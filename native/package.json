@@ -1,0 +1,14 @@
+{
+  "name": "ultragraph-kb",
+  "version": "0.1.0",
+  "description": "High-Performance Knowledge Base Indexer",
+  "main": "index.js",
+  "napi": {
+    "name": "ultragraph-kb",
+    "platforms": ["aarch64-apple-darwin"]
+  },
+  "scripts": {
+    "build": "cargo build --release",
+    "postbuild": "napi build"
+  }
+}
