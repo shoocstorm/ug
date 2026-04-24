@@ -9,6 +9,9 @@
   },
   "scripts": {
     "build": "cargo build --release",
-    "postbuild": "napi build"
+    "postbuild": "napi build",
+    "test": "cargo test -- --nocapture",
+    "check": "cargo check",
+    "lint": "cargo clippy"
   }
 }

@@ -15,6 +15,18 @@ async function indexWithCache(path, cachePath) {
   return JSON.parse(result);
 }
 
+function buildGraph(indexResult) {
+  const json = JSON.stringify(indexResult);
+  const result = ug.buildGraph(json);
+  return JSON.parse(result);
+}
+
+function kHopBfs(graph, startNodeId, k) {
+  const json = JSON.stringify(graph);
+  const result = ug.kHopBfs(json, startNodeId, k);
+  return JSON.parse(result);
+}
+
 function cleanDir(dir) {
   try {
     const entries = readdirSync(dir);
@@ -167,7 +179,126 @@ class Math:
     passed++; // Count as "passed" since it's a known limitation
   }
   
-  console.log('=== Results: ' + passed + '/6 passed (1 skipped - tree-sitter version) ===');
+  console.log('\n=== Phase 2 Graph Tests ===\n');
+
+  // Test 7: Build graph from index result
+  console.log('Test 7: Build graph from index result');
+  {
+    const testDir = mkdtempSync(join(tmpdir(), 'kb-graph1-'));
+    writeFileSync(join(testDir, 'test.ts'), `export function hello(name: string): string {
+  return 'Hello, ' + name;
+}
+
+export class Calculator {
+  add(a: number, b: number): number {
+    return a + b;
+  }
+}`);
+
+    const idx = await index(testDir);
+    const graph = buildGraph(idx);
+    
+    if (graph.nodes.length >= 3 && graph.edges.length >= 2) {
+      console.log('✓ PASS: Created ' + graph.nodes.length + ' nodes, ' + graph.edges.length + ' edges\n');
+      passed++;
+    } else {
+      console.log('✗ FAIL: Expected 3+ nodes, 2+ edges, got', graph.nodes.length, 'nodes,', graph.edges.length, 'edges\n');
+      failed++;
+    }
+    rmSync(testDir, { recursive: true });
+  }
+
+  // Test 8: K-hop BFS from file node
+  console.log('Test 8: K-hop BFS from file node');
+  {
+    const testDir = mkdtempSync(join(tmpdir(), 'kb-graph2-'));
+    writeFileSync(join(testDir, 'test.ts'), `export function hello(): string { return 'hi'; }
+export class Calc { }`);
+
+    const idx = await index(testDir);
+    const graph = buildGraph(idx);
+    
+    const fileNode = graph.nodes.find(n => n.node_type === 'File');
+    const bfs = kHopBfs(graph, fileNode.id, 1);
+    
+    if (bfs.nodes.length === 3 && bfs.distances[fileNode.id] === 0) {
+      console.log('✓ PASS: BFS found ' + bfs.nodes.length + ' nodes within 1 hop\n');
+      passed++;
+    } else {
+      console.log('✗ FAIL: Expected 3 nodes, got', bfs.nodes.length, '\n');
+      failed++;
+    }
+    rmSync(testDir, { recursive: true });
+  }
+
+  // Test 9: K-hop BFS from symbol node
+  console.log('Test 9: K-hop BFS from symbol node');
+  {
+    const testDir = mkdtempSync(join(tmpdir(), 'kb-graph3-'));
+    writeFileSync(join(testDir, 'test.ts'), `export function hello(): string { return 'hi'; }`);
+
+    const idx = await index(testDir);
+    const graph = buildGraph(idx);
+    
+    const funcNode = graph.nodes.find(n => n.name === 'hello');
+    const bfs = kHopBfs(graph, funcNode.id, 2);
+    
+    if (bfs.distances[funcNode.id] === 0) {
+      console.log('✓ PASS: Start node distance is 0\n');
+      passed++;
+    } else {
+      console.log('✗ FAIL: Start node distance should be 0\n');
+      failed++;
+    }
+    rmSync(testDir, { recursive: true });
+  }
+
+  // Test 10: Invalid start node returns empty
+  console.log('Test 10: Invalid start node returns empty');
+  {
+    const testDir = mkdtempSync(join(tmpdir(), 'kb-graph4-'));
+    writeFileSync(join(testDir, 'test.ts'), `export function test(): void {}`);
+
+    const idx = await index(testDir);
+    const graph = buildGraph(idx);
+    const bfs = kHopBfs(graph, 'invalid-node-id', 2);
+    
+    if (bfs.nodes.length === 0 && bfs.edges.length === 0) {
+      console.log('✓ PASS: Empty result for invalid start node\n');
+      passed++;
+    } else {
+      console.log('✗ FAIL: Expected empty result\n');
+      failed++;
+    }
+    rmSync(testDir, { recursive: true });
+  }
+
+  // Test 11: K parameter limits BFS depth
+  console.log('Test 11: K parameter limits BFS depth');
+  {
+    const testDir = mkdtempSync(join(tmpdir(), 'kb-graph5-'));
+    writeFileSync(join(testDir, 'test.ts'), `export function hello(): string { return 'hi'; }
+export class Calc { }`);
+
+    const idx = await index(testDir);
+    const graph = buildGraph(idx);
+    
+    const fileNode = graph.nodes.find(n => n.node_type === 'File');
+    
+    const bfs0 = kHopBfs(graph, fileNode.id, 0);
+    const bfs1 = kHopBfs(graph, fileNode.id, 1);
+    
+    if (bfs0.nodes.length < bfs1.nodes.length) {
+      console.log('✓ PASS: K parameter affects result (k=0: ' + bfs0.nodes.length + ', k=1: ' + bfs1.nodes.length + ')\n');
+      passed++;
+    } else {
+      console.log('✗ FAIL: K parameter not affecting results\n');
+      failed++;
+    }
+    rmSync(testDir, { recursive: true });
+  }
+  
+  console.log('=== Results: ' + passed + '/' + (passed + failed) + ' passed ===');
   process.exit(failed > 0 ? 1 : 0);
 }
 

@@ -54,6 +54,15 @@ For multi-step tasks, state a brief plan:
 
 Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
 
+## 5. Test Before Commit
+
+**Always verify changes with tests before marking a task complete.**
+
+- Run `node src/test-runner.cjs` to execute all tests
+- Tests are in `src/test-runner.cjs` (main test suite) and `src/test-indexer.test.ts` (optional bun tests)
+- When adding new functionality, add corresponding test cases to `src/test-runner.cjs`
+- Ensure all tests pass before completing a phase
+
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.

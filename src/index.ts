@@ -45,6 +45,35 @@ export interface IndexResult {
   stats: IndexStats;
 }
 
+export type GraphNodeType = "File" | "Function" | "Class" | "Interface" | "Concept";
+export type GraphEdgeType = "DependsOn" | "Calls" | "Extends" | "References" | "Contains";
+
+export interface GraphNode {
+  id: string;
+  name: string;
+  node_type: GraphNodeType;
+  file: string | null;
+  startLine: number | null;
+  endLine: number | null;
+}
+
+export interface GraphEdge {
+  source: string;
+  target: string;
+  edge_type: GraphEdgeType;
+}
+
+export interface GraphData {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
+export interface BfsResult {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  distances: Record<string, number>;
+}
+
 export async function index(path: string): Promise<IndexResult> {
   const binding = getBinding();
   const result = binding.index(path);
@@ -67,4 +96,18 @@ export function indexWithCacheSync(path: string, cachePath: string): IndexResult
   const binding = getBinding();
   const result = binding.indexWithCache(path, cachePath);
   return JSON.parse(result) as IndexResult;
+}
+
+export function buildGraph(indexResult: IndexResult): GraphData {
+  const binding = getBinding();
+  const json = JSON.stringify(indexResult);
+  const result = binding.buildGraph(json);
+  return JSON.parse(result) as GraphData;
+}
+
+export function kHopBfs(graph: GraphData, startNodeId: string, k: number): BfsResult {
+  const binding = getBinding();
+  const json = JSON.stringify(graph);
+  const result = binding.kHopBfs(json, startNodeId, k);
+  return JSON.parse(result) as BfsResult;
 }
