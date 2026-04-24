@@ -25,8 +25,8 @@
 - [x] In-Memory Querying: Implement K-Hop BFS for graph traversal
 
 **Implemented in:**
-- `native/src/lib.rs` - GraphNode, GraphEdge, GraphData, BfsResult types
-- `native/src/lib.rs` - build_graph(), k_hop_bfs() functions  
+- `native/src/*.rs` - GraphNode, GraphEdge, GraphData, BfsResult types
+- `native/src/*.rs` - build_graph(), k_hop_bfs() functions  
 - `src/index.ts` - buildGraph(), kHopBfs() TypeScript wrappers
 - `native/Cargo.toml` - Added petgraph dependency
 

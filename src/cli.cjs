@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 const { join, dirname } = require('path');
-const { readFileSync, existsSync } = require('fs');
+const { readFileSync, existsSync, writeFileSync } = require('fs');
 
 const binding = join(dirname(__dirname), 'native', 'ultragraph-kb.node');
 const ug = require(binding);
@@ -24,7 +24,7 @@ const commands = {
       return JSON.parse(result);
     }
   },
-  'graph': {
+  graph: {
     usage: '<index-json-file>',
     desc: 'Build graph from index result',
     run: (args) => {
@@ -38,7 +38,30 @@ const commands = {
       return JSON.parse(result);
     }
   },
-  'search': {
+  gen: {
+    usage: '<path> [--cache <cache-dir>] [--output <output-file>]',
+    desc: 'Index directory and build graph in one step',
+    run: (args) => {
+      const path = args[0] || '.';
+      const cacheIdx = args.indexOf('--cache');
+      const cachePath = cacheIdx >= 0 ? args[cacheIdx + 1] : null;
+      const outputIdx = args.indexOf('--output');
+      const outputPath = outputIdx >= 0 ? args[outputIdx + 1] : 'graph.json';
+
+      let result;
+      if (cachePath) {
+        result = ug.indexWithCache(path, cachePath);
+      } else {
+        result = ug.index(path);
+      }
+      const index = JSON.parse(result);
+      const json = JSON.stringify(index);
+      const graph = ug.buildGraph(json);
+      writeFileSync(outputPath, graph);
+      return JSON.parse(graph);
+    }
+  },
+  search: {
     usage: '<graph-json-file> <start-node-id> <k>',
     desc: 'Perform K-hop BFS traversal',
     run: (args) => {

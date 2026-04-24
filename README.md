@@ -280,16 +280,17 @@ kb-gen/
 ├── native/
 │   ├── Cargo.toml          # Rust dependencies
 │   ├── build.rs           # NAPI build script
-│   ├── src/lib.rs         # Rust implementation
+│   └── src/
+│       ├── lib.rs         # Module entry point
+│       ├── types.rs       # Shared data structures
+│       ├── indexer.rs     # File scanning and AST parsing
+│       └── graph.rs       # Graph building and BFS traversal
 │   └── ultragraph-kb.node # Built native module
 ├── src/
 │   ├── index.ts           # TypeScript wrapper
 │   ├── cli.cjs           # CLI entry point
 │   ├── test-runner.cjs   # Test suite
 │   └── test-indexer.test.ts
-├─��� docs/
-│   ├── kb-req.md        # Requirements spec
-│   └── PROGRESS.md       # Project progress tracking
 └── package.json
 ```
 
