@@ -22,6 +22,9 @@
             --color-interface: #f472b6;
             --color-function: #4ade80;
             --color-class: #c084fc;
+            --color-dependency: #fb923c;
+            --color-config: #fbbf24;
+            --color-requires: #94a3b8;
         }
 
         * {
@@ -442,9 +445,9 @@
             font-family: 'JetBrains Mono', monospace;
             font-size: 12px;
             max-width: 220px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: pre-wrap;
+            overflow: auto;
+            text-overflow: initial;
+            white-space: normal;
         }
 
         #info .info-value.nowrap {
@@ -729,12 +732,14 @@
 
     <script>
         const config = {
-            nodeRadius: { File: 10, Interface: 7, Function: 6, Class: 8, Default: 6 },
+            nodeRadius: { File: 10, Interface: 7, Function: 6, Class: 8, Dependency: 5, Config: 8, Default: 6 },
             colorMap: {
                 File: '#22d3ee',
                 Interface: '#f472b6',
                 Function: '#4ade80',
                 Class: '#c084fc',
+                Dependency: '#fb923c',
+                Config: '#fbbf24',
                 Default: '#94a3b8'
             },
             relColorMap: {
@@ -743,7 +748,12 @@
                 'extends': '#c084fc',
                 'implements': '#fb923c',
                 'calls': '#fbbf24',
-                'uses': '#22d3ee'
+                'uses': '#22d3ee',
+                'contains': '#71717a',
+                'requires': '#94a3b8',
+                'dependsOn': '#fb923c',
+                'references': '#a78bfa',
+                'typedAs': '#22d3ee'
             },
             getColor: group => config.colorMap[group] || config.colorMap.Default,
             getRelColor: rel => rel ? config.relColorMap[rel] || '#777' : null
@@ -788,6 +798,14 @@
                     startLine: n.startLine || null,
                     endLine: n.endLine || null,
                     docstring: n.docstring || null,
+                    metrics: n.metrics || null,
+                    signature: n.signature || null,
+                    imports: n.imports || [],
+                    exports: n.exports || [],
+                    extends: n.extends || [],
+                    implements: n.implements || [],
+                    calls: n.calls || [],
+                    typed_as: n.typed_as || [],
                     x: centerX + Math.cos(angle) * radius,
                     y: centerY + Math.sin(angle) * radius
                 });
@@ -797,7 +815,7 @@
                 .map(e => ({
                     source: nodeMap.has(e.source) ? nodeMap.get(e.source).id : null,
                     target: nodeMap.has(e.target) ? nodeMap.get(e.target).id : null,
-                    rel: e.rel || null
+                    rel: e.edge_type || null
                 }))
                 .filter(e => e.source && e.target);
 
@@ -1029,8 +1047,32 @@
             if (d.startLine) {
                 html += `<div class="info-row"><span class="info-label">Lines</span><span class="info-value">${d.startLine}${d.endLine && d.endLine !== d.startLine ? '-' + d.endLine : ''}</span></div>`;
             }
+            if (d.metrics) {
+                html += `<div class="info-row"><span class="info-label">Metrics</span><span class="info-value">LOC:${d.metrics.loc} | Params:${d.metrics.params} | Nest:${d.metrics.maxNesting}</span></div>`;
+            }
+            if (d.signature) {
+                const params = d.signature.params ? d.signature.params.map(p => p.name + (p.type ? ':' + p.type : '')).join(', ') : '';
+                const ret = d.signature.returnType ? ' => ' + d.signature.returnType : '';
+                html += `<div class="info-row"><span class="info-label">Signature</span><span class="info-value">(${params})${ret}</span></div>`;
+            }
             if (d.docstring) {
                 html += `<div class="info-row" style="flex-direction:column;align-items:flex-start;gap:4px"><span class="info-label">Doc</span><span class="info-value nowrap">${escapeHtml(d.docstring)}</span></div>`;
+            }
+            if (d.imports && d.imports.length > 0) {
+                const impPaths = d.imports.map(i => i.path).slice(0, 3).join(', ');
+                html += `<div class="info-row"><span class="info-label">Imports</span><span class="info-value">${impPaths}${d.imports.length > 3 ? '...' : ''}</span></div>`;
+            }
+            if (d.exports && d.exports.length > 0) {
+                html += `<div class="info-row"><span class="info-label">Exports</span><span class="info-value">${d.exports.map(e => e.name).join(', ')}</span></div>`;
+            }
+            if (d.calls && d.calls.length > 0) {
+                html += `<div class="info-row"><span class="info-label">Calls</span><span class="info-value">${d.calls.join(', ')}</span></div>`;
+            }
+            if (d.extends && d.extends.length > 0) {
+                html += `<div class="info-row"><span class="info-label">Extends</span><span class="info-value">${d.extends.join(', ')}</span></div>`;
+            }
+            if (d.implements && d.implements.length > 0) {
+                html += `<div class="info-row"><span class="info-label">Implements</span><span class="info-value">${d.implements.join(', ')}</span></div>`;
             }
 
             if (relatedNodes.length > 0) {
@@ -1082,7 +1124,7 @@
             info.style.left = left + 'px';
             info.style.top = top + 'px';
             info.classList.add('visible');
-            
+
             if (selectedNode && selectedNode.id !== d.id) {
                 node.filter(n => n.id === selectedNode.id).classed('selected', false);
             }
@@ -1102,9 +1144,9 @@
             const query = event.target.value;
             showSearchSuggestions(query);
             if (!query) { resetView(); return; }
-            
+
             clearSelection();
-            
+
             const matches = graphData.nodes.filter(n => n.name.toLowerCase().includes(query.toLowerCase()));
             if (matches.length > 0) {
                 const first = matches[0];

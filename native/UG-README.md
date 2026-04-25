@@ -23,7 +23,7 @@ cargo test
 Index a directory and output JSON.
 
 ```bash
-ug index -i ./src -o index.json           # Index src folder
+ug index -i ../src          # Index src folder
 ug index -i . --cache .cache -o out.json # With incremental caching
 ```
 
@@ -36,6 +36,7 @@ Options:
 Build graph from index result.
 
 ```bash
+ug graph
 ug graph -i index.json -o graph.json   # From file
 ug graph -i index.json                 # Positional args
 ```
@@ -128,6 +129,8 @@ native/
   - Imports/exports
   - Inheritance (extends/implements)
   - Type references
+- File classification (Component, Page, Hook, Util, Service, Config, Type, Constant, Context, Reducer, Test, Asset)
+- Package.json dependency extraction
 
 ### Graph
 - Node types: File, Function, Class, Interface

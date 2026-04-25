@@ -42,8 +42,8 @@
 - [x] Function Signature Details: Parameter names, types via tree-sitter + regex fallback
 - [x] Code Metrics: LOC, param count, nesting depth
 - [x] Return Type Extraction: Via tree-sitter + regex
-- [ ] Package Dependencies: package.json analysis
-- [ ] Configuration Relationships
+- [x] Package Dependencies: package.json analysis
+- [x] Configuration Relationships
 
 ---
 

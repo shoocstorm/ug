@@ -85,6 +85,7 @@ pub struct FileNode {
     pub path: String,
     pub hash: String,
     pub language: String,
+    pub classification: Option<FileClassification>,
     pub symbols: Vec<Symbol>,
     #[serde(default)]
     pub imports: Vec<ImportInfo>,
@@ -93,9 +94,35 @@ pub struct FileNode {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FileClassification {
+    Component,
+    Page,
+    Hook,
+    Util,
+    Service,
+    Config,
+    Type,
+    Constant,
+    Context,
+    Reducer,
+    Test,
+    Asset,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexResult {
     pub files: Vec<FileNode>,
+    pub dependencies: Vec<Dependency>,
     pub stats: IndexStats,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Dependency {
+    pub name: String,
+    pub version: Option<String>,
+    pub dev: bool,
+    pub optional: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -117,6 +144,8 @@ pub enum GraphNodeType {
     Class,
     Interface,
     Concept,
+    Dependency,
+    Config,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -131,6 +160,7 @@ pub enum GraphEdgeType {
     Exports,
     Requires,
     TypedAs,
+    Uses,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -143,6 +173,56 @@ pub struct GraphNode {
     pub start_line: Option<u32>,
     #[serde(rename = "endLine")]
     pub end_line: Option<u32>,
+    pub metrics: Option<SymbolMetrics>,
+    pub signature: Option<GraphNodeSignature>,
+    pub docstring: Option<String>,
+    #[serde(default)]
+    pub imports: Vec<GraphNodeImport>,
+    #[serde(default)]
+    pub exports: Vec<GraphNodeExport>,
+    #[serde(default)]
+    pub extends: Vec<String>,
+    #[serde(default)]
+    pub implements: Vec<String>,
+    #[serde(default)]
+    pub calls: Vec<String>,
+    #[serde(default)]
+    pub typed_as: Vec<GraphTypeRef>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphNodeSignature {
+    pub params: Vec<Param>,
+    #[serde(rename = "returnType")]
+    pub return_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphNodeImport {
+    pub path: String,
+    pub imported: Vec<GraphImportedItem>,
+    #[serde(rename = "isExternal")]
+    pub is_external: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphImportedItem {
+    pub name: String,
+    pub alias: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphNodeExport {
+    pub name: String,
+    pub alias: Option<String>,
+    #[serde(rename = "isDefault")]
+    pub is_default: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphTypeRef {
+    pub name: String,
+    pub generic: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

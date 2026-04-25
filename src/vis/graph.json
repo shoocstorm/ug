@@ -1,0 +1,560 @@
+{
+    "nodes": [
+        {
+            "id": "file:../src/test-indexer.test.ts",
+            "name": "../src/test-indexer.test.ts",
+            "node_type": "File",
+            "file": "../src/test-indexer.test.ts",
+            "startLine": null,
+            "endLine": null,
+            "metrics": null
+        },
+        {
+            "id": "file:../src/index.ts",
+            "name": "../src/index.ts",
+            "node_type": "File",
+            "file": "../src/index.ts",
+            "startLine": null,
+            "endLine": null,
+            "metrics": null
+        },
+        {
+            "id": "function_declaration:getBinding",
+            "name": "getBinding",
+            "node_type": "Function",
+            "file": "../src/index.ts",
+            "startLine": 7,
+            "endLine": 17,
+            "metrics": {
+                "loc": 10,
+                "params": 0,
+                "maxNesting": 1
+            }
+        },
+        {
+            "id": "interface:Symbol",
+            "name": "Symbol",
+            "node_type": "Interface",
+            "file": "../src/index.ts",
+            "startLine": 19,
+            "endLine": 27,
+            "metrics": null
+        },
+        {
+            "id": "interface:FileNode",
+            "name": "FileNode",
+            "node_type": "Interface",
+            "file": "../src/index.ts",
+            "startLine": 29,
+            "endLine": 34,
+            "metrics": null
+        },
+        {
+            "id": "interface:IndexStats",
+            "name": "IndexStats",
+            "node_type": "Interface",
+            "file": "../src/index.ts",
+            "startLine": 36,
+            "endLine": 41,
+            "metrics": null
+        },
+        {
+            "id": "interface:IndexResult",
+            "name": "IndexResult",
+            "node_type": "Interface",
+            "file": "../src/index.ts",
+            "startLine": 43,
+            "endLine": 46,
+            "metrics": null
+        },
+        {
+            "id": "type:GraphNodeType",
+            "name": "GraphNodeType",
+            "node_type": "Interface",
+            "file": "../src/index.ts",
+            "startLine": 48,
+            "endLine": 48,
+            "metrics": null
+        },
+        {
+            "id": "type:GraphEdgeType",
+            "name": "GraphEdgeType",
+            "node_type": "Interface",
+            "file": "../src/index.ts",
+            "startLine": 49,
+            "endLine": 49,
+            "metrics": null
+        },
+        {
+            "id": "interface:GraphNode",
+            "name": "GraphNode",
+            "node_type": "Interface",
+            "file": "../src/index.ts",
+            "startLine": 51,
+            "endLine": 58,
+            "metrics": null
+        },
+        {
+            "id": "interface:GraphEdge",
+            "name": "GraphEdge",
+            "node_type": "Interface",
+            "file": "../src/index.ts",
+            "startLine": 60,
+            "endLine": 64,
+            "metrics": null
+        },
+        {
+            "id": "interface:GraphData",
+            "name": "GraphData",
+            "node_type": "Interface",
+            "file": "../src/index.ts",
+            "startLine": 66,
+            "endLine": 69,
+            "metrics": null
+        },
+        {
+            "id": "interface:BfsResult",
+            "name": "BfsResult",
+            "node_type": "Interface",
+            "file": "../src/index.ts",
+            "startLine": 71,
+            "endLine": 75,
+            "metrics": null
+        },
+        {
+            "id": "function_declaration:index",
+            "name": "index",
+            "node_type": "Function",
+            "file": "../src/index.ts",
+            "startLine": 77,
+            "endLine": 81,
+            "metrics": {
+                "loc": 4,
+                "params": 1,
+                "maxNesting": 1
+            }
+        },
+        {
+            "id": "function_declaration:indexWithCache",
+            "name": "indexWithCache",
+            "node_type": "Function",
+            "file": "../src/index.ts",
+            "startLine": 83,
+            "endLine": 87,
+            "metrics": {
+                "loc": 4,
+                "params": 2,
+                "maxNesting": 1
+            }
+        },
+        {
+            "id": "function_declaration:indexSync",
+            "name": "indexSync",
+            "node_type": "Function",
+            "file": "../src/index.ts",
+            "startLine": 89,
+            "endLine": 93,
+            "metrics": {
+                "loc": 4,
+                "params": 1,
+                "maxNesting": 1
+            }
+        },
+        {
+            "id": "function_declaration:indexWithCacheSync",
+            "name": "indexWithCacheSync",
+            "node_type": "Function",
+            "file": "../src/index.ts",
+            "startLine": 95,
+            "endLine": 99,
+            "metrics": {
+                "loc": 4,
+                "params": 2,
+                "maxNesting": 1
+            }
+        },
+        {
+            "id": "function_declaration:buildGraph",
+            "name": "buildGraph",
+            "node_type": "Function",
+            "file": "../src/index.ts",
+            "startLine": 101,
+            "endLine": 106,
+            "metrics": {
+                "loc": 5,
+                "params": 1,
+                "maxNesting": 1
+            }
+        },
+        {
+            "id": "function_declaration:kHopBfs",
+            "name": "kHopBfs",
+            "node_type": "Function",
+            "file": "../src/index.ts",
+            "startLine": 108,
+            "endLine": 113,
+            "metrics": {
+                "loc": 5,
+                "params": 3,
+                "maxNesting": 1
+            }
+        }
+    ],
+    "edges": [
+        {
+            "source": "file:../src/test-indexer.test.ts",
+            "target": "dep:tmpdir",
+            "edge_type": "Imports"
+        },
+        {
+            "source": "file:../src/test-indexer.test.ts",
+            "target": "dep:os",
+            "edge_type": "Requires"
+        },
+        {
+            "source": "file:../src/test-indexer.test.ts",
+            "target": "dep:mkdtempSync",
+            "edge_type": "Imports"
+        },
+        {
+            "source": "file:../src/test-indexer.test.ts",
+            "target": "dep:writeFileSync",
+            "edge_type": "Imports"
+        },
+        {
+            "source": "file:../src/test-indexer.test.ts",
+            "target": "dep:rmSync",
+            "edge_type": "Imports"
+        },
+        {
+            "source": "file:../src/test-indexer.test.ts",
+            "target": "dep:fs",
+            "edge_type": "Requires"
+        },
+        {
+            "source": "file:../src/test-indexer.test.ts",
+            "target": "dep:describe",
+            "edge_type": "Imports"
+        },
+        {
+            "source": "file:../src/test-indexer.test.ts",
+            "target": "dep:it",
+            "edge_type": "Imports"
+        },
+        {
+            "source": "file:../src/test-indexer.test.ts",
+            "target": "dep:expect",
+            "edge_type": "Imports"
+        },
+        {
+            "source": "file:../src/test-indexer.test.ts",
+            "target": "dep:beforeEach",
+            "edge_type": "Imports"
+        },
+        {
+            "source": "file:../src/test-indexer.test.ts",
+            "target": "dep:bun:test",
+            "edge_type": "Requires"
+        },
+        {
+            "source": "file:../src/test-indexer.test.ts",
+            "target": "dep:join",
+            "edge_type": "Imports"
+        },
+        {
+            "source": "file:../src/test-indexer.test.ts",
+            "target": "dep:path",
+            "edge_type": "Requires"
+        },
+        {
+            "source": "file:../src/index.ts",
+            "target": "function_declaration:getBinding",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "file:../src/index.ts",
+            "target": "interface:Symbol",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "interface:Symbol",
+            "target": "id",
+            "edge_type": "TypedAs"
+        },
+        {
+            "source": "interface:Symbol",
+            "target": "name",
+            "edge_type": "TypedAs"
+        },
+        {
+            "source": "interface:Symbol",
+            "target": "kind",
+            "edge_type": "TypedAs"
+        },
+        {
+            "source": "interface:Symbol",
+            "target": "file",
+            "edge_type": "TypedAs"
+        },
+        {
+            "source": "interface:Symbol",
+            "target": "startLine",
+            "edge_type": "TypedAs"
+        },
+        {
+            "source": "interface:Symbol",
+            "target": "endLine",
+            "edge_type": "TypedAs"
+        },
+        {
+            "source": "interface:Symbol",
+            "target": "docstring",
+            "edge_type": "TypedAs"
+        },
+        {
+            "source": "file:../src/index.ts",
+            "target": "interface:FileNode",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "interface:FileNode",
+            "target": "path",
+            "edge_type": "TypedAs"
+        },
+        {
+            "source": "interface:FileNode",
+            "target": "hash",
+            "edge_type": "TypedAs"
+        },
+        {
+            "source": "interface:FileNode",
+            "target": "language",
+            "edge_type": "TypedAs"
+        },
+        {
+            "source": "interface:FileNode",
+            "target": "symbols",
+            "edge_type": "TypedAs"
+        },
+        {
+            "source": "file:../src/index.ts",
+            "target": "interface:IndexStats",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "interface:IndexStats",
+            "target": "totalFiles",
+            "edge_type": "TypedAs"
+        },
+        {
+            "source": "interface:IndexStats",
+            "target": "cachedFiles",
+            "edge_type": "TypedAs"
+        },
+        {
+            "source": "interface:IndexStats",
+            "target": "totalSymbols",
+            "edge_type": "TypedAs"
+        },
+        {
+            "source": "interface:IndexStats",
+            "target": "indexingTimeMs",
+            "edge_type": "TypedAs"
+        },
+        {
+            "source": "file:../src/index.ts",
+            "target": "interface:IndexResult",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "interface:IndexResult",
+            "target": "files",
+            "edge_type": "TypedAs"
+        },
+        {
+            "source": "interface:IndexResult",
+            "target": "stats",
+            "edge_type": "TypedAs"
+        },
+        {
+            "source": "file:../src/index.ts",
+            "target": "type:GraphNodeType",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "file:../src/index.ts",
+            "target": "type:GraphEdgeType",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "file:../src/index.ts",
+            "target": "interface:GraphNode",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "interface:GraphNode",
+            "target": "id",
+            "edge_type": "TypedAs"
+        },
+        {
+            "source": "interface:GraphNode",
+            "target": "name",
+            "edge_type": "TypedAs"
+        },
+        {
+            "source": "interface:GraphNode",
+            "target": "node_type",
+            "edge_type": "TypedAs"
+        },
+        {
+            "source": "interface:GraphNode",
+            "target": "file",
+            "edge_type": "TypedAs"
+        },
+        {
+            "source": "interface:GraphNode",
+            "target": "startLine",
+            "edge_type": "TypedAs"
+        },
+        {
+            "source": "interface:GraphNode",
+            "target": "endLine",
+            "edge_type": "TypedAs"
+        },
+        {
+            "source": "file:../src/index.ts",
+            "target": "interface:GraphEdge",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "interface:GraphEdge",
+            "target": "source",
+            "edge_type": "TypedAs"
+        },
+        {
+            "source": "interface:GraphEdge",
+            "target": "target",
+            "edge_type": "TypedAs"
+        },
+        {
+            "source": "interface:GraphEdge",
+            "target": "edge_type",
+            "edge_type": "TypedAs"
+        },
+        {
+            "source": "file:../src/index.ts",
+            "target": "interface:GraphData",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "interface:GraphData",
+            "target": "nodes",
+            "edge_type": "TypedAs"
+        },
+        {
+            "source": "interface:GraphData",
+            "target": "edges",
+            "edge_type": "TypedAs"
+        },
+        {
+            "source": "file:../src/index.ts",
+            "target": "interface:BfsResult",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "interface:BfsResult",
+            "target": "nodes",
+            "edge_type": "TypedAs"
+        },
+        {
+            "source": "interface:BfsResult",
+            "target": "edges",
+            "edge_type": "TypedAs"
+        },
+        {
+            "source": "interface:BfsResult",
+            "target": "distances",
+            "edge_type": "TypedAs"
+        },
+        {
+            "source": "file:../src/index.ts",
+            "target": "function_declaration:index",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "file:../src/index.ts",
+            "target": "function_declaration:indexWithCache",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "file:../src/index.ts",
+            "target": "function_declaration:indexSync",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "file:../src/index.ts",
+            "target": "function_declaration:indexWithCacheSync",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "file:../src/index.ts",
+            "target": "function_declaration:buildGraph",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "file:../src/index.ts",
+            "target": "function_declaration:kHopBfs",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "file:../src/index.ts",
+            "target": "dep:addNativeBinding",
+            "edge_type": "Imports"
+        },
+        {
+            "source": "file:../src/index.ts",
+            "target": "dep:loadBinding",
+            "edge_type": "Imports"
+        },
+        {
+            "source": "file:../src/index.ts",
+            "target": "dep:napi-builds",
+            "edge_type": "Requires"
+        },
+        {
+            "source": "file:../src/index.ts",
+            "target": "dep:join",
+            "edge_type": "Imports"
+        },
+        {
+            "source": "file:../src/index.ts",
+            "target": "dep:dirname",
+            "edge_type": "Imports"
+        },
+        {
+            "source": "file:../src/index.ts",
+            "target": "dep:path",
+            "edge_type": "Requires"
+        },
+        {
+            "source": "file:../src/index.ts",
+            "target": "dep:readFileSync",
+            "edge_type": "Imports"
+        },
+        {
+            "source": "file:../src/index.ts",
+            "target": "dep:existsSync",
+            "edge_type": "Imports"
+        },
+        {
+            "source": "file:../src/index.ts",
+            "target": "dep:mkdirSync",
+            "edge_type": "Imports"
+        },
+        {
+            "source": "file:../src/index.ts",
+            "target": "dep:fs",
+            "edge_type": "Requires"
+        }
+    ]
+}

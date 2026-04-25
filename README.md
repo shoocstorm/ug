@@ -164,12 +164,11 @@ interface BfsResult {
 ### Graph Visualization
 ```bash
 cd src
-node cli.cjs visualize ./out/graph.json
+npm run gen -- ~/Documents/project/aldrickbot/src 
 
-or 
-cd out && python3 -m http.server 3456
+npm start
 
-open http://localhost:3456/visualization.html
+open http://localhost:8080
 ```
 
 

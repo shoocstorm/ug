@@ -1,6 +1,6 @@
 use crate::types::{
-    ExportInfo, FileNode, ImportedItem, ImportInfo, IndexResult, IndexStats, Param, Signature,
-    Symbol, SymbolMetrics, TypeRef,
+    Dependency, ExportInfo, FileClassification, FileNode, ImportedItem, ImportInfo, IndexResult, IndexStats,
+    Param, Signature, Symbol, SymbolMetrics, TypeRef,
 };
 use ignore::WalkBuilder;
 use napi_derive::napi;
@@ -56,10 +56,13 @@ pub fn process_file(path: &Path) -> Option<FileNode> {
 
     resolve_import_refs(&mut symbols, &file_imports);
 
+    let classification = classify_file(&path_str, &symbols);
+
     Some(FileNode {
         path: path_str,
         hash,
         language: lang_name.to_string(),
+        classification,
         symbols,
         imports: file_imports,
         exports: file_exports,
@@ -893,6 +896,7 @@ fn compute_hash(path: &Path) -> Option<String> {
 pub fn index(path: String) -> String {
     let start = std::time::Instant::now();
     let files_paths = scan_files(&path);
+    let dependencies = extract_package_json_dependencies(&path);
 
     let mut files: Vec<FileNode> = Vec::new();
     let mut total_symbols = 0;
@@ -911,7 +915,73 @@ pub fn index(path: String) -> String {
         indexing_time_ms: start.elapsed().as_millis() as u64,
     };
 
-    serde_json::to_string(&IndexResult { files, stats }).unwrap_or_default()
+    serde_json::to_string(&IndexResult { files, dependencies, stats }).unwrap_or_default()
+}
+
+fn classify_file(path: &str, symbols: &[Symbol]) -> Option<FileClassification> {
+    let path_lower = path.to_lowercase();
+    let file_name = Path::new(path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    if path_lower.contains(".test.") || path_lower.contains(".spec.") || file_name.ends_with(".test") || file_name.ends_with(".spec") {
+        return Some(FileClassification::Test);
+    }
+
+    if path_lower.contains("/components/") || path_lower.contains("/component/") || file_name.contains("component") {
+        return Some(FileClassification::Component);
+    }
+
+    if path_lower.contains("/pages/") || path_lower.contains("/page/") || path_lower.contains("/routes/") || file_name == "index" && path_lower.contains("/page") {
+        return Some(FileClassification::Page);
+    }
+
+    if path_lower.contains("/hooks/") || path_lower.contains("/hook/") || file_name.starts_with("use") {
+        return Some(FileClassification::Hook);
+    }
+
+    if path_lower.contains("/services/") || path_lower.contains("/service/") || file_name.ends_with("service") {
+        return Some(FileClassification::Service);
+    }
+
+    if path_lower.contains("/contexts/") || path_lower.contains("/context/") || file_name.ends_with("context") {
+        return Some(FileClassification::Context);
+    }
+
+    if path_lower.contains("/reducers/") || path_lower.contains("/reducer/") || file_name.ends_with("reducer") {
+        return Some(FileClassification::Reducer);
+    }
+
+    if path_lower.contains("/utils/") || path_lower.contains("/util/") || path_lower.contains("/helpers/") || path_lower.contains("/helper/") || file_name.ends_with("util") || file_name.ends_with("helper") {
+        return Some(FileClassification::Util);
+    }
+
+    if path_lower.contains("/config/") || file_name == "config" || file_name == "settings" {
+        return Some(FileClassification::Config);
+    }
+
+    if file_name.ends_with("type") || file_name.ends_with("types") || path_lower.contains("/types/") {
+        return Some(FileClassification::Type);
+    }
+
+    if file_name.chars().all(|c| c.is_uppercase()) || (file_name.chars().all(|c| c.is_ascii_digit() || c == '_') && file_name.len() > 1) {
+        return Some(FileClassification::Constant);
+    }
+
+    if path_lower.ends_with(".png") || path_lower.ends_with(".jpg") || path_lower.ends_with(".svg") || path_lower.ends_with(".ico") || path_lower.ends_with(".gif") {
+        return Some(FileClassification::Asset);
+    }
+
+    if symbols.iter().any(|s| s.kind == "function_declaration" || s.kind == "function" || s.kind == "method_definition") {
+        let exports: Vec<&str> = symbols.iter().filter_map(|s| s.exports.first().map(|e| e.name.as_str())).collect();
+        if exports.iter().any(|e| e.ends_with("Provider") || e.ends_with("Context")) {
+            return Some(FileClassification::Context);
+        }
+    }
+
+    None
 }
 
 #[napi]
@@ -929,6 +999,7 @@ pub fn index_with_cache(path: String, cache_path: String) -> String {
     }
 
     let files_paths = scan_files(&path);
+    let dependencies = extract_package_json_dependencies(&path);
     let mut files: Vec<FileNode> = Vec::new();
     let mut total_symbols = 0;
     let mut cached = 0;
@@ -965,5 +1036,59 @@ pub fn index_with_cache(path: String, cache_path: String) -> String {
         indexing_time_ms: start.elapsed().as_millis() as u64,
     };
 
-    serde_json::to_string(&IndexResult { files, stats }).unwrap_or_default()
+    serde_json::to_string(&IndexResult { files, dependencies, stats }).unwrap_or_default()
+}
+
+fn extract_package_json_dependencies(path: &str) -> Vec<Dependency> {
+    let pkg_path = Path::new(path).join("package.json");
+    if !pkg_path.exists() {
+        return vec![];
+    }
+
+    let content = match fs::read_to_string(&pkg_path) {
+        Ok(c) => c,
+        Err(_) => return vec![],
+    };
+
+    let pkg: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(_) => return vec![],
+    };
+
+    let mut deps = Vec::new();
+
+    if let Some(deps_obj) = pkg.get("dependencies").and_then(|v| v.as_object()) {
+        for (name, version) in deps_obj {
+            deps.push(Dependency {
+                name: name.clone(),
+                version: version.as_str().map(|s| s.to_string()),
+                dev: false,
+                optional: false,
+            });
+        }
+    }
+
+    if let Some(dev_deps) = pkg.get("devDependencies").and_then(|v| v.as_object()) {
+        for (name, version) in dev_deps {
+            deps.push(Dependency {
+                name: name.clone(),
+                version: version.as_str().map(|s| s.to_string()),
+                dev: true,
+                optional: false,
+            });
+        }
+    }
+
+    if let Some(opt_deps) = pkg.get("optionalDependencies").and_then(|v| v.as_object()) {
+        for (name, version) in opt_deps {
+            deps.push(Dependency {
+                name: name.clone(),
+                version: version.as_str().map(|s| s.to_string()),
+                dev: false,
+                optional: true,
+            });
+        }
+    }
+
+    deps
 }

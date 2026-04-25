@@ -8,16 +8,62 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
     let mut edges: Vec<GraphEdge> = Vec::new();
     let mut symbol_id_map: HashMap<String, String> = HashMap::new();
 
+    for dep in &index_result.dependencies {
+        let dep_node_id = format!("dep:{}", dep.name);
+        nodes.push(GraphNode {
+            id: dep_node_id.clone(),
+            name: dep.name.clone(),
+            node_type: GraphNodeType::Dependency,
+            file: None,
+            start_line: None,
+            end_line: None,
+            metrics: None,
+            signature: None,
+            docstring: None,
+            imports: vec![],
+            exports: vec![],
+            extends: vec![],
+            implements: vec![],
+            calls: vec![],
+            typed_as: vec![],
+        });
+    }
+
     for file in &index_result.files {
         let file_node_id = format!("file:{}", file.path.replace('\\', "/"));
+
+        let file_node_type = match &file.classification {
+            Some(crate::types::FileClassification::Config) => GraphNodeType::Config,
+            _ => GraphNodeType::File,
+        };
 
         nodes.push(GraphNode {
             id: file_node_id.clone(),
             name: file.path.clone(),
-            node_type: GraphNodeType::File,
+            node_type: file_node_type,
             file: Some(file.path.clone()),
             start_line: None,
             end_line: None,
+            metrics: None,
+            signature: None,
+            docstring: None,
+            imports: file.imports.iter().map(|imp| crate::types::GraphNodeImport {
+                path: imp.path.clone(),
+                imported: imp.imported.iter().map(|i| crate::types::GraphImportedItem {
+                    name: i.name.clone(),
+                    alias: i.alias.clone(),
+                }).collect(),
+                is_external: imp.is_external,
+            }).collect(),
+            exports: file.exports.iter().map(|exp| crate::types::GraphNodeExport {
+                name: exp.name.clone(),
+                alias: exp.alias.clone(),
+                is_default: exp.is_default,
+            }).collect(),
+            extends: vec![],
+            implements: vec![],
+            calls: vec![],
+            typed_as: vec![],
         });
 
         for sym in &file.symbols {
@@ -32,6 +78,36 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
 
             let sym_node_id = format!("{}:{}", sym.kind, sym.name);
 
+            let signature = sym.signature.as_ref().map(|s| crate::types::GraphNodeSignature {
+                params: s.params.iter().map(|p| crate::types::Param {
+                    name: p.name.clone(),
+                    param_type: p.param_type.clone(),
+                    optional: p.optional,
+                    default: p.default.clone(),
+                }).collect(),
+                return_type: s.return_type.clone(),
+            });
+
+            let imports = sym.imports.iter().map(|imp| crate::types::GraphNodeImport {
+                path: imp.path.clone(),
+                imported: imp.imported.iter().map(|i| crate::types::GraphImportedItem {
+                    name: i.name.clone(),
+                    alias: i.alias.clone(),
+                }).collect(),
+                is_external: imp.is_external,
+            }).collect();
+
+            let exports = sym.exports.iter().map(|exp| crate::types::GraphNodeExport {
+                name: exp.name.clone(),
+                alias: exp.alias.clone(),
+                is_default: exp.is_default,
+            }).collect();
+
+            let typed_as = sym.typed_as.iter().map(|t| crate::types::GraphTypeRef {
+                name: t.name.clone(),
+                generic: t.generic.clone(),
+            }).collect();
+
             nodes.push(GraphNode {
                 id: sym_node_id.clone(),
                 name: sym.name.clone(),
@@ -39,6 +115,15 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
                 file: Some(file.path.clone()),
                 start_line: Some(sym.start_line),
                 end_line: Some(sym.end_line),
+                metrics: sym.metrics.clone(),
+                signature,
+                docstring: sym.docstring.clone(),
+                imports,
+                exports,
+                extends: sym.extends.clone(),
+                implements: sym.implements.clone(),
+                calls: sym.calls.clone(),
+                typed_as,
             });
 
             symbol_id_map.insert(sym.name.clone(), sym_node_id.clone());
@@ -92,16 +177,26 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
 
             for imp in &import.imported {
                 let target_sym = if import.is_external {
-                    format!("external:{}", imp.name)
+                    format!("dep:{}", imp.name)
                 } else {
                     imp.name.clone()
                 };
 
                 edges.push(GraphEdge {
                     source: source_file.clone(),
-                    target: target_sym,
+                    target: target_sym.clone(),
                     edge_type: GraphEdgeType::Imports,
                 });
+
+                if import.is_external {
+                    if let Some(dep_node) = nodes.iter().find(|n| n.id == format!("dep:{}", imp.name)) {
+                        edges.push(GraphEdge {
+                            source: dep_node.id.clone(),
+                            target: source_file.clone(),
+                            edge_type: GraphEdgeType::DependsOn,
+                        });
+                    }
+                }
             }
 
             if !import.path.is_empty() && !import.is_external {
@@ -123,6 +218,13 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
                     source: source_file,
                     target: target_file,
                     edge_type: GraphEdgeType::Imports,
+                });
+            } else if import.is_external {
+                let dep_name = import.path.split('/').next().unwrap_or(&import.path);
+                edges.push(GraphEdge {
+                    source: file_node_id.clone(),
+                    target: format!("dep:{}", dep_name),
+                    edge_type: GraphEdgeType::Requires,
                 });
             }
         }
