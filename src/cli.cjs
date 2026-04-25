@@ -39,10 +39,11 @@ const commands = {
     }
   },
   gen: {
-    usage: '<path> [--cache <cache-dir>] [--output <output-dir>]',
+    usage: '[--input <path>] [--cache <cache-dir>] [--output <output-dir>]',
     desc: 'Index directory and generate graph + visualization',
     run: (args) => {
-      const path = args[0] || '.';
+      const pathIdx = args.indexOf('--input');
+      const path = pathIdx >= 0 ? args[pathIdx + 1] : (args.length ? args[0] : '.');
       const cacheIdx = args.indexOf('--cache');
       const cachePath = cacheIdx >= 0 ? args[cacheIdx + 1] : null;
       const outputIdx = args.indexOf('--output');
@@ -85,7 +86,8 @@ const commands = {
       console.log('  - index.html (open in browser with HTTP server)');
       console.log('  - README.md');
 
-      return JSON.parse(graph);
+      //return JSON.parse(graph);
+      return `Visit http://localhost:8080 to view the graph`;
     }
   },
   search: {

@@ -6,3 +6,5 @@ src/graph.json
 src/.DS_Store
 src/out/.DS_Store
 src/out
+out
+out/*

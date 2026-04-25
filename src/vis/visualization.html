@@ -130,6 +130,7 @@
             font-size: 13px;
             outline: none;
             transition: all 0.2s;
+            width: 100%;
         }
 
         #controls input:focus {
@@ -139,6 +140,68 @@
 
         #controls input::placeholder {
             color: var(--text-muted);
+        }
+
+        .search-wrapper {
+            position: relative;
+        }
+
+        #search-suggestions {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            max-height: 200px;
+            overflow-y: auto;
+            z-index: 100;
+            display: none;
+            margin-top: 4px;
+        }
+
+        #search-suggestions.visible {
+            display: block;
+        }
+
+        #search-suggestions .suggestion-item {
+            padding: 10px 16px;
+            cursor: pointer;
+            font-size: 13px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        #search-suggestions .suggestion-item:last-child {
+            border-bottom: none;
+        }
+
+        #search-suggestions .suggestion-item:hover {
+            background: var(--border);
+        }
+
+        #search-suggestions .suggestion-item .suggestion-type {
+            font-size: 10px;
+            color: var(--accent);
+            margin-left: 8px;
+        }
+
+        #graph-select {
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 12px 16px;
+            border-radius: 10px;
+            font-size: 13px;
+            outline: none;
+            transition: all 0.2s;
+            width: 100%;
+            cursor: pointer;
+        }
+
+        #graph-select:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.15);
         }
 
         .btn {
@@ -160,6 +223,33 @@
         .btn:hover {
             background: var(--border);
             transform: translateY(-1px);
+        }
+
+        .btn-icon {
+            width: 40px;
+            height: 40px;
+            padding: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            color: var(--text);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-icon:hover {
+            background: var(--border);
+            color: var(--accent);
+            border-color: var(--accent);
+            box-shadow: 0 0 16px rgba(34, 211, 238, 0.2);
+        }
+
+        .btn-icon svg {
+            width: 18px;
+            height: 18px;
         }
 
         .btn-primary {
@@ -435,13 +525,20 @@
 
         <div class="header">
             <h1>Knowledge Graph</h1>
-            <p>Interactive visualization</p>
+            <p id="graph-title">Interactive visualization</p>
         </div>
 
         <div class="ui-panel" id="controls">
-            <input type="text" id="search" placeholder="Search nodes...">
-            <button class="btn" id="reset">Reset View</button>
-            <button class="btn" id="export">Export SVG</button>
+            <div class="search-wrapper">
+                <input type="text" id="search" placeholder="Search nodes..." autocomplete="off">
+                <div class="suggestions" id="search-suggestions"></div>
+            </div>
+            <button class="btn-icon" id="reset" title="Reset View">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+                    <path d="M3 3v5h5"/>
+                </svg>
+            </button>
         </div>
 
         <div class="ui-panel" id="stats">
@@ -493,6 +590,9 @@
         async function loadGraph() {
             const params = new URLSearchParams(window.location.search);
             const file = params.get('file') || 'graph.json';
+            document.getElementById('loading').style.display = 'block';
+            if (simulation) simulation.stop();
+            if (g) g.selectAll('*').remove();
 
             try {
                 const response = await fetch(file);
@@ -553,10 +653,13 @@
             render();
 
             document.getElementById('loading').style.display = 'none';
+            document.getElementById('graph-title').textContent = graphData.nodes.length + ' nodes';
 
-            document.getElementById('search').addEventListener('input', handleSearch);
+            const searchInput = document.getElementById('search');
+            searchInput.addEventListener('input', handleSearch);
+            searchInput.addEventListener('focus', () => showSearchSuggestions(searchInput.value));
+            searchInput.addEventListener('blur', () => setTimeout(() => document.getElementById('search-suggestions').classList.remove('visible'), 200));
             document.getElementById('reset').addEventListener('click', resetView);
-            document.getElementById('export').addEventListener('click', exportSVG);
         }
 
         function createLegend() {
@@ -693,15 +796,16 @@
         }
 
         function handleSearch(event) {
-            const query = event.target.value.toLowerCase();
+            const query = event.target.value;
+            showSearchSuggestions(query);
             if (!query) { resetView(); return; }
 
-            const matches = graphData.nodes.filter(n => n.name.toLowerCase().includes(query));
+            const matches = graphData.nodes.filter(n => n.name.toLowerCase().includes(query.toLowerCase()));
             if (matches.length > 0) {
                 const first = matches[0];
                 svg.transition().duration(750).call(zoom.transform,
                     d3.zoomIdentity.translate(width / 2 - first.x, height / 2 - first.y).scale(1.5));
-                node.selectAll('circle').attr('opacity', n => matches.includes(n) ? 1 : 0.2);
+                highlightNodes(matches);
             }
         }
 
@@ -714,15 +818,49 @@
             link.attr('opacity', 1);
         }
 
-        function exportSVG() {
-            const serializer = new XMLSerializer();
-            let source = serializer.serializeToString(svg.node());
-            source = source.replace(/<svg/, '<svg xmlns="http://www.w3.org/2000/svg"');
-            const blob = new Blob([source], { type: 'image/svg+xml;charset=utf-8' });
-            const link = document.createElement('a');
-            link.href = URL.createObjectURL(blob);
-            link.download = 'knowledge-graph.svg';
-            link.click();
+        function populateSearchSuggestions() {}
+
+        function showSearchSuggestions(query) {
+            const container = document.getElementById('search-suggestions');
+            container.innerHTML = '';
+            if (!query) {
+                container.classList.remove('visible');
+                return;
+            }
+            const matches = graphData.nodes
+                .filter(n => n.name.toLowerCase().includes(query.toLowerCase()))
+                .slice(0, 10);
+            if (matches.length === 0) {
+                container.classList.remove('visible');
+                return;
+            }
+            matches.forEach(n => {
+                const item = document.createElement('div');
+                item.className = 'suggestion-item';
+                item.innerHTML = `${escapeHtml(truncateName(n.name))}<span class="suggestion-type">${n.group}</span>`;
+                item.addEventListener('click', () => selectSearchResult(n));
+                container.appendChild(item);
+            });
+            container.classList.add('visible');
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function selectSearchResult(node) {
+            document.getElementById('search').value = node.name;
+            document.getElementById('search-suggestions').classList.remove('visible');
+            highlightNodes([node]);
+            svg.transition().duration(750).call(zoom.transform,
+                d3.zoomIdentity.translate(width / 2 - node.x, height / 2 - node.y).scale(1.5));
+        }
+
+        function highlightNodes(matches) {
+            node.selectAll('circle').attr('opacity', n => matches.some(m => m.id === n.id) ? 1 : 0.2);
+            node.selectAll('text').attr('opacity', n => matches.some(m => m.id === n.id) ? 1 : 0.1);
         }
 
         window.addEventListener('resize', () => {
@@ -733,7 +871,11 @@
             simulation.alpha(0.3).restart();
         });
 
-        loadGraph();
+        async function bootstrap() {
+            await loadGraph();
+        }
+
+        bootstrap();
     </script>
 </body>
 
