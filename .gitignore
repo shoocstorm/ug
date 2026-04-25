@@ -1,5 +1,6 @@
 native/target
 native/ultragraph-kb.node
+native/out
 src/.cache
 src/out1
 src/graph.json

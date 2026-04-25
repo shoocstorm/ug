@@ -8,13 +8,14 @@ const ug = require(binding);
 
 const commands = {
   index: {
-    usage: '[<input dir>] [--cache <cache-dir>] [--output <output-path>]',
+    usage: '[<input dir>] [-i|--input <dir>] [--cache <cache-dir>] [--output <output-path>]',
     desc: 'Index a directory and output the symbol tree as JSON into a file specified by `--output` (default: `out/indexed-tree.json`). Use `--cache` to speed up re-indexing.',
     run: (args) => {
-      const path = args[0] || '.';
-      const cacheIdx = args.indexOf('--cache');
+      const inputIdx = args.indexOf('-i') >= 0 ? args.indexOf('-i') : args.indexOf('--input');
+      const path = inputIdx >= 0 ? args[inputIdx + 1] : (args[0] || '.');
+      const cacheIdx = args.indexOf('--cache') >= 0 ? args.indexOf('--cache') : args.indexOf('-c');
       const cachePath = cacheIdx >= 0 ? args[cacheIdx + 1] : null;
-      const outputIdx = args.indexOf('--output');
+      const outputIdx = args.indexOf('--output') >= 0 ? args.indexOf('--output') : args.indexOf('-o');
       const outputPath = outputIdx >= 0 ? args[outputIdx + 1] : 'out/indexed-tree.json';
 
       // Ensure output directory exists

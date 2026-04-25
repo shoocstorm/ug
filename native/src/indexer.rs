@@ -517,6 +517,9 @@ fn extract_params(node: &Node, source: &[u8], language: &str) -> Vec<Param> {
                 {
                     let name = get_node_text(child.child_by_field_name("name"), source)
                         .unwrap_or_default();
+                    if name.is_empty() {
+                        continue;
+                    }
                     let param_type = get_node_text(child.child_by_field_name("type"), source);
                     let optional = child.kind() == "optional_parameter";
                     let default = get_node_text(child.child_by_field_name("default"), source);
@@ -532,6 +535,9 @@ fn extract_params(node: &Node, source: &[u8], language: &str) -> Vec<Param> {
                 if child.kind() == "parameter" {
                     let name = get_node_text(child.child_by_field_name("name"), source)
                         .unwrap_or_default();
+                    if name.is_empty() {
+                        continue;
+                    }
                     let default = get_node_text(child.child_by_field_name("default"), source);
                     let optional = default.is_some();
 
@@ -546,12 +552,59 @@ fn extract_params(node: &Node, source: &[u8], language: &str) -> Vec<Param> {
         }
     }
 
+if params.is_empty() {
+        if let Some(node_text) = get_node_text(Some(*node), source) {
+            if let Some(start) = node_text.find('(') {
+                if let Some(end) = node_text[start..].find(')') {
+                    let args = &node_text[start + 1..start + end];
+                    let param_re = regex::Regex::new(r"(\w+)\s*(?::\s*([^\s,=]+))?").ok();
+                    if let Some(re) = param_re {
+                        for cap in re.captures_iter(args.trim()) {
+                            if let Some(name_match) = cap.get(1) {
+                                let name = name_match.as_str().to_string();
+                                if name.is_empty() || name == "function" || name == "class" || name == "interface" {
+                                    continue;
+                                }
+                                let param_type = cap.get(2).map(|m| m.as_str().to_string());
+                                params.push(Param {
+                                    name,
+                                    param_type,
+                                    optional: false,
+                                    default: None,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     params
 }
 
 fn extract_return_type(node: &Node, source: &[u8]) -> Option<String> {
-    node.child_by_field_name("return_type")
-        .and_then(|n| get_node_text(Some(n), source))
+    if let Some(return_type) = node.child_by_field_name("return_type") {
+        if let Some(text) = get_node_text(Some(return_type), source) {
+            return Some(text.trim_start_matches(':').trim().to_string());
+        }
+    }
+
+    if let Some(node_text) = get_node_text(Some(*node), source) {
+        let return_re = regex::Regex::new(r"\)\s*:\s*([^\s{]+)").ok();
+        if let Some(re) = return_re {
+            if let Some(cap) = re.captures(&node_text) {
+                if let Some(return_match) = cap.get(1) {
+                    let return_type = return_match.as_str().to_string();
+                    if !return_type.is_empty() {
+                        return Some(return_type);
+                    }
+                }
+            }
+        }
+    }
+
+    None
 }
 
 fn extract_extends(node: &Node, source: &[u8]) -> Vec<String> {
@@ -708,44 +761,49 @@ fn extract_function_calls(node: &Node, source: &[u8]) -> Vec<String> {
 
 fn extract_docstring(node: &Node, source: &[u8]) -> Option<String> {
     let start_byte = node.start_byte();
-
-    if start_byte < 3 {
+    if start_byte < 6 {
         return None;
     }
 
-    let prefix = &source[start_byte - 3..start_byte];
-    if prefix == b"/**" || prefix == b"\"\"\"".as_slice() {
-        let end_byte = node.end_byte();
-        let end = if end_byte + 3 <= source.len() {
-            &source[end_byte..end_byte + 3]
+    let search_range = 200.min(start_byte);
+    let slice = &source[start_byte - search_range..start_byte];
+
+    if let Some(start) = slice.windows(3).rposition(|w| w == b"/**") {
+        let doc_start = start_byte - search_range + start;
+        let doc = &source[doc_start..start_byte];
+
+        let has_close = doc.windows(2).any(|w| w == b"*/");
+        if !has_close {
+            return None;
+        }
+
+        let text = String::from_utf8(doc.to_vec()).ok()?;
+        let clean = text
+            .lines()
+            .filter_map(|l| {
+                let line = l.trim().trim_start_matches('*').trim();
+                if line.is_empty() || line.starts_with("/**") || line.starts_with("*/") {
+                    None
+                } else if line.starts_with("@param") {
+                    let parts: Vec<&str> = line.splitn(2, '-').collect();
+                    Some(format!("param: {}", parts.get(0).unwrap_or(&line).trim().replace("@param", "")))
+                } else if line.starts_with("@return") || line.starts_with("@returns") {
+                    Some(format!("returns: {}", line.replace("@return", "").replace("@returns", "").trim()))
+                } else {
+                    Some(line.to_string())
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        if clean.is_empty() {
+            None
         } else {
-            &source[end_byte..]
-        };
-
-        if end == b"*/".as_slice() || end == b"\"\"\"".as_slice() {
-            return get_node_text(node.child(0), source);
+            Some(clean)
         }
+    } else {
+        None
     }
-
-    if start_byte >= 10 {
-        let prefix_slice = &source[start_byte - 10..start_byte];
-        let prefix_str = String::from_utf8(prefix_slice.to_vec()).unwrap_or_default();
-        if prefix_str.contains("/**") {
-            let docstart = prefix_str.rfind("/**").unwrap_or(0);
-            let doc = &prefix_str[docstart..];
-            let clean = doc
-                .trim_start_matches(" /**")
-                .trim_start_matches("/**")
-                .trim_end_matches("*/")
-                .trim();
-
-            if !clean.is_empty() {
-                return Some(clean.to_string());
-            }
-        }
-    }
-
-    None
 }
 
 fn calculate_nesting(node: &Node) -> u32 {

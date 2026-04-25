@@ -58,10 +58,26 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 **Always verify changes with tests before marking a task complete.**
 
+### JavaScript/TypeScript Tests
 - Run `node src/test-runner.cjs` to execute all tests
 - Tests are in `src/test-runner.cjs` (main test suite) and `src/test-indexer.test.ts` (optional bun tests)
 - When adding new functionality, add corresponding test cases to `src/test-runner.cjs`
+
+### Rust Tests (Native Code)
+- Run `cd native && cargo test` to execute all Rust tests
+- Tests are in:
+  - `native/tests/indexer_test.rs` (13 tests covering index functionality)
+  - `native/tests/graph_test.rs` (18 tests covering graph building and BFS)
+- **Run these tests after every code change in the native folder**
+- If adding new functionality, add corresponding test cases to the test files
 - Ensure all tests pass before completing a phase
+
+### Verification Checklist
+```
+1. cd native && cargo test      → all tests must pass
+2. cd native && cargo build    → native module must build  
+3. cd native && ./target/release/ug --help  → CLI works
+```
 
 ---
 

@@ -8,6 +8,13 @@ description = "High-Performance Knowledge Base Indexer"
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[[bin]]
+name = "ug"
+path = "src/main.rs"
+
+[dev-dependencies]
+tempfile = "3"
+
 [dependencies]
 napi = { version = "3", features = ["napi6"] }
 napi-build = "1"
