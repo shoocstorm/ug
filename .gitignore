@@ -3,6 +3,7 @@ native/ultragraph-kb.node
 src/.cache
 src/out1
 src/graph.json
+.DS_Store
 src/.DS_Store
 src/out/.DS_Store
 src/out
