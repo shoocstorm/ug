@@ -87,6 +87,12 @@
             filter: drop-shadow(0 0 12px var(--accent));
         }
 
+        .node.selected circle {
+            stroke: var(--accent);
+            stroke-width: 3px;
+            filter: drop-shadow(0 0 16px var(--accent));
+        }
+
         .node circle:active {
             cursor: grabbing;
         }
@@ -746,6 +752,7 @@
         let graphData = { nodes: [], edges: [] };
         let simulation, svg, g, link, node, zoom;
         let width, height;
+        let selectedNode = null;
 
         async function loadGraph() {
             const params = new URLSearchParams(window.location.search);
@@ -809,6 +816,11 @@
                 .scaleExtent([0.1, 4])
                 .on('zoom', (event) => g.attr('transform', event.transform));
             svg.call(zoom);
+            svg.on('click', (event) => {
+                if (event.target === svg.node()) {
+                    clearSelection();
+                }
+            });
 
             document.getElementById('nodeCount').textContent = graphData.nodes.length;
             document.getElementById('edgeCount').textContent = graphData.edges.length;
@@ -1070,13 +1082,29 @@
             info.style.left = left + 'px';
             info.style.top = top + 'px';
             info.classList.add('visible');
+            
+            if (selectedNode && selectedNode.id !== d.id) {
+                node.filter(n => n.id === selectedNode.id).classed('selected', false);
+            }
+            selectedNode = d;
+            node.filter(n => n.id === d.id).classed('selected', true);
+        }
+
+        function clearSelection() {
+            if (selectedNode) {
+                node.filter(n => n.id === selectedNode.id).classed('selected', false);
+                selectedNode = null;
+            }
+            document.getElementById('info').classList.remove('visible');
         }
 
         function handleSearch(event) {
             const query = event.target.value;
             showSearchSuggestions(query);
             if (!query) { resetView(); return; }
-
+            
+            clearSelection();
+            
             const matches = graphData.nodes.filter(n => n.name.toLowerCase().includes(query.toLowerCase()));
             if (matches.length > 0) {
                 const first = matches[0];
@@ -1093,6 +1121,10 @@
             node.selectAll('circle').attr('opacity', 1);
             node.selectAll('text').attr('opacity', 0.8);
             link.attr('opacity', 1);
+            if (selectedNode) {
+                node.filter(n => n.id === selectedNode.id).classed('selected', false);
+                selectedNode = null;
+            }
         }
 
         function initDragging() {
@@ -1162,6 +1194,7 @@
             highlightNodes([node]);
             svg.transition().duration(750).call(zoom.transform,
                 d3.zoomIdentity.translate(width / 2 - node.x, height / 2 - node.y).scale(1.5));
+            handleClick({ target: null }, node);
         }
 
         function highlightNodes(matches) {
