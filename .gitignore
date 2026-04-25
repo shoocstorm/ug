@@ -1,5 +1,8 @@
 native/target
 native/ultragraph-kb.node
 src/.cache
-src/out
+src/out1
 src/graph.json
+src/.DS_Store
+src/out/.DS_Store
+src/out

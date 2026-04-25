@@ -17,10 +17,25 @@ This requirements file is optimized for a **High-Performance Hybrid Architecture
  * [ ] **NAPI-RS Bridge:** Expose a single index(path: string) function to TypeScript that returns a structured JSON of nodes and edges.
 ### Phase 2: Embedded Graph Persistence
 *Goal: Zero-latency traversal without an external database server.*
- * [ ] **Graph Schema:**
-   * **Nodes:** File, Symbol (Function/Class), Concept (extracted from Docs).
-   * **Edges:** DEPENDS_ON, CALLS, EXTENDS, REFERENCES.
- * [ ] **In-Memory Querying:** Implement a Rust-side function to perform **K-Hop Breadth-First Search (BFS)** to find related context for a given symbol.
+* [ ] **Graph Schema:**
+  * **Nodes:** File, Symbol (Function/Class), Concept (extracted from Docs).
+  * **Edges:** DEPENDS_ON, CALLS, EXTENDS, REFERENCES.
+* [ ] **In-Memory Querying:** Implement a Rust-side function to perform **K-Hop Breadth-First Search (BFS)** to find related context for a given symbol.
+* [ ] **HTML Visualization Export:**
+  * [ ] **Data Export:** Expose a function to serialize the graph as JSON with `nodes` (id, group) and `edges` (source, target).
+  * [ ] **D3.js Integration:** Create a vanilla JS/HTML5 visualization module using D3.js v7.
+  * [ ] **Force-Directed Rendering:**
+    * Implement `d3.forceSimulation` with `forceLink`, `forceManyBody`, and `forceCenter`.
+    * Add `forceCollide` to prevent node overlap and `forceX`/`forceY` for group clustering.
+  * [ ] **Visual Encoding:**
+    * Nodes as circles with fill color mapped to `group` via categorical scale.
+    * Edges as lines connecting nodes.
+    * Text labels showing node `id`.
+  * [ ] **Interactivity:**
+    * Drag & drop nodes with simulation alpha updates.
+    * Zoom/pan via `d3.zoom`.
+    * Hover effects highlighting node and neighbors.
+  * [ ] **Responsive Design:** SVG adapts to window/container dimensions.
 ### Phase 3: Semantic Enrichment (TypeScript)
 *Goal: Add "meaning" to the structural map using local LLMs.*
  * [ ] **Vector Integration:** Embed extracted docstrings and code comments into LanceDB using a local model (e.g., all-MiniLM-L6-v2).

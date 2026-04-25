@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 const { join, dirname } = require('path');
-const { readFileSync, existsSync, writeFileSync } = require('fs');
+const { readFileSync, existsSync, writeFileSync, mkdirSync, copyFileSync } = require('fs');
 
 const binding = join(dirname(__dirname), 'native', 'ultragraph-kb.node');
 const ug = require(binding);
@@ -39,15 +39,21 @@ const commands = {
     }
   },
   gen: {
-    usage: '<path> [--cache <cache-dir>] [--output <output-file>]',
-    desc: 'Index directory and build graph in one step',
+    usage: '<path> [--cache <cache-dir>] [--output <output-dir>]',
+    desc: 'Index directory and generate graph + visualization',
     run: (args) => {
       const path = args[0] || '.';
       const cacheIdx = args.indexOf('--cache');
       const cachePath = cacheIdx >= 0 ? args[cacheIdx + 1] : null;
       const outputIdx = args.indexOf('--output');
-      const outputPath = outputIdx >= 0 ? args[outputIdx + 1] : 'graph.json';
+      const outputDir = outputIdx >= 0 ? args[outputIdx + 1] : 'out';
 
+      // Ensure output directory exists
+      if (!existsSync(outputDir)) {
+        mkdirSync(outputDir, { recursive: true });
+      }
+
+      // Generate graph
       let result;
       if (cachePath) {
         result = ug.indexWithCache(path, cachePath);
@@ -57,7 +63,28 @@ const commands = {
       const index = JSON.parse(result);
       const json = JSON.stringify(index);
       const graph = ug.buildGraph(json);
-      writeFileSync(outputPath, graph);
+
+      // Write graph.json
+      const graphPath = join(outputDir, 'graph.json');
+      writeFileSync(graphPath, graph);
+
+      // Copy visualization files
+      const visSrc = join(__dirname, 'vis');
+      const indexHtmlSrc = join(visSrc, 'visualization.html');
+      const indexMdSrc = join(visSrc, 'visualization.md');
+
+      if (existsSync(indexHtmlSrc)) {
+        copyFileSync(indexHtmlSrc, join(outputDir, 'index.html'));
+      }
+      if (existsSync(indexMdSrc)) {
+        copyFileSync(indexMdSrc, join(outputDir, 'README.md'));
+      }
+
+      console.log(`Generated in ${outputDir}/:`);
+      console.log('  - graph.json');
+      console.log('  - index.html (open in browser with HTTP server)');
+      console.log('  - README.md');
+
       return JSON.parse(graph);
     }
   },

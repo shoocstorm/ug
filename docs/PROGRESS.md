@@ -23,16 +23,27 @@
   - [x] Nodes: File, Symbol (Function/Class), Concept (extracted from Docs)
   - [x] Edges: DEPENDS_ON, CALLS, EXTENDS, REFERENCES
 - [x] In-Memory Querying: Implement K-Hop BFS for graph traversal
+- [x] HTML Visualization Export: D3.js v7 force-directed graph
 
 **Implemented in:**
 - `native/src/*.rs` - GraphNode, GraphEdge, GraphData, BfsResult types
 - `native/src/*.rs` - build_graph(), k_hop_bfs() functions  
 - `src/index.ts` - buildGraph(), kHopBfs() TypeScript wrappers
 - `native/Cargo.toml` - Added petgraph dependency
+- `src/out/visualization.html` - Interactive D3.js visualization
 
 **Functions exposed via NAPI-RS:**
 - `buildGraph(indexJson: string) -> string` - Build graph from index result
 - `kHopBfs(graphJson: string, startNodeId: string, k: number) -> string` - K-hop BFS traversal
+
+**Visualization Features:**
+- D3.js v7 force-directed rendering with physics simulation
+- Interactive drag, zoom, pan
+- Hover highlighting with connected nodes
+- Search and filter nodes
+- SVG export
+- Dark theme with gradient accents
+- Node type color coding
 
 ---
 
@@ -48,4 +59,4 @@
 
 ---
 
-## Last Updated: 2026-04-24
+## Last Updated: 2026-04-25

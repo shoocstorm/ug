@@ -161,6 +161,17 @@ interface BfsResult {
   distances: Record<string, number>;
 }
 ```
+### Graph Visualization
+```bash
+cd src
+node cli.cjs visualize ./out/graph.json
+
+or 
+cd out && python3 -m http.server 3456
+
+open http://localhost:3456/visualization.html
+```
+
 
 ## Examples
 

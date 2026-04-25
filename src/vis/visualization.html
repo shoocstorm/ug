@@ -1,0 +1,740 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Knowledge Graph | UltraGraph-KB</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+
+    <style>
+        :root {
+            --bg-deep: #09090b;
+            --bg-surface: #18181b;
+            --bg-elevated: #27272a;
+            --border: #3f3f46;
+            --text: #e4e4e7;
+            --text-muted: #a1a1aa;
+            --accent: #22d3ee;
+            --accent-dim: #0891b2;
+
+            --color-file: #22d3ee;
+            --color-interface: #f472b6;
+            --color-function: #4ade80;
+            --color-class: #c084fc;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg-deep);
+            color: var(--text);
+            overflow: hidden;
+            min-height: 100vh;
+        }
+
+        #container {
+            width: 100vw;
+            height: 100vh;
+            position: relative;
+            background:
+                radial-gradient(ellipse 80% 50% at 50% -20%, rgba(34, 211, 238, 0.08), transparent),
+                radial-gradient(ellipse 60% 40% at 80% 100%, rgba(192, 132, 252, 0.06), transparent),
+                var(--bg-deep);
+        }
+
+        svg {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
+        .node circle {
+            stroke: rgba(255, 255, 255, 0.1);
+            stroke-width: 2px;
+            cursor: grab;
+            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+            filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
+        }
+
+        .node circle:hover {
+            stroke: var(--accent);
+            stroke-width: 3px;
+            filter: drop-shadow(0 0 12px var(--accent));
+        }
+
+        .node circle:active {
+            cursor: grabbing;
+        }
+
+        .node text {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 9px;
+            fill: var(--text-muted);
+            pointer-events: none;
+            text-anchor: middle;
+            dominant-baseline: middle;
+            opacity: 0.8;
+            transition: opacity 0.2s;
+        }
+
+        .node:hover text {
+            fill: var(--text);
+            opacity: 1;
+        }
+
+        .edge {
+            stroke: url(#edgeGradient);
+            stroke-opacity: 0.4;
+            stroke-width: 1px;
+            stroke-linecap: round;
+            transition: all 0.2s ease;
+        }
+
+        .edge.highlighted {
+            stroke: var(--accent);
+            stroke-opacity: 1;
+            stroke-width: 2px;
+        }
+
+        .ui-panel {
+            position: absolute;
+            background: rgba(24, 24, 27, 0.85);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 20px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+        }
+
+        #controls {
+            top: 20px;
+            left: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            min-width: 220px;
+        }
+
+        #controls input {
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 12px 16px;
+            border-radius: 10px;
+            font-size: 13px;
+            outline: none;
+            transition: all 0.2s;
+        }
+
+        #controls input:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.15);
+        }
+
+        #controls input::placeholder {
+            color: var(--text-muted);
+        }
+
+        .btn {
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 12px 16px;
+            border-radius: 10px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .btn:hover {
+            background: var(--border);
+            transform: translateY(-1px);
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--accent-dim), #0e7490);
+            border-color: var(--accent);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: linear-gradient(135deg, var(--accent), #0e7490);
+            box-shadow: 0 4px 20px rgba(34, 211, 238, 0.3);
+        }
+
+        #legend {
+            bottom: 20px;
+            left: 20px;
+            min-width: 180px;
+        }
+
+        #legend h3 {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-muted);
+            margin-bottom: 16px;
+            font-weight: 600;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin: 10px 0;
+            font-size: 13px;
+        }
+
+        .legend-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            box-shadow: 0 0 10px currentColor;
+        }
+
+        #stats {
+            top: 20px;
+            right: 20px;
+            min-width: 160px;
+            text-align: center;
+        }
+
+        #stats .stat-value {
+            font-size: 32px;
+            font-weight: 600;
+            color: var(--accent);
+            line-height: 1;
+        }
+
+        #stats .stat-label {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        #info {
+            bottom: 20px;
+            right: 20px;
+            min-width: 280px;
+            display: none;
+        }
+
+        #info.visible {
+            display: block;
+            animation: slideIn 0.3s ease;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        #info h3 {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--accent);
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        #info h3::before {
+            content: '';
+            width: 8px;
+            height: 8px;
+            background: var(--accent);
+            border-radius: 50%;
+        }
+
+        #info .info-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid var(--border);
+            font-size: 13px;
+        }
+
+        #info .info-row:last-child {
+            border-bottom: none;
+        }
+
+        #info .info-label {
+            color: var(--text-muted);
+        }
+
+        #info .info-value {
+            color: var(--text);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            max-width: 180px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+        }
+
+        .loader {
+            width: 48px;
+            height: 48px;
+            border: 3px solid var(--border);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 16px;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        #loading p {
+            color: var(--text-muted);
+            font-size: 14px;
+        }
+
+        .tooltip {
+            position: absolute;
+            background: rgba(24, 24, 27, 0.95);
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 10px 14px;
+            font-size: 12px;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.15s;
+            z-index: 1000;
+            max-width: 250px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
+        }
+
+        .tooltip.visible {
+            opacity: 1;
+        }
+
+        .tooltip-title {
+            font-weight: 600;
+            color: var(--text);
+            margin-bottom: 4px;
+        }
+
+        .tooltip-type {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--accent);
+        }
+
+        .header {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 18px;
+            font-weight: 600;
+            letter-spacing: -0.5px;
+            background: linear-gradient(135deg, var(--text), var(--accent));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .header p {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        .zoom-controls {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 8px;
+            background: rgba(24, 24, 27, 0.85);
+            backdrop-filter: blur(20px);
+            padding: 8px;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+        }
+
+        .zoom-controls button {
+            width: 36px;
+            height: 36px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text);
+            cursor: pointer;
+            font-size: 18px;
+            transition: all 0.2s;
+        }
+
+        .zoom-controls button:hover {
+            background: var(--border);
+        }
+    </style>
+</head>
+
+<body>
+    <div id="container">
+        <svg>
+            <defs>
+                <linearGradient id="edgeGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stop-color="#22d3ee" stop-opacity="0.5" />
+                    <stop offset="50%" stop-color="#c084fc" stop-opacity="0.3" />
+                    <stop offset="100%" stop-color="#22d3ee" stop-opacity="0.5" />
+                </linearGradient>
+                <filter id="glow">
+                    <feGaussianBlur stdDeviation="3" result="coloredBlur" />
+                    <feMerge>
+                        <feMergeNode in="coloredBlur" />
+                        <feMergeNode in="SourceGraphic" />
+                    </feMerge>
+                </filter>
+            </defs>
+        </svg>
+
+        <div class="header">
+            <h1>Knowledge Graph</h1>
+            <p>Interactive visualization</p>
+        </div>
+
+        <div class="ui-panel" id="controls">
+            <input type="text" id="search" placeholder="Search nodes...">
+            <button class="btn" id="reset">Reset View</button>
+            <button class="btn" id="export">Export SVG</button>
+        </div>
+
+        <div class="ui-panel" id="stats">
+            <div class="stat-value" id="nodeCount">0</div>
+            <div class="stat-label">Nodes</div>
+            <div style="height: 16px"></div>
+            <div class="stat-value" id="edgeCount" style="font-size: 24px">0</div>
+            <div class="stat-label">Edges</div>
+        </div>
+
+        <div class="ui-panel" id="legend">
+            <h3>Node Types</h3>
+            <div id="legend-items"></div>
+        </div>
+
+        <div class="ui-panel" id="info">
+            <h3>Node Details</h3>
+            <div id="info-content"></div>
+        </div>
+
+        <div id="loading">
+            <div class="loader"></div>
+            <p>Loading graph...</p>
+        </div>
+
+        <div class="tooltip" id="tooltip">
+            <div class="tooltip-title"></div>
+            <div class="tooltip-type"></div>
+        </div>
+    </div>
+
+    <script>
+        const config = {
+            nodeRadius: { File: 10, Interface: 7, Function: 6, Class: 8, Default: 6 },
+            colorMap: {
+                File: '#22d3ee',
+                Interface: '#f472b6',
+                Function: '#4ade80',
+                Class: '#c084fc',
+                Default: '#94a3b8'
+            },
+            getColor: group => config.colorMap[group] || config.colorMap.Default
+        };
+
+        let graphData = { nodes: [], edges: [] };
+        let simulation, svg, g, link, node, zoom;
+        let width, height;
+
+        async function loadGraph() {
+            const params = new URLSearchParams(window.location.search);
+            const file = params.get('file') || 'graph.json';
+
+            try {
+                const response = await fetch(file);
+                const data = await response.json();
+                transformData(data);
+                initializeVisualization();
+            } catch (error) {
+                console.error('Failed to load graph:', error);
+                document.getElementById('loading').innerHTML = '<p style="color:#f87171">Failed to load graph.</p>';
+            }
+        }
+
+        function transformData(data) {
+            const nodeMap = new Map();
+            const centerX = window.innerWidth / 2 || 800;
+            const centerY = window.innerHeight / 2 || 600;
+
+            data.nodes.forEach((n, i) => {
+                const angle = (i / data.nodes.length) * Math.PI * 2;
+                const radius = 100 + Math.random() * 150;
+                nodeMap.set(n.id, {
+                    id: n.id,
+                    name: n.name || n.id,
+                    group: n.node_type || 'Default',
+                    x: centerX + Math.cos(angle) * radius,
+                    y: centerY + Math.sin(angle) * radius
+                });
+            });
+
+            const edges = data.edges
+                .map(e => ({
+                    source: nodeMap.has(e.source) ? nodeMap.get(e.source).id : null,
+                    target: nodeMap.has(e.target) ? nodeMap.get(e.target).id : null
+                }))
+                .filter(e => e.source && e.target);
+
+            graphData = { nodes: Array.from(nodeMap.values()), edges };
+        }
+
+        function initializeVisualization() {
+            const container = document.getElementById('container');
+            width = container.clientWidth;
+            height = container.clientHeight;
+
+            svg = d3.select('#container svg');
+            g = svg.append('g').attr('class', 'graph-container');
+
+            zoom = d3.zoom()
+                .scaleExtent([0.1, 4])
+                .on('zoom', (event) => g.attr('transform', event.transform));
+            svg.call(zoom);
+
+            document.getElementById('nodeCount').textContent = graphData.nodes.length;
+            document.getElementById('edgeCount').textContent = graphData.edges.length;
+
+            createLegend();
+            createSimulation();
+            render();
+
+            document.getElementById('loading').style.display = 'none';
+
+            document.getElementById('search').addEventListener('input', handleSearch);
+            document.getElementById('reset').addEventListener('click', resetView);
+            document.getElementById('export').addEventListener('click', exportSVG);
+        }
+
+        function createLegend() {
+            const groups = [...new Set(graphData.nodes.map(n => n.group))];
+            const legend = document.getElementById('legend-items');
+
+            groups.sort().forEach(group => {
+                const count = graphData.nodes.filter(n => n.group === group).length;
+                const item = document.createElement('div');
+                item.className = 'legend-item';
+                item.innerHTML = `
+                    <div class="legend-dot" style="background:${config.getColor(group)}"></div>
+                    <span>${group}</span>
+                    <span style="color:var(--text-muted);margin-left:auto">${count}</span>
+                `;
+                legend.appendChild(item);
+            });
+        }
+
+        function createSimulation() {
+            simulation = d3.forceSimulation(graphData.nodes)
+                .force('link', d3.forceLink(graphData.edges).id(d => d.id).distance(80))
+                .force('charge', d3.forceManyBody().strength(-50))
+                .force('center', d3.forceCenter(width / 2, height / 2).strength(0.05))
+                .force('collide', d3.forceCollide().radius(d => config.nodeRadius[d.group] + 5));
+        }
+
+        function render() {
+            link = g.append('g').attr('class', 'edges')
+                .selectAll('line')
+                .data(graphData.edges)
+                .join('line')
+                .attr('class', 'edge');
+
+            const nodeGroups = g.append('g').attr('class', 'nodes')
+                .selectAll('g')
+                .data(graphData.nodes)
+                .join('g')
+                .attr('class', 'node')
+                .call(d3.drag()
+                    .on('start', dragstarted)
+                    .on('drag', dragged)
+                    .on('end', dragended));
+
+            nodeGroups.selectAll('circle')
+                .data(d => [d])
+                .join('circle')
+                .attr('r', d => config.nodeRadius[d.group] || 6)
+                .attr('fill', d => config.getColor(d.group))
+                .attr('fill-opacity', 0.8);
+
+            nodeGroups.selectAll('text')
+                .data(d => [d])
+                .join('text')
+                .text(d => truncateName(d.name))
+                .attr('dy', d => config.nodeRadius[d.group] + 14);
+
+            simulation.on('tick', () => {
+                link
+                    .attr('x1', d => Number(d.source.x) || 0)
+                    .attr('y1', d => Number(d.source.y) || 0)
+                    .attr('x2', d => Number(d.target.x) || 0)
+                    .attr('y2', d => Number(d.target.y) || 0);
+
+                nodeGroups.attr('transform', d => `translate(${Number(d.x) || 0},${Number(d.y) || 0})`);
+            });
+
+            nodeGroups
+                .on('mouseover', handleMouseOver)
+                .on('mouseout', handleMouseOut)
+                .on('click', handleClick);
+
+            node = nodeGroups;
+        }
+
+        function truncateName(name) {
+            const parts = name.split('/');
+            const last = parts.pop();
+            const short = last.split(':').pop();
+            return short.length > 12 ? short.slice(0, 11) + '…' : short;
+        }
+
+        function dragstarted(event, d) {
+            if (!event.active) simulation.alphaTarget(0.3).restart();
+            d.fx = d.x;
+            d.fy = d.y;
+        }
+
+        function dragged(event, d) {
+            d.fx = event.x;
+            d.fy = event.y;
+        }
+
+        function dragended(event, d) {
+            if (!event.active) simulation.alphaTarget(0);
+            d.fx = null;
+            d.fy = null;
+        }
+
+        function handleMouseOver(event, d) {
+            const connected = new Set([d.id]);
+            graphData.edges.forEach(e => {
+                if (e.source.id === d.id) connected.add(e.target.id);
+                else if (e.target.id === d.id) connected.add(e.source.id);
+            });
+
+            node.selectAll('circle').attr('opacity', n => connected.has(n.id) ? 1 : 0.2);
+            node.selectAll('text').attr('opacity', n => connected.has(n.id) ? 1 : 0.1);
+            link.attr('opacity', e => connected.has(e.source.id) && connected.has(e.target.id) ? 1 : 0.1);
+
+            const tooltip = document.getElementById('tooltip');
+            tooltip.querySelector('.tooltip-title').textContent = truncateName(d.name);
+            tooltip.querySelector('.tooltip-type').textContent = d.group;
+            tooltip.style.left = (event.pageX + 15) + 'px';
+            tooltip.style.top = (event.pageY + 15) + 'px';
+            tooltip.classList.add('visible');
+        }
+
+        function handleMouseOut(event, d) {
+            node.selectAll('circle').attr('opacity', 1);
+            node.selectAll('text').attr('opacity', 0.8);
+            link.attr('opacity', 1);
+            document.getElementById('tooltip').classList.remove('visible');
+        }
+
+        function handleClick(event, d) {
+            const info = document.getElementById('info');
+            const content = document.getElementById('info-content');
+            content.innerHTML = `
+                <div class="info-row"><span class="info-label">Name</span><span class="info-value">${d.name}</span></div>
+                <div class="info-row"><span class="info-label">Type</span><span class="info-value">${d.group}</span></div>
+            `;
+            info.classList.add('visible');
+        }
+
+        function handleSearch(event) {
+            const query = event.target.value.toLowerCase();
+            if (!query) { resetView(); return; }
+
+            const matches = graphData.nodes.filter(n => n.name.toLowerCase().includes(query));
+            if (matches.length > 0) {
+                const first = matches[0];
+                svg.transition().duration(750).call(zoom.transform,
+                    d3.zoomIdentity.translate(width / 2 - first.x, height / 2 - first.y).scale(1.5));
+                node.selectAll('circle').attr('opacity', n => matches.includes(n) ? 1 : 0.2);
+            }
+        }
+
+        function resetView() {
+            document.getElementById('search').value = '';
+            document.getElementById('info').classList.remove('visible');
+            svg.transition().duration(750).call(zoom.transform, d3.zoomIdentity);
+            node.selectAll('circle').attr('opacity', 1);
+            node.selectAll('text').attr('opacity', 0.8);
+            link.attr('opacity', 1);
+        }
+
+        function exportSVG() {
+            const serializer = new XMLSerializer();
+            let source = serializer.serializeToString(svg.node());
+            source = source.replace(/<svg/, '<svg xmlns="http://www.w3.org/2000/svg"');
+            const blob = new Blob([source], { type: 'image/svg+xml;charset=utf-8' });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = 'knowledge-graph.svg';
+            link.click();
+        }
+
+        window.addEventListener('resize', () => {
+            width = document.getElementById('container').clientWidth;
+            height = document.getElementById('container').clientHeight;
+            svg.attr('width', width).attr('height', height);
+            simulation.force('center', d3.forceCenter(width / 2, height / 2));
+            simulation.alpha(0.3).restart();
+        });
+
+        loadGraph();
+    </script>
+</body>
+
+</html>

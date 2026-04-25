@@ -1,0 +1,158 @@
+{
+  "files": [
+    {
+      "path": "src/test-indexer.test.ts",
+      "hash": "c931b8766595e961e5a0ccbd932a4b74ad96db53732f4f0fe5aae2d4cb0e1244",
+      "language": "typescript",
+      "symbols": []
+    },
+    {
+      "path": "src/index.ts",
+      "hash": "84836ce1113a56c6378f6e09229fb60920cff6a1382d0517ad0ad3eed403786f",
+      "language": "typescript",
+      "symbols": [
+        {
+          "id": "fn:7:getBinding",
+          "name": "getBinding",
+          "kind": "function_declaration",
+          "file": "src/index.ts",
+          "startLine": 7,
+          "endLine": 17,
+          "docstring": null
+        },
+        {
+          "id": "interface:19:Symbol",
+          "name": "Symbol",
+          "kind": "interface",
+          "file": "src/index.ts",
+          "startLine": 19,
+          "endLine": 27,
+          "docstring": null
+        },
+        {
+          "id": "interface:29:FileNode",
+          "name": "FileNode",
+          "kind": "interface",
+          "file": "src/index.ts",
+          "startLine": 29,
+          "endLine": 34,
+          "docstring": null
+        },
+        {
+          "id": "interface:36:IndexStats",
+          "name": "IndexStats",
+          "kind": "interface",
+          "file": "src/index.ts",
+          "startLine": 36,
+          "endLine": 41,
+          "docstring": null
+        },
+        {
+          "id": "interface:43:IndexResult",
+          "name": "IndexResult",
+          "kind": "interface",
+          "file": "src/index.ts",
+          "startLine": 43,
+          "endLine": 46,
+          "docstring": null
+        },
+        {
+          "id": "interface:51:GraphNode",
+          "name": "GraphNode",
+          "kind": "interface",
+          "file": "src/index.ts",
+          "startLine": 51,
+          "endLine": 58,
+          "docstring": null
+        },
+        {
+          "id": "interface:60:GraphEdge",
+          "name": "GraphEdge",
+          "kind": "interface",
+          "file": "src/index.ts",
+          "startLine": 60,
+          "endLine": 64,
+          "docstring": null
+        },
+        {
+          "id": "interface:66:GraphData",
+          "name": "GraphData",
+          "kind": "interface",
+          "file": "src/index.ts",
+          "startLine": 66,
+          "endLine": 69,
+          "docstring": null
+        },
+        {
+          "id": "interface:71:BfsResult",
+          "name": "BfsResult",
+          "kind": "interface",
+          "file": "src/index.ts",
+          "startLine": 71,
+          "endLine": 75,
+          "docstring": null
+        },
+        {
+          "id": "fn:77:index",
+          "name": "index",
+          "kind": "function_declaration",
+          "file": "src/index.ts",
+          "startLine": 77,
+          "endLine": 81,
+          "docstring": null
+        },
+        {
+          "id": "fn:83:indexWithCache",
+          "name": "indexWithCache",
+          "kind": "function_declaration",
+          "file": "src/index.ts",
+          "startLine": 83,
+          "endLine": 87,
+          "docstring": null
+        },
+        {
+          "id": "fn:89:indexSync",
+          "name": "indexSync",
+          "kind": "function_declaration",
+          "file": "src/index.ts",
+          "startLine": 89,
+          "endLine": 93,
+          "docstring": null
+        },
+        {
+          "id": "fn:95:indexWithCacheSync",
+          "name": "indexWithCacheSync",
+          "kind": "function_declaration",
+          "file": "src/index.ts",
+          "startLine": 95,
+          "endLine": 99,
+          "docstring": null
+        },
+        {
+          "id": "fn:101:buildGraph",
+          "name": "buildGraph",
+          "kind": "function_declaration",
+          "file": "src/index.ts",
+          "startLine": 101,
+          "endLine": 106,
+          "docstring": null
+        },
+        {
+          "id": "fn:108:kHopBfs",
+          "name": "kHopBfs",
+          "kind": "function_declaration",
+          "file": "src/index.ts",
+          "startLine": 108,
+          "endLine": 113,
+          "docstring": null
+        }
+      ]
+    }
+  ],
+  "stats": {
+    "totalFiles": 2,
+    "cachedFiles": 0,
+    "totalSymbols": 15,
+    "indexingTimeMs": 4
+  }
+}

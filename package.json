@@ -10,7 +10,11 @@
     "prebuild": "cd native && cargo build --release",
     "test": "node lib/index.js"
   },
-  "keywords": ["knowledge-base", "graph", "indexer"],
+  "keywords": [
+    "knowledge-base",
+    "graph",
+    "indexer"
+  ],
   "author": "",
   "license": "MIT"
 }
