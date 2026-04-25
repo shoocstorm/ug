@@ -8,12 +8,20 @@ const ug = require(binding);
 
 const commands = {
   index: {
-    usage: '<path> [--cache <cache-dir>]',
-    desc: 'Index a directory and return symbols',
+    usage: '[<input dir>] [--cache <cache-dir>] [--output <output-path>]',
+    desc: 'Index a directory and output the symbol tree as JSON into a file specified by `--output` (default: `out/indexed-tree.json`). Use `--cache` to speed up re-indexing.',
     run: (args) => {
       const path = args[0] || '.';
       const cacheIdx = args.indexOf('--cache');
       const cachePath = cacheIdx >= 0 ? args[cacheIdx + 1] : null;
+      const outputIdx = args.indexOf('--output');
+      const outputPath = outputIdx >= 0 ? args[outputIdx + 1] : 'out/indexed-tree.json';
+
+      // Ensure output directory exists
+      const outputDir = dirname(outputPath);
+      if (!existsSync(outputDir)) {
+        mkdirSync(outputDir, { recursive: true });
+      }
 
       let result;
       if (cachePath) {
@@ -21,21 +29,32 @@ const commands = {
       } else {
         result = ug.index(path);
       }
-      return JSON.parse(result);
+      writeFileSync(outputPath, result);
+      return `Generated index in ${outputPath}`;
     }
   },
   graph: {
-    usage: '<index-json-file>',
-    desc: 'Build graph from index result',
+    usage: '[<indexed-tree-json-file>] [--output <output-path>]',
+    desc: 'Build graph from index result (i.e.: out/indexed-tree.json)',
     run: (args) => {
-      if (!args[0]) {
-        throw new Error('Usage: build-graph <index-json-file>');
+      const pathIdx = args.indexOf('--input');
+      const path = pathIdx >= 0 ? args[pathIdx + 1] : (args.length ? args[0] : 'out/indexed-tree.json');
+      const outputIdx = args.indexOf('--output');
+      const outputPath = outputIdx >= 0 ? args[outputIdx + 1] : 'out/graph.json';
+
+      // Ensure output directory exists
+      const outputDir = dirname(outputPath);
+      if (!existsSync(outputDir)) {
+        mkdirSync(outputDir, { recursive: true });
       }
-      const indexJson = readFileSync(args[0], 'utf-8');
+
+      const indexJson = readFileSync(path, 'utf-8');
       const index = JSON.parse(indexJson);
       const json = JSON.stringify(index);
       const result = ug.buildGraph(json);
-      return JSON.parse(result);
+
+      writeFileSync(outputPath, result);
+      return `Generated graph in ${outputPath}`;
     }
   },
   gen: {

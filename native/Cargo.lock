@@ -588,6 +588,7 @@ dependencies = [
  "napi-derive",
  "petgraph",
  "rayon",
+ "regex",
  "serde",
  "serde_json",
  "tree-sitter",

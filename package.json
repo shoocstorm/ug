@@ -8,8 +8,11 @@
     "build": "tsc",
     "build:native": "cd native && cargo build --release",
     "prebuild": "cd native && cargo build --release",
+    "index": "node src/cli.cjs index",
+    "graph": "node src/cli.cjs graph",
     "gen": "node src/cli.cjs gen",
-    "start": "python3 -m http.server 8080 -d out"
+    "start": "python3 -m http.server 8080 -d out",
+    "test": "node src/test-runner.cjs"
   },
   "keywords": [
     "knowledge-base",
