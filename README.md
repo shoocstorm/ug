@@ -164,7 +164,7 @@ interface BfsResult {
 ### Graph Visualization
 ```bash
 cd src
-npm run gen -- ~/Documents/project/aldrickbot/src 
+npm run build -- ~/Documents/project/aldrickbot/src 
 
 npm start
 

@@ -134,7 +134,7 @@ native/
 
 ### Graph
 - Node types: File, Function, Class, Interface
-- Edge types: Contains, Imports, Extends, Implements, TypedAs, Calls, References
+- Edge types: Contains, Imports, Extends, Implements, Calls, References
 - K-hop BFS traversal
 - Deduplication
 

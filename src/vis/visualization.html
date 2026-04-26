@@ -963,7 +963,7 @@
 
     <script>
         const config = {
-            nodeRadius: { File: 10, Interface: 7, Function: 6, Class: 8, Dependency: 5, Config: 8, External: 5, Default: 6 },
+            nodeRadius: { File: 10, Interface: 7, Function: 6, Class: 8, Dependency: 5, Config: 8, Default: 6 },
             colorMap: {
                 File: '#22d3ee',
                 Interface: '#f472b6',
@@ -971,7 +971,7 @@
                 Class: '#c084fc',
                 Dependency: '#fb923c',
                 Config: '#fbbf24',
-                External: '#94a3b8',
+                
                 Default: '#94a3b8'
             },
             relColorMap: {
@@ -989,7 +989,6 @@
                 'Imports': '#f472b6',
                 'Requires': '#94a3b8',
                 'Contains': '#71717a',
-                'TypedAs': '#22d3ee'
             },
             getColor: group => config.colorMap[group] || config.colorMap.Default,
             getRelColor: rel => rel ? (config.relColorMap[rel] || '#777') : null
@@ -1041,7 +1040,7 @@
                     extends: n.extends || [],
                     implements: n.implements || [],
                     calls: n.calls || [],
-                    typed_as: n.typed_as || [],
+                    edge_type: "edge_type",
                     x: centerX + Math.cos(angle) * radius,
                     y: centerY + Math.sin(angle) * radius
                 });
@@ -1051,36 +1050,9 @@
                 .map(e => {
                     const sourceKey = e.source;
                     const targetKey = e.target;
-
-                    if (!nodeMap.has(sourceKey)) {
-                        nodeMap.set(sourceKey, {
-                            id: sourceKey,
-                            name: sourceKey.replace(/^[^:]+:/, '').replace(/^file:/, '').replace(/^dep:/, ''),
-                            group: 'External',
-                            file: null, startLine: null, endLine: null,
-                            docstring: null, metrics: null, signature: null,
-                            imports: [], exports: [], extends: [],
-                            implements: [], calls: [], typed_as: [],
-                            x: centerX + Math.cos(Math.random() * Math.PI * 2) * 150,
-                            y: centerY + Math.sin(Math.random() * Math.PI * 2) * 150
-                        });
-                    }
-                    if (!nodeMap.has(targetKey)) {
-                        nodeMap.set(targetKey, {
-                            id: targetKey,
-                            name: targetKey.replace(/^[^:]+:/, '').replace(/^file:/, '').replace(/^dep:/, ''),
-                            group: 'External',
-                            file: null, startLine: null, endLine: null,
-                            docstring: null, metrics: null, signature: null,
-                            imports: [], exports: [], extends: [],
-                            implements: [], calls: [], typed_as: [],
-                            x: centerX + Math.cos(Math.random() * Math.PI * 2) * 150,
-                            y: centerY + Math.sin(Math.random() * Math.PI * 2) * 150
-                        });
-                    }
                     return { source: sourceKey, target: targetKey, rel: e.edge_type || e.rel || null };
                 })
-                .filter(e => e.source && e.target);
+                .filter(e => e.source && e.target && nodeMap.has(e.source) && nodeMap.has(e.target));
 
             graphData = { nodes: Array.from(nodeMap.values()), edges };
         }

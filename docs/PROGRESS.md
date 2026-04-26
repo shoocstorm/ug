@@ -25,15 +25,15 @@
 - [x] Function Call Relationships: Nested function calls
 
 **New Symbol Fields:**
-- `imports`: File-level imports with path, imported names, external flag
+- `imports`: File-level imports with path, imported names
 - `exports`: File-level exports
 - `extends`: Parent classes/interfaces
 - `implements`: Implemented interfaces  
 - `calls`: Called functions
-- `typed_as`: Type references
+
 
 **New Edge Types:**
-- Imports, Exports, Extends, Implements, TypedAs, Calls, References
+- Imports, Exports, Extends, Implements, Calls, References
 
 ---
 

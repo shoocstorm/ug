@@ -5,13 +5,13 @@
   "main": "index.js",
   "napi": {
     "name": "ultragraph-kb",
-    "platforms": ["aarch64-apple-darwin"]
+    "platforms": [
+      "aarch64-apple-darwin"
+    ]
   },
   "scripts": {
     "build": "cargo build --release",
     "postbuild": "napi build",
-    "test": "cargo test -- --nocapture",
-    "check": "cargo check",
-    "lint": "cargo clippy"
+    "test": "cargo test -- --nocapture"
   }
 }

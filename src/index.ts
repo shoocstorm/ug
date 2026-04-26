@@ -46,7 +46,7 @@ export interface IndexResult {
 }
 
 export type GraphNodeType = "File" | "Function" | "Class" | "Interface" | "Concept" | "Dependency" | "Config";
-export type GraphEdgeType = "DependsOn" | "Calls" | "Extends" | "Implements" | "References" | "Contains" | "Imports" | "Exports" | "Requires" | "TypedAs" | "Uses";
+export type GraphEdgeType = "DependsOn" | "Calls" | "Extends" | "Implements" | "References" | "Contains" | "Imports" | "Exports" | "Requires" | "Uses";
 
 export interface GraphNode {
   id: string;
@@ -58,12 +58,11 @@ export interface GraphNode {
   metrics?: { loc: number; params: number; maxNesting: number };
   signature?: { params: Array<{ name: string; type?: string; optional: boolean; default?: string }>; returnType?: string };
   docstring?: string | null;
-  imports?: Array<{ path: string; imported: Array<{ name: string; alias?: string }>; isExternal: boolean }>;
+  imports?: Array<{ path: string; imported: Array<{ name: string; alias?: string }> }>;
   exports?: Array<{ name: string; alias?: string; isDefault: boolean }>;
   extends?: string[];
   implements?: string[];
   calls?: string[];
-  typed_as?: Array<{ name: string; generic?: string }>;
 }
 
 export interface GraphEdge {

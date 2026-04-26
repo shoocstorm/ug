@@ -6,7 +6,7 @@
   "types": "lib/index.d.ts",
   "scripts": {
     "build": "node src/cli.cjs gen",
-    "prebuild": "cd native && cargo build --release",
+    "prebuild": "echo 'Execute pre-build to generate ultragraph-kb.node binary' && cd native && npm run build",
     "index": "node src/cli.cjs index",
     "graph": "node src/cli.cjs graph",
     "gen": "node src/cli.cjs gen",

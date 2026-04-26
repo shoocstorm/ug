@@ -128,7 +128,6 @@ This requirements file is optimized for a **High-Performance Hybrid Architecture
 
 * **[NEW] Package Dependencies** (Medium Value)
   * Extract: `package.json` dependencies, devDependencies
-  * Extract: `import ... from 'package'` for external detection
   * Creates: DEPENDS_ON edges to package nodes
 
 * **[NEW] Configuration Relationships** (Medium Value)

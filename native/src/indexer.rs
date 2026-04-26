@@ -99,14 +99,12 @@ fn extract_file_imports(node: &Node, source: &[u8], language: &str) -> Vec<Impor
 
                 let path = cap.get(4).map(|m| m.as_str().to_string()).unwrap_or_default();
                 if !path.is_empty() {
-                    let is_external = !path.starts_with('.');
                     import_lookup
                         .entry(path.clone())
                         .and_modify(|info| info.imported.extend(names.clone()))
                         .or_insert_with(|| ImportInfo {
                             path,
                             imported: names,
-                            is_external,
                         });
                 }
             }
@@ -131,14 +129,12 @@ fn extract_file_imports(node: &Node, source: &[u8], language: &str) -> Vec<Impor
 
                 let path = cap.get(2).map(|m| m.as_str().to_string()).unwrap_or_default();
                 if !path.is_empty() {
-                    let is_external = !path.starts_with('.');
                     import_lookup
                         .entry(path.clone())
                         .and_modify(|info| info.imported.extend(names.clone()))
                         .or_insert_with(|| ImportInfo {
                             path,
                             imported: names,
-                            is_external,
                         });
                 }
             }
@@ -169,7 +165,6 @@ fn extract_file_imports(node: &Node, source: &[u8], language: &str) -> Vec<Impor
                         .or_insert_with(|| ImportInfo {
                             path,
                             imported: names,
-                            is_external: true,
                         });
                 }
             }
@@ -188,7 +183,6 @@ fn extract_file_imports(node: &Node, source: &[u8], language: &str) -> Vec<Impor
                                 name: path.split('.').last().unwrap_or(&path).to_string(),
                                 alias: None,
                             }],
-                            is_external: true,
                         });
                 }
             }
@@ -279,7 +273,7 @@ fn extract_symbols(
                     let calls = extract_function_calls(&node, source);
                     let extends = extract_extends(&node, source);
                     let implements = extract_implements(&node, source);
-                    let typed_as = extract_type_refs(&node, source);
+                    
                     let docstring = extract_docstring(&node, source);
                     let metrics = SymbolMetrics {
                         loc: end.saturating_sub(start),
@@ -304,7 +298,7 @@ fn extract_symbols(
                         extends,
                         implements,
                         calls,
-                        typed_as,
+                        
                         metrics: Some(metrics),
                     });
                 }
@@ -313,7 +307,7 @@ fn extract_symbols(
                 if let Some(name) = get_node_text(node.child_by_field_name("name"), source) {
                     let extends = extract_extends(&node, source);
                     let implements = extract_implements(&node, source);
-                    let typed_as = extract_type_refs(&node, source);
+                    
                     let docstring = extract_docstring(&node, source);
 
                     symbols.push(Symbol {
@@ -330,7 +324,7 @@ fn extract_symbols(
                         extends,
                         implements,
                         calls: vec![],
-                        typed_as,
+                        
                         metrics: None,
                     });
                 }
@@ -338,9 +332,9 @@ fn extract_symbols(
             "interface_declaration" => {
                 if let Some(name) = get_node_text(node.child_by_field_name("name"), source) {
                     let extends = extract_extends(&node, source);
-                    let typed_as = extract_type_refs(&node, source);
+                    
                     let docstring = extract_docstring(&node, source);
-                    let members = extract_interface_members(&node, source);
+                    let _members = extract_interface_members(&node, source);
 
                     symbols.push(Symbol {
                         id: format!("interface:{}:{}", start, name),
@@ -356,14 +350,13 @@ fn extract_symbols(
                         extends,
                         implements: vec![],
                         calls: vec![],
-                        typed_as: members,
                         metrics: None,
                     });
                 }
             }
             "variable_declaration" => {
                 if let Some(name) = get_node_text(node.child_by_field_name("name"), source) {
-                    let typed_as = extract_type_refs(&node, source);
+                    
                     let docstring = extract_docstring(&node, source);
 
                     symbols.push(Symbol {
@@ -380,14 +373,14 @@ fn extract_symbols(
                         extends: vec![],
                         implements: vec![],
                         calls: vec![],
-                        typed_as,
+                        
                         metrics: None,
                     });
                 }
             }
             "type_alias_declaration" => {
                 if let Some(name) = get_node_text(node.child_by_field_name("name"), source) {
-                    let typed_as = extract_type_refs(&node, source);
+                    
                     let docstring = extract_docstring(&node, source);
 
                     symbols.push(Symbol {
@@ -404,7 +397,7 @@ fn extract_symbols(
                         extends: vec![],
                         implements: vec![],
                         calls: vec![],
-                        typed_as,
+                        
                         metrics: None,
                     });
                 }
@@ -441,16 +434,15 @@ fn extract_symbols(
                         exports: vec![],
                         extends: vec![],
                         implements: vec![],
-                        calls,
-                        typed_as: vec![],
-                        metrics: Some(metrics),
+                         calls,
+                         metrics: Some(metrics),
                     });
                 }
             }
             "class_definition" => {
                 if let Some(name) = get_node_text(node.child_by_field_name("name"), source) {
                     let extends = extract_python_extends(&node, source);
-                    let typed_as = extract_type_refs(&node, source);
+                    
                     let docstring = extract_docstring(&node, source);
 
                     symbols.push(Symbol {
@@ -467,13 +459,13 @@ fn extract_symbols(
                         extends,
                         implements: vec![],
                         calls: vec![],
-                        typed_as,
+                        
                         metrics: None,
                     });
                 }
             }
             "assignment" => {
-                let typed_as = extract_type_refs(&node, source);
+                
                 if let Some(target) = node.child_by_field_name("target") {
                     let name = get_node_text(Some(target), source);
                     if let Some(n) = name {
@@ -491,7 +483,7 @@ fn extract_symbols(
                             extends: vec![],
                             implements: vec![],
                             calls: vec![],
-                            typed_as,
+                            
                             metrics: None,
                         });
                     }
@@ -842,7 +834,6 @@ fn resolve_import_refs(symbols: &mut [Symbol], imports: &[ImportInfo]) {
                     sym.imports.push(ImportInfo {
                         path: _import.path.clone(),
                         imported: vec![imp.clone()],
-                        is_external: _import.is_external,
                     });
                 }
             }

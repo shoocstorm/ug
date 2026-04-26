@@ -23,8 +23,7 @@ pub struct Symbol {
     pub implements: Vec<String>,
     #[serde(default)]
     pub calls: Vec<String>,
-    #[serde(default)]
-    pub typed_as: Vec<TypeRef>,
+
     #[serde(default)]
     pub metrics: Option<SymbolMetrics>,
 }
@@ -48,8 +47,6 @@ pub struct Param {
 pub struct ImportInfo {
     pub path: String,
     pub imported: Vec<ImportedItem>,
-    #[serde(rename = "isExternal")]
-    pub is_external: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -156,11 +153,10 @@ pub enum GraphEdgeType {
     Implements,
     References,
     Contains,
-    Imports,
-    Exports,
-    Requires,
-    TypedAs,
-    Uses,
+     Imports,
+     Exports,
+     Requires,
+     Uses,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -186,8 +182,7 @@ pub struct GraphNode {
     pub implements: Vec<String>,
     #[serde(default)]
     pub calls: Vec<String>,
-    #[serde(default)]
-    pub typed_as: Vec<GraphTypeRef>,
+
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -201,8 +196,6 @@ pub struct GraphNodeSignature {
 pub struct GraphNodeImport {
     pub path: String,
     pub imported: Vec<GraphImportedItem>,
-    #[serde(rename = "isExternal")]
-    pub is_external: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
