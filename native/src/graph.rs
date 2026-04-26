@@ -8,6 +8,9 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
     let mut edges: Vec<GraphEdge> = Vec::new();
     let mut symbol_id_map: HashMap<String, String> = HashMap::new();
 
+    // Pass 1: build all file & symbol nodes and populate symbol_id_map so
+    // pass-2 edges (calls/extends/implements) can resolve targets to real
+    // node IDs even when the call target is defined later or in another file.
     for file in &index_result.files {
         let file_node_id = format!("file:{}", file.path.replace('\\', "/"));
 
@@ -41,7 +44,6 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
             extends: vec![],
             implements: vec![],
             calls: vec![],
-
         });
 
         for sym in &file.symbols {
@@ -80,7 +82,6 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
                 is_default: exp.is_default,
             }).collect();
 
-
             nodes.push(GraphNode {
                 id: sym_node_id.clone(),
                 name: sym.name.clone(),
@@ -96,7 +97,6 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
                 extends: sym.extends.clone(),
                 implements: sym.implements.clone(),
                 calls: sym.calls.clone(),
-
             });
 
             symbol_id_map.insert(sym.name.clone(), sym_node_id.clone());
@@ -106,38 +106,50 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
                 target: sym_node_id.clone(),
                 edge_type: GraphEdgeType::Contains,
             });
+        }
+    }
+
+    // Pass 2: resolve calls/extends/implements through symbol_id_map. Names
+    // like `this.foo` or `obj.foo` fall back to the trailing segment so
+    // member-access calls hit the right method node.
+    for file in &index_result.files {
+        for sym in &file.symbols {
+            let sym_node_id = format!("{}:{}", sym.kind, sym.name);
 
             for extended in &sym.extends {
-                edges.push(GraphEdge {
-                    source: sym_node_id.clone(),
-                    target: format!("class:{}", extended),
-                    edge_type: GraphEdgeType::Extends,
-                });
+                if let Some(target_id) = resolve_symbol(&symbol_id_map, extended) {
+                    edges.push(GraphEdge {
+                        source: sym_node_id.clone(),
+                        target: target_id,
+                        edge_type: GraphEdgeType::Extends,
+                    });
+                }
             }
 
             for implemented in &sym.implements {
-                edges.push(GraphEdge {
-                    source: sym_node_id.clone(),
-                    target: format!("interface:{}", implemented),
-                    edge_type: GraphEdgeType::Implements,
-                });
+                if let Some(target_id) = resolve_symbol(&symbol_id_map, implemented) {
+                    edges.push(GraphEdge {
+                        source: sym_node_id.clone(),
+                        target: target_id,
+                        edge_type: GraphEdgeType::Implements,
+                    });
+                }
             }
 
             for called in &sym.calls {
-                edges.push(GraphEdge {
-                    source: sym_node_id.clone(),
-                    target: format!("fn:{}", called),
-                    edge_type: GraphEdgeType::Calls,
-                });
-                edges.push(GraphEdge {
-                    source: sym_node_id.clone(),
-                    target: format!("class:{}", called),
-                    edge_type: GraphEdgeType::Calls,
-                });
+                if let Some(target_id) = resolve_symbol(&symbol_id_map, called) {
+                    edges.push(GraphEdge {
+                        source: sym_node_id.clone(),
+                        target: target_id,
+                        edge_type: GraphEdgeType::Calls,
+                    });
+                }
             }
-
-
         }
+    }
+
+    for file in &index_result.files {
+        let file_node_id = format!("file:{}", file.path.replace('\\', "/"));
 
         for import in &file.imports {
             let source_file = file_node_id.clone();
@@ -187,6 +199,20 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
     dedupe_edges(&mut edges);
 
     GraphData { nodes, edges }
+}
+
+/// Look up a symbol by name. Falls back to the trailing identifier so
+/// member-access call expressions (`this.foo`, `obj.bar.baz`) resolve to
+/// the method node when only the bare method name is in the map.
+fn resolve_symbol(map: &HashMap<String, String>, name: &str) -> Option<String> {
+    if let Some(id) = map.get(name) {
+        return Some(id.clone());
+    }
+    let tail = name.rsplit('.').next()?;
+    if tail == name {
+        return None;
+    }
+    map.get(tail).cloned()
 }
 
 fn resolve_cross_file_references(edges: &mut Vec<GraphEdge>, symbol_id_map: &HashMap<String, String>) {

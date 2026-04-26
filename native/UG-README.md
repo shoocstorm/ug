@@ -10,6 +10,7 @@ cd native
 cargo build --release
 
 # Run CLI
+alias ug=./target/release/ug
 ./target/release/ug --help
 
 # Run tests

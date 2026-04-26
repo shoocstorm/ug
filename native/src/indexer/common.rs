@@ -139,17 +139,23 @@ pub fn extract_return_type(node: &Node, source: &[u8]) -> Option<String> {
     }
 }
 
-/// Collect every callee name reachable from `node`. Looks for
-/// `call_expression` children, which is the kind used by the
-/// TypeScript/JavaScript grammars. Languages whose grammar uses a different
-/// node kind (Python uses `call`) should override this in their own indexer.
+/// Collect every callee name reachable anywhere beneath `node`. Recurses into
+/// nested blocks so calls inside `if`/loops/closures are captured. Looks for
+/// `call_expression` (TypeScript/JavaScript) and `call` (Python).
 pub fn extract_function_calls(node: &Node, source: &[u8]) -> Vec<String> {
     let mut calls = Vec::new();
+    collect_calls(node, source, &mut calls);
+    calls
+}
 
+fn collect_calls(node: &Node, source: &[u8], calls: &mut Vec<String>) {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        if child.kind() == "call_expression" {
-            if let Some(func) = child.child_by_field_name("function") {
+        if matches!(child.kind(), "call_expression" | "call") {
+            let func_node = child
+                .child_by_field_name("function")
+                .or_else(|| child.child_by_field_name("callee"));
+            if let Some(func) = func_node {
                 if let Some(name) = get_node_text(Some(func), source) {
                     if !calls.contains(&name) {
                         calls.push(name);
@@ -157,9 +163,8 @@ pub fn extract_function_calls(node: &Node, source: &[u8]) -> Vec<String> {
                 }
             }
         }
+        collect_calls(&child, source, calls);
     }
-
-    calls
 }
 
 /// Regex-based parameter extraction used as a fallback when the AST didn't
