@@ -178,13 +178,13 @@ open http://localhost:8080
 
 ```bash
 # Step 1: Index the project
-node src/cli.cjs index ./src > index.json
+node src/cli.cjs index ./src
 
 # Step 2: Build the graph
-node src/cli.cjs build-graph index.json > graph.json
+node src/cli.cjs graph
 
-# Step 3: Query 2-hop neighbors from index.ts
-node src/cli.cjs k-hop-bfs graph.json "file:./src/index.ts" 2
+# Step 3: Query 2-hop neighbors from loadBinding function
+node src/cli.cjs search ./out/graph.json "function_declaration:getBinding" 3
 ```
 
 Output:
@@ -227,7 +227,7 @@ const result3 = await indexWithCache('./project', './.cache');
 Run the test suite:
 
 ```bash
-node src/test-runner.cjs
+node src/test/test-runner.cjs
 ```
 
 **Current results:**
@@ -299,7 +299,7 @@ kb-gen/
 ├── src/
 │   ├── index.ts           # TypeScript wrapper
 │   ├── cli.cjs           # CLI entry point
-│   ├── test-runner.cjs   # Test suite
+│   ├── test/test-runner.cjs   # Test suite
 │   └── test-indexer.test.ts
 └── package.json
 ```

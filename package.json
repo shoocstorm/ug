@@ -11,7 +11,7 @@
     "graph": "node src/cli.cjs graph",
     "gen": "node src/cli.cjs gen",
     "start": "python3 -m http.server 8080 -d out",
-    "test": "node src/test-runner.cjs"
+    "test": "node src/test/test-runner.cjs"
   },
   "keywords": [
     "knowledge-base",
