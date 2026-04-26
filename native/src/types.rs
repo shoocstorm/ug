@@ -106,6 +106,7 @@ pub enum FileClassification {
     Reducer,
     Test,
     Asset,
+    Documentation,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

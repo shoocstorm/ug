@@ -14,7 +14,7 @@ use tree_sitter::Node;
 
 /// File extensions we are willing to index. Add new entries when registering
 /// a new language indexer in `super::languages`.
-pub const SUPPORTED_EXTS: &[&str] = &["ts", "tsx", "js", "jsx", "py"];
+pub const SUPPORTED_EXTS: &[&str] = &["ts", "tsx", "js", "jsx", "py", "md", "mdx", "markdown"];
 
 /// Directory names that are always skipped during the file walk.
 pub const IGNORED_DIRS: &[&str] = &["node_modules", ".git", "target"];

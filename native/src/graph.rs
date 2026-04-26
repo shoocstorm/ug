@@ -46,17 +46,37 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
             calls: vec![],
         });
 
+        // Stack of (heading_level, sym_node_id) maintained per file while
+        // walking symbols in source order. Used to resolve the parent of
+        // each markdown heading: pop any heading on top whose level is
+        // greater-or-equal to the current one, and the stack's new top is
+        // the parent (the file node when the stack is empty). Non-markdown
+        // files never push to the stack.
+        let mut heading_stack: Vec<(usize, String)> = Vec::new();
+
         for sym in &file.symbols {
-            let node_type = match sym.kind.as_str() {
-                "function" | "function_declaration" | "method_definition" => GraphNodeType::Function,
-                "class" | "class_declaration" => GraphNodeType::Class,
-                "interface" | "interface_declaration" => GraphNodeType::Interface,
-                "variable" | "variable_declaration" => GraphNodeType::Function,
-                "type" | "type_alias_declaration" => GraphNodeType::Interface,
-                _ => GraphNodeType::Function,
+            let heading_level = parse_heading_level(&sym.kind);
+
+            let node_type = if heading_level.is_some() {
+                GraphNodeType::Concept
+            } else {
+                match sym.kind.as_str() {
+                    "function" | "function_declaration" | "method_definition" => GraphNodeType::Function,
+                    "class" | "class_declaration" => GraphNodeType::Class,
+                    "interface" | "interface_declaration" => GraphNodeType::Interface,
+                    "variable" | "variable_declaration" => GraphNodeType::Function,
+                    "type" | "type_alias_declaration" => GraphNodeType::Interface,
+                    _ => GraphNodeType::Function,
+                }
             };
 
-            let sym_node_id = format!("{}:{}", sym.kind, sym.name);
+            // Headings get file+line-scoped IDs so the same `## Setup`
+            // heading in two different docs doesn't collapse onto one node.
+            let sym_node_id = if heading_level.is_some() {
+                format!("heading:{}:{}", file.path.replace('\\', "/"), sym.start_line)
+            } else {
+                format!("{}:{}", sym.kind, sym.name)
+            };
 
             let signature = sym.signature.as_ref().map(|s| crate::types::GraphNodeSignature {
                 params: s.params.iter().map(|p| crate::types::Param {
@@ -99,13 +119,37 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
                 calls: sym.calls.clone(),
             });
 
-            symbol_id_map.insert(sym.name.clone(), sym_node_id.clone());
+            if let Some(level) = heading_level {
+                while let Some(&(top_level, _)) = heading_stack.last() {
+                    if top_level < level {
+                        break;
+                    }
+                    heading_stack.pop();
+                }
+                let parent_id = heading_stack
+                    .last()
+                    .map(|(_, id)| id.clone())
+                    .unwrap_or_else(|| file_node_id.clone());
 
-            edges.push(GraphEdge {
-                source: file_node_id.clone(),
-                target: sym_node_id.clone(),
-                edge_type: GraphEdgeType::Contains,
-            });
+                edges.push(GraphEdge {
+                    source: parent_id,
+                    target: sym_node_id.clone(),
+                    edge_type: GraphEdgeType::Contains,
+                });
+
+                heading_stack.push((level, sym_node_id.clone()));
+                // Heading text is intentionally kept out of `symbol_id_map`:
+                // a heading "Setup" must not be a target for code-side
+                // call/extends/implements resolution.
+            } else {
+                symbol_id_map.insert(sym.name.clone(), sym_node_id.clone());
+
+                edges.push(GraphEdge {
+                    source: file_node_id.clone(),
+                    target: sym_node_id.clone(),
+                    edge_type: GraphEdgeType::Contains,
+                });
+            }
         }
     }
 
@@ -199,6 +243,18 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
     dedupe_edges(&mut edges);
 
     GraphData { nodes, edges }
+}
+
+/// Parse a markdown heading kind like `heading_3` into its level (1-6).
+/// Returns `None` for non-heading symbol kinds, so non-markdown files
+/// short-circuit cheaply on the prefix check.
+fn parse_heading_level(kind: &str) -> Option<usize> {
+    let level: usize = kind.strip_prefix("heading_")?.parse().ok()?;
+    if (1..=6).contains(&level) {
+        Some(level)
+    } else {
+        None
+    }
 }
 
 /// Look up a symbol by name. Falls back to the trailing identifier so
