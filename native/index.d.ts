@@ -10,8 +10,18 @@ export declare function filterEdgesByType(graphJson: string, edgeTypes: Array<st
 
 export declare function findShortestPath(graphJson: string, sourceId: string, targetId: string): string
 
+/**
+ * Index every supported source file under `path`. Returns a JSON-encoded
+ * [`IndexResult`].
+ */
 export declare function index(path: string): string
 
+/**
+ * Index every supported source file under `path`, skipping files whose
+ * blake3 hash matches the value stored in `<cache_path>/cache.json` from a
+ * previous run. The cache file is rewritten with the latest hashes once
+ * indexing is complete.
+ */
 export declare function indexWithCache(path: string, cachePath: string): string
 
 export declare function kHopBfs(graphJson: string, startNodeId: string, k: number): string

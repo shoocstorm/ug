@@ -59,7 +59,7 @@ Options:
 
 ### `ug gen`
 
-Generate full output: index + graph.
+Generate full output: indexing + graph building (combination of ug index + ug graph).
 
 ```bash
 ug gen -i ./lib -o ./out              # Generate in ./out
@@ -149,6 +149,16 @@ native/
 - `rayon` - Parallel processing
 - `regex` - Pattern matching
 - `napi-rs` - Node.js bindings
+
+
+## Extensibility
+Support a new language, i.e.: Java.
+Adding Java is now a 5-step additive change (documented in languages.rs):
+  1. Drop languages/java.rs implementing LanguageIndexer.
+  2. Add mod java; in languages.rs.
+  3. Register the extensions in for_extension.
+  4. Add the same exts to common::SUPPORTED_EXTS.
+  5. Add tree-sitter-java to Cargo.toml.
 
 ## Performance
 

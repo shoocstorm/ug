@@ -1140,12 +1140,12 @@
                 cycleResult.style.display = 'none';
             });
 
-            document.getElementById('centrality-btn').addEventListener('click', async () => {
+            document.getElementById('centrality-btn').addEventListener('click', () => {
                 pathPanel.classList.remove('visible');
                 centralityPanel.classList.toggle('visible');
                 cycleResult.style.display = 'none';
                 if (centralityPanel.classList.contains('visible')) {
-                    await calculateAndShowCentrality();
+                    showCentrality();
                 }
             });
 
@@ -1169,14 +1169,25 @@
             cycleResult.style.display = 'none';
         }
 
-        async function calculateAndShowCentrality() {
+        function showCentrality() {
             const degreeList = document.getElementById('degree-centrality');
             const betweennessList = document.getElementById('betweenness-centrality');
             degreeList.innerHTML = '';
             betweennessList.innerHTML = '';
 
-            const degree = graphData.nodes.map(n => ({ id: n.id, value: Math.random() * 10 }));
-            const betweenness = graphData.nodes.map(n => ({ id: n.id, value: Math.random() * 5 }));
+            const degree = graphData.nodes
+                .filter(n => n.metrics && n.metrics.degree_centrality !== undefined)
+                .map(n => ({ id: n.id, value: n.metrics.degree_centrality }));
+            const betweenness = graphData.nodes
+                .filter(n => n.metrics && n.metrics.betweenness_centrality !== undefined)
+                .map(n => ({ id: n.id, value: n.metrics.betweenness_centrality }));
+
+            if (degree.length === 0 || betweenness.length === 0) {
+                degreeList.innerHTML = '<div class="centrality-item">No centrality data available</div>';
+                betweennessList.innerHTML = '<div class="centrality-item">No centrality data available</div>';
+                return;
+            }
+
             degree.sort((a, b) => b.value - a.value);
             betweenness.sort((a, b) => b.value - a.value);
 
@@ -1188,7 +1199,7 @@
                 item.className = 'centrality-item';
                 const width = (n.value / maxDegree) * 80;
                 const name = truncateName(n.id);
-                item.innerHTML = `<span class="name" style="width:100px">${name}</span><div class="bar" style="width:${width}px"></div><span>${n.value.toFixed(1)}</span>`;
+                item.innerHTML = '<span class="name" style="width:100px">' + name + '</span><div class="bar" style="width:' + width + 'px"></div><span>' + n.value.toFixed(3) + '</span>';
                 degreeList.appendChild(item);
             });
 
@@ -1197,7 +1208,7 @@
                 item.className = 'centrality-item';
                 const width = (n.value / maxBetweenness) * 80;
                 const name = truncateName(n.id);
-                item.innerHTML = `<span class="name" style="width:100px">${name}</span><div class="bar" style="width:${width}px;background:#f472b6"></div><span>${n.value.toFixed(1)}</span>`;
+                item.innerHTML = '<span class="name" style="width:100px">' + name + '</span><div class="bar" style="width:' + width + 'px;background:#f472b6"></div><span>' + n.value.toFixed(3) + '</span>';
                 betweennessList.appendChild(item);
             });
         }
