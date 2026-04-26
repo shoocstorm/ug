@@ -2,6 +2,14 @@
 /* eslint-disable */
 export declare function buildGraph(indexJson: string): string
 
+export declare function calculateCentrality(graphJson: string): string
+
+export declare function detectCycles(graphJson: string): string
+
+export declare function filterEdgesByType(graphJson: string, edgeTypes: Array<string>): string
+
+export declare function findShortestPath(graphJson: string, sourceId: string, targetId: string): string
+
 export declare function index(path: string): string
 
 export declare function indexWithCache(path: string, cachePath: string): string

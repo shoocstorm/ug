@@ -1,4 +1,4 @@
-use ultragraph_kb::{index, build_graph, k_hop_bfs, types::{GraphData, BfsResult, GraphNodeType, GraphEdgeType}};
+use ultragraph_kb::{index, build_graph, k_hop_bfs, filter_edges_by_type, find_shortest_path, calculate_centrality, detect_cycles, types::{GraphData, BfsResult, GraphNodeType, GraphEdgeType, FilteredEdgesResult, PathResult, CentralityResult, CycleResult}};
 use std::fs;
 use tempfile::TempDir;
 
@@ -328,4 +328,220 @@ fn test_graph_empty_directory() {
 
     assert!(graph.nodes.is_empty());
     assert!(graph.edges.is_empty());
+}
+
+#[test]
+fn test_filter_edges_by_type() {
+    let dir = TempDir::new().unwrap();
+    let dir_path = dir.path().to_string_lossy().to_string();
+    fs::write(dir.path().join("a.ts"), "export function a(): void { }").unwrap();
+    fs::write(dir.path().join("b.ts"), "import { a } from './a'; export function b(): void { }").unwrap();
+
+    let index_result = index(dir_path);
+    let graph_json = build_graph(index_result);
+
+    let result_json = filter_edges_by_type(graph_json, vec!["imports".to_string()]);
+    let result: FilteredEdgesResult = serde_json::from_str(&result_json).unwrap();
+
+    assert!(result.count > 0);
+    assert!(result.edges.iter().all(|e| format!("{:?}", e.edge_type).to_lowercase() == "imports"));
+}
+
+#[test]
+fn test_filter_edges_by_type_multiple() {
+    let dir = TempDir::new().unwrap();
+    let dir_path = dir.path().to_string_lossy().to_string();
+    fs::write(dir.path().join("a.ts"), "export function a(): void { }").unwrap();
+    fs::write(dir.path().join("b.ts"), "import { a } from './a'; export function b(): void { }").unwrap();
+
+    let index_result = index(dir_path);
+    let graph_json = build_graph(index_result);
+
+    let result_json = filter_edges_by_type(graph_json, vec!["imports".to_string(), "contains".to_string()]);
+    let result: FilteredEdgesResult = serde_json::from_str(&result_json).unwrap();
+
+    assert!(result.count > 0);
+}
+
+#[test]
+fn test_filter_edges_by_type_none_found() {
+    let dir = TempDir::new().unwrap();
+    let dir_path = dir.path().to_string_lossy().to_string();
+    fs::write(dir.path().join("test.ts"), "function test(): void { }").unwrap();
+
+    let index_result = index(dir_path);
+    let graph_json = build_graph(index_result);
+
+    let result_json = filter_edges_by_type(graph_json, vec!["nonexistent".to_string()]);
+    let result: FilteredEdgesResult = serde_json::from_str(&result_json).unwrap();
+
+    assert_eq!(result.count, 0);
+    assert!(result.edges.is_empty());
+}
+
+#[test]
+fn test_find_shortest_path_exists() {
+    let dir = TempDir::new().unwrap();
+    let dir_path = dir.path().to_string_lossy().to_string();
+    fs::write(dir.path().join("a.ts"), "export function a(): void { }").unwrap();
+    fs::write(dir.path().join("b.ts"), "import { a } from './a'; export function b(): void { }").unwrap();
+
+    let index_result = index(dir_path);
+    let graph_json = build_graph(index_result.clone());
+    let graph: GraphData = serde_json::from_str(&graph_json).unwrap();
+
+    let file_b = graph.nodes.iter().find(|n| n.name.contains("b.ts")).unwrap();
+    let fn_b = graph.nodes.iter().find(|n| n.name == "b").unwrap();
+
+    let result_json = find_shortest_path(graph_json, file_b.id.clone(), fn_b.id.clone());
+    let result: PathResult = serde_json::from_str(&result_json).unwrap();
+
+    assert!(result.found, "Expected path from {} to {}, path: {:?}", file_b.id, fn_b.id, result.path);
+    assert!(result.path.len() >= 2);
+}
+
+#[test]
+fn test_find_shortest_path_not_found() {
+    let dir = TempDir::new().unwrap();
+    let dir_path = dir.path().to_string_lossy().to_string();
+    fs::write(dir.path().join("a.ts"), "function a(): void { }").unwrap();
+    fs::write(dir.path().join("b.ts"), "function b(): void { }").unwrap();
+
+    let index_result = index(dir_path);
+    let graph_json = build_graph(index_result.clone());
+    let graph: GraphData = serde_json::from_str(&graph_json).unwrap();
+
+    let fn_a = graph.nodes.iter().find(|n| n.node_type == GraphNodeType::Function && n.name == "a").unwrap();
+    let fn_b = graph.nodes.iter().find(|n| n.node_type == GraphNodeType::Function && n.name == "b").unwrap();
+
+    let result_json = find_shortest_path(graph_json, fn_a.id.clone(), fn_b.id.clone());
+    let result: PathResult = serde_json::from_str(&result_json).unwrap();
+
+    assert!(!result.found);
+    assert!(result.path.is_empty());
+    assert!(result.length.is_none());
+}
+
+#[test]
+fn test_find_shortest_path_self() {
+    let dir = TempDir::new().unwrap();
+    let dir_path = dir.path().to_string_lossy().to_string();
+    fs::write(dir.path().join("test.ts"), "function test(): void { }").unwrap();
+
+    let index_result = index(dir_path);
+    let graph_json = build_graph(index_result.clone());
+    let graph: GraphData = serde_json::from_str(&graph_json).unwrap();
+
+    let fn_test = graph.nodes.iter().find(|n| n.node_type == GraphNodeType::Function && n.name == "test").unwrap();
+
+    let result_json = find_shortest_path(graph_json, fn_test.id.clone(), fn_test.id.clone());
+    let result: PathResult = serde_json::from_str(&result_json).unwrap();
+
+    assert!(result.found);
+    assert_eq!(result.path.len(), 1);
+    assert_eq!(result.length, Some(0));
+}
+
+#[test]
+fn test_find_shortest_path_invalid_source() {
+    let dir = TempDir::new().unwrap();
+    let dir_path = dir.path().to_string_lossy().to_string();
+    fs::write(dir.path().join("test.ts"), "function test(): void { }").unwrap();
+
+    let index_result = index(dir_path);
+    let graph_json = build_graph(index_result.clone());
+    let graph: GraphData = serde_json::from_str(&graph_json).unwrap();
+
+    let fn_test = graph.nodes.iter().find(|n| n.node_type == GraphNodeType::Function).unwrap();
+
+    let result_json = find_shortest_path(graph_json, "nonexistent".to_string(), fn_test.id.clone());
+    let result: PathResult = serde_json::from_str(&result_json).unwrap();
+
+    assert!(!result.found);
+}
+
+#[test]
+fn test_calculate_centrality() {
+    let dir = TempDir::new().unwrap();
+    let dir_path = dir.path().to_string_lossy().to_string();
+    fs::write(dir.path().join("a.ts"), "export function a(): void { }").unwrap();
+    fs::write(dir.path().join("b.ts"), "import { a } from './a'; export function b(): void { }").unwrap();
+    fs::write(dir.path().join("c.ts"), "import { b } from './b'; export function c(): void { }").unwrap();
+
+    let index_result = index(dir_path);
+    let graph_json = build_graph(index_result);
+
+    let result_json = calculate_centrality(graph_json);
+    let result: CentralityResult = serde_json::from_str(&result_json).unwrap();
+
+    assert!(!result.degree_centrality.is_empty());
+    assert!(!result.betweenness_centrality.is_empty());
+
+    for (_, centrality) in &result.degree_centrality {
+        assert!(*centrality >= 0.0);
+    }
+}
+
+#[test]
+fn test_calculate_centrality_empty_graph() {
+    let dir = TempDir::new().unwrap();
+    let dir_path = dir.path().to_string_lossy().to_string();
+
+    let index_result = index(dir_path);
+    let graph_json = build_graph(index_result);
+
+    let result_json = calculate_centrality(graph_json);
+    let result: CentralityResult = serde_json::from_str(&result_json).unwrap();
+
+    assert!(result.degree_centrality.is_empty());
+    assert!(result.betweenness_centrality.is_empty());
+}
+
+#[test]
+fn test_calculate_centrality_single_node() {
+    let dir = TempDir::new().unwrap();
+    let dir_path = dir.path().to_string_lossy().to_string();
+    fs::write(dir.path().join("test.ts"), "function test(): void { }").unwrap();
+
+    let index_result = index(dir_path);
+    let graph_json = build_graph(index_result);
+
+    let result_json = calculate_centrality(graph_json);
+    let result: CentralityResult = serde_json::from_str(&result_json).unwrap();
+
+    assert!(!result.degree_centrality.is_empty());
+    for (_, centrality) in &result.degree_centrality {
+        assert!(*centrality >= 0.0);
+    }
+}
+
+#[test]
+fn test_detect_cycles_no_cycles() {
+    let dir = TempDir::new().unwrap();
+    let dir_path = dir.path().to_string_lossy().to_string();
+    fs::write(dir.path().join("a.ts"), "export function a(): void { }").unwrap();
+    fs::write(dir.path().join("b.ts"), "import { a } from './a'; export function b(): void { }").unwrap();
+
+    let index_result = index(dir_path);
+    let graph_json = build_graph(index_result);
+
+    let result_json = detect_cycles(graph_json);
+    let result: CycleResult = serde_json::from_str(&result_json).unwrap();
+
+    assert!(!result.has_cycles || result.cycles.is_empty());
+}
+
+#[test]
+fn test_detect_cycles_empty_graph() {
+    let dir = TempDir::new().unwrap();
+    let dir_path = dir.path().to_string_lossy().to_string();
+
+    let index_result = index(dir_path);
+    let graph_json = build_graph(index_result);
+
+    let result_json = detect_cycles(graph_json);
+    let result: CycleResult = serde_json::from_str(&result_json).unwrap();
+
+    assert!(!result.has_cycles);
+    assert!(result.cycles.is_empty());
 }

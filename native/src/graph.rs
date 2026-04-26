@@ -277,27 +277,7 @@ fn dedupe_edges(edges: &mut Vec<GraphEdge>) {
 }
 
 fn run_k_hop_bfs(graph: &GraphData, start_node_id: &str, k: u32) -> crate::types::BfsResult {
-    let mut di_graph: DiGraph<(), ()> = DiGraph::new();
-
-    let index_map: HashMap<String, NodeIndex> = graph
-        .nodes
-        .iter()
-        .enumerate()
-        .map(|(i, n)| (n.id.clone(), NodeIndex::new(i)))
-        .collect();
-
-    for _ in &graph.nodes {
-        di_graph.add_node(());
-    }
-
-    for edge in &graph.edges {
-        if let (Some(&src_idx), Some(&tgt_idx)) = (
-            index_map.get(&edge.source),
-            index_map.get(&edge.target),
-        ) {
-            di_graph.add_edge(src_idx, tgt_idx, ());
-        }
-    }
+    let (di_graph, index_map) = build_di_graph(graph);
 
     let start_idx = match index_map.get(start_node_id) {
         Some(idx) => *idx,
@@ -374,4 +354,344 @@ pub fn k_hop_bfs(graph_json: String, start_node_id: String, k: u32) -> String {
 
     let result = run_k_hop_bfs(&graph, &start_node_id, k);
     serde_json::to_string(&result).unwrap_or_default()
+}
+
+fn build_di_graph(graph: &GraphData) -> (DiGraph<(), ()>, HashMap<String, NodeIndex>) {
+    let mut di_graph: DiGraph<(), ()> = DiGraph::new();
+    let index_map: HashMap<String, NodeIndex> = graph
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.id.clone(), NodeIndex::new(i)))
+        .collect();
+
+    for _ in &graph.nodes {
+        di_graph.add_node(());
+    }
+
+    for edge in &graph.edges {
+        if let (Some(&src_idx), Some(&tgt_idx)) = (
+            index_map.get(&edge.source),
+            index_map.get(&edge.target),
+        ) {
+            di_graph.add_edge(src_idx, tgt_idx, ());
+        }
+    }
+
+    (di_graph, index_map)
+}
+
+#[napi]
+pub fn filter_edges_by_type(graph_json: String, edge_types: Vec<String>) -> String {
+    let graph: GraphData = match serde_json::from_str(&graph_json) {
+        Ok(g) => g,
+        Err(_) => return "{}".to_string(),
+    };
+
+    let filtered: Vec<GraphEdge> = graph
+        .edges
+        .iter()
+        .filter(|e| {
+            edge_types.iter().any(|t| {
+                let et_str = format!("{:?}", e.edge_type);
+                et_str.to_lowercase() == t.to_lowercase()
+            })
+        })
+        .cloned()
+        .collect();
+
+    let result = crate::types::FilteredEdgesResult {
+        count: filtered.len(),
+        edges: filtered,
+    };
+
+    serde_json::to_string(&result).unwrap_or_default()
+}
+
+#[napi]
+pub fn find_shortest_path(graph_json: String, source_id: String, target_id: String) -> String {
+    let graph: GraphData = match serde_json::from_str(&graph_json) {
+        Ok(g) => g,
+        Err(_) => return "{}".to_string(),
+    };
+
+    let (di_graph, index_map) = build_di_graph(&graph);
+
+    let source_idx = match index_map.get(&source_id) {
+        Some(idx) => *idx,
+        None => {
+            let result = crate::types::PathResult {
+                path: vec![],
+                found: false,
+                length: None,
+            };
+            return serde_json::to_string(&result).unwrap_or_default();
+        }
+    };
+
+    let target_idx = match index_map.get(&target_id) {
+        Some(idx) => *idx,
+        None => {
+            let result = crate::types::PathResult {
+                path: vec![],
+                found: false,
+                length: None,
+            };
+            return serde_json::to_string(&result).unwrap_or_default();
+        }
+    };
+
+    let mut queue: Vec<(NodeIndex, Vec<String>)> = vec![(source_idx, vec![source_id.clone()])];
+    let mut visited: HashMap<NodeIndex, bool> = HashMap::new();
+
+    while !queue.is_empty() {
+        let (node_idx, path) = queue.remove(0);
+        if node_idx == target_idx {
+            let path_len = path.len() as u32;
+            let result = crate::types::PathResult {
+                path: path.clone(),
+                found: true,
+                length: Some(path_len - 1),
+            };
+            return serde_json::to_string(&result).unwrap_or_default();
+        }
+
+        if visited.get(&node_idx) == Some(&true) {
+            continue;
+        }
+        visited.insert(node_idx, true);
+
+        for neighbor in di_graph.neighbors(node_idx) {
+            if !visited.contains_key(&neighbor) {
+                let mut new_path = path.clone();
+                let neighbor_id = graph.nodes[neighbor.index()].id.clone();
+                new_path.push(neighbor_id);
+                queue.push((neighbor, new_path));
+            }
+        }
+    }
+
+    let result = crate::types::PathResult {
+        path: vec![],
+        found: false,
+        length: None,
+    };
+    serde_json::to_string(&result).unwrap_or_default()
+}
+
+#[napi]
+pub fn calculate_centrality(graph_json: String) -> String {
+    let graph: GraphData = match serde_json::from_str(&graph_json) {
+        Ok(g) => g,
+        Err(_) => return "{}".to_string(),
+    };
+
+    let n = graph.nodes.len() as f64;
+    if n == 0.0 {
+        let result = crate::types::CentralityResult {
+            degree_centrality: HashMap::new(),
+            betweenness_centrality: HashMap::new(),
+        };
+        return serde_json::to_string(&result).unwrap_or_default();
+    }
+
+    let mut degree_centrality: HashMap<String, f64> = HashMap::new();
+    let mut in_degree: HashMap<String, usize> = HashMap::new();
+    let mut out_degree: HashMap<String, usize> = HashMap::new();
+
+    for node in &graph.nodes {
+        degree_centrality.insert(node.id.clone(), 0.0);
+        in_degree.insert(node.id.clone(), 0);
+        out_degree.insert(node.id.clone(), 0);
+    }
+
+    for edge in &graph.edges {
+        if let Some(c) = degree_centrality.get_mut(&edge.source) {
+            *c += 1.0;
+        }
+        if let Some(c) = degree_centrality.get_mut(&edge.target) {
+            *c += 1.0;
+        }
+        if let Some(c) = out_degree.get_mut(&edge.source) {
+            *c += 1;
+        }
+        if let Some(c) = in_degree.get_mut(&edge.target) {
+            *c += 1;
+        }
+    }
+
+    for (_, c) in &mut degree_centrality {
+        if n > 1.0 {
+            *c /= n - 1.0;
+        }
+    }
+
+    let mut betweenness: HashMap<String, f64> = HashMap::new();
+    for node in &graph.nodes {
+        betweenness.insert(node.id.clone(), 0.0);
+    }
+
+    if n > 1.0 {
+    let (di_graph, index_map) = build_di_graph(&graph);
+
+    for node in &graph.nodes {
+        let mut pred: HashMap<String, Vec<String>> = HashMap::new();
+        let mut dist: HashMap<String, i32> = HashMap::new();
+        let mut sigma: HashMap<String, usize> = HashMap::new();
+        let mut delta: HashMap<String, f64> = HashMap::new();
+
+        for n in &graph.nodes {
+            pred.insert(n.id.clone(), vec![]);
+            dist.insert(n.id.clone(), -1);
+            sigma.insert(n.id.clone(), 0);
+            delta.insert(n.id.clone(), 0.0);
+        }
+        sigma.insert(node.id.clone(), 1);
+        dist.insert(node.id.clone(), 0);
+
+        let source_idx = *index_map.get(&node.id).unwrap();
+        let mut queue: Vec<NodeIndex> = vec![source_idx];
+
+        while !queue.is_empty() {
+            let v_idx = queue.remove(0);
+            let v_id = graph.nodes[v_idx.index()].id.clone();
+            let v_dist = *dist.get(&v_id).unwrap();
+
+            for w_idx in di_graph.neighbors(v_idx) {
+                let w_id = graph.nodes[w_idx.index()].id.clone();
+                let w_dist = *dist.get(&w_id).unwrap();
+
+                if w_dist == -1 {
+                    *dist.get_mut(&w_id).unwrap() = v_dist + 1;
+                    queue.push(w_idx);
+                }
+
+                if v_dist + 1 == w_dist {
+                    let sigma_v = *sigma.get(&v_id).unwrap();
+                    *sigma.get_mut(&w_id).unwrap() += sigma_v;
+                    pred.get_mut(&w_id).unwrap().push(v_id.clone());
+                }
+            }
+        }
+
+        let node_ids: Vec<String> = graph.nodes.iter().map(|n| n.id.clone()).collect();
+        let mut ordered: Vec<String> = node_ids.iter()
+            .filter(|id| *dist.get(*id).unwrap() > 0)
+            .cloned()
+            .collect();
+        ordered.sort_by(|a, b| {
+            dist.get(b).unwrap().cmp(dist.get(a).unwrap())
+        });
+
+        for w in &ordered {
+            for v in pred.get(w).unwrap_or(&vec![]) {
+                let sigma_v = *sigma.get(v).unwrap() as f64;
+                let sigma_w = *sigma.get(w).unwrap() as f64;
+                let delta_v = *delta.get(v).unwrap();
+                if sigma_w > 0.0 {
+                    let contribution = (sigma_v / sigma_w) * (1.0 + delta_v);
+                    *delta.get_mut(w).unwrap() += contribution;
+                }
+            }
+            if w != &node.id {
+                *betweenness.get_mut(w).unwrap() += delta.get(w).unwrap();
+            }
+        }
+    }
+
+    let normalizer = (n - 1.0) * (n - 2.0);
+    if normalizer > 0.0 {
+        for (_, c) in &mut betweenness {
+            *c /= normalizer;
+        }
+    }
+    }
+
+    let result = crate::types::CentralityResult {
+        degree_centrality,
+        betweenness_centrality: betweenness,
+    };
+    serde_json::to_string(&result).unwrap_or_default()
+}
+
+#[napi]
+pub fn detect_cycles(graph_json: String) -> String {
+    let graph: GraphData = match serde_json::from_str(&graph_json) {
+        Ok(g) => g,
+        Err(_) => return "{}".to_string(),
+    };
+
+    let (di_graph, index_map) = build_di_graph(&graph);
+    let mut visited: HashMap<String, bool> = HashMap::new();
+    let mut rec_stack: HashMap<String, bool> = HashMap::new();
+    let mut cycles: Vec<Vec<String>> = vec![];
+
+    for node in &graph.nodes {
+        if !visited.contains_key(&node.id) {
+            detect_cycles_dfs(
+                &di_graph,
+                &graph.nodes,
+                &index_map,
+                &node.id,
+                &mut visited,
+                &mut rec_stack,
+                &mut vec![],
+                &mut cycles,
+            );
+        }
+    }
+
+    let unique_cycles: Vec<Vec<String>> = cycles
+        .into_iter()
+        .map(|mut c| { c.sort(); c })
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+
+    let result = crate::types::CycleResult {
+        has_cycles: !unique_cycles.is_empty(),
+        cycles: unique_cycles,
+    };
+    serde_json::to_string(&result).unwrap_or_default()
+}
+
+fn detect_cycles_dfs(
+    di_graph: &DiGraph<(), ()>,
+    nodes: &[GraphNode],
+    index_map: &HashMap<String, NodeIndex>,
+    node_id: &str,
+    visited: &mut HashMap<String, bool>,
+    rec_stack: &mut HashMap<String, bool>,
+    path: &mut Vec<String>,
+    cycles: &mut Vec<Vec<String>>,
+) {
+    visited.insert(node_id.to_string(), true);
+    rec_stack.insert(node_id.to_string(), true);
+    path.push(node_id.to_string());
+
+    if let Some(&idx) = index_map.get(node_id) {
+        for neighbor_idx in di_graph.neighbors(idx) {
+            let neighbor_id = nodes[neighbor_idx.index()].id.clone();
+
+            if !visited.contains_key(&neighbor_id) {
+                detect_cycles_dfs(
+                    di_graph, nodes, index_map,
+                    &neighbor_id, visited, rec_stack, path, cycles,
+                );
+            } else if rec_stack.get(&neighbor_id) == Some(&true) {
+                let mut cycle = vec![];
+                let start_pos = path.iter().position(|n| n == &neighbor_id).unwrap();
+                for (i, n) in path.iter().enumerate() {
+                    if i >= start_pos {
+                        cycle.push(n.clone());
+                    }
+                }
+                cycle.push(neighbor_id.clone());
+                cycles.push(cycle);
+            }
+        }
+    }
+
+    path.pop();
+    rec_stack.insert(node_id.to_string(), false);
 }

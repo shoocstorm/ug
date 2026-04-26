@@ -45,8 +45,8 @@ export interface IndexResult {
   stats: IndexStats;
 }
 
-export type GraphNodeType = "File" | "Function" | "Class" | "Interface" | "Concept";
-export type GraphEdgeType = "DependsOn" | "Calls" | "Extends" | "References" | "Contains";
+export type GraphNodeType = "File" | "Function" | "Class" | "Interface" | "Concept" | "Dependency" | "Config";
+export type GraphEdgeType = "DependsOn" | "Calls" | "Extends" | "Implements" | "References" | "Contains" | "Imports" | "Exports" | "Requires" | "TypedAs" | "Uses";
 
 export interface GraphNode {
   id: string;
@@ -55,6 +55,15 @@ export interface GraphNode {
   file: string | null;
   startLine: number | null;
   endLine: number | null;
+  metrics?: { loc: number; params: number; maxNesting: number };
+  signature?: { params: Array<{ name: string; type?: string; optional: boolean; default?: string }>; returnType?: string };
+  docstring?: string | null;
+  imports?: Array<{ path: string; imported: Array<{ name: string; alias?: string }>; isExternal: boolean }>;
+  exports?: Array<{ name: string; alias?: string; isDefault: boolean }>;
+  extends?: string[];
+  implements?: string[];
+  calls?: string[];
+  typed_as?: Array<{ name: string; generic?: string }>;
 }
 
 export interface GraphEdge {
@@ -110,4 +119,79 @@ export function kHopBfs(graph: GraphData, startNodeId: string, k: number): BfsRe
   const json = JSON.stringify(graph);
   const result = binding.kHopBfs(json, startNodeId, k);
   return JSON.parse(result) as BfsResult;
+}
+
+export interface FilteredEdgesResult {
+  edges: GraphEdge[];
+  count: number;
+}
+
+export interface PathResult {
+  path: string[];
+  found: boolean;
+  length: number | null;
+}
+
+export interface CentralityResult {
+  degree_centrality: Record<string, number>;
+  betweenness_centrality: Record<string, number>;
+}
+
+export interface CycleResult {
+  has_cycles: boolean;
+  cycles: string[][];
+}
+
+export function filterEdgesByType(graph: GraphData, edgeTypes: string[]): FilteredEdgesResult {
+  const binding = getBinding();
+  const json = JSON.stringify(graph);
+  const result = binding.filterEdgesByType(json, edgeTypes);
+  return JSON.parse(result) as FilteredEdgesResult;
+}
+
+export function findShortestPath(graph: GraphData, sourceId: string, targetId: string): PathResult {
+  const binding = getBinding();
+  const json = JSON.stringify(graph);
+  const result = binding.findShortestPath(json, sourceId, targetId);
+  return JSON.parse(result) as PathResult;
+}
+
+export function calculateCentrality(graph: GraphData): CentralityResult {
+  const binding = getBinding();
+  const json = JSON.stringify(graph);
+  const result = binding.calculateCentrality(json);
+  return JSON.parse(result) as CentralityResult;
+}
+
+export function detectCycles(graph: GraphData): CycleResult {
+  const binding = getBinding();
+  const json = JSON.stringify(graph);
+  const result = binding.detectCycles(json);
+  return JSON.parse(result) as CycleResult;
+}
+
+export interface GraphAnalysis {
+  centrality: CentralityResult;
+  cycles: CycleResult;
+  edgeCounts: Record<string, number>;
+}
+
+export function analyzeGraph(graph: GraphData): GraphAnalysis {
+  const binding = getBinding();
+  const json = JSON.stringify(graph);
+  
+  const centralityJson = binding.calculateCentrality(json);
+  const cyclesJson = binding.detectCycles(json);
+  
+  const edgeCounts: Record<string, number> = {};
+  graph.edges.forEach(e => {
+    const t = e.edge_type || 'unknown';
+    edgeCounts[t] = (edgeCounts[t] || 0) + 1;
+  });
+  
+  return {
+    centrality: JSON.parse(centralityJson) as CentralityResult,
+    cycles: JSON.parse(cyclesJson) as CycleResult,
+    edgeCounts
+  };
 }

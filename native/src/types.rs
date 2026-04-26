@@ -244,3 +244,28 @@ pub struct BfsResult {
     pub edges: Vec<GraphEdge>,
     pub distances: std::collections::HashMap<String, u32>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PathResult {
+    pub path: Vec<String>,
+    pub found: bool,
+    pub length: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CentralityResult {
+    pub degree_centrality: std::collections::HashMap<String, f64>,
+    pub betweenness_centrality: std::collections::HashMap<String, f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CycleResult {
+    pub has_cycles: bool,
+    pub cycles: Vec<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FilteredEdgesResult {
+    pub edges: Vec<GraphEdge>,
+    pub count: usize,
+}

@@ -5,8 +5,7 @@
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
   "scripts": {
-    "build": "tsc",
-    "build:native": "cd native && cargo build --release",
+    "build": "node src/cli.cjs gen",
     "prebuild": "cd native && cargo build --release",
     "index": "node src/cli.cjs index",
     "graph": "node src/cli.cjs graph",

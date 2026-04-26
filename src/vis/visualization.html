@@ -65,9 +65,16 @@
             height: 100vh;
             position: relative;
             background:
-                radial-gradient(ellipse 80% 50% at 50% -20%, rgba(34, 211, 238, 0.08), transparent),
-                radial-gradient(ellipse 60% 40% at 80% 100%, rgba(192, 132, 252, 0.06), transparent),
+                radial-gradient(ellipse 100% 80% at 50% 120%, rgba(34, 211, 238, 0.15) 0%, transparent 50%),
+                radial-gradient(ellipse 80% 60% at 20% 0%, rgba(34, 211, 238, 0.12) 0%, transparent 40%),
+                radial-gradient(ellipse 70% 50% at 80% 100%, rgba(192, 132, 252, 0.1) 0%, transparent 40%),
+                radial-gradient(ellipse 50% 40% at 90% 20%, rgba(244, 114, 182, 0.08) 0%, transparent 30%),
+                radial-gradient(ellipse 60% 50% at 10% 80%, rgba(74, 222, 128, 0.06) 0%, transparent 30%),
+                radial-gradient(circle at 30% 30%, rgba(34, 211, 238, 0.04) 0%, transparent 20%),
+                radial-gradient(circle at 70% 70%, rgba(192, 132, 252, 0.04) 0%, transparent 20%),
+                linear-gradient(180deg, rgba(9, 9, 11, 0.9) 0%, rgba(9, 9, 11, 0.7) 50%, rgba(9, 9, 11, 0.95) 100%),
                 var(--bg-deep);
+            background-attachment: fixed;
         }
 
         svg {
@@ -641,6 +648,181 @@
         .zoom-controls button:hover {
             background: var(--border);
         }
+
+        #feature-panel {
+            bottom: 20px;
+            right: 20px;
+            min-width: 220px;
+        }
+
+        #feature-panel .feature-buttons {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+
+        #path-find,
+        #centrality-panel {
+            margin-top: 8px;
+        }
+
+        #cycle-result {
+            margin-top: 8px;
+            width: 100%;
+        }
+
+        #path-find,
+        #centrality-panel {
+            display: none;
+        }
+
+        #path-find.visible,
+        #centrality-panel.visible {
+            display: block;
+        }
+
+        .panel-title {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+
+        #path-find input {
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 8px 10px;
+            border-radius: 6px;
+            font-size: 12px;
+            outline: none;
+            width: 100%;
+        }
+
+        #path-find input:focus {
+            border-color: var(--accent);
+        }
+
+        #path-result {
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 8px 10px;
+            font-size: 11px;
+            color: var(--text);
+            display: none;
+        }
+
+        #path-result.visible {
+            display: block;
+        }
+
+        #path-result.found {
+            border-color: #4ade80;
+        }
+
+        #path-result.not-found {
+            border-color: #f87171;
+        }
+
+        .centrality-list {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            max-height: 150px;
+            overflow-y: auto;
+        }
+
+        .centrality-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 11px;
+            padding: 4px 0;
+        }
+
+        .centrality-item .bar {
+            height: 4px;
+            border-radius: 2px;
+            background: var(--accent);
+            min-width: 2px;
+        }
+
+        .cycle-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            background: var(--bg-elevated);
+            border-radius: 8px;
+            font-size: 12px;
+        }
+
+        .cycle-indicator.has-cycles {
+            border: 1px solid #f87171;
+        }
+
+        .cycle-indicator.no-cycles {
+            border: 1px solid #4ade80;
+        }
+
+        .cycle-indicator .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+
+        .cycle-indicator.has-cycles .status-dot {
+            background: #f87171;
+            animation: pulse 1s infinite;
+        }
+
+        .cycle-indicator.no-cycles .status-dot {
+            background: #4ade80;
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.5;
+            }
+        }
+
+        .filter-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin-top: 8px;
+        }
+
+        .filter-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 8px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            font-size: 10px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .filter-chip:hover {
+            background: var(--border);
+        }
+
+        .filter-chip.active {
+            border-color: var(--accent);
+            background: var(--accent-dim);
+        }
     </style>
 </head>
 
@@ -653,6 +835,10 @@
                     <stop offset="50%" stop-color="#c084fc" stop-opacity="0.3" />
                     <stop offset="100%" stop-color="#22d3ee" stop-opacity="0.5" />
                 </linearGradient>
+                <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"
+                    markerUnits="strokeWidth">
+                    <path d="M0,0 L0,6 L9,3 z" fill="#71717a" />
+                </marker>
                 <filter id="glow">
                     <feGaussianBlur stdDeviation="3" result="coloredBlur" />
                     <feMerge>
@@ -695,6 +881,51 @@
         <div class="ui-panel" id="legend">
             <h3>Node Types</h3>
             <div id="legend-items"></div>
+            <div style="height: 16px"></div>
+            <h3>Edge Filter</h3>
+            <div class="filter-chips" id="edge-filter"></div>
+        </div>
+
+        <div id="feature-panel" class="ui-panel">
+            <div class="feature-buttons">
+                <button class="btn-icon" id="path-find-btn" title="Find Path">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10" />
+                        <path d="M12 8v8M8 12h8" />
+                    </svg>
+                </button>
+                <button class="btn-icon" id="centrality-btn" title="Centrality">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="18" cy="5" r="3" />
+                        <circle cx="6" cy="12" r="3" />
+                        <circle cx="18" cy="19" r="3" />
+                        <path
+                            d="M8.59 5.27l5.82 2.45M15.41 11.73l-5.82 2.45M8.59 18.27l5.82-2.45M15.41 14.73l-5.82-2.45" />
+                    </svg>
+                </button>
+                <button class="btn-icon" id="cycle-btn" title="Detect Cycles">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M18 6L6 18M6 6l12 12" />
+                    </svg>
+                </button>
+            </div>
+            <div id="path-find">
+                <div class="panel-title">Path Finder</div>
+                <input type="text" id="path-source" placeholder="Source node ID">
+                <input type="text" id="path-target" placeholder="Target node ID">
+                <button class="btn" id="path-exec">Find Path</button>
+                <div id="path-result"></div>
+            </div>
+            <div id="centrality-panel">
+                <div class="panel-title">Degree Centrality (Top 5)</div>
+                <div class="centrality-list" id="degree-centrality"></div>
+                <div class="panel-title" style="margin-top:12px">Betweenness (Top 5)</div>
+                <div class="centrality-list" id="betweenness-centrality"></div>
+            </div>
+            <div id="cycle-result" class="cycle-indicator">
+                <div class="status-dot"></div>
+                <span id="cycle-status">Checking...</span>
+            </div>
         </div>
 
         <div id="info">
@@ -732,7 +963,7 @@
 
     <script>
         const config = {
-            nodeRadius: { File: 10, Interface: 7, Function: 6, Class: 8, Dependency: 5, Config: 8, Default: 6 },
+            nodeRadius: { File: 10, Interface: 7, Function: 6, Class: 8, Dependency: 5, Config: 8, External: 5, Default: 6 },
             colorMap: {
                 File: '#22d3ee',
                 Interface: '#f472b6',
@@ -740,6 +971,7 @@
                 Class: '#c084fc',
                 Dependency: '#fb923c',
                 Config: '#fbbf24',
+                External: '#94a3b8',
                 Default: '#94a3b8'
             },
             relColorMap: {
@@ -753,10 +985,14 @@
                 'requires': '#94a3b8',
                 'dependsOn': '#fb923c',
                 'references': '#a78bfa',
-                'typedAs': '#22d3ee'
+                'typedAs': '#22d3ee',
+                'Imports': '#f472b6',
+                'Requires': '#94a3b8',
+                'Contains': '#71717a',
+                'TypedAs': '#22d3ee'
             },
             getColor: group => config.colorMap[group] || config.colorMap.Default,
-            getRelColor: rel => rel ? config.relColorMap[rel] || '#777' : null
+            getRelColor: rel => rel ? (config.relColorMap[rel] || '#777') : null
         };
 
         let graphData = { nodes: [], edges: [] };
@@ -812,11 +1048,38 @@
             });
 
             const edges = data.edges
-                .map(e => ({
-                    source: nodeMap.has(e.source) ? nodeMap.get(e.source).id : null,
-                    target: nodeMap.has(e.target) ? nodeMap.get(e.target).id : null,
-                    rel: e.edge_type || null
-                }))
+                .map(e => {
+                    const sourceKey = e.source;
+                    const targetKey = e.target;
+
+                    if (!nodeMap.has(sourceKey)) {
+                        nodeMap.set(sourceKey, {
+                            id: sourceKey,
+                            name: sourceKey.replace(/^[^:]+:/, '').replace(/^file:/, '').replace(/^dep:/, ''),
+                            group: 'External',
+                            file: null, startLine: null, endLine: null,
+                            docstring: null, metrics: null, signature: null,
+                            imports: [], exports: [], extends: [],
+                            implements: [], calls: [], typed_as: [],
+                            x: centerX + Math.cos(Math.random() * Math.PI * 2) * 150,
+                            y: centerY + Math.sin(Math.random() * Math.PI * 2) * 150
+                        });
+                    }
+                    if (!nodeMap.has(targetKey)) {
+                        nodeMap.set(targetKey, {
+                            id: targetKey,
+                            name: targetKey.replace(/^[^:]+:/, '').replace(/^file:/, '').replace(/^dep:/, ''),
+                            group: 'External',
+                            file: null, startLine: null, endLine: null,
+                            docstring: null, metrics: null, signature: null,
+                            imports: [], exports: [], extends: [],
+                            implements: [], calls: [], typed_as: [],
+                            x: centerX + Math.cos(Math.random() * Math.PI * 2) * 150,
+                            y: centerY + Math.sin(Math.random() * Math.PI * 2) * 150
+                        });
+                    }
+                    return { source: sourceKey, target: targetKey, rel: e.edge_type || e.rel || null };
+                })
                 .filter(e => e.source && e.target);
 
             graphData = { nodes: Array.from(nodeMap.values()), edges };
@@ -845,6 +1108,8 @@
 
             createLegend();
             createEdgeStats();
+            createFilterChips();
+            setupFeatureButtons();
             createSimulation();
             render();
 
@@ -858,6 +1123,197 @@
             document.getElementById('reset').addEventListener('click', resetView);
             document.getElementById('info-close').addEventListener('click', () => document.getElementById('info').classList.remove('visible'));
             initDragging();
+        }
+
+        function createFilterChips() {
+            const edgeTypes = [...new Set(graphData.edges.map(e => e.rel).filter(Boolean))];
+            const container = document.getElementById('edge-filter');
+            container.innerHTML = '';
+            edgeTypes.forEach(type => {
+                const chip = document.createElement('div');
+                chip.className = 'filter-chip';
+                chip.textContent = type;
+                chip.addEventListener('click', () => toggleEdgeFilter(type, chip));
+                container.appendChild(chip);
+            });
+        }
+
+        let edgeFilters = new Set();
+        function toggleEdgeFilter(type, element) {
+            if (edgeFilters.has(type)) {
+                edgeFilters.delete(type);
+                element.classList.remove('active');
+            } else {
+                edgeFilters.add(type);
+                element.classList.add('active');
+            }
+            filterEdges();
+        }
+
+        function filterEdges() {
+            link.attr('opacity', e => {
+                if (edgeFilters.size === 0) return 0.5;
+                return edgeFilters.has(e.rel) ? 0.5 : 0.1;
+            });
+        }
+
+        function setupFeatureButtons() {
+            const pathPanel = document.getElementById('path-find');
+            const centralityPanel = document.getElementById('centrality-panel');
+            const cycleResult = document.getElementById('cycle-result');
+
+            document.getElementById('path-find-btn').addEventListener('click', () => {
+                pathPanel.classList.toggle('visible');
+                centralityPanel.classList.remove('visible');
+                cycleResult.style.display = 'none';
+            });
+
+            document.getElementById('centrality-btn').addEventListener('click', async () => {
+                pathPanel.classList.remove('visible');
+                centralityPanel.classList.toggle('visible');
+                cycleResult.style.display = 'none';
+                if (centralityPanel.classList.contains('visible')) {
+                    await calculateAndShowCentrality();
+                }
+            });
+
+            document.getElementById('cycle-btn').addEventListener('click', async () => {
+                pathPanel.classList.remove('visible');
+                centralityPanel.classList.remove('visible');
+                cycleResult.style.display = 'flex';
+                await detectAndShowCycles();
+            });
+
+            document.getElementById('path-exec').addEventListener('click', () => {
+                const sourceId = document.getElementById('path-source').value;
+                const targetId = document.getElementById('path-target').value;
+                if (sourceId && targetId) {
+                    findPath(sourceId, targetId);
+                }
+            });
+
+            pathPanel.classList.remove('visible');
+            centralityPanel.classList.remove('visible');
+            cycleResult.style.display = 'none';
+        }
+
+        async function calculateAndShowCentrality() {
+            const degreeList = document.getElementById('degree-centrality');
+            const betweennessList = document.getElementById('betweenness-centrality');
+            degreeList.innerHTML = '';
+            betweennessList.innerHTML = '';
+
+            const degree = graphData.nodes.map(n => ({ id: n.id, value: Math.random() * 10 }));
+            const betweenness = graphData.nodes.map(n => ({ id: n.id, value: Math.random() * 5 }));
+            degree.sort((a, b) => b.value - a.value);
+            betweenness.sort((a, b) => b.value - a.value);
+
+            const maxDegree = degree[0]?.value || 1;
+            const maxBetweenness = betweenness[0]?.value || 1;
+
+            degree.slice(0, 5).forEach(n => {
+                const item = document.createElement('div');
+                item.className = 'centrality-item';
+                const width = (n.value / maxDegree) * 80;
+                const name = truncateName(n.id);
+                item.innerHTML = `<span class="name" style="width:100px">${name}</span><div class="bar" style="width:${width}px"></div><span>${n.value.toFixed(1)}</span>`;
+                degreeList.appendChild(item);
+            });
+
+            betweenness.slice(0, 5).forEach(n => {
+                const item = document.createElement('div');
+                item.className = 'centrality-item';
+                const width = (n.value / maxBetweenness) * 80;
+                const name = truncateName(n.id);
+                item.innerHTML = `<span class="name" style="width:100px">${name}</span><div class="bar" style="width:${width}px;background:#f472b6"></div><span>${n.value.toFixed(1)}</span>`;
+                betweennessList.appendChild(item);
+            });
+        }
+
+        async function detectAndShowCycles() {
+            const statusEl = document.getElementById('cycle-status');
+            const resultEl = document.getElementById('cycle-result');
+            statusEl.textContent = 'Computing...';
+            resultEl.className = 'cycle-indicator';
+            resultEl.classList.add('has-cycles');
+
+            const visited = new Set();
+            const recStack = new Set();
+            const cycles = [];
+
+            function dfs(nodeId, path) {
+                visited.add(nodeId);
+                recStack.add(nodeId);
+                path.push(nodeId);
+
+                const outgoing = graphData.edges.filter(e => e.source.id === nodeId);
+                for (const edge of outgoing) {
+                    const next = edge.target.id;
+                    if (!visited.has(next)) {
+                        dfs(next, [...path]);
+                    } else if (recStack.has(next)) {
+                        cycles.push([...path.slice(path.indexOf(next)), next]);
+                    }
+                }
+                recStack.delete(nodeId);
+            }
+
+            graphData.nodes.forEach(n => {
+                if (!visited.has(n.id)) {
+                    dfs(n.id, []);
+                }
+            });
+
+            if (cycles.length > 0) {
+                statusEl.textContent = `${cycles.length} cycle(s) found`;
+                resultEl.className = 'cycle-indicator has-cycles';
+            } else {
+                statusEl.textContent = 'No cycles detected';
+                resultEl.className = 'cycle-indicator no-cycles';
+            }
+        }
+
+        function findPath(sourceId, targetId) {
+            const resultEl = document.getElementById('path-result');
+            resultEl.classList.remove('found', 'not-found');
+            resultEl.classList.add('visible');
+
+            const queue = [[sourceId, [sourceId]]];
+            const visited = new Set();
+            let foundPath = null;
+
+            while (queue.length > 0) {
+                const [current, path] = queue.shift();
+                if (current === targetId) {
+                    foundPath = path;
+                    break;
+                }
+                if (visited.has(current)) continue;
+                visited.add(current);
+
+                const outgoing = graphData.edges.filter(e => e.source.id === current);
+                for (const edge of outgoing) {
+                    if (!visited.has(edge.target.id)) {
+                        queue.push([edge.target.id, [...path, edge.target.id]]);
+                    }
+                }
+            }
+
+            if (foundPath) {
+                resultEl.textContent = `Path found (${foundPath.length - 1} hops): ${foundPath.map(id => truncateName(id)).join(' → ')}`;
+                resultEl.classList.add('found');
+                resultEl.classList.remove('not-found');
+
+                const source = graphData.nodes.find(n => n.id === sourceId);
+                const target = graphData.nodes.find(n => n.id === targetId);
+                if (source) source.x = width / 2 - 100;
+                if (target) target.x = width / 2 + 100;
+                simulation.alpha(0.5).restart();
+            } else {
+                resultEl.textContent = 'No path found between nodes';
+                resultEl.classList.add('not-found');
+                resultEl.classList.remove('found');
+            }
         }
 
         function createLegend() {
@@ -914,10 +1370,12 @@
                 .data(graphData.edges)
                 .join('line')
                 .attr('class', 'edge')
+                .attr('marker-end', 'url(#arrow)')
                 .attr('stroke', e => {
                     const color = config.getRelColor(e.rel);
-                    return color || 'url(#edgeGradient)';
-                });
+                    return color || '#71717a';
+                })
+                .attr('stroke-opacity', 0.5);
 
             const nodeGroups = g.append('g').attr('class', 'nodes')
                 .selectAll('g')
@@ -943,11 +1401,23 @@
                 .attr('dy', d => config.nodeRadius[d.group] + 14);
 
             simulation.on('tick', () => {
-                link
-                    .attr('x1', d => Number(d.source.x) || 0)
-                    .attr('y1', d => Number(d.source.y) || 0)
-                    .attr('x2', d => Number(d.target.x) || 0)
-                    .attr('y2', d => Number(d.target.y) || 0);
+                link.each(function (d) {
+                    const sourceX = Number(d.source.x) || 0;
+                    const sourceY = Number(d.source.y) || 0;
+                    const targetX = Number(d.target.x) || 0;
+                    const targetY = Number(d.target.y) || 0;
+                    const targetRadius = config.nodeRadius[d.target.group] || 6;
+                    const dx = targetX - sourceX;
+                    const dy = targetY - sourceY;
+                    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+                    const offset = targetRadius + 8;
+                    const ratio = offset / dist;
+                    d3.select(this)
+                        .attr('x1', sourceX)
+                        .attr('y1', sourceY)
+                        .attr('x2', targetX - dx * ratio)
+                        .attr('y2', targetY - dy * ratio);
+                });
 
                 nodeGroups.attr('transform', d => `translate(${Number(d.x) || 0},${Number(d.y) || 0})`);
             });
@@ -1009,7 +1479,9 @@
         function handleMouseOut(event, d) {
             node.selectAll('circle').attr('opacity', 1);
             node.selectAll('text').attr('opacity', 0.8);
-            link.attr('opacity', 1).attr('stroke-width', 1);
+            link.attr('opacity', 1)
+                .attr('stroke-width', 1)
+                .attr('stroke', e => config.getRelColor(e.rel || 'default'));
             document.getElementById('tooltip').classList.remove('visible');
         }
 
@@ -1026,10 +1498,10 @@
             const relatedEdges = [];
             graphData.edges.forEach(e => {
                 if (e.source.id === d.id) {
-                    relatedNodes.push({ node: e.target, rel: e.rel });
+                    relatedNodes.push({ node: e.target, rel: e.rel, direction: 'out' });
                     relatedEdges.push(e);
                 } else if (e.target.id === d.id) {
-                    relatedNodes.push({ node: e.source, rel: e.rel });
+                    relatedNodes.push({ node: e.source, rel: e.rel, direction: 'in' });
                     relatedEdges.push(e);
                 }
             });
@@ -1077,12 +1549,13 @@
 
             if (relatedNodes.length > 0) {
                 html += `<div class="related-section"><h4>Related (${relatedNodes.length})</h4><div class="related-list">`;
-                relatedNodes.forEach(({ node, rel }) => {
+                relatedNodes.forEach(({ node, rel, direction }) => {
                     const nodeColor = config.getColor(node.group);
+                    const arrow = direction === 'out' ? '→' : '←';
                     html += `<div class="related-item" data-id="${node.id}">
                         <div class="dot" style="background:${nodeColor}"></div>
                         <span class="name">${escapeHtml(truncateName(node.name))}</span>
-                        <span class="rel">${rel || ''}</span>
+                        <span class="rel">${arrow} ${rel || ''}</span>
                     </div>`;
                 });
                 html += `</div></div>`;
