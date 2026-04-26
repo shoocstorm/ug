@@ -37,9 +37,10 @@ pub struct Signature {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Param {
     pub name: String,
-    #[serde(rename = "type")]
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub param_type: Option<String>,
     pub optional: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub default: Option<String>,
 }
 
@@ -164,49 +165,57 @@ pub struct GraphNode {
     pub id: String,
     pub name: String,
     pub node_type: GraphNodeType,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,
-    #[serde(rename = "startLine")]
+    #[serde(rename = "startLine", skip_serializing_if = "Option::is_none")]
     pub start_line: Option<u32>,
-    #[serde(rename = "endLine")]
+    #[serde(rename = "endLine", skip_serializing_if = "Option::is_none")]
     pub end_line: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub metrics: Option<SymbolMetrics>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub signature: Option<GraphNodeSignature>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub docstring: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub imports: Vec<GraphNodeImport>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exports: Vec<GraphNodeExport>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extends: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub implements: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub calls: Vec<String>,
 
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphNodeSignature {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub params: Vec<Param>,
-    #[serde(rename = "returnType")]
+    #[serde(rename = "returnType", skip_serializing_if = "Option::is_none")]
     pub return_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphNodeImport {
     pub path: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub imported: Vec<GraphImportedItem>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphImportedItem {
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub alias: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphNodeExport {
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub alias: Option<String>,
     #[serde(rename = "isDefault")]
     pub is_default: bool,
@@ -242,6 +251,7 @@ pub struct BfsResult {
 pub struct PathResult {
     pub path: Vec<String>,
     pub found: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub length: Option<u32>,
 }
 
@@ -260,5 +270,11 @@ pub struct CycleResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FilteredEdgesResult {
     pub edges: Vec<GraphEdge>,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchResult {
+    pub nodes: Vec<GraphNode>,
     pub count: usize,
 }

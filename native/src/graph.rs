@@ -378,6 +378,61 @@ pub fn filter_edges_by_type(graph_json: String, edge_types: Vec<String>) -> Stri
     serde_json::to_string(&result).unwrap_or_default()
 }
 
+/// Keyword-based search over graph nodes. Matches `keyword` (case-insensitive
+/// substring) against each node's `name` and `docstring`. When `node_types`
+/// is provided and non-empty, only nodes whose `node_type` (lowercased) is in
+/// the list are considered. An empty `keyword` returns every node that passes
+/// the type filter.
+#[napi]
+pub fn search_by_keyword(
+    graph_json: String,
+    keyword: String,
+    node_types: Option<Vec<String>>,
+) -> String {
+    let graph: GraphData = match serde_json::from_str(&graph_json) {
+        Ok(g) => g,
+        Err(_) => return "{}".to_string(),
+    };
+
+    let needle = keyword.to_lowercase();
+    let type_filter: Option<Vec<String>> = node_types
+        .map(|v| v.into_iter().map(|t| t.to_lowercase()).collect::<Vec<_>>())
+        .filter(|v| !v.is_empty());
+
+    let matched: Vec<GraphNode> = graph
+        .nodes
+        .iter()
+        .filter(|n| {
+            if let Some(types) = &type_filter {
+                let nt = format!("{:?}", n.node_type).to_lowercase();
+                if !types.contains(&nt) {
+                    return false;
+                }
+            }
+
+            if needle.is_empty() {
+                return true;
+            }
+
+            let name_match = n.name.to_lowercase().contains(&needle);
+            let doc_match = n
+                .docstring
+                .as_ref()
+                .map(|d| d.to_lowercase().contains(&needle))
+                .unwrap_or(false);
+
+            name_match || doc_match
+        })
+        .cloned()
+        .collect();
+
+    let result = crate::types::SearchResult {
+        count: matched.len(),
+        nodes: matched,
+    };
+    serde_json::to_string(&result).unwrap_or_default()
+}
+
 #[napi]
 pub fn find_shortest_path(graph_json: String, source_id: String, target_id: String) -> String {
     let graph: GraphData = match serde_json::from_str(&graph_json) {

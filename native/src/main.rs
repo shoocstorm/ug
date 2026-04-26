@@ -1,7 +1,7 @@
 use std::env;
 use std::fs;
 use std::path::Path;
-use ultragraph_kb::{index, index_with_cache, build_graph, k_hop_bfs, filter_edges_by_type, find_shortest_path, calculate_centrality, detect_cycles};
+use ultragraph_kb::{index, index_with_cache, build_graph, k_hop_bfs, filter_edges_by_type, find_shortest_path, calculate_centrality, detect_cycles, search_by_keyword};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -22,6 +22,7 @@ fn main() {
         "path" => run_path(cmd_args),
         "centrality" => run_centrality(cmd_args),
         "cycles" => run_cycles(cmd_args),
+        "search" => run_search(cmd_args),
         "analyze" => run_analyze(cmd_args),
         "gen" => run_gen(cmd_args),
         "help" => {
@@ -288,6 +289,59 @@ fn run_cycles(args: &[String]) {
     }
 }
 
+fn run_search(args: &[String]) {
+    if args.len() < 2 {
+        eprintln!("Usage: ug search <graph-file> <keyword> [-t|--type <node-type>]... [-o|--output <file>]");
+        std::process::exit(1);
+    }
+
+    let graph_file = args[0].clone();
+    let mut keyword: Option<String> = None;
+    let mut node_types: Vec<String> = Vec::new();
+    let mut output_path: Option<String> = None;
+
+    let mut i = 1;
+    let argc = args.len();
+    while i < argc {
+        let arg = args[i].clone();
+        if arg == "-t" || arg == "--type" {
+            if i + 1 < argc {
+                node_types.push(args[i + 1].clone());
+            }
+            i += 2;
+        } else if arg == "-o" || arg == "--output" {
+            if i + 1 < argc {
+                output_path = Some(args[i + 1].clone());
+            }
+            i += 2;
+        } else if keyword.is_none() {
+            keyword = Some(arg);
+            i += 1;
+        } else {
+            i += 1;
+        }
+    }
+
+    let kw = match keyword {
+        Some(k) => k,
+        None => {
+            eprintln!("Usage: ug search <graph-file> <keyword> [-t|--type <node-type>]... [-o|--output <file>]");
+            std::process::exit(1);
+        }
+    };
+
+    let graph_json = fs::read_to_string(&graph_file).expect("Failed to read graph");
+    let types_opt = if node_types.is_empty() { None } else { Some(node_types) };
+    let result = search_by_keyword(graph_json, kw, types_opt);
+
+    if let Some(path) = output_path {
+        fs::write(&path, &result).expect("Failed to write output");
+        println!("Wrote search result to {}", path);
+    } else {
+        println!("{}", result);
+    }
+}
+
 fn run_analyze(args: &[String]) {
     let mut input = "out/graph.json".to_string();
     let mut output_dir = "out".to_string();
@@ -355,6 +409,10 @@ fn print_help() {
     println!("  cycles <graph>        Detect cycles in graph");
     println!("    -o, --output <file> Output file (optional)");
     println!();
+    println!("  search <graph> <keyword> Keyword search over graph nodes");
+    println!("    -t, --type <type>   Restrict to node type (repeatable, e.g. function/class/file)");
+    println!("    -o, --output <file> Output file (optional)");
+    println!();
     println!("  analyze              Run full graph analysis (centrality + cycles)");
     println!("    -i, --input <file> Graph file (default: out/graph.json)");
     println!("    -o, --output <dir> Output directory (default: out)");
@@ -372,6 +430,7 @@ fn print_help() {
     println!("  ug filter graph.json Contains Imports");
     println!("  ug centrality graph.json");
     println!("  ug cycles graph.json");
+    println!("  ug search graph.json loadConfig --type function --type class");
     println!("  ug analyze");
     println!("  ug gen -i ./lib -o ./out");
 }

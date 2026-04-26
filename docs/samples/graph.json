@@ -1,52 +1,19 @@
 {
     "nodes": [
         {
-            "id": "file:../src/test-indexer.test.ts",
-            "name": "../src/test-indexer.test.ts",
+            "id": "file:../src/test/ts-test-indexing.ts",
+            "name": "../src/test/ts-test-indexing.ts",
             "node_type": "File",
-            "file": "../src/test-indexer.test.ts",
-            "startLine": null,
-            "endLine": null,
-            "metrics": null,
-            "signature": null,
-            "docstring": null,
+            "file": "../src/test/ts-test-indexing.ts",
             "imports": [
                 {
                     "path": "path",
                     "imported": [
                         {
-                            "name": "join",
-                            "alias": null
-                        }
-                    ]
-                },
-                {
-                    "path": "bun:test",
-                    "imported": [
-                        {
-                            "name": "describe",
-                            "alias": null
+                            "name": "join"
                         },
                         {
-                            "name": "it",
-                            "alias": null
-                        },
-                        {
-                            "name": "expect",
-                            "alias": null
-                        },
-                        {
-                            "name": "beforeEach",
-                            "alias": null
-                        }
-                    ]
-                },
-                {
-                    "path": "os",
-                    "imported": [
-                        {
-                            "name": "tmpdir",
-                            "alias": null
+                            "name": "dirname"
                         }
                     ]
                 },
@@ -54,63 +21,13 @@
                     "path": "fs",
                     "imported": [
                         {
-                            "name": "mkdtempSync",
-                            "alias": null
+                            "name": "readFileSync"
                         },
                         {
-                            "name": "writeFileSync",
-                            "alias": null
+                            "name": "existsSync"
                         },
                         {
-                            "name": "rmSync",
-                            "alias": null
-                        }
-                    ]
-                }
-            ],
-            "exports": [],
-            "extends": [],
-            "implements": [],
-            "calls": []
-        },
-        {
-            "id": "file:../src/index.ts",
-            "name": "../src/index.ts",
-            "node_type": "File",
-            "file": "../src/index.ts",
-            "startLine": null,
-            "endLine": null,
-            "metrics": null,
-            "signature": null,
-            "docstring": null,
-            "imports": [
-                {
-                    "path": "path",
-                    "imported": [
-                        {
-                            "name": "join",
-                            "alias": null
-                        },
-                        {
-                            "name": "dirname",
-                            "alias": null
-                        }
-                    ]
-                },
-                {
-                    "path": "fs",
-                    "imported": [
-                        {
-                            "name": "readFileSync",
-                            "alias": null
-                        },
-                        {
-                            "name": "existsSync",
-                            "alias": null
-                        },
-                        {
-                            "name": "mkdirSync",
-                            "alias": null
+                            "name": "mkdirSync"
                         }
                     ]
                 },
@@ -118,26 +35,20 @@
                     "path": "napi-builds",
                     "imported": [
                         {
-                            "name": "addNativeBinding",
-                            "alias": null
+                            "name": "addNativeBinding"
                         },
                         {
-                            "name": "loadBinding",
-                            "alias": null
+                            "name": "loadBinding"
                         }
                     ]
                 }
-            ],
-            "exports": [],
-            "extends": [],
-            "implements": [],
-            "calls": []
+            ]
         },
         {
             "id": "function_declaration:getBinding",
             "name": "getBinding",
             "node_type": "Function",
-            "file": "../src/index.ts",
+            "file": "../src/test/ts-test-indexing.ts",
             "startLine": 7,
             "endLine": 17,
             "metrics": {
@@ -145,15 +56,7 @@
                 "params": 0,
                 "maxNesting": 1
             },
-            "signature": {
-                "params": [],
-                "returnType": null
-            },
-            "docstring": null,
-            "imports": [],
-            "exports": [],
-            "extends": [],
-            "implements": [],
+            "signature": {},
             "calls": [
                 "loadBinding",
                 "console.error"
@@ -163,167 +66,87 @@
             "id": "interface:Symbol",
             "name": "Symbol",
             "node_type": "Interface",
-            "file": "../src/index.ts",
+            "file": "../src/test/ts-test-indexing.ts",
             "startLine": 19,
-            "endLine": 27,
-            "metrics": null,
-            "signature": null,
-            "docstring": null,
-            "imports": [],
-            "exports": [],
-            "extends": [],
-            "implements": [],
-            "calls": []
+            "endLine": 27
         },
         {
             "id": "interface:FileNode",
             "name": "FileNode",
             "node_type": "Interface",
-            "file": "../src/index.ts",
+            "file": "../src/test/ts-test-indexing.ts",
             "startLine": 29,
-            "endLine": 34,
-            "metrics": null,
-            "signature": null,
-            "docstring": null,
-            "imports": [],
-            "exports": [],
-            "extends": [],
-            "implements": [],
-            "calls": []
+            "endLine": 34
         },
         {
             "id": "interface:IndexStats",
             "name": "IndexStats",
             "node_type": "Interface",
-            "file": "../src/index.ts",
+            "file": "../src/test/ts-test-indexing.ts",
             "startLine": 36,
-            "endLine": 41,
-            "metrics": null,
-            "signature": null,
-            "docstring": null,
-            "imports": [],
-            "exports": [],
-            "extends": [],
-            "implements": [],
-            "calls": []
+            "endLine": 41
         },
         {
             "id": "interface:IndexResult",
             "name": "IndexResult",
             "node_type": "Interface",
-            "file": "../src/index.ts",
+            "file": "../src/test/ts-test-indexing.ts",
             "startLine": 43,
-            "endLine": 46,
-            "metrics": null,
-            "signature": null,
-            "docstring": null,
-            "imports": [],
-            "exports": [],
-            "extends": [],
-            "implements": [],
-            "calls": []
+            "endLine": 46
         },
         {
             "id": "type:GraphNodeType",
             "name": "GraphNodeType",
             "node_type": "Interface",
-            "file": "../src/index.ts",
+            "file": "../src/test/ts-test-indexing.ts",
             "startLine": 48,
-            "endLine": 48,
-            "metrics": null,
-            "signature": null,
-            "docstring": null,
-            "imports": [],
-            "exports": [],
-            "extends": [],
-            "implements": [],
-            "calls": []
+            "endLine": 48
         },
         {
             "id": "type:GraphEdgeType",
             "name": "GraphEdgeType",
             "node_type": "Interface",
-            "file": "../src/index.ts",
+            "file": "../src/test/ts-test-indexing.ts",
             "startLine": 49,
-            "endLine": 49,
-            "metrics": null,
-            "signature": null,
-            "docstring": null,
-            "imports": [],
-            "exports": [],
-            "extends": [],
-            "implements": [],
-            "calls": []
+            "endLine": 49
         },
         {
             "id": "interface:GraphNode",
             "name": "GraphNode",
             "node_type": "Interface",
-            "file": "../src/index.ts",
+            "file": "../src/test/ts-test-indexing.ts",
             "startLine": 51,
-            "endLine": 66,
-            "metrics": null,
-            "signature": null,
-            "docstring": null,
-            "imports": [],
-            "exports": [],
-            "extends": [],
-            "implements": [],
-            "calls": []
+            "endLine": 66
         },
         {
             "id": "interface:GraphEdge",
             "name": "GraphEdge",
             "node_type": "Interface",
-            "file": "../src/index.ts",
+            "file": "../src/test/ts-test-indexing.ts",
             "startLine": 68,
-            "endLine": 72,
-            "metrics": null,
-            "signature": null,
-            "docstring": null,
-            "imports": [],
-            "exports": [],
-            "extends": [],
-            "implements": [],
-            "calls": []
+            "endLine": 72
         },
         {
             "id": "interface:GraphData",
             "name": "GraphData",
             "node_type": "Interface",
-            "file": "../src/index.ts",
+            "file": "../src/test/ts-test-indexing.ts",
             "startLine": 74,
-            "endLine": 77,
-            "metrics": null,
-            "signature": null,
-            "docstring": null,
-            "imports": [],
-            "exports": [],
-            "extends": [],
-            "implements": [],
-            "calls": []
+            "endLine": 77
         },
         {
             "id": "interface:BfsResult",
             "name": "BfsResult",
             "node_type": "Interface",
-            "file": "../src/index.ts",
+            "file": "../src/test/ts-test-indexing.ts",
             "startLine": 79,
-            "endLine": 83,
-            "metrics": null,
-            "signature": null,
-            "docstring": null,
-            "imports": [],
-            "exports": [],
-            "extends": [],
-            "implements": [],
-            "calls": []
+            "endLine": 83
         },
         {
             "id": "function_declaration:index",
             "name": "index",
             "node_type": "Function",
-            "file": "../src/index.ts",
+            "file": "../src/test/ts-test-indexing.ts",
             "startLine": 90,
             "endLine": 94,
             "metrics": {
@@ -336,17 +159,12 @@
                     {
                         "name": "path",
                         "type": "string",
-                        "optional": false,
-                        "default": null
+                        "optional": false
                     }
                 ],
                 "returnType": "Promise<IndexResult>"
             },
             "docstring": "Index all the files in a directory param:  path returns: s IndexResult / export",
-            "imports": [],
-            "exports": [],
-            "extends": [],
-            "implements": [],
             "calls": [
                 "getBinding",
                 "binding.index",
@@ -357,7 +175,7 @@
             "id": "function_declaration:indexWithCache",
             "name": "indexWithCache",
             "node_type": "Function",
-            "file": "../src/index.ts",
+            "file": "../src/test/ts-test-indexing.ts",
             "startLine": 102,
             "endLine": 106,
             "metrics": {
@@ -370,23 +188,17 @@
                     {
                         "name": "path",
                         "type": "string",
-                        "optional": false,
-                        "default": null
+                        "optional": false
                     },
                     {
                         "name": "cachePath",
                         "type": "string",
-                        "optional": false,
-                        "default": null
+                        "optional": false
                     }
                 ],
                 "returnType": "Promise<IndexResult>"
             },
             "docstring": "Index all the files in a directory with cache param:  path param:  cachePath returns: s IndexResult / export",
-            "imports": [],
-            "exports": [],
-            "extends": [],
-            "implements": [],
             "calls": [
                 "getBinding",
                 "binding.indexWithCache",
@@ -397,7 +209,7 @@
             "id": "function_declaration:indexSync",
             "name": "indexSync",
             "node_type": "Function",
-            "file": "../src/index.ts",
+            "file": "../src/test/ts-test-indexing.ts",
             "startLine": 113,
             "endLine": 117,
             "metrics": {
@@ -410,17 +222,12 @@
                     {
                         "name": "path",
                         "type": "string",
-                        "optional": false,
-                        "default": null
+                        "optional": false
                     }
                 ],
                 "returnType": "IndexResult"
             },
             "docstring": "Index all the files in a directory param:  path returns: s IndexResult / export",
-            "imports": [],
-            "exports": [],
-            "extends": [],
-            "implements": [],
             "calls": [
                 "getBinding",
                 "binding.index",
@@ -431,7 +238,7 @@
             "id": "function_declaration:indexWithCacheSync",
             "name": "indexWithCacheSync",
             "node_type": "Function",
-            "file": "../src/index.ts",
+            "file": "../src/test/ts-test-indexing.ts",
             "startLine": 125,
             "endLine": 129,
             "metrics": {
@@ -444,23 +251,17 @@
                     {
                         "name": "path",
                         "type": "string",
-                        "optional": false,
-                        "default": null
+                        "optional": false
                     },
                     {
                         "name": "cachePath",
                         "type": "string",
-                        "optional": false,
-                        "default": null
+                        "optional": false
                     }
                 ],
                 "returnType": "IndexResult"
             },
             "docstring": "Index all the files in a directory with cache param:  path param:  cachePath returns: s IndexResult / export",
-            "imports": [],
-            "exports": [],
-            "extends": [],
-            "implements": [],
             "calls": [
                 "getBinding",
                 "binding.indexWithCache",
@@ -471,7 +272,7 @@
             "id": "function_declaration:buildGraph",
             "name": "buildGraph",
             "node_type": "Function",
-            "file": "../src/index.ts",
+            "file": "../src/test/ts-test-indexing.ts",
             "startLine": 136,
             "endLine": 141,
             "metrics": {
@@ -484,17 +285,12 @@
                     {
                         "name": "indexResult",
                         "type": "IndexResult",
-                        "optional": false,
-                        "default": null
+                        "optional": false
                     }
                 ],
                 "returnType": "GraphData"
             },
             "docstring": "Build a graph from an index result param:  indexResult returns: s GraphData / export",
-            "imports": [],
-            "exports": [],
-            "extends": [],
-            "implements": [],
             "calls": [
                 "getBinding",
                 "JSON.stringify",
@@ -506,7 +302,7 @@
             "id": "function_declaration:kHopBfs",
             "name": "kHopBfs",
             "node_type": "Function",
-            "file": "../src/index.ts",
+            "file": "../src/test/ts-test-indexing.ts",
             "startLine": 150,
             "endLine": 155,
             "metrics": {
@@ -519,29 +315,22 @@
                     {
                         "name": "graph",
                         "type": "GraphData",
-                        "optional": false,
-                        "default": null
+                        "optional": false
                     },
                     {
                         "name": "startNodeId",
                         "type": "string",
-                        "optional": false,
-                        "default": null
+                        "optional": false
                     },
                     {
                         "name": "k",
                         "type": "number",
-                        "optional": false,
-                        "default": null
+                        "optional": false
                     }
                 ],
                 "returnType": "BfsResult"
             },
             "docstring": "Perform k-hop BFS on a graph param:  graph param:  startNodeId param:  k returns: s BfsResult / export",
-            "imports": [],
-            "exports": [],
-            "extends": [],
-            "implements": [],
             "calls": [
                 "getBinding",
                 "JSON.stringify",
@@ -553,71 +342,39 @@
             "id": "interface:FilteredEdgesResult",
             "name": "FilteredEdgesResult",
             "node_type": "Interface",
-            "file": "../src/index.ts",
+            "file": "../src/test/ts-test-indexing.ts",
             "startLine": 157,
-            "endLine": 160,
-            "metrics": null,
-            "signature": null,
-            "docstring": null,
-            "imports": [],
-            "exports": [],
-            "extends": [],
-            "implements": [],
-            "calls": []
+            "endLine": 160
         },
         {
             "id": "interface:PathResult",
             "name": "PathResult",
             "node_type": "Interface",
-            "file": "../src/index.ts",
+            "file": "../src/test/ts-test-indexing.ts",
             "startLine": 162,
-            "endLine": 166,
-            "metrics": null,
-            "signature": null,
-            "docstring": null,
-            "imports": [],
-            "exports": [],
-            "extends": [],
-            "implements": [],
-            "calls": []
+            "endLine": 166
         },
         {
             "id": "interface:CentralityResult",
             "name": "CentralityResult",
             "node_type": "Interface",
-            "file": "../src/index.ts",
+            "file": "../src/test/ts-test-indexing.ts",
             "startLine": 168,
-            "endLine": 171,
-            "metrics": null,
-            "signature": null,
-            "docstring": null,
-            "imports": [],
-            "exports": [],
-            "extends": [],
-            "implements": [],
-            "calls": []
+            "endLine": 171
         },
         {
             "id": "interface:CycleResult",
             "name": "CycleResult",
             "node_type": "Interface",
-            "file": "../src/index.ts",
+            "file": "../src/test/ts-test-indexing.ts",
             "startLine": 173,
-            "endLine": 176,
-            "metrics": null,
-            "signature": null,
-            "docstring": null,
-            "imports": [],
-            "exports": [],
-            "extends": [],
-            "implements": [],
-            "calls": []
+            "endLine": 176
         },
         {
             "id": "function_declaration:filterEdgesByType",
             "name": "filterEdgesByType",
             "node_type": "Function",
-            "file": "../src/index.ts",
+            "file": "../src/test/ts-test-indexing.ts",
             "startLine": 178,
             "endLine": 183,
             "metrics": {
@@ -630,23 +387,16 @@
                     {
                         "name": "graph",
                         "type": "GraphData",
-                        "optional": false,
-                        "default": null
+                        "optional": false
                     },
                     {
                         "name": "edgeTypes",
                         "type": "string[]",
-                        "optional": false,
-                        "default": null
+                        "optional": false
                     }
                 ],
                 "returnType": "FilteredEdgesResult"
             },
-            "docstring": null,
-            "imports": [],
-            "exports": [],
-            "extends": [],
-            "implements": [],
             "calls": [
                 "getBinding",
                 "JSON.stringify",
@@ -658,7 +408,7 @@
             "id": "function_declaration:findShortestPath",
             "name": "findShortestPath",
             "node_type": "Function",
-            "file": "../src/index.ts",
+            "file": "../src/test/ts-test-indexing.ts",
             "startLine": 185,
             "endLine": 190,
             "metrics": {
@@ -671,29 +421,21 @@
                     {
                         "name": "graph",
                         "type": "GraphData",
-                        "optional": false,
-                        "default": null
+                        "optional": false
                     },
                     {
                         "name": "sourceId",
                         "type": "string",
-                        "optional": false,
-                        "default": null
+                        "optional": false
                     },
                     {
                         "name": "targetId",
                         "type": "string",
-                        "optional": false,
-                        "default": null
+                        "optional": false
                     }
                 ],
                 "returnType": "PathResult"
             },
-            "docstring": null,
-            "imports": [],
-            "exports": [],
-            "extends": [],
-            "implements": [],
             "calls": [
                 "getBinding",
                 "JSON.stringify",
@@ -705,7 +447,7 @@
             "id": "function_declaration:calculateCentrality",
             "name": "calculateCentrality",
             "node_type": "Function",
-            "file": "../src/index.ts",
+            "file": "../src/test/ts-test-indexing.ts",
             "startLine": 192,
             "endLine": 197,
             "metrics": {
@@ -718,17 +460,11 @@
                     {
                         "name": "graph",
                         "type": "GraphData",
-                        "optional": false,
-                        "default": null
+                        "optional": false
                     }
                 ],
                 "returnType": "CentralityResult"
             },
-            "docstring": null,
-            "imports": [],
-            "exports": [],
-            "extends": [],
-            "implements": [],
             "calls": [
                 "getBinding",
                 "JSON.stringify",
@@ -740,7 +476,7 @@
             "id": "function_declaration:detectCycles",
             "name": "detectCycles",
             "node_type": "Function",
-            "file": "../src/index.ts",
+            "file": "../src/test/ts-test-indexing.ts",
             "startLine": 199,
             "endLine": 204,
             "metrics": {
@@ -753,17 +489,11 @@
                     {
                         "name": "graph",
                         "type": "GraphData",
-                        "optional": false,
-                        "default": null
+                        "optional": false
                     }
                 ],
                 "returnType": "CycleResult"
             },
-            "docstring": null,
-            "imports": [],
-            "exports": [],
-            "extends": [],
-            "implements": [],
             "calls": [
                 "getBinding",
                 "JSON.stringify",
@@ -775,23 +505,15 @@
             "id": "interface:GraphAnalysis",
             "name": "GraphAnalysis",
             "node_type": "Interface",
-            "file": "../src/index.ts",
+            "file": "../src/test/ts-test-indexing.ts",
             "startLine": 206,
-            "endLine": 210,
-            "metrics": null,
-            "signature": null,
-            "docstring": null,
-            "imports": [],
-            "exports": [],
-            "extends": [],
-            "implements": [],
-            "calls": []
+            "endLine": 210
         },
         {
             "id": "function_declaration:analyzeGraph",
             "name": "analyzeGraph",
             "node_type": "Function",
-            "file": "../src/index.ts",
+            "file": "../src/test/ts-test-indexing.ts",
             "startLine": 212,
             "endLine": 230,
             "metrics": {
@@ -804,17 +526,11 @@
                     {
                         "name": "graph",
                         "type": "GraphData",
-                        "optional": false,
-                        "default": null
+                        "optional": false
                     }
                 ],
                 "returnType": "GraphAnalysis"
             },
-            "docstring": null,
-            "imports": [],
-            "exports": [],
-            "extends": [],
-            "implements": [],
             "calls": [
                 "getBinding",
                 "JSON.stringify",
@@ -827,137 +543,137 @@
     ],
     "edges": [
         {
-            "source": "file:../src/index.ts",
+            "source": "file:../src/test/ts-test-indexing.ts",
             "target": "function_declaration:getBinding",
             "edge_type": "Contains"
         },
         {
-            "source": "file:../src/index.ts",
+            "source": "file:../src/test/ts-test-indexing.ts",
             "target": "interface:Symbol",
             "edge_type": "Contains"
         },
         {
-            "source": "file:../src/index.ts",
+            "source": "file:../src/test/ts-test-indexing.ts",
             "target": "interface:FileNode",
             "edge_type": "Contains"
         },
         {
-            "source": "file:../src/index.ts",
+            "source": "file:../src/test/ts-test-indexing.ts",
             "target": "interface:IndexStats",
             "edge_type": "Contains"
         },
         {
-            "source": "file:../src/index.ts",
+            "source": "file:../src/test/ts-test-indexing.ts",
             "target": "interface:IndexResult",
             "edge_type": "Contains"
         },
         {
-            "source": "file:../src/index.ts",
+            "source": "file:../src/test/ts-test-indexing.ts",
             "target": "type:GraphNodeType",
             "edge_type": "Contains"
         },
         {
-            "source": "file:../src/index.ts",
+            "source": "file:../src/test/ts-test-indexing.ts",
             "target": "type:GraphEdgeType",
             "edge_type": "Contains"
         },
         {
-            "source": "file:../src/index.ts",
+            "source": "file:../src/test/ts-test-indexing.ts",
             "target": "interface:GraphNode",
             "edge_type": "Contains"
         },
         {
-            "source": "file:../src/index.ts",
+            "source": "file:../src/test/ts-test-indexing.ts",
             "target": "interface:GraphEdge",
             "edge_type": "Contains"
         },
         {
-            "source": "file:../src/index.ts",
+            "source": "file:../src/test/ts-test-indexing.ts",
             "target": "interface:GraphData",
             "edge_type": "Contains"
         },
         {
-            "source": "file:../src/index.ts",
+            "source": "file:../src/test/ts-test-indexing.ts",
             "target": "interface:BfsResult",
             "edge_type": "Contains"
         },
         {
-            "source": "file:../src/index.ts",
+            "source": "file:../src/test/ts-test-indexing.ts",
             "target": "function_declaration:index",
             "edge_type": "Contains"
         },
         {
-            "source": "file:../src/index.ts",
+            "source": "file:../src/test/ts-test-indexing.ts",
             "target": "function_declaration:indexWithCache",
             "edge_type": "Contains"
         },
         {
-            "source": "file:../src/index.ts",
+            "source": "file:../src/test/ts-test-indexing.ts",
             "target": "function_declaration:indexSync",
             "edge_type": "Contains"
         },
         {
-            "source": "file:../src/index.ts",
+            "source": "file:../src/test/ts-test-indexing.ts",
             "target": "function_declaration:indexWithCacheSync",
             "edge_type": "Contains"
         },
         {
-            "source": "file:../src/index.ts",
+            "source": "file:../src/test/ts-test-indexing.ts",
             "target": "function_declaration:buildGraph",
             "edge_type": "Contains"
         },
         {
-            "source": "file:../src/index.ts",
+            "source": "file:../src/test/ts-test-indexing.ts",
             "target": "function_declaration:kHopBfs",
             "edge_type": "Contains"
         },
         {
-            "source": "file:../src/index.ts",
+            "source": "file:../src/test/ts-test-indexing.ts",
             "target": "interface:FilteredEdgesResult",
             "edge_type": "Contains"
         },
         {
-            "source": "file:../src/index.ts",
+            "source": "file:../src/test/ts-test-indexing.ts",
             "target": "interface:PathResult",
             "edge_type": "Contains"
         },
         {
-            "source": "file:../src/index.ts",
+            "source": "file:../src/test/ts-test-indexing.ts",
             "target": "interface:CentralityResult",
             "edge_type": "Contains"
         },
         {
-            "source": "file:../src/index.ts",
+            "source": "file:../src/test/ts-test-indexing.ts",
             "target": "interface:CycleResult",
             "edge_type": "Contains"
         },
         {
-            "source": "file:../src/index.ts",
+            "source": "file:../src/test/ts-test-indexing.ts",
             "target": "function_declaration:filterEdgesByType",
             "edge_type": "Contains"
         },
         {
-            "source": "file:../src/index.ts",
+            "source": "file:../src/test/ts-test-indexing.ts",
             "target": "function_declaration:findShortestPath",
             "edge_type": "Contains"
         },
         {
-            "source": "file:../src/index.ts",
+            "source": "file:../src/test/ts-test-indexing.ts",
             "target": "function_declaration:calculateCentrality",
             "edge_type": "Contains"
         },
         {
-            "source": "file:../src/index.ts",
+            "source": "file:../src/test/ts-test-indexing.ts",
             "target": "function_declaration:detectCycles",
             "edge_type": "Contains"
         },
         {
-            "source": "file:../src/index.ts",
+            "source": "file:../src/test/ts-test-indexing.ts",
             "target": "interface:GraphAnalysis",
             "edge_type": "Contains"
         },
         {
-            "source": "file:../src/index.ts",
+            "source": "file:../src/test/ts-test-indexing.ts",
             "target": "function_declaration:analyzeGraph",
             "edge_type": "Contains"
         },
@@ -1077,117 +793,52 @@
             "edge_type": "Calls"
         },
         {
-            "source": "file:../src/test-indexer.test.ts",
+            "source": "file:../src/test/ts-test-indexing.ts",
             "target": "join",
             "edge_type": "Imports"
         },
         {
-            "source": "file:../src/test-indexer.test.ts",
-            "target": "file:path",
-            "edge_type": "Imports"
-        },
-        {
-            "source": "file:../src/test-indexer.test.ts",
-            "target": "describe",
-            "edge_type": "Imports"
-        },
-        {
-            "source": "file:../src/test-indexer.test.ts",
-            "target": "it",
-            "edge_type": "Imports"
-        },
-        {
-            "source": "file:../src/test-indexer.test.ts",
-            "target": "expect",
-            "edge_type": "Imports"
-        },
-        {
-            "source": "file:../src/test-indexer.test.ts",
-            "target": "beforeEach",
-            "edge_type": "Imports"
-        },
-        {
-            "source": "file:../src/test-indexer.test.ts",
-            "target": "file:bun:test",
-            "edge_type": "Imports"
-        },
-        {
-            "source": "file:../src/test-indexer.test.ts",
-            "target": "tmpdir",
-            "edge_type": "Imports"
-        },
-        {
-            "source": "file:../src/test-indexer.test.ts",
-            "target": "file:os",
-            "edge_type": "Imports"
-        },
-        {
-            "source": "file:../src/test-indexer.test.ts",
-            "target": "mkdtempSync",
-            "edge_type": "Imports"
-        },
-        {
-            "source": "file:../src/test-indexer.test.ts",
-            "target": "writeFileSync",
-            "edge_type": "Imports"
-        },
-        {
-            "source": "file:../src/test-indexer.test.ts",
-            "target": "rmSync",
-            "edge_type": "Imports"
-        },
-        {
-            "source": "file:../src/test-indexer.test.ts",
-            "target": "file:fs",
-            "edge_type": "Imports"
-        },
-        {
-            "source": "file:../src/index.ts",
-            "target": "join",
-            "edge_type": "Imports"
-        },
-        {
-            "source": "file:../src/index.ts",
+            "source": "file:../src/test/ts-test-indexing.ts",
             "target": "dirname",
             "edge_type": "Imports"
         },
         {
-            "source": "file:../src/index.ts",
+            "source": "file:../src/test/ts-test-indexing.ts",
             "target": "file:path",
             "edge_type": "Imports"
         },
         {
-            "source": "file:../src/index.ts",
+            "source": "file:../src/test/ts-test-indexing.ts",
             "target": "readFileSync",
             "edge_type": "Imports"
         },
         {
-            "source": "file:../src/index.ts",
+            "source": "file:../src/test/ts-test-indexing.ts",
             "target": "existsSync",
             "edge_type": "Imports"
         },
         {
-            "source": "file:../src/index.ts",
+            "source": "file:../src/test/ts-test-indexing.ts",
             "target": "mkdirSync",
             "edge_type": "Imports"
         },
         {
-            "source": "file:../src/index.ts",
+            "source": "file:../src/test/ts-test-indexing.ts",
             "target": "file:fs",
             "edge_type": "Imports"
         },
         {
-            "source": "file:../src/index.ts",
+            "source": "file:../src/test/ts-test-indexing.ts",
             "target": "addNativeBinding",
             "edge_type": "Imports"
         },
         {
-            "source": "file:../src/index.ts",
+            "source": "file:../src/test/ts-test-indexing.ts",
             "target": "loadBinding",
             "edge_type": "Imports"
         },
         {
-            "source": "file:../src/index.ts",
+            "source": "file:../src/test/ts-test-indexing.ts",
             "target": "file:napi-builds",
             "edge_type": "Imports"
         }

@@ -1,4 +1,4 @@
-use ultragraph_kb::{index, types::{IndexResult, Symbol}};
+use ultragraph_kb::{index, types::{IndexResult}};
 use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
@@ -260,6 +260,6 @@ fn test_index_metrics() {
 
     // Metrics are optional, check if present
     if let Some(ref metrics) = fn_symbol.metrics {
-        assert!(metrics.params >= 0);
+        assert_eq!(metrics.params, 1);
     }
 }

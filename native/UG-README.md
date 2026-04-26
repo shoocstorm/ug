@@ -46,6 +46,18 @@ Options:
 - `-i, --input <file>` - Input index file
 - `-o, --output <file>` - Output graph file
 
+### `ug search`
+
+Search by keyword.
+
+```bash
+ug search ./out/graph.json "Cache" -o ./out/searhc_result.json
+```
+
+Options:
+- `-o, --output <file>` - Output file (optional)
+- `-t, --type <type>` - Filter by node type
+
 ### `ug bfs`
 
 K-hop BFS traversal on graph.

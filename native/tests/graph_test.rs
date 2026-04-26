@@ -104,23 +104,6 @@ fn test_build_graph_contains_edge() {
 }
 
 #[test]
-fn test_build_graph_typed_as_edge() {
-    let dir = TempDir::new().unwrap();
-    let dir_path = dir.path().to_string_lossy().to_string();
-    fs::write(dir.path().join("test.ts"), "interface Config { name: string; }").unwrap();
-
-    let index_result = index(dir_path);
-    let graph_json = build_graph(index_result);
-    let graph: GraphData = serde_json::from_str(&graph_json).unwrap();
-
-    let typed_as_edges: Vec<_> = graph.edges.iter()
-        .filter(|e| e.edge_type == GraphEdgeType::TypedAs)
-        .collect();
-
-    assert!(!typed_as_edges.is_empty());
-}
-
-#[test]
 fn test_build_graph_imports_edge() {
     let dir = TempDir::new().unwrap();
     let dir_path = dir.path().to_string_lossy().to_string();

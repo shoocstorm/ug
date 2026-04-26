@@ -110,16 +110,46 @@ const commands = {
       return `Visit http://localhost:8080 to view the graph`;
     }
   },
-  search: {
+  bfs: {
     usage: '<graph-json-file> <start-node-id> <k>',
     desc: 'Perform K-hop BFS traversal',
     run: (args) => {
       if (args.length < 3) {
-        throw new Error('Usage: k-hop-bfs <graph-json-file> <start-node-id> <k>');
+        throw new Error('Usage: bfs <graph-json-file> <start-node-id> <k>');
       }
       const [file, startNodeId, k] = args;
       const graphJson = readFileSync(file, 'utf-8');
       const result = ug.kHopBfs(graphJson, startNodeId, parseInt(k, 10));
+      return JSON.parse(result);
+    }
+  },
+  search: {
+    usage: '<graph-json-file> <keyword> [--type <node-type>]... [--output <output-path>]',
+    desc: 'Keyword search over graph nodes (case-insensitive substring on name and docstring). Repeat --type to restrict to specific node types (function, class, interface, file, ...).',
+    run: (args) => {
+      if (args.length < 2) {
+        throw new Error('Usage: search <graph-json-file> <keyword> [--type <node-type>]... [--output <output-path>]');
+      }
+      const file = args[0];
+      const keyword = args[1];
+      const nodeTypes = [];
+      let outputPath = null;
+      for (let i = 2; i < args.length; i++) {
+        const a = args[i];
+        if (a === '--type' || a === '-t') {
+          if (i + 1 < args.length) nodeTypes.push(args[++i]);
+        } else if (a === '--output' || a === '-o') {
+          if (i + 1 < args.length) outputPath = args[++i];
+        }
+      }
+      const graphJson = readFileSync(file, 'utf-8');
+      const result = ug.searchByKeyword(graphJson, keyword, nodeTypes.length ? nodeTypes : null);
+      if (outputPath) {
+        const outputDir = dirname(outputPath);
+        if (!existsSync(outputDir)) mkdirSync(outputDir, { recursive: true });
+        writeFileSync(outputPath, result);
+        return `Wrote search result to ${outputPath}`;
+      }
       return JSON.parse(result);
     }
   },

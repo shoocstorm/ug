@@ -25,3 +25,12 @@ export declare function index(path: string): string
 export declare function indexWithCache(path: string, cachePath: string): string
 
 export declare function kHopBfs(graphJson: string, startNodeId: string, k: number): string
+
+/**
+ * Keyword-based search over graph nodes. Matches `keyword` (case-insensitive
+ * substring) against each node's `name` and `docstring`. When `node_types`
+ * is provided and non-empty, only nodes whose `node_type` (lowercased) is in
+ * the list are considered. An empty `keyword` returns every node that passes
+ * the type filter.
+ */
+export declare function searchByKeyword(graphJson: string, keyword: string, nodeTypes?: Array<string> | undefined | null): string
