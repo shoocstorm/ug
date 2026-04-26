@@ -4,7 +4,7 @@
   "description": "High-Performance Knowledge Base Indexer",
   "main": "index.js",
   "napi": {
-    "name": "ultragraph-kb",
+    "binaryName": "ultragraph-kb",
     "platforms": [
       "aarch64-apple-darwin"
     ]

@@ -82,30 +82,57 @@ export interface BfsResult {
   distances: Record<string, number>;
 }
 
+/**
+ * Index all the files in a directory
+ * @param path - Path to the directory
+ * @returns IndexResult
+ */
 export async function index(path: string): Promise<IndexResult> {
   const binding = getBinding();
   const result = binding.index(path);
   return JSON.parse(result) as IndexResult;
 }
 
+/**
+ * Index all the files in a directory with cache
+ * @param path - Path to the directory
+ * @param cachePath - Path to the cache
+ * @returns IndexResult
+ */
 export async function indexWithCache(path: string, cachePath: string): Promise<IndexResult> {
   const binding = getBinding();
   const result = binding.indexWithCache(path, cachePath);
   return JSON.parse(result) as IndexResult;
 }
 
+/**
+ * Index all the files in a directory
+ * @param path - Path to the directory
+ * @returns IndexResult
+ */
 export function indexSync(path: string): IndexResult {
   const binding = getBinding();
   const result = binding.index(path);
   return JSON.parse(result) as IndexResult;
 }
 
+/**
+ * Index all the files in a directory with cache
+ * @param path - Path to the directory
+ * @param cachePath - Path to the cache
+ * @returns IndexResult
+ */
 export function indexWithCacheSync(path: string, cachePath: string): IndexResult {
   const binding = getBinding();
   const result = binding.indexWithCache(path, cachePath);
   return JSON.parse(result) as IndexResult;
 }
 
+/**
+ * Build a graph from an index result
+ * @param indexResult - Index result
+ * @returns GraphData
+ */
 export function buildGraph(indexResult: IndexResult): GraphData {
   const binding = getBinding();
   const json = JSON.stringify(indexResult);
@@ -113,6 +140,13 @@ export function buildGraph(indexResult: IndexResult): GraphData {
   return JSON.parse(result) as GraphData;
 }
 
+/**
+ * Perform k-hop BFS on a graph
+ * @param graph - Graph data
+ * @param startNodeId - Starting node ID
+ * @param k - Number of hops
+ * @returns BfsResult
+ */
 export function kHopBfs(graph: GraphData, startNodeId: string, k: number): BfsResult {
   const binding = getBinding();
   const json = JSON.stringify(graph);
@@ -178,16 +212,16 @@ export interface GraphAnalysis {
 export function analyzeGraph(graph: GraphData): GraphAnalysis {
   const binding = getBinding();
   const json = JSON.stringify(graph);
-  
+
   const centralityJson = binding.calculateCentrality(json);
   const cyclesJson = binding.detectCycles(json);
-  
+
   const edgeCounts: Record<string, number> = {};
   graph.edges.forEach(e => {
     const t = e.edge_type || 'unknown';
     edgeCounts[t] = (edgeCounts[t] || 0) + 1;
   });
-  
+
   return {
     centrality: JSON.parse(centralityJson) as CentralityResult,
     cycles: JSON.parse(cyclesJson) as CycleResult,

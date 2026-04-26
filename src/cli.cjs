@@ -149,8 +149,11 @@ if (!cmd || cmd === 'help') {
 
 if (commands[cmd]) {
   try {
+    const start = Date.now();
     const result = commands[cmd].run(args);
+    const elapsed = ((Date.now() - start) / 1000).toFixed(2);
     console.log(JSON.stringify(result, null, 2));
+    console.log(`\n⏱ Done in ${elapsed}s`);
   } catch (e) {
     console.error(`Error: ${e.message}`);
     process.exit(1);

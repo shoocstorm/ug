@@ -25,7 +25,7 @@ fn main() {
         "analyze" => run_analyze(cmd_args),
         "gen" => run_gen(cmd_args),
         "help" => {
-            if let Some(c) = cmd_args.first() {
+            if let Some(_c) = cmd_args.first() {
                 eprintln!("TODO: print command help");
             } else {
                 print_help();
