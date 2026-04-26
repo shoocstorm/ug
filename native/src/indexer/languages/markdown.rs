@@ -37,6 +37,7 @@ impl LanguageIndexer for MarkdownIndexer {
     }
 
     fn extract_imports(&self, source: &[u8], _root: Node) -> Vec<ImportInfo> {
+        // TODO: resolve local links as references instead of imports
         extract_local_links(source)
     }
 

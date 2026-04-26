@@ -1,18 +1,50 @@
+use crate::indexer::{normalize_path, resolve_relative};
 use crate::types::{GraphData, GraphEdge, GraphEdgeType, GraphNode, GraphNodeType};
 use napi_derive::napi;
 use petgraph::graph::{DiGraph, NodeIndex};
 use std::collections::HashMap;
 
+/// Extension permutations tried when resolving an import path against the
+/// file index. Empty string is included so that imports already carrying an
+/// extension (`./foo.ts`, markdown links to `PROGRESS.md`) succeed without
+/// any extra work. Order matters: the first match wins, so list the most
+/// specific candidates first.
+const FILE_RESOLVE_EXT_CANDIDATES: &[&str] = &[
+    "",
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".py",
+    ".java",
+    ".md",
+    ".mdx",
+    ".markdown",
+    "/index.ts",
+    "/index.tsx",
+    "/index.js",
+    "/index.jsx",
+    "/index.md",
+    "/README.md",
+    "/__init__.py",
+];
+
 fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData {
     let mut nodes: Vec<GraphNode> = Vec::new();
     let mut edges: Vec<GraphEdge> = Vec::new();
-    let mut symbol_id_map: HashMap<String, String> = HashMap::new();
+    // Same name can exist in many files (e.g. helper `parse` in three
+    // modules). Keep every match so cross-file resolvers can prefer the
+    // one in the same file as the caller.
+    let mut symbol_id_map: HashMap<String, Vec<String>> = HashMap::new();
+
+    let (path_index, basename_index) = build_file_indexes(&index_result.files);
 
     // Pass 1: build all file & symbol nodes and populate symbol_id_map so
-    // pass-2 edges (calls/extends/implements) can resolve targets to real
-    // node IDs even when the call target is defined later or in another file.
+    // later passes (calls/extends/implements/imports) can resolve targets to
+    // real node IDs even when the target is defined later or in another file.
     for file in &index_result.files {
-        let file_node_id = format!("file:{}", file.path.replace('\\', "/"));
+        let normalized_file_path = normalize_path(&file.path);
+        let file_node_id = format!("file:{}", normalized_file_path);
 
         let file_node_type = match &file.classification {
             Some(crate::types::FileClassification::Config) => GraphNodeType::Config,
@@ -21,9 +53,9 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
 
         nodes.push(GraphNode {
             id: file_node_id.clone(),
-            name: file.path.clone(),
+            name: normalized_file_path.clone(),
             node_type: file_node_type,
-            file: Some(file.path.clone()),
+            file: Some(normalized_file_path.clone()),
             start_line: None,
             end_line: None,
             metrics: None,
@@ -70,12 +102,17 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
                 }
             };
 
-            // Headings get file+line-scoped IDs so the same `## Setup`
-            // heading in two different docs doesn't collapse onto one node.
+            // Symbol IDs are scoped by `<file>:<line>:<name>` so two files
+            // declaring the same `class Foo` get distinct nodes. Headings
+            // use a slimmer `<file>:<line>` key since markdown headings carry
+            // no kind variation worth disambiguating on.
             let sym_node_id = if heading_level.is_some() {
-                format!("heading:{}:{}", file.path.replace('\\', "/"), sym.start_line)
+                format!("heading:{}:{}", normalized_file_path, sym.start_line)
             } else {
-                format!("{}:{}", sym.kind, sym.name)
+                format!(
+                    "{}:{}:{}:{}",
+                    sym.kind, normalized_file_path, sym.start_line, sym.name
+                )
             };
 
             let signature = sym.signature.as_ref().map(|s| crate::types::GraphNodeSignature {
@@ -106,7 +143,7 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
                 id: sym_node_id.clone(),
                 name: sym.name.clone(),
                 node_type,
-                file: Some(file.path.clone()),
+                file: Some(normalized_file_path.clone()),
                 start_line: Some(sym.start_line),
                 end_line: Some(sym.end_line),
                 metrics: sym.metrics.clone(),
@@ -142,7 +179,10 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
                 // a heading "Setup" must not be a target for code-side
                 // call/extends/implements resolution.
             } else {
-                symbol_id_map.insert(sym.name.clone(), sym_node_id.clone());
+                symbol_id_map
+                    .entry(sym.name.clone())
+                    .or_default()
+                    .push(sym_node_id.clone());
 
                 edges.push(GraphEdge {
                     source: file_node_id.clone(),
@@ -155,13 +195,21 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
 
     // Pass 2: resolve calls/extends/implements through symbol_id_map. Names
     // like `this.foo` or `obj.foo` fall back to the trailing segment so
-    // member-access calls hit the right method node.
+    // member-access calls hit the right method node. When a name has matches
+    // in multiple files we prefer the one in the same file as the caller.
     for file in &index_result.files {
+        let normalized_file_path = normalize_path(&file.path);
         for sym in &file.symbols {
-            let sym_node_id = format!("{}:{}", sym.kind, sym.name);
+            if parse_heading_level(&sym.kind).is_some() {
+                continue;
+            }
+            let sym_node_id = format!(
+                "{}:{}:{}:{}",
+                sym.kind, normalized_file_path, sym.start_line, sym.name
+            );
 
             for extended in &sym.extends {
-                if let Some(target_id) = resolve_symbol(&symbol_id_map, extended) {
+                if let Some(target_id) = resolve_symbol(&symbol_id_map, extended, &normalized_file_path) {
                     edges.push(GraphEdge {
                         source: sym_node_id.clone(),
                         target: target_id,
@@ -171,7 +219,7 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
             }
 
             for implemented in &sym.implements {
-                if let Some(target_id) = resolve_symbol(&symbol_id_map, implemented) {
+                if let Some(target_id) = resolve_symbol(&symbol_id_map, implemented, &normalized_file_path) {
                     edges.push(GraphEdge {
                         source: sym_node_id.clone(),
                         target: target_id,
@@ -181,7 +229,7 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
             }
 
             for called in &sym.calls {
-                if let Some(target_id) = resolve_symbol(&symbol_id_map, called) {
+                if let Some(target_id) = resolve_symbol(&symbol_id_map, called, &normalized_file_path) {
                     edges.push(GraphEdge {
                         source: sym_node_id.clone(),
                         target: target_id,
@@ -192,57 +240,220 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
         }
     }
 
+    // Pass 3: resolve file-level imports against the file index. We emit:
+    // - one `Imports` edge file→file when the target path resolves to a known
+    //   file (markdown link, TS relative import, etc.)
+    // - one `References` edge file→symbol per imported name that matches a
+    //   symbol the indexer recorded
+    // Bare unresolved imports (package names, dead links) are dropped to
+    // keep the visualization free of orphan-target edges.
     for file in &index_result.files {
-        let file_node_id = format!("file:{}", file.path.replace('\\', "/"));
+        let normalized_file_path = normalize_path(&file.path);
+        let file_node_id = format!("file:{}", normalized_file_path);
 
         for import in &file.imports {
-            let source_file = file_node_id.clone();
-
-            for imp in &import.imported {
-                edges.push(GraphEdge {
-                    source: source_file.clone(),
-                    target: imp.name.clone(),
-                    edge_type: GraphEdgeType::Imports,
-                });
+            if !import.path.is_empty() {
+                if let Some(target_file_id) = resolve_import_to_file_id(
+                    &normalized_file_path,
+                    &import.path,
+                    &path_index,
+                    &basename_index,
+                ) {
+                    if target_file_id != file_node_id {
+                        edges.push(GraphEdge {
+                            source: file_node_id.clone(),
+                            target: target_file_id,
+                            edge_type: GraphEdgeType::Imports,
+                        });
+                    }
+                }
             }
 
-            if !import.path.is_empty() {
-                let target_file = if import.path.starts_with('.') {
-                    let base_dir = std::path::Path::new(&file.path)
-                        .parent()
-                        .map(|p| p.to_string_lossy().to_string())
-                        .unwrap_or_default();
-                    let resolved = std::path::Path::new(&base_dir)
-                        .join(import.path.trim_start_matches('.'))
-                        .to_string_lossy()
-                        .to_string();
-                    format!("file:{}", resolved)
-                } else {
-                    format!("file:{}", import.path)
-                };
-
-                edges.push(GraphEdge {
-                    source: source_file,
-                    target: target_file,
-                    edge_type: GraphEdgeType::Imports,
-                });
+            for imp in &import.imported {
+                if let Some(target_sym_id) =
+                    resolve_symbol(&symbol_id_map, &imp.name, &normalized_file_path)
+                {
+                    edges.push(GraphEdge {
+                        source: file_node_id.clone(),
+                        target: target_sym_id,
+                        edge_type: GraphEdgeType::References,
+                    });
+                }
             }
         }
 
         for exp in &file.exports {
-            edges.push(GraphEdge {
-                source: file_node_id.clone(),
-                target: exp.name.clone(),
-                edge_type: GraphEdgeType::Exports,
-            });
+            if let Some(target_sym_id) =
+                resolve_symbol(&symbol_id_map, &exp.name, &normalized_file_path)
+            {
+                edges.push(GraphEdge {
+                    source: file_node_id.clone(),
+                    target: target_sym_id,
+                    edge_type: GraphEdgeType::Exports,
+                });
+            }
         }
     }
-
-    resolve_cross_file_references(&mut edges, &symbol_id_map);
 
     dedupe_edges(&mut edges);
 
     GraphData { nodes, edges }
+}
+
+/// Build the lookup tables used to resolve import paths to file node IDs.
+///
+/// `path_index` maps every spelling we want to recognise (with extension,
+/// without extension) onto a single file node ID. `basename_index` is the
+/// last-resort fallback: when a markdown link or import doesn't carry enough
+/// path context to resolve uniquely, we look it up by basename and pick the
+/// closest match. Multiple files can share a basename (`README.md` in N
+/// directories), so the value is a list and disambiguation happens at lookup.
+fn build_file_indexes(
+    files: &[crate::types::FileNode],
+) -> (HashMap<String, String>, HashMap<String, Vec<String>>) {
+    let mut path_index: HashMap<String, String> = HashMap::new();
+    let mut basename_index: HashMap<String, Vec<String>> = HashMap::new();
+
+    for file in files {
+        let normalized = normalize_path(&file.path);
+        let id = format!("file:{}", normalized);
+
+        path_index.insert(normalized.clone(), id.clone());
+
+        // Also key on the path with its extension stripped so an import like
+        // `./utils` resolves to a `./utils.ts` file in one lookup.
+        if let Some(dot_idx) = normalized.rfind('.') {
+            // Only strip if the dot is in the basename, not in some parent
+            // directory like `my.module/file`.
+            let last_slash = normalized.rfind('/').map(|i| i + 1).unwrap_or(0);
+            if dot_idx >= last_slash {
+                path_index
+                    .entry(normalized[..dot_idx].to_string())
+                    .or_insert_with(|| id.clone());
+            }
+        }
+
+        let basename = match normalized.rfind('/') {
+            Some(idx) => &normalized[idx + 1..],
+            None => &normalized,
+        };
+        basename_index
+            .entry(basename.to_string())
+            .or_default()
+            .push(id.clone());
+
+        if let Some(dot_idx) = basename.rfind('.') {
+            basename_index
+                .entry(basename[..dot_idx].to_string())
+                .or_default()
+                .push(id.clone());
+        }
+    }
+
+    (path_index, basename_index)
+}
+
+/// Resolve a raw import target to a file node ID, walking through several
+/// progressively looser strategies:
+///
+/// 1. join with the source file's directory and look up exactly
+/// 2. try common extensions / index files at that joined location
+/// 3. look up the unjoined import path (covers absolute and root-anchored
+///    imports the indexer records verbatim)
+/// 4. basename fallback - useful for markdown links that drop the directory
+///    (`[…](README.md)` resolving to `docs/README.md` from a sibling file)
+///
+/// Returns `None` for genuine externals (npm packages, dead links) so the
+/// caller can drop the edge instead of leaving an orphan in the graph.
+fn resolve_import_to_file_id(
+    src_file_path: &str,
+    import_path: &str,
+    path_index: &HashMap<String, String>,
+    basename_index: &HashMap<String, Vec<String>>,
+) -> Option<String> {
+    let cleaned = import_path.split('#').next().unwrap_or(import_path);
+    let cleaned = cleaned.split('?').next().unwrap_or(cleaned);
+    if cleaned.is_empty() {
+        return None;
+    }
+
+    let resolved = resolve_relative(src_file_path, cleaned);
+    if let Some(id) = lookup_with_extensions(&resolved, path_index) {
+        return Some(id);
+    }
+
+    let direct = normalize_path(cleaned);
+    if direct != resolved {
+        if let Some(id) = lookup_with_extensions(&direct, path_index) {
+            return Some(id);
+        }
+    }
+
+    let basename = match cleaned.rfind('/') {
+        Some(idx) => &cleaned[idx + 1..],
+        None => cleaned,
+    };
+    if !basename.is_empty() {
+        if let Some(id) = lookup_basename(basename, src_file_path, basename_index) {
+            return Some(id);
+        }
+        if let Some(dot_idx) = basename.rfind('.') {
+            if let Some(id) =
+                lookup_basename(&basename[..dot_idx], src_file_path, basename_index)
+            {
+                return Some(id);
+            }
+        }
+    }
+
+    None
+}
+
+fn lookup_with_extensions(base: &str, path_index: &HashMap<String, String>) -> Option<String> {
+    for ext in FILE_RESOLVE_EXT_CANDIDATES {
+        let candidate = if ext.is_empty() {
+            base.to_string()
+        } else {
+            format!("{}{}", base, ext)
+        };
+        if let Some(id) = path_index.get(&candidate) {
+            return Some(id.clone());
+        }
+    }
+    None
+}
+
+/// Pick the basename match whose path shares the longest directory prefix
+/// with the source file. Ties (or no shared prefix) fall through to the
+/// first registered entry, which is good enough for the visualization.
+fn lookup_basename(
+    basename: &str,
+    src_file_path: &str,
+    basename_index: &HashMap<String, Vec<String>>,
+) -> Option<String> {
+    let candidates = basename_index.get(basename)?;
+    if candidates.is_empty() {
+        return None;
+    }
+    if candidates.len() == 1 {
+        return Some(candidates[0].clone());
+    }
+
+    let src_norm = normalize_path(src_file_path);
+    let mut best: Option<(usize, &String)> = None;
+    for cand in candidates {
+        let cand_path = cand.strip_prefix("file:").unwrap_or(cand.as_str());
+        let shared = shared_prefix_len(&src_norm, cand_path);
+        match best {
+            Some((cur_len, _)) if shared <= cur_len => {}
+            _ => best = Some((shared, cand)),
+        }
+    }
+    best.map(|(_, id)| id.clone())
+}
+
+fn shared_prefix_len(a: &str, b: &str) -> usize {
+    a.bytes().zip(b.bytes()).take_while(|(x, y)| x == y).count()
 }
 
 /// Parse a markdown heading kind like `heading_3` into its level (1-6).
@@ -257,36 +468,45 @@ fn parse_heading_level(kind: &str) -> Option<usize> {
     }
 }
 
-/// Look up a symbol by name. Falls back to the trailing identifier so
-/// member-access call expressions (`this.foo`, `obj.bar.baz`) resolve to
-/// the method node when only the bare method name is in the map.
-fn resolve_symbol(map: &HashMap<String, String>, name: &str) -> Option<String> {
-    if let Some(id) = map.get(name) {
-        return Some(id.clone());
+/// Look up a symbol by name, preferring matches in the caller's own file.
+///
+/// Names like `this.foo` or `obj.bar.baz` fall back to the trailing
+/// identifier so member-access call expressions resolve to the method node
+/// when only the bare method name is in the map. When several files declare
+/// the same name (a `parse` helper in three modules), we pick the match in
+/// `caller_file` if there is one — otherwise the first registered ID, which
+/// keeps the graph deterministic for the same input.
+fn resolve_symbol(
+    map: &HashMap<String, Vec<String>>,
+    name: &str,
+    caller_file: &str,
+) -> Option<String> {
+    if let Some(id) = pick_best(map.get(name), caller_file) {
+        return Some(id);
     }
     let tail = name.rsplit('.').next()?;
     if tail == name {
         return None;
     }
-    map.get(tail).cloned()
+    pick_best(map.get(tail), caller_file)
 }
 
-fn resolve_cross_file_references(edges: &mut Vec<GraphEdge>, symbol_id_map: &HashMap<String, String>) {
-    let import_edges: Vec<GraphEdge> = edges
-        .iter()
-        .filter(|e| e.edge_type == GraphEdgeType::Imports)
-        .cloned()
-        .collect();
-
-    for edge in import_edges {
-        if let Some(target_sym_id) = symbol_id_map.get(&edge.target) {
-            edges.push(GraphEdge {
-                source: edge.source.clone(),
-                target: target_sym_id.clone(),
-                edge_type: GraphEdgeType::References,
-            });
+fn pick_best(candidates: Option<&Vec<String>>, caller_file: &str) -> Option<String> {
+    let candidates = candidates?;
+    if candidates.is_empty() {
+        return None;
+    }
+    // Symbol IDs encode `<kind>:<file>:<line>:<name>` - prefer an ID whose
+    // `<file>` segment matches the caller. Falls through to the first
+    // registered entry so behaviour is stable when there's no same-file
+    // match (cross-file calls, externals).
+    let needle = format!(":{}:", caller_file);
+    for id in candidates {
+        if id.contains(&needle) {
+            return Some(id.clone());
         }
     }
+    Some(candidates[0].clone())
 }
 
 fn dedupe_edges(edges: &mut Vec<GraphEdge>) {

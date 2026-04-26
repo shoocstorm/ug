@@ -27,6 +27,7 @@ use std::path::Path;
 use tree_sitter::Parser;
 
 use classifier::classify_file;
+pub use common::{normalize_path, resolve_relative};
 use common::{compute_hash, resolve_import_refs, scan_files};
 use package_json::extract_package_json_dependencies;
 
@@ -52,8 +53,10 @@ pub fn process_file(path: &Path) -> Option<FileNode> {
 
     // Stamp the file path onto every symbol now that it's known. Doing this
     // here keeps each language indexer focused on AST extraction and unaware
-    // of where the file lives on disk.
-    let path_str = path.to_string_lossy().to_string();
+    // of where the file lives on disk. The path is normalized so downstream
+    // ID derivation is stable regardless of how the user invoked the CLI
+    // (`./src/foo.ts` and `src/foo.ts` collapse to the same key).
+    let path_str = normalize_path(&path.to_string_lossy());
     for sym in symbols.iter_mut() {
         sym.file = path_str.clone();
     }
@@ -130,7 +133,10 @@ pub fn index_with_cache(path: String, cache_path: String) -> String {
     let mut cached = 0;
 
     for file_path in files_paths {
-        let path_str = file_path.to_string_lossy().to_string();
+        // Normalize so the cache key matches what `process_file` stamps onto
+        // the FileNode. Without this, a cache built from `./src/foo.ts` would
+        // miss a path stored as `src/foo.ts` and re-index every run.
+        let path_str = normalize_path(&file_path.to_string_lossy());
         let hash = match compute_hash(&file_path) {
             Some(h) => h,
             None => continue,

@@ -274,6 +274,78 @@ pub fn compute_hash(path: &Path) -> Option<String> {
     Some(blake3::hash(&data).to_hex().to_string())
 }
 
+/// Normalize a path string into a canonical form used everywhere downstream:
+/// - backslashes → forward slashes
+/// - leading `./` stripped, mid-path `./` segments collapsed
+/// - `..` collapsed against preceding segments where possible
+/// - leading `..` segments preserved (the indexed root may sit above cwd)
+///
+/// Two different ways to spell the same file (`./docs/A.md`, `docs/A.md`,
+/// `docs/./A.md`) all collapse to `docs/A.md` so the graph builder can
+/// resolve cross-file links by exact-match lookup.
+pub fn normalize_path(p: &str) -> String {
+    let p = p.replace('\\', "/");
+    let absolute = p.starts_with('/');
+    let mut parts: Vec<&str> = Vec::new();
+    let mut leading_parents: usize = 0;
+
+    for segment in p.split('/') {
+        match segment {
+            "" | "." => continue,
+            ".." => {
+                if !parts.is_empty() {
+                    parts.pop();
+                } else if !absolute {
+                    leading_parents += 1;
+                }
+            }
+            other => parts.push(other),
+        }
+    }
+
+    let mut out = String::new();
+    if absolute {
+        out.push('/');
+    }
+    for _ in 0..leading_parents {
+        out.push_str("../");
+    }
+    out.push_str(&parts.join("/"));
+    out
+}
+
+/// Resolve `import_path` to a normalized path string, joining against the
+/// source file's directory when the import is relative or bare. Strips any
+/// `#fragment` and `?query` suffix the input may carry (markdown anchors,
+/// build-tool query strings).
+///
+/// Absolute imports (`/foo`) are returned normalized but unjoined. Bare
+/// specifiers like `lodash` will be joined with the source dir too — that
+/// produces a path that won't match anything in the file index, which is
+/// exactly the right behaviour for the resolver: package imports get
+/// dropped silently.
+pub fn resolve_relative(src_file: &str, import_path: &str) -> String {
+    let import_path = import_path.split('#').next().unwrap_or(import_path);
+    let import_path = import_path.split('?').next().unwrap_or(import_path);
+
+    let normalized = normalize_path(import_path);
+    if normalized.starts_with('/') {
+        return normalized;
+    }
+
+    let src_normalized = normalize_path(src_file);
+    let src_dir = match src_normalized.rfind('/') {
+        Some(idx) => &src_normalized[..idx],
+        None => "",
+    };
+
+    if src_dir.is_empty() {
+        normalized
+    } else {
+        normalize_path(&format!("{}/{}", src_dir, normalized))
+    }
+}
+
 /// For each symbol whose name matches an imported item, attach the
 /// corresponding `ImportInfo` so the symbol carries a record of where it
 /// came from.

@@ -17,6 +17,7 @@ This requirements file is optimized for a **High-Performance Hybrid Architecture
  * [ ] **NAPI-RS Bridge:** Expose a single index(path: string) function to TypeScript that returns a structured JSON of nodes and edges.
 ### Phase 2: Embedded Graph Persistence
 *Goal: Zero-latency traversal without an external database server.*
+
 * [ ] **Graph Schema:**
   * **Nodes:** File, Symbol (Function/Class), Concept (extracted from Docs).
   * **Edges:** DEPENDS_ON, CALLS, EXTENDS, REFERENCES.
@@ -36,6 +37,9 @@ This requirements file is optimized for a **High-Performance Hybrid Architecture
     * Zoom/pan via `d3.zoom`.
     * Hover effects highlighting node and neighbors.
   * [ ] **Responsive Design:** SVG adapts to window/container dimensions.
+  * Refer to [Visualization](VISUALIZATION.md) for visualization details.
+
+
 ### Phase 3: Semantic Enrichment (TypeScript)
 *Goal: Add "meaning" to the structural map using local LLMs.*
  * [ ] **Vector Integration:** Embed extracted docstrings and code comments into LanceDB using a local model (e.g., all-MiniLM-L6-v2).
@@ -251,3 +255,6 @@ This requirements file is optimized for a **High-Performance Hybrid Architecture
 9. Configuration relationships
 10. Path finding algorithms
 > 
+
+
+Refer to [IMPLEMENTATION PROGRESS](PROGRESS.md) for implementation progress.
