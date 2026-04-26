@@ -18,6 +18,7 @@
 //!
 //! No other module needs to change.
 
+mod java;
 mod markdown;
 mod python;
 mod typescript;
@@ -55,12 +56,15 @@ pub fn for_extension(ext: &str) -> Option<&'static dyn LanguageIndexer> {
     // hand back as `&'static dyn LanguageIndexer`.
     static TYPESCRIPT: typescript::TypeScriptIndexer = typescript::TypeScriptIndexer;
     static PYTHON: python::PythonIndexer = python::PythonIndexer;
+    static JAVA: java::JavaIndexer = java::JavaIndexer;
     static MARKDOWN: markdown::MarkdownIndexer = markdown::MarkdownIndexer;
 
     if TYPESCRIPT.extensions().contains(&ext) {
         Some(&TYPESCRIPT)
     } else if PYTHON.extensions().contains(&ext) {
         Some(&PYTHON)
+    } else if JAVA.extensions().contains(&ext) {
+        Some(&JAVA)
     } else if MARKDOWN.extensions().contains(&ext) {
         Some(&MARKDOWN)
     } else {

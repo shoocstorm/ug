@@ -14,7 +14,8 @@ use tree_sitter::Node;
 
 /// File extensions we are willing to index. Add new entries when registering
 /// a new language indexer in `super::languages`.
-pub const SUPPORTED_EXTS: &[&str] = &["ts", "tsx", "js", "jsx", "py", "md", "mdx", "markdown"];
+pub const SUPPORTED_EXTS: &[&str] =
+    &["ts", "tsx", "js", "jsx", "py", "java", "md", "mdx", "markdown"];
 
 /// Directory names that are always skipped during the file walk.
 pub const IGNORED_DIRS: &[&str] = &["node_modules", ".git", "target"];
@@ -99,8 +100,13 @@ pub fn calculate_nesting(node: &Node) -> u32 {
         "function_declaration"
             | "function_definition"
             | "method_definition"
+            | "method_declaration"
+            | "constructor_declaration"
             | "class_declaration"
             | "class_definition"
+            | "interface_declaration"
+            | "enum_declaration"
+            | "record_declaration"
     ) {
         current_nesting += 1;
     }
@@ -141,7 +147,8 @@ pub fn extract_return_type(node: &Node, source: &[u8]) -> Option<String> {
 
 /// Collect every callee name reachable anywhere beneath `node`. Recurses into
 /// nested blocks so calls inside `if`/loops/closures are captured. Looks for
-/// `call_expression` (TypeScript/JavaScript) and `call` (Python).
+/// `call_expression` (TypeScript/JavaScript), `call` (Python),
+/// `method_invocation` and `object_creation_expression` (Java).
 pub fn extract_function_calls(node: &Node, source: &[u8]) -> Vec<String> {
     let mut calls = Vec::new();
     collect_calls(node, source, &mut calls);
@@ -151,17 +158,38 @@ pub fn extract_function_calls(node: &Node, source: &[u8]) -> Vec<String> {
 fn collect_calls(node: &Node, source: &[u8], calls: &mut Vec<String>) {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        if matches!(child.kind(), "call_expression" | "call") {
-            let func_node = child
-                .child_by_field_name("function")
-                .or_else(|| child.child_by_field_name("callee"));
-            if let Some(func) = func_node {
-                if let Some(name) = get_node_text(Some(func), source) {
-                    if !calls.contains(&name) {
-                        calls.push(name);
+        match child.kind() {
+            "call_expression" | "call" => {
+                let func_node = child
+                    .child_by_field_name("function")
+                    .or_else(|| child.child_by_field_name("callee"));
+                if let Some(func) = func_node {
+                    if let Some(name) = get_node_text(Some(func), source) {
+                        if !calls.contains(&name) {
+                            calls.push(name);
+                        }
                     }
                 }
             }
+            "method_invocation" => {
+                if let Some(name_node) = child.child_by_field_name("name") {
+                    if let Some(name) = get_node_text(Some(name_node), source) {
+                        if !calls.contains(&name) {
+                            calls.push(name);
+                        }
+                    }
+                }
+            }
+            "object_creation_expression" => {
+                if let Some(type_node) = child.child_by_field_name("type") {
+                    if let Some(name) = get_node_text(Some(type_node), source) {
+                        if !calls.contains(&name) {
+                            calls.push(name);
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
         collect_calls(&child, source, calls);
     }
