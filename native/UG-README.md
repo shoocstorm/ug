@@ -84,6 +84,50 @@ Options:
 - `-o, --output <dir>` - Output directory
 - `-c, --cache <dir>` - Cache directory
 
+```
+  To run end-to-end against the real Qwen3 endpoint:                                                                                                                                      
+  ug ingest -g out/graph.json -d out/kg_db --with-indexes         
+  ug vsearch "build a tree" -d out/kg_db --filter "node_type = 'Function'"                                                                                                                                                                   
+  ug traverse file:src/index.ts -d out/kg_db -k 2     
+```
+
+### `ug ingest`
+
+Ingest graph data into vector database.
+
+```bash
+ug ingest -g graph.json -d out/kg_db --with-indexes
+```
+
+Options:
+- `-g, --graph <file>` - Graph file
+- `-d, --db <dir>` - Database directory
+- `--with-indexes` - Create indexes (optional)
+
+### `ug vsearch`
+
+Vector search on graph.
+
+```bash
+ug vsearch "build a tree" -d out/kg_db --filter "node_type = 'Function'"
+```
+
+Options:
+- `-d, --db <dir>` - Database directory
+- `--filter <filter>` - Filter by node type (optional)
+
+### `ug traverse`
+
+K-hop BFS traversal on graph.
+
+```bash
+ug traverse file:src/index.ts -d out/kg_db -k 2
+```
+
+Options:
+- `-d, --db <dir>` - Database directory
+- `-k, --k <k>` - Number of hops (default: 2)
+
 ## Development
 
 ### Running Tests

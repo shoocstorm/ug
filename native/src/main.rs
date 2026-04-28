@@ -1,7 +1,15 @@
 use std::env;
 use std::fs;
 use std::path::Path;
-use ultragraph_kb::{index, index_with_cache, build_graph, k_hop_bfs, filter_edges_by_type, find_shortest_path, calculate_centrality, detect_cycles, search_by_keyword};
+use ultragraph_kb::storage::{
+    self, ingest_graph, semantic_search as storage_semantic_search,
+    traverse as storage_traverse, Db, Embedder, EmbedderConfig,
+};
+use ultragraph_kb::types::GraphData;
+use ultragraph_kb::{
+    build_graph, calculate_centrality, detect_cycles, filter_edges_by_type, find_shortest_path,
+    index, index_with_cache, k_hop_bfs, search_by_keyword,
+};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -25,6 +33,9 @@ fn main() {
         "search" => run_search(cmd_args),
         "analyze" => run_analyze(cmd_args),
         "gen" => run_gen(cmd_args),
+        "ingest" => run_ingest(cmd_args),
+        "vsearch" => run_vsearch(cmd_args),
+        "traverse" => run_traverse(cmd_args),
         "help" => {
             if let Some(_c) = cmd_args.first() {
                 eprintln!("TODO: print command help");
@@ -379,6 +390,324 @@ fn run_analyze(args: &[String]) {
     println!("  - cycles.json (cycle detection)");
 }
 
+fn build_embedder_from_args(
+    base_url: Option<String>,
+    api_key: Option<String>,
+    model: Option<String>,
+) -> Embedder {
+    let mut cfg = EmbedderConfig::default();
+    if let Some(b) = base_url {
+        cfg.base_url = b;
+    }
+    if let Some(k) = api_key {
+        cfg.api_key = k;
+    }
+    if let Some(m) = model {
+        cfg.model = m;
+    }
+    Embedder::new(cfg).expect("failed to build embedder")
+}
+
+fn tokio_runtime() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("failed to build tokio runtime")
+}
+
+fn run_ingest(args: &[String]) {
+    let mut graph_file = "out/graph.json".to_string();
+    let mut db_path = "out/kg_db".to_string();
+    let mut base_url: Option<String> = None;
+    let mut api_key: Option<String> = None;
+    let mut model: Option<String> = None;
+    let mut create_indexes = false;
+
+    let mut i = 0;
+    let argc = args.len();
+    while i < argc {
+        let arg = args[i].clone();
+        match arg.as_str() {
+            "-g" | "--graph" => {
+                if i + 1 < argc {
+                    graph_file = args[i + 1].clone();
+                }
+                i += 2;
+            }
+            "-d" | "--db" => {
+                if i + 1 < argc {
+                    db_path = args[i + 1].clone();
+                }
+                i += 2;
+            }
+            "--base-url" => {
+                if i + 1 < argc {
+                    base_url = Some(args[i + 1].clone());
+                }
+                i += 2;
+            }
+            "--api-key" => {
+                if i + 1 < argc {
+                    api_key = Some(args[i + 1].clone());
+                }
+                i += 2;
+            }
+            "--model" => {
+                if i + 1 < argc {
+                    model = Some(args[i + 1].clone());
+                }
+                i += 2;
+            }
+            "--with-indexes" => {
+                create_indexes = true;
+                i += 1;
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+
+    let graph_json = fs::read_to_string(&graph_file).expect("Failed to read graph file");
+    let graph: GraphData = serde_json::from_str(&graph_json).expect("Failed to parse graph JSON");
+    let embedder = build_embedder_from_args(base_url, api_key, model);
+    let rt = tokio_runtime();
+
+    rt.block_on(async {
+        let db = Db::open(&db_path).await.expect("failed to open lancedb");
+        let stats = ingest_graph(&db, &embedder, &graph)
+            .await
+            .expect("ingest failed");
+        println!(
+            "Ingested {} nodes, {} edges into {}",
+            stats.nodes_written, stats.edges_written, db_path
+        );
+
+        if create_indexes {
+            // Indexes can fail on tiny tables (IvfPq needs a minimum number
+            // of training rows). Surface the error but don't abort the
+            // command - the table is still queryable without the indexes.
+            if let Err(e) = db.try_create_vector_index().await {
+                eprintln!("warning: vector index creation skipped: {}", e);
+            } else {
+                println!("Created vector index");
+            }
+            if let Err(e) = db.try_create_fts_index().await {
+                eprintln!("warning: FTS index creation skipped: {}", e);
+            } else {
+                println!("Created FTS indexes (name, description)");
+            }
+        }
+    });
+}
+
+fn run_vsearch(args: &[String]) {
+    if args.is_empty() {
+        eprintln!(
+            "Usage: ug vsearch <query> [-d|--db <path>] [-k <limit>] [--filter <sql>] \\
+                 [--base-url <url>] [--api-key <key>] [--model <name>] [-o|--output <file>]"
+        );
+        std::process::exit(1);
+    }
+
+    let mut query: Option<String> = None;
+    let mut db_path = "out/kg_db".to_string();
+    let mut limit: usize = 10;
+    let mut filter: Option<String> = None;
+    let mut base_url: Option<String> = None;
+    let mut api_key: Option<String> = None;
+    let mut model: Option<String> = None;
+    let mut output_path: Option<String> = None;
+
+    let mut i = 0;
+    let argc = args.len();
+    while i < argc {
+        let arg = args[i].clone();
+        match arg.as_str() {
+            "-d" | "--db" => {
+                if i + 1 < argc {
+                    db_path = args[i + 1].clone();
+                }
+                i += 2;
+            }
+            "-k" | "--limit" => {
+                if i + 1 < argc {
+                    limit = args[i + 1].parse().unwrap_or(10);
+                }
+                i += 2;
+            }
+            "--filter" => {
+                if i + 1 < argc {
+                    filter = Some(args[i + 1].clone());
+                }
+                i += 2;
+            }
+            "--base-url" => {
+                if i + 1 < argc {
+                    base_url = Some(args[i + 1].clone());
+                }
+                i += 2;
+            }
+            "--api-key" => {
+                if i + 1 < argc {
+                    api_key = Some(args[i + 1].clone());
+                }
+                i += 2;
+            }
+            "--model" => {
+                if i + 1 < argc {
+                    model = Some(args[i + 1].clone());
+                }
+                i += 2;
+            }
+            "-o" | "--output" => {
+                if i + 1 < argc {
+                    output_path = Some(args[i + 1].clone());
+                }
+                i += 2;
+            }
+            _ => {
+                if query.is_none() {
+                    query = Some(arg);
+                }
+                i += 1;
+            }
+        }
+    }
+
+    let q = query.expect("missing query");
+    let embedder = build_embedder_from_args(base_url, api_key, model);
+    let rt = tokio_runtime();
+
+    let result_json = rt.block_on(async {
+        let db = Db::open(&db_path).await.expect("failed to open lancedb");
+        let hits = match filter.as_deref() {
+            Some(f) => storage::hybrid_search(&db, &embedder, &q, limit, f)
+                .await
+                .expect("hybrid_search failed"),
+            None => storage_semantic_search(&db, &embedder, &q, limit)
+                .await
+                .expect("semantic_search failed"),
+        };
+
+        let json: Vec<serde_json::Value> = hits
+            .into_iter()
+            .map(|h| {
+                serde_json::json!({
+                    "id": h.node.id,
+                    "name": h.node.name,
+                    "node_type": h.node.node_type,
+                    "file": h.node.file,
+                    "start_line": h.node.start_line,
+                    "end_line": h.node.end_line,
+                    "description": h.node.description,
+                    "distance": h.distance,
+                })
+            })
+            .collect();
+        serde_json::to_string_pretty(&json).unwrap_or_default()
+    });
+
+    if let Some(p) = output_path {
+        fs::write(&p, &result_json).expect("Failed to write output");
+        println!("Wrote search result to {}", p);
+    } else {
+        println!("{}", result_json);
+    }
+}
+
+fn run_traverse(args: &[String]) {
+    if args.is_empty() {
+        eprintln!(
+            "Usage: ug traverse <start-node-id> [-d|--db <path>] [-k|--hops <n>] [-o|--output <file>]"
+        );
+        std::process::exit(1);
+    }
+
+    let mut start_id: Option<String> = None;
+    let mut db_path = "out/kg_db".to_string();
+    let mut hops: u32 = 2;
+    let mut output_path: Option<String> = None;
+
+    let mut i = 0;
+    let argc = args.len();
+    while i < argc {
+        let arg = args[i].clone();
+        match arg.as_str() {
+            "-d" | "--db" => {
+                if i + 1 < argc {
+                    db_path = args[i + 1].clone();
+                }
+                i += 2;
+            }
+            "-k" | "--hops" => {
+                if i + 1 < argc {
+                    hops = args[i + 1].parse().unwrap_or(2);
+                }
+                i += 2;
+            }
+            "-o" | "--output" => {
+                if i + 1 < argc {
+                    output_path = Some(args[i + 1].clone());
+                }
+                i += 2;
+            }
+            _ => {
+                if start_id.is_none() {
+                    start_id = Some(arg);
+                }
+                i += 1;
+            }
+        }
+    }
+
+    let start = start_id.expect("missing start node id");
+    let rt = tokio_runtime();
+
+    let json = rt.block_on(async {
+        let db = Db::open(&db_path).await.expect("failed to open lancedb");
+        let result = storage_traverse(&db, &start, hops)
+            .await
+            .expect("traverse failed");
+        let nodes_json: Vec<serde_json::Value> = result
+            .nodes
+            .iter()
+            .map(|n| {
+                serde_json::json!({
+                    "id": n.id,
+                    "name": n.name,
+                    "node_type": n.node_type,
+                    "file": n.file,
+                    "distance": result.distances.get(&n.id).copied().unwrap_or(0),
+                })
+            })
+            .collect();
+        let edges_json: Vec<serde_json::Value> = result
+            .edges
+            .iter()
+            .map(|e| {
+                serde_json::json!({
+                    "source": e.source,
+                    "target": e.target,
+                    "edge_type": e.edge_type,
+                })
+            })
+            .collect();
+        serde_json::to_string_pretty(&serde_json::json!({
+            "nodes": nodes_json,
+            "edges": edges_json,
+        }))
+        .unwrap_or_default()
+    });
+
+    if let Some(p) = output_path {
+        fs::write(&p, &json).expect("Failed to write output");
+        println!("Wrote traverse result to {}", p);
+    } else {
+        println!("{}", json);
+    }
+}
+
 fn print_help() {
     println!("UltraGraph-KB CLI");
     println!();
@@ -422,6 +751,26 @@ fn print_help() {
     println!("    -o, --output <dir> Output directory (default: out)");
     println!("    -c, --cache <dir>  Cache directory");
     println!();
+    println!("  ingest               Embed graph nodes and write to LanceDB");
+    println!("    -g, --graph <file>  Graph JSON (default: out/graph.json)");
+    println!("    -d, --db <path>    LanceDB directory (default: out/kg_db)");
+    println!("    --base-url <url>   Embedding endpoint (default: http://localhost:8000/v1)");
+    println!("    --api-key <key>    Embedding API key (default: 1234)");
+    println!("    --model <name>     Embedding model (default: openai/Qwen3-Embedding-0.6B-4bit-DWQ)");
+    println!("    --with-indexes     Best-effort create vector + FTS indexes after ingest");
+    println!();
+    println!("  vsearch <query>      Semantic vector search over the LanceDB nodes table");
+    println!("    -d, --db <path>    LanceDB directory (default: out/kg_db)");
+    println!("    -k, --limit <n>    Top-k results (default: 10)");
+    println!("    --filter <sql>     Optional SQL WHERE clause (hybrid search)");
+    println!("    --base-url/--api-key/--model  Embedding endpoint overrides");
+    println!("    -o, --output <file> Output file (optional)");
+    println!();
+    println!("  traverse <node-id>   K-hop BFS using the LanceDB edges table");
+    println!("    -d, --db <path>    LanceDB directory (default: out/kg_db)");
+    println!("    -k, --hops <n>     Max hops (default: 2)");
+    println!("    -o, --output <file> Output file (optional)");
+    println!();
     println!("Examples:");
     println!("  ug index -i ./src -o index.json");
     println!("  ug index ./src -o index.json");
@@ -433,4 +782,8 @@ fn print_help() {
     println!("  ug search graph.json loadConfig --type function --type class");
     println!("  ug analyze");
     println!("  ug gen -i ./lib -o ./out");
+    println!("  ug ingest -g out/graph.json -d out/kg_db --with-indexes");
+    println!("  ug vsearch \"oauth login flow\" -d out/kg_db -k 5");
+    println!("  ug vsearch \"build a tree\" -d out/kg_db --filter \"node_type = 'Function'\"");
+    println!("  ug traverse file:src/index.ts -d out/kg_db -k 2");
 }

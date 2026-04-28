@@ -32,6 +32,12 @@ tree-sitter-md = "0.1"
 petgraph = "0.6"
 regex = "1"
 lancedb = "0.27.2"
+arrow = "57.3"
+arrow-array = "57.3"
+arrow-schema = "57.3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+futures = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 [build-dependencies]
 napi-build = "1"

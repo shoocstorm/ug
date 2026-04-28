@@ -2,7 +2,7 @@
 
 ## UltraGraph-KB
 
-### Current Phase: Phase 1.2 - Semantic Metadata Extraction
+### Current Phase: Phase 3 - Semantic Storage & Enrichment (Vector Integration)
 
 ---
 
@@ -76,9 +76,28 @@
 
 ---
 
-## Phase 3: Semantic Enrichment (TypeScript) ⏳ PENDING
-- [ ] Vector Integration: Embed docstrings into LanceDB
-- [ ] Semantic Clustering: Group related symbols
+## Phase 3: Semantic Storage & Enrichment 🚧 IN PROGRESS
+- [x] Vector Integration: Embed graph nodes into LanceDB via local OpenAI-compatible endpoint
+- [ ] Semantic Clustering: Group related symbols (pending)
+
+**Implemented in:**
+- `native/src/storage/text.rs` - `build_node_text`, `collect_related_names` (per-node embedding text shaping)
+- `native/src/storage/embed.rs` - `Embedder` HTTP client for `/v1/embeddings` (default: `openai/Qwen3-Embedding-0.6B-4bit-DWQ`, 1024-dim)
+- `native/src/storage/db.rs` - LanceDB schemas (`nodes` with FixedSizeList<Float32, 1024>, `edges` without vector), `Db::open`, `upsert_nodes`, `upsert_edges`, `vector_search`, `edges_from`, `nodes_by_ids`, optional vector + FTS index creation
+- `native/src/storage/ingest.rs` - `ingest_graph` (full re-embed) and `reembed_nodes` (incremental updates)
+- `native/src/storage/query.rs` - `semantic_search`, `hybrid_search` (vector + SQL `WHERE`), `traverse` (DB-backed BFS)
+- `native/src/main.rs` - CLI subcommands `ingest`, `vsearch`, `traverse`
+- `native/Cargo.toml` - added `arrow`, `arrow-array`, `arrow-schema` (57.3), `tokio` (rt-multi-thread+macros), `futures`, `reqwest` (rustls)
+
+**Tests:**
+- `native/tests/storage_test.rs` - text shaping, schema sanity, upsert + vector_search round trip, edges_from traversal, nodes_by_ids fetch (7 tests)
+
+**Build prerequisite:**
+- `protoc` (Lance internals build via prost). Install on macOS with `brew install protobuf`.
+
+**Versioning & incremental updates:**
+- LanceDB versions every write automatically; time-travel queries are available without extra code.
+- `reembed_nodes(db, embedder, graph, &changed_ids)` re-embeds only the changed subset and upserts.
 
 ---
 
@@ -88,4 +107,4 @@
 
 ---
 
-## Last Updated: 2026-04-25
+## Last Updated: 2026-04-28
