@@ -40,11 +40,24 @@ This requirements file is optimized for a **High-Performance Hybrid Architecture
   * Refer to [Visualization](VISUALIZATION.md) for visualization details.
 
 
-### Phase 3: Semantic Enrichment (TypeScript)
+### Phase 3: Semantic Storage & Enrichment
 *Goal: Add "meaning" to the structural map using local LLMs.*
- * [ ] **Vector Integration:** Embed extracted docstrings and code comments into LanceDB using a local model (e.g., all-MiniLM-L6-v2).
- * [ ] **Semantic Clustering:** * Group related symbols into "Functional Modules."
-   * Use Ollama to generate high-level summaries for these clusters (e.g., "This module handles OAuth2 authentication").
+ * [ ] **Vector Integration:** Generate embeddings for extracted graph nodes and edges and store them in LanceDB using a local embedding model.
+```Local embedding model settings:
+Model: openai/Qwen3-Embedding-0.6B-4bit-DWQ
+Base URL: http://localhost:8000/v1
+API Key: 1234
+```
+Refer to [Graph Storage](GRAPH-STORAGE.md) for graph storage details.
+
+ * [ ] **Semantic Clustering:** Group related symbols into "Functional Modules"
+   * Use qwen to generate high-level summaries for these clusters (e.g., "This module handles OAuth2 authentication").
+```Local clustering model settings:
+Model: openai/Qwen3.6-35B-A3B-MLX-8bit
+Base URL: http://localhost:8000/v1
+API Key: 1234
+```
+
 ### Phase 4: The GraphRAG Retrieval Protocol
 *Goal: Provide the "Perfect Context" to the AI Agent.*
  * [ ] **Hybrid Search Algorithm:**

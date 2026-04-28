@@ -1,0 +1,572 @@
+{
+    "nodes": [
+        {
+            "id": "file:../docs/PROGRESS.md",
+            "name": "../docs/PROGRESS.md",
+            "node_type": "File",
+            "file": "../docs/PROGRESS.md"
+        },
+        {
+            "id": "heading:../docs/PROGRESS.md:1",
+            "name": "Project Progress Tracking",
+            "node_type": "Concept",
+            "file": "../docs/PROGRESS.md",
+            "startLine": 1,
+            "endLine": 1
+        },
+        {
+            "id": "heading:../docs/PROGRESS.md:3",
+            "name": "UltraGraph-KB",
+            "node_type": "Concept",
+            "file": "../docs/PROGRESS.md",
+            "startLine": 3,
+            "endLine": 3
+        },
+        {
+            "id": "heading:../docs/PROGRESS.md:5",
+            "name": "Current Phase: Phase 1.2 - Semantic Metadata Extraction",
+            "node_type": "Concept",
+            "file": "../docs/PROGRESS.md",
+            "startLine": 5,
+            "endLine": 5
+        },
+        {
+            "id": "heading:../docs/PROGRESS.md:9",
+            "name": "Phase 1: The Native \"Turbo\" Indexer (Rust) ✅ COMPLETED",
+            "node_type": "Concept",
+            "file": "../docs/PROGRESS.md",
+            "startLine": 9,
+            "endLine": 9
+        },
+        {
+            "id": "heading:../docs/PROGRESS.md:21",
+            "name": "Phase 1.1: Additional Symbol Relationships ✅ COMPLETED",
+            "node_type": "Concept",
+            "file": "../docs/PROGRESS.md",
+            "startLine": 21,
+            "endLine": 21
+        },
+        {
+            "id": "heading:../docs/PROGRESS.md:40",
+            "name": "Phase 1.2: Semantic Metadata ✅ COMPLETED",
+            "node_type": "Concept",
+            "file": "../docs/PROGRESS.md",
+            "startLine": 40,
+            "endLine": 40
+        },
+        {
+            "id": "heading:../docs/PROGRESS.md:50",
+            "name": "Phase 2: Embedded Graph Persistence ✅ COMPLETED",
+            "node_type": "Concept",
+            "file": "../docs/PROGRESS.md",
+            "startLine": 50,
+            "endLine": 50
+        },
+        {
+            "id": "heading:../docs/PROGRESS.md:79",
+            "name": "Phase 3: Semantic Enrichment (TypeScript) ⏳ PENDING",
+            "node_type": "Concept",
+            "file": "../docs/PROGRESS.md",
+            "startLine": 79,
+            "endLine": 79
+        },
+        {
+            "id": "heading:../docs/PROGRESS.md:85",
+            "name": "Phase 4: The GraphRAG Retrieval Protocol ⏳ PENDING",
+            "node_type": "Concept",
+            "file": "../docs/PROGRESS.md",
+            "startLine": 85,
+            "endLine": 85
+        },
+        {
+            "id": "heading:../docs/PROGRESS.md:91",
+            "name": "Last Updated: 2026-04-25",
+            "node_type": "Concept",
+            "file": "../docs/PROGRESS.md",
+            "startLine": 91,
+            "endLine": 91
+        },
+        {
+            "id": "file:../docs/REQUIREMENT.md",
+            "name": "../docs/REQUIREMENT.md",
+            "node_type": "File",
+            "file": "../docs/REQUIREMENT.md",
+            "imports": [
+                {
+                    "path": "VISUALIZATION.md",
+                    "imported": [
+                        {
+                            "name": "Visualization"
+                        }
+                    ]
+                },
+                {
+                    "path": "PROGRESS.md",
+                    "imported": [
+                        {
+                            "name": "IMPLEMENTATION PROGRESS"
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "id": "heading:../docs/REQUIREMENT.md:2",
+            "name": "Technical Requirements: Project \"UltraGraph-KB\"",
+            "node_type": "Concept",
+            "file": "../docs/REQUIREMENT.md",
+            "startLine": 2,
+            "endLine": 2
+        },
+        {
+            "id": "heading:../docs/REQUIREMENT.md:4",
+            "name": "🏗️ The Hybrid Tech Stack",
+            "node_type": "Concept",
+            "file": "../docs/REQUIREMENT.md",
+            "startLine": 4,
+            "endLine": 4
+        },
+        {
+            "id": "heading:../docs/REQUIREMENT.md:10",
+            "name": "📋 Implementation Phases",
+            "node_type": "Concept",
+            "file": "../docs/REQUIREMENT.md",
+            "startLine": 10,
+            "endLine": 10
+        },
+        {
+            "id": "heading:../docs/REQUIREMENT.md:11",
+            "name": "Phase 1: The Native \"Turbo\" Indexer (Rust)",
+            "node_type": "Concept",
+            "file": "../docs/REQUIREMENT.md",
+            "startLine": 11,
+            "endLine": 11
+        },
+        {
+            "id": "heading:../docs/REQUIREMENT.md:18",
+            "name": "Phase 2: Embedded Graph Persistence",
+            "node_type": "Concept",
+            "file": "../docs/REQUIREMENT.md",
+            "startLine": 18,
+            "endLine": 18
+        },
+        {
+            "id": "heading:../docs/REQUIREMENT.md:43",
+            "name": "Phase 3: Semantic Enrichment (TypeScript)",
+            "node_type": "Concept",
+            "file": "../docs/REQUIREMENT.md",
+            "startLine": 43,
+            "endLine": 43
+        },
+        {
+            "id": "heading:../docs/REQUIREMENT.md:48",
+            "name": "Phase 4: The GraphRAG Retrieval Protocol",
+            "node_type": "Concept",
+            "file": "../docs/REQUIREMENT.md",
+            "startLine": 48,
+            "endLine": 48
+        },
+        {
+            "id": "heading:../docs/REQUIREMENT.md:55",
+            "name": "⚡ Performance Targets",
+            "node_type": "Concept",
+            "file": "../docs/REQUIREMENT.md",
+            "startLine": 55,
+            "endLine": 55
+        },
+        {
+            "id": "heading:../docs/REQUIREMENT.md:59",
+            "name": "🛠️ Usage for Coding Agent",
+            "node_type": "Concept",
+            "file": "../docs/REQUIREMENT.md",
+            "startLine": 59,
+            "endLine": 59
+        },
+        {
+            "id": "heading:../docs/REQUIREMENT.md:66",
+            "name": "🚀 Enhanced Extraction Plan (v2)",
+            "node_type": "Concept",
+            "file": "../docs/REQUIREMENT.md",
+            "startLine": 66,
+            "endLine": 66
+        },
+        {
+            "id": "heading:../docs/REQUIREMENT.md:68",
+            "name": "Phase 1: The Native \"Turbo\" Indexer (Rust) - Extended",
+            "node_type": "Concept",
+            "file": "../docs/REQUIREMENT.md",
+            "startLine": 68,
+            "endLine": 68
+        },
+        {
+            "id": "heading:../docs/REQUIREMENT.md:73",
+            "name": "Current Implementation (keep)",
+            "node_type": "Concept",
+            "file": "../docs/REQUIREMENT.md",
+            "startLine": 73,
+            "endLine": 73
+        },
+        {
+            "id": "heading:../docs/REQUIREMENT.md:80",
+            "name": "New: Additional Symbol Relationships (Phase 1.1)",
+            "node_type": "Concept",
+            "file": "../docs/REQUIREMENT.md",
+            "startLine": 80,
+            "endLine": 80
+        },
+        {
+            "id": "heading:../docs/REQUIREMENT.md:101",
+            "name": "New: Semantic Metadata (Phase 1.2)",
+            "node_type": "Concept",
+            "file": "../docs/REQUIREMENT.md",
+            "startLine": 101,
+            "endLine": 101
+        },
+        {
+            "id": "heading:../docs/REQUIREMENT.md:123",
+            "name": "New: File-Level Intelligence (Phase 1.3)",
+            "node_type": "Concept",
+            "file": "../docs/REQUIREMENT.md",
+            "startLine": 123,
+            "endLine": 123
+        },
+        {
+            "id": "heading:../docs/REQUIREMENT.md:142",
+            "name": "Phase 2: Enhanced Graph Schema",
+            "node_type": "Concept",
+            "file": "../docs/REQUIREMENT.md",
+            "startLine": 142,
+            "endLine": 142
+        },
+        {
+            "id": "heading:../docs/REQUIREMENT.md:146",
+            "name": "Current Implementation (keep)",
+            "node_type": "Concept",
+            "file": "../docs/REQUIREMENT.md",
+            "startLine": 146,
+            "endLine": 146
+        },
+        {
+            "id": "heading:../docs/REQUIREMENT.md:159",
+            "name": "New: Enhanced Query Operations (Phase 2.1)",
+            "node_type": "Concept",
+            "file": "../docs/REQUIREMENT.md",
+            "startLine": 159,
+            "endLine": 159
+        },
+        {
+            "id": "heading:../docs/REQUIREMENT.md:178",
+            "name": "Phase 3: Semantic Enrichment (TypeScript) - Extended",
+            "node_type": "Concept",
+            "file": "../docs/REQUIREMENT.md",
+            "startLine": 178,
+            "endLine": 178
+        },
+        {
+            "id": "heading:../docs/REQUIREMENT.md:185",
+            "name": "New: Enhanced Semantic Features (Phase 3.1)",
+            "node_type": "Concept",
+            "file": "../docs/REQUIREMENT.md",
+            "startLine": 185,
+            "endLine": 185
+        },
+        {
+            "id": "heading:../docs/REQUIREMENT.md:202",
+            "name": "Phase 4: The GraphRAG Retrieval Protocol - Extended",
+            "node_type": "Concept",
+            "file": "../docs/REQUIREMENT.md",
+            "startLine": 202,
+            "endLine": 202
+        },
+        {
+            "id": "heading:../docs/REQUIREMENT.md:211",
+            "name": "New: Enhanced Retrieval Features (Phase 4.1)",
+            "node_type": "Concept",
+            "file": "../docs/REQUIREMENT.md",
+            "startLine": 211,
+            "endLine": 211
+        },
+        {
+            "id": "heading:../docs/REQUIREMENT.md:227",
+            "name": "📊 New Relationship Summary",
+            "node_type": "Concept",
+            "file": "../docs/REQUIREMENT.md",
+            "startLine": 227,
+            "endLine": 227
+        },
+        {
+            "id": "heading:../docs/REQUIREMENT.md:240",
+            "name": "📋 Implementation Priority",
+            "node_type": "Concept",
+            "file": "../docs/REQUIREMENT.md",
+            "startLine": 240,
+            "endLine": 240
+        },
+        {
+            "id": "file:../docs/VISUALIZATION.md",
+            "name": "../docs/VISUALIZATION.md",
+            "node_type": "File",
+            "file": "../docs/VISUALIZATION.md"
+        },
+        {
+            "id": "heading:../docs/VISUALIZATION.md:1",
+            "name": "Specification: Interactive Force-Directed Relationship Graph",
+            "node_type": "Concept",
+            "file": "../docs/VISUALIZATION.md",
+            "startLine": 1,
+            "endLine": 1
+        },
+        {
+            "id": "heading:../docs/VISUALIZATION.md:3",
+            "name": "Goal",
+            "node_type": "Concept",
+            "file": "../docs/VISUALIZATION.md",
+            "startLine": 3,
+            "endLine": 3
+        },
+        {
+            "id": "heading:../docs/VISUALIZATION.md:6",
+            "name": "Technical Stack",
+            "node_type": "Concept",
+            "file": "../docs/VISUALIZATION.md",
+            "startLine": 6,
+            "endLine": 6
+        },
+        {
+            "id": "heading:../docs/VISUALIZATION.md:11",
+            "name": "Data Structure",
+            "node_type": "Concept",
+            "file": "../docs/VISUALIZATION.md",
+            "startLine": 11,
+            "endLine": 11
+        },
+        {
+            "id": "heading:../docs/VISUALIZATION.md:16",
+            "name": "Core Requirements",
+            "node_type": "Concept",
+            "file": "../docs/VISUALIZATION.md",
+            "startLine": 16,
+            "endLine": 16
+        },
+        {
+            "id": "heading:../docs/VISUALIZATION.md:35",
+            "name": "Implementation Steps",
+            "node_type": "Concept",
+            "file": "../docs/VISUALIZATION.md",
+            "startLine": 35,
+            "endLine": 35
+        }
+    ],
+    "edges": [
+        {
+            "source": "file:../docs/PROGRESS.md",
+            "target": "heading:../docs/PROGRESS.md:1",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "heading:../docs/PROGRESS.md:1",
+            "target": "heading:../docs/PROGRESS.md:3",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "heading:../docs/PROGRESS.md:3",
+            "target": "heading:../docs/PROGRESS.md:5",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "heading:../docs/PROGRESS.md:1",
+            "target": "heading:../docs/PROGRESS.md:9",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "heading:../docs/PROGRESS.md:1",
+            "target": "heading:../docs/PROGRESS.md:21",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "heading:../docs/PROGRESS.md:1",
+            "target": "heading:../docs/PROGRESS.md:40",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "heading:../docs/PROGRESS.md:1",
+            "target": "heading:../docs/PROGRESS.md:50",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "heading:../docs/PROGRESS.md:1",
+            "target": "heading:../docs/PROGRESS.md:79",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "heading:../docs/PROGRESS.md:1",
+            "target": "heading:../docs/PROGRESS.md:85",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "heading:../docs/PROGRESS.md:1",
+            "target": "heading:../docs/PROGRESS.md:91",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "file:../docs/REQUIREMENT.md",
+            "target": "heading:../docs/REQUIREMENT.md:2",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "heading:../docs/REQUIREMENT.md:2",
+            "target": "heading:../docs/REQUIREMENT.md:4",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "heading:../docs/REQUIREMENT.md:2",
+            "target": "heading:../docs/REQUIREMENT.md:10",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "heading:../docs/REQUIREMENT.md:10",
+            "target": "heading:../docs/REQUIREMENT.md:11",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "heading:../docs/REQUIREMENT.md:10",
+            "target": "heading:../docs/REQUIREMENT.md:18",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "heading:../docs/REQUIREMENT.md:10",
+            "target": "heading:../docs/REQUIREMENT.md:43",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "heading:../docs/REQUIREMENT.md:10",
+            "target": "heading:../docs/REQUIREMENT.md:48",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "heading:../docs/REQUIREMENT.md:2",
+            "target": "heading:../docs/REQUIREMENT.md:55",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "heading:../docs/REQUIREMENT.md:2",
+            "target": "heading:../docs/REQUIREMENT.md:59",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "heading:../docs/REQUIREMENT.md:2",
+            "target": "heading:../docs/REQUIREMENT.md:66",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "heading:../docs/REQUIREMENT.md:66",
+            "target": "heading:../docs/REQUIREMENT.md:68",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "heading:../docs/REQUIREMENT.md:68",
+            "target": "heading:../docs/REQUIREMENT.md:73",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "heading:../docs/REQUIREMENT.md:68",
+            "target": "heading:../docs/REQUIREMENT.md:80",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "heading:../docs/REQUIREMENT.md:68",
+            "target": "heading:../docs/REQUIREMENT.md:101",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "heading:../docs/REQUIREMENT.md:68",
+            "target": "heading:../docs/REQUIREMENT.md:123",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "heading:../docs/REQUIREMENT.md:66",
+            "target": "heading:../docs/REQUIREMENT.md:142",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "heading:../docs/REQUIREMENT.md:142",
+            "target": "heading:../docs/REQUIREMENT.md:146",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "heading:../docs/REQUIREMENT.md:142",
+            "target": "heading:../docs/REQUIREMENT.md:159",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "heading:../docs/REQUIREMENT.md:66",
+            "target": "heading:../docs/REQUIREMENT.md:178",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "heading:../docs/REQUIREMENT.md:178",
+            "target": "heading:../docs/REQUIREMENT.md:185",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "heading:../docs/REQUIREMENT.md:66",
+            "target": "heading:../docs/REQUIREMENT.md:202",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "heading:../docs/REQUIREMENT.md:202",
+            "target": "heading:../docs/REQUIREMENT.md:211",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "heading:../docs/REQUIREMENT.md:2",
+            "target": "heading:../docs/REQUIREMENT.md:227",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "heading:../docs/REQUIREMENT.md:2",
+            "target": "heading:../docs/REQUIREMENT.md:240",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "file:../docs/VISUALIZATION.md",
+            "target": "heading:../docs/VISUALIZATION.md:1",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "heading:../docs/VISUALIZATION.md:1",
+            "target": "heading:../docs/VISUALIZATION.md:3",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "heading:../docs/VISUALIZATION.md:1",
+            "target": "heading:../docs/VISUALIZATION.md:6",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "heading:../docs/VISUALIZATION.md:1",
+            "target": "heading:../docs/VISUALIZATION.md:11",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "heading:../docs/VISUALIZATION.md:1",
+            "target": "heading:../docs/VISUALIZATION.md:16",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "heading:../docs/VISUALIZATION.md:1",
+            "target": "heading:../docs/VISUALIZATION.md:35",
+            "edge_type": "Contains"
+        },
+        {
+            "source": "file:../docs/REQUIREMENT.md",
+            "target": "file:../docs/VISUALIZATION.md",
+            "edge_type": "Imports"
+        },
+        {
+            "source": "file:../docs/REQUIREMENT.md",
+            "target": "file:../docs/PROGRESS.md",
+            "edge_type": "Imports"
+        }
+    ]
+}
