@@ -101,10 +101,10 @@
   3. MMR reranking for diversity vs. relevance balance
   4. Snippet extraction + token-budgeted context assembly
 - [x] **MCP Server Implementation:**
-  - `src/mcp/mcp-server.mjs` — stdio MCP server using `@modelcontextprotocol/sdk` + `zod`
+  - `src/mcp-server.mjs` — stdio MCP server using `@modelcontextprotocol/sdk` + `zod`
   - Tools: `search_kb` (uses `dbHybridSearch`), `traverse_kb` (uses `dbTraverse`), `ping_embedder`
   - Configurable via env: `UG_DB_PATH`, `UG_REPO_ROOT`, `UG_EMBED_BASE_URL`, `UG_EMBED_API_KEY`, `UG_EMBED_MODEL`
-  - Run via `node src/mcp/mcp-server.mjs`
+  - Run via `node src/mcp-server.mjs`
 
 ### NAPI bindings (`native/src/storage/napi_bindings.rs`)
 - `dbIngest(graphJson, dbPath, embedderOptions?) -> Promise<string>`

@@ -2,8 +2,8 @@ use std::env;
 use std::fs;
 use std::path::Path;
 use ultragraph_kb::storage::{
-    self, ingest_graph, semantic_search as storage_semantic_search,
-    traverse as storage_traverse, Db, Embedder, EmbedderConfig,
+    self, ingest_graph, semantic_search as storage_semantic_search, traverse as storage_traverse,
+    Db, Embedder, EmbedderConfig,
 };
 use ultragraph_kb::types::GraphData;
 use ultragraph_kb::{
@@ -54,7 +54,7 @@ fn main() {
 fn run_index(args: &[String]) {
     let mut path = ".".to_string();
     let mut cache_path: Option<String> = None;
-    let mut output = "out/indexed-tree.json".to_string();
+    let mut output = "ug-out/indexed-tree.json".to_string();
 
     let mut i = 0;
     let argc = args.len();
@@ -90,14 +90,14 @@ fn run_index(args: &[String]) {
     if let Some(parent) = Path::new(&output).parent() {
         let _ = fs::create_dir_all(parent);
     }
-    
+
     fs::write(&output, &result).expect("Failed to write output");
     println!("Generated index in {}", output);
 }
 
 fn run_graph(args: &[String]) {
-    let mut input = "out/indexed-tree.json".to_string();
-    let mut output = "out/graph.json".to_string();
+    let mut input = "ug-out/indexed-tree.json".to_string();
+    let mut output = "ug-out/graph.json".to_string();
 
     let mut i = 0;
     let argc = args.len();
@@ -124,7 +124,7 @@ fn run_graph(args: &[String]) {
     if let Some(parent) = Path::new(&output).parent() {
         let _ = fs::create_dir_all(parent);
     }
-    
+
     fs::write(&output, &result).expect("Failed to write output");
     println!("Generated graph in {}", output);
 }
@@ -137,9 +137,14 @@ fn run_bfs(args: &[String]) {
 
     let graph_file = args[0].clone();
     let start_node = args[1].clone();
-    let k = if args.len() > 2 { args[2].parse().unwrap_or(1) } else { 1 };
-    
-    let output_path = if args.contains(&"-o".to_string()) || args.contains(&"--output".to_string()) {
+    let k = if args.len() > 2 {
+        args[2].parse().unwrap_or(1)
+    } else {
+        1
+    };
+
+    let output_path = if args.contains(&"-o".to_string()) || args.contains(&"--output".to_string())
+    {
         let idx = args.iter().position(|a| a == "-o" || a == "--output");
         idx.and_then(|i| args.get(i + 1).map(|s| s.clone()))
     } else {
@@ -160,7 +165,7 @@ fn run_bfs(args: &[String]) {
 fn run_gen(args: &[String]) {
     let mut input = ".".to_string();
     let mut cache_path: Option<String> = None;
-    let mut output_dir = "out".to_string();
+    let mut output_dir = "ug-out".to_string();
 
     let mut i = 0;
     let argc = args.len();
@@ -197,10 +202,12 @@ fn run_gen(args: &[String]) {
     let cycles = detect_cycles(graph.clone());
 
     let _ = fs::create_dir_all(&output_dir);
-    
+
     fs::write(format!("{}/graph.json", output_dir), &graph).expect("Failed to write graph.json");
-    fs::write(format!("{}/indexed-tree.json", output_dir), &index_result).expect("Failed to write indexed-tree.json");
-    fs::write(format!("{}/analysis.json", output_dir), &analysis).expect("Failed to write analysis.json");
+    fs::write(format!("{}/indexed-tree.json", output_dir), &index_result)
+        .expect("Failed to write indexed-tree.json");
+    fs::write(format!("{}/analysis.json", output_dir), &analysis)
+        .expect("Failed to write analysis.json");
     fs::write(format!("{}/cycles.json", output_dir), &cycles).expect("Failed to write cycles.json");
 
     println!("Generated in {}/:", output_dir);
@@ -212,14 +219,22 @@ fn run_gen(args: &[String]) {
 
 fn run_filter(args: &[String]) {
     if args.len() < 2 {
-        eprintln!("Usage: ug filter <graph-file> <edge-type> [<edge-type>...] [-o|--output <file>]");
+        eprintln!(
+            "Usage: ug filter <graph-file> <edge-type> [<edge-type>...] [-o|--output <file>]"
+        );
         std::process::exit(1);
     }
 
     let graph_file = args[0].clone();
-    let edge_types: Vec<String> = args[1..].iter().take_while(|s| !s.starts_with('-')).cloned().collect();
-    
-    let output_path = args.iter().position(|a| a == "-o" || a == "--output")
+    let edge_types: Vec<String> = args[1..]
+        .iter()
+        .take_while(|s| !s.starts_with('-'))
+        .cloned()
+        .collect();
+
+    let output_path = args
+        .iter()
+        .position(|a| a == "-o" || a == "--output")
         .and_then(|i| args.get(i + 1).map(|s| s.clone()));
 
     let graph_json = fs::read_to_string(&graph_file).expect("Failed to read graph");
@@ -243,8 +258,10 @@ fn run_path(args: &[String]) {
     let graph_file = args[0].clone();
     let source = args[1].clone();
     let target = args[2].clone();
-    
-    let output_path = args.iter().position(|a| a == "-o" || a == "--output")
+
+    let output_path = args
+        .iter()
+        .position(|a| a == "-o" || a == "--output")
         .and_then(|i| args.get(i + 1).map(|s| s.clone()));
 
     let graph_json = fs::read_to_string(&graph_file).expect("Failed to read graph");
@@ -265,7 +282,9 @@ fn run_centrality(args: &[String]) {
     }
 
     let graph_file = args[0].clone();
-    let output_path = args.iter().position(|a| a == "-o" || a == "--output")
+    let output_path = args
+        .iter()
+        .position(|a| a == "-o" || a == "--output")
         .and_then(|i| args.get(i + 1).map(|s| s.clone()));
 
     let graph_json = fs::read_to_string(&graph_file).expect("Failed to read graph");
@@ -286,7 +305,9 @@ fn run_cycles(args: &[String]) {
     }
 
     let graph_file = args[0].clone();
-    let output_path = args.iter().position(|a| a == "-o" || a == "--output")
+    let output_path = args
+        .iter()
+        .position(|a| a == "-o" || a == "--output")
         .and_then(|i| args.get(i + 1).map(|s| s.clone()));
 
     let graph_json = fs::read_to_string(&graph_file).expect("Failed to read graph");
@@ -342,7 +363,11 @@ fn run_search(args: &[String]) {
     };
 
     let graph_json = fs::read_to_string(&graph_file).expect("Failed to read graph");
-    let types_opt = if node_types.is_empty() { None } else { Some(node_types) };
+    let types_opt = if node_types.is_empty() {
+        None
+    } else {
+        Some(node_types)
+    };
     let result = graph_keyword_search(graph_json, kw, types_opt);
 
     if let Some(path) = output_path {
@@ -354,8 +379,8 @@ fn run_search(args: &[String]) {
 }
 
 fn run_analyze(args: &[String]) {
-    let mut input = "out/graph.json".to_string();
-    let mut output_dir = "out".to_string();
+    let mut input = "ug-out/graph.json".to_string();
+    let mut output_dir = "ug-out".to_string();
 
     let mut i = 0;
     let argc = args.len();
@@ -381,8 +406,9 @@ fn run_analyze(args: &[String]) {
     let cycles = detect_cycles(graph_json.clone());
 
     let _ = fs::create_dir_all(&output_dir);
-    
-    fs::write(format!("{}/analysis.json", output_dir), &centrality).expect("Failed to write analysis.json");
+
+    fs::write(format!("{}/analysis.json", output_dir), &centrality)
+        .expect("Failed to write analysis.json");
     fs::write(format!("{}/cycles.json", output_dir), &cycles).expect("Failed to write cycles.json");
 
     println!("Analyzed graph:");
@@ -416,8 +442,8 @@ fn tokio_runtime() -> tokio::runtime::Runtime {
 }
 
 fn run_ingest(args: &[String]) {
-    let mut graph_file = "out/graph.json".to_string();
-    let mut db_path = "out/kg_db".to_string();
+    let mut graph_file = "ug-out/graph.json".to_string();
+    let mut db_path = "ug-out/ug-db".to_string();
     let mut base_url: Option<String> = None;
     let mut api_key: Option<String> = None;
     let mut model: Option<String> = None;
@@ -511,7 +537,7 @@ fn run_vsearch(args: &[String]) {
     }
 
     let mut query: Option<String> = None;
-    let mut db_path = "out/kg_db".to_string();
+    let mut db_path = "ug-out/ug-db".to_string();
     let mut limit: usize = 10;
     let mut filter: Option<String> = None;
     let mut base_url: Option<String> = None;
@@ -625,7 +651,7 @@ fn run_traverse(args: &[String]) {
     }
 
     let mut start_id: Option<String> = None;
-    let mut db_path = "out/kg_db".to_string();
+    let mut db_path = "ug-out/ug-db".to_string();
     let mut hops: u32 = 2;
     let mut output_path: Option<String> = None;
 
@@ -716,12 +742,12 @@ fn print_help() {
     println!("Commands:");
     println!("  index [<path>]        Index a directory");
     println!("    -i, --input <path>   Input directory (default: .)");
-    println!("    -o, --output <file>  Output file (default: out/indexed-tree.json)");
+    println!("    -o, --output <file>  Output file (default: ug-out/indexed-tree.json)");
     println!("    -c, --cache <dir>    Cache directory for incremental indexing");
     println!();
     println!("  graph [<file>]        Build graph from index result");
-    println!("    -i, --input <file>  Input index file (default: out/indexed-tree.json)");
-    println!("    -o, --output <file> Output graph file (default: out/graph.json)");
+    println!("    -i, --input <file>  Input index file (default: ug-out/indexed-tree.json)");
+    println!("    -o, --output <file> Output graph file (default: ug-out/graph.json)");
     println!();
     println!("  bfs <file> <node> [k] K-hop BFS traversal");
     println!("    -o, --output <file> Output file (optional)");
@@ -739,35 +765,39 @@ fn print_help() {
     println!("    -o, --output <file> Output file (optional)");
     println!();
     println!("  search <graph> <keyword> Keyword search over graph nodes");
-    println!("    -t, --type <type>   Restrict to node type (repeatable, e.g. function/class/file)");
+    println!(
+        "    -t, --type <type>   Restrict to node type (repeatable, e.g. function/class/file)"
+    );
     println!("    -o, --output <file> Output file (optional)");
     println!();
     println!("  analyze              Run full graph analysis (centrality + cycles)");
-    println!("    -i, --input <file> Graph file (default: out/graph.json)");
-    println!("    -o, --output <dir> Output directory (default: out)");
+    println!("    -i, --input <file> Graph file (default: ug-out/graph.json)");
+    println!("    -o, --output <dir> Output directory (default: ug-out)");
     println!();
     println!("  gen [<path>]         Generate graph + visualization");
     println!("    -i, --input <path>  Input directory (default: .)");
-    println!("    -o, --output <dir> Output directory (default: out)");
+    println!("    -o, --output <dir> Output directory (default: ug-out)");
     println!("    -c, --cache <dir>  Cache directory");
     println!();
     println!("  ingest               Embed graph nodes and write to LanceDB");
-    println!("    -g, --graph <file>  Graph JSON (default: out/graph.json)");
-    println!("    -d, --db <path>    LanceDB directory (default: out/kg_db)");
+    println!("    -g, --graph <file>  Graph JSON (default: ug-out/graph.json)");
+    println!("    -d, --db <path>    LanceDB directory (default: ug-out/ug-db)");
     println!("    --base-url <url>   Embedding endpoint (default: http://localhost:8000/v1)");
     println!("    --api-key <key>    Embedding API key (default: 1234)");
-    println!("    --model <name>     Embedding model (default: openai/Qwen3-Embedding-0.6B-4bit-DWQ)");
+    println!(
+        "    --model <name>     Embedding model (default: openai/Qwen3-Embedding-0.6B-4bit-DWQ)"
+    );
     println!("    --with-indexes     Best-effort create vector + FTS indexes after ingest");
     println!();
     println!("  vsearch <query>      Semantic vector search over the LanceDB nodes table");
-    println!("    -d, --db <path>    LanceDB directory (default: out/kg_db)");
+    println!("    -d, --db <path>    LanceDB directory (default: ug-out/ug-db)");
     println!("    -k, --limit <n>    Top-k results (default: 10)");
     println!("    --filter <sql>     Optional SQL WHERE clause (hybrid search)");
     println!("    --base-url/--api-key/--model  Embedding endpoint overrides");
     println!("    -o, --output <file> Output file (optional)");
     println!();
     println!("  traverse <node-id>   K-hop BFS using the LanceDB edges table");
-    println!("    -d, --db <path>    LanceDB directory (default: out/kg_db)");
+    println!("    -d, --db <path>    LanceDB directory (default: ug-out/ug-db)");
     println!("    -k, --hops <n>     Max hops (default: 2)");
     println!("    -o, --output <file> Output file (optional)");
     println!();
@@ -781,9 +811,9 @@ fn print_help() {
     println!("  ug cycles graph.json");
     println!("  ug search graph.json loadConfig --type function --type class");
     println!("  ug analyze");
-    println!("  ug gen -i ./lib -o ./out");
-    println!("  ug ingest -g out/graph.json -d out/kg_db --with-indexes");
-    println!("  ug vsearch \"oauth login flow\" -d out/kg_db -k 5");
-    println!("  ug vsearch \"build a tree\" -d out/kg_db --filter \"node_type = 'Function'\"");
-    println!("  ug traverse file:src/index.ts -d out/kg_db -k 2");
+    println!("  ug gen -i ./lib -o ./ug-out");
+    println!("  ug ingest -g ug-out/graph.json -d ug-out/ug-db --with-indexes");
+    println!("  ug vsearch \"oauth login flow\" -d ug-out/ug-db -k 5");
+    println!("  ug vsearch \"build a tree\" -d ug-out/ug-db --filter \"node_type = 'Function'\"");
+    println!("  ug traverse file:src/index.ts -d ug-out/ug-db -k 2");
 }

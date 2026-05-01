@@ -1,5 +1,5 @@
 native/target
-native/ultragraph-kb.node
+ug-out
 native/ultragraph-kb.darwin-arm64.node
 native/out
 src/.cache

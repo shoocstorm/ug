@@ -3,7 +3,7 @@ const { join } = require('path');
 const { mkdtempSync, writeFileSync, rmSync, mkdirSync, readdirSync } = require('fs');
 const { tmpdir } = require('os');
 
-const ug = require('../../native/ultragraph-kb.node');
+const ug = require('../../ug-out/ultragraph-kb.node');
 
 async function index(path) {
   const result = ug.index(path);
@@ -200,7 +200,7 @@ class Math:
     rmSync(testDir, { recursive: true });
   }
 
-// Test 5: Ignore node_modules and .git
+  // Test 5: Ignore node_modules and .git
   console.log('Test 5: Ignore node_modules and .git');
   {
     const testDir = mkdtempSync(join(tmpdir(), 'kb-test5-'));
@@ -209,9 +209,9 @@ class Math:
     mkdirSync(join(testDir, '.git'));
     writeFileSync(join(testDir, 'node_modules', 'test.ts'), `export function ignored(): void {}`);
     writeFileSync(join(testDir, '.git', 'test.ts'), `export function ignored(): void {}`);
-    
+
     const result = await index(testDir);
-    
+
     if (result.stats.totalFiles === 1) {
       console.log('✓ PASS: node_modules and .git ignored\n');
       passed++;
@@ -222,13 +222,13 @@ class Math:
     }
     rmSync(testDir, { recursive: true });
   }
-  
+
   // Test 6: Markdown indexing (SKIP - requires tree-sitter 0.19, currently using 0.20)
   console.log('Test 6: Markdown indexing (SKIPPED - version conflict with tree-sitter)');
   {
     passed++; // Count as "passed" since it's a known limitation
   }
-  
+
   console.log('\n=== Phase 2 Graph Tests ===\n');
 
   // Test 7: Build graph from index result
@@ -247,7 +247,7 @@ export class Calculator {
 
     const idx = await index(testDir);
     const graph = buildGraph(idx);
-    
+
     if (graph.nodes.length >= 3 && graph.edges.length >= 2) {
       console.log('✓ PASS: Created ' + graph.nodes.length + ' nodes, ' + graph.edges.length + ' edges\n');
       passed++;
@@ -267,10 +267,10 @@ export class Calc { }`);
 
     const idx = await index(testDir);
     const graph = buildGraph(idx);
-    
+
     const fileNode = graph.nodes.find(n => n.node_type === 'File');
     const bfs = kHopBfs(graph, fileNode.id, 1);
-    
+
     if (bfs.nodes.length === 3 && bfs.distances[fileNode.id] === 0) {
       console.log('✓ PASS: BFS found ' + bfs.nodes.length + ' nodes within 1 hop\n');
       passed++;
@@ -289,10 +289,10 @@ export class Calc { }`);
 
     const idx = await index(testDir);
     const graph = buildGraph(idx);
-    
+
     const funcNode = graph.nodes.find(n => n.name === 'hello');
     const bfs = kHopBfs(graph, funcNode.id, 2);
-    
+
     if (bfs.distances[funcNode.id] === 0) {
       console.log('✓ PASS: Start node distance is 0\n');
       passed++;
@@ -312,7 +312,7 @@ export class Calc { }`);
     const idx = await index(testDir);
     const graph = buildGraph(idx);
     const bfs = kHopBfs(graph, 'invalid-node-id', 2);
-    
+
     if (bfs.nodes.length === 0 && bfs.edges.length === 0) {
       console.log('✓ PASS: Empty result for invalid start node\n');
       passed++;
@@ -332,12 +332,12 @@ export class Calc { }`);
 
     const idx = await index(testDir);
     const graph = buildGraph(idx);
-    
+
     const fileNode = graph.nodes.find(n => n.node_type === 'File');
-    
+
     const bfs0 = kHopBfs(graph, fileNode.id, 0);
     const bfs1 = kHopBfs(graph, fileNode.id, 1);
-    
+
     if (bfs0.nodes.length < bfs1.nodes.length) {
       console.log('✓ PASS: K parameter affects result (k=0: ' + bfs0.nodes.length + ', k=1: ' + bfs1.nodes.length + ')\n');
       passed++;
@@ -360,7 +360,7 @@ export class Calc { }`);
     const idx = await index(testDir);
     const graph = buildGraph(idx);
     const filtered = filterEdgesByType(graph, ['Contains']);
-    
+
     if (filtered.count >= 2) {
       console.log('✓ PASS: Found ' + filtered.count + ' Contains edges\n');
       passed++;
@@ -380,11 +380,11 @@ export class Calc { add(a: number, b: number): number { return a + b; } }`);
 
     const idx = await index(testDir);
     const graph = buildGraph(idx);
-    
+
     const fileNode = graph.nodes.find(n => n.node_type === 'File');
     const funcNode = graph.nodes.find(n => n.name === 'hello');
     const path = findShortestPath(graph, fileNode.id, funcNode.id);
-    
+
     if (path.found && path.path.length >= 2) {
       console.log('✓ PASS: Found path with ' + path.path.length + ' nodes\n');
       passed++;
@@ -404,7 +404,7 @@ export class Calc { add(a: number, b: number): number { return a + b; } }`);
     const idx = await index(testDir);
     const graph = buildGraph(idx);
     const path = findShortestPath(graph, 'nonexistent1', 'nonexistent2');
-    
+
     if (!path.found && path.path.length === 0) {
       console.log('✓ PASS: No path found for nonexistent nodes\n');
       passed++;
@@ -425,7 +425,7 @@ export class Calc { add(a: number, b: number): number { return a + b; } }`);
     const idx = await index(testDir);
     const graph = buildGraph(idx);
     const centrality = calculateCentrality(graph);
-    
+
     if (centrality.degree_centrality && Object.keys(centrality.degree_centrality).length >= 2) {
       console.log('✓ PASS: Calculated centrality for ' + Object.keys(centrality.degree_centrality).length + ' nodes\n');
       passed++;
@@ -445,7 +445,7 @@ export class Calc { add(a: number, b: number): number { return a + b; } }`);
     const idx = await index(testDir);
     const graph = buildGraph(idx);
     const cycles = detectCycles(graph);
-    
+
     if (!cycles.has_cycles) {
       console.log('✓ PASS: No cycles detected\n');
       passed++;
@@ -466,7 +466,7 @@ export class Calculator { }`);
     const idx = await index(testDir);
     const graph = buildGraph(idx);
     const result = graphKeywordSearch(graph, 'hello', ['Function']);
-    
+
     if (result.count >= 1) {
       console.log('✓ PASS: Found ' + result.count + ' function(s) matching "hello"\n');
       passed++;
@@ -482,7 +482,7 @@ export class Calculator { }`);
   {
     const testDir = mkdtempSync(join(tmpdir(), 'kb-ingest1-'));
     const dbPath = join(testDir, 'test_db');
-    
+
     writeFileSync(join(testDir, 'main.ts'), `export function main(): void {
   console.log('hello');
 }
@@ -492,13 +492,13 @@ export class App { run(): void { main(); } }`);
       const idx = await index(testDir);
       const graph = buildGraph(idx);
       const graphJson = JSON.stringify(graph);
-      
+
       const ingestResult = await dbIngest(graphJson, dbPath);
-      
+
       if (ingestResult.nodes_written >= 2 && ingestResult.edges_written >= 1) {
         const fileNode = graph.nodes.find(n => n.node_type === 'File');
         const traversal = await dbTraverse(dbPath, [fileNode.id], 2);
-        
+
         if (traversal.nodes && traversal.nodes.length >= 1) {
           console.log('✓ PASS: Ingested ' + ingestResult.nodes_written + ' nodes, traversed to ' + traversal.nodes.length + ' nodes\n');
           passed++;
@@ -527,7 +527,7 @@ export class App { run(): void { main(); } }`);
   {
     const testDir = mkdtempSync(join(tmpdir(), 'kb-vsearch1-'));
     const dbPath = join(testDir, 'test_db');
-    
+
     writeFileSync(join(testDir, 'auth.ts'), `export function authenticate(token: string): boolean {
   return token.length > 0;
 }`);
@@ -536,10 +536,10 @@ export class App { run(): void { main(); } }`);
       const idx = await index(testDir);
       const graph = buildGraph(idx);
       const graphJson = JSON.stringify(graph);
-      
+
       await dbIngest(graphJson, dbPath);
       const results = await dbSemanticSearch(dbPath, 'authentication function', 5);
-      
+
       if (results && results.length >= 1) {
         console.log('✓ PASS: Found ' + results.length + ' semantic match(es)\n');
         passed++;
@@ -564,7 +564,7 @@ export class App { run(): void { main(); } }`);
   {
     const testDir = mkdtempSync(join(tmpdir(), 'kb-rag1-'));
     const dbPath = join(testDir, 'test_db');
-    
+
     writeFileSync(join(testDir, 'oauth.ts'), `/**
  * Handles OAuth2 authentication flow.
  */
@@ -581,11 +581,11 @@ export function handleCallback(code: string): Promise<string> {
       const idx = await index(testDir);
       const graph = buildGraph(idx);
       const graphJson = JSON.stringify(graph);
-      
+
       await dbIngest(graphJson, dbPath);
       const optionsJson = JSON.stringify({ query: 'oauth authentication', k: 5, maxHops: 2 });
       const results = await dbHybridSearch(dbPath, optionsJson);
-      
+
       if (results && results.items) {
         console.log('✓ PASS: GraphRAG search returned ' + results.items.length + ' context item(s)\n');
         passed++;
@@ -610,7 +610,7 @@ export function handleCallback(code: string): Promise<string> {
   {
     const testDir = mkdtempSync(join(tmpdir(), 'kb-traverse1-'));
     const dbPath = join(testDir, 'test_db');
-    
+
     writeFileSync(join(testDir, 'utils.ts'), `export function parse(input: string): object { return JSON.parse(input); }
 export function format(data: object): string { return JSON.stringify(data); }`);
 
@@ -618,12 +618,12 @@ export function format(data: object): string { return JSON.stringify(data); }`);
       const idx = await index(testDir);
       const graph = buildGraph(idx);
       const graphJson = JSON.stringify(graph);
-      
+
       await dbIngest(graphJson, dbPath);
-      
+
       const fileNode = graph.nodes.find(n => n.node_type === 'File');
       const traversal = await dbTraverse(dbPath, [fileNode.id], 2, ['Contains']);
-      
+
       if (traversal.nodes && traversal.nodes.length >= 2) {
         console.log('✓ PASS: Traversed with edge filter, found ' + traversal.nodes.length + ' nodes\n');
         passed++;
@@ -642,7 +642,7 @@ export function format(data: object): string { return JSON.stringify(data); }`);
     }
     rmSync(testDir, { recursive: true });
   }
-  
+
   console.log('=== Results: ' + passed + '/' + (passed + failed) + ' passed ===');
   process.exit(failed > 0 ? 1 : 0);
 }

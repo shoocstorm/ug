@@ -5,15 +5,16 @@
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
   "scripts": {
-    "build": "echo 'Indexing and Building Graph data' && node src/cli.cjs index && node src/cli.cjs graph",
     "prebuild": "echo 'Execute pre-build to generate ultragraph-kb.node binary' && cd native && npm run build:dev",
+    "build": "node src/cli.cjs gen && cp src/vis/* ug-out/ && cp src/cli.cjs ug-out/ && cp src/mcp-server.mjs ug-out/",
     "index": "echo 'Indexing files' && node src/cli.cjs index",
     "graph": "echo 'Building Graph data' && node src/cli.cjs graph",
-    "graph-search": "echo 'Searching Graph data' && node src/cli.cjs graph-search",
-    "db-ingest": "echo 'Ingesting data into DB' && node src/cli.cjs db-ingest",
-    "db-rag": "echo 'Performing RAG on DB' && node src/cli.cjs db-rag",
-    "mcp": "echo 'Starting MCP server' && node src/mcp/mcp-server.mjs",
-    "start": "npx serve out -p 8080",
+    "gen": "node src/cli.cjs gen",
+    "ingest": "echo 'Ingesting data into DB' && node src/cli.cjs db-ingest",
+    "rag": "echo 'Performing RAG on DB' && node src/cli.cjs db-rag",
+    "traverse": "echo 'Traversing the graph' && node src/cli.cjs db-traverse",
+    "mcp": "echo 'Starting MCP server' && node src/mcp-server.mjs",
+    "start": "npx serve ug-out -p 8080",
     "test": "echo 'Running tests' && node src/test/test-runner.cjs"
   },
   "keywords": [
@@ -27,6 +28,7 @@
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
+    "chalk": "^4.1.2",
     "zod": "^3.23.8"
   }
 }

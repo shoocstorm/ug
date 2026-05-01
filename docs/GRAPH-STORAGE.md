@@ -52,7 +52,7 @@ refer to: GraphData
 
 ## LanceDB Setup
 
-· Connect to local directory: LanceDb::connect("./kg_db")
+· Connect to local directory: LanceDb::connect("./ug-db")
 · Create nodes table with schema (including vector column)
 · Create edges table without vector column
 · Create vector index on nodes.vector (cosine metric)

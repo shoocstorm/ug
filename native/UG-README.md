@@ -27,7 +27,7 @@ ug index -i . --cache .cache -o out.json
 ```
 
 Options:
-- `-o, --output <file>` — Output file (default: `out/indexed-tree.json`)
+- `-o, --output <file>` — Output file (default: `ug-out/indexed-tree.json`)
 - `-c, --cache <dir>` — Cache directory for incremental indexing
 
 ### `ug graph`
@@ -43,7 +43,7 @@ ug graph -i index.json -o graph.json
 Keyword search over graph nodes.
 
 ```bash
-ug search ./out/graph.json "Cache" -t function
+ug search ./ug-out/graph.json "Cache" -t function
 ```
 
 ### `ug bfs`
@@ -59,7 +59,7 @@ ug bfs graph.json "file:src/index.ts" 2
 Full pipeline: index + graph + analysis.
 
 ```bash
-ug gen -i ./src -o ./out
+ug gen -i ./src -o ./ug-out
 # Produces: graph.json, indexed-tree.json, analysis.json, cycles.json
 ```
 
@@ -68,7 +68,7 @@ ug gen -i ./src -o ./out
 Embed graph nodes into LanceDB.
 
 ```bash
-ug ingest -g out/graph.json -d out/kg_db --with-indexes
+ug ingest -g ug-out/graph.json -d ug-out/ug-db --with-indexes
 ```
 
 ### `ug vsearch`
@@ -76,7 +76,7 @@ ug ingest -g out/graph.json -d out/kg_db --with-indexes
 Semantic vector search.
 
 ```bash
-ug vsearch "build a tree" -d out/kg_db --filter "node_type = 'Function'"
+ug vsearch "build a tree" -d ug-out/ug-db --filter "node_type = 'Function'"
 ```
 
 ### `ug traverse`
@@ -84,7 +84,7 @@ ug vsearch "build a tree" -d out/kg_db --filter "node_type = 'Function'"
 K-hop BFS over LanceDB edges.
 
 ```bash
-ug traverse file:src/index.ts -d out/kg_db -k 2
+ug traverse file:src/index.ts -d ug-out/ug-db -k 2
 ```
 
 ## Storage / GraphRAG (Phase 3+4)
@@ -92,9 +92,9 @@ ug traverse file:src/index.ts -d out/kg_db -k 2
 End-to-end against a running embedding endpoint:
 
 ```bash
-ug ingest -g out/graph.json -d out/kg_db --with-indexes
-ug vsearch "build a tree" -d out/kg_db --filter "node_type = 'Function'"
-ug traverse file:src/index.ts -d out/kg_db -k 2
+ug ingest -g ug-out/graph.json -d ug-out/ug-db --with-indexes
+ug vsearch "build a tree" -d ug-out/ug-db --filter "node_type = 'Function'"
+ug traverse file:src/index.ts -d ug-out/ug-db -k 2
 ```
 
 ## Development

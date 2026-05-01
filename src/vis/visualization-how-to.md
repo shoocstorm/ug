@@ -7,7 +7,7 @@ Interactive force-directed graph visualization built with D3.js v7.
 ### Using npx (No Install Required)
 
 ```bash
-npx serve out -p 8080
+npx serve ug-out -p 8080
 ```
 
 Then open: http://localhost:8080
@@ -18,14 +18,14 @@ Then open: http://localhost:8080
 npm start
 ```
 
-Runs `npx serve out -p 8080` — open http://localhost:8080.
+Runs `npx serve ug-out -p 8080` — open http://localhost:8080.
 
 ### Node.js HTTP Server (Global)
 
 ```bash
 # Install serve globally or locally
 npm install -g serve
-serve out -p 8080
+serve ug-out -p 8080
 ```
 
 Then open: http://localhost:8080

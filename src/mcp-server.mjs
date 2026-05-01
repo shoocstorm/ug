@@ -2,7 +2,7 @@
 // MCP server exposing the Phase 4 GraphRAG `search_kb` tool.
 //
 // Configuration via env vars:
-//   UG_DB_PATH         - LanceDB directory (default: ./out/kg_db)
+//   UG_DB_PATH         - LanceDB directory (default: ./ug-out/ug-db)
 //   UG_REPO_ROOT       - root for resolving snippet file paths (default: cwd)
 //   UG_EMBED_BASE_URL  - override embedding endpoint base URL
 //   UG_EMBED_API_KEY   - override embedding API key
@@ -10,7 +10,7 @@
 //
 // Usage:
 //   pnpm install
-//   node src/mcp/mcp-server.mjs   # speaks MCP over stdio
+//   node src/mcp-server.mjs   # speaks MCP over stdio
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -25,9 +25,9 @@ import { dirname, resolve } from "path";
 
 const require = createRequire(import.meta.url);
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const ug = require(resolve(__dirname, "..", "..", "native", "ultragraph-kb.node"));
+const ug = require(resolve(__dirname, ".", "ultragraph-kb.node"));
 
-const DB_PATH = process.env.UG_DB_PATH || "./out/kg_db";
+const DB_PATH = process.env.UG_DB_PATH || "./ug-db";
 const REPO_ROOT = process.env.UG_REPO_ROOT || process.cwd();
 
 function embedderOptionsJson() {

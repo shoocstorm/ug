@@ -184,56 +184,87 @@ This produces `native/ultragraph-kb.node` — the native Node.js module.
 See [docs/QUICKSTART.md](docs/QUICKSTART.md) for a step-by-step walkthrough.
 
 ```bash
-# 1. Index a codebase
-npm run index -- ./src -o out/indexed-tree.json
+# 1. Index a folder
+npm run index -- ./src -o ug-out/indexed-tree.json
 
 # 2. Build the graph
-npm run graph -- out/indexed-tree.json -o out/graph.json
+npm run graph -- ug-out/indexed-tree.json -o ug-out/graph.json
 
-# 3. Visualize (or use all-in-one: npm run gen -- ./src -o out/)
+# 3. Visualize (or use all-in-one: npm run gen -- ./src -o ug-out/)
 npm start
 # Open http://localhost:8080
 
 # 4. Semantic search (requires embedding endpoint)
-npm run ingest -- out/graph.json out/kg_db
-npm run rag -- out/kg_db "how does auth work" -k 8
+npm run ingest -- ug-out/graph.json ug-out/ug-db
+npm run rag -- ug-out/ug-db "how does auth work" -k 8
 
 # 5. Manually check lance db data (via duckdb)
 duckdb
 INSTALL lance
 load lance;
-ATTACH 'native/out/kg_db' as db (type LANCE);
+ATTACH 'ug-out/ug-db' as db (type LANCE);
 select * from db.main.nodes limit 10;
 ```
 
 
 ## All CLI Commands
 
-Use `npm run <command> -- [args]` for all commands:
+Use `npm run <command> -- [args]` for all commands, or directly via `node src/cli.cjs <cmd> [args]`:
 
+### npm scripts
 | npm script | Description |
 |-----------|-------------|
-| `npm run index -- <dir> -o <out>` | Index a directory |
-| `npm run graph -- <index.json> -o <out>` | Build graph from index result |
-| `npm run gen -- <dir> -o <out>` | Index + graph + visualization (all-in-one) |
-| `npm run ingest -- <graph.json> <db_path>` | Embed graph into LanceDB |
-| `npm run search -- <db> <query>` | Semantic vector search over LanceDB |
-| `npm run rag -- <db> <query> -k <num>` | End-to-end GraphRAG retrieval |
+| `npm run gen -- [options]` | Index + graph + ingest + visualization (all-in-one) |
+| `npm run index -- [options]` | Index a directory |
+| `npm run graph -- [options]` | Build graph from index result |
+| `npm run ingest -- <graph.json> <db>` | Embed graph into LanceDB |
+| `npm run rag -- <db> <query> [options]` | End-to-end GraphRAG retrieval |
+| `npm run traverse -- <db> <node-id> [options]` | K-hop BFS traversal over LanceDB edges |
 | `npm start` | Serve visualization at http://localhost:8080 |
 | `npm run mcp` | Start MCP server (requires `UG_DB_PATH`) |
 
-Direct CLI commands (via `node src/cli.cjs <cmd>`):
-- `bfs` - K-hop BFS traversal (in-memory graph)
-- `search` - Keyword search over graph nodes
-- `traverse` - K-hop BFS over LanceDB edges (with edge-type filter)
-- `ping` - Probe embedding endpoint
-- `help` - Show help
+### Direct CLI commands (via `node src/cli.cjs <cmd>`)
+| Command | Short Flags | Description |
+|---------|-------------|-------------|
+| `index` | `-i` (--input), `-c` (--cache), `-o` (--output) | Index a directory with optional caching |
+| `graph` | `-i` (--input), `-o` (--output) | Build graph from index result |
+| `gen` | `-i` (--input), `-c` (--cache), `-o` (--output), `-d` (--db) | Full pipeline: index → graph → visualization → LanceDB ingest |
+| `graph-search` | `-t` (--type), `-o` (--output) | Keyword search over in-memory graph nodes |
+| `db-ingest` | `-b` (--base-url), `-a` (--api-key), `-m` (--model) | Embed graph nodes and write to LanceDB |
+| `db-traverse` | `-k` (--hops), `-e` (--edge-type) | K-hop BFS traversal over LanceDB edges |
+| `db-rag` | `-k` (--limit), `-b` (--base-url), `-a` (--api-key), `-m` (--model) | End-to-end GraphRAG hybrid retrieval |
+| `ping` | `-b` (--base-url), `-a` (--api-key), `-m` (--model) | Probe embedding endpoint |
+| `help` | `-h` (--help) | Show help for commands |
+
+### Examples
+```bash
+# Index a folder
+node src/cli.cjs index -i ./src -c ./cache -o ug-out/indexed-tree.json
+
+# Build graph from index result
+node src/cli.cjs graph -i ./src -o ug-out/graph.json
+
+# keyword based graph search with type filter
+node src/cli.cjs graph-search ug-out/graph.json "auth" -t Function -t Class
+
+# DB ingest with custom embedder
+node src/cli.cjs db-ingest graph.json ./ug-db -b http://localhost:11434/v1 -m llama3
+
+# Traverse with edge-type filter
+node src/cli.cjs db-traverse ./ug-db "node-123" -k 3 -e Calls -e Imports
+
+# RAG search
+node src/cli.cjs db-rag ./ug-db "how does auth work" -k 8
+
+# Get help for a command
+node src/cli.cjs gen -h
+```
 
 ## MCP Server
 
 ```bash
 # Configure via environment, then run:
-UG_DB_PATH=./out/kg_db npm run mcp
+UG_DB_PATH=./ug-out/ug-db npm run mcp
 ```
 
 Exposes three tools: `search_kb`, `traverse_kb`, `ping_embedder`.
@@ -263,12 +294,11 @@ ug/
 │   │       ├── query.rs      # search, traverse, RRF, MMR
 │   │       ├── napi_bindings.rs  # NAPI async fns
 │   │       └── text.rs       # Embedding text shaping
-│   └── ultragraph-kb.node    # Built native module
+└── ug-out/ultragraph-kb.node    # Built native module
 ├── src/
 │   ├── cli.cjs               # JavaScript CLI
 │   ├── vis/                  # D3.js visualization
-│   ├── mcp/
-│   │   └── mcp-server.mjs        # MCP stdio server
+│   └── mcp-server.mjs        # MCP stdio server
 │   └── test/
 │       └── test-runner.cjs   # Test suite (21 tests)
 └── docs/                     # Design docs + quick start
