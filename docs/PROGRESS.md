@@ -35,11 +35,28 @@
 - [x] Docstring Extraction (JSDoc @param/@returns)
 - [x] Function Signature Details (params, types, defaults, return types)
 - [x] Code Metrics (LOC, param count, nesting depth)
+- [x] Markdown heading section spans (`end_line` covers from heading through the line before the next same-or-shallower heading) — gives Semantic Enrichment the full body of each heading symbol
+
+---
+
+## Phase 1.3: Folder Hierarchy ✅ COMPLETED
+- [x] FolderNode derivation from the scanned file set (no parsing — pure path math)
+- [x] Synthetic `.` root anchors the forest; every folder carries `parent`, `depth`, immediate `childFiles` / `childFolders`, recursive `totalFiles`, recursive `languageBreakdown`
+- [x] README detection (`README.md` / `_index.md` / `index.md` variants) populates `folder.readme`
+- [x] Folder classification: path-name heuristics (`tests/`, `docs/`, `components/`, …) with content-driven fallback (all-markdown → Documentation, all-code → Source, else Mixed)
+- [x] `folder.summary: Option<String>` reserved for the Semantic Enrichment phase to fill later
+- [x] Cache-stable: folders are recomputed each run from `scan_files`, so the forest is correct in both `index()` and `index_with_cache()`
+
+**Implemented in:**
+- `native/src/indexer/folder.rs` — `extract_folders()`
+- `native/src/indexer.rs` — wires the call into both index entry points
+- `native/src/types.rs` — `FolderNode`, `FolderClassification`, `IndexResult.folders`, `IndexStats.totalFolders`
 
 ---
 
 ## Phase 2: Embedded Graph Persistence ✅ COMPLETED
-- [x] Graph Schema: Nodes (File, Symbol, Concept) + Edges (all types above)
+- [x] Graph Schema: Nodes (File, Folder, Symbol, Concept) + Edges (all types above)
+- [x] Folder forest in the graph: `Contains` edges parent_folder→child_folder and folder→immediate_file (only when the file resolved into a graph node)
 - [x] In-Memory Querying: K-Hop BFS
 - [x] Graph Analysis: centrality, cycle detection, shortest path, edge-type filtering
 - [x] HTML Visualization Export: D3.js v7 force-directed graph
@@ -47,6 +64,7 @@
 **Implemented in:**
 - `native/src/graph.rs` — GraphNode, GraphEdge, GraphData, BfsResult, build_graph(), k_hop_bfs()
 - `native/src/graph.rs` — filter_edges_by_type(), find_shortest_path(), calculate_centrality(), detect_cycles()
+- `native/src/types.rs` — `GraphNodeType::Folder`, `GraphNodeFolderMeta` (depth, parent, classification, readme, totalFiles, languageBreakdown, summary)
 - `src/vis/visualization.html` — Interactive D3.js visualization
 
 **NAPI exports:**
@@ -57,10 +75,12 @@
 ## Phase 3: Semantic Storage & Enrichment ✅ COMPLETED
 - [x] Vector Integration: Embed graph nodes into LanceDB via local OpenAI-compatible endpoint
 - [x] Auto index creation (vector + FTS)
+- [x] Folder-aware embedding text: pre-enrichment, folder nodes get a synthesized synopsis from classification + language breakdown + depth so they carry retrieval signal even before LLM summaries arrive; post-enrichment, `folder.summary` (or `docstring`) takes over
 - [ ] Semantic Clustering: deferred
+- [ ] Semantic Enrichment (LLM-written `summary` for folder + symbol nodes): deferred
 
 **Implemented in:**
-- `native/src/storage/text.rs` — `build_node_text`, `collect_related_names`
+- `native/src/storage/text.rs` — `build_node_text`, `collect_related_names`, folder-synopsis fallback
 - `native/src/storage/embed.rs` — `Embedder` HTTP client + `Embedder::ping`
 - `native/src/storage/db.rs` — LanceDB schemas, upsert, vector_search, edges_from/to, fts_search, nodes_by_ids
 - `native/src/storage/ingest.rs` — `ingest_graph`, `reembed_nodes`
@@ -99,7 +119,7 @@
 - `db-ingest`, `db-semantic-search`, `db-traverse`, `db-rag`, `ping` — LanceDB + GraphRAG operations
 
 ### Tests
-- Rust: **67 tests pass** across 4 suites (`indexer_test`: 29, `graph_test`: 13, `search_test`: 13, `storage_test`: 12)
+- Rust: **67 tests pass** across 4 suites (`indexer_test`: 29, `graph_test`: 13, `search_test`: 13, `storage_test`: 12). Folder + markdown-end_line work is exercised through the existing index/graph/storage suites — the additive type changes flow through unchanged assertion paths.
 - JS: **21/21 tests pass** covering indexing, graph ops, ingest, semantic search, GraphRAG retrieval, edge-filtered traversal
 
 ### Still open (Phase 4.1 — "nice-to-haves" from REQUIREMENT.md)
@@ -108,4 +128,4 @@
 
 ---
 
-## Last Updated: 2026-04-29
+## Last Updated: 2026-05-01

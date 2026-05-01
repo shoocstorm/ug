@@ -21,13 +21,15 @@ refer to: GraphData
 
 · id (string, primary key)
 · name (string)
-· node_type (string, e.g., "File", "Document")
+· node_type (string — currently one of: "File", "Folder", "Function", "Class", "Interface", "Concept", "Dependency", "Config")
 · description (string)
-· file (string)
+· file (string — empty for Folder nodes; folder identity lives in `id` as `folder:<path>`)
 · ....
 · last_update_at (datetime)
 · node_text (string) – concatenated field for embedding
 · vector (fixed-size list of f32, default length 1024)
+
+**Folder node embedding:** Folder nodes have no docstring at index time. Pre-enrichment, `build_node_text` synthesizes a description from the folder's classification + recursive language breakdown + depth (e.g., `"Folder: src/components. components folder, 8 typescript and 2 markdown files, depth 2. Related: …"`). Once the Semantic Enrichment phase fills `folder.summary` (or any node's `docstring`), the storage layer prefers that over the synopsis on re-embed.
 
 ### Edges Table
 
@@ -41,9 +43,11 @@ refer to: GraphData
 
 · Load local model once at startup
 · For each node, build node_text = "{type}: {name}. {description}. Related: {list_of_related_names}"
+  · For Folder nodes the `{name}` slot uses the full path (from `folder:<path>`), not the basename, so `tests/components` doesn't collide with `src/components` in vector space
+  · `{description}` priority order: `folder.summary` → `docstring` → synthesized folder synopsis (Folder nodes only) → empty
 · Batch process all nodes: encode texts → list of 1024-dimension vectors
 · Store vectors in LanceDB
-· Support incremental updates so that only updated nodes are re-encoded and re-stored
+· Support incremental updates so that only updated nodes are re-encoded and re-stored (use `reembed_nodes` after enrichment writes summaries)
 · Support versioning
 
 ## LanceDB Setup

@@ -152,14 +152,27 @@ API Key: 1234
   * Link: Environment variables to where they're used
   * Enables: Impact analysis for config changes
 
+#### New: Folder Hierarchy (Phase 1.4) ✅
+
+*Goal: Surface the structural narrative the directory tree itself tells — `src/components` vs `tests/components`, a `docs/2026/january/` knowledge-base layout, the `lib/` vs `app/` split.*
+
+* [x] **Folder-Node Derivation** (High Value)
+  * Derived from the scanned file set without re-parsing — pure path math
+  * Synthetic `.` root anchors the forest; folders carry `parent`, `depth`, immediate `childFiles` / `childFolders`, recursive `totalFiles`, recursive `languageBreakdown`
+  * README detection (`README.md` / `_index.md` / `index.md`) populates `folder.readme`
+  * Folder classification: path-name heuristics (`tests/`, `docs/`, `components/`, …) with a content-driven fallback (all-markdown → Documentation, all-code → Source, else Mixed)
+  * `folder.summary: Option<String>` reserved for the Semantic Enrichment phase
+  * Cache-stable: recomputed each run from `scan_files`, so the forest stays correct under `index_with_cache`
+  * Enables: hierarchy visualization, folder-scoped retrieval ("summarize what `src/auth/` contains"), and a coarser RAG context level above per-file/per-symbol nodes
+
 ### Phase 2: Enhanced Graph Schema
 
 *Goal: Zero-latency traversal without an external database server.*
 
 #### Current Implementation (keep)
 * [x] **Graph Schema:**
-  * **Nodes:** File, Symbol (Function/Class), Concept (extracted from Docs).
-  * **Edges:** DEPENDS_ON, CALLS, EXTENDS, REFERENCES.
+  * **Nodes:** File, **Folder**, Symbol (Function/Class), Concept (extracted from Docs).
+  * **Edges:** DEPENDS_ON, CALLS, EXTENDS, REFERENCES, **CONTAINS** (also wires the folder forest: parent_folder → child_folder, folder → immediate file).
 * [x] **In-Memory Querying:** Implement a Rust-side function to perform **K-Hop Breadth-First Search (BFS)** to find related context for a given symbol.
 * [x] **HTML Visualization Export:**
   * [x] **Data Export:** Expose a function to serialize the graph as JSON with `nodes` (id, group) and `edges` (source, target).
@@ -241,6 +254,7 @@ API Key: 1234
 
 | Edge Type | Source | Target | Purpose |
 |-----------|--------|--------|---------|
+| CONTAINS | Folder/File | Folder/File/Symbol | Structural hierarchy (folder forest + file→symbol nesting + markdown heading nesting) |
 | IMPORTS | File/Symbol | File/Symbol | Cross-file dependencies |
 | EXPORTS | Symbol | File | Module exports |
 | CALLS | Function | Function | Call graph |

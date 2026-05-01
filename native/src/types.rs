@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Symbol {
@@ -110,8 +111,53 @@ pub enum FileClassification {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FolderNode {
+    pub path: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    pub depth: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub classification: Option<FolderClassification>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub readme: Option<String>,
+    #[serde(rename = "childFiles", default)]
+    pub child_files: Vec<String>,
+    #[serde(rename = "childFolders", default)]
+    pub child_folders: Vec<String>,
+    #[serde(rename = "totalFiles")]
+    pub total_files: u32,
+    #[serde(rename = "languageBreakdown", default)]
+    pub language_breakdown: HashMap<String, u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FolderClassification {
+    Source,
+    Tests,
+    Documentation,
+    Examples,
+    Config,
+    Assets,
+    Components,
+    Pages,
+    Hooks,
+    Services,
+    Contexts,
+    Reducers,
+    Utils,
+    Types,
+    Mixed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexResult {
     pub files: Vec<FileNode>,
+    #[serde(default)]
+    pub folders: Vec<FolderNode>,
     pub dependencies: Vec<Dependency>,
     pub stats: IndexStats,
 }
@@ -132,6 +178,8 @@ pub struct IndexStats {
     pub cached_files: usize,
     #[serde(rename = "totalSymbols")]
     pub total_symbols: usize,
+    #[serde(rename = "totalFolders", default)]
+    pub total_folders: usize,
     #[serde(rename = "indexingTimeMs")]
     pub indexing_time_ms: u64,
 }
@@ -139,6 +187,7 @@ pub struct IndexStats {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum GraphNodeType {
     File,
+    Folder,
     Function,
     Class,
     Interface,
@@ -189,6 +238,36 @@ pub struct GraphNode {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub calls: Vec<String>,
 
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<GraphNodeFolderMeta>,
+}
+
+/// Folder-specific metadata projected onto the generic GraphNode. Lifted from
+/// `FolderNode` so the graph is self-contained for downstream consumers (the
+/// visualizer doesn't need to cross-reference IndexResult.folders, and the
+/// RAG layer can store / query folder context without a second table).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphNodeFolderMeta {
+    pub depth: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub classification: Option<FolderClassification>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub readme: Option<String>,
+    #[serde(rename = "totalFiles")]
+    pub total_files: u32,
+    #[serde(
+        rename = "languageBreakdown",
+        default,
+        skip_serializing_if = "HashMap::is_empty"
+    )]
+    pub language_breakdown: HashMap<String, u32>,
+    /// Filled by the Semantic Enrichment phase. When present, the storage
+    /// layer prefers this over the synthesized description for folder
+    /// embeddings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

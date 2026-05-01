@@ -16,6 +16,7 @@
 
 mod classifier;
 mod common;
+mod folder;
 mod languages;
 mod package_json;
 
@@ -86,6 +87,15 @@ pub fn index(path: String) -> String {
     let mut files: Vec<FileNode> = Vec::new();
     let mut total_symbols = 0;
 
+    // Capture normalized paths up-front so we can hand them to folder
+    // extraction. Folders are derived from the full scanned set (no parsing
+    // required), which keeps folder data correct regardless of which files
+    // ended up indexable.
+    let mut normalized_paths: Vec<String> = Vec::with_capacity(files_paths.len());
+    for file_path in &files_paths {
+        normalized_paths.push(normalize_path(&file_path.to_string_lossy()));
+    }
+
     for file_path in files_paths {
         if let Some(file_node) = process_file(&file_path) {
             total_symbols += file_node.symbols.len();
@@ -93,15 +103,19 @@ pub fn index(path: String) -> String {
         }
     }
 
+    let folders = folder::extract_folders(&normalized_paths);
+
     let stats = IndexStats {
         total_files: files.len(),
         cached_files: 0,
         total_symbols,
+        total_folders: folders.len(),
         indexing_time_ms: start.elapsed().as_millis() as u64,
     };
 
     serde_json::to_string(&IndexResult {
         files,
+        folders,
         dependencies,
         stats,
     })
@@ -132,11 +146,19 @@ pub fn index_with_cache(path: String, cache_path: String) -> String {
     let mut total_symbols = 0;
     let mut cached = 0;
 
+    // Folder hierarchy is derived from the full scanned set, not just the
+    // re-parsed slice. This keeps the forest stable across cached runs - a
+    // folder doesn't disappear from the index just because none of its files
+    // changed since the previous run.
+    let mut normalized_paths: Vec<String> = Vec::with_capacity(files_paths.len());
+
     for file_path in files_paths {
         // Normalize so the cache key matches what `process_file` stamps onto
         // the FileNode. Without this, a cache built from `./src/foo.ts` would
         // miss a path stored as `src/foo.ts` and re-index every run.
         let path_str = normalize_path(&file_path.to_string_lossy());
+        normalized_paths.push(path_str.clone());
+
         let hash = match compute_hash(&file_path) {
             Some(h) => h,
             None => continue,
@@ -163,15 +185,19 @@ pub fn index_with_cache(path: String, cache_path: String) -> String {
         let _ = fs::write(&cache_file, json);
     }
 
+    let folders = folder::extract_folders(&normalized_paths);
+
     let stats = IndexStats {
         total_files: files.len(),
         cached_files: cached,
         total_symbols,
+        total_folders: folders.len(),
         indexing_time_ms: start.elapsed().as_millis() as u64,
     };
 
     serde_json::to_string(&IndexResult {
         files,
+        folders,
         dependencies,
         stats,
     })

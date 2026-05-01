@@ -53,16 +53,26 @@ impl LanguageIndexer for MarkdownIndexer {
 /// Scan the source line-by-line and emit one `Symbol` per ATX heading.
 /// Tracks fenced-code state so `#` lines inside a ```` ``` ```` block don't
 /// get mistaken for headings.
+///
+/// `end_line` spans the heading's section: from the heading line through the
+/// line before the next heading of the same or higher precedence (lower or
+/// equal level number), or through the last line of the file for the final
+/// heading. This gives the Semantic Enrichment phase the full body of text
+/// that belongs to each heading symbol.
 fn extract_headings(source: &[u8]) -> Vec<Symbol> {
     let source_str = match std::str::from_utf8(source) {
         Ok(s) => s,
         Err(_) => return Vec::new(),
     };
 
-    let mut out = Vec::new();
+    let lines: Vec<&str> = source_str.lines().collect();
+    let total_lines = lines.len() as u32;
+
+    // First pass: collect (start_line, level, name) for every heading.
+    let mut raw: Vec<(u32, usize, String)> = Vec::new();
     let mut in_fence = false;
 
-    for (idx, line) in source_str.lines().enumerate() {
+    for (idx, line) in lines.iter().enumerate() {
         let trimmed = line.trim_start();
 
         if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
@@ -91,14 +101,29 @@ fn extract_headings(source: &[u8]) -> Vec<Symbol> {
             continue;
         }
 
-        let line_no = (idx + 1) as u32;
+        raw.push(((idx + 1) as u32, level, name));
+    }
+
+    // Second pass: compute each heading's end_line by scanning forward for
+    // the next heading whose level is shallower-or-equal (i.e. closes the
+    // current section). Falls back to the file's last line for the tail.
+    let mut out = Vec::with_capacity(raw.len());
+    for i in 0..raw.len() {
+        let (start_line, level, _) = raw[i];
+        let end_line = raw[i + 1..]
+            .iter()
+            .find(|(_, l, _)| *l <= level)
+            .map(|(next_start, _, _)| next_start.saturating_sub(1).max(start_line))
+            .unwrap_or_else(|| total_lines.max(start_line));
+
+        let name = raw[i].2.clone();
         out.push(Symbol {
-            id: format!("heading:{}:{}", line_no, name),
+            id: format!("heading:{}:{}", start_line, name),
             name,
             kind: format!("heading_{}", level),
             file: String::new(),
-            start_line: line_no,
-            end_line: line_no,
+            start_line,
+            end_line,
             docstring: None,
             signature: None,
             imports: Vec::new(),

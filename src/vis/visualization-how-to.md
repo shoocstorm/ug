@@ -41,12 +41,17 @@ Then open: http://localhost:8080
 
 ## Node Types
 
-| Color | Type |
-|-------|------|
-| Cyan | File |
-| Pink | Interface |
-| Green | Function |
-| Purple | Class |
+Colors come from `colorMap` in `visualization.html` (see the `config` block near the top of the `<script>`). Node types not listed below render with the default slate color.
+
+| Color | Type | Notes |
+|-------|------|-------|
+| Cyan | File | Source files (TS/JS/Py/Java/MD) |
+| Pink | Interface | TypeScript / Java interfaces |
+| Green | Function | Functions, methods, variables |
+| Purple | Class | Classes |
+| Orange | Dependency | npm / package.json deps |
+| Gold | Config | Files classified as `config` |
+| Slate (default) | Folder, Concept | Folder hierarchy nodes (`folder:<path>`) and markdown heading concepts. Add explicit entries to `colorMap` in `visualization.html` to give them their own colors. |
 
 ## URL Parameters
 

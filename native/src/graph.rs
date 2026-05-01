@@ -1,5 +1,7 @@
 use crate::indexer::{normalize_path, resolve_relative};
-use crate::types::{GraphData, GraphEdge, GraphEdgeType, GraphNode, GraphNodeType};
+use crate::types::{
+    GraphData, GraphEdge, GraphEdgeType, GraphNode, GraphNodeFolderMeta, GraphNodeType,
+};
 use napi_derive::napi;
 use petgraph::graph::{DiGraph, NodeIndex};
 use std::collections::HashMap;
@@ -39,6 +41,70 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
 
     let (path_index, basename_index) = build_file_indexes(&index_result.files);
 
+    // Pass 0: folder forest. Folder nodes carry filesystem hierarchy that no
+    // single FileNode captures (`src/components/` vs `tests/components/`), so
+    // adding them lets the visualizer render the project tree and lets the
+    // RAG retriever climb from a leaf file to its containing folder for a
+    // higher-level summary. Edges:
+    //   - parent_folder -> child_folder  (Contains)
+    //   - folder        -> immediate file (Contains, only when the file
+    //                                       resolved into a graph node above)
+    // Folder nodes get an `id` of `folder:<path>` mirroring `file:<path>`.
+    for f in &index_result.folders {
+        let folder_id = format!("folder:{}", f.path);
+        let parent_id = f.parent.as_ref().map(|p| format!("folder:{}", p));
+
+        nodes.push(GraphNode {
+            id: folder_id.clone(),
+            name: f.name.clone(),
+            node_type: GraphNodeType::Folder,
+            file: None,
+            start_line: None,
+            end_line: None,
+            metrics: None,
+            signature: None,
+            // Pre-enrichment we don't have a written summary; the storage
+            // text builder synthesizes one from the meta below.
+            docstring: None,
+            imports: vec![],
+            exports: vec![],
+            extends: vec![],
+            implements: vec![],
+            calls: vec![],
+            folder: Some(GraphNodeFolderMeta {
+                depth: f.depth,
+                parent: f.parent.clone(),
+                classification: f.classification.clone(),
+                readme: f.readme.clone(),
+                total_files: f.total_files,
+                language_breakdown: f.language_breakdown.clone(),
+                summary: f.summary.clone(),
+            }),
+        });
+
+        if let Some(pid) = parent_id {
+            edges.push(GraphEdge {
+                source: pid,
+                target: folder_id.clone(),
+                edge_type: GraphEdgeType::Contains,
+            });
+        }
+
+        // Wire each immediate file under this folder. We resolve through
+        // path_index (rather than format!("file:{}", path)) so a file that
+        // failed to parse and never produced a FileNode silently drops out
+        // instead of leaving a dangling target.
+        for child_file_path in &f.child_files {
+            if let Some(file_id) = path_index.get(child_file_path) {
+                edges.push(GraphEdge {
+                    source: folder_id.clone(),
+                    target: file_id.clone(),
+                    edge_type: GraphEdgeType::Contains,
+                });
+            }
+        }
+    }
+
     // Pass 1: build all file & symbol nodes and populate symbol_id_map so
     // later passes (calls/extends/implements/imports) can resolve targets to
     // real node IDs even when the target is defined later or in another file.
@@ -76,6 +142,7 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
             extends: vec![],
             implements: vec![],
             calls: vec![],
+            folder: None,
         });
 
         // Stack of (heading_level, sym_node_id) maintained per file while
@@ -154,6 +221,7 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
                 extends: sym.extends.clone(),
                 implements: sym.implements.clone(),
                 calls: sym.calls.clone(),
+                folder: None,
             });
 
             if let Some(level) = heading_level {

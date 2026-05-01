@@ -28,6 +28,7 @@ fn make_graph() -> GraphData {
             extends: vec![],
             implements: vec![],
             calls: vec![],
+            folder: None,
         },
         GraphNode {
             id: "function:src/a.ts:1:greet".to_string(),
@@ -44,6 +45,7 @@ fn make_graph() -> GraphData {
             extends: vec![],
             implements: vec![],
             calls: vec![],
+            folder: None,
         },
     ];
     let edges = vec![GraphEdge {

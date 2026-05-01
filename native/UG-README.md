@@ -129,7 +129,14 @@ native/
 ├── src/
 │   ├── main.rs             # CLI binary
 │   ├── lib.rs              # Library exports
-│   ├── indexer.rs          # File indexing + AST parsing
+│   ├── indexer.rs          # Indexing entry-point + per-file pipeline
+│   ├── indexer/
+│   │   ├── classifier.rs   # File classification heuristics
+│   │   ├── common.rs       # File walk, hashing, path normalization
+│   │   ├── folder.rs       # Folder-node derivation from scanned paths
+│   │   ├── languages.rs    # Per-language indexer registry (TS/Py/Java/MD)
+│   │   ├── languages/      # Per-language tree-sitter extractors
+│   │   └── package_json.rs # package.json dependency parsing
 │   ├── graph.rs            # Graph building + BFS + analysis
 │   ├── types.rs            # Data structures
 │   └── storage/
@@ -139,7 +146,7 @@ native/
 │       ├── ingest.rs       # Embed + upsert pipeline
 │       ├── query.rs        # search, traverse, RRF, MMR, snippets
 │       ├── napi_bindings.rs   # NAPI async fns
-│       └── text.rs         # Embedding text shaping
+│       └── text.rs         # Embedding text shaping (folder synopsis fallback)
 └── tests/
     ├── indexer_test.rs     # 29 tests
     ├── graph_test.rs       # 13 tests
@@ -155,6 +162,8 @@ native/
 - AST parsing (tree-sitter)
   - TypeScript/JavaScript
   - Python
+  - Java
+  - Markdown / MDX (heading sections carry full-body `end_line` spans for downstream summarization)
 - Symbol extraction:
   - Functions, classes, interfaces
   - Function signatures (params, return types)
@@ -164,11 +173,18 @@ native/
   - Type references
   - Function calls
 - File classification
+- Folder hierarchy extraction:
+  - Synthetic `.` root, every folder with `parent` / `depth` / `childFiles` / `childFolders`
+  - Recursive `totalFiles` and `languageBreakdown` for character signal
+  - README detection (`README.md` / `_index.md` / `index.md`)
+  - Folder classification (Tests / Documentation / Components / Source / Mixed / …) via path-name + content fallback
+  - `summary` slot reserved for the Semantic Enrichment phase
 - Package.json dependency extraction
 
 ### Graph
-- Node types: File, Function, Class, Interface, Concept
+- Node types: File, Folder, Function, Class, Interface, Concept (markdown headings), Dependency, Config
 - Edge types: Contains, Imports, Exports, Extends, Implements, Calls, References
+- Folder forest is wired with `Contains` edges (parent_folder → child_folder, folder → immediate_file), giving a clean `folder → folder → file → symbol` traversal chain that all query primitives (BFS, centrality, shortest-path, search) work over for free
 - K-hop BFS traversal
 - Centrality (degree + betweenness)
 - Cycle detection
@@ -184,6 +200,7 @@ native/
 - Graph expansion with direction + edge-type filter
 - Code snippet extraction
 - Token-budgeted context assembly
+- Folder-aware embedding text: pre-enrichment, folder nodes embed with a synthesized synopsis ("`<classification>` folder, N typescript and M markdown files, depth D"); the storage layer prefers `folder.summary` once enrichment fills it
 - `search_kb` — Phase 4 entry point
 
 ## Dependencies

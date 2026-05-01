@@ -5,17 +5,16 @@
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
   "scripts": {
-    "build": "node src/cli.cjs index && node src/cli.cjs graph",
+    "build": "echo 'Indexing and Building Graph data' && node src/cli.cjs index && node src/cli.cjs graph",
     "prebuild": "echo 'Execute pre-build to generate ultragraph-kb.node binary' && cd native && npm run build:dev",
-    "index": "node src/cli.cjs index",
-    "graph": "node src/cli.cjs graph",
-    "db-ingest": "node src/cli.cjs db-ingest",
-    "db-semantic-search": "node src/cli.cjs db-semantic-search",
-    "db-rag": "node src/cli.cjs db-rag",
-    "graph-search": "node src/cli.cjs graph-search",
-    "mcp": "node src/mcp/mcp-server.mjs",
+    "index": "echo 'Indexing files' && node src/cli.cjs index",
+    "graph": "echo 'Building Graph data' && node src/cli.cjs graph",
+    "graph-search": "echo 'Searching Graph data' && node src/cli.cjs graph-search",
+    "db-ingest": "echo 'Ingesting data into DB' && node src/cli.cjs db-ingest",
+    "db-rag": "echo 'Performing RAG on DB' && node src/cli.cjs db-rag",
+    "mcp": "echo 'Starting MCP server' && node src/mcp/mcp-server.mjs",
     "start": "npx serve out -p 8080",
-    "test": "node src/test/test-runner.cjs"
+    "test": "echo 'Running tests' && node src/test/test-runner.cjs"
   },
   "keywords": [
     "knowledge-base",

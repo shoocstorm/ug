@@ -39,12 +39,15 @@ UltraGraph-KB implements all four phases of the UltraGraph knowledge base system
               ┌─────────────────────────┐
               │   Phase 2: Graphing     │
               │  ────────────────────   │
-              │  Nodes: File/Function/  │
-              │    Class/Interface/     │
-              │    Concept/Dependency   │
-              │  Edges: Contains/       │
-              │    Imports/Calls/       │
-              │    Extends/References   │
+              │  Nodes: Folder/File/    │
+              │    Function/Class/      │
+              │    Interface/Concept/   │
+              │    Dependency           │
+              │  Edges: Contains        │
+              │    (folder→folder→file  │
+              │    →symbol)/Imports/    │
+              │    Calls/Extends/       │
+              │    References           │
               │  Algos: BFS/Cycle/      │
               │    Centrality/Paths     │
               └────┬────────────┬───────┘
@@ -101,9 +104,11 @@ UltraGraph-KB implements all four phases of the UltraGraph knowledge base system
 | Incremental indexing (blake3) | ✅ |
 | TypeScript AST parsing | ✅ |
 | Python AST parsing | ✅ |
-| Markdown parsing | ✅ |
+| Markdown parsing (heading sections w/ full body spans) | ✅ |
+| Folder hierarchy extraction (parent/depth/children/README/classification) | ✅ |
 | NAPI-RS bridge | ✅ |
 | Graph schema (Nodes/Edges) | ✅ |
+| Folder forest in graph (Contains: folder→folder→file→symbol) | ✅ |
 | K-hop BFS traversal | ✅ |
 | Graph analysis (centrality, cycles, shortest path) | ✅ |
 | Vector search (LanceDB) | ✅ |
@@ -130,7 +135,7 @@ If you want to use the high-performance Rust-native APIs (exposed via `ultragrap
 | File | Purpose |
 |------|---------|
 | `native/index.js` | Auto-generated NAPI-RS loader that detects your OS, architecture, and libc version to load the correct native binary. This is the entry point your app should require. |
-| `native/ultragraph-kb.<platform>-<arch>.node` | Platform-specific pre-compiled native binary. Include at minimum the binary matching your target deployment environment (e.g., `ultragraph-kb.darwin-arm64.node` for macOS Apple Silicon). For cross-platform support, include all pre-built binaries for supported platforms. |
+| `native/ultragraph-kb.node` | Platform-specific pre-compiled native binary. Include at minimum the binary matching your target deployment environment (e.g., `ultragraph-kb.darwin-arm64.node` for macOS Apple Silicon). For cross-platform support, include all pre-built binaries for supported platforms. |
 
 ### Usage
 Require the loader in your Node.js app (adjust the path to match your project structure):

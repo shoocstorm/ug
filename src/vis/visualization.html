@@ -118,6 +118,7 @@
                 opacity: 0.55;
                 transform: scale(1);
             }
+
             100% {
                 opacity: 0;
                 transform: scale(2.4);
@@ -767,8 +768,15 @@
         }
 
         @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.4; }
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.4;
+            }
         }
 
         .sidebar-footer {
@@ -824,7 +832,7 @@
             background: var(--bg-elevated);
         }
 
-        #sidebar.collapsed ~ #sidebar-toggle {
+        #sidebar.collapsed~#sidebar-toggle {
             left: 0;
         }
 
@@ -834,7 +842,7 @@
             transition: transform 0.3s;
         }
 
-        #sidebar.collapsed ~ #sidebar-toggle svg {
+        #sidebar.collapsed~#sidebar-toggle svg {
             transform: rotate(180deg);
         }
 
@@ -863,8 +871,15 @@
         }
 
         @keyframes slideIn {
-            from { opacity: 0; transform: translateY(8px); }
-            to { opacity: 1; transform: translateY(0); }
+            from {
+                opacity: 0;
+                transform: translateY(8px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
         }
 
         #info .drag-handle {
@@ -916,7 +931,6 @@
         }
 
         #info-body {
-            overflow-y: auto;
             flex: 1;
             min-height: 0;
         }
@@ -1046,11 +1060,22 @@
             transition: background 0.15s, color 0.15s;
         }
 
-        .info-tab:hover { color: var(--text); }
-        .info-tab.active { background: var(--bg-hover); color: var(--accent); }
+        .info-tab:hover {
+            color: var(--text);
+        }
 
-        .info-view { display: none; }
-        .info-view.active { display: block; }
+        .info-tab.active {
+            background: var(--bg-hover);
+            color: var(--accent);
+        }
+
+        .info-view {
+            display: none;
+        }
+
+        .info-view.active {
+            display: block;
+        }
 
         .hier-list {
             max-height: 460px;
@@ -1073,7 +1098,9 @@
             transition: background 0.15s;
         }
 
-        .hier-row:hover { background: var(--bg-hover); }
+        .hier-row:hover {
+            background: var(--bg-hover);
+        }
 
         .hier-row.selected {
             background: rgba(34, 211, 238, 0.12);
@@ -1101,7 +1128,9 @@
             flex-shrink: 0;
         }
 
-        .hier-row.selected .kind { color: var(--accent); }
+        .hier-row.selected .kind {
+            color: var(--accent);
+        }
 
         .hier-row.has-children .kind {
             color: var(--accent);
@@ -1119,7 +1148,9 @@
             flex-shrink: 0;
         }
 
-        .hier-row .lines:empty { display: none; }
+        .hier-row .lines:empty {
+            display: none;
+        }
 
         .hier-divider {
             margin: 8px 4px 4px;
@@ -1168,7 +1199,9 @@
         }
 
         @keyframes spin {
-            to { transform: rotate(360deg); }
+            to {
+                transform: rotate(360deg);
+            }
         }
 
         #loading p {
@@ -1217,7 +1250,9 @@
             font-family: 'JetBrains Mono', monospace;
         }
 
-        .tooltip-stats:empty { display: none; }
+        .tooltip-stats:empty {
+            display: none;
+        }
     </style>
 </head>
 
@@ -1262,8 +1297,8 @@
                                 <circle cx="11" cy="11" r="8" />
                                 <line x1="21" y1="21" x2="16.65" y2="16.65" />
                             </svg>
-                            <input type="text" id="search" class="search-input"
-                                placeholder="Search nodes by name…" autocomplete="off">
+                            <input type="text" id="search" class="search-input" placeholder="Search nodes by name…"
+                                autocomplete="off">
                             <button class="search-clear" id="search-clear" title="Clear">
                                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                                     stroke-width="2">
@@ -1367,8 +1402,8 @@
         </aside>
 
         <button id="sidebar-toggle" title="Toggle sidebar">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                stroke-linecap="round" stroke-linejoin="round">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                stroke-linejoin="round">
                 <polyline points="15 18 9 12 15 6" />
             </svg>
         </button>

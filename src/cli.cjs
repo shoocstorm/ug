@@ -74,7 +74,7 @@ const commands = {
   },
   graph: {
     usage: '[<indexed-tree-json-file>] [--output <output-path>]',
-    desc: 'Build graph from index result (i.e.: out/indexed-tree.json)',
+    desc: 'Build graph from index result (i.e.: out/indexed-tree.json) and generates graph.json',
     run: (args) => {
       const pathIdx = args.indexOf('--input');
       const path = pathIdx >= 0 ? args[pathIdx + 1] : (args.length ? args[0] : 'out/indexed-tree.json');
@@ -148,19 +148,6 @@ const commands = {
       return `Visit http://localhost:8080 to view the graph`;
     }
   },
-  bfs: {
-    usage: '<graph-json-file> <start-node-id> <k>',
-    desc: 'Perform K-hop BFS traversal',
-    run: (args) => {
-      if (args.length < 3) {
-        throw new Error(`Usage: bfs ${commands.bfs.usage}\n  ${commands.bfs.desc}`);
-      }
-      const [file, startNodeId, k] = args;
-      const graphJson = readFileSync(file, 'utf-8');
-      const result = ug.kHopBfs(graphJson, startNodeId, parseInt(k, 10));
-      return JSON.parse(result);
-    }
-  },
   'graph-search': {
     usage: '<graph-json-file> <keyword> [--type <node-type>]... [--output <output-path>]',
     desc: 'Graph-based: Keyword search over in-memory graph nodes (case-insensitive substring on name/docstring).',
@@ -206,24 +193,6 @@ const commands = {
       return JSON.parse(result);
     }
   },
-  'db-semantic-search': {
-    usage: '<db-path> <query> [-k <limit>] [--base-url <url>] [--api-key <key>] [--model <name>] [--filter <sql>]',
-    desc: 'LanceDB: Semantic vector search over embedded graph nodes.',
-    run: async (args) => {
-      if (args.length < 2) {
-        throw new Error(`Usage: db-semantic-search ${commands['db-semantic-search'].usage}\n  ${commands['db-semantic-search'].desc}`);
-      }
-      const dbPath = args[0];
-      const query = args[1];
-      const rest = args.slice(2);
-      const k = extractArg(rest, '-k', '--limit', 10);
-      const filter = extractFlag(rest, '--filter');
-      const embedderOptions = parseEmbedderOptions(rest);
-      const whereClause = filter || null;
-      const result = await ug.dbSemanticSearch(dbPath, query, k, whereClause, embedderOptions ? JSON.stringify(embedderOptions) : null);
-      return JSON.parse(result);
-    }
-  },
   'db-traverse': {
     usage: '<db-path> <start-node-id> [-k <hops>] [--edge-type <type>]... [--direction <outbound|inbound|both>]',
     desc: 'LanceDB: K-hop BFS traversal using edges table with optional edge-type filtering.',
@@ -257,7 +226,6 @@ const commands = {
       return JSON.parse(result);
     }
   },
-
   ping: {
     usage: '[--base-url <url>] [--api-key <key>] [--model <name>]',
     desc: 'Probe the embedding endpoint to verify connectivity.',
