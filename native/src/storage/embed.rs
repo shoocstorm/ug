@@ -93,6 +93,22 @@ impl Embedder {
         &self.cfg
     }
 
+    /// Probe the embedding endpoint with a one-token payload. Returns
+    /// `Ok(())` if the server responds with the expected dimension.
+    /// Callers (CLI, MCP server) can surface a friendly error before
+    /// firing off a long ingest or search.
+    pub async fn ping(&self) -> Result<(), EmbedError> {
+        let probe = vec!["ping".to_string()];
+        let v = self.embed(&probe).await?;
+        if v.is_empty() || v[0].len() != EMBEDDING_DIM {
+            return Err(EmbedError::DimensionMismatch {
+                expected: EMBEDDING_DIM,
+                got: v.first().map(|x| x.len()).unwrap_or(0),
+            });
+        }
+        Ok(())
+    }
+
     /// Embed a batch of texts. Returns one vector per input in the same
     /// order. Splits the input into sub-batches of `cfg.batch_size` so the
     /// server doesn't receive an unbounded payload.

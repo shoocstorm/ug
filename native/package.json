@@ -12,6 +12,8 @@
   "scripts": {
     "build": "cargo build --release",
     "postbuild": "napi build",
+    "build:dev": "cargo build --profile dev-fast",
+    "postbuild:dev": "napi build",
     "test": "cargo test -- --nocapture"
   }
 }

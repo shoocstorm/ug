@@ -1,5 +1,5 @@
 use ultragraph_kb::{
-    build_graph, index, search_by_keyword,
+    build_graph, graph_keyword_search, index,
     types::{GraphData, GraphEdge, GraphEdgeType, GraphNode, GraphNodeType, SearchResult},
 };
 use std::fs;
@@ -98,7 +98,7 @@ fn test_search_by_name_match() {
         "function calculateTotal(): number { return 0; } function helper(): void {}",
     )]);
 
-    let result_json = search_by_keyword(graph_json, "calculate".to_string(), None);
+    let result_json = graph_keyword_search(graph_json, "calculate".to_string(), None);
     let result: SearchResult = serde_json::from_str(&result_json).unwrap();
 
     assert!(result.count >= 1);
@@ -113,7 +113,7 @@ fn test_search_is_case_insensitive() {
         "function getUserName(): string { return ''; }",
     )]);
 
-    let result_json = search_by_keyword(graph_json, "USERNAME".to_string(), None);
+    let result_json = graph_keyword_search(graph_json, "USERNAME".to_string(), None);
     let result: SearchResult = serde_json::from_str(&result_json).unwrap();
 
     assert!(result.nodes.iter().any(|n| n.name == "getUserName"));
@@ -126,7 +126,7 @@ fn test_search_partial_substring_matches() {
         "function authenticateUser(): void {}",
     )]);
 
-    let result_json = search_by_keyword(graph_json, "auth".to_string(), None);
+    let result_json = graph_keyword_search(graph_json, "auth".to_string(), None);
     let result: SearchResult = serde_json::from_str(&result_json).unwrap();
 
     assert!(result.nodes.iter().any(|n| n.name == "authenticateUser"));
@@ -139,7 +139,7 @@ fn test_search_no_match_returns_empty() {
         "function alpha(): void {} function beta(): void {}",
     )]);
 
-    let result_json = search_by_keyword(graph_json, "zzz_no_such_thing".to_string(), None);
+    let result_json = graph_keyword_search(graph_json, "zzz_no_such_thing".to_string(), None);
     let result: SearchResult = serde_json::from_str(&result_json).unwrap();
 
     assert_eq!(result.count, 0);
@@ -153,7 +153,7 @@ fn test_search_node_types_restricts_scope() {
         "function Config(): void {} class Config {} interface Config {}",
     )]);
 
-    let result_json = search_by_keyword(
+    let result_json = graph_keyword_search(
         graph_json,
         "Config".to_string(),
         Some(vec!["class".to_string()]),
@@ -174,7 +174,7 @@ fn test_search_node_types_multiple() {
         "function Config(): void {} class ConfigStore {} interface ConfigShape {}",
     )]);
 
-    let result_json = search_by_keyword(
+    let result_json = graph_keyword_search(
         graph_json,
         "Config".to_string(),
         Some(vec!["class".to_string(), "interface".to_string()]),
@@ -197,8 +197,8 @@ fn test_search_empty_node_types_treated_as_unfiltered() {
         "function widget(): void {} class WidgetBox {}",
     )]);
 
-    let unfiltered = search_by_keyword(graph_json.clone(), "widget".to_string(), None);
-    let empty_filter = search_by_keyword(graph_json, "widget".to_string(), Some(vec![]));
+    let unfiltered = graph_keyword_search(graph_json.clone(), "widget".to_string(), None);
+    let empty_filter = graph_keyword_search(graph_json, "widget".to_string(), Some(vec![]));
 
     let r_unfiltered: SearchResult = serde_json::from_str(&unfiltered).unwrap();
     let r_empty: SearchResult = serde_json::from_str(&empty_filter).unwrap();
@@ -213,7 +213,7 @@ fn test_search_empty_keyword_returns_all_passing_type_filter() {
         "function a(): void {} function b(): void {} class C {}",
     )]);
 
-    let result_json = search_by_keyword(
+    let result_json = graph_keyword_search(
         graph_json,
         "".to_string(),
         Some(vec!["function".to_string()]),
@@ -229,14 +229,14 @@ fn test_search_empty_keyword_returns_all_passing_type_filter() {
 
 #[test]
 fn test_search_invalid_graph_json_returns_empty_object() {
-    let result = search_by_keyword("not json".to_string(), "anything".to_string(), None);
+    let result = graph_keyword_search("not json".to_string(), "anything".to_string(), None);
     assert_eq!(result, "{}");
 }
 
 #[test]
 fn test_search_matches_docstring() {
     let graph_json = synthetic_graph_json();
-    let result_json = search_by_keyword(graph_json, "configuration".to_string(), None);
+    let result_json = graph_keyword_search(graph_json, "configuration".to_string(), None);
     let result: SearchResult = serde_json::from_str(&result_json).unwrap();
 
     assert!(result.nodes.iter().any(|n| n.id == "function:loadConfig"));
@@ -245,7 +245,7 @@ fn test_search_matches_docstring() {
 #[test]
 fn test_search_unknown_node_type_filters_everything_out() {
     let graph_json = synthetic_graph_json();
-    let result_json = search_by_keyword(
+    let result_json = graph_keyword_search(
         graph_json,
         "Config".to_string(),
         Some(vec!["nonexistent_type".to_string()]),
@@ -258,7 +258,7 @@ fn test_search_unknown_node_type_filters_everything_out() {
 #[test]
 fn test_search_node_types_is_case_insensitive() {
     let graph_json = synthetic_graph_json();
-    let result_json = search_by_keyword(
+    let result_json = graph_keyword_search(
         graph_json,
         "Settings".to_string(),
         Some(vec!["INTERFACE".to_string()]),
@@ -271,7 +271,7 @@ fn test_search_node_types_is_case_insensitive() {
 #[test]
 fn test_search_file_node_by_path_substring() {
     let graph_json = synthetic_graph_json();
-    let result_json = search_by_keyword(
+    let result_json = graph_keyword_search(
         graph_json,
         "handler".to_string(),
         Some(vec!["file".to_string()]),

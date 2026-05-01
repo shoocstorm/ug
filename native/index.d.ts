@@ -4,11 +4,44 @@ export declare function buildGraph(indexJson: string): string
 
 export declare function calculateCentrality(graphJson: string): string
 
+/**
+ * Phase 4 entry point: end-to-end GraphRAG retrieval.
+ * `options_json` must include at least `{ "query": "..." }`.
+ */
+export declare function dbHybridSearch(dbPath: string, optionsJson: string, embedderOptions?: string | undefined | null): Promise<string>
+
+/**
+ * Ingest a JSON graph (the output of `buildGraph`) into a LanceDB
+ * instance at `db_path`. Returns ingest stats as JSON.
+ */
+export declare function dbIngest(graphJson: string, dbPath: string, embedderOptions?: string | undefined | null): Promise<string>
+
+/**
+ * Pure vector search. Useful when the caller already has a seed and
+ * just wants nearest neighbours.
+ */
+export declare function dbSemanticSearch(dbPath: string, query: string, k: number, whereClause?: string | undefined | null, embedderOptions?: string | undefined | null): Promise<string>
+
+/**
+ * DB-backed graph traversal with direction + edge-type filter.
+ * `direction` accepts: "outbound" (default), "inbound", "both".
+ */
+export declare function dbTraverse(dbPath: string, startNodeIds: Array<string>, hops: number, edgeTypes?: Array<string> | undefined | null, direction?: string | undefined | null): Promise<string>
+
 export declare function detectCycles(graphJson: string): string
 
 export declare function filterEdgesByType(graphJson: string, edgeTypes: Array<string>): string
 
 export declare function findShortestPath(graphJson: string, sourceId: string, targetId: string): string
+
+/**
+ * Keyword-based search over graph nodes. Matches `keyword` (case-insensitive
+ * substring) against each node's `name` and `docstring`. When `node_types`
+ * is provided and non-empty, only nodes whose `node_type` (lowercased) is in
+ * the list are considered. An empty `keyword` returns every node that passes
+ * the type filter.
+ */
+export declare function graphKeywordSearch(graphJson: string, keyword: string, nodeTypes?: Array<string> | undefined | null): string
 
 /**
  * Index every supported source file under `path`. Returns a JSON-encoded
@@ -27,10 +60,7 @@ export declare function indexWithCache(path: string, cachePath: string): string
 export declare function kHopBfs(graphJson: string, startNodeId: string, k: number): string
 
 /**
- * Keyword-based search over graph nodes. Matches `keyword` (case-insensitive
- * substring) against each node's `name` and `docstring`. When `node_types`
- * is provided and non-empty, only nodes whose `node_type` (lowercased) is in
- * the list are considered. An empty `keyword` returns every node that passes
- * the type filter.
+ * Probe the embedding endpoint. Returns `"ok"` on success, throws on
+ * failure with the upstream error message.
  */
-export declare function searchByKeyword(graphJson: string, keyword: string, nodeTypes?: Array<string> | undefined | null): string
+export declare function pingEmbedder(embedderOptions?: string | undefined | null): Promise<string>

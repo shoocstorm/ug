@@ -6,6 +6,44 @@ const { readFileSync, existsSync, writeFileSync, mkdirSync, copyFileSync } = req
 const binding = join(dirname(__dirname), 'native', 'ultragraph-kb.node');
 const ug = require(binding);
 
+function extractArg(args, shortFlag, longFlag, defaultValue) {
+  const shortIdx = args.indexOf(shortFlag);
+  const longIdx = args.indexOf(longFlag);
+  const idx = shortIdx >= 0 ? shortIdx : longIdx;
+  if (idx < 0 || idx + 1 >= args.length) return defaultValue;
+  const parsed = parseInt(args[idx + 1], 10);
+  return isNaN(parsed) ? defaultValue : parsed;
+}
+
+function extractFlag(args, flag) {
+  const idx = args.indexOf(flag);
+  if (idx < 0 || idx + 1 >= args.length) return null;
+  return args[idx + 1];
+}
+
+function extractMultiFlags(args, flag) {
+  const results = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === flag && i + 1 < args.length) {
+      results.push(args[i + 1]);
+      i++;
+    }
+  }
+  return results;
+}
+
+function parseEmbedderOptions(args) {
+  const baseUrl = extractFlag(args, '--base-url');
+  const apiKey = extractFlag(args, '--api-key');
+  const model = extractFlag(args, '--model');
+  if (!baseUrl && !apiKey && !model) return null;
+  const opts = {};
+  if (baseUrl) opts.baseUrl = baseUrl;
+  if (apiKey) opts.apiKey = apiKey;
+  if (model) opts.model = model;
+  return opts;
+}
+
 const commands = {
   index: {
     usage: '[<input dir>] [-i|--input <dir>] [--cache <cache-dir>] [--output <output-path>]',
@@ -115,7 +153,7 @@ const commands = {
     desc: 'Perform K-hop BFS traversal',
     run: (args) => {
       if (args.length < 3) {
-        throw new Error('Usage: bfs <graph-json-file> <start-node-id> <k>');
+        throw new Error(`Usage: bfs ${commands.bfs.usage}\n  ${commands.bfs.desc}`);
       }
       const [file, startNodeId, k] = args;
       const graphJson = readFileSync(file, 'utf-8');
@@ -123,12 +161,12 @@ const commands = {
       return JSON.parse(result);
     }
   },
-  search: {
+  'graph-search': {
     usage: '<graph-json-file> <keyword> [--type <node-type>]... [--output <output-path>]',
-    desc: 'Keyword search over graph nodes (case-insensitive substring on name and docstring). Repeat --type to restrict to specific node types (function, class, interface, file, ...).',
+    desc: 'Graph-based: Keyword search over in-memory graph nodes (case-insensitive substring on name/docstring).',
     run: (args) => {
       if (args.length < 2) {
-        throw new Error('Usage: search <graph-json-file> <keyword> [--type <node-type>]... [--output <output-path>]');
+        throw new Error(`Usage: graph-search ${commands['graph-search'].usage}\n  ${commands['graph-search'].desc}`);
       }
       const file = args[0];
       const keyword = args[1];
@@ -143,7 +181,7 @@ const commands = {
         }
       }
       const graphJson = readFileSync(file, 'utf-8');
-      const result = ug.searchByKeyword(graphJson, keyword, nodeTypes.length ? nodeTypes : null);
+      const result = ug.graphKeywordSearch(graphJson, keyword, nodeTypes.length ? nodeTypes : null);
       if (outputPath) {
         const outputDir = dirname(outputPath);
         if (!existsSync(outputDir)) mkdirSync(outputDir, { recursive: true });
@@ -151,6 +189,82 @@ const commands = {
         return `Wrote search result to ${outputPath}`;
       }
       return JSON.parse(result);
+    }
+  },
+  'db-ingest': {
+    usage: '<graph-json-file> <db-path> [--base-url <url>] [--api-key <key>] [--model <name>]',
+    desc: 'LanceDB: Embed graph nodes and write to LanceDB. Requires a running embedding endpoint.',
+    run: async (args) => {
+      if (args.length < 2) {
+        throw new Error(`Usage: db-ingest ${commands['db-ingest'].usage}\n  ${commands['db-ingest'].desc}`);
+      }
+      const graphFile = args[0];
+      const dbPath = args[1];
+      const embedderOptions = parseEmbedderOptions(args.slice(2));
+      const graphJson = readFileSync(graphFile, 'utf-8');
+      const result = await ug.dbIngest(graphJson, dbPath, embedderOptions ? JSON.stringify(embedderOptions) : null);
+      return JSON.parse(result);
+    }
+  },
+  'db-semantic-search': {
+    usage: '<db-path> <query> [-k <limit>] [--base-url <url>] [--api-key <key>] [--model <name>] [--filter <sql>]',
+    desc: 'LanceDB: Semantic vector search over embedded graph nodes.',
+    run: async (args) => {
+      if (args.length < 2) {
+        throw new Error(`Usage: db-semantic-search ${commands['db-semantic-search'].usage}\n  ${commands['db-semantic-search'].desc}`);
+      }
+      const dbPath = args[0];
+      const query = args[1];
+      const rest = args.slice(2);
+      const k = extractArg(rest, '-k', '--limit', 10);
+      const filter = extractFlag(rest, '--filter');
+      const embedderOptions = parseEmbedderOptions(rest);
+      const whereClause = filter || null;
+      const result = await ug.dbSemanticSearch(dbPath, query, k, whereClause, embedderOptions ? JSON.stringify(embedderOptions) : null);
+      return JSON.parse(result);
+    }
+  },
+  'db-traverse': {
+    usage: '<db-path> <start-node-id> [-k <hops>] [--edge-type <type>]... [--direction <outbound|inbound|both>]',
+    desc: 'LanceDB: K-hop BFS traversal using edges table with optional edge-type filtering.',
+    run: async (args) => {
+      if (args.length < 3) {
+        throw new Error(`Usage: db-traverse ${commands['db-traverse'].usage}\n  ${commands['db-traverse'].desc}`);
+      }
+      const dbPath = args[0];
+      const startNodeId = args[1];
+      const hops = extractArg(args.slice(2), '-k', '--hops', 2);
+      const edgeTypes = extractMultiFlags(args.slice(2), '--edge-type');
+      const direction = extractFlag(args.slice(2), '--direction') || 'outbound';
+      const result = await ug.dbTraverse(dbPath, [startNodeId], hops, edgeTypes.length ? edgeTypes : null, direction);
+      return JSON.parse(result);
+    }
+  },
+  'db-rag': {
+    usage: '<db-path> <query> [-k <limit>] [--base-url <url>] [--api-key <key>] [--model <name>]',
+    desc: 'LanceDB: End-to-end GraphRAG hybrid retrieval (vector + FTS + graph expansion).',
+    run: async (args) => {
+      if (args.length < 2) {
+        throw new Error(`Usage: db-rag ${commands['db-rag'].usage}\n  ${commands['db-rag'].desc}`);
+      }
+      const dbPath = args[0];
+      const query = args[1];
+      const rest = args.slice(2);
+      const k = extractArg(rest, '-k', '--limit', 10);
+      const embedderOptions = parseEmbedderOptions(rest);
+      const optionsJson = JSON.stringify({ query, k, maxHops: 2 });
+      const result = await ug.dbHybridSearch(dbPath, optionsJson, embedderOptions ? JSON.stringify(embedderOptions) : null);
+      return JSON.parse(result);
+    }
+  },
+
+  ping: {
+    usage: '[--base-url <url>] [--api-key <key>] [--model <name>]',
+    desc: 'Probe the embedding endpoint to verify connectivity.',
+    run: async (args) => {
+      const embedderOptions = parseEmbedderOptions(args);
+      const result = await ug.pingEmbedder(embedderOptions ? JSON.stringify(embedderOptions) : null);
+      return result;
     }
   },
   help: {
@@ -181,9 +295,19 @@ if (commands[cmd]) {
   try {
     const start = Date.now();
     const result = commands[cmd].run(args);
-    const elapsed = ((Date.now() - start) / 1000).toFixed(2);
-    console.log(JSON.stringify(result, null, 2));
-    console.log(`\n⏱ Done in ${elapsed}s`);
+    const handleResult = (res) => {
+      const elapsed = ((Date.now() - start) / 1000).toFixed(2);
+      console.log(JSON.stringify(res, null, 2));
+      console.log(`\nDone in ${elapsed}s`);
+    };
+    if (result && typeof result.then === 'function') {
+      result.then(handleResult).catch(e => {
+        console.error(`Error: ${e.message}`);
+        process.exit(1);
+      });
+    } else {
+      handleResult(result);
+    }
   } catch (e) {
     console.error(`Error: ${e.message}`);
     process.exit(1);

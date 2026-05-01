@@ -8,7 +8,7 @@ use ultragraph_kb::storage::{
 use ultragraph_kb::types::GraphData;
 use ultragraph_kb::{
     build_graph, calculate_centrality, detect_cycles, filter_edges_by_type, find_shortest_path,
-    index, index_with_cache, k_hop_bfs, search_by_keyword,
+    graph_keyword_search, index, index_with_cache, k_hop_bfs,
 };
 
 fn main() {
@@ -343,7 +343,7 @@ fn run_search(args: &[String]) {
 
     let graph_json = fs::read_to_string(&graph_file).expect("Failed to read graph");
     let types_opt = if node_types.is_empty() { None } else { Some(node_types) };
-    let result = search_by_keyword(graph_json, kw, types_opt);
+    let result = graph_keyword_search(graph_json, kw, types_opt);
 
     if let Some(path) = output_path {
         fs::write(&path, &result).expect("Failed to write output");

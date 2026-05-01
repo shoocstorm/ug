@@ -87,11 +87,42 @@ pub async fn ingest_graph(
     db.upsert_nodes(&node_rows).await?;
     db.upsert_edges(&edge_rows).await?;
 
+    // Best-effort: attempt to create vector + FTS indexes once we have
+    // enough rows for them to be useful. Both are no-ops on tiny tables
+    // (IvfPq needs a training minimum, FTS is happy at any size). Errors
+    // are swallowed because the table is queryable without indexes;
+    // logging them here would pollute test output.
+    let _ = maybe_create_indexes(db, node_rows.len()).await;
+
     Ok(IngestStats {
         nodes_written: node_rows.len(),
         edges_written: edge_rows.len(),
         embedding_calls: 1,
     })
+}
+
+/// Vector indexing is worthwhile once a table has more rows than this.
+/// Below it, scan latency is already low and IvfPq training tends to
+/// fail. The exact threshold is approximate; LanceDB picks the index
+/// type via `Index::Auto`, so the only thing we control is whether to
+/// even try.
+const MIN_ROWS_FOR_VECTOR_INDEX: usize = 256;
+
+async fn maybe_create_indexes(
+    db: &crate::storage::db::Db,
+    last_write: usize,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Use the latest row count; the table may already have rows from a
+    // previous ingest plus the rows we just wrote.
+    let total = db.count_nodes().await.unwrap_or(last_write);
+    if total >= MIN_ROWS_FOR_VECTOR_INDEX {
+        let _ = db.try_create_vector_index().await;
+    }
+    // FTS is cheap; create unconditionally on any non-empty table.
+    if total > 0 {
+        let _ = db.try_create_fts_index().await;
+    }
+    Ok(())
 }
 
 /// Re-embed and upsert only the subset of nodes whose `id` appears in

@@ -660,7 +660,7 @@ pub fn filter_edges_by_type(graph_json: String, edge_types: Vec<String>) -> Stri
 /// the list are considered. An empty `keyword` returns every node that passes
 /// the type filter.
 #[napi]
-pub fn search_by_keyword(
+pub fn graph_keyword_search(
     graph_json: String,
     keyword: String,
     node_types: Option<Vec<String>>,

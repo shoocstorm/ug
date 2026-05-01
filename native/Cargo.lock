@@ -3349,6 +3349,7 @@ dependencies = [
  "napi-sys",
  "nohash-hasher",
  "rustc-hash",
+ "tokio",
 ]
 
 [[package]]
@@ -5228,6 +5229,7 @@ dependencies = [
  "blake3",
  "futures",
  "ignore",
+ "lance-index",
  "lancedb",
  "napi",
  "napi-build 1.2.1",

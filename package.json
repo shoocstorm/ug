@@ -5,19 +5,29 @@
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
   "scripts": {
-    "build": "node src/cli.cjs gen",
-    "prebuild": "echo 'Execute pre-build to generate ultragraph-kb.node binary' && cd native && npm run build",
+    "build": "node src/cli.cjs index && node src/cli.cjs graph",
+    "prebuild": "echo 'Execute pre-build to generate ultragraph-kb.node binary' && cd native && npm run build:dev",
     "index": "node src/cli.cjs index",
     "graph": "node src/cli.cjs graph",
-    "gen": "node src/cli.cjs gen",
-    "start": "python3 -m http.server 8080 -d out",
+    "db-ingest": "node src/cli.cjs db-ingest",
+    "db-semantic-search": "node src/cli.cjs db-semantic-search",
+    "db-rag": "node src/cli.cjs db-rag",
+    "graph-search": "node src/cli.cjs graph-search",
+    "mcp": "node src/mcp/mcp-server.mjs",
+    "start": "npx serve out -p 8080",
     "test": "node src/test/test-runner.cjs"
   },
   "keywords": [
     "knowledge-base",
     "graph",
-    "indexer"
+    "indexer",
+    "mcp",
+    "graphrag"
   ],
   "author": "",
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "zod": "^3.23.8"
+  }
 }

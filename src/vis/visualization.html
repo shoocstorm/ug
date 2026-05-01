@@ -848,9 +848,9 @@
             border-radius: 12px;
             padding: 16px;
             box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.6);
-            min-width: 360px;
-            max-width: 460px;
-            max-height: 70vh;
+            min-width: 440px;
+            max-width: 600px;
+            max-height: 88vh;
             display: none;
             z-index: 30;
             overflow: hidden;
@@ -977,7 +977,7 @@
             display: flex;
             flex-direction: column;
             gap: 4px;
-            max-height: 280px;
+            max-height: 380px;
             overflow-y: auto;
         }
 
@@ -1017,6 +1017,133 @@
             color: var(--text-dim);
             font-size: 10px;
             flex-shrink: 0;
+        }
+
+        /* ─── Info-panel tabs & hierarchy ───────────────────── */
+
+        .info-tabs {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 10px;
+            padding: 3px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-soft);
+            border-radius: 8px;
+        }
+
+        .info-tab {
+            flex: 1;
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            font-size: 11px;
+            padding: 6px 8px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-family: inherit;
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+            transition: background 0.15s, color 0.15s;
+        }
+
+        .info-tab:hover { color: var(--text); }
+        .info-tab.active { background: var(--bg-hover); color: var(--accent); }
+
+        .info-view { display: none; }
+        .info-view.active { display: block; }
+
+        .hier-list {
+            max-height: 460px;
+            overflow: auto;
+            border: 1px solid var(--border-soft);
+            border-radius: 8px;
+            padding: 6px 4px;
+            background: rgba(255, 255, 255, 0.015);
+        }
+
+        .hier-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 5px 8px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 11px;
+            white-space: nowrap;
+            transition: background 0.15s;
+        }
+
+        .hier-row:hover { background: var(--bg-hover); }
+
+        .hier-row.selected {
+            background: rgba(34, 211, 238, 0.12);
+        }
+
+        .hier-row .dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            flex-shrink: 0;
+            box-shadow: 0 0 6px currentColor;
+        }
+
+        .hier-row .name {
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--text);
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .hier-row .kind {
+            color: var(--text-dim);
+            font-size: 10px;
+            flex-shrink: 0;
+        }
+
+        .hier-row.selected .kind { color: var(--accent); }
+
+        .hier-row.has-children .kind {
+            color: var(--accent);
+            font-weight: 600;
+        }
+
+        .hier-row.has-children .name {
+            color: var(--text);
+        }
+
+        .hier-row .lines {
+            color: var(--text-dim);
+            font-size: 10px;
+            font-family: 'JetBrains Mono', monospace;
+            flex-shrink: 0;
+        }
+
+        .hier-row .lines:empty { display: none; }
+
+        .hier-divider {
+            margin: 8px 4px 4px;
+            padding-top: 8px;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-dim);
+            border-top: 1px solid var(--border-soft);
+            font-weight: 600;
+        }
+
+        .hier-empty {
+            padding: 14px;
+            text-align: center;
+            color: var(--text-dim);
+            font-size: 12px;
+        }
+
+        .hier-empty code {
+            background: var(--bg-elevated);
+            padding: 1px 6px;
+            border-radius: 4px;
+            font-size: 11px;
         }
 
         /* ─── Loading & tooltip ─────────────────────────────── */
@@ -1082,6 +1209,15 @@
             letter-spacing: 0.5px;
             color: var(--accent);
         }
+
+        .tooltip-stats {
+            margin-top: 4px;
+            font-size: 10px;
+            color: var(--text-muted);
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .tooltip-stats:empty { display: none; }
     </style>
 </head>
 
@@ -1268,6 +1404,7 @@
         <div class="tooltip" id="tooltip">
             <div class="tooltip-title"></div>
             <div class="tooltip-type"></div>
+            <div class="tooltip-stats"></div>
         </div>
     </div>
 
@@ -1365,6 +1502,37 @@
                 .filter(e => e.source && e.target && nodeMap.has(e.source) && nodeMap.has(e.target));
 
             state.graph = { nodes: Array.from(nodeMap.values()), edges };
+            state.containsMaps = null;
+        }
+
+        function getContainsMaps() {
+            if (state.containsMaps) return state.containsMaps;
+            const childrenOf = new Map();
+            const parentOf = new Map();
+            state.graph.edges.forEach(e => {
+                if (e.rel !== 'Contains') return;
+                const sId = e.source.id || e.source;
+                const tId = e.target.id || e.target;
+                if (!childrenOf.has(sId)) childrenOf.set(sId, []);
+                childrenOf.get(sId).push(tId);
+                if (!parentOf.has(tId)) parentOf.set(tId, []);
+                parentOf.get(tId).push(sId);
+            });
+            state.containsMaps = { childrenOf, parentOf };
+            return state.containsMaps;
+        }
+
+        function getContainsCounts(nodeId) {
+            const { childrenOf, parentOf } = getContainsMaps();
+            const directChildren = (childrenOf.get(nodeId) || []).length;
+            const parents = parentOf.get(nodeId) || [];
+            const siblingSet = new Set();
+            parents.forEach(p => {
+                (childrenOf.get(p) || []).forEach(c => {
+                    if (c !== nodeId) siblingSet.add(c);
+                });
+            });
+            return { directChildren, siblings: siblingSet.size, parents: parents.length };
         }
 
         function initialize() {
@@ -1792,6 +1960,13 @@
             tooltip.querySelector('.tooltip-title').textContent = truncateName(d.name);
             tooltip.querySelector('.tooltip-type').textContent =
                 d.group + (d.startLine ? ` @L${d.startLine}` : '');
+
+            const { directChildren, siblings } = getContainsCounts(d.id);
+            const statParts = [];
+            if (directChildren) statParts.push(`↳ ${directChildren} child${directChildren === 1 ? '' : 'ren'}`);
+            if (siblings) statParts.push(`• ${siblings} sibling${siblings === 1 ? '' : 's'}`);
+            tooltip.querySelector('.tooltip-stats').textContent = statParts.join('  ·  ');
+
             tooltip.style.left = (event.pageX + 15) + 'px';
             tooltip.style.top = (event.pageY + 15) + 'px';
             tooltip.classList.add('visible');
@@ -1838,8 +2013,15 @@
             if (d.extends && d.extends.length) html += `<div class="info-row"><span class="info-label">Extends</span><span class="info-value">${escapeHtml(d.extends.join(', '))}</span></div>`;
             if (d.implements && d.implements.length) html += `<div class="info-row"><span class="info-label">Implements</span><span class="info-value">${escapeHtml(d.implements.join(', '))}</span></div>`;
 
+            const activeTab = state.infoTab || 'related';
+            html += `<div class="related-section">
+                <div class="info-tabs">
+                    <button class="info-tab${activeTab === 'related' ? ' active' : ''}" data-view="related">Related${related.length ? ' (' + related.length + ')' : ''}</button>
+                    <button class="info-tab${activeTab === 'hierarchy' ? ' active' : ''}" data-view="hierarchy">Hierarchy</button>
+                </div>
+                <div class="info-view${activeTab === 'related' ? ' active' : ''}" data-view="related">`;
             if (related.length > 0) {
-                html += `<div class="related-section"><h4>Related (${related.length})</h4><div class="related-list">`;
+                html += `<div class="related-list">`;
                 related.forEach(({ node, rel, dir }) => {
                     const c = config.getColor(node.group);
                     const arrow = dir === 'out' ? '→' : '←';
@@ -1849,14 +2031,34 @@
                         <span class="rel">${arrow} ${rel || ''}</span>
                     </div>`;
                 });
-                html += `</div></div>`;
+                html += `</div>`;
+            } else {
+                html += `<div class="hier-empty">No related nodes.</div>`;
             }
+            html += `</div>
+                <div class="info-view${activeTab === 'hierarchy' ? ' active' : ''}" data-view="hierarchy">
+                    <div class="hier-list" id="hier-content"></div>
+                </div>
+            </div>`;
 
             body.innerHTML = html;
             body.querySelectorAll('.related-item').forEach(item => {
                 item.addEventListener('click', () => {
                     const t = state.graph.nodes.find(n => n.id === item.dataset.id);
                     if (t) { handleClick(null, t); focusNode(t); }
+                });
+            });
+
+            const hierContainer = body.querySelector('#hier-content');
+            if (hierContainer) renderHierarchyView(d, hierContainer);
+
+            body.querySelectorAll('.info-tab').forEach(tab => {
+                tab.addEventListener('click', () => {
+                    body.querySelectorAll('.info-tab').forEach(t => t.classList.remove('active'));
+                    body.querySelectorAll('.info-view').forEach(v => v.classList.remove('active'));
+                    tab.classList.add('active');
+                    body.querySelector('.info-view[data-view="' + tab.dataset.view + '"]').classList.add('active');
+                    state.infoTab = tab.dataset.view;
                 });
             });
 
@@ -1875,8 +2077,8 @@
             const rect = document.getElementById('container').getBoundingClientRect();
             let left = (d.x || width / 2) + 30;
             let top = (d.y || height / 2) - 100;
-            if (left + 360 > rect.width) left = (d.x || width / 2) - 380;
-            if (top + 400 > rect.height) top = rect.height - 420;
+            if (left + 480 > rect.width) left = (d.x || width / 2) - 500;
+            if (top + 540 > rect.height) top = rect.height - 560;
             if (top < 20) top = 20;
             if (left < 340) left = 340;
             info.style.left = left + 'px';
@@ -1888,6 +2090,123 @@
             }
             state.selectedNode = d;
             node.filter(n => n.id === d.id).classed('selected', true);
+        }
+
+        function renderHierarchyView(selected, container) {
+            const { childrenOf, parentOf } = getContainsMaps();
+            const nodeById = id => state.graph.nodes.find(n => n.id === id);
+
+            const ancestors = [];
+            const upVisited = new Set([selected.id]);
+            let cur = selected.id;
+            for (let i = 0; i < 10; i++) {
+                const parents = parentOf.get(cur) || [];
+                const p = parents.find(x => !upVisited.has(x));
+                if (!p) break;
+                ancestors.unshift(p);
+                upVisited.add(p);
+                cur = p;
+            }
+
+            const immediateParent = ancestors.length ? ancestors[ancestors.length - 1] : null;
+            const siblingIds = immediateParent
+                ? (childrenOf.get(immediateParent) || []).filter(id => id !== selected.id)
+                : [];
+            const directChildren = childrenOf.get(selected.id) || [];
+
+            if (!ancestors.length && !siblingIds.length && !directChildren.length) {
+                container.innerHTML = '<div class="hier-empty">No <code>Contains</code> hierarchy for this node.</div>';
+                return;
+            }
+
+            const renderRow = (n, depth, kind) => {
+                if (!n) return '';
+                const c = config.getColor(n.group);
+                const indent = depth * 12;
+                const childCount = (childrenOf.get(n.id) || []).length;
+                let sym;
+                if (kind === 'selected') sym = '◆';
+                else if (kind === 'ancestor') sym = '↑';
+                else if (kind === 'sibling') sym = childCount ? `▸ ${childCount}` : '•';
+                else sym = '↳';
+                let klass = 'hier-row' + (kind === 'selected' ? ' selected' : '');
+                if (kind === 'sibling' && childCount) klass += ' has-children';
+                let lineLabel = '';
+                if (n.startLine != null) {
+                    lineLabel = 'L' + n.startLine;
+                    if (n.endLine != null && n.endLine !== n.startLine) {
+                        lineLabel += '–' + n.endLine;
+                    }
+                }
+                return `<div class="${klass}" data-id="${escapeHtml(n.id)}" style="padding-left:${indent + 8}px" title="${escapeHtml(n.id)}">
+                    <span class="dot" style="background:${c}"></span>
+                    <span class="name">${escapeHtml(truncateName(n.name))}</span>
+                    <span class="lines">${lineLabel}</span>
+                    <span class="kind">${sym}</span>
+                </div>`;
+            };
+
+            let html = '';
+            ancestors.forEach((aid, i) => {
+                html += renderRow(nodeById(aid), i, 'ancestor');
+            });
+
+            const selectedDepth = ancestors.length;
+
+            const dVisited = new Set(upVisited);
+            dVisited.add(selected.id);
+            siblingIds.forEach(id => dVisited.add(id));
+
+            function dfs(id, depth) {
+                if (depth - selectedDepth > 10) return '';
+                const kids = childrenOf.get(id) || [];
+                let h = '';
+                for (const k of kids) {
+                    if (dVisited.has(k)) continue;
+                    dVisited.add(k);
+                    const kn = nodeById(k);
+                    if (!kn) continue;
+                    h += renderRow(kn, depth, 'child');
+                    h += dfs(k, depth + 1);
+                }
+                return h;
+            }
+
+            // Merge siblings + selected at the same depth. Prefer startLine order
+            // (natural code order under a File/Class parent); fall back to name
+            // for nodes without a line number.
+            const peers = immediateParent
+                ? (childrenOf.get(immediateParent) || [])
+                    .map(id => nodeById(id))
+                    .filter(Boolean)
+                    .sort((a, b) => {
+                        const al = a.startLine, bl = b.startLine;
+                        if (al != null && bl != null) return al - bl;
+                        if (al != null) return -1;
+                        if (bl != null) return 1;
+                        return String(a.name || '').localeCompare(String(b.name || ''));
+                    })
+                : [selected];
+
+            peers.forEach(n => {
+                if (n.id === selected.id) {
+                    html += renderRow(selected, selectedDepth, 'selected');
+                    html += dfs(selected.id, selectedDepth + 1);
+                } else {
+                    html += renderRow(n, selectedDepth, 'sibling');
+                }
+            });
+
+            container.innerHTML = html;
+            container.querySelectorAll('.hier-row').forEach(row => {
+                row.addEventListener('click', () => {
+                    const t = nodeById(row.dataset.id);
+                    if (t) { handleClick(null, t); focusNode(t); }
+                });
+            });
+
+            const selectedRow = container.querySelector('.hier-row.selected');
+            if (selectedRow) selectedRow.scrollIntoView({ block: 'center' });
         }
 
         function clearSelection() {

@@ -347,6 +347,52 @@ pub async fn edges_from(db: &Db, node_id: &str) -> Result<Vec<EdgeRow>, DbError>
     Ok(decode_edge_batches(&batches))
 }
 
+/// Mirror of [`edges_from`] for the inbound direction. Required for any
+/// "who calls/imports this?" expansion - the most useful kind of context
+/// for a code agent.
+pub async fn edges_to(db: &Db, node_id: &str) -> Result<Vec<EdgeRow>, DbError> {
+    let escaped = node_id.replace('\'', "''");
+    let predicate = format!("target = '{}'", escaped);
+    let stream = db
+        .edges
+        .query()
+        .only_if(predicate)
+        .execute()
+        .await?;
+    let batches: Vec<RecordBatch> = stream.try_collect().await?;
+    Ok(decode_edge_batches(&batches))
+}
+
+/// Full-text search over the indexed string columns (`name`, `description`).
+/// Returns rows ranked by FTS score. LanceDB exposes the score via the
+/// `_score` column when the `phrase_query` API is used.
+///
+/// If FTS indexes haven't been created yet, LanceDB will fall back to a
+/// linear scan; the call still succeeds, just slower.
+pub async fn fts_search(
+    db: &Db,
+    query: &str,
+    limit: usize,
+    where_clause: Option<&str>,
+) -> Result<Vec<NodeRow>, DbError> {
+    use lance_index::scalar::FullTextSearchQuery;
+    use lancedb::query::QueryBase;
+    let mut q = db
+        .nodes
+        .query()
+        .full_text_search(FullTextSearchQuery::new(query.to_string()))
+        .limit(limit);
+    if let Some(filter) = where_clause {
+        q = q.only_if(filter);
+    }
+    let stream = q.execute().await?;
+    let batches: Vec<RecordBatch> = stream.try_collect().await?;
+    Ok(decode_node_batches_with_distance(&batches)
+        .into_iter()
+        .map(|(r, _)| r)
+        .collect())
+}
+
 pub async fn nodes_by_ids(db: &Db, ids: &[String]) -> Result<Vec<NodeRow>, DbError> {
     if ids.is_empty() {
         return Ok(Vec::new());

@@ -4,41 +4,31 @@ Interactive force-directed graph visualization built with D3.js v7.
 
 ## Quick Start
 
-### Python HTTP Server (Recommended)
-
-```bash
-# From the output directory
-cd out
-python3 -m http.server 8080
-```
-
-Then open: http://localhost:8080/index.html
-
-### Node.js HTTP Server
-
-```bash
-# Install serve globally or locally
-npm install -g serve
-
-# From the output directory
-cd out
-serve -p 8080
-```
-
-Then open: http://localhost:8080
-
-### Using npx (No Install)
+### Using npx (No Install Required)
 
 ```bash
 npx serve out -p 8080
 ```
 
-### PHP Built-in Server
+Then open: http://localhost:8080
+
+### Using npm start
 
 ```bash
-cd out
-php -S localhost:8080
+npm start
 ```
+
+Runs `npx serve out -p 8080` — open http://localhost:8080.
+
+### Node.js HTTP Server (Global)
+
+```bash
+# Install serve globally or locally
+npm install -g serve
+serve out -p 8080
+```
+
+Then open: http://localhost:8080
 
 ## Features
 
@@ -65,7 +55,9 @@ php -S localhost:8080
 ## Troubleshooting
 
 ### CORS Error
-If loading local files fails, ensure you're using an HTTP server (not opening file:// directly).
+
+If loading local files fails, ensure you're using an HTTP server (not opening `file://` directly).
 
 ### Large Graphs
+
 For graphs with many nodes, the simulation may take time to stabilize. Wait a few seconds for layout to settle.

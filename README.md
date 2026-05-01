@@ -4,10 +4,93 @@ A high-performance, local-first knowledge base generator that transforms codebas
 
 ## Overview
 
-UltraGraph-KB implements **Phase 1** and **Phase 2** of the UltraGraph knowledge base system:
+UltraGraph-KB implements all four phases of the UltraGraph knowledge base system:
 
-- **Phase 1**: Native turbo indexer - saturates CPU cores to map codebases in milliseconds
+- **Phase 1**: Native turbo indexer — saturates CPU cores to map codebases in milliseconds
 - **Phase 2**: In-memory graph persistence with K-hop BFS traversal
+- **Phase 3**: Semantic storage & enrichment (LanceDB + local embeddings)
+- **Phase 4**: GraphRAG retrieval protocol with MCP server
+
+## Core Flow
+
+```
+                    ┌──────────────┐
+                    │   Source     │
+                    │   Codebase   │
+                    │  (Dir Path)  │
+                    └──────┬───────┘
+                           │
+                           ▼
+              ┌─────────────────────────┐
+              │   Phase 1: Indexing     │
+              │  ────────────────────   │
+              │  • File discovery       │
+              │    (.gitignore aware)   │
+              │  • tree-sitter AST      │
+              │  • Symbol extraction    │
+              │  • Incremental (blake3) │
+              │  • Languages: TS/JS/    │
+              │    Py/Java/MD           │
+              └──────────┬──────────────┘
+                         │
+                         │ IndexResult (JSON)
+                         │
+                         ▼
+              ┌─────────────────────────┐
+              │   Phase 2: Graphing     │
+              │  ────────────────────   │
+              │  Nodes: File/Function/  │
+              │    Class/Interface/     │
+              │    Concept/Dependency   │
+              │  Edges: Contains/       │
+              │    Imports/Calls/       │
+              │    Extends/References   │
+              │  Algos: BFS/Cycle/      │
+              │    Centrality/Paths     │
+              └────┬────────────┬───────┘
+                   │            │
+    GraphData      │            │ GraphData
+    (JSON)         │            │
+                   ▼            ▼
+         ┌────────────┐  ┌──────────────────┐
+         │            │  │ Phase 3: RAG     │
+         │  VISUALIZE │  │ Storage          │
+         │            │  │ ──────────────── │
+         │  D3.js     │  │ • LanceDB tables │
+         │ Interactive│  │ • Embeddings     │
+         │  Force-    │  │   (1024-dim)     │
+         │  directed  │  │ • Nodes + Edges  │
+         │  graph     │  │   ingestion      │
+         │            │  └────────-┬────────┘
+         └────────────┘            │
+                                   │ stored vectors
+                                   ▼
+                          ┌──────────────────┐
+                          │ Phase 4: GraphRAG│
+                          │ ──────────────── │
+                          │ Hybrid Search:   │
+                          │ • Vector-semantic│
+                          │ • FTS-keyword    │
+                          │ • RRF fusion     │
+                          │ • MMR reranking  │
+                          │ • K-hop expansion│
+                          └────────┬─────────┘
+                                   │
+                                   ▼
+                          ┌──────────────────┐
+                          │   AI Agent via   │
+                          │   MCP Server     │
+                          │ ──────────────── │
+                          │ Tools:           │
+                          │ • search_kb      │
+                          │ • traverse_kb    │
+                          │ • ping_embedder  │
+                          └──────────────────┘
+```
+
+**Data Flow:**
+- `Input → [Index] → [Graph] → [Visualize]`
+- `Input → [Index] → [Graph] → [RAG Store] → [Hybrid Search] → [AI Agent/MCP]`
 
 ### Features
 
@@ -18,17 +101,62 @@ UltraGraph-KB implements **Phase 1** and **Phase 2** of the UltraGraph knowledge
 | Incremental indexing (blake3) | ✅ |
 | TypeScript AST parsing | ✅ |
 | Python AST parsing | ✅ |
-| Markdown parsing | ⚠️ (version conflict) |
+| Markdown parsing | ✅ |
 | NAPI-RS bridge | ✅ |
 | Graph schema (Nodes/Edges) | ✅ |
 | K-hop BFS traversal | ✅ |
+| Graph analysis (centrality, cycles, shortest path) | ✅ |
+| Vector search (LanceDB) | ✅ |
+| Hybrid search (RRF: vector + FTS) | ✅ |
+| MMR reranking | ✅ |
+| GraphRAG retrieval (search → expand → rank → snippet) | ✅ |
+| MCP server | ✅ |
 | CLI commands | ✅ |
+| D3.js visualization | ✅ |
 
 ## Tech Stack
 
-- **Core Engine (Rust)**: File walking (`ignore` crate), AST Parsing (`tree-sitter`), Incremental Hashing (`blake3`), Graph (`petgraph`)
-- **Bridge (NAPI-RS)**: Compiles Rust logic into a native `.node` module for TypeScript
-- **Interface (TypeScript)**: Node.js 20+, Zod for schema validation
+- **Core Engine (Rust)**: File walking (`ignore`), AST Parsing (`tree-sitter`), Incremental Hashing (`blake3`), Graph (`petgraph`)
+- **Bridge (NAPI-RS)**: Compiles Rust logic into a native `.node` module for Node.js
+- **Storage**: LanceDB (vector + FTS), local OpenAI-compatible embedding endpoint
+- **MCP**: `@modelcontextprotocol/sdk` stdio server with `zod` validation
+- **CLI**: Node.js 20+ with native bindings
+
+## Using Native APIs in External Node.js Apps
+
+If you want to use the high-performance Rust-native APIs (exposed via `ultragraph-kb.node`) directly in your own Node.js application, you need to include the following files from this repository:
+
+### Required Files
+| File | Purpose |
+|------|---------|
+| `native/index.js` | Auto-generated NAPI-RS loader that detects your OS, architecture, and libc version to load the correct native binary. This is the entry point your app should require. |
+| `native/ultragraph-kb.<platform>-<arch>.node` | Platform-specific pre-compiled native binary. Include at minimum the binary matching your target deployment environment (e.g., `ultragraph-kb.darwin-arm64.node` for macOS Apple Silicon). For cross-platform support, include all pre-built binaries for supported platforms. |
+
+### Usage
+Require the loader in your Node.js app (adjust the path to match your project structure):
+```javascript
+const { 
+  index, 
+  buildGraph, 
+  dbHybridSearch, 
+  kHopBfs 
+} = require('./path/to/native/index.js');
+```
+
+### Exposed Native APIs
+The native module exports the following functions (see `native/index.js:579-591` for the full list):
+- `index` / `indexWithCache` — Codebase indexing with incremental caching
+- `buildGraph` — Build in-memory knowledge graph from index results
+- `kHopBfs` — K-hop breadth-first graph traversal
+- `findShortestPath` — Find shortest path between graph nodes
+- `calculateCentrality` / `detectCycles` — Graph analysis utilities
+- `filterEdgesByType` — Filter graph edges by type
+- `graphKeywordSearch` — Graph-based: Keyword search over in-memory graph nodes
+- `dbIngest` — LanceDB: Embed graph and write to LanceDB
+- `dbHybridSearch` — LanceDB: End-to-end GraphRAG hybrid retrieval (vector + FTS + graph expansion)
+- `dbSemanticSearch` — LanceDB: Pure vector search over embedded graph nodes
+- `dbTraverse` — LanceDB: Graph traversal using edges table with edge-type filtering
+- `pingEmbedder` — Probe embedding endpoint availability
 
 ## Installation
 
@@ -36,294 +164,107 @@ UltraGraph-KB implements **Phase 1** and **Phase 2** of the UltraGraph knowledge
 
 - Rust (latest stable)
 - Node.js 20+
-- macOS (aarch64-apple-darwin)
+- `protoc` (`brew install protobuf` on macOS)
 
 ### Build from Source
 
 ```bash
-cd native
-rm -f Cargo.lock
-napi build --release
+npm run prebuild
 ```
 
-This produces `native/ultragraph-kb.node` - a native Node.js module.
+This produces `native/ultragraph-kb.node` — the native Node.js module.
 
-## Usage
+## Quick Start
 
-### CLI
+See [docs/QUICKSTART.md](docs/QUICKSTART.md) for a step-by-step walkthrough.
 
 ```bash
-# Show help
-node src/cli.cjs help
+# 1. Index a codebase
+npm run index -- ./src -o out/indexed-tree.json
 
-# Index a directory
-node src/cli.cjs index ./src
+# 2. Build the graph
+npm run graph -- out/indexed-tree.json -o out/graph.json
 
-# Index with cache
-node src/cli.cjs index ./src --cache ./cache
-
-# Build graph from index result
-node src/cli.cjs graph index.json > graph.json
-
-# K-hop BFS traversal
-node src/cli.cjs search graph.json "file:./src/index.ts" 2
-```
-
-### TypeScript API
-
-```typescript
-import { index, indexWithCache, buildGraph, kHopBfs } from './src/index.ts';
-
-// Basic indexing
-const result = await index('./path/to/project');
-console.log(result.stats);
-// { totalFiles: 5, cachedFiles: 0, totalSymbols: 42, indexingTimeMs: 3 }
-
-// With incremental caching
-const cached = await indexWithCache('./path/to/project', './cache');
-// First run: { totalFiles: 5, cachedFiles: 0, totalSymbols: 42, indexingTimeMs: 3 }
-// Second run: { totalFiles: 0, cachedFiles: 5, totalSymbols: 0, indexingTimeMs: 1 }
-
-// Build graph from index result
-const graph = buildGraph(result);
-
-// K-hop BFS from a node
-const bfs = kHopBfs(graph, "file:./src/index.ts", 2);
-console.log(bfs.nodes);     // Nodes within 2 hops
-console.log(bfs.edges);     // Edges connecting them
-console.log(bfs.distances); // Distance map from start node
-```
-
-## Output Format
-
-### Index Result
-
-```typescript
-interface Symbol {
-  id: string;           // "fn:7:hello"
-  name: string;        // "hello"
-  kind: string;        // "function_declaration", "class", "method_definition", "interface"
-  file: string;       // "/path/to/file.ts"
-  startLine: number;   // 7
-  endLine: number;    // 10
-  docstring: string | null;
-}
-
-interface FileNode {
-  path: string;
-  hash: string;       // blake3 hash for incremental indexing
-  language: string;   // "typescript", "python"
-  symbols: Symbol[];
-}
-
-interface IndexResult {
-  files: FileNode[];
-  stats: IndexStats;
-}
-
-interface IndexStats {
-  totalFiles: number;
-  cachedFiles: number;
-  totalSymbols: number;
-  indexingTimeMs: number;
-}
-```
-
-### Graph Data
-
-```typescript
-type GraphNodeType = "File" | "Function" | "Class" | "Interface" | "Concept";
-type GraphEdgeType = "DependsOn" | "Calls" | "Extends" | "References" | "Contains";
-
-interface GraphNode {
-  id: string;
-  name: string;
-  node_type: GraphNodeType;
-  file: string | null;
-  startLine: number | null;
-  endLine: number | null;
-}
-
-interface GraphEdge {
-  source: string;
-  target: string;
-  edge_type: GraphEdgeType;
-}
-
-interface GraphData {
-  nodes: GraphNode[];
-  edges: GraphEdge[];
-}
-
-interface BfsResult {
-  nodes: GraphNode[];
-  edges: GraphEdge[];
-  distances: Record<string, number>;
-}
-```
-### Graph Visualization
-```bash
-cd src
-npm run build -- ~/Documents/project/aldrickbot/src 
-
+# 3. Visualize (or use all-in-one: npm run gen -- ./src -o out/)
 npm start
+# Open http://localhost:8080
 
-open http://localhost:8080
+# 4. Semantic search (requires embedding endpoint)
+npm run ingest -- out/graph.json out/kg_db
+npm run rag -- out/kg_db "how does auth work" -k 8
+
+# 5. Manually check lance db data (via duckdb)
+duckdb
+INSTALL lance
+load lance;
+ATTACH 'native/out/kg_db' as db (type LANCE);
+select * from db.main.nodes limit 10;
 ```
 
 
-## Examples
+## All CLI Commands
 
-### Example 1: Index and Query a TypeScript Project
+Use `npm run <command> -- [args]` for all commands:
+
+| npm script | Description |
+|-----------|-------------|
+| `npm run index -- <dir> -o <out>` | Index a directory |
+| `npm run graph -- <index.json> -o <out>` | Build graph from index result |
+| `npm run gen -- <dir> -o <out>` | Index + graph + visualization (all-in-one) |
+| `npm run ingest -- <graph.json> <db_path>` | Embed graph into LanceDB |
+| `npm run search -- <db> <query>` | Semantic vector search over LanceDB |
+| `npm run rag -- <db> <query> -k <num>` | End-to-end GraphRAG retrieval |
+| `npm start` | Serve visualization at http://localhost:8080 |
+| `npm run mcp` | Start MCP server (requires `UG_DB_PATH`) |
+
+Direct CLI commands (via `node src/cli.cjs <cmd>`):
+- `bfs` - K-hop BFS traversal (in-memory graph)
+- `search` - Keyword search over graph nodes
+- `traverse` - K-hop BFS over LanceDB edges (with edge-type filter)
+- `ping` - Probe embedding endpoint
+- `help` - Show help
+
+## MCP Server
 
 ```bash
-# Step 1: Index the project
-node src/cli.cjs index ./src
-
-# Step 2: Build the graph
-node src/cli.cjs graph
-
-# Step 3: Query 2-hop neighbors from loadBinding function
-node src/cli.cjs search ./out/graph.json "function_declaration:getBinding" 3
+# Configure via environment, then run:
+UG_DB_PATH=./out/kg_db npm run mcp
 ```
 
-Output:
-```json
-{
-  "nodes": [
-    {"id": "file:./src/index.ts", "name": "./src/index.ts", "node_type": "File", ...},
-    {"id": "function_declaration:getBinding", "name": "getBinding", "node_type": "Function", ...},
-    ...
-  ],
-  "edges": [
-    {"source": "file:./src/index.ts", "target": "function_declaration:getBinding", "edge_type": "Contains"},
-    ...
-  ],
-  "distances": {
-    "file:./src/index.ts": 0,
-    "function_declaration:getBinding": 1
-  }
-}
-```
-
-### Example 2: Incremental Indexing with Cache
-
-```typescript
-// First run indexes all files
-const result1 = await indexWithCache('./project', './.cache');
-// { totalFiles: 10, cachedFiles: 0, totalSymbols: 150, indexingTimeMs: 15 }
-
-// Second run uses cache (no changes detected)
-const result2 = await indexWithCache('./project', './.cache');
-// { totalFiles: 0, cachedFiles: 10, totalSymbols: 0, indexingTimeMs: 2 }
-
-// Modify a file, then third run re-indexes changed files only
-const result3 = await indexWithCache('./project', './.cache');
-// { totalFiles: 1, cachedFiles: 9, totalSymbols: 15, indexingTimeMs: 3 }
-```
+Exposes three tools: `search_kb`, `traverse_kb`, `ping_embedder`.
 
 ## Tests
 
-Run the test suite:
-
 ```bash
-node src/test/test-runner.cjs
+npm test                      # JS tests (21/21)
+npm run prebuild && cd native && cargo test  # Rust tests (67 pass)
 ```
-
-**Current results:**
-```
-=== Phase 1 Indexer Tests ===
-
-Test 1: Empty directory
-✓ PASS
-
-Test 2: TypeScript indexing
-✓ PASS: Found function, class, method, interface
-
-Test 3: Python indexing
-✓ PASS: Found function, class, and method
-
-Test 4: Incremental caching
-✓ PASS: First run indexed, second run cached
-
-Test 5: Ignore node_modules and .git
-✓ PASS: node_modules and .git ignored
-
-Test 6: Markdown indexing (SKIPPED - tree-sitter version conflict)
-
-=== Phase 2 Graph Tests ===
-
-Test 7: Build graph from index result
-✓ PASS: Created 4 nodes, 3 edges
-
-Test 8: K-hop BFS from file node
-✓ PASS: BFS found 3 nodes within 1 hop
-
-Test 9: K-hop BFS from symbol node
-✓ PASS: Start node distance is 0
-
-Test 10: Invalid start node returns empty
-✓ PASS: Empty result for invalid start node
-
-Test 11: K parameter limits BFS depth
-✓ PASS: K parameter affects result (k=0: 1, k=1: 3)
-
-=== Results: 11/11 passed ===
-```
-
-## Performance
-
-For a typical project:
-
-| Metric | Target | Actual |
-|--------|--------|--------|
-| 1,000 files | < 5 seconds | ~3-15ms |
-| Query latency | < 100ms | ~1-5ms |
-| Memory | < 500MB | ~50MB |
-
-*Note: Actual performance depends on codebase size and complexity.*
 
 ## Project Structure
 
 ```
-kb-gen/
+ug/
 ├── native/
-│   ├── Cargo.toml          # Rust dependencies
-│   ├── build.rs           # NAPI build script
-│   └── src/
-│       ├── lib.rs         # Module entry point
-│       ├── types.rs       # Shared data structures
-│       ├── indexer.rs     # File scanning and AST parsing
-│       └── graph.rs       # Graph building and BFS traversal
-│   └── ultragraph-kb.node # Built native module
+│   ├── src/
+│   │   ├── lib.rs            # NAPI-RS entry point
+│   │   ├── main.rs           # Rust CLI binary (ug)
+│   │   ├── indexer.rs        # File scanning + AST parsing
+│   │   ├── graph.rs          # Graph building + BFS + analysis
+│   │   ├── types.rs          # Shared data structures
+│   │   └── storage/          # LanceDB + embedding + GraphRAG
+│   │       ├── db.rs         # LanceDB schemas + queries
+│   │       ├── embed.rs      # Embedding HTTP client
+│   │       ├── ingest.rs     # Embed + upsert pipeline
+│   │       ├── query.rs      # search, traverse, RRF, MMR
+│   │       ├── napi_bindings.rs  # NAPI async fns
+│   │       └── text.rs       # Embedding text shaping
+│   └── ultragraph-kb.node    # Built native module
 ├── src/
-│   ├── index.ts           # TypeScript wrapper
-│   ├── cli.cjs           # CLI entry point
-│   ├── test/test-runner.cjs   # Test suite
-│   └── test-indexer.test.ts
-└── package.json
+│   ├── cli.cjs               # JavaScript CLI
+│   ├── vis/                  # D3.js visualization
+│   ├── mcp/
+│   │   └── mcp-server.mjs        # MCP stdio server
+│   └── test/
+│       └── test-runner.cjs   # Test suite (21 tests)
+└── docs/                     # Design docs + quick start
 ```
-
-## Known Limitations
-
-### Markdown Support
-
-Markdown parsing is currently skipped due to tree-sitter version conflicts:
-
-| Crate | tree-sitter Version |
-|-------|-------------------|
-| tree-sitter-typescript | 0.20 |
-| tree-sitter-python | 0.20 |
-| tree-sitter-markdown | 0.19 (conflicts) |
-| napi-rs v3 | 0.22 (conflicts) |
-
-The tree-sitter ecosystem has complex version dependencies. Markdown support will be added once a compatible grammar crate is available.
-
-## Next Steps (Phase 3-4)
-
-1. **Phase 3**: Semantic Enrichment (LanceDB, Ollama)
-2. **Phase 4**: GraphRAG Retrieval (MCP Server)
-
-## License
-
-MIT

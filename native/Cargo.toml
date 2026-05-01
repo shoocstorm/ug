@@ -16,7 +16,7 @@ path = "src/main.rs"
 tempfile = "3"
 
 [dependencies]
-napi = { version = "3", features = ["napi6"] }
+napi = { version = "3", features = ["napi6", "tokio_rt"] }
 napi-build = "1"
 napi-derive = "3"
 rayon = "1.10"
@@ -32,6 +32,7 @@ tree-sitter-md = "0.1"
 petgraph = "0.6"
 regex = "1"
 lancedb = "0.27.2"
+lance-index = "4.0.0"
 arrow = "57.3"
 arrow-array = "57.3"
 arrow-schema = "57.3"
@@ -43,6 +44,13 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 napi-build = "1"
 
 [profile.release]
-lto = true
-codegen-units = 1
+lto = "thin"
+codegen-units = 16
 panic = "abort"
+
+[profile.dev-fast]
+inherits = "release"
+lto = false
+codegen-units = 256
+opt-level = 1
+debug = false

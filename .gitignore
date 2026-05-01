@@ -1,5 +1,6 @@
 native/target
 native/ultragraph-kb.node
+native/ultragraph-kb.darwin-arm64.node
 native/out
 src/.cache
 src/out1
@@ -11,3 +12,4 @@ src/out
 out
 out/*
 .gitnexus
+node_modules

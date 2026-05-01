@@ -5,15 +5,13 @@ High-performance knowledge base indexer built with Rust, tree-sitter, and NAPI-R
 ## Quick Start
 
 ```bash
-# Build the project
-cd native
-cargo build --release
+# Build
+cd native && cargo build --release
 
-# Run CLI
-alias ug=./target/release/ug
+# CLI
 ./target/release/ug --help
 
-# Run tests
+# Tests
 cargo test
 ```
 
@@ -24,151 +22,129 @@ cargo test
 Index a directory and output JSON.
 
 ```bash
-ug index -i ../src          # Index src folder
-ug index -i . --cache .cache -o out.json # With incremental caching
+ug index -i ../src
+ug index -i . --cache .cache -o out.json
 ```
 
 Options:
-- `-o, --output <file>` - Output file (default: `out/indexed-tree.json`)
-- `-c, --cache <dir>` - Cache directory for incremental indexing
+- `-o, --output <file>` — Output file (default: `out/indexed-tree.json`)
+- `-c, --cache <dir>` — Cache directory for incremental indexing
 
 ### `ug graph`
 
 Build graph from index result.
 
 ```bash
-ug graph
-ug graph -i index.json -o graph.json   # From file
-ug graph -i index.json                 # Positional args
+ug graph -i index.json -o graph.json
 ```
-
-Options:
-- `-i, --input <file>` - Input index file
-- `-o, --output <file>` - Output graph file
 
 ### `ug search`
 
-Search by keyword.
+Keyword search over graph nodes.
 
 ```bash
-ug search ./out/graph.json "Cache" -o ./out/searhc_result.json
+ug search ./out/graph.json "Cache" -t function
 ```
-
-Options:
-- `-o, --output <file>` - Output file (optional)
-- `-t, --type <type>` - Filter by node type
 
 ### `ug bfs`
 
-K-hop BFS traversal on graph.
+K-hop BFS traversal (in-memory graph).
 
 ```bash
-ug bfs graph.json "file:src/index.ts" 2  # 2-hop BFS
-ug bfs graph.json node_id 1 -o result.json
+ug bfs graph.json "file:src/index.ts" 2
 ```
-
-Options:
-- `-o, --output <file>` - Output file (optional)
 
 ### `ug gen`
 
-Generate full output: indexing + graph building (combination of ug index + ug graph).
+Full pipeline: index + graph + analysis.
 
 ```bash
-ug gen -i ./lib -o ./out              # Generate in ./out
-ug gen                                 # Use defaults (current dir)
-```
-
-Options:
-- `-i, --input <path>` - Input directory
-- `-o, --output <dir>` - Output directory
-- `-c, --cache <dir>` - Cache directory
-
-```
-  To run end-to-end against the real Qwen3 endpoint:                                                                                                                                      
-  ug ingest -g out/graph.json -d out/kg_db --with-indexes         
-  ug vsearch "build a tree" -d out/kg_db --filter "node_type = 'Function'"                                                                                                                                                                   
-  ug traverse file:src/index.ts -d out/kg_db -k 2     
+ug gen -i ./src -o ./out
+# Produces: graph.json, indexed-tree.json, analysis.json, cycles.json
 ```
 
 ### `ug ingest`
 
-Ingest graph data into vector database.
+Embed graph nodes into LanceDB.
 
 ```bash
-ug ingest -g graph.json -d out/kg_db --with-indexes
+ug ingest -g out/graph.json -d out/kg_db --with-indexes
 ```
-
-Options:
-- `-g, --graph <file>` - Graph file
-- `-d, --db <dir>` - Database directory
-- `--with-indexes` - Create indexes (optional)
 
 ### `ug vsearch`
 
-Vector search on graph.
+Semantic vector search.
 
 ```bash
 ug vsearch "build a tree" -d out/kg_db --filter "node_type = 'Function'"
 ```
 
-Options:
-- `-d, --db <dir>` - Database directory
-- `--filter <filter>` - Filter by node type (optional)
-
 ### `ug traverse`
 
-K-hop BFS traversal on graph.
+K-hop BFS over LanceDB edges.
 
 ```bash
 ug traverse file:src/index.ts -d out/kg_db -k 2
 ```
 
-Options:
-- `-d, --db <dir>` - Database directory
-- `-k, --k <k>` - Number of hops (default: 2)
+## Storage / GraphRAG (Phase 3+4)
+
+End-to-end against a running embedding endpoint:
+
+```bash
+ug ingest -g out/graph.json -d out/kg_db --with-indexes
+ug vsearch "build a tree" -d out/kg_db --filter "node_type = 'Function'"
+ug traverse file:src/index.ts -d out/kg_db -k 2
+```
 
 ## Development
 
 ### Running Tests
 
 ```bash
-cargo test              # Run all tests
-cargo test --test indexer_test   # Just indexer tests
-cargo test --test graph_test     # Just graph tests
+cargo test              # All suites (67 tests)
+cargo test --test indexer_test
+cargo test --test graph_test
+cargo test --test search_test
+cargo test --test storage_test
 ```
-
-Test coverage:
-- **31 tests total** (13 indexer + 18 graph)
-- Tests use `tempfile` for isolated test directories
 
 ### Building
 
 ```bash
-cargo build              # Debug build
-cargo build --release   # Release build (optimized)
+cargo build              # Debug
+cargo build --release   # Release (optimized)
 ```
 
 Output:
 - Library: `target/release/libultragraph_kb.rlib`
-- NAPI: `target/release/ultragraph_kb.node` (for Node.js)
-- Binary: `target/release/ug` (CLI)
+- NAPI: `target/release/ultragraph-kb.node`
+- Binary: `target/release/ug`
 
 ### Project Structure
 
 ```
 native/
-├── Cargo.toml          # Rust dependencies
+├── Cargo.toml
 ├── src/
-│   ├── main.rs        # CLI binary
-│   ├── lib.rs         # Library exports
-│   ├── indexer.rs     # File indexing logic
-│   ├── graph.rs       # Graph building & BFS
-│   └── types.rs       # Data structures
-├── tests/
-│   ├── indexer_test.rs  # Indexer tests (13)
-│   └── graph_test.rs    # Graph tests (18)
-└── target/            # Build output
+│   ├── main.rs             # CLI binary
+│   ├── lib.rs              # Library exports
+│   ├── indexer.rs          # File indexing + AST parsing
+│   ├── graph.rs            # Graph building + BFS + analysis
+│   ├── types.rs            # Data structures
+│   └── storage/
+│       ├── mod.rs
+│       ├── db.rs           # LanceDB schemas + queries
+│       ├── embed.rs        # Embedding HTTP client
+│       ├── ingest.rs       # Embed + upsert pipeline
+│       ├── query.rs        # search, traverse, RRF, MMR, snippets
+│       ├── napi_bindings.rs   # NAPI async fns
+│       └── text.rs         # Embedding text shaping
+└── tests/
+    ├── indexer_test.rs     # 29 tests
+    ├── graph_test.rs       # 13 tests
+    ├── search_test.rs      # 13 tests
+    └── storage_test.rs     # 12 tests
 ```
 
 ## Features
@@ -182,40 +158,57 @@ native/
 - Symbol extraction:
   - Functions, classes, interfaces
   - Function signatures (params, return types)
-  - Docstrings (JSDoc)
+  - Docstrings (JSDoc @param/@returns)
   - Imports/exports
   - Inheritance (extends/implements)
   - Type references
-- File classification (Component, Page, Hook, Util, Service, Config, Type, Constant, Context, Reducer, Test, Asset)
+  - Function calls
+- File classification
 - Package.json dependency extraction
 
 ### Graph
-- Node types: File, Function, Class, Interface
-- Edge types: Contains, Imports, Extends, Implements, Calls, References
+- Node types: File, Function, Class, Interface, Concept
+- Edge types: Contains, Imports, Exports, Extends, Implements, Calls, References
 - K-hop BFS traversal
-- Deduplication
+- Centrality (degree + betweenness)
+- Cycle detection
+- Shortest path
+- Edge-type filtering
+
+### Storage & GraphRAG
+- LanceDB persistence (nodes + edges tables)
+- Vector search (1024-dim embeddings)
+- FTS search (name + description)
+- RRF hybrid search (vector + FTS fusion)
+- MMR reranking (relevance vs. diversity)
+- Graph expansion with direction + edge-type filter
+- Code snippet extraction
+- Token-budgeted context assembly
+- `search_kb` — Phase 4 entry point
 
 ## Dependencies
 
-- `tree-sitter` - AST parsing
-- `tree-sitter-typescript` - TypeScript parser
-- `tree-sitter-python` - Python parser
-- `blake3` - Incremental hashing
-- `ignore` - File walking
-- `petgraph` - Graph algorithms
-- `rayon` - Parallel processing
-- `regex` - Pattern matching
-- `napi-rs` - Node.js bindings
-
+- `tree-sitter` — AST parsing
+- `tree-sitter-typescript` — TypeScript parser
+- `tree-sitter-python` — Python parser
+- `blake3` — Incremental hashing
+- `ignore` — File walking
+- `petgraph` — Graph algorithms
+- `rayon` — Parallel processing
+- `lancedb` — Vector database
+- `arrow` / `arrow-array` / `arrow-schema` — LanceDB data format
+- `tokio` — Async runtime
+- `reqwest` — HTTP client (embeddings)
+- `napi-rs` — Node.js bindings
 
 ## Extensibility
-Support a new language, i.e.: Java.
-Adding Java is now a 5-step additive change (documented in languages.rs):
-  1. Drop languages/java.rs implementing LanguageIndexer.
-  2. Add mod java; in languages.rs.
-  3. Register the extensions in for_extension.
-  4. Add the same exts to common::SUPPORTED_EXTS.
-  5. Add tree-sitter-java to Cargo.toml.
+
+Adding a new language is a 5-step additive change:
+1. Drop a new `languages/<name>.rs` implementing `LanguageIndexer`
+2. Add `mod <name>;` in `languages.rs`
+3. Register extensions in `for_extension`
+4. Add exts to `common::SUPPORTED_EXTS`
+5. Add `tree-sitter-<name>` to `Cargo.toml`
 
 ## Performance
 
