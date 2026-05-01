@@ -18,10 +18,10 @@ use crate::storage::query::{
     traverse_filtered as run_traverse_filtered, ContextItem, Direction, RankStrategy,
     RankedContext, SearchKbOptions,
 };
-use std::collections::HashMap;
 use crate::types::GraphData;
 use napi_derive::napi;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// Optional embedder overrides. Mirrors [`EmbedderConfig`] but with all
@@ -133,7 +133,9 @@ fn parse_embedder_options(json: Option<String>) -> Result<Option<EmbedderOptions
     match json {
         None => Ok(None),
         Some(s) if s.is_empty() => Ok(None),
-        Some(s) => serde_json::from_str(&s).map(Some).map_err(|e| e.to_string()),
+        Some(s) => serde_json::from_str(&s)
+            .map(Some)
+            .map_err(|e| e.to_string()),
     }
 }
 
@@ -207,11 +209,10 @@ pub async fn db_hybrid_search(
         .as_deref()
         .map(Direction::from_str_lossy)
         .unwrap_or(Direction::Both);
-    let ppr_edge_weights: Option<HashMap<String, f32>> = opts.ppr_edge_weights.as_ref().map(|m| {
-        m.iter()
-            .map(|(k, v)| (k.clone(), *v as f32))
-            .collect()
-    });
+    let ppr_edge_weights: Option<HashMap<String, f32>> = opts
+        .ppr_edge_weights
+        .as_ref()
+        .map(|m| m.iter().map(|(k, v)| (k.clone(), *v as f32)).collect());
 
     let mut kb_opts = SearchKbOptions::new(&opts.query, repo_root_buf.as_path());
     if let Some(k) = opts.k {
@@ -268,9 +269,11 @@ pub async fn db_semantic_search(
     let db = open_db(&db_path).await?;
 
     let hits = match where_clause.as_deref() {
-        Some(w) => crate::storage::query::hybrid_search(&db, &embedder, &query, k as usize, w)
-            .await
-            .map_err(|e| napi::Error::from_reason(format!("search failed: {}", e)))?,
+        Some(w) => {
+            crate::storage::query::semantic_search_w_where(&db, &embedder, &query, k as usize, w)
+                .await
+                .map_err(|e| napi::Error::from_reason(format!("search failed: {}", e)))?
+        }
         None => run_semantic_search(&db, &embedder, &query, k as usize)
             .await
             .map_err(|e| napi::Error::from_reason(format!("search failed: {}", e)))?,

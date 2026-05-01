@@ -88,7 +88,7 @@ refer to: GraphData
 · Implement create_tables(): create LanceDB tables, vector index, FTS index
 · Implement insert_nodes() + insert_edges() (batch writes)
 · Implement update_node() (recompute embedding on change)
-· Implement semantic_search(), hybrid_search(), traverse()
+· Implement semantic_search(), semantic_search_w_where(), traverse()
 · Add versioning: LanceDB automatically versions on write; use time-travel if needed
 
 ## Testing Criteria

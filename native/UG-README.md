@@ -38,12 +38,12 @@ Build graph from index result.
 ug graph -i index.json -o graph.json
 ```
 
-### `ug search`
+### `ug search_graph`
 
 Keyword search over graph nodes.
 
 ```bash
-ug search ./ug-out/graph.json "Cache" -t function
+ug search_graph ./ug-out/graph.json "Cache" -t function
 ```
 
 ### `ug bfs`
@@ -71,12 +71,12 @@ Embed graph nodes into LanceDB.
 ug ingest -g ug-out/graph.json -d ug-out/ug-db --with-indexes
 ```
 
-### `ug vsearch`
+### `ug semantic_search`
 
 Semantic vector search.
 
 ```bash
-ug vsearch "build a tree" -d ug-out/ug-db --filter "node_type = 'Function'"
+ug semantic_search "build a tree" -d ug-out/ug-db --filter "node_type = 'Function'"
 ```
 
 ### `ug traverse`
@@ -93,7 +93,7 @@ End-to-end against a running embedding endpoint:
 
 ```bash
 ug ingest -g ug-out/graph.json -d ug-out/ug-db --with-indexes
-ug vsearch "build a tree" -d ug-out/ug-db --filter "node_type = 'Function'"
+ug semantic_search "build a tree" -d ug-out/ug-db --filter "node_type = 'Function'"
 ug traverse file:src/index.ts -d ug-out/ug-db -k 2
 ```
 

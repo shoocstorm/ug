@@ -22,7 +22,7 @@ pub use ppr::{
     default_edge_type_weights, personalized_pagerank, run_ppr_from_edges, PprOptions, PprResult,
 };
 pub use query::{
-    hybrid_search, mmr_rerank, read_snippet, rrf_search, search_kb, semantic_search, traverse,
+    semantic_search_w_where, mmr_rerank, read_snippet, rrf_search, search_kb, semantic_search, traverse,
     traverse_filtered, ContextItem, Direction, RankStrategy, RankedContext, SearchHit,
     SearchKbOptions, TraversalResult,
 };

@@ -35,11 +35,11 @@ fn main() {
         "path" => run_path(cmd_args),
         "centrality" => run_centrality(cmd_args),
         "cycles" => run_cycles(cmd_args),
-        "search" => run_search(cmd_args),
+        "search_graph" => run_search_graph(cmd_args),
         "analyze" => run_analyze(cmd_args),
         "gen" => run_gen(cmd_args),
         "ingest" => run_ingest(cmd_args),
-        "vsearch" => run_vsearch(cmd_args),
+        "semantic_search" => run_semantic_search(cmd_args),
         "traverse" => run_traverse(cmd_args),
         "help" => print_help(),
         _ => {
@@ -175,6 +175,7 @@ fn run_graph(args: &[String]) {
     println!("Generated graph in {}", output);
 }
 
+// simple breadth-first search on the graph (json)
 fn run_bfs(args: &[String]) {
     if args.len() < 2 {
         eprintln!("Usage: ug bfs <graph-file> <start-node-id> [k] [-o|--output <file>]");
@@ -190,9 +191,35 @@ fn run_bfs(args: &[String]) {
     write_or_print(output_path.as_deref(), &result, "BFS result");
 }
 
+// keyword-based in-memory graph search by loading the graph file into memory (json)
+fn run_search_graph(args: &[String]) {
+    if args.len() < 2 {
+        eprintln!("Usage: ug search_graph <graph-file> <keyword> [-t|--type <node-type>]... [-o|--output <file>]");
+        std::process::exit(1);
+    }
+    let graph_file = &args[0];
+    let keyword = first_positional(&args[1..], &["-t", "--type", "-o", "--output"]).unwrap_or_else(|| {
+        eprintln!("Usage: ug search_graph <graph-file> <keyword> [-t|--type <node-type>]... [-o|--output <file>]");
+        std::process::exit(1);
+    });
+    let node_types = multi_flag(args, &["-t", "--type"]);
+    let output_path = flag_value(args, &["-o", "--output"]);
+
+    let graph_json = fs::read_to_string(graph_file).expect("Failed to read graph");
+    let types_opt = if node_types.is_empty() {
+        None
+    } else {
+        Some(node_types)
+    };
+    let result = graph_keyword_search(graph_json, keyword, types_opt);
+    write_or_print(output_path.as_deref(), &result, "search result");
+}
+
 fn run_filter(args: &[String]) {
     if args.len() < 2 {
-        eprintln!("Usage: ug filter <graph-file> <edge-type> [<edge-type>...] [-o|--output <file>]");
+        eprintln!(
+            "Usage: ug filter <graph-file> <edge-type> [<edge-type>...] [-o|--output <file>]"
+        );
         std::process::exit(1);
     }
     let graph_file = &args[0];
@@ -249,25 +276,6 @@ fn run_cycles(args: &[String]) {
     write_or_print(output_path.as_deref(), &result, "cycle result");
 }
 
-fn run_search(args: &[String]) {
-    if args.len() < 2 {
-        eprintln!("Usage: ug search <graph-file> <keyword> [-t|--type <node-type>]... [-o|--output <file>]");
-        std::process::exit(1);
-    }
-    let graph_file = &args[0];
-    let keyword = first_positional(&args[1..], &["-t", "--type", "-o", "--output"]).unwrap_or_else(|| {
-        eprintln!("Usage: ug search <graph-file> <keyword> [-t|--type <node-type>]... [-o|--output <file>]");
-        std::process::exit(1);
-    });
-    let node_types = multi_flag(args, &["-t", "--type"]);
-    let output_path = flag_value(args, &["-o", "--output"]);
-
-    let graph_json = fs::read_to_string(graph_file).expect("Failed to read graph");
-    let types_opt = if node_types.is_empty() { None } else { Some(node_types) };
-    let result = graph_keyword_search(graph_json, keyword, types_opt);
-    write_or_print(output_path.as_deref(), &result, "search result");
-}
-
 fn run_analyze(args: &[String]) {
     let input = flag_value_or(args, &["-i", "--input"], "ug-out/graph.json");
     let output_dir = flag_value_or(args, &["-o", "--output"], "ug-out");
@@ -286,6 +294,7 @@ fn run_analyze(args: &[String]) {
     println!("  - cycles.json (cycle detection)");
 }
 
+// full pipeline: ingest -> graph -> analyze -> search
 fn run_gen(args: &[String]) {
     if has_flag(args, "-h") || has_flag(args, "--help") {
         print_gen_help();
@@ -315,7 +324,8 @@ fn run_gen(args: &[String]) {
     let cache = flag_value(args, &["-c", "--cache"]);
     let output_dir = flag_value_or(args, &["-o", "--output"], "ug-out");
     let no_ingest = has_flag(args, "--no-ingest");
-    let db_path = flag_value(args, &["-d", "--db"]).unwrap_or_else(|| format!("{}/ug-db", output_dir));
+    let db_path =
+        flag_value(args, &["-d", "--db"]).unwrap_or_else(|| format!("{}/ug-db", output_dir));
 
     let pipeline_summary = if no_ingest {
         "index → graph → visualization"
@@ -337,8 +347,14 @@ fn run_gen(args: &[String]) {
 
     let (nodes_count, edges_count) = match serde_json::from_str::<serde_json::Value>(&graph) {
         Ok(v) => (
-            v.get("nodes").and_then(|n| n.as_array()).map(|a| a.len()).unwrap_or(0),
-            v.get("edges").and_then(|e| e.as_array()).map(|a| a.len()).unwrap_or(0),
+            v.get("nodes")
+                .and_then(|n| n.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0),
+            v.get("edges")
+                .and_then(|e| e.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0),
         ),
         Err(_) => (0, 0),
     };
@@ -351,10 +367,8 @@ fn run_gen(args: &[String]) {
         .expect("Failed to write indexed-tree.json");
 
     println!("▸ Copying visualization assets");
-    fs::write(format!("{}/index.html", output_dir), VIS_HTML)
-        .expect("Failed to write index.html");
-    fs::write(format!("{}/README.md", output_dir), VIS_MD)
-        .expect("Failed to write README.md");
+    fs::write(format!("{}/index.html", output_dir), VIS_HTML).expect("Failed to write index.html");
+    fs::write(format!("{}/README.md", output_dir), VIS_MD).expect("Failed to write README.md");
 
     println!("────────────────────────────────────────");
     println!("✓ Generated in {}/", output_dir);
@@ -373,7 +387,10 @@ fn run_gen(args: &[String]) {
     println!("▸ Ingesting into {}", db_path);
     match run_gen_ingest(&graph, &db_path, args) {
         Ok((nodes_written, edges_written)) => {
-            println!("  ✓ {} nodes, {} edges embedded", nodes_written, edges_written);
+            println!(
+                "  ✓ {} nodes, {} edges embedded",
+                nodes_written, edges_written
+            );
         }
         Err(e) => {
             eprintln!("⚠ db-ingest skipped — {}", e);
@@ -384,15 +401,25 @@ fn run_gen(args: &[String]) {
 
     println!("────────────────────────────────────────");
     println!("Visit http://localhost:8080 to view the graph");
-    println!("Run 'ug vsearch \"hello\" -d {}' to perform a RAG query.", db_path);
+    println!(
+        "Run 'ug semantic_search \"hello\" -d {}' to perform a RAG query.",
+        db_path
+    );
 }
 
-fn run_gen_ingest(graph_json: &str, db_path: &str, args: &[String]) -> Result<(usize, usize), String> {
-    let graph: GraphData = serde_json::from_str(graph_json).map_err(|e| format!("parse graph: {}", e))?;
+fn run_gen_ingest(
+    graph_json: &str,
+    db_path: &str,
+    args: &[String],
+) -> Result<(usize, usize), String> {
+    let graph: GraphData =
+        serde_json::from_str(graph_json).map_err(|e| format!("parse graph: {}", e))?;
     let embedder = embedder_from_args(args);
     let rt = tokio_runtime();
     rt.block_on(async {
-        let db = Db::open(db_path).await.map_err(|e| format!("open db: {}", e))?;
+        let db = Db::open(db_path)
+            .await
+            .map_err(|e| format!("open db: {}", e))?;
         let stats = ingest_graph(&db, &embedder, &graph)
             .await
             .map_err(|e| format!("ingest: {}", e))?;
@@ -400,6 +427,7 @@ fn run_gen_ingest(graph_json: &str, db_path: &str, args: &[String]) -> Result<(u
     })
 }
 
+// ingest graph into LanceDB (only)
 fn run_ingest(args: &[String]) {
     let graph_file = flag_value_or(args, &["-g", "--graph"], "ug-out/graph.json");
     let db_path = flag_value_or(args, &["-d", "--db"], "ug-out/ug-db");
@@ -438,10 +466,11 @@ fn run_ingest(args: &[String]) {
     });
 }
 
-fn run_vsearch(args: &[String]) {
+// vector search on LanceDB (only)
+fn run_semantic_search(args: &[String]) {
     if args.is_empty() {
         eprintln!(
-            "Usage: ug vsearch <query> [-d|--db <path>] [-k <limit>] [--filter <sql>] \\
+            "Usage: ug semantic_search <query> [-d|--db <path>] [-k <limit>] [--filter <sql>] \\
                  [--base-url <url>] [--api-key <key>] [--model <name>] [-o|--output <file>]"
         );
         std::process::exit(1);
@@ -475,9 +504,9 @@ fn run_vsearch(args: &[String]) {
     let result_json = rt.block_on(async {
         let db = Db::open(&db_path).await.expect("failed to open lancedb");
         let hits = match filter.as_deref() {
-            Some(f) => storage::hybrid_search(&db, &embedder, &query, limit, f)
+            Some(f) => storage::semantic_search_w_where(&db, &embedder, &query, limit, f)
                 .await
-                .expect("hybrid_search failed"),
+                .expect("semantic_search_w_where failed"),
             None => storage_semantic_search(&db, &embedder, &query, limit)
                 .await
                 .expect("semantic_search failed"),
@@ -605,14 +634,18 @@ fn print_help() {
     println!("    -o, --output <file> Output file (optional)");
     println!();
     println!("  search <graph> <keyword> Keyword search over graph nodes");
-    println!("    -t, --type <type>   Restrict to node type (repeatable, e.g. function/class/file)");
+    println!(
+        "    -t, --type <type>   Restrict to node type (repeatable, e.g. function/class/file)"
+    );
     println!("    -o, --output <file> Output file (optional)");
     println!();
     println!("  analyze              Run full graph analysis (centrality + cycles)");
     println!("    -i, --input <file> Graph file (default: ug-out/graph.json)");
     println!("    -o, --output <dir> Output directory (default: ug-out)");
     println!();
-    println!("  gen [<path>]         Full pipeline: index → graph → visualization → LanceDB ingest");
+    println!(
+        "  gen [<path>]         Full pipeline: index → graph → visualization → LanceDB ingest"
+    );
     println!("    -i, --input <path>  Input directory (default: .)");
     println!("    -c, --cache <dir>   Cache directory");
     println!("    -o, --output <dir>  Output directory (default: ug-out)");
@@ -625,10 +658,12 @@ fn print_help() {
     println!("    -d, --db <path>    LanceDB directory (default: ug-out/ug-db)");
     println!("    --base-url <url>   Embedding endpoint (default: http://localhost:8000/v1)");
     println!("    --api-key <key>    Embedding API key (default: 1234)");
-    println!("    --model <name>     Embedding model (default: openai/Qwen3-Embedding-0.6B-4bit-DWQ)");
+    println!(
+        "    --model <name>     Embedding model (default: openai/Qwen3-Embedding-0.6B-4bit-DWQ)"
+    );
     println!("    --with-indexes     Best-effort create vector + FTS indexes after ingest");
     println!();
-    println!("  vsearch <query>      Semantic vector search over the LanceDB nodes table");
+    println!("  semantic_search <query>      Semantic vector search over the LanceDB nodes table");
     println!("    -d, --db <path>    LanceDB directory (default: ug-out/ug-db)");
     println!("    -k, --limit <n>    Top-k results (default: 10)");
     println!("    --filter <sql>     Optional SQL WHERE clause (hybrid search)");
@@ -647,12 +682,14 @@ fn print_help() {
     println!("  ug filter graph.json Contains Imports");
     println!("  ug centrality graph.json");
     println!("  ug cycles graph.json");
-    println!("  ug search graph.json loadConfig --type function --type class");
+    println!("  ug search_graph graph.json loadConfig --type function --type class");
     println!("  ug analyze");
     println!("  ug gen -i ./lib -o ./ug-out");
     println!("  ug gen -i ./lib --no-ingest");
     println!("  ug ingest -g ug-out/graph.json -d ug-out/ug-db --with-indexes");
-    println!("  ug vsearch \"oauth login flow\" -d ug-out/ug-db -k 5");
-    println!("  ug vsearch \"build a tree\" -d ug-out/ug-db --filter \"node_type = 'Function'\"");
+    println!("  ug semantic_search \"oauth login flow\" -d ug-out/ug-db -k 5");
+    println!(
+        "  ug semantic_search \"build a tree\" -d ug-out/ug-db --filter \"node_type = 'Function'\""
+    );
     println!("  ug traverse file:src/index.ts -d ug-out/ug-db -k 2");
 }

@@ -129,18 +129,6 @@ node src/cli.cjs ping
 node src/cli.cjs ingest ug-out/graph.json ug-out/ug-db
 ```
 
-### Semantic (Vector) Search
-
-```bash
-node src/cli.cjs vsearch ug-out/ug-db "oauth login flow" -k 5
-```
-
-With SQL filter:
-
-```bash
-node src/cli.cjs vsearch ug-out/ug-db "build a tree" --filter "node_type = 'Function'"
-```
-
 ### GraphRAG Retrieval (End-to-End)
 
 Combines seed search → graph expansion → MMR reranking → snippet extraction:
@@ -158,17 +146,16 @@ node src/cli.cjs traverse ug-out/ug-db "file:src/index.ts" -k 2 --edge-type Cont
 ## All CLI Commands
 
 ```
-index      Index a directory
-graph      Build graph from index result
-gen        Index + graph + visualization (all-in-one)
-bfs        K-hop BFS traversal (in-memory graph)
-search     Keyword search over graph nodes
-ingest     Embed graph into LanceDB
-vsearch    Semantic vector search over LanceDB
-traverse   K-hop BFS over LanceDB edges (with type filter)
-rag        End-to-end GraphRAG retrieval
-ping       Probe embedding endpoint
-help       Show help for commands
+gen           Index + graph + visualization + ingest (all-in-one)
+index         Index a directory
+graph         Build graph from index result
+bfs           K-hop BFS traversal (in-memory graph)
+graph-search  Keyword search over graph nodes
+ingest        Embed graph into LanceDB
+traverse      K-hop BFS over LanceDB edges (with type filter)
+rag           End-to-end GraphRAG retrieval
+ping          Probe embedding endpoint
+help          Show help for commands
 ```
 
 ## Tests

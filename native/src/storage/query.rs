@@ -4,7 +4,7 @@
 //! GraphRAG composition: seed search -> expand -> rerank -> assemble.
 //!
 //!   1. semantic_search - vector-only nearest-neighbour
-//!   2. hybrid_search   - vector + SQL filter (e.g. `node_type = 'Function'`)
+//!   2. semantic_search_w_where   - vector + SQL filter (e.g. `node_type = 'Function'`)
 //!   3. traverse        - BFS over the edges table from a seed node id
 //!   4. rerank          - Maximal Marginal Relevance (MMR) to balance diversity and
 //!     relevance
@@ -75,7 +75,7 @@ pub async fn semantic_search(
 
 /// Like [`semantic_search`] but with an additional SQL `WHERE` clause
 /// applied during the vector query.
-pub async fn hybrid_search(
+pub async fn semantic_search_w_where(
     db: &Db,
     embedder: &Embedder,
     query: &str,
@@ -459,7 +459,7 @@ impl<'a> SearchKbOptions<'a> {
     }
 }
 
-/// Phase 4 GraphRAG: seed search -> rank (PPR by default, MMR optional)
+/// [Advanced RAG Search] Phase 4 GraphRAG: seed search -> rank (PPR by default, MMR optional)
 /// -> snippet attachment -> token-budgeted assembly. Returns a
 /// JSON-friendly [`RankedContext`].
 pub async fn search_kb(
@@ -541,7 +541,9 @@ async fn search_kb_ppr(
     let mut items: Vec<ContextItem> = Vec::new();
     let mut total_chars: usize = 0;
     for id in top_ids.iter() {
-        let Some(n) = nodes_by_id.get(id) else { continue };
+        let Some(n) = nodes_by_id.get(id) else {
+            continue;
+        };
         let score = score_by_id.get(id).copied().unwrap_or(0.0);
         let snippet = if opts.include_snippets {
             read_snippet(opts.repo_root, &n.file, n.start_line, n.end_line)

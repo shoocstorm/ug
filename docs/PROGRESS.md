@@ -84,7 +84,7 @@
 - `native/src/storage/embed.rs` — `Embedder` HTTP client + `Embedder::ping`
 - `native/src/storage/db.rs` — LanceDB schemas, upsert, vector_search, edges_from/to, fts_search, nodes_by_ids
 - `native/src/storage/ingest.rs` — `ingest_graph`, `reembed_nodes`
-- `native/src/storage/query.rs` — `semantic_search`, `hybrid_search`, `rrf_search`, `mmr_rerank`, `traverse`, `traverse_filtered`, `read_snippet`, `search_kb`
+- `native/src/storage/query.rs` — `semantic_search`, `semantic_search_w_where`, `rrf_search`, `mmr_rerank`, `traverse`, `traverse_filtered`, `read_snippet`, `search_kb`
 - `native/src/storage/napi_bindings.rs` — NAPI surface for storage (async)
 - `native/Cargo.toml` — arrow, tokio, futures, reqwest, lancedb, lance-index
 
