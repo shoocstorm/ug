@@ -1,10 +1,11 @@
 use std::io::Write;
 use tempfile::TempDir;
 use ultragraph_kb::storage::db::{
-    edges_from, edges_schema, edges_to, fts_search, nodes_by_ids, nodes_schema, vector_search, Db,
-    EdgeRow, NodeRow,
+    all_edges, edges_from, edges_schema, edges_to, fts_search, nodes_by_ids, nodes_schema,
+    vector_search, Db, EdgeRow, NodeRow,
 };
 use ultragraph_kb::storage::embed::EMBEDDING_DIM;
+use ultragraph_kb::storage::ppr::{personalized_pagerank, PprOptions};
 use ultragraph_kb::storage::query::{
     mmr_rerank, read_snippet, traverse_filtered, Direction, SearchHit,
 };
@@ -357,6 +358,91 @@ fn mmr_rerank_orders_by_lambda() {
     let r2 = mmr_rerank(&q, cands.clone(), 2, 0.0);
     assert_eq!(r2[0].node.id, "a");
     assert_eq!(r2[1].node.id, "c");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn all_edges_returns_full_table() {
+    let dir = TempDir::new().unwrap();
+    let db = Db::open(dir.path().to_str().unwrap()).await.unwrap();
+
+    let edges = vec![
+        EdgeRow {
+            id: "e1".to_string(),
+            source: "a".to_string(),
+            target: "b".to_string(),
+            edge_type: "Calls".to_string(),
+            properties: String::new(),
+        },
+        EdgeRow {
+            id: "e2".to_string(),
+            source: "b".to_string(),
+            target: "c".to_string(),
+            edge_type: "Imports".to_string(),
+            properties: String::new(),
+        },
+    ];
+    db.upsert_edges(&edges).await.unwrap();
+
+    let all = all_edges(&db).await.unwrap();
+    let mut ids: Vec<String> = all.into_iter().map(|e| e.id).collect();
+    ids.sort();
+    assert_eq!(ids, vec!["e1".to_string(), "e2".to_string()]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ppr_against_lancedb_ranks_seed_neighborhood_first() {
+    let dir = TempDir::new().unwrap();
+    let db = Db::open(dir.path().to_str().unwrap()).await.unwrap();
+
+    // Chain a -[Calls]-> b -[Calls]-> c. Seed = a. With undirected
+    // walks the central node `b` may outrank `a` itself (a known and
+    // correct PPR property — central neighbors are valuable context),
+    // so we test the *retrieval-relevant* invariant: 1-hop neighbor
+    // beats 2-hop neighbor and both seed+neighbor beat the far node.
+    let edges = vec![
+        EdgeRow {
+            id: "ea".to_string(),
+            source: "a".to_string(),
+            target: "b".to_string(),
+            edge_type: "Calls".to_string(),
+            properties: String::new(),
+        },
+        EdgeRow {
+            id: "eb".to_string(),
+            source: "b".to_string(),
+            target: "c".to_string(),
+            edge_type: "Calls".to_string(),
+            properties: String::new(),
+        },
+    ];
+    db.upsert_edges(&edges).await.unwrap();
+
+    let mut seeds = std::collections::HashMap::new();
+    seeds.insert("a".to_string(), 1.0f32);
+    let r = personalized_pagerank(&db, &seeds, &PprOptions::default())
+        .await
+        .unwrap();
+
+    let score_of = |id: &str| -> f32 {
+        r.ranked
+            .iter()
+            .find(|(n, _)| n == id)
+            .map(|(_, s)| *s)
+            .unwrap_or(0.0)
+    };
+    assert!(
+        score_of("b") > score_of("c"),
+        "1-hop b={} should outrank 2-hop c={}",
+        score_of("b"),
+        score_of("c")
+    );
+    assert!(
+        score_of("a") > score_of("c"),
+        "seed a={} should outrank 2-hop c={}",
+        score_of("a"),
+        score_of("c")
+    );
+    assert!(r.converged, "PPR did not converge: iters={}", r.iterations);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

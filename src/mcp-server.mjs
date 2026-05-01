@@ -48,6 +48,11 @@ const SearchKbInput = z.object({
   mmrLambda: z.number().min(0).max(1).optional(),
   whereClause: z.string().optional(),
   includeSnippets: z.boolean().optional(),
+  strategy: z.enum(["ppr", "mmr"]).optional(),
+  pprRestartProb: z.number().min(0.01).max(0.99).optional(),
+  pprMaxIter: z.number().int().min(1).max(200).optional(),
+  pprSeedPool: z.number().int().min(1).max(200).optional(),
+  pprEdgeWeights: z.record(z.string(), z.number().min(0)).optional(),
 });
 
 const TraverseInput = z.object({
@@ -65,7 +70,7 @@ const TOOLS = [
   {
     name: "search_kb",
     description:
-      "Graph-based RAG retrieval. Hybrid (vector+FTS) seed search, k-hop graph expansion (filtered by edge type and direction), MMR rerank, code-snippet attachment, token-budgeted context assembly.",
+      "Graph-based RAG retrieval. RRF (vector+FTS) seeds become a Personalized PageRank personalization vector over the edge graph; PPR scores combine seed proximity with structural centrality (replaces the older BFS+MMR cascade). Set strategy='mmr' for the legacy diversity-first path.",
     inputSchema: {
       type: "object",
       properties: {
@@ -80,19 +85,20 @@ const TOOLS = [
           type: "integer",
           minimum: 0,
           maximum: 5,
-          description: "Graph expansion radius from each seed (default 2).",
+          description:
+            "MMR-only: graph expansion radius from each seed (default 2). Ignored under PPR.",
         },
         edgeTypes: {
           type: "array",
           items: { type: "string" },
           description:
-            "Restrict expansion to these edge types (case-insensitive). Common: imports, calls, extends, implements, contains, references.",
+            "Restrict the walk to these edge types (case-insensitive). Common: imports, calls, extends, implements, contains, references.",
         },
         direction: {
           type: "string",
           enum: ["outbound", "inbound", "both"],
           description:
-            "Edge direction during expansion (default 'both').",
+            "Edge direction during the walk (default 'both').",
         },
         maxChars: {
           type: "integer",
@@ -105,7 +111,7 @@ const TOOLS = [
           minimum: 0,
           maximum: 1,
           description:
-            "MMR balance: 1 = max relevance, 0 = max diversity (default 0.6).",
+            "MMR balance (only when strategy='mmr'): 1 = max relevance, 0 = max diversity (default 0.6).",
         },
         whereClause: {
           type: "string",
@@ -115,6 +121,38 @@ const TOOLS = [
           type: "boolean",
           description:
             "Read source slice for each item (default true).",
+        },
+        strategy: {
+          type: "string",
+          enum: ["ppr", "mmr"],
+          description:
+            "Ranking strategy. 'ppr' (default) = Personalized PageRank seeded by RRF. 'mmr' = legacy seed+BFS+MMR.",
+        },
+        pprRestartProb: {
+          type: "number",
+          minimum: 0.01,
+          maximum: 0.99,
+          description:
+            "PPR teleport probability (default 0.15). Higher = stay closer to seeds; lower = let centrality dominate.",
+        },
+        pprMaxIter: {
+          type: "integer",
+          minimum: 1,
+          maximum: 200,
+          description: "PPR power-iteration cap (default 30).",
+        },
+        pprSeedPool: {
+          type: "integer",
+          minimum: 1,
+          maximum: 200,
+          description:
+            "How many RRF hits feed the personalization vector (default 16). Larger = more robust to a noisy top hit.",
+        },
+        pprEdgeWeights: {
+          type: "object",
+          additionalProperties: { type: "number", minimum: 0 },
+          description:
+            "Override edge-type weights, e.g. { calls: 1.0, imports: 0.7, contains: 0.3 }. Keys are case-insensitive.",
         },
       },
       required: ["query"],

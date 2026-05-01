@@ -60,10 +60,11 @@ API Key: 1234
 
 ### Phase 4: The GraphRAG Retrieval Protocol
 *Goal: Provide the "Perfect Context" to the AI Agent.*
- * [ ] **Hybrid Search Algorithm:**
-   1. **Keyword/Vector Search:** Locate the "Seed Node" in the KB.
-   2. **Graph Expansion:** Walk the graph 2-3 hops from the Seed Node to pull in relevant dependencies and documentation.
-   3. **Context Ranking:** Use a re-ranker to ensure the most relevant code snippets appear first in the prompt.
+ * [ ] **Hybrid Search Algorithm (PPR-based, HippoRAG-style):**
+   1. **RRF Seed Search:** Reciprocal Rank Fusion of vector + FTS produces a *seed pool* (default 16 hits) — these are weighted candidates, **not** fixed entry points. RRF scores form the personalization mass.
+   2. **Personalized PageRank over the edge graph:** edge-type-weighted random walk with restart (default α = 0.15). PPR scores combine seed proximity with structural centrality in a single graph-aware ranking — replaces the older "single seed → BFS expansion → MMR rerank" cascade. Edge-type weights default to Calls=1.0, Extends/Implements=0.9, Imports=0.7, Exports=0.6, References=0.5, DependsOn=0.4, Contains=0.3 and are caller-overridable.
+   3. **Token-Budgeted Assembly:** hydrate top-K nodes by PPR score, attach code snippets, apply a character budget.
+   4. *Legacy fallback:* MMR-based path retained behind `strategy: "mmr"` for callers that want diversity-first behavior.
  * [ ] **MCP Server Implementation:** Wrap the search logic in a **Model Context Protocol (MCP)** server so any AI agent (Claude, Javis Bot, etc.) can call search_kb(query).
 ## ⚡ Performance Targets
  * **Ingestion:** < 5 seconds for a 1,000-file repository.
@@ -228,17 +229,43 @@ API Key: 1234
 ### Phase 4: The GraphRAG Retrieval Protocol - Extended
 
 *Goal: Provide the "Perfect Context" to the AI Agent.*
-* [x] **Hybrid Search Algorithm:**
-  1. **Keyword/Vector Search:** Locate the "Seed Node" in the KB.
-  2. **Graph Expansion:** Walk the graph 2-3 hops from the Seed Node to pull in relevant dependencies and documentation.
-  3. **Context Ranking:** Use a re-ranker to ensure the most relevant code snippets appear first in the prompt.
+
+#### Why we moved off "single seed node → BFS"
+
+The original spec (above) framed retrieval as **find one seed node, then BFS 2–3 hops, then rerank**. In practice that cascade has three failure modes:
+
+1. **Stage-1 errors compound.** A wrong top-1 seed pulls expansion into the wrong neighborhood; MMR can't recover relevance from a tainted candidate set.
+2. **Single entry-point assumption.** Many real queries ("how does auth work") have answers distributed across 5+ nodes — there is no one seed.
+3. **MMR optimizes diversity, not relevance.** The "rerank" step is a diversity heuristic, not a true relevance scorer.
+
+The replacement is **Personalized PageRank seeded by RRF** (HippoRAG-style):
+
+* [x] **PPR-Based Hybrid Search Algorithm** *(implemented 2026-05-01, replaces seed+BFS+MMR by default)*:
+  1. **RRF Seed Pool:** Vector + FTS via Reciprocal Rank Fusion produces a *weighted* seed set (default top-16). RRF scores feed the PPR personalization vector — no single-point-of-failure top-1 seed.
+  2. **Personalized PageRank:** Random walk with restart over the edge graph. Edge types are *weighted* (Calls > Imports > Contains, etc.) rather than gated, so a strong Calls edge can outweigh a chain of weak Contains edges. Direction (`outbound` / `inbound` / `both`) and edge-type whitelists still supported as filters.
+  3. **Token-Budgeted Context Assembly:** Hydrate top-K nodes by PPR score, attach code snippets, apply char budget.
+  4. **Multi-seed by construction.** Disconnected components anchored by separate seeds each get their own ranked neighborhood.
+  5. **Legacy MMR path retained** behind `strategy: "mmr"` for diversity-first callers.
 * [x] **MCP Server Implementation:** Wrap the search logic in a **Model Context Protocol (MCP)** server so any AI agent (Claude, Javis Bot, etc.) can call search_kb(query).
+
+**Tunable PPR parameters** (exposed through the MCP `search_kb` tool, NAPI `dbHybridSearch`, and CLI `db-rag`):
+
+| Parameter | Default | Effect |
+|-----------|---------|--------|
+| `pprRestartProb` | 0.15 | Teleport probability. Higher = stay closer to seeds; lower = let centrality dominate. |
+| `pprMaxIter` | 100 | Power-iteration cap. Convergence is L1 within `tol`=1e-4. |
+| `pprSeedPool` | 16 | RRF hits feeding the personalization vector. Larger = more robust to a noisy top hit. |
+| `pprEdgeWeights` | see below | Per-edge-type weight overrides (case-insensitive). |
+
+Default edge-type weights: `calls=1.0, extends=0.9, implements=0.9, imports=0.7, requires=0.7, exports=0.6, uses=0.6, references=0.5, dependson=0.4, contains=0.3`.
+
+**Scaling note:** PPR loads the full edges table per query (single-digit ms via sparse iteration at ≤100K edges). Past ~1M edges, a future enhancement would be subgraph restriction (k-hop frontier from seeds) or precomputed PPR vectors per node.
 
 #### New: Enhanced Retrieval Features (Phase 4.1)
 
-* **[NEW] Edge-Type-Aware Expansion**
-  * Only expand along specific edge types (e.g., only CALLED_BY edges)
-  * Enable: More targeted context
+* **[NEW] Edge-Type-Aware Walk (implemented as PPR weights + whitelist)**
+  * Walk along specific edge types only, *or* let all edges participate with type-specific weights.
+  * Enable: More targeted context without losing centrality signal.
 
 * **[NEW] Query by Signature**
   * "Find functions that take User as parameter and return Promise"

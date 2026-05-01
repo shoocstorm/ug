@@ -11,15 +11,19 @@ pub mod db;
 pub mod embed;
 pub mod ingest;
 pub mod napi_bindings;
+pub mod ppr;
 pub mod query;
 pub mod text;
 
 pub use db::{Db, EdgeRow, NodeRow};
 pub use embed::{Embedder, EmbedderConfig, EMBEDDING_DIM};
 pub use ingest::{ingest_graph, reembed_nodes, IngestStats};
+pub use ppr::{
+    default_edge_type_weights, personalized_pagerank, run_ppr_from_edges, PprOptions, PprResult,
+};
 pub use query::{
     hybrid_search, mmr_rerank, read_snippet, rrf_search, search_kb, semantic_search, traverse,
-    traverse_filtered, ContextItem, Direction, RankedContext, SearchHit, SearchKbOptions,
-    TraversalResult,
+    traverse_filtered, ContextItem, Direction, RankStrategy, RankedContext, SearchHit,
+    SearchKbOptions, TraversalResult,
 };
 pub use text::{build_node_text, collect_related_names};

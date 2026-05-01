@@ -234,8 +234,8 @@ const commands = {
     }
   },
   'db-rag': {
-    usage: '<db-path> <query> [-k <limit>] [-b|--base-url <url>] [-a|--api-key <key>] [-m|--model <name>]',
-    desc: 'LanceDB: End-to-end GraphRAG hybrid retrieval (vector + FTS + graph expansion).',
+    usage: '<db-path> <query> [-k <limit>] [--strategy <ppr|mmr>] [--restart-prob <0..1>] [--seed-pool <n>] [--direction <outbound|inbound|both>] [--edge-type <type>]... [-b|--base-url <url>] [-a|--api-key <key>] [-m|--model <name>]',
+    desc: 'LanceDB: End-to-end GraphRAG retrieval. Default ranking: Personalized PageRank seeded by RRF (vector + FTS). Pass --strategy mmr for legacy seed+BFS+MMR.',
     run: async (args) => {
       if (args.length < 2) {
         throw new Error(`Usage: db-rag ${commands['db-rag'].usage}\n  ${commands['db-rag'].desc}`);
@@ -244,9 +244,19 @@ const commands = {
       const query = args[1];
       const rest = args.slice(2);
       const k = extractArg(rest, '-k', '--limit', 10);
+      const strategy = extractFlag(rest, '--strategy');
+      const restartProbRaw = extractFlag(rest, '--restart-prob');
+      const seedPool = extractArg(rest, '--seed-pool', '--seed-pool', NaN);
+      const direction = extractFlag(rest, '--direction');
+      const edgeTypes = [...new Set([...extractMultiFlags(rest, '--edge-type'), ...extractMultiFlags(rest, '-e')])];
       const embedderOptions = parseEmbedderOptions(rest);
-      const optionsJson = JSON.stringify({ query, k, maxHops: 2 });
-      const result = await ug.dbHybridSearch(dbPath, optionsJson, embedderOptions ? JSON.stringify(embedderOptions) : null);
+      const opts = { query, k };
+      if (strategy) opts.strategy = strategy;
+      if (restartProbRaw && !isNaN(parseFloat(restartProbRaw))) opts.pprRestartProb = parseFloat(restartProbRaw);
+      if (!isNaN(seedPool)) opts.pprSeedPool = seedPool;
+      if (direction) opts.direction = direction;
+      if (edgeTypes.length) opts.edgeTypes = edgeTypes;
+      const result = await ug.dbHybridSearch(dbPath, JSON.stringify(opts), embedderOptions ? JSON.stringify(embedderOptions) : null);
       return JSON.parse(result);
     }
   },

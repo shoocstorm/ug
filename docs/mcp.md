@@ -108,20 +108,25 @@ UG_DB_PATH=/path/to/ug-db UG_EMBED_BASE_URL=http://localhost:11434/v1 node /path
 
 ### 1. `search_kb` - GraphRAG Retrieval
 
-Performs hybrid (vector + FTS) search with graph expansion and MMR reranking.
+Default ranking is **Personalized PageRank** seeded by RRF (vector + FTS) hits. RRF scores form the PPR personalization vector; PPR scores combine seed proximity with structural centrality, replacing the older BFS+MMR cascade. Set `strategy: "mmr"` to fall back to the legacy seed → BFS → MMR path.
 
 **Parameters:**
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `query` | string | ✅ | Natural-language query |
 | `k` | integer (1-50) | ❌ | Number of context items to return (default: 8) |
-| `hops` | integer (0-5) | ❌ | Graph expansion radius from seeds (default: 2) |
-| `edgeTypes` | string[] | ❌ | Restrict expansion to edge types (e.g., `["imports", "calls"]`) |
+| `hops` | integer (0-5) | ❌ | MMR-only: graph expansion radius from seeds (default: 2). Ignored under PPR. |
+| `edgeTypes` | string[] | ❌ | Restrict the walk to edge types (e.g., `["imports", "calls"]`) |
 | `direction` | string | ❌ | Edge direction: `"outbound"`, `"inbound"`, or `"both"` (default: `"both"`) |
 | `maxChars` | integer (100-200000) | ❌ | Approximate character budget for assembled context |
-| `mmrLambda` | number (0-1) | ❌ | MMR balance: 1 = max relevance, 0 = max diversity (default: 0.6) |
+| `mmrLambda` | number (0-1) | ❌ | MMR balance (only when `strategy: "mmr"`): 1 = max relevance, 0 = max diversity (default: 0.6) |
 | `whereClause` | string | ❌ | Optional SQL WHERE clause for seed search |
 | `includeSnippets` | boolean | ❌ | Read source code snippets (default: true) |
+| `strategy` | string | ❌ | `"ppr"` (default) or `"mmr"` |
+| `pprRestartProb` | number (0.01-0.99) | ❌ | PPR teleport probability (default: 0.15). Higher = stay closer to seeds. |
+| `pprMaxIter` | integer (1-200) | ❌ | PPR power-iteration cap (default: 100) |
+| `pprSeedPool` | integer (1-200) | ❌ | How many RRF hits feed the personalization vector (default: 16) |
+| `pprEdgeWeights` | object | ❌ | Override edge-type weights, e.g. `{"calls": 1.0, "imports": 0.7, "contains": 0.3}` |
 
 **Example usage in Claude:**
 ```

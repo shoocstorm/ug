@@ -15,6 +15,7 @@ use crate::storage::db::{
     edges_from, edges_to, fts_search, nodes_by_ids, vector_search, Db, EdgeRow, NodeRow,
 };
 use crate::storage::embed::Embedder;
+use crate::storage::ppr::{personalized_pagerank, PprOptions};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -384,6 +385,26 @@ pub fn read_snippet(
     }
 }
 
+/// Ranking strategy for the candidate pool produced by seed search +
+/// graph context. PPR is the default — it replaces the old BFS+MMR
+/// cascade with a single graph-aware ranking. MMR is kept as an opt-in
+/// fallback for callers who want diversity-first behavior or need to
+/// avoid the bulk-edge scan PPR performs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RankStrategy {
+    Ppr,
+    Mmr,
+}
+
+impl RankStrategy {
+    pub fn from_str_lossy(s: &str) -> Self {
+        match s.to_ascii_lowercase().as_str() {
+            "mmr" => RankStrategy::Mmr,
+            _ => RankStrategy::Ppr,
+        }
+    }
+}
+
 /// Configuration for [`search_kb`]. Keeping this as a struct keeps the
 /// NAPI signature small (one JSON blob) and allows future fields without
 /// breaking callers.
@@ -399,6 +420,21 @@ pub struct SearchKbOptions<'a> {
     pub repo_root: &'a Path,
     pub where_clause: Option<&'a str>,
     pub include_snippets: bool,
+    pub strategy: RankStrategy,
+    /// PPR teleport probability. Higher = stay closer to seeds; lower =
+    /// let structural centrality dominate. Ignored unless
+    /// `strategy == Ppr`.
+    pub ppr_restart_prob: f32,
+    /// PPR power-iteration cap. Ignored unless `strategy == Ppr`.
+    pub ppr_max_iter: usize,
+    /// Override the default edge-type weight table (id is
+    /// case-insensitive). `None` = use defaults from
+    /// [`crate::storage::ppr::default_edge_type_weights`].
+    pub ppr_edge_weights: Option<HashMap<String, f32>>,
+    /// Number of seeds passed into the PPR personalization vector. We
+    /// use a wider seed pool than `k` so a single noisy hit doesn't
+    /// dominate the random walker. Ignored unless `strategy == Ppr`.
+    pub ppr_seed_pool: usize,
 }
 
 impl<'a> SearchKbOptions<'a> {
@@ -414,14 +450,146 @@ impl<'a> SearchKbOptions<'a> {
             repo_root,
             where_clause: None,
             include_snippets: true,
+            strategy: RankStrategy::Ppr,
+            ppr_restart_prob: 0.15,
+            ppr_max_iter: 30,
+            ppr_edge_weights: None,
+            ppr_seed_pool: 16,
         }
     }
 }
 
-/// Phase 4 GraphRAG: seed search -> graph expansion -> rerank ->
-/// snippet attachment -> token-budgeted assembly. Returns a JSON-friendly
-/// [`RankedContext`].
+/// Phase 4 GraphRAG: seed search -> rank (PPR by default, MMR optional)
+/// -> snippet attachment -> token-budgeted assembly. Returns a
+/// JSON-friendly [`RankedContext`].
 pub async fn search_kb(
+    db: &Db,
+    embedder: &Embedder,
+    opts: SearchKbOptions<'_>,
+) -> Result<RankedContext, Box<dyn std::error::Error + Send + Sync>> {
+    match opts.strategy {
+        RankStrategy::Ppr => search_kb_ppr(db, embedder, opts).await,
+        RankStrategy::Mmr => search_kb_mmr(db, embedder, opts).await,
+    }
+}
+
+/// Default path: RRF seeds become a personalization vector for
+/// Personalized PageRank over the full edge graph. PPR scores replace
+/// both BFS expansion and MMR reranking — a single ranking that fuses
+/// seed proximity with graph-wide centrality.
+async fn search_kb_ppr(
+    db: &Db,
+    embedder: &Embedder,
+    opts: SearchKbOptions<'_>,
+) -> Result<RankedContext, Box<dyn std::error::Error + Send + Sync>> {
+    // 1. RRF seeds. Wider pool than `k` so a noisy top-1 doesn't
+    //    dominate the personalization vector.
+    let seed_pool = opts.ppr_seed_pool.max(opts.k.max(1));
+    let seeds = rrf_search(db, embedder, opts.query, seed_pool, opts.where_clause).await?;
+    let seed_id = seeds.first().map(|h| h.node.id.clone());
+
+    // 2. Personalization vector: RRF score (stored as -score in
+    //    `distance`) translated back to positive mass. Negate, floor
+    //    at zero, fall back to rank-decayed weights when distances are
+    //    zero (e.g. FTS-only path).
+    let mut seed_mass: HashMap<String, f32> = HashMap::new();
+    let mut any_positive = false;
+    for h in seeds.iter() {
+        let mass = (-h.distance).max(0.0);
+        if mass > 0.0 {
+            any_positive = true;
+        }
+        seed_mass.entry(h.node.id.clone()).or_insert(mass);
+    }
+    if !any_positive {
+        for (rank, h) in seeds.iter().enumerate() {
+            seed_mass.insert(h.node.id.clone(), 1.0 / (rank as f32 + 1.0));
+        }
+    }
+
+    // 3. PPR.
+    let mut ppr_opts = PprOptions::default();
+    ppr_opts.restart_prob = opts.ppr_restart_prob.clamp(0.01, 0.99);
+    ppr_opts.max_iter = opts.ppr_max_iter.max(1);
+    ppr_opts.direction = opts.direction;
+    if let Some(weights) = &opts.ppr_edge_weights {
+        ppr_opts.edge_type_weights = weights
+            .iter()
+            .map(|(k, v)| (k.to_ascii_lowercase(), *v))
+            .collect();
+    }
+    if let Some(allowed) = opts.edge_types {
+        ppr_opts.allowed_edge_types =
+            Some(allowed.iter().map(|s| s.to_ascii_lowercase()).collect());
+    }
+    let ranked = personalized_pagerank(db, &seed_mass, &ppr_opts).await?;
+
+    // 4. Hydrate the top-N node rows. Take a generous slice so the
+    //    char budget stage has room to discard sparse/empty entries.
+    let take = (opts.k * 4).max(opts.k.max(1));
+    let top_ids: Vec<String> = ranked
+        .ranked
+        .iter()
+        .take(take)
+        .map(|(id, _)| id.clone())
+        .collect();
+    let score_by_id: HashMap<String, f32> = ranked.ranked.into_iter().collect();
+    let nodes = nodes_by_ids(db, &top_ids).await?;
+    let nodes_by_id: HashMap<String, NodeRow> =
+        nodes.into_iter().map(|n| (n.id.clone(), n)).collect();
+
+    let mut items: Vec<ContextItem> = Vec::new();
+    let mut total_chars: usize = 0;
+    for id in top_ids.iter() {
+        let Some(n) = nodes_by_id.get(id) else { continue };
+        let score = score_by_id.get(id).copied().unwrap_or(0.0);
+        let snippet = if opts.include_snippets {
+            read_snippet(opts.repo_root, &n.file, n.start_line, n.end_line)
+        } else {
+            None
+        };
+        // `hop` field kept for backwards compatibility: 0 if seed,
+        // else 1 (PPR has no hop concept; seed/non-seed is the most
+        // useful signal we can preserve here).
+        let hop: u32 = if seed_mass.contains_key(id) { 0 } else { 1 };
+        let item = ContextItem {
+            id: n.id.clone(),
+            name: n.name.clone(),
+            node_type: n.node_type.clone(),
+            file: n.file.clone(),
+            start_line: n.start_line,
+            end_line: n.end_line,
+            description: n.description.clone(),
+            // Surface PPR score as a negated "distance" so existing
+            // downstream consumers (sort-ascending) keep working.
+            distance: -score,
+            hop,
+            snippet,
+        };
+        let item_chars = item.snippet.as_ref().map(|s| s.len()).unwrap_or(0)
+            + item.description.len()
+            + item.name.len();
+        if total_chars + item_chars > opts.max_chars && !items.is_empty() {
+            break;
+        }
+        total_chars += item_chars;
+        items.push(item);
+        if items.len() >= opts.k {
+            break;
+        }
+    }
+
+    Ok(RankedContext {
+        query: opts.query.to_string(),
+        items,
+        total_chars,
+        seed_id,
+    })
+}
+
+/// Legacy path: seed -> BFS expand -> MMR rerank. Kept available via
+/// `RankStrategy::Mmr` for callers who want diversity-first behavior.
+async fn search_kb_mmr(
     db: &Db,
     embedder: &Embedder,
     opts: SearchKbOptions<'_>,
@@ -436,9 +604,6 @@ pub async fn search_kb(
         traverse_filtered(db, &seed_ids, opts.hops, opts.edge_types, opts.direction).await?;
 
     // 3. Build candidate pool: union of seed hits + traversal nodes.
-    // Inherit distances from the seed hits where available; otherwise
-    // derive a synthetic distance from hop count so the reranker has a
-    // reasonable relevance signal even for nodes pulled in by expansion.
     let seed_dist: HashMap<String, f32> = seeds
         .iter()
         .map(|h| (h.node.id.clone(), h.distance))
@@ -454,7 +619,6 @@ pub async fn search_kb(
     for n in traversal.nodes.iter() {
         if seen.insert(n.id.clone()) {
             let hop = traversal.distances.get(&n.id).copied().unwrap_or(opts.hops);
-            // Synthetic distance: each hop costs 0.1, floor at 0.05.
             let dist = seed_dist
                 .get(&n.id)
                 .copied()

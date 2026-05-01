@@ -15,9 +15,10 @@ use crate::storage::embed::{Embedder, EmbedderConfig};
 use crate::storage::ingest::ingest_graph;
 use crate::storage::query::{
     search_kb as run_search_kb, semantic_search as run_semantic_search,
-    traverse_filtered as run_traverse_filtered, ContextItem, Direction, RankedContext,
-    SearchKbOptions,
+    traverse_filtered as run_traverse_filtered, ContextItem, Direction, RankStrategy,
+    RankedContext, SearchKbOptions,
 };
+use std::collections::HashMap;
 use crate::types::GraphData;
 use napi_derive::napi;
 use serde::{Deserialize, Serialize};
@@ -57,6 +58,20 @@ pub struct SearchKbJsonOptions {
     pub where_clause: Option<String>,
     #[serde(default)]
     pub include_snippets: Option<bool>,
+    /// Ranking strategy: "ppr" (default) or "mmr".
+    #[serde(default)]
+    pub strategy: Option<String>,
+    #[serde(default)]
+    pub ppr_restart_prob: Option<f64>,
+    #[serde(default)]
+    pub ppr_max_iter: Option<u32>,
+    #[serde(default)]
+    pub ppr_seed_pool: Option<u32>,
+    /// Edge-type weight overrides for PPR. Keys are case-insensitive
+    /// edge type names; values are non-negative weights. Edge types
+    /// not listed here fall back to the built-in defaults.
+    #[serde(default)]
+    pub ppr_edge_weights: Option<HashMap<String, f64>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -196,6 +211,11 @@ pub async fn db_hybrid_search(
         .as_deref()
         .map(Direction::from_str_lossy)
         .unwrap_or(Direction::Both);
+    let ppr_edge_weights: Option<HashMap<String, f32>> = opts.ppr_edge_weights.as_ref().map(|m| {
+        m.iter()
+            .map(|(k, v)| (k.clone(), *v as f32))
+            .collect()
+    });
 
     let mut kb_opts = SearchKbOptions::new(&opts.query, repo_root_buf.as_path());
     if let Some(k) = opts.k {
@@ -216,6 +236,19 @@ pub async fn db_hybrid_search(
     if let Some(s) = opts.include_snippets {
         kb_opts.include_snippets = s;
     }
+    if let Some(s) = opts.strategy.as_deref() {
+        kb_opts.strategy = RankStrategy::from_str_lossy(s);
+    }
+    if let Some(p) = opts.ppr_restart_prob {
+        kb_opts.ppr_restart_prob = p as f32;
+    }
+    if let Some(m) = opts.ppr_max_iter {
+        kb_opts.ppr_max_iter = m as usize;
+    }
+    if let Some(p) = opts.ppr_seed_pool {
+        kb_opts.ppr_seed_pool = p as usize;
+    }
+    kb_opts.ppr_edge_weights = ppr_edge_weights;
 
     let result: RankedContext = run_search_kb(&db, &embedder, kb_opts)
         .await

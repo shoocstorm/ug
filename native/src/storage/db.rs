@@ -363,6 +363,16 @@ pub async fn edges_to(db: &Db, node_id: &str) -> Result<Vec<EdgeRow>, DbError> {
     Ok(decode_edge_batches(&batches))
 }
 
+/// Bulk-scan every edge in the table. Used by graph-global algorithms
+/// (e.g. Personalized PageRank) that need the full adjacency in memory.
+/// At UltraGraph-KB scale (≤ a few hundred thousand edges per repo),
+/// this is single-digit MB and a single sub-second LanceDB scan.
+pub async fn all_edges(db: &Db) -> Result<Vec<EdgeRow>, DbError> {
+    let stream = db.edges.query().execute().await?;
+    let batches: Vec<RecordBatch> = stream.try_collect().await?;
+    Ok(decode_edge_batches(&batches))
+}
+
 /// Full-text search over the indexed string columns (`name`, `description`).
 /// Returns rows ranked by FTS score. LanceDB exposes the score via the
 /// `_score` column when the `phrase_query` API is used.

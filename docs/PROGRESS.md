@@ -95,11 +95,11 @@
 ## Phase 4: The GraphRAG Retrieval Protocol ✅ COMPLETED
 
 ### Core deliverables (per REQUIREMENT.md)
-- [x] **Hybrid Search Algorithm:**
-  1. Seed search via RRF (Reciprocal Rank Fusion of vector + FTS)
-  2. Graph expansion via `traverse_filtered` (direction + edge-type aware, multi-seed)
-  3. MMR reranking for diversity vs. relevance balance
-  4. Snippet extraction + token-budgeted context assembly
+- [x] **Hybrid Search Algorithm (PPR-first as of 2026-05-01):**
+  1. Seed search via RRF (Reciprocal Rank Fusion of vector + FTS) — RRF scores feed the personalization vector instead of being used as fixed BFS roots
+  2. **Personalized PageRank** over the edge graph (HippoRAG-style): edge-type-weighted random walk with restart, replaces both BFS expansion and MMR rerank with a single graph-aware ranking. Multi-seed by construction; central neighbors surface naturally
+  3. Snippet extraction + token-budgeted context assembly
+  4. Legacy MMR path retained behind `strategy: "mmr"` for callers who want diversity-first behavior
 - [x] **MCP Server Implementation:**
   - `src/mcp-server.mjs` — stdio MCP server using `@modelcontextprotocol/sdk` + `zod`
   - Tools: `search_kb` (uses `dbHybridSearch`), `traverse_kb` (uses `dbTraverse`), `ping_embedder`
@@ -108,7 +108,7 @@
 
 ### NAPI bindings (`native/src/storage/napi_bindings.rs`)
 - `dbIngest(graphJson, dbPath, embedderOptions?) -> Promise<string>`
-- `dbHybridSearch(dbPath, optionsJson, embedderOptions?) -> Promise<string>`
+- `dbHybridSearch(dbPath, optionsJson, embedderOptions?) -> Promise<string>` — `optionsJson` accepts `strategy: "ppr"|"mmr"`, `pprRestartProb`, `pprMaxIter`, `pprSeedPool`, `pprEdgeWeights` (in addition to the existing `query`, `k`, `hops`, `edgeTypes`, `direction`, `maxChars`, `mmrLambda`, `whereClause`, `includeSnippets`)
 - `dbSemanticSearch(dbPath, query, k, whereClause?, embedderOptions?) -> Promise<string>`
 - `dbTraverse(dbPath, startNodeIds, hops, edgeTypes?, direction?) -> Promise<string>`
 - `pingEmbedder(embedderOptions?) -> Promise<string>`
