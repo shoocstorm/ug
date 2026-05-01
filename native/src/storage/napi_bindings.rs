@@ -116,24 +116,16 @@ struct SemanticHitJson {
 }
 
 fn build_embedder(opts: Option<&EmbedderOptions>) -> Result<Embedder, String> {
-    let mut cfg = EmbedderConfig::default();
-    if let Some(o) = opts {
-        if let Some(b) = &o.base_url {
-            cfg.base_url = b.clone();
-        }
-        if let Some(a) = &o.api_key {
-            cfg.api_key = a.clone();
-        }
-        if let Some(m) = &o.model {
-            cfg.model = m.clone();
-        }
-        if let Some(bs) = o.batch_size {
-            cfg.batch_size = bs as usize;
-        }
-        if let Some(t) = o.timeout_secs {
-            cfg.timeout_secs = t as u64;
-        }
-    }
+    let cfg = match opts {
+        None => EmbedderConfig::default(),
+        Some(o) => EmbedderConfig::with_overrides(
+            o.base_url.clone(),
+            o.api_key.clone(),
+            o.model.clone(),
+            o.batch_size.map(|v| v as usize),
+            o.timeout_secs.map(|v| v as u64),
+        ),
+    };
     Embedder::new(cfg).map_err(|e| e.to_string())
 }
 
@@ -143,6 +135,23 @@ fn parse_embedder_options(json: Option<String>) -> Result<Option<EmbedderOptions
         Some(s) if s.is_empty() => Ok(None),
         Some(s) => serde_json::from_str(&s).map(Some).map_err(|e| e.to_string()),
     }
+}
+
+/// Combines option-parse + embedder build with their NAPI error mapping.
+/// Used by every public function that needs an embedder.
+fn embedder_from_json(json: Option<String>) -> napi::Result<Embedder> {
+    let opts = parse_embedder_options(json)
+        .map_err(|e| napi::Error::from_reason(format!("invalid embedder options: {}", e)))?;
+    build_embedder(opts.as_ref())
+        .map_err(|e| napi::Error::from_reason(format!("embedder init failed: {}", e)))
+}
+
+/// Open a LanceDB connection with NAPI error mapping. Connections are
+/// cheap (memory-mapped) so each call gets a fresh one.
+async fn open_db(path: &str) -> napi::Result<Db> {
+    Db::open(path)
+        .await
+        .map_err(|e| napi::Error::from_reason(format!("failed to open db: {}", e)))
 }
 
 /// Ingest a JSON graph (the output of `buildGraph`) into a LanceDB
@@ -155,15 +164,8 @@ pub async fn db_ingest(
 ) -> napi::Result<String> {
     let graph: GraphData = serde_json::from_str(&graph_json)
         .map_err(|e| napi::Error::from_reason(format!("invalid graph JSON: {}", e)))?;
-
-    let opts = parse_embedder_options(embedder_options)
-        .map_err(|e| napi::Error::from_reason(format!("invalid embedder options: {}", e)))?;
-    let embedder = build_embedder(opts.as_ref())
-        .map_err(|e| napi::Error::from_reason(format!("embedder init failed: {}", e)))?;
-
-    let db = Db::open(&db_path)
-        .await
-        .map_err(|e| napi::Error::from_reason(format!("failed to open db: {}", e)))?;
+    let embedder = embedder_from_json(embedder_options)?;
+    let db = open_db(&db_path).await?;
 
     let stats = ingest_graph(&db, &embedder, &graph)
         .await
@@ -189,14 +191,8 @@ pub async fn db_hybrid_search(
     let opts: SearchKbJsonOptions = serde_json::from_str(&options_json)
         .map_err(|e| napi::Error::from_reason(format!("invalid options: {}", e)))?;
 
-    let emb_opts = parse_embedder_options(embedder_options)
-        .map_err(|e| napi::Error::from_reason(format!("invalid embedder options: {}", e)))?;
-    let embedder = build_embedder(emb_opts.as_ref())
-        .map_err(|e| napi::Error::from_reason(format!("embedder init failed: {}", e)))?;
-
-    let db = Db::open(&db_path)
-        .await
-        .map_err(|e| napi::Error::from_reason(format!("failed to open db: {}", e)))?;
+    let embedder = embedder_from_json(embedder_options)?;
+    let db = open_db(&db_path).await?;
 
     let repo_root_buf: PathBuf = opts
         .repo_root
@@ -268,14 +264,8 @@ pub async fn db_semantic_search(
     where_clause: Option<String>,
     embedder_options: Option<String>,
 ) -> napi::Result<String> {
-    let emb_opts = parse_embedder_options(embedder_options)
-        .map_err(|e| napi::Error::from_reason(format!("invalid embedder options: {}", e)))?;
-    let embedder = build_embedder(emb_opts.as_ref())
-        .map_err(|e| napi::Error::from_reason(format!("embedder init failed: {}", e)))?;
-
-    let db = Db::open(&db_path)
-        .await
-        .map_err(|e| napi::Error::from_reason(format!("failed to open db: {}", e)))?;
+    let embedder = embedder_from_json(embedder_options)?;
+    let db = open_db(&db_path).await?;
 
     let hits = match where_clause.as_deref() {
         Some(w) => crate::storage::query::hybrid_search(&db, &embedder, &query, k as usize, w)
@@ -314,9 +304,7 @@ pub async fn db_traverse(
     edge_types: Option<Vec<String>>,
     direction: Option<String>,
 ) -> napi::Result<String> {
-    let db = Db::open(&db_path)
-        .await
-        .map_err(|e| napi::Error::from_reason(format!("failed to open db: {}", e)))?;
+    let db = open_db(&db_path).await?;
 
     let dir = direction
         .as_deref()
@@ -356,10 +344,7 @@ pub async fn db_traverse(
 /// failure with the upstream error message.
 #[napi]
 pub async fn ping_embedder(embedder_options: Option<String>) -> napi::Result<String> {
-    let opts = parse_embedder_options(embedder_options)
-        .map_err(|e| napi::Error::from_reason(format!("invalid embedder options: {}", e)))?;
-    let embedder = build_embedder(opts.as_ref())
-        .map_err(|e| napi::Error::from_reason(format!("embedder init failed: {}", e)))?;
+    let embedder = embedder_from_json(embedder_options)?;
     embedder
         .ping()
         .await

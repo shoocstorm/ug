@@ -8,24 +8,10 @@ Interactive force-directed graph visualization built with D3.js v7.
 
 ```bash
 npx serve ug-out -p 8080
-```
 
-Then open: http://localhost:8080
+or
 
-### Using npm start
-
-```bash
-npm start
-```
-
-Runs `npx serve ug-out -p 8080` — open http://localhost:8080.
-
-### Node.js HTTP Server (Global)
-
-```bash
-# Install serve globally or locally
-npm install -g serve
-serve ug-out -p 8080
+python3 -m http.server 8080 --directory ug-out
 ```
 
 Then open: http://localhost:8080

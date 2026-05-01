@@ -35,6 +35,37 @@ impl Default for EmbedderConfig {
     }
 }
 
+impl EmbedderConfig {
+    /// Build a config from defaults, applying any provided overrides.
+    /// Used by both the CLI (`--base-url`, etc.) and the NAPI surface
+    /// (camelCase JSON) so the override semantics stay in one place.
+    pub fn with_overrides(
+        base_url: Option<String>,
+        api_key: Option<String>,
+        model: Option<String>,
+        batch_size: Option<usize>,
+        timeout_secs: Option<u64>,
+    ) -> Self {
+        let mut cfg = Self::default();
+        if let Some(b) = base_url {
+            cfg.base_url = b;
+        }
+        if let Some(a) = api_key {
+            cfg.api_key = a;
+        }
+        if let Some(m) = model {
+            cfg.model = m;
+        }
+        if let Some(bs) = batch_size {
+            cfg.batch_size = bs;
+        }
+        if let Some(t) = timeout_secs {
+            cfg.timeout_secs = t;
+        }
+        cfg
+    }
+}
+
 #[derive(Serialize)]
 struct EmbeddingRequest<'a> {
     model: &'a str,
