@@ -22,6 +22,8 @@ pub(crate) const VIS_D3: &[u8] = include_bytes!("./vis/d3.v7.min.js");
 const VIS_MD: &str = include_str!("../../README.md");
 
 fn main() {
+    print_logo();
+
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
@@ -48,7 +50,9 @@ fn main() {
         "hybrid_search" => run_hybrid_search(cmd_args),
         "traverse" => run_traverse(cmd_args),
         "serve" => serve::run_serve(cmd_args),
-        "help" => print_help(),
+        "help" => {
+            print_help();
+        }
         _ => {
             eprintln!("Unknown command: {}", cmd);
             print_help();
@@ -144,7 +148,7 @@ fn write_or_print(output_path: Option<&str>, data: &str, label: &str) {
 
 // ---------- Embedder / runtime helpers ----------
 
-fn embedder_from_args(args: &[String]) -> Embedder {
+pub(crate) fn embedder_from_args(args: &[String]) -> Embedder {
     let cfg = EmbedderConfig::with_overrides(
         flag_value(args, &["--base-url"]),
         flag_value(args, &["--api-key"]),
@@ -340,6 +344,7 @@ fn run_gen(args: &[String]) {
     let cache = flag_value(args, &["-c", "--cache"]);
     let output_dir = flag_value_or(args, &["-o", "--output"], "ug-out");
     let no_ingest = has_flag(args, "--no-ingest");
+    let chain_serve = has_flag(args, "--serve");
     let db_path =
         flag_value(args, &["-o", "--output"]).unwrap_or_else(|| "ug-out/ugdb".to_string());
 
@@ -389,7 +394,8 @@ fn run_gen(args: &[String]) {
     let t2 = std::time::Instant::now();
     println!("▸ Copying visualization assets");
     fs::write(format!("{}/index.html", output_dir), VIS_HTML).expect("Failed to write index.html");
-    fs::write(format!("{}/d3.v7.min.js", output_dir), VIS_D3).expect("Failed to write d3.v7.min.js");
+    fs::write(format!("{}/d3.v7.min.js", output_dir), VIS_D3)
+        .expect("Failed to write d3.v7.min.js");
     fs::write(format!("{}/README.md", output_dir), VIS_MD).expect("Failed to write README.md");
     println!("  ✓ done in {:?}", t2.elapsed());
 
@@ -403,7 +409,15 @@ fn run_gen(args: &[String]) {
 
     if no_ingest {
         println!("⚠ Skipping db-ingest (--no-ingest)");
-        println!("Run ' ug serve -i {} ' and open http://127.0.0.1:8080", graph_path);
+        if chain_serve {
+            println!("Total time: {:?}", start_total.elapsed());
+            chain_to_serve(args, &graph_path, &db_path, true);
+            return;
+        }
+        println!(
+            "Run ' ug serve -i {} ' and open http://127.0.0.1:8080",
+            graph_path
+        );
         println!("Total time: {:?}", start_total.elapsed());
         return;
     }
@@ -441,6 +455,47 @@ fn run_gen(args: &[String]) {
         db_path
     );
     println!("Total time: {:?}", start_total.elapsed());
+
+    if chain_serve {
+        chain_to_serve(args, &graph_path, &db_path, false);
+    }
+}
+
+/// Build a synthetic args vec for `serve` from the gen invocation and call
+/// `serve::run_serve`. Inherits port/host/watch/repo-root and embedder flags
+/// from the original invocation; sets `-i`/`-d` to the freshly generated
+/// paths, and `--no-db` when the ingest step was skipped.
+fn chain_to_serve(args: &[String], graph_path: &str, db_path: &str, no_db: bool) {
+    let mut serve_args: Vec<String> = vec![
+        "-i".to_string(),
+        graph_path.to_string(),
+        "-d".to_string(),
+        db_path.to_string(),
+    ];
+    if no_db {
+        serve_args.push("--no-db".to_string());
+    }
+    if has_flag(args, "--watch") {
+        serve_args.push("--watch".to_string());
+    }
+    for &flag in &[
+        "-p",
+        "--port",
+        "--host",
+        "--repo-root",
+        "--base-url",
+        "--api-key",
+        "--model",
+    ] {
+        if let Some(v) = flag_value(args, &[flag]) {
+            serve_args.push(flag.to_string());
+            serve_args.push(v);
+        }
+    }
+    println!();
+    println!("────────────────────────────────────────");
+    println!("Starting web server...");
+    serve::run_serve(&serve_args);
 }
 
 async fn ingest_graph_with_progress(
@@ -641,7 +696,7 @@ fn run_ingest(args: &[String]) {
     });
 }
 
-// vector search on LanceDB (only)
+// vector search on OverGraph (only)
 fn run_semantic_search(args: &[String]) {
     if args.is_empty() {
         eprintln!(
@@ -677,7 +732,7 @@ fn run_semantic_search(args: &[String]) {
     let rt = tokio_runtime();
 
     let result_json = rt.block_on(async {
-        let db = Db::open(&db_path).await.expect("failed to open lancedb");
+        let db = Db::open(&db_path).await.expect("failed to open OverGraph");
         let hits = match filter.as_deref() {
             Some(f) => storage::semantic_search_w_where(&db, &embedder, &query, limit, f)
                 .await
@@ -773,7 +828,7 @@ fn run_hybrid_search(args: &[String]) {
     let rt = tokio_runtime();
 
     let result_json = rt.block_on(async {
-        let db = Db::open(&db_path).await.expect("failed to open lancedb");
+        let db = Db::open(&db_path).await.expect("failed to open OverGraph");
         let mut opts = SearchKbOptions::new(&query, repo_root.as_path());
         opts.k = k;
         opts.hops = hops;
@@ -816,7 +871,7 @@ fn run_traverse(args: &[String]) {
 
     let rt = tokio_runtime();
     let json = rt.block_on(async {
-        let db = Db::open(&db_path).await.expect("failed to open lancedb");
+        let db = Db::open(&db_path).await.expect("failed to open OverGraph");
         let result = storage_traverse(&db, &start, hops)
             .await
             .expect("traverse failed");
@@ -857,14 +912,77 @@ fn run_traverse(args: &[String]) {
 // ---------- Help ----------
 
 fn print_gen_help() {
-    println!("gen [<path>]  Full pipeline: index → graph → visualization → LanceDB ingest");
+    println!("gen [<path>]  Full pipeline: index → graph → visualization → OverGraph ingest");
     println!("  -i, --input <path>   Input directory (default: .)");
     println!("  -c, --cache <dir>    Cache directory for incremental indexing");
-    println!("  -o, --output <dir>   Output/LanceDB directory (default: ug-out)");
-    println!("  --no-ingest          Skip the LanceDB ingest step");
+    println!("  -o, --output <dir>   Output/OverGraph directory (default: ug-out)");
+    println!("  --no-ingest          Skip the OverGraph ingest step");
+    println!("  --serve              After gen, chain into ' ug serve ' on the generated outputs");
+    println!(
+        "                       (inherits -p/--port, --host, --watch, --repo-root, embedder flags)"
+    );
     println!("  --base-url <url>     Embedding endpoint (default: http://localhost:8000/v1)");
     println!("  --api-key <key>      Embedding API key");
     println!("  --model <name>       Embedding model");
+}
+
+fn print_logo() {
+    let cyan = "\x1b[36m";
+    let magenta = "\x1b[35m";
+    let yellow = "\x1b[33m";
+    let green = "\x1b[32m";
+    let blue = "\x1b[34m";
+    let reset = "\x1b[0m";
+    let bold = "\x1b[1m";
+
+    println!(
+        "{bold}{cyan}  _   _ {magenta} _ {yellow} _             {green} _____                 _     {reset}",
+        bold = bold,
+        cyan = cyan,
+        magenta = magenta,
+        yellow = yellow,
+        green = green,
+        reset = reset
+    );
+    println!(
+        "{bold}{cyan} | | | |{magenta}| |_ {yellow}___ ___ ___  {green}|   __|___ ___ ___ ___| |_   {reset}",
+        bold = bold,
+        cyan = cyan,
+        magenta = magenta,
+        yellow = yellow,
+        green = green,
+        reset = reset
+    );
+    println!(
+        "{bold}{cyan} | | | |{magenta}|  _|{yellow}  _| .'| . | {green}|  |  |  _| .'| . |   |  _|  {reset}",
+        bold = bold,
+        cyan = cyan,
+        magenta = magenta,
+        yellow = yellow,
+        green = green,
+        reset = reset
+    );
+    println!(
+        "{bold}{cyan} |_____|{magenta}|_| {yellow}|_| |__,|_  | {green}|_____|_| |__,|  _|_|_|_|    {reset}",
+        bold = bold,
+        cyan = cyan,
+        magenta = magenta,
+        yellow = yellow,
+        green = green,
+        reset = reset
+    );
+    println!(
+        "{bold}{yellow}                       |___| {green}              |_|            {reset}",
+        bold = bold,
+        yellow = yellow,
+        green = green,
+        reset = reset
+    );
+    println!();
+    println!(
+        "        {bold}{blue}⊂{reset}{bold}{magenta}ヽ{reset}{bold}{blue}({reset}{bold}{cyan}◕{reset}{bold}{magenta}‿{reset}{bold}{cyan}◕{reset}{bold}{blue}){reset}{bold}{magenta}ﾉ{reset}{bold}{blue}⊃{reset}  {bold}{yellow}✨ UltraGraph: Ultra-fast Knowledge Graph ✨{reset}"
+    );
+    println!();
 }
 
 fn print_help() {
@@ -908,25 +1026,26 @@ fn print_help() {
     println!("    -o, --output <dir> Output directory (default: ug-out)");
     println!();
     println!(
-        "  gen [<path>]         Full pipeline: index → graph → visualization → LanceDB ingest"
+        "  gen [<path>]         Full pipeline: index → graph → visualization → OverGraph ingest"
     );
     println!("    -i, --input <path>  Input directory (default: .)");
     println!("    -c, --cache <dir>   Cache directory");
-    println!("    -o, --output <dir>  Output/LanceDB directory (default: ug-out)");
-    println!("    --no-ingest         Skip the LanceDB ingest step");
+    println!("    -o, --output <dir>  Output/OverGraph directory (default: ug-out)");
+    println!("    --no-ingest         Skip the OverGraph ingest step");
+    println!("    --serve             Chain into ' ug serve ' on the generated outputs after gen finishes");
     println!("    --base-url/--api-key/--model  Embedding endpoint overrides");
     println!();
-    println!("  ingest               Embed graph nodes and write to LanceDB");
+    println!("  ingest               Embed graph nodes and write to OverGraph");
     println!("    -i, --input <file>  Graph JSON (default: ug-out/graph.json)");
-    println!("    -o, --output <dir> LanceDB directory (default: ug-out/ugdb)");
+    println!("    -o, --output <dir> OverGraph directory (default: ug-out/ugdb)");
     println!("    --base-url <url>   Embedding endpoint (default: http://localhost:8000/v1)");
     println!("    --api-key <key>    Embedding API key (default: 1234)");
     println!(
         "    --model <name>     Embedding model (default: openai/Qwen3-Embedding-0.6B-4bit-DWQ)"
     );
     println!();
-    println!("  semantic_search <query>      Semantic vector search (LanceDB, no graph context)");
-    println!("    -d, --db <path>    LanceDB directory (default: ug-out/ugdb)");
+    println!("  semantic_search <query>      Semantic vector search (OverGraph, no graph context)");
+    println!("    -d, --db <path>    OverGraph directory (default: ug-out/ugdb)");
     println!("    -k, --limit <n>    Top-k results (default: 10)");
     println!("    --filter <sql>     Optional SQL WHERE clause");
     println!("    --base-url/--api-key/--model  Embedding endpoint overrides");
@@ -935,7 +1054,7 @@ fn print_help() {
     println!(
         "  hybrid_search <query>        GraphRAG: semantic search → graph expansion → ranked context"
     );
-    println!("    -d, --db <path>     LanceDB directory (default: ug-out/ugdb)");
+    println!("    -d, --db <path>     OverGraph directory (default: ug-out/ugdb)");
     println!("    -k, --limit <n>     Final results (default: 8)");
     println!("    --hops <n>          Graph expansion hops (default: 2)");
     println!("    --filter <sql>      SQL WHERE clause for semantic seed filter");
@@ -949,8 +1068,8 @@ fn print_help() {
     println!("    --base-url/--api-key/--model  Embedding endpoint overrides");
     println!("    -o, --output <file> Output file (optional, omit for stdout)");
     println!();
-    println!("  traverse <node-id>   K-hop BFS using the LanceDB edges table");
-    println!("    -d, --db <path>    LanceDB directory (default: ug-out/ugdb)");
+    println!("  traverse <node-id>   K-hop BFS using the OverGraph edges table");
+    println!("    -d, --db <path>    OverGraph directory (default: ug-out/ugdb)");
     println!("    -k, --hops <n>     Max hops (default: 2)");
     println!("    -o, --output <file> Output file (optional)");
     println!();
@@ -959,8 +1078,20 @@ fn print_help() {
     println!("    -p, --port <n>      TCP port (default: 8080)");
     println!("    --host <addr>       Bind address (default: 127.0.0.1; use 0.0.0.0 for LAN)");
     println!("    --watch             Reload graph file when its mtime changes (~2s poll)");
-    println!("    API: GET /api/graph/{{stats, node/<id>, search?q=&types=, bfs/<id>?k=,");
-    println!("                          path?source=&target=, filter?types=, centrality, cycles}}");
+    println!("    -d, --db <path>     OverGraph DB for /api/db + /api/search routes (default: ug-out/ugdb)");
+    println!("    --no-db             Don't open DB; Phase 3 routes return 503");
+    println!(
+        "    --repo-root <path>  Repo root for hybrid-search snippet resolution (default: cwd)"
+    );
+    println!(
+        "    --base-url/--api-key/--model  Embedding endpoint overrides (same as ingest/search)"
+    );
+    println!("    API: GET  /api/graph/{{stats, node/<id>, search?q=&types=, bfs/<id>?k=,");
+    println!(
+        "                           path?source=&target=, filter?types=, centrality, cycles}}"
+    );
+    println!("         GET  /api/db/{{node/<id>, traverse/<id>?k=&dir=&types=}}");
+    println!("         POST /api/search/{{semantic, hybrid}}  body: JSON");
     println!();
     println!("Examples:");
     println!("  ug index -i ./src -o index.json");
@@ -972,7 +1103,7 @@ fn print_help() {
     println!("  ug search_graph graph.json loadConfig --type function --type class");
     println!("  ug analyze");
     println!("  ug gen -i ./src -o ./ug-out");
-    println!("  ug gen -i ./src --no-ingest");
+    println!("  ug gen -i ./src --no-ingest --serve");
     println!("  ug ingest -i ug-out/graph.json -o ug-out/ugdb");
     println!("  ug semantic_search \"oauth login flow\" -d ug-out/ugdb");
     println!("  ug hybrid_search \"oauth login flow\" -d ug-out/ugdb -k 8");

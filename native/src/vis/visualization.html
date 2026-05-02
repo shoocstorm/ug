@@ -210,9 +210,15 @@
             display: flex;
             flex-direction: column;
             transform: translateX(0);
-            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.25s ease;
             z-index: 40;
             box-shadow: 0 0 40px rgba(0, 0, 0, 0.4);
+        }
+
+        #sidebar.pending,
+        #sidebar-toggle.pending {
+            opacity: 0;
+            pointer-events: none;
         }
 
         #sidebar.collapsed {
@@ -828,7 +834,7 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            transition: left 0.3s cubic-bezier(0.4, 0, 0.2, 1), background 0.15s, color 0.15s;
+            transition: left 0.3s cubic-bezier(0.4, 0, 0.2, 1), background 0.15s, color 0.15s, opacity 0.25s ease;
             z-index: 41;
         }
 
@@ -1332,7 +1338,7 @@
             <p id="graph-title">Interactive visualization</p>
         </div>
 
-        <aside id="sidebar">
+        <aside id="sidebar" class="pending">
             <div class="sidebar-header">
                 <div class="brand">
                     <div class="brand-dot"></div>
@@ -1492,7 +1498,7 @@
             </div>
         </aside>
 
-        <button id="sidebar-toggle" title="Toggle sidebar">
+        <button id="sidebar-toggle" class="pending" title="Toggle sidebar">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
                 stroke-linejoin="round">
                 <polyline points="15 18 9 12 15 6" />
@@ -1769,6 +1775,8 @@
             render();
 
             document.getElementById('loading').style.display = 'none';
+            document.getElementById('sidebar').classList.remove('pending');
+            document.getElementById('sidebar-toggle').classList.remove('pending');
             wireSidebarSections();
             wireSearch();
             wireToggle();

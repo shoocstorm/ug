@@ -157,6 +157,21 @@ impl Db {
         Ok(None)
     }
 
+    /// Hydrate a single node row by its project string id. Cheaper than
+    /// `traverse(id, 0)` (which OverGraph currently rejects) and avoids
+    /// the over-fetch of `traverse(id, 1)`. Used by `ug serve`'s
+    /// `/api/db/node/<id>` endpoint.
+    pub fn fetch_node(&self, key: &str) -> Result<Option<NodeRow>, DbError> {
+        let Some(numeric) = self.lookup_id(key)? else {
+            return Ok(None);
+        };
+        let Some(rec) = self.engine.get_node(numeric)? else {
+            return Ok(None);
+        };
+        self.remember(rec.key.clone(), rec.id);
+        Ok(Some(node_record_to_row(&rec)))
+    }
+
     fn remember(&self, key: String, id: u64) {
         self.key_to_id.write().unwrap().insert(key.clone(), id);
         self.id_to_key.write().unwrap().insert(id, key);

@@ -36,9 +36,11 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
 futures = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 axum = "0.7"
-tower-http = { version = "0.5", features = ["compression-br", "compression-gzip"] }
+tower-http = { version = "0.5", features = ["compression-br", "compression-gzip", "trace"] }
 flate2 = "1"
 brotli = "8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [build-dependencies]
 napi-build = "1"
