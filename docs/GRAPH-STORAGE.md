@@ -1,6 +1,6 @@
 # Knowledge Graph Storage with OverGraph (Rust)
 
-> **Migration note (2026-05-01):** Storage moved from LanceDB to **OverGraph** v0.6.0. See `MIGRATION-OVERGRAPH.md` for the rationale, API mapping, and §6 trade-offs. The historical LanceDB version of this document is preserved in `git log` on `main` prior to commit `migrate/overgraph`.
+> **Migration note (2026-05-01):** Storage moved from LanceDB to **OverGraph** v0.6.0. See `MIGRATION-OVERGRAPH.md` for the rationale, API mapping, and §6 trade-offs. 
 
 ## Objective
 Implement a knowledge graph storage system in Rust using OverGraph for persistence and local embedding generation. Use explicit embeddings.
@@ -48,8 +48,6 @@ OverGraph keys nodes by `(type_id: u32, key: String)` and edges by `(from_id, to
 **Why the edge weight matters:** OverGraph PPR has no per-edge-type weight knob, only an `edge_type_filter`. So we encode the structural bias (Calls=1.0, Imports=0.7, Contains=0.3, …) into each edge's *weight* at upsert time. The `default_edge_type_weights()` table in `native/src/storage/ppr.rs` is the source of truth.
 
 ### Embedding Generation (Explicit)
-
-Unchanged from the LanceDB-era flow:
 
 1. Load embedding endpoint config once.
 2. For each node, build `node_text = "{type}: {name}. {description}. Related: {list_of_related_names}"`.

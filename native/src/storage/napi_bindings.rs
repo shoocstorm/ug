@@ -5,7 +5,7 @@
 //! shipping every internal struct over the NAPI boundary as a typed
 //! object - a single string is easier to evolve.
 //!
-//! Each call opens the LanceDB connection from `db_path`. LanceDB
+//! Each call opens the OverGraph connection from `db_path`. OverGraph
 //! reopens are cheap (memory-mapped) so this trades a tiny per-call
 //! cost for a much simpler API surface and matches how the MCP server
 //! is expected to be driven (one request -> one call).
@@ -148,7 +148,7 @@ fn embedder_from_json(json: Option<String>) -> napi::Result<Embedder> {
         .map_err(|e| napi::Error::from_reason(format!("embedder init failed: {}", e)))
 }
 
-/// Open a LanceDB connection with NAPI error mapping. Connections are
+/// Open a OverGraph connection with NAPI error mapping. Connections are
 /// cheap (memory-mapped) so each call gets a fresh one.
 async fn open_db(path: &str) -> napi::Result<Db> {
     Db::open(path)
@@ -156,7 +156,7 @@ async fn open_db(path: &str) -> napi::Result<Db> {
         .map_err(|e| napi::Error::from_reason(format!("failed to open db: {}", e)))
 }
 
-/// Ingest a JSON graph (the output of `buildGraph`) into a LanceDB
+/// Ingest a JSON graph (the output of `buildGraph`) into a OverGraph
 /// instance at `db_path`. Returns ingest stats as JSON.
 #[napi]
 pub async fn db_ingest(

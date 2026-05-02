@@ -12,7 +12,7 @@ UltraGraph-KB transforms a codebase into a **semantic knowledge graph** — a st
 |------|---------|
 | Node.js | 20+ |
 | Rust | latest stable |
-| protoc | any (needed by LanceDB internals) |
+| protoc | any (needed by OverGraph internals) |
 
 On macOS:
 
@@ -72,7 +72,7 @@ node src/cli.cjs index ./src -c ./.ug-cache
 node src/cli.cjs graph ug-out/indexed-tree.json -o ug-out/graph.json
 ```
 
-Or use `gen` to do index + graph + visualization + LanceDB ingest in one command:
+Or use `gen` to do index + graph + visualization + OverGraph ingest in one command:
 
 ```bash
 node src/cli.cjs gen -i ./src -o ./ug-out
@@ -123,7 +123,7 @@ These features require a running local embedding endpoint. Default config:
 node src/cli.cjs ping
 ```
 
-### Ingest Graph into LanceDB
+### Ingest Graph into OverGraph
 
 ```bash
 node src/cli.cjs ingest ug-out/graph.json ug-out/ugdb
@@ -151,8 +151,8 @@ index         Index a directory
 graph         Build graph from index result
 bfs           K-hop BFS traversal (in-memory graph)
 graph-search  Keyword search over graph nodes
-ingest        Embed graph into LanceDB
-traverse      K-hop BFS over LanceDB edges (with type filter)
+ingest        Embed graph into OverGraph
+traverse      K-hop BFS over OverGraph edges (with type filter)
 rag           End-to-end GraphRAG retrieval
 ping          Probe embedding endpoint
 help          Show help for commands
@@ -181,7 +181,7 @@ ug/
 │   │   ├── indexer.rs     # File scanning + AST parsing
 │   │   ├── graph.rs       # Graph building + BFS
 │   │   ├── types.rs       # Shared data structures
-│   │   └── storage/       # LanceDB + embedding + GraphRAG
+│   │   └── storage/       # OverGraph + embedding + GraphRAG
 │   ├── Cargo.toml
 │── ug-out/ultragraph-kb.node # Built native module
 ├── src/
@@ -215,7 +215,7 @@ Second run only re-parses files whose blake3 hash changed.
 `gen` already runs ingest at the end (skip with `--no-ingest` if your embedding endpoint isn't up):
 
 ```bash
-# 1. One command does indexing + graph + visualization + LanceDB ingest
+# 1. One command does indexing + graph + visualization + OverGraph ingest
 node src/cli.cjs gen -i ./my-project -o ./ug-out
 
 # 2. Query with context retrieval

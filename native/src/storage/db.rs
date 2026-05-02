@@ -6,7 +6,7 @@
 //! ids internally.
 //!
 //! The public function names and signatures intentionally mirror the
-//! previous LanceDB layer (`upsert_nodes`, `upsert_edges`, `vector_search`,
+//! previous OverGraph layer (`upsert_nodes`, `upsert_edges`, `vector_search`,
 //! `fts_search`, `edges_from`, `edges_to`, `nodes_by_ids`, `all_edges`)
 //! so `query.rs` and `ingest.rs` don't need to change in this phase.
 //! Phase D will retarget those callers to the more idiomatic OverGraph
@@ -262,7 +262,7 @@ impl Db {
     }
 
     /// No-op on OverGraph — vector indexes are built per-segment at flush
-    /// time. Kept for call-site compatibility with the previous LanceDB
+    /// time. Kept for call-site compatibility with the previous OverGraph
     /// API;
     pub async fn try_create_vector_index(&self) -> Result<(), DbError> {
         Ok(())

@@ -5,7 +5,7 @@ This requirements file is optimized for a **High-Performance Hybrid Architecture
  * **Core Engine (Rust):** File walking (ignore crate), AST Parsing (tree-sitter), and Incremental Hashing (blake3).
  * **Bridge (NAPI-RS):** Compiles Rust logic into a native .node module for TypeScript.
  * **Storage (Embeddable):** * **Graph:** Oxigraph (SPARQL/RDF support) or SurrealDB (embedded mode).
-   * **Vector:** LanceDB (Native NodeJS/Rust integration).
+   * **Vector:** OverGraph (Native NodeJS/Rust integration).
  * **Interface (TypeScript):** Node.js 20+, pnpm, zod for schema validation.
 ## 📋 Implementation Phases
 ### Phase 1: The Native "Turbo" Indexer (Rust)
@@ -42,7 +42,7 @@ This requirements file is optimized for a **High-Performance Hybrid Architecture
 
 ### Phase 3: Semantic Storage & Enrichment
 *Goal: Add "meaning" to the structural map using local LLMs.*
- * [ ] **Vector Integration:** Generate embeddings for extracted graph nodes and edges and store them in LanceDB using a local embedding model.
+ * [ ] **Vector Integration:** Generate embeddings for extracted graph nodes and edges and store them in OverGraph using a local embedding model.
 ```Local embedding model settings:
 Model: openai/Qwen3-Embedding-0.6B-4bit-DWQ
 Base URL: http://localhost:8000/v1
@@ -74,7 +74,7 @@ API Key: 1234
  1. **Initialize:** "Create a new monorepo with a /native folder for Rust and a /lib folder for TypeScript."
  2. **Step 1:** "Implement the NAPI-RS boilerplate in /native and a simple file-walking function."
  3. **Step 2:** "Integrate Tree-sitter in Rust to extract TypeScript interfaces."
- 4. **Step 3:** "Build the TypeScript wrapper to store these symbols in LanceDB."
+ 4. **Step 3:** "Build the TypeScript wrapper to store these symbols in OverGraph."
 > **Note:** Since you are on **macOS**, ensure the Rust target is configured for aarch64-apple-darwin to take full advantage of your Mac's M-series performance.
 
 ## 🚀 Enhanced Extraction Plan (v2)
@@ -205,7 +205,7 @@ API Key: 1234
 ### Phase 3: Semantic Enrichment (TypeScript) - Extended
 
 *Goal: Add "meaning" to the structural map using local LLMs.*
-* [x] **Vector Integration:** Embed extracted docstrings and code comments into LanceDB using a local model (e.g., all-MiniLM-L6-v2).
+* [x] **Vector Integration:** Embed extracted docstrings and code comments into OverGraph using a local model (e.g., all-MiniLM-L6-v2).
 * [x] **Semantic Clustering:** * Group related symbols into "Functional Modules."
   * Use Ollama to generate high-level summaries for these clusters (e.g., "This module handles OAuth2 authentication").
 
@@ -311,7 +311,7 @@ Default edge-type weights: `calls=1.0, extends=0.9, implements=0.9, imports=0.7,
 > 
 
 ### Perf
-With LanceDB, it took ~5min to import (with embeddings on MacBook Pro M5 Max 18-core 40-GPU 128GB):
+With OverGraph, it took ~5min to import (with embeddings on MacBook Pro M5 Max 18-core 40-GPU 128GB):
 ▸ Ingesting into ug-out/ugdb
   ✓ 41619 nodes, 95071 edges embedded
 index-tree.json - 20MB

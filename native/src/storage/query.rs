@@ -55,7 +55,7 @@ impl Direction {
 }
 
 /// Vector search by free-text query. Embeds `query` once with `embedder`,
-/// then asks LanceDB for the top-`k` nearest node rows.
+/// then asks OverGraph for the top-`k` nearest node rows.
 pub async fn semantic_search(
     db: &Db,
     embedder: &Embedder,

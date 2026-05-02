@@ -29,10 +29,7 @@ pub async fn ingest_graph(
         .nodes
         .iter()
         .map(|n| {
-            let names = related
-                .get(&n.id)
-                .map(|v| v.as_slice())
-                .unwrap_or(&[][..]);
+            let names = related.get(&n.id).map(|v| v.as_slice()).unwrap_or(&[][..]);
             build_node_text(n, names)
         })
         .collect();
@@ -103,7 +100,7 @@ pub async fn ingest_graph(
 
 /// Vector indexing is worthwhile once a table has more rows than this.
 /// Below it, scan latency is already low and IvfPq training tends to
-/// fail. The exact threshold is approximate; LanceDB picks the index
+/// fail. The exact threshold is approximate; OverGraph picks the index
 /// type via `Index::Auto`, so the only thing we control is whether to
 /// even try.
 const MIN_ROWS_FOR_VECTOR_INDEX: usize = 256;
@@ -139,8 +136,7 @@ pub async fn reembed_nodes(
     }
     let related = collect_related_names(graph);
     let now = current_unix_secs();
-    let id_set: std::collections::HashSet<&str> =
-        changed_ids.iter().map(|s| s.as_str()).collect();
+    let id_set: std::collections::HashSet<&str> = changed_ids.iter().map(|s| s.as_str()).collect();
 
     let mut texts: Vec<String> = Vec::new();
     let mut targets: Vec<&crate::types::GraphNode> = Vec::new();

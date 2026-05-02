@@ -69,7 +69,7 @@ ug gen -i ./src -o ./ug-out
 
 ### `ug ingest`
 
-Embed graph nodes into LanceDB.
+Embed graph nodes into OverGraph.
 
 ```bash
 ug ingest -g ug-out/graph.json -d ug-out/ugdb
@@ -85,7 +85,7 @@ ug semantic_search "build a tree" -d ug-out/ugdb --filter "node_type = 'Function
 
 ### `ug traverse`
 
-K-hop BFS over LanceDB edges.
+K-hop BFS over OverGraph edges.
 
 ```bash
 ug traverse file:src/index.ts -d ug-out/ugdb -k 2
@@ -145,7 +145,7 @@ native/
 │   ├── types.rs            # Data structures
 │   └── storage/
 │       ├── mod.rs
-│       ├── db.rs           # LanceDB schemas + queries
+│       ├── db.rs           # OverGraph schemas + queries
 │       ├── embed.rs        # Embedding HTTP client
 │       ├── ingest.rs       # Embed + upsert pipeline
 │       ├── query.rs        # search, traverse, RRF, MMR, snippets
@@ -196,7 +196,7 @@ native/
 - Edge-type filtering
 
 ### Storage & GraphRAG
-- LanceDB persistence (nodes + edges tables)
+- OverGraph persistence (nodes + edges tables)
 - Vector search (1024-dim embeddings)
 - FTS search (name + description)
 - RRF hybrid search (vector + FTS fusion)

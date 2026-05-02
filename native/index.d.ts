@@ -11,7 +11,7 @@ export declare function calculateCentrality(graphJson: string): string
 export declare function dbHybridSearch(dbPath: string, optionsJson: string, embedderOptions?: string | undefined | null): Promise<string>
 
 /**
- * Ingest a JSON graph (the output of `buildGraph`) into a LanceDB
+ * Ingest a JSON graph (the output of `buildGraph`) into a OverGraph
  * instance at `db_path`. Returns ingest stats as JSON.
  */
 export declare function dbIngest(graphJson: string, dbPath: string, embedderOptions?: string | undefined | null): Promise<string>

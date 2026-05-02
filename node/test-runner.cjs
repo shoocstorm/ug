@@ -477,8 +477,8 @@ export class Calculator { }`);
     rmSync(testDir, { recursive: true });
   }
 
-  // Test 18: Ingest into LanceDB and traverse
-  console.log('Test 18: Ingest graph into LanceDB and traverse');
+  // Test 18: Ingest into OverGraph and traverse
+  console.log('Test 18: Ingest graph into OverGraph and traverse');
   {
     const testDir = mkdtempSync(join(tmpdir(), 'kb-ingest1-'));
     const dbPath = join(testDir, 'test_db');

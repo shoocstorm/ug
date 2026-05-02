@@ -95,7 +95,7 @@ const commands = {
   },
   gen: {
     usage: '[-i|--input <input-dir, default: .>] [-c|--cache <cache-dir>] [-o|--output <output-dir, default: ./ug-out>] [-d|--db <db-path, default: ./ug-out/ugdb>] [--no-ingest] [-m|--model <embedding-model-name>] [-b|--base-url <embedding-api-base-url>] [-a|--api-key <embedding-api-key>]',
-    desc: 'Full pipeline: index → graph → visualization → LanceDB ingest. DB defaults to <output-dir>/ugdb. Pass --no-ingest to skip ingestion (no embedding endpoint required).',
+    desc: 'Full pipeline: index → graph → visualization → OverGraph ingest. DB defaults to <output-dir>/ugdb. Pass --no-ingest to skip ingestion (no embedding endpoint required).',
     run: async (args) => {
       if (args.includes('-h') || args.includes('--help')) {
         console.log(`gen ${commands.gen.usage}`);
@@ -106,7 +106,7 @@ const commands = {
       const cachePath = extractFlag(args, '-c') || extractFlag(args, '--cache');
       const outputDir = extractFlag(args, '-o') || extractFlag(args, '--output') || 'ug-out';
 
-      console.log(chalk.cyan('\n⚡ Full pipeline: ') + chalk.white('index ') + chalk.gray('→') + chalk.white(' graph ') + chalk.gray('→') + chalk.white(' visualization ') + chalk.gray('→') + chalk.white(' LanceDB ingest'));
+      console.log(chalk.cyan('\n⚡ Full pipeline: ') + chalk.white('index ') + chalk.gray('→') + chalk.white(' graph ') + chalk.gray('→') + chalk.white(' visualization ') + chalk.gray('→') + chalk.white(' OverGraph ingest'));
 
       if (!existsSync(outputDir)) {
         mkdirSync(outputDir, { recursive: true });
@@ -204,7 +204,7 @@ const commands = {
   },
   'db-ingest': {
     usage: '<graph-json-file> <db-path> [-b|--base-url <url>] [-a|--api-key <key>] [-m|--model <name>]',
-    desc: 'LanceDB: Embed graph nodes and write to LanceDB. Requires a running embedding endpoint.',
+    desc: 'OverGraph: Embed graph nodes and write to OverGraph. Requires a running embedding endpoint.',
     run: async (args) => {
       if (args.length < 2) {
         throw new Error(`Usage: db-ingest ${commands['db-ingest'].usage}\n  ${commands['db-ingest'].desc}`);
@@ -219,7 +219,7 @@ const commands = {
   },
   'db-traverse': {
     usage: '<db-path> <start-node-id> [-k <hops>] [-e|--edge-type <type>]... [--direction <outbound|inbound|both>]',
-    desc: 'LanceDB: K-hop BFS traversal using edges table with optional edge-type filtering.',
+    desc: 'OverGraph: K-hop BFS traversal using edges table with optional edge-type filtering.',
     run: async (args) => {
       if (args.length < 3) {
         throw new Error(`Usage: db-traverse ${commands['db-traverse'].usage}\n  ${commands['db-traverse'].desc}`);
@@ -235,7 +235,7 @@ const commands = {
   },
   'db-rag': {
     usage: '<db-path> <query> [-k <limit>] [--strategy <ppr|mmr>] [--restart-prob <0..1>] [--seed-pool <n>] [--direction <outbound|inbound|both>] [--edge-type <type>]... [-b|--base-url <url>] [-a|--api-key <key>] [-m|--model <name>]',
-    desc: 'LanceDB: End-to-end GraphRAG retrieval. Default ranking: Personalized PageRank seeded by RRF (vector + FTS). Pass --strategy mmr for legacy seed+BFS+MMR.',
+    desc: 'OverGraph: End-to-end GraphRAG retrieval. Default ranking: Personalized PageRank seeded by RRF (vector + FTS). Pass --strategy mmr for legacy seed+BFS+MMR.',
     run: async (args) => {
       if (args.length < 2) {
         throw new Error(`Usage: db-rag ${commands['db-rag'].usage}\n  ${commands['db-rag'].desc}`);

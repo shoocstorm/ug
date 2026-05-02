@@ -73,7 +73,7 @@
 ---
 
 ## Phase 3: Semantic Storage & Enrichment ✅ COMPLETED
-- [x] Vector Integration: Embed graph nodes into LanceDB via local OpenAI-compatible endpoint
+- [x] Vector Integration: Embed graph nodes into OverGraph via local OpenAI-compatible endpoint
 - [x] Auto index creation (vector + FTS)
 - [x] Folder-aware embedding text: pre-enrichment, folder nodes get a synthesized synopsis from classification + language breakdown + depth so they carry retrieval signal even before LLM summaries arrive; post-enrichment, `folder.summary` (or `docstring`) takes over
 - [ ] Semantic Clustering: deferred
@@ -82,7 +82,7 @@
 **Implemented in:**
 - `native/src/storage/text.rs` — `build_node_text`, `collect_related_names`, folder-synopsis fallback
 - `native/src/storage/embed.rs` — `Embedder` HTTP client + `Embedder::ping`
-- `native/src/storage/db.rs` — LanceDB schemas, upsert, vector_search, edges_from/to, fts_search, nodes_by_ids
+- `native/src/storage/db.rs` — OverGraph schemas, upsert, vector_search, edges_from/to, fts_search, nodes_by_ids
 - `native/src/storage/ingest.rs` — `ingest_graph`, `reembed_nodes`
 - `native/src/storage/query.rs` — `semantic_search`, `semantic_search_w_where`, `rrf_search`, `mmr_rerank`, `traverse`, `traverse_filtered`, `read_snippet`, `search_kb`
 - `native/src/storage/napi_bindings.rs` — NAPI surface for storage (async)
@@ -128,21 +128,21 @@
 
 ---
 
-## Storage Migration: LanceDB → OverGraph (2026-05-01) ✅
+## Storage Migration: OverGraph → OverGraph (2026-05-01) ✅
 
 End-to-end migration on branch `migrate/overgraph`. See `docs/MIGRATION-OVERGRAPH.md` for the full plan, run log, and open-question resolutions.
 
 **Highlights:**
-- Replaced LanceDB + manual PPR + manual RRF with a single OverGraph 0.6.0 dependency.
+- Replaced OverGraph + manual PPR + manual RRF with a single OverGraph 0.6.0 dependency.
 - Native PPR: `native/src/storage/ppr.rs` shrank from 445 → 116 LOC.
 - Native hybrid search: `query::rrf_search` collapsed into one `vector_search(mode=Hybrid, fusion_mode=RRF)` call.
-- New deterministic sparse keyword tokenizer (`text::build_sparse_keyword_vector`) replaces LanceDB's BM25 FTS for the keyword channel of hybrid search.
+- New deterministic sparse keyword tokenizer (`text::build_sparse_keyword_vector`) replaces OverGraph's BM25 FTS for the keyword channel of hybrid search.
 - Storage NAPI surface (`db_ingest`, `db_semantic_search`, `db_hybrid_search`, `db_traverse`, `ping_embedder`) — wire-compatible, no caller changes needed.
 - Bench (dev profile, ARM64): ingest 1K nodes + 5K edges in 64.8ms; hybrid search p95 = 5.7ms.
 
 **Outstanding:**
 - Release-mode bin link error to resolve (LTO + napi cdylib + new dep tree).
 - End-to-end CLI verification with a live embedding endpoint.
-- Decision on whether to ship behind a `storage-overgraph` Cargo feature flag (LanceDB retained as fallback) or merge as the only backend.
+- Decision on whether to ship behind a `storage-overgraph` Cargo feature flag (OverGraph retained as fallback) or merge as the only backend.
 
 ## Last Updated: 2026-05-01

@@ -8,7 +8,7 @@ UltraGraph-KB implements all four phases of the UltraGraph knowledge base system
 
 - **Phase 1**: Native turbo indexer — saturates CPU cores to map codebases in milliseconds
 - **Phase 2**: In-memory graph persistence with K-hop BFS traversal
-- **Phase 3**: Semantic storage & enrichment (LanceDB + local embeddings)
+- **Phase 3**: Semantic storage & enrichment (OverGraph + local embeddings)
 - **Phase 4**: GraphRAG retrieval protocol with MCP server
 
 ## Core Flow
@@ -59,7 +59,7 @@ UltraGraph-KB implements all four phases of the UltraGraph knowledge base system
          │            │  │ Phase 3: RAG     │
          │  VISUALIZE │  │ Storage          │
          │            │  │ ──────────────── │
-         │  D3.js     │  │ • LanceDB tables │
+         │  D3.js     │  │ • OverGraph tables │
          │ Interactive│  │ • Embeddings     │
          │  Force-    │  │   (1024-dim)     │
          │  directed  │  │ • Nodes + Edges  │
@@ -111,7 +111,7 @@ UltraGraph-KB implements all four phases of the UltraGraph knowledge base system
 | Folder forest in graph (Contains: folder→folder→file→symbol) | ✅ |
 | K-hop BFS traversal | ✅ |
 | Graph analysis (centrality, cycles, shortest path) | ✅ |
-| Vector search (LanceDB) | ✅ |
+| Vector search (OverGraph) | ✅ |
 | Hybrid search (RRF: vector + FTS) | ✅ |
 | MMR reranking | ✅ |
 | GraphRAG retrieval (search → expand → rank → snippet) | ✅ |
@@ -123,7 +123,7 @@ UltraGraph-KB implements all four phases of the UltraGraph knowledge base system
 
 - **Core Engine (Rust)**: File walking (`ignore`), AST Parsing (`tree-sitter`), Incremental Hashing (`blake3`), Graph (`petgraph`)
 - **Bridge (NAPI-RS)**: Compiles Rust logic into a native `.node` module for Node.js
-- **Storage**: LanceDB (vector + FTS), local OpenAI-compatible embedding endpoint
+- **Storage**: OverGraph (vector + FTS), local OpenAI-compatible embedding endpoint
 - **MCP**: `@modelcontextprotocol/sdk` stdio server with `zod` validation
 - **CLI**: Node.js 20+ with native bindings
 
@@ -157,10 +157,10 @@ The native module exports the following functions (see `native/index.js:579-591`
 - `calculateCentrality` / `detectCycles` — Graph analysis utilities
 - `filterEdgesByType` — Filter graph edges by type
 - `graphKeywordSearch` — Graph-based: Keyword search over in-memory graph nodes
-- `dbIngest` — LanceDB: Embed graph and write to LanceDB
-- `dbHybridSearch` — LanceDB: End-to-end GraphRAG hybrid retrieval (vector + FTS + graph expansion)
-- `dbSemanticSearch` — LanceDB: Pure vector search over embedded graph nodes
-- `dbTraverse` — LanceDB: Graph traversal using edges table with edge-type filtering
+- `dbIngest` — OverGraph: Embed graph and write to OverGraph
+- `dbHybridSearch` — OverGraph: End-to-end GraphRAG hybrid retrieval (vector + FTS + graph expansion)
+- `dbSemanticSearch` — OverGraph: Pure vector search over embedded graph nodes
+- `dbTraverse` — OverGraph: Graph traversal using edges table with edge-type filtering
 - `pingEmbedder` — Probe embedding endpoint availability
 
 ## Installation
@@ -217,9 +217,9 @@ Use `npm run <command> -- [args]` for all commands, or directly via `node node/c
 | `npm run gen -- [options]` | Index + graph + ingest + visualization (all-in-one) |
 | `npm run index -- [options]` | Index a directory |
 | `npm run graph -- [options]` | Build graph from index result |
-| `npm run ingest -- <graph.json> <db>` | Embed graph into LanceDB |
+| `npm run ingest -- <graph.json> <db>` | Embed graph into OverGraph |
 | `npm run rag -- <db> <query> [options]` | End-to-end GraphRAG retrieval |
-| `npm run traverse -- <db> <node-id> [options]` | K-hop BFS traversal over LanceDB edges |
+| `npm run traverse -- <db> <node-id> [options]` | K-hop BFS traversal over OverGraph edges |
 | `npm start` | Serve visualization at http://localhost:8080 |
 | `npm run mcp` | Start MCP server (requires `UG_DB_PATH`) |
 
@@ -228,10 +228,10 @@ Use `npm run <command> -- [args]` for all commands, or directly via `node node/c
 |---------|-------------|-------------|
 | `index` | `-i` (--input), `-c` (--cache), `-o` (--output) | Index a directory with optional caching |
 | `graph` | `-i` (--input), `-o` (--output) | Build graph from index result |
-| `gen` | `-i` (--input), `-c` (--cache), `-o` (--output), `-d` (--db) | Full pipeline: index → graph → visualization → LanceDB ingest |
+| `gen` | `-i` (--input), `-c` (--cache), `-o` (--output), `-d` (--db) | Full pipeline: index → graph → visualization → OverGraph ingest |
 | `graph-search` | `-t` (--type), `-o` (--output) | Keyword search over in-memory graph nodes |
-| `db-ingest` | `-b` (--base-url), `-a` (--api-key), `-m` (--model) | Embed graph nodes and write to LanceDB |
-| `db-traverse` | `-k` (--hops), `-e` (--edge-type) | K-hop BFS traversal over LanceDB edges |
+| `db-ingest` | `-b` (--base-url), `-a` (--api-key), `-m` (--model) | Embed graph nodes and write to OverGraph |
+| `db-traverse` | `-k` (--hops), `-e` (--edge-type) | K-hop BFS traversal over OverGraph edges |
 | `db-rag` | `-k` (--limit), `-b` (--base-url), `-a` (--api-key), `-m` (--model) | End-to-end GraphRAG hybrid retrieval |
 | `ping` | `-b` (--base-url), `-a` (--api-key), `-m` (--model) | Probe embedding endpoint |
 | `help` | `-h` (--help) | Show help for commands |
@@ -287,8 +287,8 @@ ug/
 │   │   ├── indexer.rs        # File scanning + AST parsing
 │   │   ├── graph.rs          # Graph building + BFS + analysis
 │   │   ├── types.rs          # Shared data structures
-│   │   └── storage/          # LanceDB + embedding + GraphRAG
-│   │       ├── db.rs         # LanceDB schemas + queries
+│   │   └── storage/          # OverGraph + embedding + GraphRAG
+│   │       ├── db.rs         # OverGraph schemas + queries
 │   │       ├── embed.rs      # Embedding HTTP client
 │   │       ├── ingest.rs     # Embed + upsert pipeline
 │   │       ├── query.rs      # search, traverse, RRF, MMR
