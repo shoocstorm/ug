@@ -15,8 +15,8 @@ use ultragraph_kb::{
 
 // Bundled visualization assets so `ug gen` can produce a self-contained
 // output directory without needing the source tree at runtime.
-const VIS_HTML: &str = include_str!("../../src/vis/visualization.html");
-const VIS_MD: &str = include_str!("../../src/visualization-how-to.md");
+const VIS_HTML: &str = include_str!("./vis/visualization.html");
+const VIS_MD: &str = include_str!("../../README.md");
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -124,6 +124,13 @@ fn write_file(path: &str, data: &str) {
 fn write_or_print(output_path: Option<&str>, data: &str, label: &str) {
     match output_path {
         Some(p) => {
+            if Path::new(p).is_dir() {
+                eprintln!(
+                    "Error: '{}' is a directory, not a file. Omit -o flag or specify a file path.",
+                    p
+                );
+                std::process::exit(1);
+            }
             write_file(p, data);
             println!("Wrote {} to {}", label, p);
         }
@@ -417,7 +424,11 @@ fn run_gen(args: &[String]) {
     println!("────────────────────────────────────────");
     println!("Visit http://localhost:8080 to view the graph");
     println!(
-        "Run 'ug semantic_search \"hello\" -o {}' to perform a RAG query.",
+        "Run ' ug semantic_search \"hello\" -d {} ' to perform a semantic RAG query.",
+        db_path
+    );
+    println!(
+        "Run ' ug hybrid_search \"hello\" -d {} ' to perform a hybrid graph + semantic RAG query.",
         db_path
     );
     println!("Total time: {:?}", start_total.elapsed());
@@ -625,8 +636,8 @@ fn run_ingest(args: &[String]) {
 fn run_semantic_search(args: &[String]) {
     if args.is_empty() {
         eprintln!(
-            "Usage: ug semantic_search <query> [-d|--db <path>] [-k <limit>] [--filter <sql>] \\
-                 [--base-url <url>] [--api-key <key>] [--model <name>] [-o|--output <file>]"
+            "Usage: ug semantic_search <query> [-d|--db <path>] [-k|--limit <n>] \\
+                 [--filter <sql>] [--base-url <url>] [--api-key <key>] [--model <name>] [-o|--output <file>]"
         );
         std::process::exit(1);
     }
@@ -692,7 +703,7 @@ fn run_semantic_search(args: &[String]) {
 fn run_hybrid_search(args: &[String]) {
     if args.is_empty() {
         eprintln!(
-            "Usage: ug hybrid_search <query> [-d|--db <path>] [-k <limit>] [--hops <n>] \\
+            "Usage: ug hybrid_search <query> [-d|--db <path>] [-k|--limit <n>] [--hops <n>] \\
                  [--filter <sql>] [--strategy <ppr|mmr>] [--direction <out|in|both>] \\
                  [-t|--edge-type <type>]... [--max-chars <n>] [--mmr-lambda <f>] \\
                  [--no-snippets] [--repo-root <path>] \\
@@ -877,7 +888,7 @@ fn print_help() {
     println!("  cycles <graph>        Detect cycles in graph");
     println!("    -o, --output <file> Output file (optional)");
     println!();
-    println!("  search <graph> <keyword> Keyword search over graph nodes");
+    println!("  search_graph <graph> <keyword> Keyword search over graph nodes (in-memory, for small graphs)");
     println!(
         "    -t, --type <type>   Restrict to node type (repeatable, e.g. function/class/file)"
     );
@@ -905,21 +916,21 @@ fn print_help() {
         "    --model <name>     Embedding model (default: openai/Qwen3-Embedding-0.6B-4bit-DWQ)"
     );
     println!();
-    println!("  semantic_search <query>      Semantic vector search over the LanceDB nodes table");
+    println!("  semantic_search <query>      Semantic vector search (LanceDB, no graph context)");
     println!("    -d, --db <path>    LanceDB directory (default: ug-out/ugdb)");
     println!("    -k, --limit <n>    Top-k results (default: 10)");
-    println!("    --filter <sql>     Optional SQL WHERE clause (hybrid search)");
+    println!("    --filter <sql>     Optional SQL WHERE clause");
     println!("    --base-url/--api-key/--model  Embedding endpoint overrides");
-    println!("    -o, --output <file> Output file (optional)");
+    println!("    -o, --output <file> Output file (optional, omit for stdout)");
     println!();
     println!(
-        "  hybrid_search <query>        GraphRAG: RRF seeds → PPR/MMR rerank → ranked context"
+        "  hybrid_search <query>        GraphRAG: semantic search → graph expansion → ranked context"
     );
     println!("    -d, --db <path>     LanceDB directory (default: ug-out/ugdb)");
-    println!("    -k, --limit <n>     Top-k results (default: 8)");
-    println!("    --hops <n>          Graph expansion hops (default: 2, MMR only)");
-    println!("    --filter <sql>      Optional SQL WHERE clause for seed search");
-    println!("    --strategy <s>      ppr (default) or mmr");
+    println!("    -k, --limit <n>     Final results (default: 8)");
+    println!("    --hops <n>          Graph expansion hops (default: 2)");
+    println!("    --filter <sql>      SQL WHERE clause for semantic seed filter");
+    println!("    --strategy <s>      ppr (default, personalizedPageRank) or mmr (max marginal relevance)");
     println!("    --direction <dir>   outbound|inbound|both (default: both)");
     println!("    -t, --edge-type <t> Restrict expansion to edge type (repeatable)");
     println!("    --max-chars <n>     Char budget for assembled context (default: 12000)");
@@ -927,7 +938,7 @@ fn print_help() {
     println!("    --no-snippets       Skip reading source snippets from disk");
     println!("    --repo-root <path>  Repo root for snippet resolution (default: cwd)");
     println!("    --base-url/--api-key/--model  Embedding endpoint overrides");
-    println!("    -o, --output <file> Output file (optional)");
+    println!("    -o, --output <file> Output file (optional, omit for stdout)");
     println!();
     println!("  traverse <node-id>   K-hop BFS using the LanceDB edges table");
     println!("    -d, --db <path>    LanceDB directory (default: ug-out/ugdb)");
@@ -943,13 +954,11 @@ fn print_help() {
     println!("  ug cycles graph.json");
     println!("  ug search_graph graph.json loadConfig --type function --type class");
     println!("  ug analyze");
-    println!("  ug gen -i ./lib -o ./ug-out");
-    println!("  ug gen -i ./lib --no-ingest");
+    println!("  ug gen -i ./src -o ./ug-out");
+    println!("  ug gen -i ./src --no-ingest");
     println!("  ug ingest -i ug-out/graph.json -o ug-out/ugdb");
-    println!("  ug semantic_search \"oauth login flow\" -d ug-out/ugdb -k 5");
-    println!("  ug hybrid_search \"oauth login flow\" -d ug-out/ugdb -k 8 --strategy ppr");
-    println!(
-        "  ug semantic_search \"build a tree\" -d ug-out/ugdb --filter \"node_type = 'Function'\""
-    );
-    println!("  ug traverse file:src/index.ts -d ug-out/ugdb -k 2");
+    println!("  ug semantic_search \"oauth login flow\" -d ug-out/ugdb");
+    println!("  ug hybrid_search \"oauth login flow\" -d ug-out/ugdb -k 8");
+    println!("  ug hybrid_search \"build a tree\" -d ug-out/ugdb --strategy mmr");
+    println!("  ug traverse \"file:src/index.ts\" -d ug-out/ugdb");
 }

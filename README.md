@@ -209,7 +209,7 @@ select * from db.main.nodes limit 10;
 
 ## All CLI Commands
 
-Use `npm run <command> -- [args]` for all commands, or directly via `node src/cli.cjs <cmd> [args]`:
+Use `npm run <command> -- [args]` for all commands, or directly via `node node/cli.cjs <cmd> [args]`:
 
 ### npm scripts
 | npm script | Description |
@@ -223,7 +223,7 @@ Use `npm run <command> -- [args]` for all commands, or directly via `node src/cl
 | `npm start` | Serve visualization at http://localhost:8080 |
 | `npm run mcp` | Start MCP server (requires `UG_DB_PATH`) |
 
-### Direct CLI commands (via `node src/cli.cjs <cmd>`)
+### Direct CLI commands (via `node node/cli.cjs <cmd>`)
 | Command | Short Flags | Description |
 |---------|-------------|-------------|
 | `index` | `-i` (--input), `-c` (--cache), `-o` (--output) | Index a directory with optional caching |
@@ -239,25 +239,25 @@ Use `npm run <command> -- [args]` for all commands, or directly via `node src/cl
 ### Examples
 ```bash
 # Index a folder
-node src/cli.cjs index -i ./src -c ./cache -o ug-out/indexed-tree.json
+node node/cli.cjs index -i ./src -c ./cache -o ug-out/indexed-tree.json
 
 # Build graph from index result
-node src/cli.cjs graph -i ./src -o ug-out/graph.json
+node node/cli.cjs graph -i ./src -o ug-out/graph.json
 
 # keyword based graph search with type filter
-node src/cli.cjs graph-search ug-out/graph.json "auth" -t Function -t Class
+node node/cli.cjs graph-search ug-out/graph.json "auth" -t Function -t Class
 
 # DB ingest with custom embedder
-node src/cli.cjs db-ingest graph.json ./ugdb -b http://localhost:11434/v1 -m llama3
+node node/cli.cjs db-ingest graph.json ./ugdb -b http://localhost:11434/v1 -m llama3
 
 # Traverse with edge-type filter
-node src/cli.cjs db-traverse ./ugdb "node-123" -k 3 -e Calls -e Imports
+node node/cli.cjs db-traverse ./ugdb "node-123" -k 3 -e Calls -e Imports
 
 # RAG search
-node src/cli.cjs db-rag ./ugdb "how does auth work" -k 8
+node node/cli.cjs db-rag ./ugdb "how does auth work" -k 8
 
 # Get help for a command
-node src/cli.cjs gen -h
+node node/cli.cjs gen -h
 ```
 
 ## MCP Server
@@ -281,7 +281,7 @@ npm run prebuild && cd native && cargo test  # Rust tests (67 pass)
 ```
 ug/
 ├── native/
-│   ├── src/
+│   ├── node/
 │   │   ├── lib.rs            # NAPI-RS entry point
 │   │   ├── main.rs           # Rust CLI binary (ug)
 │   │   ├── indexer.rs        # File scanning + AST parsing
@@ -295,7 +295,7 @@ ug/
 │   │       ├── napi_bindings.rs  # NAPI async fns
 │   │       └── text.rs       # Embedding text shaping
 └── ug-out/ultragraph-kb.node    # Built native module
-├── src/
+├── node/
 │   ├── cli.cjs               # JavaScript CLI
 │   ├── vis/                  # D3.js visualization
 │   └── mcp-server.mjs        # MCP stdio server

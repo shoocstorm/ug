@@ -216,8 +216,7 @@ native/
 - `ignore` — File walking
 - `petgraph` — Graph algorithms
 - `rayon` — Parallel processing
-- `lancedb` — Vector database
-- `arrow` / `arrow-array` / `arrow-schema` — LanceDB data format
+- `overgraph` — Graph and Vector database
 - `tokio` — Async runtime
 - `reqwest` — HTTP client (embeddings)
 - `napi-rs` — Node.js bindings
