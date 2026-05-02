@@ -91,7 +91,7 @@ fn synthetic_graph_json() -> String {
         target: "function:loadConfig".to_string(),
         edge_type: GraphEdgeType::Contains,
     }];
-    let graph = GraphData { nodes, edges };
+    let graph = GraphData { nodes, edges, stats: None };
     serde_json::to_string(&graph).unwrap()
 }
 

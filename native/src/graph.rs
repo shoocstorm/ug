@@ -365,7 +365,11 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
 
     dedupe_edges(&mut edges);
 
-    GraphData { nodes, edges }
+    GraphData {
+        nodes,
+        edges,
+        stats: Some(index_result.stats.clone()),
+    }
 }
 
 /// Build the lookup tables used to resolve import paths to file node IDs.

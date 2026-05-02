@@ -133,6 +133,11 @@
             opacity: 0.1;
         }
 
+        .node.hidden,
+        .edge.hidden {
+            display: none;
+        }
+
         .node circle:active {
             cursor: grabbing;
         }
@@ -1253,6 +1258,75 @@
         .tooltip-stats:empty {
             display: none;
         }
+
+        /* ─── Perf mode (>5000 nodes/edges) ─────────────────── */
+
+        body.perf-mode .node circle,
+        body.perf-mode .node circle:hover,
+        body.perf-mode .node.selected circle {
+            filter: none;
+            transition: none;
+        }
+
+        body.perf-mode .node circle:hover {
+            stroke-width: 2px;
+        }
+
+        body.perf-mode .edge {
+            transition: none;
+            pointer-events: none;
+        }
+
+        body.perf-mode .node.selected .ripple,
+        body.perf-mode .cycle-status.has-cycles .status-dot {
+            animation: none;
+        }
+
+        body.perf-mode #info.visible,
+        body.perf-mode .tooltip,
+        body.perf-mode .suggestion-item,
+        body.perf-mode .filter-chip,
+        body.perf-mode .section-header,
+        body.perf-mode .tool-tab,
+        body.perf-mode .info-tab,
+        body.perf-mode .icon-btn,
+        body.perf-mode .sidebar-footer button {
+            animation: none;
+            transition: none;
+        }
+
+        body.perf-mode #container {
+            background: var(--bg-deep);
+        }
+
+        body.perf-mode #sidebar,
+        body.perf-mode #sidebar-toggle,
+        body.perf-mode #info,
+        body.perf-mode .tooltip {
+            backdrop-filter: none;
+            -webkit-backdrop-filter: none;
+            background: rgba(15, 15, 17, 0.97);
+        }
+
+        body.perf-mode .suggestion-dot,
+        body.perf-mode .filter-chip .chip-dot,
+        body.perf-mode .sidebar-header .brand-dot,
+        body.perf-mode .edge-breakdown-row .dot,
+        body.perf-mode #info .drag-handle .dot,
+        body.perf-mode #info .related-item .dot,
+        body.perf-mode .hier-row .dot,
+        body.perf-mode .header h1 {
+            box-shadow: none;
+            text-shadow: none;
+        }
+
+        body.perf-mode .header h1 {
+            background: none;
+            -webkit-background-clip: initial;
+            -webkit-text-fill-color: var(--text);
+            background-clip: initial;
+            color: var(--text);
+        }
     </style>
 </head>
 
@@ -1282,6 +1356,37 @@
             </div>
 
             <div class="sidebar-body">
+                <!-- Index stats -->
+                <div class="section" data-section="index-stats">
+                    <div class="section-header">
+                        <span class="label">Index</span>
+                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="6 9 12 15 18 9" />
+                        </svg>
+                    </div>
+                    <div class="section-body">
+                        <div class="stat-grid">
+                            <div class="stat-tile">
+                                <div class="stat-value" id="stat-files">—</div>
+                                <div class="stat-label">Files</div>
+                            </div>
+                            <div class="stat-tile">
+                                <div class="stat-value" id="stat-folders">—</div>
+                                <div class="stat-label">Folders</div>
+                            </div>
+                            <div class="stat-tile">
+                                <div class="stat-value" id="stat-symbols">—</div>
+                                <div class="stat-label">Symbols</div>
+                            </div>
+                            <div class="stat-tile">
+                                <div class="stat-value" id="stat-lines">—</div>
+                                <div class="stat-label">Lines</div>
+                            </div>
+                        </div>
+                        <div class="edge-breakdown" id="index-meta"></div>
+                    </div>
+                </div>
+
                 <!-- Search -->
                 <div class="section" data-section="search">
                     <div class="section-header">
@@ -1335,7 +1440,7 @@
                 </div>
 
                 <!-- Insights -->
-                <div class="section collapsed" data-section="insights">
+                <div class="section" data-section="insights">
                     <div class="section-header">
                         <span class="label">Insights</span>
                         <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1538,6 +1643,75 @@
 
             state.graph = { nodes: Array.from(nodeMap.values()), edges };
             state.containsMaps = null;
+            state.stats = data.stats || null;
+        }
+
+        function formatNumber(n) {
+            if (n == null || isNaN(n)) return '—';
+            if (n >= 1_000_000) return (n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1) + 'M';
+            if (n >= 1_000) return (n / 1_000).toFixed(n >= 10_000 ? 0 : 1) + 'k';
+            return String(n);
+        }
+
+        function formatDuration(ms) {
+            if (ms == null || isNaN(ms)) return '—';
+            if (ms < 1000) return `${ms} ms`;
+            const s = ms / 1000;
+            if (s < 60) return `${s.toFixed(s < 10 ? 2 : 1)} s`;
+            const m = Math.floor(s / 60);
+            const rem = Math.round(s - m * 60);
+            return `${m}m ${rem}s`;
+        }
+
+        function formatRelativeTime(epochSec) {
+            if (!epochSec) return '—';
+            const ms = epochSec > 1e12 ? epochSec : epochSec * 1000;
+            const diff = Date.now() - ms;
+            if (diff < 0 || isNaN(diff)) return new Date(ms).toLocaleString();
+            const s = Math.floor(diff / 1000);
+            if (s < 60) return `${s}s ago`;
+            const m = Math.floor(s / 60);
+            if (m < 60) return `${m}m ago`;
+            const h = Math.floor(m / 60);
+            if (h < 24) return `${h}h ago`;
+            const d = Math.floor(h / 24);
+            if (d < 30) return `${d}d ago`;
+            return new Date(ms).toLocaleDateString();
+        }
+
+        function renderIndexStats() {
+            const stats = state.stats;
+            const filesEl = document.getElementById('stat-files');
+            const foldersEl = document.getElementById('stat-folders');
+            const symbolsEl = document.getElementById('stat-symbols');
+            const linesEl = document.getElementById('stat-lines');
+            const metaEl = document.getElementById('index-meta');
+            if (!stats) {
+                filesEl.textContent = foldersEl.textContent =
+                    symbolsEl.textContent = linesEl.textContent = '—';
+                metaEl.innerHTML = '<div class="edge-breakdown-row"><span class="name">No index stats in graph.json</span></div>';
+                return;
+            }
+            filesEl.textContent = formatNumber(stats.totalFiles);
+            foldersEl.textContent = formatNumber(stats.totalFolders);
+            symbolsEl.textContent = formatNumber(stats.totalSymbols);
+            linesEl.textContent = formatNumber(stats.totalLines);
+
+            const cached = stats.cachedFiles ?? 0;
+            const total = stats.totalFiles ?? 0;
+            const pct = total > 0 ? Math.round((cached / total) * 100) : 0;
+            const rows = [
+                { label: 'Cached', value: total > 0 ? `${cached} / ${total} (${pct}%)` : '—' },
+                { label: 'Indexed in', value: formatDuration(stats.indexingTimeMs) },
+                { label: 'Last run', value: formatRelativeTime(stats.lastIndexedAt) },
+                { label: 'Repo', value: stats.repoRoot || '—' }
+            ];
+            metaEl.innerHTML = rows.map(r => `
+                <div class="edge-breakdown-row">
+                    <span class="name">${escapeHtml(r.label)}</span>
+                    <span class="count" title="${escapeHtml(String(r.value))}">${escapeHtml(String(r.value))}</span>
+                </div>
+            `).join('');
         }
 
         function getContainsMaps() {
@@ -1588,15 +1762,23 @@
 
             const nodeCount = state.graph.nodes.length;
             const edgeCount = state.graph.edges.length;
+            const totalElements = Math.max(nodeCount, edgeCount);
+            state.skipLabels = totalElements > 2000;
+            state.perfMode = totalElements > 5000;
+            state.nodeById = new Map(state.graph.nodes.map(n => [n.id, n]));
+            document.body.classList.toggle('perf-mode', state.perfMode);
+
             document.getElementById('nodeCount').textContent = nodeCount;
             document.getElementById('edgeCount').textContent = edgeCount;
             document.getElementById('sidebar-meta').textContent = `${nodeCount}N · ${edgeCount}E`;
             document.getElementById('graph-title').textContent =
-                `${nodeCount} nodes, ${edgeCount} edges`;
+                `${nodeCount} nodes, ${edgeCount} edges` +
+                (state.perfMode ? ' · perf mode' : '');
 
             buildNodeFilterChips();
             buildEdgeFilterChips();
             buildEdgeBreakdown();
+            renderIndexStats();
             createSimulation();
             render();
 
@@ -1758,16 +1940,28 @@
             const edgeMatches = e =>
                 state.edgeFilters.size === 0 || state.edgeFilters.has(e.rel);
 
-            node.classed('dimmed', n => !nodeMatches(n));
-            link.classed('dimmed', e => {
-                const sourceId = e.source.id || e.source;
-                const targetId = e.target.id || e.target;
-                const sourceNode = state.graph.nodes.find(n => n.id === sourceId);
-                const targetNode = state.graph.nodes.find(n => n.id === targetId);
+            const byId = state.nodeById || new Map(state.graph.nodes.map(n => [n.id, n]));
+            const linkExcluded = e => {
+                const sourceNode = byId.get(e.source.id || e.source);
+                const targetNode = byId.get(e.target.id || e.target);
                 if (sourceNode && !nodeMatches(sourceNode)) return true;
                 if (targetNode && !nodeMatches(targetNode)) return true;
                 return !edgeMatches(e);
-            });
+            };
+
+            // In perf mode, fully unmount filtered-out elements (display:none) so
+            // the browser skips layout/paint on them. Outside perf mode, just dim.
+            if (state.perfMode) {
+                node.classed('hidden', n => !nodeMatches(n))
+                    .classed('dimmed', false);
+                link.classed('hidden', linkExcluded)
+                    .classed('dimmed', false);
+            } else {
+                node.classed('dimmed', n => !nodeMatches(n))
+                    .classed('hidden', false);
+                link.classed('dimmed', linkExcluded)
+                    .classed('hidden', false);
+            }
         }
 
         // ─── Search ─────────────────────────────────────────
@@ -1797,8 +1991,10 @@
         function refreshSuggestions(query) {
             const container = document.getElementById('search-suggestions');
             const meta = document.getElementById('search-meta-count');
+            const searchInput = document.getElementById('search');
             const q = query.trim().toLowerCase();
             const filterActive = state.nodeFilters.size > 0;
+            const searchFocused = document.activeElement === searchInput;
 
             const candidates = state.graph.nodes.filter(n => {
                 if (filterActive && !state.nodeFilters.has(n.group)) return false;
@@ -1819,28 +2015,34 @@
             state.currentSuggestions = display;
             state.suggestionIndex = -1;
 
-            container.innerHTML = '';
-            if (display.length === 0) {
-                container.innerHTML = '<div class="suggestion-empty">No matching nodes</div>';
+            // Only render/open the dropdown when the user is actively searching.
+            // Filter-chip clicks must not pop the suggestion list — that re-flows
+            // the sidebar and feels like the screen jumping.
+            if (searchFocused) {
+                container.innerHTML = '';
+                if (display.length === 0) {
+                    container.innerHTML = '<div class="suggestion-empty">No matching nodes</div>';
+                } else {
+                    display.forEach((n, i) => {
+                        const item = document.createElement('div');
+                        item.className = 'suggestion-item';
+                        item.dataset.index = i;
+                        const color = config.getColor(n.group);
+                        item.innerHTML = `
+                            <span class="suggestion-dot" style="background:${color};color:${color}"></span>
+                            <span class="suggestion-name">${escapeHtml(truncateName(n.name))}</span>
+                            <span class="suggestion-type">${n.group}</span>
+                        `;
+                        item.addEventListener('mousedown', evt => {
+                            evt.preventDefault();
+                            selectSearchResult(n);
+                        });
+                        container.appendChild(item);
+                    });
+                }
                 container.classList.add('visible');
             } else {
-                display.forEach((n, i) => {
-                    const item = document.createElement('div');
-                    item.className = 'suggestion-item';
-                    item.dataset.index = i;
-                    const color = config.getColor(n.group);
-                    item.innerHTML = `
-                        <span class="suggestion-dot" style="background:${color};color:${color}"></span>
-                        <span class="suggestion-name">${escapeHtml(truncateName(n.name))}</span>
-                        <span class="suggestion-type">${n.group}</span>
-                    `;
-                    item.addEventListener('mousedown', evt => {
-                        evt.preventDefault();
-                        selectSearchResult(n);
-                    });
-                    container.appendChild(item);
-                });
-                container.classList.add('visible');
+                container.classList.remove('visible');
             }
 
             const total = candidates.length;
@@ -1897,9 +2099,18 @@
         function createSimulation() {
             simulation = d3.forceSimulation(state.graph.nodes)
                 .force('link', d3.forceLink(state.graph.edges).id(d => d.id).distance(80))
-                .force('charge', d3.forceManyBody().strength(-50))
-                .force('center', d3.forceCenter(width / 2, height / 2).strength(0.05))
-                .force('collide', d3.forceCollide().radius(d => (config.nodeRadius[d.group] || 6) + 5));
+                .force('charge', d3.forceManyBody().strength(state.perfMode ? -25 : -50))
+                .force('center', d3.forceCenter(width / 2, height / 2).strength(0.05));
+            if (!state.perfMode) {
+                simulation.force('collide', d3.forceCollide().radius(d => (config.nodeRadius[d.group] || 6) + 5));
+                return;
+            }
+            // Perf mode: settle layout synchronously, then freeze — no per-frame gravity.
+            simulation.alphaDecay(0.05).velocityDecay(0.55).stop();
+            const decay = simulation.alphaDecay();
+            const ticks = Math.min(200,
+                Math.ceil(Math.log(simulation.alphaMin()) / Math.log(1 - decay)));
+            for (let i = 0; i < ticks; i++) simulation.tick();
         }
 
         function render() {
@@ -1908,8 +2119,8 @@
                 .data(state.graph.edges)
                 .join('line')
                 .attr('class', 'edge')
-                .attr('marker-end', 'url(#arrow)')
                 .attr('stroke', e => config.getRelColor(e.rel));
+            if (!state.perfMode) link.attr('marker-end', 'url(#arrow)');
 
             const nodeGroups = g.append('g').attr('class', 'nodes')
                 .selectAll('g')
@@ -1926,30 +2137,44 @@
                 .attr('fill', d => config.getColor(d.group))
                 .attr('fill-opacity', 0.85);
 
-            nodeGroups.append('circle')
-                .attr('class', 'ripple')
-                .attr('r', d => config.nodeRadius[d.group] || 6);
+            if (!state.perfMode) {
+                nodeGroups.append('circle')
+                    .attr('class', 'ripple')
+                    .attr('r', d => config.nodeRadius[d.group] || 6);
+            }
 
-            nodeGroups.append('text')
-                .text(d => truncateName(d.name))
-                .attr('dy', d => (config.nodeRadius[d.group] || 6) + 14);
+            if (!state.skipLabels) {
+                nodeGroups.append('text')
+                    .text(d => truncateName(d.name))
+                    .attr('dy', d => (config.nodeRadius[d.group] || 6) + 14);
+            }
 
-            simulation.on('tick', () => {
-                link.each(function (d) {
-                    const sx = +d.source.x || 0, sy = +d.source.y || 0;
-                    const tx = +d.target.x || 0, ty = +d.target.y || 0;
-                    const tr = config.nodeRadius[d.target.group] || 6;
-                    const dx = tx - sx, dy = ty - sy;
-                    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-                    const ratio = (tr + 8) / dist;
-                    d3.select(this)
-                        .attr('x1', sx)
-                        .attr('y1', sy)
-                        .attr('x2', tx - dx * ratio)
-                        .attr('y2', ty - dy * ratio);
-                });
+            if (state.perfMode) {
+                // Sim has already settled synchronously — position once, no tick loop.
+                link
+                    .attr('x1', d => +d.source.x || 0)
+                    .attr('y1', d => +d.source.y || 0)
+                    .attr('x2', d => +d.target.x || 0)
+                    .attr('y2', d => +d.target.y || 0);
                 nodeGroups.attr('transform', d => `translate(${+d.x || 0},${+d.y || 0})`);
-            });
+            } else {
+                simulation.on('tick', () => {
+                    link.each(function (d) {
+                        const sx = +d.source.x || 0, sy = +d.source.y || 0;
+                        const tx = +d.target.x || 0, ty = +d.target.y || 0;
+                        const tr = config.nodeRadius[d.target.group] || 6;
+                        const dx = tx - sx, dy = ty - sy;
+                        const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+                        const ratio = (tr + 8) / dist;
+                        d3.select(this)
+                            .attr('x1', sx)
+                            .attr('y1', sy)
+                            .attr('x2', tx - dx * ratio)
+                            .attr('y2', ty - dy * ratio);
+                    });
+                    nodeGroups.attr('transform', d => `translate(${+d.x || 0},${+d.y || 0})`);
+                });
+            }
 
             nodeGroups
                 .on('mouseover', handleMouseOver)
@@ -1967,11 +2192,24 @@
         }
 
         function dragstarted(event, d) {
+            if (state.perfMode) { d.fx = d.x; d.fy = d.y; return; }
             if (!event.active) simulation.alphaTarget(0.3).restart();
             d.fx = d.x; d.fy = d.y;
         }
-        function dragged(event, d) { d.fx = event.x; d.fy = event.y; }
+        function dragged(event, d) {
+            d.fx = event.x; d.fy = event.y;
+            if (!state.perfMode) return;
+            d.x = event.x; d.y = event.y;
+            node.filter(n => n.id === d.id)
+                .attr('transform', `translate(${d.x},${d.y})`);
+            link.filter(e => (e.source.id || e.source) === d.id || (e.target.id || e.target) === d.id)
+                .attr('x1', e => +e.source.x || 0)
+                .attr('y1', e => +e.source.y || 0)
+                .attr('x2', e => +e.target.x || 0)
+                .attr('y2', e => +e.target.y || 0);
+        }
         function dragended(event, d) {
+            if (state.perfMode) { d.fx = null; d.fy = null; return; }
             if (!event.active) simulation.alphaTarget(0);
             d.fx = null; d.fy = null;
         }
@@ -1979,17 +2217,19 @@
         // ─── Hover & selection ──────────────────────────────
 
         function handleMouseOver(event, d) {
-            const connected = new Set([d.id]);
-            const hits = new Set();
-            state.graph.edges.forEach(e => {
-                const sId = e.source.id || e.source;
-                const tId = e.target.id || e.target;
-                if (sId === d.id) { connected.add(tId); hits.add(e); }
-                else if (tId === d.id) { connected.add(sId); hits.add(e); }
-            });
-            node.style('opacity', n => connected.has(n.id) ? 1 : 0.25);
-            link.style('opacity', e => hits.has(e) ? 1 : 0.05)
-                .style('stroke-width', e => hits.has(e) ? 2 : 1);
+            if (!state.perfMode) {
+                const connected = new Set([d.id]);
+                const hits = new Set();
+                state.graph.edges.forEach(e => {
+                    const sId = e.source.id || e.source;
+                    const tId = e.target.id || e.target;
+                    if (sId === d.id) { connected.add(tId); hits.add(e); }
+                    else if (tId === d.id) { connected.add(sId); hits.add(e); }
+                });
+                node.style('opacity', n => connected.has(n.id) ? 1 : 0.25);
+                link.style('opacity', e => hits.has(e) ? 1 : 0.05)
+                    .style('stroke-width', e => hits.has(e) ? 2 : 1);
+            }
 
             const tooltip = document.getElementById('tooltip');
             tooltip.querySelector('.tooltip-title').textContent = truncateName(d.name);
@@ -2008,8 +2248,10 @@
         }
 
         function handleMouseOut() {
-            node.style('opacity', null);
-            link.style('opacity', null).style('stroke-width', null);
+            if (!state.perfMode) {
+                node.style('opacity', null);
+                link.style('opacity', null).style('stroke-width', null);
+            }
             document.getElementById('tooltip').classList.remove('visible');
         }
 
@@ -2425,6 +2667,7 @@
             width = document.getElementById('container').clientWidth;
             height = document.getElementById('container').clientHeight;
             svg.attr('width', width).attr('height', height);
+            if (state.perfMode) return;
             simulation.force('center', d3.forceCenter(width / 2, height / 2));
             simulation.alpha(0.3).restart();
         });

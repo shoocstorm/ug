@@ -325,6 +325,8 @@ pub struct GraphEdge {
 pub struct GraphData {
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<GraphEdge>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stats: Option<IndexStats>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
