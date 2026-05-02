@@ -3,9 +3,9 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use ultragraph_kb::storage::{
-    self, ingest_graph, search_kb as storage_search_kb,
-    semantic_search as storage_semantic_search, traverse as storage_traverse, Db, Direction,
-    Embedder, EmbedderConfig, RankStrategy, SearchKbOptions,
+    self, ingest_graph, search_kb as storage_search_kb, semantic_search as storage_semantic_search,
+    traverse as storage_traverse, Db, Direction, Embedder, EmbedderConfig, RankStrategy,
+    SearchKbOptions,
 };
 use ultragraph_kb::types::GraphData;
 use ultragraph_kb::{
@@ -16,7 +16,7 @@ use ultragraph_kb::{
 // Bundled visualization assets so `ug gen` can produce a self-contained
 // output directory without needing the source tree at runtime.
 const VIS_HTML: &str = include_str!("../../src/vis/visualization.html");
-const VIS_MD: &str = include_str!("../../src/vis/visualization-how-to.md");
+const VIS_MD: &str = include_str!("../../src/visualization-how-to.md");
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -328,7 +328,7 @@ fn run_gen(args: &[String]) {
     let output_dir = flag_value_or(args, &["-o", "--output"], "ug-out");
     let no_ingest = has_flag(args, "--no-ingest");
     let db_path =
-        flag_value(args, &["-d", "--db"]).unwrap_or_else(|| format!("{}/ug-db", output_dir));
+        flag_value(args, &["-d", "--db"]).unwrap_or_else(|| format!("{}/ugdb", output_dir));
 
     let pipeline_summary = if no_ingest {
         "index → graph → visualization"
@@ -430,11 +430,15 @@ fn run_gen_ingest(
     })
 }
 
-// ingest graph into LanceDB (only)
+// ingest graph into OverGraph (only)
 fn run_ingest(args: &[String]) {
     let graph_file = flag_value_or(args, &["-g", "--graph"], "ug-out/graph.json");
-    let db_path = flag_value_or(args, &["-d", "--db"], "ug-out/ug-db");
-    let create_indexes = has_flag(args, "--with-indexes");
+    let db_path = flag_value_or(args, &["-d", "--db"], "ug-out/ugdb");
+    if has_flag(args, "--with-indexes") {
+        eprintln!(
+            "note: --with-indexes is a no-op on OverGraph; indexes are built per segment at flush time"
+        );
+    }
 
     let graph_json = fs::read_to_string(&graph_file).expect("Failed to read graph file");
     let graph: GraphData = serde_json::from_str(&graph_json).expect("Failed to parse graph JSON");
@@ -442,7 +446,7 @@ fn run_ingest(args: &[String]) {
     let rt = tokio_runtime();
 
     rt.block_on(async {
-        let db = Db::open(&db_path).await.expect("failed to open lancedb");
+        let db = Db::open(&db_path).await.expect("failed to open overgraph");
         let stats = ingest_graph(&db, &embedder, &graph)
             .await
             .expect("ingest failed");
@@ -450,22 +454,6 @@ fn run_ingest(args: &[String]) {
             "Ingested {} nodes, {} edges into {}",
             stats.nodes_written, stats.edges_written, db_path
         );
-
-        if create_indexes {
-            // Indexes can fail on tiny tables (IvfPq needs a minimum number
-            // of training rows). Surface the error but don't abort the
-            // command - the table is still queryable without the indexes.
-            if let Err(e) = db.try_create_vector_index().await {
-                eprintln!("warning: vector index creation skipped: {}", e);
-            } else {
-                println!("Created vector index");
-            }
-            if let Err(e) = db.try_create_fts_index().await {
-                eprintln!("warning: FTS index creation skipped: {}", e);
-            } else {
-                println!("Created FTS indexes (name, description)");
-            }
-        }
     });
 }
 
@@ -495,7 +483,7 @@ fn run_semantic_search(args: &[String]) {
         ],
     )
     .expect("missing query");
-    let db_path = flag_value_or(args, &["-d", "--db"], "ug-out/ug-db");
+    let db_path = flag_value_or(args, &["-d", "--db"], "ug-out/ugdb");
     let limit: usize = flag_value(args, &["-k", "--limit"])
         .and_then(|s| s.parse().ok())
         .unwrap_or(10);
@@ -570,7 +558,7 @@ fn run_hybrid_search(args: &[String]) {
         "--output",
     ];
     let query = first_positional(args, &value_flags).expect("missing query");
-    let db_path = flag_value_or(args, &["-d", "--db"], "ug-out/ug-db");
+    let db_path = flag_value_or(args, &["-d", "--db"], "ug-out/ugdb");
     let k: usize = flag_value(args, &["-k", "--limit"])
         .and_then(|s| s.parse().ok())
         .unwrap_or(8);
@@ -636,7 +624,7 @@ fn run_traverse(args: &[String]) {
 
     let start = first_positional(args, &["-d", "--db", "-k", "--hops", "-o", "--output"])
         .expect("missing start node id");
-    let db_path = flag_value_or(args, &["-d", "--db"], "ug-out/ug-db");
+    let db_path = flag_value_or(args, &["-d", "--db"], "ug-out/ugdb");
     let hops: u32 = flag_value(args, &["-k", "--hops"])
         .and_then(|s| s.parse().ok())
         .unwrap_or(2);
@@ -689,7 +677,7 @@ fn print_gen_help() {
     println!("  -i, --input <path>   Input directory (default: .)");
     println!("  -c, --cache <dir>    Cache directory for incremental indexing");
     println!("  -o, --output <dir>   Output directory (default: ug-out)");
-    println!("  -d, --db <path>      LanceDB directory (default: <output>/ug-db)");
+    println!("  -d, --db <path>      LanceDB directory (default: <output>/ugdb)");
     println!("  --no-ingest          Skip the LanceDB ingest step");
     println!("  --base-url <url>     Embedding endpoint (default: http://localhost:8000/v1)");
     println!("  --api-key <key>      Embedding API key");
@@ -742,29 +730,31 @@ fn print_help() {
     println!("    -i, --input <path>  Input directory (default: .)");
     println!("    -c, --cache <dir>   Cache directory");
     println!("    -o, --output <dir>  Output directory (default: ug-out)");
-    println!("    -d, --db <path>     LanceDB directory (default: <output>/ug-db)");
+    println!("    -d, --db <path>     LanceDB directory (default: <output>/ugdb)");
     println!("    --no-ingest         Skip the LanceDB ingest step");
     println!("    --base-url/--api-key/--model  Embedding endpoint overrides");
     println!();
     println!("  ingest               Embed graph nodes and write to LanceDB");
     println!("    -g, --graph <file>  Graph JSON (default: ug-out/graph.json)");
-    println!("    -d, --db <path>    LanceDB directory (default: ug-out/ug-db)");
+    println!("    -d, --db <path>    LanceDB directory (default: ug-out/ugdb)");
     println!("    --base-url <url>   Embedding endpoint (default: http://localhost:8000/v1)");
     println!("    --api-key <key>    Embedding API key (default: 1234)");
     println!(
         "    --model <name>     Embedding model (default: openai/Qwen3-Embedding-0.6B-4bit-DWQ)"
     );
-    println!("    --with-indexes     Best-effort create vector + FTS indexes after ingest");
+    println!("    --with-indexes     Deprecated no-op on OverGraph (indexes auto-built at flush)");
     println!();
     println!("  semantic_search <query>      Semantic vector search over the LanceDB nodes table");
-    println!("    -d, --db <path>    LanceDB directory (default: ug-out/ug-db)");
+    println!("    -d, --db <path>    LanceDB directory (default: ug-out/ugdb)");
     println!("    -k, --limit <n>    Top-k results (default: 10)");
     println!("    --filter <sql>     Optional SQL WHERE clause (hybrid search)");
     println!("    --base-url/--api-key/--model  Embedding endpoint overrides");
     println!("    -o, --output <file> Output file (optional)");
     println!();
-    println!("  hybrid_search <query>        GraphRAG: RRF seeds → PPR/MMR rerank → ranked context");
-    println!("    -d, --db <path>     LanceDB directory (default: ug-out/ug-db)");
+    println!(
+        "  hybrid_search <query>        GraphRAG: RRF seeds → PPR/MMR rerank → ranked context"
+    );
+    println!("    -d, --db <path>     LanceDB directory (default: ug-out/ugdb)");
     println!("    -k, --limit <n>     Top-k results (default: 8)");
     println!("    --hops <n>          Graph expansion hops (default: 2, MMR only)");
     println!("    --filter <sql>      Optional SQL WHERE clause for seed search");
@@ -779,7 +769,7 @@ fn print_help() {
     println!("    -o, --output <file> Output file (optional)");
     println!();
     println!("  traverse <node-id>   K-hop BFS using the LanceDB edges table");
-    println!("    -d, --db <path>    LanceDB directory (default: ug-out/ug-db)");
+    println!("    -d, --db <path>    LanceDB directory (default: ug-out/ugdb)");
     println!("    -k, --hops <n>     Max hops (default: 2)");
     println!("    -o, --output <file> Output file (optional)");
     println!();
@@ -794,11 +784,11 @@ fn print_help() {
     println!("  ug analyze");
     println!("  ug gen -i ./lib -o ./ug-out");
     println!("  ug gen -i ./lib --no-ingest");
-    println!("  ug ingest -g ug-out/graph.json -d ug-out/ug-db --with-indexes");
-    println!("  ug semantic_search \"oauth login flow\" -d ug-out/ug-db -k 5");
-    println!("  ug hybrid_search \"oauth login flow\" -d ug-out/ug-db -k 8 --strategy ppr");
+    println!("  ug ingest -g ug-out/graph.json -d ug-out/ugdb --with-indexes");
+    println!("  ug semantic_search \"oauth login flow\" -d ug-out/ugdb -k 5");
+    println!("  ug hybrid_search \"oauth login flow\" -d ug-out/ugdb -k 8 --strategy ppr");
     println!(
-        "  ug semantic_search \"build a tree\" -d ug-out/ug-db --filter \"node_type = 'Function'\""
+        "  ug semantic_search \"build a tree\" -d ug-out/ugdb --filter \"node_type = 'Function'\""
     );
-    println!("  ug traverse file:src/index.ts -d ug-out/ug-db -k 2");
+    println!("  ug traverse file:src/index.ts -d ug-out/ugdb -k 2");
 }

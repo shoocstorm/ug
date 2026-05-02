@@ -1,5 +1,6 @@
 native/target
 ug-out
+ug-out-old
 native/ultragraph-kb.darwin-arm64.node
 native/out
 src/.cache
@@ -13,3 +14,4 @@ out
 out/*
 .gitnexus
 node_modules
+docs/overgraph

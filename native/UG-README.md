@@ -68,7 +68,7 @@ ug gen -i ./src -o ./ug-out
 Embed graph nodes into LanceDB.
 
 ```bash
-ug ingest -g ug-out/graph.json -d ug-out/ug-db --with-indexes
+ug ingest -g ug-out/graph.json -d ug-out/ugdb --with-indexes
 ```
 
 ### `ug semantic_search`
@@ -76,7 +76,7 @@ ug ingest -g ug-out/graph.json -d ug-out/ug-db --with-indexes
 Semantic vector search.
 
 ```bash
-ug semantic_search "build a tree" -d ug-out/ug-db --filter "node_type = 'Function'"
+ug semantic_search "build a tree" -d ug-out/ugdb --filter "node_type = 'Function'"
 ```
 
 ### `ug traverse`
@@ -84,7 +84,7 @@ ug semantic_search "build a tree" -d ug-out/ug-db --filter "node_type = 'Functio
 K-hop BFS over LanceDB edges.
 
 ```bash
-ug traverse file:src/index.ts -d ug-out/ug-db -k 2
+ug traverse file:src/index.ts -d ug-out/ugdb -k 2
 ```
 
 ## Storage / GraphRAG (Phase 3+4)
@@ -92,9 +92,9 @@ ug traverse file:src/index.ts -d ug-out/ug-db -k 2
 End-to-end against a running embedding endpoint:
 
 ```bash
-ug ingest -g ug-out/graph.json -d ug-out/ug-db --with-indexes
-ug semantic_search "build a tree" -d ug-out/ug-db --filter "node_type = 'Function'"
-ug traverse file:src/index.ts -d ug-out/ug-db -k 2
+ug ingest -g ug-out/graph.json -d ug-out/ugdb --with-indexes
+ug semantic_search "build a tree" -d ug-out/ugdb --filter "node_type = 'Function'"
+ug traverse file:src/index.ts -d ug-out/ugdb -k 2
 ```
 
 ## Development

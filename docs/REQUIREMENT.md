@@ -312,7 +312,7 @@ Default edge-type weights: `calls=1.0, extends=0.9, implements=0.9, imports=0.7,
 
 ### Perf
 LanceDB took ~5min to import (with embeddings on MacBook Pro M5 Max 18-core 40-GPU 128GB):
-▸ Ingesting into ug-out/ug-db
+▸ Ingesting into ug-out/ugdb
   ✓ 41619 nodes, 95071 edges embedded
 index-tree.json - 20MB
 graph.json - 40MB

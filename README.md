@@ -195,14 +195,14 @@ npm start
 # Open http://localhost:8080
 
 # 4. Semantic search (requires embedding endpoint)
-npm run ingest -- ug-out/graph.json ug-out/ug-db
-npm run rag -- ug-out/ug-db "how does auth work" -k 8
+npm run ingest -- ug-out/graph.json ug-out/ugdb
+npm run rag -- ug-out/ugdb "how does auth work" -k 8
 
 # 5. Manually check lance db data (via duckdb)
 duckdb
 INSTALL lance
 load lance;
-ATTACH 'ug-out/ug-db' as db (type LANCE);
+ATTACH 'ug-out/ugdb' as db (type LANCE);
 select * from db.main.nodes limit 10;
 ```
 
@@ -248,13 +248,13 @@ node src/cli.cjs graph -i ./src -o ug-out/graph.json
 node src/cli.cjs graph-search ug-out/graph.json "auth" -t Function -t Class
 
 # DB ingest with custom embedder
-node src/cli.cjs db-ingest graph.json ./ug-db -b http://localhost:11434/v1 -m llama3
+node src/cli.cjs db-ingest graph.json ./ugdb -b http://localhost:11434/v1 -m llama3
 
 # Traverse with edge-type filter
-node src/cli.cjs db-traverse ./ug-db "node-123" -k 3 -e Calls -e Imports
+node src/cli.cjs db-traverse ./ugdb "node-123" -k 3 -e Calls -e Imports
 
 # RAG search
-node src/cli.cjs db-rag ./ug-db "how does auth work" -k 8
+node src/cli.cjs db-rag ./ugdb "how does auth work" -k 8
 
 # Get help for a command
 node src/cli.cjs gen -h
@@ -264,7 +264,7 @@ node src/cli.cjs gen -h
 
 ```bash
 # Configure via environment, then run:
-UG_DB_PATH=./ug-out/ug-db npm run mcp
+UG_DB_PATH=./ug-out/ugdb npm run mcp
 ```
 
 Exposes three tools: `search_kb`, `traverse_kb`, `ping_embedder`.

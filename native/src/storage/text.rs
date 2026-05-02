@@ -178,3 +178,89 @@ pub fn collect_related_names(graph: &GraphData) -> HashMap<String, Vec<String>> 
 
     out
 }
+
+/// Build a sparse keyword vector for OverGraph's hybrid search. The
+/// dimension space is the FNV-1a hash of each lowercase alphanumeric
+/// token; the weight is term frequency. The same hash + tokenizer are
+/// used at ingest and at query time so tokens collide deterministically.
+///
+/// This is the v1 FTS replacement (MIGRATION-OVERGRAPH §3.3 Option 1).
+/// It has no IDF — common words count as much as rare ones — but for
+/// code symbol queries (mostly distinctive identifiers) it gives
+/// roughly BM25-equivalent recall with zero extra dependencies.
+pub fn build_sparse_keyword_vector(text: &str) -> Vec<(u32, f32)> {
+    if text.is_empty() {
+        return Vec::new();
+    }
+    let mut weights: HashMap<u32, f32> = HashMap::new();
+    let mut buf = String::new();
+    for ch in text.chars() {
+        if ch.is_alphanumeric() {
+            for c in ch.to_lowercase() {
+                buf.push(c);
+            }
+        } else if !buf.is_empty() {
+            emit_token(&buf, &mut weights);
+            buf.clear();
+        }
+    }
+    if !buf.is_empty() {
+        emit_token(&buf, &mut weights);
+    }
+    // Sort by dimension id so output is deterministic and matches the
+    // canonical form OverGraph expects for sparse vectors.
+    let mut out: Vec<(u32, f32)> = weights.into_iter().collect();
+    out.sort_unstable_by_key(|&(dim, _)| dim);
+    out
+}
+
+fn emit_token(token: &str, out: &mut HashMap<u32, f32>) {
+    // 2-char minimum filters out one-letter accidental tokens from
+    // ident splits. 32-char cap stops pathological URLs / hashes from
+    // dominating the vector.
+    let len = token.len();
+    if !(2..=32).contains(&len) {
+        return;
+    }
+    let dim = fnv1a_u32(token.as_bytes());
+    *out.entry(dim).or_insert(0.0) += 1.0;
+}
+
+/// FNV-1a 32-bit hash. Mirrors the algorithm OverGraph uses internally
+/// (its `fnv1a` is 64-bit but the principle is identical) so test
+/// fixtures can predict dimension ids.
+fn fnv1a_u32(bytes: &[u8]) -> u32 {
+    let mut h: u32 = 0x811c9dc5;
+    for &b in bytes {
+        h ^= b as u32;
+        h = h.wrapping_mul(0x0100_0193);
+    }
+    h
+}
+
+#[cfg(test)]
+mod sparse_tests {
+    use super::*;
+
+    #[test]
+    fn tokenizer_lowercases_and_splits() {
+        let v = build_sparse_keyword_vector("Hello, World! Hello.");
+        // "hello" twice, "world" once → 2 distinct dimensions
+        assert_eq!(v.len(), 2);
+        let total: f32 = v.iter().map(|(_, w)| *w).sum();
+        assert_eq!(total, 3.0);
+    }
+
+    #[test]
+    fn empty_text_yields_empty_vector() {
+        assert!(build_sparse_keyword_vector("").is_empty());
+        assert!(build_sparse_keyword_vector("!!!").is_empty());
+    }
+
+    #[test]
+    fn deterministic_dim_ids() {
+        let a = build_sparse_keyword_vector("foo bar");
+        let b = build_sparse_keyword_vector("foo bar");
+        assert_eq!(a, b);
+    }
+}

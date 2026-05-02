@@ -94,8 +94,8 @@ const commands = {
     }
   },
   gen: {
-    usage: '[-i|--input <input-dir, default: .>] [-c|--cache <cache-dir>] [-o|--output <output-dir, default: ./ug-out>] [-d|--db <db-path, default: ./ug-out/ug-db>] [--no-ingest] [-m|--model <embedding-model-name>] [-b|--base-url <embedding-api-base-url>] [-a|--api-key <embedding-api-key>]',
-    desc: 'Full pipeline: index → graph → visualization → LanceDB ingest. DB defaults to <output-dir>/ug-db. Pass --no-ingest to skip ingestion (no embedding endpoint required).',
+    usage: '[-i|--input <input-dir, default: .>] [-c|--cache <cache-dir>] [-o|--output <output-dir, default: ./ug-out>] [-d|--db <db-path, default: ./ug-out/ugdb>] [--no-ingest] [-m|--model <embedding-model-name>] [-b|--base-url <embedding-api-base-url>] [-a|--api-key <embedding-api-key>]',
+    desc: 'Full pipeline: index → graph → visualization → LanceDB ingest. DB defaults to <output-dir>/ugdb. Pass --no-ingest to skip ingestion (no embedding endpoint required).',
     run: async (args) => {
       if (args.includes('-h') || args.includes('--help')) {
         console.log(`gen ${commands.gen.usage}`);
@@ -155,7 +155,7 @@ const commands = {
         return chalk.cyan('Visit http://localhost:8080 to view the graph');
       }
 
-      const dbPath = extractFlag(args, '-d') || extractFlag(args, '--db') || join(outputDir, 'ug-db');
+      const dbPath = extractFlag(args, '-d') || extractFlag(args, '--db') || join(outputDir, 'ugdb');
       const embedderOptions = parseEmbedderOptions(args);
       const embedderArg = embedderOptions ? JSON.stringify(embedderOptions) : null;
 
@@ -175,7 +175,7 @@ const commands = {
 
       console.log(chalk.gray('────────────────────────────────────────'));
       console.log(chalk.cyan('Visit http://localhost:8080 to view the graph'));
-      console.log(chalk.cyan('Run "node ug-out/cli.cjs db-rag ug-out/ug-db hello" to perform a RAG query on the DB.'));
+      console.log(chalk.cyan('Run "node ug-out/cli.cjs db-rag ug-out/ugdb hello" to perform a RAG query on the DB.'));
 
       return;
     }

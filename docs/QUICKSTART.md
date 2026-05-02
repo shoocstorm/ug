@@ -126,7 +126,7 @@ node src/cli.cjs ping
 ### Ingest Graph into LanceDB
 
 ```bash
-node src/cli.cjs ingest ug-out/graph.json ug-out/ug-db
+node src/cli.cjs ingest ug-out/graph.json ug-out/ugdb
 ```
 
 ### GraphRAG Retrieval (End-to-End)
@@ -134,13 +134,13 @@ node src/cli.cjs ingest ug-out/graph.json ug-out/ug-db
 Combines seed search → graph expansion → MMR reranking → snippet extraction:
 
 ```bash
-node src/cli.cjs rag ug-out/ug-db "how does authentication work" -k 8
+node src/cli.cjs rag ug-out/ugdb "how does authentication work" -k 8
 ```
 
 ### Traverse with Edge Filters
 
 ```bash
-node src/cli.cjs traverse ug-out/ug-db "file:src/index.ts" -k 2 --edge-type Contains --direction outbound
+node src/cli.cjs traverse ug-out/ugdb "file:src/index.ts" -k 2 --edge-type Contains --direction outbound
 ```
 
 ## All CLI Commands
@@ -219,7 +219,7 @@ Second run only re-parses files whose blake3 hash changed.
 node src/cli.cjs gen -i ./my-project -o ./ug-out
 
 # 2. Query with context retrieval
-node src/cli.cjs rag ug-out/ug-db "explain the auth flow" -k 10
+node src/cli.cjs rag ug-out/ugdb "explain the auth flow" -k 10
 ```
 
 ## Troubleshooting

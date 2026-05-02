@@ -1,61 +1,60 @@
-//! LanceDB persistence for graph nodes and edges.
+//! OverGraph persistence for graph nodes and edges.
 //!
-//! Two tables live side by side in the same connection directory:
+//! [`Db`] wraps an [`overgraph::DatabaseEngine`] and adds a
+//! `String → u64` id cache so callers can keep using the project's
+//! string ids (`"file:src/foo.ts"`, etc.) while OverGraph uses numeric
+//! ids internally.
 //!
-//! - `nodes`: one row per graph node, with the embedded text and a
-//!   1024-dim FixedSizeList vector column. This is what semantic search
-//!   queries against.
-//! - `edges`: one row per graph edge, no vector column. Used by graph
-//!   traversal queries that walk source -> target.
-//!
-//! Upserts are implemented as delete-by-id-then-add. LanceDB's
-//! `merge_insert` would be slightly more efficient but the API surface
-//! changes between minor versions; delete+add is stable across them and
-//! the cost is negligible at our scale.
+//! The public function names and signatures intentionally mirror the
+//! previous LanceDB layer (`upsert_nodes`, `upsert_edges`, `vector_search`,
+//! `fts_search`, `edges_from`, `edges_to`, `nodes_by_ids`, `all_edges`)
+//! so `query.rs` and `ingest.rs` don't need to change in this phase.
+//! Phase D will retarget those callers to the more idiomatic OverGraph
+//! APIs (native hybrid search, `db.traverse`, etc.).
 
 use crate::storage::embed::EMBEDDING_DIM;
-use arrow_array::{
-    builder::FixedSizeListBuilder, builder::Float32Builder, Array, ArrayRef, Float32Array,
-    RecordBatch, RecordBatchIterator, RecordBatchReader, StringArray, UInt32Array,
+use crate::storage::types_registry::{
+    edge_type_from_id, edge_type_to_id, node_type_from_id, node_type_to_id,
 };
-use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use futures::TryStreamExt;
-use lancedb::query::{ExecutableQuery, QueryBase};
-use lancedb::{connect, Connection, Table};
-use std::sync::Arc;
-
-pub const NODES_TABLE: &str = "nodes";
-pub const EDGES_TABLE: &str = "edges";
+use overgraph::{
+    DatabaseEngine, DbOptions, DenseMetric, DenseVectorConfig, Direction as OgDirection, EdgeInput,
+    EdgeRecord, EngineError, FusionMode, HnswConfig, NeighborOptions, NodeInput, NodeRecord,
+    PropValue, VectorSearchMode, VectorSearchRequest,
+};
+use std::collections::{BTreeMap, HashMap};
+use std::path::Path;
+use std::sync::RwLock;
 
 #[derive(Debug)]
 pub enum DbError {
-    Lance(lancedb::Error),
-    Arrow(arrow_schema::ArrowError),
+    Engine(EngineError),
     Io(std::io::Error),
     Json(serde_json::Error),
+    Unimplemented(&'static str),
+    BadVector { id: String, got: usize, want: usize },
+    UnknownEndpoint(String),
 }
 
 impl std::fmt::Display for DbError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            DbError::Lance(e) => write!(f, "lancedb error: {}", e),
-            DbError::Arrow(e) => write!(f, "arrow error: {}", e),
+            DbError::Engine(e) => write!(f, "overgraph error: {}", e),
             DbError::Io(e) => write!(f, "io error: {}", e),
             DbError::Json(e) => write!(f, "json error: {}", e),
+            DbError::Unimplemented(what) => write!(f, "not yet implemented: {}", what),
+            DbError::BadVector { id, got, want } => {
+                write!(f, "vector for {} has dim {}, expected {}", id, got, want)
+            }
+            DbError::UnknownEndpoint(s) => write!(f, "unknown edge endpoint: {}", s),
         }
     }
 }
 
 impl std::error::Error for DbError {}
 
-impl From<lancedb::Error> for DbError {
-    fn from(e: lancedb::Error) -> Self {
-        DbError::Lance(e)
-    }
-}
-impl From<arrow_schema::ArrowError> for DbError {
-    fn from(e: arrow_schema::ArrowError) -> Self {
-        DbError::Arrow(e)
+impl From<EngineError> for DbError {
+    fn from(e: EngineError) -> Self {
+        DbError::Engine(e)
     }
 }
 impl From<std::io::Error> for DbError {
@@ -69,9 +68,9 @@ impl From<serde_json::Error> for DbError {
     }
 }
 
-/// A row that goes into the `nodes` table. The fields mirror the schema
-/// returned by [`nodes_schema`]; keeping them as a plain struct lets the
-/// upsert path stay readable without juggling columnar arrays everywhere.
+/// Wire-format DTO mirroring the previous `NodeRow` shape exactly so
+/// `query.rs`, `ingest.rs`, and the JSON outputs in `napi_bindings.rs`
+/// keep working unchanged.
 #[derive(Debug, Clone)]
 pub struct NodeRow {
     pub id: String,
@@ -95,435 +94,482 @@ pub struct EdgeRow {
     pub properties: String,
 }
 
-pub fn nodes_schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![
-        Field::new("id", DataType::Utf8, false),
-        Field::new("name", DataType::Utf8, false),
-        Field::new("node_type", DataType::Utf8, false),
-        Field::new("description", DataType::Utf8, true),
-        Field::new("file", DataType::Utf8, true),
-        Field::new("start_line", DataType::UInt32, true),
-        Field::new("end_line", DataType::UInt32, true),
-        Field::new("last_update_at", DataType::Int64, false),
-        Field::new("node_text", DataType::Utf8, false),
-        Field::new(
-            "vector",
-            DataType::FixedSizeList(
-                Arc::new(Field::new("item", DataType::Float32, true)),
-                EMBEDDING_DIM as i32,
-            ),
-            false,
-        ),
-    ]))
-}
-
-pub fn edges_schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![
-        Field::new("id", DataType::Utf8, false),
-        Field::new("source", DataType::Utf8, false),
-        Field::new("target", DataType::Utf8, false),
-        Field::new("edge_type", DataType::Utf8, false),
-        Field::new("properties", DataType::Utf8, true),
-    ]))
-}
-
 pub struct Db {
-    pub conn: Connection,
-    pub nodes: Table,
-    pub edges: Table,
+    pub engine: DatabaseEngine,
+    /// Project's string id (e.g. `"file:src/foo.ts"`) → OverGraph numeric id.
+    /// Populated on every upsert; used by edge endpoint resolution and the
+    /// traverse output (which must hand back string ids over the NAPI
+    /// boundary).
+    key_to_id: RwLock<HashMap<String, u64>>,
+    /// Reverse cache used when hydrating traversal results back into the
+    /// project's string-id wire format. Mutated together with `key_to_id`.
+    id_to_key: RwLock<HashMap<u64, String>>,
 }
 
 impl Db {
-    /// Open or create the LanceDB instance at `path`. Both tables are
-    /// created with empty contents on first call; subsequent calls reopen
-    /// the existing tables.
+    /// Open or create the OverGraph database at `path`. The dense vector
+    /// space is configured for 1024-dim cosine embeddings to match the
+    /// project's Qwen3 model.
+    ///
+    /// OverGraph's open is synchronous; the `async` signature is preserved
+    /// for call-site compatibility. The blocking call is microsecond-scale
+    /// at worst (memory-mapping segments) so we don't bother with
+    /// `spawn_blocking` here.
     pub async fn open(path: &str) -> Result<Self, DbError> {
-        let conn = connect(path).execute().await?;
-        let existing = conn.table_names().execute().await?;
-
-        if !existing.iter().any(|n| n == NODES_TABLE) {
-            conn.create_empty_table(NODES_TABLE, nodes_schema())
-                .execute()
-                .await?;
+        let path = Path::new(path);
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)?;
+            }
         }
-        if !existing.iter().any(|n| n == EDGES_TABLE) {
-            conn.create_empty_table(EDGES_TABLE, edges_schema())
-                .execute()
-                .await?;
-        }
-
-        let nodes = conn.open_table(NODES_TABLE).execute().await?;
-        let edges = conn.open_table(EDGES_TABLE).execute().await?;
-        Ok(Self { conn, nodes, edges })
+        let opts = DbOptions {
+            dense_vector: Some(DenseVectorConfig {
+                dimension: EMBEDDING_DIM as u32,
+                metric: DenseMetric::Cosine,
+                hnsw: HnswConfig::default(),
+            }),
+            ..Default::default()
+        };
+        let engine = DatabaseEngine::open(path, &opts)?;
+        Ok(Self {
+            engine,
+            key_to_id: RwLock::new(HashMap::new()),
+            id_to_key: RwLock::new(HashMap::new()),
+        })
     }
 
+    /// Return the OverGraph numeric id for a project string id, looking
+    /// it up via the cache first, then via OverGraph if absent. Returns
+    /// `None` for endpoints that haven't been ingested yet.
+    pub fn lookup_id(&self, key: &str) -> Result<Option<u64>, DbError> {
+        if let Some(id) = self.key_to_id.read().unwrap().get(key).copied() {
+            return Ok(Some(id));
+        }
+        // Slow path — try every known node type. OverGraph keys nodes by
+        // (type_id, key) so we have to probe; in practice the cache is
+        // hot so this rarely fires.
+        for &type_id in &[1u32, 2, 3, 4, 5, 6, 7, 8, 99] {
+            if let Some(rec) = self.engine.get_node_by_key(type_id, key)? {
+                self.remember(key.to_string(), rec.id);
+                return Ok(Some(rec.id));
+            }
+        }
+        Ok(None)
+    }
+
+    fn remember(&self, key: String, id: u64) {
+        self.key_to_id
+            .write()
+            .unwrap()
+            .insert(key.clone(), id);
+        self.id_to_key.write().unwrap().insert(id, key);
+    }
+
+    /// Translate an OverGraph numeric id back to its project string id.
+    /// Falls back to a synthetic `"node:<id>"` placeholder when the
+    /// reverse cache misses; that should only happen for traversal hits
+    /// that didn't pass through ingest in this process.
+    pub fn key_for(&self, id: u64) -> String {
+        if let Some(s) = self.id_to_key.read().unwrap().get(&id).cloned() {
+            return s;
+        }
+        if let Ok(Some(rec)) = self.engine.get_node(id) {
+            self.remember(rec.key.clone(), id);
+            return rec.key;
+        }
+        format!("node:{}", id)
+    }
+
+    /// Upsert the given rows into the OverGraph nodes table. Caches the
+    /// resulting `(string-id, u64)` mapping for edge endpoint resolution.
     pub async fn upsert_nodes(&self, rows: &[NodeRow]) -> Result<(), DbError> {
         if rows.is_empty() {
             return Ok(());
         }
-        let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
-        delete_by_ids(&self.nodes, &ids).await?;
-
-        let batch = node_rows_to_batch(rows)?;
-        let schema = nodes_schema();
-        let reader: Box<dyn RecordBatchReader + Send> =
-            Box::new(RecordBatchIterator::new(vec![Ok(batch)], schema));
-        self.nodes.add(reader).execute().await?;
+        let mut inputs: Vec<NodeInput> = Vec::with_capacity(rows.len());
+        for r in rows {
+            if r.vector.len() != EMBEDDING_DIM {
+                return Err(DbError::BadVector {
+                    id: r.id.clone(),
+                    got: r.vector.len(),
+                    want: EMBEDDING_DIM,
+                });
+            }
+            inputs.push(NodeInput {
+                type_id: node_type_to_id(&r.node_type),
+                key: r.id.clone(),
+                props: node_props(r),
+                weight: 1.0,
+                dense_vector: Some(r.vector.clone()),
+                sparse_vector: None,
+            });
+        }
+        let ids = self.engine.batch_upsert_nodes(&inputs)?;
+        let mut k2i = self.key_to_id.write().unwrap();
+        let mut i2k = self.id_to_key.write().unwrap();
+        for (row, id) in rows.iter().zip(ids.iter()) {
+            k2i.insert(row.id.clone(), *id);
+            i2k.insert(*id, row.id.clone());
+        }
         Ok(())
     }
 
+    /// Upsert edges. Endpoints (source/target) are resolved via the
+    /// internal cache. Edge weights are baked from the edge type (see
+    /// `default_edge_type_weights` in `ppr.rs`) so the native PPR sees
+    /// the right structural bias.
     pub async fn upsert_edges(&self, rows: &[EdgeRow]) -> Result<(), DbError> {
         if rows.is_empty() {
             return Ok(());
         }
-        let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
-        delete_by_ids(&self.edges, &ids).await?;
-
-        let batch = edge_rows_to_batch(rows)?;
-        let schema = edges_schema();
-        let reader: Box<dyn RecordBatchReader + Send> =
-            Box::new(RecordBatchIterator::new(vec![Ok(batch)], schema));
-        self.edges.add(reader).execute().await?;
+        let weights = crate::storage::ppr::default_edge_type_weights();
+        let mut inputs: Vec<EdgeInput> = Vec::with_capacity(rows.len());
+        for r in rows {
+            let from = self
+                .lookup_id(&r.source)?
+                .ok_or_else(|| DbError::UnknownEndpoint(r.source.clone()))?;
+            let to = self
+                .lookup_id(&r.target)?
+                .ok_or_else(|| DbError::UnknownEndpoint(r.target.clone()))?;
+            let weight = weights
+                .get(&r.edge_type.to_ascii_lowercase())
+                .copied()
+                .unwrap_or(0.5);
+            inputs.push(EdgeInput {
+                from,
+                to,
+                type_id: edge_type_to_id(&r.edge_type),
+                props: BTreeMap::new(),
+                weight,
+                valid_from: None,
+                valid_to: None,
+            });
+        }
+        self.engine.batch_upsert_edges(&inputs)?;
         Ok(())
     }
 
-    /// Best-effort vector index creation. IvfPq requires a minimum
-    /// number of training rows; for tiny datasets the call would fail.
-    /// We surface the error to the caller so they can decide whether to
-    /// log-and-continue or fail hard.
+    /// No-op on OverGraph — vector indexes are built per-segment at flush
+    /// time. Kept for call-site compatibility with the previous LanceDB
+    /// API; the `--with-indexes` CLI flag falls through to this and prints
+    /// a deprecation note.
     pub async fn try_create_vector_index(&self) -> Result<(), DbError> {
-        use lancedb::index::Index;
-        self.nodes
-            .create_index(&["vector"], Index::Auto)
-            .execute()
-            .await?;
         Ok(())
     }
 
     pub async fn try_create_fts_index(&self) -> Result<(), DbError> {
-        use lancedb::index::scalar::FtsIndexBuilder;
-        use lancedb::index::Index;
-        self.nodes
-            .create_index(&["name"], Index::FTS(FtsIndexBuilder::default()))
-            .execute()
-            .await?;
-        self.nodes
-            .create_index(&["description"], Index::FTS(FtsIndexBuilder::default()))
-            .execute()
-            .await?;
         Ok(())
     }
 
     pub async fn count_nodes(&self) -> Result<usize, DbError> {
-        Ok(self.nodes.count_rows(None).await?)
+        let stats = self.engine.stats()?;
+        // OverGraph's `stats` doesn't expose live node count directly; we
+        // fall back to summing visible types. Cheap when called rarely.
+        let total = (1u32..=99)
+            .filter_map(|tid| self.engine.nodes_by_type(tid).ok())
+            .map(|v| v.len())
+            .sum();
+        let _ = stats;
+        Ok(total)
     }
 
     pub async fn count_edges(&self) -> Result<usize, DbError> {
-        Ok(self.edges.count_rows(None).await?)
-    }
-}
-
-async fn delete_by_ids(table: &Table, ids: &[&str]) -> Result<(), DbError> {
-    if ids.is_empty() {
-        return Ok(());
-    }
-    // SQL-quote each id, escaping embedded apostrophes. IDs in this
-    // codebase are paths like `file:src/foo.ts` so escaping is overkill in
-    // practice, but the cost is one allocation and it removes a footgun.
-    let quoted: Vec<String> = ids
-        .iter()
-        .map(|id| format!("'{}'", id.replace('\'', "''")))
-        .collect();
-    let predicate = format!("id IN ({})", quoted.join(","));
-    table.delete(&predicate).await?;
-    Ok(())
-}
-
-fn node_rows_to_batch(rows: &[NodeRow]) -> Result<RecordBatch, DbError> {
-    let schema = nodes_schema();
-
-    let ids = StringArray::from_iter_values(rows.iter().map(|r| r.id.as_str()));
-    let names = StringArray::from_iter_values(rows.iter().map(|r| r.name.as_str()));
-    let node_types = StringArray::from_iter_values(rows.iter().map(|r| r.node_type.as_str()));
-    let descriptions =
-        StringArray::from(rows.iter().map(|r| Some(r.description.as_str())).collect::<Vec<_>>());
-    let files = StringArray::from(rows.iter().map(|r| Some(r.file.as_str())).collect::<Vec<_>>());
-    let start_lines = UInt32Array::from(rows.iter().map(|r| Some(r.start_line)).collect::<Vec<_>>());
-    let end_lines = UInt32Array::from(rows.iter().map(|r| Some(r.end_line)).collect::<Vec<_>>());
-    let last_updates: Vec<i64> = rows.iter().map(|r| r.last_update_at).collect();
-    let last_update_array = arrow_array::Int64Array::from(last_updates);
-    let node_texts = StringArray::from_iter_values(rows.iter().map(|r| r.node_text.as_str()));
-
-    // FixedSizeList<Float32, EMBEDDING_DIM>. Builder pattern is the
-    // simplest way to populate one without manually constructing offsets.
-    let mut vec_builder = FixedSizeListBuilder::new(
-        Float32Builder::with_capacity(rows.len() * EMBEDDING_DIM),
-        EMBEDDING_DIM as i32,
-    );
-    for r in rows {
-        if r.vector.len() != EMBEDDING_DIM {
-            return Err(DbError::Arrow(arrow_schema::ArrowError::InvalidArgumentError(
-                format!(
-                    "vector for {} has dim {}, expected {}",
-                    r.id,
-                    r.vector.len(),
-                    EMBEDDING_DIM
-                ),
-            )));
+        // Approximation via per-type degree sum is expensive; the project
+        // only uses this for an "is the table populated" gate, so we
+        // return 0 when no nodes exist and 1 otherwise. Phase F can
+        // replace this with a precise count if benchmarks need it.
+        if self.count_nodes().await? == 0 {
+            Ok(0)
+        } else {
+            Ok(1)
         }
-        vec_builder.values().append_slice(&r.vector);
-        vec_builder.append(true);
     }
-    let vectors = vec_builder.finish();
-
-    let columns: Vec<ArrayRef> = vec![
-        Arc::new(ids),
-        Arc::new(names),
-        Arc::new(node_types),
-        Arc::new(descriptions),
-        Arc::new(files),
-        Arc::new(start_lines),
-        Arc::new(end_lines),
-        Arc::new(last_update_array),
-        Arc::new(node_texts),
-        Arc::new(vectors),
-    ];
-    Ok(RecordBatch::try_new(schema, columns)?)
 }
 
-fn edge_rows_to_batch(rows: &[EdgeRow]) -> Result<RecordBatch, DbError> {
-    let schema = edges_schema();
-    let ids = StringArray::from_iter_values(rows.iter().map(|r| r.id.as_str()));
-    let sources = StringArray::from_iter_values(rows.iter().map(|r| r.source.as_str()));
-    let targets = StringArray::from_iter_values(rows.iter().map(|r| r.target.as_str()));
-    let etypes = StringArray::from_iter_values(rows.iter().map(|r| r.edge_type.as_str()));
-    let props = StringArray::from(
-        rows.iter()
-            .map(|r| Some(r.properties.as_str()))
-            .collect::<Vec<_>>(),
+fn node_props(r: &NodeRow) -> BTreeMap<String, PropValue> {
+    let mut m = BTreeMap::new();
+    m.insert("name".into(), PropValue::String(r.name.clone()));
+    m.insert("node_type".into(), PropValue::String(r.node_type.clone()));
+    m.insert(
+        "description".into(),
+        PropValue::String(r.description.clone()),
     );
-
-    let columns: Vec<ArrayRef> = vec![
-        Arc::new(ids),
-        Arc::new(sources),
-        Arc::new(targets),
-        Arc::new(etypes),
-        Arc::new(props),
-    ];
-    Ok(RecordBatch::try_new(schema, columns)?)
+    m.insert("file".into(), PropValue::String(r.file.clone()));
+    m.insert("start_line".into(), PropValue::UInt(r.start_line as u64));
+    m.insert("end_line".into(), PropValue::UInt(r.end_line as u64));
+    m.insert("last_update_at".into(), PropValue::Int(r.last_update_at));
+    m.insert("node_text".into(), PropValue::String(r.node_text.clone()));
+    m
 }
 
-/// Run a vector query and decode each returned RecordBatch into our
-/// in-memory [`NodeRow`] representation. The `_distance` column added by
-/// LanceDB is mirrored into a parallel `Vec<f32>` so the caller can rank
-/// by similarity without re-querying.
+fn prop_string(props: &BTreeMap<String, PropValue>, k: &str) -> String {
+    match props.get(k) {
+        Some(PropValue::String(s)) => s.clone(),
+        _ => String::new(),
+    }
+}
+
+fn prop_u32(props: &BTreeMap<String, PropValue>, k: &str) -> u32 {
+    match props.get(k) {
+        Some(PropValue::UInt(n)) => *n as u32,
+        Some(PropValue::Int(n)) => *n as u32,
+        _ => 0,
+    }
+}
+
+fn prop_i64(props: &BTreeMap<String, PropValue>, k: &str) -> i64 {
+    match props.get(k) {
+        Some(PropValue::Int(n)) => *n,
+        Some(PropValue::UInt(n)) => *n as i64,
+        _ => 0,
+    }
+}
+
+fn node_record_to_row(rec: &NodeRecord) -> NodeRow {
+    NodeRow {
+        id: rec.key.clone(),
+        name: prop_string(&rec.props, "name"),
+        node_type: {
+            let s = prop_string(&rec.props, "node_type");
+            if s.is_empty() {
+                node_type_from_id(rec.type_id).to_string()
+            } else {
+                s
+            }
+        },
+        description: prop_string(&rec.props, "description"),
+        file: prop_string(&rec.props, "file"),
+        start_line: prop_u32(&rec.props, "start_line"),
+        end_line: prop_u32(&rec.props, "end_line"),
+        last_update_at: prop_i64(&rec.props, "last_update_at"),
+        node_text: prop_string(&rec.props, "node_text"),
+        vector: rec.dense_vector.clone().unwrap_or_default(),
+    }
+}
+
+/// Pure dense vector search. Wraps OverGraph's `vector_search` in
+/// `Dense` mode. The optional `where_clause` argument is preserved for
+/// call-site compatibility but currently ignored — see §6 Q1 in
+/// `docs/MIGRATION-OVERGRAPH.md` for the SQL `WHERE` removal decision.
 pub async fn vector_search(
     db: &Db,
     query_vec: Vec<f32>,
     limit: usize,
     where_clause: Option<&str>,
 ) -> Result<Vec<(NodeRow, f32)>, DbError> {
-    let mut q = db.nodes.query().nearest_to(query_vec)?.limit(limit);
-    if let Some(filter) = where_clause {
-        q = q.only_if(filter);
+    let _ = where_clause; // TODO(overgraph-where): translate to type_filter / property predicate
+    let req = VectorSearchRequest {
+        mode: VectorSearchMode::Dense,
+        dense_query: Some(query_vec),
+        sparse_query: None,
+        k: limit,
+        type_filter: None,
+        ef_search: None,
+        scope: None,
+        dense_weight: None,
+        sparse_weight: None,
+        fusion_mode: None,
+    };
+    let hits = db.engine.vector_search(&req)?;
+    let mut out: Vec<(NodeRow, f32)> = Vec::with_capacity(hits.len());
+    for h in hits {
+        if let Some(rec) = db.engine.get_node(h.node_id)? {
+            db.remember(rec.key.clone(), rec.id);
+            out.push((node_record_to_row(&rec), h.score));
+        }
     }
-    let stream = q.execute().await?;
-    let batches: Vec<RecordBatch> = stream.try_collect().await?;
-    Ok(decode_node_batches_with_distance(&batches))
+    Ok(out)
 }
 
-/// Read every edge whose source matches `node_id`. Used by graph
-/// traversal to expand a frontier one hop at a time.
-pub async fn edges_from(db: &Db, node_id: &str) -> Result<Vec<EdgeRow>, DbError> {
-    let escaped = node_id.replace('\'', "''");
-    let predicate = format!("source = '{}'", escaped);
-    let stream = db
-        .edges
-        .query()
-        .only_if(predicate)
-        .execute()
-        .await?;
-    let batches: Vec<RecordBatch> = stream.try_collect().await?;
-    Ok(decode_edge_batches(&batches))
-}
-
-/// Mirror of [`edges_from`] for the inbound direction. Required for any
-/// "who calls/imports this?" expansion - the most useful kind of context
-/// for a code agent.
-pub async fn edges_to(db: &Db, node_id: &str) -> Result<Vec<EdgeRow>, DbError> {
-    let escaped = node_id.replace('\'', "''");
-    let predicate = format!("target = '{}'", escaped);
-    let stream = db
-        .edges
-        .query()
-        .only_if(predicate)
-        .execute()
-        .await?;
-    let batches: Vec<RecordBatch> = stream.try_collect().await?;
-    Ok(decode_edge_batches(&batches))
-}
-
-/// Bulk-scan every edge in the table. Used by graph-global algorithms
-/// (e.g. Personalized PageRank) that need the full adjacency in memory.
-/// At UltraGraph-KB scale (≤ a few hundred thousand edges per repo),
-/// this is single-digit MB and a single sub-second LanceDB scan.
-pub async fn all_edges(db: &Db) -> Result<Vec<EdgeRow>, DbError> {
-    let stream = db.edges.query().execute().await?;
-    let batches: Vec<RecordBatch> = stream.try_collect().await?;
-    Ok(decode_edge_batches(&batches))
-}
-
-/// Full-text search over the indexed string columns (`name`, `description`).
-/// Returns rows ranked by FTS score. LanceDB exposes the score via the
-/// `_score` column when the `phrase_query` API is used.
-///
-/// If FTS indexes haven't been created yet, LanceDB will fall back to a
-/// linear scan; the call still succeeds, just slower.
-pub async fn fts_search(
+/// Hybrid dense + sparse search using OverGraph's native fusion. The
+/// sparse vector is built by `text::build_sparse_keyword_vector`. This
+/// is the function `query::rrf_search` retargets to in Phase D.
+pub async fn hybrid_search(
     db: &Db,
-    query: &str,
+    query_vec: Vec<f32>,
+    sparse_vec: Vec<(u32, f32)>,
     limit: usize,
     where_clause: Option<&str>,
-) -> Result<Vec<NodeRow>, DbError> {
-    use lance_index::scalar::FullTextSearchQuery;
-    use lancedb::query::QueryBase;
-    let mut q = db
-        .nodes
-        .query()
-        .full_text_search(FullTextSearchQuery::new(query.to_string()))
-        .limit(limit);
-    if let Some(filter) = where_clause {
-        q = q.only_if(filter);
+) -> Result<Vec<(NodeRow, f32)>, DbError> {
+    let _ = where_clause;
+    let req = VectorSearchRequest {
+        mode: VectorSearchMode::Hybrid,
+        dense_query: Some(query_vec),
+        sparse_query: if sparse_vec.is_empty() {
+            None
+        } else {
+            Some(sparse_vec)
+        },
+        k: limit,
+        type_filter: None,
+        ef_search: None,
+        scope: None,
+        dense_weight: None,
+        sparse_weight: None,
+        fusion_mode: Some(FusionMode::ReciprocalRankFusion),
+    };
+    let hits = db.engine.vector_search(&req)?;
+    let mut out: Vec<(NodeRow, f32)> = Vec::with_capacity(hits.len());
+    for h in hits {
+        if let Some(rec) = db.engine.get_node(h.node_id)? {
+            db.remember(rec.key.clone(), rec.id);
+            out.push((node_record_to_row(&rec), h.score));
+        }
     }
-    let stream = q.execute().await?;
-    let batches: Vec<RecordBatch> = stream.try_collect().await?;
-    Ok(decode_node_batches_with_distance(&batches)
-        .into_iter()
-        .map(|(r, _)| r)
-        .collect())
+    Ok(out)
+}
+
+/// All outbound edges from `node_id` (a project string id). Reconstructs
+/// the wire-format `EdgeRow` from OverGraph's `NeighborEntry`.
+pub async fn edges_from(db: &Db, node_id: &str) -> Result<Vec<EdgeRow>, DbError> {
+    edges_in_direction(db, node_id, OgDirection::Outgoing).await
+}
+
+pub async fn edges_to(db: &Db, node_id: &str) -> Result<Vec<EdgeRow>, DbError> {
+    edges_in_direction(db, node_id, OgDirection::Incoming).await
+}
+
+async fn edges_in_direction(
+    db: &Db,
+    node_id: &str,
+    direction: OgDirection,
+) -> Result<Vec<EdgeRow>, DbError> {
+    let Some(start) = db.lookup_id(node_id)? else {
+        return Ok(Vec::new());
+    };
+    let opts = NeighborOptions {
+        direction,
+        ..Default::default()
+    };
+    let neighbors = db.engine.neighbors(start, &opts)?;
+    let mut out: Vec<EdgeRow> = Vec::with_capacity(neighbors.len());
+    for n in neighbors {
+        let neighbor_key = db.key_for(n.node_id);
+        let (source, target) = match direction {
+            OgDirection::Outgoing => (node_id.to_string(), neighbor_key),
+            OgDirection::Incoming => (neighbor_key, node_id.to_string()),
+            OgDirection::Both => (node_id.to_string(), neighbor_key),
+        };
+        let edge_type = edge_type_from_id(n.edge_type_id).to_string();
+        out.push(EdgeRow {
+            id: format!("{}|{}|{}", source, edge_type, target),
+            source,
+            target,
+            edge_type,
+            properties: String::new(),
+        });
+    }
+    Ok(out)
+}
+
+/// Bulk-load every edge in the database. Used today only by the project
+/// PPR fallback; native PPR replaces it in Phase C, so this is left as
+/// `Unimplemented` to surface any caller we missed.
+pub async fn all_edges(_db: &Db) -> Result<Vec<EdgeRow>, DbError> {
+    Err(DbError::Unimplemented(
+        "all_edges — replaced by native OverGraph PPR (see Phase C)",
+    ))
+}
+
+/// FTS over `name` / `description` strings. OverGraph has no built-in
+/// BM25; this stub keeps the call-site compatibility while
+/// `text::build_sparse_keyword_vector` (Phase D) provides the actual
+/// keyword channel via the hybrid sparse query.
+///
+/// Returning empty here means `query::rrf_search` degrades to dense-only
+/// seeds during the Phase B/C window; Phase D collapses `rrf_search`
+/// into `hybrid_search` directly and this function becomes unreachable.
+pub async fn fts_search(
+    _db: &Db,
+    _query: &str,
+    _limit: usize,
+    _where_clause: Option<&str>,
+) -> Result<Vec<NodeRow>, DbError> {
+    // TODO(overgraph-fts): once Phase D lands, delete this and have
+    // `query::rrf_search` call `db::hybrid_search` directly.
+    Ok(Vec::new())
 }
 
 pub async fn nodes_by_ids(db: &Db, ids: &[String]) -> Result<Vec<NodeRow>, DbError> {
     if ids.is_empty() {
         return Ok(Vec::new());
     }
-    let quoted: Vec<String> = ids
-        .iter()
-        .map(|id| format!("'{}'", id.replace('\'', "''")))
-        .collect();
-    let predicate = format!("id IN ({})", quoted.join(","));
-    let stream = db
-        .nodes
-        .query()
-        .only_if(predicate)
-        .execute()
-        .await?;
-    let batches: Vec<RecordBatch> = stream.try_collect().await?;
-    Ok(decode_node_batches_with_distance(&batches)
-        .into_iter()
-        .map(|(r, _)| r)
-        .collect())
-}
-
-fn decode_node_batches_with_distance(batches: &[RecordBatch]) -> Vec<(NodeRow, f32)> {
-    use arrow_array::cast::AsArray;
-    use arrow_array::types::Float32Type;
-    let mut out: Vec<(NodeRow, f32)> = Vec::new();
-    for batch in batches {
-        let schema = batch.schema();
-        let n = batch.num_rows();
-        if n == 0 {
-            continue;
-        }
-
-        let ids = batch.column_by_name("id").and_then(|c| c.as_any().downcast_ref::<StringArray>());
-        let names = batch.column_by_name("name").and_then(|c| c.as_any().downcast_ref::<StringArray>());
-        let node_types = batch.column_by_name("node_type").and_then(|c| c.as_any().downcast_ref::<StringArray>());
-        let descriptions = batch.column_by_name("description").and_then(|c| c.as_any().downcast_ref::<StringArray>());
-        let files = batch.column_by_name("file").and_then(|c| c.as_any().downcast_ref::<StringArray>());
-        let start_lines = batch.column_by_name("start_line").and_then(|c| c.as_any().downcast_ref::<UInt32Array>());
-        let end_lines = batch.column_by_name("end_line").and_then(|c| c.as_any().downcast_ref::<UInt32Array>());
-        let last_updates = batch.column_by_name("last_update_at").and_then(|c| c.as_any().downcast_ref::<arrow_array::Int64Array>());
-        let node_texts = batch.column_by_name("node_text").and_then(|c| c.as_any().downcast_ref::<StringArray>());
-        let distances = batch.column_by_name("_distance").and_then(|c| c.as_any().downcast_ref::<Float32Array>());
-
-        let vectors_col = batch.column_by_name("vector");
-        let vectors_list = vectors_col.map(|c| c.as_fixed_size_list());
-
-        for i in 0..n {
-            let mut vector: Vec<f32> = Vec::new();
-            if let Some(list) = vectors_list {
-                let single = list.value(i);
-                if let Some(prim) = single.as_primitive_opt::<Float32Type>() {
-                    vector = prim.values().to_vec();
-                }
+    let mut out: Vec<NodeRow> = Vec::with_capacity(ids.len());
+    for id in ids {
+        if let Some(numeric_id) = db.lookup_id(id)? {
+            if let Some(rec) = db.engine.get_node(numeric_id)? {
+                out.push(node_record_to_row(&rec));
             }
-            // Skip rows missing required columns rather than panicking; an
-            // older table written with a different schema would otherwise
-            // crash the query.
-            let id = match ids.and_then(|a| Some(a.value(i).to_string())) { Some(v) => v, None => continue };
-            let name = names.map(|a| a.value(i).to_string()).unwrap_or_default();
-            let node_type = node_types.map(|a| a.value(i).to_string()).unwrap_or_default();
-            let description = descriptions
-                .map(|a| if a.is_null(i) { String::new() } else { a.value(i).to_string() })
-                .unwrap_or_default();
-            let file = files
-                .map(|a| if a.is_null(i) { String::new() } else { a.value(i).to_string() })
-                .unwrap_or_default();
-            let start_line = start_lines
-                .map(|a| if a.is_null(i) { 0 } else { a.value(i) })
-                .unwrap_or(0);
-            let end_line = end_lines
-                .map(|a| if a.is_null(i) { 0 } else { a.value(i) })
-                .unwrap_or(0);
-            let last_update_at = last_updates.map(|a| a.value(i)).unwrap_or(0);
-            let node_text = node_texts.map(|a| a.value(i).to_string()).unwrap_or_default();
-            let distance = distances.map(|a| a.value(i)).unwrap_or(0.0);
-
-            let _ = &schema;
-            out.push((
-                NodeRow {
-                    id,
-                    name,
-                    node_type,
-                    description,
-                    file,
-                    start_line,
-                    end_line,
-                    last_update_at,
-                    node_text,
-                    vector,
-                },
-                distance,
-            ));
         }
     }
-    out
+    Ok(out)
 }
 
-fn decode_edge_batches(batches: &[RecordBatch]) -> Vec<EdgeRow> {
-    let mut out: Vec<EdgeRow> = Vec::new();
-    for batch in batches {
-        let n = batch.num_rows();
-        if n == 0 {
-            continue;
-        }
-        let ids = batch.column_by_name("id").and_then(|c| c.as_any().downcast_ref::<StringArray>());
-        let sources = batch.column_by_name("source").and_then(|c| c.as_any().downcast_ref::<StringArray>());
-        let targets = batch.column_by_name("target").and_then(|c| c.as_any().downcast_ref::<StringArray>());
-        let etypes = batch.column_by_name("edge_type").and_then(|c| c.as_any().downcast_ref::<StringArray>());
-        let props = batch.column_by_name("properties").and_then(|c| c.as_any().downcast_ref::<StringArray>());
+/// Helper used by Phase D's `query::traverse_filtered` retarget — wraps
+/// the OverGraph traversal and rehydrates results into the project's
+/// (string-id, EdgeRow) wire format.
+pub async fn traverse_string_ids(
+    db: &Db,
+    start_string_id: &str,
+    max_hops: u32,
+    edge_type_ids: Option<Vec<u32>>,
+    direction: OgDirection,
+) -> Result<(Vec<NodeRow>, Vec<EdgeRow>, HashMap<String, u32>), DbError> {
+    use overgraph::TraverseOptions;
+    let Some(start) = db.lookup_id(start_string_id)? else {
+        return Ok((Vec::new(), Vec::new(), HashMap::new()));
+    };
+    let opts = TraverseOptions {
+        edge_type_filter: edge_type_ids,
+        direction,
+        ..Default::default()
+    };
+    let page = db.engine.traverse(start, max_hops, &opts)?;
 
-        for i in 0..n {
-            let id = match ids.map(|a| a.value(i).to_string()) { Some(v) => v, None => continue };
-            let source = sources.map(|a| a.value(i).to_string()).unwrap_or_default();
-            let target = targets.map(|a| a.value(i).to_string()).unwrap_or_default();
-            let edge_type = etypes.map(|a| a.value(i).to_string()).unwrap_or_default();
-            let properties = props
-                .map(|a| if a.is_null(i) { String::new() } else { a.value(i).to_string() })
-                .unwrap_or_default();
-            out.push(EdgeRow { id, source, target, edge_type, properties });
+    let mut nodes: Vec<NodeRow> = Vec::new();
+    let mut distances: HashMap<String, u32> = HashMap::new();
+    let mut node_ids: Vec<u64> = Vec::with_capacity(page.items.len() + 1);
+    node_ids.push(start);
+    for hit in &page.items {
+        node_ids.push(hit.node_id);
+    }
+    let records = db.engine.get_nodes(&node_ids)?;
+    for (ix, rec_opt) in records.iter().enumerate() {
+        if let Some(rec) = rec_opt {
+            db.remember(rec.key.clone(), rec.id);
+            nodes.push(node_record_to_row(rec));
+            let depth = if ix == 0 {
+                0
+            } else {
+                page.items[ix - 1].depth
+            };
+            distances.insert(rec.key.clone(), depth);
         }
     }
-    out
+
+    // Reconstruct edges by reading `via_edge_id` for each hit.
+    let mut edges: Vec<EdgeRow> = Vec::new();
+    let edge_ids: Vec<u64> = page
+        .items
+        .iter()
+        .filter_map(|h| h.via_edge_id)
+        .collect();
+    let edge_records: Vec<Option<EdgeRecord>> = db.engine.get_edges(&edge_ids)?;
+    for rec_opt in edge_records.into_iter().flatten() {
+        edges.push(edge_record_to_row(db, &rec_opt));
+    }
+    Ok((nodes, edges, distances))
+}
+
+fn edge_record_to_row(db: &Db, rec: &EdgeRecord) -> EdgeRow {
+    let source = db.key_for(rec.from);
+    let target = db.key_for(rec.to);
+    let edge_type = edge_type_from_id(rec.type_id).to_string();
+    EdgeRow {
+        id: format!("{}|{}|{}", source, edge_type, target),
+        source,
+        target,
+        edge_type,
+        properties: String::new(),
+    }
 }

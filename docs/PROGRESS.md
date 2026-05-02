@@ -116,16 +116,33 @@
 ### JS CLI commands (`src/cli.cjs`)
 - `index`, `graph`, `gen` — indexing + graph building + visualization
 - `bfs`, `graph-search` — in-memory graph operations
-- `db-ingest`, `db-semantic-search`, `db-traverse`, `db-rag`, `ping` — LanceDB + GraphRAG operations
+- `db-ingest`, `db-semantic-search`, `db-traverse`, `db-rag`, `ping` — OverGraph + GraphRAG operations
 
 ### Tests
-- Rust: **67 tests pass** across 4 suites (`indexer_test`: 29, `graph_test`: 13, `search_test`: 13, `storage_test`: 12). Folder + markdown-end_line work is exercised through the existing index/graph/storage suites — the additive type changes flow through unchanged assertion paths.
-- JS: **21/21 tests pass** covering indexing, graph ops, ingest, semantic search, GraphRAG retrieval, edge-filtered traversal
+- Rust: **68 tests pass** across 7 suites after the OverGraph migration (`indexer_test`: 29, `graph_test`: 13, `search_test`: 13, `storage_test`: 7 (rewritten), plus `storage_bench`: 2 ignored, plus 4 unit tests in `text::sparse_tests` + `types_registry::tests`).
+- JS: **21/21 tests pass** covering indexing, graph ops, ingest, semantic search, GraphRAG retrieval, edge-filtered traversal.
 
 ### Still open (Phase 4.1 — "nice-to-haves" from REQUIREMENT.md)
 - [ ] Query by signature ("functions taking User and returning Promise")
 - [ ] Query by pattern (try/catch detection from AST)
 
 ---
+
+## Storage Migration: LanceDB → OverGraph (2026-05-01) ✅
+
+End-to-end migration on branch `migrate/overgraph`. See `docs/MIGRATION-OVERGRAPH.md` for the full plan, run log, and open-question resolutions.
+
+**Highlights:**
+- Replaced LanceDB + manual PPR + manual RRF with a single OverGraph 0.6.0 dependency.
+- Native PPR: `native/src/storage/ppr.rs` shrank from 445 → 116 LOC.
+- Native hybrid search: `query::rrf_search` collapsed into one `vector_search(mode=Hybrid, fusion_mode=RRF)` call.
+- New deterministic sparse keyword tokenizer (`text::build_sparse_keyword_vector`) replaces LanceDB's BM25 FTS for the keyword channel of hybrid search.
+- Storage NAPI surface (`db_ingest`, `db_semantic_search`, `db_hybrid_search`, `db_traverse`, `ping_embedder`) — wire-compatible, no caller changes needed.
+- Bench (dev profile, ARM64): ingest 1K nodes + 5K edges in 64.8ms; hybrid search p95 = 5.7ms.
+
+**Outstanding:**
+- Release-mode bin link error to resolve (LTO + napi cdylib + new dep tree).
+- End-to-end CLI verification with a live embedding endpoint.
+- Decision on whether to ship behind a `storage-overgraph` Cargo feature flag (LanceDB retained as fallback) or merge as the only backend.
 
 ## Last Updated: 2026-05-01

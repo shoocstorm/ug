@@ -12,10 +12,11 @@
 //!   6. code_snippet    - retrieval helper that returns code snippets from nodes
 
 use crate::storage::db::{
-    edges_from, edges_to, fts_search, nodes_by_ids, vector_search, Db, EdgeRow, NodeRow,
+    hybrid_search, nodes_by_ids, traverse_string_ids, vector_search, Db, EdgeRow, NodeRow,
 };
 use crate::storage::embed::Embedder;
-use crate::storage::ppr::{personalized_pagerank, PprOptions};
+use crate::storage::ppr::{run_ppr, to_og_direction};
+use crate::storage::text::build_sparse_keyword_vector;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -94,14 +95,13 @@ pub async fn semantic_search_w_where(
         .collect())
 }
 
-/// Reciprocal Rank Fusion of vector + FTS results. Standard hybrid recipe:
-/// each list contributes `1 / (k_const + rank_i)` per shared id, results
-/// are sorted by combined score. `k_const = 60` is the canonical default
-/// from the original RRF paper.
+/// Reciprocal Rank Fusion of dense + sparse results. Delegates to
+/// OverGraph's native hybrid `vector_search`, which fuses dense (HNSW
+/// 1024-dim cosine) with sparse (FNV-hashed keyword tokens, see
+/// `text::build_sparse_keyword_vector`) via the engine's RRF.
 ///
-/// We expose the fused list as `SearchHit`s with `distance = -score` so
-/// downstream code that sorts ascending by distance still gets the right
-/// order (lower `distance` = better hit).
+/// `distance = -score` is preserved for downstream consumers that sort
+/// ascending — lower `distance` means better hit.
 pub async fn rrf_search(
     db: &Db,
     embedder: &Embedder,
@@ -109,47 +109,20 @@ pub async fn rrf_search(
     k: usize,
     where_clause: Option<&str>,
 ) -> Result<Vec<SearchHit>, Box<dyn std::error::Error + Send + Sync>> {
-    const RRF_K: f32 = 60.0;
-    let pool = (k * 4).max(20);
-
-    // Vector half. Embed once.
     let vectors = embedder.embed(&[query.to_string()]).await?;
     let query_vec = vectors
         .into_iter()
         .next()
         .ok_or("embedder returned no vectors")?;
-    let vec_hits = vector_search(db, query_vec, pool, where_clause).await?;
-
-    // FTS half. We swallow its error so a missing FTS index degrades to
-    // vector-only instead of failing the whole query.
-    let fts_hits = match fts_search(db, query, pool, where_clause).await {
-        Ok(rows) => rows,
-        Err(_) => Vec::new(),
-    };
-
-    let mut scores: HashMap<String, f32> = HashMap::new();
-    let mut keep: HashMap<String, NodeRow> = HashMap::new();
-
-    for (rank, (node, _)) in vec_hits.iter().enumerate() {
-        *scores.entry(node.id.clone()).or_insert(0.0) += 1.0 / (RRF_K + rank as f32 + 1.0);
-        keep.entry(node.id.clone()).or_insert_with(|| node.clone());
-    }
-    for (rank, node) in fts_hits.iter().enumerate() {
-        *scores.entry(node.id.clone()).or_insert(0.0) += 1.0 / (RRF_K + rank as f32 + 1.0);
-        keep.entry(node.id.clone()).or_insert_with(|| node.clone());
-    }
-
-    let mut ranked: Vec<(String, f32)> = scores.into_iter().collect();
-    ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    ranked.truncate(k);
-
-    Ok(ranked
+    let sparse = build_sparse_keyword_vector(query);
+    let pool = (k * 4).max(20);
+    let hits = hybrid_search(db, query_vec, sparse, pool, where_clause).await?;
+    Ok(hits
         .into_iter()
-        .filter_map(|(id, score)| {
-            keep.remove(&id).map(|node| SearchHit {
-                node,
-                distance: -score,
-            })
+        .take(k)
+        .map(|(node, score)| SearchHit {
+            node,
+            distance: -score,
         })
         .collect())
 }
@@ -232,10 +205,8 @@ pub async fn traverse(
 
 /// Generalised graph expansion. Walks `direction` for up to `max_hops`
 /// from each id in `start_ids`, optionally restricted to specific edge
-/// types (case-insensitive match against `EdgeRow.edge_type`).
-///
-/// One LanceDB query per hop per direction; the visited set bounds total
-/// work. Final node objects are rehydrated in a single batched lookup.
+/// types. Delegates to OverGraph's native `traverse` per seed and merges
+/// the results, deduplicating shared neighbours.
 pub async fn traverse_filtered(
     db: &Db,
     start_ids: &[String],
@@ -243,84 +214,52 @@ pub async fn traverse_filtered(
     edge_types: Option<&[String]>,
     direction: Direction,
 ) -> Result<TraversalResult, Box<dyn std::error::Error + Send + Sync>> {
+    use crate::storage::types_registry::edge_type_to_id;
+
+    let edge_type_ids: Option<Vec<u32>> = edge_types
+        .filter(|v| !v.is_empty())
+        .map(|v| v.iter().map(|s| edge_type_to_id(s)).collect());
+    let og_dir = to_og_direction(direction);
+
     let mut visited: HashSet<String> = HashSet::new();
     let mut distances: HashMap<String, u32> = HashMap::new();
-    let mut frontier: Vec<String> = Vec::new();
-    let mut all_edges: Vec<EdgeRow> = Vec::new();
+    let mut nodes: Vec<NodeRow> = Vec::new();
+    let mut edges: Vec<EdgeRow> = Vec::new();
 
-    let allow_set: Option<HashSet<String>> =
-        edge_types.map(|v| v.iter().map(|s| s.to_ascii_lowercase()).collect());
+    for start_id in start_ids {
+        let (start_nodes, start_edges, start_dists) = traverse_string_ids(
+            db,
+            start_id,
+            max_hops,
+            edge_type_ids.clone(),
+            og_dir,
+        )
+        .await?;
 
-    for id in start_ids {
-        if visited.insert(id.clone()) {
-            distances.insert(id.clone(), 0);
-            frontier.push(id.clone());
-        }
-    }
-
-    for hop in 0..max_hops {
-        let mut next: Vec<String> = Vec::new();
-        for node_id in &frontier {
-            let edges = collect_edges(db, node_id, direction).await?;
-            for e in edges {
-                if let Some(ref allow) = allow_set {
-                    if !allow.contains(&e.edge_type.to_ascii_lowercase()) {
-                        continue;
-                    }
-                }
-                let neighbour = neighbour_id(&e, node_id, direction);
-                if !visited.contains(&neighbour) {
-                    visited.insert(neighbour.clone());
-                    distances.insert(neighbour.clone(), hop + 1);
-                    next.push(neighbour);
-                }
-                all_edges.push(e);
+        for n in start_nodes {
+            if visited.insert(n.id.clone()) {
+                nodes.push(n);
             }
         }
-        if next.is_empty() {
-            break;
+        edges.extend(start_edges);
+        for (k, d) in start_dists {
+            // Keep the minimum depth across seeds — closer wins.
+            distances
+                .entry(k)
+                .and_modify(|cur| {
+                    if d < *cur {
+                        *cur = d;
+                    }
+                })
+                .or_insert(d);
         }
-        frontier = next;
     }
 
-    let ids: Vec<String> = visited.into_iter().collect();
-    let nodes = nodes_by_ids(db, &ids).await?;
     Ok(TraversalResult {
         nodes,
-        edges: all_edges,
+        edges,
         distances,
     })
-}
-
-async fn collect_edges(
-    db: &Db,
-    node_id: &str,
-    direction: Direction,
-) -> Result<Vec<EdgeRow>, Box<dyn std::error::Error + Send + Sync>> {
-    match direction {
-        Direction::Outbound => Ok(edges_from(db, node_id).await?),
-        Direction::Inbound => Ok(edges_to(db, node_id).await?),
-        Direction::Both => {
-            let mut out = edges_from(db, node_id).await?;
-            let inn = edges_to(db, node_id).await?;
-            out.extend(inn);
-            Ok(out)
-        }
-    }
-}
-
-fn neighbour_id(edge: &EdgeRow, current: &str, direction: Direction) -> String {
-    match direction {
-        Direction::Outbound => edge.target.clone(),
-        Direction::Inbound => edge.source.clone(),
-        Direction::Both => {
-            if edge.source == current {
-                edge.target.clone()
-            } else {
-                edge.source.clone()
-            }
-        }
-    }
 }
 
 /// Final ranked context returned from [`search_kb`]. Each item represents a
@@ -507,33 +446,32 @@ async fn search_kb_ppr(
         }
     }
 
-    // 3. PPR.
-    let mut ppr_opts = PprOptions::default();
-    ppr_opts.restart_prob = opts.ppr_restart_prob.clamp(0.01, 0.99);
-    ppr_opts.max_iter = opts.ppr_max_iter.max(1);
-    ppr_opts.direction = opts.direction;
-    if let Some(weights) = &opts.ppr_edge_weights {
-        ppr_opts.edge_type_weights = weights
-            .iter()
-            .map(|(k, v)| (k.to_ascii_lowercase(), *v))
-            .collect();
-    }
-    if let Some(allowed) = opts.edge_types {
-        ppr_opts.allowed_edge_types =
-            Some(allowed.iter().map(|s| s.to_ascii_lowercase()).collect());
-    }
-    let ranked = personalized_pagerank(db, &seed_mass, &ppr_opts).await?;
+    // 3. PPR — uniform seeds (see MIGRATION-OVERGRAPH §3.4 for the
+    //    weighted-personalization deferral). `seed_mass` keys are still
+    //    used downstream as the "is this a seed?" set.
+    let take = (opts.k * 4).max(opts.k.max(1));
+    let seed_strings: Vec<String> = seed_mass.keys().cloned().collect();
+    let edge_types_owned: Option<Vec<String>> =
+        opts.edge_types.map(|v| v.iter().cloned().collect());
+    let ranked_pairs = run_ppr(
+        db,
+        &seed_strings,
+        opts.direction,
+        edge_types_owned.as_deref(),
+        opts.ppr_restart_prob,
+        opts.ppr_max_iter,
+        Some(take),
+    )
+    .await?;
 
     // 4. Hydrate the top-N node rows. Take a generous slice so the
     //    char budget stage has room to discard sparse/empty entries.
-    let take = (opts.k * 4).max(opts.k.max(1));
-    let top_ids: Vec<String> = ranked
-        .ranked
+    let top_ids: Vec<String> = ranked_pairs
         .iter()
         .take(take)
         .map(|(id, _)| id.clone())
         .collect();
-    let score_by_id: HashMap<String, f32> = ranked.ranked.into_iter().collect();
+    let score_by_id: HashMap<String, f32> = ranked_pairs.into_iter().collect();
     let nodes = nodes_by_ids(db, &top_ids).await?;
     let nodes_by_id: HashMap<String, NodeRow> =
         nodes.into_iter().map(|n| (n.id.clone(), n)).collect();

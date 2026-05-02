@@ -1,11 +1,13 @@
-//! Phase 3: semantic storage on top of LanceDB + a local embedding model.
+//! Phase 3: semantic storage on top of OverGraph + a local embedding model.
 //!
 //! Module layout:
-//!   - `text`   - shape per-node embedding text
-//!   - `embed`  - HTTP client to OpenAI-compatible /v1/embeddings
-//!   - `db`     - LanceDB schemas and upsert
-//!   - `query`  - semantic / hybrid / traversal queries
-//!   - `ingest` - graph -> embed -> upsert pipeline
+//!   - `text`            - shape per-node embedding text + sparse keyword vectors
+//!   - `embed`           - HTTP client to OpenAI-compatible /v1/embeddings
+//!   - `db`              - OverGraph engine wrapper + wire-format DTOs
+//!   - `query`           - semantic / hybrid / traversal queries
+//!   - `ingest`          - graph -> embed -> upsert pipeline
+//!   - `ppr`             - thin wrapper around OverGraph native PPR
+//!   - `types_registry`  - stable string ↔ u32 mapping for OverGraph type ids
 
 pub mod db;
 pub mod embed;
@@ -14,13 +16,12 @@ pub mod napi_bindings;
 pub mod ppr;
 pub mod query;
 pub mod text;
+pub mod types_registry;
 
 pub use db::{Db, EdgeRow, NodeRow};
 pub use embed::{Embedder, EmbedderConfig, EMBEDDING_DIM};
 pub use ingest::{ingest_graph, reembed_nodes, IngestStats};
-pub use ppr::{
-    default_edge_type_weights, personalized_pagerank, run_ppr_from_edges, PprOptions, PprResult,
-};
+pub use ppr::{default_edge_type_weights, run_ppr};
 pub use query::{
     semantic_search_w_where, mmr_rerank, read_snippet, rrf_search, search_kb, semantic_search, traverse,
     traverse_filtered, ContextItem, Direction, RankStrategy, RankedContext, SearchHit,
