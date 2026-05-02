@@ -32,9 +32,13 @@ tree-sitter-md = "0.1"
 petgraph = "0.6"
 regex = "1"
 overgraph = { path = "../docs/overgraph", version = "0.6" }
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
 futures = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+axum = "0.7"
+tower-http = { version = "0.5", features = ["compression-br", "compression-gzip"] }
+flate2 = "1"
+brotli = "8"
 
 [build-dependencies]
 napi-build = "1"

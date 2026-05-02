@@ -13,9 +13,12 @@ use ultragraph_kb::{
     graph_keyword_search, index, index_with_cache, k_hop_bfs,
 };
 
+mod serve;
+
 // Bundled visualization assets so `ug gen` can produce a self-contained
 // output directory without needing the source tree at runtime.
-const VIS_HTML: &str = include_str!("./vis/visualization.html");
+pub(crate) const VIS_HTML: &str = include_str!("./vis/visualization.html");
+pub(crate) const VIS_D3: &[u8] = include_bytes!("./vis/d3.v7.min.js");
 const VIS_MD: &str = include_str!("../../README.md");
 
 fn main() {
@@ -44,6 +47,7 @@ fn main() {
         "semantic_search" => run_semantic_search(cmd_args),
         "hybrid_search" => run_hybrid_search(cmd_args),
         "traverse" => run_traverse(cmd_args),
+        "serve" => serve::run_serve(cmd_args),
         "help" => print_help(),
         _ => {
             eprintln!("Unknown command: {}", cmd);
@@ -58,7 +62,7 @@ fn main() {
 /// Find the first value for any of the given flag names. Returns the
 /// argument immediately following the matched flag, or `None` if no
 /// flag matched or it was the last token.
-fn flag_value(args: &[String], names: &[&str]) -> Option<String> {
+pub(crate) fn flag_value(args: &[String], names: &[&str]) -> Option<String> {
     let mut i = 0;
     while i < args.len() {
         if names.contains(&args[i].as_str()) && i + 1 < args.len() {
@@ -69,11 +73,11 @@ fn flag_value(args: &[String], names: &[&str]) -> Option<String> {
     None
 }
 
-fn flag_value_or(args: &[String], names: &[&str], default: &str) -> String {
+pub(crate) fn flag_value_or(args: &[String], names: &[&str], default: &str) -> String {
     flag_value(args, names).unwrap_or_else(|| default.to_string())
 }
 
-fn has_flag(args: &[String], flag: &str) -> bool {
+pub(crate) fn has_flag(args: &[String], flag: &str) -> bool {
     args.iter().any(|a| a == flag)
 }
 
@@ -151,7 +155,7 @@ fn embedder_from_args(args: &[String]) -> Embedder {
     Embedder::new(cfg).expect("failed to build embedder")
 }
 
-fn tokio_runtime() -> tokio::runtime::Runtime {
+pub(crate) fn tokio_runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -385,6 +389,7 @@ fn run_gen(args: &[String]) {
     let t2 = std::time::Instant::now();
     println!("▸ Copying visualization assets");
     fs::write(format!("{}/index.html", output_dir), VIS_HTML).expect("Failed to write index.html");
+    fs::write(format!("{}/d3.v7.min.js", output_dir), VIS_D3).expect("Failed to write d3.v7.min.js");
     fs::write(format!("{}/README.md", output_dir), VIS_MD).expect("Failed to write README.md");
     println!("  ✓ done in {:?}", t2.elapsed());
 
@@ -393,11 +398,12 @@ fn run_gen(args: &[String]) {
     println!("  ✓ graph.json");
     println!("  ✓ indexed-tree.json");
     println!("  ✓ index.html (open in browser with HTTP server)");
+    println!("  ✓ d3.v7.min.js");
     println!("  ✓ README.md");
 
     if no_ingest {
         println!("⚠ Skipping db-ingest (--no-ingest)");
-        println!("Visit http://localhost:8080 to view the graph");
+        println!("Run ' ug serve -i {} ' and open http://127.0.0.1:8080", graph_path);
         println!("Total time: {:?}", start_total.elapsed());
         return;
     }
@@ -422,7 +428,10 @@ fn run_gen(args: &[String]) {
     }
 
     println!("────────────────────────────────────────");
-    println!("Visit http://localhost:8080 to view the graph");
+    println!(
+        "Run ' ug serve -i {} ' and open http://127.0.0.1:8080 to view the graph.",
+        graph_path
+    );
     println!(
         "Run ' ug semantic_search \"hello\" -d {} ' to perform a semantic RAG query.",
         db_path
@@ -945,6 +954,14 @@ fn print_help() {
     println!("    -k, --hops <n>     Max hops (default: 2)");
     println!("    -o, --output <file> Output file (optional)");
     println!();
+    println!("  serve                Serve the visualization + graph.json + read-only API (in-memory, pre-compressed gzip/br)");
+    println!("    -i, --input <file>  Graph JSON to serve (default: ug-out/graph.json)");
+    println!("    -p, --port <n>      TCP port (default: 8080)");
+    println!("    --host <addr>       Bind address (default: 127.0.0.1; use 0.0.0.0 for LAN)");
+    println!("    --watch             Reload graph file when its mtime changes (~2s poll)");
+    println!("    API: GET /api/graph/{{stats, node/<id>, search?q=&types=, bfs/<id>?k=,");
+    println!("                          path?source=&target=, filter?types=, centrality, cycles}}");
+    println!();
     println!("Examples:");
     println!("  ug index -i ./src -o index.json");
     println!("  ug graph -i index.json -o graph.json");
@@ -961,4 +978,5 @@ fn print_help() {
     println!("  ug hybrid_search \"oauth login flow\" -d ug-out/ugdb -k 8");
     println!("  ug hybrid_search \"build a tree\" -d ug-out/ugdb --strategy mmr");
     println!("  ug traverse \"file:src/index.ts\" -d ug-out/ugdb");
+    println!("  ug serve -i ug-out/graph.json -p 8080");
 }
