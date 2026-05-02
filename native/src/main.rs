@@ -1,9 +1,11 @@
 use std::env;
 use std::fs;
 use std::path::Path;
+use std::path::PathBuf;
 use ultragraph_kb::storage::{
-    self, ingest_graph, semantic_search as storage_semantic_search, traverse as storage_traverse,
-    Db, Embedder, EmbedderConfig,
+    self, ingest_graph, search_kb as storage_search_kb,
+    semantic_search as storage_semantic_search, traverse as storage_traverse, Db, Direction,
+    Embedder, EmbedderConfig, RankStrategy, SearchKbOptions,
 };
 use ultragraph_kb::types::GraphData;
 use ultragraph_kb::{
@@ -40,6 +42,7 @@ fn main() {
         "gen" => run_gen(cmd_args),
         "ingest" => run_ingest(cmd_args),
         "semantic_search" => run_semantic_search(cmd_args),
+        "hybrid_search" => run_hybrid_search(cmd_args),
         "traverse" => run_traverse(cmd_args),
         "help" => print_help(),
         _ => {
@@ -533,6 +536,96 @@ fn run_semantic_search(args: &[String]) {
     write_or_print(output_path.as_deref(), &result_json, "search result");
 }
 
+// graphRAG hybrid search: RRF seeds → PPR (default) or MMR rerank → snippet-attached context
+fn run_hybrid_search(args: &[String]) {
+    if args.is_empty() {
+        eprintln!(
+            "Usage: ug hybrid_search <query> [-d|--db <path>] [-k <limit>] [--hops <n>] \\
+                 [--filter <sql>] [--strategy <ppr|mmr>] [--direction <out|in|both>] \\
+                 [-t|--edge-type <type>]... [--max-chars <n>] [--mmr-lambda <f>] \\
+                 [--no-snippets] [--repo-root <path>] \\
+                 [--base-url <url>] [--api-key <key>] [--model <name>] [-o|--output <file>]"
+        );
+        std::process::exit(1);
+    }
+
+    let value_flags = [
+        "-d",
+        "--db",
+        "-k",
+        "--limit",
+        "--hops",
+        "--filter",
+        "--strategy",
+        "--direction",
+        "-t",
+        "--edge-type",
+        "--max-chars",
+        "--mmr-lambda",
+        "--repo-root",
+        "--base-url",
+        "--api-key",
+        "--model",
+        "-o",
+        "--output",
+    ];
+    let query = first_positional(args, &value_flags).expect("missing query");
+    let db_path = flag_value_or(args, &["-d", "--db"], "ug-out/ug-db");
+    let k: usize = flag_value(args, &["-k", "--limit"])
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(8);
+    let hops: u32 = flag_value(args, &["--hops"])
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(2);
+    let filter = flag_value(args, &["--filter"]);
+    let strategy = flag_value(args, &["--strategy"])
+        .map(|s| RankStrategy::from_str_lossy(&s))
+        .unwrap_or(RankStrategy::Ppr);
+    let direction = flag_value(args, &["--direction"])
+        .map(|s| Direction::from_str_lossy(&s))
+        .unwrap_or(Direction::Both);
+    let edge_types = multi_flag(args, &["-t", "--edge-type"]);
+    let max_chars: usize = flag_value(args, &["--max-chars"])
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(12_000);
+    let mmr_lambda: f32 = flag_value(args, &["--mmr-lambda"])
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0.6);
+    let include_snippets = !has_flag(args, "--no-snippets");
+    let repo_root: PathBuf = flag_value(args, &["--repo-root"])
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let output_path = flag_value(args, &["-o", "--output"]);
+
+    let embedder = embedder_from_args(args);
+    let rt = tokio_runtime();
+
+    let result_json = rt.block_on(async {
+        let db = Db::open(&db_path).await.expect("failed to open lancedb");
+        let mut opts = SearchKbOptions::new(&query, repo_root.as_path());
+        opts.k = k;
+        opts.hops = hops;
+        opts.edge_types = if edge_types.is_empty() {
+            None
+        } else {
+            Some(edge_types.as_slice())
+        };
+        opts.direction = direction;
+        opts.max_chars = max_chars;
+        opts.mmr_lambda = mmr_lambda;
+        opts.where_clause = filter.as_deref();
+        opts.include_snippets = include_snippets;
+        opts.strategy = strategy;
+
+        let result = storage_search_kb(&db, &embedder, opts)
+            .await
+            .expect("hybrid_search failed");
+        serde_json::to_string_pretty(&result).unwrap_or_default()
+    });
+
+    write_or_print(output_path.as_deref(), &result_json, "hybrid search result");
+}
+
 fn run_traverse(args: &[String]) {
     if args.is_empty() {
         eprintln!(
@@ -670,6 +763,21 @@ fn print_help() {
     println!("    --base-url/--api-key/--model  Embedding endpoint overrides");
     println!("    -o, --output <file> Output file (optional)");
     println!();
+    println!("  hybrid_search <query>        GraphRAG: RRF seeds → PPR/MMR rerank → ranked context");
+    println!("    -d, --db <path>     LanceDB directory (default: ug-out/ug-db)");
+    println!("    -k, --limit <n>     Top-k results (default: 8)");
+    println!("    --hops <n>          Graph expansion hops (default: 2, MMR only)");
+    println!("    --filter <sql>      Optional SQL WHERE clause for seed search");
+    println!("    --strategy <s>      ppr (default) or mmr");
+    println!("    --direction <dir>   outbound|inbound|both (default: both)");
+    println!("    -t, --edge-type <t> Restrict expansion to edge type (repeatable)");
+    println!("    --max-chars <n>     Char budget for assembled context (default: 12000)");
+    println!("    --mmr-lambda <f>    MMR diversity/relevance balance 0..1 (default: 0.6)");
+    println!("    --no-snippets       Skip reading source snippets from disk");
+    println!("    --repo-root <path>  Repo root for snippet resolution (default: cwd)");
+    println!("    --base-url/--api-key/--model  Embedding endpoint overrides");
+    println!("    -o, --output <file> Output file (optional)");
+    println!();
     println!("  traverse <node-id>   K-hop BFS using the LanceDB edges table");
     println!("    -d, --db <path>    LanceDB directory (default: ug-out/ug-db)");
     println!("    -k, --hops <n>     Max hops (default: 2)");
@@ -688,6 +796,7 @@ fn print_help() {
     println!("  ug gen -i ./lib --no-ingest");
     println!("  ug ingest -g ug-out/graph.json -d ug-out/ug-db --with-indexes");
     println!("  ug semantic_search \"oauth login flow\" -d ug-out/ug-db -k 5");
+    println!("  ug hybrid_search \"oauth login flow\" -d ug-out/ug-db -k 8 --strategy ppr");
     println!(
         "  ug semantic_search \"build a tree\" -d ug-out/ug-db --filter \"node_type = 'Function'\""
     );
