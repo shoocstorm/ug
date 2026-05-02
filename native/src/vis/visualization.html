@@ -854,47 +854,35 @@
         /* ─── Info panel (node details) ─────────────────────── */
 
         #info {
-            position: absolute;
-            background: rgba(15, 15, 17, 0.92);
+            position: fixed;
+            top: 0;
+            right: 0;
+            width: 420px;
+            height: 100vh;
+            background: rgba(15, 15, 17, 0.85);
             backdrop-filter: blur(24px);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 16px;
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.6);
-            min-width: 440px;
-            max-width: 600px;
-            max-height: 88vh;
-            display: none;
-            z-index: 30;
+            border-left: 1px solid var(--border);
+            box-shadow: 0 0 40px rgba(0, 0, 0, 0.4);
+            display: flex;
+            flex-direction: column;
+            transform: translateX(100%);
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            z-index: 40;
             overflow: hidden;
         }
 
         #info.visible {
-            display: flex;
-            flex-direction: column;
-            animation: slideIn 0.25s ease;
-        }
-
-        @keyframes slideIn {
-            from {
-                opacity: 0;
-                transform: translateY(8px);
-            }
-
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
+            transform: translateX(0);
         }
 
         #info .drag-handle {
-            cursor: move;
-            padding-bottom: 10px;
-            margin-bottom: 8px;
+            cursor: default;
+            padding: 18px 20px 14px;
             border-bottom: 1px solid var(--border-soft);
             display: flex;
             align-items: center;
             justify-content: space-between;
+            flex-shrink: 0;
         }
 
         #info .drag-handle h3 {
@@ -938,6 +926,8 @@
         #info-body {
             flex: 1;
             min-height: 0;
+            overflow-y: auto;
+            padding: 14px 20px 20px;
         }
 
         #info .info-row {
@@ -996,8 +986,6 @@
             display: flex;
             flex-direction: column;
             gap: 4px;
-            max-height: 380px;
-            overflow-y: auto;
         }
 
         #info .related-item {
@@ -1083,8 +1071,6 @@
         }
 
         .hier-list {
-            max-height: 460px;
-            overflow: auto;
             border: 1px solid var(--border-soft);
             border-radius: 8px;
             padding: 6px 4px;
@@ -1789,7 +1775,6 @@
             wireToolTabs();
             wireFooter();
             wireFilterActions();
-            wireDragInfo();
 
             document.getElementById('info-close').addEventListener('click', () =>
                 document.getElementById('info').classList.remove('visible'));
@@ -2351,15 +2336,6 @@
                 jumpBtn.style.display = 'none';
             }
 
-            const rect = document.getElementById('container').getBoundingClientRect();
-            let left = (d.x || width / 2) + 30;
-            let top = (d.y || height / 2) - 100;
-            if (left + 480 > rect.width) left = (d.x || width / 2) - 500;
-            if (top + 540 > rect.height) top = rect.height - 560;
-            if (top < 20) top = 20;
-            if (left < 340) left = 340;
-            info.style.left = left + 'px';
-            info.style.top = top + 'px';
             info.classList.add('visible');
 
             if (state.selectedNode && state.selectedNode.id !== d.id) {
@@ -2636,25 +2612,7 @@
 
         // ─── Info-panel dragging ────────────────────────────
 
-        function wireDragInfo() {
-            const info = document.getElementById('info');
-            const handle = info.querySelector('.drag-handle');
-            let dragging = false, sx, sy, il, it;
-
-            handle.addEventListener('mousedown', e => {
-                if (e.target.closest('.icon-btn')) return;
-                dragging = true;
-                sx = e.clientX; sy = e.clientY;
-                il = parseInt(info.style.left || 0);
-                it = parseInt(info.style.top || 0);
-            });
-            document.addEventListener('mousemove', e => {
-                if (!dragging) return;
-                info.style.left = (il + e.clientX - sx) + 'px';
-                info.style.top = (it + e.clientY - sy) + 'px';
-            });
-            document.addEventListener('mouseup', () => { dragging = false; });
-        }
+        // Info panel is docked to the right side — drag is no longer applicable.
 
         function escapeHtml(text) {
             if (text == null) return '';
