@@ -158,10 +158,7 @@ impl Db {
     }
 
     fn remember(&self, key: String, id: u64) {
-        self.key_to_id
-            .write()
-            .unwrap()
-            .insert(key.clone(), id);
+        self.key_to_id.write().unwrap().insert(key.clone(), id);
         self.id_to_key.write().unwrap().insert(id, key);
     }
 
@@ -251,8 +248,7 @@ impl Db {
 
     /// No-op on OverGraph — vector indexes are built per-segment at flush
     /// time. Kept for call-site compatibility with the previous LanceDB
-    /// API; the `--with-indexes` CLI flag falls through to this and prints
-    /// a deprecation note.
+    /// API;
     pub async fn try_create_vector_index(&self) -> Result<(), DbError> {
         Ok(())
     }
@@ -538,22 +534,14 @@ pub async fn traverse_string_ids(
         if let Some(rec) = rec_opt {
             db.remember(rec.key.clone(), rec.id);
             nodes.push(node_record_to_row(rec));
-            let depth = if ix == 0 {
-                0
-            } else {
-                page.items[ix - 1].depth
-            };
+            let depth = if ix == 0 { 0 } else { page.items[ix - 1].depth };
             distances.insert(rec.key.clone(), depth);
         }
     }
 
     // Reconstruct edges by reading `via_edge_id` for each hit.
     let mut edges: Vec<EdgeRow> = Vec::new();
-    let edge_ids: Vec<u64> = page
-        .items
-        .iter()
-        .filter_map(|h| h.via_edge_id)
-        .collect();
+    let edge_ids: Vec<u64> = page.items.iter().filter_map(|h| h.via_edge_id).collect();
     let edge_records: Vec<Option<EdgeRecord>> = db.engine.get_edges(&edge_ids)?;
     for rec_opt in edge_records.into_iter().flatten() {
         edges.push(edge_record_to_row(db, &rec_opt));

@@ -86,6 +86,7 @@ pub struct FileNode {
     pub language: String,
     pub classification: Option<FileClassification>,
     pub symbols: Vec<Symbol>,
+    pub lines: u32,
     #[serde(default)]
     pub imports: Vec<ImportInfo>,
     #[serde(default)]
@@ -180,8 +181,14 @@ pub struct IndexStats {
     pub total_symbols: usize,
     #[serde(rename = "totalFolders", default)]
     pub total_folders: usize,
+    #[serde(rename = "totalLines")]
+    pub total_lines: u64,
     #[serde(rename = "indexingTimeMs")]
     pub indexing_time_ms: u64,
+    #[serde(rename = "lastIndexedAt")]
+    pub last_indexed_at: u64,
+    #[serde(rename = "repoRoot")]
+    pub repo_root: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

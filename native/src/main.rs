@@ -3,7 +3,7 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use ultragraph_kb::storage::{
-    self, ingest_graph, search_kb as storage_search_kb, semantic_search as storage_semantic_search,
+    self, search_kb as storage_search_kb, semantic_search as storage_semantic_search,
     traverse as storage_traverse, Db, Direction, Embedder, EmbedderConfig, RankStrategy,
     SearchKbOptions,
 };
@@ -297,12 +297,14 @@ fn run_analyze(args: &[String]) {
     println!("  - cycles.json (cycle detection)");
 }
 
-// full pipeline: ingest -> graph -> analyze -> search
+// full pipeline: index -> graph -> ingest -> search
 fn run_gen(args: &[String]) {
     if has_flag(args, "-h") || has_flag(args, "--help") {
         print_gen_help();
         return;
     }
+
+    let start_total = std::time::Instant::now();
 
     let input = flag_value(args, &["-i", "--input"])
         .or_else(|| {
@@ -328,25 +330,29 @@ fn run_gen(args: &[String]) {
     let output_dir = flag_value_or(args, &["-o", "--output"], "ug-out");
     let no_ingest = has_flag(args, "--no-ingest");
     let db_path =
-        flag_value(args, &["-d", "--db"]).unwrap_or_else(|| format!("{}/ugdb", output_dir));
+        flag_value(args, &["-o", "--output"]).unwrap_or_else(|| "ug-out/ugdb".to_string());
 
     let pipeline_summary = if no_ingest {
         "index → graph → visualization"
     } else {
-        "index → graph → visualization → LanceDB ingest"
+        "index → graph → visualization → ingest"
     };
     println!("⚡ Full pipeline: {}", pipeline_summary);
 
     let _ = fs::create_dir_all(&output_dir);
 
+    let t0 = std::time::Instant::now();
     println!("▸ Indexing {}", input);
     let index_result = match cache {
         Some(c) => index_with_cache(input, c),
         None => index(input),
     };
+    println!("  ✓ done in {:?}", t0.elapsed());
 
+    let t1 = std::time::Instant::now();
     println!("▸ Building graph");
     let graph = build_graph(index_result.clone());
+    println!("  ✓ done in {:?}", t1.elapsed());
 
     let (nodes_count, edges_count) = match serde_json::from_str::<serde_json::Value>(&graph) {
         Ok(v) => (
@@ -369,9 +375,11 @@ fn run_gen(args: &[String]) {
     fs::write(format!("{}/indexed-tree.json", output_dir), &index_result)
         .expect("Failed to write indexed-tree.json");
 
+    let t2 = std::time::Instant::now();
     println!("▸ Copying visualization assets");
     fs::write(format!("{}/index.html", output_dir), VIS_HTML).expect("Failed to write index.html");
     fs::write(format!("{}/README.md", output_dir), VIS_MD).expect("Failed to write README.md");
+    println!("  ✓ done in {:?}", t2.elapsed());
 
     println!("────────────────────────────────────────");
     println!("✓ Generated in {}/", output_dir);
@@ -383,31 +391,186 @@ fn run_gen(args: &[String]) {
     if no_ingest {
         println!("⚠ Skipping db-ingest (--no-ingest)");
         println!("Visit http://localhost:8080 to view the graph");
+        println!("Total time: {:?}", start_total.elapsed());
         return;
     }
 
     println!();
-    println!("▸ Ingesting into {}", db_path);
+    let t3 = std::time::Instant::now();
+    println!("▸ Ingesting graph data into DB {}", db_path);
     match run_gen_ingest(&graph, &db_path, args) {
         Ok((nodes_written, edges_written)) => {
             println!(
-                "  ✓ {} nodes, {} edges embedded",
-                nodes_written, edges_written
+                "  ✓ {} nodes, {} edges embedded in {:?}",
+                nodes_written,
+                edges_written,
+                t3.elapsed()
             );
         }
         Err(e) => {
             eprintln!("⚠ db-ingest skipped — {}", e);
             eprintln!("  Re-run later once the embedding endpoint is up:");
-            eprintln!("    ug ingest -g {} -d {}", graph_path, db_path);
+            eprintln!("    ug ingest -i {} -o {}", graph_path, db_path);
         }
     }
 
     println!("────────────────────────────────────────");
     println!("Visit http://localhost:8080 to view the graph");
     println!(
-        "Run 'ug semantic_search \"hello\" -d {}' to perform a RAG query.",
+        "Run 'ug semantic_search \"hello\" -o {}' to perform a RAG query.",
         db_path
     );
+    println!("Total time: {:?}", start_total.elapsed());
+}
+
+async fn ingest_graph_with_progress(
+    db: &Db,
+    embedder: &Embedder,
+    graph: &GraphData,
+) -> Result<(usize, usize), String> {
+    let nodes_count = graph.nodes.len();
+    let edges_count = graph.edges.len();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    let t0 = std::time::Instant::now();
+    print!("▸ Building node texts ({})", nodes_count);
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+
+    let related = storage::collect_related_names(graph);
+    let texts: Vec<String> = graph
+        .nodes
+        .iter()
+        .map(|n| {
+            let names = related.get(&n.id).map(|v| v.as_slice()).unwrap_or(&[][..]);
+            storage::build_node_text(n, names)
+        })
+        .collect();
+    println!(
+        "\r▸ Building node texts: 100.0% ✓ done in {:?}",
+        t0.elapsed()
+    );
+
+    let t1 = std::time::Instant::now();
+    print!("▸ Embedding nodes ({})", nodes_count);
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+
+    let total_nodes = texts.len();
+    let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(total_nodes);
+    for (i, chunk) in texts.chunks(embedder.config().batch_size).enumerate() {
+        let chunk_vec: Vec<String> = chunk.to_vec();
+        let chunk_vectors = embedder
+            .embed(&chunk_vec)
+            .await
+            .map_err(|e| format!("embedding failed: {}", e))?;
+        vectors.extend(chunk_vectors);
+        let processed = std::cmp::min((i + 1) * embedder.config().batch_size, total_nodes);
+        let pct = processed as f32 / total_nodes as f32 * 100.0;
+        print!(
+            "\r▸ Embedding: {:>6.1}% ({}/{})",
+            pct, processed, total_nodes
+        );
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+    }
+    println!(
+        "\r▸ Embedding: 100.0% ({}/{}) ✓ done in {:?}",
+        total_nodes,
+        total_nodes,
+        t1.elapsed()
+    );
+
+    if vectors.len() != graph.nodes.len() {
+        return Err(format!(
+            "embedder returned {} vectors for {} nodes",
+            vectors.len(),
+            graph.nodes.len()
+        ));
+    }
+
+    let t2 = std::time::Instant::now();
+    print!("▸ Writing nodes to Graph DB");
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+
+    let node_rows: Vec<storage::NodeRow> = graph
+        .nodes
+        .iter()
+        .zip(texts.into_iter())
+        .zip(vectors.into_iter())
+        .map(|((n, node_text), vector)| storage::NodeRow {
+            id: n.id.clone(),
+            name: n.name.clone(),
+            node_type: format!("{:?}", n.node_type),
+            description: n.docstring.clone().unwrap_or_default(),
+            file: n.file.clone().unwrap_or_default(),
+            start_line: n.start_line.unwrap_or(0),
+            end_line: n.end_line.unwrap_or(0),
+            last_update_at: now,
+            node_text,
+            vector,
+        })
+        .collect();
+
+    let write_batch = 1000;
+    let total = node_rows.len();
+    for (i, batch) in node_rows.chunks(write_batch).enumerate() {
+        db.upsert_nodes(batch)
+            .await
+            .map_err(|e| format!("upsert nodes: {}", e))?;
+        let written = std::cmp::min((i + 1) * write_batch, total);
+        let pct = written as f32 / total as f32 * 100.0;
+        print!("\r▸ Writing nodes: {:>6.1}% ({}/{})", pct, written, total);
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+    }
+    println!(
+        "\r▸ Writing nodes: 100.0% ({}/{}) ✓ done in {:?}",
+        total,
+        total,
+        t2.elapsed()
+    );
+
+    let t3 = std::time::Instant::now();
+    print!("▸ Writing edges to Graph DB");
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+
+    let edge_rows: Vec<storage::EdgeRow> = graph
+        .edges
+        .iter()
+        .map(|e| {
+            let edge_type = format!("{:?}", e.edge_type);
+            let id = format!("{}|{}|{}", e.source, edge_type, e.target);
+            storage::EdgeRow {
+                id,
+                source: e.source.clone(),
+                target: e.target.clone(),
+                edge_type,
+                properties: String::new(),
+            }
+        })
+        .collect();
+
+    let total_edges = edge_rows.len();
+    for (i, batch) in edge_rows.chunks(write_batch).enumerate() {
+        db.upsert_edges(batch)
+            .await
+            .map_err(|e| format!("upsert edges: {}", e))?;
+        let written = std::cmp::min((i + 1) * write_batch, total_edges);
+        let pct = written as f32 / total_edges as f32 * 100.0;
+        print!(
+            "\r▸ Writing edges: {:>6.1}% ({}/{})",
+            pct, written, total_edges
+        );
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+    }
+    println!(
+        "\r▸ Writing edges: 100.0% ({}/{}) ✓ done in {:?}",
+        total_edges,
+        total_edges,
+        t3.elapsed()
+    );
+
+    Ok((nodes_count, edges_count))
 }
 
 fn run_gen_ingest(
@@ -423,37 +586,38 @@ fn run_gen_ingest(
         let db = Db::open(db_path)
             .await
             .map_err(|e| format!("open db: {}", e))?;
-        let stats = ingest_graph(&db, &embedder, &graph)
-            .await
-            .map_err(|e| format!("ingest: {}", e))?;
-        Ok((stats.nodes_written, stats.edges_written))
+        ingest_graph_with_progress(&db, &embedder, &graph).await
     })
 }
 
-// ingest graph into OverGraph (only)
 fn run_ingest(args: &[String]) {
-    let graph_file = flag_value_or(args, &["-g", "--graph"], "ug-out/graph.json");
-    let db_path = flag_value_or(args, &["-d", "--db"], "ug-out/ugdb");
-    if has_flag(args, "--with-indexes") {
-        eprintln!(
-            "note: --with-indexes is a no-op on OverGraph; indexes are built per segment at flush time"
-        );
-    }
+    let graph_file = flag_value_or(args, &["-i", "--input"], "ug-out/graph.json");
+    let db_path = flag_value_or(args, &["-o", "--output"], "ug-out/ugdb");
 
     let graph_json = fs::read_to_string(&graph_file).expect("Failed to read graph file");
     let graph: GraphData = serde_json::from_str(&graph_json).expect("Failed to parse graph JSON");
     let embedder = embedder_from_args(args);
     let rt = tokio_runtime();
 
+    let start_total = std::time::Instant::now();
+
     rt.block_on(async {
         let db = Db::open(&db_path).await.expect("failed to open overgraph");
-        let stats = ingest_graph(&db, &embedder, &graph)
-            .await
-            .expect("ingest failed");
-        println!(
-            "Ingested {} nodes, {} edges into {}",
-            stats.nodes_written, stats.edges_written, db_path
-        );
+        match ingest_graph_with_progress(&db, &embedder, &graph).await {
+            Ok((nodes_written, edges_written)) => {
+                println!("────────────────────────────────────────");
+                println!(
+                    "Ingested {} nodes, {} edges into {} in {:?}",
+                    nodes_written,
+                    edges_written,
+                    db_path,
+                    start_total.elapsed()
+                );
+            }
+            Err(e) => {
+                eprintln!("Error: {}", e);
+            }
+        }
     });
 }
 
@@ -676,8 +840,7 @@ fn print_gen_help() {
     println!("gen [<path>]  Full pipeline: index → graph → visualization → LanceDB ingest");
     println!("  -i, --input <path>   Input directory (default: .)");
     println!("  -c, --cache <dir>    Cache directory for incremental indexing");
-    println!("  -o, --output <dir>   Output directory (default: ug-out)");
-    println!("  -d, --db <path>      LanceDB directory (default: <output>/ugdb)");
+    println!("  -o, --output <dir>   Output/LanceDB directory (default: ug-out)");
     println!("  --no-ingest          Skip the LanceDB ingest step");
     println!("  --base-url <url>     Embedding endpoint (default: http://localhost:8000/v1)");
     println!("  --api-key <key>      Embedding API key");
@@ -729,20 +892,18 @@ fn print_help() {
     );
     println!("    -i, --input <path>  Input directory (default: .)");
     println!("    -c, --cache <dir>   Cache directory");
-    println!("    -o, --output <dir>  Output directory (default: ug-out)");
-    println!("    -d, --db <path>     LanceDB directory (default: <output>/ugdb)");
+    println!("    -o, --output <dir>  Output/LanceDB directory (default: ug-out)");
     println!("    --no-ingest         Skip the LanceDB ingest step");
     println!("    --base-url/--api-key/--model  Embedding endpoint overrides");
     println!();
     println!("  ingest               Embed graph nodes and write to LanceDB");
-    println!("    -g, --graph <file>  Graph JSON (default: ug-out/graph.json)");
-    println!("    -d, --db <path>    LanceDB directory (default: ug-out/ugdb)");
+    println!("    -i, --input <file>  Graph JSON (default: ug-out/graph.json)");
+    println!("    -o, --output <dir> LanceDB directory (default: ug-out/ugdb)");
     println!("    --base-url <url>   Embedding endpoint (default: http://localhost:8000/v1)");
     println!("    --api-key <key>    Embedding API key (default: 1234)");
     println!(
         "    --model <name>     Embedding model (default: openai/Qwen3-Embedding-0.6B-4bit-DWQ)"
     );
-    println!("    --with-indexes     Deprecated no-op on OverGraph (indexes auto-built at flush)");
     println!();
     println!("  semantic_search <query>      Semantic vector search over the LanceDB nodes table");
     println!("    -d, --db <path>    LanceDB directory (default: ug-out/ugdb)");
@@ -784,7 +945,7 @@ fn print_help() {
     println!("  ug analyze");
     println!("  ug gen -i ./lib -o ./ug-out");
     println!("  ug gen -i ./lib --no-ingest");
-    println!("  ug ingest -g ug-out/graph.json -d ug-out/ugdb --with-indexes");
+    println!("  ug ingest -i ug-out/graph.json -o ug-out/ugdb");
     println!("  ug semantic_search \"oauth login flow\" -d ug-out/ugdb -k 5");
     println!("  ug hybrid_search \"oauth login flow\" -d ug-out/ugdb -k 8 --strategy ppr");
     println!(

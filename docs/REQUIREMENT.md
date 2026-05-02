@@ -311,10 +311,47 @@ Default edge-type weights: `calls=1.0, extends=0.9, implements=0.9, imports=0.7,
 > 
 
 ### Perf
-LanceDB took ~5min to import (with embeddings on MacBook Pro M5 Max 18-core 40-GPU 128GB):
+With LanceDB, it took ~5min to import (with embeddings on MacBook Pro M5 Max 18-core 40-GPU 128GB):
 ▸ Ingesting into ug-out/ugdb
   ✓ 41619 nodes, 95071 edges embedded
 index-tree.json - 20MB
 graph.json - 40MB
+
+With OverGraph, it took ~2min to import (with embeddings on MacBook Pro M5 Max 18-core 40-GPU 128GB):
+- build time reduced from 5min to 1~2min.
+- binary size reduced from 300MB to 10MB.
+- db file size reduced from 300MB to 200MB.
+
+```
+ug-out/ug gen -i ~/.hermes/hermes-agent -o ug-out/ugdb 
+⚡ Full pipeline: index → graph → visualization → ingest
+▸ Indexing /Users/aldrickwan/.hermes/hermes-agent
+  ✓ done in 9.267701s
+▸ Building graph
+  ✓ done in 264.158041ms
+  nodes: 41619
+  edges: 95071
+▸ Copying visualization assets
+  ✓ done in 229.041µs
+────────────────────────────────────────
+✓ Generated in ug-out/ugdb/
+  ✓ graph.json
+  ✓ indexed-tree.json
+  ✓ index.html (open in browser with HTTP server)
+  ✓ README.md
+
+▸ Ingesting graph data into DB ug-out/ugdb
+▸ Building node texts: 100.0% ✓ done in 46.680625ms
+▸ Embedding: 100.0% (41619/41619) ✓ done in 618.098150209s
+▸ Writing nodes: 100.0% (41619/41619) ✓ done in 993.175791ms
+▸ Writing edges: 100.0% (95071/95071) ✓ done in 215.248042ms
+  ✓ 41619 nodes, 95071 edges embedded in 625.374811959s
+────────────────────────────────────────
+Visit http://localhost:8080 to view the graph
+Run 'ug semantic_search "hello" -o ug-out/ugdb' to perform a RAG query.
+Total time: 635.004456709s
+```
+
+<br>
 
 Refer to [IMPLEMENTATION PROGRESS](PROGRESS.md) for implementation progress.

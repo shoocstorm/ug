@@ -36,9 +36,6 @@ impl Default for EmbedderConfig {
 }
 
 impl EmbedderConfig {
-    /// Build a config from defaults, applying any provided overrides.
-    /// Used by both the CLI (`--base-url`, etc.) and the NAPI surface
-    /// (camelCase JSON) so the override semantics stay in one place.
     pub fn with_overrides(
         base_url: Option<String>,
         api_key: Option<String>,
@@ -124,10 +121,6 @@ impl Embedder {
         &self.cfg
     }
 
-    /// Probe the embedding endpoint with a one-token payload. Returns
-    /// `Ok(())` if the server responds with the expected dimension.
-    /// Callers (CLI, MCP server) can surface a friendly error before
-    /// firing off a long ingest or search.
     pub async fn ping(&self) -> Result<(), EmbedError> {
         let probe = vec!["ping".to_string()];
         let v = self.embed(&probe).await?;
@@ -140,9 +133,6 @@ impl Embedder {
         Ok(())
     }
 
-    /// Embed a batch of texts. Returns one vector per input in the same
-    /// order. Splits the input into sub-batches of `cfg.batch_size` so the
-    /// server doesn't receive an unbounded payload.
     pub async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, EmbedError> {
         if texts.is_empty() {
             return Ok(Vec::new());
@@ -175,8 +165,6 @@ impl Embedder {
 
             let parsed: EmbeddingResponse = resp.json().await.map_err(EmbedError::Http)?;
 
-            // The server may return items out of order; sort by `index` so
-            // each vector lines up with its input text.
             let mut items = parsed.data;
             items.sort_by_key(|i| i.index);
             for item in items {

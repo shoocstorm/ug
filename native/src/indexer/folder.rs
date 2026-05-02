@@ -36,29 +36,31 @@ const README_NAMES: &[&str] = &[
 /// always a valid lookup key.
 const ROOT_PATH: &str = ".";
 
-/// Build the folder forest for an already-normalized list of file paths.
-/// Output is sorted by `(depth asc, path asc)` so consumers can render the
-/// hierarchy without resorting.
-pub fn extract_folders(file_paths: &[String]) -> Vec<FolderNode> {
-    if file_paths.is_empty() {
-        return Vec::new();
-    }
-
-    // 1. Discover every folder reachable as an ancestor of the file set.
-    //    BTreeSet keeps the eventual output deterministic.
+/// Build the folder forest with paths relative to the repo root.
+/// This is the preferred function when the indexer has already computed `repo_root`.
+pub fn extract_folders_relative(repo_root: &str) -> Vec<FolderNode> {
+    let repo_root = crate::indexer::common::normalize_path(repo_root);
     let mut folder_paths: BTreeSet<String> = BTreeSet::new();
     folder_paths.insert(ROOT_PATH.to_string());
-    for f in file_paths {
-        let mut cursor = parent_folder(f);
+
+    let mut file_paths: Vec<String> = Vec::new();
+
+    for file_node in crate::indexer::common::scan_files(&repo_root) {
+        let normalized = crate::indexer::common::normalize_path(&file_node.to_string_lossy());
+        let relative = crate::indexer::common::strip_repo_root(&normalized, &repo_root);
+        file_paths.push(relative.clone());
+        folder_paths.insert(ROOT_PATH.to_string());
+        let mut cursor = parent_folder(&relative);
         while cursor != ROOT_PATH {
             folder_paths.insert(cursor.clone());
             cursor = parent_folder(&cursor);
         }
     }
 
-    // 2. Pre-seed the per-folder accumulators so later inserts can blindly
-    //    `get_mut`. Doing this in a separate pass keeps the file-walk loop
-    //    free of `entry().or_default()` noise.
+    if folder_paths.len() <= 1 && file_paths.is_empty() {
+        return Vec::new();
+    }
+
     let mut child_files: HashMap<String, Vec<String>> = HashMap::new();
     let mut child_folders: HashMap<String, Vec<String>> = HashMap::new();
     let mut total_files: HashMap<String, u32> = HashMap::new();
@@ -70,7 +72,6 @@ pub fn extract_folders(file_paths: &[String]) -> Vec<FolderNode> {
         lang_breakdown.insert(folder.clone(), HashMap::new());
     }
 
-    // 3. Wire each subfolder under its parent.
     for folder in &folder_paths {
         if folder == ROOT_PATH {
             continue;
@@ -81,15 +82,11 @@ pub fn extract_folders(file_paths: &[String]) -> Vec<FolderNode> {
         }
     }
 
-    // 4. Attach files to their immediate folder, then bubble file counts and
-    //    language tallies up the ancestor chain so each folder reflects its
-    //    full subtree (the LLM needs character signal, not just leaf signal).
-    for file in file_paths {
+    for file in &file_paths {
         let parent = parent_folder(file);
         if let Some(files) = child_files.get_mut(&parent) {
             files.push(file.clone());
         }
-
         let lang = language_for_path(file);
         let mut cursor = parent;
         loop {
@@ -107,7 +104,6 @@ pub fn extract_folders(file_paths: &[String]) -> Vec<FolderNode> {
         }
     }
 
-    // 5. Materialize FolderNodes.
     let mut out: Vec<FolderNode> = folder_paths
         .iter()
         .map(|path| {
@@ -260,8 +256,10 @@ fn classify_folder(
     if matches!(last.as_str(), "reducers" | "reducer") {
         return Some(FolderClassification::Reducers);
     }
-    if matches!(last.as_str(), "utils" | "util" | "helpers" | "helper" | "lib")
-        || lower.contains("/utils/")
+    if matches!(
+        last.as_str(),
+        "utils" | "util" | "helpers" | "helper" | "lib"
+    ) || lower.contains("/utils/")
         || lower.contains("/helpers/")
     {
         return Some(FolderClassification::Utils);

@@ -13,7 +13,7 @@ ug ingest -g ug-out/graph.json -d ug-out/ugdb
 
 Opening an old LanceDB-formatted directory with the new build will fail at OverGraph's manifest parser — the error is unambiguous.
 
-The CLI surface, NAPI surface, and JSON wire formats are unchanged. The only user-visible behavior change at the command level is that `ug ingest --with-indexes` is now a no-op (OverGraph builds indexes per segment automatically) and prints a deprecation note.
+The CLI surface, NAPI surface, and JSON wire formats are unchanged. The only user-visible behavior change at the command level is that `ug ingest` is now a no-op (OverGraph builds indexes per segment automatically) and prints a deprecation note.
 
 See `docs/MIGRATION-OVERGRAPH.md` for the full migration plan, run log, and open-question resolutions.
 

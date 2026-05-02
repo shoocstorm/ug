@@ -24,7 +24,7 @@ use crate::types::{FileNode, IndexResult, IndexStats};
 use napi_derive::napi;
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tree_sitter::Parser;
 
 use classifier::classify_file;
@@ -35,7 +35,10 @@ use package_json::extract_package_json_dependencies;
 /// Parse a single source file end-to-end and return the resulting
 /// [`FileNode`]. Returns `None` for unsupported extensions, unreadable files,
 /// or content that tree-sitter fails to parse.
-pub fn process_file(path: &Path) -> Option<FileNode> {
+///
+/// If `repo_root` is provided, file paths will be made relative to it
+/// to reduce output size.
+pub fn process_file(path: &Path, repo_root: Option<&str>) -> Option<FileNode> {
     let ext = path.extension()?.to_str()?;
     let indexer = languages::for_extension(ext)?;
 
@@ -54,10 +57,13 @@ pub fn process_file(path: &Path) -> Option<FileNode> {
 
     // Stamp the file path onto every symbol now that it's known. Doing this
     // here keeps each language indexer focused on AST extraction and unaware
-    // of where the file lives on disk. The path is normalized so downstream
-    // ID derivation is stable regardless of how the user invoked the CLI
-    // (`./src/foo.ts` and `src/foo.ts` collapse to the same key).
+    // of where the file lives on disk. The path is normalized and optionally
+    // made relative to the repo root.
     let path_str = normalize_path(&path.to_string_lossy());
+    let path_str = match repo_root {
+        Some(root) => common::strip_repo_root(&path_str, root),
+        None => path_str,
+    };
     for sym in symbols.iter_mut() {
         sym.file = path_str.clone();
     }
@@ -71,6 +77,7 @@ pub fn process_file(path: &Path) -> Option<FileNode> {
         language: indexer.name().to_string(),
         classification,
         symbols,
+        lines: content.lines().count() as u32,
         imports,
         exports,
     })
@@ -81,36 +88,43 @@ pub fn process_file(path: &Path) -> Option<FileNode> {
 #[napi]
 pub fn index(path: String) -> String {
     let start = std::time::Instant::now();
+
+    // Compute canonical repo root first, before scanning files
+    let canonical_root = Path::new(&path).canonicalize().unwrap_or_else(|_| PathBuf::from(&path));
+    let repo_root = canonical_root.to_string_lossy().to_string();
+
     let files_paths = scan_files(&path);
     let dependencies = extract_package_json_dependencies(&path);
 
     let mut files: Vec<FileNode> = Vec::new();
     let mut total_symbols = 0;
+    let mut total_lines = 0u64;
 
-    // Capture normalized paths up-front so we can hand them to folder
-    // extraction. Folders are derived from the full scanned set (no parsing
-    // required), which keeps folder data correct regardless of which files
-    // ended up indexable.
-    let mut normalized_paths: Vec<String> = Vec::with_capacity(files_paths.len());
-    for file_path in &files_paths {
-        normalized_paths.push(normalize_path(&file_path.to_string_lossy()));
-    }
-
+    // Process files with repo root for relative paths
     for file_path in files_paths {
-        if let Some(file_node) = process_file(&file_path) {
+        if let Some(file_node) = process_file(&file_path, Some(&repo_root)) {
             total_symbols += file_node.symbols.len();
+            total_lines += file_node.lines as u64;
             files.push(file_node);
         }
     }
 
-    let folders = folder::extract_folders(&normalized_paths);
+    let folders = folder::extract_folders_relative(&repo_root);
+
+    let last_indexed_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
 
     let stats = IndexStats {
         total_files: files.len(),
         cached_files: 0,
         total_symbols,
         total_folders: folders.len(),
+        total_lines,
         indexing_time_ms: start.elapsed().as_millis() as u64,
+        last_indexed_at,
+        repo_root,
     };
 
     serde_json::to_string(&IndexResult {
@@ -129,6 +143,11 @@ pub fn index(path: String) -> String {
 #[napi]
 pub fn index_with_cache(path: String, cache_path: String) -> String {
     let start = std::time::Instant::now();
+
+    // Compute canonical repo root first
+    let canonical_root = Path::new(&path).canonicalize().unwrap_or_else(|_| PathBuf::from(&path));
+    let repo_root = canonical_root.to_string_lossy().to_string();
+
     let cache_file = Path::new(&cache_path).join("cache.json");
     let mut cached_hashes: HashMap<String, String> = HashMap::new();
 
@@ -144,39 +163,38 @@ pub fn index_with_cache(path: String, cache_path: String) -> String {
     let dependencies = extract_package_json_dependencies(&path);
     let mut files: Vec<FileNode> = Vec::new();
     let mut total_symbols = 0;
+    let mut total_lines = 0u64;
     let mut cached = 0;
 
     // Folder hierarchy is derived from the full scanned set, not just the
-    // re-parsed slice. This keeps the forest stable across cached runs - a
-    // folder doesn't disappear from the index just because none of its files
-    // changed since the previous run.
-    let mut normalized_paths: Vec<String> = Vec::with_capacity(files_paths.len());
+    // re-parsed slice. This keeps the forest stable across cached runs
+    let mut file_paths_relative: Vec<String> = Vec::new();
 
     for file_path in files_paths {
-        // Normalize so the cache key matches what `process_file` stamps onto
-        // the FileNode. Without this, a cache built from `./src/foo.ts` would
-        // miss a path stored as `src/foo.ts` and re-index every run.
-        let path_str = normalize_path(&file_path.to_string_lossy());
-        normalized_paths.push(path_str.clone());
+        let normalized = normalize_path(&file_path.to_string_lossy());
+        let relative = common::strip_repo_root(&normalized, &repo_root);
+        file_paths_relative.push(relative.clone());
 
         let hash = match compute_hash(&file_path) {
             Some(h) => h,
             None => continue,
         };
 
-        // Cache hit: skip parsing entirely. We deliberately don't push a
-        // FileNode for cached files - callers merge with the previous run's
-        // output if they need a complete view.
-        if cached_hashes.get(&path_str) == Some(&hash) {
+        // Cache hit: skip parsing entirely.
+        if cached_hashes.get(&relative) == Some(&hash) {
             cached += 1;
+            if let Ok(content) = fs::read_to_string(&file_path) {
+                total_lines += content.lines().count() as u64;
+            }
             continue;
         }
 
-        if let Some(mut file_node) = process_file(&file_path) {
+        if let Some(mut file_node) = process_file(&file_path, Some(&repo_root)) {
             total_symbols += file_node.symbols.len();
+            total_lines += file_node.lines as u64;
             file_node.hash = hash.clone();
             files.push(file_node);
-            cached_hashes.insert(path_str, hash);
+            cached_hashes.insert(relative, hash);
         }
     }
 
@@ -185,14 +203,22 @@ pub fn index_with_cache(path: String, cache_path: String) -> String {
         let _ = fs::write(&cache_file, json);
     }
 
-    let folders = folder::extract_folders(&normalized_paths);
+    let folders = folder::extract_folders_relative(&repo_root);
+
+    let last_indexed_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
 
     let stats = IndexStats {
         total_files: files.len(),
         cached_files: cached,
         total_symbols,
         total_folders: folders.len(),
+        total_lines,
         indexing_time_ms: start.elapsed().as_millis() as u64,
+        last_indexed_at,
+        repo_root,
     };
 
     serde_json::to_string(&IndexResult {

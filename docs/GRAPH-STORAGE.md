@@ -14,6 +14,8 @@ Model: openai/Qwen3-Embedding-0.6B-4bit-DWQ
 Base URL: http://localhost:8000/v1
 API Key: 1234
 ```
+· **Note**: LanceDB is huge (caused build time 1min -> 8min, causes binary size to be 20MB -> 300MB). 
+· **Note**: OverGraph fixed the build time and binary size issue. 
 · `serde`, `tokio`, `reqwest` (for HTTP embeddings).
 
 ## Data Model
@@ -83,7 +85,7 @@ let engine = DatabaseEngine::open(path, &opts)?;
 ```
 
 - Single dense vector space per DB (1024-dim, locked at open).
-- HNSW indexes are built **per segment at flush time** automatically. The legacy `--with-indexes` flag is now a no-op with a deprecation note.
+- HNSW indexes are built **per segment at flush time** automatically. 
 - WAL mode: `WalSyncMode::GroupCommit` (default — 50ms fsync timer, ~20× write throughput vs. immediate).
 
 ## Query Functions (Rust async)

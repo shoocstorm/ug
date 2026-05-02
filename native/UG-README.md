@@ -8,22 +8,26 @@ High-performance knowledge base indexer built with Rust, tree-sitter, and NAPI-R
 # Build
 cd native && cargo build --release
 
-# CLI
-./target/release/ug --help
-
 # Tests
 cargo test
+
+# CLI
+../ug-out/ug --help
+
+# Quick Generation
+../ug-out/ug gen
+
 ```
 
 ## CLI Commands
 
 ### `ug index <path>`
 
-Index a directory and output JSON.
+Scan & index a directory and output an indexed-tree.json file.
 
 ```bash
 ug index -i ../src
-ug index -i . --cache .cache -o out.json
+ug index -i . --cache .cache -o out.json # cache speeds up re-indexing
 ```
 
 Options:
@@ -32,7 +36,7 @@ Options:
 
 ### `ug graph`
 
-Build graph from index result.
+Build graph.json from the indexed-tree.json.
 
 ```bash
 ug graph -i index.json -o graph.json
@@ -40,7 +44,7 @@ ug graph -i index.json -o graph.json
 
 ### `ug search_graph`
 
-Keyword search over graph nodes.
+Keyword search over graph nodes from graph.json.
 
 ```bash
 ug search_graph ./ug-out/graph.json "Cache" -t function
@@ -48,7 +52,7 @@ ug search_graph ./ug-out/graph.json "Cache" -t function
 
 ### `ug bfs`
 
-K-hop BFS traversal (in-memory graph).
+K-hop BFS traversal over in-memory graph.json.
 
 ```bash
 ug bfs graph.json "file:src/index.ts" 2
@@ -68,7 +72,7 @@ ug gen -i ./src -o ./ug-out
 Embed graph nodes into LanceDB.
 
 ```bash
-ug ingest -g ug-out/graph.json -d ug-out/ugdb --with-indexes
+ug ingest -g ug-out/graph.json -d ug-out/ugdb
 ```
 
 ### `ug semantic_search`
@@ -92,7 +96,7 @@ ug traverse file:src/index.ts -d ug-out/ugdb -k 2
 End-to-end against a running embedding endpoint:
 
 ```bash
-ug ingest -g ug-out/graph.json -d ug-out/ugdb --with-indexes
+ug ingest -g ug-out/graph.json -d ug-out/ugdb
 ug semantic_search "build a tree" -d ug-out/ugdb --filter "node_type = 'Function'"
 ug traverse file:src/index.ts -d ug-out/ugdb -k 2
 ```

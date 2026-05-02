@@ -314,6 +314,28 @@ pub fn normalize_path(p: &str) -> String {
     out
 }
 
+/// Strip the repo root prefix from an absolute path, returning a path
+/// relative to the repo root. The output format matches `normalize_path`
+/// output so cross-file references resolve correctly.
+///
+/// Example:
+///   strip_repo_root("/Users/foo/myrepo/src/foo.ts", "/Users/foo/myrepo")
+///   → "src/foo.ts"
+pub fn strip_repo_root(absolute_path: &str, repo_root: &str) -> String {
+    let normalized = normalize_path(absolute_path);
+    let root = normalize_path(repo_root);
+    if let Some(stripped) = normalized.strip_prefix(&root) {
+        let result = stripped.trim_start_matches('/');
+        if result.is_empty() {
+            ".".to_string()
+        } else {
+            result.to_string()
+        }
+    } else {
+        normalized
+    }
+}
+
 /// Resolve `import_path` to a normalized path string, joining against the
 /// source file's directory when the import is relative or bare. Strips any
 /// `#fragment` and `?query` suffix the input may carry (markdown anchors,
