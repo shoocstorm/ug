@@ -10,7 +10,8 @@ use ultragraph_kb::storage::{
 use ultragraph_kb::types::GraphData;
 use ultragraph_kb::{
     build_graph, calculate_centrality, detect_cycles, filter_edges_by_type, find_shortest_path,
-    graph_keyword_search, index, index_with_cache, k_hop_bfs,
+    graph_keyword_search, index, index_with_cache, k_hop_bfs, C_BLUE, C_BOLD, C_CYAN, C_GREEN,
+    C_MAGENTA, C_RESET, C_YELLOW,
 };
 
 mod serve;
@@ -180,7 +181,7 @@ fn run_index(args: &[String]) {
         None => index(path),
     };
     write_file(&output, &result);
-    println!("Generated index in {}", output);
+    println!("{C_GREEN}✓{C_RESET} Generated index in {C_BOLD}{}{C_RESET}", output);
 }
 
 fn run_graph(args: &[String]) {
@@ -190,7 +191,7 @@ fn run_graph(args: &[String]) {
     let index_json = fs::read_to_string(&input).expect("Failed to read input");
     let result = build_graph(index_json);
     write_file(&output, &result);
-    println!("Generated graph in {}", output);
+    println!("{C_GREEN}✓{C_RESET} Generated graph in {C_BOLD}{}{C_RESET}", output);
 }
 
 // simple breadth-first search on the graph (json)
@@ -307,9 +308,9 @@ fn run_analyze(args: &[String]) {
         .expect("Failed to write analysis.json");
     fs::write(format!("{}/cycles.json", output_dir), &cycles).expect("Failed to write cycles.json");
 
-    println!("Analyzed graph:");
-    println!("  - analysis.json (centrality)");
-    println!("  - cycles.json (cycle detection)");
+    println!("{C_GREEN}✓{C_RESET} Analyzed graph:");
+    println!("  {C_CYAN}▸{C_RESET} analysis.json (centrality)");
+    println!("  {C_CYAN}▸{C_RESET} cycles.json (cycle detection)");
 }
 
 // full pipeline: index -> graph -> ingest -> search
@@ -353,22 +354,22 @@ fn run_gen(args: &[String]) {
     } else {
         "index → graph → visualization → ingest"
     };
-    println!("⚡ Full pipeline: {}", pipeline_summary);
+    println!("⚡ Full pipeline: {C_BOLD}{C_MAGENTA}{}{C_RESET}", pipeline_summary);
 
     let _ = fs::create_dir_all(&output_dir);
 
     let t0 = std::time::Instant::now();
-    println!("▸ Indexing {}", input);
+    println!("{C_CYAN}▸{C_RESET} Indexing {C_YELLOW}{}{C_RESET}", input);
     let index_result = match cache {
         Some(c) => index_with_cache(input, c),
         None => index(input),
     };
-    println!("  ✓ done in {:?}", t0.elapsed());
+    println!("  {C_GREEN}✓ done{C_RESET} in {C_BOLD}{:?}{C_RESET}", t0.elapsed());
 
     let t1 = std::time::Instant::now();
-    println!("▸ Building graph");
+    println!("{C_CYAN}▸{C_RESET} Building graph");
     let graph = build_graph(index_result.clone());
-    println!("  ✓ done in {:?}", t1.elapsed());
+    println!("  {C_GREEN}✓ done{C_RESET} in {C_BOLD}{:?}{C_RESET}", t1.elapsed());
 
     let (nodes_count, edges_count) = match serde_json::from_str::<serde_json::Value>(&graph) {
         Ok(v) => (
@@ -391,44 +392,44 @@ fn run_gen(args: &[String]) {
     fs::write(format!("{}/indexed-tree.json", output_dir), &index_result)
         .expect("Failed to write indexed-tree.json");
 
-    let t2 = std::time::Instant::now();
-    println!("▸ Copying visualization assets");
-    fs::write(format!("{}/index.html", output_dir), VIS_HTML).expect("Failed to write index.html");
-    fs::write(format!("{}/d3.v7.min.js", output_dir), VIS_D3)
-        .expect("Failed to write d3.v7.min.js");
-    fs::write(format!("{}/README.md", output_dir), VIS_MD).expect("Failed to write README.md");
-    println!("  ✓ done in {:?}", t2.elapsed());
-
-    println!("────────────────────────────────────────");
-    println!("✓ Generated in {}/", output_dir);
-    println!("  ✓ graph.json");
-    println!("  ✓ indexed-tree.json");
-    println!("  ✓ index.html (open in browser with HTTP server)");
-    println!("  ✓ d3.v7.min.js");
-    println!("  ✓ README.md");
+     let t2 = std::time::Instant::now();
+     println!("{C_CYAN}▸{C_RESET} Copying visualization assets");
+     fs::write(format!("{}/index.html", output_dir), VIS_HTML).expect("Failed to write index.html");
+     fs::write(format!("{}/d3.v7.min.js", output_dir), VIS_D3)
+         .expect("Failed to write d3.v7.min.js");
+     fs::write(format!("{}/README.md", output_dir), VIS_MD).expect("Failed to write README.md");
+     println!("  {C_GREEN}✓ done{C_RESET} in {C_BOLD}{:?}{C_RESET}", t2.elapsed());
+ 
+     println!("{C_BOLD}────────────────────────────────────────{C_RESET}");
+     println!("{C_GREEN}✓ Generated{C_RESET} in {C_BOLD}{}/{C_RESET}", output_dir);
+     println!("  {C_GREEN}✓{C_RESET} graph.json");
+     println!("  {C_GREEN}✓{C_RESET} indexed-tree.json");
+     println!("  {C_GREEN}✓{C_RESET} index.html (open in browser with HTTP server)");
+     println!("  {C_GREEN}✓{C_RESET} d3.v7.min.js");
+     println!("  {C_GREEN}✓{C_RESET} README.md");
 
     if no_ingest {
-        println!("⚠ Skipping db-ingest (--no-ingest)");
+        println!("{C_YELLOW}⚠ Skipping db-ingest (--no-ingest){C_RESET}");
         if chain_serve {
-            println!("Total time: {:?}", start_total.elapsed());
+            println!("Total time: {C_BOLD}{:?}{C_RESET}", start_total.elapsed());
             chain_to_serve(args, &graph_path, &db_path, true);
             return;
         }
         println!(
-            "Run ' ug serve -i {} ' and open http://127.0.0.1:8080",
+            "Run '{C_BOLD} ug serve -i {} {C_RESET}' and open {C_CYAN}http://127.0.0.1:8080{C_RESET}",
             graph_path
         );
-        println!("Total time: {:?}", start_total.elapsed());
+        println!("Total time: {C_BOLD}{:?}{C_RESET}", start_total.elapsed());
         return;
     }
-
+ 
     println!();
     let t3 = std::time::Instant::now();
-    println!("▸ Ingesting graph data into DB {}", db_path);
+    println!("{C_CYAN}▸{C_RESET} Ingesting graph data into DB {C_YELLOW}{}{C_RESET}", db_path);
     match run_gen_ingest(&graph, &db_path, args) {
         Ok((nodes_written, edges_written)) => {
             println!(
-                "  ✓ {} nodes, {} edges embedded in {:?}",
+                "  {C_GREEN}✓ {} nodes, {} edges{C_RESET} embedded in {C_BOLD}{:?}{C_RESET}",
                 nodes_written,
                 edges_written,
                 t3.elapsed()
@@ -498,6 +499,7 @@ fn chain_to_serve(args: &[String], graph_path: &str, db_path: &str, no_db: bool)
     serve::run_serve(&serve_args);
 }
 
+// ingest graph data into graph db
 async fn ingest_graph_with_progress(
     db: &Db,
     embedder: &Embedder,
@@ -511,7 +513,7 @@ async fn ingest_graph_with_progress(
         .unwrap_or(0);
 
     let t0 = std::time::Instant::now();
-    print!("▸ Building node texts ({})", nodes_count);
+    print!("{C_CYAN}▸{C_RESET} Building node texts ({})", nodes_count);
     let _ = std::io::Write::flush(&mut std::io::stdout());
 
     let related = storage::collect_related_names(graph);
@@ -524,12 +526,12 @@ async fn ingest_graph_with_progress(
         })
         .collect();
     println!(
-        "\r▸ Building node texts: 100.0% ✓ done in {:?}",
+        "\r{C_CYAN}▸{C_RESET} Building node texts: {C_GREEN}100.0% ✓ done{C_RESET} in {C_BOLD}{:?}{C_RESET}",
         t0.elapsed()
     );
 
     let t1 = std::time::Instant::now();
-    print!("▸ Embedding nodes ({})", nodes_count);
+    print!("{C_CYAN}▸{C_RESET} Embedding nodes ({})", nodes_count);
     let _ = std::io::Write::flush(&mut std::io::stdout());
 
     let total_nodes = texts.len();
@@ -544,15 +546,13 @@ async fn ingest_graph_with_progress(
         let processed = std::cmp::min((i + 1) * embedder.config().batch_size, total_nodes);
         let pct = processed as f32 / total_nodes as f32 * 100.0;
         print!(
-            "\r▸ Embedding: {:>6.1}% ({}/{})",
+            "\r{C_CYAN}▸{C_RESET} Embedding: {C_YELLOW}{:>6.1}%{C_RESET} ({}/{})",
             pct, processed, total_nodes
         );
         let _ = std::io::Write::flush(&mut std::io::stdout());
     }
     println!(
-        "\r▸ Embedding: 100.0% ({}/{}) ✓ done in {:?}",
-        total_nodes,
-        total_nodes,
+        "\r{C_CYAN}▸{C_RESET} Embedding: {C_GREEN}100.0% ✓ done{C_RESET} in {C_BOLD}{:?}{C_RESET}",
         t1.elapsed()
     );
 
@@ -565,7 +565,7 @@ async fn ingest_graph_with_progress(
     }
 
     let t2 = std::time::Instant::now();
-    print!("▸ Writing nodes to Graph DB");
+    print!("{C_CYAN}▸{C_RESET} Writing nodes to Graph DB");
     let _ = std::io::Write::flush(&mut std::io::stdout());
 
     let node_rows: Vec<storage::NodeRow> = graph
@@ -595,18 +595,19 @@ async fn ingest_graph_with_progress(
             .map_err(|e| format!("upsert nodes: {}", e))?;
         let written = std::cmp::min((i + 1) * write_batch, total);
         let pct = written as f32 / total as f32 * 100.0;
-        print!("\r▸ Writing nodes: {:>6.1}% ({}/{})", pct, written, total);
+        print!(
+            "\r{C_CYAN}▸{C_RESET} Writing nodes: {C_YELLOW}{:>6.1}%{C_RESET} ({}/{})",
+            pct, written, total
+        );
         let _ = std::io::Write::flush(&mut std::io::stdout());
     }
     println!(
-        "\r▸ Writing nodes: 100.0% ({}/{}) ✓ done in {:?}",
-        total,
-        total,
+        "\r{C_CYAN}▸{C_RESET} Writing nodes: {C_GREEN}100.0% ✓ done{C_RESET} in {C_BOLD}{:?}{C_RESET}",
         t2.elapsed()
     );
 
     let t3 = std::time::Instant::now();
-    print!("▸ Writing edges to Graph DB");
+    print!("{C_CYAN}▸{C_RESET} Writing edges to Graph DB");
     let _ = std::io::Write::flush(&mut std::io::stdout());
 
     let edge_rows: Vec<storage::EdgeRow> = graph
@@ -633,15 +634,13 @@ async fn ingest_graph_with_progress(
         let written = std::cmp::min((i + 1) * write_batch, total_edges);
         let pct = written as f32 / total_edges as f32 * 100.0;
         print!(
-            "\r▸ Writing edges: {:>6.1}% ({}/{})",
+            "\r{C_CYAN}▸{C_RESET} Writing edges: {C_YELLOW}{:>6.1}%{C_RESET} ({}/{})",
             pct, written, total_edges
         );
         let _ = std::io::Write::flush(&mut std::io::stdout());
     }
     println!(
-        "\r▸ Writing edges: 100.0% ({}/{}) ✓ done in {:?}",
-        total_edges,
-        total_edges,
+        "\r{C_CYAN}▸{C_RESET} Writing edges: {C_GREEN}100.0% ✓ done{C_RESET} in {C_BOLD}{:?}{C_RESET}",
         t3.elapsed()
     );
 
@@ -927,60 +926,24 @@ fn print_gen_help() {
 }
 
 fn print_logo() {
-    let cyan = "\x1b[36m";
-    let magenta = "\x1b[35m";
-    let yellow = "\x1b[33m";
-    let green = "\x1b[32m";
-    let blue = "\x1b[34m";
-    let reset = "\x1b[0m";
-    let bold = "\x1b[1m";
-
     println!(
-        "{bold}{cyan}  _   _ {magenta} _ {yellow} _             {green} _____                 _     {reset}",
-        bold = bold,
-        cyan = cyan,
-        magenta = magenta,
-        yellow = yellow,
-        green = green,
-        reset = reset
+        "{C_BOLD}{C_CYAN}  _   _ {C_MAGENTA} _ {C_YELLOW} _             {C_GREEN} _____                 _     {C_RESET}"
     );
     println!(
-        "{bold}{cyan} | | | |{magenta}| |_ {yellow}___ ___ ___  {green}|   __|___ ___ ___ ___| |_   {reset}",
-        bold = bold,
-        cyan = cyan,
-        magenta = magenta,
-        yellow = yellow,
-        green = green,
-        reset = reset
+        "{C_BOLD}{C_CYAN} | | | |{C_MAGENTA}| |_ {C_YELLOW}___ ___ ___  {C_GREEN}|   __|___ ___ ___ ___| |_   {C_RESET}"
     );
     println!(
-        "{bold}{cyan} | | | |{magenta}|  _|{yellow}  _| .'| . | {green}|  |  |  _| .'| . |   |  _|  {reset}",
-        bold = bold,
-        cyan = cyan,
-        magenta = magenta,
-        yellow = yellow,
-        green = green,
-        reset = reset
+        "{C_BOLD}{C_CYAN} | | | |{C_MAGENTA}|  _|{C_YELLOW}  _| .'| . | {C_GREEN}|  |  |  _| .'| . |   |  _|  {C_RESET}"
     );
     println!(
-        "{bold}{cyan} |_____|{magenta}|_| {yellow}|_| |__,|_  | {green}|_____|_| |__,|  _|_|_|_|    {reset}",
-        bold = bold,
-        cyan = cyan,
-        magenta = magenta,
-        yellow = yellow,
-        green = green,
-        reset = reset
+        "{C_BOLD}{C_CYAN} |_____|{C_MAGENTA}|_| {C_YELLOW}|_| |__,|_  | {C_GREEN}|_____|_| |__,|  _|_|_|_|    {C_RESET}"
     );
     println!(
-        "{bold}{yellow}                       |___| {green}              |_|            {reset}",
-        bold = bold,
-        yellow = yellow,
-        green = green,
-        reset = reset
+        "{C_BOLD}{C_YELLOW}                       |___| {C_GREEN}              |_|            {C_RESET}"
     );
     println!();
     println!(
-        "        {bold}{blue}⊂{reset}{bold}{magenta}ヽ{reset}{bold}{blue}({reset}{bold}{cyan}◕{reset}{bold}{magenta}‿{reset}{bold}{cyan}◕{reset}{bold}{blue}){reset}{bold}{magenta}ﾉ{reset}{bold}{blue}⊃{reset}  {bold}{yellow}✨ UltraGraph: Ultra-fast Knowledge Graph ✨{reset}"
+        "        {C_BOLD}{C_BLUE}⊂{C_RESET}{C_BOLD}{C_MAGENTA}ヽ{C_RESET}{C_BOLD}{C_BLUE}({C_RESET}{C_BOLD}{C_CYAN}◕{C_RESET}{C_BOLD}{C_MAGENTA}‿{C_RESET}{C_BOLD}{C_CYAN}◕{C_RESET}{C_BOLD}{C_BLUE}){C_RESET}{C_BOLD}{C_MAGENTA}ﾉ{C_RESET}{C_BOLD}{C_BLUE}⊃{C_RESET}  {C_BOLD}{C_YELLOW}✨ UltraGraph: Ultra-fast Knowledge Graph ✨{C_RESET}"
     );
     println!();
 }

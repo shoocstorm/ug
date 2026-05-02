@@ -100,14 +100,38 @@ pub fn index(path: String) -> String {
     let mut total_symbols = 0;
     let mut total_lines = 0u64;
 
-    // Process files with repo root for relative paths
-    for file_path in files_paths {
+    let total_files = files_paths.len();
+    for (i, file_path) in files_paths.into_iter().enumerate() {
+        let pct = (i + 1) as f32 / total_files as f32 * 100.0;
+        print!(
+            "\r{}▸{} Indexing: {}{:>6.1}%{} ({}/{})",
+            crate::C_CYAN,
+            crate::C_RESET,
+            crate::C_YELLOW,
+            pct,
+            crate::C_RESET,
+            i + 1,
+            total_files
+        );
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+
         if let Some(file_node) = process_file(&file_path, Some(&repo_root)) {
             total_symbols += file_node.symbols.len();
             total_lines += file_node.lines as u64;
             files.push(file_node);
         }
     }
+    println!(
+        "\r{}▸{} Indexing: {}100.0% ({}/{}){} {}✓ done{}",
+        crate::C_CYAN,
+        crate::C_RESET,
+        crate::C_GREEN,
+        total_files,
+        total_files,
+        crate::C_RESET,
+        crate::C_GREEN,
+        crate::C_RESET
+    );
 
     let folders = folder::extract_folders_relative(&repo_root);
 
@@ -170,7 +194,21 @@ pub fn index_with_cache(path: String, cache_path: String) -> String {
     // re-parsed slice. This keeps the forest stable across cached runs
     let mut file_paths_relative: Vec<String> = Vec::new();
 
-    for file_path in files_paths {
+    let total_files = files_paths.len();
+    for (i, file_path) in files_paths.into_iter().enumerate() {
+        let pct = (i + 1) as f32 / total_files as f32 * 100.0;
+        print!(
+            "\r{}▸{} Indexing: {}{:>6.1}%{} ({}/{})",
+            crate::C_CYAN,
+            crate::C_RESET,
+            crate::C_YELLOW,
+            pct,
+            crate::C_RESET,
+            i + 1,
+            total_files
+        );
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+
         let normalized = normalize_path(&file_path.to_string_lossy());
         let relative = common::strip_repo_root(&normalized, &repo_root);
         file_paths_relative.push(relative.clone());
@@ -197,6 +235,18 @@ pub fn index_with_cache(path: String, cache_path: String) -> String {
             cached_hashes.insert(relative, hash);
         }
     }
+    println!(
+        "\r{}▸{} Indexing: {}100.0% ({}/{}){} {}✓ done{} ({} cached)",
+        crate::C_CYAN,
+        crate::C_RESET,
+        crate::C_GREEN,
+        total_files,
+        total_files,
+        crate::C_RESET,
+        crate::C_GREEN,
+        crate::C_RESET,
+        cached
+    );
 
     if let Ok(json) = serde_json::to_string(&cached_hashes) {
         let _ = fs::create_dir_all(&cache_path);
