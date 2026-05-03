@@ -6,10 +6,10 @@ High-performance Graph-based knowledge base generator built with Rust, tree-sitt
 
 ```bash
 # Build
-cd native && npm run build
+npm run build
 
 # Quick Generation (and visualization)
-cd ../ugout && ./ug gen -i ../docs --no-ingest --serve
+ugout/ug gen -i ./docs --no-ingest --serve
 
 
 # More CLI cmds
@@ -105,6 +105,8 @@ Serve the OverGraph database with a web UI.
 
 ```bash
 ug serve -d ./ -p 8080
+
+ug serve -d ./ -p 8081 --repo-root ~/Documents/project/aldrickbot
 ```
 
 ## Storage / GraphRAG (Phase 3+4)

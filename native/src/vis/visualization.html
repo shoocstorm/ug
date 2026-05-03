@@ -1180,6 +1180,40 @@
             display: none;
         }
 
+        .section.featured {
+            border: 1px solid var(--accent);
+            background: linear-gradient(180deg, rgba(34, 211, 238, 0.06) 0%, transparent 100%);
+            position: relative;
+            border-radius: 8px;
+            margin: 6px;
+        }
+
+        .section.featured::before {
+            content: '★ GRAPHRAG-POWERED';
+            position: absolute;
+            top: -10px;
+            left: 12px;
+            font-size: 9px;
+            font-weight: 700;
+            letter-spacing: 1.2px;
+            color: var(--accent);
+            background: var(--bg-deep);
+            padding: 2px 8px;
+            border-radius: 4px;
+            border: 1px solid var(--accent);
+            box-shadow: 0 0 12px rgba(34, 211, 238, 0.4);
+        }
+
+        .section.featured .section-header {
+            padding-top: 16px;
+        }
+
+        .section.featured .section-header .label {
+            color: var(--accent);
+            font-size: 12px;
+            letter-spacing: 1.5px;
+        }
+
         .sem-mode-tabs {
             display: flex;
             gap: 4px;
@@ -1595,10 +1629,33 @@
                     </div>
                 </div>
 
+                <!-- Semantic / Hybrid search (DB-backed) - Featured -->
+                <div class="section featured cap-hidden" data-section="semantic" id="section-semantic">
+                    <div class="section-header">
+                        <span class="label">Semantic Search</span>
+                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="6 9 12 15 18 9" />
+                        </svg>
+                    </div>
+                    <div class="section-body">
+                        <div class="sem-mode-tabs">
+                            <button class="sem-mode active" data-mode="semantic" type="button">Semantic</button>
+                            <button class="sem-mode" data-mode="hybrid" type="button">Hybrid + Snippets</button>
+                        </div>
+                        <textarea id="sem-input" rows="2" placeholder="Describe what you're looking for…"></textarea>
+                        <div class="sem-controls">
+                            <input type="number" id="sem-k" value="10" min="1" max="50" title="Number of results">
+                            <button id="sem-exec" type="button">Search</button>
+                        </div>
+                        <div id="sem-status"></div>
+                        <div id="sem-results"></div>
+                    </div>
+                </div>
+
                 <!-- Search -->
                 <div class="section" data-section="search">
                     <div class="section-header">
-                        <span class="label">Search</span>
+                        <span class="label">Keyword Search</span>
                         <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <polyline points="6 9 12 15 18 9" />
                         </svg>
@@ -1625,30 +1682,6 @@
                             <span id="search-meta-count"></span>
                             <span id="search-meta-hint">↑↓ to navigate · ⏎ to select</span>
                         </div>
-                    </div>
-                </div>
-
-                <!-- Semantic / Hybrid search (DB-backed) -->
-                <div class="section collapsed cap-hidden" data-section="semantic" id="section-semantic">
-                    <div class="section-header">
-                        <span class="label">Semantic Search</span>
-                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <polyline points="6 9 12 15 18 9" />
-                        </svg>
-                    </div>
-                    <div class="section-body">
-                        <div class="sem-mode-tabs">
-                            <button class="sem-mode active" data-mode="semantic" type="button">Semantic</button>
-                            <button class="sem-mode" data-mode="hybrid" type="button">Hybrid + Snippets</button>
-                        </div>
-                        <textarea id="sem-input" rows="2"
-                            placeholder="Describe what you're looking for…"></textarea>
-                        <div class="sem-controls">
-                            <input type="number" id="sem-k" value="10" min="1" max="50" title="Number of results">
-                            <button id="sem-exec" type="button">Search</button>
-                        </div>
-                        <div id="sem-status"></div>
-                        <div id="sem-results"></div>
                     </div>
                 </div>
 
@@ -1801,12 +1834,13 @@
             nodeRadius: { File: 10, Interface: 7, Function: 6, Class: 8, Dependency: 5, Config: 8, Default: 6 },
             colorMap: {
                 File: '#22d3ee',
+                Folder: '#c99820',
                 Interface: '#f472b6',
                 Function: '#4ade80',
                 Class: '#c084fc',
                 Dependency: '#fb923c',
                 Config: '#fbbf24',
-                Default: '#94a3b8'
+                Default: '#7dd3fc'
             },
             relColorMap: {
                 Exports: '#4ade80',
@@ -2557,13 +2591,35 @@
         function selectSearchResult(n) {
             document.getElementById('search').value = n.name;
             document.getElementById('search-suggestions').classList.remove('visible');
-            focusNode(n);
             handleClick(null, n);
+            focusNode(n);
+        }
+
+        function getViewportCenter() {
+            const sidebar = document.getElementById('sidebar');
+            const info = document.getElementById('info');
+            const sidebarW = sidebar && !sidebar.classList.contains('collapsed')
+                ? sidebar.offsetWidth : 0;
+            const infoW = info && info.classList.contains('visible')
+                ? info.offsetWidth : 0;
+            return {
+                x: sidebarW + (width - sidebarW - infoW) / 2,
+                y: height / 2
+            };
         }
 
         function focusNode(n) {
-            svg.transition().duration(600).call(zoom.transform,
-                d3.zoomIdentity.translate(width / 2 - n.x, height / 2 - n.y).scale(1.5));
+            // Wait one frame so any panel toggles (info open/close) commit their
+            // layout before we measure the visible viewport.
+            requestAnimationFrame(() => {
+                const { x: cx, y: cy } = getViewportCenter();
+                const current = d3.zoomTransform(svg.node());
+                const scale = current.k >= 1.5 ? current.k : 1.5;
+                const tx = cx - scale * n.x;
+                const ty = cy - scale * n.y;
+                svg.transition().duration(600).call(zoom.transform,
+                    d3.zoomIdentity.translate(tx, ty).scale(scale));
+            });
         }
 
         // ─── Simulation & rendering ─────────────────────────
@@ -2981,9 +3037,18 @@
             const minY = Math.min(...ys), maxY = Math.max(...ys);
             const w = Math.max(maxX - minX, 100);
             const h = Math.max(maxY - minY, 100);
-            const scale = Math.min(width / (w + 200), height / (h + 200), 1.5);
-            const tx = width / 2 - (minX + w / 2) * scale;
-            const ty = height / 2 - (minY + h / 2) * scale;
+            const sidebar = document.getElementById('sidebar');
+            const info = document.getElementById('info');
+            const sidebarW = sidebar && !sidebar.classList.contains('collapsed')
+                ? sidebar.offsetWidth : 0;
+            const infoW = info && info.classList.contains('visible')
+                ? info.offsetWidth : 0;
+            const visibleW = Math.max(width - sidebarW - infoW, 200);
+            const scale = Math.min(visibleW / (w + 200), height / (h + 200), 1.5);
+            const cx = sidebarW + visibleW / 2;
+            const cy = height / 2;
+            const tx = cx - (minX + w / 2) * scale;
+            const ty = cy - (minY + h / 2) * scale;
             svg.transition().duration(600).call(zoom.transform,
                 d3.zoomIdentity.translate(tx, ty).scale(scale));
         }

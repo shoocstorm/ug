@@ -351,6 +351,7 @@ fn run_gen(args: &[String]) {
             )
         })
         .unwrap_or_else(|| ".".to_string());
+    let repo_root = input.clone();
     let cache = flag_value(args, &["-c", "--cache"]);
     let output_dir = flag_value_or(args, &["-o", "--output"], "ugout");
     let no_ingest = has_flag(args, "--no-ingest");
@@ -435,7 +436,7 @@ fn run_gen(args: &[String]) {
         println!("{C_YELLOW}⚠ Skipping db-ingest (--no-ingest){C_RESET}");
         if chain_serve {
             println!("Total time: {C_BOLD}{:?}{C_RESET}", start_total.elapsed());
-            chain_to_serve(args, &graph_path, &db_path, true);
+            chain_to_serve(args, &graph_path, &db_path, true, &repo_root);
             return;
         }
         println!(
@@ -469,10 +470,7 @@ fn run_gen(args: &[String]) {
     }
 
     println!("────────────────────────────────────────");
-    println!(
-        "Run ' ug serve -i {} ' and open http://127.0.0.1:8080 to view the graph.",
-        graph_path
-    );
+
     println!(
         "Run ' ug semantic_search \"hello\" -d {} ' to perform a semantic RAG query.",
         db_path
@@ -484,7 +482,13 @@ fn run_gen(args: &[String]) {
     println!("Total time: {:?}", start_total.elapsed());
 
     if chain_serve {
-        chain_to_serve(args, &graph_path, &db_path, false);
+        chain_to_serve(args, &graph_path, &db_path, false, &repo_root);
+    } else {
+        println!(
+            "Run '{C_BOLD} ug serve -i {} --repo-root {} {C_RESET}' and open {C_CYAN}http://127.0.0.1:8080{C_RESET} to view the graph.",
+            graph_path,
+            repo_root
+        );
     }
 }
 
@@ -492,12 +496,14 @@ fn run_gen(args: &[String]) {
 /// `serve::run_serve`. Inherits port/host/watch/repo-root and embedder flags
 /// from the original invocation; sets `-i`/`-d` to the freshly generated
 /// paths, and `--no-db` when the ingest step was skipped.
-fn chain_to_serve(args: &[String], graph_path: &str, db_path: &str, no_db: bool) {
+fn chain_to_serve(args: &[String], graph_path: &str, db_path: &str, no_db: bool, repo_root: &str) {
     let mut serve_args: Vec<String> = vec![
         "-i".to_string(),
         graph_path.to_string(),
         "-d".to_string(),
         db_path.to_string(),
+        "--repo-root".to_string(),
+        repo_root.to_string(),
     ];
     if no_db {
         serve_args.push("--no-db".to_string());
@@ -1106,11 +1112,11 @@ fn print_help() {
     println!();
     println!("  {C_CYAN}serve{C_RESET}                Serve the visualization + graph.json + read-only API (in-memory, pre-compressed)");
     println!("    -i, --input <file>  Graph JSON to serve (default: ugout/graph.json)");
+    println!("    -d, --db <path>     OverGraph DB for /api/db + /api/search routes (default: ugout/ugdb)");
+    println!("    --no-db             Don't open DB; routes return 503");
     println!("    -p, --port <n>      TCP port (default: 8080)");
     println!("    --host <addr>       Bind address (default: 127.0.0.1; use 0.0.0.0 for LAN)");
     println!("    --watch             Reload graph file when its mtime changes (~2s poll)");
-    println!("    -d, --db <path>     OverGraph DB for /api/db + /api/search routes (default: ugout/ugdb)");
-    println!("    --no-db             Don't open DB; Phase 3 routes return 503");
     println!(
         "    --repo-root <path>  Repo root for hybrid-search snippet resolution (default: cwd)"
     );
