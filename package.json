@@ -1,5 +1,5 @@
 {
-  "name": "ultragraph-kb",
+  "name": "ultragraph",
   "version": "0.1.0",
   "description": "High-Performance Knowledge Base Indexer",
   "main": "lib/index.js",

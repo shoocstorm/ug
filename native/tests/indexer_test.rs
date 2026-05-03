@@ -1,7 +1,7 @@
-use ultragraph_kb::{index, types::{IndexResult}};
 use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
+use ultragraph::{index, types::IndexResult};
 
 fn create_test_dir() -> TempDir {
     let dir = TempDir::new().expect("Failed to create temp dir");
@@ -26,7 +26,11 @@ fn test_index_empty_directory() {
 #[test]
 fn test_index_single_file() {
     let dir = create_test_dir();
-    write_file(dir.path(), "test.ts", "function add(a: number, b: number): number { return a + b; }");
+    write_file(
+        dir.path(),
+        "test.ts",
+        "function add(a: number, b: number): number { return a + b; }",
+    );
 
     let result = index(dir.path().to_string_lossy().to_string());
     let parsed: IndexResult = serde_json::from_str(&result).expect("Failed to parse result");
@@ -39,7 +43,10 @@ fn test_index_single_file() {
 #[test]
 fn test_index_extracts_functions() {
     let dir = create_test_dir();
-    write_file(dir.path(), "test.ts", r#"
+    write_file(
+        dir.path(),
+        "test.ts",
+        r#"
 export function add(a: number, b: number): number {
     return a + b;
 }
@@ -47,7 +54,8 @@ export function add(a: number, b: number): number {
 export function multiply(a: number, b: number): number {
     return a * b;
 }
-"#);
+"#,
+    );
 
     let result = index(dir.path().to_string_lossy().to_string());
     let parsed: IndexResult = serde_json::from_str(&result).expect("Failed to parse result");
@@ -62,19 +70,24 @@ export function multiply(a: number, b: number): number {
 #[test]
 fn test_index_extracts_classes() {
     let dir = create_test_dir();
-    write_file(dir.path(), "test.ts", r#"
+    write_file(
+        dir.path(),
+        "test.ts",
+        r#"
 export class Calculator {
     add(a: number, b: number): number {
         return a + b;
     }
 }
-"#);
+"#,
+    );
 
     let result = index(dir.path().to_string_lossy().to_string());
     let parsed: IndexResult = serde_json::from_str(&result).expect("Failed to parse result");
 
     let symbols = &parsed.files[0].symbols;
-    let class_names: Vec<&str> = symbols.iter()
+    let class_names: Vec<&str> = symbols
+        .iter()
         .filter(|s| s.kind == "class")
         .map(|s| s.name.as_str())
         .collect();
@@ -85,18 +98,23 @@ export class Calculator {
 #[test]
 fn test_index_extracts_interfaces() {
     let dir = create_test_dir();
-    write_file(dir.path(), "test.ts", r#"
+    write_file(
+        dir.path(),
+        "test.ts",
+        r#"
 export interface Config {
     name: string;
     value: number;
 }
-"#);
+"#,
+    );
 
     let result = index(dir.path().to_string_lossy().to_string());
     let parsed: IndexResult = serde_json::from_str(&result).expect("Failed to parse result");
 
     let symbols = &parsed.files[0].symbols;
-    let interface_names: Vec<&str> = symbols.iter()
+    let interface_names: Vec<&str> = symbols
+        .iter()
         .filter(|s| s.kind == "interface")
         .map(|s| s.name.as_str())
         .collect();
@@ -107,12 +125,18 @@ export interface Config {
 #[test]
 fn test_index_extracts_signature_params() {
     let dir = create_test_dir();
-    write_file(dir.path(), "test.ts", "function greet(name: string, times: number): void { }");
+    write_file(
+        dir.path(),
+        "test.ts",
+        "function greet(name: string, times: number): void { }",
+    );
 
     let result = index(dir.path().to_string_lossy().to_string());
     let parsed: IndexResult = serde_json::from_str(&result).expect("Failed to parse result");
 
-    let fn_symbol = parsed.files[0].symbols.iter()
+    let fn_symbol = parsed.files[0]
+        .symbols
+        .iter()
         .find(|s| s.name == "greet")
         .expect("Function not found");
 
@@ -126,12 +150,18 @@ fn test_index_extracts_signature_params() {
 #[test]
 fn test_index_extracts_return_type() {
     let dir = create_test_dir();
-    write_file(dir.path(), "test.ts", "function getValue(): number { return 42; }");
+    write_file(
+        dir.path(),
+        "test.ts",
+        "function getValue(): number { return 42; }",
+    );
 
     let result = index(dir.path().to_string_lossy().to_string());
     let parsed: IndexResult = serde_json::from_str(&result).expect("Failed to parse result");
 
-    let fn_symbol = parsed.files[0].symbols.iter()
+    let fn_symbol = parsed.files[0]
+        .symbols
+        .iter()
         .find(|s| s.name == "getValue")
         .expect("Function not found");
 
@@ -144,7 +174,10 @@ fn test_index_extracts_return_type() {
 #[test]
 fn test_index_extracts_docstring() {
     let dir = create_test_dir();
-    write_file(dir.path(), "test.ts", r#"
+    write_file(
+        dir.path(),
+        "test.ts",
+        r#"
 /**
  * Adds two numbers together.
  * @param a - First number
@@ -154,12 +187,15 @@ fn test_index_extracts_docstring() {
 function add(a: number, b: number): number {
     return a + b;
 }
-"#);
+"#,
+    );
 
     let result = index(dir.path().to_string_lossy().to_string());
     let parsed: IndexResult = serde_json::from_str(&result).expect("Failed to parse result");
 
-    let fn_symbol = parsed.files[0].symbols.iter()
+    let fn_symbol = parsed.files[0]
+        .symbols
+        .iter()
         .find(|s| s.name == "add")
         .expect("Function not found");
 
@@ -171,13 +207,19 @@ function add(a: number, b: number): number {
 #[test]
 fn test_index_extracts_imports() {
     let dir = create_test_dir();
-    write_file(dir.path(), "math.ts", "export function add(a: number, b: number): number { return a + b; }");
+    write_file(
+        dir.path(),
+        "math.ts",
+        "export function add(a: number, b: number): number { return a + b; }",
+    );
     write_file(dir.path(), "main.ts", "import { add } from './math';");
 
     let result = index(dir.path().to_string_lossy().to_string());
     let parsed: IndexResult = serde_json::from_str(&result).expect("Failed to parse result");
 
-    let main_file = parsed.files.iter()
+    let main_file = parsed
+        .files
+        .iter()
         .find(|f| f.path.contains("main.ts"))
         .expect("main.ts not found");
 
@@ -188,7 +230,10 @@ fn test_index_extracts_imports() {
 #[test]
 fn test_index_extracts_extends() {
     let dir = create_test_dir();
-    write_file(dir.path(), "test.ts", r#"
+    write_file(
+        dir.path(),
+        "test.ts",
+        r#"
 class Base {
     method() {}
 }
@@ -198,12 +243,15 @@ class Derived extends Base {
         return super.method();
     }
 }
-"#);
+"#,
+    );
 
     let result = index(dir.path().to_string_lossy().to_string());
     let parsed: IndexResult = serde_json::from_str(&result).expect("Failed to parse result");
 
-    let derived = parsed.files[0].symbols.iter()
+    let derived = parsed.files[0]
+        .symbols
+        .iter()
         .find(|s| s.name == "Derived")
         .expect("Derived class not found");
 
@@ -215,14 +263,18 @@ class Derived extends Base {
 #[test]
 fn test_index_python_support() {
     let dir = create_test_dir();
-    write_file(dir.path(), "test.py", r#"
+    write_file(
+        dir.path(),
+        "test.py",
+        r#"
 def add(a, b):
     return a + b
 
 class Calculator:
     def add(self, a, b):
         return a + b
-"#);
+"#,
+    );
 
     let result = index(dir.path().to_string_lossy().to_string());
     let parsed: IndexResult = serde_json::from_str(&result).expect("Failed to parse result");
@@ -237,7 +289,11 @@ fn test_index_ignores_node_modules() {
     let node_modules = dir.path().join("node_modules");
     fs::create_dir(&node_modules).expect("Failed to create node_modules");
     write_file(dir.path(), "test.ts", "function test(): void { }");
-    write_file(&node_modules, "external.ts", "export function external(): void { }");
+    write_file(
+        &node_modules,
+        "external.ts",
+        "export function external(): void { }",
+    );
 
     let result = index(dir.path().to_string_lossy().to_string());
     let parsed: IndexResult = serde_json::from_str(&result).expect("Failed to parse result");
@@ -249,12 +305,18 @@ fn test_index_ignores_node_modules() {
 #[test]
 fn test_index_metrics() {
     let dir = create_test_dir();
-    write_file(dir.path(), "test.ts", "function test(a: number): number { return a; }");
+    write_file(
+        dir.path(),
+        "test.ts",
+        "function test(a: number): number { return a; }",
+    );
 
     let result = index(dir.path().to_string_lossy().to_string());
     let parsed: IndexResult = serde_json::from_str(&result).expect("Failed to parse result");
 
-    let fn_symbol = parsed.files[0].symbols.iter()
+    let fn_symbol = parsed.files[0]
+        .symbols
+        .iter()
         .find(|s| s.name == "test")
         .expect("Function not found");
 

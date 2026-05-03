@@ -1,10 +1,10 @@
 {
-  "name": "ultragraph-kb",
+  "name": "ultragraph",
   "version": "0.1.0",
   "description": "High-Performance Knowledge Base Indexer",
   "main": "index.js",
   "napi": {
-    "binaryName": "ultragraph-kb",
+    "binaryName": "ultragraph",
     "platforms": [
       "aarch64-apple-darwin"
     ]

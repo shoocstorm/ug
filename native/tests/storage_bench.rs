@@ -2,7 +2,7 @@
 //!
 //! Not a Criterion bench (kept dependency-light) — just a wall-clock
 //! sanity check. Runs only when explicitly requested:
-//!   `cargo test -p ultragraph-kb --test storage_bench -- --ignored --nocapture`
+//!   `cargo test -p ultragraph --test storage_bench -- --ignored --nocapture`
 //!
 //! Targets from MIGRATION-OVERGRAPH §F:
 //!   * Ingest 1K nodes + 5K edges < 2s
@@ -10,9 +10,9 @@
 
 use std::time::Instant;
 use tempfile::TempDir;
-use ultragraph_kb::storage::db::{hybrid_search, Db, EdgeRow, NodeRow};
-use ultragraph_kb::storage::embed::EMBEDDING_DIM;
-use ultragraph_kb::storage::text::build_sparse_keyword_vector;
+use ultragraph::storage::db::{hybrid_search, Db, EdgeRow, NodeRow};
+use ultragraph::storage::embed::EMBEDDING_DIM;
+use ultragraph::storage::text::build_sparse_keyword_vector;
 
 const N_NODES: usize = 1000;
 const N_EDGES: usize = 5000;
@@ -80,10 +80,7 @@ async fn ingest_1k_nodes_5k_edges() {
         t_edges,
         t0.elapsed()
     );
-    assert!(
-        t0.elapsed().as_secs_f32() < 5.0,
-        "ingest > 5s; investigate"
-    );
+    assert!(t0.elapsed().as_secs_f32() < 5.0, "ingest > 5s; investigate");
 }
 
 #[tokio::test]

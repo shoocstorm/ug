@@ -204,7 +204,7 @@ The server uses `tracing` + `tracing-subscriber` for structured logs. Initialize
 **Default filter**
 
 ```
-info,ultragraph_kb=info,tower_http=info,hyper=warn,h2=warn,reqwest=warn,rustls=warn
+info,ultragraph=info,tower_http=info,hyper=warn,h2=warn,reqwest=warn,rustls=warn
 ```
 
 **Override with `RUST_LOG`** — same precedence as any tracing-subscriber app:

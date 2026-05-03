@@ -1,6 +1,6 @@
 # UltraGraph-KB Native (Rust)
 
-High-performance knowledge base indexer built with Rust, tree-sitter, and NAPI-RS.
+High-performance Graph-based knowledge base generator built with Rust, tree-sitter, and NAPI-RS.
 
 ## Quick Start
 
@@ -133,8 +133,8 @@ cargo build --release   # Release (optimized)
 ```
 
 Output:
-- Library: `target/release/libultragraph_kb.rlib`
-- NAPI: `target/release/ultragraph-kb.node`
+- Library: `target/release/libultragraph.rlib`
+- NAPI: `target/release/ultragraph.node`
 - Binary: `target/release/ug`
 
 ### Project Structure

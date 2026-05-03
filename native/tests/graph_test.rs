@@ -1,4 +1,4 @@
-use ultragraph_kb::{index, build_graph, k_hop_bfs, filter_edges_by_type, find_shortest_path, calculate_centrality, detect_cycles, types::{GraphData, BfsResult, GraphNodeType, GraphEdgeType, FilteredEdgesResult, PathResult, CentralityResult, CycleResult}};
+use ultragraph::{index, build_graph, k_hop_bfs, filter_edges_by_type, find_shortest_path, calculate_centrality, detect_cycles, types::{GraphData, BfsResult, GraphNodeType, GraphEdgeType, FilteredEdgesResult, PathResult, CentralityResult, CycleResult}};
 use std::fs;
 use tempfile::TempDir;
 

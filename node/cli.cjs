@@ -5,7 +5,7 @@ const { readFileSync, existsSync, writeFileSync, mkdirSync, copyFileSync } = req
 const chalk = require('chalk');
 chalk.level = 2;
 
-const binding = join(dirname(__dirname), 'ugout', 'ultragraph-kb.node');
+const binding = join(dirname(__dirname), 'ugout', 'ultragraph.node');
 const ug = require(binding);
 
 function extractArg(args, shortFlag, longFlag, defaultValue) {

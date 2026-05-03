@@ -24,12 +24,12 @@ use crate::{
     calculate_centrality as lib_centrality, detect_cycles as lib_cycles, embedder_from_args,
     flag_value, flag_value_or, has_flag, tokio_runtime,
 };
-use ultragraph_kb::storage::{
+use ultragraph::storage::{
     self, search_kb as storage_search_kb, semantic_search as storage_semantic_search,
     semantic_search_w_where, traverse_filtered, Db, Direction, Embedder, RankStrategy,
     SearchKbOptions,
 };
-use ultragraph_kb::types::{GraphData, GraphEdge, GraphNode};
+use ultragraph::types::{GraphData, GraphEdge, GraphNode};
 
 // ---------- Encoded asset (identity + gzip + br, all pre-built) ----------
 
@@ -174,7 +174,7 @@ fn init_tracing() {
     use tracing_subscriber::{fmt, EnvFilter};
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         EnvFilter::new(
-            "info,ultragraph_kb=info,tower_http=info,hyper=warn,h2=warn,reqwest=warn,rustls=warn",
+            "info,ultragraph=info,tower_http=info,hyper=warn,h2=warn,reqwest=warn,rustls=warn",
         )
     });
     let _ = fmt()

@@ -10,14 +10,14 @@
 //! external model is needed.
 
 use tempfile::TempDir;
-use ultragraph_kb::storage::db::{
+use ultragraph::storage::db::{
     edges_from, edges_to, hybrid_search, nodes_by_ids, traverse_string_ids, vector_search, Db,
     EdgeRow, NodeRow,
 };
-use ultragraph_kb::storage::embed::EMBEDDING_DIM;
-use ultragraph_kb::storage::ppr::run_ppr;
-use ultragraph_kb::storage::query::Direction;
-use ultragraph_kb::storage::text::build_sparse_keyword_vector;
+use ultragraph::storage::embed::EMBEDDING_DIM;
+use ultragraph::storage::ppr::run_ppr;
+use ultragraph::storage::query::Direction;
+use ultragraph::storage::text::build_sparse_keyword_vector;
 
 fn unit_vector(seed: f32) -> Vec<f32> {
     // Deterministic 1024-dim vector with a single high component so

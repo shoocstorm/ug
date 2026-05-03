@@ -57,7 +57,7 @@ Add the MCP server configuration:
 ```json
 {
   "mcpServers": {
-    "ultragraph-kb": {
+    "ultragraph": {
       "command": "node",
       "args": ["/absolute/path/to/ug/src/mcp-server.mjs"],
       "env": {
@@ -80,7 +80,7 @@ Cursor supports MCP servers via its configuration. Create or edit `.cursor/mcp.j
 ```json
 {
   "mcpServers": {
-    "ultragraph-kb": {
+    "ultragraph": {
       "command": "node",
       "args": ["/absolute/path/to/ug/src/mcp-server.mjs"],
       "env": {
@@ -183,7 +183,7 @@ npx @modelcontextprotocol/inspector node src/mcp-server.mjs
 
 ## Troubleshooting
 
-**"Cannot find module 'ultragraph-kb.node'"**
+**"Cannot find module 'ultragraph.node'"**
 - Run `npm run prebuild` to build the native module
 
 **"Database not found" errors**

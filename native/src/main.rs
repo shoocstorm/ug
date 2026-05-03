@@ -2,13 +2,13 @@ use std::env;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
-use ultragraph_kb::storage::{
+use ultragraph::storage::{
     self, search_kb as storage_search_kb, semantic_search as storage_semantic_search,
     traverse as storage_traverse, Db, Direction, Embedder, EmbedderConfig, RankStrategy,
     SearchKbOptions,
 };
-use ultragraph_kb::types::GraphData;
-use ultragraph_kb::{
+use ultragraph::types::GraphData;
+use ultragraph::{
     build_graph, calculate_centrality, detect_cycles, filter_edges_by_type, find_shortest_path,
     graph_keyword_search, index, index_with_cache, k_hop_bfs, C_BLUE, C_BOLD, C_CYAN, C_GREEN,
     C_MAGENTA, C_RESET, C_YELLOW,

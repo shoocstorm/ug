@@ -25,7 +25,7 @@ import { dirname, resolve } from "path";
 
 const require = createRequire(import.meta.url);
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const ug = require(resolve(__dirname, ".", "ultragraph-kb.node"));
+const ug = require(resolve(__dirname, ".", "ultragraph.node"));
 
 const DB_PATH = process.env.UG_DB_PATH || "./ugdb";
 const REPO_ROOT = process.env.UG_REPO_ROOT || process.cwd();
@@ -221,7 +221,7 @@ function formatRankedContext(ctx) {
 }
 
 const server = new Server(
-  { name: "ultragraph-kb", version: "0.1.0" },
+  { name: "ultragraph", version: "0.1.0" },
   { capabilities: { tools: {} } },
 );
 

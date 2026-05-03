@@ -1,9 +1,9 @@
 [package]
-name = "ultragraph-kb"
+name = "ultragraph"
 version = "0.1.0"
 edition = "2021"
 authors = ["Aldrick Wan"]
-description = "High-Performance Knowledge Base Indexer"
+description = "High-Performance Graph-Based Knowledge Base Generator & Visualizer"
 
 [lib]
 crate-type = ["cdylib", "rlib"]

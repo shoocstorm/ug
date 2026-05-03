@@ -1,9 +1,9 @@
-use ultragraph_kb::{
+use std::fs;
+use tempfile::TempDir;
+use ultragraph::{
     build_graph, graph_keyword_search, index,
     types::{GraphData, GraphEdge, GraphEdgeType, GraphNode, GraphNodeType, SearchResult},
 };
-use std::fs;
-use tempfile::TempDir;
 
 fn build_test_graph_from_ts(files: &[(&str, &str)]) -> String {
     let dir = TempDir::new().unwrap();
@@ -91,7 +91,11 @@ fn synthetic_graph_json() -> String {
         target: "function:loadConfig".to_string(),
         edge_type: GraphEdgeType::Contains,
     }];
-    let graph = GraphData { nodes, edges, stats: None };
+    let graph = GraphData {
+        nodes,
+        edges,
+        stats: None,
+    };
     serde_json::to_string(&graph).unwrap()
 }
 
@@ -112,10 +116,8 @@ fn test_search_by_name_match() {
 
 #[test]
 fn test_search_is_case_insensitive() {
-    let graph_json = build_test_graph_from_ts(&[(
-        "user.ts",
-        "function getUserName(): string { return ''; }",
-    )]);
+    let graph_json =
+        build_test_graph_from_ts(&[("user.ts", "function getUserName(): string { return ''; }")]);
 
     let result_json = graph_keyword_search(graph_json, "USERNAME".to_string(), None);
     let result: SearchResult = serde_json::from_str(&result_json).unwrap();
@@ -125,10 +127,8 @@ fn test_search_is_case_insensitive() {
 
 #[test]
 fn test_search_partial_substring_matches() {
-    let graph_json = build_test_graph_from_ts(&[(
-        "auth.ts",
-        "function authenticateUser(): void {}",
-    )]);
+    let graph_json =
+        build_test_graph_from_ts(&[("auth.ts", "function authenticateUser(): void {}")]);
 
     let result_json = graph_keyword_search(graph_json, "auth".to_string(), None);
     let result: SearchResult = serde_json::from_str(&result_json).unwrap();
@@ -196,10 +196,8 @@ fn test_search_node_types_multiple() {
 
 #[test]
 fn test_search_empty_node_types_treated_as_unfiltered() {
-    let graph_json = build_test_graph_from_ts(&[(
-        "test.ts",
-        "function widget(): void {} class WidgetBox {}",
-    )]);
+    let graph_json =
+        build_test_graph_from_ts(&[("test.ts", "function widget(): void {} class WidgetBox {}")]);
 
     let unfiltered = graph_keyword_search(graph_json.clone(), "widget".to_string(), None);
     let empty_filter = graph_keyword_search(graph_json, "widget".to_string(), Some(vec![]));

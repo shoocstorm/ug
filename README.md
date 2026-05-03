@@ -1,6 +1,6 @@
 # UltraGraph-KB: Turbo Knowledge Base Indexer
 
-A high-performance, local-first knowledge base generator that transforms codebases into a queryable Semantic Knowledge Graph.
+A high-performance, local-first graph-based knowledge base generator that transforms codebases/documents into a visualized queryable Semantic Knowledge Graph.
 
 ## Overview
 
@@ -129,13 +129,13 @@ UltraGraph-KB implements all four phases of the UltraGraph knowledge base system
 
 ## Using Native APIs in External Node.js Apps
 
-If you want to use the high-performance Rust-native APIs (exposed via `ultragraph-kb.node`) directly in your own Node.js application, you need to include the following files from this repository:
+If you want to use the high-performance Rust-native APIs (exposed via `ultragraph.node`) directly in your own Node.js application, you need to include the following files from this repository:
 
 ### Required Files
 | File | Purpose |
 |------|---------|
 | `native/index.js` | Auto-generated NAPI-RS loader that detects your OS, architecture, and libc version to load the correct native binary. This is the entry point your app should require. |
-| `native/ultragraph-kb.node` | Platform-specific pre-compiled native binary. Include at minimum the binary matching your target deployment environment (e.g., `ultragraph-kb.darwin-arm64.node` for macOS Apple Silicon). For cross-platform support, include all pre-built binaries for supported platforms. |
+| `native/ultragraph.node` | Platform-specific pre-compiled native binary. Include at minimum the binary matching your target deployment environment (e.g., `ultragraph.darwin-arm64.node` for macOS Apple Silicon). For cross-platform support, include all pre-built binaries for supported platforms. |
 
 ### Usage
 Require the loader in your Node.js app (adjust the path to match your project structure):
@@ -176,7 +176,7 @@ The native module exports the following functions (see `native/index.js:579-591`
 npm run build
 ```
 
-This produces `native/ultragraph-kb.node` — the native Node.js module.
+This produces `native/ultragraph.node` — the native Node.js module.
 
 ## Quick Start
 

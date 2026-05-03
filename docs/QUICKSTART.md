@@ -36,7 +36,7 @@ cd ug
 cd native && cargo build --release && cd ..
 ```
 
-This produces `native/ultragraph-kb.node` — the native binary that powers everything.
+This produces `native/ultragraph.node` — the native binary that powers everything.
 
 ## Workflow at a Glance
 
@@ -189,7 +189,7 @@ ug/
 │   │   ├── types.rs       # Shared data structures
 │   │   └── storage/       # OverGraph + embedding + GraphRAG
 │   ├── Cargo.toml
-│── ugout/ultragraph-kb.node # Built native module
+│── ugout/ultragraph.node # Built native module
 ├── src/
 │   ├── cli.cjs            # JavaScript CLI
 │   ├── vis/               # D3.js visualization
@@ -232,7 +232,7 @@ node src/cli.cjs rag ugout/ugdb "explain the auth flow" -k 10
 
 | Issue | Fix |
 |-------|-----|
-| `MODULE_NOT_FOUND: ultragraph-kb.node` | Run `cd native && cargo build --release` |
+| `MODULE_NOT_FOUND: ultragraph.node` | Run `cd native && cargo build --release` |
 | `protoc not found` | `brew install protobuf` |
 | `embedder connect failed` | Ensure embedding endpoint is running at `localhost:8000` |
 | Markdown files not indexed | Known tree-sitter version conflict (see README.md) |

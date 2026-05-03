@@ -70,13 +70,13 @@ function requireNative() {
   } else if (process.platform === 'android') {
     if (process.arch === 'arm64') {
       try {
-        return require('./ultragraph-kb.android-arm64.node')
+        return require('./ultragraph.android-arm64.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        const binding = require('ultragraph-kb-android-arm64')
-        const bindingPackageVersion = require('ultragraph-kb-android-arm64/package.json').version
+        const binding = require('ultragraph-android-arm64')
+        const bindingPackageVersion = require('ultragraph-android-arm64/package.json').version
         if (bindingPackageVersion !== '0.1.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
           throw new Error(`Native binding package version mismatch, expected 0.1.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
@@ -86,13 +86,13 @@ function requireNative() {
       }
     } else if (process.arch === 'arm') {
       try {
-        return require('./ultragraph-kb.android-arm-eabi.node')
+        return require('./ultragraph.android-arm-eabi.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        const binding = require('ultragraph-kb-android-arm-eabi')
-        const bindingPackageVersion = require('ultragraph-kb-android-arm-eabi/package.json').version
+        const binding = require('ultragraph-android-arm-eabi')
+        const bindingPackageVersion = require('ultragraph-android-arm-eabi/package.json').version
         if (bindingPackageVersion !== '0.1.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
           throw new Error(`Native binding package version mismatch, expected 0.1.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
@@ -107,46 +107,46 @@ function requireNative() {
     if (process.arch === 'x64') {
       if (process.config?.variables?.shlib_suffix === 'dll.a' || process.config?.variables?.node_target_type === 'shared_library') {
         try {
-        return require('./ultragraph-kb.win32-x64-gnu.node')
-      } catch (e) {
-        loadErrors.push(e)
-      }
-      try {
-        const binding = require('ultragraph-kb-win32-x64-gnu')
-        const bindingPackageVersion = require('ultragraph-kb-win32-x64-gnu/package.json').version
-        if (bindingPackageVersion !== '0.1.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
-          throw new Error(`Native binding package version mismatch, expected 0.1.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+          return require('./ultragraph.win32-x64-gnu.node')
+        } catch (e) {
+          loadErrors.push(e)
         }
-        return binding
-      } catch (e) {
-        loadErrors.push(e)
-      }
+        try {
+          const binding = require('ultragraph-win32-x64-gnu')
+          const bindingPackageVersion = require('ultragraph-win32-x64-gnu/package.json').version
+          if (bindingPackageVersion !== '0.1.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+            throw new Error(`Native binding package version mismatch, expected 0.1.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+          }
+          return binding
+        } catch (e) {
+          loadErrors.push(e)
+        }
       } else {
         try {
-        return require('./ultragraph-kb.win32-x64-msvc.node')
-      } catch (e) {
-        loadErrors.push(e)
-      }
-      try {
-        const binding = require('ultragraph-kb-win32-x64-msvc')
-        const bindingPackageVersion = require('ultragraph-kb-win32-x64-msvc/package.json').version
-        if (bindingPackageVersion !== '0.1.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
-          throw new Error(`Native binding package version mismatch, expected 0.1.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+          return require('./ultragraph.win32-x64-msvc.node')
+        } catch (e) {
+          loadErrors.push(e)
         }
-        return binding
-      } catch (e) {
-        loadErrors.push(e)
-      }
+        try {
+          const binding = require('ultragraph-win32-x64-msvc')
+          const bindingPackageVersion = require('ultragraph-win32-x64-msvc/package.json').version
+          if (bindingPackageVersion !== '0.1.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+            throw new Error(`Native binding package version mismatch, expected 0.1.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+          }
+          return binding
+        } catch (e) {
+          loadErrors.push(e)
+        }
       }
     } else if (process.arch === 'ia32') {
       try {
-        return require('./ultragraph-kb.win32-ia32-msvc.node')
+        return require('./ultragraph.win32-ia32-msvc.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        const binding = require('ultragraph-kb-win32-ia32-msvc')
-        const bindingPackageVersion = require('ultragraph-kb-win32-ia32-msvc/package.json').version
+        const binding = require('ultragraph-win32-ia32-msvc')
+        const bindingPackageVersion = require('ultragraph-win32-ia32-msvc/package.json').version
         if (bindingPackageVersion !== '0.1.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
           throw new Error(`Native binding package version mismatch, expected 0.1.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
@@ -156,13 +156,13 @@ function requireNative() {
       }
     } else if (process.arch === 'arm64') {
       try {
-        return require('./ultragraph-kb.win32-arm64-msvc.node')
+        return require('./ultragraph.win32-arm64-msvc.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        const binding = require('ultragraph-kb-win32-arm64-msvc')
-        const bindingPackageVersion = require('ultragraph-kb-win32-arm64-msvc/package.json').version
+        const binding = require('ultragraph-win32-arm64-msvc')
+        const bindingPackageVersion = require('ultragraph-win32-arm64-msvc/package.json').version
         if (bindingPackageVersion !== '0.1.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
           throw new Error(`Native binding package version mismatch, expected 0.1.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
@@ -175,13 +175,13 @@ function requireNative() {
     }
   } else if (process.platform === 'darwin') {
     try {
-      return require('./ultragraph-kb.darwin-universal.node')
+      return require('./ultragraph.darwin-universal.node')
     } catch (e) {
       loadErrors.push(e)
     }
     try {
-      const binding = require('ultragraph-kb-darwin-universal')
-      const bindingPackageVersion = require('ultragraph-kb-darwin-universal/package.json').version
+      const binding = require('ultragraph-darwin-universal')
+      const bindingPackageVersion = require('ultragraph-darwin-universal/package.json').version
       if (bindingPackageVersion !== '0.1.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
         throw new Error(`Native binding package version mismatch, expected 0.1.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
       }
@@ -191,13 +191,13 @@ function requireNative() {
     }
     if (process.arch === 'x64') {
       try {
-        return require('./ultragraph-kb.darwin-x64.node')
+        return require('./ultragraph.darwin-x64.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        const binding = require('ultragraph-kb-darwin-x64')
-        const bindingPackageVersion = require('ultragraph-kb-darwin-x64/package.json').version
+        const binding = require('ultragraph-darwin-x64')
+        const bindingPackageVersion = require('ultragraph-darwin-x64/package.json').version
         if (bindingPackageVersion !== '0.1.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
           throw new Error(`Native binding package version mismatch, expected 0.1.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
@@ -207,13 +207,13 @@ function requireNative() {
       }
     } else if (process.arch === 'arm64') {
       try {
-        return require('./ultragraph-kb.darwin-arm64.node')
+        return require('./ultragraph.darwin-arm64.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        const binding = require('ultragraph-kb-darwin-arm64')
-        const bindingPackageVersion = require('ultragraph-kb-darwin-arm64/package.json').version
+        const binding = require('ultragraph-darwin-arm64')
+        const bindingPackageVersion = require('ultragraph-darwin-arm64/package.json').version
         if (bindingPackageVersion !== '0.1.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
           throw new Error(`Native binding package version mismatch, expected 0.1.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
@@ -227,13 +227,13 @@ function requireNative() {
   } else if (process.platform === 'freebsd') {
     if (process.arch === 'x64') {
       try {
-        return require('./ultragraph-kb.freebsd-x64.node')
+        return require('./ultragraph.freebsd-x64.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        const binding = require('ultragraph-kb-freebsd-x64')
-        const bindingPackageVersion = require('ultragraph-kb-freebsd-x64/package.json').version
+        const binding = require('ultragraph-freebsd-x64')
+        const bindingPackageVersion = require('ultragraph-freebsd-x64/package.json').version
         if (bindingPackageVersion !== '0.1.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
           throw new Error(`Native binding package version mismatch, expected 0.1.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
@@ -243,13 +243,13 @@ function requireNative() {
       }
     } else if (process.arch === 'arm64') {
       try {
-        return require('./ultragraph-kb.freebsd-arm64.node')
+        return require('./ultragraph.freebsd-arm64.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        const binding = require('ultragraph-kb-freebsd-arm64')
-        const bindingPackageVersion = require('ultragraph-kb-freebsd-arm64/package.json').version
+        const binding = require('ultragraph-freebsd-arm64')
+        const bindingPackageVersion = require('ultragraph-freebsd-arm64/package.json').version
         if (bindingPackageVersion !== '0.1.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
           throw new Error(`Native binding package version mismatch, expected 0.1.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
@@ -264,13 +264,13 @@ function requireNative() {
     if (process.arch === 'x64') {
       if (isMusl()) {
         try {
-          return require('./ultragraph-kb.linux-x64-musl.node')
+          return require('./ultragraph.linux-x64-musl.node')
         } catch (e) {
           loadErrors.push(e)
         }
         try {
-          const binding = require('ultragraph-kb-linux-x64-musl')
-          const bindingPackageVersion = require('ultragraph-kb-linux-x64-musl/package.json').version
+          const binding = require('ultragraph-linux-x64-musl')
+          const bindingPackageVersion = require('ultragraph-linux-x64-musl/package.json').version
           if (bindingPackageVersion !== '0.1.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
             throw new Error(`Native binding package version mismatch, expected 0.1.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
           }
@@ -280,13 +280,13 @@ function requireNative() {
         }
       } else {
         try {
-          return require('./ultragraph-kb.linux-x64-gnu.node')
+          return require('./ultragraph.linux-x64-gnu.node')
         } catch (e) {
           loadErrors.push(e)
         }
         try {
-          const binding = require('ultragraph-kb-linux-x64-gnu')
-          const bindingPackageVersion = require('ultragraph-kb-linux-x64-gnu/package.json').version
+          const binding = require('ultragraph-linux-x64-gnu')
+          const bindingPackageVersion = require('ultragraph-linux-x64-gnu/package.json').version
           if (bindingPackageVersion !== '0.1.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
             throw new Error(`Native binding package version mismatch, expected 0.1.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
           }
@@ -298,13 +298,13 @@ function requireNative() {
     } else if (process.arch === 'arm64') {
       if (isMusl()) {
         try {
-          return require('./ultragraph-kb.linux-arm64-musl.node')
+          return require('./ultragraph.linux-arm64-musl.node')
         } catch (e) {
           loadErrors.push(e)
         }
         try {
-          const binding = require('ultragraph-kb-linux-arm64-musl')
-          const bindingPackageVersion = require('ultragraph-kb-linux-arm64-musl/package.json').version
+          const binding = require('ultragraph-linux-arm64-musl')
+          const bindingPackageVersion = require('ultragraph-linux-arm64-musl/package.json').version
           if (bindingPackageVersion !== '0.1.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
             throw new Error(`Native binding package version mismatch, expected 0.1.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
           }
@@ -314,13 +314,13 @@ function requireNative() {
         }
       } else {
         try {
-          return require('./ultragraph-kb.linux-arm64-gnu.node')
+          return require('./ultragraph.linux-arm64-gnu.node')
         } catch (e) {
           loadErrors.push(e)
         }
         try {
-          const binding = require('ultragraph-kb-linux-arm64-gnu')
-          const bindingPackageVersion = require('ultragraph-kb-linux-arm64-gnu/package.json').version
+          const binding = require('ultragraph-linux-arm64-gnu')
+          const bindingPackageVersion = require('ultragraph-linux-arm64-gnu/package.json').version
           if (bindingPackageVersion !== '0.1.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
             throw new Error(`Native binding package version mismatch, expected 0.1.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
           }
@@ -332,13 +332,13 @@ function requireNative() {
     } else if (process.arch === 'arm') {
       if (isMusl()) {
         try {
-          return require('./ultragraph-kb.linux-arm-musleabihf.node')
+          return require('./ultragraph.linux-arm-musleabihf.node')
         } catch (e) {
           loadErrors.push(e)
         }
         try {
-          const binding = require('ultragraph-kb-linux-arm-musleabihf')
-          const bindingPackageVersion = require('ultragraph-kb-linux-arm-musleabihf/package.json').version
+          const binding = require('ultragraph-linux-arm-musleabihf')
+          const bindingPackageVersion = require('ultragraph-linux-arm-musleabihf/package.json').version
           if (bindingPackageVersion !== '0.1.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
             throw new Error(`Native binding package version mismatch, expected 0.1.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
           }
@@ -348,13 +348,13 @@ function requireNative() {
         }
       } else {
         try {
-          return require('./ultragraph-kb.linux-arm-gnueabihf.node')
+          return require('./ultragraph.linux-arm-gnueabihf.node')
         } catch (e) {
           loadErrors.push(e)
         }
         try {
-          const binding = require('ultragraph-kb-linux-arm-gnueabihf')
-          const bindingPackageVersion = require('ultragraph-kb-linux-arm-gnueabihf/package.json').version
+          const binding = require('ultragraph-linux-arm-gnueabihf')
+          const bindingPackageVersion = require('ultragraph-linux-arm-gnueabihf/package.json').version
           if (bindingPackageVersion !== '0.1.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
             throw new Error(`Native binding package version mismatch, expected 0.1.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
           }
@@ -366,13 +366,13 @@ function requireNative() {
     } else if (process.arch === 'loong64') {
       if (isMusl()) {
         try {
-          return require('./ultragraph-kb.linux-loong64-musl.node')
+          return require('./ultragraph.linux-loong64-musl.node')
         } catch (e) {
           loadErrors.push(e)
         }
         try {
-          const binding = require('ultragraph-kb-linux-loong64-musl')
-          const bindingPackageVersion = require('ultragraph-kb-linux-loong64-musl/package.json').version
+          const binding = require('ultragraph-linux-loong64-musl')
+          const bindingPackageVersion = require('ultragraph-linux-loong64-musl/package.json').version
           if (bindingPackageVersion !== '0.1.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
             throw new Error(`Native binding package version mismatch, expected 0.1.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
           }
@@ -382,13 +382,13 @@ function requireNative() {
         }
       } else {
         try {
-          return require('./ultragraph-kb.linux-loong64-gnu.node')
+          return require('./ultragraph.linux-loong64-gnu.node')
         } catch (e) {
           loadErrors.push(e)
         }
         try {
-          const binding = require('ultragraph-kb-linux-loong64-gnu')
-          const bindingPackageVersion = require('ultragraph-kb-linux-loong64-gnu/package.json').version
+          const binding = require('ultragraph-linux-loong64-gnu')
+          const bindingPackageVersion = require('ultragraph-linux-loong64-gnu/package.json').version
           if (bindingPackageVersion !== '0.1.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
             throw new Error(`Native binding package version mismatch, expected 0.1.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
           }
@@ -400,13 +400,13 @@ function requireNative() {
     } else if (process.arch === 'riscv64') {
       if (isMusl()) {
         try {
-          return require('./ultragraph-kb.linux-riscv64-musl.node')
+          return require('./ultragraph.linux-riscv64-musl.node')
         } catch (e) {
           loadErrors.push(e)
         }
         try {
-          const binding = require('ultragraph-kb-linux-riscv64-musl')
-          const bindingPackageVersion = require('ultragraph-kb-linux-riscv64-musl/package.json').version
+          const binding = require('ultragraph-linux-riscv64-musl')
+          const bindingPackageVersion = require('ultragraph-linux-riscv64-musl/package.json').version
           if (bindingPackageVersion !== '0.1.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
             throw new Error(`Native binding package version mismatch, expected 0.1.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
           }
@@ -416,13 +416,13 @@ function requireNative() {
         }
       } else {
         try {
-          return require('./ultragraph-kb.linux-riscv64-gnu.node')
+          return require('./ultragraph.linux-riscv64-gnu.node')
         } catch (e) {
           loadErrors.push(e)
         }
         try {
-          const binding = require('ultragraph-kb-linux-riscv64-gnu')
-          const bindingPackageVersion = require('ultragraph-kb-linux-riscv64-gnu/package.json').version
+          const binding = require('ultragraph-linux-riscv64-gnu')
+          const bindingPackageVersion = require('ultragraph-linux-riscv64-gnu/package.json').version
           if (bindingPackageVersion !== '0.1.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
             throw new Error(`Native binding package version mismatch, expected 0.1.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
           }
@@ -433,13 +433,13 @@ function requireNative() {
       }
     } else if (process.arch === 'ppc64') {
       try {
-        return require('./ultragraph-kb.linux-ppc64-gnu.node')
+        return require('./ultragraph.linux-ppc64-gnu.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        const binding = require('ultragraph-kb-linux-ppc64-gnu')
-        const bindingPackageVersion = require('ultragraph-kb-linux-ppc64-gnu/package.json').version
+        const binding = require('ultragraph-linux-ppc64-gnu')
+        const bindingPackageVersion = require('ultragraph-linux-ppc64-gnu/package.json').version
         if (bindingPackageVersion !== '0.1.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
           throw new Error(`Native binding package version mismatch, expected 0.1.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
@@ -449,13 +449,13 @@ function requireNative() {
       }
     } else if (process.arch === 's390x') {
       try {
-        return require('./ultragraph-kb.linux-s390x-gnu.node')
+        return require('./ultragraph.linux-s390x-gnu.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        const binding = require('ultragraph-kb-linux-s390x-gnu')
-        const bindingPackageVersion = require('ultragraph-kb-linux-s390x-gnu/package.json').version
+        const binding = require('ultragraph-linux-s390x-gnu')
+        const bindingPackageVersion = require('ultragraph-linux-s390x-gnu/package.json').version
         if (bindingPackageVersion !== '0.1.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
           throw new Error(`Native binding package version mismatch, expected 0.1.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
@@ -469,13 +469,13 @@ function requireNative() {
   } else if (process.platform === 'openharmony') {
     if (process.arch === 'arm64') {
       try {
-        return require('./ultragraph-kb.openharmony-arm64.node')
+        return require('./ultragraph.openharmony-arm64.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        const binding = require('ultragraph-kb-openharmony-arm64')
-        const bindingPackageVersion = require('ultragraph-kb-openharmony-arm64/package.json').version
+        const binding = require('ultragraph-openharmony-arm64')
+        const bindingPackageVersion = require('ultragraph-openharmony-arm64/package.json').version
         if (bindingPackageVersion !== '0.1.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
           throw new Error(`Native binding package version mismatch, expected 0.1.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
@@ -485,13 +485,13 @@ function requireNative() {
       }
     } else if (process.arch === 'x64') {
       try {
-        return require('./ultragraph-kb.openharmony-x64.node')
+        return require('./ultragraph.openharmony-x64.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        const binding = require('ultragraph-kb-openharmony-x64')
-        const bindingPackageVersion = require('ultragraph-kb-openharmony-x64/package.json').version
+        const binding = require('ultragraph-openharmony-x64')
+        const bindingPackageVersion = require('ultragraph-openharmony-x64/package.json').version
         if (bindingPackageVersion !== '0.1.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
           throw new Error(`Native binding package version mismatch, expected 0.1.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
@@ -501,13 +501,13 @@ function requireNative() {
       }
     } else if (process.arch === 'arm') {
       try {
-        return require('./ultragraph-kb.openharmony-arm.node')
+        return require('./ultragraph.openharmony-arm.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        const binding = require('ultragraph-kb-openharmony-arm')
-        const bindingPackageVersion = require('ultragraph-kb-openharmony-arm/package.json').version
+        const binding = require('ultragraph-openharmony-arm')
+        const bindingPackageVersion = require('ultragraph-openharmony-arm/package.json').version
         if (bindingPackageVersion !== '0.1.0' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
           throw new Error(`Native binding package version mismatch, expected 0.1.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
@@ -529,7 +529,7 @@ if (!nativeBinding || process.env.NAPI_RS_FORCE_WASI) {
   let wasiBinding = null
   let wasiBindingError = null
   try {
-    wasiBinding = require('./ultragraph-kb.wasi.cjs')
+    wasiBinding = require('./ultragraph.wasi.cjs')
     nativeBinding = wasiBinding
   } catch (err) {
     if (process.env.NAPI_RS_FORCE_WASI) {
@@ -538,7 +538,7 @@ if (!nativeBinding || process.env.NAPI_RS_FORCE_WASI) {
   }
   if (!nativeBinding || process.env.NAPI_RS_FORCE_WASI) {
     try {
-      wasiBinding = require('ultragraph-kb-wasm32-wasi')
+      wasiBinding = require('ultragraph-wasm32-wasi')
       nativeBinding = wasiBinding
     } catch (err) {
       if (process.env.NAPI_RS_FORCE_WASI) {
@@ -562,8 +562,8 @@ if (!nativeBinding) {
   if (loadErrors.length > 0) {
     throw new Error(
       `Cannot find native binding. ` +
-        `npm has a bug related to optional dependencies (https://github.com/npm/cli/issues/4828). ` +
-        'Please try `npm i` again after removing both package-lock.json and node_modules directory.',
+      `npm has a bug related to optional dependencies (https://github.com/npm/cli/issues/4828). ` +
+      'Please try `npm i` again after removing both package-lock.json and node_modules directory.',
       {
         cause: loadErrors.reduce((err, cur) => {
           cur.cause = err

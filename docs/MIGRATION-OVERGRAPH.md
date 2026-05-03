@@ -191,7 +191,7 @@ This is the biggest single edit. Strategy: replace the file wholesale rather tha
 - [ ] `all_edges`: leave returning `Err(DbError::Unimplemented)` with a comment. Once Phase C lands, no caller should hit this — verify by grep.
 - [ ] **Verify:**
   - [ ] `cd native && cargo build --bin ug` succeeds.
-  - [ ] `cd native && cargo test --no-run -p ultragraph_kb` succeeds (don't run the tests yet — they'll fail on FTS expectations).
+  - [ ] `cd native && cargo test --no-run -p ultragraph` succeeds (don't run the tests yet — they'll fail on FTS expectations).
 - [ ] Update Progress Dashboard row "B".
 - [ ] Append to §10 Run Log: new `db.rs` LOC count.
 
@@ -239,7 +239,7 @@ Native PPR replaces almost all of `native/src/storage/ppr.rs`.
 - [ ] **`query.rs::traverse_filtered`** — replace with `db.engine.traverse(start, max_hops as u32, &TraverseOptions { edge_type_filter: edge_types.map(to_ids), direction, ..Default::default() })`. Map project-side `Direction` to OverGraph's `Direction` (`Outgoing`/`Incoming`/`Both`).
 - [ ] Update `native/tests/storage_test.rs` to match new wire format. Don't loosen test expectations to make them pass — if a behavioral assertion now fails (e.g. specific PPR scores), check whether the cause is the API mismatch in Phase C; if so, document in the test and §6.
 - [ ] **Verify:**
-  - [ ] `cd native && cargo test -p ultragraph_kb storage_test` passes.
+  - [ ] `cd native && cargo test -p ultragraph storage_test` passes.
 - [ ] Update Progress Dashboard row "D".
 
 ### Phase E — NAPI surface + main.rs (Day 0.5) — ✅ Done
@@ -426,7 +426,7 @@ If migration fails or regresses:
 1. The work is on `migrate/overgraph` — `git checkout main` reverts everything.
 2. If shipped behind a Cargo feature (recommended per §6 Q4), users opt in/out per build:
    ```toml
-   ultragraph_kb = { version = "...", features = ["storage-lancedb"], default-features = false }
+   ultragraph = { version = "...", features = ["storage-lancedb"], default-features = false }
    ```
 3. The TS NAPI surface is unchanged, so `lib/` and downstream consumers aren't affected by either path.
 
@@ -490,7 +490,7 @@ Format:
 **Phase E NAPI + main.rs**: NAPI signatures unchanged. Removed the `--with-indexes` execution path in `main.rs::run_ingest` (still accepts the flag, prints a deprecation note). Updated the help text. Smoke-tested `Db::open` end-to-end: a fresh `ug ingest -d /tmp/.../db` against a 1-node hand-written graph created the OverGraph directory with `manifest.current`, `manifest.prev`, `wal_0.wal` files before failing at the embedding HTTP step (no server running) — confirming the storage-side path works.
 
 **Phase F Tests + benchmarks**:
-- **Full test suite:** `cargo test -p ultragraph-kb` → 68 tests passed across 7 suites in 0.21s.
+- **Full test suite:** `cargo test -p ultragraph` → 68 tests passed across 7 suites in 0.21s.
 - **Bench (dev profile, ARM64 M-series):**
   - Ingest 1K nodes + 5K edges: **64.8ms** (target: <2s — passes by 30×)
   - Hybrid search p50: **5.53ms**, p95: **5.69ms**, mean: **5.53ms** (target from REQUIREMENT.md: <100ms — passes)
