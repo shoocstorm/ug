@@ -116,6 +116,12 @@ These features require a running local embedding endpoint. Default config:
 | Model | `openai/Qwen3-Embedding-0.6B-4bit-DWQ` |
 | Base URL | `http://localhost:8000/v1` |
 | API Key | `1234` |
+| Embedding dim | auto-probed from the endpoint (default 1024). Override with `--embedding-dim <n>`. |
+
+The dim that a DB was created with is persisted in `<db>/ug-meta.json`. Re-opening
+the DB with a different dim returns an `embedding dim mismatch` error rather than
+silently mixing vectors of different sizes — to switch models, ingest into a fresh
+db path (or `rm -rf <db>` first).
 
 ### Check Embedding Connectivity
 

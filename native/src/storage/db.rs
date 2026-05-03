@@ -12,7 +12,7 @@
 //! Phase D will retarget those callers to the more idiomatic OverGraph
 //! APIs (native hybrid search, `db.traverse`, etc.).
 
-use crate::storage::embed::EMBEDDING_DIM;
+use crate::storage::embed::DEFAULT_EMBEDDING_DIM;
 use crate::storage::types_registry::{
     edge_type_from_id, edge_type_to_id, node_type_from_id, node_type_to_id,
 };
@@ -21,9 +21,41 @@ use overgraph::{
     EdgeRecord, EngineError, FusionMode, HnswConfig, NeighborOptions, NodeInput, NodeRecord,
     PropValue, VectorSearchMode, VectorSearchRequest,
 };
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::RwLock;
+
+/// Filename of the sidecar manifest written next to the OverGraph data
+/// directory. Records the embedding dim the DB was created with so we
+/// can reject mismatched re-opens (which would otherwise silently mix
+/// vectors of different sizes).
+const META_FILE: &str = "ug-meta.json";
+
+#[derive(Debug, Serialize, Deserialize)]
+struct DbMeta {
+    embedding_dim: u32,
+}
+
+fn meta_path(db_path: &Path) -> PathBuf {
+    db_path.join(META_FILE)
+}
+
+fn read_meta(db_path: &Path) -> Result<Option<DbMeta>, DbError> {
+    let p = meta_path(db_path);
+    match std::fs::read_to_string(&p) {
+        Ok(s) => Ok(Some(serde_json::from_str(&s)?)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(DbError::Io(e)),
+    }
+}
+
+fn write_meta(db_path: &Path, meta: &DbMeta) -> Result<(), DbError> {
+    std::fs::create_dir_all(db_path)?;
+    let s = serde_json::to_string_pretty(meta)?;
+    std::fs::write(meta_path(db_path), s)?;
+    Ok(())
+}
 
 #[derive(Debug)]
 pub enum DbError {
@@ -33,6 +65,7 @@ pub enum DbError {
     Unimplemented(&'static str),
     BadVector { id: String, got: usize, want: usize },
     UnknownEndpoint(String),
+    DimMismatch { existing: u32, requested: u32 },
 }
 
 impl std::fmt::Display for DbError {
@@ -46,6 +79,12 @@ impl std::fmt::Display for DbError {
                 write!(f, "vector for {} has dim {}, expected {}", id, got, want)
             }
             DbError::UnknownEndpoint(s) => write!(f, "unknown edge endpoint: {}", s),
+            DbError::DimMismatch { existing, requested } => write!(
+                f,
+                "embedding dim mismatch: db was created with dim {}, but {} was requested. \
+                 Either pass the matching --embedding-dim, or delete the db directory to recreate it.",
+                existing, requested
+            ),
         }
     }
 }
@@ -96,6 +135,10 @@ pub struct EdgeRow {
 
 pub struct Db {
     pub engine: DatabaseEngine,
+    /// Embedding dimension this DB was opened with. Validated against
+    /// the on-disk sidecar (`ug-meta.json`) to prevent mixing vectors
+    /// of different sizes across runs.
+    embedding_dim: u32,
     /// Project's string id (e.g. `"file:src/foo.ts"`) → OverGraph numeric id.
     /// Populated on every upsert; used by edge endpoint resolution and the
     /// traverse output (which must hand back string ids over the NAPI
@@ -107,16 +150,46 @@ pub struct Db {
 }
 
 impl Db {
-    /// Open or create the OverGraph database at `path`. The dense vector
-    /// space is configured for 1024-dim cosine embeddings to match the
-    /// project's Qwen3 model.
+    /// Open an existing OverGraph database at `path`, picking up the
+    /// embedding dimension from its sidecar manifest. If no sidecar
+    /// exists (legacy databases created before the manifest landed),
+    /// falls back to [`DEFAULT_EMBEDDING_DIM`] (1024) for backwards
+    /// compatibility.
+    ///
+    /// Use [`Db::open_or_create`] when ingesting — it writes the sidecar
+    /// and rejects mismatched re-opens, which is what you actually want
+    /// when the dim could differ between runs.
     ///
     /// OverGraph's open is synchronous; the `async` signature is preserved
-    /// for call-site compatibility. The blocking call is microsecond-scale
-    /// at worst (memory-mapping segments) so we don't bother with
-    /// `spawn_blocking` here.
+    /// for call-site compatibility.
     pub async fn open(path: &str) -> Result<Self, DbError> {
-        let path = Path::new(path);
+        let path_buf = Path::new(path).to_path_buf();
+        let dim = read_meta(&path_buf)?
+            .map(|m| m.embedding_dim)
+            .unwrap_or(DEFAULT_EMBEDDING_DIM as u32);
+        Self::open_inner(&path_buf, dim).await
+    }
+
+    /// Open the OverGraph database at `path`, creating it (and its
+    /// sidecar manifest) if it does not yet exist. If the sidecar
+    /// already records a different `embedding_dim`, returns
+    /// [`DbError::DimMismatch`] rather than silently mixing vectors.
+    pub async fn open_or_create(path: &str, embedding_dim: u32) -> Result<Self, DbError> {
+        let path_buf = Path::new(path).to_path_buf();
+        match read_meta(&path_buf)? {
+            Some(meta) if meta.embedding_dim != embedding_dim => {
+                return Err(DbError::DimMismatch {
+                    existing: meta.embedding_dim,
+                    requested: embedding_dim,
+                });
+            }
+            Some(_) => {}
+            None => write_meta(&path_buf, &DbMeta { embedding_dim })?,
+        }
+        Self::open_inner(&path_buf, embedding_dim).await
+    }
+
+    async fn open_inner(path: &Path, embedding_dim: u32) -> Result<Self, DbError> {
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
                 std::fs::create_dir_all(parent)?;
@@ -124,7 +197,7 @@ impl Db {
         }
         let opts = DbOptions {
             dense_vector: Some(DenseVectorConfig {
-                dimension: EMBEDDING_DIM as u32,
+                dimension: embedding_dim,
                 metric: DenseMetric::Cosine,
                 hnsw: HnswConfig::default(),
             }),
@@ -133,9 +206,15 @@ impl Db {
         let engine = DatabaseEngine::open(path, &opts)?;
         Ok(Self {
             engine,
+            embedding_dim,
             key_to_id: RwLock::new(HashMap::new()),
             id_to_key: RwLock::new(HashMap::new()),
         })
+    }
+
+    /// Embedding dimension this DB was opened with.
+    pub fn embedding_dim(&self) -> u32 {
+        self.embedding_dim
     }
 
     /// Return the OverGraph numeric id for a project string id, looking
@@ -199,12 +278,13 @@ impl Db {
             return Ok(());
         }
         let mut inputs: Vec<NodeInput> = Vec::with_capacity(rows.len());
+        let want = self.embedding_dim as usize;
         for r in rows {
-            if r.vector.len() != EMBEDDING_DIM {
+            if r.vector.len() != want {
                 return Err(DbError::BadVector {
                     id: r.id.clone(),
                     got: r.vector.len(),
-                    want: EMBEDDING_DIM,
+                    want,
                 });
             }
             inputs.push(NodeInput {

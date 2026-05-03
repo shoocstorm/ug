@@ -197,7 +197,7 @@ native/
 
 ### Storage & GraphRAG
 - OverGraph persistence (nodes + edges tables)
-- Vector search (1024-dim embeddings)
+- Vector search (embedding dimension is configurable per DB; default 1024, auto-probed at ingest)
 - FTS search (name + description)
 - RRF hybrid search (vector + FTS fusion)
 - MMR reranking (relevance vs. diversity)

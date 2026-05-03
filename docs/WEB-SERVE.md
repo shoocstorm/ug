@@ -126,6 +126,7 @@ OverGraph endpoints. Async, need a `Db` handle and an `Embedder`.
 | `--base-url <url>` | `http://localhost:8000/v1` | Embedding endpoint (same flag as other commands) |
 | `--api-key <key>` | env / default | Embedding API key |
 | `--model <name>` | default | Embedding model |
+| `--embedding-dim <n>` | from `<db>/ug-meta.json` (or 1024 if absent) | Override the embedding dimension. Must match the DB's recorded dim. |
 | `--repo-root <path>` | cwd | Repo root for snippet path resolution in hybrid_search |
 
 **Request / response shape**

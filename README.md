@@ -59,13 +59,13 @@ UltraGraph-KB implements all four phases of the UltraGraph knowledge base system
          │            │  │ Phase 3: RAG     │
          │  VISUALIZE │  │ Storage          │
          │            │  │ ──────────────── │
-         │  D3.js     │  │ • OverGraph tables │
+         │  D3.js     │  │ • OverGraph table│
          │ Interactive│  │ • Embeddings     │
-         │  Force-    │  │   (1024-dim)     │
+         │  Force-    │  │   (configurable) │
          │  directed  │  │ • Nodes + Edges  │
          │  graph     │  │   ingestion      │
-         │            │  └────────-┬────────┘
-         └────────────┘            │
+         └────────────┘  └─────────┬────────┘
+                                   │
                                    │ stored vectors
                                    ▼
                           ┌──────────────────┐
@@ -169,12 +169,11 @@ The native module exports the following functions (see `native/index.js:579-591`
 
 - Rust (latest stable)
 - Node.js 20+
-- `protoc` (`brew install protobuf` on macOS)
 
 ### Build from Source
 
 ```bash
-npm run prebuild
+npm run build
 ```
 
 This produces `native/ultragraph-kb.node` — the native Node.js module.
@@ -184,21 +183,26 @@ This produces `native/ultragraph-kb.node` — the native Node.js module.
 See [docs/QUICKSTART.md](docs/QUICKSTART.md) for a step-by-step walkthrough.
 
 ```bash
-# 1. Index a folder
-npm run index -- ./src -o ug-out/indexed-tree.json
+# 1. Index a folder (generate indexed-tree.json)
+npm run index -- -i ./ -o ug-out/indexed-tree.json
 
-# 2. Build the graph
-npm run graph -- ug-out/indexed-tree.json -o ug-out/graph.json
+# 2. Build the graph (generate graph.json)
+npm run graph -- -i ug-out/indexed-tree.json -o ug-out/graph.json
 
-# 3. Visualize (or use all-in-one: npm run gen -- ./src -o ug-out/)
+# 3. Visualize (see how the graph looks like visually)
 npm start
 # Open http://localhost:8080
 
-# 4. Semantic search (requires embedding endpoint)
-npm run ingest -- ug-out/graph.json ug-out/ugdb
-npm run rag -- ug-out/ugdb "how does auth work" -k 8
+# 4. Ingest graph data into OverGraph to enable semantic search (requires embedding endpoint)
+npm run ingest -- -i ug-out/graph.json -o ug-out/ugdb --model "Qwen3-Embedding-0.6B-4bit-DWQ" --base-url "http://127.0.0.1:8000/v1" --api-key "1234"
 
-# 5. Manually check lance db data (via duckdb)
+# or with other model with different embedding dimension other than 1024
+npm run ingest -- -i ug-out/graph.json -o ug-out/ugdb --model "text-embedding-nomic-embed-text-v1.5" --base-url "http://127.0.0.1:1234/v1" --api-key "1234" --embedding-dim 768
+
+# 5. Semantic search
+npm run rag -- -i ug-out/ugdb "how does auth work" -k 8 --model "text-embedding-nomic-embed-text-v1.5" --base-url "http://127.0.0.1:1234/v1" --api-key "1234" --embedding-dim 768
+
+# 6. Manually check lance db data (via duckdb)
 duckdb
 INSTALL lance
 load lance;
@@ -230,35 +234,11 @@ Use `npm run <command> -- [args]` for all commands, or directly via `node node/c
 | `graph` | `-i` (--input), `-o` (--output) | Build graph from index result |
 | `gen` | `-i` (--input), `-c` (--cache), `-o` (--output), `-d` (--db) | Full pipeline: index → graph → visualization → OverGraph ingest |
 | `graph-search` | `-t` (--type), `-o` (--output) | Keyword search over in-memory graph nodes |
-| `db-ingest` | `-b` (--base-url), `-a` (--api-key), `-m` (--model) | Embed graph nodes and write to OverGraph |
+| `db-ingest` | `-b` (--base-url), `-a` (--api-key), `-m` (--model), `--embedding-dim` | Embed graph nodes and write to OverGraph. Dim is auto-probed from the endpoint when `--embedding-dim` is omitted; the chosen dim is persisted in `<db>/ug-meta.json`. |
 | `db-traverse` | `-k` (--hops), `-e` (--edge-type) | K-hop BFS traversal over OverGraph edges |
-| `db-rag` | `-k` (--limit), `-b` (--base-url), `-a` (--api-key), `-m` (--model) | End-to-end GraphRAG hybrid retrieval |
-| `ping` | `-b` (--base-url), `-a` (--api-key), `-m` (--model) | Probe embedding endpoint |
+| `db-rag` | `-k` (--limit), `-b` (--base-url), `-a` (--api-key), `-m` (--model), `--embedding-dim` | End-to-end GraphRAG hybrid retrieval |
+| `ping` | `-b` (--base-url), `-a` (--api-key), `-m` (--model), `--embedding-dim` | Probe embedding endpoint |
 | `help` | `-h` (--help) | Show help for commands |
-
-### Examples
-```bash
-# Index a folder
-node node/cli.cjs index -i ./src -c ./cache -o ug-out/indexed-tree.json
-
-# Build graph from index result
-node node/cli.cjs graph -i ./src -o ug-out/graph.json
-
-# keyword based graph search with type filter
-node node/cli.cjs graph-search ug-out/graph.json "auth" -t Function -t Class
-
-# DB ingest with custom embedder
-node node/cli.cjs db-ingest graph.json ./ugdb -b http://localhost:11434/v1 -m llama3
-
-# Traverse with edge-type filter
-node node/cli.cjs db-traverse ./ugdb "node-123" -k 3 -e Calls -e Imports
-
-# RAG search
-node node/cli.cjs db-rag ./ugdb "how does auth work" -k 8
-
-# Get help for a command
-node node/cli.cjs gen -h
-```
 
 ## MCP Server
 
@@ -273,33 +253,6 @@ Exposes three tools: `search_kb`, `traverse_kb`, `ping_embedder`.
 
 ```bash
 npm test                      # JS tests (21/21)
-npm run prebuild && cd native && cargo test  # Rust tests (67 pass)
+npm run build && cd native && cargo test  # Rust tests (67 pass)
 ```
 
-## Project Structure
-
-```
-ug/
-├── native/
-│   ├── node/
-│   │   ├── lib.rs            # NAPI-RS entry point
-│   │   ├── main.rs           # Rust CLI binary (ug)
-│   │   ├── indexer.rs        # File scanning + AST parsing
-│   │   ├── graph.rs          # Graph building + BFS + analysis
-│   │   ├── types.rs          # Shared data structures
-│   │   └── storage/          # OverGraph + embedding + GraphRAG
-│   │       ├── db.rs         # OverGraph schemas + queries
-│   │       ├── embed.rs      # Embedding HTTP client
-│   │       ├── ingest.rs     # Embed + upsert pipeline
-│   │       ├── query.rs      # search, traverse, RRF, MMR
-│   │       ├── napi_bindings.rs  # NAPI async fns
-│   │       └── text.rs       # Embedding text shaping
-└── ug-out/ultragraph-kb.node    # Built native module
-├── node/
-│   ├── cli.cjs               # JavaScript CLI
-│   ├── vis/                  # D3.js visualization
-│   └── mcp-server.mjs        # MCP stdio server
-│   └── test/
-│       └── test-runner.cjs   # Test suite (21 tests)
-└── docs/                     # Design docs + quick start
-```

@@ -1,6 +1,7 @@
 native/target
 ug-out
 ug-out-old
+ug-out-h
 native/ultragraph-kb.darwin-arm64.node
 native/out
 src/.cache

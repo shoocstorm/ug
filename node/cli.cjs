@@ -38,11 +38,19 @@ function parseEmbedderOptions(args) {
   const baseUrl = extractFlag(args, '--base-url') || extractFlag(args, '-b');
   const apiKey = extractFlag(args, '--api-key') || extractFlag(args, '-a');
   const model = extractFlag(args, '--model') || extractFlag(args, '-m');
-  if (!baseUrl && !apiKey && !model) return null;
+  const dimRaw = extractFlag(args, '--embedding-dim');
+  if (!baseUrl && !apiKey && !model && !dimRaw) return null;
   const opts = {};
   if (baseUrl) opts.baseUrl = baseUrl;
   if (apiKey) opts.apiKey = apiKey;
   if (model) opts.model = model;
+  if (dimRaw) {
+    const dim = Number.parseInt(dimRaw, 10);
+    if (!Number.isFinite(dim) || dim <= 0) {
+      throw new Error(`--embedding-dim must be a positive integer, got: ${dimRaw}`);
+    }
+    opts.embeddingDim = dim;
+  }
   return opts;
 }
 
@@ -203,15 +211,15 @@ const commands = {
     }
   },
   'db-ingest': {
-    usage: '<graph-json-file> <db-path> [-b|--base-url <url>] [-a|--api-key <key>] [-m|--model <name>]',
+    usage: '[-i|--input <graph-json-file>] [-o|--output <db-path>] [-b|--base-url <url>] [-a|--api-key <key>] [-m|--model <name>] [--embedding-dim <n>]',
     desc: 'OverGraph: Embed graph nodes and write to OverGraph. Requires a running embedding endpoint.',
     run: async (args) => {
-      if (args.length < 2) {
+      const graphFile = extractFlag(args, '-i') || extractFlag(args, '--input') || extractFlag(args, '-o');
+      const dbPath = extractFlag(args, '-o') || extractFlag(args, '--output');
+      if (!graphFile || !dbPath) {
         throw new Error(`Usage: db-ingest ${commands['db-ingest'].usage}\n  ${commands['db-ingest'].desc}`);
       }
-      const graphFile = args[0];
-      const dbPath = args[1];
-      const embedderOptions = parseEmbedderOptions(args.slice(2));
+      const embedderOptions = parseEmbedderOptions(args);
       const graphJson = readFileSync(graphFile, 'utf-8');
       const result = await ug.dbIngest(graphJson, dbPath, embedderOptions ? JSON.stringify(embedderOptions) : null);
       return JSON.parse(result);
@@ -234,15 +242,16 @@ const commands = {
     }
   },
   'db-rag': {
-    usage: '<db-path> <query> [-k <limit>] [--strategy <ppr|mmr>] [--restart-prob <0..1>] [--seed-pool <n>] [--direction <outbound|inbound|both>] [--edge-type <type>]... [-b|--base-url <url>] [-a|--api-key <key>] [-m|--model <name>]',
+    usage: '[-i|--input <db-path>] <query> [-k <limit>] [--strategy <ppr|mmr>] [--restart-prob <0..1>] [--seed-pool <n>] [--direction <outbound|inbound|both>] [--edge-type <type>]... [-b|--base-url <url>] [-a|--api-key <key>] [-m|--model <name>] [--embedding-dim <n>]',
     desc: 'OverGraph: End-to-end GraphRAG retrieval. Default ranking: Personalized PageRank seeded by RRF (vector + FTS). Pass --strategy mmr for legacy seed+BFS+MMR.',
     run: async (args) => {
-      if (args.length < 2) {
+      const dbPath = extractFlag(args, '-i') || extractFlag(args, '--input');
+      const restIdx = dbPath ? args.indexOf(dbPath) + 1 : 0;
+      const query = args[restIdx];
+      if (!dbPath || !query) {
         throw new Error(`Usage: db-rag ${commands['db-rag'].usage}\n  ${commands['db-rag'].desc}`);
       }
-      const dbPath = args[0];
-      const query = args[1];
-      const rest = args.slice(2);
+      const rest = args.slice(restIdx + 1);
       const k = extractArg(rest, '-k', '--limit', 10);
       const strategy = extractFlag(rest, '--strategy');
       const restartProbRaw = extractFlag(rest, '--restart-prob');
@@ -261,8 +270,8 @@ const commands = {
     }
   },
   ping: {
-    usage: '[-b|--base-url <url>] [-a|--api-key <key>] [-m|--model <name>]',
-    desc: 'Probe the embedding endpoint to verify connectivity.',
+    usage: '[-b|--base-url <url>] [-a|--api-key <key>] [-m|--model <name>] [--embedding-dim <n>]',
+    desc: 'Probe the embedding endpoint to verify connectivity. Pass --embedding-dim to assert a specific dim; otherwise the probe just confirms the endpoint responds.',
     run: async (args) => {
       const embedderOptions = parseEmbedderOptions(args);
       const result = await ug.pingEmbedder(embedderOptions ? JSON.stringify(embedderOptions) : null);

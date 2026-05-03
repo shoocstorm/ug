@@ -31,7 +31,7 @@ OverGraph keys nodes by `(type_id: u32, key: String)` and edges by `(from_id, to
 | `name`, `description`, `file`, `node_text` | `props["name" \| "description" \| "file" \| "node_text"]` (all `PropValue::String`) |
 | `start_line`, `end_line` | `props["start_line" \| "end_line"]` (`PropValue::UInt`) |
 | `last_update_at: i64` | `props["last_update_at"]` (`PropValue::Int`) — also reflected in `NodeRecord.updated_at` (auto) |
-| `vector: Vec<f32>` (1024-dim) | `dense_vector: Option<DenseVector>` |
+| `vector: Vec<f32>` (dim per `<db>/ug-meta.json`, default 1024) | `dense_vector: Option<DenseVector>` |
 | _(new)_ sparse keyword vector | `sparse_vector: Option<SparseVector>` — built at query time, see "Sparse keyword vectors" below |
 
 ### Edges (OverGraph `EdgeRecord`)
@@ -53,7 +53,7 @@ OverGraph keys nodes by `(type_id: u32, key: String)` and edges by `(from_id, to
 2. For each node, build `node_text = "{type}: {name}. {description}. Related: {list_of_related_names}"`.
    - For Folder nodes the `{name}` slot uses the full path (from `folder:<path>`), not the basename.
    - `{description}` priority: `folder.summary` → `docstring` → synthesized folder synopsis → empty.
-3. Batch-encode: `texts → Vec<Vec<f32>>` (1024-dim).
+3. Batch-encode: `texts → Vec<Vec<f32>>` (dim configured on the embedder; auto-probed at ingest if not specified).
 4. Store vectors via `Db::upsert_nodes` → OverGraph `batch_upsert_nodes`.
 5. Incremental: `reembed_nodes` re-runs steps 2–4 for a subset of ids.
 
@@ -73,7 +73,7 @@ The same hash + tokenizer run at ingest (per node `node_text`) and at query time
 ```rust
 let opts = DbOptions {
     dense_vector: Some(DenseVectorConfig {
-        dimension: 1024,
+        dimension: embedding_dim, // from EmbedderConfig::dim or the DB's ug-meta.json
         metric: DenseMetric::Cosine,
         hnsw: HnswConfig::default(),  // m=16, ef_construction=200
     }),
@@ -82,8 +82,12 @@ let opts = DbOptions {
 let engine = DatabaseEngine::open(path, &opts)?;
 ```
 
-- Single dense vector space per DB (1024-dim, locked at open).
-- HNSW indexes are built **per segment at flush time** automatically. 
+- Single dense vector space per DB. The dim is configurable per ingest and persisted
+  to `<db>/ug-meta.json` on first creation; subsequent opens validate against it. Use
+  `Db::open_or_create(path, dim)` for the create/ingest path and `Db::open(path)` for
+  read-only call sites (it picks up the dim from the sidecar, falling back to 1024 for
+  legacy DBs without one).
+- HNSW indexes are built **per segment at flush time** automatically.
 - WAL mode: `WalSyncMode::GroupCommit` (default — 50ms fsync timer, ~20× write throughput vs. immediate).
 
 ## Query Functions (Rust async)
@@ -101,7 +105,7 @@ let engine = DatabaseEngine::open(path, &opts)?;
 - [x] Add dependency: `overgraph = "0.6"`
 - [x] Define `NodeRow` / `EdgeRow` DTOs (preserved from LanceDB era for wire-format stability)
 - [x] Implement `types_registry` (string ↔ u32 mapping with stable IDs)
-- [x] Implement `Db::open` with `DenseVectorConfig` (1024-dim cosine)
+- [x] Implement `Db::open` / `Db::open_or_create` with `DenseVectorConfig` (configurable dim, default 1024 cosine; persisted to `ug-meta.json`)
 - [x] Implement `key_to_id` / `id_to_key` caches (project string id ↔ OverGraph u64)
 - [x] Implement `build_node_text` (unchanged) + `build_sparse_keyword_vector` (new)
 - [x] Implement `upsert_nodes` / `upsert_edges` (with edge-weight baking)
@@ -115,7 +119,7 @@ let engine = DatabaseEngine::open(path, &opts)?;
 - [x] Verify `hybrid_search` combines dense + sparse via OverGraph's RRF.
 - [x] Verify two-hop traversal returns reachable nodes with correct distances.
 - [x] Verify `run_ppr` ranks the seed neighborhood above unconnected nodes.
-- [x] Confirm vector dimension = 1024 (`EMBEDDING_DIM`).
+- [x] Confirm vector dimension matches the embedder (probed at ingest, persisted in `ug-meta.json`, default 1024 = `DEFAULT_EMBEDDING_DIM`).
 
 ## Performance (dev profile, ARM64 M-series, see `MIGRATION-OVERGRAPH §10`)
 

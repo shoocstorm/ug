@@ -150,10 +150,12 @@ fn write_or_print(output_path: Option<&str>, data: &str, label: &str) {
 // ---------- Embedder / runtime helpers ----------
 
 pub(crate) fn embedder_from_args(args: &[String]) -> Embedder {
+    let dim = flag_value(args, &["--embedding-dim"]).and_then(|s| s.parse().ok());
     let cfg = EmbedderConfig::with_overrides(
         flag_value(args, &["--base-url"]),
         flag_value(args, &["--api-key"]),
         flag_value(args, &["--model"]),
+        dim,
         None,
         None,
     );
@@ -338,6 +340,7 @@ fn run_gen(args: &[String]) {
                     "--base-url",
                     "--api-key",
                     "--model",
+                    "--embedding-dim",
                 ],
             )
         })
@@ -487,6 +490,7 @@ fn chain_to_serve(args: &[String], graph_path: &str, db_path: &str, no_db: bool)
         "--base-url",
         "--api-key",
         "--model",
+        "--embedding-dim",
     ] {
         if let Some(v) = flag_value(args, &[flag]) {
             serve_args.push(flag.to_string());
@@ -655,9 +659,10 @@ fn run_gen_ingest(
     let graph: GraphData =
         serde_json::from_str(graph_json).map_err(|e| format!("parse graph: {}", e))?;
     let embedder = embedder_from_args(args);
+    let dim = embedder.config().dim as u32;
     let rt = tokio_runtime();
     rt.block_on(async {
-        let db = Db::open(db_path)
+        let db = Db::open_or_create(db_path, dim)
             .await
             .map_err(|e| format!("open db: {}", e))?;
         ingest_graph_with_progress(&db, &embedder, &graph).await
@@ -671,12 +676,15 @@ fn run_ingest(args: &[String]) {
     let graph_json = fs::read_to_string(&graph_file).expect("Failed to read graph file");
     let graph: GraphData = serde_json::from_str(&graph_json).expect("Failed to parse graph JSON");
     let embedder = embedder_from_args(args);
+    let dim = embedder.config().dim as u32;
     let rt = tokio_runtime();
 
     let start_total = std::time::Instant::now();
 
     rt.block_on(async {
-        let db = Db::open(&db_path).await.expect("failed to open overgraph");
+        let db = Db::open_or_create(&db_path, dim)
+            .await
+            .expect("failed to open overgraph");
         match ingest_graph_with_progress(&db, &embedder, &graph).await {
             Ok((nodes_written, edges_written)) => {
                 println!("────────────────────────────────────────");
@@ -700,7 +708,8 @@ fn run_semantic_search(args: &[String]) {
     if args.is_empty() {
         eprintln!(
             "Usage: ug semantic_search <query> [-d|--db <path>] [-k|--limit <n>] \\
-                 [--filter <sql>] [--base-url <url>] [--api-key <key>] [--model <name>] [-o|--output <file>]"
+                 [--filter <sql>] [--base-url <url>] [--api-key <key>] [--model <name>] \\
+                 [--embedding-dim <n>] [-o|--output <file>]"
         );
         std::process::exit(1);
     }
@@ -716,6 +725,7 @@ fn run_semantic_search(args: &[String]) {
             "--base-url",
             "--api-key",
             "--model",
+            "--embedding-dim",
             "-o",
             "--output",
         ],
@@ -770,7 +780,8 @@ fn run_hybrid_search(args: &[String]) {
                  [--filter <sql>] [--strategy <ppr|mmr>] [--direction <out|in|both>] \\
                  [-t|--edge-type <type>]... [--max-chars <n>] [--mmr-lambda <f>] \\
                  [--no-snippets] [--repo-root <path>] \\
-                 [--base-url <url>] [--api-key <key>] [--model <name>] [-o|--output <file>]"
+                 [--base-url <url>] [--api-key <key>] [--model <name>] [--embedding-dim <n>] \\
+                 [-o|--output <file>]"
         );
         std::process::exit(1);
     }
@@ -792,6 +803,7 @@ fn run_hybrid_search(args: &[String]) {
         "--base-url",
         "--api-key",
         "--model",
+        "--embedding-dim",
         "-o",
         "--output",
     ];
@@ -923,6 +935,9 @@ fn print_gen_help() {
     println!("  --base-url <url>     Embedding endpoint (default: http://localhost:8000/v1)");
     println!("  --api-key <key>      Embedding API key");
     println!("  --model <name>       Embedding model");
+    println!(
+        "  --embedding-dim <n>  Embedding dimension override (default: auto-probed from endpoint, fallback 1024)"
+    );
 }
 
 fn print_logo() {
@@ -996,7 +1011,7 @@ fn print_help() {
     println!("    -o, --output <dir>  Output/OverGraph directory (default: ug-out)");
     println!("    --no-ingest         Skip the OverGraph ingest step");
     println!("    --serve             Chain into ' ug serve ' on the generated outputs after gen finishes");
-    println!("    --base-url/--api-key/--model  Embedding endpoint overrides");
+    println!("    --base-url/--api-key/--model/--embedding-dim  Embedding endpoint overrides");
     println!();
     println!("  ingest               Embed graph nodes and write to OverGraph");
     println!("    -i, --input <file>  Graph JSON (default: ug-out/graph.json)");
@@ -1006,12 +1021,15 @@ fn print_help() {
     println!(
         "    --model <name>     Embedding model (default: openai/Qwen3-Embedding-0.6B-4bit-DWQ)"
     );
+    println!(
+        "    --embedding-dim <n>  Vector dim. Auto-probed from the endpoint when omitted; persisted to <db>/ug-meta.json on first ingest."
+    );
     println!();
     println!("  semantic_search <query>      Semantic vector search (OverGraph, no graph context)");
     println!("    -d, --db <path>    OverGraph directory (default: ug-out/ugdb)");
     println!("    -k, --limit <n>    Top-k results (default: 10)");
     println!("    --filter <sql>     Optional SQL WHERE clause");
-    println!("    --base-url/--api-key/--model  Embedding endpoint overrides");
+    println!("    --base-url/--api-key/--model/--embedding-dim  Embedding endpoint overrides");
     println!("    -o, --output <file> Output file (optional, omit for stdout)");
     println!();
     println!(
@@ -1028,7 +1046,7 @@ fn print_help() {
     println!("    --mmr-lambda <f>    MMR diversity/relevance balance 0..1 (default: 0.6)");
     println!("    --no-snippets       Skip reading source snippets from disk");
     println!("    --repo-root <path>  Repo root for snippet resolution (default: cwd)");
-    println!("    --base-url/--api-key/--model  Embedding endpoint overrides");
+    println!("    --base-url/--api-key/--model/--embedding-dim  Embedding endpoint overrides");
     println!("    -o, --output <file> Output file (optional, omit for stdout)");
     println!();
     println!("  traverse <node-id>   K-hop BFS using the OverGraph edges table");
@@ -1047,7 +1065,7 @@ fn print_help() {
         "    --repo-root <path>  Repo root for hybrid-search snippet resolution (default: cwd)"
     );
     println!(
-        "    --base-url/--api-key/--model  Embedding endpoint overrides (same as ingest/search)"
+        "    --base-url/--api-key/--model/--embedding-dim  Embedding endpoint overrides (same as ingest/search)"
     );
     println!("    API: GET  /api/graph/{{stats, node/<id>, search?q=&types=, bfs/<id>?k=,");
     println!(

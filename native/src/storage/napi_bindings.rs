@@ -32,6 +32,7 @@ pub struct EmbedderOptions {
     pub base_url: Option<String>,
     pub api_key: Option<String>,
     pub model: Option<String>,
+    pub embedding_dim: Option<u32>,
     pub batch_size: Option<u32>,
     pub timeout_secs: Option<u32>,
 }
@@ -122,6 +123,7 @@ fn build_embedder(opts: Option<&EmbedderOptions>) -> Result<Embedder, String> {
             o.base_url.clone(),
             o.api_key.clone(),
             o.model.clone(),
+            o.embedding_dim.map(|v| v as usize),
             o.batch_size.map(|v| v as usize),
             o.timeout_secs.map(|v| v as u64),
         ),
@@ -158,6 +160,12 @@ async fn open_db(path: &str) -> napi::Result<Db> {
 
 /// Ingest a JSON graph (the output of `buildGraph`) into a OverGraph
 /// instance at `db_path`. Returns ingest stats as JSON.
+///
+/// If the caller did not supply `embedderOptions.embeddingDim`, this
+/// probes the embedding endpoint once and uses the discovered dim so
+/// users can swap models without recompiling or knowing the dim ahead
+/// of time. The discovered dim is then validated against (or persisted
+/// to) the DB sidecar manifest by `Db::open_or_create`.
 #[napi]
 pub async fn db_ingest(
     graph_json: String,
@@ -166,8 +174,27 @@ pub async fn db_ingest(
 ) -> napi::Result<String> {
     let graph: GraphData = serde_json::from_str(&graph_json)
         .map_err(|e| napi::Error::from_reason(format!("invalid graph JSON: {}", e)))?;
-    let embedder = embedder_from_json(embedder_options)?;
-    let db = open_db(&db_path).await?;
+    let opts = parse_embedder_options(embedder_options)
+        .map_err(|e| napi::Error::from_reason(format!("invalid embedder options: {}", e)))?;
+    let dim_was_explicit = opts
+        .as_ref()
+        .and_then(|o| o.embedding_dim)
+        .is_some();
+    let mut embedder = build_embedder(opts.as_ref())
+        .map_err(|e| napi::Error::from_reason(format!("embedder init failed: {}", e)))?;
+    if !dim_was_explicit {
+        let probed = embedder
+            .probe_dim()
+            .await
+            .map_err(|e| napi::Error::from_reason(format!("embedder dim probe failed: {}", e)))?;
+        if probed != embedder.config().dim {
+            embedder.set_dim(probed);
+        }
+    }
+    let dim = embedder.config().dim as u32;
+    let db = Db::open_or_create(&db_path, dim)
+        .await
+        .map_err(|e| napi::Error::from_reason(format!("failed to open db: {}", e)))?;
 
     let stats = ingest_graph(&db, &embedder, &graph)
         .await

@@ -1,9 +1,10 @@
 //! HTTP client for an OpenAI-compatible `/v1/embeddings` endpoint.
 //!
-//! Configured by default for the local Qwen3-Embedding model described in
-//! docs/GRAPH-STORAGE.md. The model returns 1024-dimensional vectors. We
-//! batch requests (default 32 inputs per call) to stay within the server's
-//! per-request limits without paying a round-trip per node.
+//! The default config targets the local Qwen3-Embedding model described
+//! in docs/GRAPH-STORAGE.md (1024-dim cosine), but the dimension is a
+//! runtime field on `EmbedderConfig` so other models (nomic 768-dim,
+//! OpenAI 1536/3072, etc.) work without recompiling. We batch requests
+//! (default 32 inputs per call) to stay within per-request limits.
 
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -11,7 +12,10 @@ use std::time::Duration;
 pub const DEFAULT_MODEL: &str = "openai/Qwen3-Embedding-0.6B-4bit-DWQ";
 pub const DEFAULT_BASE_URL: &str = "http://localhost:8000/v1";
 pub const DEFAULT_API_KEY: &str = "1234";
-pub const EMBEDDING_DIM: usize = 1024;
+pub const DEFAULT_EMBEDDING_DIM: usize = 1024;
+/// Legacy alias preserved for existing tests/benches that use this as the
+/// fixture size. New code should use `EmbedderConfig::dim` instead.
+pub const EMBEDDING_DIM: usize = DEFAULT_EMBEDDING_DIM;
 pub const DEFAULT_BATCH_SIZE: usize = 32;
 
 #[derive(Clone, Debug)]
@@ -19,6 +23,7 @@ pub struct EmbedderConfig {
     pub base_url: String,
     pub api_key: String,
     pub model: String,
+    pub dim: usize,
     pub batch_size: usize,
     pub timeout_secs: u64,
 }
@@ -29,6 +34,7 @@ impl Default for EmbedderConfig {
             base_url: DEFAULT_BASE_URL.to_string(),
             api_key: DEFAULT_API_KEY.to_string(),
             model: DEFAULT_MODEL.to_string(),
+            dim: DEFAULT_EMBEDDING_DIM,
             batch_size: DEFAULT_BATCH_SIZE,
             timeout_secs: 120,
         }
@@ -40,6 +46,7 @@ impl EmbedderConfig {
         base_url: Option<String>,
         api_key: Option<String>,
         model: Option<String>,
+        dim: Option<usize>,
         batch_size: Option<usize>,
         timeout_secs: Option<u64>,
     ) -> Self {
@@ -52,6 +59,9 @@ impl EmbedderConfig {
         }
         if let Some(m) = model {
             cfg.model = m;
+        }
+        if let Some(d) = dim {
+            cfg.dim = d;
         }
         if let Some(bs) = batch_size {
             cfg.batch_size = bs;
@@ -121,16 +131,50 @@ impl Embedder {
         &self.cfg
     }
 
+    /// Override the configured embedding dimension. Used by the napi
+    /// `db_ingest` path when the dim was not specified by the caller —
+    /// we probe the endpoint and patch the embedder so its per-batch
+    /// validator agrees with the model's actual output size.
+    pub fn set_dim(&mut self, dim: usize) {
+        self.cfg.dim = dim;
+    }
+
     pub async fn ping(&self) -> Result<(), EmbedError> {
+        self.probe_dim().await.map(|_| ())
+    }
+
+    /// Probe the endpoint with a single input and return the discovered
+    /// embedding dimension. Useful for callers that want to detect the
+    /// model's dim instead of pre-configuring it.
+    pub async fn probe_dim(&self) -> Result<usize, EmbedError> {
         let probe = vec!["ping".to_string()];
-        let v = self.embed(&probe).await?;
-        if v.is_empty() || v[0].len() != EMBEDDING_DIM {
-            return Err(EmbedError::DimensionMismatch {
-                expected: EMBEDDING_DIM,
-                got: v.first().map(|x| x.len()).unwrap_or(0),
-            });
+        // Bypass the configured-dim validator inside `embed` so callers
+        // can use `probe_dim` to discover an unknown dim. We re-issue a
+        // minimal request here.
+        let url = format!("{}/embeddings", self.cfg.base_url.trim_end_matches('/'));
+        let req = EmbeddingRequest {
+            model: &self.cfg.model,
+            input: &probe,
+        };
+        let resp = self
+            .client
+            .post(&url)
+            .bearer_auth(&self.cfg.api_key)
+            .json(&req)
+            .send()
+            .await
+            .map_err(EmbedError::Http)?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(EmbedError::BadStatus(status.as_u16(), body));
         }
-        Ok(())
+        let parsed: EmbeddingResponse = resp.json().await.map_err(EmbedError::Http)?;
+        let item = parsed.data.into_iter().next().ok_or(EmbedError::DimensionMismatch {
+            expected: self.cfg.dim,
+            got: 0,
+        })?;
+        Ok(item.embedding.len())
     }
 
     pub async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, EmbedError> {
@@ -168,9 +212,9 @@ impl Embedder {
             let mut items = parsed.data;
             items.sort_by_key(|i| i.index);
             for item in items {
-                if item.embedding.len() != EMBEDDING_DIM {
+                if item.embedding.len() != self.cfg.dim {
                     return Err(EmbedError::DimensionMismatch {
-                        expected: EMBEDDING_DIM,
+                        expected: self.cfg.dim,
                         got: item.embedding.len(),
                     });
                 }

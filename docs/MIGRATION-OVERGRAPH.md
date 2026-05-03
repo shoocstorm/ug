@@ -91,7 +91,7 @@ This is the contract. Every existing call site maps to one of these. If you find
 
 | Current (LanceDB) | OverGraph equivalent | Notes |
 |---|---|---|
-| `Db::open(path)` | `DatabaseEngine::open(path, &DbOptions { dense_vector: Some(DenseVectorConfig { dimension: 1024, metric: DenseMetric::Cosine, hnsw: HnswConfig::default() }), ..Default::default() })` | Single dense vector space per DB. Dimension is locked at open. |
+| `Db::open(path)` / `Db::open_or_create(path, dim)` | `DatabaseEngine::open(path, &DbOptions { dense_vector: Some(DenseVectorConfig { dimension, metric: DenseMetric::Cosine, hnsw: HnswConfig::default() }), ..Default::default() })` | Single dense vector space per DB. The dim is configurable (default 1024) and persisted in `<db>/ug-meta.json`; `open_or_create` rejects mismatched re-opens, `open` reads the sidecar (falling back to 1024 for legacy DBs). |
 | `db.nodes` (Arrow `Table`) | gone — engine is the table | — |
 | `db.edges` | gone | — |
 | `upsert_nodes(rows)` (`db.rs:160`) | `db.batch_upsert_nodes(&[NodeInput {...}, ...])` | Returns `Vec<u64>` of assigned numeric ids. Cache the (`type_id`, `key`) → `u64` mapping during ingest so edges can resolve their endpoints. |
@@ -123,7 +123,7 @@ This is the contract. Every existing call site maps to one of these. If you find
 | `end_line: u32` | `props["end_line"]` | |
 | `last_update_at: i64` | `NodeRecord.updated_at` is auto-assigned; if explicit timestamps are needed, also store as `props["last_update_at"]` | |
 | `node_text: String` | `props["node_text"]` (kept for re-embedding) | |
-| `vector: Vec<f32>` | `UpsertNodeOptions.dense_vector` | Always 1024-dim per `DbOptions.dense_vector.dimension`. |
+| `vector: Vec<f32>` | `UpsertNodeOptions.dense_vector` | Length must match the DB's `DbOptions.dense_vector.dimension` (default 1024; configurable via `EmbedderConfig::dim` / `--embedding-dim` and persisted in `ug-meta.json`). |
 
 ### 2.2 The type registry — required, not optional — ✅ Done
 
@@ -184,7 +184,7 @@ Use the canonical strings from `native/src/types.rs` and the edge types in `docs
 This is the biggest single edit. Strategy: replace the file wholesale rather than incrementally.
 
 - [ ] Define `pub struct Db { engine: DatabaseEngine, key_to_id: RwLock<HashMap<(u32, String), u64>> }`. The cache is populated during ingest and read by edge resolution / traversal.
-- [ ] `pub async fn Db::open(path: &str) -> Result<Db, DbError>` wraps `DatabaseEngine::open` with the 1024-dim dense vector config. **`DatabaseEngine::open` is synchronous** — wrap with `tokio::task::spawn_blocking` when called from async (`napi_bindings.rs`).
+- [ ] `pub async fn Db::open(path: &str) -> Result<Db, DbError>` wraps `DatabaseEngine::open`. The dense vector dim is read from `<db>/ug-meta.json` (default 1024 for legacy DBs without one). For the create path use `Db::open_or_create(path, dim)`, which writes the sidecar on first creation and rejects mismatched re-opens with `DbError::DimMismatch`. **`DatabaseEngine::open` is synchronous** — wrap with `tokio::task::spawn_blocking` when called from async (`napi_bindings.rs`).
 - [ ] Keep `NodeRow` and `EdgeRow` as **DTOs** (the JSON wire format the rest of the code uses). Add `NodeRow::from_record(record: &NodeRecord) -> NodeRow` and `NodeRow::to_node_input(&self, registry) -> NodeInput`. Same for edges.
 - [ ] Re-implement public functions used elsewhere with **identical names and signatures**: `upsert_nodes`, `upsert_edges`, `vector_search`, `fts_search`, `edges_from`, `edges_to`, `nodes_by_ids`, `all_edges`. Goal is a drop-in replacement so `query.rs`, `ingest.rs`, and the tests don't change in this phase.
 - [ ] `fts_search`: leave returning empty `Vec<NodeRow>` with a `// TODO(overgraph-fts)` comment so callers degrade to dense-only seeds. Fixed in Phase D per §3.3.
