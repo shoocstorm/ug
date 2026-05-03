@@ -5,7 +5,7 @@
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
   "scripts": {
-    "build": "echo 'Building native binary for nodejs' && cd native && npm run build:dev && cp node/cli.cjs ugout/ && cp node/mcp-server.mjs ugout/",
+    "build": "echo 'Building native binary for nodejs' && cd native && npm run build:dev && cp ../node/cli.cjs ../ugout/ && cp ../node/mcp-server.mjs ../ugout/",
     "gen": "node node/cli.cjs gen",
     "index": "echo 'Indexing files' && node node/cli.cjs index",
     "graph": "echo 'Building Graph data' && node node/cli.cjs graph",

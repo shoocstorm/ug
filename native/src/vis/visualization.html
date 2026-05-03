@@ -726,31 +726,6 @@
             background: rgba(34, 211, 238, 0.2);
         }
 
-        #path-result {
-            padding: 8px 10px;
-            background: var(--bg-elevated);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            font-size: 11px;
-            font-family: 'JetBrains Mono', monospace;
-            color: var(--text);
-            display: none;
-            word-break: break-all;
-            line-height: 1.5;
-        }
-
-        #path-result.visible {
-            display: block;
-        }
-
-        #path-result.found {
-            border-color: var(--success);
-        }
-
-        #path-result.not-found {
-            border-color: var(--danger);
-        }
-
         .centrality-list {
             display: flex;
             flex-direction: column;
@@ -1252,6 +1227,88 @@
 
         /* ─── Semantic / Hybrid search panel ────────────────── */
 
+        #info .path-hint {
+            display: none;
+            margin: 12px 14px 0;
+            padding: 10px 12px;
+            background: rgba(34, 211, 238, 0.08);
+            border: 1px solid var(--accent);
+            border-radius: 8px;
+            font-size: 11px;
+            color: var(--accent);
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+        }
+
+        #info .path-hint.visible {
+            display: flex;
+        }
+
+        #info .path-hint span {
+            flex: 1;
+        }
+
+        #info .path-hint strong {
+            color: var(--text);
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        #info .path-cancel-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-dim);
+            font-size: 12px;
+            cursor: pointer;
+            padding: 2px 6px;
+            border-radius: 4px;
+            line-height: 1;
+        }
+
+        #info .path-cancel-btn:hover {
+            color: var(--danger);
+            background: rgba(248, 113, 113, 0.15);
+        }
+
+        #info .info-path-result {
+            display: none;
+            margin: 8px 14px 12px;
+            padding: 10px 12px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            font-size: 11px;
+            font-family: 'JetBrains Mono', monospace;
+            word-break: break-all;
+            line-height: 1.5;
+        }
+
+        #info .info-path-result.visible {
+            display: block;
+        }
+
+        #info .info-path-result.found {
+            border-color: var(--success);
+        }
+
+        #info .info-path-result.not-found {
+            border-color: var(--danger);
+        }
+
+        body.path-mode .node circle {
+            stroke: rgba(255, 255, 255, 0.3);
+        }
+
+        body.path-mode .node.target-active circle {
+            stroke: var(--accent);
+            stroke-width: 3px;
+            filter: drop-shadow(0 0 12px var(--accent));
+        }
+
+        body.path-mode:not(.has-source) .node {
+            cursor: crosshair;
+        }
+
         .section.cap-hidden {
             display: none;
         }
@@ -1498,6 +1555,364 @@
         .sidebar-header .brand-dot.cap-off {
             background: var(--text-dim);
             box-shadow: none;
+        }
+
+        /* ─── Catalog modal ─────────────────────────────────── */
+
+        .catalog-modal {
+            position: fixed;
+            inset: 0;
+            z-index: 200;
+            display: none;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .catalog-modal.visible {
+            display: flex;
+            animation: catalog-fade 0.18s ease-out;
+        }
+
+        @keyframes catalog-fade {
+            from { opacity: 0; }
+            to   { opacity: 1; }
+        }
+
+        .catalog-backdrop {
+            position: absolute;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.65);
+            backdrop-filter: blur(6px);
+        }
+
+        .catalog-dialog {
+            position: relative;
+            width: 80vw;
+            height: 85vh;
+            max-width: 1400px;
+            min-width: 640px;
+            background: rgba(15, 15, 17, 0.97);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            animation: catalog-pop 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        @keyframes catalog-pop {
+            from { opacity: 0; transform: scale(0.97) translateY(8px); }
+            to   { opacity: 1; transform: scale(1) translateY(0); }
+        }
+
+        .catalog-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border-soft);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            flex-shrink: 0;
+        }
+
+        .catalog-title-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-width: 0;
+        }
+
+        .catalog-title-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--accent);
+            box-shadow: 0 0 12px var(--accent);
+            flex-shrink: 0;
+        }
+
+        .catalog-header h3 {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text);
+            margin: 0;
+        }
+
+        .catalog-subtitle {
+            font-size: 11px;
+            color: var(--text-dim);
+            font-family: 'JetBrains Mono', monospace;
+            margin-left: 4px;
+        }
+
+        .catalog-header-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+
+        .catalog-toggle {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 11px;
+            color: var(--text-muted);
+            cursor: pointer;
+            user-select: none;
+            padding: 4px 8px;
+            border-radius: 6px;
+            transition: color 0.15s, background 0.15s;
+        }
+
+        .catalog-toggle:hover {
+            color: var(--text);
+            background: var(--bg-hover);
+        }
+
+        .catalog-toggle input {
+            accent-color: var(--accent);
+            cursor: pointer;
+        }
+
+        .catalog-icon-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-soft);
+            color: var(--text-muted);
+            padding: 6px 10px;
+            border-radius: 6px;
+            font-size: 11px;
+            cursor: pointer;
+            font-family: inherit;
+            transition: background 0.15s, color 0.15s, border-color 0.15s;
+        }
+
+        .catalog-icon-btn:hover {
+            background: var(--bg-hover);
+            color: var(--accent);
+            border-color: var(--accent-dim);
+        }
+
+        .catalog-icon-btn.copied {
+            color: var(--success);
+            border-color: rgba(74, 222, 128, 0.4);
+        }
+
+        .catalog-copy-label {
+            font-size: 11px;
+        }
+
+        .catalog-toolbar {
+            padding: 12px 20px;
+            border-bottom: 1px solid var(--border-soft);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-shrink: 0;
+        }
+
+        .catalog-search-wrapper {
+            position: relative;
+            flex: 1;
+        }
+
+        .catalog-search-icon {
+            position: absolute;
+            left: 11px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 14px;
+            height: 14px;
+            color: var(--text-dim);
+            pointer-events: none;
+        }
+
+        .catalog-search-input {
+            width: 100%;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 8px 12px 8px 34px;
+            border-radius: 8px;
+            font-size: 12px;
+            font-family: inherit;
+            outline: none;
+            transition: border-color 0.15s, box-shadow 0.15s;
+        }
+
+        .catalog-search-input:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.15);
+        }
+
+        .catalog-toolbar-actions {
+            display: flex;
+            gap: 6px;
+        }
+
+        .catalog-mini-btn {
+            background: transparent;
+            border: 1px solid var(--border-soft);
+            color: var(--text-muted);
+            padding: 6px 10px;
+            border-radius: 6px;
+            font-size: 11px;
+            cursor: pointer;
+            font-family: inherit;
+            transition: background 0.15s, color 0.15s, border-color 0.15s;
+        }
+
+        .catalog-mini-btn:hover {
+            background: var(--bg-hover);
+            color: var(--accent);
+            border-color: var(--accent-dim);
+        }
+
+        .catalog-body {
+            flex: 1;
+            min-height: 0;
+            overflow-y: auto;
+            padding: 8px 12px;
+        }
+
+        .catalog-empty {
+            padding: 40px;
+            text-align: center;
+            color: var(--text-dim);
+            font-size: 13px;
+        }
+
+        .catalog-tree {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+        }
+
+        .cat-node {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 8px;
+            border-radius: 6px;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: background 0.1s;
+            user-select: none;
+        }
+
+        .cat-node:hover {
+            background: var(--bg-hover);
+        }
+
+        .cat-node.match-self {
+            background: rgba(34, 211, 238, 0.1);
+        }
+
+        .cat-toggle {
+            width: 14px;
+            height: 14px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-dim);
+            flex-shrink: 0;
+            transition: transform 0.15s, color 0.15s;
+        }
+
+        .cat-node.expanded > .cat-toggle {
+            transform: rotate(90deg);
+            color: var(--accent);
+        }
+
+        .cat-toggle.empty {
+            visibility: hidden;
+        }
+
+        .cat-toggle svg {
+            width: 10px;
+            height: 10px;
+        }
+
+        .cat-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            box-shadow: 0 0 6px currentColor;
+            flex-shrink: 0;
+        }
+
+        .cat-name {
+            color: var(--text);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            min-width: 0;
+            flex: 0 1 auto;
+        }
+
+        .cat-name mark {
+            background: rgba(34, 211, 238, 0.3);
+            color: var(--text);
+            padding: 0;
+            border-radius: 2px;
+        }
+
+        .cat-kind {
+            color: var(--text-dim);
+            font-size: 10px;
+            text-transform: lowercase;
+            flex-shrink: 0;
+        }
+
+        .cat-meta {
+            color: var(--text-dim);
+            font-size: 10px;
+            margin-left: auto;
+            flex-shrink: 0;
+            padding-left: 12px;
+        }
+
+        .cat-children {
+            margin-left: 18px;
+            border-left: 1px dashed var(--border-soft);
+            padding-left: 4px;
+            display: none;
+        }
+
+        .cat-node.expanded + .cat-children {
+            display: block;
+        }
+
+        .catalog-footer {
+            padding: 10px 20px;
+            border-top: 1px solid var(--border-soft);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            flex-shrink: 0;
+            font-size: 11px;
+        }
+
+        .catalog-stats {
+            color: var(--text-muted);
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .catalog-hint {
+            color: var(--text-dim);
+        }
+
+        body.perf-mode .catalog-modal,
+        body.perf-mode .catalog-dialog {
+            animation: none;
+        }
+
+        body.perf-mode .catalog-backdrop {
+            backdrop-filter: none;
+            -webkit-backdrop-filter: none;
         }
 
         /* ─── Loading & tooltip ─────────────────────────────── */
@@ -1832,17 +2247,11 @@
                     </div>
                     <div class="section-body">
                         <div class="tool-tabs">
-                            <button class="tool-tab active" data-tool="path">Path</button>
-                            <button class="tool-tab" data-tool="centrality">Centrality</button>
+                            <button class="tool-tab active" data-tool="centrality">Centrality</button>
                             <button class="tool-tab" data-tool="cycles">Cycles</button>
+                            <button class="tool-tab" data-tool="catalog">Catalog</button>
                         </div>
-                        <div class="tool-panel active" data-tool="path">
-                            <input type="text" id="path-source" placeholder="Source node ID">
-                            <input type="text" id="path-target" placeholder="Target node ID">
-                            <button class="primary" id="path-exec">Find Path</button>
-                            <div id="path-result"></div>
-                        </div>
-                        <div class="tool-panel" data-tool="centrality">
+                        <div class="tool-panel active" data-tool="centrality">
                             <div class="section-subhead" style="margin-top:0">Top by Degree</div>
                             <div class="centrality-list" id="degree-centrality"></div>
                             <div class="section-subhead">Top by Betweenness</div>
@@ -1854,6 +2263,10 @@
                                 <span class="status-dot"></span>
                                 <span id="cycle-status-text">Click to run detection</span>
                             </div>
+                        </div>
+                        <div class="tool-panel" data-tool="catalog">
+                            <div class="section-subhead" style="margin-top:0;color:var(--text-dim);font-weight:400;text-transform:none;letter-spacing:0;font-size:11px;line-height:1.5">Render the full repository structure as a navigable tree.</div>
+                            <button class="primary" id="catalog-open">Generate Catalog</button>
                         </div>
                     </div>
                 </div>
@@ -1876,6 +2289,13 @@
             <div class="drag-handle">
                 <h3><span class="dot"></span><span id="info-title">Node Details</span></h3>
                 <div class="info-actions">
+                    <button class="icon-btn" id="find-path-btn" title="Find path from this node">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="10" />
+                            <path d="M12 8v8" />
+                            <path d="M8 12h8" />
+                        </svg>
+                    </button>
                     <button class="icon-btn" id="jump-btn" title="Copy file path" style="display:none">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                             stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1893,6 +2313,56 @@
                 </div>
             </div>
             <div id="info-body"></div>
+        </div>
+
+        <div id="catalog-modal" class="catalog-modal" aria-hidden="true">
+            <div class="catalog-backdrop" data-catalog-close></div>
+            <div class="catalog-dialog" role="dialog" aria-labelledby="catalog-title">
+                <div class="catalog-header">
+                    <div class="catalog-title-group">
+                        <span class="catalog-title-dot"></span>
+                        <h3 id="catalog-title">Repository Catalog</h3>
+                        <span class="catalog-subtitle" id="catalog-subtitle"></span>
+                    </div>
+                    <div class="catalog-header-actions">
+                        <label class="catalog-toggle">
+                            <input type="checkbox" id="catalog-symbols" checked>
+                            <span>Include symbols</span>
+                        </label>
+                        <button class="catalog-icon-btn" id="catalog-copy" title="Copy as Markdown">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                            </svg>
+                            <span class="catalog-copy-label">Markdown</span>
+                        </button>
+                        <button class="catalog-icon-btn" data-catalog-close title="Close (Esc)">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <line x1="18" y1="6" x2="6" y2="18" />
+                                <line x1="6" y1="6" x2="18" y2="18" />
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+                <div class="catalog-toolbar">
+                    <div class="catalog-search-wrapper">
+                        <svg class="catalog-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="11" cy="11" r="8" />
+                            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                        </svg>
+                        <input type="text" id="catalog-filter" class="catalog-search-input" placeholder="Filter by name or path…" autocomplete="off">
+                    </div>
+                    <div class="catalog-toolbar-actions">
+                        <button class="catalog-mini-btn" id="catalog-expand-all" title="Expand all">Expand</button>
+                        <button class="catalog-mini-btn" id="catalog-collapse-all" title="Collapse all">Collapse</button>
+                    </div>
+                </div>
+                <div class="catalog-body" id="catalog-body"></div>
+                <div class="catalog-footer">
+                    <span id="catalog-stats" class="catalog-stats"></span>
+                    <span class="catalog-hint">Click a row to focus it in the graph</span>
+                </div>
+            </div>
         </div>
 
         <div id="loading">
@@ -1945,7 +2415,9 @@
             currentSuggestions: [],
             capabilities: null,
             semMode: 'semantic',
-            semInFlight: false
+            semInFlight: false,
+            pathSource: null,
+            pathMode: false
         };
 
         let simulation, svg, g, link, node, zoom, width, height;
@@ -2007,6 +2479,9 @@
             state.graph = { nodes: Array.from(nodeMap.values()), edges };
             state.containsMaps = null;
             state.stats = data.stats || null;
+            state.catalogTree = null;
+            state.catalogExpanded = null;
+            state.catalogAutoExpanded = false;
         }
 
         function formatNumber(n) {
@@ -2155,11 +2630,19 @@
             wireFooter();
             wireFilterActions();
             wireSemanticPanel();
+            wireFindPathBtn();
+            wireCatalog();
             probeCapabilities();
             startHealthPolling();
 
-            document.getElementById('info-close').addEventListener('click', () =>
-                document.getElementById('info').classList.remove('visible'));
+            document.getElementById('info-close').addEventListener('click', () => {
+                document.getElementById('info').classList.remove('visible');
+                exitPathMode();
+                if (state.selectedNode) {
+                    node.filter(n => n.id === state.selectedNode.id).classed('selected', false);
+                    state.selectedNode = null;
+                }
+            });
         }
 
         // ─── Health polling ─────────────────────────────────
@@ -2263,6 +2746,87 @@
                     runSemanticSearch();
                 }
             });
+        }
+
+        function wireFindPathBtn() {
+            const btn = document.getElementById('find-path-btn');
+            btn.addEventListener('click', () => {
+                if (!state.selectedNode) return;
+                state.pathSource = state.selectedNode.id;
+                state.pathMode = true;
+                document.body.classList.add('path-mode', 'has-source');
+                const info = document.getElementById('info');
+                const hint = info.querySelector('.path-hint') || createPathHint();
+                hint.innerHTML = `<span>Find path from <strong>${escapeHtml(truncateName(state.pathSource))}</strong></span>
+                    <button class="path-cancel-btn" title="Cancel">✕</button>`;
+                hint.classList.add('visible');
+                showPathResult('');
+
+                hint.querySelector('.path-cancel-btn').addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    exitPathMode();
+                });
+            });
+        }
+
+        function handleNodeClick(event, d) {
+            if (state.pathMode && state.pathSource) {
+                event.stopPropagation();
+                runFindPathTo(d.id);
+                return;
+            }
+            handleClick(event, d);
+        }
+
+        function createPathHint() {
+            const info = document.getElementById('info');
+            const hint = document.createElement('div');
+            hint.className = 'path-hint';
+            info.querySelector('.drag-handle').insertAdjacentElement('afterend', hint);
+            return hint;
+        }
+
+        function showPathResult(text, found) {
+            const info = document.getElementById('info');
+            let result = info.querySelector('.info-path-result');
+            if (!result) {
+                result = document.createElement('div');
+                result.className = 'info-path-result';
+                const hint = info.querySelector('.path-hint');
+                if (hint) hint.insertAdjacentElement('afterend', result);
+                else info.querySelector('.drag-handle').insertAdjacentElement('afterend', result);
+            }
+            if (!text) {
+                result.classList.remove('visible');
+                return;
+            }
+            result.textContent = text;
+            result.classList.add('visible');
+            result.classList.toggle('found', found === true);
+            result.classList.toggle('not-found', found === false);
+        }
+
+        function exitPathMode() {
+            state.pathSource = null;
+            state.pathMode = false;
+            document.body.classList.remove('path-mode', 'has-source');
+            const info = document.getElementById('info');
+            const hint = info.querySelector('.path-hint');
+            if (hint) hint.classList.remove('visible');
+            showPathResult('');
+        }
+
+        function runFindPathTo(targetId) {
+            if (!state.pathSource || !targetId) return;
+            const result = findPath(state.pathSource, targetId);
+            const info = document.getElementById('info');
+            const hint = info.querySelector('.path-hint');
+            if (result.found) {
+                showPathResult(`${result.hops} hop(s): ${result.path.join(' → ')}`, true);
+                if (hint) hint.textContent = 'Path found! Click "Find Path" to find another.';
+            } else {
+                showPathResult('No path found from ' + truncateName(state.pathSource) + ' to ' + truncateName(targetId), false);
+            }
         }
 
         async function runSemanticSearch() {
@@ -2439,12 +3003,6 @@
                         .classList.add('active');
                     if (tab.dataset.tool === 'centrality') showCentrality();
                 });
-            });
-
-            document.getElementById('path-exec').addEventListener('click', () => {
-                const s = document.getElementById('path-source').value.trim();
-                const t = document.getElementById('path-target').value.trim();
-                if (s && t) findPath(s, t);
             });
 
             document.getElementById('cycle-run').addEventListener('click', detectAndShowCycles);
@@ -2701,6 +3259,7 @@
         function selectSearchResult(n) {
             document.getElementById('search').value = n.name;
             document.getElementById('search-suggestions').classList.remove('visible');
+            if (state.pathMode) exitPathMode();
             handleClick(null, n);
             focusNode(n);
         }
@@ -2817,7 +3376,7 @@
             nodeGroups
                 .on('mouseover', handleMouseOver)
                 .on('mouseout', handleMouseOut)
-                .on('click', handleClick);
+                .on('click', handleNodeClick);
 
             node = nodeGroups;
         }
@@ -2960,12 +3519,40 @@
             body.querySelectorAll('.related-item').forEach(item => {
                 item.addEventListener('click', () => {
                     const t = state.graph.nodes.find(n => n.id === item.dataset.id);
-                    if (t) { handleClick(null, t); focusNode(t); }
+                    if (t) {
+                        if (state.pathMode) {
+                            state.pathSource = t.id;
+                            const hint = info.querySelector('.path-hint');
+                            if (hint) hint.querySelector('strong').textContent = truncateName(state.pathSource);
+                            showPathResult('');
+                        } else {
+                            handleClick(null, t);
+                            focusNode(t);
+                        }
+                    }
                 });
             });
 
             const hierContainer = body.querySelector('#hier-content');
-            if (hierContainer) renderHierarchyView(d, hierContainer);
+            if (hierContainer) {
+                renderHierarchyView(d, hierContainer);
+                hierContainer.querySelectorAll('.hier-row').forEach(row => {
+                    row.addEventListener('click', () => {
+                        const t = state.graph.nodes.find(n => n.id === row.dataset.id);
+                        if (t) {
+                            if (state.pathMode) {
+                                state.pathSource = t.id;
+                                const hint = info.querySelector('.path-hint');
+                                if (hint) hint.querySelector('strong').textContent = truncateName(state.pathSource);
+                                showPathResult('');
+                            } else {
+                                handleClick(null, t);
+                                focusNode(t);
+                            }
+                        }
+                    });
+                });
+            }
 
             body.querySelectorAll('.info-tab').forEach(tab => {
                 tab.addEventListener('click', () => {
@@ -3280,11 +3867,428 @@
             }
         }
 
-        function findPath(sourceId, targetId) {
-            const result = document.getElementById('path-result');
-            result.classList.remove('found', 'not-found');
-            result.classList.add('visible');
+        // ─── Catalog (repo TOC) ────────────────────────────
 
+        function wireCatalog() {
+            const modal = document.getElementById('catalog-modal');
+            const openBtn = document.getElementById('catalog-open');
+            const filter = document.getElementById('catalog-filter');
+            const symbolsToggle = document.getElementById('catalog-symbols');
+            const expandAll = document.getElementById('catalog-expand-all');
+            const collapseAll = document.getElementById('catalog-collapse-all');
+            const copyBtn = document.getElementById('catalog-copy');
+
+            openBtn.addEventListener('click', openCatalog);
+
+            modal.querySelectorAll('[data-catalog-close]').forEach(el => {
+                el.addEventListener('click', closeCatalog);
+            });
+
+            document.addEventListener('keydown', e => {
+                if (e.key === 'Escape' && modal.classList.contains('visible')) {
+                    closeCatalog();
+                }
+            });
+
+            filter.addEventListener('input', () => {
+                state.catalogFilter = filter.value.trim().toLowerCase();
+                renderCatalog();
+            });
+
+            symbolsToggle.addEventListener('change', () => {
+                state.catalogIncludeSymbols = symbolsToggle.checked;
+                renderCatalog();
+            });
+
+            expandAll.addEventListener('click', () => setAllCatalogExpanded(true));
+            collapseAll.addEventListener('click', () => setAllCatalogExpanded(false));
+
+            copyBtn.addEventListener('click', copyCatalogMarkdown);
+        }
+
+        function openCatalog() {
+            const modal = document.getElementById('catalog-modal');
+            const filter = document.getElementById('catalog-filter');
+            const symbolsToggle = document.getElementById('catalog-symbols');
+
+            if (state.catalogIncludeSymbols == null) state.catalogIncludeSymbols = true;
+            if (!state.catalogFilter) state.catalogFilter = '';
+            symbolsToggle.checked = state.catalogIncludeSymbols;
+            filter.value = state.catalogFilter;
+
+            buildCatalogTree();
+            renderCatalog();
+            modal.classList.add('visible');
+            modal.setAttribute('aria-hidden', 'false');
+            requestAnimationFrame(() => filter.focus());
+        }
+
+        function closeCatalog() {
+            const modal = document.getElementById('catalog-modal');
+            modal.classList.remove('visible');
+            modal.setAttribute('aria-hidden', 'true');
+        }
+
+        // Builds a tree of node ids rooted at every Folder/File with no Contains
+        // parent (or whose parent is missing from the graph). Cached on the
+        // graph snapshot — invalidated whenever transformData reassigns
+        // state.graph (containsMaps is reset there too).
+        function buildCatalogTree() {
+            if (state.catalogTree && state.catalogTreeForGraph === state.graph) {
+                return state.catalogTree;
+            }
+            const { childrenOf, parentOf } = getContainsMaps();
+            const nodeById = state.nodeById || new Map(state.graph.nodes.map(n => [n.id, n]));
+            state.nodeById = nodeById;
+
+            const isFolder = id => {
+                const n = nodeById.get(id);
+                return n && n.group === 'Folder';
+            };
+            const isFile = id => {
+                const n = nodeById.get(id);
+                return n && n.group === 'File';
+            };
+
+            const roots = [];
+            const seen = new Set();
+            state.graph.nodes.forEach(n => {
+                if (n.group !== 'Folder' && n.group !== 'File') return;
+                const parents = parentOf.get(n.id) || [];
+                const hasContainerParent = parents.some(p => {
+                    const pn = nodeById.get(p);
+                    return pn && (pn.group === 'Folder' || pn.group === 'File');
+                });
+                if (!hasContainerParent && !seen.has(n.id)) {
+                    seen.add(n.id);
+                    roots.push(n.id);
+                }
+            });
+
+            const sortIds = ids => {
+                return ids.slice().sort((a, b) => {
+                    const na = nodeById.get(a);
+                    const nb = nodeById.get(b);
+                    if (!na || !nb) return 0;
+                    const rank = g => g === 'Folder' ? 0 : g === 'File' ? 1 : 2;
+                    const ra = rank(na.group);
+                    const rb = rank(nb.group);
+                    if (ra !== rb) return ra - rb;
+                    return String(na.name).localeCompare(String(nb.name));
+                });
+            };
+
+            // Build adjacency restricted to whatever the catalog should show.
+            const buildKids = (id) => {
+                const kids = childrenOf.get(id) || [];
+                return sortIds(kids.filter(k => nodeById.has(k)));
+            };
+
+            state.catalogTree = { roots: sortIds(roots), buildKids, nodeById, isFolder, isFile };
+            state.catalogTreeForGraph = state.graph;
+            state.catalogExpanded = state.catalogExpanded || new Set();
+
+            // Auto-expand top two levels on first build for any given graph.
+            if (!state.catalogAutoExpanded) {
+                state.catalogAutoExpanded = true;
+                state.catalogExpanded.clear();
+                state.catalogTree.roots.forEach(r => {
+                    state.catalogExpanded.add(r);
+                    state.catalogTree.buildKids(r).forEach(k => {
+                        if (state.catalogTree.isFolder(k)) state.catalogExpanded.add(k);
+                    });
+                });
+            }
+            return state.catalogTree;
+        }
+
+        function setAllCatalogExpanded(expand) {
+            const tree = buildCatalogTree();
+            state.catalogExpanded = state.catalogExpanded || new Set();
+            if (!expand) {
+                state.catalogExpanded.clear();
+                renderCatalog();
+                return;
+            }
+            const stack = tree.roots.slice();
+            while (stack.length) {
+                const id = stack.pop();
+                state.catalogExpanded.add(id);
+                tree.buildKids(id).forEach(k => stack.push(k));
+            }
+            renderCatalog();
+        }
+
+        function renderCatalog() {
+            const body = document.getElementById('catalog-body');
+            const subtitle = document.getElementById('catalog-subtitle');
+            const stats = document.getElementById('catalog-stats');
+            const tree = buildCatalogTree();
+            const includeSymbols = state.catalogIncludeSymbols !== false;
+            const filter = (state.catalogFilter || '').toLowerCase();
+            const expanded = state.catalogExpanded;
+
+            const repoLabel = (state.stats && state.stats.repoRoot)
+                ? state.stats.repoRoot.split('/').filter(Boolean).pop() || state.stats.repoRoot
+                : '';
+            subtitle.textContent = repoLabel ? `· ${repoLabel}` : '';
+
+            const counters = { folders: 0, files: 0, symbols: 0, shown: 0 };
+
+            const matches = (node) => {
+                if (!filter) return true;
+                if (String(node.name || '').toLowerCase().includes(filter)) return true;
+                if (node.file && String(node.file).toLowerCase().includes(filter)) return true;
+                if (String(node.id || '').toLowerCase().includes(filter)) return true;
+                return false;
+            };
+
+            // Two-pass: first decide which subtrees to keep when filtering, then render.
+            const keepSet = new Set();
+            const matchSet = new Set();
+            if (filter) {
+                const visit = (id) => {
+                    const n = tree.nodeById.get(id);
+                    if (!n) return false;
+                    const showHere = includeSymbols || tree.isFolder(id) || tree.isFile(id);
+                    let keep = false;
+                    const kids = tree.buildKids(id);
+                    const childSymbols = includeSymbols ? findChildSymbols(id) : [];
+                    for (const k of kids) {
+                        if (visit(k)) keep = true;
+                    }
+                    for (const s of childSymbols) {
+                        if (matches(s)) {
+                            keep = true;
+                            matchSet.add(s.id);
+                            keepSet.add(s.id);
+                        }
+                    }
+                    if (showHere && matches(n)) {
+                        keep = true;
+                        matchSet.add(id);
+                    }
+                    if (keep) keepSet.add(id);
+                    return keep;
+                };
+                tree.roots.forEach(visit);
+            }
+
+            const html = [];
+            const renderNode = (id, depth) => {
+                const n = tree.nodeById.get(id);
+                if (!n) return;
+                if (filter && !keepSet.has(id)) return;
+
+                const kids = tree.buildKids(id);
+                const symbols = includeSymbols ? findChildSymbols(id) : [];
+                const visibleKids = filter ? kids.filter(k => keepSet.has(k)) : kids;
+                const visibleSymbols = filter
+                    ? symbols.filter(s => keepSet.has(s.id))
+                    : symbols;
+                const hasChildren = visibleKids.length > 0 || visibleSymbols.length > 0;
+                const isExpanded = expanded.has(id) || (filter && hasChildren);
+                const color = config.getColor(n.group);
+
+                if (n.group === 'Folder') counters.folders++;
+                else if (n.group === 'File') counters.files++;
+                counters.shown++;
+
+                const meta = [];
+                if (visibleKids.length || visibleSymbols.length) {
+                    const childCount = visibleKids.length + visibleSymbols.length;
+                    meta.push(`${childCount} item${childCount === 1 ? '' : 's'}`);
+                }
+                if (n.startLine != null) {
+                    let lineLabel = `L${n.startLine}`;
+                    if (n.endLine != null && n.endLine !== n.startLine) {
+                        lineLabel += `–${n.endLine}`;
+                    }
+                    meta.push(lineLabel);
+                }
+
+                const nameHtml = highlight(truncateName(n.name), filter);
+                const cls = ['cat-node'];
+                if (isExpanded) cls.push('expanded');
+                if (matchSet.has(id) && filter) cls.push('match-self');
+
+                html.push(`<div class="${cls.join(' ')}" data-id="${escapeHtml(id)}" data-leaf="${hasChildren ? '0' : '1'}" title="${escapeHtml(n.id)}">
+                    <span class="cat-toggle${hasChildren ? '' : ' empty'}">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+                    </span>
+                    <span class="cat-dot" style="background:${color};color:${color}"></span>
+                    <span class="cat-name">${nameHtml}</span>
+                    <span class="cat-kind">${escapeHtml((n.group || '').toLowerCase())}</span>
+                    ${meta.length ? `<span class="cat-meta">${escapeHtml(meta.join(' · '))}</span>` : ''}
+                </div>`);
+
+                html.push(`<div class="cat-children">`);
+                if (hasChildren) {
+                    visibleKids.forEach(k => renderNode(k, depth + 1));
+                    visibleSymbols.forEach(s => renderSymbol(s, depth + 1));
+                }
+                html.push(`</div>`);
+            };
+
+            const renderSymbol = (s, depth) => {
+                if (filter && !keepSet.has(s.id)) return;
+                counters.symbols++;
+                counters.shown++;
+                const color = config.getColor(s.group);
+                let lineLabel = '';
+                if (s.startLine != null) {
+                    lineLabel = `L${s.startLine}`;
+                    if (s.endLine != null && s.endLine !== s.startLine) {
+                        lineLabel += `–${s.endLine}`;
+                    }
+                }
+                const nameHtml = highlight(truncateName(s.name), filter);
+                const cls = ['cat-node'];
+                if (matchSet.has(s.id) && filter) cls.push('match-self');
+                html.push(`<div class="${cls.join(' ')}" data-id="${escapeHtml(s.id)}" data-leaf="1" title="${escapeHtml(s.id)}">
+                    <span class="cat-toggle empty">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+                    </span>
+                    <span class="cat-dot" style="background:${color};color:${color}"></span>
+                    <span class="cat-name">${nameHtml}</span>
+                    <span class="cat-kind">${escapeHtml((s.group || '').toLowerCase())}</span>
+                    ${lineLabel ? `<span class="cat-meta">${escapeHtml(lineLabel)}</span>` : ''}
+                </div>`);
+                html.push(`<div class="cat-children"></div>`);
+            };
+
+            html.push(`<div class="catalog-tree">`);
+            tree.roots.forEach(r => renderNode(r, 0));
+            html.push(`</div>`);
+
+            if (counters.shown === 0) {
+                body.innerHTML = filter
+                    ? `<div class="catalog-empty">No matches for <strong>${escapeHtml(filter)}</strong>.</div>`
+                    : `<div class="catalog-empty">No folders or files in the graph. Re-run <code>ug index</code> to populate the catalog.</div>`;
+            } else {
+                body.innerHTML = html.join('');
+                wireCatalogRows(body);
+            }
+
+            const parts = [];
+            parts.push(`${counters.folders} folder${counters.folders === 1 ? '' : 's'}`);
+            parts.push(`${counters.files} file${counters.files === 1 ? '' : 's'}`);
+            if (includeSymbols) {
+                parts.push(`${counters.symbols} symbol${counters.symbols === 1 ? '' : 's'}`);
+            }
+            stats.textContent = parts.join(' · ');
+        }
+
+        function findChildSymbols(parentId) {
+            const { childrenOf } = getContainsMaps();
+            const nodeById = state.nodeById;
+            const out = [];
+            const stack = (childrenOf.get(parentId) || []).slice();
+            while (stack.length) {
+                const id = stack.pop();
+                const n = nodeById.get(id);
+                if (!n) continue;
+                if (n.group === 'Folder' || n.group === 'File') continue;
+                out.push(n);
+            }
+            return out.sort((a, b) => {
+                const la = a.startLine == null ? Infinity : a.startLine;
+                const lb = b.startLine == null ? Infinity : b.startLine;
+                if (la !== lb) return la - lb;
+                return String(a.name).localeCompare(String(b.name));
+            });
+        }
+
+        function wireCatalogRows(body) {
+            body.querySelectorAll('.cat-node').forEach(row => {
+                const toggle = row.querySelector('.cat-toggle');
+                const isLeaf = row.dataset.leaf === '1';
+                row.addEventListener('click', (e) => {
+                    if (!isLeaf && (e.target === toggle || toggle.contains(e.target))) {
+                        e.stopPropagation();
+                        toggleCatalogRow(row);
+                        return;
+                    }
+                    const id = row.dataset.id;
+                    const node = state.nodeById ? state.nodeById.get(id) : null;
+                    if (!node) return;
+                    handleClick(null, node);
+                    focusNode(node);
+                    closeCatalog();
+                });
+            });
+        }
+
+        function toggleCatalogRow(row) {
+            const id = row.dataset.id;
+            state.catalogExpanded = state.catalogExpanded || new Set();
+            const isExpanded = row.classList.contains('expanded');
+            if (isExpanded) {
+                row.classList.remove('expanded');
+                state.catalogExpanded.delete(id);
+            } else {
+                row.classList.add('expanded');
+                state.catalogExpanded.add(id);
+            }
+        }
+
+        function highlight(text, needle) {
+            const safe = escapeHtml(text);
+            if (!needle) return safe;
+            const lower = safe.toLowerCase();
+            const idx = lower.indexOf(needle);
+            if (idx < 0) return safe;
+            return safe.slice(0, idx) + '<mark>' + safe.slice(idx, idx + needle.length) + '</mark>' + safe.slice(idx + needle.length);
+        }
+
+        async function copyCatalogMarkdown() {
+            const tree = buildCatalogTree();
+            const includeSymbols = state.catalogIncludeSymbols !== false;
+            const lines = [];
+            const repo = state.stats && state.stats.repoRoot ? state.stats.repoRoot : 'Repository';
+            lines.push(`# Catalog — ${repo}`, '');
+
+            const walk = (id, depth) => {
+                const n = tree.nodeById.get(id);
+                if (!n) return;
+                const indent = '  '.repeat(depth);
+                const tag = n.group === 'Folder' ? '📁' : n.group === 'File' ? '📄' : '·';
+                let extra = '';
+                if (n.startLine != null) {
+                    extra = ` _(L${n.startLine}${n.endLine != null && n.endLine !== n.startLine ? `–${n.endLine}` : ''})_`;
+                }
+                lines.push(`${indent}- ${tag} **${n.name}**${extra}`);
+                tree.buildKids(id).forEach(k => walk(k, depth + 1));
+                if (includeSymbols) {
+                    findChildSymbols(id).forEach(s => {
+                        const sIndent = '  '.repeat(depth + 1);
+                        const sExtra = s.startLine != null
+                            ? ` _(L${s.startLine}${s.endLine != null && s.endLine !== s.startLine ? `–${s.endLine}` : ''})_`
+                            : '';
+                        lines.push(`${sIndent}- \`${s.group || 'Symbol'}\` ${s.name}${sExtra}`);
+                    });
+                }
+            };
+            tree.roots.forEach(r => walk(r, 0));
+
+            const text = lines.join('\n');
+            const btn = document.getElementById('catalog-copy');
+            const label = btn.querySelector('.catalog-copy-label');
+            try {
+                await navigator.clipboard.writeText(text);
+                btn.classList.add('copied');
+                if (label) label.textContent = 'Copied!';
+                setTimeout(() => {
+                    btn.classList.remove('copied');
+                    if (label) label.textContent = 'Markdown';
+                }, 1500);
+            } catch (err) {
+                if (label) label.textContent = 'Copy failed';
+                setTimeout(() => { if (label) label.textContent = 'Markdown'; }, 1500);
+            }
+        }
+
+        function findPath(sourceId, targetId) {
             const queue = [[sourceId, [sourceId]]];
             const visited = new Set();
             let found = null;
@@ -3302,12 +4306,9 @@
             }
 
             if (found) {
-                result.textContent = `${found.length - 1} hop(s): ` +
-                    found.map(id => truncateName(id)).join(' → ');
-                result.classList.add('found');
+                return { found: true, path: found.map(id => truncateName(id)), hops: found.length - 1 };
             } else {
-                result.textContent = 'No path found between nodes.';
-                result.classList.add('not-found');
+                return { found: false };
             }
         }
 
@@ -3329,6 +4330,12 @@
             if (state.perfMode) return;
             simulation.force('center', d3.forceCenter(width / 2, height / 2));
             simulation.alpha(0.3).restart();
+        });
+
+        document.addEventListener('keydown', e => {
+            if (e.key === 'Escape' && state.pathMode) {
+                exitPathMode();
+            }
         });
 
         loadGraph();

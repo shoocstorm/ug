@@ -106,7 +106,7 @@ Serve the OverGraph database with a web UI.
 ```bash
 ug serve -d ./ -p 8080
 
-ug serve -d ./ -p 8081 --repo-root ~/Documents/project/aldrickbot
+ug serve -d ./ --repo-root ~/Documents/project/aldrickbot
 ```
 
 ## Storage / GraphRAG (Phase 3+4)

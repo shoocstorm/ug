@@ -334,7 +334,8 @@ pub fn run_serve(args: &[String]) {
             encode_secs = t0.elapsed().as_secs_f32(),
             addr = %addr,
             db_api = db_api_enabled,
-            db_unavailable = state.db_unavailable_reason.as_deref().unwrap_or(""),
+            db_path = %db_path,
+            db_unavailable_reason = state.db_unavailable_reason.as_deref().unwrap_or(""),
             watch,
             "ug serve ready"
         );

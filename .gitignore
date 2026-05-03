@@ -16,3 +16,4 @@ out/*
 .gitnexus
 node_modules
 docs/overgraph
+opencode.json

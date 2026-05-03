@@ -1,17 +1,19 @@
-# UltraGraph-KB: Turbo Knowledge Base Indexer
+# UltraGraph: High-Performance Knowledge Graph & RAG Engine
 
-A high-performance, local-first graph-based knowledge base generator that transforms codebases/documents into a visualized queryable Semantic Knowledge Graph.
+A high-performance, local-first knowledge base engine that transforms codebases and documents into an interactive, visualized, and queryable **Semantic Knowledge Graph**. Built with Rust and Node.js for maximum speed and flexibility.
 
-## Overview
+## ⚡ Overview
 
-UltraGraph-KB implements all four phases of the UltraGraph knowledge base system:
+UltraGraph implements a complete four-phase pipeline for building and querying advanced knowledge bases:
 
-- **Phase 1**: Native turbo indexer — saturates CPU cores to map codebases in milliseconds
-- **Phase 2**: In-memory graph persistence with K-hop BFS traversal
-- **Phase 3**: Semantic storage & enrichment (OverGraph + local embeddings)
-- **Phase 4**: GraphRAG retrieval protocol with MCP server
+- **Phase 1: Turbo Indexing** — Native multi-threaded indexer that maps codebases in milliseconds using `tree-sitter`.
+- **Phase 2: Graph Synthesis** — Builds a rich symbol graph with structural analysis (centrality, cycle detection, shortest paths).
+- **Phase 3: OverGraph Storage** — Persistent vector + FTS storage with incremental ingestion and local embedding support.
+- **Phase 4: GraphRAG Search** — State-of-the-art retrieval using **Personalized PageRank (PPR)** to combine semantic relevance with structural importance.
 
-## Core Flow
+---
+
+## 🏗️ Architecture
 
 ```
                     ┌──────────────┐
@@ -56,7 +58,7 @@ UltraGraph-KB implements all four phases of the UltraGraph knowledge base system
     (JSON)         │            │
                    ▼            ▼
          ┌────────────┐  ┌──────────────────┐
-         │            │  │ Phase 3: RAG     │
+         │            │  │ Phase 3: Graph   │
          │  VISUALIZE │  │ Storage          │
          │            │  │ ──────────────── │
          │  D3.js     │  │ • OverGraph table│
@@ -91,168 +93,144 @@ UltraGraph-KB implements all four phases of the UltraGraph knowledge base system
                           └──────────────────┘
 ```
 
-**Data Flow:**
-- `Input → [Index] → [Graph] → [Visualize]`
-- `Input → [Index] → [Graph] → [RAG Store] → [Hybrid Search] → [AI Agent/MCP]`
+---
 
-### Features
+## ✨ Features
 
-| Feature | Status |
-|---------|--------|
-| Parallel file crawling | ✅ |
-| .gitignore respect | ✅ |
-| Incremental indexing (blake3) | ✅ |
-| TypeScript AST parsing | ✅ |
-| Python AST parsing | ✅ |
-| Markdown parsing (heading sections w/ full body spans) | ✅ |
-| Folder hierarchy extraction (parent/depth/children/README/classification) | ✅ |
-| NAPI-RS bridge | ✅ |
-| Graph schema (Nodes/Edges) | ✅ |
-| Folder forest in graph (Contains: folder→folder→file→symbol) | ✅ |
-| K-hop BFS traversal | ✅ |
-| Graph analysis (centrality, cycles, shortest path) | ✅ |
-| Vector search (OverGraph) | ✅ |
-| Hybrid search (RRF: vector + FTS) | ✅ |
-| MMR reranking | ✅ |
-| GraphRAG retrieval (search → expand → rank → snippet) | ✅ |
-| MCP server | ✅ |
-| CLI commands | ✅ |
-| D3.js visualization | ✅ |
+| Category | Feature | Status |
+| :--- | :--- | :--- |
+| **Indexing** | Parallel multi-core file crawling (`.gitignore` aware) | ✅ |
+| | Languages: **TypeScript, JavaScript, Python, Java, Markdown** | ✅ |
+| | Incremental indexing with `blake3` hashing | ✅ |
+| **Graph** | Folder hierarchy extraction & classification | ✅ |
+| | Symbol extraction (Functions, Classes, Interfaces, Imports, Calls) | ✅ |
+| | K-hop BFS, Shortest Path, Centrality, Cycle Detection | ✅ |
+| **Storage** | **OverGraph**: Hybrid Vector + FTS storage (LanceDB-backed) | ✅ |
+| | Support for local & remote OpenAI-compatible embedding endpoints | ✅ |
+| **Retrieval** | **GraphRAG**: Personalized PageRank (PPR) & MMR strategies | ✅ |
+| | RRF (Reciprocal Rank Fusion) for hybrid search | ✅ |
+| **Interface** | **Web UI**: Premium D3.js force-directed visualization | ✅ |
+| | **MCP Server**: Stdio-based server for LLM integration | ✅ |
+| | **CLI**: Comprehensive toolkit for all phases | ✅ |
 
-## Tech Stack
+---
 
-- **Core Engine (Rust)**: File walking (`ignore`), AST Parsing (`tree-sitter`), Incremental Hashing (`blake3`), Graph (`petgraph`)
-- **Bridge (NAPI-RS)**: Compiles Rust logic into a native `.node` module for Node.js
-- **Storage**: OverGraph (vector + FTS), local OpenAI-compatible embedding endpoint
-- **MCP**: `@modelcontextprotocol/sdk` stdio server with `zod` validation
-- **CLI**: Node.js 20+ with native bindings
+## 🚀 Quick Start
 
-## Using Native APIs in External Node.js Apps
+### 1. Prerequisites
+- **Rust** (latest stable)
+- **Node.js** 20+
+- (Optional) A local embedding server (e.g., [Ollama](https://ollama.ai/) or `text-embeddings-inference`)
 
-If you want to use the high-performance Rust-native APIs (exposed via `ultragraph.node`) directly in your own Node.js application, you need to include the following files from this repository:
-
-### Required Files
-| File | Purpose |
-|------|---------|
-| `native/index.js` | Auto-generated NAPI-RS loader that detects your OS, architecture, and libc version to load the correct native binary. This is the entry point your app should require. |
-| `native/ultragraph.node` | Platform-specific pre-compiled native binary. Include at minimum the binary matching your target deployment environment (e.g., `ultragraph.darwin-arm64.node` for macOS Apple Silicon). For cross-platform support, include all pre-built binaries for supported platforms. |
-
-### Usage
-Require the loader in your Node.js app (adjust the path to match your project structure):
-```javascript
-const { 
-  index, 
-  buildGraph, 
-  dbHybridSearch, 
-  kHopBfs 
-} = require('./path/to/native/index.js');
-```
-
-### Exposed Native APIs
-The native module exports the following functions (see `native/index.js:579-591` for the full list):
-- `index` / `indexWithCache` — Codebase indexing with incremental caching
-- `buildGraph` — Build in-memory knowledge graph from index results
-- `kHopBfs` — K-hop breadth-first graph traversal
-- `findShortestPath` — Find shortest path between graph nodes
-- `calculateCentrality` / `detectCycles` — Graph analysis utilities
-- `filterEdgesByType` — Filter graph edges by type
-- `graphKeywordSearch` — Graph-based: Keyword search over in-memory graph nodes
-- `dbIngest` — OverGraph: Embed graph and write to OverGraph
-- `dbHybridSearch` — OverGraph: End-to-end GraphRAG hybrid retrieval (vector + FTS + graph expansion)
-- `dbSemanticSearch` — OverGraph: Pure vector search over embedded graph nodes
-- `dbTraverse` — OverGraph: Graph traversal using edges table with edge-type filtering
-- `pingEmbedder` — Probe embedding endpoint availability
-
-## Installation
-
-### Prerequisites
-
-- Rust (latest stable)
-- Node.js 20+
-
-### Build from Source
-
+### 2. Build the Project
 ```bash
 npm run build
 ```
 
-This produces `native/ultragraph.node` — the native Node.js module.
-
-## Quick Start
-
-See [docs/QUICKSTART.md](docs/QUICKSTART.md) for a step-by-step walkthrough.
-
+### 3. Generate Your First Graph
+The `gen` command runs the entire pipeline (index → graph → ingest → UI).
 ```bash
-# 1. Index a folder (generate indexed-tree.json)
-npm run index -- -i ./ -o ugout/indexed-tree.json
+# Run the full pipeline on the current directory
+npm run gen -- -i ./ -o ugout --no-ingest
+```
 
-# 2. Build the graph (generate graph.json)
-npm run graph -- -i ugout/indexed-tree.json -o ugout/graph.json
-
-# 3. Visualize (see how the graph looks like visually)
+### 4. Visualize
+Open the interactive visualization in your browser:
+```bash
 npm start
-# Open http://localhost:8080
-
-# 4. Ingest graph data into OverGraph to enable semantic search (requires embedding endpoint)
-npm run ingest -- -i ugout/graph.json -o ugout/ugdb --model "Qwen3-Embedding-0.6B-4bit-DWQ" --base-url "http://127.0.0.1:8000/v1" --api-key "1234"
-
-# or with other model with different embedding dimension other than 1024
-npm run ingest -- -i ugout/graph.json -o ugout/ugdb --model "text-embedding-nomic-embed-text-v1.5" --base-url "http://127.0.0.1:1234/v1" --api-key "1234" --embedding-dim 768
-
-# 5. Semantic search
-npm run rag -- -i ugout/ugdb "how does auth work" -k 8 --model "text-embedding-nomic-embed-text-v1.5" --base-url "http://127.0.0.1:1234/v1" --api-key "1234" --embedding-dim 768
-
-# 6. Manually check lance db data (via duckdb)
-duckdb
-INSTALL lance
-load lance;
-ATTACH 'ugout/ugdb' as db (type LANCE);
-select * from db.main.nodes limit 10;
+# Visit http://localhost:8080
 ```
 
+---
 
-## All CLI Commands
+## 🛠️ Command Line Interface
 
-Use `npm run <command> -- [args]` for all commands, or directly via `node node/cli.cjs <cmd> [args]`:
+UltraGraph provides a powerful CLI via `node node/cli.cjs` (or the native `ug` binary).
 
-### npm scripts
-| npm script | Description |
-|-----------|-------------|
-| `npm run gen -- [options]` | Index + graph + ingest + visualization (all-in-one) |
-| `npm run index -- [options]` | Index a directory |
-| `npm run graph -- [options]` | Build graph from index result |
-| `npm run ingest -- <graph.json> <db>` | Embed graph into OverGraph |
-| `npm run rag -- <db> <query> [options]` | End-to-end GraphRAG retrieval |
-| `npm run traverse -- <db> <node-id> [options]` | K-hop BFS traversal over OverGraph edges |
-| `npm start` | Serve visualization at http://localhost:8080 |
-| `npm run mcp` | Start MCP server (requires `UG_DB_PATH`) |
+### Common Commands
 
-### Direct CLI commands (via `node node/cli.cjs <cmd>`)
-| Command | Short Flags | Description |
-|---------|-------------|-------------|
-| `index` | `-i` (--input), `-c` (--cache), `-o` (--output) | Index a directory with optional caching |
-| `graph` | `-i` (--input), `-o` (--output) | Build graph from index result |
-| `gen` | `-i` (--input), `-c` (--cache), `-o` (--output), `-d` (--db) | Full pipeline: index → graph → visualization → OverGraph ingest |
-| `graph-search` | `-t` (--type), `-o` (--output) | Keyword search over in-memory graph nodes |
-| `db-ingest` | `-b` (--base-url), `-a` (--api-key), `-m` (--model), `--embedding-dim` | Embed graph nodes and write to OverGraph. Dim is auto-probed from the endpoint when `--embedding-dim` is omitted; the chosen dim is persisted in `<db>/ug-meta.json`. |
-| `db-traverse` | `-k` (--hops), `-e` (--edge-type) | K-hop BFS traversal over OverGraph edges |
-| `db-rag` | `-k` (--limit), `-b` (--base-url), `-a` (--api-key), `-m` (--model), `--embedding-dim` | End-to-end GraphRAG hybrid retrieval |
-| `ping` | `-b` (--base-url), `-a` (--api-key), `-m` (--model), `--embedding-dim` | Probe embedding endpoint |
-| `help` | `-h` (--help) | Show help for commands |
+| Command | Usage | Description |
+| :--- | :--- | :--- |
+| `gen` | `npm run gen -- [options]` | Full pipeline: Index + Graph + Ingest + UI |
+| `index` | `npm run index -- -i <dir>` | Extract symbols from a directory |
+| `graph` | `npm run graph -- -i <index.json>` | Build structural graph from index |
+| `ingest` | `npm run ingest -- -i <graph.json>` | Embed and store in OverGraph |
+| `rag` | `npm run rag -- <db> <query>` | Perform a GraphRAG retrieval |
+| `traverse`| `npm run traverse -- <db> <id>` | K-hop traversal over stored edges |
 
-## MCP Server
+### Advanced GraphRAG Options
+When using `rag` or `db-rag`, you can tune the retrieval strategy:
+- `--strategy ppr`: (Default) Uses Personalized PageRank seeded by semantic hits.
+- `--strategy mmr`: Uses legacy seed-expansion with Maximal Marginal Relevance.
+- `--restart-prob 0.15`: Teleport probability for PPR (higher = stays closer to seeds).
+- `--direction outbound`: Restrict graph walk direction.
+
+---
+
+## 🤖 MCP Server
+
+Integrate UltraGraph directly into your AI Agent (Cursor, Claude Desktop, etc.).
+
+### Tools Exposed
+1.  **search_kb**: Graph-based RAG retrieval (PPR-based).
+2.  **traverse_kb**: Structural walk from specific node IDs.
+3.  **ping_embedder**: Verify embedding connectivity.
+
+### Configuration
+Set these environment variables before starting the server:
+- `UG_DB_PATH`: Path to your OverGraph directory (default: `./ugout/ugdb`).
+- `UG_REPO_ROOT`: Root path for resolving snippet file paths.
+- `UG_EMBED_MODEL`: Override embedding model name.
+- `UG_EMBED_BASE_URL`: Override embedding endpoint base URL.
+- `UG_EMBED_API_KEY`: Override embedding API key.
 
 ```bash
-# Configure via environment, then run:
-UG_DB_PATH=./ugout/ugdb npm run mcp
+UG_DB_PATH=./ugout/ugdb 
+
+{
+  "mcpServers": {
+    "ultragraph": {
+      "command": "node",
+      "args": ["/Users/aldrickwan/Documents/project/ug/ugout/mcp-server.mjs"],
+      "env": {
+        "UG_DB_PATH": "/Users/aldrickwan/Documents/project/ug/ugout/ugdb"
+      }
+    }
+  }
+}
+
 ```
 
-Exposes three tools: `search_kb`, `traverse_kb`, `ping_embedder`.
+---
 
-## Tests
+## 🔌 Native API Usage
+
+You can use the high-performance Rust core directly in your own Node.js apps via the `native/index.js` loader.
+
+```javascript
+const { index, buildGraph, dbHybridSearch } = require('./native/index.js');
+
+// Index a codebase
+const symbols = index('./src');
+
+// Search with GraphRAG
+const context = await dbHybridSearch('./ugdb', JSON.stringify({
+  query: "how does authentication work?",
+  k: 10
+}));
+```
+
+---
+
+## 🧪 Testing
 
 ```bash
-npm test                      # JS tests (21/21)
-npm run build && cd native && cargo test  # Rust tests (67 pass)
+# Run JS test suite
+npm test
+
+# Run Native Rust tests
+npm run build && cd native && cargo test
 ```
 
+## 📄 License
+MIT
