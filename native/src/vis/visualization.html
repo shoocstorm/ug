@@ -4,9 +4,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Knowledge Graph visualization | UltraGraph-KB</title>
+    <title>Knowledge Graph visualization | UltraGraph</title>
     <script src="d3.v7.min.js"></script>
-
     <style>
         :root {
             --bg-deep: #09090b;
@@ -194,6 +193,58 @@
             font-size: 11px;
             color: var(--text-muted);
             margin-top: 2px;
+        }
+
+        .health-badge {
+            position: fixed;
+            top: 16px;
+            right: 16px;
+            z-index: 6;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            border-radius: 999px;
+            font-size: 10px;
+            font-weight: 500;
+            letter-spacing: 0.4px;
+            text-transform: uppercase;
+            font-family: 'JetBrains Mono', monospace;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-soft);
+            color: var(--text-muted);
+            pointer-events: auto;
+            transition: color 0.15s, border-color 0.15s;
+        }
+
+        .health-badge::before {
+            content: '';
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--text-dim);
+            box-shadow: none;
+            transition: background 0.15s, box-shadow 0.15s;
+        }
+
+        .health-badge.connected {
+            color: var(--success);
+            border-color: rgba(74, 222, 128, 0.3);
+        }
+
+        .health-badge.connected::before {
+            background: var(--success);
+            box-shadow: 0 0 8px var(--success);
+        }
+
+        .health-badge.stale {
+            color: var(--danger);
+            border-color: rgba(248, 113, 113, 0.3);
+        }
+
+        .health-badge.stale::before {
+            background: var(--danger);
+            box-shadow: 0 0 8px var(--danger);
         }
 
         /* ─── Sidebar ────────────────────────────────────────── */
@@ -973,6 +1024,31 @@
             letter-spacing: 0.5px;
         }
 
+        #info .db-desc {
+            display: block;
+            padding: 10px 12px;
+            margin-top: 8px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-soft);
+            border-left: 2px solid var(--accent);
+            border-radius: 6px;
+            font-size: 11px;
+            line-height: 1.5;
+            color: var(--text);
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        #info .db-desc-label {
+            display: block;
+            font-size: 9px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-muted);
+            margin-bottom: 6px;
+            font-family: inherit;
+        }
+
         #info .related-section {
             margin-top: 14px;
             padding-top: 12px;
@@ -1588,11 +1664,13 @@
             <p id="graph-title">Interactive visualization</p>
         </div>
 
+        <span id="health-badge" class="health-badge" title="Checking server…">Checking…</span>
+
         <aside id="sidebar" class="pending">
             <div class="sidebar-header">
                 <div class="brand">
                     <div class="brand-dot"></div>
-                    <h2>UltraGraph-KB</h2>
+                    <h2>UltraGraph</h2>
                 </div>
                 <span class="meta" id="sidebar-meta">0 / 0</span>
             </div>
@@ -2078,9 +2156,41 @@
             wireFilterActions();
             wireSemanticPanel();
             probeCapabilities();
+            startHealthPolling();
 
             document.getElementById('info-close').addEventListener('click', () =>
                 document.getElementById('info').classList.remove('visible'));
+        }
+
+        // ─── Health polling ─────────────────────────────────
+
+        async function pollHealth() {
+            const badge = document.getElementById('health-badge');
+            if (!badge) return;
+            try {
+                const r = await fetch('/healthz', { cache: 'no-store' });
+                if (r.ok) {
+                    badge.classList.remove('stale');
+                    badge.classList.add('connected');
+                    badge.textContent = 'Connected';
+                    badge.title = 'Server reachable';
+                } else {
+                    badge.classList.remove('connected');
+                    badge.classList.add('stale');
+                    badge.textContent = `HTTP ${r.status}`;
+                    badge.title = `Server returned ${r.status}`;
+                }
+            } catch (err) {
+                badge.classList.remove('connected');
+                badge.classList.add('stale');
+                badge.textContent = 'Offline';
+                badge.title = 'Server unreachable';
+            }
+        }
+
+        function startHealthPolling() {
+            pollHealth();
+            setInterval(pollHealth, 15000);
         }
 
         // ─── Capabilities probe ─────────────────────────────
@@ -2886,6 +2996,45 @@
             }
             state.selectedNode = d;
             node.filter(n => n.id === d.id).classed('selected', true);
+
+            enrichFromDb(d.id);
+        }
+
+        async function enrichFromDb(id) {
+            if (!state.capabilities || !state.capabilities.db_ready) return;
+            const requestedId = id;
+            try {
+                const res = await fetch(`/api/db/node/${encodeURIComponent(id)}`);
+                if (!res.ok) return;
+                const row = await res.json();
+                if (!state.selectedNode || state.selectedNode.id !== requestedId) return;
+                renderDbEnrichment(row);
+            } catch (err) {
+                // graceful fallthrough — graph.json data remains as-is
+            }
+        }
+
+        function renderDbEnrichment(row) {
+            const body = document.getElementById('info-body');
+            if (!body) return;
+            const desc = (row && typeof row.description === 'string') ? row.description.trim() : '';
+            const existing = body.querySelector('.db-desc');
+            if (existing) existing.remove();
+            if (!desc) return;
+
+            const block = document.createElement('div');
+            block.className = 'db-desc';
+            const label = document.createElement('span');
+            label.className = 'db-desc-label';
+            label.textContent = 'Description (DB)';
+            const text = document.createElement('span');
+            text.textContent = desc;
+            block.appendChild(label);
+            block.appendChild(text);
+
+            const related = body.querySelector('.related-section');
+            if (related) body.insertBefore(block, related);
+            else body.appendChild(block);
         }
 
         function renderHierarchyView(selected, container) {

@@ -21,7 +21,7 @@ Leveraging the server APIs unlocks: faster queries on large graphs, DB-backed en
 
 ## High-Impact / Low-Effort
 
-### 1. Server-side search with `/api/graph/search`
+### 1. [x] Server-side search with `/api/graph/search`
 
 **Why:** Client-side search on 40k+ nodes scans the full array in JS. The server does substring match + type filtering in ~5ms.
 
@@ -37,7 +37,7 @@ const { hits } = await res.json();
 
 ---
 
-### 2. Live graph health indicator
+### 2. [x] Live graph health indicator
 
 **Why:** Users want to know if the loaded graph is current. Server already has `/healthz`.
 
@@ -45,7 +45,7 @@ const { hits } = await res.json();
 
 ---
 
-### 3. Node detail enrichment from DB via `/api/db/node/*id`
+### 3. [x] Node detail enrichment from DB via `/api/db/node/*id`
 
 **Why:** `graph.json` has minimal node data. OverGraph DB has full `NodeRow` with docstrings, metrics, signatures.
 
