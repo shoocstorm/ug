@@ -5,7 +5,7 @@ const { readFileSync, existsSync, writeFileSync, mkdirSync, copyFileSync } = req
 const chalk = require('chalk');
 chalk.level = 2;
 
-const binding = join(dirname(__dirname), 'ug-out', 'ultragraph-kb.node');
+const binding = join(dirname(__dirname), 'ugout', 'ultragraph-kb.node');
 const ug = require(binding);
 
 function extractArg(args, shortFlag, longFlag, defaultValue) {
@@ -57,11 +57,11 @@ function parseEmbedderOptions(args) {
 const commands = {
   index: {
     usage: '[<input dir>] [-i|--input <dir>] [-c|--cache <cache-dir>] [-o|--output <output-path>]',
-    desc: 'Index a directory and output the symbol tree as JSON into a file specified by `--output` (default: `ug-out/indexed-tree.json`). Use `--cache` to speed up re-indexing.',
+    desc: 'Index a directory and output the symbol tree as JSON into a file specified by `--output` (default: `ugout/indexed-tree.json`). Use `--cache` to speed up re-indexing.',
     run: (args) => {
       const path = extractFlag(args, '-i') || extractFlag(args, '--input') || (args[0] || '.');
       const cachePath = extractFlag(args, '-c') || extractFlag(args, '--cache');
-      const outputPath = extractFlag(args, '-o') || extractFlag(args, '--output') || 'ug-out/indexed-tree.json';
+      const outputPath = extractFlag(args, '-o') || extractFlag(args, '--output') || 'ugout/indexed-tree.json';
 
       // Ensure output directory exists
       const outputDir = dirname(outputPath);
@@ -81,10 +81,10 @@ const commands = {
   },
   graph: {
     usage: '[<indexed-tree-json-file>] [-i|--input <file>] [-o|--output <output-path>]',
-    desc: 'Build graph from index result (i.e.: ug-out/indexed-tree.json) and generates graph.json',
+    desc: 'Build graph from index result (i.e.: ugout/indexed-tree.json) and generates graph.json',
     run: (args) => {
-      const path = extractFlag(args, '-i') || extractFlag(args, '--input') || (args.length ? args[0] : 'ug-out/indexed-tree.json');
-      const outputPath = extractFlag(args, '-o') || extractFlag(args, '--output') || 'ug-out/graph.json';
+      const path = extractFlag(args, '-i') || extractFlag(args, '--input') || (args.length ? args[0] : 'ugout/indexed-tree.json');
+      const outputPath = extractFlag(args, '-o') || extractFlag(args, '--output') || 'ugout/graph.json';
 
       // Ensure output directory exists
       const outputDir = dirname(outputPath);
@@ -102,7 +102,7 @@ const commands = {
     }
   },
   gen: {
-    usage: '[-i|--input <input-dir, default: .>] [-c|--cache <cache-dir>] [-o|--output <output-dir, default: ./ug-out>] [-d|--db <db-path, default: ./ug-out/ugdb>] [--no-ingest] [-m|--model <embedding-model-name>] [-b|--base-url <embedding-api-base-url>] [-a|--api-key <embedding-api-key>]',
+    usage: '[-i|--input <input-dir, default: .>] [-c|--cache <cache-dir>] [-o|--output <output-dir, default: ./ugout>] [-d|--db <db-path, default: ./ugout/ugdb>] [--no-ingest] [-m|--model <embedding-model-name>] [-b|--base-url <embedding-api-base-url>] [-a|--api-key <embedding-api-key>]',
     desc: 'Full pipeline: index → graph → visualization → OverGraph ingest. DB defaults to <output-dir>/ugdb. Pass --no-ingest to skip ingestion (no embedding endpoint required).',
     run: async (args) => {
       if (args.includes('-h') || args.includes('--help')) {
@@ -112,7 +112,7 @@ const commands = {
       }
       const path = extractFlag(args, '-i') || extractFlag(args, '--input') || (args.length ? args[0] : '.');
       const cachePath = extractFlag(args, '-c') || extractFlag(args, '--cache');
-      const outputDir = extractFlag(args, '-o') || extractFlag(args, '--output') || 'ug-out';
+      const outputDir = extractFlag(args, '-o') || extractFlag(args, '--output') || 'ugout';
 
       console.log(chalk.cyan('\n⚡ Full pipeline: ') + chalk.white('index ') + chalk.gray('→') + chalk.white(' graph ') + chalk.gray('→') + chalk.white(' visualization ') + chalk.gray('→') + chalk.white(' OverGraph ingest'));
 
@@ -183,7 +183,7 @@ const commands = {
 
       console.log(chalk.gray('────────────────────────────────────────'));
       console.log(chalk.cyan('Visit http://localhost:8080 to view the graph'));
-      console.log(chalk.cyan('Run "node ug-out/cli.cjs db-rag ug-out/ugdb hello" to perform a RAG query on the DB.'));
+      console.log(chalk.cyan('Run "node ugout/cli.cjs db-rag ugout/ugdb hello" to perform a RAG query on the DB.'));
 
       return;
     }

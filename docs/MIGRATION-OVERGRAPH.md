@@ -252,11 +252,11 @@ The NAPI signatures **must not change** — TypeScript callers depend on them.
 - [ ] `native/src/main.rs`:
   - `run_ingest`'s `--with-indexes` flag becomes a no-op. Print a deprecation note when used.
   - `run_semantic_search`, `run_hybrid_search`, `run_traverse` — no signature changes.
-- [ ] **Verify:** all four CLI invocations below succeed end-to-end against a fresh `ug-out/ugdb/`:
-  - [ ] `ug gen -i ./native/src -o ./ug-out`
-  - [ ] `ug semantic_search "tree-sitter parser" -d ug-out/ugdb -k 5`
-  - [ ] `ug hybrid_search "loadConfig" -d ug-out/ugdb -k 8 --strategy ppr`
-  - [ ] `ug traverse file:src/main.rs -d ug-out/ugdb -k 2`
+- [ ] **Verify:** all four CLI invocations below succeed end-to-end against a fresh `ugout/ugdb/`:
+  - [ ] `ug gen -i ./native/src -o ./ugout`
+  - [ ] `ug semantic_search "tree-sitter parser" -d ugout/ugdb -k 5`
+  - [ ] `ug hybrid_search "loadConfig" -d ugout/ugdb -k 8 --strategy ppr`
+  - [ ] `ug traverse file:src/main.rs -d ugout/ugdb -k 2`
 - [ ] Update Progress Dashboard row "E".
 
 ### Phase F — Tests + benchmarks (Day 1) — ✅ Done
@@ -382,7 +382,7 @@ Each must have a recorded answer in §10 Run Log or a linked follow-up issue. Ti
   - **Resolution:** **Option 1 only.** `text::build_sparse_keyword_vector` ships, lowercase alphanum tokenizer, FNV-1a 32-bit hash, length filter 2–32 chars, term-frequency weighting, sorted output. SPLADE deferred to v2. Empty-vector path falls back to dense-only inside `vector_search` when callers have no text to tokenize.
 - [x] **Q4 — Maturity hedge.** OverGraph is v0.6.0, single-author, ~4 GitHub stars at the time of writing. Are we comfortable shipping with this dependency, or should this migration ship behind a Cargo feature `storage-overgraph` with `storage-lancedb` retained as the default until OverGraph hits 1.0 / gets adopted? **Recommended: ship behind a feature flag for at least one minor release.**
   - **Resolution:** Plan said "recommended feature flag" — this migration **did not implement that** because it would have doubled the work (every storage call would need cfg branches). Decision deferred to the human: ship as-is on `migrate/overgraph` for testing; if quality holds, merge to `main`. If a feature flag is required, add it as a follow-up before merge — the entire LanceDB path can be reconstructed from `git show main:native/src/storage/db.rs` if needed.
-- [x] **Q5 — Database directory layout.** `ug-out/ugdb/` becomes an OverGraph directory (manifest + WAL + segments) instead of a LanceDB directory. Existing user databases are **not** forward-compatible — does the migration include a `ug migrate-db` helper, or do users re-ingest? Recommended: re-ingest, document in `CHANGELOG.md`.
+- [x] **Q5 — Database directory layout.** `ugout/ugdb/` becomes an OverGraph directory (manifest + WAL + segments) instead of a LanceDB directory. Existing user databases are **not** forward-compatible — does the migration include a `ug migrate-db` helper, or do users re-ingest? Recommended: re-ingest, document in `CHANGELOG.md`.
   - **Resolution:** **Re-ingest required.** No migration helper. Documented in `CHANGELOG.md` (Phase G) and visible at runtime: opening a LanceDB-formatted directory with the new `Db::open` will fail at OverGraph manifest parsing. The error is unambiguous; users will know to delete `ugdb/` and re-run `ug ingest`.
 
 ---

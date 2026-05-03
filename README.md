@@ -184,29 +184,29 @@ See [docs/QUICKSTART.md](docs/QUICKSTART.md) for a step-by-step walkthrough.
 
 ```bash
 # 1. Index a folder (generate indexed-tree.json)
-npm run index -- -i ./ -o ug-out/indexed-tree.json
+npm run index -- -i ./ -o ugout/indexed-tree.json
 
 # 2. Build the graph (generate graph.json)
-npm run graph -- -i ug-out/indexed-tree.json -o ug-out/graph.json
+npm run graph -- -i ugout/indexed-tree.json -o ugout/graph.json
 
 # 3. Visualize (see how the graph looks like visually)
 npm start
 # Open http://localhost:8080
 
 # 4. Ingest graph data into OverGraph to enable semantic search (requires embedding endpoint)
-npm run ingest -- -i ug-out/graph.json -o ug-out/ugdb --model "Qwen3-Embedding-0.6B-4bit-DWQ" --base-url "http://127.0.0.1:8000/v1" --api-key "1234"
+npm run ingest -- -i ugout/graph.json -o ugout/ugdb --model "Qwen3-Embedding-0.6B-4bit-DWQ" --base-url "http://127.0.0.1:8000/v1" --api-key "1234"
 
 # or with other model with different embedding dimension other than 1024
-npm run ingest -- -i ug-out/graph.json -o ug-out/ugdb --model "text-embedding-nomic-embed-text-v1.5" --base-url "http://127.0.0.1:1234/v1" --api-key "1234" --embedding-dim 768
+npm run ingest -- -i ugout/graph.json -o ugout/ugdb --model "text-embedding-nomic-embed-text-v1.5" --base-url "http://127.0.0.1:1234/v1" --api-key "1234" --embedding-dim 768
 
 # 5. Semantic search
-npm run rag -- -i ug-out/ugdb "how does auth work" -k 8 --model "text-embedding-nomic-embed-text-v1.5" --base-url "http://127.0.0.1:1234/v1" --api-key "1234" --embedding-dim 768
+npm run rag -- -i ugout/ugdb "how does auth work" -k 8 --model "text-embedding-nomic-embed-text-v1.5" --base-url "http://127.0.0.1:1234/v1" --api-key "1234" --embedding-dim 768
 
 # 6. Manually check lance db data (via duckdb)
 duckdb
 INSTALL lance
 load lance;
-ATTACH 'ug-out/ugdb' as db (type LANCE);
+ATTACH 'ugout/ugdb' as db (type LANCE);
 select * from db.main.nodes limit 10;
 ```
 
@@ -244,7 +244,7 @@ Use `npm run <command> -- [args]` for all commands, or directly via `node node/c
 
 ```bash
 # Configure via environment, then run:
-UG_DB_PATH=./ug-out/ugdb npm run mcp
+UG_DB_PATH=./ugout/ugdb npm run mcp
 ```
 
 Exposes three tools: `search_kb`, `traverse_kb`, `ping_embedder`.

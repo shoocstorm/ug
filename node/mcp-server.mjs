@@ -2,7 +2,7 @@
 // MCP server exposing the Phase 4 GraphRAG `search_kb` tool.
 //
 // Configuration via env vars:
-//   UG_DB_PATH         - OverGraph directory (default: ./ug-out/ugdb)
+//   UG_DB_PATH         - OverGraph directory (default: ./ugout/ugdb)
 //   UG_REPO_ROOT       - root for resolving snippet file paths (default: cwd)
 //   UG_EMBED_BASE_URL  - override embedding endpoint base URL
 //   UG_EMBED_API_KEY   - override embedding API key

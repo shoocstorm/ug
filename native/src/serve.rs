@@ -189,14 +189,14 @@ fn init_tracing() {
 pub fn run_serve(args: &[String]) {
     init_tracing();
 
-    let graph_file = flag_value_or(args, &["-i", "--input"], "ug-out/graph.json");
+    let graph_file = flag_value_or(args, &["-i", "--input"], "ugout/graph.json");
     let port: u16 = flag_value(args, &["-p", "--port"])
         .and_then(|s| s.parse().ok())
         .unwrap_or(8080);
     let host = flag_value_or(args, &["--host"], "127.0.0.1");
     let watch = has_flag(args, "--watch");
     let no_db = has_flag(args, "--no-db");
-    let db_path = flag_value_or(args, &["-d", "--db"], "ug-out/ugdb");
+    let db_path = flag_value_or(args, &["-d", "--db"], "ugout/ugdb");
     let repo_root_path = flag_value(args, &["--repo-root"])
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
@@ -835,7 +835,10 @@ async fn api_capabilities(State(state): State<ServeState>) -> Response {
     let reason = if search_ready {
         None
     } else if !db_ready || !embedder_ready {
-        state.db_unavailable_reason.as_deref().map(|s| s.to_string())
+        state
+            .db_unavailable_reason
+            .as_deref()
+            .map(|s| s.to_string())
     } else if !has_data {
         Some("DB is open but contains no nodes (run `ug index` first)".to_string())
     } else {

@@ -176,24 +176,30 @@ fn run_index(args: &[String]) {
         .or_else(|| first_positional(args, &["-i", "--input", "-o", "--output", "-c", "--cache"]))
         .unwrap_or_else(|| ".".to_string());
     let cache = flag_value(args, &["-c", "--cache"]);
-    let output = flag_value_or(args, &["-o", "--output"], "ug-out/indexed-tree.json");
+    let output = flag_value_or(args, &["-o", "--output"], "ugout/indexed-tree.json");
 
     let result = match cache {
         Some(c) => index_with_cache(path, c),
         None => index(path),
     };
     write_file(&output, &result);
-    println!("{C_GREEN}✓{C_RESET} Generated index in {C_BOLD}{}{C_RESET}", output);
+    println!(
+        "{C_GREEN}✓{C_RESET} Generated index in {C_BOLD}{}{C_RESET}",
+        output
+    );
 }
 
 fn run_graph(args: &[String]) {
-    let input = flag_value_or(args, &["-i", "--input"], "ug-out/indexed-tree.json");
-    let output = flag_value_or(args, &["-o", "--output"], "ug-out/graph.json");
+    let input = flag_value_or(args, &["-i", "--input"], "ugout/indexed-tree.json");
+    let output = flag_value_or(args, &["-o", "--output"], "ugout/graph.json");
 
     let index_json = fs::read_to_string(&input).expect("Failed to read input");
     let result = build_graph(index_json);
     write_file(&output, &result);
-    println!("{C_GREEN}✓{C_RESET} Generated graph in {C_BOLD}{}{C_RESET}", output);
+    println!(
+        "{C_GREEN}✓{C_RESET} Generated graph in {C_BOLD}{}{C_RESET}",
+        output
+    );
 }
 
 // simple breadth-first search on the graph (json)
@@ -298,8 +304,8 @@ fn run_cycles(args: &[String]) {
 }
 
 fn run_analyze(args: &[String]) {
-    let input = flag_value_or(args, &["-i", "--input"], "ug-out/graph.json");
-    let output_dir = flag_value_or(args, &["-o", "--output"], "ug-out");
+    let input = flag_value_or(args, &["-i", "--input"], "ugout/graph.json");
+    let output_dir = flag_value_or(args, &["-o", "--output"], "ugout");
 
     let graph_json = fs::read_to_string(&input).expect("Failed to read graph");
     let centrality = calculate_centrality(graph_json.clone());
@@ -346,18 +352,20 @@ fn run_gen(args: &[String]) {
         })
         .unwrap_or_else(|| ".".to_string());
     let cache = flag_value(args, &["-c", "--cache"]);
-    let output_dir = flag_value_or(args, &["-o", "--output"], "ug-out");
+    let output_dir = flag_value_or(args, &["-o", "--output"], "ugout");
     let no_ingest = has_flag(args, "--no-ingest");
     let chain_serve = has_flag(args, "--serve");
-    let db_path =
-        flag_value(args, &["-o", "--output"]).unwrap_or_else(|| "ug-out/ugdb".to_string());
+    let db_path = flag_value(args, &["-o", "--output"]).unwrap_or_else(|| "ugout/ugdb".to_string());
 
     let pipeline_summary = if no_ingest {
         "index → graph → visualization"
     } else {
         "index → graph → visualization → ingest"
     };
-    println!("⚡ Full pipeline: {C_BOLD}{C_MAGENTA}{}{C_RESET}", pipeline_summary);
+    println!(
+        "⚡ Full pipeline: {C_BOLD}{C_MAGENTA}{}{C_RESET}",
+        pipeline_summary
+    );
 
     let _ = fs::create_dir_all(&output_dir);
 
@@ -367,12 +375,18 @@ fn run_gen(args: &[String]) {
         Some(c) => index_with_cache(input, c),
         None => index(input),
     };
-    println!("  {C_GREEN}✓ done{C_RESET} in {C_BOLD}{:?}{C_RESET}", t0.elapsed());
+    println!(
+        "  {C_GREEN}✓ done{C_RESET} in {C_BOLD}{:?}{C_RESET}",
+        t0.elapsed()
+    );
 
     let t1 = std::time::Instant::now();
     println!("{C_CYAN}▸{C_RESET} Building graph");
     let graph = build_graph(index_result.clone());
-    println!("  {C_GREEN}✓ done{C_RESET} in {C_BOLD}{:?}{C_RESET}", t1.elapsed());
+    println!(
+        "  {C_GREEN}✓ done{C_RESET} in {C_BOLD}{:?}{C_RESET}",
+        t1.elapsed()
+    );
 
     let (nodes_count, edges_count) = match serde_json::from_str::<serde_json::Value>(&graph) {
         Ok(v) => (
@@ -395,21 +409,27 @@ fn run_gen(args: &[String]) {
     fs::write(format!("{}/indexed-tree.json", output_dir), &index_result)
         .expect("Failed to write indexed-tree.json");
 
-     let t2 = std::time::Instant::now();
-     println!("{C_CYAN}▸{C_RESET} Copying visualization assets");
-     fs::write(format!("{}/index.html", output_dir), VIS_HTML).expect("Failed to write index.html");
-     fs::write(format!("{}/d3.v7.min.js", output_dir), VIS_D3)
-         .expect("Failed to write d3.v7.min.js");
-     fs::write(format!("{}/README.md", output_dir), VIS_MD).expect("Failed to write README.md");
-     println!("  {C_GREEN}✓ done{C_RESET} in {C_BOLD}{:?}{C_RESET}", t2.elapsed());
- 
-     println!("{C_BOLD}────────────────────────────────────────{C_RESET}");
-     println!("{C_GREEN}✓ Generated{C_RESET} in {C_BOLD}{}/{C_RESET}", output_dir);
-     println!("  {C_GREEN}✓{C_RESET} graph.json");
-     println!("  {C_GREEN}✓{C_RESET} indexed-tree.json");
-     println!("  {C_GREEN}✓{C_RESET} index.html (open in browser with HTTP server)");
-     println!("  {C_GREEN}✓{C_RESET} d3.v7.min.js");
-     println!("  {C_GREEN}✓{C_RESET} README.md");
+    let t2 = std::time::Instant::now();
+    println!("{C_CYAN}▸{C_RESET} Copying visualization assets");
+    fs::write(format!("{}/index.html", output_dir), VIS_HTML).expect("Failed to write index.html");
+    fs::write(format!("{}/d3.v7.min.js", output_dir), VIS_D3)
+        .expect("Failed to write d3.v7.min.js");
+    fs::write(format!("{}/README.md", output_dir), VIS_MD).expect("Failed to write README.md");
+    println!(
+        "  {C_GREEN}✓ done{C_RESET} in {C_BOLD}{:?}{C_RESET}",
+        t2.elapsed()
+    );
+
+    println!("{C_BOLD}────────────────────────────────────────{C_RESET}");
+    println!(
+        "{C_GREEN}✓ Generated{C_RESET} in {C_BOLD}{}/{C_RESET}",
+        output_dir
+    );
+    println!("  {C_GREEN}✓{C_RESET} graph.json");
+    println!("  {C_GREEN}✓{C_RESET} indexed-tree.json");
+    println!("  {C_GREEN}✓{C_RESET} index.html (open in browser with HTTP server)");
+    println!("  {C_GREEN}✓{C_RESET} d3.v7.min.js");
+    println!("  {C_GREEN}✓{C_RESET} README.md");
 
     if no_ingest {
         println!("{C_YELLOW}⚠ Skipping db-ingest (--no-ingest){C_RESET}");
@@ -425,10 +445,13 @@ fn run_gen(args: &[String]) {
         println!("Total time: {C_BOLD}{:?}{C_RESET}", start_total.elapsed());
         return;
     }
- 
+
     println!();
     let t3 = std::time::Instant::now();
-    println!("{C_CYAN}▸{C_RESET} Ingesting graph data into DB {C_YELLOW}{}{C_RESET}", db_path);
+    println!(
+        "{C_CYAN}▸{C_RESET} Ingesting graph data into DB {C_YELLOW}{}{C_RESET}",
+        db_path
+    );
     match run_gen_ingest(&graph, &db_path, args) {
         Ok((nodes_written, edges_written)) => {
             println!(
@@ -670,8 +693,8 @@ fn run_gen_ingest(
 }
 
 fn run_ingest(args: &[String]) {
-    let graph_file = flag_value_or(args, &["-i", "--input"], "ug-out/graph.json");
-    let db_path = flag_value_or(args, &["-o", "--output"], "ug-out/ugdb");
+    let graph_file = flag_value_or(args, &["-i", "--input"], "ugout/graph.json");
+    let db_path = flag_value_or(args, &["-o", "--output"], "ugout/ugdb");
 
     let graph_json = fs::read_to_string(&graph_file).expect("Failed to read graph file");
     let graph: GraphData = serde_json::from_str(&graph_json).expect("Failed to parse graph JSON");
@@ -731,7 +754,7 @@ fn run_semantic_search(args: &[String]) {
         ],
     )
     .expect("missing query");
-    let db_path = flag_value_or(args, &["-d", "--db"], "ug-out/ugdb");
+    let db_path = flag_value_or(args, &["-d", "--db"], "ugout/ugdb");
     let limit: usize = flag_value(args, &["-k", "--limit"])
         .and_then(|s| s.parse().ok())
         .unwrap_or(10);
@@ -808,7 +831,7 @@ fn run_hybrid_search(args: &[String]) {
         "--output",
     ];
     let query = first_positional(args, &value_flags).expect("missing query");
-    let db_path = flag_value_or(args, &["-d", "--db"], "ug-out/ugdb");
+    let db_path = flag_value_or(args, &["-d", "--db"], "ugout/ugdb");
     let k: usize = flag_value(args, &["-k", "--limit"])
         .and_then(|s| s.parse().ok())
         .unwrap_or(8);
@@ -874,7 +897,7 @@ fn run_traverse(args: &[String]) {
 
     let start = first_positional(args, &["-d", "--db", "-k", "--hops", "-o", "--output"])
         .expect("missing start node id");
-    let db_path = flag_value_or(args, &["-d", "--db"], "ug-out/ugdb");
+    let db_path = flag_value_or(args, &["-d", "--db"], "ugout/ugdb");
     let hops: u32 = flag_value(args, &["-k", "--hops"])
         .and_then(|s| s.parse().ok())
         .unwrap_or(2);
@@ -926,9 +949,7 @@ fn print_gen_help() {
     println!(
         "  {C_BOLD}{C_MAGENTA}⚡ ug gen{C_RESET}  {C_YELLOW}— end-to-end knowledge graph pipeline{C_RESET}"
     );
-    println!(
-        "  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}"
-    );
+    println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
     println!(
         "  {C_CYAN}index{C_RESET} {C_BOLD}→{C_RESET} {C_CYAN}graph{C_RESET} {C_BOLD}→{C_RESET} {C_CYAN}visualization{C_RESET} {C_BOLD}→{C_RESET} {C_CYAN}OverGraph ingest{C_RESET}"
     );
@@ -937,8 +958,12 @@ fn print_gen_help() {
     println!();
     println!("{C_BOLD}Options:{C_RESET}");
     println!("  {C_CYAN}-i, --input{C_RESET} <path>       Input directory (default: .)");
-    println!("  {C_CYAN}-c, --cache{C_RESET} <dir>        Cache directory for incremental indexing");
-    println!("  {C_CYAN}-o, --output{C_RESET} <dir>       Output/OverGraph directory (default: ug-out)");
+    println!(
+        "  {C_CYAN}-c, --cache{C_RESET} <dir>        Cache directory for incremental indexing"
+    );
+    println!(
+        "  {C_CYAN}-o, --output{C_RESET} <dir>       Output/OverGraph directory (default: ugout)"
+    );
     println!("  {C_YELLOW}--no-ingest{C_RESET}              Skip the OverGraph ingest step");
     println!("  {C_GREEN}--serve{C_RESET}                  Chain into 'ug serve' on the generated outputs");
     println!(
@@ -954,7 +979,7 @@ fn print_gen_help() {
     );
     println!();
     println!("{C_BOLD}Examples:{C_RESET}");
-    println!("  {C_MAGENTA}ug gen{C_RESET} -i ./src -o ./ug-out");
+    println!("  {C_MAGENTA}ug gen{C_RESET} -i ./src -o ./ugout");
     println!("  {C_MAGENTA}ug gen{C_RESET} -i ./src --no-ingest --serve");
 }
 
@@ -963,15 +988,11 @@ fn print_logo() {
     println!(
         "          {C_BOLD}{C_YELLOW}·{C_RESET}      {C_BOLD}{C_YELLOW}✦{C_RESET}      {C_BOLD}{C_CYAN}◉{C_RESET}{C_BOLD}{C_BLUE}───{C_RESET}{C_BOLD}{C_CYAN}◉{C_RESET}{C_BOLD}{C_BLUE}───{C_RESET}{C_BOLD}{C_CYAN}◉{C_RESET}      {C_BOLD}{C_YELLOW}✦{C_RESET}      {C_BOLD}{C_YELLOW}·{C_RESET}"
     );
-    println!(
-        "                          {C_BOLD}{C_BLUE}╱ ╲ ╱ ╲ ╱ ╲{C_RESET}"
-    );
+    println!("                          {C_BOLD}{C_BLUE}╱ ╲ ╱ ╲ ╱ ╲{C_RESET}");
     println!(
         "             {C_BOLD}{C_YELLOW}·{C_RESET}        {C_BOLD}{C_MAGENTA}◉{C_RESET}{C_BOLD}{C_BLUE}───{C_RESET}{C_BOLD}{C_MAGENTA}◉{C_RESET}{C_BOLD}{C_BLUE}───{C_RESET}{C_BOLD}{C_MAGENTA}◉{C_RESET}{C_BOLD}{C_BLUE}───{C_RESET}{C_BOLD}{C_MAGENTA}◉{C_RESET}        {C_BOLD}{C_YELLOW}·{C_RESET}"
     );
-    println!(
-        "                          {C_BOLD}{C_BLUE}╲ ╱ ╲ ╱ ╲ ╱{C_RESET}"
-    );
+    println!("                          {C_BOLD}{C_BLUE}╲ ╱ ╲ ╱ ╲ ╱{C_RESET}");
     println!(
         "          {C_BOLD}{C_YELLOW}·{C_RESET}      {C_BOLD}{C_YELLOW}✦{C_RESET}      {C_BOLD}{C_GREEN}◉{C_RESET}{C_BOLD}{C_BLUE}───{C_RESET}{C_BOLD}{C_GREEN}◉{C_RESET}{C_BOLD}{C_BLUE}───{C_RESET}{C_BOLD}{C_GREEN}◉{C_RESET}      {C_BOLD}{C_YELLOW}✦{C_RESET}      {C_BOLD}{C_YELLOW}·{C_RESET}"
     );
@@ -1000,12 +1021,12 @@ fn print_help() {
     println!("{C_BOLD}Commands:{C_RESET}");
     println!("  {C_CYAN}index{C_RESET} [<path>]        Index a directory");
     println!("    -i, --input <path>   Input directory (default: .)");
-    println!("    -o, --output <file>  Output file (default: ug-out/indexed-tree.json)");
+    println!("    -o, --output <file>  Output file (default: ugout/indexed-tree.json)");
     println!("    -c, --cache <dir>    Cache directory for incremental indexing");
     println!();
     println!("  {C_CYAN}graph{C_RESET} [<file>]        Build graph from index result");
-    println!("    -i, --input <file>  Input index file (default: ug-out/indexed-tree.json)");
-    println!("    -o, --output <file> Output graph file (default: ug-out/graph.json)");
+    println!("    -i, --input <file>  Input index file (default: ugout/indexed-tree.json)");
+    println!("    -o, --output <file> Output graph file (default: ugout/graph.json)");
     println!();
     println!("  {C_CYAN}bfs{C_RESET} <file> <node> [k]  K-hop BFS traversal");
     println!("    -o, --output <file> Output file (optional)");
@@ -1023,26 +1044,28 @@ fn print_help() {
     println!("    -o, --output <file> Output file (optional)");
     println!();
     println!("  {C_CYAN}search_graph{C_RESET} <graph> <keyword>  Keyword search over graph nodes (in-memory)");
-    println!(
-        "    -t, --type <type>   Restrict to node type (repeatable)"
-    );
+    println!("    -t, --type <type>   Restrict to node type (repeatable)");
     println!("    -o, --output <file> Output file (optional)");
     println!();
-    println!("  {C_CYAN}analyze{C_RESET}              Run full graph analysis (centrality + cycles)");
-    println!("    -i, --input <file> Graph file (default: ug-out/graph.json)");
-    println!("    -o, --output <dir> Output directory (default: ug-out)");
+    println!(
+        "  {C_CYAN}analyze{C_RESET}              Run full graph analysis (centrality + cycles)"
+    );
+    println!("    -i, --input <file> Graph file (default: ugout/graph.json)");
+    println!("    -o, --output <dir> Output directory (default: ugout)");
     println!();
     println!("  {C_BOLD}{C_MAGENTA}gen{C_RESET} [<path>]         {C_BOLD}{C_MAGENTA}⚡ Full pipeline: index → graph → visualization → OverGraph ingest ⚡{C_RESET}");
     println!("    -i, --input <path>  Input directory (default: .)");
     println!("    -c, --cache <dir>   Cache directory");
-    println!("    -o, --output <dir>  Output/OverGraph directory (default: ug-out)");
+    println!("    -o, --output <dir>  Output/OverGraph directory (default: ugout)");
     println!("    --no-ingest         Skip the OverGraph ingest step");
-    println!("    --serve             Chain into 'ug serve' on the generated outputs after gen finishes");
+    println!(
+        "    --serve             Chain into 'ug serve' on the generated outputs after gen finishes"
+    );
     println!("    --base-url/--api-key/--model/--embedding-dim  Embedding endpoint overrides");
     println!();
     println!("  {C_CYAN}ingest{C_RESET}               Embed graph nodes and write to OverGraph");
-    println!("    -i, --input <file>  Graph JSON (default: ug-out/graph.json)");
-    println!("    -o, --output <dir> OverGraph directory (default: ug-out/ugdb)");
+    println!("    -i, --input <file>  Graph JSON (default: ugout/graph.json)");
+    println!("    -o, --output <dir> OverGraph directory (default: ugout/ugdb)");
     println!("    --base-url <url>   Embedding endpoint (default: http://localhost:8000/v1)");
     println!("    --api-key <key>    Embedding API key (default: 1234)");
     println!(
@@ -1053,7 +1076,7 @@ fn print_help() {
     );
     println!();
     println!("  {C_CYAN}semantic_search{C_RESET} <query>  Semantic vector search (OverGraph, no graph context)");
-    println!("    -d, --db <path>    OverGraph directory (default: ug-out/ugdb)");
+    println!("    -d, --db <path>    OverGraph directory (default: ugout/ugdb)");
     println!("    -k, --limit <n>    Top-k results (default: 10)");
     println!("    --filter <sql>     Optional SQL WHERE clause");
     println!("    --base-url/--api-key/--model/--embedding-dim  Embedding endpoint overrides");
@@ -1062,7 +1085,7 @@ fn print_help() {
     println!(
         "  {C_CYAN}hybrid_search{C_RESET} <query>   {C_YELLOW}GraphRAG: semantic search → graph expansion → ranked context{C_RESET}"
     );
-    println!("    -d, --db <path>     OverGraph directory (default: ug-out/ugdb)");
+    println!("    -d, --db <path>     OverGraph directory (default: ugout/ugdb)");
     println!("    -k, --limit <n>     Final results (default: 8)");
     println!("    --hops <n>          Graph expansion hops (default: 2)");
     println!("    --filter <sql>      SQL WHERE clause for semantic seed filter");
@@ -1077,23 +1100,21 @@ fn print_help() {
     println!("    -o, --output <file> Output file (optional, omit for stdout)");
     println!();
     println!("  {C_CYAN}traverse{C_RESET} <node-id>   K-hop BFS using the OverGraph edges table");
-    println!("    -d, --db <path>    OverGraph directory (default: ug-out/ugdb)");
+    println!("    -d, --db <path>    OverGraph directory (default: ugout/ugdb)");
     println!("    -k, --hops <n>     Max hops (default: 2)");
     println!("    -o, --output <file> Output file (optional)");
     println!();
     println!("  {C_CYAN}serve{C_RESET}                Serve the visualization + graph.json + read-only API (in-memory, pre-compressed)");
-    println!("    -i, --input <file>  Graph JSON to serve (default: ug-out/graph.json)");
+    println!("    -i, --input <file>  Graph JSON to serve (default: ugout/graph.json)");
     println!("    -p, --port <n>      TCP port (default: 8080)");
     println!("    --host <addr>       Bind address (default: 127.0.0.1; use 0.0.0.0 for LAN)");
     println!("    --watch             Reload graph file when its mtime changes (~2s poll)");
-    println!("    -d, --db <path>     OverGraph DB for /api/db + /api/search routes (default: ug-out/ugdb)");
+    println!("    -d, --db <path>     OverGraph DB for /api/db + /api/search routes (default: ugout/ugdb)");
     println!("    --no-db             Don't open DB; Phase 3 routes return 503");
     println!(
         "    --repo-root <path>  Repo root for hybrid-search snippet resolution (default: cwd)"
     );
-    println!(
-        "    --base-url/--api-key/--model/--embedding-dim  Embedding endpoint overrides"
-    );
+    println!("    --base-url/--api-key/--model/--embedding-dim  Embedding endpoint overrides");
     println!("    {C_GREEN}API:{C_RESET} GET  /api/graph/{{stats, node/<id>, search?q=&types=, bfs/<id>?k=,");
     println!("                    path?source=&target=, filter?types=, centrality, cycles}}");
     println!("          GET  /api/db/{{node/<id>, traverse/<id>?k=&dir=&types=}}");
@@ -1106,13 +1127,15 @@ fn print_help() {
     println!("  {C_CYAN}ug filter{C_RESET} graph.json Contains Imports");
     println!("  {C_CYAN}ug centrality{C_RESET} graph.json");
     println!("  {C_CYAN}ug cycles{C_RESET} graph.json");
-    println!("  {C_CYAN}ug search_graph{C_RESET} graph.json loadConfig --type function --type class");
+    println!(
+        "  {C_CYAN}ug search_graph{C_RESET} graph.json loadConfig --type function --type class"
+    );
     println!("  {C_CYAN}ug analyze{C_RESET}");
-    println!("  {C_MAGENTA}ug gen{C_RESET} -i ./src -o ./ug-out");
+    println!("  {C_MAGENTA}ug gen{C_RESET} -i ./src -o ./ugout");
     println!("  {C_MAGENTA}ug gen{C_RESET} -i ./src --no-ingest --serve");
-    println!("  {C_CYAN}ug ingest{C_RESET} -i ug-out/graph.json -o ug-out/ugdb");
-    println!("  {C_CYAN}ug semantic_search{C_RESET} \"oauth login flow\" -d ug-out/ugdb");
-    println!("  {C_CYAN}ug hybrid_search{C_RESET} \"oauth login flow\" -d ug-out/ugdb -k 8");
-    println!("  {C_CYAN}ug traverse{C_RESET} \"file:src/index.ts\" -d ug-out/ugdb");
-    println!("  {C_CYAN}ug serve{C_RESET} -i ug-out/graph.json -p 8080");
+    println!("  {C_CYAN}ug ingest{C_RESET} -i ugout/graph.json -o ugout/ugdb");
+    println!("  {C_CYAN}ug semantic_search{C_RESET} \"oauth login flow\" -d ugout/ugdb");
+    println!("  {C_CYAN}ug hybrid_search{C_RESET} \"oauth login flow\" -d ugout/ugdb -k 8");
+    println!("  {C_CYAN}ug traverse{C_RESET} \"file:src/index.ts\" -d ugout/ugdb");
+    println!("  {C_CYAN}ug serve{C_RESET} -i ugout/graph.json -p 8080");
 }
