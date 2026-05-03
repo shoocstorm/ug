@@ -339,6 +339,8 @@ pub fn run_serve(args: &[String]) {
             spawn_watch(state.clone());
         }
 
+        tracing::info!("Open http://{}\n", addr);
+
         if let Err(e) = axum::serve(listener, app).await {
             tracing::error!(error = %e, "server crashed");
             std::process::exit(1);
@@ -642,13 +644,12 @@ async fn api_bfs(
         .parsed
         .edges
         .iter()
-        .filter(|e| match (
-            adj.id_to_idx.get(&e.source),
-            adj.id_to_idx.get(&e.target),
-        ) {
-            (Some(&si), Some(&ti)) => visited.contains(&si) && visited.contains(&ti),
-            _ => false,
-        })
+        .filter(
+            |e| match (adj.id_to_idx.get(&e.source), adj.id_to_idx.get(&e.target)) {
+                (Some(&si), Some(&ti)) => visited.contains(&si) && visited.contains(&ti),
+                _ => false,
+            },
+        )
         .collect();
     let dist_by_id: HashMap<&str, u32> = distances
         .iter()
@@ -673,9 +674,7 @@ async fn api_path(State(state): State<ServeState>, Query(params): Query<PathQuer
     let snap = state.snapshot();
     let adj = snap.adj.get_or_init(|| build_adj(&snap.parsed));
 
-    let not_found = || {
-        ok_json(serde_json::json!({ "path": [], "found": false }).to_string())
-    };
+    let not_found = || ok_json(serde_json::json!({ "path": [], "found": false }).to_string());
     let (Some(&src), Some(&tgt)) = (
         adj.id_to_idx.get(&params.source),
         adj.id_to_idx.get(&params.target),
@@ -939,12 +938,7 @@ async fn api_search_semantic(
 
     let _permit = match state.embed_lock.acquire().await {
         Ok(p) => p,
-        Err(_) => {
-            return err_json(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "embed semaphore closed",
-            )
-        }
+        Err(_) => return err_json(StatusCode::SERVICE_UNAVAILABLE, "embed semaphore closed"),
     };
 
     let hits = match body.filter.as_deref() {
@@ -1053,12 +1047,7 @@ async fn api_search_hybrid(
 
     let _permit = match state.embed_lock.acquire().await {
         Ok(p) => p,
-        Err(_) => {
-            return err_json(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "embed semaphore closed",
-            )
-        }
+        Err(_) => return err_json(StatusCode::SERVICE_UNAVAILABLE, "embed semaphore closed"),
     };
 
     let mut opts = SearchKbOptions::new(&body.query, state.repo_root.as_path());
@@ -1078,10 +1067,7 @@ async fn api_search_hybrid(
     match result {
         Ok(ctx) => match serde_json::to_string(&ctx) {
             Ok(s) => ok_json(s),
-            Err(e) => err_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("encode: {}", e),
-            ),
+            Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &format!("encode: {}", e)),
         },
         Err(e) => err_json(
             StatusCode::INTERNAL_SERVER_ERROR,

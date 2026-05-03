@@ -5,14 +5,14 @@
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
   "scripts": {
-    "build": "echo 'Building native binary for nodejs' && cd native && npm run build:dev && echo 'Copying binary to ug-out' && mkdir -p ug-out && cp node/cli.cjs ug-out/ && cp node/mcp-server.mjs ug-out/",
+    "build": "echo 'Building native binary for nodejs' && cd native && npm run build:dev && cp node/cli.cjs ug-out/ && cp node/mcp-server.mjs ug-out/",
+    "gen": "node node/cli.cjs gen",
     "index": "echo 'Indexing files' && node node/cli.cjs index",
     "graph": "echo 'Building Graph data' && node node/cli.cjs graph",
-    "gen": "node node/cli.cjs gen",
     "ingest": "echo 'Ingesting graph data into DB' && node node/cli.cjs db-ingest",
     "rag": "echo 'Performing RAG search on DB' && node node/cli.cjs db-rag",
     "traverse": "echo 'Traversing the graph' && node node/cli.cjs db-traverse",
-    "start": "npx serve ug-out -p 8080",
+    "start": "cp -r ./native/src/vis/visualization.html ug-out/index.html && cp -r ./native/src/vis/*.js ug-out/ && npx serve ug-out -p 8080",
     "test": "echo 'Running tests' && node node/test-runner.cjs"
   },
   "keywords": [

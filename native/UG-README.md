@@ -6,28 +6,39 @@ High-performance knowledge base indexer built with Rust, tree-sitter, and NAPI-R
 
 ```bash
 # Build
-cd native && cargo build --release
+cd native && npm run build
 
 # Tests
-cargo test
+npm run test
 
 # CLI
-../ug-out/ug --help
+cd ../ug-out 
+./ug help
 
 # Quick Generation
-../ug-out/ug gen
+./ug gen -i ../docs --no-ingest --serve
 
 ```
 
 ## CLI Commands
 
-### `ug index <path>`
+### `ug gen`
+
+Full pipeline: index + graph + ingest.
+
+```bash
+ug gen -i ../ -o ../ug-out
+# Produces: indexed-tree.json, graph.json and ingest graph.json into OverGraph db for semantic/hybrid search and RAG.
+# Adding --serve will start a http server at localhost:8080 to serve the graph.json in an visualized html page.
+```
+
+### `ug index`
 
 Scan & index a directory and output an indexed-tree.json file.
 
 ```bash
-ug index -i ../src
-ug index -i . --cache .cache -o out.json # cache speeds up re-indexing
+ug index -i ../docs
+ug index -i . --cache .cache -o indexed-tree.json # cache speeds up re-indexing
 ```
 
 Options:
@@ -39,7 +50,7 @@ Options:
 Build graph.json from the indexed-tree.json.
 
 ```bash
-ug graph -i index.json -o graph.json
+ug graph -i indexed-tree.json -o graph.json
 ```
 
 ### `ug search_graph`
@@ -47,7 +58,7 @@ ug graph -i index.json -o graph.json
 Keyword search over graph nodes from graph.json.
 
 ```bash
-ug search_graph ./ug-out/graph.json "Cache" -t function
+ug search_graph graph.json "visualization" -t Concept
 ```
 
 ### `ug bfs`
@@ -55,16 +66,7 @@ ug search_graph ./ug-out/graph.json "Cache" -t function
 K-hop BFS traversal over in-memory graph.json.
 
 ```bash
-ug bfs graph.json "file:src/index.ts" 2
-```
-
-### `ug gen`
-
-Full pipeline: index + graph + analysis.
-
-```bash
-ug gen -i ./src -o ./ug-out
-# Produces: graph.json, indexed-tree.json, analysis.json, cycles.json
+ug bfs graph.json "file:docs/VISUALIZATION-FEATURES.md" 2
 ```
 
 ### `ug ingest`
@@ -72,7 +74,7 @@ ug gen -i ./src -o ./ug-out
 Embed graph nodes into OverGraph.
 
 ```bash
-ug ingest -g ug-out/graph.json -d ug-out/ugdb
+ug ingest -g graph.json -d ./ugdb
 ```
 
 ### `ug semantic_search`
@@ -80,7 +82,15 @@ ug ingest -g ug-out/graph.json -d ug-out/ugdb
 Semantic vector search.
 
 ```bash
-ug semantic_search "build a tree" -d ug-out/ugdb --filter "node_type = 'Function'"
+ug semantic_search "build a tree" -d ./ugdb --filter "node_type = 'Function'"
+```
+
+### `ug search_kb`
+
+Hybrid (keyword + vector) search over OverGraph, with RRF and MMR.
+
+```bash
+ug search_kb "build a tree" -d ./ugdb -k 2
 ```
 
 ### `ug traverse`
@@ -88,7 +98,15 @@ ug semantic_search "build a tree" -d ug-out/ugdb --filter "node_type = 'Function
 K-hop BFS over OverGraph edges.
 
 ```bash
-ug traverse file:src/index.ts -d ug-out/ugdb -k 2
+ug traverse file:src/index.ts -d ./ugdb -k 2
+```
+
+### `ug serve`
+
+Serve the OverGraph database with a web UI.
+
+```bash
+ug serve -d ./ -p 8080
 ```
 
 ## Storage / GraphRAG (Phase 3+4)
@@ -96,9 +114,9 @@ ug traverse file:src/index.ts -d ug-out/ugdb -k 2
 End-to-end against a running embedding endpoint:
 
 ```bash
-ug ingest -g ug-out/graph.json -d ug-out/ugdb
-ug semantic_search "build a tree" -d ug-out/ugdb --filter "node_type = 'Function'"
-ug traverse file:src/index.ts -d ug-out/ugdb -k 2
+ug ingest -g graph.json -d ./ugdb
+ug semantic_search "build a tree" -d ./ugdb --filter "node_type = 'Function'"
+ug traverse file:src/index.ts -d ./ugdb -k 2
 ```
 
 ## Development
@@ -106,11 +124,7 @@ ug traverse file:src/index.ts -d ug-out/ugdb -k 2
 ### Running Tests
 
 ```bash
-cargo test              # All suites (67 tests)
-cargo test --test indexer_test
-cargo test --test graph_test
-cargo test --test search_test
-cargo test --test storage_test
+cargo test
 ```
 
 ### Building
