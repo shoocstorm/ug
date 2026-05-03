@@ -7,6 +7,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{Duration, SystemTime};
 
+use tokio::sync::OnceCell;
+
 use axum::body::{Body, Bytes};
 use axum::extract::{Json, Path as AxPath, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
@@ -128,6 +130,11 @@ struct ServeState {
     /// Reason a Phase 3 dependency is missing — surfaced verbatim in 503s so
     /// the operator can tell `--no-db` apart from a real connection failure.
     db_unavailable_reason: Arc<Option<String>>,
+    /// Cached node-count probe used by `/api/capabilities`. Populated on
+    /// first call so we don't pay the per-type scan on every request, but
+    /// stale across `--watch` reloads (acceptable: ingest doesn't run via
+    /// the server, so the count is effectively static for a serve session).
+    db_node_count: Arc<OnceCell<Option<usize>>>,
 }
 
 impl ServeState {
@@ -272,6 +279,7 @@ pub fn run_serve(args: &[String]) {
             repo_root: Arc::new(repo_root_path),
             embed_lock: Arc::new(Semaphore::new(4)),
             db_unavailable_reason: Arc::new(db_unavailable_reason),
+            db_node_count: Arc::new(OnceCell::new()),
         };
 
         let app = Router::new()
@@ -280,6 +288,7 @@ pub fn run_serve(args: &[String]) {
             .route("/d3.v7.min.js", get(handle_d3))
             .route("/graph.json", get(handle_graph))
             .route("/healthz", get(handle_health))
+            .route("/api/capabilities", get(api_capabilities))
             .route("/api/graph/stats", get(api_stats))
             .route("/api/graph/node/*id", get(api_node))
             .route("/api/graph/search", get(api_search))
@@ -787,6 +796,60 @@ async fn api_cycles(State(state): State<ServeState>) -> Response {
         .get_or_init(|| lib_cycles(snap.raw_json.clone()))
         .clone();
     ok_json(cached)
+}
+
+// ---------- Capabilities ----------
+
+/// Surfaces enough state for the visualization UI to gate DB-dependent
+/// panels (semantic / hybrid search) without having to make a probe
+/// request per panel. `search_ready` is the single boolean the UI keys
+/// off — it requires DB open, embedder configured, **and** at least one
+/// node row in the table (an opened-but-empty DB still 200s on the
+/// existing routes but returns nothing useful).
+async fn api_capabilities(State(state): State<ServeState>) -> Response {
+    let db_ready = state.db.is_some();
+    let embedder_ready = state.embedder.is_some();
+
+    let node_count: Option<usize> = if let Some(db) = state.db.clone() {
+        // Probe once per process. `count_nodes` walks per-type so we don't
+        // want to repeat it on every poll.
+        state
+            .db_node_count
+            .get_or_init(|| async move {
+                match db.count_nodes().await {
+                    Ok(n) => Some(n),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "count_nodes failed; reporting null");
+                        None
+                    }
+                }
+            })
+            .await
+            .clone()
+    } else {
+        None
+    };
+
+    let has_data = node_count.map(|n| n > 0).unwrap_or(false);
+    let search_ready = db_ready && embedder_ready && has_data;
+    let reason = if search_ready {
+        None
+    } else if !db_ready || !embedder_ready {
+        state.db_unavailable_reason.as_deref().map(|s| s.to_string())
+    } else if !has_data {
+        Some("DB is open but contains no nodes (run `ug index` first)".to_string())
+    } else {
+        None
+    };
+
+    let body = serde_json::json!({
+        "db_ready": db_ready,
+        "embedder_ready": embedder_ready,
+        "search_ready": search_ready,
+        "db_node_count": node_count,
+        "reason": reason,
+    });
+    ok_json(body.to_string())
 }
 
 // ---------- Phase 3 — DB-backed handlers ----------

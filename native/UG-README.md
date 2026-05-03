@@ -8,15 +8,12 @@ High-performance knowledge base indexer built with Rust, tree-sitter, and NAPI-R
 # Build
 cd native && npm run build
 
-# Tests
-npm run test
+# Quick Generation (and visualization)
+cd ../ug-out && ./ug gen -i ../docs --no-ingest --serve
 
-# CLI
-cd ../ug-out 
+
+# More CLI cmds
 ./ug help
-
-# Quick Generation
-./ug gen -i ../docs --no-ingest --serve
 
 ```
 
@@ -29,6 +26,7 @@ Full pipeline: index + graph + ingest.
 ```bash
 ug gen -i ../ -o ../ug-out
 # Produces: indexed-tree.json, graph.json and ingest graph.json into OverGraph db for semantic/hybrid search and RAG.
+# Add --no-ingest to skip the ingest step if you do not have an embedding endpoint running. (see ug gen --help for more info about the embedding endpoint configuration)
 # Adding --serve will start a http server at localhost:8080 to serve the graph.json in an visualized html page.
 ```
 
