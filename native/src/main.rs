@@ -27,6 +27,11 @@ fn main() {
 
     let args: Vec<String> = env::args().collect();
 
+    if args.len() >= 2 && (args[1] == "-v" || args[1] == "--version") {
+        println!("ug version {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+
     if args.len() < 2 {
         print_help();
         return;
@@ -172,6 +177,11 @@ pub(crate) fn tokio_runtime() -> tokio::runtime::Runtime {
 // ---------- Commands ----------
 
 fn run_index(args: &[String]) {
+    if has_flag(args, "-h") || has_flag(args, "--help") {
+        print_index_help();
+        return;
+    }
+
     let path = flag_value(args, &["-i", "--input"])
         .or_else(|| first_positional(args, &["-i", "--input", "-o", "--output", "-c", "--cache"]))
         .unwrap_or_else(|| ".".to_string());
@@ -190,6 +200,11 @@ fn run_index(args: &[String]) {
 }
 
 fn run_graph(args: &[String]) {
+    if has_flag(args, "-h") || has_flag(args, "--help") {
+        print_graph_help();
+        return;
+    }
+
     let input = flag_value_or(args, &["-i", "--input"], "ugout/indexed-tree.json");
     let output = flag_value_or(args, &["-o", "--output"], "ugout/graph.json");
 
@@ -699,6 +714,11 @@ fn run_gen_ingest(
 }
 
 fn run_ingest(args: &[String]) {
+    if has_flag(args, "-h") || has_flag(args, "--help") {
+        print_ingest_help();
+        return;
+    }
+
     let graph_file = flag_value_or(args, &["-i", "--input"], "ugout/graph.json");
     let db_path = flag_value_or(args, &["-o", "--output"], "ugout/ugdb");
 
@@ -950,6 +970,56 @@ fn run_traverse(args: &[String]) {
 }
 
 // ---------- Help ----------
+
+fn print_index_help() {
+    println!("  {C_CYAN}ug index{C_RESET}  {C_YELLOW}— index a directory into a tree of code entities{C_RESET}");
+    println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
+    println!();
+    println!("{C_BOLD}Usage:{C_RESET}  ug index [<path>] [options]");
+    println!();
+    println!("{C_BOLD}Options:{C_RESET}");
+    println!("  {C_CYAN}-i, --input{C_RESET} <path>   Input directory (default: .)");
+    println!("  {C_CYAN}-o, --output{C_RESET} <file>  Output file (default: ugout/indexed-tree.json)");
+    println!("  {C_CYAN}-c, --cache{C_RESET} <dir>     Cache directory for incremental indexing");
+    println!();
+    println!("{C_BOLD}Examples:{C_RESET}");
+    println!("  {C_CYAN}ug index{C_RESET} -i ./src -o index.json");
+    println!("  {C_CYAN}ug index{C_RESET} -c ./cache -o ./ugout/indexed-tree.json");
+}
+
+fn print_graph_help() {
+    println!("  {C_CYAN}ug graph{C_RESET}  {C_YELLOW}— build a graph from the indexed tree output{C_RESET}");
+    println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
+    println!();
+    println!("{C_BOLD}Usage:{C_RESET}  ug graph [<file>] [options]");
+    println!();
+    println!("{C_BOLD}Options:{C_RESET}");
+    println!("  {C_CYAN}-i, --input{C_RESET} <file>  Input index file (default: ugout/indexed-tree.json)");
+    println!("  {C_CYAN}-o, --output{C_RESET} <file> Output graph file (default: ugout/graph.json)");
+    println!();
+    println!("{C_BOLD}Examples:{C_RESET}");
+    println!("  {C_CYAN}ug graph{C_RESET} -i index.json -o graph.json");
+    println!("  {C_CYAN}ug graph{C_RESET} (uses defaults)");
+}
+
+fn print_ingest_help() {
+    println!("  {C_CYAN}ug ingest{C_RESET}  {C_YELLOW}— embed graph nodes and write to OverGraph{C_RESET}");
+    println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
+    println!();
+    println!("{C_BOLD}Usage:{C_RESET}  ug ingest [options]");
+    println!();
+    println!("{C_BOLD}Options:{C_RESET}");
+    println!("  {C_CYAN}-i, --input{C_RESET} <file>  Graph JSON (default: ugout/graph.json)");
+    println!("  {C_CYAN}-o, --output{C_RESET} <dir>  OverGraph directory (default: ugout/ugdb)");
+    println!("  {C_CYAN}--base-url{C_RESET} <url>    Embedding endpoint (default: http://localhost:8000/v1)");
+    println!("  {C_CYAN}--api-key{C_RESET} <key>     Embedding API key");
+    println!("  {C_CYAN}--model{C_RESET} <name>      Embedding model");
+    println!("  {C_CYAN}--embedding-dim{C_RESET} <n>  Vector dim (auto-probed, persisted on first ingest)");
+    println!();
+    println!("{C_BOLD}Examples:{C_RESET}");
+    println!("  {C_CYAN}ug ingest{C_RESET} -i ugout/graph.json -o ugout/ugdb");
+    println!("  {C_CYAN}ug ingest{C_RESET} -i graph.json -o ./db --model openai/text-embedding-3-small");
+}
 
 fn print_gen_help() {
     println!(

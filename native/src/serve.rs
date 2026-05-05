@@ -22,7 +22,7 @@ use tracing::Level;
 
 use crate::{
     calculate_centrality as lib_centrality, detect_cycles as lib_cycles, embedder_from_args,
-    flag_value, flag_value_or, has_flag, tokio_runtime,
+    flag_value, flag_value_or, has_flag, tokio_runtime, C_BOLD, C_CYAN, C_GREEN, C_RESET, C_YELLOW,
 };
 use ultragraph::storage::{
     self, search_kb as storage_search_kb, semantic_search as storage_semantic_search,
@@ -188,6 +188,11 @@ fn init_tracing() {
 
 pub fn run_serve(args: &[String]) {
     init_tracing();
+
+    if has_flag(args, "-h") || has_flag(args, "--help") {
+        print_serve_help();
+        return;
+    }
 
     let graph_file = flag_value_or(args, &["-i", "--input"], "ugout/graph.json");
     let port: u16 = flag_value(args, &["-p", "--port"])
@@ -1153,4 +1158,33 @@ fn node_row_to_json(n: &storage::NodeRow) -> serde_json::Value {
         "end_line": n.end_line,
         "description": n.description,
     })
+}
+
+pub fn print_serve_help() {
+    println!("  {C_CYAN}ug serve{C_RESET}  {C_YELLOW}— serve visualization + graph API{C_RESET}");
+    println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
+    println!();
+    println!("{C_BOLD}Usage:{C_RESET}  ug serve [options]");
+    println!();
+    println!("{C_BOLD}Options:{C_RESET}");
+    println!("  {C_CYAN}-i, --input{C_RESET} <file>   Graph JSON to serve (default: ugout/graph.json)");
+    println!("  {C_CYAN}-d, --db{C_RESET} <path>      OverGraph DB for /api/db + /api/search routes (default: ugout/ugdb)");
+    println!("  {C_YELLOW}--no-db{C_RESET}            Don't open DB; routes return 503");
+    println!("  {C_CYAN}-p, --port{C_RESET} <n>       TCP port (default: 8080)");
+    println!("  {C_CYAN}--host{C_RESET} <addr>        Bind address (default: 127.0.0.1)");
+    println!("  {C_GREEN}--watch{C_RESET}             Reload graph file when its mtime changes");
+    println!("  {C_CYAN}--repo-root{C_RESET} <path>   Repo root for hybrid-search snippet resolution");
+    println!("  {C_CYAN}--base-url{C_RESET} <url>      Embedding endpoint");
+    println!("  {C_CYAN}--api-key{C_RESET} <key>       Embedding API key");
+    println!("  {C_CYAN}--model{C_RESET} <name>        Embedding model");
+    println!();
+    println!("{C_BOLD}API Endpoints:{C_RESET}");
+    println!("  {C_CYAN}GET{C_RESET}  /api/graph/{{stats, node/<id>, search?q=&types=, bfs/<id>?k=,");
+    println!("           path?source=&target=, filter?types=, centrality, cycles}}");
+    println!("  {C_CYAN}GET{C_RESET}  /api/db/{{node/<id>, traverse/<id>?k=&dir=&types=}}");
+    println!("  {C_CYAN}POST{C_RESET} /api/search/{{semantic, hybrid}}  body: JSON");
+    println!();
+    println!("{C_BOLD}Examples:{C_RESET}");
+    println!("  {C_CYAN}ug serve{C_RESET} -i ugout/graph.json -p 8080");
+    println!("  {C_CYAN}ug serve{C_RESET} -i ugout/graph.json -d ugout/ugdb --watch");
 }
