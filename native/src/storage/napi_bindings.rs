@@ -117,6 +117,10 @@ struct SemanticHitJson {
 }
 
 fn build_embedder(opts: Option<&EmbedderOptions>) -> Result<Embedder, String> {
+    let want_remote = opts
+        .and_then(|o| o.base_url.as_deref())
+        .map(|s| !s.is_empty())
+        .unwrap_or(false);
     let cfg = match opts {
         None => EmbedderConfig::default(),
         Some(o) => EmbedderConfig::with_overrides(
@@ -128,7 +132,11 @@ fn build_embedder(opts: Option<&EmbedderOptions>) -> Result<Embedder, String> {
             o.timeout_secs.map(|v| v as u64),
         ),
     };
-    Embedder::new(cfg).map_err(|e| e.to_string())
+    if want_remote {
+        Embedder::remote(cfg).map_err(|e| e.to_string())
+    } else {
+        Embedder::local(cfg).map_err(|e| e.to_string())
+    }
 }
 
 fn parse_embedder_options(json: Option<String>) -> Result<Option<EmbedderOptions>, String> {

@@ -128,12 +128,12 @@
 
 ---
 
-## Storage Migration: OverGraph → OverGraph (2026-05-01) ✅
+## Storage Migration: LanceDB → OverGraph (2026-05-01) ✅
 
 End-to-end migration on branch `migrate/overgraph`. See `docs/MIGRATION-OVERGRAPH.md` for the full plan, run log, and open-question resolutions.
 
 **Highlights:**
-- Replaced OverGraph + manual PPR + manual RRF with a single OverGraph 0.6.0 dependency.
+- Replaced LanceDB + manual PPR + manual RRF with a single OverGraph 0.6.0 dependency.
 - Native PPR: `native/src/storage/ppr.rs` shrank from 445 → 116 LOC.
 - Native hybrid search: `query::rrf_search` collapsed into one `vector_search(mode=Hybrid, fusion_mode=RRF)` call.
 - New deterministic sparse keyword tokenizer (`text::build_sparse_keyword_vector`) replaces OverGraph's BM25 FTS for the keyword channel of hybrid search.

@@ -11,6 +11,7 @@
 
 pub mod db;
 pub mod embed;
+pub mod embed_local;
 pub mod ingest;
 pub mod napi_bindings;
 pub mod ppr;
@@ -19,7 +20,8 @@ pub mod text;
 pub mod types_registry;
 
 pub use db::{Db, EdgeRow, NodeRow};
-pub use embed::{Embedder, EmbedderConfig, DEFAULT_EMBEDDING_DIM, EMBEDDING_DIM};
+pub use embed::{Embedder, EmbedderConfig, RemoteEmbedder, DEFAULT_EMBEDDING_DIM, EMBEDDING_DIM};
+pub use embed_local::LocalEmbedder;
 pub use ingest::{ingest_graph, reembed_nodes, IngestStats};
 pub use ppr::{default_edge_type_weights, run_ppr};
 pub use query::{

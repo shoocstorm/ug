@@ -1,18 +1,35 @@
-//! HTTP client for an OpenAI-compatible `/v1/embeddings` endpoint.
+//! Embedding backend dispatcher.
 //!
-//! The default config targets the local Qwen3-Embedding model described
-//! in docs/GRAPH-STORAGE.md (1024-dim cosine), but the dimension is a
-//! runtime field on `EmbedderConfig` so other models (nomic 768-dim,
-//! OpenAI 1536/3072, etc.) work without recompiling. We batch requests
-//! (default 32 inputs per call) to stay within per-request limits.
+//! Two backends sit behind a single [`Embedder`] enum so callers don't
+//! care which one is in use:
+//!
+//! * [`LocalEmbedder`] — in-process ONNX inference via `fastembed-rs`.
+//!   No external service required; the model is downloaded to a user
+//!   cache on first use. This is the default.
+//! * [`RemoteEmbedder`] — HTTP client for an OpenAI-compatible
+//!   `/v1/embeddings` endpoint. Selected when the caller explicitly
+//!   provides `--base-url`.
+//!
+//! The downstream API (`embed`, `probe_dim`, `ping`, `config`,
+//! `set_dim`) is identical for both, so `ingest.rs` / `query.rs` /
+//! `napi_bindings.rs` are agnostic to the backend.
 
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-pub const DEFAULT_MODEL: &str = "openai/Qwen3-Embedding-0.6B-4bit-DWQ";
+use crate::storage::embed_local::LocalEmbedder;
+
+/// Default model. Resolved against fastembed's catalog for the local
+/// backend, and passed verbatim as the `model` field for the remote
+/// backend (OpenAI-compatible endpoints expect a model name).
+pub const DEFAULT_MODEL: &str = "BAAI/bge-small-en-v1.5";
+/// Only used when the user opts into the remote backend with
+/// `--base-url`. The local backend ignores this entirely.
 pub const DEFAULT_BASE_URL: &str = "http://localhost:8000/v1";
 pub const DEFAULT_API_KEY: &str = "1234";
-pub const DEFAULT_EMBEDDING_DIM: usize = 1024;
+/// 384 matches `bge-small-en-v1.5` and `all-MiniLM-L6-v2`. Acts as the
+/// fallback dim for legacy databases without a `ug-meta.json` sidecar.
+pub const DEFAULT_EMBEDDING_DIM: usize = 384;
 /// Legacy alias preserved for existing tests/benches that use this as the
 /// fixture size. New code should use `EmbedderConfig::dim` instead.
 pub const EMBEDDING_DIM: usize = DEFAULT_EMBEDDING_DIM;
@@ -95,6 +112,8 @@ pub enum EmbedError {
     Http(reqwest::Error),
     BadStatus(u16, String),
     DimensionMismatch { expected: usize, got: usize },
+    /// In-process inference (model load, tokenizer, ONNX session) failed.
+    Local(String),
 }
 
 impl std::fmt::Display for EmbedError {
@@ -107,18 +126,91 @@ impl std::fmt::Display for EmbedError {
             EmbedError::DimensionMismatch { expected, got } => {
                 write!(f, "embedding dim mismatch: expected {}, got {}", expected, got)
             }
+            EmbedError::Local(msg) => write!(f, "local embedding error: {}", msg),
         }
     }
 }
 
 impl std::error::Error for EmbedError {}
 
-pub struct Embedder {
+/// Public façade. The two variants share the same surface so callers
+/// don't branch — `match self` only happens inside this enum.
+pub enum Embedder {
+    Local(LocalEmbedder),
+    Remote(RemoteEmbedder),
+}
+
+impl Embedder {
+    /// Default constructor — picks the **local** backend. Preserved so
+    /// existing call sites keep compiling. Use `Embedder::remote` to
+    /// opt into the HTTP backend.
+    pub fn new(cfg: EmbedderConfig) -> Result<Self, EmbedError> {
+        Self::local(cfg)
+    }
+
+    /// In-process embeddings via fastembed-rs. The model is downloaded
+    /// (and cached) on first construction, which can take 30-60 s for
+    /// a 22-130 MB model.
+    pub fn local(cfg: EmbedderConfig) -> Result<Self, EmbedError> {
+        LocalEmbedder::new(cfg).map(Self::Local)
+    }
+
+    /// HTTP backend against an OpenAI-compatible `/v1/embeddings`
+    /// endpoint. Use this when `--base-url` is supplied.
+    pub fn remote(cfg: EmbedderConfig) -> Result<Self, EmbedError> {
+        RemoteEmbedder::new(cfg).map(Self::Remote)
+    }
+
+    pub fn config(&self) -> &EmbedderConfig {
+        match self {
+            Embedder::Local(e) => e.config(),
+            Embedder::Remote(e) => e.config(),
+        }
+    }
+
+    /// Override the configured embedding dimension. Used by the napi
+    /// `db_ingest` path when the dim was not specified by the caller —
+    /// we probe the endpoint and patch the embedder so its per-batch
+    /// validator agrees with the model's actual output size.
+    pub fn set_dim(&mut self, dim: usize) {
+        match self {
+            Embedder::Local(e) => e.set_dim(dim),
+            Embedder::Remote(e) => e.set_dim(dim),
+        }
+    }
+
+    pub async fn ping(&self) -> Result<(), EmbedError> {
+        match self {
+            Embedder::Local(e) => e.ping().await,
+            Embedder::Remote(e) => e.ping().await,
+        }
+    }
+
+    pub async fn probe_dim(&self) -> Result<usize, EmbedError> {
+        match self {
+            Embedder::Local(e) => e.probe_dim().await,
+            Embedder::Remote(e) => e.probe_dim().await,
+        }
+    }
+
+    pub async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, EmbedError> {
+        match self {
+            Embedder::Local(e) => e.embed(texts).await,
+            Embedder::Remote(e) => e.embed(texts).await,
+        }
+    }
+}
+
+/// HTTP client for an OpenAI-compatible `/v1/embeddings` endpoint.
+///
+/// We batch requests (default 32 inputs per call) to stay within
+/// per-request limits.
+pub struct RemoteEmbedder {
     cfg: EmbedderConfig,
     client: reqwest::Client,
 }
 
-impl Embedder {
+impl RemoteEmbedder {
     pub fn new(cfg: EmbedderConfig) -> Result<Self, EmbedError> {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(cfg.timeout_secs))
@@ -131,10 +223,6 @@ impl Embedder {
         &self.cfg
     }
 
-    /// Override the configured embedding dimension. Used by the napi
-    /// `db_ingest` path when the dim was not specified by the caller —
-    /// we probe the endpoint and patch the embedder so its per-batch
-    /// validator agrees with the model's actual output size.
     pub fn set_dim(&mut self, dim: usize) {
         self.cfg.dim = dim;
     }
@@ -148,9 +236,6 @@ impl Embedder {
     /// model's dim instead of pre-configuring it.
     pub async fn probe_dim(&self) -> Result<usize, EmbedError> {
         let probe = vec!["ping".to_string()];
-        // Bypass the configured-dim validator inside `embed` so callers
-        // can use `probe_dim` to discover an unknown dim. We re-issue a
-        // minimal request here.
         let url = format!("{}/embeddings", self.cfg.base_url.trim_end_matches('/'));
         let req = EmbeddingRequest {
             model: &self.cfg.model,

@@ -195,18 +195,39 @@ pub fn run_serve(args: &[String]) {
     }
 
     let graph_file = flag_value_or(args, &["-i", "--input"], "ugout/graph.json");
+    let graph_path = std::fs::canonicalize(&graph_file).unwrap_or_else(|e| {
+        tracing::error!(path = %graph_file, error = %e, "failed to resolve graph path");
+        std::process::exit(1);
+    });
+
     let port: u16 = flag_value(args, &["-p", "--port"])
         .and_then(|s| s.parse().ok())
         .unwrap_or(8080);
     let host = flag_value_or(args, &["--host"], "127.0.0.1");
     let watch = has_flag(args, "--watch");
     let no_db = has_flag(args, "--no-db");
-    let db_path = flag_value_or(args, &["-d", "--db"], "ugout/ugdb");
-    let repo_root_path = flag_value(args, &["--repo-root"])
+
+    let db_path_raw = flag_value_or(args, &["-d", "--db"], "ugout/ugdb");
+    let db_path = std::fs::canonicalize(&db_path_raw).unwrap_or_else(|_| {
+        std::env::current_dir()
+            .map(|c| c.join(&db_path_raw))
+            .unwrap_or_else(|_| PathBuf::from(&db_path_raw))
+    });
+
+    let repo_root_raw = flag_value(args, &["--repo-root"])
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let repo_root_path = std::fs::canonicalize(&repo_root_raw).unwrap_or_else(|e| {
+        tracing::error!(path = %repo_root_raw.display(), error = %e, "failed to resolve repo root path");
+        std::process::exit(1);
+    });
 
-    let graph_path = PathBuf::from(&graph_file);
+    tracing::info!(
+        graph = %graph_path.display(),
+        db = %db_path.display(),
+        repo_root = %repo_root_path.display(),
+        "resolved paths"
+    );
 
     let t0 = std::time::Instant::now();
     let snapshot = match load_snapshot(&graph_path) {
@@ -261,14 +282,15 @@ pub fn run_serve(args: &[String]) {
         let (db_arc, db_unavailable_reason): (Option<Arc<Db>>, Option<String>) = if no_db {
             (None, Some("started with --no-db".to_string()))
         } else {
-            match Db::open(&db_path).await {
+            let db_path_str = db_path.to_string_lossy();
+            match Db::open(&db_path_str).await {
                 Ok(db) => {
-                    tracing::info!(path = %db_path, "DB opened");
+                    tracing::info!(path = %db_path.display(), "DB opened");
                     (Some(Arc::new(db)), None)
                 }
                 Err(e) => {
-                    let reason = format!("failed to open DB at {}: {}", db_path, e);
-                    tracing::warn!(error = %e, path = %db_path, "DB open failed; Phase 3 routes will 503");
+                    let reason = format!("failed to open DB at {}: {}", db_path.display(), e);
+                    tracing::warn!(error = %e, path = %db_path.display(), "DB open failed; Phase 3 routes will 503");
                     (None, Some(reason))
                 }
             }
@@ -330,7 +352,7 @@ pub fn run_serve(args: &[String]) {
 
         let db_api_enabled = state.db.is_some() && state.embedder.is_some();
         tracing::info!(
-            graph = %graph_file,
+            graph = %graph_path.display(),
             nodes,
             edges,
             identity_bytes = identity_size,
@@ -339,7 +361,7 @@ pub fn run_serve(args: &[String]) {
             encode_secs = t0.elapsed().as_secs_f32(),
             addr = %addr,
             db_api = db_api_enabled,
-            db_path = %db_path,
+            db_path = %db_path.display(),
             db_unavailable_reason = state.db_unavailable_reason.as_deref().unwrap_or(""),
             watch,
             "ug serve ready"

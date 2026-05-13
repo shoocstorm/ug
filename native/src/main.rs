@@ -23,6 +23,7 @@ pub(crate) const VIS_D3: &[u8] = include_bytes!("./vis/d3.v7.min.js");
 const VIS_MD: &str = include_str!("../../README.md");
 
 fn main() {
+    install_panic_hook();
     print_logo();
 
     let args: Vec<String> = env::args().collect();
@@ -156,15 +157,54 @@ fn write_or_print(output_path: Option<&str>, data: &str, label: &str) {
 
 pub(crate) fn embedder_from_args(args: &[String]) -> Embedder {
     let dim = flag_value(args, &["--embedding-dim"]).and_then(|s| s.parse().ok());
+    let base_url = flag_value(args, &["--base-url"]);
+    // Presence of --base-url is the single switch between in-process
+    // (default) and the legacy HTTP backend. --model applies to both:
+    // for local it picks a fastembed catalog entry; for remote it's the
+    // model field sent in the /v1/embeddings request.
+    let want_remote = base_url.is_some();
     let cfg = EmbedderConfig::with_overrides(
-        flag_value(args, &["--base-url"]),
+        base_url,
         flag_value(args, &["--api-key"]),
         flag_value(args, &["--model"]),
         dim,
         None,
         None,
     );
-    Embedder::new(cfg).expect("failed to build embedder")
+    let result = if want_remote {
+        Embedder::remote(cfg)
+    } else {
+        Embedder::local(cfg)
+    };
+    let embedder = result.unwrap_or_else(|e| {
+        eprintln!("failed to build embedder: {}", e);
+        std::process::exit(1);
+    });
+    announce_embedder(&embedder, dim.is_some());
+    embedder
+}
+
+/// One-line banner on stderr so the user can see which backend the
+/// command is using before any progress output appears. Stderr so that
+/// stdout-bound JSON from `semantic_search` / `hybrid_search` stays
+/// clean for piping.
+fn announce_embedder(embedder: &Embedder, dim_was_explicit: bool) {
+    let cfg = embedder.config();
+    let dim_label = if dim_was_explicit {
+        format!("dim={}", cfg.dim)
+    } else {
+        format!("dim={} (auto-probe)", cfg.dim)
+    };
+    match embedder {
+        Embedder::Local(_) => eprintln!(
+            "{C_CYAN}▸{C_RESET} Embedder: {C_BOLD}{C_GREEN}local{C_RESET} (fastembed, in-process) — model={C_BOLD}{}{C_RESET}, {}",
+            cfg.model, dim_label
+        ),
+        Embedder::Remote(_) => eprintln!(
+            "{C_CYAN}▸{C_RESET} Embedder: {C_BOLD}{C_YELLOW}remote{C_RESET} (HTTP /v1/embeddings) — model={C_BOLD}{}{C_RESET}, base_url={}, {}",
+            cfg.model, cfg.base_url, dim_label
+        ),
+    }
 }
 
 pub(crate) fn tokio_runtime() -> tokio::runtime::Runtime {
@@ -172,6 +212,20 @@ pub(crate) fn tokio_runtime() -> tokio::runtime::Runtime {
         .enable_all()
         .build()
         .expect("failed to build tokio runtime")
+}
+
+/// Force-exit on panic so the process actually terminates. The local
+/// (fastembed/ONNX) backend spawns rayon + ORT worker threads that are
+/// not daemonized — a normal panic prints the message but then hangs
+/// forever waiting for those threads, leaving Ctrl+C as the only way
+/// out. Installing this hook keeps the default panic message but
+/// forces a hard exit immediately after.
+fn install_panic_hook() {
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        prev(info);
+        std::process::exit(101);
+    }));
 }
 
 // ---------- Commands ----------
@@ -702,10 +756,20 @@ fn run_gen_ingest(
 ) -> Result<(usize, usize), String> {
     let graph: GraphData =
         serde_json::from_str(graph_json).map_err(|e| format!("parse graph: {}", e))?;
-    let embedder = embedder_from_args(args);
-    let dim = embedder.config().dim as u32;
+    let mut embedder = embedder_from_args(args);
+    let dim_was_explicit = flag_value(args, &["--embedding-dim"]).is_some();
     let rt = tokio_runtime();
     rt.block_on(async {
+        if !dim_was_explicit {
+            let probed = embedder
+                .probe_dim()
+                .await
+                .map_err(|e| format!("embedder dim probe: {}", e))?;
+            if probed != embedder.config().dim {
+                embedder.set_dim(probed);
+            }
+        }
+        let dim = embedder.config().dim as u32;
         let db = Db::open_or_create(db_path, dim)
             .await
             .map_err(|e| format!("open db: {}", e))?;
@@ -724,16 +788,31 @@ fn run_ingest(args: &[String]) {
 
     let graph_json = fs::read_to_string(&graph_file).expect("Failed to read graph file");
     let graph: GraphData = serde_json::from_str(&graph_json).expect("Failed to parse graph JSON");
-    let embedder = embedder_from_args(args);
-    let dim = embedder.config().dim as u32;
+    let mut embedder = embedder_from_args(args);
+    let dim_was_explicit = flag_value(args, &["--embedding-dim"]).is_some();
     let rt = tokio_runtime();
 
     let start_total = std::time::Instant::now();
 
     rt.block_on(async {
-        let db = Db::open_or_create(&db_path, dim)
-            .await
-            .expect("failed to open overgraph");
+        if !dim_was_explicit {
+            match embedder.probe_dim().await {
+                Ok(probed) if probed != embedder.config().dim => embedder.set_dim(probed),
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("embedder dim probe failed: {}", e);
+                    return;
+                }
+            }
+        }
+        let dim = embedder.config().dim as u32;
+        let db = match Db::open_or_create(&db_path, dim).await {
+            Ok(db) => db,
+            Err(e) => {
+                eprintln!("Error opening OverGraph at {}: {}", db_path, e);
+                std::process::exit(1);
+            }
+        };
         match ingest_graph_with_progress(&db, &embedder, &graph).await {
             Ok((nodes_written, edges_written)) => {
                 println!("────────────────────────────────────────");
@@ -1011,14 +1090,29 @@ fn print_ingest_help() {
     println!("{C_BOLD}Options:{C_RESET}");
     println!("  {C_CYAN}-i, --input{C_RESET} <file>  Graph JSON (default: ugout/graph.json)");
     println!("  {C_CYAN}-o, --output{C_RESET} <dir>  OverGraph directory (default: ugout/ugdb)");
-    println!("  {C_CYAN}--base-url{C_RESET} <url>    Embedding endpoint (default: http://localhost:8000/v1)");
-    println!("  {C_CYAN}--api-key{C_RESET} <key>     Embedding API key");
-    println!("  {C_CYAN}--model{C_RESET} <name>      Embedding model");
-    println!("  {C_CYAN}--embedding-dim{C_RESET} <n>  Vector dim (auto-probed, persisted on first ingest)");
+    println!();
+    println!("{C_BOLD}Embedding (defaults to in-process, no service needed):{C_RESET}");
+    println!("  {C_CYAN}--model{C_RESET} <name>      Model. For local: a fastembed alias (see below).");
+    println!("                          For remote: the model field sent to /v1/embeddings.");
+    println!("                          Default: bge-small-en-v1.5 (384d, ~130 MB download).");
+    println!("  {C_CYAN}--base-url{C_RESET} <url>    {C_YELLOW}Switches to remote backend.{C_RESET} OpenAI-compatible");
+    println!("                          /v1/embeddings endpoint (e.g. http://localhost:8000/v1).");
+    println!("  {C_CYAN}--api-key{C_RESET} <key>     Bearer token for the remote endpoint (default: 1234).");
+    println!("  {C_CYAN}--embedding-dim{C_RESET} <n>  Override vector dim. Auto-probed otherwise; persisted to");
+    println!("                          <db>/ug-meta.json on first ingest.");
+    println!();
+    println!("{C_BOLD}Local model aliases:{C_RESET}");
+    println!("  bge-small-en-v1.5 (default)  bge-base-en-v1.5  bge-large-en-v1.5");
+    println!("  all-MiniLM-L6-v2  all-MiniLM-L12-v2  nomic-embed-text-v1.5");
+    println!("  multilingual-e5-small/base/large  bge-small-zh-v1.5  jina-embeddings-v2-base-code");
+    println!("  mxbai-embed-large-v1");
+    println!("  Cache: $UG_MODEL_CACHE → $XDG_CACHE_HOME/ug/models → ~/Library/Caches/ug/models (macOS)");
     println!();
     println!("{C_BOLD}Examples:{C_RESET}");
-    println!("  {C_CYAN}ug ingest{C_RESET} -i ugout/graph.json -o ugout/ugdb");
-    println!("  {C_CYAN}ug ingest{C_RESET} -i graph.json -o ./db --model openai/text-embedding-3-small");
+    println!("  {C_CYAN}ug ingest{C_RESET} -i ugout/graph.json -o ugout/ugdb        {C_YELLOW}# local, default model{C_RESET}");
+    println!("  {C_CYAN}ug ingest{C_RESET} --model nomic-embed-text-v1.5             {C_YELLOW}# local, larger model{C_RESET}");
+    println!("  {C_CYAN}ug ingest{C_RESET} --base-url https://api.openai.com/v1 \\");
+    println!("            --api-key $OPENAI_API_KEY --model text-embedding-3-small  {C_YELLOW}# remote{C_RESET}");
 }
 
 fn print_gen_help() {
@@ -1046,12 +1140,13 @@ fn print_gen_help() {
         "                            (inherits -p/--port, --host, --watch, --repo-root, embedder flags)"
     );
     println!();
-    println!("{C_BOLD}Embedding:{C_RESET}");
-    println!("  {C_CYAN}--base-url{C_RESET} <url>         Embedding endpoint (default: http://localhost:8000/v1)");
-    println!("  {C_CYAN}--api-key{C_RESET} <key>          Embedding API key");
-    println!("  {C_CYAN}--model{C_RESET} <name>           Embedding model");
+    println!("{C_BOLD}Embedding (in-process by default; --base-url switches to remote):{C_RESET}");
+    println!("  {C_CYAN}--model{C_RESET} <name>           Local fastembed alias or remote model name");
+    println!("                              (default: bge-small-en-v1.5, 384d).");
+    println!("  {C_CYAN}--base-url{C_RESET} <url>         {C_YELLOW}Opt into remote{C_RESET} /v1/embeddings endpoint.");
+    println!("  {C_CYAN}--api-key{C_RESET} <key>          Bearer token for the remote endpoint.");
     println!(
-        "  {C_CYAN}--embedding-dim{C_RESET} <n>      Embedding dimension override (default: auto-probed, fallback 1024)"
+        "  {C_CYAN}--embedding-dim{C_RESET} <n>      Override vector dim (auto-probed otherwise)."
     );
     println!();
     println!("{C_BOLD}Examples:{C_RESET}");
@@ -1142,13 +1237,12 @@ fn print_help() {
     println!("  {C_CYAN}ingest{C_RESET}               Embed graph nodes and write to OverGraph");
     println!("    -i, --input <file>  Graph JSON (default: ugout/graph.json)");
     println!("    -o, --output <dir> OverGraph directory (default: ugout/ugdb)");
-    println!("    --base-url <url>   Embedding endpoint (default: http://localhost:8000/v1)");
-    println!("    --api-key <key>    Embedding API key (default: 1234)");
+    println!("    --model <name>     Local fastembed alias or remote model name");
+    println!("                       (default: bge-small-en-v1.5, in-process, 384d)");
+    println!("    --base-url <url>   Switches to remote /v1/embeddings endpoint");
+    println!("    --api-key <key>    Bearer token for remote endpoint (default: 1234)");
     println!(
-        "    --model <name>     Embedding model (default: openai/Qwen3-Embedding-0.6B-4bit-DWQ)"
-    );
-    println!(
-        "    --embedding-dim <n>  Vector dim. Auto-probed from endpoint; persisted to <db>/ug-meta.json on first ingest."
+        "    --embedding-dim <n>  Vector dim override. Auto-probed otherwise; persisted to <db>/ug-meta.json on first ingest."
     );
     println!();
     println!("  {C_CYAN}semantic_search{C_RESET} <query>  Semantic vector search (OverGraph, no graph context)");
