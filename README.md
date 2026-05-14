@@ -6,94 +6,26 @@ A high-performance, local-first knowledge base engine that transforms codebases 
 
 - **UltraGraph Introduction**: [https://ultra-graph.web.app](https://ultra-graph.web.app)
 
+### 🎬 Demo
+
+[![UltraGraph demo](https://img.youtube.com/vi/d4OgINrD27Y/maxresdefault.jpg)](https://youtu.be/d4OgINrD27Y)
+
+> Click the thumbnail to watch the walkthrough on YouTube.
+
 UltraGraph implements a complete four-phase pipeline for building and querying advanced knowledge bases:
 
 - **Phase 1: Turbo Indexing** — Native multi-threaded indexer that maps codebases in milliseconds using `tree-sitter`.
 - **Phase 2: Graph Synthesis** — Builds a rich symbol graph with structural analysis (centrality, cycle detection, shortest paths).
-- **Phase 3: OverGraph Storage** — Persistent vector + FTS storage with incremental ingestion and local embedding support.
+- **Phase 3: OverGraph Storage** — Persistent vector + FTS storage with incremental ingestion and **in-process ONNX embedding** out of the box.
 - **Phase 4: GraphRAG Search** — State-of-the-art retrieval using **Personalized PageRank (PPR)** to combine semantic relevance with structural importance.
 
 ---
 
 ## 🏗️ Architecture
 
-```
-                    ┌──────────────┐
-                    │   Source     │
-                    │   Codebase   │
-                    │  (Dir Path)  │
-                    └──────┬───────┘
-                           │
-                           ▼
-              ┌─────────────────────────┐
-              │   Phase 1: Indexing     │
-              │  ────────────────────   │
-              │  • File discovery       │
-              │    (.gitignore aware)   │
-              │  • tree-sitter AST      │
-              │  • Symbol extraction    │
-              │  • Incremental (blake3) │
-              │  • Languages: TS/JS/    │
-              │    Py/Java/MD           │
-              └──────────┬──────────────┘
-                         │
-                         │ IndexResult (JSON)
-                         │
-                         ▼
-              ┌─────────────────────────┐
-              │   Phase 2: Graphing     │
-              │  ────────────────────   │
-              │  Nodes: Folder/File/    │
-              │    Function/Class/      │
-              │    Interface/Concept/   │
-              │    Dependency           │
-              │  Edges: Contains        │
-              │    (folder→folder→file  │
-              │    →symbol)/Imports/    │
-              │    Calls/Extends/       │
-              │    References           │
-              │  Algos: BFS/Cycle/      │
-              │    Centrality/Paths     │
-              └────┬────────────┬───────┘
-                   │            │
-    GraphData      │            │ GraphData
-    (JSON)         │            │
-                   ▼            ▼
-         ┌────────────┐  ┌──────────────────┐
-         │            │  │ Phase 3: Graph   │
-         │  VISUALIZE │  │ Storage          │
-         │            │  │ ──────────────── │
-         │  D3.js     │  │ • OverGraph table│
-         │ Interactive│  │ • Embeddings     │
-         │  Force-    │  │   (configurable) │
-         │  directed  │  │ • Nodes + Edges  │
-         │  graph     │  │   ingestion      │
-         └────────────┘  └─────────┬────────┘
-                                   │
-                                   │ stored vectors
-                                   ▼
-                          ┌──────────────────┐
-                          │ Phase 4: GraphRAG│
-                          │ ──────────────── │
-                          │ Hybrid Search:   │
-                          │ • Vector-semantic│
-                          │ • FTS-keyword    │
-                          │ • RRF fusion     │
-                          │ • MMR reranking  │
-                          │ • K-hop expansion│
-                          └────────┬─────────┘
-                                   │
-                                   ▼
-                          ┌──────────────────┐
-                          │   AI Agent via   │
-                          │   MCP Server     │
-                          │ ──────────────── │
-                          │ Tools:           │
-                          │ • search_kb      │
-                          │ • traverse_kb    │
-                          │ • ping_embedder  │
-                          └──────────────────┘
-```
+[![UltraGraph Architecture](docs/UG-Architecture.png)](https://ultra-graph.web.app/architecture.html)
+
+> Click the diagram for an interactive view at [ultra-graph.web.app/architecture.html](https://ultra-graph.web.app/architecture.html).
 
 ---
 
@@ -107,8 +39,10 @@ UltraGraph implements a complete four-phase pipeline for building and querying a
 | **Graph** | Folder hierarchy extraction & classification | ✅ |
 | | Symbol extraction (Functions, Classes, Interfaces, Imports, Calls) | ✅ |
 | | K-hop BFS, Shortest Path, Centrality, Cycle Detection | ✅ |
-| **Storage** | **OverGraph**: Hybrid Vector + FTS storage (LanceDB-backed) | ✅ |
-| | Support for local & remote OpenAI-compatible embedding endpoints | ✅ |
+| **Storage** | **OverGraph**: Hybrid Vector + FTS storage | ✅ |
+| | **Local ONNX embedding** via `fastembed-rs` (in-process, no service needed) | ✅ |
+| | Optional remote OpenAI-compatible `/v1/embeddings` backend | ✅ |
+| | Auto-probed embedding dim; persisted to `<db>/ug-meta.json` | ✅ |
 | **Retrieval** | **GraphRAG**: Personalized PageRank (PPR) & MMR strategies | ✅ |
 | | RRF (Reciprocal Rank Fusion) for hybrid search | ✅ |
 | **Interface** | **Web UI**: Premium D3.js force-directed visualization | ✅ |
@@ -122,7 +56,7 @@ UltraGraph implements a complete four-phase pipeline for building and querying a
 ### 1. Prerequisites
 - **Rust** (latest stable)
 - **Node.js** 20+
-- (Optional) A local embedding server (e.g., [Ollama](https://ollama.ai/) or `text-embeddings-inference`)
+- **No external embedding service required.** UltraGraph ships with an in-process **ONNX embedder** powered by [`fastembed-rs`](https://github.com/Anush008/fastembed-rs). Model weights are downloaded once on first use (~22–130 MB depending on model) and cached locally. Pass `--base-url` if you want to route to a remote OpenAI-compatible endpoint instead.
 
 ### 2. Build the Project
 ```bash
@@ -169,6 +103,60 @@ When using `rag` or `db-rag`, you can tune the retrieval strategy:
 
 ---
 
+## 🧠 Embeddings
+
+UltraGraph picks a backend based on a single flag: **omit `--base-url` for the local in-process embedder (default), or pass `--base-url` to use a remote OpenAI-compatible endpoint.** The same flags apply to `ingest`, `gen`, `rag`, and `semantic_search`.
+
+### Local backend (default) — in-process ONNX via `fastembed-rs`
+
+No daemon, no Docker, no network. The first call downloads the ONNX weights into a user cache directory; every subsequent run loads from disk. Inference runs on CPU through the ORT runtime and is dispatched onto a blocking pool so it doesn't stall the async runtime.
+
+```bash
+# Default — bge-small-en-v1.5, 384-dim, ~130 MB on first run
+ug ingest -i ugout/graph.json -o ugout/ugdb
+
+# Pick a different model by alias
+ug ingest --model nomic-embed-text-v1.5     # 768-dim, long-context
+ug ingest --model jina-embeddings-v2-base-code   # 768-dim, code-aware
+ug ingest --model mxbai-embed-large-v1      # 1024-dim, top-tier quality
+```
+
+**Supported aliases** (case-insensitive; vendor prefix optional):
+
+| Alias | Dim | Notes |
+| :--- | :--- | :--- |
+| `bge-small-en-v1.5` *(default)* | 384 | Smallest viable, fastest |
+| `bge-base-en-v1.5` | 768 | Balanced |
+| `bge-large-en-v1.5` | 1024 | Highest quality in BGE family |
+| `all-MiniLM-L6-v2` / `all-MiniLM-L12-v2` | 384 | Sentence-Transformers classics |
+| `nomic-embed-text-v1.5` | 768 | Strong on long context |
+| `multilingual-e5-small` / `base` / `large` | 384 / 768 / 1024 | Multilingual |
+| `bge-small-zh-v1.5` | 512 | Chinese-heavy docs |
+| `jina-embeddings-v2-base-code` | 768 | Code-aware |
+| `mxbai-embed-large-v1` | 1024 | Top-tier quality |
+
+**Model cache resolution order:**
+1. `UG_MODEL_CACHE` env var (full path) — ops escape hatch.
+2. `XDG_CACHE_HOME/ug/models` — Linux convention.
+3. Platform default — `~/Library/Caches/ug/models` (macOS), `~/.cache/ug/models` (Linux), `%LOCALAPPDATA%\ug\models` (Windows).
+
+### Remote backend (opt-in) — OpenAI-compatible `/v1/embeddings`
+
+Passing `--base-url` switches to the HTTP client. Works with OpenAI, [Ollama](https://ollama.ai/), `text-embeddings-inference`, vLLM, or any service exposing the OpenAI embeddings shape.
+
+```bash
+ug ingest \
+  --base-url https://api.openai.com/v1 \
+  --api-key  $OPENAI_API_KEY \
+  --model    text-embedding-3-small
+```
+
+### Dimension handling
+
+You don't need to know your model's dim. On first ingest, UltraGraph runs a one-shot probe, writes the discovered dim to `<db>/ug-meta.json`, and reuses it on every subsequent open. Override explicitly with `--embedding-dim <n>` if you need to pin it.
+
+---
+
 ## 🤖 MCP Server
 
 Integrate UltraGraph directly into your AI Agent (Cursor, Claude Desktop, etc.).
@@ -182,9 +170,10 @@ Integrate UltraGraph directly into your AI Agent (Cursor, Claude Desktop, etc.).
 Set these environment variables before starting the server:
 - `UG_DB_PATH`: Path to your OverGraph directory (default: `./ugout/ugdb`).
 - `UG_REPO_ROOT`: Root path for resolving snippet file paths.
-- `UG_EMBED_MODEL`: Override embedding model name.
-- `UG_EMBED_BASE_URL`: Override embedding endpoint base URL.
-- `UG_EMBED_API_KEY`: Override embedding API key.
+- `UG_EMBED_MODEL`: Override embedding model (local fastembed alias or remote model name).
+- `UG_EMBED_BASE_URL`: **Set this to opt into the remote backend.** When unset, the MCP server uses the in-process ONNX embedder.
+- `UG_EMBED_API_KEY`: Bearer token for the remote endpoint.
+- `UG_MODEL_CACHE`: Override the local ONNX model cache directory.
 
 ```bash
 UG_DB_PATH=./ugout/ugdb 

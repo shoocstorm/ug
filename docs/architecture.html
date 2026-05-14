@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>UltraGraph — Architecture</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink:        #1F2937;
+    --slate:      #64748B;
+    --slate-soft: #94A3B8;
+    --line:       #E2E8F0;
+    --line-soft:  #EEF2F6;
+    --bg:         #FFFFFF;
+    --bg-soft:    #F8FAFC;
+    --accent:     #14B8A6;
+    --accent-2:   #2DD4BF;
+    --accent-ink: #0D9488;
+    --code-bg:    #0F172A;
+    --code-ink:   #E2E8F0;
+    --code-dim:   #94A3B8;
+    --code-teal:  #5EEAD4;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    color: var(--ink);
+    background: var(--bg);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    letter-spacing: -0.011em;
+  }
+
+  body {
+    min-height: 100vh;
+    padding: 56px 48px 48px;
+    position: relative;
+    overflow-x: auto;
+    background:
+      radial-gradient(900px 600px at 10% -10%, rgba(45, 212, 191, 0.13), transparent 60%),
+      radial-gradient(800px 500px at 100% 10%, rgba(20, 184, 166, 0.10), transparent 60%),
+      radial-gradient(700px 500px at 50% 110%, rgba(94, 234, 212, 0.09), transparent 60%),
+      #FFFFFF;
+  }
+
+  .stage {
+    max-width: 1440px;
+    margin: 0 auto;
+    position: relative;
+  }
+
+  /* ─── HEADER ─────────────────────────────── */
+  .header {
+    text-align: center;
+    margin-bottom: 48px;
+  }
+  .eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 13px;
+    border: 1px solid rgba(20, 184, 166, 0.28);
+    background: rgba(20, 184, 166, 0.06);
+    border-radius: 999px;
+    color: var(--accent-ink);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    margin-bottom: 18px;
+  }
+  .eyebrow .dot {
+    width: 6px; height: 6px;
+    border-radius: 999px;
+    background: var(--accent);
+    box-shadow: 0 0 0 4px rgba(20, 184, 166, 0.15);
+  }
+  .header h1 {
+    font-size: 40px;
+    font-weight: 800;
+    line-height: 1.1;
+    letter-spacing: -0.03em;
+    color: var(--ink);
+    margin-bottom: 12px;
+  }
+  .header h1 .hl { color: var(--accent); }
+  .header p {
+    font-size: 15px;
+    color: var(--slate);
+    max-width: 660px;
+    margin: 0 auto;
+    line-height: 1.55;
+  }
+
+  /* ─── HORIZONTAL FLOW ────────────────────── */
+  .flow {
+    position: relative;
+    padding-top: 200px; /* room for the Visualize branch above */
+  }
+
+  .main-row {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    column-gap: 44px;
+    align-items: stretch;
+    position: relative;
+  }
+
+  .cell {
+    display: flex;
+    align-items: stretch;
+    justify-content: center;
+    position: relative;
+  }
+
+  /* horizontal connector arrows (sit inside the 44px column-gap) */
+  .cell + .cell::before {
+    content: "";
+    position: absolute;
+    left: -38px;
+    top: 50%;
+    width: 28px;
+    height: 2px;
+    background: var(--accent);
+    border-radius: 999px;
+    transform: translateY(-50%);
+    z-index: 1;
+  }
+  .cell + .cell::after {
+    content: "";
+    position: absolute;
+    left: -11px;
+    top: 50%;
+    width: 0; height: 0;
+    border-top: 5px solid transparent;
+    border-bottom: 5px solid transparent;
+    border-left: 8px solid var(--accent);
+    transform: translateY(-50%);
+    z-index: 1;
+  }
+
+  /* ─── CARDS ──────────────────────────────── */
+  .card {
+    background: #FFFFFF;
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    padding: 18px 18px 16px;
+    width: 100%;
+    box-shadow:
+      0 1px 0 rgba(15, 23, 42, 0.02),
+      0 6px 18px -10px rgba(15, 23, 42, 0.10),
+      0 18px 44px -28px rgba(20, 184, 166, 0.16);
+    display: flex;
+    flex-direction: column;
+    position: relative;
+  }
+  .card.accent {
+    border-color: rgba(20, 184, 166, 0.40);
+    background: linear-gradient(180deg, #ffffff 0%, #f0fdfa 100%);
+    box-shadow:
+      0 1px 0 rgba(15, 23, 42, 0.02),
+      0 8px 22px -10px rgba(20, 184, 166, 0.22),
+      0 24px 56px -32px rgba(20, 184, 166, 0.28);
+  }
+  .card.source {
+    background: linear-gradient(180deg, #ffffff, #f8fafc);
+  }
+
+  .card-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+  .icon {
+    width: 32px; height: 32px;
+    border-radius: 10px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(20, 184, 166, 0.10);
+    border: 1px solid rgba(20, 184, 166, 0.22);
+    color: var(--accent-ink);
+    flex: 0 0 auto;
+  }
+  .icon svg { width: 16px; height: 16px; }
+
+  .head-text { display: flex; flex-direction: column; min-width: 0; }
+  .tag {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent-ink);
+    line-height: 1.2;
+  }
+  .tag.neutral { color: var(--slate-soft); }
+
+  .card h2 {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--ink);
+    letter-spacing: -0.015em;
+    line-height: 1.25;
+    margin-top: 2px;
+  }
+  .card h2 .hl { color: var(--accent); }
+
+  .subtitle {
+    font-size: 11.5px;
+    color: var(--slate);
+    line-height: 1.45;
+    margin-bottom: 10px;
+  }
+
+  .divider {
+    height: 1px;
+    background: var(--line-soft);
+    margin: 8px 0 10px;
+  }
+
+  /* ─── BULLETS ────────────────────────────── */
+  .bullets {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+  .bullet {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    font-size: 11.5px;
+    color: var(--ink);
+    line-height: 1.4;
+  }
+  .bullet .pip {
+    flex: 0 0 auto;
+    width: 5px; height: 5px;
+    border-radius: 999px;
+    background: var(--accent);
+    margin-top: 6px;
+    box-shadow: 0 0 0 2px rgba(20, 184, 166, 0.14);
+  }
+  .bullet b { font-weight: 600; }
+  .bullet .muted { color: var(--slate); }
+
+  /* ─── CHIPS ──────────────────────────────── */
+  .field { margin-top: 10px; }
+  .field-label {
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    color: var(--slate);
+    margin-bottom: 6px;
+  }
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+  .chip {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--ink);
+    background: var(--bg-soft);
+    border: 1px solid var(--line);
+    padding: 3px 7px;
+    border-radius: 6px;
+    letter-spacing: -0.005em;
+    white-space: nowrap;
+  }
+  .chip.teal {
+    color: var(--accent-ink);
+    background: rgba(20, 184, 166, 0.08);
+    border-color: rgba(20, 184, 166, 0.22);
+  }
+
+  /* ─── PHASE 2 — node/edge/algo columns ───── */
+  .p2-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+  .p2-grid .field { margin-top: 0; }
+
+  /* ─── VISUALIZE BRANCH (above Phase 2) ──── */
+  .branch {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 200px;
+    pointer-events: none;
+  }
+  .branch-grid {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    column-gap: 44px;
+    height: 100%;
+    pointer-events: none;
+  }
+  .branch-slot {
+    grid-column: 3 / span 1; /* sits directly above Phase 2 (the 3rd column) */
+    pointer-events: auto;
+    position: relative;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+  }
+  .branch-card {
+    width: 100%;
+    margin-bottom: 0;
+  }
+
+  /* branch connector — flows UP from Phase 2 into Visualize */
+  .branch-line {
+    position: absolute;
+    bottom: -42px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 2px;
+    height: 42px;
+    background: linear-gradient(0deg, rgba(20,184,166,0.30), rgba(20,184,166,0.85));
+    border-radius: 999px;
+  }
+  .branch-head {
+    position: absolute;
+    bottom: -8px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0; height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-bottom: 8px solid var(--accent);
+  }
+
+  /* ─── MCP CARD CODE PANEL ────────────────── */
+  .code {
+    background: var(--code-bg);
+    color: var(--code-ink);
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 10.5px;
+    line-height: 1.55;
+    letter-spacing: -0.005em;
+  }
+  .code .k { color: var(--code-teal); }
+  .code .c { color: var(--code-dim); }
+
+  /* ─── FOOTER ─────────────────────────────── */
+  .footer {
+    text-align: center;
+    margin-top: 56px;
+    font-size: 12px;
+    color: var(--slate);
+    letter-spacing: 0.02em;
+  }
+  .footer .brand { font-weight: 600; color: var(--ink); }
+  .footer .dot-sep {
+    display: inline-block;
+    width: 3px; height: 3px;
+    border-radius: 999px;
+    background: var(--slate-soft);
+    margin: 0 10px;
+    vertical-align: middle;
+  }
+</style>
+</head>
+<body>
+
+<div class="stage">
+
+  <!-- HEADER -->
+  <div class="header">
+    <span class="eyebrow"><span class="dot"></span>System Architecture</span>
+    <h1>From source code to a <span class="hl">queryable knowledge graph</span></h1>
+    <p>UltraGraph's four-phase pipeline transforms codebases and documents into an interactive, retrievable, AI-ready semantic graph — engineered in Rust for speed and exposed via Node.js for flexibility.</p>
+  </div>
+
+  <!-- HORIZONTAL FLOW -->
+  <div class="flow">
+
+    <!-- BRANCH (Visualize) — sits above Phase 2 -->
+    <div class="branch">
+      <div class="branch-grid">
+        <div class="branch-slot">
+          <div class="card branch-card">
+            <div class="card-head">
+              <span class="icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="18" r="2"/><path d="M7 7l3 4M17 7l-3 4M7 17l3-4M17 17l-3-4"/></svg>
+              </span>
+              <div class="head-text">
+                <span class="tag neutral">Branch · UI</span>
+                <h2><span class="hl">Visualize</span></h2>
+              </div>
+            </div>
+            <div class="bullets">
+              <div class="bullet"><span class="pip"></span><span><b>D3.js</b> <span class="muted">force-directed</span></span></div>
+              <div class="bullet"><span class="pip"></span><span><b>Interactive</b> <span class="muted">zoom · drag · filter</span></span></div>
+              <div class="bullet"><span class="pip"></span><span><b>Live</b> <span class="muted">DB enrichment</span></span></div>
+            </div>
+            <div class="branch-line"></div>
+            <div class="branch-head"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- MAIN ROW (6 columns) -->
+    <div class="main-row">
+
+      <!-- 1 · SOURCE -->
+      <div class="cell">
+        <div class="card source">
+          <div class="card-head">
+            <span class="icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+            </span>
+            <div class="head-text">
+              <span class="tag neutral">Input</span>
+              <h2>Source <span class="hl">Codebase</span></h2>
+            </div>
+          </div>
+          <p class="subtitle">Any directory — local repo, monorepo, or documentation tree.</p>
+          <div class="chips">
+            <span class="chip">./src</span>
+            <span class="chip">./docs</span>
+            <span class="chip">monorepo</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2 · PHASE 1 -->
+      <div class="cell">
+        <div class="card accent">
+          <div class="card-head">
+            <span class="icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+            </span>
+            <div class="head-text">
+              <span class="tag">Phase 1</span>
+              <h2>Turbo <span class="hl">Indexing</span></h2>
+            </div>
+          </div>
+          <p class="subtitle">Native Rust crawler maps codebases in milliseconds via <b>tree-sitter</b>.</p>
+          <div class="bullets">
+            <div class="bullet"><span class="pip"></span><span><b>.gitignore</b> <span class="muted">aware crawl</span></span></div>
+            <div class="bullet"><span class="pip"></span><span><b>tree-sitter</b> <span class="muted">AST parsing</span></span></div>
+            <div class="bullet"><span class="pip"></span><span><b>Symbol</b> <span class="muted">extraction</span></span></div>
+            <div class="bullet"><span class="pip"></span><span><b>blake3</b> <span class="muted">incremental hashing</span></span></div>
+          </div>
+          <div class="field">
+            <div class="field-label">Languages</div>
+            <div class="chips">
+              <span class="chip">TS</span>
+              <span class="chip">JS</span>
+              <span class="chip">Python</span>
+              <span class="chip">Java</span>
+              <span class="chip">MD</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 3 · PHASE 2 -->
+      <div class="cell">
+        <div class="card accent">
+          <div class="card-head">
+            <span class="icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.2"/><circle cx="18" cy="6" r="2.2"/><circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="18" r="2.2"/><path d="M8 7l8 0M7 8l0 8M17 8l0 8M8 17l8 0"/></svg>
+            </span>
+            <div class="head-text">
+              <span class="tag">Phase 2</span>
+              <h2>Graph <span class="hl">Synthesis</span></h2>
+            </div>
+          </div>
+          <p class="subtitle">A rich symbol graph with relationships and structural metrics.</p>
+          <div class="p2-grid">
+            <div class="field">
+              <div class="field-label">Nodes</div>
+              <div class="chips">
+                <span class="chip">Folder</span>
+                <span class="chip">File</span>
+                <span class="chip">Function</span>
+                <span class="chip">Class</span>
+                <span class="chip">Interface</span>
+              </div>
+            </div>
+            <div class="field">
+              <div class="field-label">Edges</div>
+              <div class="chips">
+                <span class="chip">Contains</span>
+                <span class="chip">Imports</span>
+                <span class="chip">Calls</span>
+                <span class="chip">Extends</span>
+                <span class="chip">References</span>
+              </div>
+            </div>
+            <div class="field">
+              <div class="field-label">Algorithms</div>
+              <div class="chips">
+                <span class="chip teal">BFS / K-hop</span>
+                <span class="chip teal">Cycles</span>
+                <span class="chip teal">Centrality</span>
+                <span class="chip teal">Paths</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 4 · PHASE 3 -->
+      <div class="cell">
+        <div class="card accent">
+          <div class="card-head">
+            <span class="icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg>
+            </span>
+            <div class="head-text">
+              <span class="tag">Phase 3</span>
+              <h2>OverGraph <span class="hl">Storage</span></h2>
+            </div>
+          </div>
+          <p class="subtitle">Hybrid vector + FTS persistence with incremental ingestion.</p>
+          <div class="bullets">
+            <div class="bullet"><span class="pip"></span><span><b>OverGraph</b> <span class="muted">Vector + FTS</span></span></div>
+            <div class="bullet"><span class="pip"></span><span><b>Local ONNX</b> <span class="muted">fastembed-rs</span></span></div>
+            <div class="bullet"><span class="pip"></span><span><b>Remote</b> <span class="muted">/v1/embeddings</span></span></div>
+            <div class="bullet"><span class="pip"></span><span><b>Auto-dim</b> <span class="muted">probed & persisted</span></span></div>
+          </div>
+          <div class="field">
+            <div class="field-label">Default</div>
+            <div class="chips">
+              <span class="chip teal">bge-small-en-v1.5</span>
+              <span class="chip">384-d</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 5 · PHASE 4 -->
+      <div class="cell">
+        <div class="card accent">
+          <div class="card-head">
+            <span class="icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6"/><path d="M21 21l-5-5"/></svg>
+            </span>
+            <div class="head-text">
+              <span class="tag">Phase 4</span>
+              <h2><span class="hl">GraphRAG</span> Search</h2>
+            </div>
+          </div>
+          <p class="subtitle">Semantic relevance fused with structural graph importance.</p>
+          <div class="bullets">
+            <div class="bullet"><span class="pip"></span><span><b>Vector</b> <span class="muted">semantic search</span></span></div>
+            <div class="bullet"><span class="pip"></span><span><b>FTS</b> <span class="muted">keyword retrieval</span></span></div>
+            <div class="bullet"><span class="pip"></span><span><b>RRF</b> <span class="muted">rank fusion</span></span></div>
+            <div class="bullet"><span class="pip"></span><span><b>MMR</b> <span class="muted">diversity rerank</span></span></div>
+            <div class="bullet"><span class="pip"></span><span><b>K-hop</b> <span class="muted">expansion</span></span></div>
+          </div>
+          <div class="field">
+            <div class="field-label">Default Strategy</div>
+            <div class="chips">
+              <span class="chip teal">Personalized PageRank</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 6 · MCP -->
+      <div class="cell">
+        <div class="card">
+          <div class="card-head">
+            <span class="icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 9h6v6H9z"/><path d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2"/></svg>
+            </span>
+            <div class="head-text">
+              <span class="tag neutral">Output</span>
+              <h2>AI Agent · <span class="hl">MCP</span></h2>
+            </div>
+          </div>
+          <p class="subtitle">Stdio-based Model Context Protocol server for any compatible agent.</p>
+          <div class="code">
+            <span class="c"># Tools</span><br/>
+            <span class="k">search_kb</span><br/>
+            <span class="k">traverse_kb</span><br/>
+            <span class="k">semantic_search_kb</span><br/>
+            <span class="k">find_usages</span><br/>
+            <span class="k">ping_embedder</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- FOOTER -->
+  <div class="footer">
+    <span class="brand">UltraGraph</span>
+    <span class="dot-sep"></span>
+    High-performance knowledge graph & RAG engine
+    <span class="dot-sep"></span>
+    Built with Rust & Node.js
+  </div>
+
+</div>
+
+</body>
+</html>
