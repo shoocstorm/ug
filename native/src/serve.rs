@@ -25,10 +25,42 @@ use crate::{
     flag_value, flag_value_or, has_flag, tokio_runtime, C_BOLD, C_CYAN, C_GREEN, C_RESET, C_YELLOW,
 };
 use ultragraph::storage::{
-    self, search_kb as storage_search_kb, semantic_search as storage_semantic_search,
-    semantic_search_w_where, traverse_filtered, Db, Direction, Embedder, RankStrategy,
-    SearchKbOptions,
+    self, open_store, search_kb as storage_search_kb,
+    semantic_search as storage_semantic_search, semantic_search_w_where, traverse_filtered,
+    Direction, Embedder, KnowledgeStore, RankStrategy, SearchKbOptions, StoreSpec,
+    DEFAULT_EMBEDDING_DIM,
 };
+
+/// Build the `StoreSpec` for `ug serve` from env vars. Defaults to
+/// OverGraph at the supplied directory; switches to Neo4j when
+/// `UG_DEST=neo4j` is set with the necessary credentials.
+fn build_serve_store_spec(db_path: &PathBuf) -> StoreSpec {
+    let dest = std::env::var("UG_DEST")
+        .ok()
+        .map(|s| s.to_lowercase())
+        .unwrap_or_else(|| "overgraph".to_string());
+    let dim = DEFAULT_EMBEDDING_DIM as u32;
+    if dest == "neo4j" || dest == "neo" {
+        let uri = std::env::var("UG_NEO4J_URI")
+            .expect("UG_DEST=neo4j requires UG_NEO4J_URI");
+        let user = std::env::var("UG_NEO4J_USER").unwrap_or_else(|_| "neo4j".to_string());
+        let password = std::env::var("UG_NEO4J_PASSWORD")
+            .expect("UG_DEST=neo4j requires UG_NEO4J_PASSWORD");
+        let database = std::env::var("UG_NEO4J_DATABASE").ok();
+        StoreSpec::Neo4j {
+            uri,
+            user,
+            password,
+            database,
+            embedding_dim: dim,
+        }
+    } else {
+        StoreSpec::Overgraph {
+            path: db_path.clone(),
+            embedding_dim: dim,
+        }
+    }
+}
 use ultragraph::types::{GraphData, GraphEdge, GraphNode};
 
 // ---------- Encoded asset (identity + gzip + br, all pre-built) ----------
@@ -119,7 +151,9 @@ struct ServeState {
     d3: Arc<EncodedAsset>,
     /// `None` when `--no-db` is set or the DB failed to open. Phase 3 routes
     /// return 503 in that case rather than panicking the server.
-    db: Option<Arc<Db>>,
+    /// Trait-object wrapped so `ug serve` can target any `KnowledgeStore`
+    /// backend (OverGraph by default, Neo4j when `UG_DEST=neo4j` is set).
+    db: Option<Arc<dyn KnowledgeStore>>,
     /// `None` when the embedder couldn't be constructed (e.g. missing endpoint).
     /// Phase 3 search routes need it; `/api/db/*` routes don't.
     embedder: Option<Arc<Embedder>>,
@@ -277,20 +311,32 @@ pub fn run_serve(args: &[String]) {
 
     let rt = tokio_runtime();
     rt.block_on(async move {
-        // Open the DB inside the runtime (async). A failure here is
+        // Open the store inside the runtime (async). A failure here is
         // non-fatal — Phase 1/2 routes still work; Phase 3 routes 503.
-        let (db_arc, db_unavailable_reason): (Option<Arc<Db>>, Option<String>) = if no_db {
+        // The destination is picked from `UG_DEST` (default overgraph),
+        // matching the CLI / MCP env-var conventions.
+        let (db_arc, db_unavailable_reason): (
+            Option<Arc<dyn KnowledgeStore>>,
+            Option<String>,
+        ) = if no_db {
             (None, Some("started with --no-db".to_string()))
         } else {
-            let db_path_str = db_path.to_string_lossy();
-            match Db::open(&db_path_str).await {
-                Ok(db) => {
-                    tracing::info!(path = %db_path.display(), "DB opened");
-                    (Some(Arc::new(db)), None)
+            let spec = build_serve_store_spec(&db_path);
+            match open_store(&spec).await {
+                Ok(store) => {
+                    tracing::info!(
+                        backend = %spec.name(),
+                        "store opened"
+                    );
+                    (Some(Arc::from(store)), None)
                 }
                 Err(e) => {
-                    let reason = format!("failed to open DB at {}: {}", db_path.display(), e);
-                    tracing::warn!(error = %e, path = %db_path.display(), "DB open failed; Phase 3 routes will 503");
+                    let reason = format!(
+                        "failed to open {} store: {}",
+                        spec.name(),
+                        e
+                    );
+                    tracing::warn!(error = %e, "store open failed; Phase 3 routes will 503");
                     (None, Some(reason))
                 }
             }
@@ -885,7 +931,7 @@ async fn api_capabilities(State(state): State<ServeState>) -> Response {
 
 // ---------- Phase 3 — DB-backed handlers ----------
 
-fn db_or_503(state: &ServeState) -> Result<Arc<Db>, Response> {
+fn db_or_503(state: &ServeState) -> Result<Arc<dyn KnowledgeStore>, Response> {
     state.db.clone().ok_or_else(|| {
         let msg = state
             .db_unavailable_reason
@@ -909,10 +955,9 @@ async fn api_db_node(State(state): State<ServeState>, AxPath(id): AxPath<String>
         Ok(d) => d,
         Err(r) => return r,
     };
-    // `Db::fetch_node` does the lookup_id + get_node + row conversion
-    // in one shot. `traverse(id, 0)` would be the obvious shape but
-    // OverGraph rejects min_depth=max_depth=0.
-    match db.fetch_node(&id) {
+    // `KnowledgeStore::fetch_node` is the single-row hydrate; works
+    // identically across OverGraph and Neo4j backends.
+    match db.fetch_node(&id).await {
         Ok(Some(n)) => ok_json(node_row_to_json(&n).to_string()),
         Ok(None) => err_json(StatusCode::NOT_FOUND, "node not found"),
         Err(e) => err_json(
@@ -951,7 +996,7 @@ async fn api_db_traverse(
     let edge_types = parse_csv(params.types);
 
     let result = match traverse_filtered(
-        &db,
+        &*db,
         std::slice::from_ref(&id),
         hops,
         edge_types.as_deref(),
@@ -1036,8 +1081,8 @@ async fn api_search_semantic(
     };
 
     let hits = match body.filter.as_deref() {
-        Some(f) => semantic_search_w_where(&db, &embedder, &body.query, k, f).await,
-        None => storage_semantic_search(&db, &embedder, &body.query, k).await,
+        Some(f) => semantic_search_w_where(&*db, &embedder, &body.query, k, f).await,
+        None => storage_semantic_search(&*db, &embedder, &body.query, k).await,
     };
     drop(_permit);
 
@@ -1155,7 +1200,7 @@ async fn api_search_hybrid(
     opts.include_snippets = body.include_snippets;
     opts.strategy = strategy;
 
-    let result = storage_search_kb(&db, &embedder, opts).await;
+    let result = storage_search_kb(&*db, &embedder, opts).await;
     drop(_permit);
 
     match result {

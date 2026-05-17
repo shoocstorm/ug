@@ -16,3 +16,6 @@ out/*
 node_modules
 docs/overgraph
 opencode.json
+.env
+.env.local
+docs/neo4j-cred.txt

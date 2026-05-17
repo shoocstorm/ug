@@ -11,14 +11,16 @@
 //!   5. assemble        - GraphRAG query composition: seeds → expand → rerank → final ranked list
 //!   6. code_snippet    - retrieval helper that returns code snippets from nodes
 
-use crate::storage::db::{
-    hybrid_search, nodes_by_ids, traverse_string_ids, vector_search, Db, EdgeRow, NodeRow,
-};
+use crate::storage::db::{EdgeRow, NodeRow};
 use crate::storage::embed::Embedder;
-use crate::storage::ppr::{run_ppr, to_og_direction};
+use crate::storage::ppr::run_ppr;
+use crate::storage::store::{KnowledgeStore, NodeFilter};
 use crate::storage::text::build_sparse_keyword_vector;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+
+/// Re-exported for back-compat — `Direction` now lives in `store.rs`.
+pub use crate::storage::store::Direction;
 
 #[derive(Debug, Clone)]
 pub struct SearchHit {
@@ -33,31 +35,11 @@ pub struct TraversalResult {
     pub distances: HashMap<String, u32>,
 }
 
-/// Direction of edge expansion during graph traversal.
-/// - `Outbound` walks `source -> target` (e.g. who does X call?).
-/// - `Inbound`  walks `target -> source` (e.g. who calls X?).
-/// - `Both`     unions the two; useful for "everything related to X".
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Direction {
-    Outbound,
-    Inbound,
-    Both,
-}
-
-impl Direction {
-    pub fn from_str_lossy(s: &str) -> Self {
-        match s.to_ascii_lowercase().as_str() {
-            "in" | "inbound" | "incoming" => Direction::Inbound,
-            "both" | "all" | "any" => Direction::Both,
-            _ => Direction::Outbound,
-        }
-    }
-}
-
 /// Vector search by free-text query. Embeds `query` once with `embedder`,
-/// then asks OverGraph for the top-`k` nearest node rows.
+/// then asks the backend for the top-`k` nearest node rows. Works
+/// against any [`KnowledgeStore`].
 pub async fn semantic_search(
-    db: &Db,
+    store: &dyn KnowledgeStore,
     embedder: &Embedder,
     query: &str,
     k: usize,
@@ -67,17 +49,19 @@ pub async fn semantic_search(
         .into_iter()
         .next()
         .ok_or("embedder returned no vectors")?;
-    let raw = vector_search(db, query_vec, k, None).await?;
+    let raw = store.vector_search(query_vec, k, None).await?;
     Ok(raw
         .into_iter()
         .map(|(node, distance)| SearchHit { node, distance })
         .collect())
 }
 
-/// Like [`semantic_search`] but with an additional SQL `WHERE` clause
-/// applied during the vector query.
+/// Like [`semantic_search`] but with a `node_type` filter parsed from
+/// the legacy SQL-flavored `WHERE` argument. Anything the parser
+/// doesn't recognize degrades to no filter (matches pre-trait
+/// OverGraph behavior — see `MIGRATION-OVERGRAPH §6 Q1`).
 pub async fn semantic_search_w_where(
-    db: &Db,
+    store: &dyn KnowledgeStore,
     embedder: &Embedder,
     query: &str,
     k: usize,
@@ -88,22 +72,22 @@ pub async fn semantic_search_w_where(
         .into_iter()
         .next()
         .ok_or("embedder returned no vectors")?;
-    let raw = vector_search(db, query_vec, k, Some(where_clause)).await?;
+    let filter = NodeFilter::from_legacy_where(where_clause);
+    let raw = store.vector_search(query_vec, k, filter.as_ref()).await?;
     Ok(raw
         .into_iter()
         .map(|(node, distance)| SearchHit { node, distance })
         .collect())
 }
 
-/// Reciprocal Rank Fusion of dense + sparse results. Delegates to
-/// OverGraph's native hybrid `vector_search`, which fuses dense (HNSW
-/// 1024-dim cosine) with sparse (FNV-hashed keyword tokens, see
-/// `text::build_sparse_keyword_vector`) via the engine's RRF.
+/// Reciprocal Rank Fusion of dense + sparse results. Dispatches via
+/// the [`KnowledgeStore`] trait — the OverGraph backend uses its native
+/// RRF, the Neo4j backend fuses vector + full-text in app code.
 ///
 /// `distance = -score` is preserved for downstream consumers that sort
 /// ascending — lower `distance` means better hit.
 pub async fn rrf_search(
-    db: &Db,
+    store: &dyn KnowledgeStore,
     embedder: &Embedder,
     query: &str,
     k: usize,
@@ -116,7 +100,10 @@ pub async fn rrf_search(
         .ok_or("embedder returned no vectors")?;
     let sparse = build_sparse_keyword_vector(query);
     let pool = (k * 4).max(20);
-    let hits = hybrid_search(db, query_vec, sparse, pool, where_clause).await?;
+    let filter = where_clause.and_then(NodeFilter::from_legacy_where);
+    let hits = store
+        .hybrid_search(query_vec, sparse, query, pool, filter.as_ref())
+        .await?;
     Ok(hits
         .into_iter()
         .take(k)
@@ -189,12 +176,12 @@ fn cosine(a: &[f32], b: &[f32]) -> f32 {
 /// BFS up to `max_hops` from `start_id` over the `edges` table.
 /// Outbound-only, no edge-type filter. Kept for backwards compatibility.
 pub async fn traverse(
-    db: &Db,
+    store: &dyn KnowledgeStore,
     start_id: &str,
     max_hops: u32,
 ) -> Result<TraversalResult, Box<dyn std::error::Error + Send + Sync>> {
     traverse_filtered(
-        db,
+        store,
         &[start_id.to_string()],
         max_hops,
         None,
@@ -205,54 +192,40 @@ pub async fn traverse(
 
 /// Generalised graph expansion. Walks `direction` for up to `max_hops`
 /// from each id in `start_ids`, optionally restricted to specific edge
-/// types. Delegates to OverGraph's native `traverse` per seed and merges
-/// the results, deduplicating shared neighbours.
+/// types. Calls the trait's `traverse` per seed and merges results,
+/// deduplicating shared neighbours.
 pub async fn traverse_filtered(
-    db: &Db,
+    store: &dyn KnowledgeStore,
     start_ids: &[String],
     max_hops: u32,
     edge_types: Option<&[String]>,
     direction: Direction,
 ) -> Result<TraversalResult, Box<dyn std::error::Error + Send + Sync>> {
-    use crate::storage::types_registry::edge_type_to_id;
-
-    let edge_type_ids: Option<Vec<u32>> = edge_types
-        .filter(|v| !v.is_empty())
-        .map(|v| v.iter().map(|s| edge_type_to_id(s)).collect());
-    let og_dir = to_og_direction(direction);
-
     let mut visited: HashSet<String> = HashSet::new();
     let mut distances: HashMap<String, u32> = HashMap::new();
     let mut nodes: Vec<NodeRow> = Vec::new();
     let mut edges: Vec<EdgeRow> = Vec::new();
 
     for start_id in start_ids {
-        let (start_nodes, start_edges, start_dists) = traverse_string_ids(
-            db,
-            start_id,
-            max_hops,
-            edge_type_ids.clone(),
-            og_dir,
-        )
-        .await?;
+        let page = store
+            .traverse(start_id, max_hops, edge_types, direction)
+            .await?;
 
-        for n in start_nodes {
-            if visited.insert(n.id.clone()) {
-                nodes.push(n);
-            }
-        }
-        edges.extend(start_edges);
-        for (k, d) in start_dists {
-            // Keep the minimum depth across seeds — closer wins.
+        for tn in page.nodes {
+            // Track depth even if we've already added the node — closer wins.
             distances
-                .entry(k)
+                .entry(tn.row.id.clone())
                 .and_modify(|cur| {
-                    if d < *cur {
-                        *cur = d;
+                    if tn.depth < *cur {
+                        *cur = tn.depth;
                     }
                 })
-                .or_insert(d);
+                .or_insert(tn.depth);
+            if visited.insert(tn.row.id.clone()) {
+                nodes.push(tn.row);
+            }
         }
+        edges.extend(page.edges);
     }
 
     Ok(TraversalResult {
@@ -401,14 +374,28 @@ impl<'a> SearchKbOptions<'a> {
 /// [Advanced RAG Search] Phase 4 GraphRAG: seed search -> rank (PPR by default, MMR optional)
 /// -> snippet attachment -> token-budgeted assembly. Returns a
 /// JSON-friendly [`RankedContext`].
+///
+/// Backends without native PPR (Neo4j without GDS) silently fall back
+/// to MMR with a single warning log line — callers don't need to opt
+/// in.
 pub async fn search_kb(
-    db: &Db,
+    store: &dyn KnowledgeStore,
     embedder: &Embedder,
     opts: SearchKbOptions<'_>,
 ) -> Result<RankedContext, Box<dyn std::error::Error + Send + Sync>> {
-    match opts.strategy {
-        RankStrategy::Ppr => search_kb_ppr(db, embedder, opts).await,
-        RankStrategy::Mmr => search_kb_mmr(db, embedder, opts).await,
+    let strategy = match opts.strategy {
+        RankStrategy::Ppr if !store.supports_native_ppr() => {
+            tracing::warn!(
+                backend = store.backend_name(),
+                "PPR strategy requested but backend lacks native PPR; falling back to MMR"
+            );
+            RankStrategy::Mmr
+        }
+        s => s,
+    };
+    match strategy {
+        RankStrategy::Ppr => search_kb_ppr(store, embedder, opts).await,
+        RankStrategy::Mmr => search_kb_mmr(store, embedder, opts).await,
     }
 }
 
@@ -417,14 +404,14 @@ pub async fn search_kb(
 /// both BFS expansion and MMR reranking — a single ranking that fuses
 /// seed proximity with graph-wide centrality.
 async fn search_kb_ppr(
-    db: &Db,
+    store: &dyn KnowledgeStore,
     embedder: &Embedder,
     opts: SearchKbOptions<'_>,
 ) -> Result<RankedContext, Box<dyn std::error::Error + Send + Sync>> {
     // 1. RRF seeds. Wider pool than `k` so a noisy top-1 doesn't
     //    dominate the personalization vector.
     let seed_pool = opts.ppr_seed_pool.max(opts.k.max(1));
-    let seeds = rrf_search(db, embedder, opts.query, seed_pool, opts.where_clause).await?;
+    let seeds = rrf_search(store, embedder, opts.query, seed_pool, opts.where_clause).await?;
     let seed_id = seeds.first().map(|h| h.node.id.clone());
 
     // 2. Personalization vector: RRF score (stored as -score in
@@ -454,7 +441,7 @@ async fn search_kb_ppr(
     let edge_types_owned: Option<Vec<String>> =
         opts.edge_types.map(|v| v.iter().cloned().collect());
     let ranked_pairs = run_ppr(
-        db,
+        store,
         &seed_strings,
         opts.direction,
         edge_types_owned.as_deref(),
@@ -472,7 +459,7 @@ async fn search_kb_ppr(
         .map(|(id, _)| id.clone())
         .collect();
     let score_by_id: HashMap<String, f32> = ranked_pairs.into_iter().collect();
-    let nodes = nodes_by_ids(db, &top_ids).await?;
+    let nodes = store.nodes_by_ids(&top_ids).await?;
     let nodes_by_id: HashMap<String, NodeRow> =
         nodes.into_iter().map(|n| (n.id.clone(), n)).collect();
 
@@ -530,18 +517,18 @@ async fn search_kb_ppr(
 /// Legacy path: seed -> BFS expand -> MMR rerank. Kept available via
 /// `RankStrategy::Mmr` for callers who want diversity-first behavior.
 async fn search_kb_mmr(
-    db: &Db,
+    store: &dyn KnowledgeStore,
     embedder: &Embedder,
     opts: SearchKbOptions<'_>,
 ) -> Result<RankedContext, Box<dyn std::error::Error + Send + Sync>> {
     // 1. Seed: RRF over vector + FTS, optionally filtered.
-    let seeds = rrf_search(db, embedder, opts.query, opts.k.max(1), opts.where_clause).await?;
+    let seeds = rrf_search(store, embedder, opts.query, opts.k.max(1), opts.where_clause).await?;
     let seed_id = seeds.first().map(|h| h.node.id.clone());
 
     // 2. Expand: walk the graph from each seed.
     let seed_ids: Vec<String> = seeds.iter().map(|h| h.node.id.clone()).collect();
     let traversal =
-        traverse_filtered(db, &seed_ids, opts.hops, opts.edge_types, opts.direction).await?;
+        traverse_filtered(store, &seed_ids, opts.hops, opts.edge_types, opts.direction).await?;
 
     // 3. Build candidate pool: union of seed hits + traversal nodes.
     let seed_dist: HashMap<String, f32> = seeds

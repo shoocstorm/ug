@@ -10,7 +10,6 @@
 //! cost for a much simpler API surface and matches how the MCP server
 //! is expected to be driven (one request -> one call).
 
-use crate::storage::db::Db;
 use crate::storage::embed::{Embedder, EmbedderConfig};
 use crate::storage::ingest::ingest_graph;
 use crate::storage::query::{
@@ -18,6 +17,7 @@ use crate::storage::query::{
     traverse_filtered as run_traverse_filtered, ContextItem, Direction, RankStrategy,
     RankedContext, SearchKbOptions,
 };
+use crate::storage::store::{open_store, KnowledgeStore, StoreSpec};
 use crate::types::GraphData;
 use napi_derive::napi;
 use serde::{Deserialize, Serialize};
@@ -35,6 +35,21 @@ pub struct EmbedderOptions {
     pub embedding_dim: Option<u32>,
     pub batch_size: Option<u32>,
     pub timeout_secs: Option<u32>,
+}
+
+/// Optional destination override. When omitted (the back-compat
+/// default), the napi entry points use OverGraph at `db_path`. To
+/// point at Neo4j, pass `{ "kind": "neo4j", "uri": "...", "user":
+/// "...", "password": "...", "database": null }`. The MCP server uses
+/// this to pick a backend from env vars.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DestOptions {
+    pub kind: Option<String>,
+    pub uri: Option<String>,
+    pub user: Option<String>,
+    pub password: Option<String>,
+    pub database: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -158,12 +173,63 @@ fn embedder_from_json(json: Option<String>) -> napi::Result<Embedder> {
         .map_err(|e| napi::Error::from_reason(format!("embedder init failed: {}", e)))
 }
 
-/// Open a OverGraph connection with NAPI error mapping. Connections are
-/// cheap (memory-mapped) so each call gets a fresh one.
-async fn open_db(path: &str) -> napi::Result<Db> {
-    Db::open(path)
+fn parse_dest_options(json: Option<String>) -> Result<Option<DestOptions>, String> {
+    match json {
+        None => Ok(None),
+        Some(s) if s.is_empty() => Ok(None),
+        Some(s) => serde_json::from_str(&s)
+            .map(Some)
+            .map_err(|e| e.to_string()),
+    }
+}
+
+/// Resolve the napi-supplied (`db_path`, `dest_options`) into a single
+/// [`StoreSpec`]. When `dest_options.kind == "neo4j"`, the Neo4j fields
+/// are required; otherwise we use OverGraph against `db_path`. The
+/// embedding dim parameter is the value that should be enforced when
+/// the store creates its sidecar / meta record.
+fn resolve_store_spec(
+    db_path: &str,
+    dest_json: Option<String>,
+    embedding_dim: u32,
+) -> napi::Result<StoreSpec> {
+    let dest = parse_dest_options(dest_json)
+        .map_err(|e| napi::Error::from_reason(format!("invalid dest options: {}", e)))?;
+    match dest.as_ref().and_then(|d| d.kind.as_deref()) {
+        Some("neo4j") => {
+            let d = dest.unwrap();
+            let uri = d
+                .uri
+                .ok_or_else(|| napi::Error::from_reason("dest.uri is required for neo4j"))?;
+            let user = d.user.unwrap_or_else(|| "neo4j".to_string());
+            let password = d.password.ok_or_else(|| {
+                napi::Error::from_reason("dest.password is required for neo4j")
+            })?;
+            Ok(StoreSpec::Neo4j {
+                uri,
+                user,
+                password,
+                database: d.database,
+                embedding_dim,
+            })
+        }
+        _ => Ok(StoreSpec::Overgraph {
+            path: PathBuf::from(db_path),
+            embedding_dim,
+        }),
+    }
+}
+
+/// Build a `Box<dyn KnowledgeStore>` from the napi inputs.
+async fn open_store_from_napi(
+    db_path: &str,
+    dest_json: Option<String>,
+    embedding_dim: u32,
+) -> napi::Result<Box<dyn KnowledgeStore>> {
+    let spec = resolve_store_spec(db_path, dest_json, embedding_dim)?;
+    open_store(&spec)
         .await
-        .map_err(|e| napi::Error::from_reason(format!("failed to open db: {}", e)))
+        .map_err(|e| napi::Error::from_reason(format!("failed to open {} store: {}", spec.name(), e)))
 }
 
 /// Ingest a JSON graph (the output of `buildGraph`) into a OverGraph
@@ -179,6 +245,7 @@ pub async fn db_ingest(
     graph_json: String,
     db_path: String,
     embedder_options: Option<String>,
+    dest_options: Option<String>,
 ) -> napi::Result<String> {
     let graph: GraphData = serde_json::from_str(&graph_json)
         .map_err(|e| napi::Error::from_reason(format!("invalid graph JSON: {}", e)))?;
@@ -200,11 +267,9 @@ pub async fn db_ingest(
         }
     }
     let dim = embedder.config().dim as u32;
-    let db = Db::open_or_create(&db_path, dim)
-        .await
-        .map_err(|e| napi::Error::from_reason(format!("failed to open db: {}", e)))?;
+    let store = open_store_from_napi(&db_path, dest_options, dim).await?;
 
-    let stats = ingest_graph(&db, &embedder, &graph)
+    let stats = ingest_graph(store.as_ref(), &embedder, &graph)
         .await
         .map_err(|e| napi::Error::from_reason(format!("ingest failed: {}", e)))?;
 
@@ -224,12 +289,14 @@ pub async fn db_hybrid_search(
     db_path: String,
     options_json: String,
     embedder_options: Option<String>,
+    dest_options: Option<String>,
 ) -> napi::Result<String> {
     let opts: SearchKbJsonOptions = serde_json::from_str(&options_json)
         .map_err(|e| napi::Error::from_reason(format!("invalid options: {}", e)))?;
 
     let embedder = embedder_from_json(embedder_options)?;
-    let db = open_db(&db_path).await?;
+    let dim = embedder.config().dim as u32;
+    let store = open_store_from_napi(&db_path, dest_options, dim).await?;
 
     let repo_root_buf: PathBuf = opts
         .repo_root
@@ -282,7 +349,7 @@ pub async fn db_hybrid_search(
     }
     kb_opts.ppr_edge_weights = ppr_edge_weights;
 
-    let result: RankedContext = run_search_kb(&db, &embedder, kb_opts)
+    let result: RankedContext = run_search_kb(store.as_ref(), &embedder, kb_opts)
         .await
         .map_err(|e| napi::Error::from_reason(format!("search_kb failed: {}", e)))?;
 
@@ -299,17 +366,23 @@ pub async fn db_semantic_search(
     k: u32,
     where_clause: Option<String>,
     embedder_options: Option<String>,
+    dest_options: Option<String>,
 ) -> napi::Result<String> {
     let embedder = embedder_from_json(embedder_options)?;
-    let db = open_db(&db_path).await?;
+    let dim = embedder.config().dim as u32;
+    let store = open_store_from_napi(&db_path, dest_options, dim).await?;
 
     let hits = match where_clause.as_deref() {
-        Some(w) => {
-            crate::storage::query::semantic_search_w_where(&db, &embedder, &query, k as usize, w)
-                .await
-                .map_err(|e| napi::Error::from_reason(format!("search failed: {}", e)))?
-        }
-        None => run_semantic_search(&db, &embedder, &query, k as usize)
+        Some(w) => crate::storage::query::semantic_search_w_where(
+            store.as_ref(),
+            &embedder,
+            &query,
+            k as usize,
+            w,
+        )
+        .await
+        .map_err(|e| napi::Error::from_reason(format!("search failed: {}", e)))?,
+        None => run_semantic_search(store.as_ref(), &embedder, &query, k as usize)
             .await
             .map_err(|e| napi::Error::from_reason(format!("search failed: {}", e)))?,
     };
@@ -341,17 +414,30 @@ pub async fn db_traverse(
     hops: u32,
     edge_types: Option<Vec<String>>,
     direction: Option<String>,
+    dest_options: Option<String>,
 ) -> napi::Result<String> {
-    let db = open_db(&db_path).await?;
+    // Traversal doesn't run the embedder, but the store still needs a
+    // dim for sidecar validation. Use the configured default; the
+    // OverGraph open path picks the persisted dim out of ug-meta.json
+    // when present and the Neo4j path persists the dim it was opened
+    // with on first connect.
+    let dim = crate::storage::DEFAULT_EMBEDDING_DIM as u32;
+    let store = open_store_from_napi(&db_path, dest_options, dim).await?;
 
     let dir = direction
         .as_deref()
         .map(Direction::from_str_lossy)
         .unwrap_or(Direction::Outbound);
 
-    let result = run_traverse_filtered(&db, &start_node_ids, hops, edge_types.as_deref(), dir)
-        .await
-        .map_err(|e| napi::Error::from_reason(format!("traverse failed: {}", e)))?;
+    let result = run_traverse_filtered(
+        store.as_ref(),
+        &start_node_ids,
+        hops,
+        edge_types.as_deref(),
+        dir,
+    )
+    .await
+    .map_err(|e| napi::Error::from_reason(format!("traverse failed: {}", e)))?;
 
     let nodes: Vec<TraversalNodeJson> = result
         .nodes

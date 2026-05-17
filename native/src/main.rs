@@ -3,9 +3,9 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use ultragraph::storage::{
-    self, search_kb as storage_search_kb, semantic_search as storage_semantic_search,
-    traverse as storage_traverse, Db, Direction, Embedder, EmbedderConfig, RankStrategy,
-    SearchKbOptions,
+    self, open_store, search_kb as storage_search_kb,
+    semantic_search as storage_semantic_search, traverse as storage_traverse, Direction, Embedder,
+    EmbedderConfig, KnowledgeStore, RankStrategy, SearchKbOptions, StoreSet, StoreSpec,
 };
 use ultragraph::types::GraphData;
 use ultragraph::{
@@ -24,6 +24,11 @@ const VIS_MD: &str = include_str!("../../README.md");
 
 fn main() {
     install_panic_hook();
+    // Load environment defaults from `.env` (in CWD or any parent
+    // directory). Real env vars still win — `dotenvy::dotenv` does not
+    // override values already set in the process environment. Quiet
+    // when no `.env` is present.
+    let _ = dotenvy::dotenv();
     print_logo();
 
     let args: Vec<String> = env::args().collect();
@@ -212,6 +217,103 @@ pub(crate) fn tokio_runtime() -> tokio::runtime::Runtime {
         .enable_all()
         .build()
         .expect("failed to build tokio runtime")
+}
+
+// ---------- Destination / store helpers ----------
+
+/// Parse `--dest <kind>[,<kind>...]` into one or more `StoreSpec`s.
+/// Defaults to `overgraph` when no `--dest` is supplied so existing
+/// invocations keep working unchanged. CLI flags override env vars
+/// (`UG_DEST`, `UG_NEO4J_*`).
+fn store_specs_from_args(args: &[String], embedding_dim: u32) -> Vec<StoreSpec> {
+    let dest = flag_value(args, &["--dest"])
+        .or_else(|| std::env::var("UG_DEST").ok())
+        .unwrap_or_else(|| "overgraph".to_string());
+
+    // The OverGraph dir path. Read commands use -d / --db; ingest uses
+    // -o / --output (which is also the JSON output file in some
+    // commands, so -d always wins when both are present).
+    let og_path = flag_value(args, &["-d", "--db"])
+        .or_else(|| flag_value(args, &["-o", "--output"]))
+        .or_else(|| std::env::var("UG_DB_PATH").ok())
+        .unwrap_or_else(|| "ugout/ugdb".to_string());
+
+    let neo4j_uri = flag_value(args, &["--neo4j-uri"]).or_else(|| std::env::var("UG_NEO4J_URI").ok());
+    let neo4j_user = flag_value(args, &["--neo4j-user"])
+        .or_else(|| std::env::var("UG_NEO4J_USER").ok())
+        .unwrap_or_else(|| "neo4j".to_string());
+    let neo4j_password = flag_value(args, &["--neo4j-password"])
+        .or_else(|| std::env::var("UG_NEO4J_PASSWORD").ok())
+        .unwrap_or_default();
+    let neo4j_database = flag_value(args, &["--neo4j-database"])
+        .or_else(|| std::env::var("UG_NEO4J_DATABASE").ok());
+
+    let mut specs: Vec<StoreSpec> = Vec::new();
+    for kind in dest.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        match kind {
+            "overgraph" | "og" => specs.push(StoreSpec::Overgraph {
+                path: PathBuf::from(&og_path),
+                embedding_dim,
+            }),
+            "neo4j" | "neo" => {
+                let uri = neo4j_uri.clone().unwrap_or_else(|| {
+                    eprintln!(
+                        "Error: --dest neo4j requires --neo4j-uri (or UG_NEO4J_URI env var)"
+                    );
+                    std::process::exit(2);
+                });
+                if neo4j_password.is_empty() {
+                    eprintln!(
+                        "Error: --dest neo4j requires --neo4j-password (or UG_NEO4J_PASSWORD env var)"
+                    );
+                    std::process::exit(2);
+                }
+                specs.push(StoreSpec::Neo4j {
+                    uri,
+                    user: neo4j_user.clone(),
+                    password: neo4j_password.clone(),
+                    database: neo4j_database.clone(),
+                    embedding_dim,
+                });
+            }
+            other => {
+                eprintln!(
+                    "Error: unknown destination '{}' (expected: overgraph, neo4j)",
+                    other
+                );
+                std::process::exit(2);
+            }
+        }
+    }
+    if specs.is_empty() {
+        eprintln!("Error: --dest cannot be empty");
+        std::process::exit(2);
+    }
+    specs
+}
+
+/// Read commands accept exactly one destination — the first parsed
+/// spec wins, with a hard error on multi-spec inputs so users don't
+/// accidentally fan out a query.
+fn single_store_spec_from_args(args: &[String], embedding_dim: u32) -> StoreSpec {
+    let specs = store_specs_from_args(args, embedding_dim);
+    if specs.len() > 1 {
+        eprintln!(
+            "Error: this command accepts a single --dest, not a comma-separated list ({} given)",
+            specs.len()
+        );
+        std::process::exit(2);
+    }
+    specs.into_iter().next().expect("at least one spec")
+}
+
+/// Banner indicating which backends a command is targeting.
+fn announce_destinations(specs: &[StoreSpec]) {
+    let names: Vec<&str> = specs.iter().map(|s| s.name()).collect();
+    eprintln!(
+        "{C_CYAN}▸{C_RESET} Destination(s): {C_BOLD}{}{C_RESET}",
+        names.join(", ")
+    );
 }
 
 /// Force-exit on panic so the process actually terminates. The local
@@ -601,9 +703,10 @@ fn chain_to_serve(args: &[String], graph_path: &str, db_path: &str, no_db: bool,
     serve::run_serve(&serve_args);
 }
 
-// ingest graph data into graph db
+// ingest graph data into one or more knowledge-store backends.
+// Works against any `KnowledgeStore` impl (OverGraph, Neo4j, …).
 async fn ingest_graph_with_progress(
-    db: &Db,
+    store: &dyn KnowledgeStore,
     embedder: &Embedder,
     graph: &GraphData,
 ) -> Result<(usize, usize), String> {
@@ -692,7 +795,8 @@ async fn ingest_graph_with_progress(
     let write_batch = 1000;
     let total = node_rows.len();
     for (i, batch) in node_rows.chunks(write_batch).enumerate() {
-        db.upsert_nodes(batch)
+        store
+            .upsert_nodes(batch)
             .await
             .map_err(|e| format!("upsert nodes: {}", e))?;
         let written = std::cmp::min((i + 1) * write_batch, total);
@@ -730,7 +834,8 @@ async fn ingest_graph_with_progress(
 
     let total_edges = edge_rows.len();
     for (i, batch) in edge_rows.chunks(write_batch).enumerate() {
-        db.upsert_edges(batch)
+        store
+            .upsert_edges(batch)
             .await
             .map_err(|e| format!("upsert edges: {}", e))?;
         let written = std::cmp::min((i + 1) * write_batch, total_edges);
@@ -770,11 +875,167 @@ fn run_gen_ingest(
             }
         }
         let dim = embedder.config().dim as u32;
-        let db = Db::open_or_create(db_path, dim)
-            .await
-            .map_err(|e| format!("open db: {}", e))?;
-        ingest_graph_with_progress(&db, &embedder, &graph).await
+        // `ug gen` accepts the same --dest / --neo4j-* flags as `ug
+        // ingest`. When --dest is omitted we keep the OverGraph-only
+        // behavior pointed at `db_path`.
+        let mut specs = store_specs_from_args(args, dim);
+        // If --dest wasn't specified the default OverGraph path may
+        // not match the db_path the gen pipeline computed; respect
+        // gen's path in that case.
+        if specs.len() == 1 {
+            if let StoreSpec::Overgraph {
+                path,
+                embedding_dim: _,
+            } = &mut specs[0]
+            {
+                if path.as_os_str().is_empty()
+                    || path.to_str() == Some("ugout/ugdb")
+                {
+                    *path = PathBuf::from(db_path);
+                }
+            }
+        }
+        announce_destinations(&specs);
+        ingest_with_specs(&specs, &embedder, &graph).await
     })
+}
+
+/// Open every spec, then dispatch to the right ingest path:
+/// single-spec → progress-bar single ingest; multi-spec → fan-out
+/// ingest (no per-store progress, but a one-line summary per backend).
+async fn ingest_with_specs(
+    specs: &[StoreSpec],
+    embedder: &Embedder,
+    graph: &GraphData,
+) -> Result<(usize, usize), String> {
+    let mut stores: Vec<Box<dyn KnowledgeStore>> = Vec::with_capacity(specs.len());
+    for spec in specs {
+        let store = open_store(spec)
+            .await
+            .map_err(|e| format!("open {} store: {}", spec.name(), e))?;
+        stores.push(store);
+    }
+    if stores.len() == 1 {
+        let store = stores.into_iter().next().unwrap();
+        ingest_graph_with_progress(store.as_ref(), embedder, graph).await
+    } else {
+        let set = StoreSet::new(stores);
+        set.validate_dims().map_err(|e| format!("dim mismatch across destinations: {}", e))?;
+        ingest_graph_multi_with_progress(&set, embedder, graph).await
+    }
+}
+
+/// Multi-destination ingest with a single progress line per stage
+/// (text-build, embed, write) — per-backend progress isn't useful when
+/// fan-out is parallel.
+async fn ingest_graph_multi_with_progress(
+    set: &StoreSet,
+    embedder: &Embedder,
+    graph: &GraphData,
+) -> Result<(usize, usize), String> {
+    use storage::{collect_related_names, build_node_text};
+
+    let nodes_count = graph.nodes.len();
+    let edges_count = graph.edges.len();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    let t0 = std::time::Instant::now();
+    let related = collect_related_names(graph);
+    let texts: Vec<String> = graph
+        .nodes
+        .iter()
+        .map(|n| {
+            let names = related.get(&n.id).map(|v| v.as_slice()).unwrap_or(&[][..]);
+            build_node_text(n, names)
+        })
+        .collect();
+    println!(
+        "{C_CYAN}▸{C_RESET} Building node texts: {C_GREEN}done{C_RESET} ({}) in {C_BOLD}{:?}{C_RESET}",
+        nodes_count,
+        t0.elapsed()
+    );
+
+    let t1 = std::time::Instant::now();
+    let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(nodes_count);
+    for chunk in texts.chunks(embedder.config().batch_size) {
+        let chunk_vec: Vec<String> = chunk.to_vec();
+        let chunk_vectors = embedder
+            .embed(&chunk_vec)
+            .await
+            .map_err(|e| format!("embedding failed: {}", e))?;
+        vectors.extend(chunk_vectors);
+    }
+    println!(
+        "{C_CYAN}▸{C_RESET} Embedding: {C_GREEN}done{C_RESET} in {C_BOLD}{:?}{C_RESET}",
+        t1.elapsed()
+    );
+
+    if vectors.len() != graph.nodes.len() {
+        return Err(format!(
+            "embedder returned {} vectors for {} nodes",
+            vectors.len(),
+            graph.nodes.len()
+        ));
+    }
+
+    let node_rows: Vec<storage::NodeRow> = graph
+        .nodes
+        .iter()
+        .zip(texts.into_iter())
+        .zip(vectors.into_iter())
+        .map(|((n, node_text), vector)| storage::NodeRow {
+            id: n.id.clone(),
+            name: n.name.clone(),
+            node_type: format!("{:?}", n.node_type),
+            description: n.docstring.clone().unwrap_or_default(),
+            file: n.file.clone().unwrap_or_default(),
+            start_line: n.start_line.unwrap_or(0),
+            end_line: n.end_line.unwrap_or(0),
+            last_update_at: now,
+            node_text,
+            vector,
+        })
+        .collect();
+    let edge_rows: Vec<storage::EdgeRow> = graph
+        .edges
+        .iter()
+        .map(|e| {
+            let edge_type = format!("{:?}", e.edge_type);
+            let id = format!("{}|{}|{}", e.source, edge_type, e.target);
+            storage::EdgeRow {
+                id,
+                source: e.source.clone(),
+                target: e.target.clone(),
+                edge_type,
+                properties: String::new(),
+            }
+        })
+        .collect();
+
+    let t2 = std::time::Instant::now();
+    set.upsert_nodes(&node_rows)
+        .await
+        .map_err(|e| format!("upsert nodes (fan-out): {}", e))?;
+    println!(
+        "{C_CYAN}▸{C_RESET} Writing nodes: {C_GREEN}done{C_RESET} (×{} backends) in {C_BOLD}{:?}{C_RESET}",
+        set.len(),
+        t2.elapsed()
+    );
+
+    let t3 = std::time::Instant::now();
+    set.upsert_edges(&edge_rows)
+        .await
+        .map_err(|e| format!("upsert edges (fan-out): {}", e))?;
+    println!(
+        "{C_CYAN}▸{C_RESET} Writing edges: {C_GREEN}done{C_RESET} (×{} backends) in {C_BOLD}{:?}{C_RESET}",
+        set.len(),
+        t3.elapsed()
+    );
+
+    Ok((nodes_count, edges_count))
 }
 
 fn run_ingest(args: &[String]) {
@@ -784,7 +1045,6 @@ fn run_ingest(args: &[String]) {
     }
 
     let graph_file = flag_value_or(args, &["-i", "--input"], "ugout/graph.json");
-    let db_path = flag_value_or(args, &["-o", "--output"], "ugout/ugdb");
 
     let graph_json = fs::read_to_string(&graph_file).expect("Failed to read graph file");
     let graph: GraphData = serde_json::from_str(&graph_json).expect("Failed to parse graph JSON");
@@ -806,26 +1066,23 @@ fn run_ingest(args: &[String]) {
             }
         }
         let dim = embedder.config().dim as u32;
-        let db = match Db::open_or_create(&db_path, dim).await {
-            Ok(db) => db,
-            Err(e) => {
-                eprintln!("Error opening OverGraph at {}: {}", db_path, e);
-                std::process::exit(1);
-            }
-        };
-        match ingest_graph_with_progress(&db, &embedder, &graph).await {
+        let specs = store_specs_from_args(args, dim);
+        announce_destinations(&specs);
+        let dest_label: Vec<String> = specs.iter().map(|s| s.name().to_string()).collect();
+        match ingest_with_specs(&specs, &embedder, &graph).await {
             Ok((nodes_written, edges_written)) => {
                 println!("────────────────────────────────────────");
                 println!(
-                    "Ingested {} nodes, {} edges into {} in {:?}",
+                    "Ingested {} nodes, {} edges into [{}] in {:?}",
                     nodes_written,
                     edges_written,
-                    db_path,
+                    dest_label.join(", "),
                     start_total.elapsed()
                 );
             }
             Err(e) => {
                 eprintln!("Error: {}", e);
+                std::process::exit(1);
             }
         }
     });
@@ -856,10 +1113,14 @@ fn run_semantic_search(args: &[String]) {
             "--embedding-dim",
             "-o",
             "--output",
+            "--dest",
+            "--neo4j-uri",
+            "--neo4j-user",
+            "--neo4j-password",
+            "--neo4j-database",
         ],
     )
     .expect("missing query");
-    let db_path = flag_value_or(args, &["-d", "--db"], "ugout/ugdb");
     let limit: usize = flag_value(args, &["-k", "--limit"])
         .and_then(|s| s.parse().ok())
         .unwrap_or(10);
@@ -869,12 +1130,16 @@ fn run_semantic_search(args: &[String]) {
     let rt = tokio_runtime();
 
     let result_json = rt.block_on(async {
-        let db = Db::open(&db_path).await.expect("failed to open OverGraph");
+        let dim = embedder.config().dim as u32;
+        let spec = single_store_spec_from_args(args, dim);
+        let store = open_store(&spec)
+            .await
+            .unwrap_or_else(|e| panic!("failed to open {} store: {}", spec.name(), e));
         let hits = match filter.as_deref() {
-            Some(f) => storage::semantic_search_w_where(&db, &embedder, &query, limit, f)
+            Some(f) => storage::semantic_search_w_where(store.as_ref(), &embedder, &query, limit, f)
                 .await
                 .expect("semantic_search_w_where failed"),
-            None => storage_semantic_search(&db, &embedder, &query, limit)
+            None => storage_semantic_search(store.as_ref(), &embedder, &query, limit)
                 .await
                 .expect("semantic_search failed"),
         };
@@ -934,9 +1199,13 @@ fn run_hybrid_search(args: &[String]) {
         "--embedding-dim",
         "-o",
         "--output",
+        "--dest",
+        "--neo4j-uri",
+        "--neo4j-user",
+        "--neo4j-password",
+        "--neo4j-database",
     ];
     let query = first_positional(args, &value_flags).expect("missing query");
-    let db_path = flag_value_or(args, &["-d", "--db"], "ugout/ugdb");
     let k: usize = flag_value(args, &["-k", "--limit"])
         .and_then(|s| s.parse().ok())
         .unwrap_or(8);
@@ -967,7 +1236,11 @@ fn run_hybrid_search(args: &[String]) {
     let rt = tokio_runtime();
 
     let result_json = rt.block_on(async {
-        let db = Db::open(&db_path).await.expect("failed to open OverGraph");
+        let dim = embedder.config().dim as u32;
+        let spec = single_store_spec_from_args(args, dim);
+        let store = open_store(&spec)
+            .await
+            .unwrap_or_else(|e| panic!("failed to open {} store: {}", spec.name(), e));
         let mut opts = SearchKbOptions::new(&query, repo_root.as_path());
         opts.k = k;
         opts.hops = hops;
@@ -983,7 +1256,7 @@ fn run_hybrid_search(args: &[String]) {
         opts.include_snippets = include_snippets;
         opts.strategy = strategy;
 
-        let result = storage_search_kb(&db, &embedder, opts)
+        let result = storage_search_kb(store.as_ref(), &embedder, opts)
             .await
             .expect("hybrid_search failed");
         serde_json::to_string_pretty(&result).unwrap_or_default()
@@ -1000,9 +1273,23 @@ fn run_traverse(args: &[String]) {
         std::process::exit(1);
     }
 
-    let start = first_positional(args, &["-d", "--db", "-k", "--hops", "-o", "--output"])
-        .expect("missing start node id");
-    let db_path = flag_value_or(args, &["-d", "--db"], "ugout/ugdb");
+    let start = first_positional(
+        args,
+        &[
+            "-d",
+            "--db",
+            "-k",
+            "--hops",
+            "-o",
+            "--output",
+            "--dest",
+            "--neo4j-uri",
+            "--neo4j-user",
+            "--neo4j-password",
+            "--neo4j-database",
+        ],
+    )
+    .expect("missing start node id");
     let hops: u32 = flag_value(args, &["-k", "--hops"])
         .and_then(|s| s.parse().ok())
         .unwrap_or(2);
@@ -1010,8 +1297,16 @@ fn run_traverse(args: &[String]) {
 
     let rt = tokio_runtime();
     let json = rt.block_on(async {
-        let db = Db::open(&db_path).await.expect("failed to open OverGraph");
-        let result = storage_traverse(&db, &start, hops)
+        // Traversal doesn't need an embedder, but `single_store_spec_from_args`
+        // wants the configured dim so the OverGraph sidecar validation works.
+        // Read it from the existing meta file when possible; fall back to the
+        // default. The Neo4j path persists its own dim independently.
+        let dim = ultragraph::storage::DEFAULT_EMBEDDING_DIM as u32;
+        let spec = single_store_spec_from_args(args, dim);
+        let store = open_store(&spec)
+            .await
+            .unwrap_or_else(|e| panic!("failed to open {} store: {}", spec.name(), e));
+        let result = storage_traverse(store.as_ref(), &start, hops)
             .await
             .expect("traverse failed");
         let nodes_json: Vec<serde_json::Value> = result
@@ -1082,7 +1377,7 @@ fn print_graph_help() {
 }
 
 fn print_ingest_help() {
-    println!("  {C_CYAN}ug ingest{C_RESET}  {C_YELLOW}— embed graph nodes and write to OverGraph{C_RESET}");
+    println!("  {C_CYAN}ug ingest{C_RESET}  {C_YELLOW}— embed graph nodes and write to one or more knowledge stores{C_RESET}");
     println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
     println!();
     println!("{C_BOLD}Usage:{C_RESET}  ug ingest [options]");
@@ -1090,6 +1385,16 @@ fn print_ingest_help() {
     println!("{C_BOLD}Options:{C_RESET}");
     println!("  {C_CYAN}-i, --input{C_RESET} <file>  Graph JSON (default: ugout/graph.json)");
     println!("  {C_CYAN}-o, --output{C_RESET} <dir>  OverGraph directory (default: ugout/ugdb)");
+    println!();
+    println!("{C_BOLD}Destinations (default: overgraph):{C_RESET}");
+    println!("  {C_CYAN}--dest{C_RESET} <kind[,kind...]>   {C_BOLD}overgraph{C_RESET} | {C_BOLD}neo4j{C_RESET}. Comma-separated for fan-out ingest.");
+    println!("                              Reads (semantic_search/hybrid_search/traverse) accept");
+    println!("                              exactly one --dest.");
+    println!("  {C_CYAN}--neo4j-uri{C_RESET} <uri>      e.g. neo4j://localhost:7687 (env: UG_NEO4J_URI)");
+    println!("  {C_CYAN}--neo4j-user{C_RESET} <user>    Default: neo4j (env: UG_NEO4J_USER)");
+    println!("  {C_CYAN}--neo4j-password{C_RESET} <pw>  Required for --dest neo4j (env: UG_NEO4J_PASSWORD)");
+    println!("  {C_CYAN}--neo4j-database{C_RESET} <db>  Default: neo4j (env: UG_NEO4J_DATABASE)");
+    println!("  See {C_BOLD}docs/MULTI-DEST.md{C_RESET} for the GDS / APOC capability matrix and Neo4j schema.");
     println!();
     println!("{C_BOLD}Embedding (defaults to in-process, no service needed):{C_RESET}");
     println!("  {C_CYAN}--model{C_RESET} <name>      Model. For local: a fastembed alias (see below).");
@@ -1113,6 +1418,12 @@ fn print_ingest_help() {
     println!("  {C_CYAN}ug ingest{C_RESET} --model nomic-embed-text-v1.5             {C_YELLOW}# local, larger model{C_RESET}");
     println!("  {C_CYAN}ug ingest{C_RESET} --base-url https://api.openai.com/v1 \\");
     println!("            --api-key $OPENAI_API_KEY --model text-embedding-3-small  {C_YELLOW}# remote{C_RESET}");
+    println!("  {C_CYAN}ug ingest{C_RESET} --dest neo4j \\");
+    println!("            --neo4j-uri neo4j://localhost:7687 --neo4j-user neo4j \\");
+    println!("            --neo4j-password $NEO4J_PASSWORD                           {C_YELLOW}# Neo4j only{C_RESET}");
+    println!("  {C_CYAN}ug ingest{C_RESET} --dest overgraph,neo4j \\");
+    println!("            -o ugout/ugdb --neo4j-uri neo4j://localhost:7687 \\");
+    println!("            --neo4j-user neo4j --neo4j-password $NEO4J_PASSWORD        {C_YELLOW}# fan-out{C_RESET}");
 }
 
 fn print_gen_help() {

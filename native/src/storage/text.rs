@@ -226,6 +226,39 @@ fn emit_token(token: &str, out: &mut HashMap<u32, f32>) {
     *out.entry(dim).or_insert(0.0) += 1.0;
 }
 
+/// Reciprocal Rank Fusion of two ranked lists. The standard RRF
+/// constant `c = 60` (Cormack et al., 2009) — small enough to keep
+/// rank-1 hits dominant, large enough that ties don't collapse to zero.
+/// Output is sorted by fused score descending; output length is
+/// capped at `k`. Both backends use this for hybrid search:
+/// OverGraph's native fusion plus Neo4j's app-side fusion of vector +
+/// full-text results.
+pub fn reciprocal_rank_fusion(
+    left: Vec<(crate::storage::db::NodeRow, f32)>,
+    right: Vec<(crate::storage::db::NodeRow, f32)>,
+    k: usize,
+) -> Vec<(crate::storage::db::NodeRow, f32)> {
+    const C: f32 = 60.0;
+    let mut scored: HashMap<String, (crate::storage::db::NodeRow, f32)> = HashMap::new();
+    for (rank, (row, _)) in left.into_iter().enumerate() {
+        let s = 1.0 / (C + rank as f32 + 1.0);
+        let id = row.id.clone();
+        scored.entry(id).or_insert((row, 0.0)).1 += s;
+    }
+    for (rank, (row, _)) in right.into_iter().enumerate() {
+        let s = 1.0 / (C + rank as f32 + 1.0);
+        let id = row.id.clone();
+        scored.entry(id).or_insert((row, 0.0)).1 += s;
+    }
+    let mut out: Vec<(crate::storage::db::NodeRow, f32)> = scored.into_values().collect();
+    out.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    out.truncate(k);
+    out
+}
+
 /// FNV-1a 32-bit hash. Mirrors the algorithm OverGraph uses internally
 /// (its `fnv1a` is 64-bit but the principle is identical) so test
 /// fixtures can predict dimension ids.

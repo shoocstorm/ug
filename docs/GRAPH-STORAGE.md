@@ -1,5 +1,12 @@
 # Knowledge Graph Storage with OverGraph (Rust)
 
+> **Multi-destination note (2026-05-15):** OverGraph is the default backend
+> but no longer the only one — UltraGraph now supports ingesting into
+> **Neo4j** alongside OverGraph via the new `--dest` flag. See
+> `MULTI-DEST.md` for the user-facing CLI surface, capability matrix,
+> and Neo4j schema. The doc below describes the OverGraph backend
+> specifically.
+>
 > **Migration note (2026-05-01):** Storage moved from LanceDB to **OverGraph** v0.6.0. See `MIGRATION-OVERGRAPH.md` for the rationale, API mapping, and §6 trade-offs. 
 
 ## Objective

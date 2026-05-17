@@ -8,6 +8,13 @@
 //   UG_EMBED_API_KEY   - override embedding API key
 //   UG_EMBED_MODEL     - override embedding model name
 //
+// Multi-destination (default backend: overgraph):
+//   UG_DEST            - "overgraph" (default) or "neo4j"
+//   UG_NEO4J_URI       - Neo4j Bolt URI (e.g. neo4j://localhost:7687)
+//   UG_NEO4J_USER      - Neo4j username (default: neo4j)
+//   UG_NEO4J_PASSWORD  - Neo4j password (required when UG_DEST=neo4j)
+//   UG_NEO4J_DATABASE  - optional database name
+//
 // Usage:
 //   pnpm install
 //   node node/mcp-server.mjs   # speaks MCP over stdio
@@ -40,6 +47,33 @@ function embedderOptionsJson() {
   if (process.env.UG_EMBED_API_KEY) o.apiKey = process.env.UG_EMBED_API_KEY;
   if (process.env.UG_EMBED_MODEL) o.model = process.env.UG_EMBED_MODEL;
   return Object.keys(o).length ? JSON.stringify(o) : null;
+}
+
+// Build the destOptions JSON from env vars. Returns null when the
+// caller wants the default (OverGraph at DB_PATH). When UG_DEST=neo4j
+// is set, the URI + password are required and we throw early so the
+// MCP transport surfaces a clean error instead of failing per-call.
+function destOptionsJson() {
+  const dest = (process.env.UG_DEST || "overgraph").toLowerCase();
+  if (dest === "overgraph" || dest === "og") return null;
+  if (dest === "neo4j" || dest === "neo") {
+    const uri = process.env.UG_NEO4J_URI;
+    const password = process.env.UG_NEO4J_PASSWORD;
+    if (!uri) {
+      throw new Error("UG_DEST=neo4j requires UG_NEO4J_URI");
+    }
+    if (!password) {
+      throw new Error("UG_DEST=neo4j requires UG_NEO4J_PASSWORD");
+    }
+    return JSON.stringify({
+      kind: "neo4j",
+      uri,
+      user: process.env.UG_NEO4J_USER || "neo4j",
+      password,
+      database: process.env.UG_NEO4J_DATABASE || null,
+    });
+  }
+  throw new Error(`Unknown UG_DEST value: ${dest} (expected: overgraph, neo4j)`);
 }
 
 const SearchKbInput = z.object({
@@ -483,7 +517,12 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     if (name === "search_kb") {
       const args = SearchKbInput.parse(rawArgs ?? {});
       const opts = { ...args, repoRoot: REPO_ROOT };
-      const json = await ug.dbHybridSearch(DB_PATH, JSON.stringify(opts), embedderOptionsJson());
+      const json = await ug.dbHybridSearch(
+        DB_PATH,
+        JSON.stringify(opts),
+        embedderOptionsJson(),
+        destOptionsJson(),
+      );
       const ctx = JSON.parse(json);
       return {
         content: [{ type: "text", text: formatRankedContext(ctx) }],
@@ -498,6 +537,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         args.k ?? 10,
         args.whereClause ?? null,
         embedderOptionsJson(),
+        destOptionsJson(),
       );
       const hits = JSON.parse(json);
       return {
@@ -513,6 +553,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         args.hops,
         args.edgeTypes ?? null,
         args.direction,
+        destOptionsJson(),
       );
       const traversal = JSON.parse(json);
       const header = `Traversal from [${args.startNodeIds.join(", ")}] (hops=${args.hops}, dir=${args.direction})`;
@@ -536,6 +577,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         args.hops,
         edgeTypes,
         "inbound",
+        destOptionsJson(),
       );
       const traversal = JSON.parse(json);
       const header = `Usages of ${args.nodeId} (hops=${args.hops}, edges=[${edgeTypes.join(", ")}])`;

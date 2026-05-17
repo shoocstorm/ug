@@ -4,6 +4,13 @@
 
 ### Current Phase: All core phases implemented ✅
 
+### Latest milestone (2026-05-15): Multi-destination ingestion (Neo4j) ✅
+- New `KnowledgeStore` trait abstracts the storage layer; OverGraph and Neo4j both implement it.
+- `--dest overgraph,neo4j` fans ingest out to both backends in one pass.
+- Neo4j 5.13+ supported via `neo4rs`; vector + full-text indexes auto-created.
+- Personalized PageRank uses `gds.pageRank.stream` when GDS is detected; falls back to MMR otherwise.
+- See `docs/MULTI-DEST.md` for the user-facing surface and `docs/MULTI-DEST-PLAN.md` for the design rationale.
+
 ---
 
 ## Phase 1: The Native "Turbo" Indexer (Rust) ✅ COMPLETED

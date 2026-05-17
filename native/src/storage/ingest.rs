@@ -2,11 +2,12 @@
 //!
 //! Given an in-memory [`GraphData`], this builds the per-node embedding
 //! text, calls the [`Embedder`] in one batched call, and upserts both the
-//! nodes and edges tables. Edges are written verbatim - they have no
-//! vector column, so no embedding work is needed for them.
+//! nodes and edges into one or more backends. Edges have no vector
+//! column so no embedding work is needed for them.
 
-use crate::storage::db::{Db, EdgeRow, NodeRow};
+use crate::storage::db::{EdgeRow, NodeRow};
 use crate::storage::embed::Embedder;
+use crate::storage::store::{KnowledgeStore, StoreError, StoreSet};
 use crate::storage::text::{build_node_text, collect_related_names};
 use crate::types::GraphData;
 
@@ -17,8 +18,10 @@ pub struct IngestStats {
     pub embedding_calls: usize,
 }
 
+/// Single-destination ingest. Embeds every node once, then upserts
+/// nodes + edges into the backend.
 pub async fn ingest_graph(
-    db: &Db,
+    store: &dyn KnowledgeStore,
     embedder: &Embedder,
     graph: &GraphData,
 ) -> Result<IngestStats, Box<dyn std::error::Error + Send + Sync>> {
@@ -44,7 +47,71 @@ pub async fn ingest_graph(
         .into());
     }
 
-    let node_rows: Vec<NodeRow> = graph
+    let node_rows = build_node_rows(graph, texts, vectors, now);
+    let edge_rows = build_edge_rows(graph);
+
+    store.upsert_nodes(&node_rows).await?;
+    store.upsert_edges(&edge_rows).await?;
+
+    Ok(IngestStats {
+        nodes_written: node_rows.len(),
+        edges_written: edge_rows.len(),
+        embedding_calls: 1,
+    })
+}
+
+/// Multi-destination ingest. Embeds the graph once, then fans the
+/// upserts out across every backend in `set` (parallel, fail-fast on
+/// any backend error). The embedding dim must match across all stores
+/// — call [`StoreSet::validate_dims`] before this if you want a clear
+/// error early instead of a per-row `BadVector`.
+pub async fn ingest_graph_multi(
+    set: &StoreSet,
+    embedder: &Embedder,
+    graph: &GraphData,
+) -> Result<IngestStats, Box<dyn std::error::Error + Send + Sync>> {
+    let related = collect_related_names(graph);
+    let now = current_unix_secs();
+
+    let texts: Vec<String> = graph
+        .nodes
+        .iter()
+        .map(|n| {
+            let names = related.get(&n.id).map(|v| v.as_slice()).unwrap_or(&[][..]);
+            build_node_text(n, names)
+        })
+        .collect();
+
+    let vectors = embedder.embed(&texts).await?;
+    if vectors.len() != graph.nodes.len() {
+        return Err(format!(
+            "embedder returned {} vectors for {} nodes",
+            vectors.len(),
+            graph.nodes.len()
+        )
+        .into());
+    }
+
+    let node_rows = build_node_rows(graph, texts, vectors, now);
+    let edge_rows = build_edge_rows(graph);
+
+    set.upsert_nodes(&node_rows).await?;
+    set.upsert_edges(&edge_rows).await?;
+
+    Ok(IngestStats {
+        nodes_written: node_rows.len(),
+        edges_written: edge_rows.len(),
+        embedding_calls: 1,
+    })
+}
+
+fn build_node_rows(
+    graph: &GraphData,
+    texts: Vec<String>,
+    vectors: Vec<Vec<f32>>,
+    now: i64,
+) -> Vec<NodeRow> {
+    graph
         .nodes
         .iter()
         .zip(texts.into_iter())
@@ -61,15 +128,15 @@ pub async fn ingest_graph(
             node_text,
             vector,
         })
-        .collect();
+        .collect()
+}
 
-    let edge_rows: Vec<EdgeRow> = graph
+fn build_edge_rows(graph: &GraphData) -> Vec<EdgeRow> {
+    graph
         .edges
         .iter()
         .map(|e| {
             let edge_type = format!("{:?}", e.edge_type);
-            // Synthesize a stable id so re-ingesting the same graph
-            // upserts instead of duplicating.
             let id = format!("{}|{}|{}", e.source, edge_type, e.target);
             EdgeRow {
                 id,
@@ -79,54 +146,14 @@ pub async fn ingest_graph(
                 properties: String::new(),
             }
         })
-        .collect();
-
-    db.upsert_nodes(&node_rows).await?;
-    db.upsert_edges(&edge_rows).await?;
-
-    // Best-effort: attempt to create vector + FTS indexes once we have
-    // enough rows for them to be useful. Both are no-ops on tiny tables
-    // (IvfPq needs a training minimum, FTS is happy at any size). Errors
-    // are swallowed because the table is queryable without indexes;
-    // logging them here would pollute test output.
-    let _ = maybe_create_indexes(db, node_rows.len()).await;
-
-    Ok(IngestStats {
-        nodes_written: node_rows.len(),
-        edges_written: edge_rows.len(),
-        embedding_calls: 1,
-    })
-}
-
-/// Vector indexing is worthwhile once a table has more rows than this.
-/// Below it, scan latency is already low and IvfPq training tends to
-/// fail. The exact threshold is approximate; OverGraph picks the index
-/// type via `Index::Auto`, so the only thing we control is whether to
-/// even try.
-const MIN_ROWS_FOR_VECTOR_INDEX: usize = 256;
-
-async fn maybe_create_indexes(
-    db: &crate::storage::db::Db,
-    last_write: usize,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Use the latest row count; the table may already have rows from a
-    // previous ingest plus the rows we just wrote.
-    let total = db.count_nodes().await.unwrap_or(last_write);
-    if total >= MIN_ROWS_FOR_VECTOR_INDEX {
-        let _ = db.try_create_vector_index().await;
-    }
-    // FTS is cheap; create unconditionally on any non-empty table.
-    if total > 0 {
-        let _ = db.try_create_fts_index().await;
-    }
-    Ok(())
+        .collect()
 }
 
 /// Re-embed and upsert only the subset of nodes whose `id` appears in
 /// `changed_ids`. Edges are left untouched - callers are expected to
 /// recompute and upsert those separately when topology changes.
 pub async fn reembed_nodes(
-    db: &Db,
+    store: &dyn KnowledgeStore,
     embedder: &Embedder,
     graph: &GraphData,
     changed_ids: &[String],
@@ -168,13 +195,23 @@ pub async fn reembed_nodes(
         })
         .collect();
 
-    db.upsert_nodes(&rows).await?;
+    store.upsert_nodes(&rows).await?;
 
     Ok(IngestStats {
         nodes_written: rows.len(),
         edges_written: 0,
         embedding_calls: 1,
     })
+}
+
+// Helper kept for backwards compat; allows ingest_graph to skip the
+// upsert_edges call when the caller prefers to run them separately.
+#[allow(dead_code)]
+pub(crate) async fn upsert_only_nodes(
+    store: &dyn KnowledgeStore,
+    rows: &[NodeRow],
+) -> Result<(), StoreError> {
+    store.upsert_nodes(rows).await
 }
 
 fn current_unix_secs() -> i64 {

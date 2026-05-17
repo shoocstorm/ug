@@ -13,13 +13,18 @@
 //! APIs (native hybrid search, `db.traverse`, etc.).
 
 use crate::storage::embed::DEFAULT_EMBEDDING_DIM;
+use crate::storage::store::{
+    Direction, KnowledgeStore, NodeFilter, StoreError, TraversalNode, TraversalPage,
+};
 use crate::storage::types_registry::{
     edge_type_from_id, edge_type_to_id, node_type_from_id, node_type_to_id,
 };
+use async_trait::async_trait;
 use overgraph::{
     DatabaseEngine, DbOptions, DenseMetric, DenseVectorConfig, Direction as OgDirection, EdgeInput,
     EdgeRecord, EngineError, FusionMode, HnswConfig, NeighborOptions, NodeInput, NodeRecord,
-    PropValue, VectorSearchMode, VectorSearchRequest,
+    PprAlgorithm, PprOptions as OgPprOptions, PprResult as OgPprResult, PropValue,
+    VectorSearchMode, VectorSearchRequest,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -654,5 +659,157 @@ fn edge_record_to_row(db: &Db, rec: &EdgeRecord) -> EdgeRow {
         target,
         edge_type,
         properties: String::new(),
+    }
+}
+
+fn to_og_direction(d: Direction) -> OgDirection {
+    match d {
+        Direction::Outbound => OgDirection::Outgoing,
+        Direction::Inbound => OgDirection::Incoming,
+        Direction::Both => OgDirection::Both,
+    }
+}
+
+/// `Db` (the OverGraph backend) implements the cross-backend
+/// [`KnowledgeStore`] trait. The trait methods delegate to the
+/// existing inherent methods / free functions in this module so the
+/// public OverGraph API stays as-is for back-compat tests.
+///
+/// Filter handling: OverGraph's `vector_search` doesn't yet honor
+/// property predicates (see `MIGRATION-OVERGRAPH §6 Q1`). The trait's
+/// `filter` argument is therefore accepted but currently ignored.
+#[async_trait]
+impl KnowledgeStore for Db {
+    fn embedding_dim(&self) -> u32 {
+        Db::embedding_dim(self)
+    }
+
+    fn supports_native_ppr(&self) -> bool {
+        true
+    }
+
+    fn backend_name(&self) -> &'static str {
+        "overgraph"
+    }
+
+    async fn upsert_nodes(&self, rows: &[NodeRow]) -> Result<(), StoreError> {
+        Db::upsert_nodes(self, rows).await.map_err(StoreError::from)
+    }
+
+    async fn upsert_edges(&self, rows: &[EdgeRow]) -> Result<(), StoreError> {
+        Db::upsert_edges(self, rows).await.map_err(StoreError::from)
+    }
+
+    async fn vector_search(
+        &self,
+        query: Vec<f32>,
+        k: usize,
+        _filter: Option<&NodeFilter>,
+    ) -> Result<Vec<(NodeRow, f32)>, StoreError> {
+        // TODO(overgraph-where): translate filter.node_types into
+        // OverGraph's `type_filter`. v1 ignores it (matches the
+        // pre-trait behavior).
+        vector_search(self, query, k, None)
+            .await
+            .map_err(StoreError::from)
+    }
+
+    async fn hybrid_search(
+        &self,
+        query: Vec<f32>,
+        sparse: Vec<(u32, f32)>,
+        _query_text: &str,
+        k: usize,
+        _filter: Option<&NodeFilter>,
+    ) -> Result<Vec<(NodeRow, f32)>, StoreError> {
+        // OverGraph uses the pre-built sparse vector. `query_text` is
+        // the Neo4j input — irrelevant here.
+        hybrid_search(self, query, sparse, k, None)
+            .await
+            .map_err(StoreError::from)
+    }
+
+    async fn traverse(
+        &self,
+        start: &str,
+        max_hops: u32,
+        edge_types: Option<&[String]>,
+        direction: Direction,
+    ) -> Result<TraversalPage, StoreError> {
+        let edge_type_ids: Option<Vec<u32>> = edge_types
+            .filter(|v| !v.is_empty())
+            .map(|v| v.iter().map(|s| edge_type_to_id(s)).collect());
+        let og_dir = to_og_direction(direction);
+        let (rows, edges, distances) =
+            traverse_string_ids(self, start, max_hops, edge_type_ids, og_dir).await?;
+        let nodes: Vec<TraversalNode> = rows
+            .into_iter()
+            .map(|row| {
+                let depth = distances.get(&row.id).copied().unwrap_or(0);
+                TraversalNode { row, depth }
+            })
+            .collect();
+        Ok(TraversalPage { nodes, edges })
+    }
+
+    async fn nodes_by_ids(&self, ids: &[String]) -> Result<Vec<NodeRow>, StoreError> {
+        nodes_by_ids(self, ids).await.map_err(StoreError::from)
+    }
+
+    async fn fetch_node(&self, key: &str) -> Result<Option<NodeRow>, StoreError> {
+        Db::fetch_node(self, key).map_err(StoreError::from)
+    }
+
+    async fn count_nodes(&self) -> Result<usize, StoreError> {
+        Db::count_nodes(self).await.map_err(StoreError::from)
+    }
+
+    async fn count_edges(&self) -> Result<usize, StoreError> {
+        Db::count_edges(self).await.map_err(StoreError::from)
+    }
+
+    async fn personalized_pagerank(
+        &self,
+        seeds: &[String],
+        _direction: Direction,
+        edge_types: Option<&[String]>,
+        restart_prob: f32,
+        max_iter: usize,
+        max_results: Option<usize>,
+    ) -> Result<Vec<(String, f32)>, StoreError> {
+        if seeds.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut seed_ids: Vec<u64> = Vec::with_capacity(seeds.len());
+        for s in seeds {
+            if let Some(id) = self.lookup_id(s)? {
+                seed_ids.push(id);
+            }
+        }
+        if seed_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let damping = (1.0 - restart_prob.clamp(0.01, 0.99)) as f64;
+        let edge_type_filter: Option<Vec<u32>> = edge_types
+            .filter(|v| !v.is_empty())
+            .map(|v| v.iter().map(|s| edge_type_to_id(s)).collect());
+        let opts = OgPprOptions {
+            algorithm: PprAlgorithm::ExactPowerIteration,
+            damping_factor: damping,
+            max_iterations: max_iter.max(1) as u32,
+            epsilon: 1e-6,
+            approx_residual_tolerance: 1e-5,
+            edge_type_filter,
+            max_results,
+        };
+        let result: OgPprResult = self
+            .engine
+            .personalized_pagerank(&seed_ids, &opts)
+            .map_err(|e| StoreError::Backend(format!("overgraph ppr: {}", e)))?;
+        let mut out: Vec<(String, f32)> = Vec::with_capacity(result.scores.len());
+        for (id, score) in result.scores {
+            out.push((self.key_for(id), score as f32));
+        }
+        Ok(out)
     }
 }
