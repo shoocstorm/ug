@@ -162,6 +162,57 @@ The dim is persisted to a `:UgMeta { key: 'singleton' }` singleton node
 the same way OverGraph uses `<db>/ug-meta.json` — opening with a
 mismatched dim is rejected with `DimMismatch`.
 
+## `ug serve` with multiple backends
+
+`ug serve` follows the same `UG_DEST` convention as the ingest CLI —
+list more than one backend and the visualization UI gets a
+**destination selector** in the Semantic Search panel:
+
+```bash
+# Open the UI with both backends queryable
+UG_DEST=overgraph,neo4j ug serve -i ugout/graph.json --db ugout/ugdb
+```
+
+- **Single backend** → a static pill labelled "overgraph · N nodes" /
+  "neo4j · N nodes" appears above the search box, so the user always
+  sees which DB they're hitting.
+- **Multiple backends** → the pill becomes a dropdown. The first
+  destination in `UG_DEST` is the default (marked `(default)` in the
+  list). The selection is per-query — switch and re-run.
+- Every search response now includes a `dest` field with the backend
+  that actually served the result, surfaced in the result status line
+  as "N results · 12 ms · from neo4j".
+
+`/api/capabilities` reports the full set:
+
+```json
+{
+  "db_ready": true,
+  "search_ready": true,
+  "db_node_count": 43,          // primary backend (back-compat)
+  "primary": "overgraph",
+  "destinations": [
+    { "name": "overgraph", "primary": true,  "node_count": 43,  "supports_native_ppr": true  },
+    { "name": "neo4j",     "primary": false, "node_count": 740, "supports_native_ppr": false }
+  ]
+}
+```
+
+Backends that failed to open at startup show up with an `error` field
+on the destination row instead of `node_count`, so the operator can
+see what's wrong without checking server logs. The UI lists them in a
+disabled `unavailable` optgroup.
+
+Per-request overrides go in the POST body / query string as `dest`:
+
+```bash
+curl -s -XPOST -H 'Content-Type: application/json' \
+  -d '{"query":"loadConfig","k":5,"dest":"neo4j"}' \
+  http://localhost:8080/api/search/semantic | jq '.dest, .count'
+
+curl -s 'http://localhost:8080/api/db/traverse/file:src/main.ts?k=2&dest=neo4j' | jq '.dest'
+```
+
 ## Fan-out semantics
 
 `--dest overgraph,neo4j` opens both stores, validates that their

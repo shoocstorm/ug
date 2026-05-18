@@ -31,35 +31,52 @@ use ultragraph::storage::{
     DEFAULT_EMBEDDING_DIM,
 };
 
-/// Build the `StoreSpec` for `ug serve` from env vars. Defaults to
-/// OverGraph at the supplied directory; switches to Neo4j when
-/// `UG_DEST=neo4j` is set with the necessary credentials.
-fn build_serve_store_spec(db_path: &PathBuf) -> StoreSpec {
+/// Build the `StoreSpec`s for `ug serve` from env vars. `UG_DEST` is
+/// comma-separated — when more than one backend is listed, the server
+/// opens all of them and the UI shows a destination selector. The
+/// first item parsed becomes the primary (default for requests that
+/// don't specify a dest).
+fn build_serve_store_specs(db_path: &PathBuf) -> Vec<StoreSpec> {
     let dest = std::env::var("UG_DEST")
         .ok()
-        .map(|s| s.to_lowercase())
+        .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "overgraph".to_string());
     let dim = DEFAULT_EMBEDDING_DIM as u32;
-    if dest == "neo4j" || dest == "neo" {
-        let uri = std::env::var("UG_NEO4J_URI")
-            .expect("UG_DEST=neo4j requires UG_NEO4J_URI");
-        let user = std::env::var("UG_NEO4J_USER").unwrap_or_else(|_| "neo4j".to_string());
-        let password = std::env::var("UG_NEO4J_PASSWORD")
-            .expect("UG_DEST=neo4j requires UG_NEO4J_PASSWORD");
-        let database = std::env::var("UG_NEO4J_DATABASE").ok();
-        StoreSpec::Neo4j {
-            uri,
-            user,
-            password,
-            database,
-            embedding_dim: dim,
-        }
-    } else {
-        StoreSpec::Overgraph {
-            path: db_path.clone(),
-            embedding_dim: dim,
+    let mut specs: Vec<StoreSpec> = Vec::new();
+    for kind in dest.split(',').map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()) {
+        match kind.as_str() {
+            "neo4j" | "neo" => {
+                let uri = std::env::var("UG_NEO4J_URI")
+                    .expect("UG_DEST=neo4j requires UG_NEO4J_URI");
+                let user = std::env::var("UG_NEO4J_USER").unwrap_or_else(|_| "neo4j".to_string());
+                let password = std::env::var("UG_NEO4J_PASSWORD")
+                    .expect("UG_DEST=neo4j requires UG_NEO4J_PASSWORD");
+                let database = std::env::var("UG_NEO4J_DATABASE").ok();
+                specs.push(StoreSpec::Neo4j {
+                    uri,
+                    user,
+                    password,
+                    database,
+                    embedding_dim: dim,
+                });
+            }
+            "overgraph" | "og" => specs.push(StoreSpec::Overgraph {
+                path: db_path.clone(),
+                embedding_dim: dim,
+            }),
+            other => panic!(
+                "UG_DEST contains unknown backend '{}' (expected: overgraph, neo4j)",
+                other
+            ),
         }
     }
+    if specs.is_empty() {
+        specs.push(StoreSpec::Overgraph {
+            path: db_path.clone(),
+            embedding_dim: dim,
+        });
+    }
+    specs
 }
 use ultragraph::types::{GraphData, GraphEdge, GraphNode};
 
@@ -143,17 +160,60 @@ fn build_adj(graph: &GraphData) -> AdjIndex {
     AdjIndex { id_to_idx, out }
 }
 
+/// One or more backends `ug serve` is wired up to. Populated when
+/// `UG_DEST` lists one or more backend names; reads route to the
+/// caller-selected dest (via a `dest` field on each search/traverse
+/// request) or fall back to `primary`.
+struct ServeStores {
+    /// All opened stores keyed by backend name (`"overgraph"`, `"neo4j"`, …).
+    map: HashMap<String, Arc<dyn KnowledgeStore>>,
+    /// Default destination — first one parsed from `UG_DEST`.
+    primary: String,
+    /// Per-destination cached node-count probes. Populated on the first
+    /// `/api/capabilities` poll, then reused for the rest of the
+    /// session (the server itself doesn't write, so the count is
+    /// effectively static).
+    node_counts: HashMap<String, OnceCell<Option<usize>>>,
+    /// Per-destination open failure reasons. Lets `/api/capabilities`
+    /// tell the operator which backends came up and which didn't.
+    open_errors: HashMap<String, String>,
+}
+
+impl ServeStores {
+    fn get(&self, name: &str) -> Option<&Arc<dyn KnowledgeStore>> {
+        self.map.get(name)
+    }
+
+    /// Reserved for future routes that hard-route to the primary; the
+    /// per-request `pick_store` helper covers the current handlers.
+    #[allow(dead_code)]
+    fn primary_store(&self) -> &Arc<dyn KnowledgeStore> {
+        self.map
+            .get(&self.primary)
+            .expect("primary backend always present in map")
+    }
+
+    /// Ordered list of available backend names. Sorted alphabetically
+    /// so the UI selector renders deterministically across reloads.
+    fn names(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.map.keys().cloned().collect();
+        v.sort();
+        v
+    }
+}
+
 #[derive(Clone)]
 struct ServeState {
     graph_path: Arc<PathBuf>,
     graph: Arc<RwLock<Arc<GraphSnapshot>>>,
     html: Arc<EncodedAsset>,
     d3: Arc<EncodedAsset>,
-    /// `None` when `--no-db` is set or the DB failed to open. Phase 3 routes
-    /// return 503 in that case rather than panicking the server.
-    /// Trait-object wrapped so `ug serve` can target any `KnowledgeStore`
-    /// backend (OverGraph by default, Neo4j when `UG_DEST=neo4j` is set).
-    db: Option<Arc<dyn KnowledgeStore>>,
+    /// `None` when `--no-db` is set or every configured store failed
+    /// to open. Phase 3 routes return 503 in that case rather than
+    /// panicking the server. With multi-dest, this is `Some` as long
+    /// as at least one backend opened; per-dest readiness is reported
+    /// in `/api/capabilities`.
+    stores: Option<Arc<ServeStores>>,
     /// `None` when the embedder couldn't be constructed (e.g. missing endpoint).
     /// Phase 3 search routes need it; `/api/db/*` routes don't.
     embedder: Option<Arc<Embedder>>,
@@ -161,14 +221,11 @@ struct ServeState {
     /// Process-wide cap on concurrent embedding calls. Cheap insurance against
     /// hammering the embedding endpoint when many search requests land at once.
     embed_lock: Arc<Semaphore>,
-    /// Reason a Phase 3 dependency is missing — surfaced verbatim in 503s so
-    /// the operator can tell `--no-db` apart from a real connection failure.
+    /// Reason all configured Phase 3 backends are unavailable —
+    /// surfaced verbatim in 503s so the operator can tell `--no-db`
+    /// apart from real connection failures. Per-dest errors live on
+    /// `ServeStores::open_errors`.
     db_unavailable_reason: Arc<Option<String>>,
-    /// Cached node-count probe used by `/api/capabilities`. Populated on
-    /// first call so we don't pay the per-type scan on every request, but
-    /// stale across `--watch` reloads (acceptable: ingest doesn't run via
-    /// the server, so the count is effectively static for a serve session).
-    db_node_count: Arc<OnceCell<Option<usize>>>,
 }
 
 impl ServeState {
@@ -311,34 +368,62 @@ pub fn run_serve(args: &[String]) {
 
     let rt = tokio_runtime();
     rt.block_on(async move {
-        // Open the store inside the runtime (async). A failure here is
-        // non-fatal — Phase 1/2 routes still work; Phase 3 routes 503.
-        // The destination is picked from `UG_DEST` (default overgraph),
-        // matching the CLI / MCP env-var conventions.
-        let (db_arc, db_unavailable_reason): (
-            Option<Arc<dyn KnowledgeStore>>,
+        // Open every store listed in `UG_DEST`. Per-dest open failures
+        // are non-fatal as long as at least one backend opens; the
+        // operator sees per-dest status on `/api/capabilities` and the
+        // UI gates its selector on it.
+        let (stores_arc, db_unavailable_reason): (
+            Option<Arc<ServeStores>>,
             Option<String>,
         ) = if no_db {
             (None, Some("started with --no-db".to_string()))
         } else {
-            let spec = build_serve_store_spec(&db_path);
-            match open_store(&spec).await {
-                Ok(store) => {
-                    tracing::info!(
-                        backend = %spec.name(),
-                        "store opened"
-                    );
-                    (Some(Arc::from(store)), None)
+            let specs = build_serve_store_specs(&db_path);
+            let mut map: HashMap<String, Arc<dyn KnowledgeStore>> = HashMap::new();
+            let mut node_counts: HashMap<String, OnceCell<Option<usize>>> = HashMap::new();
+            let mut open_errors: HashMap<String, String> = HashMap::new();
+            let mut primary: Option<String> = None;
+            for spec in specs.iter() {
+                let name = spec.name().to_string();
+                match open_store(spec).await {
+                    Ok(store) => {
+                        tracing::info!(backend = %name, "store opened");
+                        if primary.is_none() {
+                            primary = Some(name.clone());
+                        }
+                        map.insert(name.clone(), Arc::from(store));
+                        node_counts.insert(name, OnceCell::new());
+                    }
+                    Err(e) => {
+                        let reason = format!("{}", e);
+                        tracing::warn!(error = %reason, backend = %name, "store open failed");
+                        open_errors.insert(name, reason);
+                    }
                 }
-                Err(e) => {
-                    let reason = format!(
-                        "failed to open {} store: {}",
-                        spec.name(),
-                        e
-                    );
-                    tracing::warn!(error = %e, "store open failed; Phase 3 routes will 503");
-                    (None, Some(reason))
-                }
+            }
+            if let Some(primary) = primary {
+                (
+                    Some(Arc::new(ServeStores {
+                        map,
+                        primary,
+                        node_counts,
+                        open_errors,
+                    })),
+                    None,
+                )
+            } else {
+                // All backends failed to open — report all errors so
+                // the operator can see what went wrong.
+                let summary = if open_errors.is_empty() {
+                    "no destinations configured".to_string()
+                } else {
+                    let parts: Vec<String> = open_errors
+                        .iter()
+                        .map(|(k, v)| format!("{}: {}", k, v))
+                        .collect();
+                    format!("all backends failed: {}", parts.join("; "))
+                };
+                (None, Some(summary))
             }
         };
 
@@ -347,12 +432,11 @@ pub fn run_serve(args: &[String]) {
             graph: Arc::new(RwLock::new(snapshot)),
             html,
             d3,
-            db: db_arc,
+            stores: stores_arc,
             embedder: embedder_arc,
             repo_root: Arc::new(repo_root_path),
             embed_lock: Arc::new(Semaphore::new(4)),
             db_unavailable_reason: Arc::new(db_unavailable_reason),
-            db_node_count: Arc::new(OnceCell::new()),
         };
 
         let app = Router::new()
@@ -396,7 +480,7 @@ pub fn run_serve(args: &[String]) {
             }
         };
 
-        let db_api_enabled = state.db.is_some() && state.embedder.is_some();
+        let db_api_enabled = state.stores.is_some() && state.embedder.is_some();
         tracing::info!(
             graph = %graph_path.display(),
             nodes,
@@ -881,30 +965,62 @@ async fn api_cycles(State(state): State<ServeState>) -> Response {
 /// node row in the table (an opened-but-empty DB still 200s on the
 /// existing routes but returns nothing useful).
 async fn api_capabilities(State(state): State<ServeState>) -> Response {
-    let db_ready = state.db.is_some();
+    let db_ready = state.stores.is_some();
     let embedder_ready = state.embedder.is_some();
 
-    let node_count: Option<usize> = if let Some(db) = state.db.clone() {
-        // Probe once per process. `count_nodes` walks per-type so we don't
-        // want to repeat it on every poll.
-        state
-            .db_node_count
-            .get_or_init(|| async move {
-                match db.count_nodes().await {
-                    Ok(n) => Some(n),
-                    Err(e) => {
-                        tracing::warn!(error = %e, "count_nodes failed; reporting null");
-                        None
+    // Per-destination probe + serialization. `db_node_count` and
+    // `search_ready` at the top level reflect the primary backend so
+    // existing clients keep working; the new `destinations` array is
+    // what the UI keys off for the selector.
+    let mut destinations_json: Vec<serde_json::Value> = Vec::new();
+    let mut primary_count: Option<usize> = None;
+    if let Some(stores) = state.stores.clone() {
+        for name in stores.names() {
+            let store = stores.get(&name).cloned();
+            let cell = stores.node_counts.get(&name);
+            let count: Option<usize> = if let (Some(store), Some(cell)) = (store.as_ref(), cell) {
+                let store_inner = store.clone();
+                let name_for_log = name.clone();
+                cell.get_or_init(|| async move {
+                    match store_inner.count_nodes().await {
+                        Ok(n) => Some(n),
+                        Err(e) => {
+                            tracing::warn!(backend = %name_for_log, error = %e, "count_nodes failed");
+                            None
+                        }
                     }
-                }
-            })
-            .await
-            .clone()
-    } else {
-        None
-    };
+                })
+                .await
+                .clone()
+            } else {
+                None
+            };
+            let supports_ppr = store.map(|s| s.supports_native_ppr()).unwrap_or(false);
+            let is_primary = name == stores.primary;
+            if is_primary {
+                primary_count = count;
+            }
+            destinations_json.push(serde_json::json!({
+                "name": name,
+                "primary": is_primary,
+                "node_count": count,
+                "supports_native_ppr": supports_ppr,
+            }));
+        }
+        // Also surface backends that failed to open so the operator
+        // can see what's wrong from the UI/curl alone.
+        for (name, err) in stores.open_errors.iter() {
+            destinations_json.push(serde_json::json!({
+                "name": name,
+                "primary": false,
+                "node_count": null,
+                "supports_native_ppr": false,
+                "error": err,
+            }));
+        }
+    }
 
-    let has_data = node_count.map(|n| n > 0).unwrap_or(false);
+    let has_data = primary_count.map(|n| n > 0).unwrap_or(false);
     let search_ready = db_ready && embedder_ready && has_data;
     let reason = if search_ready {
         None
@@ -919,25 +1035,55 @@ async fn api_capabilities(State(state): State<ServeState>) -> Response {
         None
     };
 
+    let primary_name = state
+        .stores
+        .as_ref()
+        .map(|s| s.primary.clone())
+        .unwrap_or_default();
+
     let body = serde_json::json!({
         "db_ready": db_ready,
         "embedder_ready": embedder_ready,
         "search_ready": search_ready,
-        "db_node_count": node_count,
+        // Back-compat: existing UI reads `db_node_count` for the primary.
+        "db_node_count": primary_count,
         "reason": reason,
+        // New in multi-dest: full list with per-backend flags. UI shows
+        // a selector when `destinations.length > 1`.
+        "destinations": destinations_json,
+        "primary": primary_name,
     });
     ok_json(body.to_string())
 }
 
 // ---------- Phase 3 — DB-backed handlers ----------
 
-fn db_or_503(state: &ServeState) -> Result<Arc<dyn KnowledgeStore>, Response> {
-    state.db.clone().ok_or_else(|| {
+/// Resolve a per-request `dest` parameter to a concrete store. `None`
+/// uses the primary. Returns a 503 if no backend is available, 404 if
+/// the caller asked for a name we didn't open.
+fn pick_store(
+    state: &ServeState,
+    dest: Option<&str>,
+) -> Result<Arc<dyn KnowledgeStore>, Response> {
+    let stores = state.stores.clone().ok_or_else(|| {
         let msg = state
             .db_unavailable_reason
             .as_deref()
             .unwrap_or("DB not opened");
         err_json(StatusCode::SERVICE_UNAVAILABLE, msg)
+    })?;
+    let name = dest
+        .map(|s| s.to_ascii_lowercase())
+        .unwrap_or_else(|| stores.primary.clone());
+    stores.get(&name).cloned().ok_or_else(|| {
+        let available = stores.names().join(", ");
+        err_json(
+            StatusCode::NOT_FOUND,
+            &format!(
+                "unknown destination '{}' (available: {})",
+                name, available
+            ),
+        )
     })
 }
 
@@ -950,8 +1096,19 @@ fn embedder_or_503(state: &ServeState) -> Result<Arc<Embedder>, Response> {
     })
 }
 
-async fn api_db_node(State(state): State<ServeState>, AxPath(id): AxPath<String>) -> Response {
-    let db = match db_or_503(&state) {
+#[derive(serde::Deserialize)]
+struct DbNodeQuery {
+    /// Optional destination name; defaults to the primary backend.
+    /// Mirrors the `dest` field used by all the other DB-backed routes.
+    dest: Option<String>,
+}
+
+async fn api_db_node(
+    State(state): State<ServeState>,
+    AxPath(id): AxPath<String>,
+    Query(params): Query<DbNodeQuery>,
+) -> Response {
+    let db = match pick_store(&state, params.dest.as_deref()) {
         Ok(d) => d,
         Err(r) => return r,
     };
@@ -973,6 +1130,8 @@ struct DbTraverseQuery {
     k: u32,
     dir: Option<String>,
     types: Option<String>,
+    /// Optional destination name; defaults to the primary backend.
+    dest: Option<String>,
 }
 fn default_db_k() -> u32 {
     2
@@ -983,7 +1142,7 @@ async fn api_db_traverse(
     AxPath(id): AxPath<String>,
     Query(params): Query<DbTraverseQuery>,
 ) -> Response {
-    let db = match db_or_503(&state) {
+    let db = match pick_store(&state, params.dest.as_deref()) {
         Ok(d) => d,
         Err(r) => return r,
     };
@@ -1038,6 +1197,7 @@ async fn api_db_traverse(
 
     ok_json(
         serde_json::json!({
+            "dest": db.backend_name(),
             "nodes": nodes_json,
             "edges": edges_json,
             "distances": result.distances,
@@ -1053,6 +1213,9 @@ struct SemanticBody {
     k: usize,
     #[serde(default)]
     filter: Option<String>,
+    /// Optional destination name; defaults to the primary backend.
+    #[serde(default)]
+    dest: Option<String>,
 }
 fn default_semantic_k() -> usize {
     10
@@ -1062,7 +1225,7 @@ async fn api_search_semantic(
     State(state): State<ServeState>,
     Json(body): Json<SemanticBody>,
 ) -> Response {
-    let db = match db_or_503(&state) {
+    let db = match pick_store(&state, body.dest.as_deref()) {
         Ok(d) => d,
         Err(r) => return r,
     };
@@ -1098,6 +1261,7 @@ async fn api_search_semantic(
 
     let body = serde_json::json!({
         "count": hits.len(),
+        "dest": db.backend_name(),
         "hits": hits.iter().map(|h| {
             serde_json::json!({
                 "id": h.node.id,
@@ -1135,6 +1299,9 @@ struct HybridBody {
     where_clause: Option<String>,
     #[serde(default = "default_hybrid_include_snippets")]
     include_snippets: bool,
+    /// Optional destination name; defaults to the primary backend.
+    #[serde(default)]
+    dest: Option<String>,
 }
 fn default_hybrid_k() -> usize {
     8
@@ -1156,7 +1323,7 @@ async fn api_search_hybrid(
     State(state): State<ServeState>,
     Json(body): Json<HybridBody>,
 ) -> Response {
-    let db = match db_or_503(&state) {
+    let db = match pick_store(&state, body.dest.as_deref()) {
         Ok(d) => d,
         Err(r) => return r,
     };
@@ -1200,12 +1367,24 @@ async fn api_search_hybrid(
     opts.include_snippets = body.include_snippets;
     opts.strategy = strategy;
 
+    let dest_name = db.backend_name();
     let result = storage_search_kb(&*db, &embedder, opts).await;
     drop(_permit);
 
     match result {
-        Ok(ctx) => match serde_json::to_string(&ctx) {
-            Ok(s) => ok_json(s),
+        Ok(ctx) => match serde_json::to_value(&ctx) {
+            Ok(mut v) => {
+                // Surface the actual backend the result came from so
+                // the UI can display "results from <dest>" even when
+                // the caller didn't pass an explicit `dest`.
+                if let Some(obj) = v.as_object_mut() {
+                    obj.insert(
+                        "dest".to_string(),
+                        serde_json::Value::String(dest_name.to_string()),
+                    );
+                }
+                ok_json(v.to_string())
+            }
             Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &format!("encode: {}", e)),
         },
         Err(e) => err_json(

@@ -1449,6 +1449,66 @@
             color: var(--danger);
         }
 
+        /* Destination selector + badge — shown right above the textarea
+           so the user always knows which backend they're querying. */
+        .sem-dest-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 6px;
+            font-size: 11px;
+            color: var(--text-dim);
+        }
+
+        .sem-dest-row[hidden] {
+            display: none;
+        }
+
+        .sem-dest-row .sem-dest-label {
+            white-space: nowrap;
+        }
+
+        .sem-dest-row #sem-dest {
+            flex: 1;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 4px 6px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-family: inherit;
+            outline: none;
+        }
+
+        /* Single-backend mode: pill-style badge instead of a dropdown. */
+        .sem-dest-row .sem-dest-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 8px;
+            border-radius: 999px;
+            background: rgba(34, 211, 238, 0.10);
+            border: 1px solid var(--accent-dim);
+            color: var(--accent);
+            font-size: 10px;
+            font-weight: 500;
+            letter-spacing: 0.02em;
+            text-transform: uppercase;
+        }
+
+        .sem-dest-row .sem-dest-badge[hidden] {
+            display: none;
+        }
+
+        .sem-dest-row .sem-dest-badge::before {
+            content: "";
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--accent);
+            box-shadow: 0 0 6px var(--accent);
+        }
+
         #sem-results {
             display: flex;
             flex-direction: column;
@@ -2135,6 +2195,13 @@
                             <button class="sem-mode active" data-mode="semantic" type="button">Semantic</button>
                             <button class="sem-mode" data-mode="hybrid" type="button">Hybrid + Snippets</button>
                         </div>
+                        <!-- Backend selector. Populated from /api/capabilities.
+                             Single backend → static badge; multiple → select. -->
+                        <div class="sem-dest-row" id="sem-dest-row" hidden>
+                            <span class="sem-dest-label">Searching:</span>
+                            <select id="sem-dest" hidden></select>
+                            <span class="sem-dest-badge" id="sem-dest-badge" hidden></span>
+                        </div>
                         <textarea id="sem-input" rows="2" placeholder="Describe what you're looking for…"></textarea>
                         <div class="sem-controls">
                             <input type="number" id="sem-k" value="10" min="1" max="50" title="Number of results">
@@ -2415,6 +2482,11 @@
             currentSuggestions: [],
             capabilities: null,
             semMode: 'semantic',
+            // Currently selected backend for search/traverse requests.
+            // Initialized from /api/capabilities; null until that probe
+            // completes — fetch helpers omit `dest` in that case so the
+            // server falls back to its primary.
+            semDest: null,
             semInFlight: false,
             pathSource: null,
             pathMode: false
@@ -2700,6 +2772,7 @@
                         dot.classList.remove('cap-warn', 'cap-off');
                         dot.title = `DB ready · ${caps.db_node_count ?? '?'} nodes`;
                     }
+                    renderDestSelector(caps);
                 } else {
                     hideSection(semSection);
                     showSection(disabledSection);
@@ -2723,6 +2796,87 @@
                 }
                 console.warn('capabilities probe failed:', err);
             }
+        }
+
+        // ─── Destination selector ──────────────────────────
+        // Populated from /api/capabilities. The user always sees which
+        // backend they're querying; with >1 backend they can switch
+        // before each search.
+
+        function renderDestSelector(caps) {
+            const row = document.getElementById('sem-dest-row');
+            const select = document.getElementById('sem-dest');
+            const badge = document.getElementById('sem-dest-badge');
+            if (!row || !select || !badge) return;
+
+            // Only count the destinations that actually opened
+            // (skip ones with an `error` field — those failed at startup).
+            const all = Array.isArray(caps.destinations) ? caps.destinations : [];
+            const ready = all.filter(d => !d.error);
+            if (ready.length === 0) {
+                row.hidden = true;
+                return;
+            }
+            row.hidden = false;
+
+            const primary = caps.primary || (ready.find(d => d.primary) || ready[0]).name;
+            // Preserve the user's prior choice if it still exists across
+            // a capabilities refresh.
+            const desired = state.semDest && ready.some(d => d.name === state.semDest)
+                ? state.semDest
+                : primary;
+            state.semDest = desired;
+
+            if (ready.length === 1) {
+                // Single-backend serve: static badge so the user still
+                // knows which DB they're hitting, but no dropdown noise.
+                select.hidden = true;
+                badge.hidden = false;
+                badge.textContent = formatDestLabel(ready[0]);
+                badge.title = badgeTitle(ready[0]);
+            } else {
+                badge.hidden = true;
+                select.hidden = false;
+                select.innerHTML = '';
+                for (const d of ready) {
+                    const opt = document.createElement('option');
+                    opt.value = d.name;
+                    opt.textContent = formatDestLabel(d) + (d.primary ? '  (default)' : '');
+                    opt.title = badgeTitle(d);
+                    if (d.name === desired) opt.selected = true;
+                    select.appendChild(opt);
+                }
+                // Also report any backends that failed to open so the
+                // operator sees them without having to check logs.
+                const failed = all.filter(d => d.error);
+                if (failed.length) {
+                    const group = document.createElement('optgroup');
+                    group.label = 'unavailable';
+                    for (const d of failed) {
+                        const opt = document.createElement('option');
+                        opt.value = d.name;
+                        opt.disabled = true;
+                        opt.textContent = `${d.name} — ${d.error}`;
+                        group.appendChild(opt);
+                    }
+                    select.appendChild(group);
+                }
+                select.onchange = () => {
+                    state.semDest = select.value;
+                };
+            }
+        }
+
+        function formatDestLabel(d) {
+            const count = (d.node_count != null) ? `· ${d.node_count.toLocaleString()} nodes` : '';
+            return `${d.name} ${count}`.trim();
+        }
+
+        function badgeTitle(d) {
+            const parts = [`Backend: ${d.name}`];
+            if (d.node_count != null) parts.push(`${d.node_count.toLocaleString()} nodes`);
+            parts.push(`PPR: ${d.supports_native_ppr ? 'native' : 'MMR fallback'}`);
+            return parts.join(' · ');
         }
 
         // ─── Semantic / Hybrid panel ────────────────────────
@@ -2857,12 +3011,13 @@
                     ? await fetchHybrid(query, k)
                     : await fetchSemantic(query, k);
                 const ms = Math.round(performance.now() - t0);
+                const destNote = hits.dest ? ` · from ${hits.dest}` : '';
                 if (!hits.length) {
                     resultsEl.innerHTML = '<div class="sem-empty">No results.</div>';
-                    statusEl.textContent = `0 results · ${ms} ms`;
+                    statusEl.textContent = `0 results · ${ms} ms${destNote}`;
                 } else {
                     renderSemanticHits(resultsEl, hits, state.semMode);
-                    statusEl.textContent = `${hits.length} result${hits.length === 1 ? '' : 's'} · ${ms} ms`;
+                    statusEl.textContent = `${hits.length} result${hits.length === 1 ? '' : 's'} · ${ms} ms${destNote}`;
                 }
             } catch (err) {
                 statusEl.classList.add('error');
@@ -2876,14 +3031,16 @@
         }
 
         async function fetchSemantic(query, k) {
+            const body = { query, k };
+            if (state.semDest) body.dest = state.semDest;
             const res = await fetch('/api/search/semantic', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ query, k })
+                body: JSON.stringify(body)
             });
             if (!res.ok) throw new Error(await readErr(res));
             const data = await res.json();
-            return (data.hits || []).map(h => ({
+            const hits = (data.hits || []).map(h => ({
                 id: h.id,
                 name: h.name,
                 node_type: h.node_type,
@@ -2894,13 +3051,20 @@
                 score: h.distance,
                 snippet: null
             }));
+            // Stash the server-reported dest so the status line can
+            // surface "results from <backend>" — important when serve
+            // is configured with multiple destinations.
+            hits.dest = data.dest || state.semDest;
+            return hits;
         }
 
         async function fetchHybrid(query, k) {
+            const body = { query, k, include_snippets: true };
+            if (state.semDest) body.dest = state.semDest;
             const res = await fetch('/api/search/hybrid', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ query, k, include_snippets: true })
+                body: JSON.stringify(body)
             });
             if (!res.ok) throw new Error(await readErr(res));
             const data = await res.json();
@@ -2908,7 +3072,7 @@
             // node_type, file, start_line, end_line, description, distance,
             // hop, snippet }] } — flat, no nested node wrapper.
             const items = data.items || [];
-            return items.map(it => ({
+            const hits = items.map(it => ({
                 id: it.id,
                 name: it.name,
                 node_type: it.node_type,
@@ -2919,6 +3083,8 @@
                 score: it.distance,
                 snippet: it.snippet || null
             }));
+            hits.dest = data.dest || state.semDest;
+            return hits;
         }
 
         async function readErr(res) {
