@@ -19,6 +19,7 @@ mod common;
 mod folder;
 mod languages;
 mod package_json;
+mod pdf;
 
 use crate::types::{FileNode, IndexResult, IndexStats};
 use napi_derive::napi;
@@ -39,8 +40,16 @@ use package_json::extract_package_json_dependencies;
 /// If `repo_root` is provided, file paths will be made relative to it
 /// to reduce output size.
 pub fn process_file(path: &Path, repo_root: Option<&str>) -> Option<FileNode> {
-    let ext = path.extension()?.to_str()?;
-    let indexer = languages::for_extension(ext)?;
+    let ext = path.extension()?.to_str()?.to_lowercase();
+
+    // PDFs are binary and have no tree-sitter grammar — short-circuit
+    // to the dedicated extractor, which returns the same FileNode shape
+    // as the language pipeline below.
+    if ext == "pdf" {
+        return pdf::process_pdf(path, repo_root);
+    }
+
+    let indexer = languages::for_extension(&ext)?;
 
     let content = fs::read_to_string(path).ok()?;
     let hash = blake3::hash(content.as_bytes()).to_hex().to_string();

@@ -4,7 +4,15 @@
 
 ### Current Phase: All core phases implemented ✅
 
-### Latest milestone (2026-05-15): Multi-destination ingestion (Neo4j) ✅
+### Latest milestone (2026-05-19): PDF indexing ✅
+- New `indexer/pdf.rs` extracts text per page via the `pdf-extract` crate (pure Rust, no native deps).
+- One `Symbol` per page, `kind: "heading_1"` → maps to `Concept` graph node with a `Contains` edge from the file (same shape as markdown headings, zero new graph-layer code).
+- Page text lands in `docstring` (8 KB cap, char-boundary-safe truncation) so semantic search can rank PDF pages alongside code symbols.
+- Empty / image-only pages emit a `Page N (no text)` stub. Garbage PDFs are silently skipped.
+- Extension match is now case-insensitive — `.PDF` / `.Pdf` from scanners no longer get dropped.
+- 11 integration tests + 3 unit tests cover happy path, mixed PDF/markdown directories, Unicode survival, graph round-trip, malformed input, and uppercase extensions.
+
+### Milestone (2026-05-15): Multi-destination ingestion (Neo4j) ✅
 - New `KnowledgeStore` trait abstracts the storage layer; OverGraph and Neo4j both implement it.
 - `--dest overgraph,neo4j` fans ingest out to both backends in one pass.
 - Neo4j 5.13+ supported via `neo4rs`; vector + full-text indexes auto-created.

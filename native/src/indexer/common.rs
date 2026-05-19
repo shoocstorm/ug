@@ -13,9 +13,11 @@ use std::path::{Path, PathBuf};
 use tree_sitter::Node;
 
 /// File extensions we are willing to index. Add new entries when registering
-/// a new language indexer in `super::languages`.
+/// a new language indexer in `super::languages`. The `pdf` extension is
+/// special-cased in `indexer::process_file` — it's binary, so it bypasses the
+/// tree-sitter pipeline and is handled by `indexer::pdf::process_pdf`.
 pub const SUPPORTED_EXTS: &[&str] =
-    &["ts", "tsx", "js", "jsx", "py", "java", "md", "mdx", "markdown"];
+    &["ts", "tsx", "js", "jsx", "py", "java", "md", "mdx", "markdown", "pdf"];
 
 /// Directory names that are always skipped during the file walk.
 pub const IGNORED_DIRS: &[&str] = &["node_modules", ".git", "target"];
@@ -238,12 +240,15 @@ pub fn extract_params_from_signature(node_text: &str) -> Vec<Param> {
 }
 
 /// True if the file's extension is one we have a registered indexer for.
+/// Extension match is case-insensitive — scanners and document
+/// exporters routinely produce `.PDF`, `.MD`, etc., and rejecting them
+/// at the walker level would silently lose data.
 pub fn is_supported_file(path: &Path) -> bool {
     let ext = match path.extension() {
-        Some(e) => e.to_str().unwrap_or(""),
-        None => "",
+        Some(e) => e.to_str().unwrap_or("").to_ascii_lowercase(),
+        None => String::new(),
     };
-    SUPPORTED_EXTS.contains(&ext)
+    SUPPORTED_EXTS.contains(&ext.as_str())
 }
 
 /// True if the path passes through one of the always-ignored directories.

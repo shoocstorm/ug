@@ -153,6 +153,7 @@ native/
 │   │   ├── common.rs       # File walk, hashing, path normalization
 │   │   ├── folder.rs       # Folder-node derivation from scanned paths
 │   │   ├── languages.rs    # Per-language indexer registry (TS/Py/Java/MD)
+│   │   ├── pdf.rs          # PDF text extractor (pdf-extract, one Symbol per page)
 │   │   ├── languages/      # Per-language tree-sitter extractors
 │   │   └── package_json.rs # package.json dependency parsing
 │   ├── graph.rs            # Graph building + BFS + analysis
@@ -182,6 +183,12 @@ native/
   - Python
   - Java
   - Markdown / MDX (heading sections carry full-body `end_line` spans for downstream summarization)
+- Binary document parsing
+  - **PDF** via `pdf-extract` (pure-Rust, no native deps): one `Symbol` per page,
+    `kind: "heading_1"` so pages map cleanly to `Concept` graph nodes with a
+    `Contains` edge from the file. Page text → `docstring` (capped at 8 KB) so
+    semantic search can rank it. Empty / image-only pages emit a `(no text)`
+    stub. Extension match is case-insensitive (`.PDF`, `.Pdf` all work).
 - Symbol extraction:
   - Functions, classes, interfaces
   - Function signatures (params, return types)
