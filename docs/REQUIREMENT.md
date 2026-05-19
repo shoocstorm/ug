@@ -13,7 +13,7 @@ This requirements file is optimized for a **High-Performance Hybrid Architecture
  * [ ] **Parallel Crawler:** Use rayon to walk the directory, respecting .gitignore.
  * [ ] **Incremental Indexing:** Implement a cache using blake3 hashes. Only re-parse files where the hash has changed.
  * [ ] **AST Symbol Extraction:** * Extract: Function signatures, class hierarchies, imports/exports, and docstrings.
-   * Supported Parsers: TypeScript / JavaScript, Python, Java, Markdown (CommonMark), and PDF (text extraction via `pdf-extract`; one symbol per page).
+   * Supported Parsers: TypeScript / JavaScript, Python, Java, Rust, Markdown (CommonMark), and PDF (text extraction via `pdf-extract`; one symbol per page).
  * [ ] **NAPI-RS Bridge:** Expose a single index(path: string) function to TypeScript that returns a structured JSON of nodes and edges.
 ### Phase 2: Embedded Graph Persistence
 *Goal: Zero-latency traversal without an external database server.*

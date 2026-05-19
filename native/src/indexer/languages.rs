@@ -21,6 +21,7 @@
 mod java;
 mod markdown;
 mod python;
+mod rust;
 mod typescript;
 
 use crate::types::{ExportInfo, ImportInfo, Symbol};
@@ -58,6 +59,7 @@ pub fn for_extension(ext: &str) -> Option<&'static dyn LanguageIndexer> {
     static PYTHON: python::PythonIndexer = python::PythonIndexer;
     static JAVA: java::JavaIndexer = java::JavaIndexer;
     static MARKDOWN: markdown::MarkdownIndexer = markdown::MarkdownIndexer;
+    static RUST: rust::RustIndexer = rust::RustIndexer;
 
     if TYPESCRIPT.extensions().contains(&ext) {
         Some(&TYPESCRIPT)
@@ -67,6 +69,8 @@ pub fn for_extension(ext: &str) -> Option<&'static dyn LanguageIndexer> {
         Some(&JAVA)
     } else if MARKDOWN.extensions().contains(&ext) {
         Some(&MARKDOWN)
+    } else if RUST.extensions().contains(&ext) {
+        Some(&RUST)
     } else {
         None
     }

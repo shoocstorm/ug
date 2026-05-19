@@ -172,8 +172,8 @@ fn folder_name(path: &str) -> String {
 /// indexer is registered (in practice this can't happen because `scan_files`
 /// already filters by `SUPPORTED_EXTS`, but treat it defensively).
 fn language_for_path(path: &str) -> Option<&'static str> {
-    let ext = Path::new(path).extension()?.to_str()?;
-    languages::for_extension(ext).map(|i| i.name())
+    let ext = Path::new(path).extension()?.to_str()?.to_ascii_lowercase();
+    languages::for_extension(&ext).map(|i| i.name())
 }
 
 fn is_readme(file_path: &str) -> bool {

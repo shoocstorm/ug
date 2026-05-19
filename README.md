@@ -34,7 +34,7 @@ UltraGraph implements a complete four-phase pipeline for building and querying a
 | Category | Feature | Status |
 | :--- | :--- | :--- |
 | **Indexing** | Parallel multi-core file crawling (`.gitignore` aware) | ✅ |
-| | Languages: **TypeScript, JavaScript, Python, Java, Markdown, PDF** | ✅ |
+| | Languages: **TypeScript, JavaScript, Python, Java, Rust, Markdown, PDF** | ✅ |
 | | Incremental indexing with `blake3` hashing | ✅ |
 | **Graph** | Folder hierarchy extraction & classification | ✅ |
 | | Symbol extraction (Functions, Classes, Interfaces, Imports, Calls) | ✅ |

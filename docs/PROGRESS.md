@@ -4,7 +4,17 @@
 
 ### Current Phase: All core phases implemented ✅
 
-### Latest milestone (2026-05-19): PDF indexing ✅
+### Latest milestone (2026-05-19): Rust source indexing ✅
+- New `indexer/languages/rust.rs` using `tree-sitter-rust 0.20`.
+- Symbol kinds covered: `function`, `struct`, `enum`, `trait`, `type_alias`, `constant`, `macro`.
+- `impl` block methods get qualified names (`Type::method`); `impl Trait for Type` methods carry `implements: [Trait]`.
+- Trait super-bounds (`trait Foo: Debug + Send`) land in `extends`.
+- `use` declarations are flattened: brace-groups, nested groups, wildcards (`use foo::*`), and `as` aliases all roundtrip into `ImportInfo`.
+- `///` and `//!` doc-comment runs immediately above an item collapse into the symbol's `docstring`.
+- Graph layer: `struct`/`enum` → `Class`, `trait`/`type_alias` → `Interface`, rest → `Function`.
+- 17 integration tests + 5 use-tree parser unit tests; suite now at **107 passing**.
+
+### Milestone (2026-05-19): PDF indexing ✅
 - New `indexer/pdf.rs` extracts text per page via the `pdf-extract` crate (pure Rust, no native deps).
 - One `Symbol` per page, `kind: "heading_1"` → maps to `Concept` graph node with a `Contains` edge from the file (same shape as markdown headings, zero new graph-layer code).
 - Page text lands in `docstring` (8 KB cap, char-boundary-safe truncation) so semantic search can rank PDF pages alongside code symbols.

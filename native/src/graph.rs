@@ -165,6 +165,11 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
                     "interface" | "interface_declaration" => GraphNodeType::Interface,
                     "variable" | "variable_declaration" => GraphNodeType::Function,
                     "type" | "type_alias_declaration" => GraphNodeType::Interface,
+                    // Rust kinds — structs/enums map to Class, traits and
+                    // type aliases map to Interface, constants/macros fall
+                    // through to Function via the catch-all.
+                    "struct" | "enum" => GraphNodeType::Class,
+                    "trait" | "type_alias" => GraphNodeType::Interface,
                     _ => GraphNodeType::Function,
                 }
             };

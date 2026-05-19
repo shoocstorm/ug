@@ -54,7 +54,7 @@
 
 - **Parallel crawler** — `rayon` over `ignore` (respects `.gitignore`).
 - **Incremental indexing** — `blake3` content hash → only re-parse changed files.
-- **AST extraction** — TypeScript / JavaScript, Python, Java, Markdown (CommonMark); **PDF** text via `pdf-extract` (one symbol per page).
+- **AST extraction** — TypeScript / JavaScript, Python, Java, Rust, Markdown (CommonMark); **PDF** text via `pdf-extract` (one symbol per page).
 - **NAPI bridge** — single `index(path)` → structured JSON of nodes + edges.
 
 **Extended (1.1–1.4):**

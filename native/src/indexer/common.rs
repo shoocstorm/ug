@@ -17,7 +17,7 @@ use tree_sitter::Node;
 /// special-cased in `indexer::process_file` — it's binary, so it bypasses the
 /// tree-sitter pipeline and is handled by `indexer::pdf::process_pdf`.
 pub const SUPPORTED_EXTS: &[&str] =
-    &["ts", "tsx", "js", "jsx", "py", "java", "md", "mdx", "markdown", "pdf"];
+    &["ts", "tsx", "js", "jsx", "py", "java", "rs", "md", "mdx", "markdown", "pdf"];
 
 /// Directory names that are always skipped during the file walk.
 pub const IGNORED_DIRS: &[&str] = &["node_modules", ".git", "target"];

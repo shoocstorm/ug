@@ -152,7 +152,8 @@ native/
 │   │   ├── classifier.rs   # File classification heuristics
 │   │   ├── common.rs       # File walk, hashing, path normalization
 │   │   ├── folder.rs       # Folder-node derivation from scanned paths
-│   │   ├── languages.rs    # Per-language indexer registry (TS/Py/Java/MD)
+│   │   ├── languages.rs    # Per-language indexer registry (TS/Py/Java/Rust/MD)
+│   │   ├── languages/      # Per-language tree-sitter extractors (ts, py, java, rust, md)
 │   │   ├── pdf.rs          # PDF text extractor (pdf-extract, one Symbol per page)
 │   │   ├── languages/      # Per-language tree-sitter extractors
 │   │   └── package_json.rs # package.json dependency parsing
@@ -182,6 +183,11 @@ native/
   - TypeScript/JavaScript
   - Python
   - Java
+  - **Rust** (`function_item` / `struct_item` / `enum_item` / `trait_item` / `type_item` /
+    `const_item` / `static_item` / `macro_definition`; `impl` block methods get qualified
+    as `Type::method` with `implements: [Trait]` on `impl Trait for Type` methods;
+    `use` declarations expand brace-groups and `as` aliases into per-import records;
+    `///` and `//!` doc-comment runs collapse into `docstring`)
   - Markdown / MDX (heading sections carry full-body `end_line` spans for downstream summarization)
 - Binary document parsing
   - **PDF** via `pdf-extract` (pure-Rust, no native deps): one `Symbol` per page,
