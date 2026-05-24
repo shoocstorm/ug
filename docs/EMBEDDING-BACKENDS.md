@@ -90,7 +90,7 @@ Key points:
 
 ```bash
 # Default — no flags needed.
-ug ingest -i ugout/graph.json -o ugout/ugdb
+ug ingest -i .ug/graph.json -o .ug/ugdb
 
 # Pick a different local model.
 ug ingest --model nomic-embed-text-v1.5

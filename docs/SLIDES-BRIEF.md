@@ -273,7 +273,7 @@ On **MacBook Pro M5 Max · 18-core · 40-GPU · 128 GB**, indexing `~/.hermes/he
 
 **Full pipeline + serve**:
 ```bash
-ug gen -i ~/.hermes/hermes-agent -o ugout/ugdb --serve
+ug gen -i ~/.hermes/hermes-agent -o .ug/ugdb --serve
 ```
 
 **Hybrid search via curl**:

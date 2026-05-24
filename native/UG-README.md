@@ -9,7 +9,7 @@ High-performance Graph-based knowledge base generator built with Rust, tree-sitt
 npm run build
 
 # Quick Generation (and visualization)
-ugout/ug gen -i ./docs --no-ingest --serve
+.ug/ug gen -i ./docs --no-ingest --serve
 
 
 # More CLI cmds
@@ -24,7 +24,7 @@ ugout/ug gen -i ./docs --no-ingest --serve
 Full pipeline: index + graph + ingest.
 
 ```bash
-ug gen -i ../ -o ../ugout
+ug gen -i ../ -o ../.ug
 # Produces: indexed-tree.json, graph.json and ingest graph.json into OverGraph db for semantic/hybrid search and RAG.
 # Add --no-ingest to skip the ingest step if you do not have an embedding endpoint running. (see ug gen --help for more info about the embedding endpoint configuration)
 # Adding --serve will start a http server at localhost:8080 to serve the graph.json in an visualized html page.
@@ -40,7 +40,7 @@ ug index -i . --cache .cache -o indexed-tree.json # cache speeds up re-indexing
 ```
 
 Options:
-- `-o, --output <file>` — Output file (default: `ugout/indexed-tree.json`)
+- `-o, --output <file>` — Output file (default: `.ug/indexed-tree.json`)
 - `-c, --cache <dir>` — Cache directory for incremental indexing
 
 ### `ug graph`

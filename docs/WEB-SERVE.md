@@ -25,14 +25,14 @@ Worth being explicit, because it confuses people:
 |------|--------|-------------|
 | `/` and `/index.html` | `native/src/vis/visualization.html` via `include_str!` | **compile time** — baked into the `ug` binary |
 | `/d3.v7.min.js` | `native/src/vis/d3.v7.min.js` via `include_bytes!` | **compile time** — baked into the `ug` binary |
-| `/graph.json` | `-i <path>` flag (default `ugout/graph.json`) | **startup** — read once, held in memory |
-| `/api/db/*`, `/api/search/*` | OverGraph DB at `-d <path>` (default `ugout/ugdb`) | **startup** — opened once |
+| `/graph.json` | `-i <path>` flag (default `.ug/graph.json`) | **startup** — read once, held in memory |
+| `/api/db/*`, `/api/search/*` | OverGraph DB at `-d <path>` (default `.ug/ugdb`) | **startup** — opened once |
 | `/api/chat` | OpenAI-compatible chat endpoint configured via `--chat-model` / `--chat-base-url` / `--chat-api-key` (or `UG_CHAT_*` env vars). Disabled when no `--chat-model` is set — route returns 503. | **startup** — config baked once; per-request body can override `chat_model` / `chat_base_url` / `chat_api_key` / `temperature` / `max_tokens` |
 
 So:
 
 - Editing `native/src/vis/*` does **not** affect a running `ug serve` until you `cargo build` again.
-- The `index.html` / `d3.v7.min.js` files written into `ugout/` by `ug gen` are a *separate* copy meant for serving the directory with any static server (or `file://`). `ug serve` does not consult that copy.
+- The `index.html` / `d3.v7.min.js` files written into `.ug/` by `ug gen` are a *separate* copy meant for serving the directory with any static server (or `file://`). `ug serve` does not consult that copy.
 - Path resolution for `--input` and `--db` is relative to the working directory where you invoked `ug serve`, not relative to the binary's location.
 
 ---
@@ -47,7 +47,7 @@ ug serve [-i <graph.json>] [-p <port>] [--host <addr>]
 
 | Flag | Default | Notes |
 |------|---------|-------|
-| `-i, --input` | `ugout/graph.json` | Path to the graph JSON to serve |
+| `-i, --input` | `.ug/graph.json` | Path to the graph JSON to serve |
 | `-p, --port`  | `8080` | TCP port |
 | `--host`      | `127.0.0.1` | Bind address; pass `0.0.0.0` for LAN exposure |
 
@@ -122,7 +122,7 @@ OverGraph endpoints. Async, need a `Db` handle and an `Embedder`.
 
 | Flag | Default | Notes |
 |------|---------|-------|
-| `-d, --db <path>` | `ugout/ugdb` | OverGraph directory; if open fails, Phase 3 routes return **503** but the server still starts |
+| `-d, --db <path>` | `.ug/ugdb` | OverGraph directory; if open fails, Phase 3 routes return **503** but the server still starts |
 | `--no-db` | off | Skip opening DB and embedder entirely (start server in Phase-1/2-only mode) |
 | `--base-url <url>` | `http://localhost:8000/v1` | Embedding endpoint (same flag as other commands) |
 | `--api-key <key>` | env / default | Embedding API key |
@@ -243,7 +243,7 @@ can disable their chat UI when the route isn't usable.
 
 ## `ug gen --serve` chain  ✅ shipped
 
-`ug gen` accepts `--serve` to flow directly into the server after the gen pipeline finishes — removes the "now run `ug serve -i ugout/graph.json`" hand-off step.
+`ug gen` accepts `--serve` to flow directly into the server after the gen pipeline finishes — removes the "now run `ug serve -i .ug/graph.json`" hand-off step.
 
 ```bash
 ug gen -i ./src --serve                      # full pipeline + serve on :8080
@@ -290,10 +290,10 @@ RUST_LOG=debug ug serve …                                 # everything
 Sample output:
 
 ```
-2026-05-02T14:34:47.126Z INFO ug::serve: DB opened path=ugout/ugdb
-2026-05-02T14:34:47.126Z INFO ug::serve: ug serve ready graph=ugout/graph.json nodes=41614 edges=95117 identity_bytes=31625670 gzip_bytes=2778217 brotli_bytes=2271798 encode_secs=9.27 addr=127.0.0.1:8765 db_api=true watch=true
+2026-05-02T14:34:47.126Z INFO ug::serve: DB opened path=.ug/ugdb
+2026-05-02T14:34:47.126Z INFO ug::serve: ug serve ready graph=.ug/graph.json nodes=41614 edges=95117 identity_bytes=31625670 gzip_bytes=2778217 brotli_bytes=2271798 encode_secs=9.27 addr=127.0.0.1:8765 db_api=true watch=true
 2026-05-02T14:34:47.359Z INFO request: tower_http::trace::on_response: finished processing request latency=12 ms status=200 method=GET uri=/api/graph/stats version=HTTP/1.1
-2026-05-02T14:35:00.111Z INFO ug::serve::watch: graph reloaded path=ugout/graph.json bytes=31625670 nodes=41614 edges=95117
+2026-05-02T14:35:00.111Z INFO ug::serve::watch: graph reloaded path=.ug/graph.json bytes=31625670 nodes=41614 edges=95117
 ```
 
 ---

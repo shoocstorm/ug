@@ -51,13 +51,13 @@ This produces `native/ultragraph.node` — the native binary that powers everyth
 ### 1. Index a Codebase
 
 ```bash
-node src/cli.cjs index ./src -o ugout/indexed-tree.json
+node src/cli.cjs index ./src -o .ug/indexed-tree.json
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-i` / `--input` | `.` | Directory to scan |
-| `-o` / `--output` | `ugout/indexed-tree.json` | Output JSON file |
+| `-o` / `--output` | `.ug/indexed-tree.json` | Output JSON file |
 | `-c` / `--cache` | none | Enable incremental caching |
 
 **With cache** (faster re-indexing):
@@ -69,20 +69,20 @@ node src/cli.cjs index ./src -c ./.ug-cache
 ### 2. Build the Graph
 
 ```bash
-node src/cli.cjs graph ugout/indexed-tree.json -o ugout/graph.json
+node src/cli.cjs graph .ug/indexed-tree.json -o .ug/graph.json
 ```
 
 Or use `gen` to do index + graph + visualization + OverGraph ingest in one command:
 
 ```bash
-node src/cli.cjs gen -i ./src -o ./ugout
+node src/cli.cjs gen -i ./src -o ./.ug
 ```
 
 ### 3. View the Visualization
 
 ```bash
-node src/cli.cjs gen -i ./src -o ./ugout
-npx serve ugout -p 8080
+node src/cli.cjs gen -i ./src -o ./.ug
+npx serve .ug -p 8080
 # Open http://localhost:8080 in browser
 ```
 
@@ -91,20 +91,20 @@ npx serve ugout -p 8080
 **Keyword search:**
 
 ```bash
-node src/cli.cjs search ugout/graph.json "authenticate" --type Function
+node src/cli.cjs search .ug/graph.json "authenticate" --type Function
 ```
 
 **K-hop BFS:**
 
 ```bash
-node src/cli.cjs bfs ugout/graph.json "file:src/auth.ts" 2
+node src/cli.cjs bfs .ug/graph.json "file:src/auth.ts" 2
 ```
 
 **Find shortest path:**
 
 ```bash
 # Via Rust CLI binary (faster):
-./native/target/release/ug path ugout/graph.json "file:src/auth.ts" "function:src/handler.ts:42:handleLogin"
+./native/target/release/ug path .ug/graph.json "file:src/auth.ts" "function:src/handler.ts:42:handleLogin"
 ```
 
 ## Phase 3+4: Semantic Storage & GraphRAG
@@ -132,7 +132,7 @@ node src/cli.cjs ping
 ### Ingest Graph into OverGraph
 
 ```bash
-node src/cli.cjs ingest ugout/graph.json ugout/ugdb
+node src/cli.cjs ingest .ug/graph.json .ug/ugdb
 ```
 
 ### GraphRAG Retrieval (End-to-End)
@@ -140,13 +140,13 @@ node src/cli.cjs ingest ugout/graph.json ugout/ugdb
 Combines seed search → graph expansion → MMR reranking → snippet extraction:
 
 ```bash
-node src/cli.cjs rag ugout/ugdb "how does authentication work" -k 8
+node src/cli.cjs rag .ug/ugdb "how does authentication work" -k 8
 ```
 
 ### Traverse with Edge Filters
 
 ```bash
-node src/cli.cjs traverse ugout/ugdb "file:src/index.ts" -k 2 --edge-type Contains --direction outbound
+node src/cli.cjs traverse .ug/ugdb "file:src/index.ts" -k 2 --edge-type Contains --direction outbound
 ```
 
 ## All CLI Commands
@@ -189,7 +189,7 @@ ug/
 │   │   ├── types.rs       # Shared data structures
 │   │   └── storage/       # OverGraph + embedding + GraphRAG
 │   ├── Cargo.toml
-│── ugout/ultragraph.node # Built native module
+│── .ug/ultragraph.node # Built native module
 ├── src/
 │   ├── cli.cjs            # JavaScript CLI
 │   ├── vis/               # D3.js visualization
@@ -203,8 +203,8 @@ ug/
 ### Incremental Re-Index (Only Changed Files)
 
 ```bash
-node src/cli.cjs index ./src -c ./.ug-cache -o ugout/indexed-tree.json
-node src/cli.cjs graph ugout/indexed-tree.json -o ugout/graph.json
+node src/cli.cjs index ./src -c ./.ug-cache -o .ug/indexed-tree.json
+node src/cli.cjs graph .ug/indexed-tree.json -o .ug/graph.json
 ```
 
 Second run only re-parses files whose blake3 hash changed.
@@ -212,7 +212,7 @@ Second run only re-parses files whose blake3 hash changed.
 ### Full Graph Analysis
 
 ```bash
-./native/target/release/ug gen -i ./src -o ./ugout
+./native/target/release/ug gen -i ./src -o ./.ug
 # Produces: graph.json, indexed-tree.json, analysis.json, cycles.json
 ```
 
@@ -222,10 +222,10 @@ Second run only re-parses files whose blake3 hash changed.
 
 ```bash
 # 1. One command does indexing + graph + visualization + OverGraph ingest
-node src/cli.cjs gen -i ./my-project -o ./ugout
+node src/cli.cjs gen -i ./my-project -o ./.ug
 
 # 2. Query with context retrieval
-node src/cli.cjs rag ugout/ugdb "explain the auth flow" -k 10
+node src/cli.cjs rag .ug/ugdb "explain the auth flow" -k 10
 ```
 
 ## Troubleshooting

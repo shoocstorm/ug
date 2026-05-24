@@ -71,7 +71,7 @@ npm run build
 The `gen` command runs the entire pipeline (index → graph → ingest → UI).
 ```bash
 # Run the full pipeline on the current directory
-npm run gen -- -i ./ -o ugout --no-ingest
+npm run gen -- -i ./ -o .ug --no-ingest
 ```
 
 ### 4. Visualize
@@ -118,7 +118,7 @@ No daemon, no Docker, no network. The first call downloads the ONNX weights into
 
 ```bash
 # Default — bge-small-en-v1.5, 384-dim, ~130 MB on first run
-ug ingest -i ugout/graph.json -o ugout/ugdb
+ug ingest -i .ug/graph.json -o .ug/ugdb
 
 # Pick a different model by alias
 ug ingest --model nomic-embed-text-v1.5     # 768-dim, long-context
@@ -175,7 +175,7 @@ questions grounded in it.
 
 ```bash
 ug chat "how does graph ingest work?" \
-  -d ugout/ugdb \
+  -d .ug/ugdb \
   --base-url http://127.0.0.1:8000/v1 \
   --api-key  12345 \
   --chat-model      Qwen3.6-35B-A3B-MLX-8bit \
@@ -193,7 +193,7 @@ scripted regression testing.
 Omit the prompt to drop into a REPL with a 6-turn rolling history:
 
 ```bash
-ug chat -d ugout/ugdb \
+ug chat -d .ug/ugdb \
   --base-url http://127.0.0.1:8000/v1 \
   --chat-model my-chat-model
 # you ❯ how does ingest work?
@@ -208,7 +208,7 @@ ug chat -d ugout/ugdb \
 
 | Flag | Description |
 | :--- | :--- |
-| `-d, --db <path>`            | OverGraph directory (default: `ugout/ugdb`) |
+| `-d, --db <path>`            | OverGraph directory (default: `.ug/ugdb`) |
 | `--chat-model <name>`        | Chat completion model (required for remote chat) |
 | `--base-url <url>`           | OpenAI-compatible base URL (shared with embeddings) |
 | `--api-key <key>`            | Bearer token (shared with embeddings) |
@@ -231,7 +231,7 @@ ug chat -d ugout/ugdb \
 server with chat enabled:
 
 ```bash
-ug serve -i ugout/graph.json -d ugout/ugdb \
+ug serve -i .ug/graph.json -d .ug/ugdb \
   --base-url http://127.0.0.1:8000/v1 --api-key 12345 \
   --chat-model Qwen3.6-35B-A3B-MLX-8bit
 ```
@@ -273,7 +273,7 @@ Integrate UltraGraph directly into your AI Agent (Cursor, Claude Desktop, etc.).
 
 ### Configuration
 Set these environment variables before starting the server:
-- `UG_DB_PATH`: Path to your OverGraph directory (default: `./ugout/ugdb`).
+- `UG_DB_PATH`: Path to your OverGraph directory (default: `./.ug/ugdb`).
 - `UG_REPO_ROOT`: Root path for resolving snippet file paths.
 - `UG_EMBED_MODEL`: Override embedding model (local fastembed alias or remote model name).
 - `UG_EMBED_BASE_URL`: **Set this to opt into the remote backend.** When unset, the MCP server uses the in-process ONNX embedder.
@@ -281,15 +281,15 @@ Set these environment variables before starting the server:
 - `UG_MODEL_CACHE`: Override the local ONNX model cache directory.
 
 ```bash
-UG_DB_PATH=./ugout/ugdb 
+UG_DB_PATH=./.ug/ugdb 
 
 {
   "mcpServers": {
     "ultragraph": {
       "command": "node",
-      "args": ["/Users/aldrickwan/Documents/project/ug/ugout/mcp-server.mjs"],
+      "args": ["/Users/aldrickwan/Documents/project/ug/.ug/mcp-server.mjs"],
       "env": {
-        "UG_DB_PATH": "/Users/aldrickwan/Documents/project/ug/ugout/ugdb"
+        "UG_DB_PATH": "/Users/aldrickwan/Documents/project/ug/.ug/ugdb"
       }
     }
   }

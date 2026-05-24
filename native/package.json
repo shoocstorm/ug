@@ -10,10 +10,10 @@
     ]
   },
   "scripts": {
-    "build": "cargo build --release && mkdir -p ../ugout && cp target/release/ug ../ugout/ug",
-    "postbuild": "napi build --output-dir ../ugout",
-    "build:dev": "cargo build --profile dev-fast && mkdir -p ../ugout && cp target/dev-fast/ug ../ugout/ug",
-    "postbuild:dev": "napi build --output-dir ../ugout",
+    "build": "cargo build --release && mkdir -p ../.ug && cp target/release/ug ../.ug/ug",
+    "postbuild": "napi build --output-dir ../.ug",
+    "build:dev": "cargo build --profile dev-fast && mkdir -p ../.ug && cp target/dev-fast/ug ../.ug/ug",
+    "postbuild:dev": "napi build --output-dir ../.ug",
     "test": "cargo test -- --nocapture"
   }
 }

@@ -5,14 +5,14 @@
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
   "scripts": {
-    "build": "echo 'Building native binary for nodejs' && cd native && npm run build && cp ../node/cli.cjs ../ugout/ && cp ../node/mcp-server.mjs ../ugout/",
+    "build": "echo 'Building native binary for nodejs' && cd native && npm run build && cp ../node/cli.cjs ../.ug/ && cp ../node/mcp-server.mjs ../.ug/",
     "gen": "node node/cli.cjs gen",
     "index": "echo 'Indexing files' && node node/cli.cjs index",
     "graph": "echo 'Building Graph data' && node node/cli.cjs graph",
     "ingest": "echo 'Ingesting graph data into DB' && node node/cli.cjs db-ingest",
     "rag": "echo 'Performing RAG search on DB' && node node/cli.cjs db-rag",
     "traverse": "echo 'Traversing the graph' && node node/cli.cjs db-traverse",
-    "start": "cp -r ./native/src/vis/visualization.html ugout/index.html && cp -r ./native/src/vis/*.js ugout/ && npx serve ugout -p 8080",
+    "start": "cp -r ./native/src/vis/visualization.html .ug/index.html && cp -r ./native/src/vis/*.js .ug/ && npx serve .ug -p 8080",
     "test": "echo 'Running tests' && node node/test-runner.cjs"
   },
   "keywords": [

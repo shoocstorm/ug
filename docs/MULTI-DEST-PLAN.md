@@ -13,7 +13,7 @@ The goal is a **pluggable storage layer**: refactor today's OverGraph code behin
 1. **Pluggable backends.** New backends drop in by implementing one trait.
 2. **Neo4j as the second backend.** Feature parity for ingest, semantic, hybrid, traverse, and PPR (when GDS is detected at runtime).
 3. **Fan-out ingest.** `ug ingest --dest overgraph,neo4j` writes to both in one pass; reads still pick one destination.
-4. **Backwards-compatible defaults.** No `--dest` flag → OverGraph. Existing `ugout/ugdb/` directories keep working unchanged.
+4. **Backwards-compatible defaults.** No `--dest` flag → OverGraph. Existing `.ug/ugdb/` directories keep working unchanged.
 
 ## Non-goals (deferred)
 
@@ -169,19 +169,19 @@ Indexes are created inside `Neo4jStore::open` with `IF NOT EXISTS` semantics (Ne
 
 ```bash
 # OverGraph (default — unchanged)
-ug ingest -i ugout/graph.json -o ugout/ugdb
+ug ingest -i .ug/graph.json -o .ug/ugdb
 
 # Neo4j (single dest)
-ug ingest -i ugout/graph.json \
+ug ingest -i .ug/graph.json \
   --dest neo4j \
   --neo4j-uri bolt://localhost:7687 \
   --neo4j-user neo4j \
   --neo4j-password $NEO4J_PASSWORD
 
 # Fan-out: write to both
-ug ingest -i ugout/graph.json \
+ug ingest -i .ug/graph.json \
   --dest overgraph,neo4j \
-  -o ugout/ugdb \
+  -o .ug/ugdb \
   --neo4j-uri bolt://localhost:7687 \
   --neo4j-user neo4j \
   --neo4j-password $NEO4J_PASSWORD
@@ -210,7 +210,7 @@ Each phase ends with a green build + the listed verification command. Don't merg
 cd native && cargo build --release && cd ..
 
 # 1. Index a small repo
-npm run gen -- -i ./native/src -o ugout --no-ingest
+npm run gen -- -i ./native/src -o .ug --no-ingest
 
 # 2. Spin up Neo4j (separate terminal, or skip if you have one running)
 docker run -d --name ug-neo4j-test -p 7687:7687 -p 7474:7474 \
@@ -219,7 +219,7 @@ docker run -d --name ug-neo4j-test -p 7687:7687 -p 7474:7474 \
   neo4j:5.20
 
 # 3. Fan-out ingest
-ug ingest -i ugout/graph.json -o ugout/ugdb \
+ug ingest -i .ug/graph.json -o .ug/ugdb \
   --dest overgraph,neo4j \
   --neo4j-uri bolt://localhost:7687 \
   --neo4j-user neo4j --neo4j-password testpass

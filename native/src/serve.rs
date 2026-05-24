@@ -292,7 +292,7 @@ pub fn run_serve(args: &[String]) {
         return;
     }
 
-    let graph_file = flag_value_or(args, &["-i", "--input"], "ugout/graph.json");
+    let graph_file = flag_value_or(args, &["-i", "--input"], ".ug/graph.json");
     let graph_path = std::fs::canonicalize(&graph_file).unwrap_or_else(|e| {
         tracing::error!(path = %graph_file, error = %e, "failed to resolve graph path");
         std::process::exit(1);
@@ -305,7 +305,7 @@ pub fn run_serve(args: &[String]) {
     let watch = has_flag(args, "--watch");
     let no_db = has_flag(args, "--no-db");
 
-    let db_path_raw = flag_value_or(args, &["-d", "--db"], "ugout/ugdb");
+    let db_path_raw = flag_value_or(args, &["-d", "--db"], ".ug/ugdb");
     let db_path = std::fs::canonicalize(&db_path_raw).unwrap_or_else(|_| {
         std::env::current_dir()
             .map(|c| c.join(&db_path_raw))
@@ -1670,8 +1670,8 @@ pub fn print_serve_help() {
     println!("{C_BOLD}Usage:{C_RESET}  ug serve [options]");
     println!();
     println!("{C_BOLD}Options:{C_RESET}");
-    println!("  {C_CYAN}-i, --input{C_RESET} <file>   Graph JSON to serve (default: ugout/graph.json)");
-    println!("  {C_CYAN}-d, --db{C_RESET} <path>      OverGraph DB for /api/db + /api/search routes (default: ugout/ugdb)");
+    println!("  {C_CYAN}-i, --input{C_RESET} <file>   Graph JSON to serve (default: .ug/graph.json)");
+    println!("  {C_CYAN}-d, --db{C_RESET} <path>      OverGraph DB for /api/db + /api/search routes (default: .ug/ugdb)");
     println!("  {C_YELLOW}--no-db{C_RESET}            Don't open DB; routes return 503");
     println!("  {C_CYAN}-p, --port{C_RESET} <n>       TCP port (default: 8080)");
     println!("  {C_CYAN}--host{C_RESET} <addr>        Bind address (default: 127.0.0.1)");
@@ -1698,9 +1698,9 @@ pub fn print_serve_help() {
     println!("  {C_CYAN}POST{C_RESET} /api/chat  body: {{ query, history?, k?, hops?, chat_model?, ... }}");
     println!();
     println!("{C_BOLD}Examples:{C_RESET}");
-    println!("  {C_CYAN}ug serve{C_RESET} -i ugout/graph.json -p 8080");
-    println!("  {C_CYAN}ug serve{C_RESET} -i ugout/graph.json -d ugout/ugdb --watch");
-    println!("  {C_CYAN}ug serve{C_RESET} -i ugout/graph.json -d ugout/ugdb \\");
+    println!("  {C_CYAN}ug serve{C_RESET} -i .ug/graph.json -p 8080");
+    println!("  {C_CYAN}ug serve{C_RESET} -i .ug/graph.json -d .ug/ugdb --watch");
+    println!("  {C_CYAN}ug serve{C_RESET} -i .ug/graph.json -d .ug/ugdb \\");
     println!("           --base-url http://127.0.0.1:8000/v1 --api-key 12345 \\");
     println!("           --chat-model Qwen3.6-35B-A3B-MLX-8bit");
 }

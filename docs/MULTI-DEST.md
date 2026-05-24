@@ -16,19 +16,19 @@ interface — see `native/src/storage/store.rs`.
 
 ```bash
 # OverGraph only (unchanged default)
-ug ingest -i ugout/graph.json -o ugout/ugdb
+ug ingest -i .ug/graph.json -o .ug/ugdb
 
 # Neo4j only
-ug ingest -i ugout/graph.json \
+ug ingest -i .ug/graph.json \
   --dest neo4j \
   --neo4j-uri neo4j://localhost:7687 \
   --neo4j-user neo4j \
   --neo4j-password $NEO4J_PASSWORD
 
 # Fan-out: write to both in one pass
-ug ingest -i ugout/graph.json \
+ug ingest -i .ug/graph.json \
   --dest overgraph,neo4j \
-  -o ugout/ugdb \
+  -o .ug/ugdb \
   --neo4j-uri neo4j://localhost:7687 \
   --neo4j-user neo4j \
   --neo4j-password $NEO4J_PASSWORD
@@ -48,7 +48,7 @@ ug traverse file:src/main.ts --dest neo4j --neo4j-uri …
 | Flag | Default | Notes |
 |---|---|---|
 | `--dest <kind[,kind...]>` | `overgraph` | Comma-separated list. Multi-dest is **ingest-only**; read commands accept exactly one. |
-| `-o`, `--output <dir>` | `ugout/ugdb` | OverGraph data directory. Used as the OverGraph spec path. |
+| `-o`, `--output <dir>` | `.ug/ugdb` | OverGraph data directory. Used as the OverGraph spec path. |
 | `-d`, `--db <dir>` | (read commands) | Same as `-o` but typically used by reads. Honored as a fallback. |
 | `--neo4j-uri <uri>` | — | `neo4j://host:port` or `bolt://host:port`. Required for `--dest neo4j`. |
 | `--neo4j-user <user>` | `neo4j` | Bolt username. |
@@ -89,7 +89,7 @@ Then commands collapse to:
 ug semantic_search "..." --dest neo4j
 ug hybrid_search   "..." --dest neo4j
 ug traverse <id>          --dest neo4j
-ug ingest -i ugout/graph.json --dest overgraph,neo4j -o ugout/ugdb
+ug ingest -i .ug/graph.json --dest overgraph,neo4j -o .ug/ugdb
 ```
 
 For the MCP server (`node node/mcp-server.mjs`), Node 20+ supports the
@@ -170,7 +170,7 @@ list more than one backend and the visualization UI gets a
 
 ```bash
 # Open the UI with both backends queryable
-UG_DEST=overgraph,neo4j ug serve -i ugout/graph.json --db ugout/ugdb
+UG_DEST=overgraph,neo4j ug serve -i .ug/graph.json --db .ug/ugdb
 ```
 
 - **Single backend** → a static pill labelled "overgraph · N nodes" /

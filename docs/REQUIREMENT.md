@@ -312,7 +312,7 @@ Default edge-type weights: `calls=1.0, extends=0.9, implements=0.9, imports=0.7,
 
 ### Perf
 With OverGraph, it took ~5min to import (with embeddings on MacBook Pro M5 Max 18-core 40-GPU 128GB):
-▸ Ingesting into ugout/ugdb
+▸ Ingesting into .ug/ugdb
   ✓ 41619 nodes, 95071 edges embedded
 index-tree.json - 20MB
 graph.json - 40MB
@@ -323,7 +323,7 @@ With OverGraph, it took ~2min to import (with embeddings on MacBook Pro M5 Max 1
 - db file size reduced from 300MB to 200MB.
 
 ```
-ugout/ug gen -i ~/.hermes/hermes-agent -o ugout/ugdb 
+.ug/ug gen -i ~/.hermes/hermes-agent -o .ug/ugdb 
 ⚡ Full pipeline: index → graph → visualization → ingest
 ▸ Indexing /Users/aldrickwan/.hermes/hermes-agent
   ✓ done in 9.267701s
@@ -334,13 +334,13 @@ ugout/ug gen -i ~/.hermes/hermes-agent -o ugout/ugdb
 ▸ Copying visualization assets
   ✓ done in 229.041µs
 ────────────────────────────────────────
-✓ Generated in ugout/ugdb/
+✓ Generated in .ug/ugdb/
   ✓ graph.json
   ✓ indexed-tree.json
   ✓ index.html (open in browser with HTTP server)
   ✓ README.md
 
-▸ Ingesting graph data into DB ugout/ugdb
+▸ Ingesting graph data into DB .ug/ugdb
 ▸ Building node texts: 100.0% ✓ done in 46.680625ms
 ▸ Embedding: 100.0% (41619/41619) ✓ done in 618.098150209s
 ▸ Writing nodes: 100.0% (41619/41619) ✓ done in 993.175791ms
@@ -348,7 +348,7 @@ ugout/ug gen -i ~/.hermes/hermes-agent -o ugout/ugdb
   ✓ 41619 nodes, 95071 edges embedded in 625.374811959s
 ────────────────────────────────────────
 Visit http://localhost:8080 to view the graph
-Run 'ug semantic_search "hello" -o ugout/ugdb' to perform a RAG query.
+Run 'ug semantic_search "hello" -o .ug/ugdb' to perform a RAG query.
 Total time: 635.004456709s
 ```
 
