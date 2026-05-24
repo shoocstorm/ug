@@ -20,6 +20,7 @@ use tower_http::compression::CompressionLayer;
 use tower_http::trace::{DefaultMakeSpan, DefaultOnRequest, DefaultOnResponse, TraceLayer};
 use tracing::Level;
 
+use crate::chat::{self, ChatClient, ChatConfig, ChatMessage, ChatRagOptions};
 use crate::{
     calculate_centrality as lib_centrality, detect_cycles as lib_cycles, embedder_from_args,
     flag_value, flag_value_or, has_flag, tokio_runtime, C_BOLD, C_CYAN, C_GREEN, C_RESET, C_YELLOW,
@@ -217,6 +218,12 @@ struct ServeState {
     /// `None` when the embedder couldn't be constructed (e.g. missing endpoint).
     /// Phase 3 search routes need it; `/api/db/*` routes don't.
     embedder: Option<Arc<Embedder>>,
+    /// Default chat config baked from CLI flags. The `/api/chat` route
+    /// also accepts per-request overrides (chat_model, base_url, …) so
+    /// the UI can flip models without restarting the server. `None`
+    /// when no `--chat-model` was passed and no `UG_CHAT_*` env vars
+    /// are set; routes return 503 in that case.
+    chat_default: Arc<Option<ChatConfig>>,
     repo_root: Arc<PathBuf>,
     /// Process-wide cap on concurrent embedding calls. Cheap insurance against
     /// hammering the embedding endpoint when many search requests land at once.
@@ -427,6 +434,17 @@ pub fn run_serve(args: &[String]) {
             }
         };
 
+        let chat_default = build_chat_default_from_args(args);
+        if let Some(cfg) = chat_default.as_ref() {
+            tracing::info!(
+                model = %cfg.model,
+                base_url = %cfg.base_url,
+                "chat endpoint configured"
+            );
+        } else {
+            tracing::info!("chat endpoint not configured (/api/chat will return 503)");
+        }
+
         let state = ServeState {
             graph_path: Arc::new(graph_path.clone()),
             graph: Arc::new(RwLock::new(snapshot)),
@@ -434,6 +452,7 @@ pub fn run_serve(args: &[String]) {
             d3,
             stores: stores_arc,
             embedder: embedder_arc,
+            chat_default: Arc::new(chat_default),
             repo_root: Arc::new(repo_root_path),
             embed_lock: Arc::new(Semaphore::new(4)),
             db_unavailable_reason: Arc::new(db_unavailable_reason),
@@ -459,6 +478,7 @@ pub fn run_serve(args: &[String]) {
             .route("/api/db/traverse/*id", get(api_db_traverse))
             .route("/api/search/semantic", post(api_search_semantic))
             .route("/api/search/hybrid", post(api_search_hybrid))
+            .route("/api/chat", post(api_chat))
             // CompressionLayer skips responses that already have Content-Encoding,
             // so it only kicks in for the dynamic /api/* JSON.
             .layer(CompressionLayer::new().br(true))
@@ -1041,10 +1061,21 @@ async fn api_capabilities(State(state): State<ServeState>) -> Response {
         .map(|s| s.primary.clone())
         .unwrap_or_default();
 
+    let chat_default = state.chat_default.as_ref().as_ref();
+    let chat_ready = chat_default.is_some() && search_ready;
+    let chat_info = chat_default.map(|c| {
+        serde_json::json!({
+            "model": c.model,
+            "base_url": c.base_url,
+        })
+    });
+
     let body = serde_json::json!({
         "db_ready": db_ready,
         "embedder_ready": embedder_ready,
         "search_ready": search_ready,
+        "chat_ready": chat_ready,
+        "chat": chat_info,
         // Back-compat: existing UI reads `db_node_count` for the primary.
         "db_node_count": primary_count,
         "reason": reason,
@@ -1394,6 +1425,232 @@ async fn api_search_hybrid(
     }
 }
 
+// ---------- Phase 4 — Chat (/api/chat) ----------
+
+/// Pull a default `ChatConfig` from CLI args or env vars. Returns
+/// `None` when no chat model is configured — the route then 503s with
+/// a clear message rather than hitting a misconfigured endpoint.
+///
+/// Env-var fallbacks let `ug serve` be wrapped by `docker run -e
+/// UG_CHAT_*` without rewriting the entrypoint.
+fn build_chat_default_from_args(args: &[String]) -> Option<ChatConfig> {
+    let model = flag_value(args, &["--chat-model"]).or_else(|| std::env::var("UG_CHAT_MODEL").ok());
+    let base_url = flag_value(args, &["--chat-base-url"])
+        .or_else(|| std::env::var("UG_CHAT_BASE_URL").ok())
+        .or_else(|| flag_value(args, &["--base-url"]))
+        .or_else(|| std::env::var("UG_EMBED_BASE_URL").ok());
+    let api_key = flag_value(args, &["--chat-api-key"])
+        .or_else(|| std::env::var("UG_CHAT_API_KEY").ok())
+        .or_else(|| flag_value(args, &["--api-key"]))
+        .or_else(|| std::env::var("UG_EMBED_API_KEY").ok());
+    let temperature = flag_value(args, &["--temperature"]).and_then(|s| s.parse().ok());
+    let max_tokens = flag_value(args, &["--max-tokens"]).and_then(|s| s.parse().ok());
+    let timeout = flag_value(args, &["--chat-timeout"]).and_then(|s| s.parse().ok());
+
+    // Require at least a chat model — without it we can't reasonably
+    // pick one and the endpoint would 4xx every request.
+    let model = model?;
+    let cfg = ChatConfig::with_overrides(
+        base_url,
+        api_key,
+        Some(model),
+        temperature,
+        max_tokens,
+        timeout,
+    );
+    Some(cfg)
+}
+
+#[derive(serde::Deserialize)]
+struct ChatBody {
+    query: String,
+    #[serde(default)]
+    history: Option<Vec<ChatMessage>>,
+    #[serde(default)]
+    k: Option<usize>,
+    #[serde(default)]
+    hops: Option<u32>,
+    #[serde(default)]
+    strategy: Option<String>,
+    #[serde(default)]
+    direction: Option<String>,
+    #[serde(default)]
+    edge_types: Option<Vec<String>>,
+    #[serde(default)]
+    include_snippets: Option<bool>,
+    #[serde(default)]
+    max_context_chars: Option<usize>,
+    #[serde(default, rename = "where")]
+    where_clause: Option<String>,
+    #[serde(default)]
+    system_prompt: Option<String>,
+    // Per-request chat overrides (UI surfaces these). All optional —
+    // anything missing falls back to the default `ChatConfig`.
+    #[serde(default)]
+    chat_model: Option<String>,
+    #[serde(default)]
+    chat_base_url: Option<String>,
+    #[serde(default)]
+    chat_api_key: Option<String>,
+    #[serde(default)]
+    temperature: Option<f32>,
+    #[serde(default)]
+    max_tokens: Option<u32>,
+    /// Optional destination name; defaults to the primary backend.
+    #[serde(default)]
+    dest: Option<String>,
+}
+
+async fn api_chat(State(state): State<ServeState>, Json(body): Json<ChatBody>) -> Response {
+    if body.query.trim().is_empty() {
+        return err_json(StatusCode::BAD_REQUEST, "query is required");
+    }
+    let db = match pick_store(&state, body.dest.as_deref()) {
+        Ok(d) => d,
+        Err(r) => return r,
+    };
+    let embedder = match embedder_or_503(&state) {
+        Ok(e) => e,
+        Err(r) => return r,
+    };
+
+    // Merge defaults with per-request overrides. Without a default and
+    // without an override we can't pick a model, so the route 503s.
+    let chat_cfg = match merge_chat_cfg(state.chat_default.as_ref(), &body) {
+        Some(c) => c,
+        None => {
+            return err_json(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "chat not configured (start serve with --chat-model or pass `chat_model` in the request body)",
+            )
+        }
+    };
+
+    let chat_client = match ChatClient::new(chat_cfg) {
+        Ok(c) => c,
+        Err(e) => {
+            return err_json(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("build chat client: {}", e),
+            )
+        }
+    };
+
+    let k = body.k.unwrap_or(8).min(50).max(1);
+    let hops = body.hops.unwrap_or(2).min(4);
+    let strategy = body
+        .strategy
+        .as_deref()
+        .map(RankStrategy::from_str_lossy)
+        .unwrap_or(RankStrategy::Ppr);
+    let direction = body
+        .direction
+        .as_deref()
+        .map(Direction::from_str_lossy)
+        .unwrap_or(Direction::Both);
+    let include_snippets = body.include_snippets.unwrap_or(true);
+    let max_context_chars = body.max_context_chars.unwrap_or(chat::DEFAULT_CTX_MAX_CHARS).min(64_000);
+    let edge_types_owned: Option<Vec<String>> = body.edge_types.filter(|v| !v.is_empty());
+    let history_owned: Vec<ChatMessage> = body.history.unwrap_or_default();
+
+    let _permit = match state.embed_lock.acquire().await {
+        Ok(p) => p,
+        Err(_) => return err_json(StatusCode::SERVICE_UNAVAILABLE, "embed semaphore closed"),
+    };
+
+    let mut opts = ChatRagOptions::new();
+    opts.k = k;
+    opts.hops = hops;
+    opts.strategy = strategy;
+    opts.direction = direction;
+    opts.edge_types = edge_types_owned.as_deref();
+    opts.include_snippets = include_snippets;
+    opts.max_context_chars = max_context_chars;
+    opts.where_clause = body.where_clause.as_deref();
+    opts.system_prompt = body.system_prompt.as_deref();
+
+    let dest_name = db.backend_name();
+    let outcome = chat::run_chat_rag(
+        &*db,
+        &embedder,
+        &chat_client,
+        state.repo_root.as_path(),
+        &body.query,
+        &history_owned,
+        opts,
+    )
+    .await;
+    drop(_permit);
+
+    match outcome {
+        Ok(o) => {
+            let citations: Vec<serde_json::Value> = o
+                .context
+                .items
+                .iter()
+                .enumerate()
+                .map(|(i, it)| {
+                    serde_json::json!({
+                        "index": i + 1,
+                        "id": it.id,
+                        "name": it.name,
+                        "node_type": it.node_type,
+                        "file": it.file,
+                        "start_line": it.start_line,
+                        "end_line": it.end_line,
+                        "description": it.description,
+                        "distance": it.distance,
+                        "hop": it.hop,
+                        "snippet": it.snippet,
+                    })
+                })
+                .collect();
+            let body_json = serde_json::json!({
+                "query": body.query,
+                "answer": o.answer,
+                "citations": citations,
+                "seed_id": o.context.seed_id,
+                "retrieval_ms": o.retrieval_ms,
+                "completion_ms": o.completion_ms,
+                "usage": o.usage,
+                "dest": dest_name,
+                "chat_model": chat_client.config().model.clone(),
+            });
+            ok_json(body_json.to_string())
+        }
+        Err(e) => err_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("chat: {}", e),
+        ),
+    }
+}
+
+/// Combine a default `ChatConfig` (from CLI/env at startup) with
+/// per-request overrides. Returns `None` only when neither side
+/// provides a model — without one we can't sensibly send the request.
+fn merge_chat_cfg(default: &Option<ChatConfig>, body: &ChatBody) -> Option<ChatConfig> {
+    let base_default = default.clone().unwrap_or_default();
+    let model = body
+        .chat_model
+        .clone()
+        .or_else(|| default.as_ref().map(|c| c.model.clone()))?;
+    let base_url = body
+        .chat_base_url
+        .clone()
+        .unwrap_or(base_default.base_url);
+    let api_key = body.chat_api_key.clone().unwrap_or(base_default.api_key);
+    let temperature = body.temperature.unwrap_or(base_default.temperature);
+    let max_tokens = body.max_tokens.unwrap_or(base_default.max_tokens);
+    Some(ChatConfig {
+        base_url,
+        api_key,
+        model,
+        temperature,
+        max_tokens,
+        timeout_secs: base_default.timeout_secs,
+    })
+}
+
 fn node_row_to_json(n: &storage::NodeRow) -> serde_json::Value {
     serde_json::json!({
         "id": n.id,
@@ -1420,17 +1677,30 @@ pub fn print_serve_help() {
     println!("  {C_CYAN}--host{C_RESET} <addr>        Bind address (default: 127.0.0.1)");
     println!("  {C_GREEN}--watch{C_RESET}             Reload graph file when its mtime changes");
     println!("  {C_CYAN}--repo-root{C_RESET} <path>   Repo root for hybrid-search snippet resolution");
-    println!("  {C_CYAN}--base-url{C_RESET} <url>      Embedding endpoint");
-    println!("  {C_CYAN}--api-key{C_RESET} <key>       Embedding API key");
-    println!("  {C_CYAN}--model{C_RESET} <name>        Embedding model");
+    println!("  {C_CYAN}--base-url{C_RESET} <url>      Embedding/chat base URL (OpenAI-compatible)");
+    println!("  {C_CYAN}--api-key{C_RESET} <key>       Embedding/chat API key");
+    println!("  {C_CYAN}--model{C_RESET} <name>        Embedding model (fastembed alias for local)");
+    println!();
+    println!("{C_BOLD}Chat (POST /api/chat):{C_RESET}");
+    println!("  {C_CYAN}--chat-model{C_RESET} <name>     Chat completion model — required to enable /api/chat");
+    println!("  {C_CYAN}--chat-base-url{C_RESET} <url>   Override base URL for chat (defaults to --base-url)");
+    println!("  {C_CYAN}--chat-api-key{C_RESET} <key>    Override API key for chat (defaults to --api-key)");
+    println!("  {C_CYAN}--temperature{C_RESET} <f>       Default sampling temperature (default: 0.2)");
+    println!("  {C_CYAN}--max-tokens{C_RESET} <n>        Default max completion tokens (default: 1024)");
+    println!("  {C_CYAN}--chat-timeout{C_RESET} <secs>   HTTP timeout for chat calls (default: 180)");
+    println!("    Env fallbacks: UG_CHAT_MODEL, UG_CHAT_BASE_URL, UG_CHAT_API_KEY");
     println!();
     println!("{C_BOLD}API Endpoints:{C_RESET}");
     println!("  {C_CYAN}GET{C_RESET}  /api/graph/{{stats, node/<id>, search?q=&types=, bfs/<id>?k=,");
     println!("           path?source=&target=, filter?types=, centrality, cycles}}");
     println!("  {C_CYAN}GET{C_RESET}  /api/db/{{node/<id>, traverse/<id>?k=&dir=&types=}}");
     println!("  {C_CYAN}POST{C_RESET} /api/search/{{semantic, hybrid}}  body: JSON");
+    println!("  {C_CYAN}POST{C_RESET} /api/chat  body: {{ query, history?, k?, hops?, chat_model?, ... }}");
     println!();
     println!("{C_BOLD}Examples:{C_RESET}");
     println!("  {C_CYAN}ug serve{C_RESET} -i ugout/graph.json -p 8080");
     println!("  {C_CYAN}ug serve{C_RESET} -i ugout/graph.json -d ugout/ugdb --watch");
+    println!("  {C_CYAN}ug serve{C_RESET} -i ugout/graph.json -d ugout/ugdb \\");
+    println!("           --base-url http://127.0.0.1:8000/v1 --api-key 12345 \\");
+    println!("           --chat-model Qwen3.6-35B-A3B-MLX-8bit");
 }

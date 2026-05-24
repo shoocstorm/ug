@@ -1591,6 +1591,254 @@
             font-size: 12px;
         }
 
+        /* ─── Chat (RAG + LLM) panel ───────────────────────── */
+
+        #chat-messages {
+            max-height: 380px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-bottom: 10px;
+            padding: 4px 2px;
+            scroll-behavior: smooth;
+        }
+
+        #chat-messages:empty::before {
+            content: 'No messages yet. Ask anything grounded in the indexed knowledge graph.';
+            display: block;
+            padding: 20px 12px;
+            text-align: center;
+            color: var(--text-dim);
+            font-size: 11px;
+            font-style: italic;
+        }
+
+        .chat-msg {
+            font-size: 12px;
+            line-height: 1.5;
+            border-radius: 8px;
+            padding: 8px 10px;
+            max-width: 100%;
+            word-break: break-word;
+            white-space: pre-wrap;
+        }
+
+        .chat-msg.user {
+            align-self: flex-end;
+            background: rgba(34, 211, 238, 0.10);
+            border: 1px solid var(--accent-dim);
+            color: var(--text);
+        }
+
+        .chat-msg.assistant {
+            align-self: flex-start;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-soft);
+            color: var(--text);
+        }
+
+        .chat-msg.assistant.pending {
+            opacity: 0.7;
+            font-style: italic;
+        }
+
+        .chat-msg.error {
+            align-self: stretch;
+            background: rgba(248, 113, 113, 0.10);
+            border: 1px solid var(--danger);
+            color: var(--text);
+        }
+
+        .chat-msg .chat-citations {
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px dashed var(--border-soft);
+            font-size: 10px;
+            color: var(--text-dim);
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+        }
+
+        .chat-msg .chat-citations .chat-cite {
+            cursor: pointer;
+            color: var(--text-muted);
+            padding: 2px 4px;
+            border-radius: 4px;
+            transition: background 0.12s, color 0.12s;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .chat-msg .chat-citations .chat-cite:hover {
+            background: var(--bg-hover);
+            color: var(--accent);
+        }
+
+        .chat-msg .chat-meta {
+            margin-top: 6px;
+            font-size: 9px;
+            color: var(--text-dim);
+            font-family: 'JetBrains Mono', monospace;
+            letter-spacing: 0.02em;
+        }
+
+        #chat-input {
+            width: 100%;
+            min-height: 56px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 8px 10px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-family: inherit;
+            outline: none;
+            resize: vertical;
+            margin-bottom: 8px;
+        }
+
+        #chat-input:focus {
+            border-color: var(--accent);
+        }
+
+        .chat-controls {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+            margin-bottom: 6px;
+            flex-wrap: wrap;
+        }
+
+        .chat-controls .chat-num {
+            width: 56px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 6px 8px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-family: inherit;
+            outline: none;
+        }
+
+        .chat-controls .chat-num-label {
+            font-size: 10px;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+
+        .chat-controls #chat-send {
+            flex: 1;
+            background: rgba(192, 132, 252, 0.12);
+            border: 1px solid rgba(192, 132, 252, 0.5);
+            color: #c084fc;
+            padding: 6px 10px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            font-family: inherit;
+            min-width: 96px;
+        }
+
+        .chat-controls #chat-send:hover:not(:disabled) {
+            background: rgba(192, 132, 252, 0.2);
+        }
+
+        .chat-controls #chat-send:disabled {
+            opacity: 0.5;
+            cursor: progress;
+        }
+
+        .chat-controls #chat-reset {
+            background: transparent;
+            border: 1px solid var(--border-soft);
+            color: var(--text-muted);
+            padding: 6px 10px;
+            border-radius: 6px;
+            font-size: 11px;
+            cursor: pointer;
+            font-family: inherit;
+        }
+
+        .chat-controls #chat-reset:hover {
+            background: var(--bg-hover);
+            color: var(--text);
+        }
+
+        .chat-settings {
+            margin-bottom: 8px;
+        }
+
+        .chat-settings-toggle {
+            background: transparent;
+            border: none;
+            color: var(--text-dim);
+            font-size: 10px;
+            padding: 2px 0;
+            cursor: pointer;
+            font-family: inherit;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .chat-settings-toggle:hover {
+            color: var(--accent);
+        }
+
+        .chat-settings-body {
+            display: none;
+            margin-top: 6px;
+            padding: 8px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-soft);
+            border-radius: 6px;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .chat-settings.open .chat-settings-body {
+            display: flex;
+        }
+
+        .chat-settings-body label {
+            font-size: 10px;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+
+        .chat-settings-body input,
+        .chat-settings-body textarea {
+            width: 100%;
+            background: var(--bg-deep);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 5px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-family: inherit;
+            outline: none;
+        }
+
+        .chat-settings-body textarea {
+            resize: vertical;
+            min-height: 48px;
+        }
+
+        #chat-status {
+            font-size: 10px;
+            color: var(--text-dim);
+            margin-bottom: 6px;
+            min-height: 12px;
+        }
+
+        #chat-status.error {
+            color: var(--danger);
+        }
+
         .cap-banner {
             margin-top: 8px;
             padding: 8px 10px;
@@ -2182,6 +2430,51 @@
                     </div>
                 </div>
 
+                <!-- Chat (RAG + LLM) - Featured -->
+                <div class="section featured cap-hidden" data-section="chat" id="section-chat">
+                    <div class="section-header">
+                        <span class="label">Chat</span>
+                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="6 9 12 15 18 9" />
+                        </svg>
+                    </div>
+                    <div class="section-body">
+                        <div id="chat-model-badge" class="sem-dest-row" hidden>
+                            <span class="sem-dest-label">Model:</span>
+                            <span class="sem-dest-badge" id="chat-model-pill" hidden></span>
+                        </div>
+                        <div id="chat-messages"></div>
+                        <textarea id="chat-input" rows="2"
+                            placeholder="Ask anything about this codebase…"></textarea>
+                        <div class="chat-controls">
+                            <span class="chat-num-label" title="Retrieved context items">k</span>
+                            <input type="number" id="chat-k" class="chat-num" value="8" min="1" max="50">
+                            <span class="chat-num-label" title="Graph expansion hops">hops</span>
+                            <input type="number" id="chat-hops" class="chat-num" value="2" min="0" max="4">
+                            <button id="chat-send" type="button">Send</button>
+                            <button id="chat-reset" type="button" title="Clear conversation history">Reset</button>
+                        </div>
+                        <div class="chat-settings" id="chat-settings">
+                            <button class="chat-settings-toggle" id="chat-settings-toggle" type="button">▸ Advanced</button>
+                            <div class="chat-settings-body">
+                                <label for="chat-model-override">Chat model (override)</label>
+                                <input id="chat-model-override" type="text"
+                                    placeholder="leave blank to use server default">
+                                <label for="chat-system">System prompt (override)</label>
+                                <textarea id="chat-system" rows="2"
+                                    placeholder="leave blank for default RAG prompt"></textarea>
+                                <label for="chat-temperature">Temperature</label>
+                                <input id="chat-temperature" type="number" step="0.05" min="0" max="2"
+                                    placeholder="0.2">
+                                <label for="chat-max-tokens">Max tokens</label>
+                                <input id="chat-max-tokens" type="number" min="1" max="8192"
+                                    placeholder="1024">
+                            </div>
+                        </div>
+                        <div id="chat-status"></div>
+                    </div>
+                </div>
+
                 <!-- Semantic / Hybrid search (DB-backed) - Featured -->
                 <div class="section featured cap-hidden" data-section="semantic" id="section-semantic">
                     <div class="section-header">
@@ -2241,6 +2534,24 @@
                         <div class="search-meta">
                             <span id="search-meta-count"></span>
                             <span id="search-meta-hint">↑↓ to navigate · ⏎ to select</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Banner shown when chat endpoint isn't configured -->
+                <div class="section cap-disabled-section cap-hidden" data-section="chat-disabled"
+                    id="section-chat-disabled">
+                    <div class="section-header">
+                        <span class="label">Chat</span>
+                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="6 9 12 15 18 9" />
+                        </svg>
+                    </div>
+                    <div class="section-body">
+                        <div class="cap-banner warn" id="chat-disabled-msg">
+                            Chat unavailable. Restart <code>ug serve</code> with
+                            <code>--chat-model</code> (and optionally <code>--base-url</code>/<code>--api-key</code>)
+                            to enable RAG-grounded chat.
                         </div>
                     </div>
                 </div>
@@ -2488,6 +2799,8 @@
             // server falls back to its primary.
             semDest: null,
             semInFlight: false,
+            chatInFlight: false,
+            chatHistory: [],
             pathSource: null,
             pathMode: false
         };
@@ -2702,6 +3015,7 @@
             wireFooter();
             wireFilterActions();
             wireSemanticPanel();
+            wireChatPanel();
             wireFindPathBtn();
             wireCatalog();
             probeCapabilities();
@@ -2752,8 +3066,12 @@
 
         async function probeCapabilities() {
             const semSection = document.getElementById('section-semantic');
+            const chatSection = document.getElementById('section-chat');
+            const chatDisabled = document.getElementById('section-chat-disabled');
             const disabledSection = document.getElementById('section-cap-disabled');
             const disabledMsg = document.getElementById('cap-disabled-msg');
+            const chatBadgeRow = document.getElementById('chat-model-badge');
+            const chatBadgePill = document.getElementById('chat-model-pill');
             const dot = document.querySelector('.sidebar-header .brand-dot');
 
             const showSection = (el) => el && el.classList.remove('cap-hidden');
@@ -2785,9 +3103,31 @@
                         dot.title = reason;
                     }
                 }
+
+                if (caps.chat_ready) {
+                    showSection(chatSection);
+                    hideSection(chatDisabled);
+                    if (caps.chat && caps.chat.model && chatBadgeRow && chatBadgePill) {
+                        chatBadgeRow.hidden = false;
+                        chatBadgePill.hidden = false;
+                        chatBadgePill.textContent = caps.chat.model;
+                        chatBadgePill.title = `Chat model: ${caps.chat.model}\nBase URL: ${caps.chat.base_url || '?'}`;
+                    }
+                } else {
+                    hideSection(chatSection);
+                    // Only surface the disabled-chat banner when DB+embedder
+                    // are otherwise ready — otherwise the generic search
+                    // banner already covers it.
+                    if (caps.search_ready) {
+                        showSection(chatDisabled);
+                    } else {
+                        hideSection(chatDisabled);
+                    }
+                }
             } catch (err) {
-                state.capabilities = { db_ready: false, embedder_ready: false, search_ready: false };
+                state.capabilities = { db_ready: false, embedder_ready: false, search_ready: false, chat_ready: false };
                 hideSection(semSection);
+                hideSection(chatSection);
                 showSection(disabledSection);
                 disabledMsg.textContent = 'Capabilities probe failed — server unreachable?';
                 if (dot) {
@@ -3100,6 +3440,183 @@
             const n = parseInt(v, 10);
             if (Number.isNaN(n)) return fallback;
             return Math.max(lo, Math.min(hi, n));
+        }
+
+        // ─── Chat (RAG) panel ──────────────────────────────
+
+        function wireChatPanel() {
+            const input = document.getElementById('chat-input');
+            const sendBtn = document.getElementById('chat-send');
+            const resetBtn = document.getElementById('chat-reset');
+            const settings = document.getElementById('chat-settings');
+            const toggle = document.getElementById('chat-settings-toggle');
+
+            sendBtn.addEventListener('click', runChatTurn);
+            resetBtn.addEventListener('click', resetChat);
+            input.addEventListener('keydown', e => {
+                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                    e.preventDefault();
+                    runChatTurn();
+                }
+            });
+            toggle.addEventListener('click', () => {
+                const open = settings.classList.toggle('open');
+                toggle.textContent = (open ? '▾' : '▸') + ' Advanced';
+            });
+        }
+
+        function resetChat() {
+            state.chatHistory = [];
+            const list = document.getElementById('chat-messages');
+            list.innerHTML = '';
+            const status = document.getElementById('chat-status');
+            status.classList.remove('error');
+            status.textContent = '';
+        }
+
+        function appendChatMessage(role, text, opts = {}) {
+            const list = document.getElementById('chat-messages');
+            const el = document.createElement('div');
+            el.className = `chat-msg ${role}${opts.pending ? ' pending' : ''}${opts.error ? ' error' : ''}`;
+            el.textContent = text;
+            if (opts.citations && opts.citations.length) {
+                const cites = document.createElement('div');
+                cites.className = 'chat-citations';
+                opts.citations.forEach(c => {
+                    const a = document.createElement('div');
+                    a.className = 'chat-cite';
+                    const lineLabel = c.start_line
+                        ? `:${c.start_line}${c.end_line && c.end_line !== c.start_line ? '–' + c.end_line : ''}`
+                        : '';
+                    const fileLabel = c.file || '<unknown>';
+                    a.textContent = `[#${c.index}] ${c.name || c.id} · ${c.node_type || '?'} · ${fileLabel}${lineLabel}`;
+                    a.title = c.description ? c.description.slice(0, 200) : (c.id || c.name || '');
+                    a.addEventListener('click', () => focusCitation(c));
+                    cites.appendChild(a);
+                });
+                el.appendChild(cites);
+            }
+            if (opts.meta) {
+                const m = document.createElement('div');
+                m.className = 'chat-meta';
+                m.textContent = opts.meta;
+                el.appendChild(m);
+            }
+            list.appendChild(el);
+            list.scrollTop = list.scrollHeight;
+            return el;
+        }
+
+        function focusCitation(c) {
+            const local = state.nodeById ? state.nodeById.get(c.id) : null;
+            if (local) {
+                handleClick(null, local);
+                focusNode(local);
+            } else {
+                const status = document.getElementById('chat-status');
+                status.classList.remove('error');
+                status.textContent = `Node "${c.id}" not in loaded graph.json.`;
+            }
+        }
+
+        async function runChatTurn() {
+            const inputEl = document.getElementById('chat-input');
+            const sendBtn = document.getElementById('chat-send');
+            const statusEl = document.getElementById('chat-status');
+            const query = inputEl.value.trim();
+
+            statusEl.classList.remove('error');
+            if (!query) {
+                statusEl.textContent = 'Enter a question to send.';
+                return;
+            }
+            if (state.chatInFlight) return;
+
+            const k = clampInt(document.getElementById('chat-k').value, 1, 50, 8);
+            const hops = clampInt(document.getElementById('chat-hops').value, 0, 4, 2);
+            const modelOverride = document.getElementById('chat-model-override').value.trim();
+            const systemOverride = document.getElementById('chat-system').value.trim();
+            const temperatureRaw = document.getElementById('chat-temperature').value.trim();
+            const maxTokensRaw = document.getElementById('chat-max-tokens').value.trim();
+
+            const body = {
+                query,
+                k,
+                hops,
+                history: state.chatHistory.slice(-12),
+            };
+            if (modelOverride) body.chat_model = modelOverride;
+            if (systemOverride) body.system_prompt = systemOverride;
+            if (temperatureRaw) {
+                const t = parseFloat(temperatureRaw);
+                if (!Number.isNaN(t)) body.temperature = t;
+            }
+            if (maxTokensRaw) {
+                const n = parseInt(maxTokensRaw, 10);
+                if (!Number.isNaN(n)) body.max_tokens = n;
+            }
+            if (state.semDest) body.dest = state.semDest;
+
+            appendChatMessage('user', query);
+            inputEl.value = '';
+            const pendingEl = appendChatMessage('assistant', 'Retrieving context…', { pending: true });
+
+            state.chatInFlight = true;
+            sendBtn.disabled = true;
+            statusEl.textContent = 'Thinking…';
+
+            const t0 = performance.now();
+            try {
+                const res = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                if (!res.ok) throw new Error(await readErr(res));
+                const data = await res.json();
+                const totalMs = Math.round(performance.now() - t0);
+                pendingEl.remove();
+
+                const answer = (data.answer || '').trim() || '(no answer)';
+                const cites = (data.citations || []).map(c => ({
+                    index: c.index,
+                    id: c.id,
+                    name: c.name,
+                    node_type: c.node_type,
+                    file: c.file,
+                    start_line: c.start_line,
+                    end_line: c.end_line,
+                    description: c.description,
+                }));
+                const usageParts = [];
+                if (data.retrieval_ms != null) usageParts.push(`retrieval=${data.retrieval_ms}ms`);
+                if (data.completion_ms != null) usageParts.push(`completion=${data.completion_ms}ms`);
+                if (data.usage && data.usage.total_tokens) usageParts.push(`tokens=${data.usage.total_tokens}`);
+                if (data.dest) usageParts.push(`dest=${data.dest}`);
+                if (data.chat_model) usageParts.push(`model=${data.chat_model}`);
+
+                appendChatMessage('assistant', answer, {
+                    citations: cites,
+                    meta: usageParts.join(' · ')
+                });
+
+                state.chatHistory.push({ role: 'user', content: query });
+                state.chatHistory.push({ role: 'assistant', content: answer });
+                if (state.chatHistory.length > 24) {
+                    state.chatHistory = state.chatHistory.slice(-24);
+                }
+                statusEl.textContent = `${cites.length} citation${cites.length === 1 ? '' : 's'} · ${totalMs} ms total`;
+            } catch (err) {
+                pendingEl.remove();
+                appendChatMessage('assistant', `Error: ${err.message || err}`, { error: true });
+                statusEl.classList.add('error');
+                statusEl.textContent = `Chat failed: ${err.message || err}`;
+                console.error(err);
+            } finally {
+                state.chatInFlight = false;
+                sendBtn.disabled = false;
+                inputEl.focus();
+            }
         }
 
         function renderSemanticHits(container, hits, mode) {

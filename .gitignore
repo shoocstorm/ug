@@ -18,4 +18,5 @@ docs/overgraph
 opencode.json
 .env
 .env.local
-docs/neo4j-cred.txt
+docs/neo4j-conn.txt
+docs/model-conn.txt

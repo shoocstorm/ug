@@ -45,7 +45,11 @@ UltraGraph implements a complete four-phase pipeline for building and querying a
 | | Auto-probed embedding dim; persisted to `<db>/ug-meta.json` | ✅ |
 | **Retrieval** | **GraphRAG**: Personalized PageRank (PPR) & MMR strategies | ✅ |
 | | RRF (Reciprocal Rank Fusion) for hybrid search | ✅ |
+| **Chat** | **`ug chat`**: RAG-grounded chat against any OpenAI-compatible LLM | ✅ |
+| | One-shot + interactive REPL; per-turn citations; `--json` output | ✅ |
+| | **`POST /api/chat`** in `ug serve` powers the web chat panel | ✅ |
 | **Interface** | **Web UI**: Premium D3.js force-directed visualization | ✅ |
+| | **Web Chat panel**: drop-in UI over `/api/chat` with citation jumps | ✅ |
 | | **MCP Server**: Stdio-based server for LLM integration | ✅ |
 | | **CLI**: Comprehensive toolkit for all phases | ✅ |
 
@@ -93,6 +97,7 @@ UltraGraph provides a powerful CLI via `node node/cli.cjs` (or the native `ug` b
 | `ingest` | `npm run ingest -- -i <graph.json>` | Embed and store in OverGraph |
 | `rag` | `npm run rag -- <db> <query>` | Perform a GraphRAG retrieval |
 | `traverse`| `npm run traverse -- <db> <id>` | K-hop traversal over stored edges |
+| `chat`    | `ug chat "<question>" -d <db> --chat-model <model> ...` | RAG-grounded chat (one-shot or REPL) against an LLM |
 
 ### Advanced GraphRAG Options
 When using `rag` or `db-rag`, you can tune the retrieval strategy:
@@ -154,6 +159,106 @@ ug ingest \
 ### Dimension handling
 
 You don't need to know your model's dim. On first ingest, UltraGraph runs a one-shot probe, writes the discovered dim to `<db>/ug-meta.json`, and reuses it on every subsequent open. Override explicitly with `--embedding-dim <n>` if you need to pin it.
+
+---
+
+## 💬 RAG Chat (`ug chat`)
+
+`ug chat` closes the loop: it retrieves graph-aware context via the same
+GraphRAG pipeline that `hybrid_search` uses, then sends it to an
+OpenAI-compatible chat model and prints the answer. Use it to verify
+the *quality* of the indexed knowledge base end-to-end — not just that
+retrieval works, but that a real LLM agent can actually answer
+questions grounded in it.
+
+### One-shot
+
+```bash
+ug chat "how does graph ingest work?" \
+  -d ugout/ugdb \
+  --base-url http://127.0.0.1:8000/v1 \
+  --api-key  12345 \
+  --chat-model      Qwen3.6-35B-A3B-MLX-8bit \
+  --embedding-model Qwen3-Embedding-4B-4bit-DWQ \
+  --show-context
+```
+
+The answer is printed to stdout. Add `--json` to emit a single JSON
+document containing the answer, citations, retrieval / completion
+latencies and (when the server reports it) token usage — handy for
+scripted regression testing.
+
+### Interactive REPL
+
+Omit the prompt to drop into a REPL with a 6-turn rolling history:
+
+```bash
+ug chat -d ugout/ugdb \
+  --base-url http://127.0.0.1:8000/v1 \
+  --chat-model my-chat-model
+# you ❯ how does ingest work?
+# Answer:
+#   ...
+# you ❯ /reset    # clear history
+# you ❯ /context on   # show retrieved [#1], [#2], ...
+# you ❯ /quit
+```
+
+### Key flags
+
+| Flag | Description |
+| :--- | :--- |
+| `-d, --db <path>`            | OverGraph directory (default: `ugout/ugdb`) |
+| `--chat-model <name>`        | Chat completion model (required for remote chat) |
+| `--base-url <url>`           | OpenAI-compatible base URL (shared with embeddings) |
+| `--api-key <key>`            | Bearer token (shared with embeddings) |
+| `--chat-base-url` / `--chat-api-key` | Override the chat endpoint only |
+| `--embedding-model <name>`   | Embedding model (falls back to `--model`) |
+| `--embedding-base-url` / `--embedding-api-key` | Override the embedding endpoint only |
+| `-k, --limit <n>`            | Retrieved context items (default: 8) |
+| `--hops <n>`                 | Graph expansion hops (default: 2) |
+| `--strategy ppr\|mmr`        | Reranker (default: `ppr`) |
+| `--max-chars <n>`            | Context char budget (default: 12000) |
+| `--temperature <f>`          | Sampling temperature (default: 0.2) |
+| `--max-tokens <n>`           | Max completion tokens (default: 1024) |
+| `--system <text>`            | Override the default RAG system prompt |
+| `--show-context, -v`         | Print retrieved citations alongside the answer |
+| `--json`                     | Emit JSON for scripted use |
+
+### Chat over HTTP (`POST /api/chat`)
+
+`ug serve` exposes the same pipeline at `POST /api/chat`. Start the
+server with chat enabled:
+
+```bash
+ug serve -i ugout/graph.json -d ugout/ugdb \
+  --base-url http://127.0.0.1:8000/v1 --api-key 12345 \
+  --chat-model Qwen3.6-35B-A3B-MLX-8bit
+```
+
+Then either use the built-in **Chat** panel in the web UI
+(`http://127.0.0.1:8080`) — which surfaces clickable citations that
+jump to the corresponding graph node — or call the API directly:
+
+```bash
+curl -s http://127.0.0.1:8080/api/chat \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "query": "explain the PPR seed pool logic",
+        "k": 8,
+        "hops": 2,
+        "history": []
+      }' | jq
+```
+
+Per-request overrides supported in the body: `chat_model`,
+`chat_base_url`, `chat_api_key`, `temperature`, `max_tokens`,
+`system_prompt`, `dest`, `edge_types`, `strategy`, `direction`,
+`include_snippets`, `max_context_chars`, `where`.
+
+`GET /api/capabilities` reports `chat_ready` plus the current
+`chat.model` / `chat.base_url` so clients can disable their chat UI
+gracefully when chat isn't configured.
 
 ---
 

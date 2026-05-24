@@ -27,6 +27,7 @@ Worth being explicit, because it confuses people:
 | `/d3.v7.min.js` | `native/src/vis/d3.v7.min.js` via `include_bytes!` | **compile time** — baked into the `ug` binary |
 | `/graph.json` | `-i <path>` flag (default `ugout/graph.json`) | **startup** — read once, held in memory |
 | `/api/db/*`, `/api/search/*` | OverGraph DB at `-d <path>` (default `ugout/ugdb`) | **startup** — opened once |
+| `/api/chat` | OpenAI-compatible chat endpoint configured via `--chat-model` / `--chat-base-url` / `--chat-api-key` (or `UG_CHAT_*` env vars). Disabled when no `--chat-model` is set — route returns 503. | **startup** — config baked once; per-request body can override `chat_model` / `chat_base_url` / `chat_api_key` / `temperature` / `max_tokens` |
 
 So:
 
@@ -169,6 +170,65 @@ curl -v -X POST -H "Content-Type: application/json" \
 `GET /api/db/traverse/*id?k=2&dir=outbound&types=Calls,Imports`
 
 → `{ "nodes": [...], "edges": [...], "distances": { "<id>": <hops> } }`
+
+**`POST /api/chat`** — RAG-grounded chat against an OpenAI-compatible LLM.
+
+Enabled when `ug serve` is started with `--chat-model` (or
+`UG_CHAT_MODEL` is set). Internally runs the same `storage::search_kb`
+hybrid retrieval used by `/api/search/hybrid`, then sends the assembled
+context + the user query to the chat endpoint. Returns the assistant
+answer plus structured citations (each numbered `[#N]` and clickable
+in the web UI).
+
+Request body:
+
+```json
+{
+  "query": "explain the PPR seed pool logic",
+  "k": 8,
+  "hops": 2,
+  "strategy": "ppr",
+  "direction": "both",
+  "include_snippets": true,
+  "max_context_chars": 12000,
+  "history": [
+    { "role": "user", "content": "previous question" },
+    { "role": "assistant", "content": "previous answer" }
+  ],
+  "chat_model": "Qwen3.6-35B-A3B-MLX-8bit",
+  "chat_base_url": "http://127.0.0.1:8000/v1",
+  "chat_api_key": "12345",
+  "temperature": 0.2,
+  "max_tokens": 1024,
+  "system_prompt": null,
+  "dest": null
+}
+```
+
+Response shape:
+
+```json
+{
+  "query": "...",
+  "answer": "...",
+  "citations": [
+    { "index": 1, "id": "...", "name": "...", "node_type": "...",
+      "file": "...", "start_line": 0, "end_line": 0,
+      "description": "...", "distance": 0.0, "hop": 0, "snippet": "..." }
+  ],
+  "seed_id": "...",
+  "retrieval_ms": 123,
+  "completion_ms": 456,
+  "usage": { "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0 },
+  "dest": "overgraph",
+  "chat_model": "Qwen3.6-35B-A3B-MLX-8bit"
+}
+```
+
+503s when chat isn't configured (no startup `--chat-model` and no
+per-request `chat_model` override). `GET /api/capabilities` exposes
+`chat_ready` + the current `chat.model` / `chat.base_url` so clients
+can disable their chat UI when the route isn't usable.
 
 **Implementation notes**
 
