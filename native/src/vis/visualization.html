@@ -658,40 +658,6 @@
             font-family: 'JetBrains Mono', monospace;
         }
 
-        /* ─── View switcher ──────────────────────────────────── */
-
-        .view-chips {
-            display: flex;
-            gap: 6px;
-        }
-
-        .view-chip {
-            flex: 1;
-            background: var(--bg-elevated);
-            border: 1px solid var(--border);
-            color: var(--text-muted);
-            padding: 7px 4px;
-            border-radius: 6px;
-            font-size: 10px;
-            font-weight: 600;
-            cursor: pointer;
-            font-family: inherit;
-            text-align: center;
-            letter-spacing: 0.5px;
-            transition: border-color 0.15s, background 0.15s, color 0.15s;
-        }
-
-        .view-chip:hover {
-            background: var(--bg-hover);
-            color: var(--text);
-        }
-
-        .view-chip.active {
-            border-color: var(--accent);
-            background: rgba(34, 211, 238, 0.12);
-            color: var(--accent);
-        }
-
         /* ─── Tools ─────────────────────────────────────────── */
 
         .tool-tabs {
@@ -2674,6 +2640,128 @@
         body.perf-mode .crumb .swatch {
             box-shadow: none;
         }
+
+        /* ─── Bottom view bar (projection + toggles) ─────────── */
+        #viewbar {
+            left: 50%;
+            bottom: 16px;
+            transform: translateX(-50%);
+            display: flex;
+            align-items: stretch;
+            gap: 5px;
+            padding: 6px;
+        }
+
+        #viewbar .vbtn {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 1px;
+            min-width: 42px;
+            padding: 5px 7px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-soft);
+            border-radius: 7px;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-family: inherit;
+            line-height: 1;
+            transition: background 0.13s, border-color 0.13s, color 0.13s, box-shadow 0.13s;
+        }
+
+        #viewbar .vbtn .vn {
+            font-size: 14px;
+            font-weight: 700;
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--accent);
+        }
+
+        #viewbar .vbtn .vp {
+            font-size: 8px;
+            letter-spacing: 0.8px;
+            color: var(--text-dim);
+            text-transform: uppercase;
+        }
+
+        #viewbar .vbtn:hover {
+            background: var(--bg-hover);
+            color: var(--text);
+        }
+
+        #viewbar .vbtn.active {
+            border-color: var(--accent);
+            background: rgba(34, 211, 238, 0.1);
+            box-shadow: 0 0 12px rgba(34, 211, 238, 0.25);
+        }
+
+        #viewbar .vbtn.vbtn-3d .vn {
+            font-size: 13px;
+            color: var(--text);
+        }
+
+        #viewbar .vbtn.vbtn-3d.active .vn {
+            color: var(--accent);
+        }
+
+        #viewbar .vsep {
+            width: 1px;
+            margin: 4px 3px;
+            background: var(--border);
+        }
+
+        #viewbar .vtoggle {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 2px;
+            min-width: 44px;
+            padding: 5px 8px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-soft);
+            border-radius: 7px;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-family: inherit;
+            line-height: 1;
+            transition: background 0.13s, border-color 0.13s, color 0.13s, box-shadow 0.13s;
+        }
+
+        #viewbar .vtoggle .vt-ico {
+            font-size: 14px;
+        }
+
+        #viewbar .vtoggle .vt-lbl {
+            font-size: 8px;
+            letter-spacing: 0.6px;
+            text-transform: uppercase;
+        }
+
+        #viewbar .vtoggle:hover {
+            background: var(--bg-hover);
+            color: var(--text);
+        }
+
+        #viewbar .vtoggle.active {
+            border-color: var(--accent);
+            background: rgba(34, 211, 238, 0.12);
+            color: var(--accent);
+            box-shadow: 0 0 12px rgba(34, 211, 238, 0.22);
+        }
+
+        #viewbar .vtoggle.spinning .vt-ico {
+            animation: vt-spin 2.4s linear infinite;
+        }
+
+        @keyframes vt-spin {
+            to { transform: rotate(360deg); }
+        }
+
+        body.perf-mode #viewbar .vbtn.active,
+        body.perf-mode #viewbar .vtoggle.active {
+            box-shadow: none;
+        }
     </style>
 </head>
 
@@ -2715,6 +2803,21 @@
         <!-- Camera orientation gizmo -->
         <div id="axis-gizmo" class="canvas-overlay">
             <svg viewBox="-40 -40 80 80" id="gizmo-svg"></svg>
+        </div>
+
+        <!-- Bottom view bar: six face projections + 3D, plus box / spin toggles.
+             Number colours match the digi labels on the boundary-box faces. -->
+        <div id="viewbar" class="canvas-overlay">
+            <button class="vbtn" data-view="1" title="View face 1 — XY plane (front)"><span class="vn" style="color:#22d3ee">1</span><span class="vp">XY</span></button>
+            <button class="vbtn" data-view="2" title="View face 2 — XY plane (back)"><span class="vn" style="color:#c084fc">2</span><span class="vp">XY</span></button>
+            <button class="vbtn" data-view="3" title="View face 3 — XZ plane (top)"><span class="vn" style="color:#4ade80">3</span><span class="vp">XZ</span></button>
+            <button class="vbtn" data-view="4" title="View face 4 — XZ plane (bottom)"><span class="vn" style="color:#fbbf24">4</span><span class="vp">XZ</span></button>
+            <button class="vbtn" data-view="5" title="View face 5 — YZ plane (right)"><span class="vn" style="color:#f472b6">5</span><span class="vp">YZ</span></button>
+            <button class="vbtn" data-view="6" title="View face 6 — YZ plane (left)"><span class="vn" style="color:#fb923c">6</span><span class="vp">YZ</span></button>
+            <button class="vbtn vbtn-3d active" data-view="3d" title="Isometric 3D view"><span class="vn">3D</span><span class="vp">ISO</span></button>
+            <div class="vsep"></div>
+            <button class="vtoggle active" id="toggle-box" title="Show / hide the boundary box, corners & face labels"><span class="vt-ico">▦</span><span class="vt-lbl">Box</span></button>
+            <button class="vtoggle" id="toggle-spin" title="Toggle auto-rotation"><span class="vt-ico">⟳</span><span class="vt-lbl">Spin</span></button>
         </div>
 
         <div class="header">
@@ -2985,16 +3088,6 @@
                 </div>
             </div>
 
-            <div class="section" data-section="views">
-                <div class="section-body" style="padding:8px 20px 4px">
-                    <div class="view-chips">
-                        <button class="view-chip" data-view="xy">XY</button>
-                        <button class="view-chip" data-view="xz">XZ</button>
-                        <button class="view-chip" data-view="yz">YZ</button>
-                        <button class="view-chip active" data-view="3d">3D</button>
-                    </div>
-                </div>
-            </div>
             <div class="sidebar-footer">
                 <button id="reset">Reset View</button>
                 <button id="fit">Fit Graph</button>
@@ -3161,7 +3254,9 @@
             suppressFocusReanchor: false, // set while neighbour-stepping, to keep the anchor
             neighborCursor: -1,     // index used by Tab/Shift+Tab neighbour stepping
             neighborOf: null,       // node id the cursor belongs to
-            _labelDist: 340         // world distance beyond which labels auto-hide
+            _labelDist: 340,        // world distance beyond which labels auto-hide
+            showBoundary: true,     // dashed boundary box + corners + face labels
+            autoSpin: false         // camera auto-rotation
         };
 
         // The 3d-force-graph instance and its post-processing handles.
@@ -3356,6 +3451,7 @@
             renderIndexStats();
             createGraph();
             wireNav();
+            wireViewbar();
 
             document.getElementById('loading').style.display = 'none';
             document.getElementById('sidebar').classList.remove('pending');
@@ -4046,13 +4142,6 @@
         function wireFooter() {
             document.getElementById('reset').addEventListener('click', resetView);
             document.getElementById('fit').addEventListener('click', fitGraph);
-            document.querySelectorAll('.view-chip').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    document.querySelectorAll('.view-chip').forEach(b => b.classList.remove('active'));
-                    btn.classList.add('active');
-                    setView(btn.dataset.view);
-                });
-            });
         }
 
         function wireFilterActions() {
@@ -4288,6 +4377,51 @@
             if (back) back.addEventListener('click', () => navHistory(-1));
             if (fwd) fwd.addEventListener('click', () => navHistory(1));
             if (exit) exit.addEventListener('click', () => { clearSelection(); frameGraph(700); });
+        }
+
+        // ─── Bottom view bar: projections + box / spin toggles ─
+
+        function setActiveViewBtn(id) {
+            document.querySelectorAll('#viewbar .vbtn').forEach(b =>
+                b.classList.toggle('active', b.dataset.view === id));
+        }
+
+        function applyBoundaryVisibility() {
+            if (boundaryCube) boundaryCube.visible = state.showBoundary;
+        }
+
+        function applyAutoSpin() {
+            const controls = Graph && Graph.controls && Graph.controls();
+            if (!controls) return;
+            controls.autoRotate = state.autoSpin;
+            controls.autoRotateSpeed = 1.6;
+        }
+
+        function wireViewbar() {
+            document.querySelectorAll('#viewbar .vbtn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    setActiveViewBtn(btn.dataset.view);
+                    setView(btn.dataset.view);
+                });
+            });
+
+            const boxBtn = document.getElementById('toggle-box');
+            // The boundary box only exists in non-perf mode; hide the toggle when
+            // it can't do anything.
+            if (state.perfMode && boxBtn) boxBtn.style.display = 'none';
+            if (boxBtn) boxBtn.addEventListener('click', () => {
+                state.showBoundary = !state.showBoundary;
+                boxBtn.classList.toggle('active', state.showBoundary);
+                applyBoundaryVisibility();
+            });
+
+            const spinBtn = document.getElementById('toggle-spin');
+            if (spinBtn) spinBtn.addEventListener('click', () => {
+                state.autoSpin = !state.autoSpin;
+                spinBtn.classList.toggle('active', state.autoSpin);
+                spinBtn.classList.toggle('spinning', state.autoSpin);
+                applyAutoSpin();
+            });
         }
 
         // ─── On-canvas legend (doubles as a type filter) ─────
@@ -4859,9 +4993,21 @@
             }
         }
 
-        // Snap the camera to a predefined view axis.
-        // axis: 'xy' (top-down), 'xz' (front), 'yz' (side), '3d' (isometric)
-        function setView(axis, ms = 600) {
+        // The six face views (id → outward camera direction + the coordinate
+        // plane that face lies in). Numbers match the digi labels on the boundary
+        // box, so "view N" flies the camera to look straight at face N.
+        const VIEWS = {
+            '1': { dir: [0, 0, 1], plane: 'XY' },   // +Z front
+            '2': { dir: [0, 0, -1], plane: 'XY' },  // -Z back
+            '3': { dir: [0, 1, 0], plane: 'XZ' },   // +Y top
+            '4': { dir: [0, -1, 0], plane: 'XZ' },  // -Y bottom
+            '5': { dir: [1, 0, 0], plane: 'YZ' },   // +X right
+            '6': { dir: [-1, 0, 0], plane: 'YZ' },  // -X left
+        };
+
+        // Snap the camera to a predefined view. id: '1'–'6' (face projections) or
+        // '3d' (isometric).
+        function setView(id, ms = 600) {
             if (!Graph) return;
             const ext = computeExtent();
             if (!ext) return;
@@ -4870,15 +5016,13 @@
             const aspect = (width && height) ? (width / height) : 1.6;
             const fitFov = aspect >= 1 ? fov : 2 * Math.atan(Math.tan(fov / 2) * aspect);
             const dist = (radius * 1.05) / Math.tan(fitFov / 2);
+            const v = VIEWS[id];
             let pos;
-            switch (axis) {
-                case 'xy': pos = { x: cx, y: cy, z: cz + dist }; break;
-                case 'xz': pos = { x: cx, y: cy - dist, z: cz }; break;
-                case 'yz': pos = { x: cx + dist, y: cy, z: cz }; break;
-                default: {
-                    const d = dist / Math.sqrt(3);
-                    pos = { x: cx + d, y: cy + d, z: cz + d };
-                }
+            if (v) {
+                pos = { x: cx + v.dir[0] * dist, y: cy + v.dir[1] * dist, z: cz + v.dir[2] * dist };
+            } else {
+                const d = dist / Math.sqrt(3);
+                pos = { x: cx + d, y: cy + d, z: cz + d };
             }
             Graph.cameraPosition(pos, { x: cx, y: cy, z: cz }, ms);
         }
@@ -5081,14 +5225,15 @@
             // Translucent coloured face planes, each tagged with a glowing
             // seven-segment "digi" number so the six boundary planes are
             // individually identifiable.
+            // Numbered to match the bottom view bar: view N looks at face N.
             const hw = w / 2, hh = h / 2, hd = d / 2;
             const faceDefs = [
-                { num: 1, hex: '#22d3ee', pos: [cx + hw, cy, cz], rot: [0, Math.PI / 2, 0], size: [d, h] }, // +X
-                { num: 2, hex: '#c084fc', pos: [cx - hw, cy, cz], rot: [0, -Math.PI / 2, 0], size: [d, h] }, // -X
-                { num: 3, hex: '#4ade80', pos: [cx, cy + hh, cz], rot: [-Math.PI / 2, 0, 0], size: [w, d] }, // +Y
-                { num: 4, hex: '#fbbf24', pos: [cx, cy - hh, cz], rot: [Math.PI / 2, 0, 0], size: [w, d] }, // -Y
-                { num: 5, hex: '#f472b6', pos: [cx, cy, cz + hd], rot: [0, 0, 0], size: [w, h] }, // +Z
-                { num: 6, hex: '#fb923c', pos: [cx, cy, cz - hd], rot: [0, Math.PI, 0], size: [w, h] }, // -Z
+                { num: 1, hex: '#22d3ee', pos: [cx, cy, cz + hd], rot: [0, 0, 0], size: [w, h] }, // +Z  XY front
+                { num: 2, hex: '#c084fc', pos: [cx, cy, cz - hd], rot: [0, Math.PI, 0], size: [w, h] }, // -Z  XY back
+                { num: 3, hex: '#4ade80', pos: [cx, cy + hh, cz], rot: [-Math.PI / 2, 0, 0], size: [w, d] }, // +Y  XZ top
+                { num: 4, hex: '#fbbf24', pos: [cx, cy - hh, cz], rot: [Math.PI / 2, 0, 0], size: [w, d] }, // -Y  XZ bottom
+                { num: 5, hex: '#f472b6', pos: [cx + hw, cy, cz], rot: [0, Math.PI / 2, 0], size: [d, h] }, // +X  YZ right
+                { num: 6, hex: '#fb923c', pos: [cx - hw, cy, cz], rot: [0, -Math.PI / 2, 0], size: [d, h] }, // -X  YZ left
             ];
             const labelScale = Math.max(16, Math.min(150, Math.min(w, h, d) * 0.18));
             for (const f of faceDefs) {
@@ -5137,6 +5282,7 @@
                 label.position.copy(end).add(dir.clone().multiplyScalar(axisLen * 0.2));
                 group.add(label);
             }
+            group.visible = state.showBoundary;
             boundaryCube = group;
             Graph.scene().add(group);
         }
@@ -5563,9 +5709,7 @@
             state.edgeFilters.clear();
             document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
             applyFilters();
-            document.querySelectorAll('.view-chip').forEach(b => b.classList.remove('active'));
-            const d3 = document.querySelector('.view-chip[data-view="3d"]');
-            if (d3) d3.classList.add('active');
+            setActiveViewBtn('3d');
             frameGraph(600);
             state.selectedNode = null;
             exitFocus();
@@ -6144,15 +6288,11 @@
                 return;
             }
 
-            const viewMap = { '1': 'xy', '2': 'xz', '3': 'yz', '4': '3d' };
-            const axis = viewMap[e.key];
-            if (axis) {
-                const btn = document.querySelector(`.view-chip[data-view="${axis}"]`);
-                if (btn) {
-                    document.querySelectorAll('.view-chip').forEach(b => b.classList.remove('active'));
-                    btn.classList.add('active');
-                    setView(axis);
-                }
+            // Number keys 1–6 snap to the face projections; 0 returns to 3D.
+            const viewId = (e.key === '0') ? '3d' : (VIEWS[e.key] ? e.key : null);
+            if (viewId) {
+                setActiveViewBtn(viewId);
+                setView(viewId);
             }
         });
 

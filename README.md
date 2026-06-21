@@ -8,7 +8,7 @@ A high-performance, local-first knowledge base engine that transforms codebases 
 
 ### 🎬 Demo
 
-[![UltraGraph demo](https://img.youtube.com/vi/d4OgINrD27Y/maxresdefault.jpg)](https://youtu.be/d4OgINrD27Y)
+[![UltraGraph demo](https://img.youtube.com/vi/3K-L7NSw9vs/maxresdefault.jpg)](https://youtu.be/3K-L7NSw9vs)
 
 > Click the thumbnail to watch the walkthrough on YouTube.
 
