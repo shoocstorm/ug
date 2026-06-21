@@ -208,7 +208,7 @@ struct ServeState {
     graph_path: Arc<PathBuf>,
     graph: Arc<RwLock<Arc<GraphSnapshot>>>,
     html: Arc<EncodedAsset>,
-    d3: Arc<EncodedAsset>,
+    bundle: Arc<EncodedAsset>,
     /// `None` when `--no-db` is set or every configured store failed
     /// to open. Phase 3 routes return 503 in that case rather than
     /// panicking the server. With multi-dest, this is `Some` as long
@@ -345,8 +345,8 @@ pub fn run_serve(args: &[String]) {
         crate::VIS_HTML.as_bytes().to_vec(),
         "text/html; charset=utf-8",
     ));
-    let d3 = Arc::new(EncodedAsset::new(
-        crate::VIS_D3.to_vec(),
+    let bundle = Arc::new(EncodedAsset::new(
+        crate::VIS_BUNDLE.to_vec(),
         "application/javascript; charset=utf-8",
     ));
 
@@ -449,7 +449,7 @@ pub fn run_serve(args: &[String]) {
             graph_path: Arc::new(graph_path.clone()),
             graph: Arc::new(RwLock::new(snapshot)),
             html,
-            d3,
+            bundle,
             stores: stores_arc,
             embedder: embedder_arc,
             chat_default: Arc::new(chat_default),
@@ -461,7 +461,7 @@ pub fn run_serve(args: &[String]) {
         let app = Router::new()
             .route("/", get(handle_index))
             .route("/index.html", get(handle_index))
-            .route("/d3.v7.min.js", get(handle_d3))
+            .route("/ug-vis.bundle.js", get(handle_bundle))
             .route("/graph.json", get(handle_graph))
             .route("/healthz", get(handle_health))
             .route("/api/capabilities", get(api_capabilities))
@@ -653,8 +653,8 @@ async fn handle_graph(State(state): State<ServeState>, headers: HeaderMap) -> Re
     asset_response(&snap.encoded, &headers)
 }
 
-async fn handle_d3(State(state): State<ServeState>, headers: HeaderMap) -> Response {
-    asset_response(&state.d3, &headers)
+async fn handle_bundle(State(state): State<ServeState>, headers: HeaderMap) -> Response {
+    asset_response(&state.bundle, &headers)
 }
 
 async fn handle_health() -> &'static str {

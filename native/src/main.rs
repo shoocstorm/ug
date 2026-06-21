@@ -20,7 +20,7 @@ mod serve;
 // Bundled visualization assets so `ug gen` can produce a self-contained
 // output directory without needing the source tree at runtime.
 pub(crate) const VIS_HTML: &str = include_str!("./vis/visualization.html");
-pub(crate) const VIS_D3: &[u8] = include_bytes!("./vis/d3.v7.min.js");
+pub(crate) const VIS_BUNDLE: &[u8] = include_bytes!("./vis/ug-vis.bundle.js");
 const VIS_MD: &str = include_str!("../../README.md");
 
 fn main() {
@@ -617,10 +617,9 @@ fn run_gen(args: &[String]) {
         .expect("Failed to write indexed-tree.json");
 
     let t2 = std::time::Instant::now();
-    println!("{C_CYAN}▸{C_RESET} Copying visualization assets");
-    fs::write(format!("{}/index.html", output_dir), VIS_HTML).expect("Failed to write index.html");
-    fs::write(format!("{}/d3.v7.min.js", output_dir), VIS_D3)
-        .expect("Failed to write d3.v7.min.js");
+    // index.html and ug-vis.bundle.js are embedded in `ug serve` (VIS_HTML /
+    // VIS_BUNDLE) and served directly, so there's no need to write them here.
+    println!("{C_CYAN}▸{C_RESET} Writing visualization README");
     fs::write(format!("{}/README.md", output_dir), VIS_MD).expect("Failed to write README.md");
     println!(
         "  {C_GREEN}✓ done{C_RESET} in {C_BOLD}{:?}{C_RESET}",
@@ -634,8 +633,6 @@ fn run_gen(args: &[String]) {
     );
     println!("  {C_GREEN}✓{C_RESET} graph.json");
     println!("  {C_GREEN}✓{C_RESET} indexed-tree.json");
-    println!("  {C_GREEN}✓{C_RESET} index.html (open in browser with HTTP server)");
-    println!("  {C_GREEN}✓{C_RESET} d3.v7.min.js");
     println!("  {C_GREEN}✓{C_RESET} README.md");
 
     if no_ingest {

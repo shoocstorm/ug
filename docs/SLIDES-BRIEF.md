@@ -156,11 +156,11 @@ Exposed through MCP `search_kb`, NAPI `dbHybridSearch`, and CLI `db-rag`.
 
 ## 6. `ug serve` — the embedded web API (one slide)
 
-Single Axum process. Self-contained: `visualization.html` and `d3.v7.min.js` are `include_str!`/`include_bytes!`'d into the binary. `graph.json` is pre-loaded; bytes are pre-compressed (brotli-9 + gzip-9) once at startup. Default bind `127.0.0.1`.
+Single Axum process. Self-contained: `visualization.html` and `ug-vis.bundle.js` (three.js + 3d-force-graph) are `include_str!`/`include_bytes!`'d into the binary. `graph.json` is pre-loaded; bytes are pre-compressed (brotli-9 + gzip-9) once at startup. Default bind `127.0.0.1`.
 
 | Phase | Routes |
 |---|---|
-| **1** static | `GET /`, `/index.html`, `/d3.v7.min.js`, `/graph.json`, `/healthz` |
+| **1** static | `GET /`, `/index.html`, `/ug-vis.bundle.js`, `/graph.json`, `/healthz` |
 | **2** read-only graph API | `/api/graph/stats · /node/*id · /search · /bfs · /path · /filter · /centrality · /cycles` |
 | **3** DB-backed | `GET /api/db/node/*id · /api/db/traverse/*id`<br>`POST /api/search/semantic · /api/search/hybrid` |
 

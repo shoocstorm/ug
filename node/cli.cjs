@@ -140,14 +140,12 @@ const commands = {
       console.log('  ' + chalk.gray('nodes:') + ' ' + chalk.bold(nodeCount));
       console.log('  ' + chalk.gray('edges:') + ' ' + chalk.bold(edgeCount));
 
-      console.log(chalk.gray('▸') + ' ' + chalk.blue('Copying visualization assets'));
+      // index.html / ug-vis.bundle.js are embedded in `ug serve` and served
+      // directly, so we only emit the README here.
+      console.log(chalk.gray('▸') + ' ' + chalk.blue('Writing visualization README'));
       const visSrc = join(__dirname, 'vis');
-      const indexHtmlSrc = join(visSrc, 'visualization.html');
       const indexMdSrc = join(visSrc, 'visualization.md');
 
-      if (existsSync(indexHtmlSrc)) {
-        copyFileSync(indexHtmlSrc, join(outputDir, 'index.html'));
-      }
       if (existsSync(indexMdSrc)) {
         copyFileSync(indexMdSrc, join(outputDir, 'README.md'));
       }
@@ -155,7 +153,6 @@ const commands = {
       console.log(chalk.gray('────────────────────────────────────────'));
       console.log(chalk.green('✓') + ' ' + chalk.bold('Generated in') + ' ' + chalk.cyan(outputDir + '/'));
       console.log('  ' + chalk.green('✓') + ' ' + chalk.white('graph.json'));
-      console.log('  ' + chalk.green('✓') + ' ' + chalk.white('index.html ') + chalk.gray('(open in browser with HTTP server)'));
       console.log('  ' + chalk.green('✓') + ' ' + chalk.white('README.md'));
 
       if (args.includes('--no-ingest')) {

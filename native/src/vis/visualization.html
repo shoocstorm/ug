@@ -5,7 +5,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Knowledge Graph visualization | UltraGraph</title>
-    <script src="d3.v7.min.js"></script>
     <style>
         :root {
             --bg-deep: #09090b;
@@ -72,10 +71,16 @@
             background-attachment: fixed;
         }
 
-        svg {
+        #graph-3d {
+            position: absolute;
+            inset: 0;
             width: 100%;
             height: 100%;
+        }
+
+        #graph-3d canvas {
             display: block;
+            outline: none;
         }
 
         .node circle {
@@ -2300,7 +2305,7 @@
             display: none;
         }
 
-        /* ─── Perf mode (>5000 nodes/edges) ─────────────────── */
+        /* ─── Perf mode (>20000 nodes/edges) ─────────────────── */
 
         body.perf-mode .node circle,
         body.perf-mode .node circle:hover,
@@ -2373,14 +2378,7 @@
 
 <body>
     <div id="container">
-        <svg>
-            <defs>
-                <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"
-                    markerUnits="strokeWidth">
-                    <path d="M0,0 L0,6 L9,3 z" fill="#71717a" />
-                </marker>
-            </defs>
-        </svg>
+        <div id="graph-3d"></div>
 
         <div class="header">
             <h1>Knowledge Graph</h1>
@@ -2755,7 +2753,10 @@
         </div>
     </div>
 
-    <script>
+    <script type="module">
+        import { ForceGraph3D, THREE, SpriteText, EffectComposer, RenderPass, UnrealBloomPass }
+            from './ug-vis.bundle.js';
+
         const config = {
             nodeRadius: { File: 10, Interface: 7, Function: 6, Class: 8, Dependency: 5, Config: 8, Default: 6 },
             colorMap: {
@@ -2773,7 +2774,7 @@
                 Imports: '#f472b6',
                 Extends: '#c084fc',
                 Implements: '#fb923c',
-                Calls: '#fbbf24',
+                Calls: '#dfd9cc',
                 Uses: '#22d3ee',
                 Requires: '#94a3b8',
                 DependsOn: '#fb923c',
@@ -2805,14 +2806,17 @@
             pathMode: false
         };
 
-        let simulation, svg, g, link, node, zoom, width, height;
+        // The 3d-force-graph instance and its post-processing handles.
+        let Graph, bloomPass, width, height, selectionRing;
+        let _glowTex, _ringTex;
+        // Highlight sets re-evaluated by the node/link style accessors.
+        state.highlightNodes = new Set();
+        state.highlightLinks = new Set();
 
         async function loadGraph() {
             const params = new URLSearchParams(window.location.search);
             const file = params.get('file') || 'graph.json';
             document.getElementById('loading').style.display = 'block';
-            if (simulation) simulation.stop();
-            if (g) g.selectAll('*').remove();
             try {
                 const response = await fetch(file);
                 const data = await response.json();
@@ -2972,22 +2976,11 @@
             width = container.clientWidth;
             height = container.clientHeight;
 
-            svg = d3.select('#container svg');
-            g = svg.append('g').attr('class', 'graph-container');
-
-            zoom = d3.zoom()
-                .scaleExtent([0.1, 4])
-                .on('zoom', e => g.attr('transform', e.transform));
-            svg.call(zoom);
-            svg.on('click', e => {
-                if (e.target === svg.node()) clearSelection();
-            });
-
             const nodeCount = state.graph.nodes.length;
             const edgeCount = state.graph.edges.length;
             const totalElements = Math.max(nodeCount, edgeCount);
-            state.skipLabels = totalElements > 2000;
-            state.perfMode = totalElements > 5000;
+            state.skipLabels = totalElements > 20000;
+            state.perfMode = totalElements > 20000;
             state.nodeById = new Map(state.graph.nodes.map(n => [n.id, n]));
             document.body.classList.toggle('perf-mode', state.perfMode);
 
@@ -3002,8 +2995,7 @@
             buildEdgeFilterChips();
             buildEdgeBreakdown();
             renderIndexStats();
-            createSimulation();
-            render();
+            createGraph();
 
             document.getElementById('loading').style.display = 'none';
             document.getElementById('sidebar').classList.remove('pending');
@@ -3025,8 +3017,8 @@
                 document.getElementById('info').classList.remove('visible');
                 exitPathMode();
                 if (state.selectedNode) {
-                    node.filter(n => n.id === state.selectedNode.id).classed('selected', false);
                     state.selectedNode = null;
+                    bumpGraphStyles();
                 }
             });
         }
@@ -3790,35 +3782,24 @@
         }
 
         function applyFilters() {
-            if (!node || !link) return;
-
             const nodeMatches = n =>
                 state.nodeFilters.size === 0 || state.nodeFilters.has(n.group);
             const edgeMatches = e =>
                 state.edgeFilters.size === 0 || state.edgeFilters.has(e.rel);
 
             const byId = state.nodeById || new Map(state.graph.nodes.map(n => [n.id, n]));
-            const linkExcluded = e => {
+            // Predicates consumed by the graph's nodeVisibility / linkVisibility
+            // accessors. Filtered-out elements are hidden entirely (WebGL skips
+            // them), matching the old perf-mode behaviour for all sizes.
+            state.nodeHidden = n => !nodeMatches(n);
+            state.linkHidden = e => {
                 const sourceNode = byId.get(e.source.id || e.source);
                 const targetNode = byId.get(e.target.id || e.target);
                 if (sourceNode && !nodeMatches(sourceNode)) return true;
                 if (targetNode && !nodeMatches(targetNode)) return true;
                 return !edgeMatches(e);
             };
-
-            // In perf mode, fully unmount filtered-out elements (display:none) so
-            // the browser skips layout/paint on them. Outside perf mode, just dim.
-            if (state.perfMode) {
-                node.classed('hidden', n => !nodeMatches(n))
-                    .classed('dimmed', false);
-                link.classed('hidden', linkExcluded)
-                    .classed('dimmed', false);
-            } else {
-                node.classed('dimmed', n => !nodeMatches(n))
-                    .classed('hidden', false);
-                link.classed('dimmed', linkExcluded)
-                    .classed('hidden', false);
-            }
+            bumpGraphStyles();
         }
 
         // ─── Search ─────────────────────────────────────────
@@ -3947,121 +3928,359 @@
             focusNode(n);
         }
 
-        function getViewportCenter() {
-            const sidebar = document.getElementById('sidebar');
-            const info = document.getElementById('info');
-            const sidebarW = sidebar && !sidebar.classList.contains('collapsed')
-                ? sidebar.offsetWidth : 0;
-            const infoW = info && info.classList.contains('visible')
-                ? info.offsetWidth : 0;
-            return {
-                x: sidebarW + (width - sidebarW - infoW) / 2,
-                y: height / 2
-            };
-        }
-
         function focusNode(n) {
+            if (!Graph || n == null) return;
             // Wait one frame so any panel toggles (info open/close) commit their
-            // layout before we measure the visible viewport.
+            // layout before the camera flies.
             requestAnimationFrame(() => {
-                const { x: cx, y: cy } = getViewportCenter();
-                const current = d3.zoomTransform(svg.node());
-                const scale = current.k >= 1.5 ? current.k : 1.5;
-                const tx = cx - scale * n.x;
-                const ty = cy - scale * n.y;
-                svg.transition().duration(600).call(zoom.transform,
-                    d3.zoomIdentity.translate(tx, ty).scale(scale));
+                const x = +n.x || 0, y = +n.y || 0, z = +n.z || 0;
+                // Approach straight along +Z so the flat X/Y plane keeps facing the
+                // camera (approaching along the origin→node ray would put the camera
+                // in-plane and show the graph edge-on).
+                const distance = 150;
+                Graph.cameraPosition(
+                    { x, y, z: z + distance },
+                    { x, y, z },
+                    800);
             });
         }
 
-        // ─── Simulation & rendering ─────────────────────────
+        // ─── 3D force graph & rendering ──────────────────────
 
-        function createSimulation() {
-            simulation = d3.forceSimulation(state.graph.nodes)
-                .force('link', d3.forceLink(state.graph.edges).id(d => d.id).distance(80))
-                .force('charge', d3.forceManyBody().strength(state.perfMode ? -25 : -50))
-                .force('center', d3.forceCenter(width / 2, height / 2).strength(0.05));
-            if (!state.perfMode) {
-                simulation.force('collide', d3.forceCollide().radius(d => (config.nodeRadius[d.group] || 6) + 5));
-                return;
-            }
-            // Perf mode: settle layout synchronously, then freeze — no per-frame gravity.
-            simulation.alphaDecay(0.05).velocityDecay(0.55).stop();
-            const decay = simulation.alphaDecay();
-            const ticks = Math.min(200,
-                Math.ceil(Math.log(simulation.alphaMin()) / Math.log(1 - decay)));
-            for (let i = 0; i < ticks; i++) simulation.tick();
+        // Selected node / hovered neighbours render bright white so the bloom
+        // pass makes them glow harder; everything else keeps its type colour.
+        function nodeColorFor(n) {
+            if (state.selectedNode && n.id === state.selectedNode.id) return '#ffffff';
+            if (state.highlightNodes.has(n.id)) return '#ffffff';
+            return config.getColor(n.group);
+        }
+        function linkColorFor(e) {
+            if (state.highlightLinks.has(e)) return '#ffffff';
+            return config.getRelColor(e.rel);
         }
 
-        function render() {
-            link = g.append('g').attr('class', 'edges')
-                .selectAll('line')
-                .data(state.graph.edges)
-                .join('line')
-                .attr('class', 'edge')
-                .attr('stroke', e => config.getRelColor(e.rel));
-            if (!state.perfMode) link.attr('marker-end', 'url(#arrow)');
+        function nodeRadiusFor(n) {
+            return (config.nodeRadius[n.group] || 6) * 0.55;
+        }
 
-            const nodeGroups = g.append('g').attr('class', 'nodes')
-                .selectAll('g')
-                .data(state.graph.nodes)
-                .join('g')
-                .attr('class', 'node')
-                .call(d3.drag()
-                    .on('start', dragstarted)
-                    .on('drag', dragged)
-                    .on('end', dragended));
+        // A soft circular glow texture (white radial gradient → transparent),
+        // tinted per-node via the sprite colour. Built once and shared.
+        function glowTexture() {
+            if (_glowTex) return _glowTex;
+            const c = document.createElement('canvas');
+            c.width = c.height = 128;
+            const ctx = c.getContext('2d');
+            const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+            g.addColorStop(0, 'rgba(255,255,255,1)');
+            g.addColorStop(0.2, 'rgba(255,255,255,0.65)');
+            g.addColorStop(0.55, 'rgba(255,255,255,0.18)');
+            g.addColorStop(1, 'rgba(255,255,255,0)');
+            ctx.fillStyle = g;
+            ctx.fillRect(0, 0, 128, 128);
+            _glowTex = new THREE.CanvasTexture(c);
+            _glowTex.minFilter = THREE.LinearFilter;
+            _glowTex.generateMipmaps = false;
+            return _glowTex;
+        }
 
-            nodeGroups.append('circle')
-                .attr('r', d => config.nodeRadius[d.group] || 6)
-                .attr('fill', d => config.getColor(d.group))
-                .attr('fill-opacity', 0.85);
+        // A thin bright ring texture for the animated selection marker.
+        function ringTexture() {
+            if (_ringTex) return _ringTex;
+            const c = document.createElement('canvas');
+            c.width = c.height = 256;
+            const ctx = c.getContext('2d');
+            ctx.strokeStyle = 'rgba(255,255,255,1)';
+            ctx.lineWidth = 10;
+            ctx.beginPath();
+            ctx.arc(128, 128, 104, 0, Math.PI * 2);
+            ctx.stroke();
+            // four short tick marks for a "targeting" feel
+            ctx.lineWidth = 14;
+            for (let a = 0; a < 4; a++) {
+                const ang = a * Math.PI / 2;
+                ctx.beginPath();
+                ctx.arc(128, 128, 122, ang - 0.12, ang + 0.12);
+                ctx.stroke();
+            }
+            _ringTex = new THREE.CanvasTexture(c);
+            _ringTex.minFilter = THREE.LinearFilter;
+            _ringTex.generateMipmaps = false;
+            return _ringTex;
+        }
+
+        // A subtle scene backdrop: near-black with faint coloured ambient glows in
+        // the corners, so the background reads as soft gradient light rather than a
+        // flat void. Kept dark (low alpha) so it stays below the bloom threshold.
+        function backgroundTexture() {
+            const c = document.createElement('canvas');
+            c.width = c.height = 1024;
+            const ctx = c.getContext('2d');
+            ctx.fillStyle = '#09090b';
+            ctx.fillRect(0, 0, 1024, 1024);
+            const glow = (x, y, r, color) => {
+                const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+                g.addColorStop(0, color);
+                g.addColorStop(1, 'rgba(9,9,11,0)');
+                ctx.fillStyle = g;
+                ctx.fillRect(0, 0, 1024, 1024);
+            };
+            glow(512, 1080, 760, 'rgba(34,211,238,0.12)');   // cyan, up from bottom
+            glow(120, 130, 560, 'rgba(34,211,238,0.07)');    // cyan, top-left
+            glow(940, 1010, 600, 'rgba(192,132,252,0.09)');  // violet, bottom-right
+            glow(980, 170, 460, 'rgba(244,114,182,0.06)');   // pink, top-right
+            glow(120, 940, 420, 'rgba(74,222,128,0.05)');    // green, bottom-left
+            const t = new THREE.CanvasTexture(c);
+            t.colorSpace = THREE.SRGBColorSpace;
+            t.minFilter = THREE.LinearFilter;
+            t.generateMipmaps = false;
+            return t;
+        }
+
+        // Custom node object: an unlit (self-illuminated) sphere so nodes stay
+        // bright from any camera angle and feed the bloom pass for a glow, plus
+        // a soft additive halo and an optional text label.
+        function makeNodeObject(n) {
+            const radius = nodeRadiusFor(n);
+            const seg = state.perfMode ? 6 : 16;
+            const group = new THREE.Group();
+
+            const mat = new THREE.MeshBasicMaterial({ color: nodeColorFor(n), transparent: true, opacity: 0.95 });
+            const core = new THREE.Mesh(new THREE.SphereGeometry(radius, seg, seg), mat);
+            n.__nodeMat = mat;
+            n.__nodeCore = core;
+            n.__nodeRadius = radius;
+            group.add(core);
 
             if (!state.perfMode) {
-                nodeGroups.append('circle')
-                    .attr('class', 'ripple')
-                    .attr('r', d => config.nodeRadius[d.group] || 6);
+                // Soft additive radial-gradient halo — gives every node a gentle
+                // glow even before the bloom pass kicks in.
+                const halo = new THREE.Sprite(new THREE.SpriteMaterial({
+                    map: glowTexture(),
+                    color: config.getColor(n.group),
+                    transparent: true,
+                    opacity: 0.25,
+                    blending: THREE.AdditiveBlending,
+                    depthWrite: false,
+                }));
+                halo.scale.setScalar(radius * 0.5);
+                n.__nodeHalo = halo;
+                n.__haloBase = radius * 5;
+                group.add(halo);
             }
 
             if (!state.skipLabels) {
-                nodeGroups.append('text')
-                    .text(d => truncateName(d.name))
-                    .attr('dy', d => (config.nodeRadius[d.group] || 6) + 14);
+                const label = truncateName(n.name);
+                if (label) {
+                    const s = new SpriteText(label);
+                    s.color = 'rgba(228,228,231,0.92)';
+                    s.fontFace = 'JetBrains Mono, monospace';
+                    s.textHeight = 3.5;
+                    s.material.depthWrite = false;
+                    // Sprite-text labels are NPOT canvas textures; skip mipmaps to
+                    // avoid blurry text and unsupported-mipmap paths on some GPUs.
+                    if (s.material.map) {
+                        s.material.map.generateMipmaps = false;
+                        s.material.map.minFilter = THREE.LinearFilter;
+                        s.material.map.needsUpdate = true;
+                    }
+                    s.position.set(0, radius + 6, 0);
+                    group.add(s);
+                }
+            }
+            return group;
+        }
+
+        // A d3-force that flattens the layout onto the X/Y plane: it springs each
+        // node's Z toward 0 and hard-clamps |z| to a fraction of the current X/Y
+        // spread. A *proportional* bound (not absolute) keeps the slab consistently
+        // thin whether the graph is tiny or huge — so it always reads as a plane
+        // facing the camera with a little depth, never a 3D ball.
+        function makeZBoundForce(fraction) {
+            let nodes = [];
+            const force = (alpha) => {
+                let sum = 0;
+                for (const n of nodes) sum += (n.x || 0) * (n.x || 0) + (n.y || 0) * (n.y || 0);
+                const rms = nodes.length ? Math.sqrt(sum / nodes.length) : 100;
+                const maxZ = Math.max(rms * fraction, 15);
+                const k = alpha * 0.85;
+                for (const n of nodes) {
+                    n.vz = (n.vz || 0) - (n.z || 0) * k;
+                    if (n.z > maxZ) { n.z = maxZ; if (n.vz > 0) n.vz = 0; }
+                    else if (n.z < -maxZ) { n.z = -maxZ; if (n.vz < 0) n.vz = 0; }
+                }
+            };
+            force.initialize = (n) => { nodes = n; };
+            return force;
+        }
+
+        function createGraph() {
+            const el = document.getElementById('graph-3d');
+            window.addEventListener('mousemove', e => {
+                state._mouse = { x: e.pageX, y: e.pageY };
+            });
+
+            Graph = ForceGraph3D({ controlType: 'orbit' })(el)
+                .backgroundColor('#09090b')
+                .graphData({ nodes: state.graph.nodes, links: state.graph.edges })
+                .nodeId('id')
+                .nodeVisibility(n => !(state.nodeHidden && state.nodeHidden(n)))
+                .nodeThreeObject(makeNodeObject)
+                .linkColor(linkColorFor)
+                .linkOpacity(0.55)
+                .linkWidth(0)
+                .linkVisibility(e => !(state.linkHidden && state.linkHidden(e)))
+                .linkDirectionalArrowLength(state.perfMode ? 0 : 3)
+                .linkDirectionalArrowRelPos(1)
+                .linkDirectionalParticles(e => state.highlightLinks.has(e) ? 4 : 0)
+                .linkDirectionalParticleWidth(1.6)
+                .linkDirectionalParticleSpeed(0.012)
+                .enableNodeDrag(true)
+                .onNodeHover(handleNodeHover)
+                .onNodeClick((n, evt) => handleNodeClick(evt, n))
+                .onBackgroundClick(() => clearSelection())
+                .width(width)
+                .height(height);
+
+            // Approximate the previous layout feel (tighter clustering). Charge is
+            // pushed harder so the X/Y plane spreads out to fill the screen now
+            // that the Z axis is compressed.
+            const charge = Graph.d3Force('charge');
+            if (charge) charge.strength(state.perfMode ? -60 : -120);
+            const linkForce = Graph.d3Force('link');
+            if (linkForce) linkForce.distance(45);
+            // Compress (but don't crush) the Z axis into a slab so the X/Y plane
+            // faces the camera while keeping some depth/parallax.
+            Graph.d3Force('zBound', makeZBoundForce(0.14));
+
+            // Subtle gradient backdrop (in-scene, so it sits behind the graph and
+            // reads as soft ambient light instead of a flat black void).
+            Graph.scene().background = backgroundTexture();
+
+            // Very light fog only — with a flat slab all nodes sit at a similar
+            // depth, so heavy fog would just dim the whole scene.
+            Graph.scene().fog = new THREE.FogExp2(0x09090b, 0.0002);
+
+            // Cinematic bloom — skipped in perf mode to protect framerate. The
+            // post-processing composer is created lazily on the first render, so
+            // defer until it exists before attaching the pass.
+            if (!state.perfMode) {
+                const addBloom = () => {
+                    const composer = Graph.postProcessingComposer && Graph.postProcessingComposer();
+                    if (!composer) { requestAnimationFrame(addBloom); return; }
+                    // strength, radius, threshold — a moderate threshold keeps the
+                    // glow tasteful (bright cores bloom; dense overlaps don't wash out).
+                    bloomPass = new UnrealBloomPass(new THREE.Vector2(width, height), 0.6, 0.5, 0.2);
+                    composer.addPass(bloomPass);
+                };
+                addBloom();
             }
 
-            if (state.perfMode) {
-                // Sim has already settled synchronously — position once, no tick loop.
-                link
-                    .attr('x1', d => +d.source.x || 0)
-                    .attr('y1', d => +d.source.y || 0)
-                    .attr('x2', d => +d.target.x || 0)
-                    .attr('y2', d => +d.target.y || 0);
-                nodeGroups.attr('transform', d => `translate(${+d.x || 0},${+d.y || 0})`);
-            } else {
-                simulation.on('tick', () => {
-                    link.each(function (d) {
-                        const sx = +d.source.x || 0, sy = +d.source.y || 0;
-                        const tx = +d.target.x || 0, ty = +d.target.y || 0;
-                        const tr = config.nodeRadius[d.target.group] || 6;
-                        const dx = tx - sx, dy = ty - sy;
-                        const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-                        const ratio = (tr + 8) / dist;
-                        d3.select(this)
-                            .attr('x1', sx)
-                            .attr('y1', sy)
-                            .attr('x2', tx - dx * ratio)
-                            .attr('y2', ty - dy * ratio);
-                    });
-                    nodeGroups.attr('transform', d => `translate(${+d.x || 0},${+d.y || 0})`);
-                });
+            if (state.perfMode) Graph.cooldownTicks(80);
+
+            // Animated selection marker: a spinning, pulsing ring that sits on the
+            // currently selected node (added to the scene, repositioned each frame).
+            if (!state.perfMode) {
+                selectionRing = new THREE.Sprite(new THREE.SpriteMaterial({
+                    map: ringTexture(),
+                    color: 0xffffff,
+                    transparent: true,
+                    opacity: 0,
+                    blending: THREE.AdditiveBlending,
+                    depthWrite: false,
+                    depthTest: false,
+                }));
+                selectionRing.visible = false;
+                selectionRing.renderOrder = 999;
+                Graph.scene().add(selectionRing);
+                startSelectionAnimation();
             }
 
-            nodeGroups
-                .on('mouseover', handleMouseOver)
-                .on('mouseout', handleMouseOut)
-                .on('click', handleNodeClick);
+            // Frame the bulk of the graph once the layout settles. Use frameGraph
+            // (percentile-based) rather than zoomToFit so a few far-flung outlier
+            // nodes don't force the camera miles away.
+            const autoFrame = () => { if (!state._didFit) { state._didFit = true; frameGraph(900); } };
+            Graph.onEngineStop(autoFrame);
+            // Fallbacks: settle may take a moment, so frame early too.
+            setTimeout(autoFrame, 2500);
+            setTimeout(autoFrame, 5000);
+        }
 
-            node = nodeGroups;
+        // Camera framing: look straight down +Z at the X/Y plane and fit the
+        // 90th-percentile X/Y radius (ignoring far outliers) so the plane fills
+        // the viewport and every node sits close to the camera.
+        function frameGraph(ms = 600) {
+            if (!Graph) return;
+            const nodes = state.graph.nodes.filter(n => Number.isFinite(n.x));
+            if (!nodes.length) return;
+            let cx = 0, cy = 0, cz = 0;
+            nodes.forEach(n => { cx += n.x; cy += n.y; cz += n.z || 0; });
+            cx /= nodes.length; cy /= nodes.length; cz /= nodes.length;
+            // Frame on the X/Y spread only — Z is a thin slab we look along.
+            const dists = nodes
+                .map(n => Math.hypot(n.x - cx, n.y - cy))
+                .sort((a, b) => a - b);
+            const pct = dists[Math.floor(dists.length * 0.9)] || dists[dists.length - 1] || 120;
+            const radius = Math.max(pct, 40);
+            // Account for viewport aspect so wide screens still fit the X spread.
+            const fov = (Graph.camera().fov || 50) * Math.PI / 180;
+            const aspect = (width && height) ? (width / height) : 1.6;
+            const fitFov = aspect >= 1 ? fov : 2 * Math.atan(Math.tan(fov / 2) * aspect);
+            const dist = (radius * 1.15) / Math.tan(fitFov / 2);
+            Graph.cameraPosition(
+                { x: cx, y: cy, z: cz + dist },
+                { x: cx, y: cy, z: cz },
+                ms);
+        }
+
+        // Continuous rAF loop driving the selected-node ring + halo pulse.
+        function startSelectionAnimation() {
+            const tick = () => {
+                requestAnimationFrame(tick);
+                const n = state.selectedNode;
+                if (!selectionRing) return;
+                if (!n || !Number.isFinite(n.x)) { selectionRing.visible = false; return; }
+                const t = performance.now() * 0.001;
+                const wave = Math.sin(t * 3.2);
+                const pulse = 1 + 0.16 * wave;
+                const base = Math.max((n.__nodeRadius || 4) * 16, 60);
+                selectionRing.position.set(n.x, n.y, n.z || 0);
+                selectionRing.scale.setScalar(base * pulse);
+                selectionRing.material.rotation += 0.03;
+                selectionRing.material.opacity = 0.85 + 0.15 * wave;
+                selectionRing.visible = true;
+                // Breathe the selected node's own halo and core too.
+                if (n.__nodeHalo) {
+                    n.__nodeHalo.scale.setScalar((n.__haloBase || base) * (1 + 0.3 * wave));
+                }
+                if (n.__nodeCore) {
+                    n.__nodeCore.scale.setScalar(1.6 + 0.3 * wave);
+                }
+            };
+            requestAnimationFrame(tick);
+        }
+
+        // Re-evaluate the style accessors after a selection / highlight / filter
+        // change, without rebuilding the whole scene.
+        function bumpGraphStyles() {
+            if (!Graph) return;
+            // Custom node objects own their material, so recolour them directly.
+            state.graph.nodes.forEach(n => {
+                if (n.__nodeMat) n.__nodeMat.color.set(nodeColorFor(n));
+                const sel = state.selectedNode && n.id === state.selectedNode.id;
+                if (n.__nodeHalo) {
+                    const hot = sel || state.highlightNodes.has(n.id);
+                    n.__nodeHalo.material.opacity = hot ? 0.75 : 0.45;
+                    // Non-selected halos return to base size; the selected one is
+                    // animated by the selection rAF loop.
+                    if (!sel && n.__haloBase) n.__nodeHalo.scale.setScalar(n.__haloBase);
+                }
+                // Non-selected cores return to normal scale.
+                if (!sel && n.__nodeCore) n.__nodeCore.scale.setScalar(1);
+            });
+            Graph.nodeVisibility(Graph.nodeVisibility())
+                .linkColor(linkColorFor)
+                .linkVisibility(Graph.linkVisibility())
+                .linkDirectionalParticles(Graph.linkDirectionalParticles());
         }
 
         function truncateName(name) {
@@ -4071,47 +4290,34 @@
             return short.length > 32 ? short.slice(0, 31) + '…' : short;
         }
 
-        function dragstarted(event, d) {
-            if (state.perfMode) { d.fx = d.x; d.fy = d.y; return; }
-            if (!event.active) simulation.alphaTarget(0.3).restart();
-            d.fx = d.x; d.fy = d.y;
-        }
-        function dragged(event, d) {
-            d.fx = event.x; d.fy = event.y;
-            if (!state.perfMode) return;
-            d.x = event.x; d.y = event.y;
-            node.filter(n => n.id === d.id)
-                .attr('transform', `translate(${d.x},${d.y})`);
-            link.filter(e => (e.source.id || e.source) === d.id || (e.target.id || e.target) === d.id)
-                .attr('x1', e => +e.source.x || 0)
-                .attr('y1', e => +e.source.y || 0)
-                .attr('x2', e => +e.target.x || 0)
-                .attr('y2', e => +e.target.y || 0);
-        }
-        function dragended(event, d) {
-            if (state.perfMode) { d.fx = null; d.fy = null; return; }
-            if (!event.active) simulation.alphaTarget(0);
-            d.fx = null; d.fy = null;
-        }
-
         // ─── Hover & selection ──────────────────────────────
 
-        function handleMouseOver(event, d) {
+        function handleNodeHover(d, prev) {
+            const el = document.getElementById('graph-3d');
+            if (el) el.style.cursor = d ? 'pointer' : null;
+            const tooltip = document.getElementById('tooltip');
+
+            // Recompute connected-node / link highlight sets (skipped in perf mode).
             if (!state.perfMode) {
-                const connected = new Set([d.id]);
-                const hits = new Set();
-                state.graph.edges.forEach(e => {
-                    const sId = e.source.id || e.source;
-                    const tId = e.target.id || e.target;
-                    if (sId === d.id) { connected.add(tId); hits.add(e); }
-                    else if (tId === d.id) { connected.add(sId); hits.add(e); }
-                });
-                node.style('opacity', n => connected.has(n.id) ? 1 : 0.25);
-                link.style('opacity', e => hits.has(e) ? 1 : 0.05)
-                    .style('stroke-width', e => hits.has(e) ? 2 : 1);
+                state.highlightNodes.clear();
+                state.highlightLinks.clear();
+                if (d) {
+                    state.highlightNodes.add(d.id);
+                    state.graph.edges.forEach(e => {
+                        const sId = e.source.id || e.source;
+                        const tId = e.target.id || e.target;
+                        if (sId === d.id) { state.highlightNodes.add(tId); state.highlightLinks.add(e); }
+                        else if (tId === d.id) { state.highlightNodes.add(sId); state.highlightLinks.add(e); }
+                    });
+                }
+                bumpGraphStyles();
             }
 
-            const tooltip = document.getElementById('tooltip');
+            if (!d) {
+                tooltip.classList.remove('visible');
+                return;
+            }
+
             tooltip.querySelector('.tooltip-title').textContent = truncateName(d.name);
             tooltip.querySelector('.tooltip-type').textContent =
                 d.group + (d.startLine ? ` @L${d.startLine}` : '');
@@ -4122,17 +4328,10 @@
             if (siblings) statParts.push(`• ${siblings} sibling${siblings === 1 ? '' : 's'}`);
             tooltip.querySelector('.tooltip-stats').textContent = statParts.join('  ·  ');
 
-            tooltip.style.left = (event.pageX + 15) + 'px';
-            tooltip.style.top = (event.pageY + 15) + 'px';
+            const m = state._mouse || { x: width / 2, y: height / 2 };
+            tooltip.style.left = (m.x + 15) + 'px';
+            tooltip.style.top = (m.y + 15) + 'px';
             tooltip.classList.add('visible');
-        }
-
-        function handleMouseOut() {
-            if (!state.perfMode) {
-                node.style('opacity', null);
-                link.style('opacity', null).style('stroke-width', null);
-            }
-            document.getElementById('tooltip').classList.remove('visible');
         }
 
         function handleClick(event, d) {
@@ -4261,11 +4460,8 @@
 
             info.classList.add('visible');
 
-            if (state.selectedNode && state.selectedNode.id !== d.id) {
-                node.filter(n => n.id === state.selectedNode.id).classed('selected', false);
-            }
             state.selectedNode = d;
-            node.filter(n => n.id === d.id).classed('selected', true);
+            bumpGraphStyles();
 
             enrichFromDb(d.id);
         }
@@ -4426,8 +4622,8 @@
 
         function clearSelection() {
             if (state.selectedNode) {
-                node.filter(n => n.id === state.selectedNode.id).classed('selected', false);
                 state.selectedNode = null;
+                bumpGraphStyles();
             }
             document.getElementById('info').classList.remove('visible');
         }
@@ -4441,35 +4637,16 @@
             state.edgeFilters.clear();
             document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
             applyFilters();
-            svg.transition().duration(600).call(zoom.transform, d3.zoomIdentity);
+            frameGraph(600);
             if (state.selectedNode) {
-                node.filter(n => n.id === state.selectedNode.id).classed('selected', false);
                 state.selectedNode = null;
+                bumpGraphStyles();
             }
         }
 
         function fitGraph() {
-            if (!state.graph.nodes.length) return;
-            const xs = state.graph.nodes.map(n => n.x);
-            const ys = state.graph.nodes.map(n => n.y);
-            const minX = Math.min(...xs), maxX = Math.max(...xs);
-            const minY = Math.min(...ys), maxY = Math.max(...ys);
-            const w = Math.max(maxX - minX, 100);
-            const h = Math.max(maxY - minY, 100);
-            const sidebar = document.getElementById('sidebar');
-            const info = document.getElementById('info');
-            const sidebarW = sidebar && !sidebar.classList.contains('collapsed')
-                ? sidebar.offsetWidth : 0;
-            const infoW = info && info.classList.contains('visible')
-                ? info.offsetWidth : 0;
-            const visibleW = Math.max(width - sidebarW - infoW, 200);
-            const scale = Math.min(visibleW / (w + 200), height / (h + 200), 1.5);
-            const cx = sidebarW + visibleW / 2;
-            const cy = height / 2;
-            const tx = cx - (minX + w / 2) * scale;
-            const ty = cy - (minY + h / 2) * scale;
-            svg.transition().duration(600).call(zoom.transform,
-                d3.zoomIdentity.translate(tx, ty).scale(scale));
+            if (!Graph || !state.graph.nodes.length) return;
+            frameGraph(600);
         }
 
         // ─── Tools ──────────────────────────────────────────
@@ -5009,10 +5186,8 @@
         window.addEventListener('resize', () => {
             width = document.getElementById('container').clientWidth;
             height = document.getElementById('container').clientHeight;
-            svg.attr('width', width).attr('height', height);
-            if (state.perfMode) return;
-            simulation.force('center', d3.forceCenter(width / 2, height / 2));
-            simulation.alpha(0.3).restart();
+            if (Graph) Graph.width(width).height(height);
+            if (bloomPass) bloomPass.setSize(width, height);
         });
 
         document.addEventListener('keydown', e => {
