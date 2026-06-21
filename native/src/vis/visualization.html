@@ -658,6 +658,40 @@
             font-family: 'JetBrains Mono', monospace;
         }
 
+        /* ─── View switcher ──────────────────────────────────── */
+
+        .view-chips {
+            display: flex;
+            gap: 6px;
+        }
+
+        .view-chip {
+            flex: 1;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            color: var(--text-muted);
+            padding: 7px 4px;
+            border-radius: 6px;
+            font-size: 10px;
+            font-weight: 600;
+            cursor: pointer;
+            font-family: inherit;
+            text-align: center;
+            letter-spacing: 0.5px;
+            transition: border-color 0.15s, background 0.15s, color 0.15s;
+        }
+
+        .view-chip:hover {
+            background: var(--bg-hover);
+            color: var(--text);
+        }
+
+        .view-chip.active {
+            border-color: var(--accent);
+            background: rgba(34, 211, 238, 0.12);
+            color: var(--accent);
+        }
+
         /* ─── Tools ─────────────────────────────────────────── */
 
         .tool-tabs {
@@ -2373,12 +2407,315 @@
             background-clip: initial;
             color: var(--text);
         }
+
+        /* ─── Canvas overlays: legend, gizmo, nav/breadcrumb ─── */
+
+        .canvas-overlay {
+            position: absolute;
+            z-index: 8;
+            background: rgba(15, 15, 17, 0.72);
+            backdrop-filter: blur(16px);
+            border: 1px solid var(--border-soft);
+            border-radius: 10px;
+            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
+        }
+
+        /* Legend — bottom-left, decodes node colours and doubles as a type filter. */
+        #legend {
+            left: 16px;
+            bottom: 16px;
+            width: 178px;
+            padding: 6px;
+            font-family: 'Inter', sans-serif;
+            transition: opacity 0.2s, transform 0.2s;
+        }
+
+        #legend.is-collapsed .legend-body {
+            display: none;
+        }
+
+        .legend-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 4px 6px 6px;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .legend-head .label {
+            font-size: 9px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1.2px;
+            color: var(--text-muted);
+        }
+
+        .legend-head .chevron {
+            width: 12px;
+            height: 12px;
+            color: var(--text-dim);
+            transition: transform 0.2s;
+        }
+
+        #legend.is-collapsed .legend-head .chevron {
+            transform: rotate(-90deg);
+        }
+
+        .legend-body {
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
+            max-height: 42vh;
+            overflow-y: auto;
+        }
+
+        .legend-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 4px 6px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 11px;
+            color: var(--text-muted);
+            transition: background 0.12s, color 0.12s, opacity 0.12s;
+        }
+
+        .legend-row:hover {
+            background: rgba(255, 255, 255, 0.04);
+            color: var(--text);
+        }
+
+        .legend-row.muted {
+            opacity: 0.38;
+        }
+
+        .legend-row .swatch {
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            flex-shrink: 0;
+            box-shadow: 0 0 6px currentColor;
+        }
+
+        .legend-row .name {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .legend-row .count {
+            color: var(--text-dim);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+        }
+
+        .legend-hint {
+            padding: 6px 6px 2px;
+            font-size: 9px;
+            color: var(--text-dim);
+            letter-spacing: 0.2px;
+        }
+
+        /* Axis gizmo — bottom-right, shows current camera orientation. */
+        #axis-gizmo {
+            right: 16px;
+            bottom: 16px;
+            width: 72px;
+            height: 72px;
+            padding: 0;
+            pointer-events: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #axis-gizmo svg {
+            width: 100%;
+            height: 100%;
+            overflow: visible;
+        }
+
+        /* Nav / breadcrumb bar — top centre, under the title. */
+        #navbar {
+            left: 50%;
+            top: 56px;
+            transform: translateX(-50%);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 6px;
+            max-width: min(70vw, 760px);
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s;
+        }
+
+        #navbar.visible {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .nav-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 26px;
+            height: 26px;
+            flex-shrink: 0;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-soft);
+            border-radius: 6px;
+            color: var(--text-muted);
+            cursor: pointer;
+            transition: background 0.12s, color 0.12s, opacity 0.12s;
+        }
+
+        .nav-btn:hover:not(:disabled) {
+            background: var(--bg-hover);
+            color: var(--accent);
+        }
+
+        .nav-btn:disabled {
+            opacity: 0.3;
+            cursor: default;
+        }
+
+        .nav-btn svg {
+            width: 13px;
+            height: 13px;
+        }
+
+        .crumbs {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+            overflow: hidden;
+            font-size: 11px;
+        }
+
+        .crumb {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 4px 8px;
+            border-radius: 6px;
+            color: var(--text-muted);
+            cursor: pointer;
+            white-space: nowrap;
+            max-width: 160px;
+            font-family: 'JetBrains Mono', monospace;
+            transition: background 0.12s, color 0.12s;
+        }
+
+        .crumb .name {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .crumb:hover {
+            background: var(--bg-hover);
+            color: var(--text);
+        }
+
+        .crumb.current {
+            color: var(--accent);
+        }
+
+        .crumb .swatch {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+
+        .crumb-sep {
+            color: var(--text-dim);
+            flex-shrink: 0;
+            font-size: 11px;
+        }
+
+        .nav-exit {
+            flex-shrink: 0;
+            margin-left: 2px;
+            padding: 3px 9px;
+            border-radius: 999px;
+            border: 1px solid var(--border-soft);
+            background: rgba(34, 211, 238, 0.1);
+            color: var(--accent);
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 0.4px;
+            text-transform: uppercase;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        .nav-exit:hover {
+            background: rgba(34, 211, 238, 0.2);
+        }
+
+        /* A faint accent vignette while focus mode is active, signalling the
+           "isolated" state without obscuring the graph. */
+        body.focus-active #container::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            z-index: 4;
+            box-shadow: inset 0 0 160px rgba(34, 211, 238, 0.07);
+        }
+
+        body.perf-mode #axis-gizmo,
+        body.perf-mode #legend .legend-row .swatch,
+        body.perf-mode .crumb .swatch {
+            box-shadow: none;
+        }
     </style>
 </head>
 
 <body>
     <div id="container">
         <div id="graph-3d"></div>
+
+        <!-- Navigation / breadcrumb bar (visible while exploring a node) -->
+        <div id="navbar" class="canvas-overlay">
+            <button class="nav-btn" id="nav-back" title="Back (Backspace)" disabled>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M15 18l-6-6 6-6" />
+                </svg>
+            </button>
+            <button class="nav-btn" id="nav-forward" title="Forward (Shift+Backspace)" disabled>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M9 18l6-6-6-6" />
+                </svg>
+            </button>
+            <div class="crumbs" id="nav-crumbs"></div>
+            <button class="nav-exit" id="nav-exit" title="Exit focus (Esc)">Exit focus</button>
+        </div>
+
+        <!-- Colour legend / quick type filter -->
+        <div id="legend" class="canvas-overlay">
+            <div class="legend-head" id="legend-head">
+                <span class="label">Legend</span>
+                <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                    stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M6 9l6 6 6-6" />
+                </svg>
+            </div>
+            <div class="legend-body" id="legend-body"></div>
+            <div class="legend-hint">Click a type to filter</div>
+        </div>
+
+        <!-- Camera orientation gizmo -->
+        <div id="axis-gizmo" class="canvas-overlay">
+            <svg viewBox="-40 -40 80 80" id="gizmo-svg"></svg>
+        </div>
 
         <div class="header">
             <h1>Knowledge Graph</h1>
@@ -2648,6 +2985,16 @@
                 </div>
             </div>
 
+            <div class="section" data-section="views">
+                <div class="section-body" style="padding:8px 20px 4px">
+                    <div class="view-chips">
+                        <button class="view-chip" data-view="xy">XY</button>
+                        <button class="view-chip" data-view="xz">XZ</button>
+                        <button class="view-chip" data-view="yz">YZ</button>
+                        <button class="view-chip active" data-view="3d">3D</button>
+                    </div>
+                </div>
+            </div>
             <div class="sidebar-footer">
                 <button id="reset">Reset View</button>
                 <button id="fit">Fit Graph</button>
@@ -2803,11 +3150,22 @@
             chatInFlight: false,
             chatHistory: [],
             pathSource: null,
-            pathMode: false
+            pathMode: false,
+            // Focus mode: isolate a node + its neighbourhood, dim the rest.
+            focusNode: null,        // id of the focused node (null = off)
+            focusSet: new Set(),    // node ids kept bright while focused
+            // Navigation history (visited node ids) + cursor for back/forward.
+            history: [],
+            historyIndex: -1,
+            suppressHistory: false, // set while replaying history, to avoid re-recording
+            suppressFocusReanchor: false, // set while neighbour-stepping, to keep the anchor
+            neighborCursor: -1,     // index used by Tab/Shift+Tab neighbour stepping
+            neighborOf: null,       // node id the cursor belongs to
+            _labelDist: 340         // world distance beyond which labels auto-hide
         };
 
         // The 3d-force-graph instance and its post-processing handles.
-        let Graph, bloomPass, width, height, selectionRing;
+        let Graph, bloomPass, width, height, selectionRing, boundaryCube;
         let _glowTex, _ringTex;
         // Highlight sets re-evaluated by the node/link style accessors.
         state.highlightNodes = new Set();
@@ -2994,8 +3352,10 @@
             buildNodeFilterChips();
             buildEdgeFilterChips();
             buildEdgeBreakdown();
+            buildLegend();
             renderIndexStats();
             createGraph();
+            wireNav();
 
             document.getElementById('loading').style.display = 'none';
             document.getElementById('sidebar').classList.remove('pending');
@@ -3016,10 +3376,9 @@
             document.getElementById('info-close').addEventListener('click', () => {
                 document.getElementById('info').classList.remove('visible');
                 exitPathMode();
-                if (state.selectedNode) {
-                    state.selectedNode = null;
-                    bumpGraphStyles();
-                }
+                state.selectedNode = null;
+                exitFocus();
+                bumpGraphStyles();
             });
         }
 
@@ -3655,6 +4014,7 @@
         function wireSidebarSections() {
             document.querySelectorAll('.section').forEach(sec => {
                 const header = sec.querySelector('.section-header');
+                if (!header) return;
                 header.addEventListener('click', () => sec.classList.toggle('collapsed'));
             });
         }
@@ -3686,6 +4046,13 @@
         function wireFooter() {
             document.getElementById('reset').addEventListener('click', resetView);
             document.getElementById('fit').addEventListener('click', fitGraph);
+            document.querySelectorAll('.view-chip').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    document.querySelectorAll('.view-chip').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    setView(btn.dataset.view);
+                });
+            });
         }
 
         function wireFilterActions() {
@@ -3800,6 +4167,239 @@
                 return !edgeMatches(e);
             };
             bumpGraphStyles();
+            syncLegend();
+        }
+
+        // ─── Focus mode (isolate a node's neighbourhood) ─────
+
+        // Set of node ids directly connected to `id` (1-hop).
+        function neighborIdsOf(id) {
+            const ids = new Set();
+            state.graph.edges.forEach(e => {
+                const sId = e.source.id || e.source;
+                const tId = e.target.id || e.target;
+                if (sId === id) ids.add(tId);
+                else if (tId === id) ids.add(sId);
+            });
+            return ids;
+        }
+
+        // Anchor focus on a node: keep it + its neighbours bright, dim the rest.
+        // Styling is applied by the caller's bumpGraphStyles().
+        function enterFocus(d) {
+            state.focusNode = d.id;
+            const set = neighborIdsOf(d.id);
+            set.add(d.id);
+            state.focusSet = set;
+            document.body.classList.add('focus-active');
+        }
+
+        // Drop the focus dimming. Does not touch the selection or history.
+        function exitFocus() {
+            state.focusNode = null;
+            state.focusSet = new Set();
+            document.body.classList.remove('focus-active');
+        }
+
+        // ─── Navigation history (back / forward / breadcrumb) ─
+
+        function recordHistory(id) {
+            // Stepping onto the same node we're already on is a no-op.
+            if (state.history[state.historyIndex] === id) return;
+            // Drop any forward entries before branching off.
+            if (state.historyIndex < state.history.length - 1) {
+                state.history = state.history.slice(0, state.historyIndex + 1);
+            }
+            state.history.push(id);
+            state.historyIndex = state.history.length - 1;
+        }
+
+        function navHistory(delta) {
+            const i = state.historyIndex + delta;
+            if (i < 0 || i >= state.history.length) return;
+            state.historyIndex = i;
+            const node = state.nodeById.get(state.history[i]);
+            if (!node) return;
+            state.suppressHistory = true;   // replaying — don't re-record
+            handleClick(null, node);        // re-anchors focus on the historical node
+            focusNode(node);
+            state.suppressHistory = false;
+        }
+
+        // Tab / Shift+Tab: step the selection through the focus anchor's
+        // neighbours without moving the focus anchor itself.
+        function cycleNeighbor(dir) {
+            const anchorId = state.focusNode || (state.selectedNode && state.selectedNode.id);
+            if (!anchorId) return;
+            const list = [...neighborIdsOf(anchorId)]
+                .map(id => state.nodeById.get(id))
+                .filter(n => n && !(state.nodeHidden && state.nodeHidden(n)))
+                .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+            if (!list.length) return;
+            if (state.neighborOf !== anchorId) { state.neighborOf = anchorId; state.neighborCursor = -1; }
+            state.neighborCursor = (state.neighborCursor + dir + list.length) % list.length;
+            const next = list[state.neighborCursor];
+            if (!next) return;
+            // Select + fly, but keep the focus neighbourhood anchored on `anchorId`.
+            state.suppressHistory = true;
+            state.suppressFocusReanchor = true;
+            handleClick(null, next);
+            focusNode(next);
+            state.suppressFocusReanchor = false;
+            state.suppressHistory = false;
+        }
+
+        function updateNavbar() {
+            const bar = document.getElementById('navbar');
+            const crumbs = document.getElementById('nav-crumbs');
+            const back = document.getElementById('nav-back');
+            const fwd = document.getElementById('nav-forward');
+            if (!bar) return;
+            const active = state.historyIndex >= 0 && state.history.length > 0;
+            bar.classList.toggle('visible', active);
+            if (!active) { crumbs.innerHTML = ''; return; }
+            back.disabled = state.historyIndex <= 0;
+            fwd.disabled = state.historyIndex >= state.history.length - 1;
+
+            const cur = state.historyIndex;
+            const start = Math.max(0, cur - 3);
+            let html = '';
+            if (start > 0) html += '<span class="crumb-sep">…</span>';
+            for (let i = start; i <= cur; i++) {
+                const n = state.nodeById.get(state.history[i]);
+                if (!n) continue;
+                if (i > start || start > 0) html += '<span class="crumb-sep">›</span>';
+                const c = config.getColor(n.group);
+                html += `<span class="crumb${i === cur ? ' current' : ''}" data-idx="${i}" title="${escapeHtml(n.name)}">
+                    <span class="swatch" style="background:${c}"></span>
+                    <span class="name">${escapeHtml(truncateName(n.name))}</span>
+                </span>`;
+            }
+            crumbs.innerHTML = html;
+            crumbs.querySelectorAll('.crumb').forEach(el => {
+                el.addEventListener('click', () => navHistory(parseInt(el.dataset.idx, 10) - state.historyIndex));
+            });
+        }
+
+        function wireNav() {
+            const back = document.getElementById('nav-back');
+            const fwd = document.getElementById('nav-forward');
+            const exit = document.getElementById('nav-exit');
+            if (back) back.addEventListener('click', () => navHistory(-1));
+            if (fwd) fwd.addEventListener('click', () => navHistory(1));
+            if (exit) exit.addEventListener('click', () => { clearSelection(); frameGraph(700); });
+        }
+
+        // ─── On-canvas legend (doubles as a type filter) ─────
+
+        function buildLegend() {
+            const body = document.getElementById('legend-body');
+            const head = document.getElementById('legend-head');
+            if (!body) return;
+            const counts = new Map();
+            state.graph.nodes.forEach(n => counts.set(n.group, (counts.get(n.group) || 0) + 1));
+            const types = [...counts.keys()].sort((a, b) => counts.get(b) - counts.get(a));
+            if (!types.length) { document.getElementById('legend').style.display = 'none'; return; }
+            body.innerHTML = types.map(t => {
+                const c = config.getColor(t);
+                return `<div class="legend-row" data-type="${escapeHtml(t)}" title="Filter to ${escapeHtml(t)}">
+                    <span class="swatch" style="background:${c};color:${c}"></span>
+                    <span class="name">${escapeHtml(t)}</span>
+                    <span class="count">${counts.get(t)}</span>
+                </div>`;
+            }).join('');
+            body.querySelectorAll('.legend-row').forEach(row => {
+                row.addEventListener('click', () => toggleTypeFilter(row.dataset.type));
+            });
+            if (head) head.addEventListener('click', () => {
+                document.getElementById('legend').classList.toggle('is-collapsed');
+            });
+            syncLegend();
+        }
+
+        // Toggle a node-type filter, keeping the sidebar chips + legend in sync.
+        function toggleTypeFilter(type) {
+            if (state.nodeFilters.has(type)) state.nodeFilters.delete(type);
+            else state.nodeFilters.add(type);
+            document.querySelectorAll('#node-filter .filter-chip').forEach(chip => {
+                chip.classList.toggle('active', state.nodeFilters.has(chip.dataset.type));
+            });
+            applyFilters();
+            refreshSuggestions(document.getElementById('search').value);
+        }
+
+        // Mute legend rows whose type is currently filtered out.
+        function syncLegend() {
+            const active = state.nodeFilters;
+            document.querySelectorAll('.legend-row').forEach(row => {
+                const on = active.size === 0 || active.has(row.dataset.type);
+                row.classList.toggle('muted', !on);
+            });
+        }
+
+        // ─── Orientation gizmo + distance-adaptive labels ────
+
+        const GIZMO_AXES = [
+            { v: [1, 0, 0], color: '#ff5d5d', label: 'X' },
+            { v: [0, 1, 0], color: '#5dff8f', label: 'Y' },
+            { v: [0, 0, 1], color: '#5d9dff', label: 'Z' },
+        ];
+
+        function startOverlayLoop() {
+            const svg = document.getElementById('gizmo-svg');
+            let frame = 0;
+            const v = new THREE.Vector3();
+            const tick = () => {
+                requestAnimationFrame(tick);
+                if (!Graph) return;
+                const cam = Graph.camera();
+                if (!cam) return;
+                frame++;
+                // Gizmo: rotate the world axes into the camera's view frame so the
+                // little triad mirrors how the graph is oriented on screen.
+                if (svg && frame % 2 === 0) {
+                    cam.updateMatrixWorld();
+                    const q = cam.quaternion.clone().invert();
+                    const R = 26;
+                    const drawn = GIZMO_AXES.map(a => {
+                        v.set(a.v[0], a.v[1], a.v[2]).applyQuaternion(q);
+                        return { color: a.color, label: a.label, x: v.x, y: v.y, z: v.z };
+                    }).sort((a, b) => a.z - b.z); // painter's order: far axes first
+                    let s = '';
+                    for (const a of drawn) {
+                        const x = (a.x * R).toFixed(1);
+                        const y = (-a.y * R).toFixed(1);
+                        const op = (0.4 + 0.6 * ((a.z + 1) / 2)).toFixed(2);
+                        s += `<line x1="0" y1="0" x2="${x}" y2="${y}" stroke="${a.color}" stroke-width="2.4" stroke-linecap="round" opacity="${op}"/>`;
+                        s += `<circle cx="${x}" cy="${y}" r="3.2" fill="${a.color}" opacity="${op}"/>`;
+                        s += `<text x="${(a.x * R * 1.34).toFixed(1)}" y="${(-a.y * R * 1.34 + 3.4).toFixed(1)}" fill="${a.color}" font-size="9.5" font-family="JetBrains Mono, monospace" text-anchor="middle" opacity="${op}">${a.label}</text>`;
+                    }
+                    svg.innerHTML = s;
+                }
+                // Distance-adaptive labels: hide labels for nodes far from the
+                // camera so a zoomed-out view stays clean and they reappear as you
+                // move in. Throttled; skipped when labels are globally disabled.
+                if (!state.skipLabels && frame % 8 === 0) updateAdaptiveLabels(cam);
+            };
+            requestAnimationFrame(tick);
+        }
+
+        function updateAdaptiveLabels(cam) {
+            const px = cam.position.x, py = cam.position.y, pz = cam.position.z;
+            const D = state._labelDist || 340;
+            const D2 = D * D;
+            const focusOn = !!state.focusNode;
+            state.graph.nodes.forEach(n => {
+                const s = n.__nodeLabel;
+                if (!s) return;
+                if (focusOn) {
+                    // While focused, always label the neighbourhood; hide the rest.
+                    s.visible = state.focusSet.has(n.id);
+                    return;
+                }
+                const dx = (n.x || 0) - px, dy = (n.y || 0) - py, dz = (n.z || 0) - pz;
+                s.visible = (dx * dx + dy * dy + dz * dz) < D2;
+            });
         }
 
         // ─── Search ─────────────────────────────────────────
@@ -3933,13 +4533,15 @@
             // Wait one frame so any panel toggles (info open/close) commit their
             // layout before the camera flies.
             requestAnimationFrame(() => {
+                // Centre the camera on the node at a consistent, comfortable
+                // distance. Isolation is conveyed by the focus dimming, not by the
+                // camera — fitting a scattered neighbourhood tends to either
+                // over-zoom (tiny clusters bloom out) or under-zoom (sparse, empty
+                // view), so we keep the framing simple and predictable.
                 const x = +n.x || 0, y = +n.y || 0, z = +n.z || 0;
-                // Approach straight along +Z so the flat X/Y plane keeps facing the
-                // camera (approaching along the origin→node ray would put the camera
-                // in-plane and show the graph edge-on).
-                const distance = 150;
+                const d = 150 / Math.sqrt(3);
                 Graph.cameraPosition(
-                    { x, y, z: z + distance },
+                    { x: x + d, y: y + d, z: z + d },
                     { x, y, z },
                     800);
             });
@@ -3956,11 +4558,18 @@
         }
         function linkColorFor(e) {
             if (state.highlightLinks.has(e)) return '#ffffff';
+            // In focus mode, links not wholly inside the focused neighbourhood
+            // recede to a near-background grey so the local structure stands out.
+            if (state.focusNode) {
+                const sId = e.source.id || e.source;
+                const tId = e.target.id || e.target;
+                if (!(state.focusSet.has(sId) && state.focusSet.has(tId))) return '#191920';
+            }
             return config.getRelColor(e.rel);
         }
 
         function nodeRadiusFor(n) {
-            return (config.nodeRadius[n.group] || 6) * 0.55;
+            return (config.nodeRadius[n.group] || 6) * 0.8;
         }
 
         // A soft circular glow texture (white radial gradient → transparent),
@@ -4062,9 +4671,9 @@
                     blending: THREE.AdditiveBlending,
                     depthWrite: false,
                 }));
-                halo.scale.setScalar(radius * 0.5);
+                halo.scale.setScalar(radius * 0.8);
                 n.__nodeHalo = halo;
-                n.__haloBase = radius * 5;
+                n.__haloBase = radius * 4;
                 group.add(halo);
             }
 
@@ -4084,32 +4693,38 @@
                         s.material.map.needsUpdate = true;
                     }
                     s.position.set(0, radius + 6, 0);
+                    n.__nodeLabel = s;
                     group.add(s);
                 }
             }
             return group;
         }
 
-        // A d3-force that flattens the layout onto the X/Y plane: it springs each
-        // node's Z toward 0 and hard-clamps |z| to a fraction of the current X/Y
-        // spread. A *proportional* bound (not absolute) keeps the slab consistently
-        // thin whether the graph is tiny or huge — so it always reads as a plane
-        // facing the camera with a little depth, never a 3D ball.
-        function makeZBoundForce(fraction) {
+        // A d3-force that constrains nodes' Z extent to half of the Y range
+        // so the graph reads as a box half as deep as it is tall. Nodes are
+        // initialized with random Z offsets so they naturally spread into the
+        // volume; the charge force handles inter-node spacing in 3D.
+        function makeZBoundForce() {
             let nodes = [];
             const force = (alpha) => {
-                let sum = 0;
-                for (const n of nodes) sum += (n.x || 0) * (n.x || 0) + (n.y || 0) * (n.y || 0);
-                const rms = nodes.length ? Math.sqrt(sum / nodes.length) : 100;
-                const maxZ = Math.max(rms * fraction, 15);
-                const k = alpha * 0.85;
+                let minY = Infinity, maxY = -Infinity;
                 for (const n of nodes) {
-                    n.vz = (n.vz || 0) - (n.z || 0) * k;
+                    const y = n.y || 0;
+                    if (y < minY) minY = y;
+                    if (y > maxY) maxY = y;
+                }
+                const maxZ = Math.max((maxY - minY) / 2, 15);
+                for (const n of nodes) {
                     if (n.z > maxZ) { n.z = maxZ; if (n.vz > 0) n.vz = 0; }
                     else if (n.z < -maxZ) { n.z = -maxZ; if (n.vz < 0) n.vz = 0; }
                 }
             };
-            force.initialize = (n) => { nodes = n; };
+            force.initialize = (n) => {
+                nodes = n;
+                for (const node of nodes) {
+                    node.z = (Math.random() - 0.5) * 30;
+                }
+            };
             return force;
         }
 
@@ -4126,8 +4741,8 @@
                 .nodeVisibility(n => !(state.nodeHidden && state.nodeHidden(n)))
                 .nodeThreeObject(makeNodeObject)
                 .linkColor(linkColorFor)
-                .linkOpacity(0.55)
-                .linkWidth(0)
+                .linkOpacity(0.35)
+                .linkWidth(0.4)
                 .linkVisibility(e => !(state.linkHidden && state.linkHidden(e)))
                 .linkDirectionalArrowLength(state.perfMode ? 0 : 3)
                 .linkDirectionalArrowRelPos(1)
@@ -4141,24 +4756,17 @@
                 .width(width)
                 .height(height);
 
-            // Approximate the previous layout feel (tighter clustering). Charge is
-            // pushed harder so the X/Y plane spreads out to fill the screen now
-            // that the Z axis is compressed.
             const charge = Graph.d3Force('charge');
             if (charge) charge.strength(state.perfMode ? -60 : -120);
             const linkForce = Graph.d3Force('link');
             if (linkForce) linkForce.distance(45);
-            // Compress (but don't crush) the Z axis into a slab so the X/Y plane
-            // faces the camera while keeping some depth/parallax.
-            Graph.d3Force('zBound', makeZBoundForce(0.14));
+            Graph.d3Force('zBound', makeZBoundForce());
 
             // Subtle gradient backdrop (in-scene, so it sits behind the graph and
             // reads as soft ambient light instead of a flat black void).
             Graph.scene().background = backgroundTexture();
 
-            // Very light fog only — with a flat slab all nodes sit at a similar
-            // depth, so heavy fog would just dim the whole scene.
-            Graph.scene().fog = new THREE.FogExp2(0x09090b, 0.0002);
+            Graph.scene().fog = new THREE.FogExp2(0x09090b, 0.001);
 
             // Cinematic bloom — skipped in perf mode to protect framerate. The
             // post-processing composer is created lazily on the first render, so
@@ -4167,9 +4775,10 @@
                 const addBloom = () => {
                     const composer = Graph.postProcessingComposer && Graph.postProcessingComposer();
                     if (!composer) { requestAnimationFrame(addBloom); return; }
-                    // strength, radius, threshold — a moderate threshold keeps the
-                    // glow tasteful (bright cores bloom; dense overlaps don't wash out).
-                    bloomPass = new UnrealBloomPass(new THREE.Vector2(width, height), 0.6, 0.5, 0.2);
+                    // strength, radius, threshold — a higher threshold + lower
+                    // strength keeps the glow tasteful (bright cores bloom; dense or
+                    // close-up clusters don't wash the whole view to white).
+                    bloomPass = new UnrealBloomPass(new THREE.Vector2(width, height), 0.45, 0.5, 0.32);
                     composer.addPass(bloomPass);
                 };
                 addBloom();
@@ -4198,38 +4807,338 @@
             // Frame the bulk of the graph once the layout settles. Use frameGraph
             // (percentile-based) rather than zoomToFit so a few far-flung outlier
             // nodes don't force the camera miles away.
-            const autoFrame = () => { if (!state._didFit) { state._didFit = true; frameGraph(900); } };
+            const autoFrame = () => {
+                // Recompute fog/label cues on every settle (cheap), but only
+                // fly the camera the first time.
+                applyDepthCues();
+                if (state._didFit) return;
+                state._didFit = true;
+                frameGraph(900);
+                if (!state.perfMode) updateBoundaryCube();
+            };
             Graph.onEngineStop(autoFrame);
             // Fallbacks: settle may take a moment, so frame early too.
             setTimeout(autoFrame, 2500);
             setTimeout(autoFrame, 5000);
+
+            // Drives the orientation gizmo + distance-adaptive labels.
+            startOverlayLoop();
         }
 
-        // Camera framing: look straight down +Z at the X/Y plane and fit the
-        // 90th-percentile X/Y radius (ignoring far outliers) so the plane fills
-        // the viewport and every node sits close to the camera.
-        function frameGraph(ms = 600) {
-            if (!Graph) return;
+        // Centroid + a robust (90th-percentile) radius of the laid-out graph,
+        // ignoring far-flung outliers. Shared by camera framing and depth cues.
+        function computeExtent() {
             const nodes = state.graph.nodes.filter(n => Number.isFinite(n.x));
-            if (!nodes.length) return;
+            if (!nodes.length) return null;
             let cx = 0, cy = 0, cz = 0;
             nodes.forEach(n => { cx += n.x; cy += n.y; cz += n.z || 0; });
             cx /= nodes.length; cy /= nodes.length; cz /= nodes.length;
-            // Frame on the X/Y spread only — Z is a thin slab we look along.
             const dists = nodes
-                .map(n => Math.hypot(n.x - cx, n.y - cy))
+                .map(n => Math.hypot(n.x - cx, n.y - cy, (n.z || 0) - cz))
                 .sort((a, b) => a - b);
             const pct = dists[Math.floor(dists.length * 0.9)] || dists[dists.length - 1] || 120;
-            const radius = Math.max(pct, 40);
-            // Account for viewport aspect so wide screens still fit the X spread.
+            return { cx, cy, cz, radius: Math.max(pct, 40) };
+        }
+
+        // Fog and label-distance must track the graph's actual size. The fog was
+        // originally a fixed exponential density tuned for a small graph, which
+        // blacked out everything on a large one ("not enough light"). Scale the
+        // density to the framing distance so depth reads consistently at any size.
+        function applyDepthCues() {
+            const ext = computeExtent();
+            if (!ext) return;
+            state._graphRadius = ext.radius;
+            // Labels visible within ~half the graph radius of the camera; never
+            // below the small-graph default so tiny graphs keep their labels.
+            state._labelDist = Math.max(340, ext.radius * 0.5);
+            const fog = Graph && Graph.scene().fog;
+            if (fog) {
+                // Gentle exponential fade keyed to size; capped at the original
+                // 0.001 so small graphs look unchanged.
+                fog.density = Math.min(0.001, 0.16 / ext.radius);
+            }
+        }
+
+        // Snap the camera to a predefined view axis.
+        // axis: 'xy' (top-down), 'xz' (front), 'yz' (side), '3d' (isometric)
+        function setView(axis, ms = 600) {
+            if (!Graph) return;
+            const ext = computeExtent();
+            if (!ext) return;
+            const { cx, cy, cz, radius } = ext;
             const fov = (Graph.camera().fov || 50) * Math.PI / 180;
             const aspect = (width && height) ? (width / height) : 1.6;
             const fitFov = aspect >= 1 ? fov : 2 * Math.atan(Math.tan(fov / 2) * aspect);
-            const dist = (radius * 1.15) / Math.tan(fitFov / 2);
-            Graph.cameraPosition(
-                { x: cx, y: cy, z: cz + dist },
-                { x: cx, y: cy, z: cz },
-                ms);
+            const dist = (radius * 1.05) / Math.tan(fitFov / 2);
+            let pos;
+            switch (axis) {
+                case 'xy': pos = { x: cx, y: cy, z: cz + dist }; break;
+                case 'xz': pos = { x: cx, y: cy - dist, z: cz }; break;
+                case 'yz': pos = { x: cx + dist, y: cy, z: cz }; break;
+                default: {
+                    const d = dist / Math.sqrt(3);
+                    pos = { x: cx + d, y: cy + d, z: cz + d };
+                }
+            }
+            Graph.cameraPosition(pos, { x: cx, y: cy, z: cz }, ms);
+        }
+
+        // Frame the graph at the default 3D isometric view.
+        function frameGraph(ms = 600) { setView('3d', ms); }
+
+        // Dashed wireframe cube showing the graph bounding box as spatial reference.
+        function makeAxisLabel(text, hex) {
+            const c = document.createElement('canvas');
+            c.width = 64; c.height = 64;
+            const ctx = c.getContext('2d');
+            ctx.clearRect(0, 0, 64, 64);
+            ctx.font = 'bold 44px Inter, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.shadowColor = 'rgba(0,0,0,0.6)';
+            ctx.shadowBlur = 6;
+            ctx.fillStyle = hex;
+            ctx.fillText(text, 32, 34);
+            ctx.shadowBlur = 0;
+            ctx.fillStyle = '#fff';
+            ctx.fillText(text, 32, 34);
+            const tex = new THREE.CanvasTexture(c);
+            tex.minFilter = THREE.LinearFilter;
+            tex.generateMipmaps = false;
+            const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, depthTest: false, sizeAttenuation: true });
+            const sprite = new THREE.Sprite(mat);
+            sprite.scale.setScalar(14);
+            return sprite;
+        }
+
+        // Draw a single seven-segment digit into ctx within the box (x,y,bw,bh),
+        // glowing in `hex`; off-segments are drawn very faintly for the classic
+        // digital-display look.
+        function drawSevenSeg(ctx, digit, x, y, bw, bh, hex) {
+            const map = {
+                0: 'abcdef', 1: 'bc', 2: 'abged', 3: 'abgcd', 4: 'fgbc',
+                5: 'afgcd', 6: 'afgecd', 7: 'abc', 8: 'abcdefg', 9: 'abcdfg',
+            };
+            const on = new Set((map[digit] || '').split(''));
+            const t = Math.min(bw, bh) * 0.16;     // segment thickness
+            const g = t * 0.34;                     // gap between segments
+            const midY = y + bh / 2;
+            // [orientation, x, y, length] for each segment (h = horizontal, v = vertical)
+            const segs = {
+                a: ['h', x + g, y, bw - 2 * g],
+                g: ['h', x + g, midY - t / 2, bw - 2 * g],
+                d: ['h', x + g, y + bh - t, bw - 2 * g],
+                f: ['v', x, y + g, bh / 2 - 1.5 * g],
+                b: ['v', x + bw - t, y + g, bh / 2 - 1.5 * g],
+                e: ['v', x, midY + g / 2, bh / 2 - 1.5 * g],
+                c: ['v', x + bw - t, midY + g / 2, bh / 2 - 1.5 * g],
+            };
+            const cap = (px, py, len, horiz) => {
+                // A tapered capsule so segments look like a real LCD font.
+                const th = t, half = th / 2;
+                ctx.beginPath();
+                if (horiz) {
+                    ctx.moveTo(px, py + half);
+                    ctx.lineTo(px + half, py);
+                    ctx.lineTo(px + len - half, py);
+                    ctx.lineTo(px + len, py + half);
+                    ctx.lineTo(px + len - half, py + th);
+                    ctx.lineTo(px + half, py + th);
+                } else {
+                    ctx.moveTo(px + half, py);
+                    ctx.lineTo(px + th, py + half);
+                    ctx.lineTo(px + th, py + len - half);
+                    ctx.lineTo(px + half, py + len);
+                    ctx.lineTo(px, py + len - half);
+                    ctx.lineTo(px, py + half);
+                }
+                ctx.closePath();
+                ctx.fill();
+            };
+            for (const key of Object.keys(segs)) {
+                const [orient, sx, sy, len] = segs[key];
+                const lit = on.has(key);
+                ctx.save();
+                if (lit) {
+                    ctx.fillStyle = hex;
+                    ctx.shadowColor = hex;
+                    ctx.shadowBlur = t * 1.4;
+                } else {
+                    ctx.fillStyle = 'rgba(255,255,255,0.05)';
+                    ctx.shadowBlur = 0;
+                }
+                cap(sx, sy, len, orient === 'h');
+                ctx.restore();
+            }
+        }
+
+        // A stylish "digi" label sprite: a glowing seven-segment number inside a
+        // rounded HUD frame, tinted to the face colour. Used to tag cube faces.
+        function makeDigiLabel(num, hex) {
+            const W = 150, H = 190;
+            const c = document.createElement('canvas');
+            c.width = W; c.height = H;
+            const ctx = c.getContext('2d');
+            // Rounded frame + faint panel.
+            const r = 18, pad = 8;
+            ctx.beginPath();
+            ctx.roundRect(pad, pad, W - 2 * pad, H - 2 * pad, r);
+            ctx.fillStyle = 'rgba(9,9,11,0.45)';
+            ctx.fill();
+            ctx.lineWidth = 4;
+            ctx.strokeStyle = hex;
+            ctx.shadowColor = hex;
+            ctx.shadowBlur = 14;
+            ctx.stroke();
+            // The digit, centred with margin for the frame.
+            drawSevenSeg(ctx, num, W * 0.34, H * 0.26, W * 0.32, H * 0.48, hex);
+            const tex = new THREE.CanvasTexture(c);
+            tex.colorSpace = THREE.SRGBColorSpace;
+            tex.minFilter = THREE.LinearFilter;
+            tex.generateMipmaps = false;
+            const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
+            const sprite = new THREE.Sprite(mat);
+            sprite.userData.aspect = W / H;
+            return sprite;
+        }
+
+        function updateBoundaryCube() {
+            if (!Graph) return;
+            const nodes = state.graph.nodes.filter(n => Number.isFinite(n.x));
+            if (!nodes.length) return;
+            let minX = Infinity, maxX = -Infinity;
+            let minY = Infinity, maxY = -Infinity;
+            let minZ = Infinity, maxZ = -Infinity;
+            for (const n of nodes) {
+                const x = n.x || 0, y = n.y || 0, z = n.z || 0;
+                if (x < minX) minX = x; if (x > maxX) maxX = x;
+                if (y < minY) minY = y; if (y > maxY) maxY = y;
+                if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+            }
+            const w = maxX - minX || 1;
+            const h = maxY - minY || 1;
+            const d = maxZ - minZ || 1;
+            const cx = (minX + maxX) / 2;
+            const cy = (minY + maxY) / 2;
+            const cz = (minZ + maxZ) / 2;
+            if (boundaryCube) { Graph.scene().remove(boundaryCube); boundaryCube = null; }
+
+            const group = new THREE.Group();
+
+            // Dashed boundary cube. WebGL ignores LineDashedMaterial.linewidth, so
+            // thin lines can't be thickened — instead each of the 12 edges is drawn
+            // as a row of short cylinders ("dashes") that have real 3D thickness,
+            // plus a sphere at each of the 8 corners so the box reads clearly.
+            const accent = 0x22d3ee;
+            const diag = Math.hypot(w, h, d) || 1;
+            const tubeR = Math.max(0.9, Math.min(6, diag * 0.0028));
+            const cubeMat = new THREE.MeshBasicMaterial({
+                color: accent, transparent: true, opacity: 0.55, depthWrite: false,
+            });
+            // Shared geometries: a unit-height cylinder (scaled per dash) and a
+            // corner sphere — so the whole cube is a handful of geometries.
+            const dashGeo = new THREE.CylinderGeometry(tubeR, tubeR, 1, 6);
+            const cornerGeo = new THREE.SphereGeometry(tubeR * 2.1, 10, 10);
+
+            const corners = [];
+            for (const sx of [-1, 1]) for (const sy of [-1, 1]) for (const sz of [-1, 1]) {
+                corners.push(new THREE.Vector3(cx + sx * w / 2, cy + sy * h / 2, cz + sz * d / 2));
+            }
+            // Edges join corners differing in exactly one axis bit (x=4, y=2, z=1).
+            const edgePairs = [
+                [0, 1], [2, 3], [4, 5], [6, 7], // z
+                [0, 2], [1, 3], [4, 6], [5, 7], // y
+                [0, 4], [1, 5], [2, 6], [3, 7], // x
+            ];
+            const up = new THREE.Vector3(0, 1, 0);
+            const q = new THREE.Quaternion();
+            const dir = new THREE.Vector3();
+            for (const [ai, bi] of edgePairs) {
+                const A = corners[ai], B = corners[bi];
+                dir.subVectors(B, A);
+                const len = dir.length() || 1;
+                dir.normalize();
+                q.setFromUnitVectors(up, dir);
+                // ~30-world-unit cells, clamped so the dash count stays bounded.
+                const nCells = Math.min(24, Math.max(6, Math.round(len / 30)));
+                const cell = len / nCells;
+                const dashLen = cell * 0.6; // 60% dash, 40% gap
+                for (let i = 0; i < nCells; i++) {
+                    const mid = i * cell + dashLen / 2;
+                    const m = new THREE.Mesh(dashGeo, cubeMat);
+                    m.position.copy(A).addScaledVector(dir, mid);
+                    m.quaternion.copy(q);
+                    m.scale.set(1, dashLen, 1);
+                    group.add(m);
+                }
+            }
+            for (const c of corners) {
+                const s = new THREE.Mesh(cornerGeo, cubeMat);
+                s.position.copy(c);
+                group.add(s);
+            }
+
+            // Translucent coloured face planes, each tagged with a glowing
+            // seven-segment "digi" number so the six boundary planes are
+            // individually identifiable.
+            const hw = w / 2, hh = h / 2, hd = d / 2;
+            const faceDefs = [
+                { num: 1, hex: '#22d3ee', pos: [cx + hw, cy, cz], rot: [0, Math.PI / 2, 0], size: [d, h] }, // +X
+                { num: 2, hex: '#c084fc', pos: [cx - hw, cy, cz], rot: [0, -Math.PI / 2, 0], size: [d, h] }, // -X
+                { num: 3, hex: '#4ade80', pos: [cx, cy + hh, cz], rot: [-Math.PI / 2, 0, 0], size: [w, d] }, // +Y
+                { num: 4, hex: '#fbbf24', pos: [cx, cy - hh, cz], rot: [Math.PI / 2, 0, 0], size: [w, d] }, // -Y
+                { num: 5, hex: '#f472b6', pos: [cx, cy, cz + hd], rot: [0, 0, 0], size: [w, h] }, // +Z
+                { num: 6, hex: '#fb923c', pos: [cx, cy, cz - hd], rot: [0, Math.PI, 0], size: [w, h] }, // -Z
+            ];
+            const labelScale = Math.max(16, Math.min(150, Math.min(w, h, d) * 0.18));
+            for (const f of faceDefs) {
+                const plane = new THREE.Mesh(
+                    new THREE.PlaneGeometry(f.size[0], f.size[1]),
+                    new THREE.MeshBasicMaterial({
+                        color: f.hex, transparent: true, opacity: 0.05,
+                        side: THREE.DoubleSide, depthWrite: false,
+                    })
+                );
+                plane.position.set(f.pos[0], f.pos[1], f.pos[2]);
+                plane.rotation.set(f.rot[0], f.rot[1], f.rot[2]);
+                group.add(plane);
+
+                const label = makeDigiLabel(f.num, f.hex);
+                label.position.set(f.pos[0], f.pos[1], f.pos[2]);
+                const a = label.userData.aspect || 0.8;
+                label.scale.set(labelScale * a, labelScale, 1);
+                group.add(label);
+            }
+
+            // Axis indicator at the min corner
+            const origin = new THREE.Vector3(minX, minY, minZ);
+            const axisLen = Math.min(w, h, d) * 0.12;
+            const specs = [
+                { dir: [1, 0, 0], hex: '#ff4444', label: 'X' },
+                { dir: [0, 1, 0], hex: '#44ff44', label: 'Y' },
+                { dir: [0, 0, 1], hex: '#4488ff', label: 'Z' },
+            ];
+            for (const s of specs) {
+                const dir = new THREE.Vector3(s.dir[0], s.dir[1], s.dir[2]);
+                const end = origin.clone().add(dir.clone().multiplyScalar(axisLen));
+                // Line segment
+                const lineGeo = new THREE.BufferGeometry().setFromPoints([origin, end]);
+                const lineMat = new THREE.LineBasicMaterial({ color: s.hex, transparent: true, opacity: 0.85 });
+                group.add(new THREE.Line(lineGeo, lineMat));
+                // Sphere at tip
+                const sphere = new THREE.Mesh(
+                    new THREE.SphereGeometry(axisLen * 0.06, 6, 6),
+                    new THREE.MeshBasicMaterial({ color: s.hex })
+                );
+                sphere.position.copy(end);
+                group.add(sphere);
+                // Text label
+                const label = makeAxisLabel(s.label, s.hex);
+                label.position.copy(end).add(dir.clone().multiplyScalar(axisLen * 0.2));
+                group.add(label);
+            }
+            boundaryCube = group;
+            Graph.scene().add(group);
         }
 
         // Continuous rAF loop driving the selected-node ring + halo pulse.
@@ -4242,18 +5151,22 @@
                 const t = performance.now() * 0.001;
                 const wave = Math.sin(t * 3.2);
                 const pulse = 1 + 0.16 * wave;
-                const base = Math.max((n.__nodeRadius || 4) * 16, 60);
+                // Ring sized to a small multiple of the node radius. (Was 16×,
+                // which — being additive + bloomed — washed the view to white when
+                // the camera was close, e.g. in focus mode.)
+                const base = Math.max((n.__nodeRadius || 4) * 5, 26);
                 selectionRing.position.set(n.x, n.y, n.z || 0);
                 selectionRing.scale.setScalar(base * pulse);
                 selectionRing.material.rotation += 0.03;
-                selectionRing.material.opacity = 0.85 + 0.15 * wave;
+                selectionRing.material.opacity = 0.7 + 0.15 * wave;
                 selectionRing.visible = true;
-                // Breathe the selected node's own halo and core too.
+                // Breathe the selected node's own halo and core too (gently, so the
+                // additive halo doesn't bloom out at close range).
                 if (n.__nodeHalo) {
-                    n.__nodeHalo.scale.setScalar((n.__haloBase || base) * (1 + 0.3 * wave));
+                    n.__nodeHalo.scale.setScalar((n.__haloBase || base) * (1 + 0.2 * wave));
                 }
                 if (n.__nodeCore) {
-                    n.__nodeCore.scale.setScalar(1.6 + 0.3 * wave);
+                    n.__nodeCore.scale.setScalar(1.3 + 0.18 * wave);
                 }
             };
             requestAnimationFrame(tick);
@@ -4263,13 +5176,21 @@
         // change, without rebuilding the whole scene.
         function bumpGraphStyles() {
             if (!Graph) return;
+            const focusOn = !!state.focusNode;
             // Custom node objects own their material, so recolour them directly.
             state.graph.nodes.forEach(n => {
                 if (n.__nodeMat) n.__nodeMat.color.set(nodeColorFor(n));
                 const sel = state.selectedNode && n.id === state.selectedNode.id;
+                // In focus mode, nodes outside the neighbourhood fade into the
+                // background (kept faintly visible so spatial context survives).
+                const dim = focusOn && !state.focusSet.has(n.id);
+                if (n.__nodeMat) n.__nodeMat.opacity = dim ? 0.06 : 0.95;
+                // Dimmed labels hide immediately; otherwise distance owns it (see
+                // updateAdaptiveLabels), so we only force-hide here.
+                if (dim && n.__nodeLabel) n.__nodeLabel.visible = false;
                 if (n.__nodeHalo) {
                     const hot = sel || state.highlightNodes.has(n.id);
-                    n.__nodeHalo.material.opacity = hot ? 0.75 : 0.45;
+                    n.__nodeHalo.material.opacity = dim ? 0 : (hot ? 0.75 : 0.25);
                     // Non-selected halos return to base size; the selected one is
                     // animated by the selection rAF loop.
                     if (!sel && n.__haloBase) n.__nodeHalo.scale.setScalar(n.__haloBase);
@@ -4460,8 +5381,14 @@
 
             info.classList.add('visible');
 
+            // Anchor focus on this node (unless we're mid neighbour-step, which
+            // keeps the existing anchor) and record it in the nav history.
+            if (!state.suppressFocusReanchor) enterFocus(d);
+            if (!state.suppressHistory) recordHistory(d.id);
+
             state.selectedNode = d;
             bumpGraphStyles();
+            updateNavbar();
 
             enrichFromDb(d.id);
         }
@@ -4621,10 +5548,9 @@
         }
 
         function clearSelection() {
-            if (state.selectedNode) {
-                state.selectedNode = null;
-                bumpGraphStyles();
-            }
+            state.selectedNode = null;
+            exitFocus();
+            bumpGraphStyles();
             document.getElementById('info').classList.remove('visible');
         }
 
@@ -4637,11 +5563,16 @@
             state.edgeFilters.clear();
             document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
             applyFilters();
+            document.querySelectorAll('.view-chip').forEach(b => b.classList.remove('active'));
+            const d3 = document.querySelector('.view-chip[data-view="3d"]');
+            if (d3) d3.classList.add('active');
             frameGraph(600);
-            if (state.selectedNode) {
-                state.selectedNode = null;
-                bumpGraphStyles();
-            }
+            state.selectedNode = null;
+            exitFocus();
+            state.history = [];
+            state.historyIndex = -1;
+            updateNavbar();
+            bumpGraphStyles();
         }
 
         function fitGraph() {
@@ -5191,8 +6122,37 @@
         });
 
         document.addEventListener('keydown', e => {
-            if (e.key === 'Escape' && state.pathMode) {
-                exitPathMode();
+            // Don't hijack keys while the user is typing in a field.
+            const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable;
+
+            if (e.key === 'Escape') {
+                if (state.pathMode) { exitPathMode(); return; }
+                if (state.focusNode || state.selectedNode) { clearSelection(); frameGraph(700); return; }
+            }
+            if (typing) return;
+
+            // Back / forward through visited nodes.
+            if (e.key === 'Backspace') {
+                e.preventDefault();
+                navHistory(e.shiftKey ? 1 : -1);
+                return;
+            }
+            // Step the selection through the focused node's neighbours.
+            if (e.key === 'Tab' && (state.focusNode || state.selectedNode)) {
+                e.preventDefault();
+                cycleNeighbor(e.shiftKey ? -1 : 1);
+                return;
+            }
+
+            const viewMap = { '1': 'xy', '2': 'xz', '3': 'yz', '4': '3d' };
+            const axis = viewMap[e.key];
+            if (axis) {
+                const btn = document.querySelector(`.view-chip[data-view="${axis}"]`);
+                if (btn) {
+                    document.querySelectorAll('.view-chip').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    setView(axis);
+                }
             }
         });
 
