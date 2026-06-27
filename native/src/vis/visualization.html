@@ -3104,11 +3104,11 @@
              Number colours match the digi labels on the boundary-box faces. -->
         <div id="viewbar" class="canvas-overlay">
             <button class="vbtn" data-view="1" title="View face 1 — XY plane (front)"><span class="vn" style="color:#22d3ee">1</span><span class="vp">XY</span></button>
-            <button class="vbtn" data-view="2" title="View face 2 — XY plane (back)"><span class="vn" style="color:#c084fc">2</span><span class="vp">XY</span></button>
-            <button class="vbtn" data-view="3" title="View face 3 — XZ plane (top)"><span class="vn" style="color:#4ade80">3</span><span class="vp">XZ</span></button>
-            <button class="vbtn" data-view="4" title="View face 4 — XZ plane (bottom)"><span class="vn" style="color:#fbbf24">4</span><span class="vp">XZ</span></button>
-            <button class="vbtn" data-view="5" title="View face 5 — YZ plane (right)"><span class="vn" style="color:#f472b6">5</span><span class="vp">YZ</span></button>
-            <button class="vbtn" data-view="6" title="View face 6 — YZ plane (left)"><span class="vn" style="color:#fb923c">6</span><span class="vp">YZ</span></button>
+            <button class="vbtn" data-view="2" title="View face 2 — YZ plane (right)"><span class="vn" style="color:#c084fc">2</span><span class="vp">YZ</span></button>
+            <button class="vbtn" data-view="3" title="View face 3 — XY plane (back)"><span class="vn" style="color:#4ade80">3</span><span class="vp">XY</span></button>
+            <button class="vbtn" data-view="4" title="View face 4 — YZ plane (left)"><span class="vn" style="color:#fbbf24">4</span><span class="vp">YZ</span></button>
+            <button class="vbtn" data-view="5" title="View face 5 — XZ plane (top)"><span class="vn" style="color:#f472b6">5</span><span class="vp">XZ</span></button>
+            <button class="vbtn" data-view="6" title="View face 6 — XZ plane (bottom)"><span class="vn" style="color:#fb923c">6</span><span class="vp">XZ</span></button>
             <button class="vbtn vbtn-3d active" data-view="3d" title="Isometric 3D view"><span class="vn">3D</span><span class="vp">ISO</span></button>
             <div class="vsep"></div>
             <button class="vtoggle active" id="toggle-box" title="Show / hide the boundary box, corners & face labels"><span class="vt-ico">▦</span><span class="vt-lbl">Box</span></button>
@@ -5238,18 +5238,36 @@
             // (percentile-based) rather than zoomToFit so a few far-flung outlier
             // nodes don't force the camera miles away.
             const autoFrame = () => {
-                // Recompute fog/label cues on every settle (cheap), but only
-                // fly the camera the first time.
+                // Recompute fog/label cues on every settle (cheap). The boundary
+                // box must be rebuilt on every settle too — sizing it once from an
+                // early snapshot leaves nodes outside it as the layout expands.
                 applyDepthCues();
+                if (!state.perfMode) updateBoundaryCube();
+                // Only fly the camera the first time.
                 if (state._didFit) return;
                 state._didFit = true;
                 frameGraph(900);
-                if (!state.perfMode) updateBoundaryCube();
             };
-            Graph.onEngineStop(autoFrame);
+            // Mark the layout as truly settled only on a real engine stop (the
+            // timeout fallbacks below may fire while nodes are still moving).
+            Graph.onEngineStop(() => { state._boxSettled = true; autoFrame(); });
             // Fallbacks: settle may take a moment, so frame early too.
             setTimeout(autoFrame, 2500);
             setTimeout(autoFrame, 5000);
+
+            // While the layout is still expanding, keep the boundary box enclosing
+            // the cloud — nodes drift outward before the sim settles, so a box from
+            // an early snapshot would leave them poking out. Throttled, and only
+            // until the first real settle.
+            if (!state.perfMode) {
+                Graph.onEngineTick(() => {
+                    if (state._boxSettled || !state.showBoundary) return;
+                    const now = performance.now();
+                    if (now - (state._lastBoxFit || 0) < 150) return;
+                    state._lastBoxFit = now;
+                    updateBoundaryCube();
+                });
+            }
 
             // Drives the orientation gizmo + distance-adaptive labels.
             startOverlayLoop();
@@ -5294,11 +5312,11 @@
         // box, so "view N" flies the camera to look straight at face N.
         const VIEWS = {
             '1': { dir: [0, 0, 1], plane: 'XY' },   // +Z front
-            '2': { dir: [0, 0, -1], plane: 'XY' },  // -Z back
-            '3': { dir: [0, 1, 0], plane: 'XZ' },   // +Y top
-            '4': { dir: [0, -1, 0], plane: 'XZ' },  // -Y bottom
-            '5': { dir: [1, 0, 0], plane: 'YZ' },   // +X right
-            '6': { dir: [-1, 0, 0], plane: 'YZ' },  // -X left
+            '2': { dir: [1, 0, 0], plane: 'YZ' },   // +X right
+            '3': { dir: [0, 0, -1], plane: 'XY' },  // -Z back
+            '4': { dir: [-1, 0, 0], plane: 'YZ' },  // -X left
+            '5': { dir: [0, 1, 0], plane: 'XZ' },   // +Y top
+            '6': { dir: [0, -1, 0], plane: 'XZ' },  // -Y bottom
         };
 
         // Snap the camera to a predefined view. id: '1'–'6' (face projections) or
@@ -5455,13 +5473,32 @@
                 if (y < minY) minY = y; if (y > maxY) maxY = y;
                 if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
             }
+            // Pad the extents so nodes sitting on the surface (and their sphere
+            // radius / labels) read as clearly *inside* the box rather than
+            // straddling the boundary plane.
+            const pad = Math.max(Math.hypot(maxX - minX, maxY - minY, maxZ - minZ) * 0.03, 14);
+            minX -= pad; maxX += pad;
+            minY -= pad; maxY += pad;
+            minZ -= pad; maxZ += pad;
             const w = maxX - minX || 1;
             const h = maxY - minY || 1;
             const d = maxZ - minZ || 1;
             const cx = (minX + maxX) / 2;
             const cy = (minY + maxY) / 2;
             const cz = (minZ + maxZ) / 2;
-            if (boundaryCube) { Graph.scene().remove(boundaryCube); boundaryCube = null; }
+            // Dispose the previous cube's GPU resources before discarding it —
+            // this function now rebuilds repeatedly while the layout settles.
+            if (boundaryCube) {
+                Graph.scene().remove(boundaryCube);
+                boundaryCube.traverse(o => {
+                    if (o.geometry) o.geometry.dispose();
+                    if (o.material) {
+                        if (o.material.map) o.material.map.dispose();
+                        o.material.dispose();
+                    }
+                });
+                boundaryCube = null;
+            }
 
             const group = new THREE.Group();
 
@@ -5525,11 +5562,11 @@
             const hw = w / 2, hh = h / 2, hd = d / 2;
             const faceDefs = [
                 { num: 1, hex: '#22d3ee', pos: [cx, cy, cz + hd], rot: [0, 0, 0], size: [w, h] }, // +Z  XY front
-                { num: 2, hex: '#c084fc', pos: [cx, cy, cz - hd], rot: [0, Math.PI, 0], size: [w, h] }, // -Z  XY back
-                { num: 3, hex: '#4ade80', pos: [cx, cy + hh, cz], rot: [-Math.PI / 2, 0, 0], size: [w, d] }, // +Y  XZ top
-                { num: 4, hex: '#fbbf24', pos: [cx, cy - hh, cz], rot: [Math.PI / 2, 0, 0], size: [w, d] }, // -Y  XZ bottom
-                { num: 5, hex: '#f472b6', pos: [cx + hw, cy, cz], rot: [0, Math.PI / 2, 0], size: [d, h] }, // +X  YZ right
-                { num: 6, hex: '#fb923c', pos: [cx - hw, cy, cz], rot: [0, -Math.PI / 2, 0], size: [d, h] }, // -X  YZ left
+                { num: 2, hex: '#c084fc', pos: [cx + hw, cy, cz], rot: [0, Math.PI / 2, 0], size: [d, h] }, // +X  YZ right
+                { num: 3, hex: '#4ade80', pos: [cx, cy, cz - hd], rot: [0, Math.PI, 0], size: [w, h] }, // -Z  XY back
+                { num: 4, hex: '#fbbf24', pos: [cx - hw, cy, cz], rot: [0, -Math.PI / 2, 0], size: [d, h] }, // -X  YZ left
+                { num: 5, hex: '#f472b6', pos: [cx, cy + hh, cz], rot: [-Math.PI / 2, 0, 0], size: [w, d] }, // +Y  XZ top
+                { num: 6, hex: '#fb923c', pos: [cx, cy - hh, cz], rot: [Math.PI / 2, 0, 0], size: [w, d] }, // -Y  XZ bottom
             ];
             const labelScale = Math.max(16, Math.min(150, Math.min(w, h, d) * 0.18));
             for (const f of faceDefs) {
