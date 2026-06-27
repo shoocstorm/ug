@@ -473,6 +473,8 @@ pub fn run_serve(args: &[String]) {
             .route("/api/graph/filter", get(api_filter))
             .route("/api/graph/centrality", get(api_centrality))
             .route("/api/graph/cycles", get(api_cycles))
+            // Source file content for the right-panel "Preview" tab.
+            .route("/api/file", get(api_file))
             // Phase 3 — DB / embedder backed
             .route("/api/db/node/*id", get(api_db_node))
             .route("/api/db/traverse/*id", get(api_db_traverse))
@@ -1128,6 +1130,82 @@ fn embedder_or_503(state: &ServeState) -> Result<Arc<Embedder>, Response> {
 }
 
 #[derive(serde::Deserialize)]
+struct FileQuery {
+    /// Repo-relative path of the source file to read.
+    path: String,
+    /// Optional 1-based inclusive line range. Omit both for the full file
+    /// (File nodes); pass them to return just a chunk's span.
+    start: Option<usize>,
+    end: Option<usize>,
+}
+
+/// Reads a source file (or a line slice of one) from the indexed repo so the
+/// UI's Preview tab can show real content. The synthetic `node_text` is an
+/// embedding string, not the source — this is the actual file on disk.
+async fn api_file(State(state): State<ServeState>, Query(params): Query<FileQuery>) -> Response {
+    let rel = params.path.trim();
+    if rel.is_empty() {
+        return err_json(StatusCode::BAD_REQUEST, "missing path");
+    }
+
+    // Resolve against the repo root and canonicalize, then verify the result is
+    // still inside the root — blocks `../` traversal and absolute-path escapes.
+    let root = state.repo_root.as_path();
+    let canon = match std::fs::canonicalize(root.join(rel)) {
+        Ok(p) => p,
+        Err(_) => return err_json(StatusCode::NOT_FOUND, "file not found"),
+    };
+    if !canon.starts_with(root) {
+        return err_json(StatusCode::FORBIDDEN, "path escapes repo root");
+    }
+
+    const MAX_BYTES: u64 = 2 * 1024 * 1024;
+    if let Ok(meta) = std::fs::metadata(&canon) {
+        if meta.len() > MAX_BYTES {
+            return err_json(StatusCode::PAYLOAD_TOO_LARGE, "file too large to preview");
+        }
+    }
+
+    let text = match tokio::fs::read_to_string(&canon).await {
+        Ok(t) => t,
+        Err(_) => {
+            return err_json(
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "file is not UTF-8 text",
+            )
+        }
+    };
+
+    let all: Vec<&str> = text.lines().collect();
+    let total_lines = all.len();
+
+    // Optional 1-based inclusive slice; clamp to the file's bounds.
+    let (content, sliced) = match params.start {
+        Some(s) if s >= 1 => {
+            let lo = s - 1;
+            let hi = params.end.unwrap_or(s).max(s).min(total_lines);
+            let body = if lo >= total_lines {
+                String::new()
+            } else {
+                all[lo..hi].join("\n")
+            };
+            (body, true)
+        }
+        _ => (text, false),
+    };
+
+    let body = serde_json::json!({
+        "path": rel,
+        "content": content,
+        "start_line": params.start,
+        "end_line": params.end,
+        "total_lines": total_lines,
+        "sliced": sliced,
+    });
+    ok_json(body.to_string())
+}
+
+#[derive(serde::Deserialize)]
 struct DbNodeQuery {
     /// Optional destination name; defaults to the primary backend.
     /// Mirrors the `dest` field used by all the other DB-backed routes.
@@ -1660,6 +1738,8 @@ fn node_row_to_json(n: &storage::NodeRow) -> serde_json::Value {
         "start_line": n.start_line,
         "end_line": n.end_line,
         "description": n.description,
+        // Full chunk text — powers the right-panel "Preview" tab.
+        "node_text": n.node_text,
     })
 }
 

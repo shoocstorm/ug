@@ -1367,6 +1367,147 @@
             font-size: 11px;
         }
 
+        /* ─── Preview tab (selected item content) ───────────── */
+
+        .preview-status {
+            padding: 14px;
+            text-align: center;
+            color: var(--text-dim);
+            font-size: 12px;
+        }
+
+        .preview-meta {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+            font-size: 10px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+        }
+
+        .preview-meta .src {
+            font-family: 'JetBrains Mono', monospace;
+            text-transform: none;
+            letter-spacing: 0;
+            color: var(--text-dim);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* Raw (non-markdown) chunk: monospace, preserves whitespace. */
+        .preview-code {
+            margin: 0;
+            padding: 12px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-soft);
+            border-radius: 8px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            line-height: 1.6;
+            color: var(--text);
+            white-space: pre-wrap;
+            word-break: break-word;
+            overflow-x: auto;
+        }
+
+        /* Rendered markdown chunk. */
+        .preview-md {
+            padding: 12px 14px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-soft);
+            border-radius: 8px;
+            font-size: 12.5px;
+            line-height: 1.65;
+            color: var(--text);
+            word-break: break-word;
+        }
+
+        .preview-md > *:first-child { margin-top: 0; }
+        .preview-md > *:last-child { margin-bottom: 0; }
+
+        .preview-md h1,
+        .preview-md h2,
+        .preview-md h3,
+        .preview-md h4 {
+            color: #fff;
+            font-weight: 600;
+            line-height: 1.3;
+            margin: 16px 0 8px;
+        }
+
+        .preview-md h1 { font-size: 17px; }
+        .preview-md h2 { font-size: 15px; }
+        .preview-md h3 { font-size: 13.5px; }
+        .preview-md h4 { font-size: 12.5px; color: var(--text); }
+
+        .preview-md p { margin: 8px 0; }
+
+        .preview-md ul,
+        .preview-md ol { margin: 8px 0 8px 20px; }
+
+        .preview-md li { margin: 3px 0; }
+
+        .preview-md a { color: var(--accent); text-decoration: none; }
+        .preview-md a:hover { text-decoration: underline; }
+
+        .preview-md code {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            background: rgba(255, 255, 255, 0.06);
+            padding: 1px 5px;
+            border-radius: 4px;
+            color: #8be9fd;
+        }
+
+        .preview-md pre {
+            margin: 10px 0;
+            padding: 12px;
+            background: var(--bg-deep);
+            border: 1px solid var(--border-soft);
+            border-radius: 8px;
+            overflow-x: auto;
+        }
+
+        .preview-md pre code {
+            background: none;
+            padding: 0;
+            color: var(--text);
+            line-height: 1.6;
+        }
+
+        .preview-md blockquote {
+            margin: 10px 0;
+            padding: 4px 12px;
+            border-left: 3px solid var(--accent-dim);
+            color: var(--text-muted);
+        }
+
+        .preview-md hr {
+            border: none;
+            border-top: 1px solid var(--border-soft);
+            margin: 14px 0;
+        }
+
+        .preview-md strong { color: #fff; font-weight: 600; }
+
+        .preview-md table {
+            border-collapse: collapse;
+            margin: 10px 0;
+            font-size: 11px;
+        }
+
+        .preview-md th,
+        .preview-md td {
+            border: 1px solid var(--border-soft);
+            padding: 5px 9px;
+            text-align: left;
+        }
+
+        .preview-md th { background: var(--bg-elevated); color: var(--text); }
+
         /* ─── Semantic / Hybrid search panel ────────────────── */
 
         #info .path-hint {
@@ -4826,9 +4967,9 @@
                 // view), so we keep the framing simple and predictable.
                 const x = +n.x || 0, y = +n.y || 0, z = +n.z || 0;
                 // Total camera-to-node distance (the (d,d,d) offset has magnitude
-                // sqrt(3)*d). Pulled back from 150 so more of the surrounding
-                // neighbourhood stays in frame on focus.
-                const d = 280 / Math.sqrt(3);
+                // sqrt(3)*d). Pulled well back so a generous slice of the
+                // surrounding neighbourhood stays in frame on focus.
+                const d = 480 / Math.sqrt(3);
                 Graph.cameraPosition(
                     { x: x + d, y: y + d, z: z + d },
                     { x, y, z },
@@ -5591,11 +5732,14 @@
             if (d.extends && d.extends.length) html += `<div class="info-row"><span class="info-label">Extends</span><span class="info-value">${escapeHtml(d.extends.join(', '))}</span></div>`;
             if (d.implements && d.implements.length) html += `<div class="info-row"><span class="info-label">Implements</span><span class="info-value">${escapeHtml(d.implements.join(', '))}</span></div>`;
 
-            const activeTab = state.infoTab || 'hierarchy';
+            const activeTab = state.infoTab === 'related' ? 'related' : 'preview';
             html += `<div class="related-section">
                 <div class="info-tabs">
-                    <button class="info-tab${activeTab === 'hierarchy' ? ' active' : ''}" data-view="hierarchy">Hierarchy</button>
+                    <button class="info-tab${activeTab === 'preview' ? ' active' : ''}" data-view="preview">Preview</button>
                     <button class="info-tab${activeTab === 'related' ? ' active' : ''}" data-view="related">Related${related.length ? ' (' + related.length + ')' : ''}</button>
+                </div>
+                <div class="info-view${activeTab === 'preview' ? ' active' : ''}" data-view="preview">
+                    <div id="preview-content"></div>
                 </div>
                 <div class="info-view${activeTab === 'related' ? ' active' : ''}" data-view="related">`;
             if (related.length > 0) {
@@ -5614,9 +5758,6 @@
                 html += `<div class="hier-empty">No related nodes.</div>`;
             }
             html += `</div>
-                <div class="info-view${activeTab === 'hierarchy' ? ' active' : ''}" data-view="hierarchy">
-                    <div class="hier-list" id="hier-content"></div>
-                </div>
             </div>`;
 
             body.innerHTML = html;
@@ -5637,26 +5778,11 @@
                 });
             });
 
-            const hierContainer = body.querySelector('#hier-content');
-            if (hierContainer) {
-                renderHierarchyView(d, hierContainer);
-                hierContainer.querySelectorAll('.hier-row').forEach(row => {
-                    row.addEventListener('click', () => {
-                        const t = state.graph.nodes.find(n => n.id === row.dataset.id);
-                        if (t) {
-                            if (state.pathMode) {
-                                state.pathSource = t.id;
-                                const hint = info.querySelector('.path-hint');
-                                if (hint) hint.querySelector('strong').textContent = truncateName(state.pathSource);
-                                showPathResult('');
-                            } else {
-                                handleClick(null, t);
-                                focusNode(t);
-                            }
-                        }
-                    });
-                });
-            }
+            // Preview tab: show the selected item's chunk content. The full text
+            // (node_text) only arrives via the async DB enrichment, so render
+            // immediately from any cached row, then again when the fetch lands.
+            const cachedRow = state.dbRowCache ? state.dbRowCache.get(d.id) : null;
+            renderPreview(d, cachedRow);
 
             body.querySelectorAll('.info-tab').forEach(tab => {
                 tab.addEventListener('click', () => {
@@ -5701,151 +5827,163 @@
                 const res = await fetch(`/api/db/node/${encodeURIComponent(id)}`);
                 if (!res.ok) return;
                 const row = await res.json();
+                if (!state.dbRowCache) state.dbRowCache = new Map();
+                state.dbRowCache.set(requestedId, row);
                 if (!state.selectedNode || state.selectedNode.id !== requestedId) return;
-                renderDbEnrichment(row);
+                renderPreview(state.selectedNode, row);
             } catch (err) {
                 // graceful fallthrough — graph.json data remains as-is
             }
         }
 
-        function renderDbEnrichment(row) {
-            const body = document.getElementById('info-body');
-            if (!body) return;
-            const desc = (row && typeof row.description === 'string') ? row.description.trim() : '';
-            const existing = body.querySelector('.db-desc');
-            if (existing) existing.remove();
-            if (!desc) return;
+        // Fills the right-panel "Preview" tab with the *actual* source content of
+        // the selected item: the whole file for a File node, or the
+        // start..end line span for a chunk/symbol. (node_text in the DB is a
+        // synthetic embedding string, not the source, so we read the file from
+        // disk via /api/file instead.) `row` is the DB hydrate that carries the
+        // file path + line range; it may be null on the first synchronous render.
+        async function renderPreview(node, row) {
+            const container = document.getElementById('preview-content');
+            if (!container) return;
 
-            const block = document.createElement('div');
-            block.className = 'db-desc';
-            const label = document.createElement('span');
-            label.className = 'db-desc-label';
-            label.textContent = 'Description (DB)';
-            const text = document.createElement('span');
-            text.textContent = desc;
-            block.appendChild(label);
-            block.appendChild(text);
+            const dbReady = !!(state.capabilities && state.capabilities.db_ready);
+            const file = (row && row.file) || (node && node.file) || '';
 
-            const related = body.querySelector('.related-section');
-            if (related) body.insertBefore(block, related);
-            else body.appendChild(block);
-        }
-
-        function renderHierarchyView(selected, container) {
-            const { childrenOf, parentOf } = getContainsMaps();
-            const nodeById = id => state.graph.nodes.find(n => n.id === id);
-
-            const ancestors = [];
-            const upVisited = new Set([selected.id]);
-            let cur = selected.id;
-            for (let i = 0; i < 10; i++) {
-                const parents = parentOf.get(cur) || [];
-                const p = parents.find(x => !upVisited.has(x));
-                if (!p) break;
-                ancestors.unshift(p);
-                upVisited.add(p);
-                cur = p;
-            }
-
-            const immediateParent = ancestors.length ? ancestors[ancestors.length - 1] : null;
-            const siblingIds = immediateParent
-                ? (childrenOf.get(immediateParent) || []).filter(id => id !== selected.id)
-                : [];
-            const directChildren = childrenOf.get(selected.id) || [];
-
-            if (!ancestors.length && !siblingIds.length && !directChildren.length) {
-                container.innerHTML = '<div class="hier-empty">No <code>Contains</code> hierarchy for this node.</div>';
+            // Without the DB hydrate we don't know the file path (graph.json
+            // doesn't carry it), so we can't locate the source yet.
+            if (!file) {
+                container.innerHTML = (dbReady && !row)
+                    ? `<div class="preview-status">Loading preview…</div>`
+                    : `<div class="preview-status">No source file recorded for this item.</div>`;
                 return;
             }
 
-            const renderRow = (n, depth, kind) => {
-                if (!n) return '';
-                const c = config.getColor(n.group);
-                const indent = depth * 12;
-                const childCount = (childrenOf.get(n.id) || []).length;
-                let sym;
-                if (kind === 'selected') sym = '◆';
-                else if (kind === 'ancestor') sym = '↑';
-                else if (kind === 'sibling') sym = childCount ? `▸ ${childCount}` : '•';
-                else sym = '↳';
-                let klass = 'hier-row' + (kind === 'selected' ? ' selected' : '');
-                if (kind === 'sibling' && childCount) klass += ' has-children';
-                let lineLabel = '';
-                if (n.startLine != null) {
-                    lineLabel = 'L' + n.startLine;
-                    if (n.endLine != null && n.endLine !== n.startLine) {
-                        lineLabel += '–' + n.endLine;
-                    }
-                }
-                return `<div class="${klass}" data-id="${escapeHtml(n.id)}" style="padding-left:${indent + 8}px" title="${escapeHtml(n.id)}">
-                    <span class="dot" style="background:${c}"></span>
-                    <span class="name">${escapeHtml(truncateName(n.name))}</span>
-                    <span class="lines">${lineLabel}</span>
-                    <span class="kind">${sym}</span>
-                </div>`;
-            };
+            const isFileNode = (node && node.group === 'File') || (row && row.node_type === 'File');
+            const start = isFileNode ? null : ((node && node.startLine) || (row && row.start_line) || null);
+            const end = isFileNode ? null : ((node && node.endLine) || (row && row.end_line) || null);
+            const isMd = /\.(md|markdown|mdx)$/i.test(file);
 
-            let html = '';
-            ancestors.forEach((aid, i) => {
-                html += renderRow(nodeById(aid), i, 'ancestor');
-            });
+            // Guard against a slow fetch for a previously-selected node landing
+            // after the user has moved on.
+            const token = (state.previewToken = (state.previewToken || 0) + 1);
+            container.innerHTML = `<div class="preview-status">Loading preview…</div>`;
 
-            const selectedDepth = ancestors.length;
+            let qs = `path=${encodeURIComponent(file)}`;
+            if (start) { qs += `&start=${start}`; if (end) qs += `&end=${end}`; }
 
-            const dVisited = new Set(upVisited);
-            dVisited.add(selected.id);
-            siblingIds.forEach(id => dVisited.add(id));
-
-            function dfs(id, depth) {
-                if (depth - selectedDepth > 10) return '';
-                const kids = childrenOf.get(id) || [];
-                let h = '';
-                for (const k of kids) {
-                    if (dVisited.has(k)) continue;
-                    dVisited.add(k);
-                    const kn = nodeById(k);
-                    if (!kn) continue;
-                    h += renderRow(kn, depth, 'child');
-                    h += dfs(k, depth + 1);
-                }
-                return h;
+            let data = null;
+            try {
+                const res = await fetch(`/api/file?${qs}`);
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                data = await res.json();
+            } catch (err) {
+                if (state.previewToken !== token) return;
+                const fallback = (row && row.description) || (node && node.docstring) || '';
+                container.innerHTML = fallback
+                    ? `<pre class="preview-code">${escapeHtml(fallback)}</pre>`
+                    : `<div class="preview-status">Couldn't load <code>${escapeHtml(file)}</code>.</div>`;
+                return;
             }
 
-            // Merge siblings + selected at the same depth. Prefer startLine order
-            // (natural code order under a File/Class parent); fall back to name
-            // for nodes without a line number.
-            const peers = immediateParent
-                ? (childrenOf.get(immediateParent) || [])
-                    .map(id => nodeById(id))
-                    .filter(Boolean)
-                    .sort((a, b) => {
-                        const al = a.startLine, bl = b.startLine;
-                        if (al != null && bl != null) return al - bl;
-                        if (al != null) return -1;
-                        if (bl != null) return 1;
-                        return String(a.name || '').localeCompare(String(b.name || ''));
-                    })
-                : [selected];
+            // Selection moved on while we awaited — drop this result.
+            if (state.previewToken !== token) return;
+            if (!state.selectedNode || !node || state.selectedNode.id !== node.id) return;
 
-            peers.forEach(n => {
-                if (n.id === selected.id) {
-                    html += renderRow(selected, selectedDepth, 'selected');
-                    html += dfs(selected.id, selectedDepth + 1);
-                } else {
-                    html += renderRow(n, selectedDepth, 'sibling');
+            const content = (data && typeof data.content === 'string') ? data.content : '';
+            const lineLabel = start
+                ? `L${start}${end && end !== start ? '–' + end : ''}`
+                : (data && data.total_lines ? `${data.total_lines} lines` : '');
+            const kindLabel = isMd ? 'Markdown' : (isFileNode ? 'File' : 'Chunk');
+
+            const meta = `<div class="preview-meta">
+                <span>${kindLabel}</span>
+                <span class="src">${escapeHtml(file)}${lineLabel ? ' · ' + lineLabel : ''}</span>
+            </div>`;
+
+            if (!content) {
+                container.innerHTML = meta + `<div class="preview-status">Empty content.</div>`;
+                return;
+            }
+
+            container.innerHTML = isMd
+                ? meta + `<div class="preview-md">${mdToHtml(content)}</div>`
+                : meta + `<pre class="preview-code">${escapeHtml(content)}</pre>`;
+        }
+
+        // Compact, self-contained Markdown → HTML renderer. All text is HTML-escaped
+        // before any inline markup is applied, and link targets are sanitised, so
+        // chunk content can never inject raw HTML into the panel.
+        function mdToHtml(src) {
+            const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            const inline = (s) => s
+                .replace(/`([^`]+)`/g, (_, c) => `<code>${c}</code>`)
+                .replace(/!\[([^\]]*)\]\([^)]*\)/g, (_, a) => `<em>${a || 'image'}</em>`)
+                .replace(/\[([^\]]+)\]\(([^)\s]+)[^)]*\)/g, (_, t, u) => {
+                    const safe = /^(https?:|\/|#|mailto:)/i.test(u) ? u : '#';
+                    return `<a href="${safe}" target="_blank" rel="noopener noreferrer">${t}</a>`;
+                })
+                .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+                .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+
+            const lines = src.replace(/\r\n?/g, '\n').split('\n');
+            const out = [];
+            let i = 0, listType = null;
+            const closeList = () => { if (listType) { out.push(`</${listType}>`); listType = null; } };
+
+            while (i < lines.length) {
+                const line = lines[i];
+
+                const fence = line.match(/^```(\w*)\s*$/);
+                if (fence) {
+                    closeList();
+                    const buf = [];
+                    i++;
+                    while (i < lines.length && !/^```\s*$/.test(lines[i])) { buf.push(lines[i]); i++; }
+                    i++;
+                    out.push(`<pre><code>${esc(buf.join('\n'))}</code></pre>`);
+                    continue;
                 }
-            });
+                if (/^\s*([-*_])\1{2,}\s*$/.test(line)) { closeList(); out.push('<hr>'); i++; continue; }
 
-            container.innerHTML = html;
-            container.querySelectorAll('.hier-row').forEach(row => {
-                row.addEventListener('click', () => {
-                    const t = nodeById(row.dataset.id);
-                    if (t) { handleClick(null, t); focusNode(t); }
-                });
-            });
+                const h = line.match(/^(#{1,6})\s+(.*)$/);
+                if (h) {
+                    closeList();
+                    const lvl = Math.min(h[1].length, 4);
+                    out.push(`<h${lvl}>${inline(esc(h[2].trim()))}</h${lvl}>`);
+                    i++; continue;
+                }
+                if (/^>\s?/.test(line)) {
+                    closeList();
+                    const buf = [];
+                    while (i < lines.length && /^>\s?/.test(lines[i])) { buf.push(lines[i].replace(/^>\s?/, '')); i++; }
+                    out.push(`<blockquote>${inline(esc(buf.join(' ')))}</blockquote>`);
+                    continue;
+                }
+                const ul = line.match(/^\s*[-*+]\s+(.*)$/);
+                if (ul) {
+                    if (listType !== 'ul') { closeList(); out.push('<ul>'); listType = 'ul'; }
+                    out.push(`<li>${inline(esc(ul[1]))}</li>`); i++; continue;
+                }
+                const ol = line.match(/^\s*\d+[.)]\s+(.*)$/);
+                if (ol) {
+                    if (listType !== 'ol') { closeList(); out.push('<ol>'); listType = 'ol'; }
+                    out.push(`<li>${inline(esc(ol[1]))}</li>`); i++; continue;
+                }
+                if (/^\s*$/.test(line)) { closeList(); i++; continue; }
 
-            const selectedRow = container.querySelector('.hier-row.selected');
-            if (selectedRow) selectedRow.scrollIntoView({ block: 'center' });
+                closeList();
+                const para = [line];
+                i++;
+                while (i < lines.length && !/^\s*$/.test(lines[i])
+                    && !/^(#{1,6})\s/.test(lines[i]) && !/^```/.test(lines[i])
+                    && !/^\s*[-*+]\s+/.test(lines[i]) && !/^\s*\d+[.)]\s+/.test(lines[i])
+                    && !/^>\s?/.test(lines[i])) {
+                    para.push(lines[i]); i++;
+                }
+                out.push(`<p>${inline(esc(para.join(' ')))}</p>`);
+            }
+            closeList();
+            return out.join('\n');
         }
 
         function clearSelection() {
