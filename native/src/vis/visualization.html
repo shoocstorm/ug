@@ -21,7 +21,7 @@
             --danger: #f87171;
             --success: #4ade80;
 
-            --sidebar-width: 320px;
+            --sidebar-width: 384px;
         }
 
         * {
@@ -272,7 +272,7 @@
         }
 
         #sidebar.pending,
-        #sidebar-toggle.pending {
+        #sidebar-launcher.pending {
             opacity: 0;
             pointer-events: none;
         }
@@ -317,10 +317,149 @@
             letter-spacing: 0.8px;
         }
 
+        .sidebar-header .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        #sidebar-collapse {
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: transparent;
+            border: none;
+            border-radius: 6px;
+            color: var(--text-muted);
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s;
+        }
+
+        #sidebar-collapse:hover {
+            background: var(--bg-hover);
+            color: var(--accent);
+        }
+
+        #sidebar-collapse svg {
+            width: 16px;
+            height: 16px;
+        }
+
+        /* ─── Resize handle ──────────────────────────────────── */
+
+        .sidebar-resize-handle {
+            position: absolute;
+            top: 0;
+            right: -3px;
+            width: 7px;
+            height: 100%;
+            cursor: ew-resize;
+            z-index: 42;
+        }
+
+        .sidebar-resize-handle::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            right: 3px;
+            width: 2px;
+            height: 100%;
+            background: transparent;
+            transition: background 0.15s ease;
+        }
+
+        .sidebar-resize-handle:hover::after,
+        body.resizing .sidebar-resize-handle::after {
+            background: var(--accent);
+        }
+
+        body.resizing {
+            cursor: ew-resize;
+            user-select: none;
+        }
+
+        /* While dragging the handle, kill transitions that would lag the drag. */
+        body.resizing #sidebar,
+        body.resizing #sidebar-launcher {
+            transition: none;
+        }
+
+        /* ─── Panel tabs ─────────────────────────────────────── */
+
+        .panel-tabs {
+            display: flex;
+            gap: 4px;
+            padding: 10px 14px;
+            border-bottom: 1px solid var(--border-soft);
+            flex-shrink: 0;
+        }
+
+        .panel-tab {
+            flex: 1;
+            background: transparent;
+            border: 1px solid transparent;
+            color: var(--text-muted);
+            padding: 7px 6px;
+            border-radius: 8px;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.4px;
+            cursor: pointer;
+            font-family: inherit;
+            transition: background 0.15s, color 0.15s, border-color 0.15s;
+        }
+
+        .panel-tab:hover {
+            color: var(--text);
+            background: var(--bg-hover);
+        }
+
+        .panel-tab.active {
+            color: var(--accent);
+            background: rgba(34, 211, 238, 0.08);
+            border-color: var(--accent-dim);
+        }
+
         .sidebar-body {
             flex: 1;
+            min-height: 0;
+            display: flex;
+            position: relative;
+        }
+
+        .tab-pane {
+            display: none;
+            flex: 1;
+            min-height: 0;
+            flex-direction: column;
+        }
+
+        .tab-pane.active {
+            display: flex;
+        }
+
+        /* Discover / Graph panes scroll their stacked sections as a whole. */
+        #pane-discover.active,
+        #pane-graph.active {
             overflow-y: auto;
             padding: 8px 0;
+        }
+
+        /* Catalog pane keeps a sticky toolbar/footer while the tree scrolls. */
+        #pane-catalog.active {
+            overflow: hidden;
+        }
+
+        .catalog-actions-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            padding: 8px 16px;
+            border-bottom: 1px solid var(--border-soft);
+            flex-shrink: 0;
         }
 
         .section {
@@ -846,46 +985,44 @@
             color: var(--accent);
         }
 
-        /* ─── Sidebar toggle ─────────────────────────────────── */
+        /* ─── Sidebar launcher (shown only when collapsed) ───── */
 
-        #sidebar-toggle {
+        #sidebar-launcher {
             position: fixed;
-            top: 50%;
-            left: var(--sidebar-width);
-            transform: translateY(-50%);
-            width: 28px;
-            height: 56px;
+            top: 16px;
+            left: 16px;
+            width: 40px;
+            height: 40px;
             background: rgba(15, 15, 17, 0.92);
             backdrop-filter: blur(24px);
             border: 1px solid var(--border);
-            border-left: none;
-            border-radius: 0 8px 8px 0;
+            border-radius: 10px;
             color: var(--text-muted);
             cursor: pointer;
             display: flex;
             align-items: center;
             justify-content: center;
-            transition: left 0.3s cubic-bezier(0.4, 0, 0.2, 1), background 0.15s, color 0.15s, opacity 0.25s ease;
+            opacity: 0;
+            pointer-events: none;
+            transform: translateX(-12px);
+            transition: opacity 0.25s ease, transform 0.25s ease, background 0.15s, color 0.15s;
             z-index: 41;
         }
 
-        #sidebar-toggle:hover {
+        #sidebar-launcher:hover {
             color: var(--accent);
             background: var(--bg-elevated);
         }
 
-        #sidebar.collapsed~#sidebar-toggle {
-            left: 0;
+        #sidebar-launcher svg {
+            width: 18px;
+            height: 18px;
         }
 
-        #sidebar-toggle svg {
-            width: 14px;
-            height: 14px;
-            transition: transform 0.3s;
-        }
-
-        #sidebar.collapsed~#sidebar-toggle svg {
-            transform: rotate(180deg);
+        #sidebar.collapsed~#sidebar-launcher {
+            opacity: 1;
+            pointer-events: auto;
+            transform: translateX(0);
         }
 
         /* ─── Info panel (node details) ─────────────────────── */
@@ -2124,6 +2261,23 @@
             background: rgba(34, 211, 238, 0.1);
         }
 
+        /* Persistent marker for the row whose node is currently focused. */
+        .cat-node.focused {
+            background: rgba(34, 211, 238, 0.14);
+            box-shadow: inset 2px 0 0 var(--accent);
+        }
+
+        /* One-shot "juice" pulse fired the instant a row is clicked. */
+        .cat-node.just-focused {
+            animation: cat-pulse 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
+        }
+
+        @keyframes cat-pulse {
+            0%   { background: rgba(34, 211, 238, 0.55); transform: translateX(2px); }
+            40%  { background: rgba(34, 211, 238, 0.28); }
+            100% { background: rgba(34, 211, 238, 0.14); transform: translateX(0); }
+        }
+
         .cat-toggle {
             width: 14px;
             height: 14px;
@@ -2346,7 +2500,7 @@
         }
 
         body.perf-mode #sidebar,
-        body.perf-mode #sidebar-toggle,
+        body.perf-mode #sidebar-launcher,
         body.perf-mode #info,
         body.perf-mode .tooltip {
             backdrop-filter: none;
@@ -2833,40 +2987,58 @@
                     <div class="brand-dot"></div>
                     <h2>UltraGraph</h2>
                 </div>
-                <span class="meta" id="sidebar-meta">0 / 0</span>
+                <div class="header-actions">
+                    <span class="meta" id="sidebar-meta">0 / 0</span>
+                    <button id="sidebar-collapse" title="Collapse panel">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="15 18 9 12 15 6" />
+                        </svg>
+                    </button>
+                </div>
+            </div>
+
+            <div class="sidebar-resize-handle" id="sidebar-resize" title="Drag to resize"></div>
+
+            <div class="panel-tabs" role="tablist">
+                <button class="panel-tab active" data-tab="catalog" type="button">Catalog</button>
+                <button class="panel-tab" data-tab="discover" type="button">Discover</button>
+                <button class="panel-tab" data-tab="graph" type="button">Graph</button>
             </div>
 
             <div class="sidebar-body">
-                <!-- Index stats -->
-                <div class="section" data-section="index-stats">
-                    <div class="section-header">
-                        <span class="label">Index</span>
-                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <polyline points="6 9 12 15 18 9" />
-                        </svg>
-                    </div>
-                    <div class="section-body">
-                        <div class="stat-grid">
-                            <div class="stat-tile">
-                                <div class="stat-value" id="stat-files">—</div>
-                                <div class="stat-label">Files</div>
-                            </div>
-                            <div class="stat-tile">
-                                <div class="stat-value" id="stat-folders">—</div>
-                                <div class="stat-label">Folders</div>
-                            </div>
-                            <div class="stat-tile">
-                                <div class="stat-value" id="stat-symbols">—</div>
-                                <div class="stat-label">Symbols</div>
-                            </div>
-                            <div class="stat-tile">
-                                <div class="stat-value" id="stat-lines">—</div>
-                                <div class="stat-label">Lines</div>
-                            </div>
+                <!-- ─── Catalog tab (default): inline repository tree ─── -->
+                <div class="tab-pane active" data-tab="catalog" id="pane-catalog">
+                    <div class="catalog-toolbar">
+                        <div class="catalog-search-wrapper">
+                            <svg class="catalog-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="11" cy="11" r="8" />
+                                <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                            </svg>
+                            <input type="text" id="catalog-filter" class="catalog-search-input" placeholder="Filter by name or path…" autocomplete="off">
                         </div>
-                        <div class="edge-breakdown" id="index-meta"></div>
+                    </div>
+                    <div class="catalog-actions-row">
+                        <label class="catalog-toggle">
+                            <input type="checkbox" id="catalog-symbols" checked>
+                            <span>Symbols</span>
+                        </label>
+                        <div class="catalog-toolbar-actions">
+                            <button class="catalog-mini-btn" id="catalog-expand-all" title="Expand all">Expand</button>
+                            <button class="catalog-mini-btn" id="catalog-collapse-all" title="Collapse all">Collapse</button>
+                            <button class="catalog-mini-btn" id="catalog-copy" title="Copy as Markdown"><span class="catalog-copy-label">Copy</span></button>
+                        </div>
+                    </div>
+                    <span id="catalog-subtitle" hidden></span>
+                    <div class="catalog-body" id="catalog-body"></div>
+                    <div class="catalog-footer">
+                        <span id="catalog-stats" class="catalog-stats"></span>
+                        <span class="catalog-hint">Click a row to focus it</span>
                     </div>
                 </div>
+
+                <!-- ─── Discover tab: chat + semantic / hybrid / keyword search ─── -->
+                <div class="tab-pane" data-tab="discover" id="pane-discover">
 
                 <!-- Chat (RAG + LLM) - Featured -->
                 <div class="section featured cap-hidden" data-section="chat" id="section-chat">
@@ -3010,6 +3182,42 @@
                     </div>
                 </div>
 
+                </div><!-- /#pane-discover -->
+
+                <!-- ─── Graph tab: repo meta + filters + analysis tools ─── -->
+                <div class="tab-pane" data-tab="graph" id="pane-graph">
+
+                <!-- Index stats -->
+                <div class="section" data-section="index-stats">
+                    <div class="section-header">
+                        <span class="label">Index</span>
+                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="6 9 12 15 18 9" />
+                        </svg>
+                    </div>
+                    <div class="section-body">
+                        <div class="stat-grid">
+                            <div class="stat-tile">
+                                <div class="stat-value" id="stat-files">—</div>
+                                <div class="stat-label">Files</div>
+                            </div>
+                            <div class="stat-tile">
+                                <div class="stat-value" id="stat-folders">—</div>
+                                <div class="stat-label">Folders</div>
+                            </div>
+                            <div class="stat-tile">
+                                <div class="stat-value" id="stat-symbols">—</div>
+                                <div class="stat-label">Symbols</div>
+                            </div>
+                            <div class="stat-tile">
+                                <div class="stat-value" id="stat-lines">—</div>
+                                <div class="stat-label">Lines</div>
+                            </div>
+                        </div>
+                        <div class="edge-breakdown" id="index-meta"></div>
+                    </div>
+                </div>
+
                 <!-- Filters -->
                 <div class="section" data-section="filters">
                     <div class="section-header">
@@ -3029,30 +3237,6 @@
                     </div>
                 </div>
 
-                <!-- Insights -->
-                <div class="section" data-section="insights">
-                    <div class="section-header">
-                        <span class="label">Insights</span>
-                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <polyline points="6 9 12 15 18 9" />
-                        </svg>
-                    </div>
-                    <div class="section-body">
-                        <div class="stat-grid">
-                            <div class="stat-tile">
-                                <div class="stat-value" id="nodeCount">0</div>
-                                <div class="stat-label">Nodes</div>
-                            </div>
-                            <div class="stat-tile">
-                                <div class="stat-value" id="edgeCount">0</div>
-                                <div class="stat-label">Edges</div>
-                            </div>
-                        </div>
-                        <div class="section-subhead" style="margin-top:14px">Edge breakdown</div>
-                        <div class="edge-breakdown" id="edge-breakdown"></div>
-                    </div>
-                </div>
-
                 <!-- Tools -->
                 <div class="section collapsed" data-section="tools">
                     <div class="section-header">
@@ -3065,7 +3249,6 @@
                         <div class="tool-tabs">
                             <button class="tool-tab active" data-tool="centrality">Centrality</button>
                             <button class="tool-tab" data-tool="cycles">Cycles</button>
-                            <button class="tool-tab" data-tool="catalog">Catalog</button>
                         </div>
                         <div class="tool-panel active" data-tool="centrality">
                             <div class="section-subhead" style="margin-top:0">Top by Degree</div>
@@ -3080,24 +3263,21 @@
                                 <span id="cycle-status-text">Click to run detection</span>
                             </div>
                         </div>
-                        <div class="tool-panel" data-tool="catalog">
-                            <div class="section-subhead" style="margin-top:0;color:var(--text-dim);font-weight:400;text-transform:none;letter-spacing:0;font-size:11px;line-height:1.5">Render the full repository structure as a navigable tree.</div>
-                            <button class="primary" id="catalog-open">Generate Catalog</button>
-                        </div>
                     </div>
                 </div>
+                </div><!-- /#pane-graph -->
             </div>
 
             <div class="sidebar-footer">
                 <button id="reset">Reset View</button>
-                <button id="fit">Fit Graph</button>
             </div>
         </aside>
 
-        <button id="sidebar-toggle" class="pending" title="Toggle sidebar">
+        <button id="sidebar-launcher" class="pending" title="Show panel">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
                 stroke-linejoin="round">
-                <polyline points="15 18 9 12 15 6" />
+                <rect x="3" y="3" width="18" height="18" rx="2" />
+                <line x1="9" y1="3" x2="9" y2="21" />
             </svg>
         </button>
 
@@ -3129,56 +3309,6 @@
                 </div>
             </div>
             <div id="info-body"></div>
-        </div>
-
-        <div id="catalog-modal" class="catalog-modal" aria-hidden="true">
-            <div class="catalog-backdrop" data-catalog-close></div>
-            <div class="catalog-dialog" role="dialog" aria-labelledby="catalog-title">
-                <div class="catalog-header">
-                    <div class="catalog-title-group">
-                        <span class="catalog-title-dot"></span>
-                        <h3 id="catalog-title">Repository Catalog</h3>
-                        <span class="catalog-subtitle" id="catalog-subtitle"></span>
-                    </div>
-                    <div class="catalog-header-actions">
-                        <label class="catalog-toggle">
-                            <input type="checkbox" id="catalog-symbols" checked>
-                            <span>Include symbols</span>
-                        </label>
-                        <button class="catalog-icon-btn" id="catalog-copy" title="Copy as Markdown">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                            </svg>
-                            <span class="catalog-copy-label">Markdown</span>
-                        </button>
-                        <button class="catalog-icon-btn" data-catalog-close title="Close (Esc)">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                <line x1="18" y1="6" x2="6" y2="18" />
-                                <line x1="6" y1="6" x2="18" y2="18" />
-                            </svg>
-                        </button>
-                    </div>
-                </div>
-                <div class="catalog-toolbar">
-                    <div class="catalog-search-wrapper">
-                        <svg class="catalog-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <circle cx="11" cy="11" r="8" />
-                            <line x1="21" y1="21" x2="16.65" y2="16.65" />
-                        </svg>
-                        <input type="text" id="catalog-filter" class="catalog-search-input" placeholder="Filter by name or path…" autocomplete="off">
-                    </div>
-                    <div class="catalog-toolbar-actions">
-                        <button class="catalog-mini-btn" id="catalog-expand-all" title="Expand all">Expand</button>
-                        <button class="catalog-mini-btn" id="catalog-collapse-all" title="Collapse all">Collapse</button>
-                    </div>
-                </div>
-                <div class="catalog-body" id="catalog-body"></div>
-                <div class="catalog-footer">
-                    <span id="catalog-stats" class="catalog-stats"></span>
-                    <span class="catalog-hint">Click a row to focus it in the graph</span>
-                </div>
-            </div>
         </div>
 
         <div id="loading">
@@ -3437,8 +3567,6 @@
             state.nodeById = new Map(state.graph.nodes.map(n => [n.id, n]));
             document.body.classList.toggle('perf-mode', state.perfMode);
 
-            document.getElementById('nodeCount').textContent = nodeCount;
-            document.getElementById('edgeCount').textContent = edgeCount;
             document.getElementById('sidebar-meta').textContent = `${nodeCount}N · ${edgeCount}E`;
             document.getElementById('graph-title').textContent =
                 `${nodeCount} nodes, ${edgeCount} edges` +
@@ -3446,7 +3574,6 @@
 
             buildNodeFilterChips();
             buildEdgeFilterChips();
-            buildEdgeBreakdown();
             buildLegend();
             renderIndexStats();
             createGraph();
@@ -3455,16 +3582,18 @@
 
             document.getElementById('loading').style.display = 'none';
             document.getElementById('sidebar').classList.remove('pending');
-            document.getElementById('sidebar-toggle').classList.remove('pending');
+            document.getElementById('sidebar-launcher').classList.remove('pending');
             wireSidebarSections();
             wireSearch();
             wireToggle();
+            wireSidebarResize();
             wireToolTabs();
             wireFooter();
             wireFilterActions();
             wireSemanticPanel();
             wireChatPanel();
             wireFindPathBtn();
+            wirePanelTabs();
             wireCatalog();
             probeCapabilities();
             startHealthPolling();
@@ -4117,8 +4246,51 @@
 
         function wireToggle() {
             const sidebar = document.getElementById('sidebar');
-            document.getElementById('sidebar-toggle').addEventListener('click', () => {
-                sidebar.classList.toggle('collapsed');
+            const setCollapsed = (collapsed) => sidebar.classList.toggle('collapsed', collapsed);
+            // In-header chevron hides the panel; floating launcher brings it back.
+            document.getElementById('sidebar-collapse').addEventListener('click', () => setCollapsed(true));
+            document.getElementById('sidebar-launcher').addEventListener('click', () => setCollapsed(false));
+            // Keyboard: "[" toggles the panel (ignored while typing in a field).
+            document.addEventListener('keydown', (e) => {
+                if (e.key !== '[' || e.metaKey || e.ctrlKey || e.altKey) return;
+                const t = e.target;
+                if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+                setCollapsed(!sidebar.classList.contains('collapsed'));
+            });
+        }
+
+        // Drag the right edge of the sidebar to resize it; width persists across reloads.
+        function wireSidebarResize() {
+            const handle = document.getElementById('sidebar-resize');
+            const root = document.documentElement;
+            const MIN = 300, MAX = 680;
+            const apply = (px) => root.style.setProperty('--sidebar-width', px + 'px');
+            const readWidth = () =>
+                parseInt(getComputedStyle(root).getPropertyValue('--sidebar-width'), 10) || 384;
+
+            const saved = parseInt(localStorage.getItem('ug-sidebar-width'), 10);
+            if (saved >= MIN && saved <= MAX) apply(saved);
+
+            let startX = 0, startW = 0;
+            const onMove = (e) => apply(Math.min(MAX, Math.max(MIN, startW + (e.clientX - startX))));
+            const onUp = () => {
+                document.body.classList.remove('resizing');
+                window.removeEventListener('mousemove', onMove);
+                window.removeEventListener('mouseup', onUp);
+                localStorage.setItem('ug-sidebar-width', readWidth());
+            };
+            handle.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                startX = e.clientX;
+                startW = readWidth();
+                document.body.classList.add('resizing');
+                window.addEventListener('mousemove', onMove);
+                window.addEventListener('mouseup', onUp);
+            });
+            // Double-click resets to the default width.
+            handle.addEventListener('dblclick', () => {
+                apply(384);
+                localStorage.setItem('ug-sidebar-width', 384);
             });
         }
 
@@ -4141,7 +4313,6 @@
 
         function wireFooter() {
             document.getElementById('reset').addEventListener('click', resetView);
-            document.getElementById('fit').addEventListener('click', fitGraph);
         }
 
         function wireFilterActions() {
@@ -4217,25 +4388,6 @@
             });
         }
 
-        function buildEdgeBreakdown() {
-            const counts = {};
-            state.graph.edges.forEach(e => {
-                const r = e.rel || 'default';
-                counts[r] = (counts[r] || 0) + 1;
-            });
-            const container = document.getElementById('edge-breakdown');
-            container.innerHTML = '';
-            Object.entries(counts).sort((a, b) => b[1] - a[1]).forEach(([rel, count]) => {
-                const row = document.createElement('div');
-                row.className = 'edge-breakdown-row';
-                row.innerHTML = `
-                    <span class="dot" style="background:${config.getRelColor(rel)}"></span>
-                    <span class="name">${rel}</span>
-                    <span class="count">${count}</span>
-                `;
-                container.appendChild(row);
-            });
-        }
 
         function applyFilters() {
             const nodeMatches = n =>
@@ -4673,7 +4825,10 @@
                 // over-zoom (tiny clusters bloom out) or under-zoom (sparse, empty
                 // view), so we keep the framing simple and predictable.
                 const x = +n.x || 0, y = +n.y || 0, z = +n.z || 0;
-                const d = 150 / Math.sqrt(3);
+                // Total camera-to-node distance (the (d,d,d) offset has magnitude
+                // sqrt(3)*d). Pulled back from 150 so more of the surrounding
+                // neighbourhood stays in frame on focus.
+                const d = 280 / Math.sqrt(3);
                 Graph.cameraPosition(
                     { x: x + d, y: y + d, z: z + d },
                     { x, y, z },
@@ -5719,11 +5874,6 @@
             bumpGraphStyles();
         }
 
-        function fitGraph() {
-            if (!Graph || !state.graph.nodes.length) return;
-            frameGraph(600);
-        }
-
         // ─── Tools ──────────────────────────────────────────
 
         function showCentrality() {
@@ -5804,26 +5954,31 @@
 
         // ─── Catalog (repo TOC) ────────────────────────────
 
+        // Switches between the three left-panel tabs (Catalog / Discover / Graph).
+        function wirePanelTabs() {
+            const tabs = document.querySelectorAll('.panel-tab');
+            const panes = document.querySelectorAll('.tab-pane');
+            const activate = (name) => {
+                tabs.forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+                panes.forEach(p => p.classList.toggle('active', p.dataset.tab === name));
+                state.activeTab = name;
+                // Catalog renders lazily — make sure it's populated when revealed.
+                if (name === 'catalog') renderCatalog();
+            };
+            tabs.forEach(tab => tab.addEventListener('click', () => activate(tab.dataset.tab)));
+        }
+
         function wireCatalog() {
-            const modal = document.getElementById('catalog-modal');
-            const openBtn = document.getElementById('catalog-open');
             const filter = document.getElementById('catalog-filter');
             const symbolsToggle = document.getElementById('catalog-symbols');
             const expandAll = document.getElementById('catalog-expand-all');
             const collapseAll = document.getElementById('catalog-collapse-all');
             const copyBtn = document.getElementById('catalog-copy');
 
-            openBtn.addEventListener('click', openCatalog);
-
-            modal.querySelectorAll('[data-catalog-close]').forEach(el => {
-                el.addEventListener('click', closeCatalog);
-            });
-
-            document.addEventListener('keydown', e => {
-                if (e.key === 'Escape' && modal.classList.contains('visible')) {
-                    closeCatalog();
-                }
-            });
+            if (state.catalogIncludeSymbols == null) state.catalogIncludeSymbols = true;
+            if (!state.catalogFilter) state.catalogFilter = '';
+            symbolsToggle.checked = state.catalogIncludeSymbols;
+            filter.value = state.catalogFilter;
 
             filter.addEventListener('input', () => {
                 state.catalogFilter = filter.value.trim().toLowerCase();
@@ -5837,31 +5992,11 @@
 
             expandAll.addEventListener('click', () => setAllCatalogExpanded(true));
             collapseAll.addEventListener('click', () => setAllCatalogExpanded(false));
-
             copyBtn.addEventListener('click', copyCatalogMarkdown);
-        }
 
-        function openCatalog() {
-            const modal = document.getElementById('catalog-modal');
-            const filter = document.getElementById('catalog-filter');
-            const symbolsToggle = document.getElementById('catalog-symbols');
-
-            if (state.catalogIncludeSymbols == null) state.catalogIncludeSymbols = true;
-            if (!state.catalogFilter) state.catalogFilter = '';
-            symbolsToggle.checked = state.catalogIncludeSymbols;
-            filter.value = state.catalogFilter;
-
+            // Catalog is the default tab, so build + render it up front.
             buildCatalogTree();
             renderCatalog();
-            modal.classList.add('visible');
-            modal.setAttribute('aria-hidden', 'false');
-            requestAnimationFrame(() => filter.focus());
-        }
-
-        function closeCatalog() {
-            const modal = document.getElementById('catalog-modal');
-            modal.classList.remove('visible');
-            modal.setAttribute('aria-hidden', 'true');
         }
 
         // Builds a tree of node ids rooted at every Folder/File with no Contains
@@ -5909,6 +6044,12 @@
                     const ra = rank(na.group);
                     const rb = rank(nb.group);
                     if (ra !== rb) return ra - rb;
+                    // Two symbols (e.g. nested headings) read best in source order.
+                    if (ra === 2) {
+                        const la = na.startLine == null ? Infinity : na.startLine;
+                        const lb = nb.startLine == null ? Infinity : nb.startLine;
+                        if (la !== lb) return la - lb;
+                    }
                     return String(na.name).localeCompare(String(nb.name));
                 });
             };
@@ -5978,6 +6119,17 @@
                 return false;
             };
 
+            // The catalog renders the whole Contains hierarchy through a single
+            // recursive path. buildKids() returns *all* children of a node;
+            // symbols are gated here by the "Symbols" toggle. Rendering symbols
+            // through this same path (instead of a separate renderSymbol pass)
+            // is what prevents every symbol from appearing twice.
+            const isContainer = (id) => tree.isFolder(id) || tree.isFile(id);
+            const childIds = (id) => {
+                const kids = tree.buildKids(id);
+                return includeSymbols ? kids : kids.filter(isContainer);
+            };
+
             // Two-pass: first decide which subtrees to keep when filtering, then render.
             const keepSet = new Set();
             const matchSet = new Set();
@@ -5985,21 +6137,11 @@
                 const visit = (id) => {
                     const n = tree.nodeById.get(id);
                     if (!n) return false;
-                    const showHere = includeSymbols || tree.isFolder(id) || tree.isFile(id);
                     let keep = false;
-                    const kids = tree.buildKids(id);
-                    const childSymbols = includeSymbols ? findChildSymbols(id) : [];
-                    for (const k of kids) {
+                    for (const k of childIds(id)) {
                         if (visit(k)) keep = true;
                     }
-                    for (const s of childSymbols) {
-                        if (matches(s)) {
-                            keep = true;
-                            matchSet.add(s.id);
-                            keepSet.add(s.id);
-                        }
-                    }
-                    if (showHere && matches(n)) {
+                    if (matches(n)) {
                         keep = true;
                         matchSet.add(id);
                     }
@@ -6015,24 +6157,20 @@
                 if (!n) return;
                 if (filter && !keepSet.has(id)) return;
 
-                const kids = tree.buildKids(id);
-                const symbols = includeSymbols ? findChildSymbols(id) : [];
+                const kids = childIds(id);
                 const visibleKids = filter ? kids.filter(k => keepSet.has(k)) : kids;
-                const visibleSymbols = filter
-                    ? symbols.filter(s => keepSet.has(s.id))
-                    : symbols;
-                const hasChildren = visibleKids.length > 0 || visibleSymbols.length > 0;
+                const hasChildren = visibleKids.length > 0;
                 const isExpanded = expanded.has(id) || (filter && hasChildren);
                 const color = config.getColor(n.group);
 
                 if (n.group === 'Folder') counters.folders++;
                 else if (n.group === 'File') counters.files++;
+                else counters.symbols++;
                 counters.shown++;
 
                 const meta = [];
-                if (visibleKids.length || visibleSymbols.length) {
-                    const childCount = visibleKids.length + visibleSymbols.length;
-                    meta.push(`${childCount} item${childCount === 1 ? '' : 's'}`);
+                if (visibleKids.length) {
+                    meta.push(`${visibleKids.length} item${visibleKids.length === 1 ? '' : 's'}`);
                 }
                 if (n.startLine != null) {
                     let lineLabel = `L${n.startLine}`;
@@ -6060,36 +6198,8 @@
                 html.push(`<div class="cat-children">`);
                 if (hasChildren) {
                     visibleKids.forEach(k => renderNode(k, depth + 1));
-                    visibleSymbols.forEach(s => renderSymbol(s, depth + 1));
                 }
                 html.push(`</div>`);
-            };
-
-            const renderSymbol = (s, depth) => {
-                if (filter && !keepSet.has(s.id)) return;
-                counters.symbols++;
-                counters.shown++;
-                const color = config.getColor(s.group);
-                let lineLabel = '';
-                if (s.startLine != null) {
-                    lineLabel = `L${s.startLine}`;
-                    if (s.endLine != null && s.endLine !== s.startLine) {
-                        lineLabel += `–${s.endLine}`;
-                    }
-                }
-                const nameHtml = highlight(truncateName(s.name), filter);
-                const cls = ['cat-node'];
-                if (matchSet.has(s.id) && filter) cls.push('match-self');
-                html.push(`<div class="${cls.join(' ')}" data-id="${escapeHtml(s.id)}" data-leaf="1" title="${escapeHtml(s.id)}">
-                    <span class="cat-toggle empty">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
-                    </span>
-                    <span class="cat-dot" style="background:${color};color:${color}"></span>
-                    <span class="cat-name">${nameHtml}</span>
-                    <span class="cat-kind">${escapeHtml((s.group || '').toLowerCase())}</span>
-                    ${lineLabel ? `<span class="cat-meta">${escapeHtml(lineLabel)}</span>` : ''}
-                </div>`);
-                html.push(`<div class="cat-children"></div>`);
             };
 
             html.push(`<div class="catalog-tree">`);
@@ -6103,6 +6213,11 @@
             } else {
                 body.innerHTML = html.join('');
                 wireCatalogRows(body);
+                // Re-apply the focused marker after a re-render (filter/expand etc.).
+                if (state.catalogFocusedId) {
+                    const r = body.querySelector(`.cat-node[data-id="${CSS.escape(state.catalogFocusedId)}"]`);
+                    if (r) r.classList.add('focused');
+                }
             }
 
             const parts = [];
@@ -6112,26 +6227,6 @@
                 parts.push(`${counters.symbols} symbol${counters.symbols === 1 ? '' : 's'}`);
             }
             stats.textContent = parts.join(' · ');
-        }
-
-        function findChildSymbols(parentId) {
-            const { childrenOf } = getContainsMaps();
-            const nodeById = state.nodeById;
-            const out = [];
-            const stack = (childrenOf.get(parentId) || []).slice();
-            while (stack.length) {
-                const id = stack.pop();
-                const n = nodeById.get(id);
-                if (!n) continue;
-                if (n.group === 'Folder' || n.group === 'File') continue;
-                out.push(n);
-            }
-            return out.sort((a, b) => {
-                const la = a.startLine == null ? Infinity : a.startLine;
-                const lb = b.startLine == null ? Infinity : b.startLine;
-                if (la !== lb) return la - lb;
-                return String(a.name).localeCompare(String(b.name));
-            });
         }
 
         function wireCatalogRows(body) {
@@ -6147,11 +6242,28 @@
                     const id = row.dataset.id;
                     const node = state.nodeById ? state.nodeById.get(id) : null;
                     if (!node) return;
+                    // Immersive focus: select + fly the camera, and pulse the row
+                    // so the click reads as an immediate, juicy action — panel stays
+                    // open so the tree remains a live navigation surface.
                     handleClick(null, node);
                     focusNode(node);
-                    closeCatalog();
+                    markCatalogFocused(row, id);
                 });
             });
+        }
+
+        // Visual feedback for the catalog row whose node was just focused: a
+        // persistent left-bar marker plus a one-shot pulse animation.
+        function markCatalogFocused(row, id) {
+            state.catalogFocusedId = id;
+            const body = document.getElementById('catalog-body');
+            if (body) body.querySelectorAll('.cat-node.focused').forEach(r => r.classList.remove('focused'));
+            row.classList.add('focused');
+            row.classList.remove('just-focused');
+            // Force reflow so re-adding the class restarts the animation.
+            void row.offsetWidth;
+            row.classList.add('just-focused');
+            row.addEventListener('animationend', () => row.classList.remove('just-focused'), { once: true });
         }
 
         function toggleCatalogRow(row) {
@@ -6193,16 +6305,13 @@
                     extra = ` _(L${n.startLine}${n.endLine != null && n.endLine !== n.startLine ? `–${n.endLine}` : ''})_`;
                 }
                 lines.push(`${indent}- ${tag} **${n.name}**${extra}`);
-                tree.buildKids(id).forEach(k => walk(k, depth + 1));
-                if (includeSymbols) {
-                    findChildSymbols(id).forEach(s => {
-                        const sIndent = '  '.repeat(depth + 1);
-                        const sExtra = s.startLine != null
-                            ? ` _(L${s.startLine}${s.endLine != null && s.endLine !== s.startLine ? `–${s.endLine}` : ''})_`
-                            : '';
-                        lines.push(`${sIndent}- \`${s.group || 'Symbol'}\` ${s.name}${sExtra}`);
-                    });
-                }
+                // Single recursive walk — symbols are just children, gated by the
+                // "Symbols" toggle (mirrors the on-screen tree; no duplication).
+                tree.buildKids(id).forEach(k => {
+                    const kn = tree.nodeById.get(k);
+                    if (!includeSymbols && kn && kn.group !== 'Folder' && kn.group !== 'File') return;
+                    walk(k, depth + 1);
+                });
             };
             tree.roots.forEach(r => walk(r, 0));
 
