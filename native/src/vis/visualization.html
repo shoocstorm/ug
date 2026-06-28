@@ -3111,6 +3111,9 @@
             <button class="vbtn" data-view="6" title="View face 6 — XZ plane (bottom)"><span class="vn" style="color:#fb923c">6</span><span class="vp">XZ</span></button>
             <button class="vbtn vbtn-3d active" data-view="3d" title="Isometric 3D view"><span class="vn">3D</span><span class="vp">ISO</span></button>
             <div class="vsep"></div>
+            <button class="vtoggle" id="zoom-in" title="Zoom in — move camera closer (mouse wheel up)"><span class="vt-ico">＋</span><span class="vt-lbl">In</span></button>
+            <button class="vtoggle" id="zoom-out" title="Zoom out — move camera farther (mouse wheel down)"><span class="vt-ico">－</span><span class="vt-lbl">Out</span></button>
+            <div class="vsep"></div>
             <button class="vtoggle active" id="toggle-box" title="Show / hide the boundary box, corners & face labels"><span class="vt-ico">▦</span><span class="vt-lbl">Box</span></button>
             <button class="vtoggle" id="toggle-spin" title="Toggle auto-rotation"><span class="vt-ico">⟳</span><span class="vt-lbl">Spin</span></button>
         </div>
@@ -4715,6 +4718,11 @@
                 spinBtn.classList.toggle('spinning', state.autoSpin);
                 applyAutoSpin();
             });
+
+            const zIn = document.getElementById('zoom-in');
+            const zOut = document.getElementById('zoom-out');
+            if (zIn) zIn.addEventListener('click', () => zoomBy(0.8));
+            if (zOut) zOut.addEventListener('click', () => zoomBy(1.25));
         }
 
         // ─── On-canvas legend (doubles as a type filter) ─────
@@ -5187,10 +5195,20 @@
                 .height(height);
 
             const charge = Graph.d3Force('charge');
-            if (charge) charge.strength(state.perfMode ? -60 : -120);
+            // smaller charge in perf mode so the layout doesn't explode outward and the camera doesn't have to fly miles away to fit it all.
+            if (charge) charge.strength(state.perfMode ? -50 : -70);
+            // shorter Link distance, means closer connected nodes
             const linkForce = Graph.d3Force('link');
-            if (linkForce) linkForce.distance(45);
+            if (linkForce) linkForce.distance(state.perfMode ? 35 : 50);
             Graph.d3Force('zBound', makeZBoundForce());
+
+            // Converge fast so the user isn't waiting for the layout to settle:
+            // steeper alpha decay + extra velocity friction stop the slow outward
+            // drift much sooner, and the cooldown cap guarantees the engine quits
+            // within a bounded number of ticks regardless of graph size.
+            Graph.d3AlphaDecay(state.perfMode ? 0.05 : 0.07);
+            Graph.d3VelocityDecay(0.6);
+            Graph.cooldownTicks(state.perfMode ? 80 : 100);
 
             // Subtle gradient backdrop (in-scene, so it sits behind the graph and
             // reads as soft ambient light instead of a flat black void).
@@ -5213,8 +5231,6 @@
                 };
                 addBloom();
             }
-
-            if (state.perfMode) Graph.cooldownTicks(80);
 
             // Animated selection marker: a spinning, pulsing ring that sits on the
             // currently selected node (added to the scene, repositioned each frame).
@@ -5343,6 +5359,28 @@
 
         // Frame the graph at the default 3D isometric view.
         function frameGraph(ms = 600) { setView('3d', ms); }
+
+        // Scale the camera's orbit radius by `factor` (mirrors the mouse-wheel
+        // dolly: <1 zooms in, >1 zooms out). Keeps the same look-at target so the
+        // view direction is preserved; only the distance changes.
+        function zoomBy(factor) {
+            if (!Graph) return;
+            const controls = Graph.controls && Graph.controls();
+            const cam = Graph.camera && Graph.camera();
+            if (!controls || !cam) return;
+            const t = controls.target;
+            const p = cam.position;
+            const dx = p.x - t.x, dy = p.y - t.y, dz = p.z - t.z;
+            const dist = Math.hypot(dx, dy, dz) || 1;
+            // Floor so the camera can't cross the orbit target.
+            const newDist = Math.max(dist * factor, Math.max(dist * 0.05, 2));
+            const k = newDist / dist;
+            Graph.cameraPosition(
+                { x: t.x + dx * k, y: t.y + dy * k, z: t.z + dz * k },
+                { x: t.x, y: t.y, z: t.z },
+                180
+            );
+        }
 
         // Dashed wireframe cube showing the graph bounding box as spatial reference.
         function makeAxisLabel(text, hex) {
