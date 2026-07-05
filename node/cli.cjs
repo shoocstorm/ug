@@ -1,12 +1,22 @@
 #!/usr/bin/env node
 
-const { join, dirname } = require('path');
-const { readFileSync, existsSync, writeFileSync, mkdirSync, copyFileSync } = require('fs');
+const { join, dirname, resolve } = require('path');
+const { readFileSync, existsSync, writeFileSync, mkdirSync, copyFileSync, realpathSync } = require('fs');
 const chalk = require('chalk');
 chalk.level = 2;
 
+const project = require('./project.cjs');
+
 const binding = join(dirname(__dirname), '.ug', 'ultragraph.node');
 const ug = require(binding);
+
+// Project name for an invocation: -n/--name flag wins, else derived
+// from the given input path's basename (see project.cjs).
+function resolveProjectName(args, inputPath) {
+  const flagged = extractFlag(args, '-n') || extractFlag(args, '--name');
+  if (flagged) return project.sanitizeName(flagged);
+  return project.deriveProjectName(inputPath || '.');
+}
 
 function extractArg(args, shortFlag, longFlag, defaultValue) {
   const shortIdx = args.indexOf(shortFlag);
@@ -56,12 +66,13 @@ function parseEmbedderOptions(args) {
 
 const commands = {
   index: {
-    usage: '[<input dir>] [-i|--input <dir>] [-c|--cache <cache-dir>] [-o|--output <output-path>]',
-    desc: 'Index a directory and output the symbol tree as JSON into a file specified by `--output` (default: `.ug/indexed-tree.json`). Use `--cache` to speed up re-indexing.',
+    usage: '[<input dir>] [-i|--input <dir>] [-n|--name <project>] [-c|--cache <cache-dir>] [-o|--output <output-path>]',
+    desc: 'Index a directory and output the symbol tree as JSON into a file specified by `--output` (default: `~/.ug/<name>/indexed-tree.json`). Use `--cache` to speed up re-indexing.',
     run: (args) => {
       const path = extractFlag(args, '-i') || extractFlag(args, '--input') || (args[0] || '.');
       const cachePath = extractFlag(args, '-c') || extractFlag(args, '--cache');
-      const outputPath = extractFlag(args, '-o') || extractFlag(args, '--output') || '.ug/indexed-tree.json';
+      const outputPath = extractFlag(args, '-o') || extractFlag(args, '--output')
+        || join(project.projectDir(resolveProjectName(args, path)), 'indexed-tree.json');
 
       // Ensure output directory exists
       const outputDir = dirname(outputPath);
@@ -80,11 +91,13 @@ const commands = {
     }
   },
   graph: {
-    usage: '[<indexed-tree-json-file>] [-i|--input <file>] [-o|--output <output-path>]',
-    desc: 'Build graph from index result (i.e.: .ug/indexed-tree.json) and generates graph.json',
+    usage: '[<indexed-tree-json-file>] [-i|--input <file>] [-n|--name <project>] [-o|--output <output-path>]',
+    desc: 'Build graph from index result (i.e.: ~/.ug/<name>/indexed-tree.json) and generates graph.json',
     run: (args) => {
-      const path = extractFlag(args, '-i') || extractFlag(args, '--input') || (args.length ? args[0] : '.ug/indexed-tree.json');
-      const outputPath = extractFlag(args, '-o') || extractFlag(args, '--output') || '.ug/graph.json';
+      const projectDir = project.projectDir(resolveProjectName(args, '.'));
+      const path = extractFlag(args, '-i') || extractFlag(args, '--input')
+        || (args.length && !args[0].startsWith('-') ? args[0] : join(projectDir, 'indexed-tree.json'));
+      const outputPath = extractFlag(args, '-o') || extractFlag(args, '--output') || join(projectDir, 'graph.json');
 
       // Ensure output directory exists
       const outputDir = dirname(outputPath);
@@ -102,17 +115,20 @@ const commands = {
     }
   },
   gen: {
-    usage: '[-i|--input <input-dir, default: .>] [-c|--cache <cache-dir>] [-o|--output <output-dir, default: ./.ug>] [-d|--db <db-path, default: ./.ug/ugdb>] [--no-ingest] [-m|--model <embedding-model-name>] [-b|--base-url <embedding-api-base-url>] [-a|--api-key <embedding-api-key>]',
-    desc: 'Full pipeline: index → graph → visualization → OverGraph ingest. DB defaults to <output-dir>/ugdb. Pass --no-ingest to skip ingestion (no embedding endpoint required).',
+    usage: '[-i|--input <input-dir, default: .>] [-n|--name <project, default: input dir basename>] [-c|--cache <cache-dir>] [-o|--output <output-dir, default: ~/.ug/<name>>] [-d|--db <db-path, default: <output-dir>/ugdb>] [--no-ingest] [-m|--model <embedding-model-name>] [-b|--base-url <embedding-api-base-url>] [-a|--api-key <embedding-api-key>]',
+    desc: 'Full pipeline: index → graph → visualization → OverGraph ingest. Outputs to ~/.ug/<project-name>/ by default. Pass --no-ingest to skip ingestion (no embedding endpoint required).',
     run: async (args) => {
       if (args.includes('-h') || args.includes('--help')) {
         console.log(`gen ${commands.gen.usage}`);
         console.log(`  ${commands.gen.desc}`);
         return;
       }
-      const path = extractFlag(args, '-i') || extractFlag(args, '--input') || (args.length ? args[0] : '.');
+      const path = extractFlag(args, '-i') || extractFlag(args, '--input')
+        || (args.length && !args[0].startsWith('-') ? args[0] : '.');
       const cachePath = extractFlag(args, '-c') || extractFlag(args, '--cache');
-      const outputDir = extractFlag(args, '-o') || extractFlag(args, '--output') || '.ug';
+      const projectName = resolveProjectName(args, path);
+      const outputDir = extractFlag(args, '-o') || extractFlag(args, '--output')
+        || project.projectDir(projectName);
 
       console.log(chalk.cyan('\n⚡ Full pipeline: ') + chalk.white('index ') + chalk.gray('→') + chalk.white(' graph ') + chalk.gray('→') + chalk.white(' visualization ') + chalk.gray('→') + chalk.white(' OverGraph ingest'));
 
@@ -134,6 +150,7 @@ const commands = {
       console.log(chalk.gray('▸') + ' ' + chalk.blue('Building graph'));
       const graphPath = join(outputDir, 'graph.json');
       writeFileSync(graphPath, graph);
+      writeFileSync(join(outputDir, 'indexed-tree.json'), result);
       const graphData = JSON.parse(graph);
       const nodeCount = graphData.nodes?.length ?? 0;
       const edgeCount = graphData.edges?.length ?? 0;
@@ -150,14 +167,27 @@ const commands = {
         copyFileSync(indexMdSrc, join(outputDir, 'README.md'));
       }
 
+      let repoRoot = path;
+      try {
+        repoRoot = realpathSync(resolve(path));
+      } catch {}
+      project.writeProjectMeta(outputDir, {
+        name: projectName,
+        repoRoot,
+        nodes: nodeCount,
+        edges: edgeCount,
+      });
+
       console.log(chalk.gray('────────────────────────────────────────'));
-      console.log(chalk.green('✓') + ' ' + chalk.bold('Generated in') + ' ' + chalk.cyan(outputDir + '/'));
+      console.log(chalk.green('✓') + ' ' + chalk.bold('Generated project ') + chalk.cyan(projectName) + chalk.bold(' in') + ' ' + chalk.cyan(outputDir + '/'));
       console.log('  ' + chalk.green('✓') + ' ' + chalk.white('graph.json'));
+      console.log('  ' + chalk.green('✓') + ' ' + chalk.white('indexed-tree.json'));
       console.log('  ' + chalk.green('✓') + ' ' + chalk.white('README.md'));
+      console.log('  ' + chalk.green('✓') + ' ' + chalk.white('project.json'));
 
       if (args.includes('--no-ingest')) {
         console.log(chalk.yellow('⚠ ') + 'Skipping db-ingest (--no-ingest)');
-        return chalk.cyan('Visit http://localhost:8080 to view the graph');
+        return chalk.cyan(`Run "ug serve" and visit http://localhost:8080 to view the graph`);
       }
 
       const dbPath = extractFlag(args, '-d') || extractFlag(args, '--db') || join(outputDir, 'ugdb');
@@ -179,8 +209,8 @@ const commands = {
       }
 
       console.log(chalk.gray('────────────────────────────────────────'));
-      console.log(chalk.cyan('Visit http://localhost:8080 to view the graph'));
-      console.log(chalk.cyan('Run "node .ug/cli.cjs db-rag .ug/ugdb hello" to perform a RAG query on the DB.'));
+      console.log(chalk.cyan('Run "ug serve" and visit http://localhost:8080 to view the graph'));
+      console.log(chalk.cyan(`Run "node node/cli.cjs db-rag -i ${dbPath} hello" to perform a RAG query on the DB.`));
 
       return;
     }
@@ -273,6 +303,27 @@ const commands = {
       const embedderOptions = parseEmbedderOptions(args);
       const result = await ug.pingEmbedder(embedderOptions ? JSON.stringify(embedderOptions) : null);
       return result;
+    }
+  },
+  list: {
+    usage: '',
+    desc: 'List generated projects under ~/.ug (or $UG_HOME)',
+    run: () => {
+      const projects = project.listProjects();
+      const root = project.ugHome();
+      if (!projects.length) {
+        return `No projects found in ${root}. Run \`node node/cli.cjs gen\` in a repo to create one.`;
+      }
+      const cwdName = project.deriveProjectName('.');
+      console.log(chalk.bold(`Projects in ${root}`) + chalk.gray(` (${projects.length})`) + '\n');
+      console.log('  ' + chalk.bold('NAME'.padEnd(24) + 'NODES'.padStart(8) + 'EDGES'.padStart(9) + '  UPDATED'.padEnd(22) + 'REPO'));
+      for (const { meta } of projects) {
+        const marker = meta.name === cwdName ? chalk.green('*') : ' ';
+        const updated = meta.updatedAt ? new Date(meta.updatedAt * 1000).toISOString().replace('T', ' ').slice(0, 19) : '-';
+        console.log(`${marker} ${chalk.cyan(String(meta.name).padEnd(24))}${String(meta.nodes).padStart(8)}${String(meta.edges).padStart(9)}  ${updated.padEnd(20)}${meta.repoRoot || ''}`);
+      }
+      console.log('\n' + chalk.bold('*') + ' matches the current directory.');
+      return;
     }
   },
   help: {

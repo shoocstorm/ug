@@ -203,18 +203,187 @@ impl ServeStores {
     }
 }
 
-#[derive(Clone)]
-struct ServeState {
-    graph_path: Arc<PathBuf>,
-    graph: Arc<RwLock<Arc<GraphSnapshot>>>,
-    html: Arc<EncodedAsset>,
-    bundle: Arc<EncodedAsset>,
+/// Everything the handlers need for one project: its graph snapshot,
+/// opened stores, and repo root. In multi-project mode one of these is
+/// built lazily per project the first time it's selected; in
+/// single-project mode (`-i`) there is exactly one.
+struct ProjectContext {
+    name: String,
+    graph_path: PathBuf,
+    repo_root: PathBuf,
+    graph: RwLock<Arc<GraphSnapshot>>,
     /// `None` when `--no-db` is set or every configured store failed
     /// to open. Phase 3 routes return 503 in that case rather than
     /// panicking the server. With multi-dest, this is `Some` as long
     /// as at least one backend opened; per-dest readiness is reported
     /// in `/api/capabilities`.
     stores: Option<Arc<ServeStores>>,
+    /// Reason all configured Phase 3 backends are unavailable —
+    /// surfaced verbatim in 503s so the operator can tell `--no-db`
+    /// apart from real connection failures. Per-dest errors live on
+    /// `ServeStores::open_errors`.
+    db_unavailable_reason: Option<String>,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum ServeMode {
+    /// Explicit `-i <graph.json>` — exactly one project, no switcher.
+    Single,
+    /// Rooted at `ug_home()`; projects discovered from disk and
+    /// switchable at runtime via `POST /api/projects/select`.
+    Multi,
+}
+
+/// Which project the handlers read from. The active project is a
+/// server-side selection (one per process): switching swaps what every
+/// root-relative route (`/graph.json`, `/api/*`) resolves to, so the
+/// UI just reloads after a switch.
+struct ProjectRegistry {
+    mode: ServeMode,
+    no_db: bool,
+    active: RwLock<String>,
+    loaded: RwLock<HashMap<String, Arc<ProjectContext>>>,
+}
+
+impl ProjectRegistry {
+    fn active_ctx(&self) -> Arc<ProjectContext> {
+        let name = self.active.read().expect("active poisoned").clone();
+        self.loaded
+            .read()
+            .expect("loaded poisoned")
+            .get(&name)
+            .cloned()
+            .expect("active project is always loaded")
+    }
+
+    fn get_loaded(&self, name: &str) -> Option<Arc<ProjectContext>> {
+        self.loaded.read().expect("loaded poisoned").get(name).cloned()
+    }
+
+    fn insert_and_activate(&self, ctx: Arc<ProjectContext>) {
+        let name = ctx.name.clone();
+        self.loaded
+            .write()
+            .expect("loaded poisoned")
+            .insert(name.clone(), ctx);
+        *self.active.write().expect("active poisoned") = name;
+    }
+
+    fn set_active(&self, name: &str) {
+        *self.active.write().expect("active poisoned") = name.to_string();
+    }
+}
+
+/// Build the per-project context: snapshot off the runtime (parse +
+/// recompress is CPU-heavy), stores via the same env-driven specs as
+/// before. `repo_root` comes from the project's project.json when
+/// present so file preview works no matter where the server was
+/// started; explicit `repo_root_override` (single mode) wins.
+async fn build_project_context(
+    name: &str,
+    graph_path: PathBuf,
+    db_path: PathBuf,
+    repo_root_override: Option<PathBuf>,
+    no_db: bool,
+) -> Result<Arc<ProjectContext>, String> {
+    let path_for_load = graph_path.clone();
+    let snapshot = tokio::task::spawn_blocking(move || load_snapshot(&path_for_load))
+        .await
+        .map_err(|e| format!("snapshot task: {}", e))??;
+
+    let repo_root = repo_root_override
+        .or_else(|| {
+            graph_path
+                .parent()
+                .and_then(|dir| crate::project::read_meta(dir))
+                .map(|m| PathBuf::from(m.repo_root))
+                .filter(|p| p.as_os_str().len() > 0)
+        })
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    if !repo_root.exists() {
+        tracing::warn!(
+            project = %name,
+            repo_root = %repo_root.display(),
+            "repo root does not exist; file preview will 404"
+        );
+    }
+
+    let (stores, db_unavailable_reason) = open_serve_stores(&db_path, no_db).await;
+
+    Ok(Arc::new(ProjectContext {
+        name: name.to_string(),
+        graph_path,
+        repo_root,
+        graph: RwLock::new(snapshot),
+        stores,
+        db_unavailable_reason,
+    }))
+}
+
+/// Open every store listed in `UG_DEST` for `db_path`. Per-dest open
+/// failures are non-fatal as long as at least one backend opens; the
+/// operator sees per-dest status on `/api/capabilities`.
+async fn open_serve_stores(
+    db_path: &PathBuf,
+    no_db: bool,
+) -> (Option<Arc<ServeStores>>, Option<String>) {
+    if no_db {
+        return (None, Some("started with --no-db".to_string()));
+    }
+    let specs = build_serve_store_specs(db_path);
+    let mut map: HashMap<String, Arc<dyn KnowledgeStore>> = HashMap::new();
+    let mut node_counts: HashMap<String, OnceCell<Option<usize>>> = HashMap::new();
+    let mut open_errors: HashMap<String, String> = HashMap::new();
+    let mut primary: Option<String> = None;
+    for spec in specs.iter() {
+        let name = spec.name().to_string();
+        match open_store(spec).await {
+            Ok(store) => {
+                tracing::info!(backend = %name, db = %db_path.display(), "store opened");
+                if primary.is_none() {
+                    primary = Some(name.clone());
+                }
+                map.insert(name.clone(), Arc::from(store));
+                node_counts.insert(name, OnceCell::new());
+            }
+            Err(e) => {
+                let reason = format!("{}", e);
+                tracing::warn!(error = %reason, backend = %name, "store open failed");
+                open_errors.insert(name, reason);
+            }
+        }
+    }
+    if let Some(primary) = primary {
+        (
+            Some(Arc::new(ServeStores {
+                map,
+                primary,
+                node_counts,
+                open_errors,
+            })),
+            None,
+        )
+    } else {
+        // All backends failed to open — report all errors so the
+        // operator can see what went wrong.
+        let summary = if open_errors.is_empty() {
+            "no destinations configured".to_string()
+        } else {
+            let parts: Vec<String> = open_errors
+                .iter()
+                .map(|(k, v)| format!("{}: {}", k, v))
+                .collect();
+            format!("all backends failed: {}", parts.join("; "))
+        };
+        (None, Some(summary))
+    }
+}
+
+#[derive(Clone)]
+struct ServeState {
+    registry: Arc<ProjectRegistry>,
+    html: Arc<EncodedAsset>,
+    bundle: Arc<EncodedAsset>,
     /// `None` when the embedder couldn't be constructed (e.g. missing endpoint).
     /// Phase 3 search routes need it; `/api/db/*` routes don't.
     embedder: Option<Arc<Embedder>>,
@@ -224,20 +393,34 @@ struct ServeState {
     /// when no `--chat-model` was passed and no `UG_CHAT_*` env vars
     /// are set; routes return 503 in that case.
     chat_default: Arc<Option<ChatConfig>>,
-    repo_root: Arc<PathBuf>,
     /// Process-wide cap on concurrent embedding calls. Cheap insurance against
     /// hammering the embedding endpoint when many search requests land at once.
     embed_lock: Arc<Semaphore>,
-    /// Reason all configured Phase 3 backends are unavailable —
-    /// surfaced verbatim in 503s so the operator can tell `--no-db`
-    /// apart from real connection failures. Per-dest errors live on
-    /// `ServeStores::open_errors`.
-    db_unavailable_reason: Arc<Option<String>>,
 }
 
 impl ServeState {
+    fn active(&self) -> Arc<ProjectContext> {
+        self.registry.active_ctx()
+    }
+
     fn snapshot(&self) -> Arc<GraphSnapshot> {
-        self.graph.read().expect("graph state poisoned").clone()
+        self.active()
+            .graph
+            .read()
+            .expect("graph state poisoned")
+            .clone()
+    }
+
+    fn stores(&self) -> Option<Arc<ServeStores>> {
+        self.active().stores.clone()
+    }
+
+    fn repo_root(&self) -> PathBuf {
+        self.active().repo_root.clone()
+    }
+
+    fn db_unavailable_reason(&self) -> Option<String> {
+        self.active().db_unavailable_reason.clone()
     }
 }
 
@@ -292,11 +475,11 @@ pub fn run_serve(args: &[String]) {
         return;
     }
 
-    let graph_file = flag_value_or(args, &["-i", "--input"], ".ug/graph.json");
-    let graph_path = std::fs::canonicalize(&graph_file).unwrap_or_else(|e| {
-        tracing::error!(path = %graph_file, error = %e, "failed to resolve graph path");
-        std::process::exit(1);
-    });
+    // Explicit -i/--input pins the server to one graph file (the
+    // pre-multi-project behavior). Without it the server roots at
+    // ug_home(), discovers every generated project, and lets the UI
+    // switch between them at runtime.
+    let input_flag = flag_value(args, &["-i", "--input"]);
 
     let port: u16 = flag_value(args, &["-p", "--port"])
         .and_then(|s| s.parse().ok())
@@ -305,41 +488,64 @@ pub fn run_serve(args: &[String]) {
     let watch = has_flag(args, "--watch");
     let no_db = has_flag(args, "--no-db");
 
-    let db_path_raw = flag_value_or(args, &["-d", "--db"], ".ug/ugdb");
-    let db_path = std::fs::canonicalize(&db_path_raw).unwrap_or_else(|_| {
-        std::env::current_dir()
-            .map(|c| c.join(&db_path_raw))
-            .unwrap_or_else(|_| PathBuf::from(&db_path_raw))
-    });
+    enum Startup {
+        Single { graph_file: String },
+        Multi { initial: String },
+    }
 
-    let repo_root_raw = flag_value(args, &["--repo-root"])
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-    let repo_root_path = std::fs::canonicalize(&repo_root_raw).unwrap_or_else(|e| {
-        tracing::error!(path = %repo_root_raw.display(), error = %e, "failed to resolve repo root path");
-        std::process::exit(1);
-    });
-
-    tracing::info!(
-        graph = %graph_path.display(),
-        db = %db_path.display(),
-        repo_root = %repo_root_path.display(),
-        "resolved paths"
-    );
-
-    let t0 = std::time::Instant::now();
-    let snapshot = match load_snapshot(&graph_path) {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::error!(error = %e, "failed to load graph snapshot");
-            std::process::exit(1);
+    let startup = match input_flag {
+        Some(graph_file) => Startup::Single { graph_file },
+        None => {
+            let projects = crate::project::list_projects();
+            if projects.is_empty() {
+                // Legacy repo-local layout: keep `ug serve` working in
+                // repos generated before the ~/.ug move.
+                if std::path::Path::new(".ug/graph.json").exists() {
+                    tracing::warn!(
+                        home = %crate::project::ug_home().display(),
+                        "no projects found; serving legacy ./.ug/graph.json — run `ug gen` to migrate to ~/.ug"
+                    );
+                    Startup::Single {
+                        graph_file: ".ug/graph.json".to_string(),
+                    }
+                } else {
+                    tracing::error!(
+                        home = %crate::project::ug_home().display(),
+                        "no projects found — run `ug gen` first, or pass -i <graph.json>"
+                    );
+                    std::process::exit(1);
+                }
+            } else {
+                let requested =
+                    flag_value(args, &["--project"]).map(|n| crate::project::sanitize_name(&n));
+                let initial = match requested {
+                    Some(r) => {
+                        if !projects.iter().any(|(_, m)| m.name == r) {
+                            let names: Vec<&str> =
+                                projects.iter().map(|(_, m)| m.name.as_str()).collect();
+                            tracing::error!(
+                                requested = %r,
+                                available = %names.join(", "),
+                                "--project not found"
+                            );
+                            std::process::exit(1);
+                        }
+                        r
+                    }
+                    None => {
+                        let cwd_name = crate::project::derive_project_name(".");
+                        projects
+                            .iter()
+                            .find(|(_, m)| m.name == cwd_name)
+                            .map(|(_, m)| m.name.clone())
+                            // list_projects is sorted most-recent first.
+                            .unwrap_or_else(|| projects[0].1.name.clone())
+                    }
+                };
+                Startup::Multi { initial }
+            }
         }
     };
-    let identity_size = snapshot.encoded.identity.len();
-    let gzip_size = snapshot.encoded.gzip.len();
-    let brotli_size = snapshot.encoded.brotli.len();
-    let nodes = snapshot.parsed.nodes.len();
-    let edges = snapshot.parsed.edges.len();
 
     let html = Arc::new(EncodedAsset::new(
         crate::VIS_HTML.as_bytes().to_vec(),
@@ -375,63 +581,80 @@ pub fn run_serve(args: &[String]) {
 
     let rt = tokio_runtime();
     rt.block_on(async move {
-        // Open every store listed in `UG_DEST`. Per-dest open failures
-        // are non-fatal as long as at least one backend opens; the
-        // operator sees per-dest status on `/api/capabilities` and the
-        // UI gates its selector on it.
-        let (stores_arc, db_unavailable_reason): (
-            Option<Arc<ServeStores>>,
-            Option<String>,
-        ) = if no_db {
-            (None, Some("started with --no-db".to_string()))
-        } else {
-            let specs = build_serve_store_specs(&db_path);
-            let mut map: HashMap<String, Arc<dyn KnowledgeStore>> = HashMap::new();
-            let mut node_counts: HashMap<String, OnceCell<Option<usize>>> = HashMap::new();
-            let mut open_errors: HashMap<String, String> = HashMap::new();
-            let mut primary: Option<String> = None;
-            for spec in specs.iter() {
-                let name = spec.name().to_string();
-                match open_store(spec).await {
-                    Ok(store) => {
-                        tracing::info!(backend = %name, "store opened");
-                        if primary.is_none() {
-                            primary = Some(name.clone());
-                        }
-                        map.insert(name.clone(), Arc::from(store));
-                        node_counts.insert(name, OnceCell::new());
-                    }
-                    Err(e) => {
-                        let reason = format!("{}", e);
-                        tracing::warn!(error = %reason, backend = %name, "store open failed");
-                        open_errors.insert(name, reason);
-                    }
-                }
+        let t0 = std::time::Instant::now();
+
+        let (mode, registry_seed) = match &startup {
+            Startup::Single { .. } => (ServeMode::Single, None),
+            Startup::Multi { initial } => (ServeMode::Multi, Some(initial.clone())),
+        };
+        let registry = Arc::new(ProjectRegistry {
+            mode,
+            no_db,
+            active: RwLock::new(String::new()),
+            loaded: RwLock::new(HashMap::new()),
+        });
+
+        let initial_ctx = match &startup {
+            Startup::Single { graph_file } => {
+                let graph_path = std::fs::canonicalize(graph_file).unwrap_or_else(|e| {
+                    tracing::error!(path = %graph_file, error = %e, "failed to resolve graph path");
+                    std::process::exit(1);
+                });
+                // Default db: the graph file's sibling ugdb — keeps
+                // `-i .ug/graph.json` finding `.ug/ugdb` like before.
+                let db_path_raw = flag_value(args, &["-d", "--db"]).unwrap_or_else(|| {
+                    graph_path
+                        .parent()
+                        .map(|p| p.join("ugdb"))
+                        .unwrap_or_else(|| PathBuf::from("ugdb"))
+                        .to_string_lossy()
+                        .into_owned()
+                });
+                let db_path = std::fs::canonicalize(&db_path_raw).unwrap_or_else(|_| {
+                    std::env::current_dir()
+                        .map(|c| c.join(&db_path_raw))
+                        .unwrap_or_else(|_| PathBuf::from(&db_path_raw))
+                });
+                let repo_root_override = flag_value(args, &["--repo-root"]).map(|raw| {
+                    std::fs::canonicalize(&raw).unwrap_or_else(|e| {
+                        tracing::error!(path = %raw, error = %e, "failed to resolve repo root path");
+                        std::process::exit(1);
+                    })
+                });
+                let name = graph_path
+                    .parent()
+                    .and_then(|p| p.file_name())
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("single")
+                    .to_string();
+                let ctx =
+                    build_project_context(&name, graph_path, db_path, repo_root_override, no_db)
+                        .await
+                        .unwrap_or_else(|e| {
+                            tracing::error!(error = %e, "failed to load graph snapshot");
+                            std::process::exit(1);
+                        });
+                registry.insert_and_activate(ctx.clone());
+                ctx
             }
-            if let Some(primary) = primary {
-                (
-                    Some(Arc::new(ServeStores {
-                        map,
-                        primary,
-                        node_counts,
-                        open_errors,
-                    })),
-                    None,
-                )
-            } else {
-                // All backends failed to open — report all errors so
-                // the operator can see what went wrong.
-                let summary = if open_errors.is_empty() {
-                    "no destinations configured".to_string()
-                } else {
-                    let parts: Vec<String> = open_errors
-                        .iter()
-                        .map(|(k, v)| format!("{}: {}", k, v))
-                        .collect();
-                    format!("all backends failed: {}", parts.join("; "))
-                };
-                (None, Some(summary))
+            Startup::Multi { .. } => {
+                let initial = registry_seed.expect("multi startup has initial project");
+                activate_project(&registry, &initial).await.unwrap_or_else(|e| {
+                    tracing::error!(project = %initial, error = %e, "failed to load initial project");
+                    std::process::exit(1);
+                })
             }
+        };
+
+        let (identity_size, gzip_size, brotli_size, nodes, edges) = {
+            let snap = initial_ctx.graph.read().expect("graph state poisoned");
+            (
+                snap.encoded.identity.len(),
+                snap.encoded.gzip.len(),
+                snap.encoded.brotli.len(),
+                snap.parsed.nodes.len(),
+                snap.parsed.edges.len(),
+            )
         };
 
         let chat_default = build_chat_default_from_args(args);
@@ -446,16 +669,12 @@ pub fn run_serve(args: &[String]) {
         }
 
         let state = ServeState {
-            graph_path: Arc::new(graph_path.clone()),
-            graph: Arc::new(RwLock::new(snapshot)),
+            registry: registry.clone(),
             html,
             bundle,
-            stores: stores_arc,
             embedder: embedder_arc,
             chat_default: Arc::new(chat_default),
-            repo_root: Arc::new(repo_root_path),
             embed_lock: Arc::new(Semaphore::new(4)),
-            db_unavailable_reason: Arc::new(db_unavailable_reason),
         };
 
         let app = Router::new()
@@ -464,6 +683,8 @@ pub fn run_serve(args: &[String]) {
             .route("/ug-vis.bundle.js", get(handle_bundle))
             .route("/graph.json", get(handle_graph))
             .route("/healthz", get(handle_health))
+            .route("/api/projects", get(api_projects))
+            .route("/api/projects/select", post(api_projects_select))
             .route("/api/capabilities", get(api_capabilities))
             .route("/api/graph/stats", get(api_stats))
             .route("/api/graph/node/*id", get(api_node))
@@ -502,9 +723,12 @@ pub fn run_serve(args: &[String]) {
             }
         };
 
-        let db_api_enabled = state.stores.is_some() && state.embedder.is_some();
+        let db_api_enabled = state.stores().is_some() && state.embedder.is_some();
+        let db_unavailable = state.db_unavailable_reason();
         tracing::info!(
-            graph = %graph_path.display(),
+            mode = match mode { ServeMode::Single => "single", ServeMode::Multi => "multi" },
+            project = %initial_ctx.name,
+            graph = %initial_ctx.graph_path.display(),
             nodes,
             edges,
             identity_bytes = identity_size,
@@ -513,14 +737,13 @@ pub fn run_serve(args: &[String]) {
             encode_secs = t0.elapsed().as_secs_f32(),
             addr = %addr,
             db_api = db_api_enabled,
-            db_path = %db_path.display(),
-            db_unavailable_reason = state.db_unavailable_reason.as_deref().unwrap_or(""),
+            db_unavailable_reason = db_unavailable.as_deref().unwrap_or(""),
             watch,
             "ug serve ready"
         );
         if !db_api_enabled {
             tracing::warn!(
-                reason = state.db_unavailable_reason.as_deref().unwrap_or("DB not opened"),
+                reason = db_unavailable.as_deref().unwrap_or("DB not opened"),
                 "Phase 3 routes will 503"
             );
         }
@@ -541,17 +764,27 @@ pub fn run_serve(args: &[String]) {
 
 fn spawn_watch(state: ServeState) {
     tokio::spawn(async move {
-        let path = (*state.graph_path).clone();
-        let mut last_mtime = file_mtime(&path);
+        // Per-project last-seen mtimes: the active project can change at
+        // runtime, and each context keeps its own snapshot to reload into.
+        let mut last_mtimes: HashMap<String, Option<SystemTime>> = HashMap::new();
         loop {
             tokio::time::sleep(Duration::from_secs(2)).await;
+            let ctx = state.registry.active_ctx();
+            let path = ctx.graph_path.clone();
             let mtime = file_mtime(&path);
-            if mtime.is_none() || mtime == last_mtime {
-                continue;
+            match last_mtimes.get(&ctx.name) {
+                // First time watching this project: its snapshot was
+                // freshly loaded on activation, so just record the mtime.
+                None => {
+                    last_mtimes.insert(ctx.name.clone(), mtime);
+                    continue;
+                }
+                Some(prev) if mtime.is_none() || mtime == *prev => continue,
+                Some(_) => {}
             }
-            last_mtime = mtime;
+            last_mtimes.insert(ctx.name.clone(), mtime);
             let path_clone = path.clone();
-            let state_clone = state.clone();
+            let ctx_clone = ctx.clone();
             // Parse + recompress can take a few hundred ms on big graphs;
             // do it off the runtime so we don't stall HTTP handlers.
             let _ = tokio::task::spawn_blocking(move || match load_snapshot(&path_clone) {
@@ -559,10 +792,11 @@ fn spawn_watch(state: ServeState) {
                     let size = snap.encoded.identity.len();
                     let nodes = snap.parsed.nodes.len();
                     let edges = snap.parsed.edges.len();
-                    if let Ok(mut w) = state_clone.graph.write() {
+                    if let Ok(mut w) = ctx_clone.graph.write() {
                         *w = snap;
                         tracing::info!(
                             target: "ug::serve::watch",
+                            project = %ctx_clone.name,
                             path = %path_clone.display(),
                             bytes = size,
                             nodes,
@@ -580,6 +814,116 @@ fn spawn_watch(state: ServeState) {
             .await;
         }
     });
+}
+
+// ---------- Project switching (multi-project mode) ----------
+
+/// Activate a project by name: reuse the cached context if it was
+/// loaded before, otherwise discover it on disk under `ug_home()` and
+/// build a fresh context (snapshot + stores). Errors are strings for
+/// direct surfacing in API responses.
+async fn activate_project(
+    registry: &Arc<ProjectRegistry>,
+    name: &str,
+) -> Result<Arc<ProjectContext>, String> {
+    if let Some(ctx) = registry.get_loaded(name) {
+        registry.set_active(name);
+        return Ok(ctx);
+    }
+    let projects = crate::project::list_projects();
+    let (dir, _meta) = projects
+        .into_iter()
+        .find(|(_, m)| m.name == name)
+        .ok_or_else(|| format!("unknown project '{}'", name))?;
+    let graph_path = dir.join("graph.json");
+    let db_path = dir.join("ugdb");
+    let ctx = build_project_context(name, graph_path, db_path, None, registry.no_db).await?;
+    registry.insert_and_activate(ctx.clone());
+    tracing::info!(project = %name, "project activated");
+    Ok(ctx)
+}
+
+/// GET /api/projects — mode, active project, and the project list.
+/// Multi mode re-lists from disk on every call so projects generated
+/// after server start show up without a restart.
+async fn api_projects(State(state): State<ServeState>) -> Response {
+    let registry = &state.registry;
+    let active = registry.active.read().expect("active poisoned").clone();
+    let (mode, projects_json): (&str, Vec<serde_json::Value>) = match registry.mode {
+        ServeMode::Single => {
+            let ctx = registry.active_ctx();
+            let snap = ctx.graph.read().expect("graph state poisoned").clone();
+            (
+                "single",
+                vec![serde_json::json!({
+                    "name": ctx.name,
+                    "nodes": snap.parsed.nodes.len(),
+                    "edges": snap.parsed.edges.len(),
+                    "repoRoot": ctx.repo_root.display().to_string(),
+                    "updatedAt": null,
+                    "loaded": true,
+                })],
+            )
+        }
+        ServeMode::Multi => (
+            "multi",
+            crate::project::list_projects()
+                .iter()
+                .map(|(_, m)| {
+                    serde_json::json!({
+                        "name": m.name,
+                        "nodes": m.nodes,
+                        "edges": m.edges,
+                        "repoRoot": m.repo_root,
+                        "updatedAt": m.updated_at,
+                        "loaded": registry.get_loaded(&m.name).is_some(),
+                    })
+                })
+                .collect(),
+        ),
+    };
+    let body = serde_json::json!({
+        "mode": mode,
+        "active": active,
+        "projects": projects_json,
+    });
+    ok_json(body.to_string())
+}
+
+#[derive(serde::Deserialize)]
+struct ProjectSelectBody {
+    name: String,
+}
+
+/// POST /api/projects/select — switch the server-side active project.
+/// The UI reloads after this so every root-relative fetch picks up the
+/// new project.
+async fn api_projects_select(
+    State(state): State<ServeState>,
+    Json(body): Json<ProjectSelectBody>,
+) -> Response {
+    if state.registry.mode == ServeMode::Single {
+        return err_json(
+            StatusCode::BAD_REQUEST,
+            "server is in single-project mode (started with -i); restart without -i to switch projects",
+        );
+    }
+    let name = crate::project::sanitize_name(&body.name);
+    match activate_project(&state.registry, &name).await {
+        Ok(ctx) => {
+            let snap = ctx.graph.read().expect("graph state poisoned").clone();
+            ok_json(
+                serde_json::json!({
+                    "active": ctx.name,
+                    "nodes": snap.parsed.nodes.len(),
+                    "edges": snap.parsed.edges.len(),
+                })
+                .to_string(),
+            )
+        }
+        Err(e) if e.starts_with("unknown project") => err_json(StatusCode::NOT_FOUND, &e),
+        Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    }
 }
 
 fn file_mtime(path: &PathBuf) -> Option<SystemTime> {
@@ -987,7 +1331,8 @@ async fn api_cycles(State(state): State<ServeState>) -> Response {
 /// node row in the table (an opened-but-empty DB still 200s on the
 /// existing routes but returns nothing useful).
 async fn api_capabilities(State(state): State<ServeState>) -> Response {
-    let db_ready = state.stores.is_some();
+    let active_stores = state.stores();
+    let db_ready = active_stores.is_some();
     let embedder_ready = state.embedder.is_some();
 
     // Per-destination probe + serialization. `db_node_count` and
@@ -996,7 +1341,7 @@ async fn api_capabilities(State(state): State<ServeState>) -> Response {
     // what the UI keys off for the selector.
     let mut destinations_json: Vec<serde_json::Value> = Vec::new();
     let mut primary_count: Option<usize> = None;
-    if let Some(stores) = state.stores.clone() {
+    if let Some(stores) = active_stores.clone() {
         for name in stores.names() {
             let store = stores.get(&name).cloned();
             let cell = stores.node_counts.get(&name);
@@ -1047,18 +1392,14 @@ async fn api_capabilities(State(state): State<ServeState>) -> Response {
     let reason = if search_ready {
         None
     } else if !db_ready || !embedder_ready {
-        state
-            .db_unavailable_reason
-            .as_deref()
-            .map(|s| s.to_string())
+        state.db_unavailable_reason()
     } else if !has_data {
         Some("DB is open but contains no nodes (run `ug index` first)".to_string())
     } else {
         None
     };
 
-    let primary_name = state
-        .stores
+    let primary_name = active_stores
         .as_ref()
         .map(|s| s.primary.clone())
         .unwrap_or_default();
@@ -1085,6 +1426,15 @@ async fn api_capabilities(State(state): State<ServeState>) -> Response {
         // a selector when `destinations.length > 1`.
         "destinations": destinations_json,
         "primary": primary_name,
+        // Multi-project: which project this server is currently
+        // answering for, and whether the UI should offer a switcher.
+        "project": {
+            "name": state.active().name,
+            "mode": match state.registry.mode {
+                ServeMode::Single => "single",
+                ServeMode::Multi => "multi",
+            },
+        },
     });
     ok_json(body.to_string())
 }
@@ -1098,11 +1448,9 @@ fn pick_store(
     state: &ServeState,
     dest: Option<&str>,
 ) -> Result<Arc<dyn KnowledgeStore>, Response> {
-    let stores = state.stores.clone().ok_or_else(|| {
-        let msg = state
-            .db_unavailable_reason
-            .as_deref()
-            .unwrap_or("DB not opened");
+    let stores = state.stores().ok_or_else(|| {
+        let reason = state.db_unavailable_reason();
+        let msg = reason.as_deref().unwrap_or("DB not opened");
         err_json(StatusCode::SERVICE_UNAVAILABLE, msg)
     })?;
     let name = dest
@@ -1150,7 +1498,8 @@ async fn api_file(State(state): State<ServeState>, Query(params): Query<FileQuer
 
     // Resolve against the repo root and canonicalize, then verify the result is
     // still inside the root — blocks `../` traversal and absolute-path escapes.
-    let root = state.repo_root.as_path();
+    let repo_root = state.repo_root();
+    let root = repo_root.as_path();
     let canon = match std::fs::canonicalize(root.join(rel)) {
         Ok(p) => p,
         Err(_) => return err_json(StatusCode::NOT_FOUND, "file not found"),
@@ -1465,7 +1814,8 @@ async fn api_search_hybrid(
         Err(_) => return err_json(StatusCode::SERVICE_UNAVAILABLE, "embed semaphore closed"),
     };
 
-    let mut opts = SearchKbOptions::new(&body.query, state.repo_root.as_path());
+    let repo_root = state.repo_root();
+    let mut opts = SearchKbOptions::new(&body.query, repo_root.as_path());
     opts.k = k;
     opts.hops = hops;
     opts.edge_types = edge_types_owned.as_deref();
@@ -1648,11 +1998,12 @@ async fn api_chat(State(state): State<ServeState>, Json(body): Json<ChatBody>) -
     opts.system_prompt = body.system_prompt.as_deref();
 
     let dest_name = db.backend_name();
+    let repo_root = state.repo_root();
     let outcome = chat::run_chat_rag(
         &*db,
         &embedder,
         &chat_client,
-        state.repo_root.as_path(),
+        repo_root.as_path(),
         &body.query,
         &history_owned,
         opts,
@@ -1749,9 +2100,16 @@ pub fn print_serve_help() {
     println!();
     println!("{C_BOLD}Usage:{C_RESET}  ug serve [options]");
     println!();
+    println!("  Without {C_CYAN}-i{C_RESET}, serves {C_BOLD}every{C_RESET} project under ~/.ug (or $UG_HOME) in");
+    println!("  multi-project mode — the UI gets a project switcher, and");
+    println!("  {C_CYAN}POST /api/projects/select{C_RESET} swaps the active project at runtime.");
+    println!();
     println!("{C_BOLD}Options:{C_RESET}");
-    println!("  {C_CYAN}-i, --input{C_RESET} <file>   Graph JSON to serve (default: .ug/graph.json)");
-    println!("  {C_CYAN}-d, --db{C_RESET} <path>      OverGraph DB for /api/db + /api/search routes (default: .ug/ugdb)");
+    println!("  {C_CYAN}-i, --input{C_RESET} <file>   Graph JSON to serve (forces single-project mode)");
+    println!("  {C_CYAN}--project{C_RESET} <name>     Initially active project in multi-project mode");
+    println!("                       (default: cwd basename, else most recently generated)");
+    println!("  {C_CYAN}-d, --db{C_RESET} <path>      OverGraph DB for /api/db + /api/search routes");
+    println!("                       (default: per-project ugdb, or the graph file's sibling ugdb with -i)");
     println!("  {C_YELLOW}--no-db{C_RESET}            Don't open DB; routes return 503");
     println!("  {C_CYAN}-p, --port{C_RESET} <n>       TCP port (default: 8080)");
     println!("  {C_CYAN}--host{C_RESET} <addr>        Bind address (default: 127.0.0.1)");
@@ -1771,6 +2129,8 @@ pub fn print_serve_help() {
     println!("    Env fallbacks: UG_CHAT_MODEL, UG_CHAT_BASE_URL, UG_CHAT_API_KEY");
     println!();
     println!("{C_BOLD}API Endpoints:{C_RESET}");
+    println!("  {C_CYAN}GET{C_RESET}  /api/projects              list projects + active selection");
+    println!("  {C_CYAN}POST{C_RESET} /api/projects/select       body: {{ name }} — switch active project");
     println!("  {C_CYAN}GET{C_RESET}  /api/graph/{{stats, node/<id>, search?q=&types=, bfs/<id>?k=,");
     println!("           path?source=&target=, filter?types=, centrality, cycles}}");
     println!("  {C_CYAN}GET{C_RESET}  /api/db/{{node/<id>, traverse/<id>?k=&dir=&types=}}");
@@ -1778,9 +2138,10 @@ pub fn print_serve_help() {
     println!("  {C_CYAN}POST{C_RESET} /api/chat  body: {{ query, history?, k?, hops?, chat_model?, ... }}");
     println!();
     println!("{C_BOLD}Examples:{C_RESET}");
-    println!("  {C_CYAN}ug serve{C_RESET} -i .ug/graph.json -p 8080");
-    println!("  {C_CYAN}ug serve{C_RESET} -i .ug/graph.json -d .ug/ugdb --watch");
-    println!("  {C_CYAN}ug serve{C_RESET} -i .ug/graph.json -d .ug/ugdb \\");
+    println!("  {C_CYAN}ug serve{C_RESET}                          {C_YELLOW}# all projects under ~/.ug{C_RESET}");
+    println!("  {C_CYAN}ug serve{C_RESET} --project myrepo --watch");
+    println!("  {C_CYAN}ug serve{C_RESET} -i path/to/graph.json -p 8080   {C_YELLOW}# single-project mode{C_RESET}");
+    println!("  {C_CYAN}ug serve{C_RESET} \\");
     println!("           --base-url http://127.0.0.1:8000/v1 --api-key 12345 \\");
     println!("           --chat-model Qwen3.6-35B-A3B-MLX-8bit");
 }

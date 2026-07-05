@@ -2,6 +2,13 @@
 
 Get UltraGraph-KB up and running in under 5 minutes.
 
+> **Note (data layout change):** generated data now defaults to
+> `~/.ug/<project-name>/` (one folder per repo; name = input dir
+> basename, override with `-n/--name`) instead of the repo-local `.ug/`
+> shown in some examples below. `ug list` enumerates projects and
+> `ug serve` (no `-i`) serves all of them with a switcher in the UI.
+> Explicit `-o`/`-d` paths still work exactly as written.
+
 ## What Is It
 
 UltraGraph-KB transforms a codebase into a **semantic knowledge graph** — a structured map of files, functions, classes, and their relationships. You can query it, visualize it, and use it to power AI-assisted development (GraphRAG).

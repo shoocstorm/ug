@@ -310,6 +310,25 @@
             color: var(--text);
         }
 
+        #project-select {
+            margin-left: 6px;
+            max-width: 150px;
+            background: var(--bg-hover);
+            border: 1px solid var(--border-soft);
+            border-radius: 6px;
+            color: var(--text);
+            font-size: 11px;
+            padding: 3px 6px;
+            cursor: pointer;
+            outline: none;
+            transition: border-color 0.15s;
+        }
+
+        #project-select:hover,
+        #project-select:focus {
+            border-color: var(--accent);
+        }
+
         .sidebar-header .meta {
             font-size: 10px;
             color: var(--text-muted);
@@ -3130,6 +3149,9 @@
                 <div class="brand">
                     <div class="brand-dot"></div>
                     <h2>UltraGraph</h2>
+                    <!-- Project switcher. Populated from /api/projects; hidden in
+                         single-project mode or when only one project exists. -->
+                    <select id="project-select" title="Switch project" hidden></select>
                 </div>
                 <div class="header-actions">
                     <span class="meta" id="sidebar-meta">0 / 0</span>
@@ -3740,6 +3762,7 @@
             wirePanelTabs();
             wireCatalog();
             probeCapabilities();
+            initProjectSwitcher();
             startHealthPolling();
 
             document.getElementById('info-close').addEventListener('click', () => {
@@ -3780,6 +3803,64 @@
         function startHealthPolling() {
             pollHealth();
             setInterval(pollHealth, 3500000);
+        }
+
+        // ─── Project switcher ───────────────────────────────
+        // The server holds one active project per process; selecting a
+        // different one swaps what every root-relative route serves, so
+        // after a successful switch we simply reload the page.
+
+        async function initProjectSwitcher() {
+            const select = document.getElementById('project-select');
+            if (!select) return;
+            let info;
+            try {
+                const res = await fetch('/api/projects', { cache: 'no-store' });
+                if (!res.ok) return;
+                info = await res.json();
+            } catch (err) {
+                // Static serve / older server without the endpoint: keep hidden.
+                return;
+            }
+            const projects = info.projects || [];
+            if (info.mode !== 'multi' || projects.length < 2) return;
+
+            select.innerHTML = '';
+            for (const p of projects) {
+                const opt = document.createElement('option');
+                opt.value = p.name;
+                const counts = p.nodes ? ` · ${p.nodes.toLocaleString()}N` : '';
+                opt.textContent = `${p.name}${counts}`;
+                opt.title = p.repoRoot ? `${p.name} — ${p.repoRoot}` : p.name;
+                if (p.name === info.active) opt.selected = true;
+                select.appendChild(opt);
+            }
+            select.hidden = false;
+
+            select.onchange = async () => {
+                const name = select.value;
+                if (name === info.active) return;
+                select.disabled = true;
+                try {
+                    const res = await fetch('/api/projects/select', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ name }),
+                    });
+                    if (!res.ok) {
+                        const err = await res.json().catch(() => ({}));
+                        console.warn('project switch failed:', err.error || res.status);
+                        select.value = info.active;
+                        select.disabled = false;
+                        return;
+                    }
+                    window.location.reload();
+                } catch (err) {
+                    console.warn('project switch failed:', err);
+                    select.value = info.active;
+                    select.disabled = false;
+                }
+            };
         }
 
         // ─── Capabilities probe ─────────────────────────────

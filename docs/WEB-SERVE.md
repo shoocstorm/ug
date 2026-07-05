@@ -25,8 +25,8 @@ Worth being explicit, because it confuses people:
 |------|--------|-------------|
 | `/` and `/index.html` | `native/src/vis/visualization.html` via `include_str!` | **compile time** — baked into the `ug` binary |
 | `/ug-vis.bundle.js` | `native/src/vis/ug-vis.bundle.js` via `include_bytes!` | **compile time** — baked into the `ug` binary |
-| `/graph.json` | `-i <path>` flag (default `.ug/graph.json`) | **startup** — read once, held in memory |
-| `/api/db/*`, `/api/search/*` | OverGraph DB at `-d <path>` (default `.ug/ugdb`) | **startup** — opened once |
+| `/graph.json` | `-i <path>` flag, or the active project's `~/.ug/<name>/graph.json` in multi-project mode | **startup / project activation** — read once per project, held in memory |
+| `/api/db/*`, `/api/search/*` | OverGraph DB at `-d <path>`, or the active project's `~/.ug/<name>/ugdb` | **startup / project activation** — opened once per project |
 | `/api/chat` | OpenAI-compatible chat endpoint configured via `--chat-model` / `--chat-base-url` / `--chat-api-key` (or `UG_CHAT_*` env vars). Disabled when no `--chat-model` is set — route returns 503. | **startup** — config baked once; per-request body can override `chat_model` / `chat_base_url` / `chat_api_key` / `temperature` / `max_tokens` |
 
 So:
@@ -42,12 +42,19 @@ So:
 **Command**
 
 ```
-ug serve [-i <graph.json>] [-p <port>] [--host <addr>]
+ug serve [-i <graph.json>] [--project <name>] [-p <port>] [--host <addr>]
 ```
+
+Without `-i`, the server runs in **multi-project mode**: it roots at
+`~/.ug` (or `$UG_HOME`), discovers every generated project, and exposes
+`GET /api/projects` + `POST /api/projects/select {name}` so the UI's
+project switcher can swap the active project at runtime. `-i` forces
+single-project mode (the pre-multi behavior).
 
 | Flag | Default | Notes |
 |------|---------|-------|
-| `-i, --input` | `.ug/graph.json` | Path to the graph JSON to serve |
+| `-i, --input` | *(multi-project mode)* | Path to a graph JSON; forces single-project mode |
+| `--project`   | cwd basename, else most recent | Initially active project in multi-project mode |
 | `-p, --port`  | `8080` | TCP port |
 | `--host`      | `127.0.0.1` | Bind address; pass `0.0.0.0` for LAN exposure |
 
@@ -122,13 +129,13 @@ OverGraph endpoints. Async, need a `Db` handle and an `Embedder`.
 
 | Flag | Default | Notes |
 |------|---------|-------|
-| `-d, --db <path>` | `.ug/ugdb` | OverGraph directory; if open fails, Phase 3 routes return **503** but the server still starts |
+| `-d, --db <path>` | per-project `ugdb` (graph file's sibling with `-i`) | OverGraph directory; if open fails, Phase 3 routes return **503** but the server still starts |
 | `--no-db` | off | Skip opening DB and embedder entirely (start server in Phase-1/2-only mode) |
 | `--base-url <url>` | `http://localhost:8000/v1` | Embedding endpoint (same flag as other commands) |
 | `--api-key <key>` | env / default | Embedding API key |
 | `--model <name>` | default | Embedding model |
 | `--embedding-dim <n>` | from `<db>/ug-meta.json` (or 1024 if absent) | Override the embedding dimension. Must match the DB's recorded dim. |
-| `--repo-root <path>` | cwd | Repo root for snippet path resolution in hybrid_search |
+| `--repo-root <path>` | project.json `repoRoot`, else cwd | Repo root for snippet path resolution in hybrid_search and `/api/file` |
 
 **Request / response shape**
 

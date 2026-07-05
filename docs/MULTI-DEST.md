@@ -48,7 +48,7 @@ ug traverse file:src/main.ts --dest neo4j --neo4j-uri …
 | Flag | Default | Notes |
 |---|---|---|
 | `--dest <kind[,kind...]>` | `overgraph` | Comma-separated list. Multi-dest is **ingest-only**; read commands accept exactly one. |
-| `-o`, `--output <dir>` | `.ug/ugdb` | OverGraph data directory. Used as the OverGraph spec path. |
+| `-o`, `--output <dir>` | `~/.ug/<name>/ugdb` | OverGraph data directory. Used as the OverGraph spec path. |
 | `-d`, `--db <dir>` | (read commands) | Same as `-o` but typically used by reads. Honored as a fallback. |
 | `--neo4j-uri <uri>` | — | `neo4j://host:port` or `bolt://host:port`. Required for `--dest neo4j`. |
 | `--neo4j-user <user>` | `neo4j` | Bolt username. |

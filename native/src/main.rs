@@ -15,6 +15,7 @@ use ultragraph::{
 };
 
 mod chat;
+mod project;
 mod serve;
 
 // Bundled visualization assets so `ug gen` can produce a self-contained
@@ -63,6 +64,7 @@ fn main() {
         "hybrid_search" => run_hybrid_search(cmd_args),
         "traverse" => run_traverse(cmd_args),
         "chat" => run_chat(cmd_args),
+        "list" => run_list(cmd_args),
         "serve" => serve::run_serve(cmd_args),
         "help" => {
             print_help();
@@ -271,7 +273,7 @@ fn store_specs_from_args(args: &[String], embedding_dim: u32) -> Vec<StoreSpec> 
     let og_path = flag_value(args, &["-d", "--db"])
         .or_else(|| flag_value(args, &["-o", "--output"]))
         .or_else(|| std::env::var("UG_DB_PATH").ok())
-        .unwrap_or_else(|| ".ug/ugdb".to_string());
+        .unwrap_or_else(project::default_read_db_path);
 
     let neo4j_uri = flag_value(args, &["--neo4j-uri"]).or_else(|| std::env::var("UG_NEO4J_URI").ok());
     let neo4j_user = flag_value(args, &["--neo4j-user"])
@@ -374,10 +376,21 @@ fn run_index(args: &[String]) {
     }
 
     let path = flag_value(args, &["-i", "--input"])
-        .or_else(|| first_positional(args, &["-i", "--input", "-o", "--output", "-c", "--cache"]))
+        .or_else(|| {
+            first_positional(
+                args,
+                &["-i", "--input", "-o", "--output", "-c", "--cache", "-n", "--name"],
+            )
+        })
         .unwrap_or_else(|| ".".to_string());
     let cache = flag_value(args, &["-c", "--cache"]);
-    let output = flag_value_or(args, &["-o", "--output"], ".ug/indexed-tree.json");
+    let project_dir = project::project_dir(&project::resolve_project_name(args, &path));
+    let output = flag_value(args, &["-o", "--output"]).unwrap_or_else(|| {
+        project_dir
+            .join("indexed-tree.json")
+            .to_string_lossy()
+            .into_owned()
+    });
 
     let result = match cache {
         Some(c) => index_with_cache(path, c),
@@ -396,8 +409,15 @@ fn run_graph(args: &[String]) {
         return;
     }
 
-    let input = flag_value_or(args, &["-i", "--input"], ".ug/indexed-tree.json");
-    let output = flag_value_or(args, &["-o", "--output"], ".ug/graph.json");
+    let project_dir = project::project_dir(&project::resolve_project_name(args, "."));
+    let input = flag_value(args, &["-i", "--input"]).unwrap_or_else(|| {
+        project_dir
+            .join("indexed-tree.json")
+            .to_string_lossy()
+            .into_owned()
+    });
+    let output = flag_value(args, &["-o", "--output"])
+        .unwrap_or_else(|| project_dir.join("graph.json").to_string_lossy().into_owned());
 
     let index_json = fs::read_to_string(&input).expect("Failed to read input");
     let result = build_graph(index_json);
@@ -510,8 +530,11 @@ fn run_cycles(args: &[String]) {
 }
 
 fn run_analyze(args: &[String]) {
-    let input = flag_value_or(args, &["-i", "--input"], ".ug/graph.json");
-    let output_dir = flag_value_or(args, &["-o", "--output"], ".ug");
+    let project_dir = project::project_dir(&project::resolve_project_name(args, "."));
+    let input = flag_value(args, &["-i", "--input"])
+        .unwrap_or_else(|| project_dir.join("graph.json").to_string_lossy().into_owned());
+    let output_dir = flag_value(args, &["-o", "--output"])
+        .unwrap_or_else(|| project_dir.to_string_lossy().into_owned());
 
     let graph_json = fs::read_to_string(&input).expect("Failed to read graph");
     let centrality = calculate_centrality(graph_json.clone());
@@ -549,6 +572,8 @@ fn run_gen(args: &[String]) {
                     "--output",
                     "-d",
                     "--db",
+                    "-n",
+                    "--name",
                     "--base-url",
                     "--api-key",
                     "--model",
@@ -559,10 +584,16 @@ fn run_gen(args: &[String]) {
         .unwrap_or_else(|| ".".to_string());
     let repo_root = input.clone();
     let cache = flag_value(args, &["-c", "--cache"]);
-    let output_dir = flag_value_or(args, &["-o", "--output"], ".ug");
+    let project_name = project::resolve_project_name(args, &input);
+    let output_dir = flag_value(args, &["-o", "--output"])
+        .unwrap_or_else(|| project::project_dir(&project_name).to_string_lossy().into_owned());
     let no_ingest = has_flag(args, "--no-ingest");
     let chain_serve = has_flag(args, "--serve");
-    let db_path = flag_value(args, &["-o", "--output"]).unwrap_or_else(|| ".ug/ugdb".to_string());
+    // Full precedence here: -d/--db flag → UG_DB_PATH env → <output-dir>/ugdb.
+    // run_gen_ingest then pins the default OverGraph spec to this path.
+    let db_path = flag_value(args, &["-d", "--db"])
+        .or_else(|| std::env::var("UG_DB_PATH").ok())
+        .unwrap_or_else(|| format!("{}/ugdb", output_dir));
 
     let pipeline_summary = if no_ingest {
         "index → graph → visualization"
@@ -626,14 +657,23 @@ fn run_gen(args: &[String]) {
         t2.elapsed()
     );
 
+    let repo_root_abs = fs::canonicalize(&repo_root)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| repo_root.clone());
+    let meta = project::ProjectMeta::new(&project_name, &repo_root_abs, nodes_count, edges_count);
+    if let Err(e) = project::write_meta(Path::new(&output_dir), &meta) {
+        eprintln!("⚠ failed to write project.json: {}", e);
+    }
+
     println!("{C_BOLD}────────────────────────────────────────{C_RESET}");
     println!(
-        "{C_GREEN}✓ Generated{C_RESET} in {C_BOLD}{}/{C_RESET}",
-        output_dir
+        "{C_GREEN}✓ Generated{C_RESET} project {C_BOLD}{}{C_RESET} in {C_BOLD}{}/{C_RESET}",
+        project_name, output_dir
     );
     println!("  {C_GREEN}✓{C_RESET} graph.json");
     println!("  {C_GREEN}✓{C_RESET} indexed-tree.json");
     println!("  {C_GREEN}✓{C_RESET} README.md");
+    println!("  {C_GREEN}✓{C_RESET} project.json");
 
     if no_ingest {
         println!("{C_YELLOW}⚠ Skipping db-ingest (--no-ingest){C_RESET}");
@@ -911,20 +951,16 @@ fn run_gen_ingest(
         // ingest`. When --dest is omitted we keep the OverGraph-only
         // behavior pointed at `db_path`.
         let mut specs = store_specs_from_args(args, dim);
-        // If --dest wasn't specified the default OverGraph path may
-        // not match the db_path the gen pipeline computed; respect
-        // gen's path in that case.
+        // gen already resolved the db path with full precedence
+        // (-d/--db → UG_DB_PATH → <output-dir>/ugdb), so pin the
+        // OverGraph-only default spec to it.
         if specs.len() == 1 {
             if let StoreSpec::Overgraph {
                 path,
                 embedding_dim: _,
             } = &mut specs[0]
             {
-                if path.as_os_str().is_empty()
-                    || path.to_str() == Some(".ug/ugdb")
-                {
-                    *path = PathBuf::from(db_path);
-                }
+                *path = PathBuf::from(db_path);
             }
         }
         announce_destinations(&specs);
@@ -1070,13 +1106,72 @@ async fn ingest_graph_multi_with_progress(
     Ok((nodes_count, edges_count))
 }
 
+/// `ug list` — enumerate project data dirs under `~/.ug` (or `$UG_HOME`).
+fn run_list(_args: &[String]) {
+    let projects = project::list_projects();
+    let root = project::ug_home();
+    if projects.is_empty() {
+        println!(
+            "No projects found in {C_BOLD}{}{C_RESET}. Run {C_CYAN}ug gen{C_RESET} in a repo to create one.",
+            root.display()
+        );
+        return;
+    }
+    let cwd_name = project::derive_project_name(".");
+    println!(
+        "{C_BOLD}Projects in {}{C_RESET} ({}):\n",
+        root.display(),
+        projects.len()
+    );
+    println!(
+        "  {C_BOLD}{:<24} {:>8} {:>8}  {:<19}  {}{C_RESET}",
+        "NAME", "NODES", "EDGES", "UPDATED", "REPO"
+    );
+    for (_dir, meta) in &projects {
+        let marker = if meta.name == cwd_name { "*" } else { " " };
+        let updated = format_epoch(meta.updated_at);
+        println!(
+            "{C_GREEN}{}{C_RESET} {C_CYAN}{:<24}{C_RESET} {:>8} {:>8}  {:<19}  {}",
+            marker, meta.name, meta.nodes, meta.edges, updated, meta.repo_root
+        );
+    }
+    println!("\n{C_BOLD}*{C_RESET} matches the current directory. Serve them with {C_CYAN}ug serve{C_RESET}.");
+}
+
+/// Render epoch seconds as local-naive `YYYY-MM-DD HH:MM:SS` (UTC).
+fn format_epoch(secs: u64) -> String {
+    if secs == 0 {
+        return "-".to_string();
+    }
+    // Days-from-civil algorithm (Howard Hinnant) — avoids a chrono dep.
+    let days = (secs / 86_400) as i64;
+    let rem = secs % 86_400;
+    let (h, m, s) = (rem / 3600, (rem % 3600) / 60, rem % 60);
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let mo = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if mo <= 2 { y + 1 } else { y };
+    format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", y, mo, d, h, m, s)
+}
+
 fn run_ingest(args: &[String]) {
     if has_flag(args, "-h") || has_flag(args, "--help") {
         print_ingest_help();
         return;
     }
 
-    let graph_file = flag_value_or(args, &["-i", "--input"], ".ug/graph.json");
+    let graph_file = flag_value(args, &["-i", "--input"]).unwrap_or_else(|| {
+        project::project_dir(&project::resolve_project_name(args, "."))
+            .join("graph.json")
+            .to_string_lossy()
+            .into_owned()
+    });
 
     let graph_json = fs::read_to_string(&graph_file).expect("Failed to read graph file");
     let graph: GraphData = serde_json::from_str(&graph_json).expect("Failed to parse graph JSON");
@@ -1751,12 +1846,13 @@ fn print_index_help() {
     println!();
     println!("{C_BOLD}Options:{C_RESET}");
     println!("  {C_CYAN}-i, --input{C_RESET} <path>   Input directory (default: .)");
-    println!("  {C_CYAN}-o, --output{C_RESET} <file>  Output file (default: .ug/indexed-tree.json)");
+    println!("  {C_CYAN}-o, --output{C_RESET} <file>  Output file (default: ~/.ug/<name>/indexed-tree.json)");
+    println!("  {C_CYAN}-n, --name{C_RESET} <name>    Project name (default: input dir basename)");
     println!("  {C_CYAN}-c, --cache{C_RESET} <dir>     Cache directory for incremental indexing");
     println!();
     println!("{C_BOLD}Examples:{C_RESET}");
     println!("  {C_CYAN}ug index{C_RESET} -i ./src -o index.json");
-    println!("  {C_CYAN}ug index{C_RESET} -c ./cache -o ./.ug/indexed-tree.json");
+    println!("  {C_CYAN}ug index{C_RESET} -c ./cache -n myrepo");
 }
 
 fn print_graph_help() {
@@ -1766,8 +1862,9 @@ fn print_graph_help() {
     println!("{C_BOLD}Usage:{C_RESET}  ug graph [<file>] [options]");
     println!();
     println!("{C_BOLD}Options:{C_RESET}");
-    println!("  {C_CYAN}-i, --input{C_RESET} <file>  Input index file (default: .ug/indexed-tree.json)");
-    println!("  {C_CYAN}-o, --output{C_RESET} <file> Output graph file (default: .ug/graph.json)");
+    println!("  {C_CYAN}-i, --input{C_RESET} <file>  Input index file (default: ~/.ug/<name>/indexed-tree.json)");
+    println!("  {C_CYAN}-o, --output{C_RESET} <file> Output graph file (default: ~/.ug/<name>/graph.json)");
+    println!("  {C_CYAN}-n, --name{C_RESET} <name>   Project name (default: cwd basename)");
     println!();
     println!("{C_BOLD}Examples:{C_RESET}");
     println!("  {C_CYAN}ug graph{C_RESET} -i index.json -o graph.json");
@@ -1781,8 +1878,9 @@ fn print_ingest_help() {
     println!("{C_BOLD}Usage:{C_RESET}  ug ingest [options]");
     println!();
     println!("{C_BOLD}Options:{C_RESET}");
-    println!("  {C_CYAN}-i, --input{C_RESET} <file>  Graph JSON (default: .ug/graph.json)");
-    println!("  {C_CYAN}-o, --output{C_RESET} <dir>  OverGraph directory (default: .ug/ugdb)");
+    println!("  {C_CYAN}-i, --input{C_RESET} <file>  Graph JSON (default: ~/.ug/<name>/graph.json)");
+    println!("  {C_CYAN}-o, --output{C_RESET} <dir>  OverGraph directory (default: ~/.ug/<name>/ugdb)");
+    println!("  {C_CYAN}-n, --name{C_RESET} <name>   Project name (default: cwd basename)");
     println!();
     println!("{C_BOLD}Destinations (default: overgraph):{C_RESET}");
     println!("  {C_CYAN}--dest{C_RESET} <kind[,kind...]>   {C_BOLD}overgraph{C_RESET} | {C_BOLD}neo4j{C_RESET}. Comma-separated for fan-out ingest.");
@@ -1812,7 +1910,7 @@ fn print_ingest_help() {
     println!("  Cache: $UG_MODEL_CACHE → $XDG_CACHE_HOME/ug/models → ~/Library/Caches/ug/models (macOS)");
     println!();
     println!("{C_BOLD}Examples:{C_RESET}");
-    println!("  {C_CYAN}ug ingest{C_RESET} -i .ug/graph.json -o .ug/ugdb        {C_YELLOW}# local, default model{C_RESET}");
+    println!("  {C_CYAN}ug ingest{C_RESET}                                      {C_YELLOW}# local, default model, ~/.ug/<cwd>{C_RESET}");
     println!("  {C_CYAN}ug ingest{C_RESET} --model nomic-embed-text-v1.5             {C_YELLOW}# local, larger model{C_RESET}");
     println!("  {C_CYAN}ug ingest{C_RESET} --base-url https://api.openai.com/v1 \\");
     println!("            --api-key $OPENAI_API_KEY --model text-embedding-3-small  {C_YELLOW}# remote{C_RESET}");
@@ -1820,7 +1918,7 @@ fn print_ingest_help() {
     println!("            --neo4j-uri neo4j://localhost:7687 --neo4j-user neo4j \\");
     println!("            --neo4j-password $NEO4J_PASSWORD                           {C_YELLOW}# Neo4j only{C_RESET}");
     println!("  {C_CYAN}ug ingest{C_RESET} --dest overgraph,neo4j \\");
-    println!("            -o .ug/ugdb --neo4j-uri neo4j://localhost:7687 \\");
+    println!("            --neo4j-uri neo4j://localhost:7687 \\");
     println!("            --neo4j-user neo4j --neo4j-password $NEO4J_PASSWORD        {C_YELLOW}# fan-out{C_RESET}");
 }
 
@@ -1837,7 +1935,7 @@ fn print_chat_help() {
     println!("  Omit the prompt to drop into an interactive REPL with conversational history.");
     println!();
     println!("{C_BOLD}Retrieval (matches `ug hybrid_search`):{C_RESET}");
-    println!("  {C_CYAN}-d, --db{C_RESET} <path>          OverGraph directory (default: .ug/ugdb)");
+    println!("  {C_CYAN}-d, --db{C_RESET} <path>          OverGraph directory (default: ~/.ug/<name>/ugdb)");
     println!("  {C_CYAN}-k, --limit{C_RESET} <n>          Context items to retrieve (default: 8)");
     println!("  {C_CYAN}--hops{C_RESET} <n>               Graph expansion hops (default: 2)");
     println!("  {C_CYAN}--strategy{C_RESET} <s>           ppr (default) or mmr");
@@ -1872,16 +1970,15 @@ fn print_chat_help() {
     println!();
     println!("{C_BOLD}Examples:{C_RESET}");
     println!("  {C_MAGENTA}ug chat{C_RESET} \"how does graph ingest work?\" \\");
-    println!("    -d .ug/ugdb \\");
     println!("    --base-url http://127.0.0.1:8000/v1 --api-key 12345 \\");
     println!("    --chat-model Qwen3.6-35B-A3B-MLX-8bit \\");
     println!("    --embedding-model Qwen3-Embedding-4B-4bit-DWQ");
     println!();
     println!("  {C_MAGENTA}ug chat{C_RESET} --json -v \\");
-    println!("    \"explain the PPR seed pool logic\" -d .ug/ugdb \\");
+    println!("    \"explain the PPR seed pool logic\" \\");
     println!("    --base-url http://127.0.0.1:8000/v1 --chat-model my-model");
     println!();
-    println!("  {C_MAGENTA}ug chat{C_RESET} -d .ug/ugdb \\");
+    println!("  {C_MAGENTA}ug chat{C_RESET} \\");
     println!("    --base-url http://127.0.0.1:8000/v1 --chat-model my-model     {C_YELLOW}# interactive REPL{C_RESET}");
 }
 
@@ -1902,7 +1999,13 @@ fn print_gen_help() {
         "  {C_CYAN}-c, --cache{C_RESET} <dir>        Cache directory for incremental indexing"
     );
     println!(
-        "  {C_CYAN}-o, --output{C_RESET} <dir>       Output/OverGraph directory (default: .ug)"
+        "  {C_CYAN}-n, --name{C_RESET} <name>        Project name (default: input dir basename)"
+    );
+    println!(
+        "  {C_CYAN}-o, --output{C_RESET} <dir>       Output directory (default: ~/.ug/<name>)"
+    );
+    println!(
+        "  {C_CYAN}-d, --db{C_RESET} <dir>           OverGraph directory (default: <output-dir>/ugdb)"
     );
     println!("  {C_YELLOW}--no-ingest{C_RESET}              Skip the OverGraph ingest step");
     println!("  {C_GREEN}--serve{C_RESET}                  Chain into 'ug serve' on the generated outputs");
@@ -1920,7 +2023,8 @@ fn print_gen_help() {
     );
     println!();
     println!("{C_BOLD}Examples:{C_RESET}");
-    println!("  {C_MAGENTA}ug gen{C_RESET} -i ./src -o ./.ug");
+    println!("  {C_MAGENTA}ug gen{C_RESET}                              {C_YELLOW}# ~/.ug/<cwd-basename>/{C_RESET}");
+    println!("  {C_MAGENTA}ug gen{C_RESET} -i ./src -n myrepo           {C_YELLOW}# ~/.ug/myrepo/{C_RESET}");
     println!("  {C_MAGENTA}ug gen{C_RESET} -i ./src --no-ingest --serve");
 }
 
@@ -1962,12 +2066,14 @@ fn print_help() {
     println!("{C_BOLD}Commands:{C_RESET}");
     println!("  {C_CYAN}index{C_RESET} [<path>]        Index a directory");
     println!("    -i, --input <path>   Input directory (default: .)");
-    println!("    -o, --output <file>  Output file (default: .ug/indexed-tree.json)");
+    println!("    -o, --output <file>  Output file (default: ~/.ug/<name>/indexed-tree.json)");
+    println!("    -n, --name <name>    Project name (default: input dir basename)");
     println!("    -c, --cache <dir>    Cache directory for incremental indexing");
     println!();
     println!("  {C_CYAN}graph{C_RESET} [<file>]        Build graph from index result");
-    println!("    -i, --input <file>  Input index file (default: .ug/indexed-tree.json)");
-    println!("    -o, --output <file> Output graph file (default: .ug/graph.json)");
+    println!("    -i, --input <file>  Input index file (default: ~/.ug/<name>/indexed-tree.json)");
+    println!("    -o, --output <file> Output graph file (default: ~/.ug/<name>/graph.json)");
+    println!("    -n, --name <name>   Project name (default: cwd basename)");
     println!();
     println!("  {C_CYAN}bfs{C_RESET} <file> <node> [k]  K-hop BFS traversal");
     println!("    -o, --output <file> Output file (optional)");
@@ -1991,13 +2097,15 @@ fn print_help() {
     println!(
         "  {C_CYAN}analyze{C_RESET}              Run full graph analysis (centrality + cycles)"
     );
-    println!("    -i, --input <file> Graph file (default: .ug/graph.json)");
-    println!("    -o, --output <dir> Output directory (default: .ug)");
+    println!("    -i, --input <file> Graph file (default: ~/.ug/<name>/graph.json)");
+    println!("    -o, --output <dir> Output directory (default: ~/.ug/<name>)");
     println!();
     println!("  {C_BOLD}{C_MAGENTA}gen{C_RESET} [<path>]         {C_BOLD}{C_MAGENTA}⚡ Full pipeline: index → graph → visualization → OverGraph ingest ⚡{C_RESET}");
     println!("    -i, --input <path>  Input directory (default: .)");
+    println!("    -n, --name <name>   Project name (default: input dir basename)");
     println!("    -c, --cache <dir>   Cache directory");
-    println!("    -o, --output <dir>  Output/OverGraph directory (default: .ug)");
+    println!("    -o, --output <dir>  Output directory (default: ~/.ug/<name>)");
+    println!("    -d, --db <dir>      OverGraph directory (default: <output-dir>/ugdb)");
     println!("    --no-ingest         Skip the OverGraph ingest step");
     println!(
         "    --serve             Chain into 'ug serve' on the generated outputs after gen finishes"
@@ -2005,8 +2113,8 @@ fn print_help() {
     println!("    --base-url/--api-key/--model/--embedding-dim  Embedding endpoint overrides");
     println!();
     println!("  {C_CYAN}ingest{C_RESET}               Embed graph nodes and write to OverGraph");
-    println!("    -i, --input <file>  Graph JSON (default: .ug/graph.json)");
-    println!("    -o, --output <dir> OverGraph directory (default: .ug/ugdb)");
+    println!("    -i, --input <file>  Graph JSON (default: ~/.ug/<name>/graph.json)");
+    println!("    -o, --output <dir> OverGraph directory (default: ~/.ug/<name>/ugdb)");
     println!("    --model <name>     Local fastembed alias or remote model name");
     println!("                       (default: bge-small-en-v1.5, in-process, 384d)");
     println!("    --base-url <url>   Switches to remote /v1/embeddings endpoint");
@@ -2016,7 +2124,7 @@ fn print_help() {
     );
     println!();
     println!("  {C_CYAN}semantic_search{C_RESET} <query>  Semantic vector search (OverGraph, no graph context)");
-    println!("    -d, --db <path>    OverGraph directory (default: .ug/ugdb)");
+    println!("    -d, --db <path>    OverGraph directory (default: ~/.ug/<name>/ugdb)");
     println!("    -k, --limit <n>    Top-k results (default: 10)");
     println!("    --filter <sql>     Optional SQL WHERE clause");
     println!("    --base-url/--api-key/--model/--embedding-dim  Embedding endpoint overrides");
@@ -2025,7 +2133,7 @@ fn print_help() {
     println!(
         "  {C_CYAN}hybrid_search{C_RESET} <query>   {C_YELLOW}GraphRAG: semantic search → graph expansion → ranked context{C_RESET}"
     );
-    println!("    -d, --db <path>     OverGraph directory (default: .ug/ugdb)");
+    println!("    -d, --db <path>     OverGraph directory (default: ~/.ug/<name>/ugdb)");
     println!("    -k, --limit <n>     Final results (default: 8)");
     println!("    --hops <n>          Graph expansion hops (default: 2)");
     println!("    --filter <sql>      SQL WHERE clause for semantic seed filter");
@@ -2040,14 +2148,14 @@ fn print_help() {
     println!("    -o, --output <file> Output file (optional, omit for stdout)");
     println!();
     println!("  {C_CYAN}traverse{C_RESET} <node-id>   K-hop BFS using the OverGraph edges table");
-    println!("    -d, --db <path>    OverGraph directory (default: .ug/ugdb)");
+    println!("    -d, --db <path>    OverGraph directory (default: ~/.ug/<name>/ugdb)");
     println!("    -k, --hops <n>     Max hops (default: 2)");
     println!("    -o, --output <file> Output file (optional)");
     println!();
     println!(
         "  {C_BOLD}{C_MAGENTA}chat{C_RESET} [<prompt>]      {C_BOLD}{C_MAGENTA}💬 GraphRAG-grounded chat (one-shot or REPL){C_RESET}"
     );
-    println!("    -d, --db <path>       OverGraph directory (default: .ug/ugdb)");
+    println!("    -d, --db <path>       OverGraph directory (default: ~/.ug/<name>/ugdb)");
     println!("    -k, --limit <n>       Retrieved context items (default: 8)");
     println!("    --hops <n>            Graph expansion hops (default: 2)");
     println!("    --strategy <s>        ppr (default) or mmr");
@@ -2069,9 +2177,13 @@ fn print_help() {
     println!("    --json                Emit a JSON document (answer + citations)");
     println!("    -o, --output <file>   Write answer (or JSON) to a file");
     println!();
+    println!("  {C_CYAN}list{C_RESET}                 List generated projects under ~/.ug (or $UG_HOME)");
+    println!();
     println!("  {C_CYAN}serve{C_RESET}                Serve the visualization + graph.json + read-only API (in-memory, pre-compressed)");
-    println!("    -i, --input <file>  Graph JSON to serve (default: .ug/graph.json)");
-    println!("    -d, --db <path>     OverGraph DB for /api/db + /api/search routes (default: .ug/ugdb)");
+    println!("                        Default: multi-project mode over ~/.ug with a project switcher in the UI");
+    println!("    -i, --input <file>  Graph JSON to serve (forces single-project mode)");
+    println!("    --project <name>    Initially active project in multi-project mode (default: cwd basename)");
+    println!("    -d, --db <path>     OverGraph DB for /api/db + /api/search routes (default: per-project ugdb)");
     println!("    --no-db             Don't open DB; routes return 503");
     println!("    -p, --port <n>      TCP port (default: 8080)");
     println!("    --host <addr>       Bind address (default: 127.0.0.1; use 0.0.0.0 for LAN)");
@@ -2098,14 +2210,15 @@ fn print_help() {
         "  {C_CYAN}ug search_graph{C_RESET} graph.json loadConfig --type function --type class"
     );
     println!("  {C_CYAN}ug analyze{C_RESET}");
-    println!("  {C_MAGENTA}ug gen{C_RESET} -i ./src -o ./.ug");
+    println!("  {C_MAGENTA}ug gen{C_RESET} -i ./src -n myrepo");
     println!("  {C_MAGENTA}ug gen{C_RESET} -i ./src --no-ingest --serve");
-    println!("  {C_CYAN}ug ingest{C_RESET} -i .ug/graph.json -o .ug/ugdb");
-    println!("  {C_CYAN}ug semantic_search{C_RESET} \"oauth login flow\" -d .ug/ugdb");
-    println!("  {C_CYAN}ug hybrid_search{C_RESET} \"oauth login flow\" -d .ug/ugdb -k 8");
-    println!("  {C_CYAN}ug traverse{C_RESET} \"file:src/index.ts\" -d .ug/ugdb");
-    println!("  {C_MAGENTA}ug chat{C_RESET} \"how does ingest work?\" -d .ug/ugdb \\");
+    println!("  {C_CYAN}ug list{C_RESET}");
+    println!("  {C_CYAN}ug ingest{C_RESET} -n myrepo");
+    println!("  {C_CYAN}ug semantic_search{C_RESET} \"oauth login flow\"");
+    println!("  {C_CYAN}ug hybrid_search{C_RESET} \"oauth login flow\" -k 8");
+    println!("  {C_CYAN}ug traverse{C_RESET} \"file:src/index.ts\"");
+    println!("  {C_MAGENTA}ug chat{C_RESET} \"how does ingest work?\" \\");
     println!("        --base-url http://127.0.0.1:8000/v1 --api-key 12345 \\");
     println!("        --chat-model my-chat --embedding-model my-embed");
-    println!("  {C_CYAN}ug serve{C_RESET} -i .ug/graph.json -p 8080");
+    println!("  {C_CYAN}ug serve{C_RESET} -p 8080");
 }

@@ -70,8 +70,13 @@ npm run build
 ### 3. Generate Your First Graph
 The `gen` command runs the entire pipeline (index → graph → ingest → UI).
 ```bash
-# Run the full pipeline on the current directory
-npm run gen -- -i ./ -o .ug --no-ingest
+# Run the full pipeline on the current directory.
+# Output goes to ~/.ug/<project-name>/ (project name = the directory's
+# basename; override with -n/--name).
+npm run gen -- -i ./ --no-ingest
+
+# Index another repo under a custom project name
+npm run gen -- -i ~/code/other-repo -n other --no-ingest
 ```
 
 ### 4. Visualize
@@ -80,6 +85,27 @@ Open the interactive visualization in your browser:
 npm start
 # Visit http://localhost:8080
 ```
+Without `-i`, `ug serve` runs in **multi-project mode**: it discovers every
+project under `~/.ug` and the UI header gets a project switcher, so you can
+flip between repos without restarting.
+
+### Data layout
+
+All generated data lives in one folder per project under `~/.ug`
+(override the root with `UG_HOME`):
+
+```
+~/.ug/<project-name>/
+├── graph.json          # the knowledge graph
+├── indexed-tree.json   # raw symbol tree
+├── ugdb/               # OverGraph vector + edge store
+├── project.json        # name, repoRoot, node/edge counts, timestamps
+└── README.md
+```
+
+`ug list` shows every project with counts and last-generated times. The
+repo-local `.ug/` folder only holds build artifacts (`ug` binary,
+`ultragraph.node`), not data.
 
 ---
 
@@ -117,8 +143,9 @@ UltraGraph picks a backend based on a single flag: **omit `--base-url` for the l
 No daemon, no Docker, no network. The first call downloads the ONNX weights into a user cache directory; every subsequent run loads from disk. Inference runs on CPU through the ORT runtime and is dispatched onto a blocking pool so it doesn't stall the async runtime.
 
 ```bash
-# Default — bge-small-en-v1.5, 384-dim, ~130 MB on first run
-ug ingest -i .ug/graph.json -o .ug/ugdb
+# Default — bge-small-en-v1.5, 384-dim, ~130 MB on first run.
+# Reads ~/.ug/<cwd-basename>/graph.json and writes its ugdb sibling.
+ug ingest
 
 # Pick a different model by alias
 ug ingest --model nomic-embed-text-v1.5     # 768-dim, long-context
@@ -175,7 +202,6 @@ questions grounded in it.
 
 ```bash
 ug chat "how does graph ingest work?" \
-  -d .ug/ugdb \
   --base-url http://127.0.0.1:8000/v1 \
   --api-key  12345 \
   --chat-model      Qwen3.6-35B-A3B-MLX-8bit \
@@ -193,7 +219,7 @@ scripted regression testing.
 Omit the prompt to drop into a REPL with a 6-turn rolling history:
 
 ```bash
-ug chat -d .ug/ugdb \
+ug chat \
   --base-url http://127.0.0.1:8000/v1 \
   --chat-model my-chat-model
 # you ❯ how does ingest work?
@@ -208,7 +234,7 @@ ug chat -d .ug/ugdb \
 
 | Flag | Description |
 | :--- | :--- |
-| `-d, --db <path>`            | OverGraph directory (default: `.ug/ugdb`) |
+| `-d, --db <path>`            | OverGraph directory (default: `~/.ug/<cwd-basename>/ugdb`) |
 | `--chat-model <name>`        | Chat completion model (required for remote chat) |
 | `--base-url <url>`           | OpenAI-compatible base URL (shared with embeddings) |
 | `--api-key <key>`            | Bearer token (shared with embeddings) |
@@ -231,7 +257,7 @@ ug chat -d .ug/ugdb \
 server with chat enabled:
 
 ```bash
-ug serve -i .ug/graph.json -d .ug/ugdb \
+ug serve \
   --base-url http://127.0.0.1:8000/v1 --api-key 12345 \
   --chat-model Qwen3.6-35B-A3B-MLX-8bit
 ```
@@ -273,28 +299,29 @@ Integrate UltraGraph directly into your AI Agent (Cursor, Claude Desktop, etc.).
 
 ### Configuration
 Set these environment variables before starting the server:
-- `UG_DB_PATH`: Path to your OverGraph directory (default: `./.ug/ugdb`).
-- `UG_REPO_ROOT`: Root path for resolving snippet file paths.
+- `UG_PROJECT`: Project name under `~/.ug` — the db is `~/.ug/<project>/ugdb` and the repo root is read from that project's `project.json`. **Preferred.**
+- `UG_DB_PATH`: Explicit OverGraph directory (overrides `UG_PROJECT`).
+- `UG_HOME`: Override the `~/.ug` root.
+- `UG_REPO_ROOT`: Root path for resolving snippet file paths (overrides `project.json`).
 - `UG_EMBED_MODEL`: Override embedding model (local fastembed alias or remote model name).
 - `UG_EMBED_BASE_URL`: **Set this to opt into the remote backend.** When unset, the MCP server uses the in-process ONNX embedder.
 - `UG_EMBED_API_KEY`: Bearer token for the remote endpoint.
 - `UG_MODEL_CACHE`: Override the local ONNX model cache directory.
 
-```bash
-UG_DB_PATH=./.ug/ugdb 
+When no env vars are set, the server uses `~/.ug/<cwd-basename>/ugdb` if it exists.
 
+```json
 {
   "mcpServers": {
     "ultragraph": {
       "command": "node",
       "args": ["/Users/aldrickwan/Documents/project/ug/.ug/mcp-server.mjs"],
       "env": {
-        "UG_DB_PATH": "/Users/aldrickwan/Documents/project/ug/.ug/ugdb"
+        "UG_PROJECT": "ug"
       }
     }
   }
 }
-
 ```
 
 ---

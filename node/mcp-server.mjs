@@ -2,8 +2,14 @@
 // MCP server exposing UltraGraph's GraphRAG knowledge-base tools.
 //
 // Configuration via env vars:
-//   UG_DB_PATH         - OverGraph directory (default: ./ugdb)
-//   UG_REPO_ROOT       - root for resolving snippet file paths (default: cwd)
+//   UG_DB_PATH         - OverGraph directory (overrides everything)
+//   UG_PROJECT         - project name under ~/.ug (or $UG_HOME); the db is
+//                        ~/.ug/<project>/ugdb and the repo root comes from
+//                        that project's project.json
+//   UG_HOME            - override the ~/.ug root
+//   UG_REPO_ROOT       - root for resolving snippet file paths (default:
+//                        project.json repoRoot, else cwd)
+//   (no env)           - ~/.ug/<cwd-basename>/ugdb if it exists, else ./ugdb
 //   UG_EMBED_BASE_URL  - override embedding endpoint base URL
 //   UG_EMBED_API_KEY   - override embedding API key
 //   UG_EMBED_MODEL     - override embedding model name
@@ -28,14 +34,45 @@ import {
 import { z } from "zod";
 import { createRequire } from "module";
 import { fileURLToPath } from "url";
-import { dirname, resolve } from "path";
+import { dirname, resolve, join } from "path";
+import { existsSync } from "fs";
 
 const require = createRequire(import.meta.url);
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ug = require(resolve(__dirname, ".", "ultragraph.node"));
+const project = require(resolve(__dirname, ".", "project.cjs"));
 
-const DB_PATH = process.env.UG_DB_PATH || "./ugdb";
-const REPO_ROOT = process.env.UG_REPO_ROOT || process.cwd();
+// DB + repo-root resolution, most explicit first: UG_DB_PATH →
+// UG_PROJECT → the ~/.ug project matching the cwd → legacy ./ugdb.
+// UG_REPO_ROOT always wins over project.json's repoRoot.
+function resolveDbAndRoot() {
+  if (process.env.UG_DB_PATH) {
+    return {
+      dbPath: process.env.UG_DB_PATH,
+      repoRoot: process.env.UG_REPO_ROOT || process.cwd(),
+    };
+  }
+  const fromProject = (dir) => {
+    const meta = project.readProjectMeta(dir);
+    return {
+      dbPath: join(dir, "ugdb"),
+      repoRoot: process.env.UG_REPO_ROOT || meta?.repoRoot || process.cwd(),
+    };
+  };
+  if (process.env.UG_PROJECT) {
+    return fromProject(project.projectDir(process.env.UG_PROJECT));
+  }
+  const derived = project.projectDir(project.deriveProjectName("."));
+  if (existsSync(join(derived, "ugdb"))) {
+    return fromProject(derived);
+  }
+  return {
+    dbPath: "./ugdb",
+    repoRoot: process.env.UG_REPO_ROOT || process.cwd(),
+  };
+}
+
+const { dbPath: DB_PATH, repoRoot: REPO_ROOT } = resolveDbAndRoot();
 
 // Long snippets blow up the prompt. Cap each item but indicate truncation
 // so the agent knows it can re-fetch the full slice via the file path.
