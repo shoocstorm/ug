@@ -2167,6 +2167,366 @@
             box-shadow: none;
         }
 
+        /* ─── Knowledge Base Manager (startup landing screen) ── */
+
+        .kb-manager {
+            position: fixed;
+            inset: 0;
+            z-index: 500;
+            background: var(--bg-deep);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 40px 20px;
+            overflow-y: auto;
+        }
+
+        .kb-manager.visible {
+            display: flex;
+        }
+
+        .kb-inner {
+            width: 100%;
+            max-width: 920px;
+        }
+
+        .kb-header {
+            text-align: center;
+            margin-bottom: 32px;
+        }
+
+        .kb-brand {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+
+        .kb-brand h1 {
+            font-size: 20px;
+            font-weight: 600;
+            letter-spacing: 0.3px;
+        }
+
+        .kb-subtitle {
+            margin-top: 6px;
+            font-size: 12px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .kb-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        /* Higher specificity than `.kb-state` so the JS-toggled `hidden`
+           attribute actually hides these — an author-stylesheet class
+           rule otherwise wins the cascade over the UA `[hidden]` rule
+           at equal specificity. */
+        .kb-state[hidden] {
+            display: none;
+        }
+
+        #kb-loading {
+            padding: 60px 0;
+            text-align: center;
+            color: var(--text-muted);
+        }
+
+        .kb-list-toolbar {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 16px;
+        }
+
+        .kb-list-count {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .kb-new-btn {
+            background: var(--accent);
+            color: var(--bg-deep);
+            border: none;
+            padding: 8px 14px;
+            border-radius: 8px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            font-family: inherit;
+            transition: opacity 0.15s;
+        }
+
+        .kb-new-btn:hover {
+            opacity: 0.85;
+        }
+
+        .kb-grid {
+            width: 100%;
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+            gap: 14px;
+        }
+
+        .kb-card {
+            background: var(--bg-surface);
+            border: 1px solid var(--border-soft);
+            border-radius: 12px;
+            padding: 16px;
+            cursor: pointer;
+            text-align: left;
+            transition: border-color 0.15s, transform 0.1s, background 0.15s;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            font-family: inherit;
+        }
+
+        .kb-card:hover {
+            border-color: var(--accent-dim);
+            background: var(--bg-elevated);
+            transform: translateY(-1px);
+        }
+
+        .kb-card.active {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 1px var(--accent) inset;
+        }
+
+        .kb-card-name {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .kb-card-badge {
+            font-size: 9px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--accent);
+            border: 1px solid var(--accent-dim);
+            border-radius: 4px;
+            padding: 1px 5px;
+        }
+
+        .kb-card-stats {
+            font-size: 11px;
+            color: var(--text-muted);
+            display: flex;
+            gap: 10px;
+        }
+
+        .kb-card-path {
+            font-size: 10px;
+            color: var(--text-dim);
+            font-family: 'JetBrains Mono', monospace;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .kb-card-updated {
+            font-size: 10px;
+            color: var(--text-dim);
+        }
+
+        .kb-back-btn {
+            align-self: flex-start;
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            font-size: 12px;
+            cursor: pointer;
+            margin-bottom: 12px;
+            font-family: inherit;
+        }
+
+        .kb-back-btn:hover {
+            color: var(--accent);
+        }
+
+        .kb-wizard-title {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 6px;
+        }
+
+        .kb-wizard-hint {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-bottom: 20px;
+            text-align: center;
+        }
+
+        .kb-form {
+            width: 100%;
+            max-width: 480px;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+
+        .kb-form[hidden] {
+            display: none;
+        }
+
+        .kb-field {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .kb-field em {
+            font-style: normal;
+            color: var(--text-dim);
+        }
+
+        .kb-field input[type="text"] {
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 9px 12px;
+            border-radius: 8px;
+            font-size: 13px;
+            font-family: 'JetBrains Mono', monospace;
+            outline: none;
+            transition: border-color 0.15s, box-shadow 0.15s;
+        }
+
+        .kb-field input[type="text"]:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.15);
+        }
+
+        .kb-checkbox {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            font-size: 12px;
+            color: var(--text-muted);
+            cursor: pointer;
+        }
+
+        .kb-checkbox input {
+            margin-top: 2px;
+            accent-color: var(--accent);
+            cursor: pointer;
+        }
+
+        .kb-form-actions {
+            display: flex;
+            justify-content: flex-end;
+            margin-top: 4px;
+        }
+
+        #kb-generate-btn {
+            background: var(--accent);
+            color: var(--bg-deep);
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            font-family: inherit;
+            transition: opacity 0.15s;
+        }
+
+        #kb-generate-btn:hover {
+            opacity: 0.85;
+        }
+
+        #kb-generate-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .kb-wizard-status {
+            width: 100%;
+            max-width: 480px;
+            text-align: center;
+            margin-top: 20px;
+        }
+
+        .kb-wizard-status .loader {
+            width: 32px;
+            height: 32px;
+        }
+
+        #kb-wizard-status-text {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin: 10px 0;
+        }
+
+        #kb-wizard-log {
+            text-align: left;
+            background: var(--bg-surface);
+            border: 1px solid var(--border-soft);
+            border-radius: 8px;
+            padding: 10px 12px;
+            font-size: 10px;
+            line-height: 1.5;
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--text-dim);
+            max-height: 220px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        .kb-wizard-error {
+            width: 100%;
+            max-width: 480px;
+            margin-top: 16px;
+            background: rgba(248, 113, 113, 0.08);
+            border: 1px solid rgba(248, 113, 113, 0.35);
+            border-radius: 8px;
+            padding: 10px 12px;
+            font-size: 12px;
+            color: var(--danger);
+        }
+
+        .kb-open-btn {
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: transparent;
+            border: none;
+            border-radius: 6px;
+            color: var(--text-muted);
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s;
+        }
+
+        .kb-open-btn:hover {
+            background: var(--bg-hover);
+            color: var(--accent);
+        }
+
+        /* See `.kb-state[hidden]` above — same cascade fix needed since
+           this rule also sets `display` unconditionally. */
+        .kb-open-btn[hidden] {
+            display: none;
+        }
+
+        .kb-open-btn svg {
+            width: 14px;
+            height: 14px;
+        }
+
         /* ─── Catalog modal ─────────────────────────────────── */
 
         .catalog-modal {
@@ -3080,6 +3440,69 @@
 </head>
 
 <body>
+    <!-- Knowledge Base Manager: always shown first in multi-project mode.
+         Lists discovered ~/.ug projects to open, or a wizard to generate
+         a new one from a folder. Hidden entirely in single-project mode
+         (server started with `ug serve -i <graph.json>`). -->
+    <div id="kb-manager" class="kb-manager">
+        <div class="kb-inner">
+            <div class="kb-header">
+                <div class="kb-brand">
+                    <div class="brand-dot"></div>
+                    <h1>UltraGraph</h1>
+                </div>
+                <p class="kb-subtitle">Knowledge Base Manager</p>
+            </div>
+
+            <div class="kb-body">
+                <div id="kb-loading" class="kb-state">
+                    <div class="loader"></div>
+                    <p>Discovering knowledge bases…</p>
+                </div>
+
+                <div id="kb-list-view" class="kb-state" hidden>
+                    <div class="kb-list-toolbar">
+                        <span id="kb-list-count" class="kb-list-count"></span>
+                        <button id="kb-new-btn" class="kb-new-btn" type="button">+ New Knowledge Base</button>
+                    </div>
+                    <div id="kb-grid" class="kb-grid"></div>
+                </div>
+
+                <div id="kb-wizard-view" class="kb-state" hidden>
+                    <button id="kb-wizard-back" class="kb-back-btn" type="button" hidden>← Back to list</button>
+                    <h2 class="kb-wizard-title">Generate a Knowledge Base</h2>
+                    <p class="kb-wizard-hint">Point at a local folder to index. This runs the same pipeline as
+                        <code>ug gen</code>.</p>
+                    <form id="kb-wizard-form" class="kb-form">
+                        <label class="kb-field">
+                            <span>Folder path</span>
+                            <input type="text" id="kb-path-input" placeholder="/absolute/path/to/repo"
+                                autocomplete="off" required>
+                        </label>
+                        <label class="kb-field">
+                            <span>Project name <em>(optional)</em></span>
+                            <input type="text" id="kb-name-input" placeholder="defaults to folder name"
+                                autocomplete="off">
+                        </label>
+                        <label class="kb-checkbox">
+                            <input type="checkbox" id="kb-no-ingest">
+                            <span>Skip embedding ingest (faster; disables semantic/hybrid search &amp; chat)</span>
+                        </label>
+                        <div class="kb-form-actions">
+                            <button type="submit" id="kb-generate-btn">Generate</button>
+                        </div>
+                    </form>
+                    <div id="kb-wizard-status" class="kb-wizard-status" hidden>
+                        <div class="loader"></div>
+                        <p id="kb-wizard-status-text">Starting…</p>
+                        <pre id="kb-wizard-log"></pre>
+                    </div>
+                    <div id="kb-wizard-error" class="kb-wizard-error" hidden></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div id="container">
         <div id="graph-3d"></div>
 
@@ -3154,6 +3577,15 @@
                     <select id="project-select" title="Switch project" hidden></select>
                 </div>
                 <div class="header-actions">
+                    <button id="kb-open-btn" class="kb-open-btn" title="Browse knowledge bases" hidden>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="3" y="3" width="7" height="7" rx="1.5" />
+                            <rect x="14" y="3" width="7" height="7" rx="1.5" />
+                            <rect x="3" y="14" width="7" height="7" rx="1.5" />
+                            <rect x="14" y="14" width="7" height="7" rx="1.5" />
+                        </svg>
+                    </button>
                     <span class="meta" id="sidebar-meta">0 / 0</span>
                     <button id="sidebar-collapse" title="Collapse panel">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -3576,6 +4008,208 @@
                 document.getElementById('loading').innerHTML =
                     '<p style="color:#f87171">Failed to load graph.</p>';
             }
+        }
+
+        // ─── Knowledge Base Manager (startup landing + wizard) ──
+        // Always shown first when the server is in multi-project mode:
+        // discovers ~/.ug projects via /api/projects, lets the user open
+        // one (activates it, then loads the graph) or generate a new one
+        // from a folder path via /api/generate — a background job on the
+        // server, polled through /api/generate/status. In single-project
+        // mode (`ug serve -i <graph.json>`) this is skipped entirely.
+
+        let kbCapsCache = null;
+
+        async function bootstrap() {
+            wireKbManager();
+            let caps;
+            try {
+                const res = await fetch('/api/projects', { cache: 'no-store' });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                caps = await res.json();
+            } catch (err) {
+                // Static serve, or an older server without the endpoint —
+                // fall back to the pre-KB-manager behavior.
+                loadGraph();
+                return;
+            }
+            if (caps.mode !== 'multi') {
+                loadGraph();
+                return;
+            }
+            kbCapsCache = caps;
+            document.getElementById('kb-open-btn').hidden = false;
+            showKbManager(caps);
+        }
+
+        function showKbManager(caps) {
+            document.getElementById('kb-manager').classList.add('visible');
+            if (!caps.projects.length) {
+                showKbWizard({ canGoBack: false });
+            } else {
+                showKbList(caps);
+            }
+        }
+
+        function hideKbManager() {
+            document.getElementById('kb-manager').classList.remove('visible');
+        }
+
+        function showKbList(caps) {
+            document.getElementById('kb-loading').hidden = true;
+            document.getElementById('kb-wizard-view').hidden = true;
+            document.getElementById('kb-list-view').hidden = false;
+
+            const count = caps.projects.length;
+            document.getElementById('kb-list-count').textContent =
+                `${count} knowledge base${count === 1 ? '' : 's'} found in ~/.ug`;
+
+            const grid = document.getElementById('kb-grid');
+            grid.innerHTML = '';
+            for (const p of caps.projects) {
+                const card = document.createElement('button');
+                card.type = 'button';
+                card.className = 'kb-card' + (p.name === caps.active ? ' active' : '');
+                const updated = p.updatedAt ? new Date(p.updatedAt * 1000).toLocaleString() : '—';
+                card.innerHTML = `
+                    <div class="kb-card-name">${escapeHtml(p.name)}${p.name === caps.active ? '<span class="kb-card-badge">active</span>' : ''}</div>
+                    <div class="kb-card-stats"><span>${(p.nodes || 0).toLocaleString()} nodes</span><span>${(p.edges || 0).toLocaleString()} edges</span></div>
+                    <div class="kb-card-path" title="${escapeHtml(p.repoRoot || '')}">${escapeHtml(p.repoRoot || '')}</div>
+                    <div class="kb-card-updated">Updated ${updated}</div>
+                `;
+                card.addEventListener('click', () => openProject(p.name, caps.active));
+                grid.appendChild(card);
+            }
+
+            document.getElementById('kb-new-btn').onclick = () => showKbWizard({ canGoBack: true });
+        }
+
+        function showKbWizard({ canGoBack }) {
+            document.getElementById('kb-loading').hidden = true;
+            document.getElementById('kb-list-view').hidden = true;
+            document.getElementById('kb-wizard-view').hidden = false;
+            document.getElementById('kb-wizard-back').hidden = !canGoBack;
+            document.getElementById('kb-wizard-form').hidden = false;
+            document.getElementById('kb-wizard-status').hidden = true;
+            document.getElementById('kb-wizard-error').hidden = true;
+            document.getElementById('kb-generate-btn').disabled = false;
+        }
+
+        async function openProject(name, activeName) {
+            hideKbManager();
+            if (name === activeName) {
+                loadGraph();
+                return;
+            }
+            document.getElementById('loading').style.display = 'block';
+            try {
+                const res = await fetch('/api/projects/select', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name }),
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.error || `HTTP ${res.status}`);
+                }
+                loadGraph();
+            } catch (err) {
+                console.error('failed to open project:', err);
+                document.getElementById('loading').innerHTML =
+                    `<p style="color:#f87171">Failed to open project: ${escapeHtml(err.message)}</p>`;
+            }
+        }
+
+        function wireKbManager() {
+            document.getElementById('kb-wizard-back').addEventListener('click', () => {
+                if (kbCapsCache) showKbList(kbCapsCache);
+            });
+
+            document.getElementById('kb-open-btn').addEventListener('click', async () => {
+                document.getElementById('kb-manager').classList.add('visible');
+                document.getElementById('kb-loading').hidden = false;
+                document.getElementById('kb-list-view').hidden = true;
+                document.getElementById('kb-wizard-view').hidden = true;
+                try {
+                    const res = await fetch('/api/projects', { cache: 'no-store' });
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    kbCapsCache = await res.json();
+                    showKbManager(kbCapsCache);
+                } catch (err) {
+                    console.error('failed to list projects:', err);
+                    hideKbManager();
+                }
+            });
+
+            const form = document.getElementById('kb-wizard-form');
+            form.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const path = document.getElementById('kb-path-input').value.trim();
+                const name = document.getElementById('kb-name-input').value.trim();
+                const noIngest = document.getElementById('kb-no-ingest').checked;
+                if (!path) return;
+
+                document.getElementById('kb-generate-btn').disabled = true;
+                document.getElementById('kb-wizard-error').hidden = true;
+                document.getElementById('kb-wizard-status').hidden = false;
+                document.getElementById('kb-wizard-status-text').textContent = 'Starting…';
+                document.getElementById('kb-wizard-log').textContent = '';
+
+                try {
+                    const res = await fetch('/api/generate', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ path, name: name || undefined, no_ingest: noIngest }),
+                    });
+                    if (!res.ok) {
+                        const err = await res.json().catch(() => ({}));
+                        throw new Error(err.error || `HTTP ${res.status}`);
+                    }
+                    const { jobId } = await res.json();
+                    await pollGenJob(jobId);
+                } catch (err) {
+                    document.getElementById('kb-wizard-status').hidden = true;
+                    document.getElementById('kb-wizard-error').hidden = false;
+                    document.getElementById('kb-wizard-error').textContent = err.message || String(err);
+                    document.getElementById('kb-generate-btn').disabled = false;
+                }
+            });
+        }
+
+        function pollGenJob(jobId) {
+            return new Promise((resolve, reject) => {
+                const statusText = document.getElementById('kb-wizard-status-text');
+                const logEl = document.getElementById('kb-wizard-log');
+                const tick = async () => {
+                    let job;
+                    try {
+                        const res = await fetch(`/api/generate/status?job=${encodeURIComponent(jobId)}`, { cache: 'no-store' });
+                        job = await res.json();
+                    } catch (err) {
+                        setTimeout(tick, 1500);
+                        return;
+                    }
+                    logEl.textContent = (job.log || []).join('\n');
+                    logEl.scrollTop = logEl.scrollHeight;
+                    if (job.status === 'running') {
+                        statusText.textContent = 'Generating knowledge base…';
+                        setTimeout(tick, 1000);
+                    } else if (job.status === 'done') {
+                        statusText.textContent = `Done — opening ${job.projectName}…`;
+                        setTimeout(async () => {
+                            await openProject(job.projectName, null);
+                            resolve();
+                        }, 500);
+                    } else {
+                        document.getElementById('kb-generate-btn').disabled = false;
+                        document.getElementById('kb-wizard-status').hidden = true;
+                        document.getElementById('kb-wizard-error').hidden = false;
+                        document.getElementById('kb-wizard-error').textContent = job.error || 'Generation failed.';
+                        reject(new Error(job.error || 'generation failed'));
+                    }
+                };
+                tick();
+            });
         }
 
         function transformData(data) {
@@ -6699,7 +7333,7 @@
             }
         });
 
-        loadGraph();
+        bootstrap();
     </script>
 </body>
 

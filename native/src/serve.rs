@@ -4,6 +4,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{Duration, SystemTime};
 
@@ -320,6 +321,42 @@ async fn build_project_context(
     }))
 }
 
+/// Zero-project startup: rather than failing to start, register an
+/// empty placeholder project and activate it so every handler still
+/// has something to read from (`GET /graph.json` just returns an empty
+/// graph). The KB Manager screen shows the "generate from scratch"
+/// wizard whenever `/api/projects` reports zero real projects; once
+/// the user generates or selects one, `activate_project` replaces this
+/// as the active context.
+fn build_placeholder_context(registry: &Arc<ProjectRegistry>) -> Arc<ProjectContext> {
+    let empty_graph = GraphData {
+        nodes: Vec::new(),
+        edges: Vec::new(),
+        stats: None,
+    };
+    let raw_json =
+        serde_json::to_string(&empty_graph).unwrap_or_else(|_| "{\"nodes\":[],\"edges\":[]}".to_string());
+    let encoded = EncodedAsset::new(raw_json.clone().into_bytes(), "application/json; charset=utf-8");
+    let snapshot = Arc::new(GraphSnapshot {
+        encoded,
+        parsed: empty_graph,
+        raw_json,
+        adj: OnceLock::new(),
+        centrality: OnceLock::new(),
+        cycles: OnceLock::new(),
+    });
+    let ctx = Arc::new(ProjectContext {
+        name: "__none__".to_string(),
+        graph_path: PathBuf::new(),
+        repo_root: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        graph: RwLock::new(snapshot),
+        stores: None,
+        db_unavailable_reason: Some("no knowledge base selected yet".to_string()),
+    });
+    registry.insert_and_activate(ctx.clone());
+    ctx
+}
+
 /// Open every store listed in `UG_DEST` for `db_path`. Per-dest open
 /// failures are non-fatal as long as at least one backend opens; the
 /// operator sees per-dest status on `/api/capabilities`.
@@ -396,6 +433,8 @@ struct ServeState {
     /// Process-wide cap on concurrent embedding calls. Cheap insurance against
     /// hammering the embedding endpoint when many search requests land at once.
     embed_lock: Arc<Semaphore>,
+    /// Background `ug gen` jobs kicked off from the KB Manager wizard.
+    gen_jobs: Arc<GenJobs>,
 }
 
 impl ServeState {
@@ -422,6 +461,50 @@ impl ServeState {
     fn db_unavailable_reason(&self) -> Option<String> {
         self.active().db_unavailable_reason.clone()
     }
+}
+
+// ---------- Background `ug gen` jobs (KB Manager wizard) ----------
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum GenJobStatus {
+    Running,
+    Done,
+    Error,
+}
+
+/// State for one wizard-triggered generation, run as a `ug gen`
+/// subprocess so the pipeline logic isn't duplicated here. Streamed
+/// stdout/stderr lines accumulate in `log` for the client to poll.
+struct GenJob {
+    status: GenJobStatus,
+    log: Vec<String>,
+    project_name: Option<String>,
+    error: Option<String>,
+}
+
+/// In-memory registry of generation jobs, keyed by a per-process
+/// monotonic id. Local dev tool, single user — no persistence or
+/// eviction needed; the process restarting clears it.
+struct GenJobs {
+    next_id: AtomicU64,
+    jobs: RwLock<HashMap<String, Arc<RwLock<GenJob>>>>,
+}
+
+impl GenJobs {
+    fn new() -> Self {
+        GenJobs {
+            next_id: AtomicU64::new(1),
+            jobs: RwLock::new(HashMap::new()),
+        }
+    }
+}
+
+/// Strip ANSI SGR escape sequences (`\x1b[...m`) from CLI output so the
+/// wizard's plain-text log viewer doesn't show raw color codes.
+fn strip_ansi(s: &str) -> String {
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| regex::Regex::new(r"\x1b\[[0-9;]*m").expect("valid regex"));
+    re.replace_all(s, "").into_owned()
 }
 
 fn load_snapshot(path: &PathBuf) -> Result<Arc<GraphSnapshot>, String> {
@@ -509,11 +592,19 @@ pub fn run_serve(args: &[String]) {
                         graph_file: ".ug/graph.json".to_string(),
                     }
                 } else {
-                    tracing::error!(
+                    // No projects and no legacy graph: start anyway with
+                    // an empty placeholder project. The KB Manager screen
+                    // (always shown first when `/api/projects` reports
+                    // zero projects) presents the "generate from scratch"
+                    // wizard; an empty sentinel `initial` name signals
+                    // that below.
+                    tracing::info!(
                         home = %crate::project::ug_home().display(),
-                        "no projects found — run `ug gen` first, or pass -i <graph.json>"
+                        "no projects found — starting in multi-project mode; use the KB Manager UI to generate one"
                     );
-                    std::process::exit(1);
+                    Startup::Multi {
+                        initial: String::new(),
+                    }
                 }
             } else {
                 let requested =
@@ -639,10 +730,14 @@ pub fn run_serve(args: &[String]) {
             }
             Startup::Multi { .. } => {
                 let initial = registry_seed.expect("multi startup has initial project");
-                activate_project(&registry, &initial).await.unwrap_or_else(|e| {
-                    tracing::error!(project = %initial, error = %e, "failed to load initial project");
-                    std::process::exit(1);
-                })
+                if initial.is_empty() {
+                    build_placeholder_context(&registry)
+                } else {
+                    activate_project(&registry, &initial).await.unwrap_or_else(|e| {
+                        tracing::error!(project = %initial, error = %e, "failed to load initial project");
+                        std::process::exit(1);
+                    })
+                }
             }
         };
 
@@ -675,6 +770,7 @@ pub fn run_serve(args: &[String]) {
             embedder: embedder_arc,
             chat_default: Arc::new(chat_default),
             embed_lock: Arc::new(Semaphore::new(4)),
+            gen_jobs: Arc::new(GenJobs::new()),
         };
 
         let app = Router::new()
@@ -685,6 +781,8 @@ pub fn run_serve(args: &[String]) {
             .route("/healthz", get(handle_health))
             .route("/api/projects", get(api_projects))
             .route("/api/projects/select", post(api_projects_select))
+            .route("/api/generate", post(api_generate))
+            .route("/api/generate/status", get(api_generate_status))
             .route("/api/capabilities", get(api_capabilities))
             .route("/api/graph/stats", get(api_stats))
             .route("/api/graph/node/*id", get(api_node))
@@ -924,6 +1022,169 @@ async fn api_projects_select(
         Err(e) if e.starts_with("unknown project") => err_json(StatusCode::NOT_FOUND, &e),
         Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &e),
     }
+}
+
+#[derive(serde::Deserialize)]
+struct GenerateBody {
+    path: String,
+    name: Option<String>,
+    #[serde(default)]
+    no_ingest: bool,
+}
+
+/// POST /api/generate — KB Manager wizard entry point. Spawns `ug gen`
+/// as a subprocess (reusing the exact same pipeline the CLI uses,
+/// rather than duplicating it here) against `body.path`, and returns a
+/// job id immediately; progress is polled via `/api/generate/status`.
+/// Only available in multi-project mode — there's nowhere sensible to
+/// discover a newly generated project from in single mode.
+async fn api_generate(State(state): State<ServeState>, Json(body): Json<GenerateBody>) -> Response {
+    if state.registry.mode == ServeMode::Single {
+        return err_json(
+            StatusCode::BAD_REQUEST,
+            "generate is only available in multi-project mode",
+        );
+    }
+    let raw_path = body.path.trim().to_string();
+    let canon = match std::fs::canonicalize(&raw_path) {
+        Ok(p) if p.is_dir() => p,
+        Ok(_) => return err_json(StatusCode::BAD_REQUEST, "path is not a directory"),
+        Err(e) => return err_json(StatusCode::BAD_REQUEST, &format!("invalid path: {}", e)),
+    };
+    let name = body.name.as_deref().map(crate::project::sanitize_name);
+
+    let id = state
+        .gen_jobs
+        .next_id
+        .fetch_add(1, Ordering::SeqCst)
+        .to_string();
+    let job = Arc::new(RwLock::new(GenJob {
+        status: GenJobStatus::Running,
+        log: Vec::new(),
+        project_name: None,
+        error: None,
+    }));
+    state
+        .gen_jobs
+        .jobs
+        .write()
+        .expect("jobs poisoned")
+        .insert(id.clone(), job.clone());
+
+    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("ug"));
+    let mut cmd = tokio::process::Command::new(exe);
+    cmd.arg("gen").arg("-i").arg(&canon);
+    if let Some(n) = &name {
+        cmd.arg("-n").arg(n);
+    }
+    if body.no_ingest {
+        cmd.arg("--no-ingest");
+    }
+    // Quiet the ASCII-art banner `main()` prints on every invocation —
+    // it would otherwise dominate the wizard's log viewer.
+    cmd.env("UG_QUIET_LOGO", "1");
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+    cmd.kill_on_drop(true);
+
+    let fallback_name =
+        name.unwrap_or_else(|| crate::project::derive_project_name(&canon.to_string_lossy()));
+
+    tokio::spawn(async move {
+        use tokio::io::{AsyncBufReadExt, BufReader};
+
+        let mut child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => {
+                let mut j = job.write().expect("job poisoned");
+                j.status = GenJobStatus::Error;
+                j.error = Some(format!("failed to spawn ug gen: {}", e));
+                return;
+            }
+        };
+        let stdout = child.stdout.take().expect("piped stdout");
+        let stderr = child.stderr.take().expect("piped stderr");
+
+        let job_out = job.clone();
+        let out_task = tokio::spawn(async move {
+            let mut lines = BufReader::new(stdout).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                job_out
+                    .write()
+                    .expect("job poisoned")
+                    .log
+                    .push(strip_ansi(&line));
+            }
+        });
+        let job_err = job.clone();
+        let err_task = tokio::spawn(async move {
+            let mut lines = BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                job_err
+                    .write()
+                    .expect("job poisoned")
+                    .log
+                    .push(strip_ansi(&line));
+            }
+        });
+
+        let status = child.wait().await;
+        let _ = out_task.await;
+        let _ = err_task.await;
+
+        let mut j = job.write().expect("job poisoned");
+        match status {
+            Ok(s) if s.success() => {
+                j.status = GenJobStatus::Done;
+                j.project_name = Some(fallback_name);
+            }
+            Ok(s) => {
+                j.status = GenJobStatus::Error;
+                j.error = Some(format!("ug gen exited with {}", s));
+            }
+            Err(e) => {
+                j.status = GenJobStatus::Error;
+                j.error = Some(format!("failed to wait on ug gen: {}", e));
+            }
+        }
+    });
+
+    ok_json(serde_json::json!({ "jobId": id }).to_string())
+}
+
+#[derive(serde::Deserialize)]
+struct GenJobQuery {
+    job: String,
+}
+
+/// GET /api/generate/status?job=<id> — poll a generation job's status,
+/// accumulated log lines, and (on success) the resulting project name.
+async fn api_generate_status(
+    State(state): State<ServeState>,
+    Query(params): Query<GenJobQuery>,
+) -> Response {
+    let job = {
+        let jobs = state.gen_jobs.jobs.read().expect("jobs poisoned");
+        match jobs.get(&params.job) {
+            Some(j) => j.clone(),
+            None => return err_json(StatusCode::NOT_FOUND, "unknown job"),
+        }
+    };
+    let j = job.read().expect("job poisoned");
+    let status = match j.status {
+        GenJobStatus::Running => "running",
+        GenJobStatus::Done => "done",
+        GenJobStatus::Error => "error",
+    };
+    ok_json(
+        serde_json::json!({
+            "status": status,
+            "log": j.log,
+            "projectName": j.project_name,
+            "error": j.error,
+        })
+        .to_string(),
+    )
 }
 
 fn file_mtime(path: &PathBuf) -> Option<SystemTime> {

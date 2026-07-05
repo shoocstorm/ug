@@ -31,7 +31,12 @@ fn main() {
     // override values already set in the process environment. Quiet
     // when no `.env` is present.
     let _ = dotenvy::dotenv();
-    print_logo();
+    // Suppressed when spawned as a subprocess by `ug serve`'s KB Manager
+    // wizard (`POST /api/generate`) — the banner would otherwise dominate
+    // the wizard's streamed log viewer.
+    if std::env::var("UG_QUIET_LOGO").is_err() {
+        print_logo();
+    }
 
     let args: Vec<String> = env::args().collect();
 
