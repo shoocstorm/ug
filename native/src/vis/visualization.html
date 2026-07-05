@@ -310,6 +310,18 @@
             color: var(--text);
         }
 
+        /* Toggled on in multi-project mode so the brand also doubles as
+           a "back to Knowledge Base Manager" affordance, alongside the
+           explicit icon button. */
+        .brand-clickable {
+            cursor: pointer;
+            transition: color 0.15s;
+        }
+
+        .brand-clickable:hover {
+            color: var(--accent);
+        }
+
         #project-select {
             margin-left: 6px;
             max-width: 150px;
@@ -2177,7 +2189,7 @@
             display: none;
             align-items: center;
             justify-content: center;
-            padding: 40px 20px;
+            padding: 56px 20px;
             overflow-y: auto;
         }
 
@@ -2185,41 +2197,175 @@
             display: flex;
         }
 
-        .kb-inner {
+        /* Ambient constellation backdrop — a sparse, slowly-twinkling
+           node graph behind the console, echoing the product itself
+           without competing with the foreground content. */
+        .kb-bg {
+            position: absolute;
+            inset: 0;
+            z-index: 0;
+            pointer-events: none;
+            overflow: hidden;
+        }
+
+        .kb-bg svg {
             width: 100%;
-            max-width: 920px;
+            height: 100%;
+        }
+
+        .kb-bg circle {
+            animation: kb-twinkle 6s ease-in-out infinite;
+        }
+
+        .kb-bg circle:nth-child(3n) {
+            animation-delay: -1.2s;
+        }
+
+        .kb-bg circle:nth-child(3n+1) {
+            animation-delay: -3.4s;
+        }
+
+        .kb-bg circle:nth-child(3n+2) {
+            animation-delay: -5s;
+        }
+
+        @keyframes kb-twinkle {
+
+            0%,
+            100% {
+                opacity: 0.18;
+            }
+
+            50% {
+                opacity: 0.55;
+            }
+        }
+
+        .kb-glow {
+            position: absolute;
+            top: -12%;
+            left: 50%;
+            width: 900px;
+            height: 900px;
+            transform: translateX(-50%);
+            background: radial-gradient(closest-side, rgba(34, 211, 238, 0.12), transparent 70%);
+        }
+
+        .kb-inner {
+            position: relative;
+            z-index: 1;
+            width: 100%;
+            max-width: 960px;
         }
 
         .kb-header {
             text-align: center;
-            margin-bottom: 32px;
+            margin-bottom: 44px;
+        }
+
+        .kb-kicker {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 3px;
+            text-transform: uppercase;
+            color: var(--accent);
+            margin-bottom: 12px;
         }
 
         .kb-brand {
             display: flex;
             align-items: center;
             justify-content: center;
-            gap: 10px;
         }
 
         .kb-brand h1 {
-            font-size: 20px;
-            font-weight: 600;
-            letter-spacing: 0.3px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 40px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            color: var(--text);
+            text-shadow: 0 0 44px rgba(34, 211, 238, 0.25);
         }
 
-        .kb-subtitle {
-            margin-top: 6px;
-            font-size: 12px;
+        .kb-cursor {
+            display: inline-block;
+            width: 4px;
+            height: 32px;
+            background: var(--accent);
+            margin-left: 6px;
+            box-shadow: 0 0 12px var(--accent);
+            animation: kb-blink 1.1s step-end infinite;
+        }
+
+        @keyframes kb-blink {
+
+            0%,
+            45% {
+                opacity: 1;
+            }
+
+            50%,
+            100% {
+                opacity: 0;
+            }
+        }
+
+        .kb-status-line {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 18px;
+            padding: 5px 14px;
+            border: 1px solid var(--border-soft);
+            border-radius: 999px;
+            background: var(--bg-surface);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            letter-spacing: 0.4px;
             color: var(--text-muted);
-            text-transform: uppercase;
-            letter-spacing: 1px;
+        }
+
+        .kb-status-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--success);
+            box-shadow: 0 0 8px var(--success);
+            animation: kb-pulse 2s ease-in-out infinite;
+        }
+
+        @keyframes kb-pulse {
+
+            0%,
+            100% {
+                opacity: 1;
+                transform: scale(1);
+            }
+
+            50% {
+                opacity: 0.5;
+                transform: scale(0.7);
+            }
         }
 
         .kb-state {
             display: flex;
             flex-direction: column;
             align-items: center;
+            animation: kb-rise 0.35s ease-out both;
+        }
+
+        @keyframes kb-rise {
+            from {
+                opacity: 0;
+                transform: translateY(6px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
         }
 
         /* Higher specificity than `.kb-state` so the JS-toggled `hidden`
@@ -2230,41 +2376,53 @@
             display: none;
         }
 
+        /* ─── Loading ("scanning") state ─── */
+
         #kb-loading {
             padding: 60px 0;
             text-align: center;
+        }
+
+        .kb-scan {
+            position: relative;
+            width: 60px;
+            height: 60px;
+            margin: 0 auto 22px;
+        }
+
+        .kb-scan::before,
+        .kb-scan::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            border-radius: 50%;
+        }
+
+        .kb-scan::before {
+            border: 2px solid var(--border-soft);
+        }
+
+        .kb-scan::after {
+            background: conic-gradient(from 0deg, var(--accent), transparent 65%);
+            mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 3px));
+            -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 3px));
+            animation: kb-spin 1.1s linear infinite;
+        }
+
+        @keyframes kb-spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        #kb-loading p {
             color: var(--text-muted);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11.5px;
+            letter-spacing: 0.4px;
         }
 
-        .kb-list-toolbar {
-            width: 100%;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            margin-bottom: 16px;
-        }
-
-        .kb-list-count {
-            font-size: 12px;
-            color: var(--text-muted);
-        }
-
-        .kb-new-btn {
-            background: var(--accent);
-            color: var(--bg-deep);
-            border: none;
-            padding: 8px 14px;
-            border-radius: 8px;
-            font-size: 12px;
-            font-weight: 600;
-            cursor: pointer;
-            font-family: inherit;
-            transition: opacity 0.15s;
-        }
-
-        .kb-new-btn:hover {
-            opacity: 0.85;
-        }
+        /* ─── List state ─── */
 
         .kb-grid {
             width: 100%;
@@ -2273,64 +2431,159 @@
             gap: 14px;
         }
 
+        .kb-card,
+        .kb-add-tile {
+            opacity: 0;
+            animation: kb-card-in 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+            animation-delay: calc(var(--i, 0) * 45ms);
+        }
+
+        @keyframes kb-card-in {
+            from {
+                opacity: 0;
+                transform: translateY(10px) scale(0.98);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0) scale(1);
+            }
+        }
+
         .kb-card {
+            position: relative;
             background: var(--bg-surface);
             border: 1px solid var(--border-soft);
             border-radius: 12px;
-            padding: 16px;
+            padding: 16px 16px 16px 20px;
             cursor: pointer;
             text-align: left;
-            transition: border-color 0.15s, transform 0.1s, background 0.15s;
+            transition: border-color 0.18s, transform 0.18s, background 0.18s, box-shadow 0.18s;
             display: flex;
             flex-direction: column;
-            gap: 8px;
+            gap: 9px;
             font-family: inherit;
+            overflow: hidden;
+        }
+
+        .kb-card::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            width: 3px;
+            background: var(--card-accent, var(--accent));
         }
 
         .kb-card:hover {
-            border-color: var(--accent-dim);
+            border-color: var(--card-accent, var(--accent-dim));
             background: var(--bg-elevated);
-            transform: translateY(-1px);
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px -14px var(--card-accent, var(--accent));
         }
 
         .kb-card.active {
-            border-color: var(--accent);
-            box-shadow: 0 0 0 1px var(--accent) inset;
+            border-color: var(--card-accent, var(--accent));
+            box-shadow: 0 0 0 1px var(--card-accent, var(--accent)) inset, 0 0 24px -10px var(--card-accent, var(--accent));
         }
 
-        .kb-card-name {
-            font-size: 14px;
-            font-weight: 600;
-            color: var(--text);
+        .kb-card-top {
             display: flex;
-            align-items: center;
+            align-items: flex-start;
+            justify-content: space-between;
             gap: 8px;
         }
 
+        .kb-card-icon {
+            flex-shrink: 0;
+            width: 20px;
+            height: 20px;
+            color: var(--card-accent, var(--accent));
+            opacity: 0.9;
+        }
+
+        .kb-card-name {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
         .kb-card-badge {
-            font-size: 9px;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            flex-shrink: 0;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 8px;
+            font-weight: 700;
             text-transform: uppercase;
             letter-spacing: 0.5px;
-            color: var(--accent);
-            border: 1px solid var(--accent-dim);
+            color: var(--success);
+            border: 1px solid rgba(74, 222, 128, 0.4);
             border-radius: 4px;
-            padding: 1px 5px;
+            padding: 2px 6px;
+        }
+
+        .kb-card-badge::before {
+            content: '';
+            width: 4px;
+            height: 4px;
+            border-radius: 50%;
+            background: var(--success);
+            box-shadow: 0 0 5px var(--success);
         }
 
         .kb-card-stats {
-            font-size: 11px;
-            color: var(--text-muted);
             display: flex;
-            gap: 10px;
+            gap: 16px;
+        }
+
+        .kb-card-metric {
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
+        }
+
+        .kb-card-metric b {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 14px;
+            font-weight: 700;
+            color: var(--text);
+        }
+
+        .kb-card-metric span {
+            font-size: 9px;
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+            color: var(--text-dim);
         }
 
         .kb-card-path {
+            display: flex;
+            align-items: center;
+            gap: 5px;
             font-size: 10px;
             color: var(--text-dim);
             font-family: 'JetBrains Mono', monospace;
-            white-space: nowrap;
+        }
+
+        .kb-card-path svg {
+            width: 11px;
+            height: 11px;
+            flex-shrink: 0;
+            opacity: 0.7;
+        }
+
+        .kb-card-path span {
+            min-width: 0;
             overflow: hidden;
             text-overflow: ellipsis;
+            white-space: nowrap;
         }
 
         .kb-card-updated {
@@ -2338,40 +2591,110 @@
             color: var(--text-dim);
         }
 
+        .kb-add-tile {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            min-height: 128px;
+            background: transparent;
+            border: 1.5px dashed var(--border);
+            border-radius: 12px;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-family: inherit;
+            font-size: 12px;
+            font-weight: 600;
+            transition: border-color 0.18s, color 0.18s, background 0.18s;
+        }
+
+        .kb-add-tile:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+            background: rgba(34, 211, 238, 0.05);
+        }
+
+        .kb-add-tile svg {
+            width: 22px;
+            height: 22px;
+        }
+
+        /* ─── Wizard state ─── */
+
         .kb-back-btn {
             align-self: flex-start;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
             background: transparent;
             border: none;
             color: var(--text-muted);
             font-size: 12px;
             cursor: pointer;
-            margin-bottom: 12px;
+            margin-bottom: 18px;
             font-family: inherit;
+            transition: color 0.15s, transform 0.15s;
         }
 
         .kb-back-btn:hover {
             color: var(--accent);
+            transform: translateX(-2px);
+        }
+
+        .kb-back-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        /* See `.kb-state[hidden]` above — same cascade fix, needed
+           wherever a rule sets `display` unconditionally on an element
+           the JS toggles `hidden` on. */
+        .kb-back-btn[hidden] {
+            display: none;
+        }
+
+        .kb-wizard-icon {
+            width: 44px;
+            height: 44px;
+            color: var(--accent);
+            margin-bottom: 16px;
+            filter: drop-shadow(0 0 14px rgba(34, 211, 238, 0.4));
         }
 
         .kb-wizard-title {
-            font-size: 16px;
-            font-weight: 600;
-            margin-bottom: 6px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 17px;
+            font-weight: 700;
+            margin-bottom: 8px;
+            letter-spacing: 0.3px;
         }
 
         .kb-wizard-hint {
-            font-size: 12px;
+            font-size: 12.5px;
+            line-height: 1.6;
             color: var(--text-muted);
-            margin-bottom: 20px;
+            margin-bottom: 26px;
             text-align: center;
+            max-width: 420px;
+        }
+
+        .kb-wizard-hint code {
+            font-family: 'JetBrains Mono', monospace;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-soft);
+            border-radius: 4px;
+            padding: 1px 5px;
+            color: var(--accent);
         }
 
         .kb-form {
             width: 100%;
-            max-width: 480px;
+            max-width: 460px;
             display: flex;
             flex-direction: column;
-            gap: 14px;
+            gap: 16px;
         }
 
         .kb-form[hidden] {
@@ -2382,23 +2705,46 @@
             display: flex;
             flex-direction: column;
             gap: 6px;
-            font-size: 12px;
-            color: var(--text-muted);
+            font-size: 11.5px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+            color: var(--text-dim);
         }
 
         .kb-field em {
             font-style: normal;
+            text-transform: none;
+            letter-spacing: 0;
+            font-weight: 400;
             color: var(--text-dim);
         }
 
+        .kb-input-wrap {
+            position: relative;
+            display: flex;
+            align-items: center;
+        }
+
+        .kb-input-wrap svg {
+            position: absolute;
+            left: 12px;
+            width: 14px;
+            height: 14px;
+            color: var(--text-dim);
+            pointer-events: none;
+        }
+
         .kb-field input[type="text"] {
+            width: 100%;
             background: var(--bg-elevated);
             border: 1px solid var(--border);
             color: var(--text);
-            padding: 9px 12px;
+            padding: 10px 12px 10px 34px;
             border-radius: 8px;
             font-size: 13px;
             font-family: 'JetBrains Mono', monospace;
+            font-weight: 400;
             outline: none;
             transition: border-color 0.15s, box-shadow 0.15s;
         }
@@ -2411,8 +2757,11 @@
         .kb-checkbox {
             display: flex;
             align-items: flex-start;
-            gap: 8px;
+            gap: 9px;
             font-size: 12px;
+            font-weight: 400;
+            text-transform: none;
+            letter-spacing: 0;
             color: var(--text-muted);
             cursor: pointer;
         }
@@ -2430,43 +2779,54 @@
         }
 
         #kb-generate-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
             background: var(--accent);
-            color: var(--bg-deep);
+            color: #04262b;
             border: none;
-            padding: 10px 20px;
+            padding: 11px 22px;
             border-radius: 8px;
             font-size: 13px;
-            font-weight: 600;
+            font-weight: 700;
             cursor: pointer;
-            font-family: inherit;
-            transition: opacity 0.15s;
+            font-family: 'JetBrains Mono', monospace;
+            letter-spacing: 0.3px;
+            box-shadow: 0 8px 24px -10px var(--accent);
+            transition: opacity 0.15s, transform 0.15s, box-shadow 0.15s;
         }
 
         #kb-generate-btn:hover {
-            opacity: 0.85;
+            opacity: 0.92;
+            transform: translateY(-1px);
+            box-shadow: 0 12px 28px -10px var(--accent);
         }
 
         #kb-generate-btn:disabled {
-            opacity: 0.5;
+            opacity: 0.4;
             cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
         }
 
         .kb-wizard-status {
             width: 100%;
-            max-width: 480px;
+            max-width: 460px;
             text-align: center;
-            margin-top: 20px;
+            margin-top: 24px;
         }
 
-        .kb-wizard-status .loader {
-            width: 32px;
-            height: 32px;
+        .kb-wizard-status .kb-scan {
+            width: 40px;
+            height: 40px;
         }
 
         #kb-wizard-status-text {
-            font-size: 12px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11.5px;
+            letter-spacing: 0.3px;
             color: var(--text-muted);
-            margin: 10px 0;
+            margin: 12px 0;
         }
 
         #kb-wizard-log {
@@ -2474,9 +2834,9 @@
             background: var(--bg-surface);
             border: 1px solid var(--border-soft);
             border-radius: 8px;
-            padding: 10px 12px;
-            font-size: 10px;
-            line-height: 1.5;
+            padding: 12px 14px;
+            font-size: 10.5px;
+            line-height: 1.6;
             font-family: 'JetBrains Mono', monospace;
             color: var(--text-dim);
             max-height: 220px;
@@ -2485,14 +2845,20 @@
             word-break: break-all;
         }
 
+        #kb-wizard-log:not(:empty)::after {
+            content: '▌';
+            color: var(--accent);
+            animation: kb-blink 1.1s step-end infinite;
+        }
+
         .kb-wizard-error {
             width: 100%;
-            max-width: 480px;
-            margin-top: 16px;
+            max-width: 460px;
+            margin-top: 18px;
             background: rgba(248, 113, 113, 0.08);
             border: 1px solid rgba(248, 113, 113, 0.35);
             border-radius: 8px;
-            padding: 10px 12px;
+            padding: 11px 14px;
             font-size: 12px;
             color: var(--danger);
         }
@@ -3445,55 +3811,126 @@
          a new one from a folder. Hidden entirely in single-project mode
          (server started with `ug serve -i <graph.json>`). -->
     <div id="kb-manager" class="kb-manager">
+        <div class="kb-bg" aria-hidden="true">
+            <div class="kb-glow"></div>
+            <svg viewBox="0 0 1000 600" preserveAspectRatio="xMidYMid slice">
+                <g stroke="#22d3ee" stroke-width="1" opacity="0.5">
+                    <line x1="120" y1="90" x2="260" y2="180" />
+                    <line x1="260" y1="180" x2="205" y2="320" />
+                    <line x1="205" y1="320" x2="80" y2="410" />
+                    <line x1="780" y1="70" x2="900" y2="160" />
+                    <line x1="900" y1="160" x2="840" y2="290" />
+                    <line x1="840" y1="290" x2="960" y2="380" />
+                    <line x1="480" y1="40" x2="560" y2="120" />
+                    <line x1="560" y1="120" x2="470" y2="200" />
+                    <line x1="120" y1="480" x2="240" y2="540" />
+                    <line x1="700" y1="470" x2="620" y2="540" />
+                </g>
+                <g fill="#22d3ee">
+                    <circle cx="120" cy="90" r="2.2" />
+                    <circle cx="260" cy="180" r="1.6" />
+                    <circle cx="205" cy="320" r="2" />
+                    <circle cx="80" cy="410" r="1.4" />
+                    <circle cx="780" cy="70" r="1.8" />
+                    <circle cx="900" cy="160" r="2.4" />
+                    <circle cx="840" cy="290" r="1.5" />
+                    <circle cx="960" cy="380" r="2" />
+                    <circle cx="480" cy="40" r="1.6" />
+                    <circle cx="560" cy="120" r="2.2" />
+                    <circle cx="470" cy="200" r="1.4" />
+                    <circle cx="120" cy="480" r="1.8" />
+                    <circle cx="240" cy="540" r="1.4" />
+                    <circle cx="700" cy="470" r="2" />
+                    <circle cx="620" cy="540" r="1.6" />
+                    <circle cx="30" cy="220" r="1.4" />
+                    <circle cx="960" cy="60" r="1.6" />
+                    <circle cx="500" cy="560" r="1.8" />
+                </g>
+            </svg>
+        </div>
+
         <div class="kb-inner">
             <div class="kb-header">
+                <div class="kb-kicker">Knowledge Base Manager</div>
                 <div class="kb-brand">
-                    <div class="brand-dot"></div>
-                    <h1>UltraGraph</h1>
+                    <h1>ULTRAGRAPH</h1>
+                    <span class="kb-cursor"></span>
                 </div>
-                <p class="kb-subtitle">Knowledge Base Manager</p>
+                <div class="kb-status-line">
+                    <span class="kb-status-dot"></span>
+                    <span id="kb-status-text">Connecting…</span>
+                </div>
             </div>
 
             <div class="kb-body">
                 <div id="kb-loading" class="kb-state">
-                    <div class="loader"></div>
-                    <p>Discovering knowledge bases…</p>
+                    <div class="kb-scan"></div>
+                    <p>Scanning ~/.ug for knowledge bases…</p>
                 </div>
 
                 <div id="kb-list-view" class="kb-state" hidden>
-                    <div class="kb-list-toolbar">
-                        <span id="kb-list-count" class="kb-list-count"></span>
-                        <button id="kb-new-btn" class="kb-new-btn" type="button">+ New Knowledge Base</button>
-                    </div>
                     <div id="kb-grid" class="kb-grid"></div>
                 </div>
 
                 <div id="kb-wizard-view" class="kb-state" hidden>
-                    <button id="kb-wizard-back" class="kb-back-btn" type="button" hidden>← Back to list</button>
+                    <button id="kb-wizard-back" class="kb-back-btn" type="button" hidden>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
+                            stroke-linecap="round" stroke-linejoin="round" width="13" height="13">
+                            <path d="M15 18l-6-6 6-6" />
+                        </svg>
+                        Back to library
+                    </button>
+                    <svg class="kb-wizard-icon" viewBox="0 0 48 48" fill="none">
+                        <circle cx="24" cy="10" r="3.4" fill="currentColor" opacity="0.9" />
+                        <circle cx="10" cy="34" r="3.4" fill="currentColor" opacity="0.7" />
+                        <circle cx="38" cy="34" r="3.4" fill="currentColor" opacity="0.7" />
+                        <path d="M24 13.4 L11.5 31.2 M24 13.4 L36.5 31.2 M13 34 H35" stroke="currentColor"
+                            stroke-width="1.6" opacity="0.55" />
+                    </svg>
                     <h2 class="kb-wizard-title">Generate a Knowledge Base</h2>
                     <p class="kb-wizard-hint">Point at a local folder to index. This runs the same pipeline as
-                        <code>ug gen</code>.</p>
+                        <code>ug gen</code> and streams progress live below.</p>
                     <form id="kb-wizard-form" class="kb-form">
                         <label class="kb-field">
                             <span>Folder path</span>
-                            <input type="text" id="kb-path-input" placeholder="/absolute/path/to/repo"
-                                autocomplete="off" required>
+                            <div class="kb-input-wrap">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                                    stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
+                                </svg>
+                                <input type="text" id="kb-path-input" placeholder="/absolute/path/to/repo"
+                                    autocomplete="off" required>
+                            </div>
                         </label>
                         <label class="kb-field">
                             <span>Project name <em>(optional)</em></span>
-                            <input type="text" id="kb-name-input" placeholder="defaults to folder name"
-                                autocomplete="off">
+                            <div class="kb-input-wrap">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                                    stroke-linecap="round" stroke-linejoin="round">
+                                    <path
+                                        d="M20.59 13.41 11 3.83A2 2 0 0 0 9.59 3H4a1 1 0 0 0-1 1v5.59a2 2 0 0 0 .59 1.41l9.58 9.58a2 2 0 0 0 2.83 0l4.59-4.59a2 2 0 0 0 0-2.58Z" />
+                                    <circle cx="7.5" cy="7.5" r="1.2" fill="currentColor" stroke="none" />
+                                </svg>
+                                <input type="text" id="kb-name-input" placeholder="defaults to folder name"
+                                    autocomplete="off">
+                            </div>
                         </label>
                         <label class="kb-checkbox">
                             <input type="checkbox" id="kb-no-ingest">
                             <span>Skip embedding ingest (faster; disables semantic/hybrid search &amp; chat)</span>
                         </label>
                         <div class="kb-form-actions">
-                            <button type="submit" id="kb-generate-btn">Generate</button>
+                            <button type="submit" id="kb-generate-btn">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
+                                    stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
+                                    <path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z" />
+                                </svg>
+                                Generate
+                            </button>
                         </div>
                     </form>
                     <div id="kb-wizard-status" class="kb-wizard-status" hidden>
-                        <div class="loader"></div>
+                        <div class="kb-scan"></div>
                         <p id="kb-wizard-status-text">Starting…</p>
                         <pre id="kb-wizard-log"></pre>
                     </div>
@@ -3571,7 +4008,7 @@
             <div class="sidebar-header">
                 <div class="brand">
                     <div class="brand-dot"></div>
-                    <h2>UltraGraph</h2>
+                    <h2 id="brand-title">UltraGraph</h2>
                     <!-- Project switcher. Populated from /api/projects; hidden in
                          single-project mode or when only one project exists. -->
                     <select id="project-select" title="Switch project" hidden></select>
@@ -4003,6 +4440,7 @@
                 const data = await response.json();
                 transformData(data);
                 initialize();
+                graphInitialized = true;
             } catch (err) {
                 console.error('Failed to load graph:', err);
                 document.getElementById('loading').innerHTML =
@@ -4019,6 +4457,36 @@
         // mode (`ug serve -i <graph.json>`) this is skipped entirely.
 
         let kbCapsCache = null;
+        // Whether `initialize()` has already wired up the 3D scene, event
+        // listeners, etc. in this page session. Re-running it in place (by
+        // calling loadGraph() a second time) would double-attach every
+        // listener and leak the old three.js scene, so once this is true,
+        // switching projects goes through a full page reload instead —
+        // the same safe path the sidebar's quick-switch dropdown already
+        // uses.
+        let graphInitialized = false;
+        // Whether the server is in multi-project mode — gates the KB
+        // Manager reopen affordances (icon button + clicking the brand).
+        let isMultiMode = false;
+        // Per-card accent, cycled by position — the same categorical
+        // palette the legend / view-bar face labels already use
+        // elsewhere in the app, so the manager reads as part of the
+        // same product rather than a bolted-on landing page.
+        const KB_PALETTE = ['#22d3ee', '#c084fc', '#4ade80', '#fbbf24', '#f472b6', '#fb923c'];
+
+        function setKbStatus(text) {
+            const el = document.getElementById('kb-status-text');
+            if (el) el.textContent = text;
+        }
+
+        function kbCardIconSvg() {
+            return `<svg class="kb-card-icon" viewBox="0 0 24 24" fill="none">
+                <circle cx="12" cy="5" r="2.2" fill="currentColor" />
+                <circle cx="5" cy="18" r="2.2" fill="currentColor" />
+                <circle cx="19" cy="18" r="2.2" fill="currentColor" />
+                <path d="M12 7.2 6.3 16.2 M12 7.2 17.7 16.2 M7 18 H17" stroke="currentColor" stroke-width="1.4" opacity="0.6" />
+            </svg>`;
+        }
 
         async function bootstrap() {
             wireKbManager();
@@ -4037,8 +4505,28 @@
                 loadGraph();
                 return;
             }
+            isMultiMode = true;
             kbCapsCache = caps;
             document.getElementById('kb-open-btn').hidden = false;
+            document.getElementById('brand-title').classList.add('brand-clickable');
+            document.getElementById('brand-title').title = 'Browse knowledge bases';
+
+            // `openProject` marks the URL before reloading to switch
+            // projects mid-session (see the `graphInitialized` reload
+            // path). On a genuine fresh navigation this is absent and the
+            // manager always shows first, per the always-show-on-startup
+            // design; on a switch-triggered reload it's present, so skip
+            // straight to the project the user just picked instead of
+            // making them pick it again from the manager.
+            const params = new URLSearchParams(window.location.search);
+            if (params.get('kbOpen') === '1') {
+                params.delete('kbOpen');
+                const rest = params.toString();
+                window.history.replaceState(null, '', window.location.pathname + (rest ? `?${rest}` : ''));
+                loadGraph();
+                return;
+            }
+
             showKbManager(caps);
         }
 
@@ -4061,27 +4549,49 @@
             document.getElementById('kb-list-view').hidden = false;
 
             const count = caps.projects.length;
-            document.getElementById('kb-list-count').textContent =
-                `${count} knowledge base${count === 1 ? '' : 's'} found in ~/.ug`;
+            setKbStatus(`${count} knowledge base${count === 1 ? '' : 's'} indexed`);
 
             const grid = document.getElementById('kb-grid');
             grid.innerHTML = '';
-            for (const p of caps.projects) {
+            caps.projects.forEach((p, i) => {
                 const card = document.createElement('button');
                 card.type = 'button';
                 card.className = 'kb-card' + (p.name === caps.active ? ' active' : '');
+                card.style.setProperty('--card-accent', KB_PALETTE[i % KB_PALETTE.length]);
+                card.style.setProperty('--i', i);
                 const updated = p.updatedAt ? new Date(p.updatedAt * 1000).toLocaleString() : '—';
                 card.innerHTML = `
-                    <div class="kb-card-name">${escapeHtml(p.name)}${p.name === caps.active ? '<span class="kb-card-badge">active</span>' : ''}</div>
-                    <div class="kb-card-stats"><span>${(p.nodes || 0).toLocaleString()} nodes</span><span>${(p.edges || 0).toLocaleString()} edges</span></div>
-                    <div class="kb-card-path" title="${escapeHtml(p.repoRoot || '')}">${escapeHtml(p.repoRoot || '')}</div>
+                    <div class="kb-card-top">
+                        ${kbCardIconSvg()}
+                        ${p.name === caps.active ? '<span class="kb-card-badge">Active</span>' : ''}
+                    </div>
+                    <div class="kb-card-name" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</div>
+                    <div class="kb-card-stats">
+                        <div class="kb-card-metric"><b>${(p.nodes || 0).toLocaleString()}</b><span>Nodes</span></div>
+                        <div class="kb-card-metric"><b>${(p.edges || 0).toLocaleString()}</b><span>Edges</span></div>
+                    </div>
+                    <div class="kb-card-path" title="${escapeHtml(p.repoRoot || '')}">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></svg>
+                        <span>${escapeHtml(p.repoRoot || '')}</span>
+                    </div>
                     <div class="kb-card-updated">Updated ${updated}</div>
                 `;
                 card.addEventListener('click', () => openProject(p.name, caps.active));
                 grid.appendChild(card);
-            }
+            });
 
-            document.getElementById('kb-new-btn').onclick = () => showKbWizard({ canGoBack: true });
+            const addTile = document.createElement('button');
+            addTile.type = 'button';
+            addTile.className = 'kb-add-tile';
+            addTile.style.setProperty('--i', count);
+            addTile.innerHTML = `
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 5v14M5 12h14" />
+                </svg>
+                New Knowledge Base
+            `;
+            addTile.addEventListener('click', () => showKbWizard({ canGoBack: true }));
+            grid.appendChild(addTile);
         }
 
         function showKbWizard({ canGoBack }) {
@@ -4093,12 +4603,31 @@
             document.getElementById('kb-wizard-status').hidden = true;
             document.getElementById('kb-wizard-error').hidden = true;
             document.getElementById('kb-generate-btn').disabled = false;
+            document.getElementById('kb-wizard-back').disabled = false;
+            setKbStatus(canGoBack ? 'Adding a new knowledge base' : 'No knowledge bases yet');
         }
 
+        // Reload onto whatever project the server now has active, marking
+        // the URL so `bootstrap()` opens it directly instead of showing
+        // the KB Manager again — a plain `location.reload()` would land
+        // back on the manager (a reload is a fresh "startup" too, and the
+        // manager always shows first then), forcing a second click to
+        // actually open the project the user just switched to.
+        function reloadOntoActiveProject() {
+            const url = new URL(window.location.href);
+            url.searchParams.set('kbOpen', '1');
+            window.location.href = url.toString();
+        }
+
+        // Open `name` (already-discovered project) in the explorer. If the
+        // 3D scene hasn't been initialized yet in this page session (the
+        // very first pick from the initial bootstrap screen), it's safe to
+        // load in place; otherwise reload the page so `initialize()` only
+        // ever runs once per load — see the `graphInitialized` comment.
         async function openProject(name, activeName) {
             hideKbManager();
             if (name === activeName) {
-                loadGraph();
+                if (!graphInitialized) loadGraph();
                 return;
             }
             document.getElementById('loading').style.display = 'block';
@@ -4112,11 +4641,35 @@
                     const err = await res.json().catch(() => ({}));
                     throw new Error(err.error || `HTTP ${res.status}`);
                 }
-                loadGraph();
+                if (graphInitialized) {
+                    reloadOntoActiveProject();
+                } else {
+                    loadGraph();
+                }
             } catch (err) {
                 console.error('failed to open project:', err);
                 document.getElementById('loading').innerHTML =
                     `<p style="color:#f87171">Failed to open project: ${escapeHtml(err.message)}</p>`;
+            }
+        }
+
+        // Shared by the sidebar's "browse knowledge bases" icon and
+        // clicking the brand/logo — both just reopen the same overlay.
+        async function reopenKbManager() {
+            if (!isMultiMode) return;
+            document.getElementById('kb-manager').classList.add('visible');
+            document.getElementById('kb-loading').hidden = false;
+            document.getElementById('kb-list-view').hidden = true;
+            document.getElementById('kb-wizard-view').hidden = true;
+            setKbStatus('Refreshing…');
+            try {
+                const res = await fetch('/api/projects', { cache: 'no-store' });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                kbCapsCache = await res.json();
+                showKbManager(kbCapsCache);
+            } catch (err) {
+                console.error('failed to list projects:', err);
+                hideKbManager();
             }
         }
 
@@ -4125,21 +4678,8 @@
                 if (kbCapsCache) showKbList(kbCapsCache);
             });
 
-            document.getElementById('kb-open-btn').addEventListener('click', async () => {
-                document.getElementById('kb-manager').classList.add('visible');
-                document.getElementById('kb-loading').hidden = false;
-                document.getElementById('kb-list-view').hidden = true;
-                document.getElementById('kb-wizard-view').hidden = true;
-                try {
-                    const res = await fetch('/api/projects', { cache: 'no-store' });
-                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                    kbCapsCache = await res.json();
-                    showKbManager(kbCapsCache);
-                } catch (err) {
-                    console.error('failed to list projects:', err);
-                    hideKbManager();
-                }
-            });
+            document.getElementById('kb-open-btn').addEventListener('click', reopenKbManager);
+            document.getElementById('brand-title').addEventListener('click', reopenKbManager);
 
             const form = document.getElementById('kb-wizard-form');
             form.addEventListener('submit', async (e) => {
@@ -4150,6 +4690,7 @@
                 if (!path) return;
 
                 document.getElementById('kb-generate-btn').disabled = true;
+                document.getElementById('kb-wizard-back').disabled = true;
                 document.getElementById('kb-wizard-error').hidden = true;
                 document.getElementById('kb-wizard-status').hidden = false;
                 document.getElementById('kb-wizard-status-text').textContent = 'Starting…';
@@ -4172,6 +4713,7 @@
                     document.getElementById('kb-wizard-error').hidden = false;
                     document.getElementById('kb-wizard-error').textContent = err.message || String(err);
                     document.getElementById('kb-generate-btn').disabled = false;
+                    document.getElementById('kb-wizard-back').disabled = false;
                 }
             });
         }
@@ -4202,6 +4744,7 @@
                         }, 500);
                     } else {
                         document.getElementById('kb-generate-btn').disabled = false;
+                        document.getElementById('kb-wizard-back').disabled = false;
                         document.getElementById('kb-wizard-status').hidden = true;
                         document.getElementById('kb-wizard-error').hidden = false;
                         document.getElementById('kb-wizard-error').textContent = job.error || 'Generation failed.';
@@ -4488,7 +5031,7 @@
                         select.disabled = false;
                         return;
                     }
-                    window.location.reload();
+                    reloadOntoActiveProject();
                 } catch (err) {
                     console.warn('project switch failed:', err);
                     select.value = info.active;

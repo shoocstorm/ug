@@ -82,7 +82,7 @@ npm run gen -- -i ~/code/other-repo -n other --no-ingest
 ### 4. Visualize
 Open the interactive visualization in your browser:
 ```bash
-npm start
+npm start (or ug serve if ug is installed)
 # Visit http://localhost:8080
 ```
 Without `-i`, `ug serve` runs in **multi-project mode**: it discovers every
