@@ -244,8 +244,7 @@ log line per call.
 ## Known limitations
 
 - **Direction filter on PPR** is a no-op on both backends today (matches
-  the OverGraph behavior in `MIGRATION-OVERGRAPH §3.4`). The GDS
-  projection uses `orientation: 'NATURAL'`.
+  the OverGraph behavior). The GDS projection uses `orientation: 'NATURAL'`.
 - **Sparse vector parity.** Neo4j has no sparse vector type; hybrid
   recall on Neo4j may differ from OverGraph for queries dominated by
   rare identifier tokens. Acceptance bar in tests: ≥ 60% top-10 Jaccard.

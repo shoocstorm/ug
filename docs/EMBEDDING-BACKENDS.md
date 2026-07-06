@@ -298,7 +298,7 @@ release per target — see `ort` docs.
 | `native/src/storage/mod.rs`                | Module wiring + public re-exports                   |
 | `native/src/storage/napi_bindings.rs`      | NAPI `build_embedder`: branches on `baseUrl`        |
 | `native/src/main.rs`                       | CLI `embedder_from_args`: branches on `--base-url`  |
-| `native/Cargo.toml`                        | `fastembed = "4"`, `dirs = "5"`                     |
+| `native/Cargo.toml`                        | `fastembed = "4"` (rustls TLS, no OpenSSL), `dirs = "5"` |
 
 ---
 

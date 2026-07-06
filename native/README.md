@@ -11,10 +11,8 @@ npm run build
 # Quick Generation (and visualization)
 .ug/ug gen -i ./docs --no-ingest --serve
 
-
 # More CLI cmds
-./ug help
-
+.ug/ug help
 ```
 
 ## CLI Commands
@@ -72,7 +70,7 @@ ug bfs graph.json "file:docs/VISUALIZATION-FEATURES.md" 2
 Embed graph nodes into OverGraph.
 
 ```bash
-ug ingest -g graph.json -d ./ugdb
+ug ingest -i graph.json -o ./ugdb
 ```
 
 ### `ug semantic_search`
@@ -83,12 +81,12 @@ Semantic vector search.
 ug semantic_search "build a tree" -d ./ugdb --filter "node_type = 'Function'"
 ```
 
-### `ug search_kb`
+### `ug hybrid_search`
 
-Hybrid (keyword + vector) search over OverGraph, with RRF and MMR.
+Hybrid (keyword + vector) search over OverGraph, with RRF and PPR/MMR.
 
 ```bash
-ug search_kb "build a tree" -d ./ugdb -k 2
+ug hybrid_search "build a tree" -d ./ugdb -k 2
 ```
 
 ### `ug traverse`
@@ -114,7 +112,7 @@ ug serve -d ./ --repo-root ~/Documents/project/aldrickbot
 End-to-end against a running embedding endpoint:
 
 ```bash
-ug ingest -g graph.json -d ./ugdb
+ug ingest -i graph.json -o ./ugdb
 ug semantic_search "build a tree" -d ./ugdb --filter "node_type = 'Function'"
 ug traverse file:src/index.ts -d ./ugdb -k 2
 ```
@@ -136,7 +134,7 @@ cargo build --release   # Release (optimized)
 
 Output:
 - Library: `target/release/libultragraph.rlib`
-- NAPI: `target/release/ultragraph.node`
+- NAPI: `target/release/ug.node`
 - Binary: `target/release/ug`
 
 ### Project Structure
@@ -146,7 +144,11 @@ native/
 ├── Cargo.toml
 ├── src/
 │   ├── main.rs             # CLI binary
-│   ├── lib.rs              # Library exports
+│   ├── lib.rs              # Library / NAPI exports
+│   ├── project.rs          # ~/.ug/<project> folder resolution (mirrors node/cli.mjs)
+│   ├── serve.rs             # `ug serve` — Axum web server + REST API
+│   ├── chat.rs              # `ug chat` — RAG-grounded chat against an OpenAI-compatible LLM
+│   ├── vis/                 # Embedded visualization HTML + JS bundle
 │   ├── indexer.rs          # Indexing entry-point + per-file pipeline
 │   ├── indexer/
 │   │   ├── classifier.rs   # File classification heuristics
@@ -155,23 +157,33 @@ native/
 │   │   ├── languages.rs    # Per-language indexer registry (TS/Py/Java/Rust/MD)
 │   │   ├── languages/      # Per-language tree-sitter extractors (ts, py, java, rust, md)
 │   │   ├── pdf.rs          # PDF text extractor (pdf-extract, one Symbol per page)
-│   │   ├── languages/      # Per-language tree-sitter extractors
 │   │   └── package_json.rs # package.json dependency parsing
 │   ├── graph.rs            # Graph building + BFS + analysis
 │   ├── types.rs            # Data structures
 │   └── storage/
 │       ├── mod.rs
-│       ├── db.rs           # OverGraph schemas + queries
-│       ├── embed.rs        # Embedding HTTP client
-│       ├── ingest.rs       # Embed + upsert pipeline
-│       ├── query.rs        # search, traverse, RRF, MMR, snippets
-│       ├── napi_bindings.rs   # NAPI async fns
-│       └── text.rs         # Embedding text shaping (folder synopsis fallback)
+│       ├── db.rs             # OverGraph schemas + queries
+│       ├── embed.rs          # Remote embedding HTTP client
+│       ├── embed_local.rs    # In-process ONNX embedder (fastembed)
+│       ├── ingest.rs         # Embed + upsert pipeline
+│       ├── query.rs          # search, traverse, RRF, MMR, snippets
+│       ├── ppr.rs            # Personalized PageRank
+│       ├── store.rs          # `KnowledgeStore` trait (multi-destination)
+│       ├── types_registry.rs # Stable string↔u32 type-id mapping
+│       ├── napi_bindings.rs  # NAPI async fns
+│       ├── text.rs           # Embedding text shaping (folder synopsis fallback)
+│       └── backends/
+│           └── neo4j.rs      # Neo4j `KnowledgeStore` implementation
 └── tests/
-    ├── indexer_test.rs     # 29 tests
-    ├── graph_test.rs       # 13 tests
-    ├── search_test.rs      # 13 tests
-    └── storage_test.rs     # 12 tests
+    ├── indexer_test.rs        # 13 tests
+    ├── graph_test.rs          # 29 tests
+    ├── search_test.rs         # 13 tests
+    ├── storage_test.rs        # 7 tests
+    ├── rust_indexer_test.rs   # 17 tests
+    ├── pdf_indexer_test.rs    # 11 tests
+    ├── storage_bench.rs       # 2 tests, #[ignore] by default
+    ├── neo4j_smoke.rs         # 4 tests, #[ignore] — needs a running Neo4j
+    └── neo4j_write_smoke.rs   # 3 tests, #[ignore] — needs a running Neo4j
 ```
 
 ## Features

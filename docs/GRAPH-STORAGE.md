@@ -7,7 +7,7 @@
 > and Neo4j schema. The doc below describes the OverGraph backend
 > specifically.
 >
-> **Migration note (2026-05-01):** Storage moved from LanceDB to **OverGraph** v0.6.0. See `MIGRATION-OVERGRAPH.md` for the rationale, API mapping, and §6 trade-offs. 
+> **Migration note (2026-05-01):** Storage moved from LanceDB to **OverGraph** v0.6.0.
 
 ## Objective
 Implement a knowledge graph storage system in Rust using OverGraph for persistence and local embedding generation. Use explicit embeddings.
@@ -38,7 +38,7 @@ OverGraph keys nodes by `(type_id: u32, key: String)` and edges by `(from_id, to
 | `name`, `description`, `file`, `node_text` | `props["name" \| "description" \| "file" \| "node_text"]` (all `PropValue::String`) |
 | `start_line`, `end_line` | `props["start_line" \| "end_line"]` (`PropValue::UInt`) |
 | `last_update_at: i64` | `props["last_update_at"]` (`PropValue::Int`) — also reflected in `NodeRecord.updated_at` (auto) |
-| `vector: Vec<f32>` (dim per `<db>/ug-meta.json`, default 1024) | `dense_vector: Option<DenseVector>` |
+| `vector: Vec<f32>` (dim per `<db>/ug-meta.json`, default 384) | `dense_vector: Option<DenseVector>` |
 | _(new)_ sparse keyword vector | `sparse_vector: Option<SparseVector>` — built at query time, see "Sparse keyword vectors" below |
 
 ### Edges (OverGraph `EdgeRecord`)
@@ -92,27 +92,27 @@ let engine = DatabaseEngine::open(path, &opts)?;
 - Single dense vector space per DB. The dim is configurable per ingest and persisted
   to `<db>/ug-meta.json` on first creation; subsequent opens validate against it. Use
   `Db::open_or_create(path, dim)` for the create/ingest path and `Db::open(path)` for
-  read-only call sites (it picks up the dim from the sidecar, falling back to 1024 for
+  read-only call sites (it picks up the dim from the sidecar, falling back to 384 for
   legacy DBs without one).
 - HNSW indexes are built **per segment at flush time** automatically.
 - WAL mode: `WalSyncMode::GroupCommit` (default — 50ms fsync timer, ~20× write throughput vs. immediate).
 
 ## Query Functions (Rust async)
 
-1. **Semantic Search** — `db::vector_search(db, query_vec, k, where_clause)`. Pure dense ANN over the HNSW index. `where_clause` parameter is currently ignored (see `MIGRATION-OVERGRAPH §6 Q1`); use OverGraph's `type_filter` directly when needed.
+1. **Semantic Search** — `db::vector_search(db, query_vec, k, where_clause)`. Pure dense ANN over the HNSW index. `where_clause` parameter is currently ignored; use OverGraph's `type_filter` directly when needed.
 
 2. **Hybrid Search** — `db::hybrid_search(db, dense_vec, sparse_vec, k, where_clause)`. Native OverGraph `VectorSearchMode::Hybrid` with `FusionMode::ReciprocalRankFusion`. Replaces the manual RRF in the previous `query::rrf_search`.
 
 3. **Graph Traversal** — `db::traverse_string_ids(db, start, max_hops, edge_type_ids, direction)`. Wraps OverGraph's `engine.traverse` and rehydrates string ids + edge records.
 
-4. **Personalized PageRank** — `ppr::run_ppr(db, seeds, direction, edge_types, restart_prob, max_iter, max_results)`. Wraps OverGraph's native `engine.personalized_pagerank`. v1 ships with **uniform seed mass** (no per-seed weighting); the previous weighted-personalization-vector behavior is deferred (see `MIGRATION-OVERGRAPH §3.4`).
+4. **Personalized PageRank** — `ppr::run_ppr(db, seeds, direction, edge_types, restart_prob, max_iter, max_results)`. Wraps OverGraph's native `engine.personalized_pagerank`. v1 ships with **uniform seed mass** (no per-seed weighting); per-seed weighting is deferred.
 
 ## Implementation Checklist
 
 - [x] Add dependency: `overgraph = "0.6"`
 - [x] Define `NodeRow` / `EdgeRow` DTOs (preserved from LanceDB era for wire-format stability)
 - [x] Implement `types_registry` (string ↔ u32 mapping with stable IDs)
-- [x] Implement `Db::open` / `Db::open_or_create` with `DenseVectorConfig` (configurable dim, default 1024 cosine; persisted to `ug-meta.json`)
+- [x] Implement `Db::open` / `Db::open_or_create` with `DenseVectorConfig` (configurable dim, default 384 cosine; persisted to `ug-meta.json`)
 - [x] Implement `key_to_id` / `id_to_key` caches (project string id ↔ OverGraph u64)
 - [x] Implement `build_node_text` (unchanged) + `build_sparse_keyword_vector` (new)
 - [x] Implement `upsert_nodes` / `upsert_edges` (with edge-weight baking)
@@ -126,9 +126,9 @@ let engine = DatabaseEngine::open(path, &opts)?;
 - [x] Verify `hybrid_search` combines dense + sparse via OverGraph's RRF.
 - [x] Verify two-hop traversal returns reachable nodes with correct distances.
 - [x] Verify `run_ppr` ranks the seed neighborhood above unconnected nodes.
-- [x] Confirm vector dimension matches the embedder (probed at ingest, persisted in `ug-meta.json`, default 1024 = `DEFAULT_EMBEDDING_DIM`).
+- [x] Confirm vector dimension matches the embedder (probed at ingest, persisted in `ug-meta.json`, default 384 = `DEFAULT_EMBEDDING_DIM`).
 
-## Performance (dev profile, ARM64 M-series, see `MIGRATION-OVERGRAPH §10`)
+## Performance (dev profile, ARM64 M-series)
 
 - Ingest 1K nodes + 5K edges: 64.8ms (target <2s).
 - Hybrid search p50/p95: 5.5ms / 5.7ms over 100 queries (target <100ms).

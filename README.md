@@ -55,6 +55,58 @@ UltraGraph implements a complete four-phase pipeline for building and querying a
 
 ---
 
+## 🧭 Ways to Use UltraGraph
+
+Four ways to use it — pick what fits:
+
+| # | Way | How | Notes |
+| :--- | :--- | :--- | :--- |
+| 1 | **Standalone binary** | `ug gen`, `ug serve` | No Node.js needed. Only place with `serve` (web UI) and `chat`. |
+| 2 | **Node CLI** | `node .ug/cli.mjs gen`, `node .ug/cli.mjs list` | Same core pipeline via the JS wrapper. No `serve`/`chat` — those are Rust-binary-only. |
+| 3 | **MCP server** | `node .ug/cli.mjs mcp` | Node-only — there's no separate Rust MCP mode. See [MCP Server](#-mcp-server). |
+| 4 | **Embed in your own Node/TS app** | `require('.ug/ug.node')` | Call the native functions directly, no CLI/subprocess. See [Native API Usage](#-native-api-usage). |
+
+### 1. Standalone binary
+```bash
+ug gen                          # index → graph → ingest a repo
+ug serve                        # web UI + REST API at http://localhost:8080
+```
+
+### 2. Node CLI
+```bash
+node .ug/cli.mjs gen
+node .ug/cli.mjs list
+```
+
+### 3. MCP server
+```json
+{
+  "mcpServers": {
+    "ultragraph": {
+      "command": "node",
+      "args": ["/path/to/ug/.ug/cli.mjs", "mcp"],
+      "env": { "UG_PROJECT": "my-project" }
+    }
+  }
+}
+```
+
+### 4. Embed the native addon
+```js
+const ug = require('/path/to/ug/.ug/ug.node'); // types: .ug/index.d.ts
+
+const symbols = ug.index('./src');
+const graph = ug.buildGraph(symbols);
+const context = await ug.dbHybridSearch('./ugdb', JSON.stringify({
+  query: 'how does authentication work?',
+  k: 8,
+}));
+```
+Prefer not to link the addon? Spawn the `ug` binary instead (`child_process`)
+and parse its JSON output, or run `ug serve` and call its REST API.
+
+---
+
 ## 🚀 Quick Start
 
 ### 1. Prerequisites
@@ -328,13 +380,17 @@ When no env vars are set, the server uses `~/.ug/<cwd-basename>/ugdb` if it exis
 
 ## 🔌 Native API Usage
 
-You can use the high-performance Rust core directly in your own Node.js apps via the `native/index.js` loader.
+You can use the high-performance Rust core directly in your own Node.js or
+TypeScript app by requiring the built native addon (`.ug/ug.node`) — no CLI,
+no subprocess. Build it first with `npm run build`; TypeScript users get full
+types for free from the generated `.ug/index.d.ts` sitting next to it.
 
 ```javascript
-const { index, buildGraph, dbHybridSearch } = require('./native/index.js');
+const { index, buildGraph, dbHybridSearch } = require('/path/to/ug/.ug/ug.node');
 
 // Index a codebase
 const symbols = index('./src');
+const graph = buildGraph(symbols);
 
 // Search with GraphRAG
 const context = await dbHybridSearch('./ugdb', JSON.stringify({
@@ -342,6 +398,11 @@ const context = await dbHybridSearch('./ugdb', JSON.stringify({
   k: 10
 }));
 ```
+
+Prefer not to link the addon into your process? Shell out to the `ug` binary
+instead (`child_process.execFile`) and parse its JSON output, or run
+`ug serve` and call its REST API (`/api/search/hybrid`, `/api/chat`, etc.)
+over HTTP.
 
 ---
 
@@ -354,6 +415,21 @@ npm test
 # Run Native Rust tests
 npm run build && cd native && cargo test
 ```
+
+---
+
+## 📚 Further Reading
+
+Deep-dive docs for anyone extending UltraGraph:
+
+| Doc | Covers |
+| :--- | :--- |
+| [`docs/GRAPH-STORAGE.md`](docs/GRAPH-STORAGE.md) | OverGraph data model, query functions, node/edge mapping |
+| [`docs/EMBEDDING-BACKENDS.md`](docs/EMBEDDING-BACKENDS.md) | Local ONNX vs. remote embedder architecture, model aliases, failure modes |
+| [`docs/WEB-SERVE.md`](docs/WEB-SERVE.md) | `ug serve`'s REST API, routes, logging, asset resolution |
+| [`docs/MCP.md`](docs/MCP.md) | Full MCP tool reference, client setup (Claude Desktop, Cursor), troubleshooting |
+| [`docs/MULTI-DEST.md`](docs/MULTI-DEST.md) | Neo4j backend: CLI flags, capability matrix, schema |
+| [`native/README.md`](native/README.md) | Rust crate internals: CLI commands, project structure, extensibility |
 
 ## 📄 License
 MIT

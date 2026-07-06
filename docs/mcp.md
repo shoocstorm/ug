@@ -4,31 +4,33 @@ UltraGraph-KB includes an MCP (Model Context Protocol) server that exposes Graph
 
 ## What is MCP?
 
-The Model Context Protocol (MCP) allows AI applications (like Claude Desktop, Cursor, and other AI agents) to connect to external data sources and tools. This MCP server provides three tools for querying your knowledge graph.
+The Model Context Protocol (MCP) allows AI applications (like Claude Desktop, Cursor, and other AI agents) to connect to external data sources and tools. This MCP server provides five tools for querying your knowledge graph.
 
 ## Prerequisites
 
 Before using the MCP server, ensure you have:
 
-1. **Built the native module:**
+1. **Built the project:**
    ```bash
-   npm run prebuild
+   npm run build
    ```
 
-2. **Generated a knowledge graph and ingested it into LanceDB:**
+2. **Generated a knowledge graph and ingested it into OverGraph:**
    ```bash
-   # Full pipeline (index + graph + visualization + ingest)
-   npm run gen -- ./src -o ug-out/
-   
+   # Full pipeline (index + graph + visualization + ingest).
+   # Output goes to ~/.ug/<project-name>/ by default.
+   npm run gen -- -i ./src
+
    # Or step by step:
-   npm run index -- ./src -o ug-out/indexed-tree.json
-   npm run graph -- ug-out/indexed-tree.json -o ug-out/graph.json
-   npm run ingest -- ug-out/graph.json ug-out/ug-db
+   npm run index -- -i ./src
+   npm run graph -- -i ~/.ug/src/indexed-tree.json
+   npm run ingest -- -i ~/.ug/src/graph.json -o ~/.ug/src/ugdb
    ```
 
-3. **Running embedding endpoint** (for `search_kb` tool):
-   - Local: `ollama serve` (with models like `llama3`, `nomic-embed-text`)
-   - Or a remote OpenAI-compatible API
+3. **Embedding endpoint** (for `search_kb` / `semantic_search_kb`): not required by
+   default — UltraGraph ships an in-process ONNX embedder (no external service).
+   Set `UG_EMBED_BASE_URL` to opt into a remote OpenAI-compatible endpoint instead
+   (e.g. `ollama serve` with `nomic-embed-text`).
 
 ## Configuration
 
@@ -36,11 +38,15 @@ The MCP server uses environment variables for configuration:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `UG_DB_PATH` | Path to LanceDB directory | `./ug-out/ug-db` |
-| `UG_REPO_ROOT` | Root directory for resolving file paths in snippets | Current working directory |
-| `UG_EMBED_BASE_URL` | Override embedding endpoint base URL | None (uses built-in default) |
-| `UG_EMBED_API_KEY` | Override embedding API key | None |
-| `UG_EMBED_MODEL` | Override embedding model name | None (uses built-in default) |
+| `UG_PROJECT` | Project name under `~/.ug` — db is `~/.ug/<project>/ugdb`, repo root read from `project.json`. **Preferred.** | none |
+| `UG_DB_PATH` | Explicit OverGraph directory (overrides `UG_PROJECT`) | `~/.ug/<cwd-basename>/ugdb` if it exists, else `./ugdb` |
+| `UG_HOME` | Override the `~/.ug` root | `~/.ug` |
+| `UG_REPO_ROOT` | Root directory for resolving file paths in snippets | `project.json`'s `repoRoot`, else cwd |
+| `UG_EMBED_MODEL` | Override embedding model (local fastembed alias or remote model name) | built-in default |
+| `UG_EMBED_BASE_URL` | Set to opt into the remote embedding backend | unset — uses the in-process ONNX embedder |
+| `UG_EMBED_API_KEY` | Bearer token for the remote embedding endpoint | none |
+| `UG_MODEL_CACHE` | Override the local ONNX model cache directory | platform cache dir |
+| `UG_DEST` | Knowledge store to read from: `overgraph` (default) or `neo4j` | `overgraph` |
 
 ## Setting Up with AI Agents
 
@@ -61,7 +67,7 @@ Add the MCP server configuration:
       "command": "node",
       "args": ["/absolute/path/to/ug/.ug/cli.mjs", "mcp"],
       "env": {
-        "UG_DB_PATH": "/absolute/path/to/ug/ug-out/ug-db",
+        "UG_DB_PATH": "/absolute/path/to/.ug/<project>/ugdb",
         "UG_REPO_ROOT": "/absolute/path/to/your/project",
         "UG_EMBED_BASE_URL": "http://localhost:11434/v1",
         "UG_EMBED_MODEL": "nomic-embed-text"
@@ -84,7 +90,7 @@ Cursor supports MCP servers via its configuration. Create or edit `.cursor/mcp.j
       "command": "node",
       "args": ["/absolute/path/to/ug/.ug/cli.mjs", "mcp"],
       "env": {
-        "UG_DB_PATH": "/absolute/path/to/ug/ug-out/ug-db",
+        "UG_DB_PATH": "/absolute/path/to/.ug/<project>/ugdb",
         "UG_REPO_ROOT": "/absolute/path/to/your/project"
       }
     }
@@ -307,7 +313,7 @@ You can test the MCP server manually using the MCP inspector or by running it di
 
 ```bash
 # Set environment variables
-export UG_DB_PATH=./ug-out/ug-db
+export UG_DB_PATH=~/.ug/<project>/ugdb
 export UG_EMBED_BASE_URL=http://localhost:11434/v1
 export UG_EMBED_MODEL=nomic-embed-text
 
@@ -323,16 +329,16 @@ npx @modelcontextprotocol/inspector node node/cli.mjs mcp
 
 ## Troubleshooting
 
-**"Cannot find module 'ultragraph.node'"**
-- Run `npm run prebuild` to build the native module
+**"Cannot find module 'ug.node'"**
+- Run `npm run build` to build the native addon
 
 **"Database not found" errors**
-- Ensure `UG_DB_PATH` points to a valid LanceDB directory
-- Run `npm run ingest` to create the database
+- Ensure `UG_DB_PATH` (or `UG_PROJECT`) points to a valid OverGraph directory
+- Run `npm run gen` (or `npm run ingest`) to create the database
 
 **"Embedding endpoint unreachable"**
-- Verify your embedding endpoint is running
-- Check `UG_EMBED_BASE_URL` is correct
+- Only relevant if you opted into the remote backend via `UG_EMBED_BASE_URL`
+- Verify that endpoint is running and `UG_EMBED_BASE_URL` is correct
 - Use `ping_embedder` tool to test connectivity
 
 **Tools not appearing in AI agent**

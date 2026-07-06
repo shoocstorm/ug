@@ -59,24 +59,23 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 **Always verify changes with tests before marking a task complete.**
 
 ### JavaScript/TypeScript Tests
-- Run `node src/test/test-runner.cjs` to execute all tests
-- Tests are in `src/test/test-runner.cjs` (main test suite) and `src/test-indexer.test.ts` (optional bun tests)
-- When adding new functionality, add corresponding test cases to `src/test/test-runner.cjs`
+- Run `node node/test-runner.cjs` to execute all tests
+- When adding new functionality, add corresponding test cases to `node/test-runner.cjs`
 
 ### Rust Tests (Native Code)
 - Run `cd native && cargo test` to execute all Rust tests
-- Tests are in:
-  - `native/tests/indexer_test.rs` (13 tests covering index functionality)
-  - `native/tests/graph_test.rs` (18 tests covering graph building and BFS)
+- Tests are in `native/tests/`: `indexer_test.rs`, `graph_test.rs`, `search_test.rs`,
+  `storage_test.rs`, `rust_indexer_test.rs`, `pdf_indexer_test.rs`, `storage_bench.rs`,
+  and the `#[ignore]`-gated `neo4j_smoke.rs` / `neo4j_write_smoke.rs`
 - **Run these tests after every code change in the native folder**
 - If adding new functionality, add corresponding test cases to the test files
 - Ensure all tests pass before completing a phase
 
 ### Verification Checklist
 ```
-1. cd native && cargo test      → all tests must pass
-2. cd native && cargo build    → native module must build  
-3. cd native && ./target/release/ug --help  → CLI works
+1. cd native && cargo test              → all tests must pass
+2. cd native && cargo build --release   → native module must build
+3. ./native/target/release/ug help      → CLI works
 ```
 
 ---
