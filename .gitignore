@@ -15,6 +15,7 @@ out/*
 .gitnexus
 node_modules
 docs/overgraph
+docs/ug-website
 native/.cargo/config.toml
 opencode.json
 .env

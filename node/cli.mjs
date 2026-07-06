@@ -20,9 +20,11 @@ import {
 chalk.level = 2;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const require = createRequire(import.meta.url);
+// Named nodeRequire (not `require`) so bundlers don't mistake this dynamic,
+// computed-path load for a statically resolvable module and try to inline it.
+const nodeRequire = createRequire(import.meta.url);
 
-const ug = require(join(dirname(__dirname), '.ug', 'ug.node'));
+const ug = nodeRequire(join(dirname(__dirname), '.ug', 'ug.node'));
 
 // ---------------------------------------------------------------------------
 // Project-folder resolution for the ~/.ug/<project> data layout.
@@ -697,6 +699,73 @@ function formatTraversal(traversal, header) {
   return lines.join('\n');
 }
 
+function claudeDesktopConfigPath() {
+  const home = homedir();
+  if (process.platform === 'darwin') {
+    return join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json');
+  }
+  if (process.platform === 'win32') {
+    return join(process.env.APPDATA || join(home, 'AppData', 'Roaming'), 'Claude', 'claude_desktop_config.json');
+  }
+  return join(home, '.config', 'Claude', 'claude_desktop_config.json');
+}
+
+// Each target: where its config lives, and how to graft a { command, args,
+// env } server entry into that target's own JSON shape (schemas differ).
+const MCP_INSTALL_TARGETS = {
+  claude: {
+    configPath: claudeDesktopConfigPath,
+    apply: (config, server) => {
+      config.mcpServers = config.mcpServers || {};
+      config.mcpServers.ultragraph = server;
+    },
+  },
+  cursor: {
+    configPath: () => join(process.cwd(), '.cursor', 'mcp.json'),
+    apply: (config, server) => {
+      config.mcpServers = config.mcpServers || {};
+      config.mcpServers.ultragraph = server;
+    },
+  },
+  opencode: {
+    configPath: () => join(process.cwd(), 'opencode.json'),
+    apply: (config, server) => {
+      if (config['$schema'] === undefined) config['$schema'] = 'https://opencode.ai/config.json';
+      config.mcp = config.mcp || {};
+      config.mcp.servers = config.mcp.servers || {};
+      config.mcp.servers.ultragraph = { type: 'local', ...server, enabled: true };
+    },
+  },
+};
+
+// Writes (or merges into) an MCP client's config file so `ug` shows up as a
+// tool source without the user hand-editing JSON / absolute paths themselves.
+function installMcpConfig(target) {
+  const targetDef = MCP_INSTALL_TARGETS[target];
+  if (!targetDef) {
+    throw new Error(`Unknown MCP target '${target}' (expected: ${Object.keys(MCP_INSTALL_TARGETS).join(', ')})`);
+  }
+  const configPath = targetDef.configPath();
+
+  let config = {};
+  if (existsSync(configPath)) {
+    try {
+      config = JSON.parse(readFileSync(configPath, 'utf-8'));
+    } catch (e) {
+      throw new Error(`${configPath} exists but isn't valid JSON — fix or remove it, then retry (${e.message})`);
+    }
+  }
+  targetDef.apply(config, {
+    command: 'node',
+    args: [fileURLToPath(import.meta.url), 'mcp'],
+    env: { UG_PROJECT: deriveProjectName('.') },
+  });
+
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+  return configPath;
+}
+
 async function runMcpServer() {
   const { dbPath: DB_PATH, repoRoot: REPO_ROOT } = resolveDbAndRoot();
 
@@ -807,6 +876,19 @@ async function runMcpServer() {
   console.error('start ultragraph mcp server...');
   await server.connect(transport);
   console.error('ultragraph mcp server started.');
+}
+
+// Shown for bare `node cli.mjs` with no subcommand — a short "what do I do
+// first" nudge instead of the full command wall (that's the `help` command).
+function quickstartBanner() {
+  return [
+    chalk.bold('Welcome to UltraGraph') + ' — turn a codebase into a queryable knowledge graph.',
+    '',
+    chalk.bold('Quick start:'),
+    '  ' + chalk.cyan('node cli.mjs gen') + '   Index this directory, build the graph, and ingest it (→ ~/.ug/<name>/)',
+    '  ' + chalk.cyan('node cli.mjs mcp install claude') + '   Wire this up as an MCP server for Claude Desktop',
+    '  ' + chalk.cyan('node cli.mjs help') + '  Full command reference',
+  ].join('\n');
 }
 
 const commands = {
@@ -1072,9 +1154,20 @@ const commands = {
     }
   },
   mcp: {
-    usage: '',
-    desc: 'Start the MCP server (GraphRAG tools over stdio) — see env vars in the source header.',
-    run: async () => {
+    usage: '[install <claude|cursor|opencode>]',
+    desc: 'Start the MCP server (no args; see env vars in the source header), or write this project into an MCP client config with `install <target>`.',
+    run: async (args) => {
+      if (args[0] === 'install') {
+        const target = args[1];
+        if (!target) {
+          throw new Error(`Usage: mcp install <${Object.keys(MCP_INSTALL_TARGETS).join('|')}>`);
+        }
+        const configPath = installMcpConfig(target);
+        const appNames = { claude: 'Claude Desktop', cursor: 'Cursor', opencode: 'opencode' };
+        console.log(chalk.green('✓') + ' ' + chalk.white(`Wrote MCP config to ${configPath}`));
+        console.log(chalk.cyan(`Restart ${appNames[target] ?? target} to pick it up.`));
+        return;
+      }
       await runMcpServer();
     }
   },
@@ -1096,10 +1189,14 @@ const commands = {
 const cmd = process.argv[2];
 const args = process.argv.slice(3);
 
-if (!cmd || cmd === 'help') {
-  const cmdArgs = cmd ? args : [];
-  console.log(commands.help.run(cmdArgs));
-  process.exit(cmd ? 0 : 1);
+if (!cmd) {
+  console.log(quickstartBanner());
+  process.exit(1);
+}
+
+if (cmd === 'help') {
+  console.log(commands.help.run(args));
+  process.exit(0);
 }
 
 if (commands[cmd]) {
@@ -1113,9 +1210,11 @@ if (commands[cmd]) {
       } else if (res && typeof res === 'object') {
         console.log(JSON.stringify(res, null, 2));
       }
-      // The mcp command keeps running (stdio transport) and must not print
-      // to stdout, which is reserved for MCP's own JSON-RPC frames.
-      if (cmd !== 'mcp' && (cmd !== 'gen' || !args.includes('--no-ingest'))) {
+      // Bare `mcp` keeps running (stdio transport) and must not print to
+      // stdout, which is reserved for MCP's own JSON-RPC frames. `mcp install
+      // ...` is a normal one-shot command and should get the footer.
+      const isMcpServer = cmd === 'mcp' && args[0] !== 'install';
+      if (!isMcpServer && (cmd !== 'gen' || !args.includes('--no-ingest'))) {
         console.log(chalk.gray(`\nDone in ${elapsed}s`));
       }
     };

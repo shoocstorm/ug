@@ -50,7 +50,20 @@ The MCP server uses environment variables for configuration:
 
 ## Setting Up with AI Agents
 
-### Claude Desktop
+### The easy way
+
+```bash
+node .ug/cli.mjs mcp install claude     # Claude Desktop
+node .ug/cli.mjs mcp install cursor     # Cursor (.cursor/mcp.json in cwd)
+node .ug/cli.mjs mcp install opencode   # opencode (opencode.json in cwd)
+```
+
+This writes (or merges into, preserving any other configured servers) the
+target's config file with the correct absolute path to this `cli.mjs` and
+`UG_PROJECT` set to the current directory's project name. Restart the app
+afterward. For any other MCP client, or to configure things manually, see below.
+
+### Claude Desktop (manual)
 
 Edit your Claude Desktop configuration file:
 
@@ -79,7 +92,7 @@ Add the MCP server configuration:
 
 **Important:** Use absolute paths, not relative paths.
 
-### Cursor
+### Cursor (manual)
 
 Cursor supports MCP servers via its configuration. Create or edit `.cursor/mcp.json` in your project root:
 

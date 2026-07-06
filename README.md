@@ -63,7 +63,7 @@ Four ways to use it — pick what fits:
 | :--- | :--- | :--- | :--- |
 | 1 | **Standalone binary** | `ug gen`, `ug serve` | No Node.js needed. Only place with `serve` (web UI) and `chat`. |
 | 2 | **Node CLI** | `node .ug/cli.mjs gen`, `node .ug/cli.mjs list` | Same core pipeline via the JS wrapper. No `serve`/`chat` — those are Rust-binary-only. |
-| 3 | **MCP server** | `node .ug/cli.mjs mcp` | Node-only — there's no separate Rust MCP mode. See [MCP Server](#-mcp-server). |
+| 3 | **MCP server** | `node .ug/cli.mjs mcp install claude` | Node-only — there's no separate Rust MCP mode. See [MCP Server](#-mcp-server). |
 | 4 | **Embed in your own Node/TS app** | `require('.ug/ug.node')` | Call the native functions directly, no CLI/subprocess. See [Native API Usage](#-native-api-usage). |
 
 ### 1. Standalone binary
@@ -79,16 +79,10 @@ node .ug/cli.mjs list
 ```
 
 ### 3. MCP server
-```json
-{
-  "mcpServers": {
-    "ultragraph": {
-      "command": "node",
-      "args": ["/path/to/ug/.ug/cli.mjs", "mcp"],
-      "env": { "UG_PROJECT": "my-project" }
-    }
-  }
-}
+```bash
+node .ug/cli.mjs mcp install claude   # or: cursor, opencode
+# Writes/merges the ultragraph entry into the target's own MCP config
+# for you — no hand-edited absolute-path JSON needed.
 ```
 
 ### 4. Embed the native addon
@@ -109,32 +103,42 @@ and parse its JSON output, or run `ug serve` and call its REST API.
 
 ## 🚀 Quick Start
 
-### 1. Prerequisites
-- **Rust** (latest stable)
-- **Node.js** 20+
-- **No external embedding service required.** UltraGraph ships with an in-process **ONNX embedder** powered by [`fastembed-rs`](https://github.com/Anush008/fastembed-rs). Model weights are downloaded once on first use (~22–130 MB depending on model) and cached locally. Pass `--base-url` if you want to route to a remote OpenAI-compatible endpoint instead.
+### 1. Install
 
-### 2. Build the Project
+Prebuilt (macOS/Linux, no Rust/Node toolchain needed):
+```bash
+curl -fsSL https://ultra-graph.web.app/install.sh | sh
+```
+Installs `ug` (+ the native addon and Node CLI it ships alongside) to
+`~/.local/share/ultragraph/.ug/` and symlinks `ug` onto `~/.local/bin`.
+Windows: download `ultragraph-windows-x64.zip` from
+[Releases](https://github.com/shoocstorm/ug/releases/latest).
+
+Building from source instead needs **Rust** (latest stable) and **Node.js** 20+:
 ```bash
 npm run build
 ```
 
-### 3. Generate Your First Graph
+No external embedding service is required either way — UltraGraph ships an in-process **ONNX embedder** powered by [`fastembed-rs`](https://github.com/Anush008/fastembed-rs). Model weights are downloaded once on first use (~22–130 MB depending on model) and cached locally. Pass `--base-url` if you want to route to a remote OpenAI-compatible endpoint instead.
+
+### 2. Generate Your First Graph
 The `gen` command runs the entire pipeline (index → graph → ingest → UI).
 ```bash
 # Run the full pipeline on the current directory.
 # Output goes to ~/.ug/<project-name>/ (project name = the directory's
 # basename; override with -n/--name).
-npm run gen -- -i ./ --no-ingest
+ug gen -i ./ --no-ingest                        # prebuilt install
+npm run gen -- -i ./ --no-ingest                # built from source
 
 # Index another repo under a custom project name
-npm run gen -- -i ~/code/other-repo -n other --no-ingest
+ug gen -i ~/code/other-repo -n other --no-ingest
 ```
 
-### 4. Visualize
+### 3. Visualize
 Open the interactive visualization in your browser:
 ```bash
-npm start (or ug serve if ug is installed)
+ug serve       # prebuilt install
+npm start      # built from source
 # Visit http://localhost:8080
 ```
 Without `-i`, `ug serve` runs in **multi-project mode**: it discovers every
@@ -176,6 +180,7 @@ UltraGraph provides a powerful CLI via `node node/cli.mjs` (or the native `ug` b
 | `rag` | `npm run rag -- <db> <query>` | Perform a GraphRAG retrieval |
 | `traverse`| `npm run traverse -- <db> <id>` | K-hop traversal over stored edges |
 | `chat`    | `ug chat "<question>" -d <db> --chat-model <model> ...` | RAG-grounded chat (one-shot or REPL) against an LLM |
+| `mcp`     | `npm run mcp` / `node node/cli.mjs mcp install claude` | Start the MCP server, or wire it into an MCP client's config |
 
 ### Advanced GraphRAG Options
 When using `rag` or `db-rag`, you can tune the retrieval strategy:
@@ -427,7 +432,7 @@ Deep-dive docs for anyone extending UltraGraph:
 | [`docs/GRAPH-STORAGE.md`](docs/GRAPH-STORAGE.md) | OverGraph data model, query functions, node/edge mapping |
 | [`docs/EMBEDDING-BACKENDS.md`](docs/EMBEDDING-BACKENDS.md) | Local ONNX vs. remote embedder architecture, model aliases, failure modes |
 | [`docs/WEB-SERVE.md`](docs/WEB-SERVE.md) | `ug serve`'s REST API, routes, logging, asset resolution |
-| [`docs/MCP.md`](docs/MCP.md) | Full MCP tool reference, client setup (Claude Desktop, Cursor), troubleshooting |
+| [`docs/MCP.md`](docs/MCP.md) | Full MCP tool reference, client setup (Claude Desktop, Cursor, opencode), troubleshooting |
 | [`docs/MULTI-DEST.md`](docs/MULTI-DEST.md) | Neo4j backend: CLI flags, capability matrix, schema |
 | [`native/README.md`](native/README.md) | Rust crate internals: CLI commands, project structure, extensibility |
 

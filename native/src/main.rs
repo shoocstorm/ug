@@ -46,7 +46,7 @@ fn main() {
     }
 
     if args.len() < 2 {
-        print_help();
+        print_quickstart();
         return;
     }
 
@@ -2060,6 +2060,24 @@ fn print_logo() {
     println!(
         "    {C_BOLD}{C_YELLOW}✦{C_RESET}  {C_BOLD}{C_GREEN}the graph from which all other graphs eternally flow.{C_RESET}"
     );
+    println!();
+}
+
+/// Shown for bare `ug` with no subcommand — a short "what do I do first"
+/// nudge instead of the full command wall (that's `ug help`).
+fn print_quickstart() {
+    println!("{C_BOLD}Welcome to UltraGraph{C_RESET} — turn a codebase into a queryable knowledge graph.");
+    println!();
+    println!("{C_BOLD}Quick start:{C_RESET}");
+    println!("  {C_CYAN}ug gen{C_RESET}     Index this directory, build the graph, and ingest it (→ ~/.ug/<name>/)");
+    println!("  {C_CYAN}ug serve{C_RESET}   Open the visualization + REST API at http://localhost:8080");
+    println!("  {C_CYAN}ug help{C_RESET}    Full command reference");
+    println!();
+    println!("{C_BOLD}MCP (Claude Desktop / Cursor):{C_RESET}");
+    match std::env::current_exe().ok().and_then(|exe| exe.parent().map(|d| d.join("cli.mjs"))) {
+        Some(cli) => println!("  node {} mcp install claude", cli.display()),
+        None => println!("  node <install-dir>/cli.mjs mcp install claude"),
+    }
     println!();
 }
 
