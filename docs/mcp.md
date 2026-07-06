@@ -59,7 +59,7 @@ Add the MCP server configuration:
   "mcpServers": {
     "ultragraph": {
       "command": "node",
-      "args": ["/absolute/path/to/ug/src/mcp-server.mjs"],
+      "args": ["/absolute/path/to/ug/.ug/cli.mjs", "mcp"],
       "env": {
         "UG_DB_PATH": "/absolute/path/to/ug/ug-out/ug-db",
         "UG_REPO_ROOT": "/absolute/path/to/your/project",
@@ -82,7 +82,7 @@ Cursor supports MCP servers via its configuration. Create or edit `.cursor/mcp.j
   "mcpServers": {
     "ultragraph": {
       "command": "node",
-      "args": ["/absolute/path/to/ug/src/mcp-server.mjs"],
+      "args": ["/absolute/path/to/ug/.ug/cli.mjs", "mcp"],
       "env": {
         "UG_DB_PATH": "/absolute/path/to/ug/ug-out/ug-db",
         "UG_REPO_ROOT": "/absolute/path/to/your/project"
@@ -98,10 +98,10 @@ For any MCP client that supports stdio transport, use:
 
 ```bash
 # Command to start the server
-node /path/to/ug/src/mcp-server.mjs
+node /path/to/ug/.ug/cli.mjs mcp
 
 # With environment variables
-UG_DB_PATH=/path/to/ug-db UG_EMBED_BASE_URL=http://localhost:11434/v1 node /path/to/ug/src/mcp-server.mjs
+UG_DB_PATH=/path/to/ug-db UG_EMBED_BASE_URL=http://localhost:11434/v1 node /path/to/ug/.ug/cli.mjs mcp
 ```
 
 ## Available Tools
@@ -312,13 +312,13 @@ export UG_EMBED_BASE_URL=http://localhost:11434/v1
 export UG_EMBED_MODEL=nomic-embed-text
 
 # Run the server (it speaks MCP protocol over stdio)
-node src/mcp-server.mjs
+node node/cli.mjs mcp
 ```
 
 For a more interactive test, use the [MCP Inspector](https://github.com/modelcontextprotocol/inspector):
 
 ```bash
-npx @modelcontextprotocol/inspector node src/mcp-server.mjs
+npx @modelcontextprotocol/inspector node node/cli.mjs mcp
 ```
 
 ## Troubleshooting

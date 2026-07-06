@@ -8,25 +8,31 @@ export declare function calculateCentrality(graphJson: string): string
  * Phase 4 entry point: end-to-end GraphRAG retrieval.
  * `options_json` must include at least `{ "query": "..." }`.
  */
-export declare function dbHybridSearch(dbPath: string, optionsJson: string, embedderOptions?: string | undefined | null): Promise<string>
+export declare function dbHybridSearch(dbPath: string, optionsJson: string, embedderOptions?: string | undefined | null, destOptions?: string | undefined | null): Promise<string>
 
 /**
  * Ingest a JSON graph (the output of `buildGraph`) into a OverGraph
  * instance at `db_path`. Returns ingest stats as JSON.
+ *
+ * If the caller did not supply `embedderOptions.embeddingDim`, this
+ * probes the embedding endpoint once and uses the discovered dim so
+ * users can swap models without recompiling or knowing the dim ahead
+ * of time. The discovered dim is then validated against (or persisted
+ * to) the DB sidecar manifest by `Db::open_or_create`.
  */
-export declare function dbIngest(graphJson: string, dbPath: string, embedderOptions?: string | undefined | null): Promise<string>
+export declare function dbIngest(graphJson: string, dbPath: string, embedderOptions?: string | undefined | null, destOptions?: string | undefined | null): Promise<string>
 
 /**
  * Pure vector search. Useful when the caller already has a seed and
  * just wants nearest neighbours.
  */
-export declare function dbSemanticSearch(dbPath: string, query: string, k: number, whereClause?: string | undefined | null, embedderOptions?: string | undefined | null): Promise<string>
+export declare function dbSemanticSearch(dbPath: string, query: string, k: number, whereClause?: string | undefined | null, embedderOptions?: string | undefined | null, destOptions?: string | undefined | null): Promise<string>
 
 /**
  * DB-backed graph traversal with direction + edge-type filter.
  * `direction` accepts: "outbound" (default), "inbound", "both".
  */
-export declare function dbTraverse(dbPath: string, startNodeIds: Array<string>, hops: number, edgeTypes?: Array<string> | undefined | null, direction?: string | undefined | null): Promise<string>
+export declare function dbTraverse(dbPath: string, startNodeIds: Array<string>, hops: number, edgeTypes?: Array<string> | undefined | null, direction?: string | undefined | null, destOptions?: string | undefined | null): Promise<string>
 
 export declare function detectCycles(graphJson: string): string
 

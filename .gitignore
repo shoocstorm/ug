@@ -1,7 +1,7 @@
 native/target
 .ug
 .ug-*
-native/ultragraph.darwin-arm64.node
+native/ug.darwin-arm64.node
 native/out
 src/.cache
 src/out1
@@ -15,6 +15,7 @@ out/*
 .gitnexus
 node_modules
 docs/overgraph
+native/.cargo/config.toml
 opencode.json
 .env
 .env.local

@@ -3,7 +3,7 @@ const { join } = require('path');
 const { mkdtempSync, writeFileSync, rmSync, mkdirSync, readdirSync } = require('fs');
 const { tmpdir } = require('os');
 
-const ug = require('../.ug/ultragraph.node');
+const ug = require('../.ug/ug.node');
 
 async function index(path) {
   const result = ug.index(path);

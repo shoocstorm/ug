@@ -33,14 +33,14 @@ tree-sitter-rust = "0.20"
 pdf-extract = "0.10"
 petgraph = "0.6"
 regex = "1"
-overgraph = { path = "../docs/overgraph", version = "0.6" }
+overgraph = "0.6"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
 futures = "0.3"
 async-trait = "0.1"
 neo4rs = "0.8"
 dotenvy = "0.15"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-fastembed = "4"
+fastembed = { version = "4", default-features = false, features = ["ort-download-binaries", "hf-hub-rustls-tls"] }
 dirs = "5"
 axum = "0.7"
 tower-http = { version = "0.5", features = ["compression-br", "compression-gzip", "trace"] }

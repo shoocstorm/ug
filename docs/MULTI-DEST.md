@@ -92,11 +92,11 @@ ug traverse <id>          --dest neo4j
 ug ingest -i .ug/graph.json --dest overgraph,neo4j -o .ug/ugdb
 ```
 
-For the MCP server (`node node/mcp-server.mjs`), Node 20+ supports the
+For the MCP server (`node node/cli.mjs mcp`), Node 20+ supports the
 same file natively:
 
 ```bash
-node --env-file=.env node/mcp-server.mjs
+node --env-file=.env node/cli.mjs mcp
 ```
 
 Real environment variables always win over `.env` values, so CI /

@@ -105,13 +105,13 @@ All generated data lives in one folder per project under `~/.ug`
 
 `ug list` shows every project with counts and last-generated times. The
 repo-local `.ug/` folder only holds build artifacts (`ug` binary,
-`ultragraph.node`), not data.
+`ug.node`), not data.
 
 ---
 
 ## 🛠️ Command Line Interface
 
-UltraGraph provides a powerful CLI via `node node/cli.cjs` (or the native `ug` binary).
+UltraGraph provides a powerful CLI via `node node/cli.mjs` (or the native `ug` binary).
 
 ### Common Commands
 
@@ -315,7 +315,7 @@ When no env vars are set, the server uses `~/.ug/<cwd-basename>/ugdb` if it exis
   "mcpServers": {
     "ultragraph": {
       "command": "node",
-      "args": ["/Users/aldrickwan/Documents/project/ug/.ug/mcp-server.mjs"],
+      "args": ["/Users/aldrickwan/Documents/project/ug/.ug/cli.mjs", "mcp"],
       "env": {
         "UG_PROJECT": "ug"
       }

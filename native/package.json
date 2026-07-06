@@ -4,16 +4,22 @@
   "description": "High-Performance Knowledge Base Indexer",
   "main": "index.js",
   "napi": {
-    "binaryName": "ultragraph",
+    "binaryName": "ug",
     "platforms": [
-      "aarch64-apple-darwin"
+      "aarch64-apple-darwin",
+      "x86_64-apple-darwin",
+      "x86_64-unknown-linux-gnu",
+      "x86_64-pc-windows-msvc"
     ]
   },
   "scripts": {
-    "build": "cargo build --release && mkdir -p ../.ug && cp target/release/ug ../.ug/ug",
-    "postbuild": "napi build --output-dir ../.ug",
-    "build:dev": "cargo build --profile dev-fast && mkdir -p ../.ug && cp target/dev-fast/ug ../.ug/ug",
+    "build": "cargo build --release && node scripts/copy-bin.mjs release",
+    "postbuild": "napi build --release --output-dir ../.ug",
+    "build:dev": "cargo build --profile dev-fast && node scripts/copy-bin.mjs dev-fast",
     "postbuild:dev": "napi build --output-dir ../.ug",
     "test": "cargo test -- --nocapture"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^3.6.2"
   }
 }
