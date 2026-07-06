@@ -184,6 +184,20 @@
             z-index: 5;
         }
 
+        /* Echoes the Knowledge Base Manager's kicker-over-wordmark pairing
+           (see .kb-kicker) so the explorer reads as a continuation of that
+           screen rather than a different app. */
+        .header-kicker {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 9px;
+            font-weight: 600;
+            letter-spacing: 2.5px;
+            text-transform: uppercase;
+            color: var(--accent);
+            opacity: 0.85;
+            margin-bottom: 2px;
+        }
+
         .header h1 {
             font-size: 16px;
             font-weight: 600;
@@ -342,10 +356,17 @@
         }
 
         .sidebar-header .meta {
+            display: inline-flex;
+            align-items: center;
             font-size: 10px;
+            font-family: 'JetBrains Mono', monospace;
             color: var(--text-muted);
             text-transform: uppercase;
             letter-spacing: 0.8px;
+            padding: 3px 8px;
+            border: 1px solid var(--border-soft);
+            border-radius: 999px;
+            background: var(--bg-surface);
         }
 
         .sidebar-header .header-actions {
@@ -1001,19 +1022,23 @@
         .sidebar-footer button {
             flex: 1;
             background: var(--bg-elevated);
-            border: 1px solid var(--border);
+            border: 1px solid var(--border-soft);
             color: var(--text-muted);
             padding: 8px 10px;
             border-radius: 6px;
             font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.3px;
             cursor: pointer;
             font-family: inherit;
-            transition: background 0.15s, color 0.15s;
+            transition: background 0.15s, color 0.15s, border-color 0.15s, box-shadow 0.15s;
         }
 
         .sidebar-footer button:hover {
-            background: var(--bg-hover);
+            background: rgba(34, 211, 238, 0.08);
             color: var(--accent);
+            border-color: var(--accent-dim);
+            box-shadow: 0 0 12px rgba(34, 211, 238, 0.15);
         }
 
         /* ─── Sidebar launcher (shown only when collapsed) ───── */
@@ -3250,8 +3275,29 @@
         }
 
         .catalog-stats {
-            color: var(--text-muted);
+            display: flex;
+            align-items: baseline;
+            gap: 12px;
+        }
+
+        .catalog-metric {
+            display: inline-flex;
+            align-items: baseline;
+            gap: 4px;
             font-family: 'JetBrains Mono', monospace;
+        }
+
+        .catalog-metric b {
+            font-size: 13px;
+            font-weight: 700;
+            color: var(--text);
+        }
+
+        .catalog-metric span {
+            font-size: 9px;
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+            color: var(--text-dim);
         }
 
         .catalog-hint {
@@ -3998,6 +4044,7 @@
         </div>
 
         <div class="header">
+            <div class="header-kicker">UltraGraph</div>
             <h1>Knowledge Graph</h1>
             <p id="graph-title">Interactive visualization</p>
         </div>
@@ -7691,13 +7738,13 @@
                 }
             }
 
-            const parts = [];
-            parts.push(`${counters.folders} folder${counters.folders === 1 ? '' : 's'}`);
-            parts.push(`${counters.files} file${counters.files === 1 ? '' : 's'}`);
+            const chips = [];
+            chips.push(`<span class="catalog-metric"><b>${counters.folders}</b><span>Folder${counters.folders === 1 ? '' : 's'}</span></span>`);
+            chips.push(`<span class="catalog-metric"><b>${counters.files}</b><span>File${counters.files === 1 ? '' : 's'}</span></span>`);
             if (includeSymbols) {
-                parts.push(`${counters.symbols} symbol${counters.symbols === 1 ? '' : 's'}`);
+                chips.push(`<span class="catalog-metric"><b>${counters.symbols}</b><span>Symbol${counters.symbols === 1 ? '' : 's'}</span></span>`);
             }
-            stats.textContent = parts.join(' · ');
+            stats.innerHTML = chips.join('');
         }
 
         function wireCatalogRows(body) {
