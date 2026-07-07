@@ -11,6 +11,7 @@ import { createRequire } from 'node:module';
 import { createInterface } from 'node:readline/promises';
 import chalk from 'chalk';
 import { z } from 'zod';
+import { parseDocument } from 'yaml';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
@@ -783,6 +784,11 @@ const MCP_INSTALL_TARGETS = {
     format: 'toml',
     configPath: () => join(homedir(), '.codex', 'config.toml'),
   },
+  hermes: {
+    label: 'Hermes Agent',
+    format: 'yaml',
+    configPath: () => join(homedir(), '.hermes', 'config.yaml'),
+  },
   opencode: {
     label: 'opencode',
     configPath: () => join(process.cwd(), 'opencode.json'),
@@ -832,6 +838,19 @@ function upsertTomlServer(content, name, server) {
   return (remainder ? remainder + '\n\n' : '') + block + '\n';
 }
 
+// Hermes Agent's config is YAML (`mcp_servers.<name>` under ~/.hermes/config.yaml)
+// and, unlike Codex's TOML, is likely to carry the user's own comments — a
+// text-range splice would risk mangling those, so this goes through a real
+// parser. `parseDocument` (rather than plain `parse`/`stringify`) keeps a
+// CST alongside the data, so `setIn` mutates in place and `toString()`
+// preserves the surrounding formatting/comments instead of a full reprint.
+function upsertYamlServer(content, name, server) {
+  const doc = parseDocument(content || '');
+  if (doc.contents === null) doc.contents = doc.createNode({});
+  doc.setIn(['mcp_servers', name], server);
+  return doc.toString();
+}
+
 // Writes (or merges into) an MCP client's config file so `ug` shows up as a
 // tool source without the user hand-editing JSON / absolute paths themselves.
 function installMcpConfig(target) {
@@ -850,6 +869,13 @@ function installMcpConfig(target) {
     const existing = existsSync(configPath) ? readFileSync(configPath, 'utf-8') : '';
     mkdirSync(dirname(configPath), { recursive: true });
     writeFileSync(configPath, upsertTomlServer(existing, 'ultragraph', server));
+    return configPath;
+  }
+
+  if (targetDef.format === 'yaml') {
+    const existing = existsSync(configPath) ? readFileSync(configPath, 'utf-8') : '';
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, upsertYamlServer(existing, 'ultragraph', server));
     return configPath;
   }
 
@@ -988,7 +1014,7 @@ function quickstartBanner() {
     '',
     chalk.bold('Quick start:'),
     '  ' + chalk.cyan('node cli.mjs gen') + '   Index this directory, build the graph, and ingest it (→ ~/.ug/<name>/)',
-    '  ' + chalk.cyan('node cli.mjs mcp install claude') + '   Wire this up as an MCP server (or cursor, claude-code, windsurf, vscode, gemini, codex, opencode)',
+    '  ' + chalk.cyan('node cli.mjs mcp install claude') + '   Wire this up as an MCP server (or cursor, claude-code, windsurf, vscode, gemini, codex, hermes, opencode)',
     '  ' + chalk.cyan('node cli.mjs doctor') + '  Show resolved project/db/embedder config and where it came from',
     '  ' + chalk.cyan('node cli.mjs help') + '  Full command reference',
     '',

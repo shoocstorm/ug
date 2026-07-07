@@ -2390,7 +2390,7 @@ fn print_help() {
     println!("{C_BOLD}Quick start:{C_RESET}");
     println!("  {C_CYAN}ug gen{C_RESET}     Index this directory, build the graph, and ingest it (→ ~/.ug/<name>/)");
     println!("  {C_CYAN}ug{C_RESET}         Bare `ug` starts the server (visualization + REST API at http://localhost:8080)");
-    println!("{C_BOLD}MCP (Claude Desktop / Claude Code / Cursor / Windsurf / VS Code / Gemini CLI / Codex CLI / opencode):{C_RESET}");
+    println!("{C_BOLD}MCP (Claude Desktop / Claude Code / Cursor / Windsurf / VS Code / Gemini CLI / Codex CLI / Hermes Agent / opencode):{C_RESET}");
     match std::env::current_exe().ok().and_then(|exe| exe.parent().map(|d| d.join("cli.mjs"))) {
         Some(cli) => println!("  node {} mcp install claude", cli.display()),
         None => println!("  node <install-dir>/cli.mjs mcp install claude"),

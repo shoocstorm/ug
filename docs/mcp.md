@@ -66,6 +66,7 @@ node .ug/cli.mjs mcp install windsurf      # Windsurf (~/.codeium/windsurf/mcp_c
 node .ug/cli.mjs mcp install vscode        # VS Code (.vscode/mcp.json in cwd)
 node .ug/cli.mjs mcp install gemini        # Gemini CLI (~/.gemini/settings.json)
 node .ug/cli.mjs mcp install codex         # Codex CLI (~/.codex/config.toml)
+node .ug/cli.mjs mcp install hermes        # Hermes Agent (~/.hermes/config.yaml)
 node .ug/cli.mjs mcp install opencode      # opencode (opencode.json in cwd)
 ```
 
