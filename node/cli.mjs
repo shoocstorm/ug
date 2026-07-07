@@ -736,24 +736,55 @@ function claudeDesktopConfigPath() {
   return join(home, '.config', 'Claude', 'claude_desktop_config.json');
 }
 
+function mcpServersApply(config, server) {
+  config.mcpServers = config.mcpServers || {};
+  config.mcpServers.ultragraph = server;
+}
+
 // Each target: where its config lives, and how to graft a { command, args,
 // env } server entry into that target's own JSON shape (schemas differ).
+// `format: 'toml'` targets skip `apply`/JSON entirely — see `upsertTomlServer`.
 const MCP_INSTALL_TARGETS = {
   claude: {
+    label: 'Claude Desktop',
     configPath: claudeDesktopConfigPath,
-    apply: (config, server) => {
-      config.mcpServers = config.mcpServers || {};
-      config.mcpServers.ultragraph = server;
-    },
+    apply: mcpServersApply,
+  },
+  'claude-code': {
+    label: 'Claude Code',
+    configPath: () => join(process.cwd(), '.mcp.json'),
+    apply: mcpServersApply,
   },
   cursor: {
+    label: 'Cursor',
     configPath: () => join(process.cwd(), '.cursor', 'mcp.json'),
+    apply: mcpServersApply,
+  },
+  windsurf: {
+    label: 'Windsurf',
+    configPath: () => join(homedir(), '.codeium', 'windsurf', 'mcp_config.json'),
+    apply: mcpServersApply,
+  },
+  vscode: {
+    label: 'VS Code',
+    configPath: () => join(process.cwd(), '.vscode', 'mcp.json'),
     apply: (config, server) => {
-      config.mcpServers = config.mcpServers || {};
-      config.mcpServers.ultragraph = server;
+      config.servers = config.servers || {};
+      config.servers.ultragraph = { type: 'stdio', ...server };
     },
   },
+  gemini: {
+    label: 'Gemini CLI',
+    configPath: () => join(homedir(), '.gemini', 'settings.json'),
+    apply: mcpServersApply,
+  },
+  codex: {
+    label: 'Codex CLI',
+    format: 'toml',
+    configPath: () => join(homedir(), '.codex', 'config.toml'),
+  },
   opencode: {
+    label: 'opencode',
     configPath: () => join(process.cwd(), 'opencode.json'),
     apply: (config, server) => {
       if (config['$schema'] === undefined) config['$schema'] = 'https://opencode.ai/config.json';
@@ -764,6 +795,43 @@ const MCP_INSTALL_TARGETS = {
   },
 };
 
+// Codex's config is TOML, not JSON — rather than pull in a full TOML
+// parser/writer for one write, surgically replace just the
+// `[mcp_servers.<name>]` table (and its nested `.env` subtable) by text
+// range, leaving the rest of the file untouched.
+function upsertTomlServer(content, name, server) {
+  const header = `[mcp_servers.${name}]`;
+  const envHeader = `[mcp_servers.${name}.env]`;
+  const hasEnv = server.env && Object.keys(server.env).length > 0;
+  const block = [
+    header,
+    `command = ${JSON.stringify(server.command)}`,
+    `args = ${JSON.stringify(server.args)}`,
+    ...(hasEnv
+      ? ['', envHeader, ...Object.entries(server.env).map(([k, v]) => `${k} = ${JSON.stringify(v)}`)]
+      : []),
+  ].join('\n');
+
+  const out = [];
+  let skipping = false;
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim();
+    const isOwnHeader = trimmed === header || trimmed === envHeader;
+    const isOtherHeader = /^\[.+\]$/.test(trimmed) && !isOwnHeader;
+    if (skipping) {
+      if (isOtherHeader) skipping = false;
+      else continue;
+    }
+    if (isOwnHeader) {
+      skipping = true;
+      continue;
+    }
+    out.push(line);
+  }
+  const remainder = out.join('\n').replace(/\n{3,}/g, '\n\n').replace(/\s+$/, '');
+  return (remainder ? remainder + '\n\n' : '') + block + '\n';
+}
+
 // Writes (or merges into) an MCP client's config file so `ug` shows up as a
 // tool source without the user hand-editing JSON / absolute paths themselves.
 function installMcpConfig(target) {
@@ -772,6 +840,18 @@ function installMcpConfig(target) {
     throw new Error(`Unknown MCP target '${target}' (expected: ${Object.keys(MCP_INSTALL_TARGETS).join(', ')})`);
   }
   const configPath = targetDef.configPath();
+  const server = {
+    command: 'node',
+    args: [fileURLToPath(import.meta.url), 'mcp'],
+    env: { UG_PROJECT: deriveProjectName('.') },
+  };
+
+  if (targetDef.format === 'toml') {
+    const existing = existsSync(configPath) ? readFileSync(configPath, 'utf-8') : '';
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, upsertTomlServer(existing, 'ultragraph', server));
+    return configPath;
+  }
 
   let config = {};
   if (existsSync(configPath)) {
@@ -781,11 +861,7 @@ function installMcpConfig(target) {
       throw new Error(`${configPath} exists but isn't valid JSON — fix or remove it, then retry (${e.message})`);
     }
   }
-  targetDef.apply(config, {
-    command: 'node',
-    args: [fileURLToPath(import.meta.url), 'mcp'],
-    env: { UG_PROJECT: deriveProjectName('.') },
-  });
+  targetDef.apply(config, server);
 
   mkdirSync(dirname(configPath), { recursive: true });
   writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
@@ -912,7 +988,7 @@ function quickstartBanner() {
     '',
     chalk.bold('Quick start:'),
     '  ' + chalk.cyan('node cli.mjs gen') + '   Index this directory, build the graph, and ingest it (→ ~/.ug/<name>/)',
-    '  ' + chalk.cyan('node cli.mjs mcp install claude') + '   Wire this up as an MCP server for Claude Desktop',
+    '  ' + chalk.cyan('node cli.mjs mcp install claude') + '   Wire this up as an MCP server (or cursor, claude-code, windsurf, vscode, gemini, codex, opencode)',
     '  ' + chalk.cyan('node cli.mjs doctor') + '  Show resolved project/db/embedder config and where it came from',
     '  ' + chalk.cyan('node cli.mjs help') + '  Full command reference',
     '',
@@ -1271,7 +1347,7 @@ const commands = {
     }
   },
   mcp: {
-    usage: '[install <claude|cursor|opencode>]',
+    usage: `[install <${Object.keys(MCP_INSTALL_TARGETS).join('|')}>]`,
     desc: 'Start the MCP server (no args; see env vars in the source header), or write this project into an MCP client config with `install <target>`.',
     run: async (args) => {
       if (args[0] === 'install') {
@@ -1280,9 +1356,8 @@ const commands = {
           throw new Error(`Usage: mcp install <${Object.keys(MCP_INSTALL_TARGETS).join('|')}>`);
         }
         const configPath = installMcpConfig(target);
-        const appNames = { claude: 'Claude Desktop', cursor: 'Cursor', opencode: 'opencode' };
         console.log(chalk.green('✓') + ' ' + chalk.white(`Wrote MCP config to ${configPath}`));
-        console.log(chalk.cyan(`Restart ${appNames[target] ?? target} to pick it up.`));
+        console.log(chalk.cyan(`Restart ${MCP_INSTALL_TARGETS[target].label} to pick it up.`));
         return;
       }
       await runMcpServer();

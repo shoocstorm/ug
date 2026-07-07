@@ -59,9 +59,14 @@ with which env var (if any) drove each value.
 ### The easy way
 
 ```bash
-node .ug/cli.mjs mcp install claude     # Claude Desktop
-node .ug/cli.mjs mcp install cursor     # Cursor (.cursor/mcp.json in cwd)
-node .ug/cli.mjs mcp install opencode   # opencode (opencode.json in cwd)
+node .ug/cli.mjs mcp install claude        # Claude Desktop
+node .ug/cli.mjs mcp install claude-code   # Claude Code (.mcp.json in cwd)
+node .ug/cli.mjs mcp install cursor        # Cursor (.cursor/mcp.json in cwd)
+node .ug/cli.mjs mcp install windsurf      # Windsurf (~/.codeium/windsurf/mcp_config.json)
+node .ug/cli.mjs mcp install vscode        # VS Code (.vscode/mcp.json in cwd)
+node .ug/cli.mjs mcp install gemini        # Gemini CLI (~/.gemini/settings.json)
+node .ug/cli.mjs mcp install codex         # Codex CLI (~/.codex/config.toml)
+node .ug/cli.mjs mcp install opencode      # opencode (opencode.json in cwd)
 ```
 
 This writes (or merges into, preserving any other configured servers) the

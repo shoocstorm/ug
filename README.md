@@ -90,7 +90,7 @@ node .ug/cli.mjs list
 
 ### MCP server
 ```bash
-node .ug/cli.mjs mcp install claude   # or: cursor, opencode
+node .ug/cli.mjs mcp install claude   # or: claude-code, cursor, windsurf, vscode, gemini, codex, opencode
 # Writes/merges the ultragraph entry into the target's own MCP config
 # for you — no hand-edited absolute-path JSON needed.
 ```

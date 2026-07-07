@@ -32,14 +32,19 @@ fn main() {
     // override values already set in the process environment. Quiet
     // when no `.env` is present.
     let _ = dotenvy::dotenv();
-    // Suppressed when spawned as a subprocess by `ug serve`'s KB Manager
-    // wizard (`POST /api/generate`) — the banner would otherwise dominate
-    // the wizard's streamed log viewer.
-    if std::env::var("UG_QUIET_LOGO").is_err() {
-        print_logo();
-    }
 
     let args: Vec<String> = env::args().collect();
+
+    // Suppressed when spawned as a subprocess by `ug serve`'s KB Manager
+    // wizard (`POST /api/generate`) — the banner would otherwise dominate
+    // the wizard's streamed log viewer. Also suppressed for bare `ug mcp`
+    // (no `install` subcommand): that mode is a stdio JSON-RPC server, and
+    // the logo on stdout would corrupt the protocol stream.
+    let is_mcp_server_mode = args.get(1).map(String::as_str) == Some("mcp")
+        && args.get(2).map(String::as_str) != Some("install");
+    if std::env::var("UG_QUIET_LOGO").is_err() && !is_mcp_server_mode {
+        print_logo();
+    }
 
     if args.len() >= 2 && (args[1] == "-v" || args[1] == "--version") {
         println!("ug version {}", env!("CARGO_PKG_VERSION"));
@@ -81,6 +86,7 @@ fn main() {
         "rm" => run_rm(cmd_args),
         "doctor" => run_doctor(cmd_args),
         "serve" => serve::run_serve(cmd_args),
+        "mcp" => run_mcp(cmd_args),
         "help" => {
             print_help();
         }
@@ -1289,6 +1295,45 @@ fn run_rm(args: &[String]) {
     }
 }
 
+/// `ug mcp [install <target>]` — there's no separate Rust MCP
+/// implementation, so this forwards straight to the bundled `cli.mjs`
+/// (sitting next to this binary in `.ug/` — see scripts/copy-wrappers.mjs).
+/// Bare `ug mcp` becomes a long-running stdio JSON-RPC server: stdio is
+/// inherited as-is so it can be wired into an MCP client directly, and the
+/// startup logo is suppressed for that mode (see `is_mcp_server_mode` in
+/// `main`).
+fn run_mcp(args: &[String]) {
+    let cli_path = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|d| d.join("cli.mjs")));
+
+    let cli_path = match cli_path {
+        Some(p) if p.exists() => p,
+        _ => {
+            eprintln!("Couldn't find cli.mjs next to the `ug` binary — the MCP server/installer is Node-only.");
+            eprintln!(
+                "Run it directly instead: {C_CYAN}node <install-dir>/cli.mjs mcp {}{C_RESET}",
+                args.join(" ")
+            );
+            std::process::exit(1);
+        }
+    };
+
+    let status = std::process::Command::new("node")
+        .arg(&cli_path)
+        .arg("mcp")
+        .args(args)
+        .status();
+
+    match status {
+        Ok(status) => std::process::exit(status.code().unwrap_or(1)),
+        Err(e) => {
+            eprintln!("Failed to launch `node {}`: {}", cli_path.display(), e);
+            std::process::exit(1);
+        }
+    }
+}
+
 fn doctor_source_label(s: PrefSource) -> String {
     match s {
         PrefSource::Flag => "flag".to_string(),
@@ -2345,7 +2390,7 @@ fn print_help() {
     println!("{C_BOLD}Quick start:{C_RESET}");
     println!("  {C_CYAN}ug gen{C_RESET}     Index this directory, build the graph, and ingest it (→ ~/.ug/<name>/)");
     println!("  {C_CYAN}ug{C_RESET}         Bare `ug` starts the server (visualization + REST API at http://localhost:8080)");
-    println!("{C_BOLD}MCP (Claude Desktop / Cursor):{C_RESET}");
+    println!("{C_BOLD}MCP (Claude Desktop / Claude Code / Cursor / Windsurf / VS Code / Gemini CLI / Codex CLI / opencode):{C_RESET}");
     match std::env::current_exe().ok().and_then(|exe| exe.parent().map(|d| d.join("cli.mjs"))) {
         Some(cli) => println!("  node {} mcp install claude", cli.display()),
         None => println!("  node <install-dir>/cli.mjs mcp install claude"),
