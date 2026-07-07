@@ -6,6 +6,7 @@ use ultragraph::storage::{
     self, open_store, search_kb as storage_search_kb,
     semantic_search as storage_semantic_search, traverse as storage_traverse, Direction, Embedder,
     EmbedderConfig, KnowledgeStore, RankStrategy, SearchKbOptions, StoreSet, StoreSpec,
+    DEFAULT_BASE_URL as DEFAULT_EMBED_BASE_URL, DEFAULT_MODEL as DEFAULT_EMBED_MODEL,
 };
 use ultragraph::types::GraphData;
 use ultragraph::{
@@ -46,7 +47,14 @@ fn main() {
     }
 
     if args.len() < 2 {
-        print_quickstart();
+        // No subcommand: just start the server. `ug serve` is safe even
+        // with zero generated projects — it shows the KB Manager wizard
+        // instead of erroring — so this removes the old "run gen, then
+        // remember to run serve" two-step for the common case.
+        eprintln!(
+            "{C_CYAN}▸{C_RESET} No command given — starting {C_BOLD}ug serve{C_RESET}. Run {C_CYAN}ug help{C_RESET} for other commands."
+        );
+        serve::run_serve(&[]);
         return;
     }
 
@@ -70,6 +78,7 @@ fn main() {
         "traverse" => run_traverse(cmd_args),
         "chat" => run_chat(cmd_args),
         "list" => run_list(cmd_args),
+        "doctor" => run_doctor(cmd_args),
         "serve" => serve::run_serve(cmd_args),
         "help" => {
             print_help();
@@ -167,24 +176,90 @@ fn write_or_print(output_path: Option<&str>, data: &str, label: &str) {
     }
 }
 
+// ---------- Precedence helper ----------
+
+/// Where a resolved config value came from: an explicit CLI flag, a
+/// named env var, or neither (caller applies its own default). `ug
+/// doctor` reports this so the multi-tier fallback chain is inspectable
+/// instead of implicit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PrefSource {
+    Flag,
+    Env(&'static str),
+    Default,
+}
+
+/// Three-tier precedence: an explicit flag value wins, else the named
+/// env var (blank values are treated as unset), else `None`/`Default`.
+pub(crate) fn resolve_pref(
+    flag: Option<String>,
+    env_key: &'static str,
+) -> (Option<String>, PrefSource) {
+    if let Some(v) = flag {
+        return (Some(v), PrefSource::Flag);
+    }
+    match std::env::var(env_key) {
+        Ok(v) if !v.trim().is_empty() => (Some(v), PrefSource::Env(env_key)),
+        _ => (None, PrefSource::Default),
+    }
+}
+
+#[cfg(test)]
+mod pref_tests {
+    use super::{resolve_pref, PrefSource};
+
+    // Each test uses its own env var name so they can't race each other
+    // under cargo's default parallel test execution.
+
+    #[test]
+    fn flag_wins_over_env_and_default() {
+        std::env::set_var("UG_TEST_PREF_FLAG_WINS", "from-env");
+        let (val, src) = resolve_pref(Some("from-flag".to_string()), "UG_TEST_PREF_FLAG_WINS");
+        assert_eq!(val.as_deref(), Some("from-flag"));
+        assert_eq!(src, PrefSource::Flag);
+        std::env::remove_var("UG_TEST_PREF_FLAG_WINS");
+    }
+
+    #[test]
+    fn env_wins_when_no_flag() {
+        std::env::set_var("UG_TEST_PREF_ENV_WINS", "from-env");
+        let (val, src) = resolve_pref(None, "UG_TEST_PREF_ENV_WINS");
+        assert_eq!(val.as_deref(), Some("from-env"));
+        assert_eq!(src, PrefSource::Env("UG_TEST_PREF_ENV_WINS"));
+        std::env::remove_var("UG_TEST_PREF_ENV_WINS");
+    }
+
+    #[test]
+    fn default_when_neither_set() {
+        std::env::remove_var("UG_TEST_PREF_NEITHER_SET");
+        let (val, src) = resolve_pref(None, "UG_TEST_PREF_NEITHER_SET");
+        assert_eq!(val, None);
+        assert_eq!(src, PrefSource::Default);
+    }
+
+    #[test]
+    fn blank_env_value_treated_as_unset() {
+        std::env::set_var("UG_TEST_PREF_BLANK", "   ");
+        let (val, src) = resolve_pref(None, "UG_TEST_PREF_BLANK");
+        assert_eq!(val, None);
+        assert_eq!(src, PrefSource::Default);
+        std::env::remove_var("UG_TEST_PREF_BLANK");
+    }
+}
+
 // ---------- Embedder / runtime helpers ----------
 
 pub(crate) fn embedder_from_args(args: &[String]) -> Embedder {
     let dim = flag_value(args, &["--embedding-dim"]).and_then(|s| s.parse().ok());
-    let base_url = flag_value(args, &["--base-url"]);
-    // Presence of --base-url is the single switch between in-process
-    // (default) and the legacy HTTP backend. --model applies to both:
-    // for local it picks a fastembed catalog entry; for remote it's the
-    // model field sent in the /v1/embeddings request.
+    let (base_url, _) = resolve_pref(flag_value(args, &["--base-url"]), "UG_EMBED_BASE_URL");
+    // Presence of --base-url (or $UG_EMBED_BASE_URL) is the single switch
+    // between in-process (default) and the legacy HTTP backend. --model
+    // applies to both: for local it picks a fastembed catalog entry; for
+    // remote it's the model field sent in the /v1/embeddings request.
     let want_remote = base_url.is_some();
-    let cfg = EmbedderConfig::with_overrides(
-        base_url,
-        flag_value(args, &["--api-key"]),
-        flag_value(args, &["--model"]),
-        dim,
-        None,
-        None,
-    );
+    let (api_key, _) = resolve_pref(flag_value(args, &["--api-key"]), "UG_EMBED_API_KEY");
+    let (model, _) = resolve_pref(flag_value(args, &["--model"]), "UG_EMBED_MODEL");
+    let cfg = EmbedderConfig::with_overrides(base_url, api_key, model, dim, None, None);
     let result = if want_remote {
         Embedder::remote(cfg)
     } else {
@@ -221,24 +296,26 @@ fn announce_embedder(embedder: &Embedder, dim_was_explicit: bool) {
     }
 }
 
-/// Like `embedder_from_args`, but resolves the embedding model from
-/// `--embedding-model` first (falling back to `--model` for backwards
-/// compatibility with the rest of the CLI). Used by `ug chat` where
-/// `--model` is reserved for the chat side and a separate
-/// `--embedding-model` selects the embeddings.
+/// Like `embedder_from_args`, but used by `ug chat` where a chat model
+/// is also in play. `--embedding-model` (or `$UG_EMBED_MODEL`) selects
+/// the embeddings independently of `--chat-model` — `--model` has no
+/// effect here, since with two services in the same command it's
+/// ambiguous which one it would mean.
 ///
 /// For the base-url / api-key, `--embedding-base-url` /
 /// `--embedding-api-key` win when set, otherwise the shared
 /// `--base-url` / `--api-key` apply (this matches the common case where
-/// chat and embedding share a single OpenAI-compatible host).
+/// chat and embedding share a single OpenAI-compatible host), and
+/// `$UG_EMBED_BASE_URL` / `$UG_EMBED_API_KEY` are the last fallback.
 pub(crate) fn embedder_from_chat_args(args: &[String]) -> Embedder {
     let dim = flag_value(args, &["--embedding-dim"]).and_then(|s| s.parse().ok());
-    let base_url = flag_value(args, &["--embedding-base-url"])
+    let base_url_flag = flag_value(args, &["--embedding-base-url"])
         .or_else(|| flag_value(args, &["--base-url"]));
-    let api_key = flag_value(args, &["--embedding-api-key"])
+    let (base_url, _) = resolve_pref(base_url_flag, "UG_EMBED_BASE_URL");
+    let api_key_flag = flag_value(args, &["--embedding-api-key"])
         .or_else(|| flag_value(args, &["--api-key"]));
-    let model = flag_value(args, &["--embedding-model"])
-        .or_else(|| flag_value(args, &["--model"]));
+    let (api_key, _) = resolve_pref(api_key_flag, "UG_EMBED_API_KEY");
+    let (model, _) = resolve_pref(flag_value(args, &["--embedding-model"]), "UG_EMBED_MODEL");
     let want_remote = base_url.is_some();
     let cfg = EmbedderConfig::with_overrides(base_url, api_key, model, dim, None, None);
     let result = if want_remote {
@@ -1143,6 +1220,132 @@ fn run_list(_args: &[String]) {
     println!("\n{C_BOLD}*{C_RESET} matches the current directory. Serve them with {C_CYAN}ug serve{C_RESET}.");
 }
 
+fn doctor_source_label(s: PrefSource) -> String {
+    match s {
+        PrefSource::Flag => "flag".to_string(),
+        PrefSource::Env(name) => format!("env:{}", name),
+        PrefSource::Default => "default".to_string(),
+    }
+}
+
+/// `ug doctor` — print resolved project/db/embedder/chat configuration
+/// and which tier (flag / env var / default) each value came from. Purely
+/// read-only: resolves the same precedence chains the other commands use
+/// but never builds an embedder/chat client or touches the network.
+fn run_doctor(args: &[String]) {
+    println!("{C_BOLD}UltraGraph doctor{C_RESET}");
+    println!();
+
+    println!("{C_BOLD}Project{C_RESET}");
+    let ug_home_from_env = std::env::var("UG_HOME")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .is_some();
+    println!(
+        "  UG_HOME:      {C_CYAN}{}{C_RESET}  [{}]",
+        project::ug_home().display(),
+        if ug_home_from_env { "env:UG_HOME" } else { "default: ~/.ug" }
+    );
+
+    let name_flag = flag_value(args, &["-n", "--name"]);
+    let project_name = name_flag
+        .as_deref()
+        .map(project::sanitize_name)
+        .unwrap_or_else(|| project::derive_project_name("."));
+    println!(
+        "  project name: {C_CYAN}{}{C_RESET}  [{}]",
+        project_name,
+        if name_flag.is_some() { "flag:-n/--name" } else { "derived from cwd basename" }
+    );
+
+    let project_dir = project::project_dir(&project_name);
+    let dir_status = if project_dir.exists() {
+        format!("{C_GREEN}exists{C_RESET}")
+    } else {
+        format!("{C_YELLOW}not generated yet — run `ug gen`{C_RESET}")
+    };
+    println!("  project dir:  {} ({})", project_dir.display(), dir_status);
+
+    let db_flag = flag_value(args, &["-d", "--db"]);
+    let db_path = db_flag.clone().unwrap_or_else(project::default_read_db_path);
+    let db_status = if std::path::Path::new(&db_path).exists() {
+        format!("{C_GREEN}exists{C_RESET}")
+    } else {
+        format!("{C_YELLOW}missing — run `ug ingest`{C_RESET}")
+    };
+    println!(
+        "  db path:      {} ({})  [{}]",
+        db_path,
+        db_status,
+        if db_flag.is_some() { "flag:-d/--db" } else { "default: ~/.ug/<name>/ugdb → legacy ./.ug/ugdb" }
+    );
+    println!();
+
+    println!("{C_BOLD}Embeddings{C_RESET} (ingest / gen / semantic_search / hybrid_search / serve)");
+    let (base_url, base_src) = resolve_pref(flag_value(args, &["--base-url"]), "UG_EMBED_BASE_URL");
+    let (_api_key, api_src) = resolve_pref(flag_value(args, &["--api-key"]), "UG_EMBED_API_KEY");
+    let (model, model_src) = resolve_pref(flag_value(args, &["--model"]), "UG_EMBED_MODEL");
+    let backend = if base_url.is_some() {
+        "remote (HTTP /v1/embeddings)"
+    } else {
+        "local (in-process ONNX)"
+    };
+    println!("  backend:      {C_CYAN}{}{C_RESET}  [{}]", backend, doctor_source_label(base_src));
+    println!(
+        "  model:        {}  [{}]",
+        model.unwrap_or_else(|| DEFAULT_EMBED_MODEL.to_string()),
+        doctor_source_label(model_src)
+    );
+    println!(
+        "  base_url:     {}  [{}]",
+        base_url.unwrap_or_else(|| format!("(n/a — {})", DEFAULT_EMBED_BASE_URL)),
+        doctor_source_label(base_src)
+    );
+    println!("  api_key:      [{}]", doctor_source_label(api_src));
+    println!();
+
+    println!("{C_BOLD}Chat{C_RESET} (ug chat / POST /api/chat)");
+    let chat_base_flag =
+        flag_value(args, &["--chat-base-url"]).or_else(|| flag_value(args, &["--base-url"]));
+    let (chat_base_url, chat_base_src) = resolve_pref(chat_base_flag, "UG_CHAT_BASE_URL");
+    let chat_api_flag =
+        flag_value(args, &["--chat-api-key"]).or_else(|| flag_value(args, &["--api-key"]));
+    let (chat_api_key, chat_api_src) = resolve_pref(chat_api_flag, "UG_CHAT_API_KEY");
+    let (chat_model, chat_model_src) =
+        resolve_pref(flag_value(args, &["--chat-model"]), "UG_CHAT_MODEL");
+    let configured = chat_base_url.is_some() || chat_model.is_some();
+    println!(
+        "  base_url:     {}  [{}]",
+        chat_base_url.unwrap_or_else(|| chat::DEFAULT_CHAT_BASE_URL.to_string()),
+        doctor_source_label(chat_base_src)
+    );
+    println!(
+        "  model:        {}  [{}]",
+        chat_model.unwrap_or_else(|| chat::DEFAULT_CHAT_MODEL.to_string()),
+        doctor_source_label(chat_model_src)
+    );
+    println!(
+        "  api_key:      {}  [{}]",
+        if chat_api_key.is_some() { "(set)" } else { "(default placeholder)" },
+        doctor_source_label(chat_api_src)
+    );
+    println!(
+        "  status:       {}",
+        if configured {
+            format!("{C_GREEN}configured{C_RESET} (base_url/model explicitly set)")
+        } else {
+            format!(
+                "{C_YELLOW}not configured{C_RESET} — using sample defaults; point --chat-base-url (or $UG_CHAT_BASE_URL) at a real endpoint"
+            )
+        }
+    );
+    println!();
+
+    println!("{C_BOLD}Model cache{C_RESET} (ONNX weights for the local embedder)");
+    println!("  {}", ultragraph::storage::embed_local::local_model_cache_dir().display());
+    println!("  resolution: $UG_MODEL_CACHE → $XDG_CACHE_HOME/ug/models → platform cache dir → temp dir");
+}
+
 /// Render epoch seconds as local-naive `YYYY-MM-DD HH:MM:SS` (UTC).
 fn format_epoch(secs: u64) -> String {
     if secs == 0 {
@@ -1490,11 +1693,13 @@ pub(crate) fn chat_client_from_args(args: &[String]) -> chat::ChatClient {
 }
 
 fn chat_config_from_args(args: &[String]) -> chat::ChatConfig {
-    let base_url = flag_value(args, &["--chat-base-url"])
+    let base_url_flag = flag_value(args, &["--chat-base-url"])
         .or_else(|| flag_value(args, &["--base-url"]));
-    let api_key = flag_value(args, &["--chat-api-key"])
+    let (base_url, _) = resolve_pref(base_url_flag, "UG_CHAT_BASE_URL");
+    let api_key_flag = flag_value(args, &["--chat-api-key"])
         .or_else(|| flag_value(args, &["--api-key"]));
-    let model = flag_value(args, &["--chat-model"]);
+    let (api_key, _) = resolve_pref(api_key_flag, "UG_CHAT_API_KEY");
+    let (model, _) = resolve_pref(flag_value(args, &["--chat-model"]), "UG_CHAT_MODEL");
     let temperature = flag_value(args, &["--temperature"]).and_then(|s| s.parse().ok());
     let max_tokens = flag_value(args, &["--max-tokens"]).and_then(|s| s.parse().ok());
     let timeout = flag_value(args, &["--chat-timeout"]).and_then(|s| s.parse().ok());
@@ -2063,28 +2268,19 @@ fn print_logo() {
     println!();
 }
 
-/// Shown for bare `ug` with no subcommand — a short "what do I do first"
-/// nudge instead of the full command wall (that's `ug help`).
-fn print_quickstart() {
-    println!("{C_BOLD}Welcome to UltraGraph{C_RESET} — turn a codebase into a queryable knowledge graph.");
+fn print_help() {
+    println!("{C_BOLD}UltraGraph-KB CLI{C_RESET}");
+    println!();
+    println!("Usage: {C_BOLD}ug <command>{C_RESET} [options]");
     println!();
     println!("{C_BOLD}Quick start:{C_RESET}");
     println!("  {C_CYAN}ug gen{C_RESET}     Index this directory, build the graph, and ingest it (→ ~/.ug/<name>/)");
-    println!("  {C_CYAN}ug serve{C_RESET}   Open the visualization + REST API at http://localhost:8080");
-    println!("  {C_CYAN}ug help{C_RESET}    Full command reference");
-    println!();
+    println!("  {C_CYAN}ug{C_RESET}         Bare `ug` starts the server (visualization + REST API at http://localhost:8080)");
     println!("{C_BOLD}MCP (Claude Desktop / Cursor):{C_RESET}");
     match std::env::current_exe().ok().and_then(|exe| exe.parent().map(|d| d.join("cli.mjs"))) {
         Some(cli) => println!("  node {} mcp install claude", cli.display()),
         None => println!("  node <install-dir>/cli.mjs mcp install claude"),
     }
-    println!();
-}
-
-fn print_help() {
-    println!("{C_BOLD}UltraGraph-KB CLI{C_RESET}");
-    println!();
-    println!("Usage: {C_BOLD}ug <command>{C_RESET} [options]");
     println!();
     println!("{C_BOLD}Commands:{C_RESET}");
     println!("  {C_CYAN}index{C_RESET} [<path>]        Index a directory");
@@ -2191,7 +2387,7 @@ fn print_help() {
     println!("    --base-url <url>      OpenAI-compatible base URL (shared with embeddings)");
     println!("    --api-key <key>       Bearer token (shared with embeddings)");
     println!("    --chat-base-url/--chat-api-key  Override the chat endpoint only");
-    println!("    --embedding-model <name>  Embedding model (falls back to --model)");
+    println!("    --embedding-model <name>  Embedding model (independent of --chat-model; default: bge-small-en-v1.5)");
     println!("    --embedding-base-url/--embedding-api-key  Override the embedding endpoint only");
     println!("    --temperature <f>     Sampling temperature (default: 0.2)");
     println!("    --max-tokens <n>      Max completion tokens (default: 1024)");
@@ -2201,6 +2397,11 @@ fn print_help() {
     println!("    -o, --output <file>   Write answer (or JSON) to a file");
     println!();
     println!("  {C_CYAN}list{C_RESET}                 List generated projects under ~/.ug (or $UG_HOME)");
+    println!();
+    println!("  {C_CYAN}doctor{C_RESET}               Show resolved project/db/embedder/chat config and where each value came from (flag/env/default)");
+    println!("    -n, --name <name>   Project name to resolve (default: cwd basename)");
+    println!("    -d, --db <path>     DB path override to resolve against");
+    println!("    --base-url/--api-key/--model/--chat-base-url/--chat-api-key/--chat-model  Same flags as ingest/chat, shown with their resolution source");
     println!();
     println!("  {C_CYAN}serve{C_RESET}                Serve the visualization + graph.json + read-only API (in-memory, pre-compressed)");
     println!("                        Default: multi-project mode over ~/.ug with a project switcher in the UI");
@@ -2236,6 +2437,7 @@ fn print_help() {
     println!("  {C_MAGENTA}ug gen{C_RESET} -i ./src -n myrepo");
     println!("  {C_MAGENTA}ug gen{C_RESET} -i ./src --no-ingest --serve");
     println!("  {C_CYAN}ug list{C_RESET}");
+    println!("  {C_CYAN}ug doctor{C_RESET}");
     println!("  {C_CYAN}ug ingest{C_RESET} -n myrepo");
     println!("  {C_CYAN}ug semantic_search{C_RESET} \"oauth login flow\"");
     println!("  {C_CYAN}ug hybrid_search{C_RESET} \"oauth login flow\" -k 8");

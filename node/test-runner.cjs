@@ -2,6 +2,7 @@
 const { join } = require('path');
 const { mkdtempSync, writeFileSync, rmSync, mkdirSync, readdirSync } = require('fs');
 const { tmpdir } = require('os');
+const { execFileSync } = require('child_process');
 
 const ug = require('../.ug/ug.node');
 
@@ -641,6 +642,93 @@ export function format(data: object): string { return JSON.stringify(data); }`);
       }
     }
     rmSync(testDir, { recursive: true });
+  }
+
+  console.log('=== Phase 3: CLI doctor / .env tests ===\n');
+
+  // Test 22: doctor picks up UG_EMBED_MODEL from env
+  console.log('Test 22: doctor reports UG_EMBED_MODEL from env');
+  {
+    const ugHomeDir = mkdtempSync(join(tmpdir(), 'kb-doctor-home-'));
+    try {
+      const out = execFileSync('node', [join(__dirname, 'cli.mjs'), 'doctor'], {
+        cwd: __dirname,
+        env: { ...process.env, UG_HOME: ugHomeDir, UG_EMBED_MODEL: 'nomic-embed-text-v1.5' },
+        encoding: 'utf-8',
+      });
+      if (out.includes('nomic-embed-text-v1.5') && out.includes('env:UG_EMBED_MODEL')) {
+        console.log('✓ PASS\n');
+        passed++;
+      } else {
+        console.log('✗ FAIL: doctor output missing expected model/source\n' + out + '\n');
+        failed++;
+      }
+    } catch (e) {
+      console.log('✗ FAIL: ' + e.message + '\n');
+      failed++;
+    }
+    rmSync(ugHomeDir, { recursive: true });
+  }
+
+  // Test 23: doctor resolves db path + repo root via UG_PROJECT
+  console.log('Test 23: doctor resolves db path via UG_PROJECT');
+  {
+    const ugHomeDir = mkdtempSync(join(tmpdir(), 'kb-doctor-home-'));
+    const projectDir = join(ugHomeDir, 'myproj');
+    mkdirSync(projectDir, { recursive: true });
+    writeFileSync(join(projectDir, 'project.json'), JSON.stringify({ name: 'myproj', repoRoot: '/some/repo' }));
+    try {
+      const out = execFileSync('node', [join(__dirname, 'cli.mjs'), 'doctor'], {
+        cwd: __dirname,
+        env: { ...process.env, UG_HOME: ugHomeDir, UG_PROJECT: 'myproj' },
+        encoding: 'utf-8',
+      });
+      const expectedDb = join(projectDir, 'ugdb');
+      if (out.includes(expectedDb) && out.includes('/some/repo') && out.includes('env:UG_PROJECT')) {
+        console.log('✓ PASS\n');
+        passed++;
+      } else {
+        console.log('✗ FAIL: doctor output missing expected db path/repo root\n' + out + '\n');
+        failed++;
+      }
+    } catch (e) {
+      console.log('✗ FAIL: ' + e.message + '\n');
+      failed++;
+    }
+    rmSync(ugHomeDir, { recursive: true });
+  }
+
+  // Test 24: .env loader fills unset vars from a cwd .env file, but a
+  // real env var of the same name still wins.
+  console.log('Test 24: .env loader fills unset vars, real env wins');
+  {
+    const cwdDir = mkdtempSync(join(tmpdir(), 'kb-dotenv-'));
+    const ugHomeDir = mkdtempSync(join(tmpdir(), 'kb-doctor-home-'));
+    writeFileSync(
+      join(cwdDir, '.env'),
+      'UG_EMBED_MODEL=from-dotenv\nUG_EMBED_API_KEY=dotenv-key-value\n',
+    );
+    try {
+      const out = execFileSync('node', [join(__dirname, 'cli.mjs'), 'doctor'], {
+        cwd: cwdDir,
+        env: { ...process.env, UG_HOME: ugHomeDir, UG_EMBED_MODEL: 'from-real-env' },
+        encoding: 'utf-8',
+      });
+      const realEnvWonForModel = out.includes('from-real-env') && !out.includes('from-dotenv');
+      const dotEnvFilledApiKey = out.includes('(set)') && out.includes('env:UG_EMBED_API_KEY');
+      if (realEnvWonForModel && dotEnvFilledApiKey) {
+        console.log('✓ PASS\n');
+        passed++;
+      } else {
+        console.log('✗ FAIL: .env precedence not respected\n' + out + '\n');
+        failed++;
+      }
+    } catch (e) {
+      console.log('✗ FAIL: ' + e.message + '\n');
+      failed++;
+    }
+    rmSync(cwdDir, { recursive: true });
+    rmSync(ugHomeDir, { recursive: true });
   }
 
   console.log('=== Results: ' + passed + '/' + (passed + failed) + ' passed ===');

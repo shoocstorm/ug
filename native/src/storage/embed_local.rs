@@ -106,7 +106,7 @@ impl LocalEmbedder {
 ///    - Linux:   `~/.cache/ug/models`
 ///    - Windows: `%LOCALAPPDATA%\ug\models`
 /// 4. Final fallback: `std::env::temp_dir()/ug/models`.
-fn local_model_cache_dir() -> PathBuf {
+pub fn local_model_cache_dir() -> PathBuf {
     if let Ok(p) = std::env::var("UG_MODEL_CACHE") {
         return PathBuf::from(p);
     }

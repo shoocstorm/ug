@@ -48,6 +48,12 @@ The MCP server uses environment variables for configuration:
 | `UG_MODEL_CACHE` | Override the local ONNX model cache directory | platform cache dir |
 | `UG_DEST` | Knowledge store to read from: `overgraph` (default) or `neo4j` | `overgraph` |
 
+These can also be set in a `.env` file in the directory you launch the
+server from — a real environment variable of the same name always wins
+over `.env`. Run `node node/cli.mjs doctor` any time to print the fully
+resolved db path, repo root, embedder, and destination config, along
+with which env var (if any) drove each value.
+
 ## Setting Up with AI Agents
 
 ### The easy way
@@ -348,6 +354,7 @@ npx @modelcontextprotocol/inspector node node/cli.mjs mcp
 **"Database not found" errors**
 - Ensure `UG_DB_PATH` (or `UG_PROJECT`) points to a valid OverGraph directory
 - Run `npm run gen` (or `npm run ingest`) to create the database
+- Run `node node/cli.mjs doctor` to see exactly which db path got resolved and why
 
 **"Embedding endpoint unreachable"**
 - Only relevant if you opted into the remote backend via `UG_EMBED_BASE_URL`

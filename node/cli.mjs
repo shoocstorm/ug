@@ -19,6 +19,31 @@ import {
 
 chalk.level = 2;
 
+// Minimal `.env` loader (mirrors native's `dotenvy::dotenv()`): reads
+// KEY=VALUE lines from a `.env` in cwd, skipping blank lines/comments.
+// Real env vars always win — only fills in names not already set.
+function loadDotEnv() {
+  const path = join(process.cwd(), '.env');
+  if (!existsSync(path)) return;
+  const lines = readFileSync(path, 'utf-8').split('\n');
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eq = trimmed.indexOf('=');
+    if (eq === -1) continue;
+    const key = trimmed.slice(0, eq).trim();
+    let value = trimmed.slice(eq + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    if (key && !(key in process.env)) process.env[key] = value;
+  }
+}
+loadDotEnv();
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Named nodeRequire (not `require`) so bundlers don't mistake this dynamic,
 // computed-path load for a statically resolvable module and try to inline it.
@@ -887,7 +912,10 @@ function quickstartBanner() {
     chalk.bold('Quick start:'),
     '  ' + chalk.cyan('node cli.mjs gen') + '   Index this directory, build the graph, and ingest it (→ ~/.ug/<name>/)',
     '  ' + chalk.cyan('node cli.mjs mcp install claude') + '   Wire this up as an MCP server for Claude Desktop',
+    '  ' + chalk.cyan('node cli.mjs doctor') + '  Show resolved project/db/embedder config and where it came from',
     '  ' + chalk.cyan('node cli.mjs help') + '  Full command reference',
+    '',
+    chalk.gray('(the `ug` standalone binary opens the server directly when run with no arguments)'),
   ].join('\n');
 }
 
@@ -1150,6 +1178,48 @@ const commands = {
         console.log(`${marker} ${chalk.cyan(String(meta.name).padEnd(24))}${String(meta.nodes).padStart(8)}${String(meta.edges).padStart(9)}  ${updated.padEnd(20)}${meta.repoRoot || ''}`);
       }
       console.log('\n' + chalk.bold('*') + ' matches the current directory.');
+      return;
+    }
+  },
+  doctor: {
+    usage: '',
+    desc: 'Show resolved MCP-server config (db path, repo root, embedder, destination) and which env var (if any) each value came from',
+    run: () => {
+      const line = (label, value, source) => `  ${label.padEnd(14)}${chalk.cyan(String(value))}  ${chalk.gray(`[${source}]`)}`;
+
+      console.log(chalk.bold('UltraGraph doctor (MCP server resolution)'));
+      console.log();
+
+      console.log(chalk.bold('Project'));
+      console.log(line('UG_HOME:', ugHome(), process.env.UG_HOME ? 'env:UG_HOME' : 'default: ~/.ug'));
+
+      const { dbPath, repoRoot } = resolveDbAndRoot();
+      const dbSource = process.env.UG_DB_PATH
+        ? 'env:UG_DB_PATH'
+        : process.env.UG_PROJECT
+        ? 'env:UG_PROJECT'
+        : existsSync(dbPath)
+        ? 'derived from cwd basename'
+        : 'derived from cwd basename (no db found yet)';
+      console.log(line('db path:', dbPath, dbSource));
+      console.log(`  ${'exists:'.padEnd(14)}${existsSync(dbPath) ? chalk.green('yes') : chalk.yellow('no — run `ug ingest`')}`);
+      console.log(line('repo root:', repoRoot, process.env.UG_REPO_ROOT ? 'env:UG_REPO_ROOT' : 'project.json / cwd'));
+      console.log();
+
+      console.log(chalk.bold('Embeddings') + chalk.gray(' (used by search_kb / traverse_kb / ping_embedder)'));
+      console.log(line('base_url:', process.env.UG_EMBED_BASE_URL || '(n/a — local in-process ONNX)', process.env.UG_EMBED_BASE_URL ? 'env:UG_EMBED_BASE_URL' : 'default'));
+      console.log(line('api_key:', process.env.UG_EMBED_API_KEY ? '(set)' : '(default placeholder)', process.env.UG_EMBED_API_KEY ? 'env:UG_EMBED_API_KEY' : 'default'));
+      console.log(line('model:', process.env.UG_EMBED_MODEL || '(default: bge-small-en-v1.5)', process.env.UG_EMBED_MODEL ? 'env:UG_EMBED_MODEL' : 'default'));
+      console.log();
+
+      console.log(chalk.bold('Destination'));
+      const dest = (process.env.UG_DEST || 'overgraph').toLowerCase();
+      console.log(line('backend:', dest, process.env.UG_DEST ? 'env:UG_DEST' : 'default: overgraph'));
+      if (dest === 'neo4j' || dest === 'neo') {
+        console.log(line('neo4j uri:', process.env.UG_NEO4J_URI || '(unset — required)', process.env.UG_NEO4J_URI ? 'env:UG_NEO4J_URI' : 'MISSING'));
+        console.log(line('neo4j user:', process.env.UG_NEO4J_USER || 'neo4j', process.env.UG_NEO4J_USER ? 'env:UG_NEO4J_USER' : 'default'));
+        console.log(line('neo4j password:', process.env.UG_NEO4J_PASSWORD ? '(set)' : '(unset — required)', process.env.UG_NEO4J_PASSWORD ? 'env:UG_NEO4J_PASSWORD' : 'MISSING'));
+      }
       return;
     }
   },

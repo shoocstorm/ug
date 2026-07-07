@@ -2,6 +2,11 @@
 
 A high-performance, local-first knowledge base engine that transforms codebases and documents into an interactive, visualized, and queryable **Semantic Knowledge Graph**. Built with Rust and Node.js for maximum speed and flexibility.
 
+## Install
+```bash
+curl -fsSL https://ultra-graph.web.app/install.sh | sh
+```
+
 ## ⚡ Overview
 
 - **UltraGraph Introduction**: [https://ultra-graph.web.app](https://ultra-graph.web.app)
@@ -57,35 +62,40 @@ UltraGraph implements a complete four-phase pipeline for building and querying a
 
 ## 🧭 Ways to Use UltraGraph
 
-Four ways to use it — pick what fits:
+**The standalone binary is the default path.** No Node.js required to run it:
+
+```bash
+ug gen        # index → graph → ingest this repo (→ ~/.ug/<name>/)
+ug            # bare `ug`, no arguments, opens the server directly:
+              # visualization + REST API at http://localhost:8080
+```
+
+That's it for the common case — `ug help` lists every other command
+(`chat`, `list`, `doctor`, individual pipeline stages, etc).
+
+<details>
+<summary><b>Advanced / other integration modes</b> — Node CLI, MCP server, embedding the native addon</summary>
 
 | # | Way | How | Notes |
 | :--- | :--- | :--- | :--- |
-| 1 | **Standalone binary** | `ug gen`, `ug serve` | No Node.js needed. Only place with `serve` (web UI) and `chat`. |
-| 2 | **Node CLI** | `node .ug/cli.mjs gen`, `node .ug/cli.mjs list` | Same core pipeline via the JS wrapper. No `serve`/`chat` — those are Rust-binary-only. |
-| 3 | **MCP server** | `node .ug/cli.mjs mcp install claude` | Node-only — there's no separate Rust MCP mode. See [MCP Server](#-mcp-server). |
-| 4 | **Embed in your own Node/TS app** | `require('.ug/ug.node')` | Call the native functions directly, no CLI/subprocess. See [Native API Usage](#-native-api-usage). |
+| 1 | **Node CLI** | `node .ug/cli.mjs gen`, `node .ug/cli.mjs list` | Same core pipeline via the JS wrapper. No `serve`/`chat` — those are Rust-binary-only. |
+| 2 | **MCP server** | `node .ug/cli.mjs mcp install claude` | Node-only — there's no separate Rust MCP mode. See [MCP Server](#-mcp-server). |
+| 3 | **Embed in your own Node/TS app** | `require('.ug/ug.node')` | Call the native functions directly, no CLI/subprocess. See [Native API Usage](#-native-api-usage). |
 
-### 1. Standalone binary
-```bash
-ug gen                          # index → graph → ingest a repo
-ug serve                        # web UI + REST API at http://localhost:8080
-```
-
-### 2. Node CLI
+### Node CLI
 ```bash
 node .ug/cli.mjs gen
 node .ug/cli.mjs list
 ```
 
-### 3. MCP server
+### MCP server
 ```bash
 node .ug/cli.mjs mcp install claude   # or: cursor, opencode
 # Writes/merges the ultragraph entry into the target's own MCP config
 # for you — no hand-edited absolute-path JSON needed.
 ```
 
-### 4. Embed the native addon
+### Embed the native addon
 ```js
 const ug = require('/path/to/ug/.ug/ug.node'); // types: .ug/index.d.ts
 
@@ -98,6 +108,8 @@ const context = await ug.dbHybridSearch('./ugdb', JSON.stringify({
 ```
 Prefer not to link the addon? Spawn the `ug` binary instead (`child_process`)
 and parse its JSON output, or run `ug serve` and call its REST API.
+
+</details>
 
 ---
 
@@ -137,13 +149,16 @@ ug gen -i ~/code/other-repo -n other --no-ingest
 ### 3. Visualize
 Open the interactive visualization in your browser:
 ```bash
-ug serve       # prebuilt install
+ug             # bare `ug` — same as `ug serve` (prebuilt install)
+ug serve       # equivalent, explicit form
 npm start      # built from source
 # Visit http://localhost:8080
 ```
-Without `-i`, `ug serve` runs in **multi-project mode**: it discovers every
-project under `~/.ug` and the UI header gets a project switcher, so you can
-flip between repos without restarting.
+Without `-i`, `ug serve` (and bare `ug`) runs in **multi-project mode**: it
+discovers every project under `~/.ug` and the UI header gets a project
+switcher, so you can flip between repos without restarting. With zero
+projects generated yet, it shows the KB Manager wizard instead of erroring —
+so `ug` alone is a safe first thing to run in any repo.
 
 ### Data layout
 
@@ -181,6 +196,31 @@ UltraGraph provides a powerful CLI via `node node/cli.mjs` (or the native `ug` b
 | `traverse`| `npm run traverse -- <db> <id>` | K-hop traversal over stored edges |
 | `chat`    | `ug chat "<question>" -d <db> --chat-model <model> ...` | RAG-grounded chat (one-shot or REPL) against an LLM |
 | `mcp`     | `npm run mcp` / `node node/cli.mjs mcp install claude` | Start the MCP server, or wire it into an MCP client's config |
+| `doctor`  | `ug doctor` / `node node/cli.mjs doctor` | Print resolved project/db/embedder/chat config and whether each value came from a flag, an env var, or a default |
+
+### `ug doctor`
+
+Config resolution has several fallback tiers (flag → env var → default,
+plus project/db path lookup through `~/.ug`). `ug doctor` (or
+`node node/cli.mjs doctor` for the MCP-server side) prints exactly what
+got resolved and why, instead of you having to trace it through env vars:
+
+```
+$ ug doctor
+Project
+  UG_HOME:      /Users/you/.ug  [default: ~/.ug]
+  project name: my-repo  [derived from cwd basename]
+  project dir:  /Users/you/.ug/my-repo (exists)
+  db path:      /Users/you/.ug/my-repo/ugdb (exists)  [default: ...]
+
+Embeddings (ingest / gen / semantic_search / hybrid_search / serve)
+  backend:      local (in-process ONNX)  [default]
+  model:        BAAI/bge-small-en-v1.5  [default]
+  ...
+
+Chat (ug chat / POST /api/chat)
+  status:       not configured — using sample defaults; point --chat-base-url ...
+```
 
 ### Advanced GraphRAG Options
 When using `rag` or `db-rag`, you can tune the retrieval strategy:
@@ -191,9 +231,43 @@ When using `rag` or `db-rag`, you can tune the retrieval strategy:
 
 ---
 
+## ⚙️ Configuration file
+
+Repeating `--base-url`/`--api-key`/`--model`/`--chat-model` on every
+invocation gets old fast. Instead of a new config format, UltraGraph
+loads a `.env` file from the current directory (both the `ug` binary and
+`node cli.mjs` do this) — put your defaults there once:
+
+```bash
+# .env in your repo root
+UG_EMBED_BASE_URL=https://api.openai.com/v1
+UG_EMBED_API_KEY=sk-...
+UG_EMBED_MODEL=text-embedding-3-small
+UG_CHAT_MODEL=gpt-4o-mini
+```
+
+Precedence is always **CLI flag > env var > `.env` file > built-in
+default** — a real env var of the same name still wins over `.env`, so
+`.env` is purely a convenience, never a surprise override.
+
+| Env var | Overrides |
+| :--- | :--- |
+| `UG_HOME` | Root of the `~/.ug` project data directory |
+| `UG_DB_PATH` | OverGraph directory (MCP server; overrides project lookup) |
+| `UG_PROJECT` | Project name under `~/.ug` (MCP server) |
+| `UG_REPO_ROOT` | Repo root used to resolve snippet file paths |
+| `UG_EMBED_BASE_URL` / `UG_EMBED_API_KEY` / `UG_EMBED_MODEL` | `--base-url` / `--api-key` / `--model` (embeddings) |
+| `UG_CHAT_BASE_URL` / `UG_CHAT_API_KEY` / `UG_CHAT_MODEL` | `--chat-base-url` / `--chat-api-key` / `--chat-model` (`ug chat`) |
+| `UG_MODEL_CACHE` | Local ONNX model cache directory |
+
+Run `ug doctor` (or `node node/cli.mjs doctor`) any time to see which
+tier actually won for each setting — see [`ug doctor`](#ug-doctor) above.
+
+---
+
 ## 🧠 Embeddings
 
-UltraGraph picks a backend based on a single flag: **omit `--base-url` for the local in-process embedder (default), or pass `--base-url` to use a remote OpenAI-compatible endpoint.** The same flags apply to `ingest`, `gen`, `rag`, and `semantic_search`.
+UltraGraph picks a backend based on a single flag: **omit `--base-url` for the local in-process embedder (default), or pass `--base-url` to use a remote OpenAI-compatible endpoint.** The same flags apply to `ingest`, `gen`, `rag`, and `semantic_search`. `--base-url`/`--api-key`/`--model` fall back to `$UG_EMBED_BASE_URL`/`$UG_EMBED_API_KEY`/`$UG_EMBED_MODEL` when omitted.
 
 ### Local backend (default) — in-process ONNX via `fastembed-rs`
 
@@ -292,12 +366,12 @@ ug chat \
 | Flag | Description |
 | :--- | :--- |
 | `-d, --db <path>`            | OverGraph directory (default: `~/.ug/<cwd-basename>/ugdb`) |
-| `--chat-model <name>`        | Chat completion model (required for remote chat) |
+| `--chat-model <name>`        | Chat completion model (required for remote chat; falls back to `$UG_CHAT_MODEL`) |
 | `--base-url <url>`           | OpenAI-compatible base URL (shared with embeddings) |
 | `--api-key <key>`            | Bearer token (shared with embeddings) |
-| `--chat-base-url` / `--chat-api-key` | Override the chat endpoint only |
-| `--embedding-model <name>`   | Embedding model (falls back to `--model`) |
-| `--embedding-base-url` / `--embedding-api-key` | Override the embedding endpoint only |
+| `--chat-base-url` / `--chat-api-key` | Override the chat endpoint only (falls back to `$UG_CHAT_BASE_URL` / `$UG_CHAT_API_KEY`) |
+| `--embedding-model <name>`   | Embedding model, independent of `--chat-model` (default: `bge-small-en-v1.5`; falls back to `$UG_EMBED_MODEL`) |
+| `--embedding-base-url` / `--embedding-api-key` | Override the embedding endpoint only (falls back to `$UG_EMBED_BASE_URL` / `$UG_EMBED_API_KEY`) |
 | `-k, --limit <n>`            | Retrieved context items (default: 8) |
 | `--hops <n>`                 | Graph expansion hops (default: 2) |
 | `--strategy ppr\|mmr`        | Reranker (default: `ppr`) |
@@ -366,6 +440,10 @@ Set these environment variables before starting the server:
 - `UG_MODEL_CACHE`: Override the local ONNX model cache directory.
 
 When no env vars are set, the server uses `~/.ug/<cwd-basename>/ugdb` if it exists.
+
+Before wiring up a client, run `node node/cli.mjs doctor` to see exactly
+which db path, repo root, and embedder settings the MCP server will
+resolve to (and which env var, if any, is driving each one).
 
 ```json
 {
