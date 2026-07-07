@@ -196,9 +196,10 @@ UltraGraph provides a powerful CLI via `node node/cli.mjs` (or the native `ug` b
 | `rag` | `npm run rag -- <db> <query>` | Perform a GraphRAG retrieval |
 | `traverse`| `npm run traverse -- <db> <id>` | K-hop traversal over stored edges |
 | `chat`    | `ug chat "<question>" -d <db> --chat-model <model> ...` | RAG-grounded chat (one-shot or REPL) against an LLM |
-| `mcp`     | `npm run mcp` / `node node/cli.mjs mcp install claude` | Start the MCP server, or wire it into an MCP client's config |
+| `mcp`     | `npm run mcp` / `node node/cli.mjs mcp install claude` | Start the MCP server, or wire it into (`install`) / remove it from (`uninstall`) an MCP client's config |
 | `doctor`  | `ug doctor` / `node node/cli.mjs doctor` | Print resolved project/db/embedder/chat config and whether each value came from a flag, an env var, or a default |
 | `rm`      | `ug rm <project>` / `node node/cli.mjs rm <project>` | Delete a project's data directory under `~/.ug`; prompts for confirmation unless `-f/--force`/`-y/--yes` |
+| `uninstall` | `ug uninstall` | Delete ALL indexed projects under `~/.ug`, then remove the standalone install itself (prebuilt installs only); prompts for confirmation unless `-f/--force`/`-y/--yes` |
 
 ### `ug doctor`
 

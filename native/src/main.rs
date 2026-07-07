@@ -38,10 +38,10 @@ fn main() {
     // Suppressed when spawned as a subprocess by `ug serve`'s KB Manager
     // wizard (`POST /api/generate`) — the banner would otherwise dominate
     // the wizard's streamed log viewer. Also suppressed for bare `ug mcp`
-    // (no `install` subcommand): that mode is a stdio JSON-RPC server, and
-    // the logo on stdout would corrupt the protocol stream.
+    // (no `install`/`uninstall` subcommand): that mode is a stdio JSON-RPC
+    // server, and the logo on stdout would corrupt the protocol stream.
     let is_mcp_server_mode = args.get(1).map(String::as_str) == Some("mcp")
-        && args.get(2).map(String::as_str) != Some("install");
+        && !matches!(args.get(2).map(String::as_str), Some("install") | Some("uninstall"));
     if std::env::var("UG_QUIET_LOGO").is_err() && !is_mcp_server_mode {
         print_logo();
     }
@@ -84,6 +84,7 @@ fn main() {
         "chat" => run_chat(cmd_args),
         "list" => run_list(cmd_args),
         "rm" => run_rm(cmd_args),
+        "uninstall" => run_uninstall(cmd_args),
         "doctor" => run_doctor(cmd_args),
         "serve" => serve::run_serve(cmd_args),
         "mcp" => run_mcp(cmd_args),
@@ -1295,7 +1296,124 @@ fn run_rm(args: &[String]) {
     }
 }
 
-/// `ug mcp [install <target>]` — there's no separate Rust MCP
+/// `ug uninstall` — deletes every indexed project under `ug_home()` (all
+/// of `~/.ug` / `$UG_HOME`) and then removes the standalone install
+/// itself: the `~/.local/share/ultragraph` dir the prebuilt installer
+/// (see README's Install section, `curl ... install.sh`) unpacks into,
+/// and the `~/.local/bin/ug` symlink it points at. The symlink is only
+/// touched when it actually resolves into that install dir — never a
+/// same-named file the user happens to have on their own PATH. A
+/// from-source checkout has neither of those, so that half is silently
+/// skipped and only project data is removed. Prompts for confirmation
+/// unless `-f/--force` (or `-y/--yes`); empty/EOF input (e.g.
+/// non-interactive stdin) reads as "no", same fail-closed default as `ug
+/// rm`.
+fn run_uninstall(args: &[String]) {
+    if has_flag(args, "-h") || has_flag(args, "--help") {
+        println!("Usage: {C_BOLD}ug uninstall{C_RESET} [-f, --force | -y, --yes]");
+        println!(
+            "  Delete ALL indexed projects under {} and uninstall ug itself",
+            project::ug_home().display()
+        );
+        println!("  (the standalone install dir + `ug` symlink, if this is a prebuilt install).");
+        return;
+    }
+
+    let home = dirs::home_dir();
+    let install_dir = home
+        .as_ref()
+        .map(|h| h.join(".local").join("share").join("ultragraph"));
+    let bin_symlink = home.as_ref().map(|h| h.join(".local").join("bin").join("ug"));
+
+    let ug_home_dir = project::ug_home();
+    let projects = project::list_projects();
+    let install_dir_exists = install_dir.as_ref().is_some_and(|d| d.exists());
+    let bin_symlink_is_ours = bin_symlink.as_ref().is_some_and(|p| {
+        p.symlink_metadata()
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false)
+            && std::fs::read_link(p)
+                .ok()
+                .and_then(|target| install_dir.as_ref().map(|d| target.starts_with(d)))
+                .unwrap_or(false)
+    });
+
+    println!("{C_BOLD}This will:{C_RESET}");
+    if ug_home_dir.exists() {
+        println!(
+            "  - Delete {} indexed project(s) under {}",
+            projects.len(),
+            ug_home_dir.display()
+        );
+    }
+    if install_dir_exists {
+        println!(
+            "  - Remove the installed app at {}",
+            install_dir.as_ref().unwrap().display()
+        );
+    }
+    if bin_symlink_is_ours {
+        println!(
+            "  - Remove the `ug` symlink at {}",
+            bin_symlink.as_ref().unwrap().display()
+        );
+    }
+    if !install_dir_exists && !bin_symlink_is_ours {
+        println!(
+            "  {C_YELLOW}(no standalone install found — looks like a from-source checkout, so only project data will be removed){C_RESET}"
+        );
+    }
+    println!();
+    println!("{C_BOLD}{C_YELLOW}This cannot be undone.{C_RESET}");
+
+    let force = has_flag(args, "-f")
+        || has_flag(args, "--force")
+        || has_flag(args, "-y")
+        || has_flag(args, "--yes");
+    if !force {
+        use std::io::Write;
+        print!("Type 'yes' to confirm: ");
+        let _ = std::io::stdout().flush();
+        let mut input = String::new();
+        let _ = std::io::stdin().read_line(&mut input);
+        let answer = input.trim().to_ascii_lowercase();
+        if answer != "y" && answer != "yes" {
+            println!("Aborted.");
+            return;
+        }
+    }
+
+    if ug_home_dir.exists() {
+        match std::fs::remove_dir_all(&ug_home_dir) {
+            Ok(()) => println!(
+                "{C_GREEN}✓{C_RESET} Removed project data at {}",
+                ug_home_dir.display()
+            ),
+            Err(e) => eprintln!("Failed to remove {}: {}", ug_home_dir.display(), e),
+        }
+    }
+
+    if bin_symlink_is_ours {
+        let p = bin_symlink.unwrap();
+        match std::fs::remove_file(&p) {
+            Ok(()) => println!("{C_GREEN}✓{C_RESET} Removed symlink {}", p.display()),
+            Err(e) => eprintln!("Failed to remove {}: {}", p.display(), e),
+        }
+    }
+
+    if install_dir_exists {
+        let d = install_dir.unwrap();
+        match std::fs::remove_dir_all(&d) {
+            Ok(()) => println!("{C_GREEN}✓{C_RESET} Removed {}", d.display()),
+            Err(e) => eprintln!("Failed to remove {}: {}", d.display(), e),
+        }
+    }
+
+    println!();
+    println!("{C_BOLD}ug has been uninstalled.{C_RESET} Thanks for trying UltraGraph.");
+}
+
+/// `ug mcp [install|uninstall <target>]` — there's no separate Rust MCP
 /// implementation, so this forwards straight to the bundled `cli.mjs`
 /// (sitting next to this binary in `.ug/` — see scripts/copy-wrappers.mjs).
 /// Bare `ug mcp` becomes a long-running stdio JSON-RPC server: stdio is
@@ -2514,6 +2632,9 @@ fn print_help() {
     println!();
     println!("  {C_CYAN}rm{C_RESET} [<project>]       Delete a project's data directory under ~/.ug (or $UG_HOME)");
     println!("    -n, --name <name>   Project name (default: cwd basename)");
+    println!("    -f, --force, -y, --yes  Skip the confirmation prompt");
+    println!();
+    println!("  {C_CYAN}uninstall{C_RESET}            Delete ALL indexed projects and uninstall ug itself (prebuilt installs only)");
     println!("    -f, --force, -y, --yes  Skip the confirmation prompt");
     println!();
     println!("  {C_CYAN}doctor{C_RESET}               Show resolved project/db/embedder/chat config and where each value came from (flag/env/default)");

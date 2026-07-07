@@ -742,6 +742,14 @@ function mcpServersApply(config, server) {
   config.mcpServers.ultragraph = server;
 }
 
+// Returns whether an `ultragraph` entry existed (and deletes it if so), so
+// callers can tell "removed" from "already wasn't there".
+function mcpServersRemove(config) {
+  const existed = !!config.mcpServers && Object.prototype.hasOwnProperty.call(config.mcpServers, 'ultragraph');
+  if (existed) delete config.mcpServers.ultragraph;
+  return existed;
+}
+
 // Each target: where its config lives, and how to graft a { command, args,
 // env } server entry into that target's own JSON shape (schemas differ).
 // `format: 'toml'` targets skip `apply`/JSON entirely — see `upsertTomlServer`.
@@ -750,21 +758,25 @@ const MCP_INSTALL_TARGETS = {
     label: 'Claude Desktop',
     configPath: claudeDesktopConfigPath,
     apply: mcpServersApply,
+    remove: mcpServersRemove,
   },
   'claude-code': {
     label: 'Claude Code',
     configPath: () => join(process.cwd(), '.mcp.json'),
     apply: mcpServersApply,
+    remove: mcpServersRemove,
   },
   cursor: {
     label: 'Cursor',
     configPath: () => join(process.cwd(), '.cursor', 'mcp.json'),
     apply: mcpServersApply,
+    remove: mcpServersRemove,
   },
   windsurf: {
     label: 'Windsurf',
     configPath: () => join(homedir(), '.codeium', 'windsurf', 'mcp_config.json'),
     apply: mcpServersApply,
+    remove: mcpServersRemove,
   },
   vscode: {
     label: 'VS Code',
@@ -773,11 +785,17 @@ const MCP_INSTALL_TARGETS = {
       config.servers = config.servers || {};
       config.servers.ultragraph = { type: 'stdio', ...server };
     },
+    remove: (config) => {
+      const existed = !!config.servers && Object.prototype.hasOwnProperty.call(config.servers, 'ultragraph');
+      if (existed) delete config.servers.ultragraph;
+      return existed;
+    },
   },
   gemini: {
     label: 'Gemini CLI',
     configPath: () => join(homedir(), '.gemini', 'settings.json'),
     apply: mcpServersApply,
+    remove: mcpServersRemove,
   },
   codex: {
     label: 'Codex CLI',
@@ -798,26 +816,21 @@ const MCP_INSTALL_TARGETS = {
       config.mcp.servers = config.mcp.servers || {};
       config.mcp.servers.ultragraph = { type: 'local', ...server, enabled: true };
     },
+    remove: (config) => {
+      const existed = !!config.mcp?.servers && Object.prototype.hasOwnProperty.call(config.mcp.servers, 'ultragraph');
+      if (existed) delete config.mcp.servers.ultragraph;
+      return existed;
+    },
   },
 };
 
 // Codex's config is TOML, not JSON — rather than pull in a full TOML
-// parser/writer for one write, surgically replace just the
+// parser/writer for one write, surgically strip just the
 // `[mcp_servers.<name>]` table (and its nested `.env` subtable) by text
 // range, leaving the rest of the file untouched.
-function upsertTomlServer(content, name, server) {
+function removeTomlServerBlock(content, name) {
   const header = `[mcp_servers.${name}]`;
   const envHeader = `[mcp_servers.${name}.env]`;
-  const hasEnv = server.env && Object.keys(server.env).length > 0;
-  const block = [
-    header,
-    `command = ${JSON.stringify(server.command)}`,
-    `args = ${JSON.stringify(server.args)}`,
-    ...(hasEnv
-      ? ['', envHeader, ...Object.entries(server.env).map(([k, v]) => `${k} = ${JSON.stringify(v)}`)]
-      : []),
-  ].join('\n');
-
   const out = [];
   let skipping = false;
   for (const line of content.split('\n')) {
@@ -834,7 +847,23 @@ function upsertTomlServer(content, name, server) {
     }
     out.push(line);
   }
-  const remainder = out.join('\n').replace(/\n{3,}/g, '\n\n').replace(/\s+$/, '');
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').replace(/\s+$/, '');
+}
+
+function upsertTomlServer(content, name, server) {
+  const header = `[mcp_servers.${name}]`;
+  const envHeader = `[mcp_servers.${name}.env]`;
+  const hasEnv = server.env && Object.keys(server.env).length > 0;
+  const block = [
+    header,
+    `command = ${JSON.stringify(server.command)}`,
+    `args = ${JSON.stringify(server.args)}`,
+    ...(hasEnv
+      ? ['', envHeader, ...Object.entries(server.env).map(([k, v]) => `${k} = ${JSON.stringify(v)}`)]
+      : []),
+  ].join('\n');
+
+  const remainder = removeTomlServerBlock(content, name);
   return (remainder ? remainder + '\n\n' : '') + block + '\n';
 }
 
@@ -892,6 +921,49 @@ function installMcpConfig(target) {
   mkdirSync(dirname(configPath), { recursive: true });
   writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
   return configPath;
+}
+
+// Reverses `installMcpConfig`: strips the `ultragraph` entry from a target's
+// config, leaving everything else (other servers, comments, formatting)
+// untouched. Returns `removed: false` (no write) when there was nothing to
+// remove — a missing config file or a config that never had our entry.
+function uninstallMcpConfig(target) {
+  const targetDef = MCP_INSTALL_TARGETS[target];
+  if (!targetDef) {
+    throw new Error(`Unknown MCP target '${target}' (expected: ${Object.keys(MCP_INSTALL_TARGETS).join(', ')})`);
+  }
+  const configPath = targetDef.configPath();
+  if (!existsSync(configPath)) {
+    return { configPath, removed: false };
+  }
+
+  if (targetDef.format === 'toml') {
+    const existing = readFileSync(configPath, 'utf-8');
+    const remainder = removeTomlServerBlock(existing, 'ultragraph');
+    const removed = remainder !== existing.replace(/\s+$/, '');
+    if (removed) writeFileSync(configPath, remainder ? remainder + '\n' : '');
+    return { configPath, removed };
+  }
+
+  if (targetDef.format === 'yaml') {
+    const doc = parseDocument(readFileSync(configPath, 'utf-8'));
+    const removed = doc.hasIn(['mcp_servers', 'ultragraph']);
+    if (removed) {
+      doc.deleteIn(['mcp_servers', 'ultragraph']);
+      writeFileSync(configPath, doc.toString());
+    }
+    return { configPath, removed };
+  }
+
+  let config;
+  try {
+    config = JSON.parse(readFileSync(configPath, 'utf-8'));
+  } catch (e) {
+    throw new Error(`${configPath} exists but isn't valid JSON — fix or remove it, then retry (${e.message})`);
+  }
+  const removed = targetDef.remove(config);
+  if (removed) writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+  return { configPath, removed };
 }
 
 async function runMcpServer() {
@@ -1373,17 +1445,28 @@ const commands = {
     }
   },
   mcp: {
-    usage: `[install <${Object.keys(MCP_INSTALL_TARGETS).join('|')}>]`,
-    desc: 'Start the MCP server (no args; see env vars in the source header), or write this project into an MCP client config with `install <target>`.',
+    usage: `[install|uninstall <${Object.keys(MCP_INSTALL_TARGETS).join('|')}>]`,
+    desc: 'Start the MCP server (no args; see env vars in the source header), write this project into an MCP client config with `install <target>`, or remove it with `uninstall <target>`.',
     run: async (args) => {
-      if (args[0] === 'install') {
+      if (args[0] === 'install' || args[0] === 'uninstall') {
+        const action = args[0];
         const target = args[1];
         if (!target) {
-          throw new Error(`Usage: mcp install <${Object.keys(MCP_INSTALL_TARGETS).join('|')}>`);
+          throw new Error(`Usage: mcp ${action} <${Object.keys(MCP_INSTALL_TARGETS).join('|')}>`);
         }
-        const configPath = installMcpConfig(target);
-        console.log(chalk.green('✓') + ' ' + chalk.white(`Wrote MCP config to ${configPath}`));
-        console.log(chalk.cyan(`Restart ${MCP_INSTALL_TARGETS[target].label} to pick it up.`));
+        if (action === 'install') {
+          const configPath = installMcpConfig(target);
+          console.log(chalk.green('✓') + ' ' + chalk.white(`Wrote MCP config to ${configPath}`));
+          console.log(chalk.cyan(`Restart ${MCP_INSTALL_TARGETS[target].label} to pick it up.`));
+        } else {
+          const { configPath, removed } = uninstallMcpConfig(target);
+          if (removed) {
+            console.log(chalk.green('✓') + ' ' + chalk.white(`Removed ultragraph from ${configPath}`));
+            console.log(chalk.cyan(`Restart ${MCP_INSTALL_TARGETS[target].label} to pick it up.`));
+          } else {
+            console.log(chalk.yellow('•') + ' ' + chalk.white(`No ultragraph entry found in ${configPath} — nothing to do.`));
+          }
+        }
         return;
       }
       await runMcpServer();
@@ -1429,9 +1512,10 @@ if (commands[cmd]) {
         console.log(JSON.stringify(res, null, 2));
       }
       // Bare `mcp` keeps running (stdio transport) and must not print to
-      // stdout, which is reserved for MCP's own JSON-RPC frames. `mcp install
-      // ...` is a normal one-shot command and should get the footer.
-      const isMcpServer = cmd === 'mcp' && args[0] !== 'install';
+      // stdout, which is reserved for MCP's own JSON-RPC frames. `mcp
+      // install`/`mcp uninstall` are normal one-shot commands and should
+      // get the footer.
+      const isMcpServer = cmd === 'mcp' && args[0] !== 'install' && args[0] !== 'uninstall';
       if (!isMcpServer && (cmd !== 'gen' || !args.includes('--no-ingest'))) {
         console.log(chalk.gray(`\nDone in ${elapsed}s`));
       }

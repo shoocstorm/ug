@@ -75,6 +75,12 @@ target's config file with the correct absolute path to this `cli.mjs` and
 `UG_PROJECT` set to the current directory's project name. Restart the app
 afterward. For any other MCP client, or to configure things manually, see below.
 
+To remove it again, swap `install` for `uninstall` (e.g. `node .ug/cli.mjs mcp
+uninstall cursor`) — this strips just the `ultragraph` entry and leaves any
+other servers, comments, and formatting in the target's config untouched. If
+there's nothing to remove (no config file, or no `ultragraph` entry in it),
+it's a no-op.
+
 ### Claude Desktop (manual)
 
 Edit your Claude Desktop configuration file:
