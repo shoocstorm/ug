@@ -174,9 +174,10 @@ All generated data lives in one folder per project under `~/.ug`
 └── README.md
 ```
 
-`ug list` shows every project with counts and last-generated times. The
-repo-local `.ug/` folder only holds build artifacts (`ug` binary,
-`ug.node`), not data.
+`ug list` shows every project with counts and last-generated times;
+`ug rm <project>` deletes one (prompts for confirmation unless
+`-f/--force`/`-y/--yes` is given). The repo-local `.ug/` folder only
+holds build artifacts (`ug` binary, `ug.node`), not data.
 
 ---
 
@@ -197,6 +198,7 @@ UltraGraph provides a powerful CLI via `node node/cli.mjs` (or the native `ug` b
 | `chat`    | `ug chat "<question>" -d <db> --chat-model <model> ...` | RAG-grounded chat (one-shot or REPL) against an LLM |
 | `mcp`     | `npm run mcp` / `node node/cli.mjs mcp install claude` | Start the MCP server, or wire it into an MCP client's config |
 | `doctor`  | `ug doctor` / `node node/cli.mjs doctor` | Print resolved project/db/embedder/chat config and whether each value came from a flag, an env var, or a default |
+| `rm`      | `ug rm <project>` / `node node/cli.mjs rm <project>` | Delete a project's data directory under `~/.ug`; prompts for confirmation unless `-f/--force`/`-y/--yes` |
 
 ### `ug doctor`
 

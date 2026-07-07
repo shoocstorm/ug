@@ -781,6 +781,7 @@ pub fn run_serve(args: &[String]) {
             .route("/healthz", get(handle_health))
             .route("/api/projects", get(api_projects))
             .route("/api/projects/select", post(api_projects_select))
+            .route("/api/projects/delete", post(api_projects_delete))
             .route("/api/generate", post(api_generate))
             .route("/api/generate/status", get(api_generate_status))
             .route("/api/capabilities", get(api_capabilities))
@@ -1022,6 +1023,70 @@ async fn api_projects_select(
         Err(e) if e.starts_with("unknown project") => err_json(StatusCode::NOT_FOUND, &e),
         Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &e),
     }
+}
+
+#[derive(serde::Deserialize)]
+struct ProjectDeleteBody {
+    name: String,
+}
+
+/// POST /api/projects/delete — delete a project's on-disk data
+/// directory (mirrors `ug rm`) and drop it from the in-memory registry.
+/// If the deleted project was active, falls back to another remaining
+/// project, or the zero-project placeholder if none are left, so every
+/// handler always has something to read from.
+async fn api_projects_delete(
+    State(state): State<ServeState>,
+    Json(body): Json<ProjectDeleteBody>,
+) -> Response {
+    if state.registry.mode == ServeMode::Single {
+        return err_json(
+            StatusCode::BAD_REQUEST,
+            "server is in single-project mode (started with -i); restart without -i to manage projects",
+        );
+    }
+    let name = crate::project::sanitize_name(&body.name);
+    let dir = crate::project::project_dir(&name);
+    if let Err(e) = crate::project::remove_project_dir(&dir) {
+        return err_json(
+            StatusCode::NOT_FOUND,
+            &format!("failed to remove '{}': {}", name, e),
+        );
+    }
+    state
+        .registry
+        .loaded
+        .write()
+        .expect("loaded poisoned")
+        .remove(&name);
+
+    let was_active = *state.registry.active.read().expect("active poisoned") == name;
+    let mut active_name = name.clone();
+    if was_active {
+        let remaining = crate::project::list_projects();
+        if let Some((_, meta)) = remaining.first() {
+            match activate_project(&state.registry, &meta.name).await {
+                Ok(ctx) => active_name = ctx.name.clone(),
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to activate fallback project after delete");
+                    build_placeholder_context(&state.registry);
+                    active_name = "__none__".to_string();
+                }
+            }
+        } else {
+            build_placeholder_context(&state.registry);
+            active_name = "__none__".to_string();
+        }
+    }
+
+    tracing::info!(project = %name, "project deleted");
+    ok_json(
+        serde_json::json!({
+            "removed": name,
+            "active": active_name,
+        })
+        .to_string(),
+    )
 }
 
 #[derive(serde::Deserialize)]
@@ -2392,6 +2457,7 @@ pub fn print_serve_help() {
     println!("{C_BOLD}API Endpoints:{C_RESET}");
     println!("  {C_CYAN}GET{C_RESET}  /api/projects              list projects + active selection");
     println!("  {C_CYAN}POST{C_RESET} /api/projects/select       body: {{ name }} — switch active project");
+    println!("  {C_CYAN}POST{C_RESET} /api/projects/delete       body: {{ name }} — delete a project's data directory");
     println!("  {C_CYAN}GET{C_RESET}  /api/graph/{{stats, node/<id>, search?q=&types=, bfs/<id>?k=,");
     println!("           path?source=&target=, filter?types=, centrality, cycles}}");
     println!("  {C_CYAN}GET{C_RESET}  /api/db/{{node/<id>, traverse/<id>?k=&dir=&types=}}");

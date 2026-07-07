@@ -2501,7 +2501,8 @@
             background: var(--card-accent, var(--accent));
         }
 
-        .kb-card:hover {
+        .kb-card:hover,
+        .kb-card:focus-visible {
             border-color: var(--card-accent, var(--accent-dim));
             background: var(--bg-elevated);
             transform: translateY(-2px);
@@ -2561,6 +2562,34 @@
             border-radius: 50%;
             background: var(--success);
             box-shadow: 0 0 5px var(--success);
+        }
+
+        .kb-card-delete {
+            flex-shrink: 0;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 22px;
+            height: 22px;
+            border: none;
+            border-radius: 6px;
+            background: transparent;
+            color: var(--text-dim);
+            opacity: 0.55;
+            cursor: pointer;
+            transition: opacity 0.15s, background 0.15s, color 0.15s;
+        }
+
+        .kb-card-delete:hover,
+        .kb-card-delete:focus-visible {
+            opacity: 1;
+            background: rgba(248, 113, 113, 0.14);
+            color: #f87171;
+        }
+
+        .kb-card-delete svg {
+            width: 14px;
+            height: 14px;
         }
 
         .kb-card-stats {
@@ -2886,6 +2915,206 @@
             padding: 11px 14px;
             font-size: 12px;
             color: var(--danger);
+        }
+
+        /* ─── Delete-project confirmation dialog ──────────────── */
+
+        .kb-confirm-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 700;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            background: rgba(9, 9, 11, 0.72);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+        }
+
+        .kb-confirm-overlay.visible {
+            display: flex;
+        }
+
+        .kb-confirm-panel {
+            position: relative;
+            width: 100%;
+            max-width: 380px;
+            background: var(--bg-surface);
+            border: 1px solid rgba(248, 113, 113, 0.3);
+            border-radius: 14px;
+            padding: 30px 26px 24px;
+            text-align: center;
+            overflow: hidden;
+            box-shadow: 0 30px 70px -24px rgba(0, 0, 0, 0.6), 0 0 40px -18px rgba(248, 113, 113, 0.35);
+            animation: kb-confirm-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+        }
+
+        @keyframes kb-confirm-in {
+            from {
+                opacity: 0;
+                transform: translateY(8px) scale(0.96);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0) scale(1);
+            }
+        }
+
+        .kb-confirm-stripe {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 5px;
+            background: repeating-linear-gradient(-45deg, var(--danger) 0 8px, transparent 8px 16px);
+            opacity: 0.55;
+        }
+
+        .kb-confirm-icon {
+            width: 46px;
+            height: 46px;
+            margin: 6px auto 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            background: rgba(248, 113, 113, 0.12);
+            color: var(--danger);
+            animation: kb-confirm-pulse 2.2s ease-in-out infinite;
+        }
+
+        .kb-confirm-icon svg {
+            width: 22px;
+            height: 22px;
+        }
+
+        @keyframes kb-confirm-pulse {
+
+            0%,
+            100% {
+                box-shadow: 0 0 0 0 rgba(248, 113, 113, 0.35);
+            }
+
+            50% {
+                box-shadow: 0 0 0 10px rgba(248, 113, 113, 0);
+            }
+        }
+
+        .kb-confirm-kicker {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 2.5px;
+            text-transform: uppercase;
+            color: var(--danger);
+            margin-bottom: 10px;
+        }
+
+        .kb-confirm-title {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 17px;
+            font-weight: 700;
+            line-height: 1.4;
+            margin-bottom: 10px;
+            word-break: break-word;
+        }
+
+        .kb-confirm-name {
+            color: var(--danger);
+        }
+
+        .kb-confirm-body {
+            font-size: 12.5px;
+            line-height: 1.65;
+            color: var(--text-muted);
+            margin-bottom: 18px;
+        }
+
+        .kb-confirm-body b {
+            color: var(--text);
+            font-weight: 600;
+        }
+
+        .kb-confirm-body code {
+            font-family: 'JetBrains Mono', monospace;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-soft);
+            border-radius: 4px;
+            padding: 1px 5px;
+            color: var(--text-muted);
+            word-break: break-all;
+        }
+
+        .kb-confirm-error {
+            margin-bottom: 16px;
+            background: rgba(248, 113, 113, 0.08);
+            border: 1px solid rgba(248, 113, 113, 0.35);
+            border-radius: 8px;
+            padding: 9px 12px;
+            font-size: 11.5px;
+            color: var(--danger);
+            text-align: left;
+        }
+
+        .kb-confirm-actions {
+            display: flex;
+            gap: 10px;
+        }
+
+        .kb-confirm-btn {
+            flex: 1;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 7px;
+            padding: 11px 16px;
+            border-radius: 9px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12.5px;
+            font-weight: 700;
+            letter-spacing: 0.2px;
+            cursor: pointer;
+            border: 1px solid transparent;
+            transition: opacity 0.15s, transform 0.15s, box-shadow 0.15s, background 0.15s, border-color 0.15s;
+        }
+
+        .kb-confirm-cancel {
+            background: transparent;
+            border-color: var(--border);
+            color: var(--text-muted);
+        }
+
+        .kb-confirm-cancel:hover,
+        .kb-confirm-cancel:focus-visible {
+            border-color: var(--text-muted);
+            color: var(--text);
+        }
+
+        .kb-confirm-delete {
+            background: var(--danger);
+            color: #2a0a0a;
+            box-shadow: 0 8px 24px -10px var(--danger);
+        }
+
+        .kb-confirm-delete svg {
+            width: 13px;
+            height: 13px;
+        }
+
+        .kb-confirm-delete:hover,
+        .kb-confirm-delete:focus-visible {
+            opacity: 0.92;
+            transform: translateY(-1px);
+            box-shadow: 0 12px 28px -10px var(--danger);
+        }
+
+        .kb-confirm-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
         }
 
         .kb-open-btn {
@@ -3986,6 +4215,32 @@
         </div>
     </div>
 
+    <!-- Delete-project confirmation dialog, triggered from a KB Manager
+         card's delete button. Content (name/stats/repo) is filled in by
+         JS per invocation. -->
+    <div id="kb-confirm-overlay" class="kb-confirm-overlay">
+        <div class="kb-confirm-panel" role="alertdialog" aria-modal="true" aria-labelledby="kb-confirm-title">
+            <div class="kb-confirm-stripe" aria-hidden="true"></div>
+            <div class="kb-confirm-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M10.29 3.86 1.82 18a1.5 1.5 0 0 0 1.3 2.25h17.76a1.5 1.5 0 0 0 1.3-2.25L13.71 3.86a1.5 1.5 0 0 0-2.42 0Z" />
+                    <path d="M12 9v4M12 16.5h.01" />
+                </svg>
+            </div>
+            <div class="kb-confirm-kicker">Destructive action</div>
+            <h2 class="kb-confirm-title" id="kb-confirm-title">Delete <span class="kb-confirm-name" id="kb-confirm-name"></span>?</h2>
+            <p class="kb-confirm-body" id="kb-confirm-body"></p>
+            <div class="kb-confirm-error" id="kb-confirm-error" hidden></div>
+            <div class="kb-confirm-actions">
+                <button type="button" class="kb-confirm-btn kb-confirm-cancel" id="kb-confirm-cancel">Cancel</button>
+                <button type="button" class="kb-confirm-btn kb-confirm-delete" id="kb-confirm-delete-btn">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m2 0-.7 12.1A2 2 0 0 1 14.3 21H9.7a2 2 0 0 1-2-1.9L7 7"/></svg>
+                    <span id="kb-confirm-delete-label">Delete forever</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
     <div id="container">
         <div id="graph-3d"></div>
 
@@ -4601,9 +4856,15 @@
             const grid = document.getElementById('kb-grid');
             grid.innerHTML = '';
             caps.projects.forEach((p, i) => {
-                const card = document.createElement('button');
-                card.type = 'button';
+                // A plain div (not <button>) because it hosts a real nested
+                // delete <button> — nested buttons are invalid HTML and
+                // browsers mis-parse them. role/tabIndex + a keydown handler
+                // restore the button-like keyboard behavior a native
+                // <button> would have given for free.
+                const card = document.createElement('div');
                 card.className = 'kb-card' + (p.name === caps.active ? ' active' : '');
+                card.setAttribute('role', 'button');
+                card.tabIndex = 0;
                 card.style.setProperty('--card-accent', KB_PALETTE[i % KB_PALETTE.length]);
                 card.style.setProperty('--i', i);
                 const updated = p.updatedAt ? new Date(p.updatedAt * 1000).toLocaleString() : '—';
@@ -4611,6 +4872,9 @@
                     <div class="kb-card-top">
                         ${kbCardIconSvg()}
                         ${p.name === caps.active ? '<span class="kb-card-badge">Active</span>' : ''}
+                        <button type="button" class="kb-card-delete" title="Delete knowledge base" aria-label="Delete ${escapeHtml(p.name)}">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m2 0-.7 12.1A2 2 0 0 1 14.3 21H9.7a2 2 0 0 1-2-1.9L7 7"/></svg>
+                        </button>
                     </div>
                     <div class="kb-card-name" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</div>
                     <div class="kb-card-stats">
@@ -4624,6 +4888,16 @@
                     <div class="kb-card-updated">Updated ${updated}</div>
                 `;
                 card.addEventListener('click', () => openProject(p.name, caps.active));
+                card.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        openProject(p.name, caps.active);
+                    }
+                });
+                card.querySelector('.kb-card-delete').addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    openDeleteConfirm(p);
+                });
                 grid.appendChild(card);
             });
 
@@ -4700,6 +4974,80 @@
             }
         }
 
+        // ─── Delete confirmation dialog ──────────────────────────
+        // Custom dialog (not window.confirm) so the destructive-action
+        // framing, stats, and in-dialog error/busy states match the rest
+        // of the KB Manager instead of dropping to a native browser
+        // prompt. `kbConfirmProject` holds whichever project the dialog
+        // currently targets; the Cancel/Delete buttons are wired once in
+        // `wireKbManager()` and just act on whatever's pending.
+        let kbConfirmProject = null;
+
+        function openDeleteConfirm(p) {
+            kbConfirmProject = p;
+            document.getElementById('kb-confirm-name').textContent = p.name;
+            const stats = `${(p.nodes || 0).toLocaleString()} node${p.nodes === 1 ? '' : 's'} and ${(p.edges || 0).toLocaleString()} edge${p.edges === 1 ? '' : 's'}`;
+            document.getElementById('kb-confirm-body').innerHTML =
+                `This permanently deletes <b>${stats}</b> of indexed data` +
+                (p.repoRoot ? ` for <code>${escapeHtml(p.repoRoot)}</code>` : '') +
+                `. Your source files are untouched, but this cannot be undone.`;
+            const errEl = document.getElementById('kb-confirm-error');
+            errEl.hidden = true;
+            errEl.textContent = '';
+            setConfirmBusy(false);
+            document.getElementById('kb-confirm-overlay').classList.add('visible');
+            document.getElementById('kb-confirm-cancel').focus();
+        }
+
+        function closeDeleteConfirm() {
+            document.getElementById('kb-confirm-overlay').classList.remove('visible');
+            kbConfirmProject = null;
+        }
+
+        function setConfirmBusy(busy) {
+            document.getElementById('kb-confirm-cancel').disabled = busy;
+            document.getElementById('kb-confirm-delete-btn').disabled = busy;
+            document.getElementById('kb-confirm-delete-label').textContent = busy ? 'Deleting…' : 'Delete forever';
+        }
+
+        // Delete the project currently shown in the confirm dialog via
+        // POST /api/projects/delete (server-side mirror of `ug rm`). If
+        // it was the active project, the server has already switched
+        // active to another project (or the empty placeholder) — resync
+        // via a full reload when the 3D scene is already initialized,
+        // same as any other project switch.
+        async function confirmDeleteActive() {
+            if (!kbConfirmProject) return;
+            const { name } = kbConfirmProject;
+            const wasActive = kbCapsCache && kbCapsCache.active === name;
+            setConfirmBusy(true);
+            try {
+                const res = await fetch('/api/projects/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name }),
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.error || `HTTP ${res.status}`);
+                }
+                closeDeleteConfirm();
+                if (wasActive && graphInitialized) {
+                    reloadOntoActiveProject();
+                    return;
+                }
+                const listRes = await fetch('/api/projects', { cache: 'no-store' });
+                kbCapsCache = await listRes.json();
+                showKbManager(kbCapsCache);
+            } catch (err) {
+                console.error('failed to delete project:', err);
+                setConfirmBusy(false);
+                const errEl = document.getElementById('kb-confirm-error');
+                errEl.textContent = err.message || 'Failed to delete project.';
+                errEl.hidden = false;
+            }
+        }
+
         // Shared by the sidebar's "browse knowledge bases" icon and
         // clicking the brand/logo — both just reopen the same overlay.
         async function reopenKbManager() {
@@ -4727,6 +5075,17 @@
 
             document.getElementById('kb-open-btn').addEventListener('click', reopenKbManager);
             document.getElementById('brand-title').addEventListener('click', reopenKbManager);
+
+            document.getElementById('kb-confirm-cancel').addEventListener('click', closeDeleteConfirm);
+            document.getElementById('kb-confirm-delete-btn').addEventListener('click', confirmDeleteActive);
+            document.getElementById('kb-confirm-overlay').addEventListener('click', (e) => {
+                if (e.target.id === 'kb-confirm-overlay') closeDeleteConfirm();
+            });
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape' && document.getElementById('kb-confirm-overlay').classList.contains('visible')) {
+                    closeDeleteConfirm();
+                }
+            });
 
             const form = document.getElementById('kb-wizard-form');
             form.addEventListener('submit', async (e) => {

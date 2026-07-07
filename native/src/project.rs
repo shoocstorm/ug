@@ -201,6 +201,20 @@ pub(crate) fn default_read_db_path() -> String {
     new_path.to_string_lossy().into_owned()
 }
 
+/// Delete a project's data directory (`graph.json`, `ugdb/`,
+/// `project.json`, etc). Errors with `NotFound` instead of silently
+/// no-op'ing when the directory doesn't exist, so callers (`ug rm`) can
+/// report a clean error rather than a false "removed" message.
+pub(crate) fn remove_project_dir(dir: &Path) -> std::io::Result<()> {
+    if !dir.exists() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("{} does not exist", dir.display()),
+        ));
+    }
+    std::fs::remove_dir_all(dir)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -260,5 +274,23 @@ mod tests {
         assert_eq!(second.created_at, 1000, "created_at preserved");
         assert_eq!(second.nodes, 3);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn remove_project_dir_deletes_existing_dir() {
+        let dir = std::env::temp_dir().join(format!("ug-rm-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("graph.json"), "{}").unwrap();
+        assert!(dir.exists());
+        remove_project_dir(&dir).unwrap();
+        assert!(!dir.exists());
+    }
+
+    #[test]
+    fn remove_project_dir_errors_when_missing() {
+        let dir = std::env::temp_dir().join(format!("ug-rm-test-missing-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(remove_project_dir(&dir).is_err());
     }
 }

@@ -78,6 +78,7 @@ fn main() {
         "traverse" => run_traverse(cmd_args),
         "chat" => run_chat(cmd_args),
         "list" => run_list(cmd_args),
+        "rm" => run_rm(cmd_args),
         "doctor" => run_doctor(cmd_args),
         "serve" => serve::run_serve(cmd_args),
         "help" => {
@@ -1218,6 +1219,74 @@ fn run_list(_args: &[String]) {
         );
     }
     println!("\n{C_BOLD}*{C_RESET} matches the current directory. Serve them with {C_CYAN}ug serve{C_RESET}.");
+}
+
+/// `ug rm [<project>]` — delete a project's data directory under
+/// `~/.ug` (or `$UG_HOME`). Prompts for confirmation unless `-f/--force`
+/// (or `-y/--yes`) is given; an empty/EOF answer (e.g. non-interactive
+/// stdin) is treated as "no" so this fails closed by default.
+fn run_rm(args: &[String]) {
+    if has_flag(args, "-h") || has_flag(args, "--help") {
+        println!("Usage: {C_BOLD}ug rm{C_RESET} [<project>] [-n, --name <project>] [-f, --force | -y, --yes]");
+        println!("  Delete a project's data directory under ~/.ug (or $UG_HOME).");
+        println!("  Project defaults to the current directory's basename if omitted.");
+        return;
+    }
+
+    let value_flags = ["-n", "--name"];
+    let name_flag = flag_value(args, &["-n", "--name"]);
+    let positional = first_positional(args, &value_flags);
+    let project_name = name_flag
+        .or(positional)
+        .map(|n| project::sanitize_name(&n))
+        .unwrap_or_else(|| project::derive_project_name("."));
+
+    let dir = project::project_dir(&project_name);
+    if !dir.exists() {
+        eprintln!(
+            "No project named {C_BOLD}{}{C_RESET} found at {}.",
+            project_name,
+            dir.display()
+        );
+        eprintln!("Run {C_CYAN}ug list{C_RESET} to see available projects.");
+        std::process::exit(1);
+    }
+
+    println!("About to remove project {C_BOLD}{}{C_RESET}", project_name);
+    println!("  path:  {}", dir.display());
+    if let Some(meta) = project::read_meta(&dir) {
+        println!("  repo:  {}", meta.repo_root);
+        println!("  nodes: {}, edges: {}", meta.nodes, meta.edges);
+    }
+
+    let force = has_flag(args, "-f")
+        || has_flag(args, "--force")
+        || has_flag(args, "-y")
+        || has_flag(args, "--yes");
+    if !force {
+        use std::io::Write;
+        print!("Delete this project directory? This cannot be undone. [y/N] ");
+        let _ = std::io::stdout().flush();
+        let mut input = String::new();
+        let _ = std::io::stdin().read_line(&mut input);
+        let answer = input.trim().to_ascii_lowercase();
+        if answer != "y" && answer != "yes" {
+            println!("Aborted.");
+            return;
+        }
+    }
+
+    match project::remove_project_dir(&dir) {
+        Ok(()) => println!(
+            "{C_GREEN}✓{C_RESET} Removed {C_BOLD}{}{C_RESET} ({})",
+            project_name,
+            dir.display()
+        ),
+        Err(e) => {
+            eprintln!("Failed to remove {}: {}", dir.display(), e);
+            std::process::exit(1);
+        }
+    }
 }
 
 fn doctor_source_label(s: PrefSource) -> String {
@@ -2398,6 +2467,10 @@ fn print_help() {
     println!();
     println!("  {C_CYAN}list{C_RESET}                 List generated projects under ~/.ug (or $UG_HOME)");
     println!();
+    println!("  {C_CYAN}rm{C_RESET} [<project>]       Delete a project's data directory under ~/.ug (or $UG_HOME)");
+    println!("    -n, --name <name>   Project name (default: cwd basename)");
+    println!("    -f, --force, -y, --yes  Skip the confirmation prompt");
+    println!();
     println!("  {C_CYAN}doctor{C_RESET}               Show resolved project/db/embedder/chat config and where each value came from (flag/env/default)");
     println!("    -n, --name <name>   Project name to resolve (default: cwd basename)");
     println!("    -d, --db <path>     DB path override to resolve against");
@@ -2437,6 +2510,7 @@ fn print_help() {
     println!("  {C_MAGENTA}ug gen{C_RESET} -i ./src -n myrepo");
     println!("  {C_MAGENTA}ug gen{C_RESET} -i ./src --no-ingest --serve");
     println!("  {C_CYAN}ug list{C_RESET}");
+    println!("  {C_CYAN}ug rm{C_RESET} myrepo");
     println!("  {C_CYAN}ug doctor{C_RESET}");
     println!("  {C_CYAN}ug ingest{C_RESET} -n myrepo");
     println!("  {C_CYAN}ug semantic_search{C_RESET} \"oauth login flow\"");

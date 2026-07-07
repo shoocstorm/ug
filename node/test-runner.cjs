@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 const { join } = require('path');
-const { mkdtempSync, writeFileSync, rmSync, mkdirSync, readdirSync } = require('fs');
+const { mkdtempSync, writeFileSync, rmSync, mkdirSync, readdirSync, existsSync } = require('fs');
 const { tmpdir } = require('os');
 const { execFileSync } = require('child_process');
 
@@ -729,6 +729,64 @@ export function format(data: object): string { return JSON.stringify(data); }`);
     }
     rmSync(cwdDir, { recursive: true });
     rmSync(ugHomeDir, { recursive: true });
+  }
+
+  // Test 25: rm --force deletes the project directory
+  console.log('Test 25: rm --force deletes the project directory');
+  {
+    const ugHomeDir = mkdtempSync(join(tmpdir(), 'kb-rm-home-'));
+    const projectDir = join(ugHomeDir, 'rmproj');
+    mkdirSync(projectDir, { recursive: true });
+    writeFileSync(join(projectDir, 'project.json'), JSON.stringify({ name: 'rmproj', repoRoot: '/some/repo' }));
+    try {
+      const out = execFileSync('node', [join(__dirname, 'cli.mjs'), 'rm', 'rmproj', '--force'], {
+        cwd: __dirname,
+        env: { ...process.env, UG_HOME: ugHomeDir },
+        encoding: 'utf-8',
+      });
+      if (out.includes('Removed rmproj') && !existsSync(projectDir)) {
+        console.log('✓ PASS\n');
+        passed++;
+      } else {
+        console.log('✗ FAIL: project dir still exists or missing confirmation message\n' + out + '\n');
+        failed++;
+      }
+    } catch (e) {
+      console.log('✗ FAIL: ' + e.message + '\n');
+      failed++;
+    }
+    rmSync(ugHomeDir, { recursive: true, force: true });
+  }
+
+  // Test 26: rm without --force refuses on non-interactive (piped) stdin
+  // instead of hanging or silently proceeding — fails closed.
+  console.log('Test 26: rm without --force refuses on non-interactive stdin');
+  {
+    const ugHomeDir = mkdtempSync(join(tmpdir(), 'kb-rm-home-'));
+    const projectDir = join(ugHomeDir, 'rmproj2');
+    mkdirSync(projectDir, { recursive: true });
+    writeFileSync(join(projectDir, 'project.json'), JSON.stringify({ name: 'rmproj2', repoRoot: '/some/repo' }));
+    let threw = false;
+    let message = '';
+    try {
+      execFileSync('node', [join(__dirname, 'cli.mjs'), 'rm', 'rmproj2'], {
+        cwd: __dirname,
+        env: { ...process.env, UG_HOME: ugHomeDir },
+        encoding: 'utf-8',
+        input: '',
+      });
+    } catch (e) {
+      threw = true;
+      message = (e.stdout || '') + (e.stderr || '');
+    }
+    if (threw && message.includes('non-interactive') && existsSync(projectDir)) {
+      console.log('✓ PASS\n');
+      passed++;
+    } else {
+      console.log('✗ FAIL: expected a non-interactive refusal + surviving project dir\n' + message + '\n');
+      failed++;
+    }
+    rmSync(ugHomeDir, { recursive: true, force: true });
   }
 
   console.log('=== Results: ' + passed + '/' + (passed + failed) + ' passed ===');

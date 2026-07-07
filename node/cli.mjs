@@ -4,10 +4,11 @@ import { join, dirname, resolve, basename } from 'node:path';
 import { homedir } from 'node:os';
 import {
   readFileSync, existsSync, writeFileSync, mkdirSync, copyFileSync, realpathSync,
-  readdirSync, statSync,
+  readdirSync, statSync, rmSync,
 } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import { createInterface } from 'node:readline/promises';
 import chalk from 'chalk';
 import { z } from 'zod';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -1178,6 +1179,52 @@ const commands = {
         console.log(`${marker} ${chalk.cyan(String(meta.name).padEnd(24))}${String(meta.nodes).padStart(8)}${String(meta.edges).padStart(9)}  ${updated.padEnd(20)}${meta.repoRoot || ''}`);
       }
       console.log('\n' + chalk.bold('*') + ' matches the current directory.');
+      return;
+    }
+  },
+  rm: {
+    usage: '[<project>] [-n|--name <project>] [-f|--force]',
+    desc: "Delete a project's data directory under ~/.ug (or $UG_HOME). Prompts for confirmation unless -f/--force (or -y/--yes) is given.",
+    run: async (args) => {
+      const flagged = extractFlag(args, '-n') || extractFlag(args, '--name');
+      const positional = args[0] && !args[0].startsWith('-') ? args[0] : null;
+      const name = sanitizeName(flagged || positional || deriveProjectName('.'));
+      const dir = projectDir(name);
+
+      if (!existsSync(dir)) {
+        throw new Error(`No project named '${name}' found at ${dir}. Run \`node node/cli.mjs list\` to see available projects.`);
+      }
+
+      const meta = readProjectMeta(dir);
+      console.log(chalk.bold(`About to remove project ${name}`));
+      console.log(`  path:  ${dir}`);
+      if (meta) {
+        console.log(`  repo:  ${meta.repoRoot || ''}`);
+        console.log(`  nodes: ${meta.nodes || 0}, edges: ${meta.edges || 0}`);
+      }
+
+      const force = args.includes('-f') || args.includes('--force') || args.includes('-y') || args.includes('--yes');
+      if (!force) {
+        // Non-interactive stdin (piped/CI) has no line to answer with, so
+        // fail closed instead of hanging or silently proceeding.
+        if (!process.stdin.isTTY) {
+          throw new Error("Refusing to delete without confirmation in a non-interactive shell. Re-run with -f/--force (or -y/--yes).");
+        }
+        const rl = createInterface({ input: process.stdin, output: process.stdout });
+        let answer = '';
+        try {
+          answer = await rl.question('Delete this project directory? This cannot be undone. [y/N] ');
+        } finally {
+          rl.close();
+        }
+        if (!/^y(es)?$/i.test(answer.trim())) {
+          console.log('Aborted.');
+          return;
+        }
+      }
+
+      rmSync(dir, { recursive: true, force: true });
+      console.log(chalk.green('✓') + ` Removed ${name} (${dir})`);
       return;
     }
   },
