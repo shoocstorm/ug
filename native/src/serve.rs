@@ -421,6 +421,7 @@ struct ServeState {
     registry: Arc<ProjectRegistry>,
     html: Arc<EncodedAsset>,
     bundle: Arc<EncodedAsset>,
+    favicon: Arc<EncodedAsset>,
     /// `None` when the embedder couldn't be constructed (e.g. missing endpoint).
     /// Phase 3 search routes need it; `/api/db/*` routes don't.
     embedder: Option<Arc<Embedder>>,
@@ -646,6 +647,10 @@ pub fn run_serve(args: &[String]) {
         crate::VIS_BUNDLE.to_vec(),
         "application/javascript; charset=utf-8",
     ));
+    let favicon = Arc::new(EncodedAsset::new(
+        crate::VIS_FAVICON.to_vec(),
+        "image/svg+xml",
+    ));
 
     // Build embedder up-front (sync) — Phase 3 search routes need it.
     // Failure here is non-fatal: keep the rest of the server up and let
@@ -767,6 +772,7 @@ pub fn run_serve(args: &[String]) {
             registry: registry.clone(),
             html,
             bundle,
+            favicon,
             embedder: embedder_arc,
             chat_default: Arc::new(chat_default),
             embed_lock: Arc::new(Semaphore::new(4)),
@@ -777,6 +783,7 @@ pub fn run_serve(args: &[String]) {
             .route("/", get(handle_index))
             .route("/index.html", get(handle_index))
             .route("/ug-vis.bundle.js", get(handle_bundle))
+            .route("/favicon.svg", get(handle_favicon))
             .route("/graph.json", get(handle_graph))
             .route("/healthz", get(handle_health))
             .route("/api/projects", get(api_projects))
@@ -1327,6 +1334,10 @@ async fn handle_graph(State(state): State<ServeState>, headers: HeaderMap) -> Re
 
 async fn handle_bundle(State(state): State<ServeState>, headers: HeaderMap) -> Response {
     asset_response(&state.bundle, &headers)
+}
+
+async fn handle_favicon(State(state): State<ServeState>, headers: HeaderMap) -> Response {
+    asset_response(&state.favicon, &headers)
 }
 
 async fn handle_health() -> &'static str {

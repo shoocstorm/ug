@@ -11,8 +11,8 @@ use ultragraph::storage::{
 use ultragraph::types::GraphData;
 use ultragraph::{
     build_graph, calculate_centrality, detect_cycles, filter_edges_by_type, find_shortest_path,
-    graph_keyword_search, index, index_with_cache, k_hop_bfs, C_BLUE, C_BOLD, C_CYAN, C_GREEN,
-    C_MAGENTA, C_RESET, C_YELLOW,
+    graph_keyword_search, index, index_with_cache, k_hop_bfs, C_BLUE, C_BOLD, C_CYAN, C_DIM,
+    C_GREEN, C_MAGENTA, C_RESET, C_YELLOW,
 };
 
 mod chat;
@@ -23,6 +23,7 @@ mod serve;
 // output directory without needing the source tree at runtime.
 pub(crate) const VIS_HTML: &str = include_str!("./vis/visualization.html");
 pub(crate) const VIS_BUNDLE: &[u8] = include_bytes!("./vis/ug-vis.bundle.js");
+pub(crate) const VIS_FAVICON: &[u8] = include_bytes!("./vis/favicon.svg");
 const VIS_MD: &str = include_str!("../../README.md");
 
 fn main() {
@@ -67,28 +68,33 @@ fn main() {
     let cmd_args = &args[2..];
 
     match cmd.as_str() {
+        // Primary entry points.
+        "gen" => run_gen(cmd_args),
+        "serve" => serve::run_serve(cmd_args),
+        // Pipeline steps `gen` runs for you.
         "index" => run_index(cmd_args),
         "graph" => run_graph(cmd_args),
+        "ingest" => run_ingest(cmd_args),
+        // Graph analysis (offline, in-memory).
+        "analyze" => run_analyze(cmd_args),
         "bfs" => run_bfs(cmd_args),
-        "filter" => run_filter(cmd_args),
         "path" => run_path(cmd_args),
+        "filter" => run_filter(cmd_args),
         "centrality" => run_centrality(cmd_args),
         "cycles" => run_cycles(cmd_args),
         "search_graph" => run_search_graph(cmd_args),
-        "analyze" => run_analyze(cmd_args),
-        "gen" => run_gen(cmd_args),
-        "ingest" => run_ingest(cmd_args),
+        // Retrieval (OverGraph-backed).
         "semantic_search" => run_semantic_search(cmd_args),
         "hybrid_search" => run_hybrid_search(cmd_args),
         "traverse" => run_traverse(cmd_args),
         "chat" => run_chat(cmd_args),
+        // Project management.
         "list" => run_list(cmd_args),
         "rm" => run_rm(cmd_args),
         "uninstall" => run_uninstall(cmd_args),
         "doctor" => run_doctor(cmd_args),
-        "serve" => serve::run_serve(cmd_args),
         "mcp" => run_mcp(cmd_args),
-        "help" => {
+        "help" | "-h" | "--help" => {
             print_help();
         }
         _ => {
@@ -357,10 +363,14 @@ fn store_specs_from_args(args: &[String], embedding_dim: u32) -> Vec<StoreSpec> 
         .or_else(|| std::env::var("UG_DEST").ok())
         .unwrap_or_else(|| "overgraph".to_string());
 
-    // The OverGraph dir path. Read commands use -d / --db; ingest uses
-    // -o / --output (which is also the JSON output file in some
-    // commands, so -d always wins when both are present).
-    let og_path = flag_value(args, &["-d", "--db"])
+    // The OverGraph dir path. Read commands (semantic_search,
+    // hybrid_search, traverse, chat) select a project by name via
+    // -n/--name, resolved to ~/.ug/<name>/ugdb; ingest uses -o/--output
+    // directly (which is also the JSON output file in some commands,
+    // so -o always wins over the -n-derived path when both are
+    // present).
+    let og_path = flag_value(args, &["-n", "--name"])
+        .map(|n| project::project_dir(&project::sanitize_name(&n)).join("ugdb").to_string_lossy().into_owned())
         .or_else(|| flag_value(args, &["-o", "--output"]))
         .or_else(|| std::env::var("UG_DB_PATH").ok())
         .unwrap_or_else(project::default_read_db_path);
@@ -520,6 +530,10 @@ fn run_graph(args: &[String]) {
 
 // simple breadth-first search on the graph (json)
 fn run_bfs(args: &[String]) {
+    if has_flag(args, "-h") || has_flag(args, "--help") {
+        print_bfs_help();
+        return;
+    }
     if args.len() < 2 {
         eprintln!("Usage: ug bfs <graph-file> <start-node-id> [k] [-o|--output <file>]");
         std::process::exit(1);
@@ -536,6 +550,10 @@ fn run_bfs(args: &[String]) {
 
 // keyword-based in-memory graph search by loading the graph file into memory (json)
 fn run_search_graph(args: &[String]) {
+    if has_flag(args, "-h") || has_flag(args, "--help") {
+        print_search_graph_help();
+        return;
+    }
     if args.len() < 2 {
         eprintln!("Usage: ug search_graph <graph-file> <keyword> [-t|--type <node-type>]... [-o|--output <file>]");
         std::process::exit(1);
@@ -559,6 +577,10 @@ fn run_search_graph(args: &[String]) {
 }
 
 fn run_filter(args: &[String]) {
+    if has_flag(args, "-h") || has_flag(args, "--help") {
+        print_filter_help();
+        return;
+    }
     if args.len() < 2 {
         eprintln!(
             "Usage: ug filter <graph-file> <edge-type> [<edge-type>...] [-o|--output <file>]"
@@ -579,6 +601,10 @@ fn run_filter(args: &[String]) {
 }
 
 fn run_path(args: &[String]) {
+    if has_flag(args, "-h") || has_flag(args, "--help") {
+        print_path_help();
+        return;
+    }
     if args.len() < 3 {
         eprintln!("Usage: ug path <graph-file> <source> <target> [-o|--output <file>]");
         std::process::exit(1);
@@ -594,6 +620,10 @@ fn run_path(args: &[String]) {
 }
 
 fn run_centrality(args: &[String]) {
+    if has_flag(args, "-h") || has_flag(args, "--help") {
+        print_centrality_help();
+        return;
+    }
     if args.is_empty() {
         eprintln!("Usage: ug centrality <graph-file> [-o|--output <file>]");
         std::process::exit(1);
@@ -607,6 +637,10 @@ fn run_centrality(args: &[String]) {
 }
 
 fn run_cycles(args: &[String]) {
+    if has_flag(args, "-h") || has_flag(args, "--help") {
+        print_cycles_help();
+        return;
+    }
     if args.is_empty() {
         eprintln!("Usage: ug cycles <graph-file> [-o|--output <file>]");
         std::process::exit(1);
@@ -620,6 +654,10 @@ fn run_cycles(args: &[String]) {
 }
 
 fn run_analyze(args: &[String]) {
+    if has_flag(args, "-h") || has_flag(args, "--help") {
+        print_analyze_help();
+        return;
+    }
     let project_dir = project::project_dir(&project::resolve_project_name(args, "."));
     let input = flag_value(args, &["-i", "--input"])
         .unwrap_or_else(|| project_dir.join("graph.json").to_string_lossy().into_owned());
@@ -805,12 +843,12 @@ fn run_gen(args: &[String]) {
     println!("────────────────────────────────────────");
 
     println!(
-        "Run ' ug semantic_search \"hello\" -d {} ' to perform a semantic RAG query.",
-        db_path
+        "Run ' ug semantic_search \"hello\" -n {} ' to perform a semantic RAG query.",
+        project_name
     );
     println!(
-        "Run ' ug hybrid_search \"hello\" -d {} ' to perform a hybrid graph + semantic RAG query.",
-        db_path
+        "Run ' ug hybrid_search \"hello\" -n {} ' to perform a hybrid graph + semantic RAG query.",
+        project_name
     );
     println!("Total time: {:?}", start_total.elapsed());
 
@@ -1197,7 +1235,11 @@ async fn ingest_graph_multi_with_progress(
 }
 
 /// `ug list` — enumerate project data dirs under `~/.ug` (or `$UG_HOME`).
-fn run_list(_args: &[String]) {
+fn run_list(args: &[String]) {
+    if has_flag(args, "-h") || has_flag(args, "--help") {
+        print_list_help();
+        return;
+    }
     let projects = project::list_projects();
     let root = project::ug_home();
     if projects.is_empty() {
@@ -1465,6 +1507,10 @@ fn doctor_source_label(s: PrefSource) -> String {
 /// read-only: resolves the same precedence chains the other commands use
 /// but never builds an embedder/chat client or touches the network.
 fn run_doctor(args: &[String]) {
+    if has_flag(args, "-h") || has_flag(args, "--help") {
+        print_doctor_help();
+        return;
+    }
     println!("{C_BOLD}UltraGraph doctor{C_RESET}");
     println!();
 
@@ -1657,9 +1703,13 @@ fn run_ingest(args: &[String]) {
 
 // vector search on OverGraph (only)
 fn run_semantic_search(args: &[String]) {
+    if has_flag(args, "-h") || has_flag(args, "--help") {
+        print_semantic_search_help();
+        return;
+    }
     if args.is_empty() {
         eprintln!(
-            "Usage: ug semantic_search <query> [-d|--db <path>] [-k|--limit <n>] \\
+            "Usage: ug semantic_search <query> [-n|--name <project>] [-k|--limit <n>] \\
                  [--filter <sql>] [--base-url <url>] [--api-key <key>] [--model <name>] \\
                  [--embedding-dim <n>] [-o|--output <file>]"
         );
@@ -1669,8 +1719,8 @@ fn run_semantic_search(args: &[String]) {
     let query = first_positional(
         args,
         &[
-            "-d",
-            "--db",
+            "-n",
+            "--name",
             "-k",
             "--limit",
             "--filter",
@@ -1734,9 +1784,13 @@ fn run_semantic_search(args: &[String]) {
 
 // graphRAG hybrid search: RRF seeds → PPR (default) or MMR rerank → snippet-attached context
 fn run_hybrid_search(args: &[String]) {
+    if has_flag(args, "-h") || has_flag(args, "--help") {
+        print_hybrid_search_help();
+        return;
+    }
     if args.is_empty() {
         eprintln!(
-            "Usage: ug hybrid_search <query> [-d|--db <path>] [-k|--limit <n>] [--hops <n>] \\
+            "Usage: ug hybrid_search <query> [-n|--name <project>] [-k|--limit <n>] [--hops <n>] \\
                  [--filter <sql>] [--strategy <ppr|mmr>] [--direction <out|in|both>] \\
                  [-t|--edge-type <type>]... [--max-chars <n>] [--mmr-lambda <f>] \\
                  [--no-snippets] [--repo-root <path>] \\
@@ -1747,8 +1801,8 @@ fn run_hybrid_search(args: &[String]) {
     }
 
     let value_flags = [
-        "-d",
-        "--db",
+        "-n",
+        "--name",
         "-k",
         "--limit",
         "--hops",
@@ -1833,9 +1887,13 @@ fn run_hybrid_search(args: &[String]) {
 }
 
 fn run_traverse(args: &[String]) {
+    if has_flag(args, "-h") || has_flag(args, "--help") {
+        print_traverse_help();
+        return;
+    }
     if args.is_empty() {
         eprintln!(
-            "Usage: ug traverse <start-node-id> [-d|--db <path>] [-k|--hops <n>] [-o|--output <file>]"
+            "Usage: ug traverse <start-node-id> [-n|--name <project>] [-k|--hops <n>] [-o|--output <file>]"
         );
         std::process::exit(1);
     }
@@ -1843,8 +1901,8 @@ fn run_traverse(args: &[String]) {
     let start = first_positional(
         args,
         &[
-            "-d",
-            "--db",
+            "-n",
+            "--name",
             "-k",
             "--hops",
             "-o",
@@ -1947,8 +2005,8 @@ fn run_chat(args: &[String]) {
     // Value-bearing flags so the first non-flag positional becomes the
     // (optional) one-shot prompt — anything else drops us into REPL mode.
     let value_flags = [
-        "-d",
-        "--db",
+        "-n",
+        "--name",
         "-k",
         "--limit",
         "--hops",
@@ -2313,6 +2371,100 @@ fn print_graph_help() {
     println!("  {C_CYAN}ug graph{C_RESET} (uses defaults)");
 }
 
+fn print_analyze_help() {
+    println!("  {C_CYAN}ug analyze{C_RESET}  {C_YELLOW}— run full graph analysis (centrality + cycles){C_RESET}");
+    println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
+    println!();
+    println!("{C_BOLD}Usage:{C_RESET}  ug analyze [options]");
+    println!();
+    println!("{C_BOLD}Options:{C_RESET}");
+    println!("  {C_CYAN}-i, --input{C_RESET} <file>  Graph file (default: ~/.ug/<name>/graph.json)");
+    println!("  {C_CYAN}-o, --output{C_RESET} <dir>  Output directory (default: ~/.ug/<name>)");
+    println!("  {C_CYAN}-n, --name{C_RESET} <name>   Project name (default: cwd basename)");
+    println!();
+    println!("{C_BOLD}Examples:{C_RESET}");
+    println!("  {C_CYAN}ug analyze{C_RESET}");
+}
+
+fn print_bfs_help() {
+    println!("  {C_CYAN}ug bfs{C_RESET}  {C_YELLOW}— K-hop breadth-first traversal from a node{C_RESET}");
+    println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
+    println!();
+    println!("{C_BOLD}Usage:{C_RESET}  ug bfs <graph-file> <start-node-id> [k] [options]");
+    println!();
+    println!("{C_BOLD}Options:{C_RESET}");
+    println!("  {C_CYAN}-o, --output{C_RESET} <file>  Output file (optional, omit for stdout)");
+    println!();
+    println!("{C_BOLD}Examples:{C_RESET}");
+    println!("  {C_CYAN}ug bfs{C_RESET} graph.json file:src/index.ts 2");
+}
+
+fn print_search_graph_help() {
+    println!("  {C_CYAN}ug search_graph{C_RESET}  {C_YELLOW}— keyword search over graph nodes (in-memory){C_RESET}");
+    println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
+    println!();
+    println!("{C_BOLD}Usage:{C_RESET}  ug search_graph <graph-file> <keyword> [options]");
+    println!();
+    println!("{C_BOLD}Options:{C_RESET}");
+    println!("  {C_CYAN}-t, --type{C_RESET} <type>    Restrict to node type (repeatable)");
+    println!("  {C_CYAN}-o, --output{C_RESET} <file>  Output file (optional, omit for stdout)");
+    println!();
+    println!("{C_BOLD}Examples:{C_RESET}");
+    println!("  {C_CYAN}ug search_graph{C_RESET} graph.json loadConfig --type function --type class");
+}
+
+fn print_filter_help() {
+    println!("  {C_CYAN}ug filter{C_RESET}  {C_YELLOW}— filter graph edges by type{C_RESET}");
+    println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
+    println!();
+    println!("{C_BOLD}Usage:{C_RESET}  ug filter <graph-file> <edge-type> [<edge-type>...] [options]");
+    println!();
+    println!("{C_BOLD}Options:{C_RESET}");
+    println!("  {C_CYAN}-o, --output{C_RESET} <file>  Output file (optional, omit for stdout)");
+    println!();
+    println!("{C_BOLD}Examples:{C_RESET}");
+    println!("  {C_CYAN}ug filter{C_RESET} graph.json Contains Imports");
+}
+
+fn print_path_help() {
+    println!("  {C_CYAN}ug path{C_RESET}  {C_YELLOW}— shortest path between two nodes{C_RESET}");
+    println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
+    println!();
+    println!("{C_BOLD}Usage:{C_RESET}  ug path <graph-file> <source> <target> [options]");
+    println!();
+    println!("{C_BOLD}Options:{C_RESET}");
+    println!("  {C_CYAN}-o, --output{C_RESET} <file>  Output file (optional, omit for stdout)");
+    println!();
+    println!("{C_BOLD}Examples:{C_RESET}");
+    println!("  {C_CYAN}ug path{C_RESET} graph.json file:src/a.ts file:src/b.ts");
+}
+
+fn print_centrality_help() {
+    println!("  {C_CYAN}ug centrality{C_RESET}  {C_YELLOW}— degree & betweenness centrality{C_RESET}");
+    println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
+    println!();
+    println!("{C_BOLD}Usage:{C_RESET}  ug centrality <graph-file> [options]");
+    println!();
+    println!("{C_BOLD}Options:{C_RESET}");
+    println!("  {C_CYAN}-o, --output{C_RESET} <file>  Output file (optional, omit for stdout)");
+    println!();
+    println!("{C_BOLD}Examples:{C_RESET}");
+    println!("  {C_CYAN}ug centrality{C_RESET} graph.json");
+}
+
+fn print_cycles_help() {
+    println!("  {C_CYAN}ug cycles{C_RESET}  {C_YELLOW}— detect cycles in the graph{C_RESET}");
+    println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
+    println!();
+    println!("{C_BOLD}Usage:{C_RESET}  ug cycles <graph-file> [options]");
+    println!();
+    println!("{C_BOLD}Options:{C_RESET}");
+    println!("  {C_CYAN}-o, --output{C_RESET} <file>  Output file (optional, omit for stdout)");
+    println!();
+    println!("{C_BOLD}Examples:{C_RESET}");
+    println!("  {C_CYAN}ug cycles{C_RESET} graph.json");
+}
+
 fn print_ingest_help() {
     println!("  {C_CYAN}ug ingest{C_RESET}  {C_YELLOW}— embed graph nodes and write to one or more knowledge stores{C_RESET}");
     println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
@@ -2364,6 +2516,91 @@ fn print_ingest_help() {
     println!("            --neo4j-user neo4j --neo4j-password $NEO4J_PASSWORD        {C_YELLOW}# fan-out{C_RESET}");
 }
 
+fn print_semantic_search_help() {
+    println!("  {C_CYAN}ug semantic_search{C_RESET}  {C_YELLOW}— semantic vector search (OverGraph, no graph context){C_RESET}");
+    println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
+    println!();
+    println!("{C_BOLD}Usage:{C_RESET}  ug semantic_search <query> [options]");
+    println!();
+    println!("{C_BOLD}Options:{C_RESET}");
+    println!("  {C_CYAN}-n, --name{C_RESET} <name>   Project name (default: cwd basename, else most recent under ~/.ug)");
+    println!("  {C_CYAN}-k, --limit{C_RESET} <n>     Top-k results (default: 10)");
+    println!("  {C_CYAN}--filter{C_RESET} <sql>      Optional SQL WHERE clause");
+    println!("  {C_CYAN}--base-url/--api-key/--model/--embedding-dim{C_RESET}  Embedding endpoint overrides");
+    println!("  {C_CYAN}-o, --output{C_RESET} <file>  Output file (optional, omit for stdout)");
+    println!();
+    println!("{C_BOLD}Examples:{C_RESET}");
+    println!("  {C_CYAN}ug semantic_search{C_RESET} \"oauth login flow\"");
+}
+
+fn print_hybrid_search_help() {
+    println!(
+        "  {C_BOLD}{C_YELLOW}★ ug hybrid_search{C_RESET}  {C_YELLOW}— GraphRAG: semantic search → graph expansion → ranked context{C_RESET}"
+    );
+    println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
+    println!();
+    println!("{C_BOLD}Usage:{C_RESET}  ug hybrid_search <query> [options]");
+    println!();
+    println!("{C_BOLD}Options:{C_RESET}");
+    println!("  {C_CYAN}-n, --name{C_RESET} <name>    Project name (default: cwd basename, else most recent under ~/.ug)");
+    println!("  {C_CYAN}-k, --limit{C_RESET} <n>      Final results (default: 8)");
+    println!("  {C_CYAN}--hops{C_RESET} <n>           Graph expansion hops (default: 2)");
+    println!("  {C_CYAN}--filter{C_RESET} <sql>       SQL WHERE clause for semantic seed filter");
+    println!("  {C_CYAN}--strategy{C_RESET} <s>       ppr (default) or mmr (max marginal relevance)");
+    println!("  {C_CYAN}--direction{C_RESET} <dir>    outbound|inbound|both (default: both)");
+    println!("  {C_CYAN}-t, --edge-type{C_RESET} <t>  Restrict expansion to edge type (repeatable)");
+    println!("  {C_CYAN}--max-chars{C_RESET} <n>      Char budget for assembled context (default: 12000)");
+    println!("  {C_CYAN}--mmr-lambda{C_RESET} <f>     MMR diversity/relevance balance 0..1 (default: 0.6)");
+    println!("  {C_CYAN}--no-snippets{C_RESET}        Skip reading source snippets from disk");
+    println!("  {C_CYAN}--repo-root{C_RESET} <path>   Repo root for snippet resolution (default: cwd)");
+    println!("  {C_CYAN}--base-url/--api-key/--model/--embedding-dim{C_RESET}  Embedding endpoint overrides");
+    println!("  {C_CYAN}-o, --output{C_RESET} <file>  Output file (optional, omit for stdout)");
+    println!();
+    println!("{C_BOLD}Examples:{C_RESET}");
+    println!("  {C_CYAN}ug hybrid_search{C_RESET} \"oauth login flow\" -k 8");
+}
+
+fn print_traverse_help() {
+    println!("  {C_CYAN}ug traverse{C_RESET}  {C_YELLOW}— K-hop BFS using the OverGraph edges table{C_RESET}");
+    println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
+    println!();
+    println!("{C_BOLD}Usage:{C_RESET}  ug traverse <node-id> [options]");
+    println!();
+    println!("{C_BOLD}Options:{C_RESET}");
+    println!("  {C_CYAN}-n, --name{C_RESET} <name>    Project name (default: cwd basename, else most recent under ~/.ug)");
+    println!("  {C_CYAN}-k, --hops{C_RESET} <n>       Max hops (default: 2)");
+    println!("  {C_CYAN}-o, --output{C_RESET} <file>  Output file (optional, omit for stdout)");
+    println!();
+    println!("{C_BOLD}Examples:{C_RESET}");
+    println!("  {C_CYAN}ug traverse{C_RESET} \"file:src/index.ts\"");
+}
+
+fn print_list_help() {
+    println!("  {C_BOLD}{C_GREEN}★ ug list{C_RESET}  {C_YELLOW}— list generated projects{C_RESET}");
+    println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
+    println!();
+    println!("{C_BOLD}Usage:{C_RESET}  ug list");
+    println!();
+    println!("  Lists every project under ~/.ug (or $UG_HOME), with node/edge counts");
+    println!("  and last-updated time. The current directory's project is marked with {C_BOLD}*{C_RESET}.");
+}
+
+fn print_doctor_help() {
+    println!("  {C_CYAN}ug doctor{C_RESET}  {C_YELLOW}— show resolved config and where each value came from{C_RESET}");
+    println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
+    println!();
+    println!("{C_BOLD}Usage:{C_RESET}  ug doctor [options]");
+    println!();
+    println!("{C_BOLD}Options:{C_RESET}");
+    println!("  {C_CYAN}-n, --name{C_RESET} <name>  Project name to resolve (default: cwd basename)");
+    println!("  {C_CYAN}-d, --db{C_RESET} <path>    DB path override to resolve against");
+    println!("  {C_CYAN}--base-url/--api-key/--model{C_RESET}  Embedding flags, shown with resolution source");
+    println!("  {C_CYAN}--chat-base-url/--chat-api-key/--chat-model{C_RESET}  Same, for chat");
+    println!();
+    println!("{C_BOLD}Examples:{C_RESET}");
+    println!("  {C_CYAN}ug doctor{C_RESET}");
+}
+
 fn print_chat_help() {
     println!(
         "  {C_BOLD}{C_MAGENTA}💬 ug chat{C_RESET}  {C_YELLOW}— RAG-grounded chat against the knowledge graph{C_RESET}"
@@ -2377,7 +2614,7 @@ fn print_chat_help() {
     println!("  Omit the prompt to drop into an interactive REPL with conversational history.");
     println!();
     println!("{C_BOLD}Retrieval (matches `ug hybrid_search`):{C_RESET}");
-    println!("  {C_CYAN}-d, --db{C_RESET} <path>          OverGraph directory (default: ~/.ug/<name>/ugdb)");
+    println!("  {C_CYAN}-n, --name{C_RESET} <name>        Project name (default: cwd basename, else most recent under ~/.ug)");
     println!("  {C_CYAN}-k, --limit{C_RESET} <n>          Context items to retrieve (default: 8)");
     println!("  {C_CYAN}--hops{C_RESET} <n>               Graph expansion hops (default: 2)");
     println!("  {C_CYAN}--strategy{C_RESET} <s>           ppr (default) or mmr");
@@ -2473,35 +2710,26 @@ fn print_gen_help() {
 fn print_logo() {
     println!();
     println!(
-        "          {C_BOLD}{C_YELLOW}·{C_RESET}      {C_BOLD}{C_YELLOW}✦{C_RESET}      {C_BOLD}{C_CYAN}◉{C_RESET}{C_BOLD}{C_BLUE}───{C_RESET}{C_BOLD}{C_CYAN}◉{C_RESET}{C_BOLD}{C_BLUE}───{C_RESET}{C_BOLD}{C_CYAN}◉{C_RESET}      {C_BOLD}{C_YELLOW}✦{C_RESET}      {C_BOLD}{C_YELLOW}·{C_RESET}"
-    );
-    println!("                          {C_BOLD}{C_BLUE}╱ ╲ ╱ ╲ ╱ ╲{C_RESET}");
-    println!(
-        "             {C_BOLD}{C_YELLOW}·{C_RESET}        {C_BOLD}{C_MAGENTA}◉{C_RESET}{C_BOLD}{C_BLUE}───{C_RESET}{C_BOLD}{C_MAGENTA}◉{C_RESET}{C_BOLD}{C_BLUE}───{C_RESET}{C_BOLD}{C_MAGENTA}◉{C_RESET}{C_BOLD}{C_BLUE}───{C_RESET}{C_BOLD}{C_MAGENTA}◉{C_RESET}        {C_BOLD}{C_YELLOW}·{C_RESET}"
-    );
-    println!("                          {C_BOLD}{C_BLUE}╲ ╱ ╲ ╱ ╲ ╱{C_RESET}");
-    println!(
-        "          {C_BOLD}{C_YELLOW}·{C_RESET}      {C_BOLD}{C_YELLOW}✦{C_RESET}      {C_BOLD}{C_GREEN}◉{C_RESET}{C_BOLD}{C_BLUE}───{C_RESET}{C_BOLD}{C_GREEN}◉{C_RESET}{C_BOLD}{C_BLUE}───{C_RESET}{C_BOLD}{C_GREEN}◉{C_RESET}      {C_BOLD}{C_YELLOW}✦{C_RESET}      {C_BOLD}{C_YELLOW}·{C_RESET}"
+        "   {C_YELLOW}✦{C_RESET} {C_DIM}──────────────────────────────────────────{C_RESET} {C_YELLOW}✦{C_RESET}"
     );
     println!();
     println!(
-        "       {C_BOLD}{C_CYAN}━━━━━{C_RESET}  {C_BOLD}{C_MAGENTA}U{C_RESET} {C_BOLD}{C_CYAN}L{C_RESET} {C_BOLD}{C_MAGENTA}T{C_RESET} {C_BOLD}{C_CYAN}R{C_RESET} {C_BOLD}{C_MAGENTA}A{C_RESET}   {C_BOLD}{C_YELLOW}✦{C_RESET}   {C_BOLD}{C_GREEN}G{C_RESET} {C_BOLD}{C_CYAN}R{C_RESET} {C_BOLD}{C_GREEN}A{C_RESET} {C_BOLD}{C_CYAN}P{C_RESET} {C_BOLD}{C_GREEN}H{C_RESET}  {C_BOLD}{C_CYAN}━━━━━{C_RESET}"
+        "     {C_BOLD}{C_CYAN}●{C_RESET}{C_DIM}───{C_RESET}{C_BOLD}{C_MAGENTA}●{C_RESET}    {C_BOLD}U L T R A  G R A P H{C_RESET}"
+    );
+    println!("     {C_DIM}│   │{C_RESET}    {C_DIM}·  code intelligence  ·{C_RESET}");
+    println!(
+        "     {C_BOLD}{C_BLUE}●{C_RESET}{C_DIM}───{C_RESET}{C_BOLD}{C_GREEN}●{C_RESET}"
     );
     println!();
+    println!("     {C_DIM}the knowledge graph for your codebase & docs{C_RESET}");
+    println!();
     println!(
-        "    {C_BOLD}{C_YELLOW}✦{C_RESET}  {C_BOLD}{C_CYAN}A luminous lattice where every concept finds its place,{C_RESET}"
-    );
-    println!(
-        "    {C_BOLD}{C_YELLOW}✦{C_RESET}  {C_BOLD}{C_MAGENTA}a constellation woven from the very fabric of meaning —{C_RESET}"
-    );
-    println!(
-        "    {C_BOLD}{C_YELLOW}✦{C_RESET}  {C_BOLD}{C_GREEN}the graph from which all other graphs eternally flow.{C_RESET}"
+        "   {C_YELLOW}✦{C_RESET} {C_DIM}──────────────────────────────────────────{C_RESET} {C_YELLOW}✦{C_RESET}"
     );
     println!();
 }
 
 fn print_help() {
-    println!("{C_BOLD}UltraGraph-KB CLI{C_RESET}");
     println!();
     println!("Usage: {C_BOLD}ug <command>{C_RESET} [options]");
     println!();
@@ -2509,181 +2737,45 @@ fn print_help() {
     println!("  {C_CYAN}ug gen{C_RESET}     Index this directory, build the graph, and ingest it (→ ~/.ug/<name>/)");
     println!("  {C_CYAN}ug{C_RESET}         Bare `ug` starts the server (visualization + REST API at http://localhost:8080)");
     println!("{C_BOLD}MCP (Claude Desktop / Claude Code / Cursor / Windsurf / VS Code / Gemini CLI / Codex CLI / Hermes Agent / opencode):{C_RESET}");
-    match std::env::current_exe().ok().and_then(|exe| exe.parent().map(|d| d.join("cli.mjs"))) {
-        Some(cli) => println!("  node {} mcp install claude", cli.display()),
-        None => println!("  node <install-dir>/cli.mjs mcp install claude"),
-    }
+    println!("  {C_CYAN}ug mcp install claude{C_RESET}     Install/config MCP for your local coding agent");
+
     println!();
     println!("{C_BOLD}Commands:{C_RESET}");
-    println!("  {C_CYAN}index{C_RESET} [<path>]        Index a directory");
-    println!("    -i, --input <path>   Input directory (default: .)");
-    println!("    -o, --output <file>  Output file (default: ~/.ug/<name>/indexed-tree.json)");
-    println!("    -n, --name <name>    Project name (default: input dir basename)");
-    println!("    -c, --cache <dir>    Cache directory for incremental indexing");
-    println!();
-    println!("  {C_CYAN}graph{C_RESET} [<file>]        Build graph from index result");
-    println!("    -i, --input <file>  Input index file (default: ~/.ug/<name>/indexed-tree.json)");
-    println!("    -o, --output <file> Output graph file (default: ~/.ug/<name>/graph.json)");
-    println!("    -n, --name <name>   Project name (default: cwd basename)");
-    println!();
-    println!("  {C_CYAN}bfs{C_RESET} <file> <node> [k]  K-hop BFS traversal");
-    println!("    -o, --output <file> Output file (optional)");
-    println!();
-    println!("  {C_CYAN}filter{C_RESET} <graph> <type>...  Filter edges by type");
-    println!("    -o, --output <file> Output file (optional)");
-    println!();
-    println!("  {C_CYAN}path{C_RESET} <graph> <src> <dst>  Find shortest path between nodes");
-    println!("    -o, --output <file> Output file (optional)");
-    println!();
-    println!("  {C_CYAN}centrality{C_RESET} <graph>     Calculate degree/betweenness centrality");
-    println!("    -o, --output <file> Output file (optional)");
-    println!();
-    println!("  {C_CYAN}cycles{C_RESET} <graph>        Detect cycles in graph");
-    println!("    -o, --output <file> Output file (optional)");
-    println!();
-    println!("  {C_CYAN}search_graph{C_RESET} <graph> <keyword>  Keyword search over graph nodes (in-memory)");
-    println!("    -t, --type <type>   Restrict to node type (repeatable)");
-    println!("    -o, --output <file> Output file (optional)");
-    println!();
     println!(
-        "  {C_CYAN}analyze{C_RESET}              Run full graph analysis (centrality + cycles)"
+        "  {C_BOLD}{C_MAGENTA}gen{C_RESET}              {C_BOLD}{C_MAGENTA}⚡ full pipeline: index → graph → visualization → ingest ⚡{C_RESET}"
     );
-    println!("    -i, --input <file> Graph file (default: ~/.ug/<name>/graph.json)");
-    println!("    -o, --output <dir> Output directory (default: ~/.ug/<name>)");
+    println!("  {C_CYAN}serve{C_RESET}            Serve the visualization + graph API");
     println!();
-    println!("  {C_BOLD}{C_MAGENTA}gen{C_RESET} [<path>]         {C_BOLD}{C_MAGENTA}⚡ Full pipeline: index → graph → visualization → OverGraph ingest ⚡{C_RESET}");
-    println!("    -i, --input <path>  Input directory (default: .)");
-    println!("    -n, --name <name>   Project name (default: input dir basename)");
-    println!("    -c, --cache <dir>   Cache directory");
-    println!("    -o, --output <dir>  Output directory (default: ~/.ug/<name>)");
-    println!("    -d, --db <dir>      OverGraph directory (default: <output-dir>/ugdb)");
-    println!("    --no-ingest         Skip the OverGraph ingest step");
+    println!("  {C_DIM}Retrieval (OverGraph-backed){C_RESET}");
+    println!("  {C_CYAN}semantic_search{C_RESET}  Semantic vector search");
     println!(
-        "    --serve             Chain into 'ug serve' on the generated outputs after gen finishes"
+        "  {C_BOLD}{C_YELLOW}hybrid_search{C_RESET}    {C_YELLOW}GraphRAG: semantic search → graph expansion → ranked context{C_RESET}"
     );
-    println!("    --base-url/--api-key/--model/--embedding-dim  Embedding endpoint overrides");
-    println!();
-    println!("  {C_CYAN}ingest{C_RESET}               Embed graph nodes and write to OverGraph");
-    println!("    -i, --input <file>  Graph JSON (default: ~/.ug/<name>/graph.json)");
-    println!("    -o, --output <dir> OverGraph directory (default: ~/.ug/<name>/ugdb)");
-    println!("    --model <name>     Local fastembed alias or remote model name");
-    println!("                       (default: bge-small-en-v1.5, in-process, 384d)");
-    println!("    --base-url <url>   Switches to remote /v1/embeddings endpoint");
-    println!("    --api-key <key>    Bearer token for remote endpoint (default: 1234)");
+    println!("  {C_CYAN}traverse{C_RESET}         K-hop BFS over the OverGraph edges table");
     println!(
-        "    --embedding-dim <n>  Vector dim override. Auto-probed otherwise; persisted to <db>/ug-meta.json on first ingest."
+        "  {C_BOLD}{C_MAGENTA}chat{C_RESET}             {C_BOLD}{C_MAGENTA}💬 GraphRAG-grounded chat (one-shot or REPL){C_RESET}"
     );
     println!();
-    println!("  {C_CYAN}semantic_search{C_RESET} <query>  Semantic vector search (OverGraph, no graph context)");
-    println!("    -d, --db <path>    OverGraph directory (default: ~/.ug/<name>/ugdb)");
-    println!("    -k, --limit <n>    Top-k results (default: 10)");
-    println!("    --filter <sql>     Optional SQL WHERE clause");
-    println!("    --base-url/--api-key/--model/--embedding-dim  Embedding endpoint overrides");
-    println!("    -o, --output <file> Output file (optional, omit for stdout)");
+    println!("  {C_DIM}Pipeline steps (gen runs these for you){C_RESET}");
+    println!("  {C_CYAN}index{C_RESET}            Index a directory");
+    println!("  {C_CYAN}graph{C_RESET}            Build graph from index result");
+    println!("  {C_CYAN}ingest{C_RESET}           Embed graph nodes and write to OverGraph");
     println!();
-    println!(
-        "  {C_CYAN}hybrid_search{C_RESET} <query>   {C_YELLOW}GraphRAG: semantic search → graph expansion → ranked context{C_RESET}"
-    );
-    println!("    -d, --db <path>     OverGraph directory (default: ~/.ug/<name>/ugdb)");
-    println!("    -k, --limit <n>     Final results (default: 8)");
-    println!("    --hops <n>          Graph expansion hops (default: 2)");
-    println!("    --filter <sql>      SQL WHERE clause for semantic seed filter");
-    println!("    --strategy <s>      ppr (default) or mmr (max marginal relevance)");
-    println!("    --direction <dir>   outbound|inbound|both (default: both)");
-    println!("    -t, --edge-type <t> Restrict expansion to edge type (repeatable)");
-    println!("    --max-chars <n>     Char budget for assembled context (default: 12000)");
-    println!("    --mmr-lambda <f>    MMR diversity/relevance balance 0..1 (default: 0.6)");
-    println!("    --no-snippets       Skip reading source snippets from disk");
-    println!("    --repo-root <path>  Repo root for snippet resolution (default: cwd)");
-    println!("    --base-url/--api-key/--model/--embedding-dim  Embedding endpoint overrides");
-    println!("    -o, --output <file> Output file (optional, omit for stdout)");
+    println!("  {C_DIM}Graph analysis (offline, in-memory){C_RESET}");
+    println!("  {C_CYAN}analyze{C_RESET}          Run full graph analysis (centrality + cycles)");
+    println!("  {C_CYAN}bfs{C_RESET}              K-hop BFS traversal");
+    println!("  {C_CYAN}path{C_RESET}             Find shortest path between two nodes");
+    println!("  {C_CYAN}filter{C_RESET}           Filter edges by type");
+    println!("  {C_CYAN}centrality{C_RESET}       Calculate degree/betweenness centrality");
+    println!("  {C_CYAN}cycles{C_RESET}           Detect cycles in graph");
+    println!("  {C_CYAN}search_graph{C_RESET}     Keyword search over graph nodes");
     println!();
-    println!("  {C_CYAN}traverse{C_RESET} <node-id>   K-hop BFS using the OverGraph edges table");
-    println!("    -d, --db <path>    OverGraph directory (default: ~/.ug/<name>/ugdb)");
-    println!("    -k, --hops <n>     Max hops (default: 2)");
-    println!("    -o, --output <file> Output file (optional)");
+
+    println!("  {C_DIM}Project management{C_RESET}");
+    println!("  {C_BOLD}{C_GREEN}list{C_RESET}           {C_GREEN}List generated projects under ~/.ug (or $UG_HOME){C_RESET}");
+    println!("  {C_CYAN}rm{C_RESET}               Delete a project's data directory");
+    println!("  {C_CYAN}uninstall{C_RESET}        Delete ALL indexed projects and uninstall ug itself");
+    println!("  {C_CYAN}doctor{C_RESET}           Show resolved project/db/embedder/chat config");
     println!();
-    println!(
-        "  {C_BOLD}{C_MAGENTA}chat{C_RESET} [<prompt>]      {C_BOLD}{C_MAGENTA}💬 GraphRAG-grounded chat (one-shot or REPL){C_RESET}"
-    );
-    println!("    -d, --db <path>       OverGraph directory (default: ~/.ug/<name>/ugdb)");
-    println!("    -k, --limit <n>       Retrieved context items (default: 8)");
-    println!("    --hops <n>            Graph expansion hops (default: 2)");
-    println!("    --strategy <s>        ppr (default) or mmr");
-    println!("    --direction <dir>     outbound|inbound|both (default: both)");
-    println!("    -t, --edge-type <t>   Restrict expansion edge type (repeatable)");
-    println!("    --max-chars <n>       Context char budget (default: 12000)");
-    println!("    --no-snippets         Don't include source snippets in context");
-    println!("    --repo-root <path>    Repo root for snippet resolution (default: cwd)");
-    println!("    --chat-model <name>   Chat completion model (required for remote chat)");
-    println!("    --base-url <url>      OpenAI-compatible base URL (shared with embeddings)");
-    println!("    --api-key <key>       Bearer token (shared with embeddings)");
-    println!("    --chat-base-url/--chat-api-key  Override the chat endpoint only");
-    println!("    --embedding-model <name>  Embedding model (independent of --chat-model; default: bge-small-en-v1.5)");
-    println!("    --embedding-base-url/--embedding-api-key  Override the embedding endpoint only");
-    println!("    --temperature <f>     Sampling temperature (default: 0.2)");
-    println!("    --max-tokens <n>      Max completion tokens (default: 1024)");
-    println!("    --system <text>       Override the default RAG system prompt");
-    println!("    --show-context, -v    Print retrieved citations alongside the answer");
-    println!("    --json                Emit a JSON document (answer + citations)");
-    println!("    -o, --output <file>   Write answer (or JSON) to a file");
-    println!();
-    println!("  {C_CYAN}list{C_RESET}                 List generated projects under ~/.ug (or $UG_HOME)");
-    println!();
-    println!("  {C_CYAN}rm{C_RESET} [<project>]       Delete a project's data directory under ~/.ug (or $UG_HOME)");
-    println!("    -n, --name <name>   Project name (default: cwd basename)");
-    println!("    -f, --force, -y, --yes  Skip the confirmation prompt");
-    println!();
-    println!("  {C_CYAN}uninstall{C_RESET}            Delete ALL indexed projects and uninstall ug itself (prebuilt installs only)");
-    println!("    -f, --force, -y, --yes  Skip the confirmation prompt");
-    println!();
-    println!("  {C_CYAN}doctor{C_RESET}               Show resolved project/db/embedder/chat config and where each value came from (flag/env/default)");
-    println!("    -n, --name <name>   Project name to resolve (default: cwd basename)");
-    println!("    -d, --db <path>     DB path override to resolve against");
-    println!("    --base-url/--api-key/--model/--chat-base-url/--chat-api-key/--chat-model  Same flags as ingest/chat, shown with their resolution source");
-    println!();
-    println!("  {C_CYAN}serve{C_RESET}                Serve the visualization + graph.json + read-only API (in-memory, pre-compressed)");
-    println!("                        Default: multi-project mode over ~/.ug with a project switcher in the UI");
-    println!("    -i, --input <file>  Graph JSON to serve (forces single-project mode)");
-    println!("    --project <name>    Initially active project in multi-project mode (default: cwd basename)");
-    println!("    -d, --db <path>     OverGraph DB for /api/db + /api/search routes (default: per-project ugdb)");
-    println!("    --no-db             Don't open DB; routes return 503");
-    println!("    -p, --port <n>      TCP port (default: 8080)");
-    println!("    --host <addr>       Bind address (default: 127.0.0.1; use 0.0.0.0 for LAN)");
-    println!("    --watch             Reload graph file when its mtime changes (~2s poll)");
-    println!(
-        "    --repo-root <path>  Repo root for hybrid-search snippet resolution (default: cwd)"
-    );
-    println!("    --base-url/--api-key/--model/--embedding-dim  Embedding endpoint overrides");
-    println!("    --chat-model/--chat-base-url/--chat-api-key  Chat endpoint overrides (enables /api/chat)");
-    println!("    {C_GREEN}API:{C_RESET} GET  /api/graph/{{stats, node/<id>, search?q=&types=, bfs/<id>?k=,");
-    println!("                    path?source=&target=, filter?types=, centrality, cycles}}");
-    println!("          GET  /api/db/{{node/<id>, traverse/<id>?k=&dir=&types=}}");
-    println!("          POST /api/search/{{semantic, hybrid}}  body: JSON");
-    println!("          POST /api/chat  body: {{query, k?, hops?, history?, chat_model?, ...}}");
-    println!();
-    println!("{C_BOLD}Examples:{C_RESET}");
-    println!("  {C_CYAN}ug index{C_RESET} -i ./src -o index.json");
-    println!("  {C_CYAN}ug graph{C_RESET} -i index.json -o graph.json");
-    println!("  {C_CYAN}ug bfs{C_RESET} graph.json file:src/index.ts 2");
-    println!("  {C_CYAN}ug filter{C_RESET} graph.json Contains Imports");
-    println!("  {C_CYAN}ug centrality{C_RESET} graph.json");
-    println!("  {C_CYAN}ug cycles{C_RESET} graph.json");
-    println!(
-        "  {C_CYAN}ug search_graph{C_RESET} graph.json loadConfig --type function --type class"
-    );
-    println!("  {C_CYAN}ug analyze{C_RESET}");
-    println!("  {C_MAGENTA}ug gen{C_RESET} -i ./src -n myrepo");
-    println!("  {C_MAGENTA}ug gen{C_RESET} -i ./src --no-ingest --serve");
-    println!("  {C_CYAN}ug list{C_RESET}");
-    println!("  {C_CYAN}ug rm{C_RESET} myrepo");
-    println!("  {C_CYAN}ug doctor{C_RESET}");
-    println!("  {C_CYAN}ug ingest{C_RESET} -n myrepo");
-    println!("  {C_CYAN}ug semantic_search{C_RESET} \"oauth login flow\"");
-    println!("  {C_CYAN}ug hybrid_search{C_RESET} \"oauth login flow\" -k 8");
-    println!("  {C_CYAN}ug traverse{C_RESET} \"file:src/index.ts\"");
-    println!("  {C_MAGENTA}ug chat{C_RESET} \"how does ingest work?\" \\");
-    println!("        --base-url http://127.0.0.1:8000/v1 --api-key 12345 \\");
-    println!("        --chat-model my-chat --embedding-model my-embed");
-    println!("  {C_CYAN}ug serve{C_RESET} -p 8080");
+    println!("Run {C_CYAN}ug <command> -h{C_RESET} for that command's options and examples.");
 }

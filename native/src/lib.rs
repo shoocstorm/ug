@@ -18,3 +18,4 @@ pub const C_GREEN: &str = "\x1b[32m";
 pub const C_BLUE: &str = "\x1b[34m";
 pub const C_RESET: &str = "\x1b[0m";
 pub const C_BOLD: &str = "\x1b[1m";
+pub const C_DIM: &str = "\x1b[2m";

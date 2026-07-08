@@ -70,7 +70,7 @@ ug            # bare `ug`, no arguments, opens the server directly:
               # visualization + REST API at http://localhost:8080
 ```
 
-That's it for the common case — `ug help` lists every other command
+That's it for the common case — `ug -h` lists every other command
 (`chat`, `list`, `doctor`, individual pipeline stages, etc).
 
 <details>
@@ -117,21 +117,18 @@ and parse its JSON output, or run `ug serve` and call its REST API.
 
 ### 1. Install
 
-Prebuilt (macOS/Linux, no Rust/Node toolchain needed):
-```bash
-curl -fsSL https://ultra-graph.web.app/install.sh | sh
-```
-Installs `ug` (+ the native addon and Node CLI it ships alongside) to
-`~/.local/share/ultragraph/.ug/` and symlinks `ug` onto `~/.local/bin`.
-Windows: download `ultragraph-windows-x64.zip` from
-[Releases](https://github.com/shoocstorm/ug/releases/latest).
+The one-liner above installs `ug` (+ the native addon and Node CLI it
+ships alongside) to `~/.local/share/ultragraph/.ug/` and symlinks `ug`
+onto `~/.local/bin`. Windows: download `ultragraph-windows-x64.zip`
+from [Releases](https://github.com/shoocstorm/ug/releases/latest).
+Building from source instead needs **Rust** (latest stable) and
+**Node.js** 20+: `npm run build`.
 
-Building from source instead needs **Rust** (latest stable) and **Node.js** 20+:
-```bash
-npm run build
-```
-
-No external embedding service is required either way — UltraGraph ships an in-process **ONNX embedder** powered by [`fastembed-rs`](https://github.com/Anush008/fastembed-rs). Model weights are downloaded once on first use (~22–130 MB depending on model) and cached locally. Pass `--base-url` if you want to route to a remote OpenAI-compatible endpoint instead.
+No external embedding service is required either way — UltraGraph
+ships an in-process **ONNX embedder** ([`fastembed-rs`](https://github.com/Anush008/fastembed-rs)).
+Model weights download once on first use (~22–130 MB) and cache
+locally. Pass `--base-url` to route to a remote OpenAI-compatible
+endpoint instead.
 
 ### 2. Generate Your First Graph
 The `gen` command runs the entire pipeline (index → graph → ingest → UI).
@@ -183,23 +180,29 @@ holds build artifacts (`ug` binary, `ug.node`), not data.
 
 ## 🛠️ Command Line Interface
 
-UltraGraph provides a powerful CLI via `node node/cli.mjs` (or the native `ug` binary).
+The native `ug` binary is the primary CLI (the Node wrapper exposes the
+same pipeline stages under `node node/cli.mjs <command>`, see
+[Node CLI](#node-cli) above). `ug -h` lists every command; `ug <command>
+-h` prints that command's full flags and examples.
 
-### Common Commands
+| Command | Description |
+| :--- | :--- |
+| `ug gen` | Full pipeline: index → graph → visualization → OverGraph ingest |
+| `ug serve` | Serve the visualization + REST API (multi-project by default) |
+| `ug index` / `ug graph` / `ug ingest` | The individual pipeline stages `gen` runs for you |
+| `ug hybrid_search "<query>"` | GraphRAG: semantic search → graph expansion → ranked context |
+| `ug semantic_search "<query>"` | Plain vector search, no graph expansion |
+| `ug traverse <node-id>` | K-hop BFS over the stored OverGraph edges |
+| `ug chat "<question>"` | RAG-grounded chat against an LLM, one-shot or REPL — see [RAG Chat](#-rag-chat-ug-chat) |
+| `ug list` / `ug rm <project>` | List projects under `~/.ug`, or delete one |
+| `ug doctor` | Print resolved project/db/embedder/chat config and where each value came from |
+| `ug mcp install claude` | Wire the MCP server into a client's config (see [MCP Server](#-mcp-server)) |
+| `ug uninstall` | Delete ALL indexed projects and the standalone install itself (prebuilt installs only) |
 
-| Command | Usage | Description |
-| :--- | :--- | :--- |
-| `gen` | `npm run gen -- [options]` | Full pipeline: Index + Graph + Ingest + UI |
-| `index` | `npm run index -- -i <dir>` | Extract symbols from a directory |
-| `graph` | `npm run graph -- -i <index.json>` | Build structural graph from index |
-| `ingest` | `npm run ingest -- -i <graph.json>` | Embed and store in OverGraph |
-| `rag` | `npm run rag -- <db> <query>` | Perform a GraphRAG retrieval |
-| `traverse`| `npm run traverse -- <db> <id>` | K-hop traversal over stored edges |
-| `chat`    | `ug chat "<question>" -d <db> --chat-model <model> ...` | RAG-grounded chat (one-shot or REPL) against an LLM |
-| `mcp`     | `npm run mcp` / `node node/cli.mjs mcp install claude` | Start the MCP server, or wire it into (`install`) / remove it from (`uninstall`) an MCP client's config |
-| `doctor`  | `ug doctor` / `node node/cli.mjs doctor` | Print resolved project/db/embedder/chat config and whether each value came from a flag, an env var, or a default |
-| `rm`      | `ug rm <project>` / `node node/cli.mjs rm <project>` | Delete a project's data directory under `~/.ug`; prompts for confirmation unless `-f/--force`/`-y/--yes` |
-| `uninstall` | `ug uninstall` | Delete ALL indexed projects under `~/.ug`, then remove the standalone install itself (prebuilt installs only); prompts for confirmation unless `-f/--force`/`-y/--yes` |
+Every command that selects a project takes `-n/--name <project>`
+(default: current directory's basename, else the most recently
+generated project under `~/.ug`). Destructive commands (`rm`,
+`uninstall`) prompt for confirmation unless `-f/--force`/`-y/--yes` is given.
 
 ### `ug doctor`
 
@@ -224,13 +227,6 @@ Embeddings (ingest / gen / semantic_search / hybrid_search / serve)
 Chat (ug chat / POST /api/chat)
   status:       not configured — using sample defaults; point --chat-base-url ...
 ```
-
-### Advanced GraphRAG Options
-When using `rag` or `db-rag`, you can tune the retrieval strategy:
-- `--strategy ppr`: (Default) Uses Personalized PageRank seeded by semantic hits.
-- `--strategy mmr`: Uses legacy seed-expansion with Maximal Marginal Relevance.
-- `--restart-prob 0.15`: Teleport probability for PPR (higher = stays closer to seeds).
-- `--direction outbound`: Restrict graph walk direction.
 
 ---
 
@@ -270,7 +266,7 @@ tier actually won for each setting — see [`ug doctor`](#ug-doctor) above.
 
 ## 🧠 Embeddings
 
-UltraGraph picks a backend based on a single flag: **omit `--base-url` for the local in-process embedder (default), or pass `--base-url` to use a remote OpenAI-compatible endpoint.** The same flags apply to `ingest`, `gen`, `rag`, and `semantic_search`. `--base-url`/`--api-key`/`--model` fall back to `$UG_EMBED_BASE_URL`/`$UG_EMBED_API_KEY`/`$UG_EMBED_MODEL` when omitted.
+UltraGraph picks a backend based on a single flag: **omit `--base-url` for the local in-process embedder (default), or pass `--base-url` to use a remote OpenAI-compatible endpoint.** The same flags apply to `ingest`, `gen`, `semantic_search`, and `hybrid_search`. `--base-url`/`--api-key`/`--model` fall back to `$UG_EMBED_BASE_URL`/`$UG_EMBED_API_KEY`/`$UG_EMBED_MODEL` when omitted.
 
 ### Local backend (default) — in-process ONNX via `fastembed-rs`
 
@@ -301,10 +297,7 @@ ug ingest --model mxbai-embed-large-v1      # 1024-dim, top-tier quality
 | `jina-embeddings-v2-base-code` | 768 | Code-aware |
 | `mxbai-embed-large-v1` | 1024 | Top-tier quality |
 
-**Model cache resolution order:**
-1. `UG_MODEL_CACHE` env var (full path) — ops escape hatch.
-2. `XDG_CACHE_HOME/ug/models` — Linux convention.
-3. Platform default — `~/Library/Caches/ug/models` (macOS), `~/.cache/ug/models` (Linux), `%LOCALAPPDATA%\ug\models` (Windows).
+**Model cache:** `$UG_MODEL_CACHE` → `$XDG_CACHE_HOME/ug/models` → platform default (`~/Library/Caches/ug/models` macOS, `~/.cache/ug/models` Linux, `%LOCALAPPDATA%\ug\models` Windows).
 
 ### Remote backend (opt-in) — OpenAI-compatible `/v1/embeddings`
 
@@ -368,22 +361,14 @@ ug chat \
 
 | Flag | Description |
 | :--- | :--- |
-| `-d, --db <path>`            | OverGraph directory (default: `~/.ug/<cwd-basename>/ugdb`) |
-| `--chat-model <name>`        | Chat completion model (required for remote chat; falls back to `$UG_CHAT_MODEL`) |
-| `--base-url <url>`           | OpenAI-compatible base URL (shared with embeddings) |
-| `--api-key <key>`            | Bearer token (shared with embeddings) |
-| `--chat-base-url` / `--chat-api-key` | Override the chat endpoint only (falls back to `$UG_CHAT_BASE_URL` / `$UG_CHAT_API_KEY`) |
-| `--embedding-model <name>`   | Embedding model, independent of `--chat-model` (default: `bge-small-en-v1.5`; falls back to `$UG_EMBED_MODEL`) |
-| `--embedding-base-url` / `--embedding-api-key` | Override the embedding endpoint only (falls back to `$UG_EMBED_BASE_URL` / `$UG_EMBED_API_KEY`) |
-| `-k, --limit <n>`            | Retrieved context items (default: 8) |
-| `--hops <n>`                 | Graph expansion hops (default: 2) |
-| `--strategy ppr\|mmr`        | Reranker (default: `ppr`) |
-| `--max-chars <n>`            | Context char budget (default: 12000) |
-| `--temperature <f>`          | Sampling temperature (default: 0.2) |
-| `--max-tokens <n>`           | Max completion tokens (default: 1024) |
-| `--system <text>`            | Override the default RAG system prompt |
-| `--show-context, -v`         | Print retrieved citations alongside the answer |
-| `--json`                     | Emit JSON for scripted use |
+| `-n, --name <project>` | Project name (default: cwd basename, else the most recently generated project under `~/.ug`) |
+| `--chat-model <name>` | Chat completion model (required for remote chat; falls back to `$UG_CHAT_MODEL`) |
+| `--base-url` / `--api-key` | OpenAI-compatible endpoint, shared with embeddings (`--chat-base-url`/`--chat-api-key`/`--embedding-*` override each independently) |
+| `--strategy ppr\|mmr`, `--hops`, `-k/--limit` | Retrieval tuning — same as `hybrid_search` |
+| `--show-context, -v` / `--json` | Print citations alongside the answer, or emit one JSON document for scripting |
+
+Run `ug chat -h` for the complete flag reference (temperature, max-tokens,
+system prompt override, snippet/repo-root resolution, etc).
 
 ### Chat over HTTP (`POST /api/chat`)
 
@@ -453,7 +438,7 @@ resolve to (and which env var, if any, is driving each one).
   "mcpServers": {
     "ultragraph": {
       "command": "node",
-      "args": ["/Users/aldrickwan/Documents/project/ug/.ug/cli.mjs", "mcp"],
+      "args": ["~/.ug/cli.mjs", "mcp"],
       "env": {
         "UG_PROJECT": "ug"
       }

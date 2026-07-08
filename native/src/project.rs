@@ -185,10 +185,12 @@ pub(crate) fn list_projects() -> Vec<(PathBuf, ProjectMeta)> {
 }
 
 /// Default db path for read commands (chat, semantic_search, …) when
-/// no `-d/--db` flag and no `UG_DB_PATH` env var is given:
+/// no `-n/--name` flag and no `UG_DB_PATH` env var is given:
 /// `~/.ug/<cwd-basename>/ugdb` if it exists → legacy `./.ug/ugdb` if it
-/// exists → `~/.ug/<cwd-basename>/ugdb` (so error messages point users
-/// at the new layout).
+/// exists → the most recently updated project under `~/.ug` (covers
+/// running a read command from outside any indexed repo) →
+/// `~/.ug/<cwd-basename>/ugdb` (so error messages point users at the
+/// new layout).
 pub(crate) fn default_read_db_path() -> String {
     let new_path = project_dir(&derive_project_name(".")).join("ugdb");
     if new_path.exists() {
@@ -197,6 +199,12 @@ pub(crate) fn default_read_db_path() -> String {
     let legacy = Path::new(".ug/ugdb");
     if legacy.exists() {
         return ".ug/ugdb".to_string();
+    }
+    if let Some((dir, _meta)) = list_projects().into_iter().next() {
+        let fallback = dir.join("ugdb");
+        if fallback.exists() {
+            return fallback.to_string_lossy().into_owned();
+        }
     }
     new_path.to_string_lossy().into_owned()
 }
