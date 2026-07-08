@@ -2791,7 +2791,8 @@
         }
 
         .kb-field input[type="text"] {
-            width: 100%;
+            flex: 1;
+            min-width: 0;
             background: var(--bg-elevated);
             border: 1px solid var(--border);
             color: var(--text);
@@ -3117,6 +3118,194 @@
             cursor: not-allowed;
             transform: none;
             box-shadow: none;
+        }
+
+        /* ─── Folder-browse dialog (KB wizard "Browse…") ──────────── */
+
+        .kb-browse-btn {
+            flex-shrink: 0;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            color: var(--text-muted);
+            padding: 0 12px;
+            height: 100%;
+            border-radius: 12px;
+            min-height: 38px;
+            margin-left: 8px;            
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11.5px;
+            font-weight: 600;
+            letter-spacing: 0.2px;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: border-color 0.15s, color 0.15s;
+        }
+
+        .kb-browse-btn:hover {
+            border-color: var(--accent);
+            color: var(--text);
+        }
+
+        .kb-browse-btn svg {
+            width: 13px;
+            height: 13px;
+        }
+
+        .kb-browse-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 720;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            background: rgba(9, 9, 11, 0.72);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+        }
+
+        .kb-browse-overlay.visible {
+            display: flex;
+        }
+
+        .kb-browse-panel {
+            width: 100%;
+            max-width: 480px;
+            max-height: 78vh;
+            display: flex;
+            flex-direction: column;
+            background: var(--bg-surface);
+            border: 1px solid var(--border-soft);
+            border-radius: 14px;
+            padding: 20px 20px 16px;
+            box-shadow: 0 30px 70px -24px rgba(0, 0, 0, 0.6);
+            animation: kb-confirm-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+        }
+
+        .kb-browse-title {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px;
+            font-weight: 700;
+            margin-bottom: 12px;
+        }
+
+        .kb-browse-path-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+
+        .kb-browse-up {
+            flex-shrink: 0;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            border-radius: 7px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            color: var(--text-muted);
+            cursor: pointer;
+        }
+
+        .kb-browse-up svg {
+            width: 13px;
+            height: 13px;
+        }
+
+        .kb-browse-up:hover:not(:disabled) {
+            border-color: var(--accent);
+            color: var(--text);
+        }
+
+        .kb-browse-up:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        .kb-browse-path {
+            flex: 1;
+            min-width: 0;
+            overflow-x: auto;
+            white-space: nowrap;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11.5px;
+            color: var(--text-muted);
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-soft);
+            border-radius: 7px;
+            padding: 6px 10px;
+        }
+
+        .kb-browse-list {
+            flex: 1;
+            min-height: 220px;
+            max-height: 46vh;
+            overflow-y: auto;
+            border: 1px solid var(--border-soft);
+            border-radius: 9px;
+            margin-bottom: 14px;
+        }
+
+        .kb-browse-row {
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            padding: 9px 12px;
+            font-size: 12.5px;
+            color: var(--text);
+            cursor: pointer;
+            border-bottom: 1px solid var(--border-soft);
+            transition: background 0.1s;
+        }
+
+        .kb-browse-row:last-child {
+            border-bottom: none;
+        }
+
+        .kb-browse-row:hover,
+        .kb-browse-row.selected {
+            background: var(--bg-elevated);
+        }
+
+        .kb-browse-row svg {
+            width: 14px;
+            height: 14px;
+            color: var(--text-dim);
+            flex-shrink: 0;
+        }
+
+        .kb-browse-row.is-repo svg {
+            color: var(--accent);
+        }
+
+        .kb-browse-empty,
+        .kb-browse-loading {
+            padding: 24px 12px;
+            text-align: center;
+            font-size: 12px;
+            color: var(--text-dim);
+        }
+
+        .kb-browse-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+        }
+
+        .kb-browse-select {
+            background: var(--accent);
+            border-color: transparent;
+            color: #04262b;
+        }
+
+        .kb-browse-select:hover:not(:disabled) {
+            opacity: 0.92;
         }
 
         .kb-open-btn {
@@ -4177,6 +4366,13 @@
                                 </svg>
                                 <input type="text" id="kb-path-input" placeholder="/absolute/path/to/repo"
                                     autocomplete="off" required>
+                                <button type="button" class="kb-browse-btn" id="kb-browse-btn">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                                        stroke-linecap="round" stroke-linejoin="round">
+                                        <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
+                                    </svg>
+                                    Browse…
+                                </button>
                             </div>
                         </label>
                         <label class="kb-field">
@@ -4239,6 +4435,28 @@
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m2 0-.7 12.1A2 2 0 0 1 14.3 21H9.7a2 2 0 0 1-2-1.9L7 7"/></svg>
                     <span id="kb-confirm-delete-label">Delete forever</span>
                 </button>
+            </div>
+        </div>
+    </div>
+
+    <div id="kb-browse-overlay" class="kb-browse-overlay">
+        <div class="kb-browse-panel" role="dialog" aria-modal="true" aria-label="Browse for a folder">
+            <h2 class="kb-browse-title">Choose a folder</h2>
+            <div class="kb-browse-path-row">
+                <button type="button" class="kb-browse-up" id="kb-browse-up" title="Up one level" disabled>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 19V5M5 12l7-7 7 7" />
+                    </svg>
+                </button>
+                <div class="kb-browse-path" id="kb-browse-path"></div>
+            </div>
+            <div class="kb-browse-list" id="kb-browse-list">
+                <div class="kb-browse-loading">Loading…</div>
+            </div>
+            <div class="kb-browse-actions">
+                <button type="button" class="kb-confirm-btn kb-confirm-cancel" id="kb-browse-cancel">Cancel</button>
+                <button type="button" class="kb-confirm-btn kb-browse-select" id="kb-browse-select">Select this folder</button>
             </div>
         </div>
     </div>
@@ -5070,7 +5288,82 @@
             }
         }
 
+        // Folder-browse dialog for the KB wizard's "Browse…" button — lets
+        // the user click through directories server-side (via
+        // GET /api/browse-dir) instead of only being able to type an
+        // absolute path by hand. `kbBrowsePath` tracks whatever directory
+        // is currently listed; "Select this folder" writes it back into
+        // #kb-path-input and closes the dialog without touching anything
+        // else in the wizard.
+        let kbBrowsePath = null;
+
+        function openFolderBrowser() {
+            document.getElementById('kb-browse-overlay').classList.add('visible');
+            const seed = document.getElementById('kb-path-input').value.trim();
+            loadBrowseDir(seed || null);
+        }
+
+        function closeFolderBrowser() {
+            document.getElementById('kb-browse-overlay').classList.remove('visible');
+        }
+
+        async function loadBrowseDir(path) {
+            const listEl = document.getElementById('kb-browse-list');
+            const pathEl = document.getElementById('kb-browse-path');
+            const upBtn = document.getElementById('kb-browse-up');
+            listEl.innerHTML = '<div class="kb-browse-loading">Loading…</div>';
+            try {
+                const qs = path ? `?path=${encodeURIComponent(path)}` : '';
+                const res = await fetch(`/api/browse-dir${qs}`, { cache: 'no-store' });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.error || `HTTP ${res.status}`);
+                }
+                const data = await res.json();
+                kbBrowsePath = data.path;
+                pathEl.textContent = data.path;
+                pathEl.scrollLeft = pathEl.scrollWidth;
+                upBtn.disabled = !data.parent;
+                upBtn.onclick = () => loadBrowseDir(data.parent);
+
+                if (!data.entries.length) {
+                    listEl.innerHTML = '<div class="kb-browse-empty">No subfolders here.</div>';
+                    return;
+                }
+                listEl.innerHTML = data.entries.map(entry => `
+                    <div class="kb-browse-row${entry.isRepo ? ' is-repo' : ''}" data-path="${escapeHtml(entry.path)}">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
+                        </svg>
+                        <span>${escapeHtml(entry.name)}</span>
+                    </div>
+                `).join('');
+                listEl.querySelectorAll('.kb-browse-row').forEach(row => {
+                    row.addEventListener('click', () => loadBrowseDir(row.dataset.path));
+                });
+            } catch (err) {
+                console.error('failed to browse directory:', err);
+                listEl.innerHTML = `<div class="kb-browse-empty">${escapeHtml(err.message || 'Failed to list directory.')}</div>`;
+            }
+        }
+
         function wireKbManager() {
+            document.getElementById('kb-browse-btn').addEventListener('click', openFolderBrowser);
+            document.getElementById('kb-browse-cancel').addEventListener('click', closeFolderBrowser);
+            document.getElementById('kb-browse-select').addEventListener('click', () => {
+                if (kbBrowsePath) document.getElementById('kb-path-input').value = kbBrowsePath;
+                closeFolderBrowser();
+            });
+            document.getElementById('kb-browse-overlay').addEventListener('click', (e) => {
+                if (e.target.id === 'kb-browse-overlay') closeFolderBrowser();
+            });
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape' && document.getElementById('kb-browse-overlay').classList.contains('visible')) {
+                    closeFolderBrowser();
+                }
+            });
+
+
             document.getElementById('kb-wizard-back').addEventListener('click', () => {
                 if (kbCapsCache) showKbList(kbCapsCache);
             });

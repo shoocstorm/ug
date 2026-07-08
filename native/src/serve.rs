@@ -791,6 +791,7 @@ pub fn run_serve(args: &[String]) {
             .route("/api/projects/delete", post(api_projects_delete))
             .route("/api/generate", post(api_generate))
             .route("/api/generate/status", get(api_generate_status))
+            .route("/api/browse-dir", get(api_browse_dir))
             .route("/api/capabilities", get(api_capabilities))
             .route("/api/graph/stats", get(api_stats))
             .route("/api/graph/node/*id", get(api_node))
@@ -1254,6 +1255,69 @@ async fn api_generate_status(
             "log": j.log,
             "projectName": j.project_name,
             "error": j.error,
+        })
+        .to_string(),
+    )
+}
+
+#[derive(serde::Deserialize)]
+struct BrowseDirQuery {
+    path: Option<String>,
+}
+
+/// GET /api/browse-dir?path=<dir> — list subdirectories of `path` (or the
+/// user's home directory when omitted) for the KB Manager wizard's folder
+/// browser. Read-only; only ever lists directory entries. Resolves
+/// symlinks/`..` via `canonicalize` so the returned `path`/`parent` are
+/// always absolute, and falls back to the parent directory if `path`
+/// happens to point at a file rather than a directory.
+async fn api_browse_dir(Query(params): Query<BrowseDirQuery>) -> Response {
+    let requested = params
+        .path
+        .filter(|p| !p.trim().is_empty())
+        .map(PathBuf::from)
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(|| PathBuf::from("/"));
+
+    let dir = match std::fs::canonicalize(&requested) {
+        Ok(p) if p.is_dir() => p,
+        Ok(p) => match p.parent() {
+            Some(parent) => parent.to_path_buf(),
+            None => return err_json(StatusCode::BAD_REQUEST, "path is not a directory"),
+        },
+        Err(e) => return err_json(StatusCode::BAD_REQUEST, &format!("invalid path: {}", e)),
+    };
+
+    let read = match std::fs::read_dir(&dir) {
+        Ok(r) => r,
+        Err(e) => {
+            return err_json(StatusCode::BAD_REQUEST, &format!("cannot read directory: {}", e))
+        }
+    };
+
+    let mut entries: Vec<(String, serde_json::Value)> = Vec::new();
+    for entry in read.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+        let is_repo = path.join(".git").exists();
+        entries.push((
+            name.to_lowercase(),
+            serde_json::json!({ "name": name, "path": path.to_string_lossy(), "isRepo": is_repo }),
+        ));
+    }
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+    ok_json(
+        serde_json::json!({
+            "path": dir.to_string_lossy(),
+            "parent": dir.parent().map(|p| p.to_string_lossy().to_string()),
+            "entries": entries.into_iter().map(|(_, v)| v).collect::<Vec<_>>(),
         })
         .to_string(),
     )
