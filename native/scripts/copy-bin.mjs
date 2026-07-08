@@ -14,3 +14,7 @@ const distDir = join(repoRoot, '.ug');
 
 mkdirSync(distDir, { recursive: true });
 copyFileSync(join(nativeDir, 'target', profileDir, `ug${ext}`), join(distDir, `ug${ext}`));
+// Desktop shell (native/src/bin/ug_app.rs) — launched by `ug app` alongside
+// `ug serve`. Built as a matter of course since `cargo build` with no
+// --bin filter builds every [[bin]] target in the crate.
+copyFileSync(join(nativeDir, 'target', profileDir, `ug-app${ext}`), join(distDir, `ug-app${ext}`));

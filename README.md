@@ -55,6 +55,7 @@ UltraGraph implements a complete four-phase pipeline for building and querying a
 | | **`POST /api/chat`** in `ug serve` powers the web chat panel | ✅ |
 | **Interface** | **Web UI**: Premium D3.js force-directed visualization | ✅ |
 | | **Web Chat panel**: drop-in UI over `/api/chat` with citation jumps | ✅ |
+| | **Desktop App**: `ug app` — native window (Tauri) over the same UI, no browser tab needed | ✅ |
 | | **MCP Server**: Stdio-based server for LLM integration | ✅ |
 | | **CLI**: Comprehensive toolkit for all phases | ✅ |
 
@@ -189,6 +190,7 @@ same pipeline stages under `node node/cli.mjs <command>`, see
 | :--- | :--- |
 | `ug gen` | Full pipeline: index → graph → visualization → OverGraph ingest |
 | `ug serve` | Serve the visualization + REST API (multi-project by default) |
+| `ug app` | Open the native desktop shell (Tauri) — starts `ug serve` and a window pointed at it |
 | `ug index` / `ug graph` / `ug ingest` | The individual pipeline stages `gen` runs for you |
 | `ug hybrid_search "<query>"` | GraphRAG: semantic search → graph expansion → ranked context |
 | `ug semantic_search "<query>"` | Plain vector search, no graph expansion |

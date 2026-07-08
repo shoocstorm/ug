@@ -12,6 +12,10 @@ crate-type = ["cdylib", "rlib"]
 name = "ug"
 path = "src/main.rs"
 
+[[bin]]
+name = "ug-app"
+path = "src/bin/ug_app.rs"
+
 [dev-dependencies]
 tempfile = "3"
 
@@ -48,9 +52,12 @@ flate2 = "1"
 brotli = "8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tauri = "2"
+url = "2"
 
 [build-dependencies]
 napi-build = "1"
+tauri-build = "2"
 
 [profile.release]
 lto = "thin"

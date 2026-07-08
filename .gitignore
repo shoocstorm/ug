@@ -1,4 +1,5 @@
 native/target
+native/gen
 .ug
 .ug-*
 native/ug.darwin-arm64.node
