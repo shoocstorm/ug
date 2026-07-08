@@ -71,6 +71,7 @@ fn main() {
         // Primary entry points.
         "gen" => run_gen(cmd_args),
         "serve" => serve::run_serve(cmd_args),
+        "api" => run_api(cmd_args),
         // Pipeline steps `gen` runs for you.
         "index" => run_index(cmd_args),
         "graph" => run_graph(cmd_args),
@@ -1624,6 +1625,136 @@ fn run_doctor(args: &[String]) {
     println!("  resolution: $UG_MODEL_CACHE → $XDG_CACHE_HOME/ug/models → platform cache dir → temp dir");
 }
 
+/// One HTTP endpoint `ug serve` registers, for `ug api`'s reference
+/// listing. `cli_equivalent` is `Some("ug <cmd>")` when the exact same
+/// data/action is also reachable as a plain CLI subcommand that works
+/// without a server running at all — everything in this table is an
+/// HTTP route, so it always requires `ug serve` to be up to hit it over
+/// HTTP; this field instead tells the user whether *the underlying
+/// capability* has a non-serve escape hatch.
+struct ApiEntry {
+    method: &'static str,
+    path: &'static str,
+    desc: &'static str,
+    availability: &'static str,
+    cli_equivalent: Option<&'static str>,
+}
+
+const API_ENDPOINTS: &[(&str, &[ApiEntry])] = &[
+    (
+        "Knowledge-base / project management",
+        &[
+            ApiEntry { method: "GET", path: "/api/projects", desc: "list discovered projects (or the single active one)", availability: "always", cli_equivalent: Some("ug list") },
+            ApiEntry { method: "POST", path: "/api/projects/select", desc: "switch the server's active project", availability: "multi-project mode only", cli_equivalent: None },
+            ApiEntry { method: "POST", path: "/api/projects/delete", desc: "delete a project's data directory", availability: "multi-project mode only", cli_equivalent: Some("ug rm") },
+            ApiEntry { method: "POST", path: "/api/generate", desc: "spawn `ug gen` against a folder, returns a job id", availability: "multi-project mode only", cli_equivalent: Some("ug gen") },
+            ApiEntry { method: "GET", path: "/api/generate/status", desc: "poll a generation job's progress/log", availability: "multi-project mode only", cli_equivalent: None },
+            ApiEntry { method: "GET", path: "/api/browse-dir", desc: "list subdirectories of a path (KB wizard folder picker)", availability: "always", cli_equivalent: None },
+            ApiEntry { method: "GET", path: "/api/capabilities", desc: "report db/embedder/chat readiness for the active project", availability: "always", cli_equivalent: Some("ug doctor (similar info)") },
+        ],
+    ),
+    (
+        "Graph API (in-memory, active project)",
+        &[
+            ApiEntry { method: "GET", path: "/api/graph/stats", desc: "node/edge counts by type", availability: "always (empty if no project active)", cli_equivalent: None },
+            ApiEntry { method: "GET", path: "/api/graph/node/:id", desc: "fetch one node by id", availability: "always (empty if no project active)", cli_equivalent: None },
+            ApiEntry { method: "GET", path: "/api/graph/search", desc: "keyword search over graph nodes", availability: "always (empty if no project active)", cli_equivalent: Some("ug search_graph") },
+            ApiEntry { method: "GET", path: "/api/graph/bfs/:id", desc: "k-hop BFS traversal from a node", availability: "always (empty if no project active)", cli_equivalent: Some("ug bfs") },
+            ApiEntry { method: "GET", path: "/api/graph/path", desc: "shortest path between two nodes", availability: "always (empty if no project active)", cli_equivalent: Some("ug path") },
+            ApiEntry { method: "GET", path: "/api/graph/filter", desc: "filter edges by type", availability: "always (empty if no project active)", cli_equivalent: Some("ug filter") },
+            ApiEntry { method: "GET", path: "/api/graph/centrality", desc: "degree/betweenness centrality", availability: "always (empty if no project active)", cli_equivalent: Some("ug centrality") },
+            ApiEntry { method: "GET", path: "/api/graph/cycles", desc: "detect cycles in the graph", availability: "always (empty if no project active)", cli_equivalent: Some("ug cycles") },
+            ApiEntry { method: "GET", path: "/api/file", desc: "source file content for the preview panel", availability: "always (404 if file/project missing)", cli_equivalent: None },
+        ],
+    ),
+    (
+        "OverGraph search & chat (Phase 3 — needs a DB + embedder)",
+        &[
+            ApiEntry { method: "GET", path: "/api/db/node/:id", desc: "fetch one node from the OverGraph store", availability: "503 if no DB backend configured", cli_equivalent: None },
+            ApiEntry { method: "GET", path: "/api/db/traverse/:id", desc: "k-hop BFS over the OverGraph edges table", availability: "503 if no DB backend configured", cli_equivalent: Some("ug traverse") },
+            ApiEntry { method: "POST", path: "/api/search/semantic", desc: "semantic vector search", availability: "503 if no DB + embedder configured", cli_equivalent: Some("ug semantic_search") },
+            ApiEntry { method: "POST", path: "/api/search/hybrid", desc: "GraphRAG: semantic search → graph expansion → ranked context", availability: "503 if no DB + embedder configured", cli_equivalent: Some("ug hybrid_search") },
+            ApiEntry { method: "POST", path: "/api/chat", desc: "GraphRAG-grounded chat completion", availability: "503 if no DB + embedder + chat model configured", cli_equivalent: Some("ug chat") },
+        ],
+    ),
+    (
+        "UI & static assets",
+        &[
+            ApiEntry { method: "GET", path: "/", desc: "3D visualization UI (single-page app)", availability: "always", cli_equivalent: None },
+            ApiEntry { method: "GET", path: "/index.html", desc: "same as /", availability: "always", cli_equivalent: None },
+            ApiEntry { method: "GET", path: "/ug-vis.bundle.js", desc: "three.js/3d-force-graph JS bundle for the UI", availability: "always", cli_equivalent: None },
+            ApiEntry { method: "GET", path: "/favicon.svg", desc: "browser tab icon", availability: "always", cli_equivalent: None },
+            ApiEntry { method: "GET", path: "/healthz", desc: "liveness probe — always returns \"ok\"", availability: "always", cli_equivalent: None },
+            ApiEntry { method: "GET", path: "/graph.json", desc: "raw graph JSON for the active project", availability: "always (empty if no project active)", cli_equivalent: None },
+        ],
+    )    
+];
+
+/// `ug api` — reference listing of every HTTP endpoint `ug serve`
+/// exposes, for users/agents who want to hit the REST API directly
+/// instead of (or alongside) the CLI. Every row is an HTTP route, so
+/// all of them require `ug serve` to be running to reach at all; the
+/// "CLI equivalent" column instead flags which ones have a plain CLI
+/// subcommand that does the same thing without a server.
+fn run_api(args: &[String]) {
+    if has_flag(args, "-h") || has_flag(args, "--help") {
+        print_api_help();
+        return;
+    }
+
+    if has_flag(args, "--json") {
+        let sections: Vec<serde_json::Value> = API_ENDPOINTS
+            .iter()
+            .map(|(section, entries)| {
+                serde_json::json!({
+                    "section": section,
+                    "endpoints": entries.iter().map(|e| serde_json::json!({
+                        "method": e.method,
+                        "path": e.path,
+                        "description": e.desc,
+                        "availability": e.availability,
+                        "cli_equivalent": e.cli_equivalent,
+                    })).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({ "requires_serve": true, "sections": sections }))
+                .unwrap_or_default()
+        );
+        return;
+    }
+
+    println!("{C_BOLD}ug serve — HTTP API reference{C_RESET}");
+    println!(
+        "Every endpoint below is only reachable while {C_CYAN}ug serve{C_RESET} is running (default http://localhost:8080)."
+    );
+    println!(
+        "{C_DIM}\"CLI equivalent\" marks endpoints whose capability is also available as a plain CLI command, no server needed.{C_RESET}"
+    );
+    println!();
+
+    for (section, entries) in API_ENDPOINTS {
+        println!("{C_BOLD}{}{C_RESET}", section);
+        for e in *entries {
+            let method_color = if e.method == "GET" { C_CYAN } else { C_MAGENTA };
+            println!(
+                "  {}{:<5}{C_RESET} {C_BOLD}{:<24}{C_RESET} {}",
+                method_color, e.method, e.path, e.desc
+            );
+            let cli_note = match e.cli_equivalent {
+                Some(cmd) => format!("{C_GREEN}CLI equivalent: {}{C_RESET}", cmd),
+                None => format!("{C_DIM}serve-only (no CLI equivalent){C_RESET}"),
+            };
+            println!("        {C_YELLOW}{}{C_RESET}  ·  {}", e.availability, cli_note);
+        }
+        println!();
+    }
+
+    println!("Run {C_CYAN}ug api --json{C_RESET} for machine-readable output.");
+}
+
 /// Render epoch seconds as local-naive `YYYY-MM-DD HH:MM:SS` (UTC).
 fn format_epoch(secs: u64) -> String {
     if secs == 0 {
@@ -2585,6 +2716,21 @@ fn print_list_help() {
     println!("  and last-updated time. The current directory's project is marked with {C_BOLD}*{C_RESET}.");
 }
 
+fn print_api_help() {
+    println!("  {C_CYAN}ug api{C_RESET}  {C_YELLOW}— list every HTTP endpoint `ug serve` exposes{C_RESET}");
+    println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
+    println!();
+    println!("{C_BOLD}Usage:{C_RESET}  ug api [--json]");
+    println!();
+    println!("  Prints a reference table of every route registered by {C_CYAN}ug serve{C_RESET}'s");
+    println!("  HTTP server: method, path, what it does, when it 503s/is empty, and");
+    println!("  whether the same capability also exists as a plain CLI subcommand");
+    println!("  that works without a server running.");
+    println!();
+    println!("{C_BOLD}Options:{C_RESET}");
+    println!("  {C_CYAN}--json{C_RESET}  Emit the same listing as machine-readable JSON");
+}
+
 fn print_doctor_help() {
     println!("  {C_CYAN}ug doctor{C_RESET}  {C_YELLOW}— show resolved config and where each value came from{C_RESET}");
     println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
@@ -2745,6 +2891,7 @@ fn print_help() {
         "  {C_BOLD}{C_MAGENTA}gen{C_RESET}              {C_BOLD}{C_MAGENTA}⚡ full pipeline: index → graph → visualization → ingest ⚡{C_RESET}"
     );
     println!("  {C_CYAN}serve{C_RESET}            Serve the visualization + graph API");
+    println!("  {C_CYAN}api{C_RESET}              List every HTTP endpoint `ug serve` exposes");
     println!();
     println!("  {C_DIM}Retrieval (OverGraph-backed){C_RESET}");
     println!("  {C_CYAN}semantic_search{C_RESET}  Semantic vector search");
