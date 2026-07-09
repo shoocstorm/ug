@@ -1465,9 +1465,10 @@ fn run_uninstall(args: &[String]) {
 /// startup logo is suppressed for that mode (see `is_mcp_server_mode` in
 /// `main`).
 fn run_mcp(args: &[String]) {
-    let cli_path = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(|d| d.join("cli.mjs")));
+    let cli_path = std::env::current_exe().ok().and_then(|exe| {
+        let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
+        exe.parent().map(|d| d.join("cli.mjs"))
+    });
 
     let cli_path = match cli_path {
         Some(p) if p.exists() => p,
@@ -1514,7 +1515,13 @@ fn run_app(args: &[String]) {
         .unwrap_or(8080);
     let host = flag_value_or(args, &["--host"], "127.0.0.1");
 
+    // `current_exe()` can return the invoked path rather than the resolved
+    // one when `ug` is reached through a symlink (e.g. the installer's
+    // `~/.local/bin/ug` -> `~/.local/share/ultragraph/.ug/ug`), which would
+    // make us look for `ug-app` next to the symlink instead of next to the
+    // real binary. Canonicalize first so we always look in the right dir.
     let app_path = std::env::current_exe().ok().and_then(|exe| {
+        let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
         exe.parent().map(|d| {
             d.join(if cfg!(windows) { "ug-app.exe" } else { "ug-app" })
         })

@@ -7,6 +7,12 @@ A high-performance, local-first knowledge base engine that transforms codebases 
 curl -fsSL https://ultra-graph.web.app/install.sh | sh
 ```
 
+## Run
+```
+ug app
+ug serve
+```
+
 ## ⚡ Overview
 
 - **UltraGraph Introduction**: [https://ultra-graph.web.app](https://ultra-graph.web.app)
@@ -67,7 +73,7 @@ UltraGraph implements a complete four-phase pipeline for building and querying a
 
 ```bash
 ug gen        # index → graph → ingest this repo (→ ~/.ug/<name>/)
-ug            # bare `ug`, no arguments, opens the server directly:
+ug serve      # or run bare `ug`, no arguments, opens the server directly:
               # visualization + REST API at http://localhost:8080
 ```
 
