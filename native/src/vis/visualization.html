@@ -17,8 +17,8 @@
             --text: #e4e4e7;
             --text-muted: #a1a1aa;
             --text-dim: #71717a;
-            --accent: #22d3ee;
-            --accent-dim: #0891b2;
+            --accent: #f97316;
+            --accent-dim: #c2410c;
             --danger: #f87171;
             --success: #4ade80;
 
@@ -61,14 +61,14 @@
             width: 100vw;
             height: 100vh;
             position: relative;
+            /* Light "ink on paper" backdrop matching the 3D scene, so there is
+               no dark flash before the canvas initialises. */
             background:
-                radial-gradient(ellipse 100% 80% at 50% 120%, rgba(34, 211, 238, 0.15) 0%, transparent 50%),
-                radial-gradient(ellipse 80% 60% at 20% 0%, rgba(34, 211, 238, 0.12) 0%, transparent 40%),
-                radial-gradient(ellipse 70% 50% at 80% 100%, rgba(192, 132, 252, 0.1) 0%, transparent 40%),
-                radial-gradient(ellipse 50% 40% at 90% 20%, rgba(244, 114, 182, 0.08) 0%, transparent 30%),
-                radial-gradient(ellipse 60% 50% at 10% 80%, rgba(74, 222, 128, 0.06) 0%, transparent 30%),
-                linear-gradient(180deg, rgba(9, 9, 11, 0.9) 0%, rgba(9, 9, 11, 0.7) 50%, rgba(9, 9, 11, 0.95) 100%),
-                var(--bg-deep);
+                radial-gradient(ellipse 70% 55% at 78% 18%, rgba(233, 100, 28, 0.10) 0%, transparent 55%),
+                radial-gradient(ellipse 60% 50% at 15% 75%, rgba(58, 110, 165, 0.10) 0%, transparent 55%),
+                radial-gradient(ellipse 50% 40% at 30% 15%, rgba(91, 143, 201, 0.07) 0%, transparent 50%),
+                radial-gradient(ellipse 55% 45% at 88% 85%, rgba(194, 65, 12, 0.06) 0%, transparent 50%),
+                #fdfcfa;
             background-attachment: fixed;
         }
 
@@ -337,25 +337,6 @@
             color: var(--accent);
         }
 
-        #project-select {
-            margin-left: 6px;
-            max-width: 150px;
-            background: var(--bg-hover);
-            border: 1px solid var(--border-soft);
-            border-radius: 6px;
-            color: var(--text);
-            font-size: 11px;
-            padding: 3px 6px;
-            cursor: pointer;
-            outline: none;
-            transition: border-color 0.15s;
-        }
-
-        #project-select:hover,
-        #project-select:focus {
-            border-color: var(--accent);
-        }
-
         .sidebar-header .meta {
             display: inline-flex;
             align-items: center;
@@ -471,7 +452,7 @@
 
         .panel-tab.active {
             color: var(--accent);
-            background: rgba(34, 211, 238, 0.08);
+            background: rgba(249, 115, 22, 0.08);
             border-color: var(--accent-dim);
         }
 
@@ -603,7 +584,7 @@
 
         .search-input:focus {
             border-color: var(--accent);
-            box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.15);
+            box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.15);
         }
 
         .search-input::placeholder {
@@ -749,7 +730,7 @@
 
         .filter-chip.active {
             border-color: var(--accent);
-            background: rgba(34, 211, 238, 0.12);
+            background: rgba(249, 115, 22, 0.12);
             color: var(--text);
         }
 
@@ -912,7 +893,7 @@
 
         .tool-panel button.primary {
             cursor: pointer;
-            background: rgba(34, 211, 238, 0.12);
+            background: rgba(249, 115, 22, 0.12);
             border-color: var(--accent-dim);
             color: var(--accent);
             font-weight: 500;
@@ -920,7 +901,7 @@
         }
 
         .tool-panel button.primary:hover {
-            background: rgba(34, 211, 238, 0.2);
+            background: rgba(249, 115, 22, 0.2);
         }
 
         .centrality-list {
@@ -1036,10 +1017,10 @@
         }
 
         .sidebar-footer button:hover {
-            background: rgba(34, 211, 238, 0.08);
+            background: rgba(249, 115, 22, 0.08);
             color: var(--accent);
             border-color: var(--accent-dim);
-            box-shadow: 0 0 12px rgba(34, 211, 238, 0.15);
+            box-shadow: 0 0 12px rgba(249, 115, 22, 0.15);
         }
 
         /* ─── Sidebar launcher (shown only when collapsed) ───── */
@@ -1350,7 +1331,7 @@
         }
 
         .hier-row.selected {
-            background: rgba(34, 211, 238, 0.12);
+            background: rgba(249, 115, 22, 0.12);
         }
 
         .hier-row .dot {
@@ -1397,6 +1378,13 @@
 
         .hier-row .lines:empty {
             display: none;
+        }
+
+        .hier-more {
+            color: var(--text-dim);
+            font-size: 10px;
+            font-style: italic;
+            padding: 3px 8px;
         }
 
         .hier-divider {
@@ -1571,7 +1559,7 @@
             display: none;
             margin: 12px 14px 0;
             padding: 10px 12px;
-            background: rgba(34, 211, 238, 0.08);
+            background: rgba(249, 115, 22, 0.08);
             border: 1px solid var(--accent);
             border-radius: 8px;
             font-size: 11px;
@@ -1655,7 +1643,7 @@
 
         .section.featured {
             border: 1px solid var(--accent);
-            background: linear-gradient(180deg, rgba(34, 211, 238, 0.06) 0%, transparent 100%);
+            background: linear-gradient(180deg, rgba(249, 115, 22, 0.06) 0%, transparent 100%);
             position: relative;
             border-radius: 8px;
             margin: 6px;
@@ -1674,7 +1662,7 @@
             padding: 2px 8px;
             border-radius: 4px;
             border: 1px solid var(--accent);
-            box-shadow: 0 0 12px rgba(34, 211, 238, 0.4);
+            box-shadow: 0 0 12px rgba(249, 115, 22, 0.4);
         }
 
         .section.featured .section-header {
@@ -1758,7 +1746,7 @@
 
         .sem-controls #sem-exec {
             flex: 1;
-            background: rgba(34, 211, 238, 0.12);
+            background: rgba(249, 115, 22, 0.12);
             border: 1px solid var(--accent-dim);
             color: var(--accent);
             padding: 6px 10px;
@@ -1770,7 +1758,7 @@
         }
 
         .sem-controls #sem-exec:hover:not(:disabled) {
-            background: rgba(34, 211, 238, 0.2);
+            background: rgba(249, 115, 22, 0.2);
         }
 
         .sem-controls #sem-exec:disabled {
@@ -1827,7 +1815,7 @@
             gap: 4px;
             padding: 2px 8px;
             border-radius: 999px;
-            background: rgba(34, 211, 238, 0.10);
+            background: rgba(249, 115, 22, 0.10);
             border: 1px solid var(--accent-dim);
             color: var(--accent);
             font-size: 10px;
@@ -1966,7 +1954,7 @@
 
         .chat-msg.user {
             align-self: flex-end;
-            background: rgba(34, 211, 238, 0.10);
+            background: rgba(249, 115, 22, 0.10);
             border: 1px solid var(--accent-dim);
             color: var(--text);
         }
@@ -2274,7 +2262,7 @@
             width: 900px;
             height: 900px;
             transform: translateX(-50%);
-            background: radial-gradient(closest-side, rgba(34, 211, 238, 0.12), transparent 70%);
+            background: radial-gradient(closest-side, rgba(249, 115, 22, 0.12), transparent 70%);
         }
 
         .kb-inner {
@@ -2311,7 +2299,7 @@
             font-weight: 700;
             letter-spacing: 1px;
             color: var(--text);
-            text-shadow: 0 0 44px rgba(34, 211, 238, 0.25);
+            text-shadow: 0 0 44px rgba(249, 115, 22, 0.25);
         }
 
         .kb-cursor {
@@ -2667,7 +2655,7 @@
         .kb-add-tile:hover {
             border-color: var(--accent);
             color: var(--accent);
-            background: rgba(34, 211, 238, 0.05);
+            background: rgba(249, 115, 22, 0.05);
         }
 
         .kb-add-tile svg {
@@ -2715,7 +2703,7 @@
             height: 44px;
             color: var(--accent);
             margin-bottom: 16px;
-            filter: drop-shadow(0 0 14px rgba(34, 211, 238, 0.4));
+            filter: drop-shadow(0 0 14px rgba(249, 115, 22, 0.4));
         }
 
         .kb-wizard-title {
@@ -2807,7 +2795,7 @@
 
         .kb-field input[type="text"]:focus {
             border-color: var(--accent);
-            box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.15);
+            box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.15);
         }
 
         .kb-checkbox {
@@ -3527,7 +3515,7 @@
 
         .catalog-search-input:focus {
             border-color: var(--accent);
-            box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.15);
+            box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.15);
         }
 
         .catalog-toolbar-actions {
@@ -3589,12 +3577,12 @@
         }
 
         .cat-node.match-self {
-            background: rgba(34, 211, 238, 0.1);
+            background: rgba(249, 115, 22, 0.1);
         }
 
         /* Persistent marker for the row whose node is currently focused. */
         .cat-node.focused {
-            background: rgba(34, 211, 238, 0.14);
+            background: rgba(249, 115, 22, 0.14);
             box-shadow: inset 2px 0 0 var(--accent);
         }
 
@@ -3604,9 +3592,9 @@
         }
 
         @keyframes cat-pulse {
-            0%   { background: rgba(34, 211, 238, 0.55); transform: translateX(2px); }
-            40%  { background: rgba(34, 211, 238, 0.28); }
-            100% { background: rgba(34, 211, 238, 0.14); transform: translateX(0); }
+            0%   { background: rgba(249, 115, 22, 0.55); transform: translateX(2px); }
+            40%  { background: rgba(249, 115, 22, 0.28); }
+            100% { background: rgba(249, 115, 22, 0.14); transform: translateX(0); }
         }
 
         .cat-toggle {
@@ -3651,7 +3639,7 @@
         }
 
         .cat-name mark {
-            background: rgba(34, 211, 238, 0.3);
+            background: rgba(249, 115, 22, 0.3);
             color: var(--text);
             padding: 0;
             border-radius: 2px;
@@ -4116,7 +4104,7 @@
             padding: 3px 9px;
             border-radius: 999px;
             border: 1px solid var(--border-soft);
-            background: rgba(34, 211, 238, 0.1);
+            background: rgba(249, 115, 22, 0.1);
             color: var(--accent);
             font-size: 10px;
             font-weight: 600;
@@ -4127,7 +4115,7 @@
         }
 
         .nav-exit:hover {
-            background: rgba(34, 211, 238, 0.2);
+            background: rgba(249, 115, 22, 0.2);
         }
 
         /* A faint accent vignette while focus mode is active, signalling the
@@ -4138,7 +4126,7 @@
             inset: 0;
             pointer-events: none;
             z-index: 4;
-            box-shadow: inset 0 0 160px rgba(34, 211, 238, 0.07);
+            box-shadow: inset 0 0 160px rgba(249, 115, 22, 0.07);
         }
 
         body.perf-mode #axis-gizmo,
@@ -4197,8 +4185,8 @@
 
         #viewbar .vbtn.active {
             border-color: var(--accent);
-            background: rgba(34, 211, 238, 0.1);
-            box-shadow: 0 0 12px rgba(34, 211, 238, 0.25);
+            background: rgba(249, 115, 22, 0.1);
+            box-shadow: 0 0 12px rgba(249, 115, 22, 0.25);
         }
 
         #viewbar .vbtn.vbtn-3d .vn {
@@ -4251,9 +4239,9 @@
 
         #viewbar .vtoggle.active {
             border-color: var(--accent);
-            background: rgba(34, 211, 238, 0.12);
+            background: rgba(249, 115, 22, 0.12);
             color: var(--accent);
-            box-shadow: 0 0 12px rgba(34, 211, 238, 0.22);
+            box-shadow: 0 0 12px rgba(249, 115, 22, 0.22);
         }
 
         #viewbar .vtoggle.spinning .vt-ico {
@@ -4280,7 +4268,7 @@
         <div class="kb-bg" aria-hidden="true">
             <div class="kb-glow"></div>
             <svg viewBox="0 0 1000 600" preserveAspectRatio="xMidYMid slice">
-                <g stroke="#22d3ee" stroke-width="1" opacity="0.5">
+                <g stroke="#f97316" stroke-width="1" opacity="0.5">
                     <line x1="120" y1="90" x2="260" y2="180" />
                     <line x1="260" y1="180" x2="205" y2="320" />
                     <line x1="205" y1="320" x2="80" y2="410" />
@@ -4292,7 +4280,7 @@
                     <line x1="120" y1="480" x2="240" y2="540" />
                     <line x1="700" y1="470" x2="620" y2="540" />
                 </g>
-                <g fill="#22d3ee">
+                <g fill="#5b8fc9">
                     <circle cx="120" cy="90" r="2.2" />
                     <circle cx="260" cy="180" r="1.6" />
                     <circle cx="205" cy="320" r="2" />
@@ -4503,12 +4491,12 @@
         <!-- Bottom view bar: six face projections + 3D, plus box / spin toggles.
              Number colours match the digi labels on the boundary-box faces. -->
         <div id="viewbar" class="canvas-overlay">
-            <button class="vbtn" data-view="1" title="View face 1 — XY plane (front)"><span class="vn" style="color:#22d3ee">1</span><span class="vp">XY</span></button>
-            <button class="vbtn" data-view="2" title="View face 2 — YZ plane (right)"><span class="vn" style="color:#c084fc">2</span><span class="vp">YZ</span></button>
-            <button class="vbtn" data-view="3" title="View face 3 — XY plane (back)"><span class="vn" style="color:#4ade80">3</span><span class="vp">XY</span></button>
-            <button class="vbtn" data-view="4" title="View face 4 — YZ plane (left)"><span class="vn" style="color:#fbbf24">4</span><span class="vp">YZ</span></button>
-            <button class="vbtn" data-view="5" title="View face 5 — XZ plane (top)"><span class="vn" style="color:#f472b6">5</span><span class="vp">XZ</span></button>
-            <button class="vbtn" data-view="6" title="View face 6 — XZ plane (bottom)"><span class="vn" style="color:#fb923c">6</span><span class="vp">XZ</span></button>
+            <button class="vbtn" data-view="1" title="View face 1 — XY plane (front)"><span class="vn" style="color:#f97316">1</span><span class="vp">XY</span></button>
+            <button class="vbtn" data-view="2" title="View face 2 — YZ plane (right)"><span class="vn" style="color:#3a6ea5">2</span><span class="vp">YZ</span></button>
+            <button class="vbtn" data-view="3" title="View face 3 — XY plane (back)"><span class="vn" style="color:#c2410c">3</span><span class="vp">XY</span></button>
+            <button class="vbtn" data-view="4" title="View face 4 — YZ plane (left)"><span class="vn" style="color:#5b8fc9">4</span><span class="vp">YZ</span></button>
+            <button class="vbtn" data-view="5" title="View face 5 — XZ plane (top)"><span class="vn" style="color:#f59e0b">5</span><span class="vp">XZ</span></button>
+            <button class="vbtn" data-view="6" title="View face 6 — XZ plane (bottom)"><span class="vn" style="color:#2f5f96">6</span><span class="vp">XZ</span></button>
             <button class="vbtn vbtn-3d active" data-view="3d" title="Isometric 3D view"><span class="vn">3D</span><span class="vp">ISO</span></button>
             <div class="vsep"></div>
             <button class="vtoggle" id="zoom-in" title="Zoom in — move camera closer (mouse wheel up)"><span class="vt-ico">＋</span><span class="vt-lbl">In</span></button>
@@ -4531,9 +4519,6 @@
                 <div class="brand">
                     <div class="brand-dot"></div>
                     <h2 id="brand-title">UltraGraph</h2>
-                    <!-- Project switcher. Populated from /api/projects; hidden in
-                         single-project mode or when only one project exists. -->
-                    <select id="project-select" title="Switch project" hidden></select>
                 </div>
                 <div class="header-actions">
                     <button id="kb-open-btn" class="kb-open-btn" title="Browse knowledge bases" hidden>
@@ -4881,35 +4866,39 @@
     </div>
 
     <script type="module">
-        import { ForceGraph3D, THREE, SpriteText, EffectComposer, RenderPass, UnrealBloomPass }
+        import { ForceGraph3D, THREE, SpriteText }
             from './ug-vis.bundle.js';
 
         const config = {
             nodeRadius: { File: 10, Interface: 7, Function: 6, Class: 8, Dependency: 5, Config: 8, Default: 6 },
+            // Two-family "ink" palette: warm oranges carry the structural
+            // spine (folders, files, deps), steel blues carry code symbols —
+            // mirroring the orange-trunk / blue-scatter reading of the
+            // reference art (docs/node-diagram-ref.jpg).
             colorMap: {
-                File: '#22d3ee',
-                Folder: '#c99820',
-                Interface: '#f472b6',
-                Function: '#4ade80',
-                Class: '#c084fc',
+                File: '#f26a1b',
+                Folder: '#c2410c',
+                Interface: '#8fb8dd',
+                Function: '#5b8fc9',
+                Class: '#2f5f96',
                 Dependency: '#fb923c',
-                Config: '#fbbf24',
-                Default: '#7dd3fc'
+                Config: '#f59e0b',
+                Default: '#7ba3c9'
             },
             relColorMap: {
-                Exports: '#4ade80',
-                Imports: '#f472b6',
-                Extends: '#c084fc',
-                Implements: '#fb923c',
-                Calls: '#dfd9cc',
-                Uses: '#22d3ee',
+                Exports: '#3a6ea5',
+                Imports: '#5b8fc9',
+                Extends: '#2f5f96',
+                Implements: '#8fb8dd',
+                Calls: '#9db5cc',
+                Uses: '#c98d5e',
                 Requires: '#94a3b8',
                 DependsOn: '#fb923c',
-                References: '#a78bfa',
-                Contains: '#4ade80'
+                References: '#a4b8cc',
+                Contains: '#e8712a'
             },
             getColor: g => config.colorMap[g] || config.colorMap.Default,
-            getRelColor: r => r ? (config.relColorMap[r] || '#71717a') : '#71717a'
+            getRelColor: r => r ? (config.relColorMap[r] || '#9aa7b4') : '#9aa7b4'
         };
 
         const state = {
@@ -4946,8 +4935,8 @@
             autoSpin: false         // camera auto-rotation
         };
 
-        // The 3d-force-graph instance and its post-processing handles.
-        let Graph, bloomPass, width, height, selectionRing, boundaryCube;
+        // The 3d-force-graph instance and its scene-decor handles.
+        let Graph, width, height, selectionRing, boundaryCube, particleField;
         let _glowTex, _ringTex;
         // Highlight sets re-evaluated by the node/link style accessors.
         state.highlightNodes = new Set();
@@ -4983,9 +4972,7 @@
         // listeners, etc. in this page session. Re-running it in place (by
         // calling loadGraph() a second time) would double-attach every
         // listener and leak the old three.js scene, so once this is true,
-        // switching projects goes through a full page reload instead —
-        // the same safe path the sidebar's quick-switch dropdown already
-        // uses.
+        // switching projects goes through a full page reload instead.
         let graphInitialized = false;
         // Whether the server is in multi-project mode — gates the KB
         // Manager reopen affordances (icon button + clicking the brand).
@@ -4994,7 +4981,7 @@
         // palette the legend / view-bar face labels already use
         // elsewhere in the app, so the manager reads as part of the
         // same product rather than a bolted-on landing page.
-        const KB_PALETTE = ['#22d3ee', '#c084fc', '#4ade80', '#fbbf24', '#f472b6', '#fb923c'];
+        const KB_PALETTE = ['#f97316', '#5b8fc9', '#fb923c', '#8fb8dd', '#f59e0b', '#c2410c'];
 
         function setKbStatus(text) {
             const el = document.getElementById('kb-status-text');
@@ -5598,6 +5585,93 @@
             return { directChildren, siblings: siblingSet.size, parents: parents.length };
         }
 
+        // ─── Hierarchy tab ──────────────────────────────────
+        // The selected node's containment context: ancestors up to two levels,
+        // every sibling under its direct parent, and its own descendants down
+        // to two levels. Long generations are windowed around the selection so
+        // a file among hundreds of siblings stays readable.
+        const HIER_SIBLING_CAP = 40;
+        const HIER_CHILD_CAP = 40;
+        const HIER_GRANDCHILD_CAP = 8;
+
+        function buildHierarchyHtml(d) {
+            const { childrenOf, parentOf } = getContainsMaps();
+            const get = id => state.nodeById && state.nodeById.get(id);
+
+            const sortNodes = ids => ids
+                .map(get).filter(Boolean)
+                .sort((a, b) => ((a.startLine ?? Infinity) - (b.startLine ?? Infinity))
+                    || String(a.name).localeCompare(String(b.name)));
+
+            const rowHtml = (n, depth, isSelected) => {
+                const c = config.getColor(n.group);
+                const kids = (childrenOf.get(n.id) || []).length;
+                const lines = n.startLine
+                    ? `L${n.startLine}${n.endLine && n.endLine !== n.startLine ? '–' + n.endLine : ''}` : '';
+                return `<div class="hier-row${isSelected ? ' selected' : ''}${kids ? ' has-children' : ''}"
+                    data-id="${escapeHtml(n.id)}" style="padding-left:${8 + depth * 14}px">
+                    <div class="dot" style="background:${c};color:${c}"></div>
+                    <span class="name" title="${escapeHtml(n.name)}">${escapeHtml(truncateName(n.name))}</span>
+                    <span class="kind">${escapeHtml(n.group || '')}</span>
+                    <span class="lines">${lines}</span>
+                </div>`;
+            };
+            const moreHtml = (count, depth) =>
+                `<div class="hier-more" style="padding-left:${8 + depth * 14}px">… ${count} more</div>`;
+
+            // Ancestor chain, nearest last: [grandparent?, parent?]. Contains
+            // is effectively a tree, so we follow the first parent.
+            const chain = [];
+            let cur = d.id;
+            for (let i = 0; i < 2; i++) {
+                const ps = parentOf.get(cur) || [];
+                const p = ps.length ? get(ps[0]) : null;
+                if (!p) break;
+                chain.unshift(p);
+                cur = p.id;
+            }
+
+            let html = '';
+            let depth = 0;
+            for (const a of chain) html += rowHtml(a, depth++, false);
+
+            // The selected node's generation: all siblings under its direct
+            // parent (just the node itself when it has no parent).
+            const parent = chain[chain.length - 1];
+            let generation = parent ? sortNodes(childrenOf.get(parent.id) || []) : [d];
+            if (!generation.some(n => n.id === d.id)) generation = [d, ...generation];
+
+            // Window an oversized generation around the selection.
+            let shown = generation, hiddenSiblings = 0;
+            if (generation.length > HIER_SIBLING_CAP) {
+                const idx = generation.findIndex(n => n.id === d.id);
+                const start = Math.max(0, Math.min(idx - HIER_SIBLING_CAP / 2, generation.length - HIER_SIBLING_CAP));
+                shown = generation.slice(start, start + HIER_SIBLING_CAP);
+                hiddenSiblings = generation.length - shown.length;
+            }
+            for (const n of shown) {
+                const isSel = n.id === d.id;
+                html += rowHtml(n, depth, isSel);
+                if (!isSel) continue;
+                // Descendants of the selected node only, two levels deep.
+                const kids = sortNodes(childrenOf.get(n.id) || []);
+                for (const k of kids.slice(0, HIER_CHILD_CAP)) {
+                    html += rowHtml(k, depth + 1, false);
+                    const gks = sortNodes(childrenOf.get(k.id) || []);
+                    for (const g of gks.slice(0, HIER_GRANDCHILD_CAP)) html += rowHtml(g, depth + 2, false);
+                    if (gks.length > HIER_GRANDCHILD_CAP) html += moreHtml(gks.length - HIER_GRANDCHILD_CAP, depth + 2);
+                }
+                if (kids.length > HIER_CHILD_CAP) html += moreHtml(kids.length - HIER_CHILD_CAP, depth + 1);
+            }
+            if (hiddenSiblings) html += moreHtml(hiddenSiblings, depth);
+
+            const hasKids = (childrenOf.get(d.id) || []).length > 0;
+            if (!chain.length && !hasKids && generation.length === 1) {
+                return `<div class="hier-empty">No containment hierarchy for this node.</div>`;
+            }
+            return `<div class="hier-list">${html}</div>`;
+        }
+
         function initialize() {
             const container = document.getElementById('container');
             width = container.clientWidth;
@@ -5640,7 +5714,6 @@
             wirePanelTabs();
             wireCatalog();
             probeCapabilities();
-            initProjectSwitcher();
             startHealthPolling();
 
             document.getElementById('info-close').addEventListener('click', () => {
@@ -5681,64 +5754,6 @@
         function startHealthPolling() {
             pollHealth();
             setInterval(pollHealth, 3500000);
-        }
-
-        // ─── Project switcher ───────────────────────────────
-        // The server holds one active project per process; selecting a
-        // different one swaps what every root-relative route serves, so
-        // after a successful switch we simply reload the page.
-
-        async function initProjectSwitcher() {
-            const select = document.getElementById('project-select');
-            if (!select) return;
-            let info;
-            try {
-                const res = await fetch('/api/projects', { cache: 'no-store' });
-                if (!res.ok) return;
-                info = await res.json();
-            } catch (err) {
-                // Static serve / older server without the endpoint: keep hidden.
-                return;
-            }
-            const projects = info.projects || [];
-            if (info.mode !== 'multi' || projects.length < 2) return;
-
-            select.innerHTML = '';
-            for (const p of projects) {
-                const opt = document.createElement('option');
-                opt.value = p.name;
-                const counts = p.nodes ? ` · ${p.nodes.toLocaleString()}N` : '';
-                opt.textContent = `${p.name}${counts}`;
-                opt.title = p.repoRoot ? `${p.name} — ${p.repoRoot}` : p.name;
-                if (p.name === info.active) opt.selected = true;
-                select.appendChild(opt);
-            }
-            select.hidden = false;
-
-            select.onchange = async () => {
-                const name = select.value;
-                if (name === info.active) return;
-                select.disabled = true;
-                try {
-                    const res = await fetch('/api/projects/select', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ name }),
-                    });
-                    if (!res.ok) {
-                        const err = await res.json().catch(() => ({}));
-                        console.warn('project switch failed:', err.error || res.status);
-                        select.value = info.active;
-                        select.disabled = false;
-                        return;
-                    }
-                    reloadOntoActiveProject();
-                } catch (err) {
-                    console.warn('project switch failed:', err);
-                    select.value = info.active;
-                    select.disabled = false;
-                }
-            };
         }
 
         // ─── Capabilities probe ─────────────────────────────
@@ -6946,21 +6961,21 @@
 
         // ─── 3D force graph & rendering ──────────────────────
 
-        // Selected node / hovered neighbours render bright white so the bloom
-        // pass makes them glow harder; everything else keeps its type colour.
+        // Selected node / hovered neighbours flare to a hot saturated orange —
+        // the brightest ink on the page; everything else keeps its type colour.
         function nodeColorFor(n) {
-            if (state.selectedNode && n.id === state.selectedNode.id) return '#ffffff';
-            if (state.highlightNodes.has(n.id)) return '#ffffff';
+            if (state.selectedNode && n.id === state.selectedNode.id) return '#ff3d00';
+            if (state.highlightNodes.has(n.id)) return '#f96716';
             return config.getColor(n.group);
         }
         function linkColorFor(e) {
-            if (state.highlightLinks.has(e)) return '#ffffff';
+            if (state.highlightLinks.has(e)) return '#f96716';
             // In focus mode, links not wholly inside the focused neighbourhood
             // recede to a near-background grey so the local structure stands out.
             if (state.focusNode) {
                 const sId = e.source.id || e.source;
                 const tId = e.target.id || e.target;
-                if (!(state.focusSet.has(sId) && state.focusSet.has(tId))) return '#191920';
+                if (!(state.focusSet.has(sId) && state.focusSet.has(tId))) return '#e9e5de';
             }
             return config.getRelColor(e.rel);
         }
@@ -7014,27 +7029,28 @@
             return _ringTex;
         }
 
-        // A subtle scene backdrop: near-black with faint coloured ambient glows in
-        // the corners, so the background reads as soft gradient light rather than a
-        // flat void. Kept dark (low alpha) so it stays below the bloom threshold.
+        // A subtle scene backdrop: warm paper-white with soft out-of-focus
+        // washes of the two ink families (orange / steel blue), so the
+        // background reads like the blurred far layer of the reference art
+        // rather than a flat white void.
         function backgroundTexture() {
             const c = document.createElement('canvas');
             c.width = c.height = 1024;
             const ctx = c.getContext('2d');
-            ctx.fillStyle = '#09090b';
+            ctx.fillStyle = '#fdfcfa';
             ctx.fillRect(0, 0, 1024, 1024);
             const glow = (x, y, r, color) => {
                 const g = ctx.createRadialGradient(x, y, 0, x, y, r);
                 g.addColorStop(0, color);
-                g.addColorStop(1, 'rgba(9,9,11,0)');
+                g.addColorStop(1, 'rgba(253,252,250,0)');
                 ctx.fillStyle = g;
                 ctx.fillRect(0, 0, 1024, 1024);
             };
-            glow(512, 1080, 760, 'rgba(34,211,238,0.12)');   // cyan, up from bottom
-            glow(120, 130, 560, 'rgba(34,211,238,0.07)');    // cyan, top-left
-            glow(940, 1010, 600, 'rgba(192,132,252,0.09)');  // violet, bottom-right
-            glow(980, 170, 460, 'rgba(244,114,182,0.06)');   // pink, top-right
-            glow(120, 940, 420, 'rgba(74,222,128,0.05)');    // green, bottom-left
+            glow(790, 190, 620, 'rgba(233,100,28,0.10)');   // warm haze, top-right
+            glow(170, 780, 640, 'rgba(58,110,165,0.11)');   // blue haze, bottom-left
+            glow(320, 150, 460, 'rgba(91,143,201,0.07)');   // pale blue, top-left
+            glow(880, 880, 520, 'rgba(194,65,12,0.07)');    // rust haze, bottom-right
+            glow(512, 512, 700, 'rgba(255,255,255,0.5)');   // bright centre, keeps focus mid-frame
             const t = new THREE.CanvasTexture(c);
             t.colorSpace = THREE.SRGBColorSpace;
             t.minFilter = THREE.LinearFilter;
@@ -7043,8 +7059,10 @@
         }
 
         // Custom node object: an unlit (self-illuminated) sphere so nodes stay
-        // bright from any camera angle and feed the bloom pass for a glow, plus
-        // a soft additive halo and an optional text label.
+        // saturated from any camera angle, plus a soft tinted halo (a normal-
+        // blend colour wash — additive glow would vanish against the white
+        // paper), a translucent "membrane" shell on the larger cell-like
+        // nodes, and an optional text label.
         function makeNodeObject(n) {
             const radius = nodeRadiusFor(n);
             const seg = state.perfMode ? 6 : 16;
@@ -7058,27 +7076,40 @@
             group.add(core);
 
             if (!state.perfMode) {
-                // Soft additive radial-gradient halo — gives every node a gentle
-                // glow even before the bloom pass kicks in.
+                // Soft tinted radial-gradient halo — reads as the out-of-focus
+                // ink bleed around every node in the reference art.
                 const halo = new THREE.Sprite(new THREE.SpriteMaterial({
                     map: glowTexture(),
                     color: config.getColor(n.group),
                     transparent: true,
-                    opacity: 0.25,
-                    blending: THREE.AdditiveBlending,
+                    opacity: 0.3,
                     depthWrite: false,
                 }));
-                halo.scale.setScalar(radius * 0.8);
+                n.__haloBase = radius * 4.5;
+                halo.scale.setScalar(n.__haloBase);
                 n.__nodeHalo = halo;
-                n.__haloBase = radius * 4;
                 group.add(halo);
+
+                // Larger nodes get a translucent outer shell — the nucleus-
+                // inside-a-membrane look the big cells in the reference have.
+                if (radius >= 6) {
+                    const shell = new THREE.Mesh(
+                        new THREE.SphereGeometry(radius * 1.65, seg, seg),
+                        new THREE.MeshBasicMaterial({
+                            color: config.getColor(n.group),
+                            transparent: true,
+                            opacity: 0.14,
+                            depthWrite: false,
+                        }));
+                    group.add(shell);
+                }
             }
 
             if (!state.skipLabels) {
                 const label = truncateName(n.name);
                 if (label) {
                     const s = new SpriteText(label);
-                    s.color = 'rgba(228,228,231,0.92)';
+                    s.color = 'rgba(71,85,105,0.95)';
                     s.fontFace = 'JetBrains Mono, monospace';
                     s.textHeight = 3.5;
                     s.material.depthWrite = false;
@@ -7128,24 +7159,34 @@
         function createGraph() {
             const el = document.getElementById('graph-3d');
             window.addEventListener('mousemove', e => {
-                state._mouse = { x: e.pageX, y: e.pageY };
+                // page coords position the tooltip; client coords feed the
+                // pointerOverCanvas hit-test (elementFromPoint wants viewport
+                // coordinates — identical here, but kept separate for safety).
+                state._mouse = { x: e.pageX, y: e.pageY, cx: e.clientX, cy: e.clientY };
+                // A hover struck on-canvas would otherwise stick (highlight +
+                // tooltip) when the pointer crosses into a panel, because the
+                // renderer never reports a leave for occluded pixels.
+                if (state._hoverNode && !pointerOverCanvas()) handleNodeHover(null);
             });
 
             Graph = ForceGraph3D({ controlType: 'orbit' })(el)
-                .backgroundColor('#09090b')
+                .backgroundColor('#fdfcfa')
                 .graphData({ nodes: state.graph.nodes, links: state.graph.edges })
                 .nodeId('id')
                 .nodeVisibility(n => !(state.nodeHidden && state.nodeHidden(n)))
                 .nodeThreeObject(makeNodeObject)
                 .linkColor(linkColorFor)
-                .linkOpacity(0.35)
-                .linkWidth(0.4)
+                .linkOpacity(0.5)
+                // Containment edges are the thick orange branches of the
+                // reference art; everything else stays a fine strand.
+                .linkWidth(e => e.rel === 'Contains' ? 1.1 : 0.45)
                 .linkVisibility(e => !(state.linkHidden && state.linkHidden(e)))
                 .linkDirectionalArrowLength(state.perfMode ? 0 : 3)
                 .linkDirectionalArrowRelPos(1)
                 .linkDirectionalParticles(e => state.highlightLinks.has(e) ? 4 : 0)
                 .linkDirectionalParticleWidth(1.6)
                 .linkDirectionalParticleSpeed(0.012)
+                .linkDirectionalParticleColor(() => '#ff3d00')
                 .enableNodeDrag(true)
                 .onNodeHover(handleNodeHover)
                 .onNodeClick((n, evt) => handleNodeClick(evt, n))
@@ -7170,36 +7211,24 @@
             Graph.cooldownTicks(state.perfMode ? 80 : 100);
 
             // Subtle gradient backdrop (in-scene, so it sits behind the graph and
-            // reads as soft ambient light instead of a flat black void).
+            // reads as blurred ambient washes instead of a flat white void).
             Graph.scene().background = backgroundTexture();
 
-            Graph.scene().fog = new THREE.FogExp2(0x09090b, 0.001);
-
-            // Cinematic bloom — skipped in perf mode to protect framerate. The
-            // post-processing composer is created lazily on the first render, so
-            // defer until it exists before attaching the pass.
-            if (!state.perfMode) {
-                const addBloom = () => {
-                    const composer = Graph.postProcessingComposer && Graph.postProcessingComposer();
-                    if (!composer) { requestAnimationFrame(addBloom); return; }
-                    // strength, radius, threshold — a higher threshold + lower
-                    // strength keeps the glow tasteful (bright cores bloom; dense or
-                    // close-up clusters don't wash the whole view to white).
-                    bloomPass = new UnrealBloomPass(new THREE.Vector2(width, height), 0.45, 0.5, 0.32);
-                    composer.addPass(bloomPass);
-                };
-                addBloom();
-            }
+            // White fog doubles as depth-of-field: far nodes and strands melt
+            // into the paper exactly like the out-of-focus layers of the
+            // reference art. (The old dark theme used bloom for atmosphere;
+            // additive bloom washes out on a light background, so fog + tinted
+            // halos carry the effect instead.)
+            Graph.scene().fog = new THREE.FogExp2(0xfdfcfa, 0.001);
 
             // Animated selection marker: a spinning, pulsing ring that sits on the
             // currently selected node (added to the scene, repositioned each frame).
             if (!state.perfMode) {
                 selectionRing = new THREE.Sprite(new THREE.SpriteMaterial({
                     map: ringTexture(),
-                    color: 0xffffff,
+                    color: 0xff3d00,
                     transparent: true,
                     opacity: 0,
-                    blending: THREE.AdditiveBlending,
                     depthWrite: false,
                     depthTest: false,
                 }));
@@ -7217,7 +7246,7 @@
                 // box must be rebuilt on every settle too — sizing it once from an
                 // early snapshot leaves nodes outside it as the layout expands.
                 applyDepthCues();
-                if (!state.perfMode) updateBoundaryCube();
+                if (!state.perfMode) { updateBoundaryCube(); updateParticleField(); }
                 // Only fly the camera the first time.
                 if (state._didFit) return;
                 state._didFit = true;
@@ -7276,8 +7305,9 @@
             state._labelDist = Math.max(340, ext.radius * 0.5);
             const fog = Graph && Graph.scene().fog;
             if (fog) {
-                // Gentle exponential fade keyed to size; capped at the original
-                // 0.001 so small graphs look unchanged.
+                // Exponential fade into the paper-white, keyed to size — this is
+                // the depth-of-field of the reference art. Capped so small
+                // graphs keep everything crisp.
                 fog.density = Math.min(0.001, 0.16 / ext.radius);
             }
         }
@@ -7350,12 +7380,11 @@
             ctx.font = 'bold 44px Inter, sans-serif';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
-            ctx.shadowColor = 'rgba(0,0,0,0.6)';
+            ctx.shadowColor = 'rgba(255,255,255,0.9)';
             ctx.shadowBlur = 6;
             ctx.fillStyle = hex;
             ctx.fillText(text, 32, 34);
             ctx.shadowBlur = 0;
-            ctx.fillStyle = '#fff';
             ctx.fillText(text, 32, 34);
             const tex = new THREE.CanvasTexture(c);
             tex.minFilter = THREE.LinearFilter;
@@ -7419,7 +7448,7 @@
                     ctx.shadowColor = hex;
                     ctx.shadowBlur = t * 1.4;
                 } else {
-                    ctx.fillStyle = 'rgba(255,255,255,0.05)';
+                    ctx.fillStyle = 'rgba(71,85,105,0.12)';
                     ctx.shadowBlur = 0;
                 }
                 cap(sx, sy, len, orient === 'h');
@@ -7438,7 +7467,7 @@
             const r = 18, pad = 8;
             ctx.beginPath();
             ctx.roundRect(pad, pad, W - 2 * pad, H - 2 * pad, r);
-            ctx.fillStyle = 'rgba(9,9,11,0.45)';
+            ctx.fillStyle = 'rgba(255,255,255,0.35)';
             ctx.fill();
             ctx.lineWidth = 4;
             ctx.strokeStyle = hex;
@@ -7503,11 +7532,11 @@
             // thin lines can't be thickened — instead each of the 12 edges is drawn
             // as a row of short cylinders ("dashes") that have real 3D thickness,
             // plus a sphere at each of the 8 corners so the box reads clearly.
-            const accent = 0x22d3ee;
+            const accent = 0x8fa3b8; // quiet slate so the frame recedes behind the ink
             const diag = Math.hypot(w, h, d) || 1;
             const tubeR = Math.max(0.9, Math.min(6, diag * 0.0028));
             const cubeMat = new THREE.MeshBasicMaterial({
-                color: accent, transparent: true, opacity: 0.55, depthWrite: false,
+                color: accent, transparent: true, opacity: 0.22, depthWrite: false,
             });
             // Shared geometries: a unit-height cylinder (scaled per dash) and a
             // corner sphere — so the whole cube is a handful of geometries.
@@ -7558,12 +7587,12 @@
             // Numbered to match the bottom view bar: view N looks at face N.
             const hw = w / 2, hh = h / 2, hd = d / 2;
             const faceDefs = [
-                { num: 1, hex: '#22d3ee', pos: [cx, cy, cz + hd], rot: [0, 0, 0], size: [w, h] }, // +Z  XY front
-                { num: 2, hex: '#c084fc', pos: [cx + hw, cy, cz], rot: [0, Math.PI / 2, 0], size: [d, h] }, // +X  YZ right
-                { num: 3, hex: '#4ade80', pos: [cx, cy, cz - hd], rot: [0, Math.PI, 0], size: [w, h] }, // -Z  XY back
-                { num: 4, hex: '#fbbf24', pos: [cx - hw, cy, cz], rot: [0, -Math.PI / 2, 0], size: [d, h] }, // -X  YZ left
-                { num: 5, hex: '#f472b6', pos: [cx, cy + hh, cz], rot: [-Math.PI / 2, 0, 0], size: [w, d] }, // +Y  XZ top
-                { num: 6, hex: '#fb923c', pos: [cx, cy - hh, cz], rot: [Math.PI / 2, 0, 0], size: [w, d] }, // -Y  XZ bottom
+                { num: 1, hex: '#f97316', pos: [cx, cy, cz + hd], rot: [0, 0, 0], size: [w, h] }, // +Z  XY front
+                { num: 2, hex: '#3a6ea5', pos: [cx + hw, cy, cz], rot: [0, Math.PI / 2, 0], size: [d, h] }, // +X  YZ right
+                { num: 3, hex: '#c2410c', pos: [cx, cy, cz - hd], rot: [0, Math.PI, 0], size: [w, h] }, // -Z  XY back
+                { num: 4, hex: '#5b8fc9', pos: [cx - hw, cy, cz], rot: [0, -Math.PI / 2, 0], size: [d, h] }, // -X  YZ left
+                { num: 5, hex: '#f59e0b', pos: [cx, cy + hh, cz], rot: [-Math.PI / 2, 0, 0], size: [w, d] }, // +Y  XZ top
+                { num: 6, hex: '#2f5f96', pos: [cx, cy - hh, cz], rot: [Math.PI / 2, 0, 0], size: [w, d] }, // -Y  XZ bottom
             ];
             const labelScale = Math.max(16, Math.min(150, Math.min(w, h, d) * 0.18));
             for (const f of faceDefs) {
@@ -7617,6 +7646,86 @@
             Graph.scene().add(group);
         }
 
+        // ─── Ambient particle field ─────────────────────────
+        // Tiny ink flecks scattered around the settled node positions — the
+        // "splatter" texture of the reference art. Three Points layers give
+        // three fleck sizes: a fine dust layer, a mid layer, and a sparse
+        // large layer whose soft texture reads as out-of-focus bokeh. All of
+        // them inherit the scene fog, so distant flecks melt into the paper.
+        let _dotTex;
+        function dotTexture() {
+            if (_dotTex) return _dotTex;
+            const c = document.createElement('canvas');
+            c.width = c.height = 64;
+            const ctx = c.getContext('2d');
+            const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+            g.addColorStop(0, 'rgba(255,255,255,1)');
+            g.addColorStop(0.4, 'rgba(255,255,255,0.9)');
+            g.addColorStop(0.75, 'rgba(255,255,255,0.25)');
+            g.addColorStop(1, 'rgba(255,255,255,0)');
+            ctx.fillStyle = g;
+            ctx.fillRect(0, 0, 64, 64);
+            _dotTex = new THREE.CanvasTexture(c);
+            _dotTex.minFilter = THREE.LinearFilter;
+            _dotTex.generateMipmaps = false;
+            return _dotTex;
+        }
+
+        function updateParticleField() {
+            if (!Graph || state.perfMode) return;
+            const nodes = state.graph.nodes.filter(n => Number.isFinite(n.x));
+            if (!nodes.length) return;
+            // Rebuilt on every settle; dispose the old field's GPU resources.
+            if (particleField) {
+                Graph.scene().remove(particleField);
+                particleField.traverse(o => {
+                    if (o.geometry) o.geometry.dispose();
+                    if (o.material) o.material.dispose();
+                });
+                particleField = null;
+            }
+            const group = new THREE.Group();
+            // layers: [fleck size, share of total, opacity]
+            const layers = [[1.6, 0.68, 0.75], [3.4, 0.24, 0.45], [7.5, 0.08, 0.2]];
+            const total = Math.min(5000, Math.max(900, nodes.length * 10));
+            const tmp = new THREE.Color();
+            for (const [size, share, opacity] of layers) {
+                const count = Math.max(1, Math.round(total * share));
+                const pos = new Float32Array(count * 3);
+                const col = new Float32Array(count * 3);
+                for (let i = 0; i < count; i++) {
+                    // Cluster each fleck around a random node so the splatter
+                    // follows the graph's shape instead of filling the box.
+                    const n = nodes[(Math.random() * nodes.length) | 0];
+                    const r = (n.__nodeRadius || 5) * (2 + Math.pow(Math.random(), 2) * 16);
+                    const th = Math.random() * Math.PI * 2;
+                    const ph = Math.acos(2 * Math.random() - 1);
+                    pos[i * 3] = n.x + r * Math.sin(ph) * Math.cos(th);
+                    pos[i * 3 + 1] = n.y + r * Math.sin(ph) * Math.sin(th);
+                    pos[i * 3 + 2] = (n.z || 0) + r * Math.cos(ph);
+                    // Echo the anchor node's ink family, with a little jitter
+                    // so the dust doesn't read as a flat colour.
+                    tmp.set(config.getColor(n.group));
+                    tmp.offsetHSL(0, (Math.random() - 0.5) * 0.1, (Math.random() - 0.35) * 0.25);
+                    col[i * 3] = tmp.r; col[i * 3 + 1] = tmp.g; col[i * 3 + 2] = tmp.b;
+                }
+                const geo = new THREE.BufferGeometry();
+                geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+                geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+                group.add(new THREE.Points(geo, new THREE.PointsMaterial({
+                    map: dotTexture(),
+                    size,
+                    vertexColors: true,
+                    transparent: true,
+                    opacity,
+                    depthWrite: false,
+                    sizeAttenuation: true,
+                })));
+            }
+            particleField = group;
+            Graph.scene().add(group);
+        }
+
         // Continuous rAF loop driving the selected-node ring + halo pulse.
         function startSelectionAnimation() {
             const tick = () => {
@@ -7627,17 +7736,16 @@
                 const t = performance.now() * 0.001;
                 const wave = Math.sin(t * 3.2);
                 const pulse = 1 + 0.16 * wave;
-                // Ring sized to a small multiple of the node radius. (Was 16×,
-                // which — being additive + bloomed — washed the view to white when
-                // the camera was close, e.g. in focus mode.)
+                // Ring sized to a small multiple of the node radius so it stays
+                // legible without swamping the neighbourhood at close range.
                 const base = Math.max((n.__nodeRadius || 4) * 5, 26);
                 selectionRing.position.set(n.x, n.y, n.z || 0);
                 selectionRing.scale.setScalar(base * pulse);
                 selectionRing.material.rotation += 0.03;
                 selectionRing.material.opacity = 0.7 + 0.15 * wave;
                 selectionRing.visible = true;
-                // Breathe the selected node's own halo and core too (gently, so the
-                // additive halo doesn't bloom out at close range).
+                // Breathe the selected node's own halo and core too (gently, so
+                // the tinted halo doesn't swamp its neighbours at close range).
                 if (n.__nodeHalo) {
                     n.__nodeHalo.scale.setScalar((n.__haloBase || base) * (1 + 0.2 * wave));
                 }
@@ -7689,7 +7797,24 @@
 
         // ─── Hover & selection ──────────────────────────────
 
+        // Whether the pointer is genuinely over the 3D canvas (and not over
+        // the sidebar, navbar, or any other panel stacked above it). The
+        // renderer re-raycasts its *last known* canvas coordinates every
+        // frame, so while the pointer is parked over a panel, camera flights
+        // and layout ticks can slide a node under that stale position and
+        // fire phantom hover events.
+        function pointerOverCanvas() {
+            const m = state._mouse;
+            if (!m) return true;
+            const el = document.elementFromPoint(m.cx ?? m.x, m.cy ?? m.y);
+            return !!el && !!el.closest('#graph-3d');
+        }
+
         function handleNodeHover(d, prev) {
+            // Suppress hovers raycast from a stale pointer position while the
+            // user is actually working in a panel (see pointerOverCanvas).
+            if (d && !pointerOverCanvas()) d = null;
+            state._hoverNode = d || null;
             const el = document.getElementById('graph-3d');
             if (el) el.style.cursor = d ? 'pointer' : null;
             const tooltip = document.getElementById('tooltip');
@@ -7766,14 +7891,18 @@
             if (d.extends && d.extends.length) html += `<div class="info-row"><span class="info-label">Extends</span><span class="info-value">${escapeHtml(d.extends.join(', '))}</span></div>`;
             if (d.implements && d.implements.length) html += `<div class="info-row"><span class="info-label">Implements</span><span class="info-value">${escapeHtml(d.implements.join(', '))}</span></div>`;
 
-            const activeTab = state.infoTab === 'related' ? 'related' : 'preview';
+            const activeTab = ['related', 'hierarchy'].includes(state.infoTab) ? state.infoTab : 'preview';
             html += `<div class="related-section">
                 <div class="info-tabs">
                     <button class="info-tab${activeTab === 'preview' ? ' active' : ''}" data-view="preview">Preview</button>
+                    <button class="info-tab${activeTab === 'hierarchy' ? ' active' : ''}" data-view="hierarchy">Hierarchy</button>
                     <button class="info-tab${activeTab === 'related' ? ' active' : ''}" data-view="related">Related${related.length ? ' (' + related.length + ')' : ''}</button>
                 </div>
                 <div class="info-view${activeTab === 'preview' ? ' active' : ''}" data-view="preview">
                     <div id="preview-content"></div>
+                </div>
+                <div class="info-view${activeTab === 'hierarchy' ? ' active' : ''}" data-view="hierarchy">
+                    ${buildHierarchyHtml(d)}
                 </div>
                 <div class="info-view${activeTab === 'related' ? ' active' : ''}" data-view="related">`;
             if (related.length > 0) {
@@ -7795,7 +7924,8 @@
             </div>`;
 
             body.innerHTML = html;
-            body.querySelectorAll('.related-item').forEach(item => {
+            // Related entries and hierarchy rows both navigate to their node.
+            body.querySelectorAll('.related-item, .hier-row').forEach(item => {
                 item.addEventListener('click', () => {
                     const t = state.graph.nodes.find(n => n.id === item.dataset.id);
                     if (t) {
@@ -8065,8 +8195,8 @@
                 return;
             }
 
-            renderCentrality(degEl, degree, '#22d3ee');
-            renderCentrality(betEl, betweenness, '#f472b6');
+            renderCentrality(degEl, degree, '#f97316');
+            renderCentrality(betEl, betweenness, '#5b8fc9');
         }
 
         function renderCentrality(container, list, color) {
@@ -8543,7 +8673,6 @@
             width = document.getElementById('container').clientWidth;
             height = document.getElementById('container').clientHeight;
             if (Graph) Graph.width(width).height(height);
-            if (bloomPass) bloomPass.setSize(width, height);
         });
 
         document.addEventListener('keydown', e => {

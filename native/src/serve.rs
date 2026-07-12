@@ -500,6 +500,74 @@ impl GenJobs {
     }
 }
 
+/// Render `bytes` as a stream's current log line: overwrite the still-open
+/// entry at `open_idx` if there is one, otherwise append a new entry and
+/// mark it open. The log only ever grows, so the index stays valid.
+fn write_gen_log_line(job: &RwLock<GenJob>, open_idx: &mut Option<usize>, bytes: &[u8]) {
+    let line = strip_ansi(&String::from_utf8_lossy(bytes));
+    let mut j = job.write().expect("job poisoned");
+    match *open_idx {
+        Some(i) if i < j.log.len() => j.log[i] = line,
+        _ => {
+            j.log.push(line);
+            *open_idx = Some(j.log.len() - 1);
+        }
+    }
+}
+
+/// Stream one of the `ug gen` child's output pipes into the job log.
+///
+/// Splits on `\r` as well as `\n`: the pipeline prints long-phase progress
+/// via `print!("\r…")` rewrites, so with a plain line reader an entire
+/// phase (e.g. embedding thousands of nodes) surfaces as one giant line
+/// only after its terminating `\n` — until then the log looks finished
+/// while the job is still running. A `\r` rewrite updates the stream's
+/// open log entry in place, and unterminated output is flushed after
+/// every read so `print!` phase headers appear immediately. The open
+/// entry is tracked per stream so interleaved stdout/stderr lines don't
+/// overwrite each other.
+async fn pump_gen_output<R>(mut stream: R, job: Arc<RwLock<GenJob>>)
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    use tokio::io::AsyncReadExt;
+    let mut buf = [0u8; 8192];
+    let mut partial: Vec<u8> = Vec::new();
+    let mut open_idx: Option<usize> = None;
+    loop {
+        let n = match stream.read(&mut buf).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => n,
+        };
+        for &b in &buf[..n] {
+            match b {
+                b'\n' | b'\r' => {
+                    if !partial.is_empty() {
+                        write_gen_log_line(&job, &mut open_idx, &partial);
+                        partial.clear();
+                    } else if b == b'\n' && open_idx.is_none() {
+                        // Bare println!() — preserve the blank line.
+                        job.write().expect("job poisoned").log.push(String::new());
+                    }
+                    if b == b'\n' {
+                        open_idx = None;
+                    }
+                }
+                _ => partial.push(b),
+            }
+        }
+        // `partial` keeps accumulating until a separator arrives; the
+        // flush just renders its current state, so a line split across
+        // reads is re-rendered whole on the next pass.
+        if !partial.is_empty() {
+            write_gen_log_line(&job, &mut open_idx, &partial);
+        }
+    }
+    if !partial.is_empty() {
+        write_gen_log_line(&job, &mut open_idx, &partial);
+    }
+}
+
 /// Strip ANSI SGR escape sequences (`\x1b[...m`) from CLI output so the
 /// wizard's plain-text log viewer doesn't show raw color codes.
 fn strip_ansi(s: &str) -> String {
@@ -1164,8 +1232,6 @@ async fn api_generate(State(state): State<ServeState>, Json(body): Json<Generate
         name.unwrap_or_else(|| crate::project::derive_project_name(&canon.to_string_lossy()));
 
     tokio::spawn(async move {
-        use tokio::io::{AsyncBufReadExt, BufReader};
-
         let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => {
@@ -1178,28 +1244,8 @@ async fn api_generate(State(state): State<ServeState>, Json(body): Json<Generate
         let stdout = child.stdout.take().expect("piped stdout");
         let stderr = child.stderr.take().expect("piped stderr");
 
-        let job_out = job.clone();
-        let out_task = tokio::spawn(async move {
-            let mut lines = BufReader::new(stdout).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                job_out
-                    .write()
-                    .expect("job poisoned")
-                    .log
-                    .push(strip_ansi(&line));
-            }
-        });
-        let job_err = job.clone();
-        let err_task = tokio::spawn(async move {
-            let mut lines = BufReader::new(stderr).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                job_err
-                    .write()
-                    .expect("job poisoned")
-                    .log
-                    .push(strip_ansi(&line));
-            }
-        });
+        let out_task = tokio::spawn(pump_gen_output(stdout, job.clone()));
+        let err_task = tokio::spawn(pump_gen_output(stderr, job.clone()));
 
         let status = child.wait().await;
         let _ = out_task.await;

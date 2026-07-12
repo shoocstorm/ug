@@ -34,7 +34,6 @@ tree-sitter-python = "0.20"
 tree-sitter-java = "0.20"
 tree-sitter-md = "0.1"
 tree-sitter-rust = "0.20"
-pdf-extract = "0.10"
 petgraph = "0.6"
 regex = "1"
 overgraph = "0.6"
@@ -54,6 +53,12 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tauri = "2"
 url = "2"
+
+# default features pull in tesseract-rs's `build-tesseract`, which compiles
+# Tesseract+Leptonica from source via cmake at `cargo build` time (network +
+# several minutes). We don't need OCR — office/pdf text extraction works
+# without it — so default features stay off.
+liteparse = { version = "2.5.1", default-features = false }
 
 [build-dependencies]
 napi-build = "1"

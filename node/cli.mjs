@@ -810,15 +810,24 @@ const MCP_INSTALL_TARGETS = {
   opencode: {
     label: 'opencode',
     configPath: () => join(process.cwd(), 'opencode.json'),
+    // opencode's schema keys servers directly under `mcp` (no `servers`
+    // nesting), and McpLocalConfig wants one `command` array (binary +
+    // args combined) plus `environment` — not the generic {command, args,
+    // env} shape the other targets use — with additionalProperties: false,
+    // so any extra keys fail validation.
     apply: (config, server) => {
       if (config['$schema'] === undefined) config['$schema'] = 'https://opencode.ai/config.json';
       config.mcp = config.mcp || {};
-      config.mcp.servers = config.mcp.servers || {};
-      config.mcp.servers.ultragraph = { type: 'local', ...server, enabled: true };
+      config.mcp.ultragraph = {
+        type: 'local',
+        command: [server.command, ...server.args],
+        environment: server.env,
+        enabled: true,
+      };
     },
     remove: (config) => {
-      const existed = !!config.mcp?.servers && Object.prototype.hasOwnProperty.call(config.mcp.servers, 'ultragraph');
-      if (existed) delete config.mcp.servers.ultragraph;
+      const existed = !!config.mcp && Object.prototype.hasOwnProperty.call(config.mcp, 'ultragraph');
+      if (existed) delete config.mcp.ultragraph;
       return existed;
     },
   },
