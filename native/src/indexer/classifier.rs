@@ -21,14 +21,17 @@ pub fn classify_file(path: &str, symbols: &[Symbol]) -> Option<FileClassificatio
         .unwrap_or("")
         .to_lowercase();
 
-    // Markdown and PDF land here before any of the path heuristics so a
-    // `docs/components/intro.md` (or a `.pdf` shipped under `components/`)
-    // doesn't get misclassified as a component.
-    if path_lower.ends_with(".md")
-        || path_lower.ends_with(".mdx")
-        || path_lower.ends_with(".markdown")
-        || path_lower.ends_with(".pdf")
-    {
+    // Markdown, PDF and office documents land here before any of the path
+    // heuristics so a `docs/components/intro.md` (or a `.pdf`/`.docx`
+    // shipped under `components/`) doesn't get misclassified as a
+    // component. Kept in sync with `document::is_supported_ext`.
+    const DOCUMENT_EXTS: &[&str] = &[
+        ".md", ".mdx", ".markdown", ".pdf",
+        ".doc", ".docx", ".docm", ".dot", ".dotm", ".dotx", ".odt", ".ott", ".rtf",
+        ".xls", ".xlsx", ".xlsm", ".xlsb", ".ods", ".ots",
+        ".ppt", ".pptx", ".pptm", ".pot", ".potm", ".potx", ".odp", ".otp",
+    ];
+    if DOCUMENT_EXTS.iter().any(|ext| path_lower.ends_with(ext)) {
         return Some(FileClassification::Documentation);
     }
 

@@ -16,10 +16,10 @@
 
 mod classifier;
 mod common;
+mod document;
 mod folder;
 mod languages;
 mod package_json;
-mod pdf;
 
 use crate::types::{FileNode, IndexResult, IndexStats};
 use napi_derive::napi;
@@ -42,11 +42,11 @@ use package_json::extract_package_json_dependencies;
 pub fn process_file(path: &Path, repo_root: Option<&str>) -> Option<FileNode> {
     let ext = path.extension()?.to_str()?.to_lowercase();
 
-    // PDFs are binary and have no tree-sitter grammar — short-circuit
-    // to the dedicated extractor, which returns the same FileNode shape
-    // as the language pipeline below.
-    if ext == "pdf" {
-        return pdf::process_pdf(path, repo_root);
+    // PDF/Word/Excel/PowerPoint are binary and have no tree-sitter grammar —
+    // short-circuit to the dedicated extractor, which returns the same
+    // FileNode shape as the language pipeline below.
+    if document::is_supported_ext(&ext) {
+        return document::process_document(path, repo_root);
     }
 
     let indexer = languages::for_extension(&ext)?;

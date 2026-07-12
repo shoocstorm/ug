@@ -13,11 +13,20 @@ use std::path::{Path, PathBuf};
 use tree_sitter::Node;
 
 /// File extensions we are willing to index. Add new entries when registering
-/// a new language indexer in `super::languages`. The `pdf` extension is
-/// special-cased in `indexer::process_file` — it's binary, so it bypasses the
-/// tree-sitter pipeline and is handled by `indexer::pdf::process_pdf`.
-pub const SUPPORTED_EXTS: &[&str] =
-    &["ts", "tsx", "js", "jsx", "py", "java", "rs", "md", "mdx", "markdown", "pdf"];
+/// a new language indexer in `super::languages`. `pdf` and the Word/Excel/
+/// PowerPoint extensions are special-cased in `indexer::process_file` —
+/// they're binary, so they bypass the tree-sitter pipeline and are handled
+/// by `indexer::document::process_document`. Keep this list in sync with
+/// `document::is_supported_ext`.
+pub const SUPPORTED_EXTS: &[&str] = &[
+    "ts", "tsx", "js", "jsx", "py", "java", "rs", "md", "mdx", "markdown", "pdf",
+    // Word
+    "doc", "docx", "docm", "dot", "dotm", "dotx", "odt", "ott", "rtf",
+    // Excel
+    "xls", "xlsx", "xlsm", "xlsb", "ods", "ots",
+    // PowerPoint
+    "ppt", "pptx", "pptm", "pot", "potm", "potx", "odp", "otp",
+];
 
 /// Directory names that are always skipped during the file walk.
 pub const IGNORED_DIRS: &[&str] = &["node_modules", ".git", "target"];
