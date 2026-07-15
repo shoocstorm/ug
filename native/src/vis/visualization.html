@@ -3326,6 +3326,526 @@
             height: 14px;
         }
 
+        /* ─── Settings modal ─────────────────────────────────── */
+
+        #settings-open-btn {
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: transparent;
+            border: none;
+            border-radius: 6px;
+            color: var(--text-muted);
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s, transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        #settings-open-btn:hover {
+            background: var(--bg-hover);
+            color: var(--accent);
+            transform: rotate(45deg);
+        }
+
+        #settings-open-btn svg {
+            width: 14px;
+            height: 14px;
+        }
+
+        /* Same gear, floated over the KB Manager splash screen. */
+        .kb-corner-settings {
+            position: absolute;
+            top: 18px;
+            right: 20px;
+            z-index: 5;
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            padding: 7px 12px;
+            background: rgba(24, 24, 27, 0.7);
+            border: 1px solid var(--border-soft);
+            border-radius: 999px;
+            color: var(--text-muted);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10.5px;
+            font-weight: 600;
+            letter-spacing: 0.8px;
+            text-transform: uppercase;
+            cursor: pointer;
+            backdrop-filter: blur(6px);
+            -webkit-backdrop-filter: blur(6px);
+            transition: border-color 0.15s, color 0.15s;
+        }
+
+        .kb-corner-settings:hover {
+            border-color: var(--accent);
+            color: var(--text);
+        }
+
+        .kb-corner-settings svg {
+            width: 13px;
+            height: 13px;
+            transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .kb-corner-settings:hover svg {
+            transform: rotate(45deg);
+            color: var(--accent);
+        }
+
+        .settings-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 760;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            background: rgba(9, 9, 11, 0.72);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+        }
+
+        .settings-overlay.visible {
+            display: flex;
+        }
+
+        .settings-panel {
+            width: 100%;
+            max-width: 620px;
+            max-height: 86vh;
+            display: flex;
+            flex-direction: column;
+            background: var(--bg-surface);
+            border: 1px solid var(--border-soft);
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: 0 30px 70px -24px rgba(0, 0, 0, 0.6);
+            animation: kb-confirm-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+        }
+
+        .settings-head {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 18px 20px 14px;
+            border-bottom: 1px solid var(--border-soft);
+        }
+
+        .settings-head-icon {
+            flex-shrink: 0;
+            width: 36px;
+            height: 36px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 10px;
+            background: rgba(249, 115, 22, 0.12);
+            border: 1px solid rgba(249, 115, 22, 0.28);
+            color: var(--accent);
+        }
+
+        .settings-head-icon svg {
+            width: 18px;
+            height: 18px;
+        }
+
+        .settings-head-text {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .settings-head-text h2 {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 14px;
+            font-weight: 700;
+            letter-spacing: 0.4px;
+        }
+
+        .settings-head-text p {
+            margin-top: 3px;
+            font-size: 11px;
+            color: var(--text-dim);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .settings-head-text p code {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            color: var(--text-muted);
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-soft);
+            border-radius: 5px;
+            padding: 1px 5px;
+        }
+
+        .settings-close {
+            flex-shrink: 0;
+            width: 26px;
+            height: 26px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: transparent;
+            border: none;
+            border-radius: 7px;
+            color: var(--text-muted);
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s;
+        }
+
+        .settings-close:hover {
+            background: var(--bg-hover);
+            color: var(--text);
+        }
+
+        .settings-close svg {
+            width: 14px;
+            height: 14px;
+        }
+
+        /* Precedence legend: how a value actually gets picked. */
+        .settings-precedence {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 6px;
+            padding: 10px 20px;
+            border-bottom: 1px solid var(--border-soft);
+            background: var(--bg-deep);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 9.5px;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            color: var(--text-dim);
+        }
+
+        .settings-precedence .prec-step {
+            padding: 3px 8px;
+            border-radius: 999px;
+            border: 1px solid var(--border-soft);
+            background: var(--bg-surface);
+            color: var(--text-muted);
+            white-space: nowrap;
+        }
+
+        .settings-precedence .prec-step.prec-here {
+            border-color: rgba(249, 115, 22, 0.45);
+            background: rgba(249, 115, 22, 0.1);
+            color: var(--accent);
+        }
+
+        .settings-precedence .prec-arrow {
+            color: var(--text-dim);
+            opacity: 0.7;
+        }
+
+        .settings-body {
+            flex: 1;
+            min-height: 0;
+            overflow-y: auto;
+            padding: 16px 20px 6px;
+        }
+
+        .settings-loading,
+        .settings-error {
+            padding: 30px 0 40px;
+            text-align: center;
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .settings-error {
+            color: var(--danger);
+        }
+
+        .settings-group {
+            margin-bottom: 16px;
+            border: 1px solid var(--border-soft);
+            border-radius: 12px;
+            background: var(--bg-deep);
+            overflow: hidden;
+        }
+
+        .settings-group-head {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 11px 14px;
+            border-bottom: 1px solid var(--border-soft);
+        }
+
+        .settings-group-head svg {
+            width: 14px;
+            height: 14px;
+            color: var(--accent);
+            flex-shrink: 0;
+        }
+
+        .settings-group-title {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11.5px;
+            font-weight: 700;
+            letter-spacing: 0.6px;
+            text-transform: uppercase;
+        }
+
+        .settings-group-sub {
+            flex: 1;
+            font-size: 10.5px;
+            color: var(--text-dim);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .settings-apply-badge {
+            flex-shrink: 0;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 9px;
+            font-weight: 600;
+            letter-spacing: 0.7px;
+            text-transform: uppercase;
+            padding: 2px 8px;
+            border-radius: 999px;
+        }
+
+        .settings-apply-badge.live {
+            color: var(--success);
+            border: 1px solid rgba(74, 222, 128, 0.3);
+            background: rgba(74, 222, 128, 0.08);
+        }
+
+        .settings-apply-badge.restart {
+            color: #fbbf24;
+            border: 1px solid rgba(251, 191, 36, 0.3);
+            background: rgba(251, 191, 36, 0.08);
+        }
+
+        .settings-rows {
+            padding: 6px 14px 12px;
+        }
+
+        .settings-row {
+            padding: 9px 0 3px;
+        }
+
+        .settings-row+.settings-row {
+            border-top: 1px solid var(--border-soft);
+        }
+
+        .settings-row-head {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 6px;
+        }
+
+        .settings-row-head label {
+            font-size: 11.5px;
+            font-weight: 600;
+            color: var(--text);
+        }
+
+        .settings-row-head .settings-key {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 9.5px;
+            color: var(--text-dim);
+        }
+
+        .settings-chip {
+            margin-left: auto;
+            flex-shrink: 0;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 9px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            padding: 2px 7px;
+            border-radius: 999px;
+            white-space: nowrap;
+        }
+
+        .settings-chip.chip-default {
+            color: var(--text-dim);
+            border: 1px solid var(--border-soft);
+        }
+
+        .settings-chip.chip-config {
+            color: var(--success);
+            border: 1px solid rgba(74, 222, 128, 0.3);
+            background: rgba(74, 222, 128, 0.08);
+        }
+
+        .settings-chip.chip-env,
+        .settings-chip.chip-flag {
+            color: #fbbf24;
+            border: 1px solid rgba(251, 191, 36, 0.35);
+            background: rgba(251, 191, 36, 0.08);
+        }
+
+        .settings-input-wrap {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .settings-input-wrap input {
+            flex: 1;
+            min-width: 0;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-soft);
+            border-radius: 8px;
+            color: var(--text);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11.5px;
+            padding: 7px 10px;
+            outline: none;
+            transition: border-color 0.15s, box-shadow 0.15s;
+        }
+
+        .settings-input-wrap input:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.15);
+        }
+
+        .settings-input-wrap input::placeholder {
+            color: var(--text-dim);
+        }
+
+        .settings-row.dirty .settings-input-wrap input {
+            border-color: rgba(249, 115, 22, 0.55);
+        }
+
+        .settings-clear-btn {
+            flex-shrink: 0;
+            width: 28px;
+            height: 28px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background: transparent;
+            border: 1px solid transparent;
+            border-radius: 7px;
+            color: var(--text-dim);
+            cursor: pointer;
+            transition: color 0.15s, border-color 0.15s;
+        }
+
+        .settings-clear-btn:hover {
+            color: var(--danger);
+            border-color: var(--border);
+        }
+
+        .settings-clear-btn[hidden] {
+            display: none;
+        }
+
+        .settings-clear-btn svg {
+            width: 12px;
+            height: 12px;
+        }
+
+        .settings-row-note {
+            margin-top: 5px;
+            font-size: 10.5px;
+            line-height: 1.5;
+            color: var(--text-dim);
+        }
+
+        .settings-row-note.override {
+            color: #fbbf24;
+        }
+
+        .settings-row-note.override code,
+        .settings-row-note code {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 9.5px;
+            background: var(--bg-elevated);
+            border-radius: 4px;
+            padding: 0 4px;
+        }
+
+        .settings-row.pending-unset .settings-input-wrap input {
+            text-decoration: line-through;
+            opacity: 0.55;
+        }
+
+        .settings-foot {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px 20px 14px;
+            border-top: 1px solid var(--border-soft);
+            background: var(--bg-deep);
+        }
+
+        .settings-status {
+            flex: 1;
+            min-width: 0;
+            font-size: 11px;
+            color: var(--text-dim);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .settings-status.ok {
+            color: var(--success);
+        }
+
+        .settings-status.err {
+            color: var(--danger);
+        }
+
+        .settings-btn {
+            flex-shrink: 0;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 7px 14px;
+            border-radius: 8px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.2px;
+            cursor: pointer;
+            transition: opacity 0.15s, border-color 0.15s, color 0.15s;
+        }
+
+        .settings-btn svg {
+            width: 12px;
+            height: 12px;
+        }
+
+        .settings-btn.secondary {
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--text-muted);
+        }
+
+        .settings-btn.secondary:hover:not(:disabled) {
+            border-color: var(--text-muted);
+            color: var(--text);
+        }
+
+        .settings-btn.primary {
+            background: var(--accent);
+            border: 1px solid var(--accent);
+            color: #1c1917;
+        }
+
+        .settings-btn.primary:hover:not(:disabled) {
+            opacity: 0.9;
+        }
+
+        .settings-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
         /* ─── Catalog modal ─────────────────────────────────── */
 
         .catalog-modal {
@@ -4303,6 +4823,15 @@
             </svg>
         </div>
 
+        <button id="kb-settings-btn" class="kb-corner-settings" title="Settings (model, endpoints)" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+                <circle cx="12" cy="12" r="3" />
+            </svg>
+            Settings
+        </button>
+
         <div class="kb-inner">
             <div class="kb-header">
                 <div class="kb-kicker">Knowledge Base Manager</div>
@@ -4449,6 +4978,55 @@
         </div>
     </div>
 
+    <!-- Settings: view + persist ug configuration (~/.ug/config.json).
+         Groups mirror `ug config` keys; values are loaded from
+         GET /api/config and saved via POST /api/config. CLI flags and
+         env vars still outrank saved values — rows show a chip + note
+         when that's happening so overrides are never silent. -->
+    <div id="settings-overlay" class="settings-overlay">
+        <div class="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+            <div class="settings-head">
+                <div class="settings-head-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+                        <circle cx="12" cy="12" r="3" />
+                    </svg>
+                </div>
+                <div class="settings-head-text">
+                    <h2 id="settings-title">Settings</h2>
+                    <p>Saved to <code id="settings-path">~/.ug/config.json</code> — shared by the CLI, MCP server, and this UI</p>
+                </div>
+                <button type="button" class="settings-close" id="settings-close" title="Close (Esc)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M18 6 6 18M6 6l12 12" />
+                    </svg>
+                </button>
+            </div>
+            <div class="settings-precedence" title="How a value is picked when several places define it">
+                <span class="prec-step">CLI flag</span>
+                <span class="prec-arrow">›</span>
+                <span class="prec-step">env var</span>
+                <span class="prec-arrow">›</span>
+                <span class="prec-step prec-here">saved here</span>
+                <span class="prec-arrow">›</span>
+                <span class="prec-step">default</span>
+            </div>
+            <div class="settings-body" id="settings-body">
+                <div class="settings-loading">Loading configuration…</div>
+            </div>
+            <div class="settings-foot">
+                <span class="settings-status" id="settings-status"></span>
+                <button type="button" class="settings-btn secondary" id="settings-revert" disabled>Revert</button>
+                <button type="button" class="settings-btn primary" id="settings-save" disabled>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M20 6 9 17l-5-5" />
+                    </svg>
+                    Save
+                </button>
+            </div>
+        </div>
+    </div>
+
     <div id="container">
         <div id="graph-3d"></div>
 
@@ -4521,6 +5099,13 @@
                     <h2 id="brand-title">UltraGraph</h2>
                 </div>
                 <div class="header-actions">
+                    <button id="settings-open-btn" title="Settings (model, endpoints)" type="button">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+                            <circle cx="12" cy="12" r="3" />
+                        </svg>
+                    </button>
                     <button id="kb-open-btn" class="kb-open-btn" title="Browse knowledge bases" hidden>
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                             stroke-linecap="round" stroke-linejoin="round">
@@ -5831,6 +6416,298 @@
                 console.warn('capabilities probe failed:', err);
             }
         }
+
+        // ─── Settings modal (view + persist ~/.ug/config.json) ─────
+        // Backed by GET/POST /api/config. Precedence: CLI flag > env
+        // var > saved config > default. Rows carry a source chip and an
+        // override note when a flag/env var outranks the saved value,
+        // so nothing about the resolution is silent.
+
+        const settingsUi = {
+            data: null,        // last /api/config payload
+            edits: new Map(),  // key name → new raw string value
+            unsets: new Set(), // key names marked "clear on save"
+        };
+
+        const SETTINGS_SECTIONS = {
+            chat: {
+                title: 'Chat',
+                sub: 'GraphRAG answers — ug chat & this UI',
+                badge: ['live', 'applies instantly'],
+                icon: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+            },
+            embed: {
+                title: 'Embeddings',
+                sub: 'Vector search & ingest',
+                badge: ['restart', 'after restart'],
+                icon: '<path d="m12 2 8.5 5v10L12 22l-8.5-5V7L12 2z"/><path d="M12 22v-10"/><path d="m3.5 7 8.5 5 8.5-5"/>',
+            },
+        };
+
+        const SETTINGS_FIELDS = {
+            'chat.model': { label: 'Model', hint: 'Any model your endpoint serves — e.g. gpt-4o-mini, or a local MLX / vLLM / Ollama model name.' },
+            'chat.base_url': { label: 'Endpoint URL', hint: 'OpenAI-compatible base URL, usually ending in /v1.' },
+            'chat.api_key': { label: 'API key', hint: 'Stored locally in config.json with owner-only file permissions; never sent to the browser.' },
+            'chat.temperature': { label: 'Temperature', hint: '0 = deterministic, higher = more creative.', num: { step: '0.05', min: '0', max: '2' } },
+            'chat.max_tokens': { label: 'Max tokens', hint: 'Cap on completion length.', num: { step: '1', min: '1' } },
+            'chat.timeout_secs': { label: 'Timeout (seconds)', hint: 'HTTP timeout per completion call.', num: { step: '1', min: '1' } },
+            'embed.model': { label: 'Model', hint: 'Local fastembed alias (bge-small-en-v1.5, nomic-embed-text-v1.5, …) or a remote model name.' },
+            'embed.base_url': { label: 'Endpoint URL', hint: 'Leave unset to embed locally in-process (no network needed).' },
+            'embed.api_key': { label: 'API key', hint: 'Only needed for a remote embeddings endpoint.' },
+            'embed.dim': { label: 'Dimension', hint: 'Auto-probed on first ingest — set only to pin it explicitly.', num: { step: '1', min: '1' } },
+        };
+
+        function settingsOverlayEl() {
+            return document.getElementById('settings-overlay');
+        }
+
+        function openSettings() {
+            settingsOverlayEl().classList.add('visible');
+            loadSettings();
+        }
+
+        function closeSettings() {
+            settingsOverlayEl().classList.remove('visible');
+        }
+
+        async function loadSettings() {
+            const body = document.getElementById('settings-body');
+            settingsUi.edits.clear();
+            settingsUi.unsets.clear();
+            setSettingsStatus('', '');
+            body.innerHTML = '<div class="settings-loading">Loading configuration…</div>';
+            try {
+                const res = await fetch('/api/config');
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                settingsUi.data = await res.json();
+                renderSettings();
+            } catch (err) {
+                body.innerHTML = '<div class="settings-error">Couldn’t load configuration — ' + escapeHtml(String(err.message || err)) + '</div>';
+            }
+            updateSettingsFooter();
+        }
+
+        function renderSettings() {
+            const body = document.getElementById('settings-body');
+            body.innerHTML = '';
+            const data = settingsUi.data;
+            if (!data) return;
+            const pathEl = document.getElementById('settings-path');
+            if (pathEl) {
+                pathEl.textContent = data.path;
+                pathEl.title = data.path;
+            }
+            const bySection = {};
+            for (const k of data.keys) (bySection[k.section] ||= []).push(k);
+            for (const [sec, meta] of Object.entries(SETTINGS_SECTIONS)) {
+                const keys = bySection[sec];
+                if (!keys || !keys.length) continue;
+                const group = document.createElement('div');
+                group.className = 'settings-group';
+                const head = document.createElement('div');
+                head.className = 'settings-group-head';
+                head.innerHTML =
+                    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + meta.icon + '</svg>' +
+                    '<span class="settings-group-title">' + escapeHtml(meta.title) + '</span>' +
+                    '<span class="settings-group-sub">' + escapeHtml(meta.sub) + '</span>' +
+                    '<span class="settings-apply-badge ' + meta.badge[0] + '">' + escapeHtml(meta.badge[1]) + '</span>';
+                group.appendChild(head);
+                const rows = document.createElement('div');
+                rows.className = 'settings-rows';
+                for (const k of keys) rows.appendChild(renderSettingsRow(k));
+                group.appendChild(rows);
+                body.appendChild(group);
+            }
+        }
+
+        function renderSettingsRow(k) {
+            const meta = SETTINGS_FIELDS[k.name] || { label: k.name, hint: k.desc };
+            const row = document.createElement('div');
+            row.className = 'settings-row';
+            row.dataset.key = k.name;
+
+            const head = document.createElement('div');
+            head.className = 'settings-row-head';
+            const label = document.createElement('label');
+            label.textContent = meta.label;
+            const keySpan = document.createElement('span');
+            keySpan.className = 'settings-key';
+            keySpan.textContent = k.name;
+            const chip = document.createElement('span');
+            chip.className = 'settings-chip';
+            if (k.source === 'flag') {
+                chip.classList.add('chip-flag');
+                chip.textContent = k.flag;
+                chip.title = 'This server was started with ' + k.flag + ', which outranks the saved value.';
+            } else if (k.source === 'env') {
+                chip.classList.add('chip-env');
+                chip.textContent = '$' + k.env;
+                chip.title = '$' + k.env + ' is set in the server’s environment and outranks the saved value.';
+            } else if (k.source === 'config') {
+                chip.classList.add('chip-config');
+                chip.textContent = 'saved';
+                chip.title = 'Using the value saved in ' + (settingsUi.data ? settingsUi.data.path : 'config.json');
+            } else {
+                chip.classList.add('chip-default');
+                chip.textContent = 'default';
+                chip.title = 'No saved value — using the built-in default.';
+            }
+            head.append(label, keySpan, chip);
+            row.appendChild(head);
+
+            const wrap = document.createElement('div');
+            wrap.className = 'settings-input-wrap';
+            const input = document.createElement('input');
+            if (k.secret) {
+                input.type = 'password';
+                input.autocomplete = 'new-password';
+            } else if (meta.num) {
+                input.type = 'number';
+                input.step = meta.num.step;
+                if (meta.num.min !== undefined) input.min = meta.num.min;
+                if (meta.num.max !== undefined) input.max = meta.num.max;
+            } else {
+                input.type = 'text';
+                input.spellcheck = false;
+            }
+            // Secrets are never echoed back into the field — the server
+            // only sends a masked preview, shown as the placeholder.
+            if (!k.secret && k.saved != null) input.value = k.saved;
+            if (k.secret) {
+                input.placeholder = k.saved != null ? 'saved · ' + k.saved + ' — type to replace' : 'not set';
+            } else {
+                input.placeholder = k.default != null ? 'default: ' + k.default : 'not set';
+            }
+            wrap.appendChild(input);
+
+            const clearBtn = document.createElement('button');
+            clearBtn.type = 'button';
+            clearBtn.className = 'settings-clear-btn';
+            clearBtn.title = 'Clear the saved value (back to default)';
+            clearBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m2 0-.7 12.1A2 2 0 0 1 14.3 21H9.7a2 2 0 0 1-2-1.9L7 7"/></svg>';
+            clearBtn.hidden = k.saved == null;
+            wrap.appendChild(clearBtn);
+            row.appendChild(wrap);
+
+            const note = document.createElement('div');
+            note.className = 'settings-row-note';
+            if (k.source === 'flag' || k.source === 'env') {
+                note.classList.add('override');
+                const src = k.source === 'flag' ? 'CLI flag <code>' + escapeHtml(k.flag) + '</code>' : 'env var <code>$' + escapeHtml(k.env) + '</code>';
+                const eff = k.effective != null ? ' — currently using <code>' + escapeHtml(k.effective) + '</code>' : '';
+                note.innerHTML = 'Overridden by ' + src + eff + '. Saving still updates the file for every other run.';
+            } else {
+                note.textContent = meta.hint || k.desc || '';
+            }
+            row.appendChild(note);
+
+            input.addEventListener('input', () => {
+                if (settingsUi.unsets.has(k.name)) {
+                    settingsUi.unsets.delete(k.name);
+                    row.classList.remove('pending-unset');
+                }
+                const val = input.value.trim();
+                const baseline = k.secret ? '' : (k.saved != null ? String(k.saved) : '');
+                if (val !== baseline) settingsUi.edits.set(k.name, val);
+                else settingsUi.edits.delete(k.name);
+                row.classList.toggle('dirty', settingsUi.edits.has(k.name));
+                updateSettingsFooter();
+            });
+
+            clearBtn.addEventListener('click', () => {
+                if (settingsUi.unsets.has(k.name)) {
+                    // Undo the pending clear.
+                    settingsUi.unsets.delete(k.name);
+                    row.classList.remove('pending-unset');
+                    if (!k.secret && k.saved != null) input.value = k.saved;
+                } else {
+                    settingsUi.unsets.add(k.name);
+                    settingsUi.edits.delete(k.name);
+                    row.classList.remove('dirty');
+                    row.classList.add('pending-unset');
+                    if (!k.secret) input.value = k.saved != null ? k.saved : '';
+                }
+                updateSettingsFooter();
+            });
+
+            return row;
+        }
+
+        function setSettingsStatus(kind, text) {
+            const el = document.getElementById('settings-status');
+            el.className = 'settings-status' + (kind ? ' ' + kind : '');
+            el.textContent = text;
+        }
+
+        function updateSettingsFooter() {
+            const count = settingsUi.edits.size + settingsUi.unsets.size;
+            document.getElementById('settings-save').disabled = count === 0;
+            document.getElementById('settings-revert').disabled = count === 0;
+            const status = document.getElementById('settings-status');
+            if (count > 0) {
+                setSettingsStatus('', count + ' unsaved change' + (count === 1 ? '' : 's'));
+            } else if (!status.classList.contains('ok') && !status.classList.contains('err')) {
+                // Only clear neutral "N unsaved changes" text — keep a
+                // just-shown save result visible.
+                setSettingsStatus('', '');
+            }
+        }
+
+        async function saveSettings() {
+            const saveBtn = document.getElementById('settings-save');
+            const set = {};
+            for (const [name, val] of settingsUi.edits) set[name] = val;
+            const unset = Array.from(settingsUi.unsets);
+            const touchedEmbed = Object.keys(set).concat(unset).some((n) => n.startsWith('embed.'));
+            saveBtn.disabled = true;
+            setSettingsStatus('', 'Saving…');
+            try {
+                const res = await fetch('/api/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ set, unset }),
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.error || 'HTTP ' + res.status);
+                }
+                settingsUi.data = await res.json();
+                settingsUi.edits.clear();
+                settingsUi.unsets.clear();
+                renderSettings();
+                updateSettingsFooter();
+                setSettingsStatus('ok', touchedEmbed
+                    ? 'Saved ✓ — chat applies now; embedding changes take effect after a server restart'
+                    : 'Saved ✓ — applied immediately');
+                // Chat readiness / model pill may have just changed.
+                probeCapabilities();
+            } catch (err) {
+                setSettingsStatus('err', 'Save failed: ' + String(err.message || err));
+                updateSettingsFooter();
+                saveBtn.disabled = settingsUi.edits.size + settingsUi.unsets.size === 0;
+            }
+        }
+
+        (function initSettingsUi() {
+            const overlay = settingsOverlayEl();
+            document.getElementById('settings-open-btn').addEventListener('click', openSettings);
+            document.getElementById('kb-settings-btn').addEventListener('click', openSettings);
+            document.getElementById('settings-close').addEventListener('click', closeSettings);
+            document.getElementById('settings-revert').addEventListener('click', () => {
+                settingsUi.edits.clear();
+                settingsUi.unsets.clear();
+                renderSettings();
+                updateSettingsFooter();
+                setSettingsStatus('', '');
+            });
+            document.getElementById('settings-save').addEventListener('click', saveSettings);
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay) closeSettings();
+            });
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape' && overlay.classList.contains('visible')) closeSettings();
+            });
+        })();
 
         // ─── Destination selector ──────────────────────────
         // Populated from /api/capabilities. The user always sees which

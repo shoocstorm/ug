@@ -233,17 +233,57 @@ Embeddings (ingest / gen / semantic_search / hybrid_search / serve)
   ...
 
 Chat (ug chat / POST /api/chat)
-  status:       not configured — using sample defaults; point --chat-base-url ...
+  status:       not configured — using sample defaults; run `ug config set chat.base_url <url>` ...
 ```
 
 ---
 
-## ⚙️ Configuration file
+## ⚙️ Configuration
 
 Repeating `--base-url`/`--api-key`/`--model`/`--chat-model` on every
-invocation gets old fast. Instead of a new config format, UltraGraph
-loads a `.env` file from the current directory (both the `ug` binary and
-`node cli.mjs` do this) — put your defaults there once:
+invocation gets old fast. Persist your defaults once with `ug config`:
+
+```bash
+ug config set chat.model gpt-4o-mini
+ug config set chat.base_url https://api.openai.com/v1
+ug config set chat.api_key sk-...
+ug config set embed.model text-embedding-3-small
+
+ug config list              # every key, its saved value, and what can override it
+ug config get chat.model
+ug config unset chat.model
+ug config path              # → ~/.ug/config.json (or $UG_HOME/config.json)
+```
+
+Values land in `$UG_HOME/config.json` (default `~/.ug/config.json`,
+written with owner-only permissions since it may hold API keys) and are
+picked up by every command — `ug chat`, `ug serve`'s `/api/chat`, the
+embedder, and the npm MCP server.
+
+Prefer clicking? The visualization has the same settings behind the
+**⚙ gear** (top-right of the Knowledge Base Manager, and in the sidebar
+header once a graph is open). It reads/writes the same file via
+`GET`/`POST /api/config`, shows which tier (flag / env / saved /
+default) currently wins for each key, and chat changes apply to the
+running server immediately — no restart.
+
+Known keys: `chat.model`, `chat.base_url`, `chat.api_key`,
+`chat.temperature`, `chat.max_tokens`, `chat.timeout_secs`,
+`embed.model`, `embed.base_url`, `embed.api_key`, `embed.dim`.
+
+Precedence is always **CLI flag > env var > `ug config` > built-in
+default**. An explicit flag or env var still wins over a saved value —
+but never silently: the CLI prints a one-line notice when that happens,
+e.g.
+
+```
+▸ note: CLI flag --chat-model overrides saved config chat.model = gpt-4o-mini (~/.ug/config.json)
+```
+
+### `.env` files
+
+UltraGraph also loads a `.env` file from the current directory (both the
+`ug` binary and `node cli.mjs` do this) for per-repo env-var defaults:
 
 ```bash
 # .env in your repo root
@@ -253,9 +293,8 @@ UG_EMBED_MODEL=text-embedding-3-small
 UG_CHAT_MODEL=gpt-4o-mini
 ```
 
-Precedence is always **CLI flag > env var > `.env` file > built-in
-default** — a real env var of the same name still wins over `.env`, so
-`.env` is purely a convenience, never a surprise override.
+A real env var of the same name still wins over `.env`, and both count
+as the "env var" tier — above `ug config`, below CLI flags.
 
 | Env var | Overrides |
 | :--- | :--- |

@@ -223,6 +223,8 @@ function parseEmbedderOptions(args) {
 //   UG_EMBED_BASE_URL  - override embedding endpoint base URL
 //   UG_EMBED_API_KEY   - override embedding API key
 //   UG_EMBED_MODEL     - override embedding model name
+//   (embed settings persisted with `ug config set embed.*` in
+//    $UG_HOME/config.json are the fallback when the env vars are unset)
 //
 // Multi-destination (default backend: overgraph):
 //   UG_DEST            - "overgraph" (default) or "neo4j"
@@ -266,11 +268,27 @@ function resolveDbAndRoot() {
 // so the agent knows it can re-fetch the full slice via the file path.
 const SNIPPET_PREVIEW_CHARS = 1200;
 
+// Persisted user config ($UG_HOME/config.json, written by `ug config
+// set`). Mirrors native/src/config.rs — env vars outrank it, it
+// outranks built-in defaults. Malformed/missing file → {}.
+function userConfig() {
+  try {
+    return JSON.parse(readFileSync(join(ugHome(), 'config.json'), 'utf-8'));
+  } catch {
+    return {};
+  }
+}
+
 function embedderOptionsJson() {
+  const saved = userConfig().embed || {};
   const o = {};
-  if (process.env.UG_EMBED_BASE_URL) o.baseUrl = process.env.UG_EMBED_BASE_URL;
-  if (process.env.UG_EMBED_API_KEY) o.apiKey = process.env.UG_EMBED_API_KEY;
-  if (process.env.UG_EMBED_MODEL) o.model = process.env.UG_EMBED_MODEL;
+  const baseUrl = process.env.UG_EMBED_BASE_URL || saved.baseUrl;
+  const apiKey = process.env.UG_EMBED_API_KEY || saved.apiKey;
+  const model = process.env.UG_EMBED_MODEL || saved.model;
+  if (baseUrl) o.baseUrl = baseUrl;
+  if (apiKey) o.apiKey = apiKey;
+  if (model) o.model = model;
+  if (Number.isFinite(saved.dim) && saved.dim > 0) o.embeddingDim = saved.dim;
   return Object.keys(o).length ? JSON.stringify(o) : null;
 }
 

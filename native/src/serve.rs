@@ -425,12 +425,17 @@ struct ServeState {
     /// `None` when the embedder couldn't be constructed (e.g. missing endpoint).
     /// Phase 3 search routes need it; `/api/db/*` routes don't.
     embedder: Option<Arc<Embedder>>,
-    /// Default chat config baked from CLI flags. The `/api/chat` route
-    /// also accepts per-request overrides (chat_model, base_url, …) so
-    /// the UI can flip models without restarting the server. `None`
-    /// when no `--chat-model` was passed and no `UG_CHAT_*` env vars
-    /// are set; routes return 503 in that case.
-    chat_default: Arc<Option<ChatConfig>>,
+    /// Default chat config from CLI flags / env vars / `~/.ug/config.json`.
+    /// The `/api/chat` route also accepts per-request overrides
+    /// (chat_model, base_url, …) so the UI can flip models without
+    /// restarting the server. `None` when no chat model is configured
+    /// anywhere; routes return 503 in that case. Behind a lock because
+    /// `POST /api/config` rebuilds it when the user saves settings.
+    chat_default: Arc<RwLock<Option<ChatConfig>>>,
+    /// The args `ug serve` was started with, kept so `/api/config` can
+    /// report which values are pinned by CLI flags and rebuild
+    /// `chat_default` with the same flag precedence after a save.
+    serve_args: Arc<Vec<String>>,
     /// Process-wide cap on concurrent embedding calls. Cheap insurance against
     /// hammering the embedding endpoint when many search requests land at once.
     embed_lock: Arc<Semaphore>,
@@ -842,7 +847,8 @@ pub fn run_serve(args: &[String]) {
             bundle,
             favicon,
             embedder: embedder_arc,
-            chat_default: Arc::new(chat_default),
+            chat_default: Arc::new(RwLock::new(chat_default)),
+            serve_args: Arc::new(args.to_vec()),
             embed_lock: Arc::new(Semaphore::new(4)),
             gen_jobs: Arc::new(GenJobs::new()),
         };
@@ -861,6 +867,7 @@ pub fn run_serve(args: &[String]) {
             .route("/api/generate/status", get(api_generate_status))
             .route("/api/browse-dir", get(api_browse_dir))
             .route("/api/capabilities", get(api_capabilities))
+            .route("/api/config", get(api_config_get).post(api_config_post))
             .route("/api/graph/stats", get(api_stats))
             .route("/api/graph/node/*id", get(api_node))
             .route("/api/graph/search", get(api_search))
@@ -1851,7 +1858,7 @@ async fn api_capabilities(State(state): State<ServeState>) -> Response {
         .map(|s| s.primary.clone())
         .unwrap_or_default();
 
-    let chat_default = state.chat_default.as_ref().as_ref();
+    let chat_default = state.chat_default.read().expect("chat_default poisoned").clone();
     let chat_ready = chat_default.is_some() && search_ready;
     let chat_info = chat_default.map(|c| {
         serde_json::json!({
@@ -2302,25 +2309,39 @@ async fn api_search_hybrid(
 
 // ---------- Phase 4 — Chat (/api/chat) ----------
 
-/// Pull a default `ChatConfig` from CLI args or env vars. Returns
+/// Pull a default `ChatConfig` from CLI args, env vars, or the
+/// persisted `~/.ug/config.json` (`ug config set chat.*`). Returns
 /// `None` when no chat model is configured — the route then 503s with
 /// a clear message rather than hitting a misconfigured endpoint.
 ///
 /// Env-var fallbacks let `ug serve` be wrapped by `docker run -e
 /// UG_CHAT_*` without rewriting the entrypoint.
 fn build_chat_default_from_args(args: &[String]) -> Option<ChatConfig> {
-    let model = flag_value(args, &["--chat-model"]).or_else(|| std::env::var("UG_CHAT_MODEL").ok());
-    let base_url = flag_value(args, &["--chat-base-url"])
-        .or_else(|| std::env::var("UG_CHAT_BASE_URL").ok())
-        .or_else(|| flag_value(args, &["--base-url"]))
-        .or_else(|| std::env::var("UG_EMBED_BASE_URL").ok());
-    let api_key = flag_value(args, &["--chat-api-key"])
-        .or_else(|| std::env::var("UG_CHAT_API_KEY").ok())
-        .or_else(|| flag_value(args, &["--api-key"]))
-        .or_else(|| std::env::var("UG_EMBED_API_KEY").ok());
-    let temperature = flag_value(args, &["--temperature"]).and_then(|s| s.parse().ok());
-    let max_tokens = flag_value(args, &["--max-tokens"]).and_then(|s| s.parse().ok());
-    let timeout = flag_value(args, &["--chat-timeout"]).and_then(|s| s.parse().ok());
+    let (model, _) =
+        crate::config::resolve_pref_cfg(flag_value(args, &["--chat-model"]), "chat.model");
+    // Chat borrows the embeddings endpoint/key when no chat-specific one
+    // is given (the common single-host case): the chat.* chain resolves
+    // first, then the embed.* chain (env/config only — its flags were
+    // already folded in above).
+    let chat_base_flag =
+        flag_value(args, &["--chat-base-url"]).or_else(|| flag_value(args, &["--base-url"]));
+    let base_url = crate::config::resolve_pref_cfg(chat_base_flag, "chat.base_url")
+        .0
+        .or_else(|| crate::config::resolve_pref_cfg(None, "embed.base_url").0);
+    let chat_api_flag =
+        flag_value(args, &["--chat-api-key"]).or_else(|| flag_value(args, &["--api-key"]));
+    let api_key = crate::config::resolve_pref_cfg(chat_api_flag, "chat.api_key")
+        .0
+        .or_else(|| crate::config::resolve_pref_cfg(None, "embed.api_key").0);
+    let (temp_raw, _) =
+        crate::config::resolve_pref_cfg(flag_value(args, &["--temperature"]), "chat.temperature");
+    let temperature = temp_raw.and_then(|s| s.parse().ok());
+    let (max_tok_raw, _) =
+        crate::config::resolve_pref_cfg(flag_value(args, &["--max-tokens"]), "chat.max_tokens");
+    let max_tokens = max_tok_raw.and_then(|s| s.parse().ok());
+    let (timeout_raw, _) =
+        crate::config::resolve_pref_cfg(flag_value(args, &["--chat-timeout"]), "chat.timeout_secs");
+    let timeout = timeout_raw.and_then(|s| s.parse().ok());
 
     // Require at least a chat model — without it we can't reasonably
     // pick one and the endpoint would 4xx every request.
@@ -2334,6 +2355,140 @@ fn build_chat_default_from_args(args: &[String]) -> Option<ChatConfig> {
         timeout,
     );
     Some(cfg)
+}
+
+// ---------- Settings (/api/config) ----------
+
+/// JSON view of every persistable config key for the settings UI:
+/// saved value, effective value after flag/env precedence, and which
+/// tier won. Secrets are masked — a raw API key never leaves the
+/// server, only a short prefix for recognition.
+fn config_payload(state: &ServeState) -> serde_json::Value {
+    let args: &[String] = &state.serve_args;
+    let keys: Vec<serde_json::Value> = crate::config::CONFIG_KEYS
+        .iter()
+        .map(|key| {
+            let saved = crate::config::get(key.name);
+            let flag_val = flag_value(args, &[key.flag]);
+            let flag_active = flag_val.is_some();
+            let (effective, source) = crate::config::resolve_pref_cfg(flag_val, key.name);
+            let source_label = match source {
+                crate::PrefSource::Flag => "flag",
+                crate::PrefSource::Env(_) => "env",
+                crate::PrefSource::Config(_) => "config",
+                crate::PrefSource::Default => "default",
+            };
+            let env_active = key
+                .env
+                .map(|e| std::env::var(e).map(|v| !v.trim().is_empty()).unwrap_or(false))
+                .unwrap_or(false);
+            let mask = |v: &String| {
+                if key.secret {
+                    crate::config::display_value(key, v)
+                } else {
+                    v.clone()
+                }
+            };
+            serde_json::json!({
+                "name": key.name,
+                "section": key.section,
+                "desc": key.desc,
+                "kind": match key.kind {
+                    crate::config::Kind::Str => "str",
+                    crate::config::Kind::F32 => "f32",
+                    crate::config::Kind::U32 => "u32",
+                    crate::config::Kind::U64 => "u64",
+                },
+                "secret": key.secret,
+                "saved": saved.as_ref().map(&mask),
+                "effective": effective.as_ref().map(&mask),
+                "source": source_label,
+                "env": key.env,
+                "env_active": env_active,
+                "flag": key.flag,
+                "flag_active": flag_active,
+                "default": crate::config::default_for(key),
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "path": crate::config::config_path().display().to_string(),
+        "keys": keys,
+        // Chat settings apply immediately (chat_default is rebuilt on
+        // save); the embedder is constructed at startup, so embed.*
+        // changes need a server restart to take effect here.
+        "live_sections": ["chat"],
+    })
+}
+
+async fn api_config_get(State(state): State<ServeState>) -> Response {
+    ok_json(config_payload(&state).to_string())
+}
+
+#[derive(serde::Deserialize)]
+struct ConfigPostBody {
+    /// key → new value. Strings and numbers accepted; a blank string
+    /// clears the key (same as listing it in `unset`).
+    #[serde(default)]
+    set: BTreeMap<String, serde_json::Value>,
+    #[serde(default)]
+    unset: Vec<String>,
+}
+
+/// Persist settings changes from the UI into `~/.ug/config.json`, then
+/// refresh the in-process view so chat picks them up immediately.
+/// Validation failures reject the whole request — the file is only
+/// written when every change parses.
+async fn api_config_post(
+    State(state): State<ServeState>,
+    Json(body): Json<ConfigPostBody>,
+) -> Response {
+    let path = crate::config::config_path();
+    let mut cfg = match crate::config::read_config_file(&path) {
+        Ok(c) => c,
+        Err(e) => return err_json(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    };
+    for (name, val) in &body.set {
+        let Some(key) = crate::config::find_key(name) else {
+            return err_json(StatusCode::BAD_REQUEST, &format!("unknown config key: {}", name));
+        };
+        let raw = match val {
+            serde_json::Value::String(s) => s.clone(),
+            serde_json::Value::Number(n) => n.to_string(),
+            _ => {
+                return err_json(
+                    StatusCode::BAD_REQUEST,
+                    &format!("{} expects a string or number value", key.name),
+                )
+            }
+        };
+        if raw.trim().is_empty() {
+            crate::config::value_unset(&mut cfg, key);
+            continue;
+        }
+        if let Err(e) = crate::config::value_set(&mut cfg, key, raw.trim()) {
+            return err_json(StatusCode::BAD_REQUEST, &e);
+        }
+    }
+    for name in &body.unset {
+        let Some(key) = crate::config::find_key(name) else {
+            return err_json(StatusCode::BAD_REQUEST, &format!("unknown config key: {}", name));
+        };
+        crate::config::value_unset(&mut cfg, key);
+    }
+    if let Err(e) = crate::config::write_config_file(&path, &cfg) {
+        return err_json(StatusCode::INTERNAL_SERVER_ERROR, &e);
+    }
+    crate::config::reload();
+
+    let new_default = build_chat_default_from_args(&state.serve_args);
+    match new_default.as_ref() {
+        Some(c) => tracing::info!(model = %c.model, base_url = %c.base_url, "chat config updated via /api/config"),
+        None => tracing::info!("chat config cleared via /api/config (/api/chat will return 503)"),
+    }
+    *state.chat_default.write().expect("chat_default poisoned") = new_default;
+
+    ok_json(config_payload(&state).to_string())
 }
 
 #[derive(serde::Deserialize)]
@@ -2391,7 +2546,8 @@ async fn api_chat(State(state): State<ServeState>, Json(body): Json<ChatBody>) -
 
     // Merge defaults with per-request overrides. Without a default and
     // without an override we can't pick a model, so the route 503s.
-    let chat_cfg = match merge_chat_cfg(state.chat_default.as_ref(), &body) {
+    let chat_default = state.chat_default.read().expect("chat_default poisoned").clone();
+    let chat_cfg = match merge_chat_cfg(&chat_default, &body) {
         Some(c) => c,
         None => {
             return err_json(

@@ -16,6 +16,7 @@ use ultragraph::{
 };
 
 mod chat;
+mod config;
 mod project;
 mod serve;
 
@@ -94,6 +95,7 @@ fn main() {
         "list" => run_list(cmd_args),
         "rm" => run_rm(cmd_args),
         "uninstall" => run_uninstall(cmd_args),
+        "config" => run_config(cmd_args),
         "doctor" => run_doctor(cmd_args),
         "mcp" => run_mcp(cmd_args),
         "help" | "-h" | "--help" => {
@@ -195,13 +197,15 @@ fn write_or_print(output_path: Option<&str>, data: &str, label: &str) {
 // ---------- Precedence helper ----------
 
 /// Where a resolved config value came from: an explicit CLI flag, a
-/// named env var, or neither (caller applies its own default). `ug
+/// named env var, a key persisted in `~/.ug/config.json` (`ug config
+/// set`), or none of those (caller applies its own default). `ug
 /// doctor` reports this so the multi-tier fallback chain is inspectable
 /// instead of implicit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PrefSource {
     Flag,
     Env(&'static str),
+    Config(&'static str),
     Default,
 }
 
@@ -266,15 +270,17 @@ mod pref_tests {
 // ---------- Embedder / runtime helpers ----------
 
 pub(crate) fn embedder_from_args(args: &[String]) -> Embedder {
-    let dim = flag_value(args, &["--embedding-dim"]).and_then(|s| s.parse().ok());
-    let (base_url, _) = resolve_pref(flag_value(args, &["--base-url"]), "UG_EMBED_BASE_URL");
-    // Presence of --base-url (or $UG_EMBED_BASE_URL) is the single switch
-    // between in-process (default) and the legacy HTTP backend. --model
-    // applies to both: for local it picks a fastembed catalog entry; for
-    // remote it's the model field sent in the /v1/embeddings request.
+    let (dim_raw, _) = config::resolve_pref_cfg(flag_value(args, &["--embedding-dim"]), "embed.dim");
+    let dim = dim_raw.and_then(|s| s.parse().ok());
+    let (base_url, _) = config::resolve_pref_cfg(flag_value(args, &["--base-url"]), "embed.base_url");
+    // Presence of --base-url (or $UG_EMBED_BASE_URL, or a persisted
+    // embed.base_url) is the single switch between in-process (default)
+    // and the legacy HTTP backend. --model applies to both: for local it
+    // picks a fastembed catalog entry; for remote it's the model field
+    // sent in the /v1/embeddings request.
     let want_remote = base_url.is_some();
-    let (api_key, _) = resolve_pref(flag_value(args, &["--api-key"]), "UG_EMBED_API_KEY");
-    let (model, _) = resolve_pref(flag_value(args, &["--model"]), "UG_EMBED_MODEL");
+    let (api_key, _) = config::resolve_pref_cfg(flag_value(args, &["--api-key"]), "embed.api_key");
+    let (model, _) = config::resolve_pref_cfg(flag_value(args, &["--model"]), "embed.model");
     let cfg = EmbedderConfig::with_overrides(base_url, api_key, model, dim, None, None);
     let result = if want_remote {
         Embedder::remote(cfg)
@@ -324,14 +330,16 @@ fn announce_embedder(embedder: &Embedder, dim_was_explicit: bool) {
 /// chat and embedding share a single OpenAI-compatible host), and
 /// `$UG_EMBED_BASE_URL` / `$UG_EMBED_API_KEY` are the last fallback.
 pub(crate) fn embedder_from_chat_args(args: &[String]) -> Embedder {
-    let dim = flag_value(args, &["--embedding-dim"]).and_then(|s| s.parse().ok());
+    let (dim_raw, _) = config::resolve_pref_cfg(flag_value(args, &["--embedding-dim"]), "embed.dim");
+    let dim = dim_raw.and_then(|s| s.parse().ok());
     let base_url_flag = flag_value(args, &["--embedding-base-url"])
         .or_else(|| flag_value(args, &["--base-url"]));
-    let (base_url, _) = resolve_pref(base_url_flag, "UG_EMBED_BASE_URL");
+    let (base_url, _) = config::resolve_pref_cfg(base_url_flag, "embed.base_url");
     let api_key_flag = flag_value(args, &["--embedding-api-key"])
         .or_else(|| flag_value(args, &["--api-key"]));
-    let (api_key, _) = resolve_pref(api_key_flag, "UG_EMBED_API_KEY");
-    let (model, _) = resolve_pref(flag_value(args, &["--embedding-model"]), "UG_EMBED_MODEL");
+    let (api_key, _) = config::resolve_pref_cfg(api_key_flag, "embed.api_key");
+    let (model, _) =
+        config::resolve_pref_cfg(flag_value(args, &["--embedding-model"]), "embed.model");
     let want_remote = base_url.is_some();
     let cfg = EmbedderConfig::with_overrides(base_url, api_key, model, dim, None, None);
     let result = if want_remote {
@@ -1586,10 +1594,176 @@ fn print_app_help() {
     println!("  {C_CYAN}ug app{C_RESET} --project myrepo -p 9000");
 }
 
+/// `ug config` — view and persist settings in `$UG_HOME/config.json`.
+/// Persisted values sit below CLI flags and env vars in precedence, so
+/// nothing here can silently hijack an explicit invocation; the
+/// resolver prints a notice whenever a flag/env var overrides a saved
+/// value.
+fn run_config(args: &[String]) {
+    if has_flag(args, "-h") || has_flag(args, "--help") {
+        print_config_help();
+        return;
+    }
+    let sub = args.first().map(String::as_str).unwrap_or("list");
+    match sub {
+        "list" | "ls" => run_config_list(),
+        "path" => println!("{}", config::config_path().display()),
+        "get" => {
+            let Some(name) = args.get(1) else {
+                eprintln!("Usage: ug config get <key>");
+                std::process::exit(1);
+            };
+            let key = config_key_or_exit(name);
+            match config::get(key.name) {
+                Some(v) => println!("{}", v),
+                None => {
+                    eprintln!("{} is not set (run `ug config set {} <value>`)", key.name, key.name);
+                    std::process::exit(1);
+                }
+            }
+        }
+        "set" => {
+            let (Some(name), Some(value)) = (args.get(1), args.get(2)) else {
+                eprintln!("Usage: ug config set <key> <value>");
+                std::process::exit(1);
+            };
+            let key = config_key_or_exit(name);
+            let path = config::config_path();
+            let mut cfg = config::read_config_file(&path).unwrap_or_else(|e| {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            });
+            if let Err(e) = config::value_set(&mut cfg, key, value) {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+            if let Err(e) = config::write_config_file(&path, &cfg) {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+            println!(
+                "{C_GREEN}✓{C_RESET} {C_BOLD}{}{C_RESET} = {} → {}",
+                key.name,
+                config::display_value(key, value),
+                path.display()
+            );
+            // A live env var still outranks what was just saved — say so
+            // now rather than letting the next command surprise them.
+            if let Some(env_key) = key.env {
+                if std::env::var(env_key).map(|v| !v.trim().is_empty()).unwrap_or(false) {
+                    println!(
+                        "{C_YELLOW}▸ note:{C_RESET} ${} is set in your environment and overrides this value until unset"
+                        , env_key
+                    );
+                }
+            }
+        }
+        "unset" | "rm" => {
+            let Some(name) = args.get(1) else {
+                eprintln!("Usage: ug config unset <key>");
+                std::process::exit(1);
+            };
+            let key = config_key_or_exit(name);
+            let path = config::config_path();
+            let mut cfg = config::read_config_file(&path).unwrap_or_else(|e| {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            });
+            if !config::value_unset(&mut cfg, key) {
+                println!("{} was not set — nothing to do", key.name);
+                return;
+            }
+            if let Err(e) = config::write_config_file(&path, &cfg) {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+            println!("{C_GREEN}✓{C_RESET} unset {C_BOLD}{}{C_RESET}", key.name);
+        }
+        other => {
+            eprintln!("Unknown config subcommand: {}", other);
+            print_config_help();
+            std::process::exit(1);
+        }
+    }
+}
+
+fn config_key_or_exit(name: &str) -> &'static config::ConfigKey {
+    config::find_key(name).unwrap_or_else(|| {
+        eprintln!("Unknown config key: {}", name);
+        eprintln!("Known keys:");
+        for k in config::CONFIG_KEYS {
+            eprintln!("  {}", k.name);
+        }
+        std::process::exit(1);
+    })
+}
+
+fn run_config_list() {
+    let path = config::config_path();
+    println!("{C_BOLD}UltraGraph config{C_RESET}  {C_DIM}{}{C_RESET}", path.display());
+    println!("{C_DIM}precedence: CLI flag > env var > this file > built-in default{C_RESET}");
+    println!();
+    for key in config::CONFIG_KEYS {
+        let saved = config::get(key.name);
+        let value_label = match &saved {
+            Some(v) => format!("{C_CYAN}{}{C_RESET}", config::display_value(key, v)),
+            None => format!("{C_DIM}(not set){C_RESET}"),
+        };
+        // Flag an active env var: the saved value (or lack of one) is
+        // not what commands will actually use right now.
+        let env_note = key
+            .env
+            .filter(|e| std::env::var(e).map(|v| !v.trim().is_empty()).unwrap_or(false))
+            .map(|e| format!("  {C_YELLOW}⚠ overridden by ${}{C_RESET}", e))
+            .unwrap_or_default();
+        let overrides = match key.env {
+            Some(env) => format!("{} / ${}", key.flag, env),
+            None => key.flag.to_string(),
+        };
+        println!("  {C_BOLD}{:<18}{C_RESET} {}{}", key.name, value_label, env_note);
+        println!("  {C_DIM}{:<18} {} [{}]{C_RESET}", "", key.desc, overrides);
+    }
+    println!();
+    println!("Run {C_CYAN}ug config set <key> <value>{C_RESET} to change, {C_CYAN}ug doctor{C_RESET} to see effective values.");
+}
+
+fn print_config_help() {
+    println!("  {C_CYAN}ug config{C_RESET}  {C_YELLOW}— view and persist defaults (chat model, endpoints, …){C_RESET}");
+    println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
+    println!();
+    println!("{C_BOLD}Usage:{C_RESET}  ug config [list|get|set|unset|path] [<key>] [<value>]");
+    println!();
+    println!("  Saved to {C_CYAN}$UG_HOME/config.json{C_RESET} (default ~/.ug/config.json) and used by every");
+    println!("  command as the fallback below CLI flags and env vars:");
+    println!();
+    println!("    {C_BOLD}CLI flag  >  env var  >  ug config  >  built-in default{C_RESET}");
+    println!();
+    println!("  A flag or env var that overrides a saved value prints a one-line notice.");
+    println!();
+    println!("{C_BOLD}Subcommands:{C_RESET}");
+    println!("  {C_CYAN}list{C_RESET}               Show every key and its saved value (default)");
+    println!("  {C_CYAN}get{C_RESET} <key>          Print one saved value");
+    println!("  {C_CYAN}set{C_RESET} <key> <value>  Persist a value");
+    println!("  {C_CYAN}unset{C_RESET} <key>        Remove a saved value");
+    println!("  {C_CYAN}path{C_RESET}               Print the config file path");
+    println!();
+    println!("{C_BOLD}Keys:{C_RESET}");
+    for key in config::CONFIG_KEYS {
+        println!("  {C_CYAN}{:<18}{C_RESET} {}", key.name, key.desc);
+    }
+    println!();
+    println!("{C_BOLD}Examples:{C_RESET}");
+    println!("  {C_MAGENTA}ug config set{C_RESET} chat.model Qwen3.6-35B-A3B-MLX-8bit");
+    println!("  {C_MAGENTA}ug config set{C_RESET} chat.base_url http://127.0.0.1:8000/v1");
+    println!("  {C_MAGENTA}ug config get{C_RESET} chat.model");
+    println!("  {C_MAGENTA}ug config unset{C_RESET} chat.model");
+}
+
 fn doctor_source_label(s: PrefSource) -> String {
     match s {
         PrefSource::Flag => "flag".to_string(),
         PrefSource::Env(name) => format!("env:{}", name),
+        PrefSource::Config(key) => format!("config:{}", key),
         PrefSource::Default => "default".to_string(),
     }
 }
@@ -1649,12 +1823,24 @@ fn run_doctor(args: &[String]) {
         db_status,
         if db_flag.is_some() { "flag:-d/--db" } else { "default: ~/.ug/<name>/ugdb → legacy ./.ug/ugdb" }
     );
+    let cfg_path = config::config_path();
+    println!(
+        "  config file:  {} ({})",
+        cfg_path.display(),
+        if cfg_path.exists() {
+            format!("{C_GREEN}exists{C_RESET} — manage with `ug config`")
+        } else {
+            format!("{C_YELLOW}none{C_RESET} — create with `ug config set <key> <value>`")
+        }
+    );
     println!();
 
     println!("{C_BOLD}Embeddings{C_RESET} (ingest / gen / semantic_search / hybrid_search / serve)");
-    let (base_url, base_src) = resolve_pref(flag_value(args, &["--base-url"]), "UG_EMBED_BASE_URL");
-    let (_api_key, api_src) = resolve_pref(flag_value(args, &["--api-key"]), "UG_EMBED_API_KEY");
-    let (model, model_src) = resolve_pref(flag_value(args, &["--model"]), "UG_EMBED_MODEL");
+    let (base_url, base_src) =
+        config::resolve_pref_cfg(flag_value(args, &["--base-url"]), "embed.base_url");
+    let (_api_key, api_src) =
+        config::resolve_pref_cfg(flag_value(args, &["--api-key"]), "embed.api_key");
+    let (model, model_src) = config::resolve_pref_cfg(flag_value(args, &["--model"]), "embed.model");
     let backend = if base_url.is_some() {
         "remote (HTTP /v1/embeddings)"
     } else {
@@ -1677,12 +1863,12 @@ fn run_doctor(args: &[String]) {
     println!("{C_BOLD}Chat{C_RESET} (ug chat / POST /api/chat)");
     let chat_base_flag =
         flag_value(args, &["--chat-base-url"]).or_else(|| flag_value(args, &["--base-url"]));
-    let (chat_base_url, chat_base_src) = resolve_pref(chat_base_flag, "UG_CHAT_BASE_URL");
+    let (chat_base_url, chat_base_src) = config::resolve_pref_cfg(chat_base_flag, "chat.base_url");
     let chat_api_flag =
         flag_value(args, &["--chat-api-key"]).or_else(|| flag_value(args, &["--api-key"]));
-    let (chat_api_key, chat_api_src) = resolve_pref(chat_api_flag, "UG_CHAT_API_KEY");
+    let (chat_api_key, chat_api_src) = config::resolve_pref_cfg(chat_api_flag, "chat.api_key");
     let (chat_model, chat_model_src) =
-        resolve_pref(flag_value(args, &["--chat-model"]), "UG_CHAT_MODEL");
+        config::resolve_pref_cfg(flag_value(args, &["--chat-model"]), "chat.model");
     let configured = chat_base_url.is_some() || chat_model.is_some();
     println!(
         "  base_url:     {}  [{}]",
@@ -1705,7 +1891,7 @@ fn run_doctor(args: &[String]) {
             format!("{C_GREEN}configured{C_RESET} (base_url/model explicitly set)")
         } else {
             format!(
-                "{C_YELLOW}not configured{C_RESET} — using sample defaults; point --chat-base-url (or $UG_CHAT_BASE_URL) at a real endpoint"
+                "{C_YELLOW}not configured{C_RESET} — using sample defaults; run `ug config set chat.base_url <url>` (or pass --chat-base-url / $UG_CHAT_BASE_URL)"
             )
         }
     );
@@ -1742,6 +1928,8 @@ const API_ENDPOINTS: &[(&str, &[ApiEntry])] = &[
             ApiEntry { method: "GET", path: "/api/generate/status", desc: "poll a generation job's progress/log", availability: "multi-project mode only", cli_equivalent: None },
             ApiEntry { method: "GET", path: "/api/browse-dir", desc: "list subdirectories of a path (KB wizard folder picker)", availability: "always", cli_equivalent: None },
             ApiEntry { method: "GET", path: "/api/capabilities", desc: "report db/embedder/chat readiness for the active project", availability: "always", cli_equivalent: Some("ug doctor (similar info)") },
+            ApiEntry { method: "GET", path: "/api/config", desc: "persisted + effective settings with per-key source (flag/env/config/default)", availability: "always", cli_equivalent: Some("ug config list") },
+            ApiEntry { method: "POST", path: "/api/config", desc: "persist settings to ~/.ug/config.json (chat changes apply immediately)", availability: "always", cli_equivalent: Some("ug config set") },
         ],
     ),
     (
@@ -2207,14 +2395,20 @@ pub(crate) fn chat_client_from_args(args: &[String]) -> chat::ChatClient {
 fn chat_config_from_args(args: &[String]) -> chat::ChatConfig {
     let base_url_flag = flag_value(args, &["--chat-base-url"])
         .or_else(|| flag_value(args, &["--base-url"]));
-    let (base_url, _) = resolve_pref(base_url_flag, "UG_CHAT_BASE_URL");
+    let (base_url, _) = config::resolve_pref_cfg(base_url_flag, "chat.base_url");
     let api_key_flag = flag_value(args, &["--chat-api-key"])
         .or_else(|| flag_value(args, &["--api-key"]));
-    let (api_key, _) = resolve_pref(api_key_flag, "UG_CHAT_API_KEY");
-    let (model, _) = resolve_pref(flag_value(args, &["--chat-model"]), "UG_CHAT_MODEL");
-    let temperature = flag_value(args, &["--temperature"]).and_then(|s| s.parse().ok());
-    let max_tokens = flag_value(args, &["--max-tokens"]).and_then(|s| s.parse().ok());
-    let timeout = flag_value(args, &["--chat-timeout"]).and_then(|s| s.parse().ok());
+    let (api_key, _) = config::resolve_pref_cfg(api_key_flag, "chat.api_key");
+    let (model, _) = config::resolve_pref_cfg(flag_value(args, &["--chat-model"]), "chat.model");
+    let (temp_raw, _) =
+        config::resolve_pref_cfg(flag_value(args, &["--temperature"]), "chat.temperature");
+    let temperature = temp_raw.and_then(|s| s.parse().ok());
+    let (max_tok_raw, _) =
+        config::resolve_pref_cfg(flag_value(args, &["--max-tokens"]), "chat.max_tokens");
+    let max_tokens = max_tok_raw.and_then(|s| s.parse().ok());
+    let (timeout_raw, _) =
+        config::resolve_pref_cfg(flag_value(args, &["--chat-timeout"]), "chat.timeout_secs");
+    let timeout = timeout_raw.and_then(|s| s.parse().ok());
     chat::ChatConfig::with_overrides(base_url, api_key, model, temperature, max_tokens, timeout)
 }
 
@@ -2872,6 +3066,7 @@ fn print_chat_help() {
     println!("  {C_CYAN}--max-tokens{C_RESET} <n>         Max completion tokens (default: 1024)");
     println!("  {C_CYAN}--chat-timeout{C_RESET} <secs>    HTTP timeout for chat calls (default: 180)");
     println!("  {C_CYAN}--system{C_RESET} <text>          Override the default RAG system prompt");
+    println!("  {C_DIM}Persist any of these once with `ug config set chat.model …` — flags/env vars still win.{C_RESET}");
     println!();
     println!("{C_BOLD}Embedding (for retrieval; in-process by default):{C_RESET}");
     println!("  {C_CYAN}--embedding-model{C_RESET} <name>   Embedding model (falls back to --model)");
@@ -3014,6 +3209,7 @@ fn print_help() {
     println!("  {C_BOLD}{C_GREEN}list{C_RESET}           {C_GREEN}List generated projects under ~/.ug (or $UG_HOME){C_RESET}");
     println!("  {C_CYAN}rm{C_RESET}               Delete a project's data directory");
     println!("  {C_CYAN}uninstall{C_RESET}        Delete ALL indexed projects and uninstall ug itself");
+    println!("  {C_CYAN}config{C_RESET}           View/persist defaults (chat model, endpoints, …) in ~/.ug/config.json");
     println!("  {C_CYAN}doctor{C_RESET}           Show resolved project/db/embedder/chat config");
     println!();
     println!("Run {C_CYAN}ug <command> -h{C_RESET} for that command's options and examples.");
