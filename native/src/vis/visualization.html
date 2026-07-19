@@ -215,6 +215,40 @@
             margin-top: 2px;
         }
 
+        .header-badges {
+            display: flex;
+            gap: 8px;
+            margin-top: 8px;
+            flex-wrap: wrap;
+        }
+
+        .header-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 3px 8px;
+            border-radius: 999px;
+            background: rgba(249, 115, 22, 0.12);
+            border: 1px solid rgba(249, 115, 22, 0.25);
+            font-size: 9px;
+            font-weight: 500;
+            letter-spacing: 0.4px;
+            text-transform: uppercase;
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--accent);
+            transition: background 0.15s, border-color 0.15s;
+        }
+
+        .header-badge:hover {
+            background: rgba(249, 115, 22, 0.18);
+            border-color: rgba(249, 115, 22, 0.4);
+        }
+
+        .header-badge svg {
+            width: 11px;
+            height: 11px;
+        }
+
         .health-badge {
             position: fixed;
             top: 16px;
@@ -2361,6 +2395,139 @@
                 opacity: 0.5;
                 transform: scale(0.7);
             }
+        }
+
+        /* ─── What's New section ─── */
+
+        .kb-whatsnew {
+            max-width: 700px;
+            margin: 0 auto 32px;
+            background: var(--bg-surface);
+            border: 1px solid var(--border-soft);
+            border-radius: 12px;
+            overflow: hidden;
+            animation: kb-rise 0.35s ease-out both;
+        }
+
+        .kb-whatsnew-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border-soft);
+            background: rgba(255, 255, 255, 0.02);
+            cursor: pointer;
+            user-select: none;
+            transition: background 0.15s;
+        }
+
+        .kb-whatsnew-header:hover {
+            background: rgba(255, 255, 255, 0.04);
+        }
+
+        .kb-whatsnew-header svg {
+            width: 16px;
+            height: 16px;
+            color: var(--accent);
+            flex-shrink: 0;
+        }
+
+        .kb-whatsnew-header span {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.6px;
+            text-transform: uppercase;
+            color: var(--text);
+        }
+
+        .kb-whatsnew-toggle {
+            margin-left: auto;
+            width: 20px;
+            height: 20px;
+            padding: 0;
+            border: none;
+            background: transparent;
+            color: var(--text-dim);
+            cursor: pointer;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: color 0.15s, background 0.15s;
+        }
+
+        .kb-whatsnew-toggle:hover {
+            color: var(--text);
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .kb-whatsnew-toggle::before {
+            content: '▾';
+            font-size: 10px;
+            transition: transform 0.2s;
+        }
+
+        .kb-whatsnew.collapsed .kb-whatsnew-toggle::before {
+            transform: rotate(-90deg);
+        }
+
+        .kb-whatsnew-body {
+            padding: 16px;
+            transition: max-height 0.3s ease, padding 0.3s ease;
+            max-height: 600px;
+        }
+
+        .kb-whatsnew.collapsed .kb-whatsnew-body {
+            max-height: 0;
+            padding-top: 0;
+            padding-bottom: 0;
+            overflow: hidden;
+        }
+
+        .kb-whatsnew-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            padding: 10px 0;
+            border-bottom: 1px solid var(--border-soft);
+        }
+
+        .kb-whatsnew-item:last-child {
+            border-bottom: none;
+            padding-bottom: 0;
+        }
+
+        .kb-whatsnew-item:first-child {
+            padding-top: 0;
+        }
+
+        .kb-whatsnew-badge {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 9px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            padding: 3px 8px;
+            border-radius: 4px;
+            background: rgba(249, 115, 22, 0.15);
+            color: var(--accent);
+            flex-shrink: 0;
+        }
+
+        .kb-whatsnew-text {
+            font-size: 12px;
+            line-height: 1.5;
+            color: var(--text-muted);
+        }
+
+        .kb-whatsnew-text code {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            padding: 2px 5px;
+            background: var(--bg-deep);
+            border-radius: 3px;
+            color: var(--text);
         }
 
         .kb-state {
@@ -4900,6 +5067,39 @@
                 </div>
             </div>
 
+            <!-- What's New: Recent Enhancements -->
+            <div class="kb-whatsnew">
+                <div class="kb-whatsnew-header">
+                    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                    </svg>
+                    <span>What's New</span>
+                    <button class="kb-whatsnew-toggle" id="kb-whatsnew-toggle" type="button" title="Toggle"></button>
+                </div>
+                <div class="kb-whatsnew-body" id="kb-whatsnew-body">
+                    <div class="kb-whatsnew-item">
+                        <span class="kb-whatsnew-badge">Performance</span>
+                        <span class="kb-whatsnew-text">Direct <code>nodeId</code> lookups in <code>find_symbol</code> and <code>file_outline</code> — O(1) when you have the id</span>
+                    </div>
+                    <div class="kb-whatsnew-item">
+                        <span class="kb-whatsnew-badge">MCP Tools</span>
+                        <span class="kb-whatsnew-text">Enhanced AI agent tools with batch support — <code>search_kb</code>, <code>traverse_kb</code>, <code>find_usages</code>, <code>get_code</code></span>
+                    </div>
+                    <div class="kb-whatsnew-item">
+                        <span class="kb-whatsnew-badge">Quality</span>
+                        <span class="kb-whatsnew-text">Enhanced node signatures and descriptions — better symbol context for code understanding</span>
+                    </div>
+                    <div class="kb-whatsnew-item">
+                        <span class="kb-whatsnew-badge">Reliability</span>
+                        <span class="kb-whatsnew-text">Project staleness detection — automatic warnings when index falls out of sync with source</span>
+                    </div>
+                    <div class="kb-whatsnew-item">
+                        <span class="kb-whatsnew-badge">Chat</span>
+                        <span class="kb-whatsnew-text">Streaming responses with real-time progress — faster, more interactive code Q&A</span>
+                    </div>
+                </div>
+            </div>
+
             <div class="kb-body">
                 <div id="kb-loading" class="kb-state">
                     <div class="kb-scan"></div>
@@ -5142,7 +5342,28 @@
         <div class="header">
             <div class="header-kicker">UltraGraph</div>
             <h1>Knowledge Graph</h1>
-            <p id="graph-title">Interactive visualization</p>
+            <p id="graph-title">AI-ready knowledge graph with enhanced MCP tools</p>
+            <div class="header-badges">
+                <span class="header-badge" title="MCP tools for AI agents (Claude, Cursor, Windsurf, etc.)">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <circle cx="8" cy="8" r="3"/>
+                        <path d="M8 1v4m0 6v4M1 8h4m6 0h4"/>
+                    </svg>
+                    <span>MCP</span>
+                </span>
+                <span class="header-badge" title="Enhanced with AI-ready tools: search_kb, find_symbol, traverse_kb, get_code">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <path d="M9 3l4 4-4 4m-5-4h9"/>
+                    </svg>
+                    <span>AI Tools</span>
+                </span>
+                <span class="header-badge" title="Direct nodeId lookups - O(1) when you have the id">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <path d="M13 8l-5 5-5-5"/>
+                    </svg>
+                    <span>Fast Lookup</span>
+                </span>
+            </div>
         </div>
 
         <span id="health-badge" class="health-badge" title="Checking server…">Checking…</span>
@@ -5215,7 +5436,7 @@
                     <div class="catalog-body" id="catalog-body"></div>
                     <div class="catalog-footer">
                         <span id="catalog-stats" class="catalog-stats"></span>
-                        <span class="catalog-hint">Click a row to focus it</span>
+                        <span class="catalog-hint">Click a row to focus it · Use <code>ug mcp install</code> to connect AI agents</span>
                     </div>
                 </div>
 
@@ -6105,6 +6326,17 @@
 
             document.getElementById('kb-wizard-back').addEventListener('click', () => {
                 if (kbCapsCache) showKbList(kbCapsCache);
+            });
+
+            // What's New toggle
+            document.getElementById('kb-whatsnew-toggle').addEventListener('click', (e) => {
+                e.stopPropagation();
+                document.getElementById('kb-whatsnew-body').parentElement.classList.toggle('collapsed');
+            });
+            document.getElementById('kb-whatsnew-body').parentElement.addEventListener('click', (e) => {
+                if (e.target.closest('.kb-whatsnew-header') && !e.target.closest('.kb-whatsnew-toggle')) {
+                    document.getElementById('kb-whatsnew-body').parentElement.classList.toggle('collapsed');
+                }
             });
 
             document.getElementById('kb-open-btn').addEventListener('click', reopenKbManager);

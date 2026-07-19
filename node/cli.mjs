@@ -60,7 +60,7 @@ const ug = nodeRequire(join(dirname(__dirname), '.ug', 'ug.node'));
 // swapped for the project's own OverGraph db.
 // ---------------------------------------------------------------------------
 
-const UG_VERSION = '0.1.3';
+const UG_VERSION = '0.1.4';
 
 function ugHome() {
   const env = process.env.UG_HOME;
