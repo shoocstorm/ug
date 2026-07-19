@@ -4,7 +4,22 @@ UltraGraph-KB includes an MCP (Model Context Protocol) server that exposes Graph
 
 ## What is MCP?
 
-The Model Context Protocol (MCP) allows AI applications (like Claude Desktop, Cursor, and other AI agents) to connect to external data sources and tools. This MCP server provides five tools for querying your knowledge graph.
+The Model Context Protocol (MCP) allows AI applications (like Claude Desktop, Cursor, and other AI agents) to connect to external data sources and tools. This MCP server provides tools for querying your knowledge graph.
+
+## Knowledge Base Types
+
+UltraGraph supports indexing two types of knowledge bases (or a mixed combination):
+
+1. **Documentation KB:** Markdown files, PDFs, Word documents, Excel spreadsheets, PowerPoint presentations
+2. **Code KB:** Source code repositories (TypeScript, JavaScript, Python, Java, Rust, etc.)
+3. **Mixed KB:** Both documentation and code in the same knowledge base
+
+The type is automatically detected during indexing based on the content composition:
+- **Docs:** Mostly `Document` and `Concept` nodes from markdown/PDF/documentation files
+- **Code:** Mostly `Function`, `Class`, `Interface`, and other code structure nodes
+- **Mixed:** Significant presence of both documentation and code nodes
+
+The UI displays the detected KB type on each project card in the Knowledge Base Manager.
 
 ## Prerequisites
 
@@ -31,6 +46,17 @@ Before using the MCP server, ensure you have:
    default — UltraGraph ships an in-process ONNX embedder (no external service).
    Set `UG_EMBED_BASE_URL` to opt into a remote OpenAI-compatible endpoint instead
    (e.g. `ollama serve` with `nomic-embed-text`).
+
+**Index filtering:** UltraGraph automatically excludes build artifacts during indexing. The following patterns are ignored by default:
+- `*.min.js`, `*.min.mjs`, `*.min.css` (minified files)
+- `*.bundle.js`, `*.bundle.mjs`, `*.bundle.css` (bundled files)
+- `dist/` directories
+
+You can add custom ignore patterns via the `UG_IGNORE` environment variable (comma-separated, gitignore-style):
+```bash
+export UG_IGNORE="vendor/,*.generated.ts,node_modules/"
+ug gen -i ./myproject
+```
 
 ## Configuration
 
@@ -267,7 +293,7 @@ Use this when the user asks "who uses X", "what calls X", "where is X imported",
 **Parameters:**
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `nodeId` | string | ✅ | The node id to look up usages for. Get this from search_kb or semantic_search_kb. |
+| `nodeId` | string \| string[] | ✅ | The node id to look up usages for (or an array of up to 10 — batch related checks into one call). Get ids from search_kb or find_symbol. |
 | `hops` | integer (1-3) | ❌ | How many hops out to walk (default 1 = direct callers only). Bump to 2 to catch transitive usages. |
 | `edgeTypes` | string[] | ❌ | Override the default set if you only care about a subset (e.g. ['calls']). |
 
@@ -291,7 +317,7 @@ find_usages: { nodeId: "file-101", hops: 1, edgeTypes: ["imports"] }
 **Parameters:**
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `name` | string | ✅ | Identifier or fragment, e.g. `resolveDbAndRoot` or `resolve`. |
+| `name` | string \| string[] | ✅ | Identifier or fragment, e.g. `resolveDbAndRoot` or `resolve`. Array of up to 10 resolves several in one call. |
 | `nodeTypes` | string[] | ❌ | Restrict to node types: Function, Class, Interface, File, Concept. |
 | `filePrefix` | string | ❌ | Only symbols under this repo-relative path prefix, e.g. `src/auth/`. |
 | `limit` | integer (1-100) | ❌ | Max hits (default 20). |
@@ -310,7 +336,7 @@ find_symbol: { name: "config", nodeTypes: ["Class"], filePrefix: "native/src/" }
 **Parameters:**
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `file` | string | ✅ | Repo-relative path (`native/src/main.rs`) or unique suffix (`main.rs`). |
+| `file` | string \| string[] | ✅ | Repo-relative path (`native/src/main.rs`) or unique suffix (`main.rs`). Array of up to 10 outlines several files in one call. |
 
 ```
 file_outline: { file: "node/cli.mjs" }
@@ -325,7 +351,7 @@ file_outline: { file: "node/cli.mjs" }
 **Parameters:**
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `nodeId` | string | ❌* | Node id from any prior result — reads that symbol's exact range. |
+| `nodeId` | string \| string[] | ❌* | Node id from any prior result — reads that symbol's exact range. Array of up to 10 reads several symbols in one call (per-symbol `maxChars`). |
 | `file` | string | ❌* | Repo-relative path (when no nodeId). |
 | `startLine` / `endLine` | integer | ❌ | 1-based inclusive range (with `file`; defaults to whole file). |
 | `maxChars` | integer | ❌ | Character cap (default 20000). |
@@ -367,7 +393,49 @@ shortest_path: { sourceId: "file:node/cli.mjs", targetId: "function:native/src/m
 
 ---
 
-### 10. `ping_embedder` - Health Check
+### 10. `graph_schema` - Node & Edge Type Metadata
+
+**What node and edge types this graph actually contains**, with counts and what each edge type connects (e.g. `Calls: Function→Function (305)`), plus the full edge-type vocabulary indexers can emit. Check it before passing `edgeTypes` to `find_usages` / `traverse_kb` or `nodeTypes` to `find_symbol` — filtering on a type the graph doesn't contain silently returns nothing.
+
+**Parameters:** None
+
+```
+graph_schema: {}
+```
+
+---
+
+### 11. `list_projects` - Enumerate Indexed Projects
+
+**List every indexed project under `~/.ug`** with name, repo root, and node/edge counts. One server instance can query all of them: every other tool accepts an optional `project: '<name>'` parameter to target another project instead of the one the server was started for.
+
+**Parameters:** None (ignores `project`)
+
+```
+list_projects: {}
+search_kb: { query: "auth flow", project: "other-repo" }
+```
+
+---
+
+### 12. `reindex` - Refresh a Stale Index
+
+**Regenerate the index → graph → embeddings pipeline** for the current (or given) project. Incremental: a blake3 content cache skips files that haven't changed, so re-indexing after a few edits is fast.
+
+Call this when tool outputs carry a staleness warning (see below), or after any burst of file changes you want reflected in search results.
+
+**Parameters:**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project` | string | ❌ | Project to re-index (default: the current one). |
+
+```
+reindex: {}
+```
+
+---
+
+### 12. `ping_embedder` - Health Check
 
 **Probe the configured embedding endpoint.** Returns 'ok' on success or throws with the upstream error.
 
@@ -433,9 +501,41 @@ find_usages: { nodeId: "func-123", hops: 1 }
 ping_embedder: {}
 ```
 
+## Index Freshness / Staleness Warnings
+
+Every tool output is stamped with a staleness note when the index no longer matches the repo:
+
+```
+⚠ Index may be stale: 3 changed, 1 deleted of 214 indexed files since the last index (index built 2 day(s) ago). Call the reindex tool to refresh.
+```
+
+Staleness is computed by comparing `graph.json`'s mtime against the current mtimes of the indexed files (once per project per server process). When you see the warning, call the `reindex` tool — it's incremental, so unchanged files are skipped.
+
+The web UI's Knowledge Base Manager runs the same check automatically on startup and every 2 minutes, showing a **⚠ Stale — Re-index** badge on affected project cards; clicking it re-runs the generation pipeline for that project.
+
 ## Testing the MCP Server
 
-You can test the MCP server manually using the MCP inspector or by running it directly:
+### Quick one-shot testing with `ug mcp list` / `ug mcp call`
+
+The fastest way to poke at any tool — no JSON-RPC framing, no client config:
+
+```bash
+# Show every tool with a one-line description
+ug mcp list
+
+# Invoke any tool one-shot with its arguments as a JSON string
+ug mcp call find_symbol '{"name":"run_mcp"}'
+ug mcp call file_outline '{"file":"chat.rs"}'
+ug mcp call list_projects '{}'
+ug mcp call search_kb '{"query":"how does auth work","k":8}'
+ug mcp call reindex '{}'
+```
+
+`ug mcp call` resolves the same project/env configuration as the stdio server (`UG_PROJECT`, `UG_DB_PATH`, `.env`, …), so what you see is exactly what an agent would get. Pass `"project":"<name>"` inside the JSON to target another indexed project.
+
+### Running the stdio server directly
+
+You can also test the MCP server using the MCP inspector or by running it directly:
 
 ```bash
 # Set environment variables

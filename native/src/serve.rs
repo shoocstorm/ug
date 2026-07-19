@@ -869,6 +869,7 @@ pub fn run_serve(args: &[String]) {
             .route("/api/capabilities", get(api_capabilities))
             .route("/api/config", get(api_config_get).post(api_config_post))
             .route("/api/graph/stats", get(api_stats))
+        .route("/api/projects/staleness", get(api_projects_staleness))
             .route("/api/graph/node/*id", get(api_node))
             .route("/api/graph/search", get(api_search))
             .route("/api/graph/bfs/*id", get(api_bfs))
@@ -1167,6 +1168,124 @@ async fn api_projects_delete(
         serde_json::json!({
             "removed": name,
             "active": active_name,
+        })
+        .to_string(),
+    )
+}
+
+/// GET /api/projects/staleness — check staleness for all projects.
+/// Compares graph.json mtime against indexed files' mtimes and returns
+/// changed/deleted counts. Runs on startup and every 2 minutes.
+async fn api_projects_staleness(State(state): State<ServeState>) -> Response {
+    let projects = if state.registry.mode == ServeMode::Multi {
+        crate::project::list_projects()
+    } else {
+        vec![]
+    };
+
+    let mut staleness_info = Vec::new();
+    for (project_dir, meta) in projects {
+        let graph_path = project_dir.join("graph.json");
+        if !graph_path.exists() {
+            continue;
+        }
+
+        let built_at = match std::fs::metadata(&graph_path) {
+            Ok(m) => m.modified().ok().map(|t| {
+                t.duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+            }),
+            Err(_) => None,
+        };
+
+        let mut changed = 0usize;
+        let mut missing = 0usize;
+        let mut files_count = 0usize;
+        let mut doc_nodes = 0usize;
+        let mut code_nodes = 0usize;
+
+        // Read graph to collect indexed files + node-type composition
+        if let Ok(graph_content) = std::fs::read_to_string(&graph_path) {
+            if let Ok(graph) = serde_json::from_str::<serde_json::Value>(&graph_content) {
+                let mut files = std::collections::HashSet::new();
+                if let Some(nodes) = graph.get("nodes").and_then(|n| n.as_array()) {
+                    for node in nodes {
+                        let node_type = node.get("node_type").and_then(|t| t.as_str());
+                        match node_type {
+                            Some("Folder") | Some("File") | None => {}
+                            Some("Document") | Some("Concept") | Some("Documentation") => {
+                                doc_nodes += 1
+                            }
+                            Some(_) => code_nodes += 1,
+                        }
+                        if let Some(file) = node.get("file").and_then(|f| f.as_str()) {
+                            if node_type != Some("Folder") {
+                                files.insert(file.to_string());
+                            }
+                        }
+                    }
+                }
+
+                files_count = files.len();
+                let repo_root = PathBuf::from(&meta.repo_root);
+
+                for file in files {
+                    let file_path = repo_root.join(&file);
+                    match std::fs::metadata(&file_path) {
+                        Ok(metadata) => {
+                            if let Ok(modified) = metadata.modified() {
+                                let file_mtime = modified
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs();
+
+                                if let Some(built) = built_at {
+                                    if file_mtime > built {
+                                        changed += 1;
+                                    }
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            missing += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        let is_stale = changed > 0 || missing > 0;
+        // Classify the KB by symbol composition: docs (markdown/PDF/office),
+        // code (source symbols), or mixed. File/Folder nodes are structural
+        // and excluded from the ratio.
+        let kb_kind = if doc_nodes > 0 && code_nodes > 0 {
+            "mixed"
+        } else if doc_nodes > code_nodes {
+            "docs"
+        } else {
+            "code"
+        };
+        staleness_info.push(serde_json::json!({
+            "name": meta.name,
+            "isStale": is_stale,
+            "builtAt": built_at,
+            "files": files_count,
+            "changed": changed,
+            "missing": missing,
+            "kbKind": kb_kind,
+            "docNodes": doc_nodes,
+            "codeNodes": code_nodes,
+        }));
+    }
+
+    ok_json(
+        serde_json::json!({
+            "projects": staleness_info,
+            "checkedAt": std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
         })
         .to_string(),
     )

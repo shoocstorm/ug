@@ -24,3 +24,5 @@ opencode.json
 docs/neo4j-conn.txt
 docs/model-conn.txt
 docs/notes.md
+.claude
+prompt.md

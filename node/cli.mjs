@@ -349,33 +349,43 @@ const TraverseInput = z.object({
   direction: z.enum(['outbound', 'inbound', 'both']).default('outbound'),
 });
 
+// Batch cap for tools accepting multiple ids/names/files: keeps one
+// response from blowing the agent's context while still collapsing a
+// handful of lookups into one round trip.
+const MAX_BATCH = 10;
+
+// One-or-many: accept "x" or ["x", "y"], normalize to a capped array.
+const oneOrMany = z
+  .union([z.string().min(1), z.array(z.string().min(1)).min(1).max(MAX_BATCH)])
+  .transform((v) => (Array.isArray(v) ? v : [v]));
+
 const FindUsagesInput = z.object({
-  nodeId: z.string().min(1),
+  nodeId: oneOrMany,
   hops: z.number().int().min(1).max(3).default(1),
   edgeTypes: z.array(z.string()).optional(),
 });
 
 const FindSymbolInput = z.object({
-  name: z.string().min(1),
+  name: oneOrMany,
   nodeTypes: z.array(z.string()).optional(),
   filePrefix: z.string().optional(),
   limit: z.number().int().min(1).max(100).optional(),
 });
 
 const FileOutlineInput = z.object({
-  file: z.string().min(1),
+  file: oneOrMany,
 });
 
 const GetCodeInput = z
   .object({
-    nodeId: z.string().min(1).optional(),
+    nodeId: oneOrMany.optional(),
     file: z.string().min(1).optional(),
     startLine: z.number().int().min(1).optional(),
     endLine: z.number().int().min(1).optional(),
     maxChars: z.number().int().min(200).max(200000).optional(),
   })
   .refine((v) => v.nodeId || v.file, {
-    message: 'Pass nodeId, or file (optionally with startLine/endLine).',
+    message: 'Pass nodeId (one id or an array), or file (optionally with startLine/endLine).',
   });
 
 const ShortestPathInput = z.object({
@@ -558,14 +568,17 @@ const MCP_TOOLS = [
     name: 'find_usages',
     description:
       "Find inbound references to a node — i.e. callers of a function, importers of a module, subclasses of a class, or anything else pointing at the node. Convenience wrapper over traverse_kb with direction='inbound' and a sensible default edge-type set ['calls', 'references', 'imports', 'extends', 'implements']. " +
-      "Use this when the user asks 'who uses X', 'what calls X', 'where is X imported', 'what would break if I change X', or before a refactor.",
+      "Use this when the user asks 'who uses X', 'what calls X', 'where is X imported', 'what would break if I change X', or before a refactor. Batch-friendly: pass an ARRAY of up to 10 nodeIds to check them all in one call (e.g. every symbol a refactor touches).",
     inputSchema: {
       type: 'object',
       properties: {
         nodeId: {
-          type: 'string',
+          oneOf: [
+            { type: 'string' },
+            { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 10 },
+          ],
           description:
-            'The node id to look up usages for. Get this from search_kb or semantic_search_kb.',
+            'The node id (or an array of up to 10 ids — batch related lookups into ONE call instead of several) to look up usages for. Get ids from search_kb or find_symbol.',
         },
         hops: {
           type: 'integer',
@@ -588,13 +601,17 @@ const MCP_TOOLS = [
     name: 'find_symbol',
     description:
       'EXACT-NAME symbol lookup — no embeddings, no fuzziness beyond substring. Use this instead of search_kb whenever you already know (part of) an identifier: a function, class, interface, or file the user named, an id you saw in a stack trace, a symbol you are about to edit. Matches case-insensitively against node names, ranked exact > prefix > substring. ' +
-      'Returns id/type/file:line for each hit — feed the id straight into get_code (source), find_usages (callers), or traverse_kb (dependencies). Cheaper and more precise than vector search for known names; fall back to search_kb when you only know the concept, not the name.',
+      'Returns id/type/file:line for each hit — feed the id straight into get_code (source), find_usages (callers), or traverse_kb (dependencies). Cheaper and more precise than vector search for known names; fall back to search_kb when you only know the concept, not the name. Batch-friendly: pass an ARRAY of up to 10 names to resolve them all in one call.',
     inputSchema: {
       type: 'object',
       properties: {
         name: {
-          type: 'string',
-          description: "Identifier to look up, e.g. 'resolveDbAndRoot' or a fragment like 'resolve'.",
+          oneOf: [
+            { type: 'string' },
+            { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 10 },
+          ],
+          description:
+            "Identifier to look up, e.g. 'resolveDbAndRoot' or a fragment like 'resolve'. Pass an array of up to 10 names to resolve several symbols in ONE call (e.g. every function you're about to edit).",
         },
         nodeTypes: {
           type: 'array',
@@ -618,13 +635,17 @@ const MCP_TOOLS = [
   {
     name: 'file_outline',
     description:
-      "List every indexed symbol in one file, in line order — a structural table of contents. Use before opening or editing a file to know what's in it, or to map a file the user mentioned. Accepts a repo-relative path or a unique suffix (e.g. just the basename). Returns name/type/line-range/id per symbol; ids feed get_code / find_usages / traverse_kb.",
+      "List every indexed symbol in one file, in line order — a structural table of contents. Use before opening or editing a file to know what's in it, or to map a file the user mentioned. Accepts a repo-relative path or a unique suffix (e.g. just the basename), or an ARRAY of up to 10 files to outline them all in one call. Returns name/type/line-range/id per symbol; ids feed get_code / find_usages / traverse_kb.",
     inputSchema: {
       type: 'object',
       properties: {
         file: {
-          type: 'string',
-          description: "Repo-relative path ('native/src/main.rs') or unique suffix ('main.rs').",
+          oneOf: [
+            { type: 'string' },
+            { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 10 },
+          ],
+          description:
+            "Repo-relative path ('native/src/main.rs'), unique suffix ('main.rs'), or a File node id ('file:native/src/main.rs'). Pass an array of up to 10 files to outline several in ONE call.",
         },
       },
       required: ['file'],
@@ -634,13 +655,17 @@ const MCP_TOOLS = [
     name: 'get_code',
     description:
       'Read the full source for a node id or an arbitrary file/line range from the indexed repo. THE follow-up to every other tool: search_kb previews truncate at ~1200 chars and traverse/find_usages return no code at all — call this to see the real implementation before reasoning about it or editing it. ' +
-      'Pass a nodeId from any prior result, or file (+ optional startLine/endLine) for raw ranges. Reads from the indexed repo root, so it works even when you have no direct file access (e.g. Claude Desktop).',
+      'Pass a nodeId from any prior result — or an ARRAY of up to 10 ids to read several symbols in one call instead of several calls — or file (+ optional startLine/endLine) for raw ranges. Reads from the indexed repo root, so it works even when you have no direct file access (e.g. Claude Desktop).',
     inputSchema: {
       type: 'object',
       properties: {
         nodeId: {
-          type: 'string',
-          description: 'Node id from find_symbol / search_kb / file_outline / traverse_kb — reads exactly that symbol\'s line range.',
+          oneOf: [
+            { type: 'string' },
+            { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 10 },
+          ],
+          description:
+            "Node id from find_symbol / search_kb / file_outline / traverse_kb — reads exactly that symbol's line range. Pass an array of up to 10 ids to read several symbols in ONE call (per-symbol maxChars still applies).",
         },
         file: {
           type: 'string',
@@ -675,6 +700,12 @@ const MCP_TOOLS = [
       },
       required: ['sourceId', 'targetId'],
     },
+  },
+  {
+    name: 'graph_schema',
+    description:
+      "Node & edge types actually present in this project's graph, with counts and what each edge type connects (e.g. Calls: Function→Function). Call this before passing edgeTypes to find_usages / traverse_kb or nodeTypes to find_symbol — filtering on a type the graph doesn't contain silently returns nothing. Also lists the full edge-type vocabulary indexers can emit. Edges are directed (Calls A→B means A calls B); Contains is pure structure (Folder→File→Symbol), exclude it when you mean 'depends on'.",
+    inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'list_projects',
@@ -984,7 +1015,10 @@ function invalidateProjectCaches(dbPath) {
 }
 
 function nodeLoc(n) {
-  return n.file ? `${n.file}:${n.startLine ?? '?'}-${n.endLine ?? '?'}` : '(no file)';
+  if (!n.file) return '(no file)';
+  // File nodes carry no line range — "path:?-?" reads like an error.
+  if (n.startLine == null && n.endLine == null) return n.file;
+  return `${n.file}:${n.startLine ?? '?'}-${n.endLine ?? '?'}`;
 }
 
 // `(name?: type = default, ...) -> return` from a node's structured
@@ -1154,7 +1188,14 @@ function formatSymbolHits(query, { total, items }) {
   return lines.join('\n');
 }
 
+// File nodes print their id as `file:<path>` (e.g. `file:docs/mcp.md`) and
+// agents/users copy that straight into file parameters. Accept both forms.
+function stripFileIdPrefix(file) {
+  return file.startsWith('file:') ? file.slice('file:'.length) : file;
+}
+
 function fileOutline(graph, file) {
+  file = stripFileIdPrefix(file);
   // Exact repo-relative match first, then unique suffix match.
   let matches = graph.nodes.filter((n) => n.file === file);
   if (!matches.length) {
@@ -1201,8 +1242,10 @@ function getCodeSlice(graph, repoRoot, args) {
     if (!node.file) throw new Error(`Node '${args.nodeId}' (${node.node_type}) has no source file.`);
     file = node.file;
     startLine = node.startLine ?? 1;
-    endLine = node.endLine ?? startLine;
+    // No line range at all (File nodes) means the whole file, not line 1.
+    endLine = node.endLine ?? (node.startLine != null ? startLine : undefined);
   }
+  if (file) file = stripFileIdPrefix(file);
   const abs = join(repoRoot, file);
   if (!existsSync(abs)) {
     throw new Error(`${file} not found under repo root ${repoRoot} — the index may be stale (re-run \`ug gen\`).`);
@@ -1273,6 +1316,74 @@ function projectOverview(graph, repoRoot, dbPath) {
   }
   lines.push('');
   lines.push('Next: file_outline on a big file, get_code / find_usages on a hotspot id, or search_kb for a concept.');
+  return lines.join('\n');
+}
+
+// Run a per-item formatter over a batch, isolating failures: one bad id
+// yields an inline error section instead of sinking the whole call. The
+// point of batching is fewer agent round trips — a thrown error would
+// force a retry turn and erase that saving.
+async function batchSections(items, fn) {
+  const sections = [];
+  for (const item of items) {
+    try {
+      sections.push(await fn(item));
+    } catch (err) {
+      sections.push(`✗ ${item}: ${err.message ?? String(err)}`);
+    }
+  }
+  return sections.join('\n\n---\n\n');
+}
+
+// The full edge-type vocabulary indexers can emit (GraphEdgeType in
+// native/src/types.rs) — shown so agents know what *could* appear, not
+// just what this graph happens to contain.
+const EDGE_TYPE_VOCABULARY = [
+  'DependsOn', 'Calls', 'Extends', 'Implements', 'References',
+  'Contains', 'Imports', 'Exports', 'Requires', 'Uses',
+];
+
+function graphSchema(graph, graphPath) {
+  const nodeCounts = new Map();
+  for (const n of graph.nodes) {
+    nodeCounts.set(n.node_type, (nodeCounts.get(n.node_type) ?? 0) + 1);
+  }
+  // Edge types keyed by source→target node types so the reader learns not
+  // just which types exist but what they connect.
+  const edgeCounts = new Map();
+  const edgeShapes = new Map();
+  for (const e of graph.edges) {
+    edgeCounts.set(e.edge_type, (edgeCounts.get(e.edge_type) ?? 0) + 1);
+    const st = graph.byId.get(e.source)?.node_type ?? '?';
+    const tt = graph.byId.get(e.target)?.node_type ?? '?';
+    const key = `${e.edge_type}|${st}→${tt}`;
+    edgeShapes.set(key, (edgeShapes.get(key) ?? 0) + 1);
+  }
+  const sorted = (m) => [...m.entries()].sort((a, b) => b[1] - a[1]);
+
+  const lines = [`# Graph schema`, `graph: ${graphPath}`, ''];
+  lines.push('## Node types in this graph');
+  for (const [t, c] of sorted(nodeCounts)) lines.push(`- ${t}: ${c}`);
+  lines.push('');
+  lines.push('## Edge types in this graph (source type → target type)');
+  for (const [t, c] of sorted(edgeCounts)) {
+    const shapes = [...edgeShapes.entries()]
+      .filter(([k]) => k.startsWith(`${t}|`))
+      .map(([k, sc]) => [k.slice(t.length + 1), sc])
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 4)
+      .map(([s, sc]) => `${s} (${sc})`)
+      .join(', ');
+    lines.push(`- ${t}: ${c}  ${shapes}`);
+  }
+  lines.push('');
+  lines.push('## Full edge-type vocabulary (what indexers can emit)');
+  lines.push(EDGE_TYPE_VOCABULARY.join(', '));
+  lines.push('');
+  lines.push('Notes:');
+  lines.push('- Edges are directed: Calls A→B means A calls B; inbound edges on B are its callers.');
+  lines.push("- Contains is structure (Folder→File→Symbol) — exclude it when you mean 'depends on'.");
+  lines.push('- Pass these names to edgeTypes in find_usages / traverse_kb, and node types to nodeTypes in find_symbol.');
   return lines.join('\n');
 }
 
@@ -1419,7 +1530,7 @@ const MCP_INSTALL_TARGETS = {
     // args combined) plus `environment` — not the generic {command, args,
     // env} shape the other targets use — with additionalProperties: false,
     // so any extra keys fail validation.
-    apply: (config, server) => {
+    apply: (config, server, skillDir) => {
       if (config['$schema'] === undefined) config['$schema'] = 'https://opencode.ai/config.json';
       config.mcp = config.mcp || {};
       config.mcp.ultragraph = {
@@ -1428,6 +1539,12 @@ const MCP_INSTALL_TARGETS = {
         environment: server.env,
         enabled: true,
       };
+      if (skillDir && existsSync(skillDir)) {
+        config.skills = config.skills || { paths: [] };
+        if (!config.skills.paths.includes(skillDir)) {
+          config.skills.paths.push(skillDir);
+        }
+      }
     },
     remove: (config) => {
       const existed = !!config.mcp && Object.prototype.hasOwnProperty.call(config.mcp, 'ultragraph');
@@ -1443,6 +1560,65 @@ const MCP_TARGET_ALIASES = {
   'claude-code': 'claude', // `claude` used to mean Claude Desktop (now `claude-desk`)
   'claude-desktop': 'claude-desk',
 };
+
+// ── Agent skill/rule file installation ────────────────────────────────────
+// After installing the MCP config, we write the ug MCP tool guide as a rule
+// file so the agent knows how to use the tools efficiently. Each agent has
+// its own rules directory and frontmatter format.
+
+const SKILL_TARGETS = {
+  claude: {
+    path: (root) => join(root, '.claude', 'rules', 'ug-mcp.md'),
+    format: 'md',
+    frontmatter: null,
+  },
+  cursor: {
+    path: (root) => join(root, '.cursor', 'rules', 'ug-mcp.mdc'),
+    format: 'mdc',
+    frontmatter: { description: 'UltraGraph MCP tools guide — efficient codebase and knowledge-base search via a semantic knowledge graph', alwaysApply: false },
+  },
+  windsurf: {
+    // Windsurf MCP config is always global, but rules go in the project dir.
+    path: () => join(process.cwd(), '.windsurf', 'rules', 'ug-mcp.md'),
+    format: 'windsurf-md',
+    frontmatter: { trigger: 'model_decision', description: 'UltraGraph MCP tools guide — efficient codebase and knowledge-base search via a semantic knowledge graph' },
+  },
+};
+
+function readSkillBody(skillDir) {
+  const skillFile = join(skillDir, 'SKILL.md');
+  if (!existsSync(skillFile)) return null;
+  const content = readFileSync(skillFile, 'utf-8');
+  const m = content.match(/^---\n[\s\S]*?\n---\n([\s\S]*)$/);
+  return m ? m[1].trim() : content.trim();
+}
+
+function formatSkillContent(body, format, frontmatter) {
+  if (!frontmatter) return body;
+  const yaml = Object.entries(frontmatter).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join('\n');
+  return `---\n${yaml}\n---\n\n${body}`;
+}
+
+function installSkillFile(target, scope) {
+  const skillDir = join(dirname(fileURLToPath(import.meta.url)), 'ug-mcp-skill');
+  const body = readSkillBody(skillDir);
+  if (!body) return;
+  const st = SKILL_TARGETS[target];
+  if (!st) return;
+  const root = scope === 'global' && target !== 'windsurf' ? homedir() : process.cwd();
+  const ruleFile = st.path(root);
+  const content = formatSkillContent(body, st.format, st.frontmatter);
+  mkdirSync(dirname(ruleFile), { recursive: true });
+  writeFileSync(ruleFile, content + '\n');
+}
+
+function uninstallSkillFile(target, scope) {
+  const st = SKILL_TARGETS[target];
+  if (!st) return;
+  const root = scope === 'global' && target !== 'windsurf' ? homedir() : process.cwd();
+  const ruleFile = st.path(root);
+  if (existsSync(ruleFile)) rmSync(ruleFile);
+}
 
 // Codex's config is TOML, not JSON — rather than pull in a full TOML
 // parser/writer for one write, surgically strip just the
@@ -1588,10 +1764,12 @@ function installMcpConfig(target, scope) {
       throw new Error(`${configPath} exists but isn't valid JSON — fix or remove it, then retry (${e.message})`);
     }
   }
-  targetDef.apply(config, server);
+  const skillDir = join(dirname(fileURLToPath(import.meta.url)), 'ug-mcp-skill');
+  targetDef.apply(config, server, skillDir);
 
   mkdirSync(dirname(configPath), { recursive: true });
   writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+  installSkillFile(target, scope);
   return configPath;
 }
 
@@ -1635,7 +1813,10 @@ function uninstallMcpConfig(target, scope) {
     throw new Error(`${configPath} exists but isn't valid JSON — fix or remove it, then retry (${e.message})`);
   }
   const removed = targetDef.remove(config);
-  if (removed) writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+  if (removed) {
+    writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+    uninstallSkillFile(target, scope);
+  }
   return { configPath, removed };
 }
 
@@ -1690,13 +1871,13 @@ async function runMcpServer() {
       if (name === 'find_usages') {
         const parsed = FindUsagesInput.parse(args);
         const edgeTypes = parsed.edgeTypes ?? ['calls', 'references', 'imports', 'extends', 'implements'];
-        const json = await ug.dbTraverse(dbPath, [parsed.nodeId], parsed.hops, edgeTypes, 'inbound', destOptionsJson());
-        const traversal = JSON.parse(json);
         const cache = loadGraph(dbPath);
-        const targetNode = cache.byId.get(parsed.nodeId);
-        const header = `Usages of ${parsed.nodeId} (hops=${parsed.hops}, edges=[${edgeTypes.join(', ')}])`;
-        let text = formatTraversal(traversal, header);
-        text += formatCallSites(traversal, targetNode, repoRoot);
+        let text = await batchSections(parsed.nodeId, async (id) => {
+          const json = await ug.dbTraverse(dbPath, [id], parsed.hops, edgeTypes, 'inbound', destOptionsJson());
+          const traversal = JSON.parse(json);
+          const header = `Usages of ${id} (hops=${parsed.hops}, edges=[${edgeTypes.join(', ')}])`;
+          return formatTraversal(traversal, header) + formatCallSites(traversal, cache.byId.get(id), repoRoot);
+        });
         text += stalenessNote(dbPath, repoRoot);
         return { content: [{ type: 'text', text }] };
       }
@@ -1704,8 +1885,9 @@ async function runMcpServer() {
       if (name === 'find_symbol') {
         const parsed = FindSymbolInput.parse(args);
         const { graph } = loadGraph(dbPath);
-        const hits = findSymbolMatches(graph, parsed);
-        let text = formatSymbolHits(parsed.name, hits);
+        let text = await batchSections(parsed.name, (nm) =>
+          formatSymbolHits(nm, findSymbolMatches(graph, { ...parsed, name: nm })),
+        );
         text += stalenessNote(dbPath, repoRoot);
         return { content: [{ type: 'text', text }] };
       }
@@ -1713,7 +1895,7 @@ async function runMcpServer() {
       if (name === 'file_outline') {
         const parsed = FileOutlineInput.parse(args);
         const { graph } = loadGraph(dbPath);
-        let text = formatFileOutline(parsed.file, fileOutline(graph, parsed.file));
+        let text = await batchSections(parsed.file, (f) => formatFileOutline(f, fileOutline(graph, f)));
         text += stalenessNote(dbPath, repoRoot);
         return { content: [{ type: 'text', text }] };
       }
@@ -1721,8 +1903,14 @@ async function runMcpServer() {
       if (name === 'get_code') {
         const parsed = GetCodeInput.parse(args);
         const cache = loadGraph(dbPath);
-        const slice = getCodeSlice(cache, repoRoot, parsed);
-        let text = formatCodeSlice(slice);
+        let text;
+        if (parsed.nodeId) {
+          text = await batchSections(parsed.nodeId, (id) =>
+            formatCodeSlice(getCodeSlice(cache, repoRoot, { ...parsed, nodeId: id })),
+          );
+        } else {
+          text = formatCodeSlice(getCodeSlice(cache, repoRoot, { ...parsed, nodeId: undefined }));
+        }
         text += stalenessNote(dbPath, repoRoot);
         return { content: [{ type: 'text', text }] };
       }
@@ -1749,6 +1937,14 @@ async function runMcpServer() {
         }
         const merged = { ...cache.graph, byId: cache.byId };
         let text = formatShortestPath(merged, parsed.sourceId, parsed.targetId, result, reversed);
+        text += stalenessNote(dbPath, repoRoot);
+        return { content: [{ type: 'text', text }] };
+      }
+
+      if (name === 'graph_schema') {
+        const cache = loadGraph(dbPath);
+        const merged = { ...cache.graph, byId: cache.byId };
+        let text = graphSchema(merged, cache.path);
         text += stalenessNote(dbPath, repoRoot);
         return { content: [{ type: 'text', text }] };
       }
@@ -2202,27 +2398,38 @@ const commands = {
           if (tool === 'find_usages') {
             const p = FindUsagesInput.parse(parsed);
             const et = p.edgeTypes ?? ['calls', 'references', 'imports', 'extends', 'implements'];
-            const r = await ug.dbTraverse(dbPath, [p.nodeId], p.hops, et, 'inbound', destOptionsJson());
-            const trav = JSON.parse(r);
             const cache = loadGraph(dbPath);
-            const target = cache.byId.get(p.nodeId);
-            let txt = formatTraversal(trav, `Usages of ${p.nodeId}`);
-            return txt + formatCallSites(trav, target, repoRoot) + stalenessNote(dbPath, repoRoot);
+            const txt = await batchSections(p.nodeId, async (id) => {
+              const r = await ug.dbTraverse(dbPath, [id], p.hops, et, 'inbound', destOptionsJson());
+              const trav = JSON.parse(r);
+              return formatTraversal(trav, `Usages of ${id}`) + formatCallSites(trav, cache.byId.get(id), repoRoot);
+            });
+            return txt + stalenessNote(dbPath, repoRoot);
           }
           if (tool === 'find_symbol') {
             const p = FindSymbolInput.parse(parsed);
             const { graph } = loadGraph(dbPath);
-            return formatSymbolHits(p.name, findSymbolMatches(graph, p)) + stalenessNote(dbPath, repoRoot);
+            const txt = await batchSections(p.name, (nm) =>
+              formatSymbolHits(nm, findSymbolMatches(graph, { ...p, name: nm })),
+            );
+            return txt + stalenessNote(dbPath, repoRoot);
           }
           if (tool === 'file_outline') {
             const p = FileOutlineInput.parse(parsed);
             const { graph } = loadGraph(dbPath);
-            return formatFileOutline(p.file, fileOutline(graph, p.file)) + stalenessNote(dbPath, repoRoot);
+            const txt = await batchSections(p.file, (f) => formatFileOutline(f, fileOutline(graph, f)));
+            return txt + stalenessNote(dbPath, repoRoot);
           }
           if (tool === 'get_code') {
             const p = GetCodeInput.parse(parsed);
             const cache = loadGraph(dbPath);
-            return formatCodeSlice(getCodeSlice(cache, repoRoot, p)) + stalenessNote(dbPath, repoRoot);
+            if (p.nodeId) {
+              const txt = await batchSections(p.nodeId, (id) =>
+                formatCodeSlice(getCodeSlice(cache, repoRoot, { ...p, nodeId: id })),
+              );
+              return txt + stalenessNote(dbPath, repoRoot);
+            }
+            return formatCodeSlice(getCodeSlice(cache, repoRoot, { ...p, nodeId: undefined })) + stalenessNote(dbPath, repoRoot);
           }
           if (tool === 'project_overview') {
             const cache = loadGraph(dbPath);
@@ -2239,6 +2446,10 @@ const commands = {
               res = JSON.parse(ug.findShortestPath(cache.raw, p.targetId, p.sourceId));
             }
             return formatShortestPath({ ...cache.graph, byId: cache.byId }, p.sourceId, p.targetId, res, rev) + stalenessNote(dbPath, repoRoot);
+          }
+          if (tool === 'graph_schema') {
+            const cache = loadGraph(dbPath);
+            return graphSchema({ ...cache.graph, byId: cache.byId }, cache.path) + stalenessNote(dbPath, repoRoot);
           }
           if (tool === 'list_projects') {
             return formatProjectList(listProjectsInfo(), repoRoot);

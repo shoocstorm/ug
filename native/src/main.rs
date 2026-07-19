@@ -86,6 +86,14 @@ fn main() {
         "centrality" => run_centrality(cmd_args),
         "cycles" => run_cycles(cmd_args),
         "search_graph" => run_search_graph(cmd_args),
+        // Agent tools (graph.json-backed, for AI coding agents).
+        "find_symbol" => run_find_symbol(cmd_args),
+        "file_outline" => run_file_outline(cmd_args),
+        "get_code" => run_get_code(cmd_args),
+        "find_usages" => run_find_usages(cmd_args),
+        "project_overview" => run_project_overview(cmd_args),
+        "shortest_path" => run_shortest_path(cmd_args),
+        "graph_schema" => run_graph_schema(cmd_args),
         // Retrieval (OverGraph-backed).
         "semantic_search" => run_semantic_search(cmd_args),
         "hybrid_search" => run_hybrid_search(cmd_args),
@@ -707,6 +715,7 @@ const AGENT_VALUE_FLAGS: &[&str] = &[
     "--name",
     "-t",
     "--type",
+    "--edge-type",
     "-f",
     "--file",
     "-l",
@@ -715,6 +724,8 @@ const AGENT_VALUE_FLAGS: &[&str] = &[
     "--start",
     "-e",
     "--end",
+    "-k",
+    "--hops",
     "--max-chars",
 ];
 
@@ -768,11 +779,17 @@ fn edge_type_str(t: &GraphEdgeType) -> &'static str {
 
 fn node_loc(n: &GraphNode) -> String {
     match &n.file {
-        Some(f) => {
-            let s = n.start_line.map(|v| v.to_string()).unwrap_or_else(|| "?".into());
-            let e = n.end_line.map(|v| v.to_string()).unwrap_or_else(|| "?".into());
-            format!("{}:{}-{}", f, s, e)
-        }
+        Some(f) => match (n.start_line, n.end_line) {
+            // File nodes carry no line range — showing "?-?" reads like
+            // an error, so just print the path.
+            (None, None) => f.clone(),
+            (s, e) => format!(
+                "{}:{}-{}",
+                f,
+                s.map(|v| v.to_string()).unwrap_or_else(|| "?".into()),
+                e.map(|v| v.to_string()).unwrap_or_else(|| "?".into())
+            ),
+        },
         None => "(no file)".into(),
     }
 }
@@ -842,45 +859,106 @@ fn agent_repo_root(graph: &GraphData, graph_path: &Path) -> PathBuf {
 }
 
 fn print_find_symbol_help() {
-    println!("Usage: ug find_symbol <name> [-t|--type <node-type>]... [-f|--file <prefix>] [-l|--limit <n>] [-n|--name <project>]");
-    println!("Exact-name symbol lookup (no embeddings). Use when you already know an identifier.");
-    println!("  <name>                 Symbol name or fragment");
-    println!("  -t, --type <type>      Restrict to node type (Function, Class, Interface, etc.)");
-    println!("  -f, --file <prefix>     Only symbols under this file path prefix");
-    println!("  -l, --limit <n>        Max hits (default 20)");
-    println!("  -n, --name <project>   Project name (default: current directory's)");
+    println!("  {C_CYAN}ug find_symbol{C_RESET}  {C_YELLOW}— exact-name symbol lookup (no embeddings){C_RESET}");
+    println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
+    println!();
+    println!("{C_BOLD}Usage:{C_RESET}  ug find_symbol <name>... [options]");
+    println!();
+    println!("  Accepts several names in one call (up to you; sections are separated) —");
+    println!("  agents should batch related lookups instead of running the command repeatedly.");
+    println!();
+    println!("{C_BOLD}Options:{C_RESET}");
+    println!("  {C_CYAN}-t, --type <type>{C_RESET}    Restrict to node type (repeatable; e.g. Function, Class, Interface)");
+    println!("  {C_CYAN}-f, --file <prefix>{C_RESET}  Only symbols under this file path prefix");
+    println!("  {C_CYAN}-l, --limit <n>{C_RESET}     Max hits (default 20)");
+    println!("  {C_CYAN}-n, --name <project>{C_RESET} Project name (default: cwd basename)");
+    println!();
+    println!("{C_BOLD}Examples:{C_RESET}");
+    println!("  {C_CYAN}ug find_symbol{C_RESET} resolveDb");
+    println!("  {C_CYAN}ug find_symbol{C_RESET} loadConfig -t Function -f src/auth/");
+    println!("  {C_CYAN}ug find_symbol{C_RESET} run_serve run_app run_gen   {C_YELLOW}# batch: three lookups, one call{C_RESET}");
 }
 
 fn print_file_outline_help() {
-    println!("Usage: ug file_outline <file> [-n|--name <project>]");
-    println!("List every indexed symbol in one file, in line order.");
-    println!("  <file>                 Repo-relative path or unique basename");
-    println!("  -n, --name <project>   Project name (default: current directory's)");
+    println!("  {C_CYAN}ug file_outline{C_RESET}  {C_YELLOW}— list every indexed symbol in one file{C_RESET}");
+    println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
+    println!();
+    println!("{C_BOLD}Usage:{C_RESET}  ug file_outline <file>... [options]");
+    println!();
+    println!("{C_BOLD}Options:{C_RESET}");
+    println!("  {C_CYAN}-n, --name <project>{C_RESET}  Project name (default: cwd basename)");
+    println!();
+    println!("{C_BOLD}Examples:{C_RESET}");
+    println!("  {C_CYAN}ug file_outline{C_RESET} native/src/main.rs");
+    println!("  {C_CYAN}ug file_outline{C_RESET} main.rs  {C_YELLOW}# unique basename works too{C_RESET}");
+    println!("  {C_CYAN}ug file_outline{C_RESET} file:native/src/main.rs  {C_YELLOW}# File node ids from find_symbol work as-is{C_RESET}");
+    println!("  {C_CYAN}ug file_outline{C_RESET} main.rs serve.rs cli.mjs   {C_YELLOW}# batch: outline several files at once{C_RESET}");
 }
 
 fn print_get_code_help() {
-    println!("Usage: ug get_code --id <node-id> | --file <file> [--start <n>] [--end <n>] [--max <chars>] [-n|--name <project>]");
-    println!("Read full source for a node id or file/line range.");
-    println!("  --id <node-id>        Node id from other tools");
-    println!("  --file <file>         Repo-relative file path");
-    println!("  --start <n>          First line (1-based, with --file)");
-    println!("  --end <n>            Last line, inclusive (with --file)");
-    println!("  --max <chars>        Character cap (default 20000)");
-    println!("  -n, --name <project>   Project name (default: current directory's)");
+    println!("  {C_CYAN}ug get_code{C_RESET}  {C_YELLOW}— read full source for a node id or file/line range{C_RESET}");
+    println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
+    println!();
+    println!("{C_BOLD}Usage:{C_RESET}  ug get_code <node-id>... | -f|--file <file> [options]");
+    println!();
+    println!("{C_BOLD}Options:{C_RESET}");
+    println!("  {C_CYAN}-f, --file <file>{C_RESET}     Repo-relative file path (instead of node-id)");
+    println!("  {C_CYAN}-s, --start <n>{C_RESET}      First line (1-based, with --file; default 1)");
+    println!("  {C_CYAN}-e, --end <n>{C_RESET}        Last line inclusive (with --file; default EOF)");
+    println!("  {C_CYAN}--max-chars <n>{C_RESET}      Character cap on output (default 20000)");
+    println!("  {C_CYAN}-n, --name <project>{C_RESET}  Project name (default: cwd basename)");
+    println!();
+    println!("{C_BOLD}Examples:{C_RESET}");
+    println!("  {C_CYAN}ug get_code{C_RESET} \"function:native/src/main.rs:124:flag_value\"  {C_YELLOW}# id from find_symbol{C_RESET}");
+    println!("  {C_CYAN}ug get_code{C_RESET} <id1> <id2> <id3>   {C_YELLOW}# batch: several symbols in one call (--max-chars applies per symbol){C_RESET}");
+    println!("  {C_CYAN}ug get_code{C_RESET} -f native/src/types.rs -s 180 -e 210");
+    println!("  {C_CYAN}ug get_code{C_RESET} -f README.md  {C_YELLOW}# whole file{C_RESET}");
 }
 
 fn print_project_overview_help() {
-    println!("Usage: ug project_overview [-n|--name <project>]");
-    println!("One-call orientation: repo root, node/edge counts, biggest files, hotspots.");
-    println!("  -n, --name <project>   Project name (default: current directory's)");
+    println!("  {C_CYAN}ug project_overview{C_RESET}  {C_YELLOW}— orient yourself in the codebase in one call{C_RESET}");
+    println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
+    println!();
+    println!("{C_BOLD}Usage:{C_RESET}  ug project_overview [options]");
+    println!();
+    println!("{C_BOLD}Options:{C_RESET}");
+    println!("  {C_CYAN}-n, --name <project>{C_RESET}  Project name (default: cwd basename)");
+    println!();
+    println!("{C_BOLD}Examples:{C_RESET}");
+    println!("  {C_CYAN}ug project_overview{C_RESET}");
+    println!();
+    println!("Shows:");
+    println!("  • Repo root and db location");
+    println!("  • Node/edge counts by type");
+    println!("  • Biggest files by symbol count");
+    println!("  • Most depended-upon symbols (hotspots)");
 }
 
 fn print_shortest_path_help() {
-    println!("Usage: ug shortest_path --source <id> --target <id> [-n|--name <project>]");
-    println!("Find shortest directed path between two node ids.");
-    println!("  --source <id>         Start node id");
-    println!("  --target <id>         End node id");
-    println!("  -n, --name <project>   Project name (default: current directory's)");
+    println!("  {C_CYAN}ug shortest_path{C_RESET}  {C_YELLOW}— how are two symbols connected?{C_RESET}");
+    println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
+    println!();
+    println!("{C_BOLD}Usage:{C_RESET}  ug shortest_path <source-id> <target-id> [options]");
+    println!();
+    println!("{C_BOLD}Options:{C_RESET}");
+    println!("  {C_CYAN}-n, --name <project>{C_RESET}  Project name (default: cwd basename)");
+    println!();
+    println!("{C_BOLD}Examples:{C_RESET}");
+    println!("  {C_CYAN}ug shortest_path{C_RESET} file:src/a.ts file:src/b.ts");
+    println!();
+    println!("Finds the shortest directed edge path between two node ids. Edges are");
+    println!("directed (imports/calls/contains flow source→target); if no forward path");
+    println!("exists the reverse direction is tried and labeled as such.");
+}
+
+/// Printed between per-item sections when a command gets several
+/// positionals (names/files/ids) in one invocation.
+fn batch_separator(i: usize) {
+    if i > 0 {
+        println!();
+        println!("{C_DIM}────────────────────────────────────────{C_RESET}");
+        println!();
+    }
 }
 
 fn run_find_symbol(args: &[String]) {
@@ -888,10 +966,11 @@ fn run_find_symbol(args: &[String]) {
         print_find_symbol_help();
         return;
     }
-    let Some(query) = first_positional(args, AGENT_VALUE_FLAGS) else {
-        eprintln!("Usage: ug find_symbol <name> [-t|--type <node-type>]... [-f|--file <prefix>] [-l|--limit <n>] [-n|--name <project>]");
+    let queries = positionals(args, AGENT_VALUE_FLAGS);
+    if queries.is_empty() {
+        eprintln!("Usage: ug find_symbol <name>... [-t|--type <node-type>]... [-f|--file <prefix>] [-l|--limit <n>] [-n|--name <project>]");
         std::process::exit(1);
-    };
+    }
     let types: Vec<String> = multi_flag(args, &["-t", "--type"])
         .iter()
         .map(|t| t.to_lowercase())
@@ -902,57 +981,60 @@ fn run_find_symbol(args: &[String]) {
         .unwrap_or(20);
     let (graph, _raw, _path) = load_agent_graph(args);
 
-    let q = query.to_lowercase();
-    let mut hits: Vec<(u8, &GraphNode)> = Vec::new();
-    for n in &graph.nodes {
-        if !types.is_empty() && !types.contains(&node_type_str(&n.node_type).to_lowercase()) {
-            continue;
-        }
-        if let Some(p) = &file_prefix {
-            if !n.file.as_deref().unwrap_or("").starts_with(p.as_str()) {
+    for (qi, query) in queries.iter().enumerate() {
+        batch_separator(qi);
+        let q = query.to_lowercase();
+        let mut hits: Vec<(u8, &GraphNode)> = Vec::new();
+        for n in &graph.nodes {
+            if !types.is_empty() && !types.contains(&node_type_str(&n.node_type).to_lowercase()) {
                 continue;
             }
+            if let Some(p) = &file_prefix {
+                if !n.file.as_deref().unwrap_or("").starts_with(p.as_str()) {
+                    continue;
+                }
+            }
+            let nm = n.name.to_lowercase();
+            // exact > prefix > substring; ties broken by shorter (closer) name.
+            let rank = if nm == q {
+                0
+            } else if nm.starts_with(&q) {
+                1
+            } else if nm.contains(&q) {
+                2
+            } else {
+                3
+            };
+            if rank < 3 {
+                hits.push((rank, n));
+            }
         }
-        let nm = n.name.to_lowercase();
-        // exact > prefix > substring; ties broken by shorter (closer) name.
-        let rank = if nm == q {
-            0
-        } else if nm.starts_with(&q) {
-            1
-        } else if nm.contains(&q) {
-            2
-        } else {
-            3
-        };
-        if rank < 3 {
-            hits.push((rank, n));
-        }
-    }
-    hits.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.name.len().cmp(&b.1.name.len())));
-    let total = hits.len();
+        hits.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.name.len().cmp(&b.1.name.len())));
+        let total = hits.len();
 
-    let showing = if total > limit {
-        format!(", showing {}", limit)
-    } else {
-        String::new()
-    };
-    println!("{C_BOLD}Symbols matching '{}'{C_RESET} — {} match(es){}", query, total, showing);
-    println!();
-    if total == 0 {
-        println!("No name matches. Try a shorter fragment, drop --type/--file, or use {C_CYAN}ug hybrid_search{C_RESET} for a concept-level query.");
-        return;
-    }
-    for (_, n) in hits.iter().take(limit) {
-        println!(
-            "- {} {C_BOLD}{}{C_RESET}  {C_DIM}{}{C_RESET}",
-            node_type_str(&n.node_type),
-            n.name,
-            node_loc(n)
-        );
-        println!("  id: {C_CYAN}{}{C_RESET}", n.id);
-        if let Some(d) = &n.docstring {
-            let preview: String = d.replace('\n', " ").chars().take(200).collect();
-            println!("  {C_DIM}doc: {}{C_RESET}", preview);
+        let showing = if total > limit {
+            format!(", showing {}", limit)
+        } else {
+            String::new()
+        };
+        println!("{C_BOLD}Symbols matching '{}'{C_RESET} — {} match(es){}", query, total, showing);
+        println!();
+        if total == 0 {
+            println!("No name matches. Try a shorter fragment, drop --type/--file, or use {C_CYAN}ug hybrid_search{C_RESET} for a concept-level query.");
+            continue;
+        }
+        for (_, n) in hits.iter().take(limit) {
+            println!(
+                "- {} {C_BOLD}{}{C_RESET}  {C_DIM}{}{C_RESET}",
+                node_type_str(&n.node_type),
+                n.name,
+                node_loc(n)
+            );
+            println!("  id: {C_CYAN}{}{C_RESET}", n.id);
+            if let Some(d) = &n.docstring {
+                let preview: String = d.replace('\n', " ").chars().take(200).collect();
+                println!("  {C_DIM}doc: {}{C_RESET}", preview);
+            }
         }
     }
     println!();
@@ -964,21 +1046,48 @@ fn run_file_outline(args: &[String]) {
         print_file_outline_help();
         return;
     }
-    let Some(file) = first_positional(args, AGENT_VALUE_FLAGS) else {
-        eprintln!("Usage: ug file_outline <file> [-n|--name <project>]");
+    let files = positionals(args, AGENT_VALUE_FLAGS);
+    if files.is_empty() {
+        eprintln!("Usage: ug file_outline <file>... [-n|--name <project>]");
         std::process::exit(1);
-    };
+    }
     let (graph, _raw, _path) = load_agent_graph(args);
 
+    let mut any_failed = false;
+    for (fi, file) in files.iter().enumerate() {
+        batch_separator(fi);
+        if !print_one_outline(&graph, file) {
+            any_failed = true;
+        }
+    }
+    println!();
+    println!("{C_DIM}Next:{C_RESET} {C_CYAN}ug get_code <id>{C_RESET} to read one symbol, or {C_CYAN}ug get_code -f <file>{C_RESET} for a whole file.");
+    if any_failed {
+        std::process::exit(1);
+    }
+}
+
+/// File nodes print their id as `file:<path>` (e.g. `file:docs/mcp.md`),
+/// and users copy that straight into file-taking commands. Accept it:
+/// strip the `file:` node-id prefix so both forms work.
+fn strip_file_id_prefix(file: &str) -> &str {
+    file.strip_prefix("file:").unwrap_or(file)
+}
+
+/// Outline one file to stdout; false when it couldn't be resolved (in a
+/// batch the remaining files still print — one bad path shouldn't sink
+/// the invocation, only the exit code).
+fn print_one_outline(graph: &GraphData, file: &str) -> bool {
+    let file = strip_file_id_prefix(file);
     // Exact repo-relative match first, then unique suffix match.
     let mut resolved: Option<String> = graph
         .nodes
         .iter()
-        .find(|n| n.file.as_deref() == Some(file.as_str()))
-        .map(|_| file.clone());
+        .find(|n| n.file.as_deref() == Some(file))
+        .map(|_| file.to_string());
     if resolved.is_none() {
         let suffix = if file.starts_with('/') {
-            file.clone()
+            file.to_string()
         } else {
             format!("/{}", file)
         };
@@ -996,16 +1105,16 @@ fn run_file_outline(args: &[String]) {
             for f in &files {
                 println!("- {}", f);
             }
-            return;
+            return false;
         }
         resolved = files.into_iter().next();
     }
     let Some(resolved) = resolved else {
-        eprintln!(
-            "No indexed file matches '{}'. Pass a repo-relative path (see {C_CYAN}ug project_overview{C_RESET} for the biggest files), or re-run {C_CYAN}ug gen{C_RESET} if the file is new.",
+        println!(
+            "✗ No indexed file matches '{}'. Pass a repo-relative path (see {C_CYAN}ug project_overview{C_RESET} for the biggest files), or re-run {C_CYAN}ug gen{C_RESET} if the file is new.",
             file
         );
-        std::process::exit(1);
+        return false;
     };
 
     let mut symbols: Vec<&GraphNode> = graph
@@ -1030,11 +1139,7 @@ fn run_file_outline(args: &[String]) {
             n.id
         );
     }
-    println!();
-    println!(
-        "{C_DIM}Next:{C_RESET} {C_CYAN}ug get_code <id>{C_RESET} to read one symbol, or {C_CYAN}ug get_code -f {}{C_RESET} for the whole file.",
-        resolved
-    );
+    true
 }
 
 fn run_get_code(args: &[String]) {
@@ -1042,62 +1147,94 @@ fn run_get_code(args: &[String]) {
         print_get_code_help();
         return;
     }
-    let node_id = first_positional(args, AGENT_VALUE_FLAGS);
+    let node_ids = positionals(args, AGENT_VALUE_FLAGS);
     let file_flag = flag_value(args, &["-f", "--file"]);
-    if node_id.is_none() && file_flag.is_none() {
-        eprintln!("Usage: ug get_code <node-id> | -f|--file <file> [-s|--start <line>] [-e|--end <line>] [--max-chars <n>] [-n|--name <project>]");
+    if node_ids.is_empty() && file_flag.is_none() {
+        eprintln!("Usage: ug get_code <node-id>... | -f|--file <file> [-s|--start <line>] [-e|--end <line>] [--max-chars <n>] [-n|--name <project>]");
         std::process::exit(1);
     }
     let (graph, _raw, graph_path) = load_agent_graph(args);
     let repo_root = agent_repo_root(&graph, &graph_path);
+    let max_chars: usize = flag_value(args, &["--max-chars"])
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(20000);
 
-    let mut node: Option<&GraphNode> = None;
-    let (file, start, end): (String, usize, usize) = if let Some(id) = &node_id {
+    // File mode: one file with an optional line range.
+    if node_ids.is_empty() {
+        let file = file_flag.unwrap();
+        let file = strip_file_id_prefix(&file).to_string();
+        let start = flag_value(args, &["-s", "--start"])
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1);
+        let end = flag_value(args, &["-e", "--end"])
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(usize::MAX);
+        if !print_one_slice(&repo_root, &file, start, end, None, max_chars) {
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    // Node-id mode: each positional is one symbol; a bad id prints an
+    // error section and the rest still print.
+    let mut any_failed = false;
+    for (i, id) in node_ids.iter().enumerate() {
+        batch_separator(i);
         let Some(n) = graph.nodes.iter().find(|n| &n.id == id) else {
-            eprintln!(
-                "No node with id '{}' — get ids from {C_CYAN}ug find_symbol{C_RESET} or {C_CYAN}ug file_outline{C_RESET}.",
+            println!(
+                "✗ No node with id '{}' — get ids from {C_CYAN}ug find_symbol{C_RESET} or {C_CYAN}ug file_outline{C_RESET}.",
                 id
             );
-            std::process::exit(1);
+            any_failed = true;
+            continue;
         };
         let Some(f) = &n.file else {
-            eprintln!("Node '{}' ({}) has no source file.", id, node_type_str(&n.node_type));
-            std::process::exit(1);
+            println!("✗ Node '{}' ({}) has no source file.", id, node_type_str(&n.node_type));
+            any_failed = true;
+            continue;
         };
-        node = Some(n);
         let s = n.start_line.unwrap_or(1) as usize;
-        (f.clone(), s, n.end_line.map(|v| v as usize).unwrap_or(s))
-    } else {
-        (
-            file_flag.unwrap(),
-            flag_value(args, &["-s", "--start"])
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(1),
-            flag_value(args, &["-e", "--end"])
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(usize::MAX),
-        )
-    };
+        // Nodes without an end line (File nodes have no range at all)
+        // mean "the whole file", not "one line".
+        let e = n.end_line.map(|v| v as usize).unwrap_or(if n.start_line.is_some() {
+            s
+        } else {
+            usize::MAX
+        });
+        if !print_one_slice(&repo_root, f, s, e, Some(n), max_chars) {
+            any_failed = true;
+        }
+    }
+    if any_failed {
+        std::process::exit(1);
+    }
+}
 
-    let abs = repo_root.join(&file);
+/// Print one source slice; false when the file can't be read (stale index).
+fn print_one_slice(
+    repo_root: &Path,
+    file: &str,
+    start: usize,
+    end: usize,
+    node: Option<&GraphNode>,
+    max_chars: usize,
+) -> bool {
+    let abs = repo_root.join(file);
     let content = match fs::read_to_string(&abs) {
         Ok(c) => c,
         Err(_) => {
-            eprintln!(
-                "{} not found under repo root {} — the index may be stale (re-run {C_CYAN}ug gen{C_RESET}).",
+            println!(
+                "✗ {} not found under repo root {} — the index may be stale (re-run {C_CYAN}ug gen{C_RESET}).",
                 file,
                 repo_root.display()
             );
-            std::process::exit(1);
+            return false;
         }
     };
     let all: Vec<&str> = content.split('\n').collect();
     let from = start.max(1).min(all.len());
     let to = end.min(all.len()).max(from);
     let mut text = all[from - 1..to].join("\n");
-    let max_chars: usize = flag_value(args, &["--max-chars"])
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(20000);
     let char_count = text.chars().count();
     let mut truncated = 0;
     if char_count > max_chars {
@@ -1107,7 +1244,7 @@ fn run_get_code(args: &[String]) {
 
     let title = match node {
         Some(n) => format!("{} {}", node_type_str(&n.node_type), n.name),
-        None => file.clone(),
+        None => file.to_string(),
     };
     println!(
         "{C_BOLD}{}{C_RESET}  —  {}:{}-{} (of {} lines)",
@@ -1129,6 +1266,7 @@ fn run_get_code(args: &[String]) {
             truncated
         );
     }
+    true
 }
 
 fn run_project_overview(args: &[String]) {
@@ -1285,6 +1423,237 @@ fn run_shortest_path(args: &[String]) {
     }
     println!();
     println!("{C_DIM}Next:{C_RESET} {C_CYAN}ug get_code <id>{C_RESET} on any id above to see the code that makes the link.");
+}
+
+/// Default edge types for `find_usages` — dependency-ish edges only, no
+/// Contains (structure) so results mean "code that uses this", not "the
+/// folder that holds it". Mirrors the MCP tool's default.
+const USAGE_EDGE_TYPES: &[&str] = &["calls", "references", "imports", "extends", "implements"];
+
+fn run_find_usages(args: &[String]) {
+    if has_flag(args, "-h") || has_flag(args, "--help") {
+        print_find_usages_help();
+        return;
+    }
+    let node_ids = positionals(args, AGENT_VALUE_FLAGS);
+    if node_ids.is_empty() {
+        eprintln!("Usage: ug find_usages <node-id>... [-k|--hops <n>] [-t|--edge-type <type>]... [-n|--name <project>]");
+        std::process::exit(1);
+    }
+    let hops: u32 = flag_value(args, &["-k", "--hops"])
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1)
+        .clamp(1, 3);
+    let edge_filter: Vec<String> = {
+        let given = multi_flag(args, &["-t", "--edge-type"]);
+        if given.is_empty() {
+            USAGE_EDGE_TYPES.iter().map(|s| s.to_string()).collect()
+        } else {
+            given.iter().map(|t| t.to_lowercase()).collect()
+        }
+    };
+    let (graph, _raw, _path) = load_agent_graph(args);
+    let by_id: std::collections::HashMap<&str, &GraphNode> =
+        graph.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+
+    // Inbound adjacency, built once and shared across the batch: edges
+    // that *end* at a node — their sources are its users/callers.
+    let mut inbound: std::collections::HashMap<&str, Vec<(&str, &'static str)>> =
+        std::collections::HashMap::new();
+    for e in &graph.edges {
+        if edge_filter.contains(&edge_type_str(&e.edge_type).to_lowercase()) {
+            inbound
+                .entry(e.target.as_str())
+                .or_default()
+                .push((e.source.as_str(), edge_type_str(&e.edge_type)));
+        }
+    }
+
+    let mut any_failed = false;
+    for (bi, node_id) in node_ids.iter().enumerate() {
+        batch_separator(bi);
+        if !by_id.contains_key(node_id.as_str()) {
+            println!(
+                "✗ No node with id '{}' — get ids from {C_CYAN}ug find_symbol{C_RESET} or {C_CYAN}ug file_outline{C_RESET} first.",
+                node_id
+            );
+            any_failed = true;
+            continue;
+        }
+
+        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        seen.insert(node_id.as_str());
+        // (id, depth, via-edge-type, used-target-id)
+        let mut results: Vec<(&str, u32, &'static str, &str)> = Vec::new();
+        let mut frontier: Vec<&str> = vec![node_id.as_str()];
+        for depth in 1..=hops {
+            let mut next: Vec<&str> = Vec::new();
+            for target in &frontier {
+                if let Some(sources) = inbound.get(target) {
+                    for (src, et) in sources {
+                        if seen.insert(src) {
+                            results.push((src, depth, et, target));
+                            next.push(src);
+                        }
+                    }
+                }
+            }
+            frontier = next;
+            if frontier.is_empty() {
+                break;
+            }
+        }
+
+        let subject = by_id[node_id.as_str()];
+        println!(
+            "{C_BOLD}Usages of {} {}{C_RESET}  {C_DIM}{}{C_RESET}",
+            node_type_str(&subject.node_type),
+            subject.name,
+            node_loc(subject)
+        );
+        println!(
+            "{C_DIM}hops={} · edges=[{}] · {} user(s){C_RESET}",
+            hops,
+            edge_filter.join(", "),
+            results.len()
+        );
+        println!();
+        if results.is_empty() {
+            println!("Nothing points at this node via [{}].", edge_filter.join(", "));
+            println!("Try more hops ({C_CYAN}-k 2{C_RESET}), different edge types ({C_CYAN}ug graph_schema{C_RESET} lists what this graph has),");
+            println!("or {C_CYAN}ug traverse{C_RESET} for outbound dependencies instead.");
+            continue;
+        }
+        for (id, depth, et, target) in &results {
+            let desc = match by_id.get(id) {
+                Some(n) => format!(
+                    "{} {C_BOLD}{}{C_RESET}  {C_DIM}{}{C_RESET}",
+                    node_type_str(&n.node_type),
+                    n.name,
+                    node_loc(n)
+                ),
+                None => format!("(unknown node) {}", id),
+            };
+            let via = if *depth > 1 {
+                let target_name = by_id.get(target).map(|n| n.name.as_str()).unwrap_or(target);
+                format!("{C_DIM}—{}→ {} (hop {}){C_RESET}", et, target_name, depth)
+            } else {
+                format!("{C_DIM}—{}→{C_RESET}", et)
+            };
+            println!("- {} {}", desc, via);
+            println!("  id: {C_CYAN}{}{C_RESET}", id);
+        }
+    }
+    println!();
+    println!("{C_DIM}Next:{C_RESET} {C_CYAN}ug get_code <id>{C_RESET} to read a caller · {C_CYAN}ug find_usages <id> -k 2{C_RESET} for transitive users.");
+    if any_failed {
+        std::process::exit(1);
+    }
+}
+
+fn run_graph_schema(args: &[String]) {
+    if has_flag(args, "-h") || has_flag(args, "--help") {
+        print_graph_schema_help();
+        return;
+    }
+    let (graph, _raw, graph_path) = load_agent_graph(args);
+
+    use std::collections::HashMap;
+    let mut node_counts: HashMap<&'static str, usize> = HashMap::new();
+    for n in &graph.nodes {
+        *node_counts.entry(node_type_str(&n.node_type)).or_insert(0) += 1;
+    }
+    // Edge types keyed by (source node type → target node type) so the
+    // reader learns not just which types exist but what they connect.
+    let by_id: HashMap<&str, &GraphNode> =
+        graph.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+    let mut edge_counts: HashMap<&'static str, usize> = HashMap::new();
+    let mut edge_shapes: HashMap<(&'static str, &'static str, &'static str), usize> =
+        HashMap::new();
+    for e in &graph.edges {
+        let et = edge_type_str(&e.edge_type);
+        *edge_counts.entry(et).or_insert(0) += 1;
+        let st = by_id.get(e.source.as_str()).map(|n| node_type_str(&n.node_type)).unwrap_or("?");
+        let tt = by_id.get(e.target.as_str()).map(|n| node_type_str(&n.node_type)).unwrap_or("?");
+        *edge_shapes.entry((et, st, tt)).or_insert(0) += 1;
+    }
+
+    println!("{C_BOLD}Graph schema{C_RESET}  {C_DIM}{}{C_RESET}", graph_path.display());
+    println!();
+    println!("{C_BOLD}Node types in this graph:{C_RESET}");
+    let mut nodes_sorted: Vec<_> = node_counts.iter().collect();
+    nodes_sorted.sort_by(|a, b| b.1.cmp(a.1));
+    for (t, c) in nodes_sorted {
+        println!("  {C_CYAN}{:<12}{C_RESET} {}", t, c);
+    }
+    println!();
+    println!("{C_BOLD}Edge types in this graph{C_RESET} {C_DIM}(source type → target type){C_RESET}{C_BOLD}:{C_RESET}");
+    let mut edges_sorted: Vec<_> = edge_counts.iter().collect();
+    edges_sorted.sort_by(|a, b| b.1.cmp(a.1));
+    for (t, c) in edges_sorted {
+        let mut shapes: Vec<_> = edge_shapes
+            .iter()
+            .filter(|((et, _, _), _)| et == t)
+            .map(|((_, st, tt), c)| (format!("{}→{}", st, tt), *c))
+            .collect();
+        shapes.sort_by(|a, b| b.1.cmp(&a.1));
+        let shape_str = shapes
+            .iter()
+            .take(4)
+            .map(|(s, c)| format!("{} ({})", s, c))
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!("  {C_CYAN}{:<12}{C_RESET} {:<6} {C_DIM}{}{C_RESET}", t, c, shape_str);
+    }
+    println!();
+    println!("{C_BOLD}Full edge-type vocabulary{C_RESET} {C_DIM}(what indexers can emit — pass these to --edge-type filters){C_RESET}{C_BOLD}:{C_RESET}");
+    println!("  DependsOn, Calls, Extends, Implements, References, Contains, Imports, Exports, Requires, Uses");
+    println!();
+    println!("{C_DIM}Notes:{C_RESET}");
+    println!("  • Edges are directed: {C_CYAN}Calls{C_RESET} A→B means A calls B; inbound edges on B are its callers.");
+    println!("  • {C_CYAN}Contains{C_RESET} is structure (Folder→File→Symbol) — exclude it when you mean \"depends on\".");
+    println!("  • Filters accepting edge types: {C_CYAN}ug find_usages -t{C_RESET}, {C_CYAN}ug filter{C_RESET}, and the MCP traverse_kb/find_usages tools.");
+}
+
+fn print_find_usages_help() {
+    println!("  {C_CYAN}ug find_usages{C_RESET}  {C_YELLOW}— who uses this symbol? (callers, importers, subclasses){C_RESET}");
+    println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
+    println!();
+    println!("  Follows edges {C_BOLD}inbound{C_RESET}: everything that calls / references / imports /");
+    println!("  extends / implements the given node. The reverse of {C_CYAN}ug traverse{C_RESET}");
+    println!("  (which walks outbound dependencies). Same logic as the MCP find_usages tool.");
+    println!();
+    println!("{C_BOLD}Usage:{C_RESET}  ug find_usages <node-id>... [options]");
+    println!();
+    println!("{C_BOLD}Options:{C_RESET}");
+    println!("  {C_CYAN}-k, --hops <n>{C_RESET}         Transitive depth 1-3 (default 1 = direct users only)");
+    println!("  {C_CYAN}-t, --edge-type <type>{C_RESET}  Restrict to edge type (repeatable; default: calls,");
+    println!("                         references, imports, extends, implements — see {C_CYAN}ug graph_schema{C_RESET})");
+    println!("  {C_CYAN}-n, --name <project>{C_RESET}    Project name (default: cwd basename)");
+    println!();
+    println!("{C_BOLD}Examples:{C_RESET}");
+    println!("  {C_CYAN}ug find_usages{C_RESET} \"function:native/src/main.rs:124:flag_value\"");
+    println!("  {C_CYAN}ug find_usages{C_RESET} \"function:src/db.ts:42:connect\" -k 2 -t calls");
+    println!("  {C_CYAN}ug find_usages{C_RESET} <id1> <id2>   {C_YELLOW}# batch: check several symbols before a refactor{C_RESET}");
+}
+
+fn print_graph_schema_help() {
+    println!("  {C_CYAN}ug graph_schema{C_RESET}  {C_YELLOW}— node & edge types in this graph (metadata){C_RESET}");
+    println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
+    println!();
+    println!("  Lists the node types and edge types actually present in the project's");
+    println!("  graph (with counts and what each edge type connects), plus the full");
+    println!("  vocabulary indexers can emit. Check this before passing edge-type");
+    println!("  filters to {C_CYAN}ug find_usages{C_RESET} / {C_CYAN}ug filter{C_RESET} — filtering on a type the graph");
+    println!("  doesn't contain silently returns nothing.");
+    println!();
+    println!("{C_BOLD}Usage:{C_RESET}  ug graph_schema [options]");
+    println!();
+    println!("{C_BOLD}Options:{C_RESET}");
+    println!("  {C_CYAN}-n, --name <project>{C_RESET}  Project name (default: cwd basename)");
+    println!();
+    println!("{C_BOLD}Examples:{C_RESET}");
+    println!("  {C_CYAN}ug graph_schema{C_RESET}");
 }
 
 // full pipeline: index -> graph -> ingest -> search
@@ -3924,6 +4293,11 @@ fn print_search_graph_help() {
     println!("  {C_CYAN}ug search_graph{C_RESET}  {C_YELLOW}— keyword search over graph nodes (in-memory){C_RESET}");
     println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
     println!();
+    println!("  Low-level keyword scan of an explicit graph.json file (raw JSON out).");
+    println!("  For everyday name lookups prefer {C_CYAN}ug find_symbol{C_RESET} — it resolves the");
+    println!("  project for you, ranks exact > prefix > substring, and prints readable");
+    println!("  results with next-step commands.");
+    println!();
     println!("{C_BOLD}Usage:{C_RESET}  ug search_graph <graph-file> <keyword> [options]");
     println!();
     println!("{C_BOLD}Options:{C_RESET}");
@@ -4041,6 +4415,12 @@ fn print_semantic_search_help() {
     println!("  {C_CYAN}ug semantic_search{C_RESET}  {C_YELLOW}— semantic vector search (OverGraph, no graph context){C_RESET}");
     println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
     println!();
+    println!("  Search by {C_BOLD}meaning{C_RESET}: describe what the code does (\"oauth login flow\") and get");
+    println!("  the closest symbols by embedding similarity. Needs an ingested db ({C_CYAN}ug gen{C_RESET})");
+    println!("  and an embedding endpoint. If you already know the identifier's name, use");
+    println!("  {C_CYAN}ug find_symbol{C_RESET} (exact, no embeddings); for search {C_BOLD}plus{C_RESET} related-code context,");
+    println!("  use {C_CYAN}ug hybrid_search{C_RESET}.");
+    println!();
     println!("{C_BOLD}Usage:{C_RESET}  ug semantic_search <query> [options]");
     println!();
     println!("{C_BOLD}Options:{C_RESET}");
@@ -4059,6 +4439,11 @@ fn print_hybrid_search_help() {
         "  {C_BOLD}{C_YELLOW}★ ug hybrid_search{C_RESET}  {C_YELLOW}— GraphRAG: semantic search → graph expansion → ranked context{C_RESET}"
     );
     println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
+    println!();
+    println!("  The most complete search: semantic seeds ({C_CYAN}semantic_search{C_RESET}) expanded along");
+    println!("  graph edges, then ranked into one context bundle with source snippets —");
+    println!("  what the MCP {C_BOLD}search_kb{C_RESET} tool runs for agents. Best when you want to hand");
+    println!("  code + its related code to an LLM, or answer \"where is X and what touches it\".");
     println!();
     println!("{C_BOLD}Usage:{C_RESET}  ug hybrid_search <query> [options]");
     println!();
@@ -4287,7 +4672,7 @@ fn print_help() {
     println!("  {C_CYAN}api{C_RESET}              List every HTTP endpoint `ug serve` exposes");
     println!();
     println!("  {C_DIM}Retrieval (OverGraph-backed){C_RESET}");
-    println!("  {C_CYAN}semantic_search{C_RESET}  Semantic vector search");
+    println!("  {C_CYAN}semantic_search{C_RESET}  Search by meaning/concept (embeddings; use find_symbol for exact names)");
     println!(
         "  {C_BOLD}{C_YELLOW}hybrid_search{C_RESET}    {C_YELLOW}GraphRAG: semantic search → graph expansion → ranked context{C_RESET}"
     );
@@ -4308,7 +4693,16 @@ fn print_help() {
     println!("  {C_CYAN}filter{C_RESET}           Filter edges by type");
     println!("  {C_CYAN}centrality{C_RESET}       Calculate degree/betweenness centrality");
     println!("  {C_CYAN}cycles{C_RESET}           Detect cycles in graph");
-    println!("  {C_CYAN}search_graph{C_RESET}     Keyword search over graph nodes");
+    println!("  {C_CYAN}search_graph{C_RESET}     Keyword scan of an explicit graph.json (raw JSON; prefer find_symbol)");
+    println!();
+    println!("  {C_DIM}Agent tools — what AI coding agents use (via MCP) to understand a repo; run by hand to explore or verify{C_RESET}");
+    println!("  {C_CYAN}project_overview{C_RESET} Orient in the codebase: stats, biggest files, most depended-upon symbols");
+    println!("  {C_CYAN}find_symbol{C_RESET}      Exact-name symbol lookup (no embeddings) — returns ids for the tools below");
+    println!("  {C_CYAN}file_outline{C_RESET}     List every indexed symbol in one file, in line order");
+    println!("  {C_CYAN}get_code{C_RESET}         Read the source for a node id or file/line range");
+    println!("  {C_CYAN}find_usages{C_RESET}      Who uses this symbol? (inbound callers/importers; -t filters edge types)");
+    println!("  {C_CYAN}shortest_path{C_RESET}    How two symbols are connected (shortest directed edge path)");
+    println!("  {C_CYAN}graph_schema{C_RESET}     Node & edge types in this graph — what to pass to -t/--edge-type filters");
     println!();
 
     println!("  {C_DIM}Project management{C_RESET}");

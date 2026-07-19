@@ -2629,6 +2629,61 @@
             white-space: nowrap;
         }
 
+        .kb-card-type {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 8px;
+            border-radius: 4px;
+            background: rgba(249, 115, 22, 0.1);
+            border: 1px solid rgba(249, 115, 22, 0.2);
+            font-size: 8px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--accent);
+            margin-top: 6px;
+        }
+
+        .kb-card-type.docs {
+            background: rgba(91, 143, 201, 0.1);
+            border-color: rgba(91, 143, 201, 0.2);
+            color: #5b8fc9;
+        }
+
+        .kb-card-type.code {
+            background: rgba(74, 222, 128, 0.1);
+            border-color: rgba(74, 222, 128, 0.2);
+            color: #4ade80;
+        }
+
+        .kb-card-type.mixed {
+            background: rgba(168, 85, 247, 0.1);
+            border-color: rgba(168, 85, 247, 0.2);
+            color: #a855f7;
+        }
+
+        .kb-card-stale-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            background: rgba(248, 113, 113, 0.1);
+            border: 1px solid rgba(248, 113, 113, 0.2);
+            font-size: 8px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #f87171;
+            margin-top: 6px;
+        }
+
+        .kb-card-stale-badge:hover {
+            background: rgba(248, 113, 113, 0.15);
+            border-color: rgba(248, 113, 113, 0.3);
+        }
+
         .kb-card-updated {
             font-size: 10px;
             color: var(--text-dim);
@@ -4872,7 +4927,7 @@
                     </svg>
                     <h2 class="kb-wizard-title">Generate a Knowledge Base</h2>
                     <p class="kb-wizard-hint">Point at a local folder to index. This runs the same pipeline as
-                        <code>ug gen</code> and streams progress live below.</p>
+                        <code>ug gen</code> and streams progress live below. Build artifacts (*.min.js, dist/, etc.) are automatically ignored via <code>UG_IGNORE</code> env var.</p>
                     <form id="kb-wizard-form" class="kb-form">
                         <label class="kb-field">
                             <span>Folder path</span>
@@ -5601,6 +5656,7 @@
             }
             isMultiMode = true;
             kbCapsCache = caps;
+            startStalenessPolling();
             document.getElementById('kb-open-btn').hidden = false;
             document.getElementById('brand-title').classList.add('brand-clickable');
             document.getElementById('brand-title').title = 'Browse knowledge bases';
@@ -5660,6 +5716,13 @@
                 card.style.setProperty('--card-accent', KB_PALETTE[i % KB_PALETTE.length]);
                 card.style.setProperty('--i', i);
                 const updated = p.updatedAt ? new Date(p.updatedAt * 1000).toLocaleString() : '—';
+                // KB kind (docs / code / mixed) is computed server-side from
+                // the graph's node composition and stamped onto the cached
+                // project by refreshStaleness(). Until the first staleness
+                // poll lands, no badge is shown rather than a wrong guess.
+                const kbType = p.kbKind || '';
+                const kbTypeLabel = { docs: 'Docs', code: 'Code', mixed: 'Mixed' }[kbType] || '';
+
                 card.innerHTML = `
                     <div class="kb-card-top">
                         ${kbCardIconSvg()}
@@ -5673,11 +5736,13 @@
                         <div class="kb-card-metric"><b>${(p.nodes || 0).toLocaleString()}</b><span>Nodes</span></div>
                         <div class="kb-card-metric"><b>${(p.edges || 0).toLocaleString()}</b><span>Edges</span></div>
                     </div>
+                    ${kbType ? `<div class="kb-card-type ${kbType}">${kbTypeLabel}</div>` : ''}
+                    ${p.stale ? '<div class="kb-card-stale-badge" role="button" tabindex="0" title="Index may be stale — files have changed since last indexing. Click to re-index.">⚠ Stale — Re-index</div>' : ''}
                     <div class="kb-card-path" title="${escapeHtml(p.repoRoot || '')}">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></svg>
                         <span>${escapeHtml(p.repoRoot || '')}</span>
                     </div>
-                    <div class="kb-card-updated">Updated ${updated}</div>
+                    <div class="kb-card-updated">Updated ${updated}${p.stale ? ` · ${p.staleInfo || 'Files changed'}` : ''}</div>
                 `;
                 card.addEventListener('click', () => openProject(p.name, caps.active));
                 card.addEventListener('keydown', (e) => {
@@ -5690,6 +5755,20 @@
                     e.stopPropagation();
                     openDeleteConfirm(p);
                 });
+                const staleBadge = card.querySelector('.kb-card-stale-badge');
+                if (staleBadge) {
+                    staleBadge.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        reindexProject(p);
+                    });
+                    staleBadge.addEventListener('keydown', (e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            reindexProject(p);
+                        }
+                    });
+                }
                 grid.appendChild(card);
             });
 
@@ -5705,6 +5784,94 @@
             `;
             addTile.addEventListener('click', () => showKbWizard({ canGoBack: true }));
             grid.appendChild(addTile);
+        }
+
+        // ─── Index staleness (auto-detected on start + every 2 min) ──
+        // Polls /api/projects/staleness, stamps `stale`/`staleInfo` onto the
+        // cached project list, and re-renders the KB grid when the manager
+        // is visible so the ⚠ badge appears/disappears without a reload.
+        const STALENESS_POLL_MS = 2 * 60 * 1000;
+        let stalenessTimer = null;
+
+        async function refreshStaleness() {
+            if (!isMultiMode || !kbCapsCache) return;
+            let data;
+            try {
+                const res = await fetch('/api/projects/staleness', { cache: 'no-store' });
+                if (!res.ok) return;
+                data = await res.json();
+            } catch {
+                return; // transient network error — next tick will retry
+            }
+            const byName = new Map((data.projects || []).map(s => [s.name, s]));
+            let changed = false;
+            for (const p of kbCapsCache.projects) {
+                const s = byName.get(p.name);
+                const stale = !!(s && s.isStale);
+                const info = s && stale
+                    ? [s.changed ? `${s.changed} changed` : '', s.missing ? `${s.missing} deleted` : '']
+                        .filter(Boolean).join(', ')
+                    : '';
+                const kind = (s && s.kbKind) || p.kbKind || '';
+                if (p.stale !== stale || p.staleInfo !== info || p.kbKind !== kind) {
+                    p.stale = stale;
+                    p.staleInfo = info;
+                    p.kbKind = kind;
+                    changed = true;
+                }
+            }
+            // Re-render only when something moved and the list is on screen —
+            // re-rendering mid-wizard would blow away the generation log.
+            const managerVisible = document.getElementById('kb-manager').classList.contains('visible');
+            const listVisible = !document.getElementById('kb-list-view').hidden;
+            if (changed && managerVisible && listVisible) showKbList(kbCapsCache);
+        }
+
+        function startStalenessPolling() {
+            if (stalenessTimer) return;
+            refreshStaleness();
+            stalenessTimer = setInterval(refreshStaleness, STALENESS_POLL_MS);
+        }
+
+        // Re-index a stale project by reusing the wizard's /api/generate job
+        // flow against the project's repo root — `ug gen` is incremental
+        // (blake3 cache skips unchanged files), so only touched files are
+        // re-processed. Progress streams into the wizard view.
+        async function reindexProject(p) {
+            if (!p.repoRoot) {
+                alert(`Cannot re-index "${p.name}": no repo root recorded in project.json.`);
+                return;
+            }
+            showKbWizard({ canGoBack: true });
+            document.getElementById('kb-path-input').value = p.repoRoot;
+            document.getElementById('kb-name-input').value = p.name;
+            setKbStatus(`Re-indexing ${p.name}…`);
+            document.getElementById('kb-generate-btn').disabled = true;
+            document.getElementById('kb-wizard-back').disabled = true;
+            document.getElementById('kb-wizard-form').hidden = true;
+            document.getElementById('kb-wizard-status').hidden = false;
+            document.getElementById('kb-wizard-status-text').textContent = `Re-indexing ${p.name}…`;
+            document.getElementById('kb-wizard-log').textContent = '';
+            try {
+                const res = await fetch('/api/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path: p.repoRoot, name: p.name }),
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.error || `HTTP ${res.status}`);
+                }
+                const { jobId } = await res.json();
+                await pollGenJob(jobId);
+            } catch (err) {
+                document.getElementById('kb-wizard-status').hidden = true;
+                document.getElementById('kb-wizard-form').hidden = false;
+                document.getElementById('kb-wizard-error').hidden = false;
+                document.getElementById('kb-wizard-error').textContent = err.message || String(err);
+                document.getElementById('kb-generate-btn').disabled = false;
+                document.getElementById('kb-wizard-back').disabled = false;
+            }
         }
 
         function showKbWizard({ canGoBack }) {
