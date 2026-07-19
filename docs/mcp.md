@@ -284,7 +284,90 @@ find_usages: { nodeId: "file-101", hops: 1, edgeTypes: ["imports"] }
 
 ---
 
-### 5. `ping_embedder` - Health Check
+### 5. `find_symbol` - Exact-Name Symbol Lookup
+
+**Exact-name lookup, no embeddings.** Use instead of `search_kb` whenever you already know (part of) an identifier: a function/class the user named, a symbol from a stack trace, something you're about to edit. Case-insensitive, ranked exact > prefix > substring. Cheaper and more precise than vector search for known names.
+
+**Parameters:**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `name` | string | ✅ | Identifier or fragment, e.g. `resolveDbAndRoot` or `resolve`. |
+| `nodeTypes` | string[] | ❌ | Restrict to node types: Function, Class, Interface, File, Concept. |
+| `filePrefix` | string | ❌ | Only symbols under this repo-relative path prefix, e.g. `src/auth/`. |
+| `limit` | integer (1-100) | ❌ | Max hits (default 20). |
+
+```
+find_symbol: { name: "installMcpConfig" }
+find_symbol: { name: "config", nodeTypes: ["Class"], filePrefix: "native/src/" }
+```
+
+---
+
+### 6. `file_outline` - File Table of Contents
+
+**Every indexed symbol in one file, in line order.** Call before opening or editing a file. Accepts a repo-relative path or a unique suffix (just the basename works if unambiguous; ambiguous suffixes return the candidate list).
+
+**Parameters:**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `file` | string | ✅ | Repo-relative path (`native/src/main.rs`) or unique suffix (`main.rs`). |
+
+```
+file_outline: { file: "node/cli.mjs" }
+```
+
+---
+
+### 7. `get_code` - Read Full Source
+
+**Read the full source for a node id or a file/line range.** The follow-up to every other tool: search previews truncate at ~1200 chars and traversals return no code — call this to see the real implementation. Works even when the client has no file access (e.g. Claude Desktop), since it reads from the indexed repo root.
+
+**Parameters:**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `nodeId` | string | ❌* | Node id from any prior result — reads that symbol's exact range. |
+| `file` | string | ❌* | Repo-relative path (when no nodeId). |
+| `startLine` / `endLine` | integer | ❌ | 1-based inclusive range (with `file`; defaults to whole file). |
+| `maxChars` | integer | ❌ | Character cap (default 20000). |
+
+*One of `nodeId` or `file` is required.
+
+```
+get_code: { nodeId: "function:node/cli.mjs:912:installMcpConfig" }
+get_code: { file: "native/src/serve.rs", startLine: 100, endLine: 180 }
+```
+
+---
+
+### 8. `project_overview` - Orientation
+
+**One-call orientation:** repo root, node/edge counts by type, biggest files by symbol count, and the most depended-upon symbols (highest inbound degree, containment edges excluded). Call it first in a new session, or for "what is this project / how is it structured".
+
+**Parameters:** None
+
+```
+project_overview: {}
+```
+
+---
+
+### 9. `shortest_path` - How Are Two Symbols Connected?
+
+**Shortest directed edge path between two node ids.** Answers "does A reach B", "how does the route reach the db call", "can editing A affect B". If no forward path exists the reverse direction is tried and labeled. Get ids from `find_symbol` or `search_kb` first.
+
+**Parameters:**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `sourceId` | string | ✅ | Start node id. |
+| `targetId` | string | ✅ | End node id. |
+
+```
+shortest_path: { sourceId: "file:node/cli.mjs", targetId: "function:native/src/main.rs:1475:run_mcp" }
+```
+
+---
+
+### 10. `ping_embedder` - Health Check
 
 **Probe the configured embedding endpoint.** Returns 'ok' on success or throws with the upstream error.
 

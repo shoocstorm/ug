@@ -355,6 +355,34 @@ const FindUsagesInput = z.object({
   edgeTypes: z.array(z.string()).optional(),
 });
 
+const FindSymbolInput = z.object({
+  name: z.string().min(1),
+  nodeTypes: z.array(z.string()).optional(),
+  filePrefix: z.string().optional(),
+  limit: z.number().int().min(1).max(100).optional(),
+});
+
+const FileOutlineInput = z.object({
+  file: z.string().min(1),
+});
+
+const GetCodeInput = z
+  .object({
+    nodeId: z.string().min(1).optional(),
+    file: z.string().min(1).optional(),
+    startLine: z.number().int().min(1).optional(),
+    endLine: z.number().int().min(1).optional(),
+    maxChars: z.number().int().min(200).max(200000).optional(),
+  })
+  .refine((v) => v.nodeId || v.file, {
+    message: 'Pass nodeId, or file (optionally with startLine/endLine).',
+  });
+
+const ShortestPathInput = z.object({
+  sourceId: z.string().min(1),
+  targetId: z.string().min(1),
+});
+
 // Tool registry — JSON Schema is what MCP wants on the wire; we keep
 // zod for runtime validation and a hand-written JSON Schema for the
 // tool list response. Avoiding a zod-to-json-schema dep keeps the
@@ -557,6 +585,98 @@ const MCP_TOOLS = [
     },
   },
   {
+    name: 'find_symbol',
+    description:
+      'EXACT-NAME symbol lookup — no embeddings, no fuzziness beyond substring. Use this instead of search_kb whenever you already know (part of) an identifier: a function, class, interface, or file the user named, an id you saw in a stack trace, a symbol you are about to edit. Matches case-insensitively against node names, ranked exact > prefix > substring. ' +
+      'Returns id/type/file:line for each hit — feed the id straight into get_code (source), find_usages (callers), or traverse_kb (dependencies). Cheaper and more precise than vector search for known names; fall back to search_kb when you only know the concept, not the name.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: {
+          type: 'string',
+          description: "Identifier to look up, e.g. 'resolveDbAndRoot' or a fragment like 'resolve'.",
+        },
+        nodeTypes: {
+          type: 'array',
+          items: { type: 'string' },
+          description: "Restrict to node types (case-insensitive). Common: Function, Class, Interface, File, Concept.",
+        },
+        filePrefix: {
+          type: 'string',
+          description: "Only symbols whose file path starts with this repo-relative prefix, e.g. 'src/auth/'.",
+        },
+        limit: {
+          type: 'integer',
+          minimum: 1,
+          maximum: 100,
+          description: 'Max hits to return (default 20).',
+        },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'file_outline',
+    description:
+      "List every indexed symbol in one file, in line order — a structural table of contents. Use before opening or editing a file to know what's in it, or to map a file the user mentioned. Accepts a repo-relative path or a unique suffix (e.g. just the basename). Returns name/type/line-range/id per symbol; ids feed get_code / find_usages / traverse_kb.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        file: {
+          type: 'string',
+          description: "Repo-relative path ('native/src/main.rs') or unique suffix ('main.rs').",
+        },
+      },
+      required: ['file'],
+    },
+  },
+  {
+    name: 'get_code',
+    description:
+      'Read the full source for a node id or an arbitrary file/line range from the indexed repo. THE follow-up to every other tool: search_kb previews truncate at ~1200 chars and traverse/find_usages return no code at all — call this to see the real implementation before reasoning about it or editing it. ' +
+      'Pass a nodeId from any prior result, or file (+ optional startLine/endLine) for raw ranges. Reads from the indexed repo root, so it works even when you have no direct file access (e.g. Claude Desktop).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        nodeId: {
+          type: 'string',
+          description: 'Node id from find_symbol / search_kb / file_outline / traverse_kb — reads exactly that symbol\'s line range.',
+        },
+        file: {
+          type: 'string',
+          description: 'Repo-relative file path. Used when nodeId is not given (or to read outside any symbol).',
+        },
+        startLine: { type: 'integer', minimum: 1, description: '1-based first line (with file; default 1).' },
+        endLine: { type: 'integer', minimum: 1, description: '1-based last line, inclusive (with file; default EOF).' },
+        maxChars: {
+          type: 'integer',
+          minimum: 200,
+          maximum: 200000,
+          description: 'Character cap on returned code (default 20000). Output notes truncation.',
+        },
+      },
+    },
+  },
+  {
+    name: 'project_overview',
+    description:
+      "Orient yourself in the indexed codebase in one call: repo root, node/edge counts by type, the biggest files by symbol count, and the most depended-upon symbols (highest inbound degree, ignoring folder-containment edges). Call this FIRST in a new session, or when the user asks 'what is this project', 'how is it structured', 'where should I start'. The listed hotspot ids are good seeds for traverse_kb / get_code.",
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'shortest_path',
+    description:
+      "How are two symbols connected? Finds the shortest directed edge path between two node ids — use it to answer 'does A reach B', 'how does the request get from the route to the db call', or to check whether an edit to A can affect B. Edges are directed (imports/calls/contains flow source→target); if no forward path exists the reverse direction is tried and labeled as such. Get ids from find_symbol or search_kb first.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sourceId: { type: 'string', description: 'Start node id.' },
+        targetId: { type: 'string', description: 'End node id.' },
+      },
+      required: ['sourceId', 'targetId'],
+    },
+  },
+  {
     name: 'ping_embedder',
     description:
       "Probe the configured embedding endpoint. Returns 'ok' on success or throws with the upstream error. Call this when search_kb / semantic_search_kb fails with an embedding-related error, or as a one-off health check before kicking off a batch of queries.",
@@ -634,7 +754,7 @@ function formatRankedContext(ctx) {
       lines.push('```');
       if (snip.truncated) {
         lines.push(
-          `(snippet truncated — ${snip.omitted} more chars; read ${loc} for the full slice)`,
+          `(snippet truncated — ${snip.omitted} more chars; call get_code with id \`${it.id}\` for the full source)`,
         );
       }
     }
@@ -740,7 +860,207 @@ function formatTraversal(traversal, header) {
 
   lines.push('Drill-down hints:');
   lines.push('- Pick an interesting node id above and call traverse_kb again to keep walking.');
-  lines.push('- Call search_kb with the node name to pull the actual source snippet.');
+  lines.push('- Call get_code with a node id to read its actual source.');
+  return lines.join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Graph-file-backed tools (find_symbol / file_outline / get_code /
+// project_overview / shortest_path). These run off graph.json — the sibling
+// of the ugdb dir — instead of the vector db: no embeddings involved, so
+// they stay exact and cheap. Loaded lazily once per server process.
+// ---------------------------------------------------------------------------
+
+let graphCache = null;
+function loadGraph(dbPath) {
+  if (graphCache) return graphCache;
+  const path = join(dirname(resolve(dbPath)), 'graph.json');
+  if (!existsSync(path)) {
+    throw new Error(`graph.json not found at ${path} — run \`ug gen\` for this project first.`);
+  }
+  const raw = readFileSync(path, 'utf-8');
+  const graph = JSON.parse(raw);
+  const byId = new Map(graph.nodes.map((n) => [n.id, n]));
+  graphCache = { raw, graph, byId, path };
+  return graphCache;
+}
+
+function nodeLoc(n) {
+  return n.file ? `${n.file}:${n.startLine ?? '?'}-${n.endLine ?? '?'}` : '(no file)';
+}
+
+function findSymbolMatches(graph, { name, nodeTypes, filePrefix, limit }) {
+  const q = name.toLowerCase();
+  const types = nodeTypes?.map((t) => t.toLowerCase());
+  const hits = [];
+  for (const n of graph.nodes) {
+    if (types && !types.includes((n.node_type || '').toLowerCase())) continue;
+    if (filePrefix && !(n.file || '').startsWith(filePrefix)) continue;
+    const nm = (n.name || '').toLowerCase();
+    // exact > prefix > substring; ties broken by shorter (closer) name.
+    const rank = nm === q ? 0 : nm.startsWith(q) ? 1 : nm.includes(q) ? 2 : 3;
+    if (rank < 3) hits.push([rank, n]);
+  }
+  hits.sort((a, b) => a[0] - b[0] || a[1].name.length - b[1].name.length);
+  return { total: hits.length, items: hits.slice(0, limit ?? 20).map(([, n]) => n) };
+}
+
+function formatSymbolHits(query, { total, items }) {
+  const lines = [`# Symbols matching '${query}'`, `${total} match(es)${total > items.length ? `, showing ${items.length}` : ''}`, ''];
+  if (!items.length) {
+    lines.push('No name matches. Try a shorter fragment, drop nodeTypes/filePrefix, or use search_kb for a concept-level query.');
+    return lines.join('\n');
+  }
+  for (const n of items) {
+    lines.push(`- ${n.node_type} **${n.name}**  ${nodeLoc(n)}`);
+    lines.push(`  id: \`${n.id}\``);
+    if (n.docstring) lines.push(`  doc: ${String(n.docstring).slice(0, 200)}`);
+  }
+  lines.push('');
+  lines.push('Next: get_code(nodeId) for source, find_usages(nodeId) for callers, traverse_kb for dependencies.');
+  return lines.join('\n');
+}
+
+function fileOutline(graph, file) {
+  // Exact repo-relative match first, then unique suffix match.
+  let matches = graph.nodes.filter((n) => n.file === file);
+  if (!matches.length) {
+    const suffix = file.startsWith('/') ? file : `/${file}`;
+    const files = new Set(
+      graph.nodes.filter((n) => n.file && (n.file === file || n.file.endsWith(suffix))).map((n) => n.file),
+    );
+    if (files.size > 1) return { ambiguous: [...files].sort() };
+    if (files.size === 1) {
+      const resolved = [...files][0];
+      matches = graph.nodes.filter((n) => n.file === resolved);
+    }
+  }
+  if (!matches.length) return { matches: [] };
+  const symbols = matches
+    .filter((n) => n.node_type !== 'File' && n.node_type !== 'Folder')
+    .sort((a, b) => (a.startLine ?? 0) - (b.startLine ?? 0));
+  return { file: matches[0].file, symbols };
+}
+
+function formatFileOutline(query, r) {
+  if (r.ambiguous) {
+    return [`'${query}' matches ${r.ambiguous.length} files — pass one of:`, ...r.ambiguous.map((f) => `- ${f}`)].join('\n');
+  }
+  if (!r.symbols || !r.file) {
+    return `No indexed file matches '${query}'. Pass a repo-relative path (see project_overview for the biggest files), or re-run \`ug gen\` if the file is new.`;
+  }
+  const lines = [`# Outline of ${r.file}`, `${r.symbols.length} symbol(s)  •  types=[${summarizeNodeTypes(r.symbols)}]`, ''];
+  for (const n of r.symbols) {
+    lines.push(`- L${n.startLine ?? '?'}-${n.endLine ?? '?'}  ${n.node_type}  **${n.name}**  id: \`${n.id}\``);
+  }
+  lines.push('');
+  lines.push('Next: get_code(nodeId) to read one symbol, or get_code(file) for the whole file.');
+  return lines.join('\n');
+}
+
+function getCodeSlice(graph, repoRoot, args) {
+  let { file, startLine, endLine } = args;
+  let node = null;
+  if (args.nodeId) {
+    node = graph.byId.get(args.nodeId);
+    if (!node) throw new Error(`No node with id '${args.nodeId}' — ids come from find_symbol / search_kb / file_outline.`);
+    if (!node.file) throw new Error(`Node '${args.nodeId}' (${node.node_type}) has no source file.`);
+    file = node.file;
+    startLine = node.startLine ?? 1;
+    endLine = node.endLine ?? startLine;
+  }
+  const abs = join(repoRoot, file);
+  if (!existsSync(abs)) {
+    throw new Error(`${file} not found under repo root ${repoRoot} — the index may be stale (re-run \`ug gen\`).`);
+  }
+  const all = readFileSync(abs, 'utf-8').split('\n');
+  const from = Math.max(1, startLine ?? 1);
+  const to = Math.min(all.length, endLine ?? all.length);
+  let text = all.slice(from - 1, to).join('\n');
+  const maxChars = args.maxChars ?? 20000;
+  let truncated = 0;
+  if (text.length > maxChars) {
+    truncated = text.length - maxChars;
+    text = text.slice(0, maxChars);
+  }
+  return { node, file, from, to, totalLines: all.length, text, truncated };
+}
+
+function formatCodeSlice(r) {
+  const lines = [];
+  const title = r.node ? `${r.node.node_type} ${r.node.name}` : r.file;
+  lines.push(`# ${title}  —  ${r.file}:${r.from}-${r.to} (of ${r.totalLines} lines)`);
+  if (r.node?.docstring) lines.push(`doc: ${r.node.docstring}`);
+  lines.push('```');
+  lines.push(r.text);
+  lines.push('```');
+  if (r.truncated) {
+    lines.push(`(truncated — ${r.truncated} more chars; narrow the line range or raise maxChars)`);
+  }
+  return lines.join('\n');
+}
+
+function projectOverview(graph, repoRoot, dbPath) {
+  const nodeTypes = new Map();
+  const symbolsPerFile = new Map();
+  for (const n of graph.nodes) {
+    nodeTypes.set(n.node_type, (nodeTypes.get(n.node_type) ?? 0) + 1);
+    if (n.file && n.node_type !== 'File' && n.node_type !== 'Folder') {
+      symbolsPerFile.set(n.file, (symbolsPerFile.get(n.file) ?? 0) + 1);
+    }
+  }
+  const edgeTypes = new Map();
+  const inDegree = new Map();
+  for (const e of graph.edges) {
+    edgeTypes.set(e.edge_type, (edgeTypes.get(e.edge_type) ?? 0) + 1);
+    // Contains edges are pure structure (folder→file→symbol); skipping them
+    // makes inbound degree mean "how much code depends on this".
+    if ((e.edge_type || '').toLowerCase() !== 'contains') {
+      inDegree.set(e.target, (inDegree.get(e.target) ?? 0) + 1);
+    }
+  }
+  const top = (m, k) => [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, k);
+
+  const lines = [`# Project overview`, `repo: ${repoRoot}`, `db: ${dbPath}`, ''];
+  lines.push(`## Nodes (${graph.nodes.length})`);
+  for (const [t, c] of top(nodeTypes, 10)) lines.push(`- ${t}: ${c}`);
+  lines.push('');
+  lines.push(`## Edges (${graph.edges.length})`);
+  for (const [t, c] of top(edgeTypes, 10)) lines.push(`- ${t}: ${c}`);
+  lines.push('');
+  lines.push('## Biggest files (by symbol count)');
+  for (const [f, c] of top(symbolsPerFile, 10)) lines.push(`- ${f}  (${c})`);
+  lines.push('');
+  lines.push('## Most depended-upon symbols (inbound edges, excluding containment)');
+  for (const [id, c] of top(inDegree, 12)) {
+    const n = graph.byId.get(id);
+    if (!n) continue;
+    lines.push(`- ${n.node_type} **${n.name}**  ←${c}  ${nodeLoc(n)}  id: \`${id}\``);
+  }
+  lines.push('');
+  lines.push('Next: file_outline on a big file, get_code / find_usages on a hotspot id, or search_kb for a concept.');
+  return lines.join('\n');
+}
+
+function formatShortestPath(graph, sourceId, targetId, result, reversed) {
+  if (!result.found) {
+    return [
+      `No directed path between \`${sourceId}\` and \`${targetId}\` in either direction.`,
+      'They may be connected only through shared ancestors — try traverse_kb from each with direction=both.',
+    ].join('\n');
+  }
+  const lines = [
+    `# Path ${reversed ? `${targetId} → ${sourceId} (reverse direction — no forward path existed)` : `${sourceId} → ${targetId}`}`,
+    `${result.length ?? result.path.length - 1} hop(s)`,
+    '',
+  ];
+  result.path.forEach((id, i) => {
+    const n = graph.byId.get(id);
+    const desc = n ? `${n.node_type} **${n.name}**  ${nodeLoc(n)}` : '(unknown node)';
+    lines.push(`${i === 0 ? '·' : '↓'} ${desc}  id: \`${id}\``);
+  });
+  lines.push('');
+  lines.push('Next: get_code on any id above to see the code that makes the link.');
   return lines.join('\n');
 }
 
@@ -1170,6 +1490,52 @@ async function runMcpServer() {
         const header = `Usages of ${args.nodeId} (hops=${args.hops}, edges=[${edgeTypes.join(', ')}])`;
         return {
           content: [{ type: 'text', text: formatTraversal(traversal, header) }],
+        };
+      }
+
+      if (name === 'find_symbol') {
+        const args = FindSymbolInput.parse(rawArgs ?? {});
+        const { graph } = loadGraph(DB_PATH);
+        const hits = findSymbolMatches(graph, args);
+        return { content: [{ type: 'text', text: formatSymbolHits(args.name, hits) }] };
+      }
+
+      if (name === 'file_outline') {
+        const args = FileOutlineInput.parse(rawArgs ?? {});
+        const { graph } = loadGraph(DB_PATH);
+        return { content: [{ type: 'text', text: formatFileOutline(args.file, fileOutline(graph, args.file)) }] };
+      }
+
+      if (name === 'get_code') {
+        const args = GetCodeInput.parse(rawArgs ?? {});
+        const cache = loadGraph(DB_PATH);
+        const slice = getCodeSlice(cache, REPO_ROOT, args);
+        return { content: [{ type: 'text', text: formatCodeSlice(slice) }] };
+      }
+
+      if (name === 'project_overview') {
+        const cache = loadGraph(DB_PATH);
+        const merged = { ...cache.graph, byId: cache.byId };
+        return { content: [{ type: 'text', text: projectOverview(merged, REPO_ROOT, DB_PATH) }] };
+      }
+
+      if (name === 'shortest_path') {
+        const args = ShortestPathInput.parse(rawArgs ?? {});
+        const cache = loadGraph(DB_PATH);
+        for (const id of [args.sourceId, args.targetId]) {
+          if (!cache.byId.has(id)) {
+            throw new Error(`No node with id '${id}' — get ids from find_symbol or search_kb first.`);
+          }
+        }
+        let reversed = false;
+        let result = JSON.parse(ug.findShortestPath(cache.raw, args.sourceId, args.targetId));
+        if (!result.found) {
+          reversed = true;
+          result = JSON.parse(ug.findShortestPath(cache.raw, args.targetId, args.sourceId));
+        }
+        const merged = { ...cache.graph, byId: cache.byId };
+        return {
+          content: [{ type: 'text', text: formatShortestPath(merged, args.sourceId, args.targetId, result, reversed) }],
         };
       }
 

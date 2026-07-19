@@ -466,8 +466,15 @@ Integrate UltraGraph directly into your AI Agent (Cursor, Claude Desktop, etc.).
 
 ### Tools Exposed
 1.  **search_kb**: Graph-based RAG retrieval (PPR-based).
-2.  **traverse_kb**: Structural walk from specific node IDs.
-3.  **ping_embedder**: Verify embedding connectivity.
+2.  **semantic_search_kb**: Lightweight pure-vector lookup.
+3.  **traverse_kb**: Structural walk from specific node IDs.
+4.  **find_usages**: Inbound references — callers, importers, subclasses.
+5.  **find_symbol**: Exact-name symbol lookup (no embeddings).
+6.  **file_outline**: All symbols in a file, in line order.
+7.  **get_code**: Full source for a node id or file/line range.
+8.  **project_overview**: Structure, hotspots, and stats in one call.
+9.  **shortest_path**: Directed path between two symbols.
+10. **ping_embedder**: Verify embedding connectivity.
 
 ### Configuration
 Set these environment variables before starting the server:
