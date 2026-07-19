@@ -342,13 +342,6 @@ const SemanticSearchInput = z.object({
   whereClause: z.string().optional(),
 });
 
-const TraverseInput = z.object({
-  startNodeIds: z.array(z.string()).min(1),
-  hops: z.number().int().min(1).max(5).default(2),
-  edgeTypes: z.array(z.string()).optional(),
-  direction: z.enum(['outbound', 'inbound', 'both']).default('outbound'),
-});
-
 // Batch cap for tools accepting multiple ids/names/files: keeps one
 // response from blowing the agent's context while still collapsing a
 // handful of lookups into one round trip.
@@ -359,6 +352,19 @@ const oneOrMany = z
   .union([z.string().min(1), z.array(z.string().min(1)).min(1).max(MAX_BATCH)])
   .transform((v) => (Array.isArray(v) ? v : [v]));
 
+// Canonical id parameter is `nodeId` (matching get_code / find_usages);
+// `startNodeIds` is the legacy spelling, still accepted.
+const TraverseInput = z
+  .object({
+    nodeId: oneOrMany.optional(),
+    startNodeIds: z.array(z.string()).min(1).optional(),
+    hops: z.number().int().min(1).max(5).default(2),
+    edgeTypes: z.array(z.string()).optional(),
+    direction: z.enum(['outbound', 'inbound', 'both']).default('outbound'),
+  })
+  .refine((v) => v.nodeId || v.startNodeIds, { message: 'Pass nodeId (one id or an array).' })
+  .transform((v) => ({ ...v, nodeId: v.nodeId ?? v.startNodeIds }));
+
 const FindUsagesInput = z.object({
   nodeId: oneOrMany,
   hops: z.number().int().min(1).max(3).default(1),
@@ -366,14 +372,20 @@ const FindUsagesInput = z.object({
 });
 
 const FindSymbolInput = z.object({
-  name: oneOrMany,
+  nodeId: oneOrMany.optional(),
+  name: oneOrMany.optional(),
   nodeTypes: z.array(z.string()).optional(),
   filePrefix: z.string().optional(),
   limit: z.number().int().min(1).max(100).optional(),
+}).refine((v) => v.nodeId || v.name, {
+  message: 'Pass nodeId (one id or an array) for direct lookup, or name (one or an array) for name search.',
 });
 
 const FileOutlineInput = z.object({
-  file: oneOrMany,
+  nodeId: oneOrMany.optional(),
+  file: oneOrMany.optional(),
+}).refine((v) => v.nodeId || v.file, {
+  message: 'Pass nodeId (one id or an array) for direct lookup, or file (one or an array) for file path lookup.',
 });
 
 const GetCodeInput = z
@@ -536,11 +548,13 @@ const MCP_TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        startNodeIds: {
-          type: 'array',
-          items: { type: 'string' },
+        nodeId: {
+          oneOf: [
+            { type: 'string' },
+            { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 10 },
+          ],
           description:
-            'Seed node ids — typically copied from a prior search_kb / semantic_search_kb result.',
+            'Seed node id(s) — one id or an array of up to 10, typically copied from a prior search_kb / find_symbol result. (`startNodeIds` is the deprecated legacy name for the same parameter.)',
         },
         hops: {
           type: 'integer',
@@ -552,7 +566,7 @@ const MCP_TOOLS = [
           type: 'array',
           items: { type: 'string' },
           description:
-            'Restrict to these edge types (case-insensitive). Common: imports, calls, extends, implements, contains, references.',
+            'Restrict to these edge types (case-insensitive). Common: imports, calls, extends, implements, contains, references. See graph_schema for what this graph has.',
         },
         direction: {
           type: 'string',
@@ -561,7 +575,7 @@ const MCP_TOOLS = [
             "Edge direction (default 'outbound'). 'inbound' = who depends on me; 'outbound' = what I depend on; 'both' = either.",
         },
       },
-      required: ['startNodeIds'],
+      required: ['nodeId'],
     },
   },
   {
@@ -600,11 +614,20 @@ const MCP_TOOLS = [
   {
     name: 'find_symbol',
     description:
-      'EXACT-NAME symbol lookup — no embeddings, no fuzziness beyond substring. Use this instead of search_kb whenever you already know (part of) an identifier: a function, class, interface, or file the user named, an id you saw in a stack trace, a symbol you are about to edit. Matches case-insensitively against node names, ranked exact > prefix > substring. ' +
-      'Returns id/type/file:line for each hit — feed the id straight into get_code (source), find_usages (callers), or traverse_kb (dependencies). Cheaper and more precise than vector search for known names; fall back to search_kb when you only know the concept, not the name. Batch-friendly: pass an ARRAY of up to 10 names to resolve them all in one call.',
+      'EXACT-NAME symbol lookup — no embeddings, no fuzziness beyond substring. Use this instead of search_kb whenever you already know (part of) an identifier: a function, class, interface, or file the user named, an id you saw in a stack trace, a symbol you are about to edit. ' +
+      'Direct nodeId lookup is also supported: if you already have a nodeId from a prior search, pass it for O(1) direct access instead of re-searching. ' +
+      'Matches case-insensitively against node names, ranked exact > prefix > substring. Returns id/type/file:line for each hit — feed the id straight into get_code (source), find_usages (callers), or traverse_kb (dependencies). Cheaper and more precise than vector search for known names; fall back to search_kb when you only know the concept, not the name. Batch-friendly: pass an ARRAY of up to 10 names/nodeIds to resolve them all in one call.',
     inputSchema: {
       type: 'object',
       properties: {
+        nodeId: {
+          oneOf: [
+            { type: 'string' },
+            { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 10 },
+          ],
+          description:
+            "Direct node id lookup — O(1) access when you already have the id from a prior search. Use instead of 'name' to skip the search step.",
+        },
         name: {
           oneOf: [
             { type: 'string' },
@@ -629,16 +652,25 @@ const MCP_TOOLS = [
           description: 'Max hits to return (default 20).',
         },
       },
-      required: ['name'],
     },
   },
   {
     name: 'file_outline',
     description:
-      "List every indexed symbol in one file, in line order — a structural table of contents. Use before opening or editing a file to know what's in it, or to map a file the user mentioned. Accepts a repo-relative path or a unique suffix (e.g. just the basename), or an ARRAY of up to 10 files to outline them all in one call. Returns name/type/line-range/id per symbol; ids feed get_code / find_usages / traverse_kb.",
+      "List every indexed symbol in one file, in line order — a structural table of contents. Use before opening or editing a file to know what's in it, or to map a file the user mentioned. " +
+      "Direct nodeId lookup is also supported: if you already have a File node id from a prior search, pass it for O(1) direct access. " +
+      "Accepts a repo-relative path or a unique suffix (e.g. just the basename), a File node id ('file:native/src/main.rs'), or an ARRAY of up to 10 files/ids to outline them all in one call. Returns name/type/line-range/id per symbol; ids feed get_code / find_usages / traverse_kb.",
     inputSchema: {
       type: 'object',
       properties: {
+        nodeId: {
+          oneOf: [
+            { type: 'string' },
+            { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 10 },
+          ],
+          description:
+            "Direct File node id lookup — O(1) access when you already have the File node id from a prior search. Use instead of 'file' to skip the file lookup step.",
+        },
         file: {
           oneOf: [
             { type: 'string' },
@@ -648,7 +680,6 @@ const MCP_TOOLS = [
             "Repo-relative path ('native/src/main.rs'), unique suffix ('main.rs'), or a File node id ('file:native/src/main.rs'). Pass an array of up to 10 files to outline several in ONE call.",
         },
       },
-      required: ['file'],
     },
   },
   {
@@ -821,7 +852,7 @@ function formatRankedContext(ctx) {
   const topId = items[0].id;
   lines.push('---');
   lines.push('Drill-down hints:');
-  lines.push(`- Walk neighbors:  traverse_kb({ startNodeIds: ["${topId}"], hops: 1 })`);
+  lines.push(`- Walk neighbors:  traverse_kb({ nodeId: "${topId}", hops: 1 })`);
   lines.push(`- Find callers:    find_usages({ nodeId: "${topId}" })`);
   lines.push(
     `- Narrow search:   search_kb({ query: "...", whereClause: "node_type = 'Function'" })`,
@@ -856,7 +887,7 @@ function formatSemanticHits(query, hits) {
 
   lines.push('');
   lines.push(
-    `Next: search_kb({ query: "${query}" }) for graph-ranked snippets, or traverse_kb({ startNodeIds: ["${hits[0].id}"] }) to expand.`,
+    `Next: search_kb({ query: "${query}" }) for graph-ranked snippets, or traverse_kb({ nodeId: "${hits[0].id}" }) to expand.`,
   );
   return lines.join('\n');
 }
@@ -1860,9 +1891,9 @@ async function runMcpServer() {
 
       if (name === 'traverse_kb') {
         const parsed = TraverseInput.parse(args);
-        const json = await ug.dbTraverse(dbPath, parsed.startNodeIds, parsed.hops, parsed.edgeTypes ?? null, parsed.direction, destOptionsJson());
+        const json = await ug.dbTraverse(dbPath, parsed.nodeId, parsed.hops, parsed.edgeTypes ?? null, parsed.direction, destOptionsJson());
         const traversal = JSON.parse(json);
-        const header = `Traversal from [${parsed.startNodeIds.join(', ')}] (hops=${parsed.hops}, dir=${parsed.direction})`;
+        const header = `Traversal from [${parsed.nodeId.join(', ')}] (hops=${parsed.hops}, dir=${parsed.direction})`;
         let text = formatTraversal(traversal, header);
         text += stalenessNote(dbPath, repoRoot);
         return { content: [{ type: 'text', text }] };
@@ -1884,18 +1915,48 @@ async function runMcpServer() {
 
       if (name === 'find_symbol') {
         const parsed = FindSymbolInput.parse(args);
-        const { graph } = loadGraph(dbPath);
-        let text = await batchSections(parsed.name, (nm) =>
-          formatSymbolHits(nm, findSymbolMatches(graph, { ...parsed, name: nm })),
-        );
+        const { graph, byId } = loadGraph(dbPath);
+        let text;
+        if (parsed.nodeId) {
+          // Direct nodeId lookup — O(1) access
+          text = await batchSections(parsed.nodeId, (id) => {
+            const node = byId.get(id);
+            if (!node) {
+              return `# Node '${id}'\n\nNo node with id '${id}' — ids come from find_symbol / search_kb / file_outline.`;
+            }
+            return formatSymbolHits(id, { total: 1, items: [node] });
+          });
+        } else {
+          // Name search
+          text = await batchSections(parsed.name, (nm) =>
+            formatSymbolHits(nm, findSymbolMatches(graph, { ...parsed, name: nm })),
+          );
+        }
         text += stalenessNote(dbPath, repoRoot);
         return { content: [{ type: 'text', text }] };
       }
 
       if (name === 'file_outline') {
         const parsed = FileOutlineInput.parse(args);
-        const { graph } = loadGraph(dbPath);
-        let text = await batchSections(parsed.file, (f) => formatFileOutline(f, fileOutline(graph, f)));
+        const { graph, byId } = loadGraph(dbPath);
+        let text;
+        if (parsed.nodeId) {
+          // Direct nodeId lookup — O(1) access
+          text = await batchSections(parsed.nodeId, (id) => {
+            const node = byId.get(id);
+            if (!node) {
+              return `# Node '${id}'\n\nNo node with id '${id}' — ids come from find_symbol / search_kb / file_outline.`;
+            }
+            if (node.node_type !== 'File') {
+              return `# Node '${id}'\n\nNode '${id}' is a ${node.node_type}, not a File. file_outline requires File node ids.`;
+            }
+            const filePath = node.file || id.replace(/^file:/, '');
+            return formatFileOutline(filePath, fileOutline(graph, filePath));
+          });
+        } else {
+          // File path lookup
+          text = await batchSections(parsed.file, (f) => formatFileOutline(f, fileOutline(graph, f)));
+        }
         text += stalenessNote(dbPath, repoRoot);
         return { content: [{ type: 'text', text }] };
       }
@@ -2392,8 +2453,8 @@ const commands = {
           }
           if (tool === 'traverse_kb') {
             const p = TraverseInput.parse(parsed);
-            const r = await ug.dbTraverse(dbPath, p.startNodeIds, p.hops, p.edgeTypes ?? null, p.direction, destOptionsJson());
-            return formatTraversal(JSON.parse(r), `Traversal from [${p.startNodeIds.join(', ')}]`) + stalenessNote(dbPath, repoRoot);
+            const r = await ug.dbTraverse(dbPath, p.nodeId, p.hops, p.edgeTypes ?? null, p.direction, destOptionsJson());
+            return formatTraversal(JSON.parse(r), `Traversal from [${p.nodeId.join(', ')}]`) + stalenessNote(dbPath, repoRoot);
           }
           if (tool === 'find_usages') {
             const p = FindUsagesInput.parse(parsed);
@@ -2408,16 +2469,46 @@ const commands = {
           }
           if (tool === 'find_symbol') {
             const p = FindSymbolInput.parse(parsed);
-            const { graph } = loadGraph(dbPath);
-            const txt = await batchSections(p.name, (nm) =>
-              formatSymbolHits(nm, findSymbolMatches(graph, { ...p, name: nm })),
-            );
+            const { graph, byId } = loadGraph(dbPath);
+            let txt;
+            if (p.nodeId) {
+              // Direct nodeId lookup — O(1) access
+              txt = await batchSections(p.nodeId, (id) => {
+                const node = byId.get(id);
+                if (!node) {
+                  return `# Node '${id}'\n\nNo node with id '${id}' — ids come from find_symbol / search_kb / file_outline.`;
+                }
+                return formatSymbolHits(id, { total: 1, items: [node] });
+              });
+            } else {
+              // Name search
+              txt = await batchSections(p.name, (nm) =>
+                formatSymbolHits(nm, findSymbolMatches(graph, { ...p, name: nm })),
+              );
+            }
             return txt + stalenessNote(dbPath, repoRoot);
           }
           if (tool === 'file_outline') {
             const p = FileOutlineInput.parse(parsed);
-            const { graph } = loadGraph(dbPath);
-            const txt = await batchSections(p.file, (f) => formatFileOutline(f, fileOutline(graph, f)));
+            const { graph, byId } = loadGraph(dbPath);
+            let txt;
+            if (p.nodeId) {
+              // Direct nodeId lookup — O(1) access
+              txt = await batchSections(p.nodeId, (id) => {
+                const node = byId.get(id);
+                if (!node) {
+                  return `# Node '${id}'\n\nNo node with id '${id}' — ids come from find_symbol / search_kb / file_outline.`;
+                }
+                if (node.node_type !== 'File') {
+                  return `# Node '${id}'\n\nNode '${id}' is a ${node.node_type}, not a File. file_outline requires File node ids.`;
+                }
+                const filePath = node.file || id.replace(/^file:/, '');
+                return formatFileOutline(filePath, fileOutline(graph, filePath));
+              });
+            } else {
+              // File path lookup
+              txt = await batchSections(p.file, (f) => formatFileOutline(f, fileOutline(graph, f)));
+            }
             return txt + stalenessNote(dbPath, repoRoot);
           }
           if (tool === 'get_code') {

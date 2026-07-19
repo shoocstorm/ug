@@ -264,20 +264,20 @@ Use `'outbound'` to see what the seed depends on; `'inbound'` to see who depends
 **Parameters:**
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `startNodeIds` | string[] | ✅ | Seed node ids — typically copied from a prior search result. |
+| `nodeId` | string \| string[] | ✅ | Seed node id(s) — one id or an array of up to 10, typically copied from a prior search result. (`startNodeIds` is the deprecated legacy name, still accepted.) |
 | `hops` | integer (1-5) | ❌ | Hop radius (default 2). Use 1 for direct neighbors only. |
-| `edgeTypes` | string[] | ❌ | Restrict to these edge types (case-insensitive). Common: imports, calls, extends, implements, contains, references. |
+| `edgeTypes` | string[] | ❌ | Restrict to these edge types (case-insensitive). Common: imports, calls, extends, implements, contains, references. See `graph_schema` for what this graph has. |
 | `direction` | string | ❌ | Edge direction (default 'outbound'). 'inbound' = who depends on me; 'outbound' = what I depend on. |
 
 **Example usage:**
 ```
-traverse_kb: { startNodeIds: ["func-123"], hops: 2, edgeTypes: ["calls", "imports"] }
+traverse_kb: { nodeId: "func-123", hops: 2, edgeTypes: ["calls", "imports"] }
 
-traverse_kb: { startNodeIds: ["class-456"], hops: 1, direction: "outbound" }
+traverse_kb: { nodeId: "class-456", hops: 1, direction: "outbound" }
 
-traverse_kb: { startNodeIds: ["func-789", "class-101"], hops: 2, direction: "both" }
+traverse_kb: { nodeId: ["func-789", "class-101"], hops: 2, direction: "both" }
 
-traverse_kb: { startNodeIds: ["file-202"], hops: 3, edgeTypes: ["contains", "imports"] }
+traverse_kb: { nodeId: "file-202", hops: 3, edgeTypes: ["contains", "imports"] }
 ```
 
 ---
@@ -312,18 +312,22 @@ find_usages: { nodeId: "file-101", hops: 1, edgeTypes: ["imports"] }
 
 ### 5. `find_symbol` - Exact-Name Symbol Lookup
 
-**Exact-name lookup, no embeddings.** Use instead of `search_kb` whenever you already know (part of) an identifier: a function/class the user named, a symbol from a stack trace, something you're about to edit. Case-insensitive, ranked exact > prefix > substring. Cheaper and more precise than vector search for known names.
+**Exact-name lookup, no embeddings.** Use instead of `search_kb` whenever you already know (part of) an identifier: a function/class the user named, a symbol from a stack trace, something you are about to edit. Case-insensitive, ranked exact > prefix > substring. Cheaper and more precise than vector search for known names. **Direct nodeId lookup is also supported** — if you already have a nodeId from a prior search, pass it for O(1) direct access.
 
 **Parameters:**
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `name` | string \| string[] | ✅ | Identifier or fragment, e.g. `resolveDbAndRoot` or `resolve`. Array of up to 10 resolves several in one call. |
+| `nodeId` | string \| string[] | ❌* | Direct node id lookup — O(1) when you already have the id from a prior search. |
+| `name` | string \| string[] | ❌* | Identifier or fragment, e.g. `resolveDbAndRoot` or `resolve`. Array of up to 10 resolves several in one call. |
 | `nodeTypes` | string[] | ❌ | Restrict to node types: Function, Class, Interface, File, Concept. |
 | `filePrefix` | string | ❌ | Only symbols under this repo-relative path prefix, e.g. `src/auth/`. |
 | `limit` | integer (1-100) | ❌ | Max hits (default 20). |
 
+*One of `nodeId` or `name` is required.
+
 ```
 find_symbol: { name: "installMcpConfig" }
+find_symbol: { nodeId: "function:node/cli.mjs:912:installMcpConfig" }
 find_symbol: { name: "config", nodeTypes: ["Class"], filePrefix: "native/src/" }
 ```
 
@@ -331,15 +335,19 @@ find_symbol: { name: "config", nodeTypes: ["Class"], filePrefix: "native/src/" }
 
 ### 6. `file_outline` - File Table of Contents
 
-**Every indexed symbol in one file, in line order.** Call before opening or editing a file. Accepts a repo-relative path or a unique suffix (just the basename works if unambiguous; ambiguous suffixes return the candidate list).
+**Every indexed symbol in one file, in line order.** Call before opening or editing a file. Accepts a repo-relative path or a unique suffix (just the basename works if unambiguous; ambiguous suffixes return the candidate list). **Direct nodeId lookup is also supported** — if you already have a File node id from a prior search, pass it for O(1) direct access.
 
 **Parameters:**
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `file` | string \| string[] | ✅ | Repo-relative path (`native/src/main.rs`) or unique suffix (`main.rs`). Array of up to 10 outlines several files in one call. |
+| `nodeId` | string \| string[] | ❌* | Direct File node id lookup — O(1) when you already have the File node id. |
+| `file` | string \| string[] | ❌* | Repo-relative path (`native/src/main.rs`) or unique suffix (`main.rs`). Array of up to 10 outlines several files in one call. |
+
+*One of `nodeId` or `file` is required.
 
 ```
 file_outline: { file: "node/cli.mjs" }
+file_outline: { nodeId: "file:node/cli.mjs" }
 ```
 
 ---
@@ -494,7 +502,17 @@ search_kb: { query: "How is authentication handled in this codebase?", k: 10 }
 
 semantic_search_kb: { query: "auth middleware", k: 5, whereClause: "node_type = 'Function'" }
 
-traverse_kb: { startNodeIds: ["func-123"], hops: 2, edgeTypes: ["calls", "imports"] }
+# Name search
+find_symbol: { name: "authenticateUser" }
+# Direct nodeId lookup (O(1) when you already have the id)
+find_symbol: { nodeId: "function:src/auth.ts:42:authenticateUser" }
+
+# File path lookup
+file_outline: { file: "src/auth.ts" }
+# Direct nodeId lookup for File nodes (O(1))
+file_outline: { nodeId: "file:src/auth.ts" }
+
+traverse_kb: { nodeId: "func-123", hops: 2, edgeTypes: ["calls", "imports"] }
 
 find_usages: { nodeId: "func-123", hops: 1 }
 

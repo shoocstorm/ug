@@ -14,13 +14,13 @@ description: |
 |------|------|--------|-------------|
 | `project_overview` | cheap | — | One-shot repo orientation: node counts, biggest files, hotspot symbols |
 | `graph_schema` | cheap | — | Node/edge types actually in this graph + full vocabulary. Check before filtering. |
-| `find_symbol` | cheap | ✅ `name[]` | Exact/substring name lookup → nodeId(s). No DB query. |
-| `file_outline` | cheap | ✅ `file[]` | List all symbols in a file (line order) → nodeIds |
+| `find_symbol` | cheap | ✅ `nodeId[]` OR `name[]` | Direct nodeId lookup (O(1)) OR exact/substring name lookup → nodeId(s) |
+| `file_outline` | cheap | ✅ `nodeId[]` OR `file[]` | Direct nodeId lookup (O(1)) OR file path → symbols in file |
 | `get_code` | cheap | ✅ `nodeId[]` | Read full source for nodeId(s) or a file:line range |
 | `list_projects` | cheap | — | List all indexed repos on this machine |
 | `ping_embedder` | cheap | — | Embedding endpoint health check |
 | `semantic_search_kb` | medium | — | Pure vector lookup → candidate nodeIds (no code snippets) |
-| `traverse_kb` | medium | ✅ `startNodeIds[]` | N-hop graph walk from nodeId(s) — deps or dependents |
+| `traverse_kb` | medium | ✅ `nodeId[]` | N-hop graph walk from nodeId(s) — deps or dependents |
 | `find_usages` | medium | ✅ `nodeId[]` | Callers/importers of symbol(s) (convenience wrapper over traverse_kb) |
 | `shortest_path` | medium | — | Shortest directed path between two nodeIds |
 | `search_kb` | expensive | — | Full GraphRAG: PPR-ranked snippets with code context |
@@ -44,6 +44,7 @@ project_overview: {}
   → identifies key files and hotspot symbols
 file_outline: { file: ["src/main.rs", "src/serve.rs", "src/db.rs"] }
   → ONE call outlines all key files → nodeIds of important functions
+  → OR use nodeId if you have File node ids from prior searches
 get_code: { nodeId: ["id-1", "id-2", "id-3"] }
   → ONE call reads the most important few
 ```
@@ -58,6 +59,12 @@ find_usages: { nodeId: "func-123" }
   → who calls it (only if needed)
 ```
 
+**Shortcut**: If you already have the nodeId from a prior search, use direct lookup (O(1)):
+```
+find_symbol: { nodeId: "function:src/auth.ts:42:authenticate" }
+  → skips name search, returns node details immediately
+```
+
 ### 3. You know the concept but not the name
 ```
 search_kb: { query: "how auth tokens are validated", k: 5 }
@@ -69,8 +76,10 @@ get_code: { nodeId: "func-xyz" }
 ### 4. Debugging / tracing a call chain
 ```
 find_symbol: { name: "loginHandler" }   → nodeId
+# OR if you already have the nodeId from a prior result:
+find_symbol: { nodeId: "function:src/auth.ts:123:loginHandler" }  → direct lookup
 find_usages: { nodeId: "handle-login" } → find callers
-traverse_kb: { startNodeIds: ["handle-login"], direction: "outbound", edgeTypes: ["calls"] }
+traverse_kb: { nodeId: ["handle-login"], direction: "outbound", edgeTypes: ["calls"] }
   → what does it call?
 shortest_path: { sourceId: "route-login", targetId: "db-query" }
   → how does request flow through?
@@ -103,8 +112,9 @@ search_kb: { query: "user schema", project: "other-repo" }
 
 | When you... | Use this | Why |
 |-------------|----------|-----|
-| ...know the identifier(s) | `find_symbol` (array for several) | Cheapest — no embedding, no DB |
-| ...need file structure | `file_outline` (array for several) | Single file scan, no DB |
+| ...have nodeId already | `find_symbol({nodeId})` or `file_outline({nodeId})` | O(1) direct lookup — skips search |
+| ...know the identifier(s) | `find_symbol({name})` (array for several) | Cheapest — no embedding, no DB |
+| ...need file structure | `file_outline({file})` (array for several) | Single file scan, no DB |
 | ...want to read source | `get_code` (array for several) | Direct file read |
 | ...have a vague concept | `search_kb` | Full GraphRAG — but limit `k: 5` first |
 | ...have nodeId, want context | `traverse_kb` with `hops: 1` | Cheap single-hop walk |
@@ -116,8 +126,9 @@ search_kb: { query: "user schema", project: "other-repo" }
 
 ## Anti-Patterns
 
-- **Don't** `search_kb` for a known name → use `find_symbol` (50-100x cheaper tokens)
-- **Don't** `search_kb` for file structure → use `file_outline`
+- **Don't** `search_kb` for a known name → use `find_symbol({name})` (50-100x cheaper tokens)
+- **Don't** `find_symbol({name})` when you have the nodeId → use `find_symbol({nodeId})` (O(1) vs O(n) scan)
+- **Don't** `search_kb` for file structure → use `file_outline({file})`
 - **Don't** make N separate `find_symbol`/`get_code`/`file_outline`/`find_usages`
   calls for N related items → pass an array (up to 10) in ONE call; each extra
   call re-reads the whole conversation context

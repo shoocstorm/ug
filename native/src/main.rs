@@ -4,7 +4,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use ultragraph::storage::{
     self, open_store, search_kb as storage_search_kb,
-    semantic_search as storage_semantic_search, traverse as storage_traverse, Direction, Embedder,
+    semantic_search as storage_semantic_search, Direction, Embedder,
     EmbedderConfig, KnowledgeStore, RankStrategy, SearchKbOptions, StoreSet, StoreSpec,
     DEFAULT_BASE_URL as DEFAULT_EMBED_BASE_URL, DEFAULT_MODEL as DEFAULT_EMBED_MODEL,
 };
@@ -862,10 +862,11 @@ fn print_find_symbol_help() {
     println!("  {C_CYAN}ug find_symbol{C_RESET}  {C_YELLOW}— exact-name symbol lookup (no embeddings){C_RESET}");
     println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
     println!();
-    println!("{C_BOLD}Usage:{C_RESET}  ug find_symbol <name>... [options]");
+    println!("{C_BOLD}Usage:{C_RESET}  ug find_symbol <name-or-id>... [options]");
     println!();
-    println!("  Accepts several names in one call (up to you; sections are separated) —");
+    println!("  Accepts several names or nodeIds in one call (up to you; sections are separated) —");
     println!("  agents should batch related lookups instead of running the command repeatedly.");
+    println!("  {C_CYAN}Direct nodeId lookup{C_RESET} (O(1)): if input contains ':' it's treated as a nodeId.");
     println!();
     println!("{C_BOLD}Options:{C_RESET}");
     println!("  {C_CYAN}-t, --type <type>{C_RESET}    Restrict to node type (repeatable; e.g. Function, Class, Interface)");
@@ -877,13 +878,18 @@ fn print_find_symbol_help() {
     println!("  {C_CYAN}ug find_symbol{C_RESET} resolveDb");
     println!("  {C_CYAN}ug find_symbol{C_RESET} loadConfig -t Function -f src/auth/");
     println!("  {C_CYAN}ug find_symbol{C_RESET} run_serve run_app run_gen   {C_YELLOW}# batch: three lookups, one call{C_RESET}");
+    println!("  {C_CYAN}ug find_symbol{C_RESET} 'function:src/auth.rs:42:login'  {C_YELLOW}# direct nodeId lookup (O(1)){C_RESET}");
 }
 
 fn print_file_outline_help() {
     println!("  {C_CYAN}ug file_outline{C_RESET}  {C_YELLOW}— list every indexed symbol in one file{C_RESET}");
     println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
     println!();
-    println!("{C_BOLD}Usage:{C_RESET}  ug file_outline <file>... [options]");
+    println!("{C_BOLD}Usage:{C_RESET}  ug file_outline <file-or-id>... [options]");
+    println!();
+    println!("  Accepts several file paths or File nodeIds in one call (up to you; sections are separated) —");
+    println!("  agents should batch related lookups instead of running the command repeatedly.");
+    println!("  {C_CYAN}Direct nodeId lookup{C_RESET} (O(1)): if input contains ':' it's treated as a nodeId.");
     println!();
     println!("{C_BOLD}Options:{C_RESET}");
     println!("  {C_CYAN}-n, --name <project>{C_RESET}  Project name (default: cwd basename)");
@@ -891,7 +897,8 @@ fn print_file_outline_help() {
     println!("{C_BOLD}Examples:{C_RESET}");
     println!("  {C_CYAN}ug file_outline{C_RESET} native/src/main.rs");
     println!("  {C_CYAN}ug file_outline{C_RESET} main.rs  {C_YELLOW}# unique basename works too{C_RESET}");
-    println!("  {C_CYAN}ug file_outline{C_RESET} file:native/src/main.rs  {C_YELLOW}# File node ids from find_symbol work as-is{C_RESET}");
+    println!("  {C_CYAN}ug file_outline{C_RESET} file:native/src/main.rs  {C_YELLOW}# File node ids work as-is{C_RESET}");
+    println!("  {C_CYAN}ug file_outline{C_RESET} 'file:src/cli.mjs'  {C_YELLOW}# direct nodeId lookup (O(1)){C_RESET}");
     println!("  {C_CYAN}ug file_outline{C_RESET} main.rs serve.rs cli.mjs   {C_YELLOW}# batch: outline several files at once{C_RESET}");
 }
 
@@ -961,6 +968,12 @@ fn batch_separator(i: usize) {
     }
 }
 
+/// Check if a string looks like a nodeId (contains ':' like 'function:path:line:name').
+/// This is a heuristic — nodeIds from the indexer contain ':' separators.
+fn looks_like_node_id(s: &str) -> bool {
+    s.contains(':')
+}
+
 fn run_find_symbol(args: &[String]) {
     if has_flag(args, "-h") || has_flag(args, "--help") {
         print_find_symbol_help();
@@ -983,6 +996,33 @@ fn run_find_symbol(args: &[String]) {
 
     for (qi, query) in queries.iter().enumerate() {
         batch_separator(qi);
+
+        // Fast path: direct nodeId lookup when query contains ':' (nodeId format)
+        if looks_like_node_id(query) {
+            if let Some(node) = graph.nodes.iter().find(|n| n.id == *query) {
+                println!("{C_BOLD}Node by direct ID lookup{C_RESET}");
+                println!();
+                println!(
+                    "- {} {C_BOLD}{}{C_RESET}  {C_DIM}{}{C_RESET}",
+                    node_type_str(&node.node_type),
+                    node.name,
+                    node_loc(node)
+                );
+                println!("  id: {C_CYAN}{}{C_RESET}", node.id);
+                if let Some(d) = &node.docstring {
+                    let preview: String = d.replace('\n', " ").chars().take(200).collect();
+                    println!("  {C_DIM}doc: {}{C_RESET}", preview);
+                }
+            } else {
+                println!(
+                    "✗ No node with id '{}' — get ids from {C_CYAN}ug find_symbol{C_RESET} or {C_CYAN}ug file_outline{C_RESET}.",
+                    query
+                );
+            }
+            continue;
+        }
+
+        // Name search path
         let q = query.to_lowercase();
         let mut hits: Vec<(u8, &GraphNode)> = Vec::new();
         for n in &graph.nodes {
@@ -1067,18 +1107,36 @@ fn run_file_outline(args: &[String]) {
     }
 }
 
-/// File nodes print their id as `file:<path>` (e.g. `file:docs/mcp.md`),
-/// and users copy that straight into file-taking commands. Accept it:
-/// strip the `file:` node-id prefix so both forms work.
-fn strip_file_id_prefix(file: &str) -> &str {
-    file.strip_prefix("file:").unwrap_or(file)
-}
-
 /// Outline one file to stdout; false when it couldn't be resolved (in a
 /// batch the remaining files still print — one bad path shouldn't sink
 /// the invocation, only the exit code).
 fn print_one_outline(graph: &GraphData, file: &str) -> bool {
+    // Fast path: direct nodeId lookup when input contains ':' (nodeId format)
+    if looks_like_node_id(file) {
+        if let Some(node) = graph.nodes.iter().find(|n| n.id == *file) {
+            if !matches!(node.node_type, GraphNodeType::File | GraphNodeType::Folder) {
+                println!("✗ Node '{}' is a {}, not a File. file_outline requires File node ids.", file, node_type_str(&node.node_type));
+                return false;
+            }
+            if let Some(f) = &node.file {
+                return print_file_outline_by_path(graph, f);
+            } else {
+                println!("✗ File node '{}' has no file path.", file);
+                return false;
+            }
+        } else {
+            println!("✗ No node with id '{}' — get ids from {C_CYAN}ug find_symbol{C_RESET} or {C_CYAN}ug file_outline{C_RESET}.", file);
+            return false;
+        }
+    }
+
+    // Path-based lookup
     let file = strip_file_id_prefix(file);
+    print_file_outline_by_path(graph, file)
+}
+
+/// Helper: outline a file by its repo-relative path.
+fn print_file_outline_by_path(graph: &GraphData, file: &str) -> bool {
     // Exact repo-relative match first, then unique suffix match.
     let mut resolved: Option<String> = graph
         .nodes
@@ -1140,6 +1198,13 @@ fn print_one_outline(graph: &GraphData, file: &str) -> bool {
         );
     }
     true
+}
+
+/// File nodes print their id as `file:<path>` (e.g. `file:docs/mcp.md`),
+/// and users copy that straight into file-taking commands. Accept it:
+/// strip the `file:` node-id prefix so both forms work.
+fn strip_file_id_prefix(file: &str) -> &str {
+    file.strip_prefix("file:").unwrap_or(file)
 }
 
 fn run_get_code(args: &[String]) {
@@ -3648,12 +3713,12 @@ fn run_traverse(args: &[String]) {
     }
     if args.is_empty() {
         eprintln!(
-            "Usage: ug traverse <start-node-id> [-n|--name <project>] [-k|--hops <n>] [-o|--output <file>]"
+            "Usage: ug traverse <start-node-id>... [-n|--name <project>] [-k|--hops <n>] [-o|--output <file>]"
         );
         std::process::exit(1);
     }
 
-    let start = first_positional(
+    let starts = positionals(
         args,
         &[
             "-n",
@@ -3668,8 +3733,11 @@ fn run_traverse(args: &[String]) {
             "--neo4j-password",
             "--neo4j-database",
         ],
-    )
-    .expect("missing start node id");
+    );
+    if starts.is_empty() {
+        eprintln!("missing start node id");
+        std::process::exit(1);
+    }
     let hops: u32 = flag_value(args, &["-k", "--hops"])
         .and_then(|s| s.parse().ok())
         .unwrap_or(2);
@@ -3686,7 +3754,7 @@ fn run_traverse(args: &[String]) {
         let store = open_store(&spec)
             .await
             .unwrap_or_else(|e| panic!("failed to open {} store: {}", spec.name(), e));
-        let result = storage_traverse(store.as_ref(), &start, hops)
+        let result = storage::traverse_filtered(store.as_ref(), &starts, hops, None, Direction::Outbound)
             .await
             .expect("traverse failed");
         let nodes_json: Vec<serde_json::Value> = result
@@ -4470,7 +4538,7 @@ fn print_traverse_help() {
     println!("  {C_CYAN}ug traverse{C_RESET}  {C_YELLOW}— K-hop BFS using the OverGraph edges table{C_RESET}");
     println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
     println!();
-    println!("{C_BOLD}Usage:{C_RESET}  ug traverse <node-id> [options]");
+    println!("{C_BOLD}Usage:{C_RESET}  ug traverse <node-id>... [options]");
     println!();
     println!("{C_BOLD}Options:{C_RESET}");
     println!("  {C_CYAN}-n, --name{C_RESET} <name>    Project name (default: cwd basename, else most recent under ~/.ug)");
@@ -4479,6 +4547,7 @@ fn print_traverse_help() {
     println!();
     println!("{C_BOLD}Examples:{C_RESET}");
     println!("  {C_CYAN}ug traverse{C_RESET} \"file:src/index.ts\"");
+    println!("  {C_CYAN}ug traverse{C_RESET} <id1> <id2>   {C_YELLOW}# batch: one merged traversal from several seeds{C_RESET}");
 }
 
 fn print_list_help() {
