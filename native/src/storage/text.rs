@@ -59,11 +59,23 @@ fn node_description(node: &GraphNode) -> String {
         }
     }
 
+    // Docstring and signature both carry retrieval signal — join whatever
+    // is present so typed-but-undocumented symbols still embed usefully.
+    let mut parts: Vec<String> = Vec::new();
     if let Some(doc) = &node.docstring {
         let trimmed = doc.trim();
         if !trimmed.is_empty() {
-            return trimmed.to_string();
+            parts.push(trimmed.to_string());
         }
+    }
+    if let Some(sig) = &node.signature {
+        let rendered = render_signature(sig);
+        if !rendered.is_empty() {
+            parts.push(format!("Signature: {rendered}"));
+        }
+    }
+    if !parts.is_empty() {
+        return parts.join(". ");
     }
 
     if matches!(node.node_type, GraphNodeType::Folder) {
@@ -73,6 +85,39 @@ fn node_description(node: &GraphNode) -> String {
     }
 
     String::new()
+}
+
+/// Render `(name?: type, ...) -> return` from a node's structured signature.
+/// Empty when the signature carries no information at all.
+fn render_signature(sig: &crate::types::GraphNodeSignature) -> String {
+    if sig.params.is_empty() && sig.return_type.is_none() {
+        return String::new();
+    }
+    let params: Vec<String> = sig
+        .params
+        .iter()
+        .map(|p| {
+            let mut s = p.name.clone();
+            if p.optional {
+                s.push('?');
+            }
+            if let Some(t) = &p.param_type {
+                s.push_str(": ");
+                s.push_str(t);
+            }
+            if let Some(d) = &p.default {
+                s.push_str(" = ");
+                s.push_str(d);
+            }
+            s
+        })
+        .collect();
+    let mut out = format!("({})", params.join(", "));
+    if let Some(ret) = &sig.return_type {
+        out.push_str(" -> ");
+        out.push_str(ret);
+    }
+    out
 }
 
 /// Build a one-line description from a folder's structural metadata. Used

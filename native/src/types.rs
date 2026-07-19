@@ -201,6 +201,7 @@ pub enum GraphNodeType {
     Concept,
     Dependency,
     Config,
+    Constant,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]

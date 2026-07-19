@@ -8,7 +8,7 @@ use ultragraph::storage::{
     EmbedderConfig, KnowledgeStore, RankStrategy, SearchKbOptions, StoreSet, StoreSpec,
     DEFAULT_BASE_URL as DEFAULT_EMBED_BASE_URL, DEFAULT_MODEL as DEFAULT_EMBED_MODEL,
 };
-use ultragraph::types::GraphData;
+use ultragraph::types::{GraphData, GraphEdgeType, GraphNode, GraphNodeType, PathResult};
 use ultragraph::{
     build_graph, calculate_centrality, detect_cycles, filter_edges_by_type, find_shortest_path,
     graph_keyword_search, index, index_with_cache, k_hop_bfs, C_BLUE, C_BOLD, C_CYAN, C_DIM,
@@ -687,6 +687,604 @@ fn run_analyze(args: &[String]) {
     println!("{C_GREEN}✓{C_RESET} Analyzed graph:");
     println!("  {C_CYAN}▸{C_RESET} analysis.json (centrality)");
     println!("  {C_CYAN}▸{C_RESET} cycles.json (cycle detection)");
+}
+
+// ---------- Agent tools ----------
+//
+// The MCP server (node/cli.mjs) exposes five graph.json-backed tools that
+// AI coding agents call to understand an indexed repo: find_symbol,
+// file_outline, get_code, project_overview, shortest_path. The commands
+// below are those same tools callable by hand — same lookup logic over the
+// same graph.json, no embeddings — so a human can run them to explore the
+// repo the way an agent does, or to verify what an agent will see.
+
+/// Flags-with-values shared by the agent-tool commands, so positional
+/// arguments can be told apart from flag values.
+const AGENT_VALUE_FLAGS: &[&str] = &[
+    "-i",
+    "--input",
+    "-n",
+    "--name",
+    "-t",
+    "--type",
+    "-f",
+    "--file",
+    "-l",
+    "--limit",
+    "-s",
+    "--start",
+    "-e",
+    "--end",
+    "--max-chars",
+];
+
+/// Every non-flag positional, skipping flag/value pairs (multi-positional
+/// sibling of `first_positional`).
+fn positionals(args: &[String], value_flags: &[&str]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        let a = &args[i];
+        if value_flags.contains(&a.as_str()) {
+            i += 2;
+        } else if a.starts_with('-') {
+            i += 1;
+        } else {
+            out.push(a.clone());
+            i += 1;
+        }
+    }
+    out
+}
+
+fn node_type_str(t: &GraphNodeType) -> &'static str {
+    match t {
+        GraphNodeType::File => "File",
+        GraphNodeType::Folder => "Folder",
+        GraphNodeType::Function => "Function",
+        GraphNodeType::Class => "Class",
+        GraphNodeType::Interface => "Interface",
+        GraphNodeType::Concept => "Concept",
+        GraphNodeType::Dependency => "Dependency",
+        GraphNodeType::Config => "Config",
+        GraphNodeType::Constant => "Constant",
+    }
+}
+
+fn edge_type_str(t: &GraphEdgeType) -> &'static str {
+    match t {
+        GraphEdgeType::DependsOn => "DependsOn",
+        GraphEdgeType::Calls => "Calls",
+        GraphEdgeType::Extends => "Extends",
+        GraphEdgeType::Implements => "Implements",
+        GraphEdgeType::References => "References",
+        GraphEdgeType::Contains => "Contains",
+        GraphEdgeType::Imports => "Imports",
+        GraphEdgeType::Exports => "Exports",
+        GraphEdgeType::Requires => "Requires",
+        GraphEdgeType::Uses => "Uses",
+    }
+}
+
+fn node_loc(n: &GraphNode) -> String {
+    match &n.file {
+        Some(f) => {
+            let s = n.start_line.map(|v| v.to_string()).unwrap_or_else(|| "?".into());
+            let e = n.end_line.map(|v| v.to_string()).unwrap_or_else(|| "?".into());
+            format!("{}:{}-{}", f, s, e)
+        }
+        None => "(no file)".into(),
+    }
+}
+
+/// graph.json for the agent-tool commands: `-i/--input` wins, else the
+/// `-n/--name` (or cwd-derived) project dir, else the most recently
+/// updated project under ~/.ug — same fallback spirit as the db reads.
+fn agent_graph_path(args: &[String]) -> PathBuf {
+    if let Some(p) = flag_value(args, &["-i", "--input"]) {
+        return PathBuf::from(p);
+    }
+    let p = project::project_dir(&project::resolve_project_name(args, ".")).join("graph.json");
+    if p.exists() || flag_value(args, &["-n", "--name"]).is_some() {
+        return p;
+    }
+    for (dir, _meta) in project::list_projects() {
+        let candidate = dir.join("graph.json");
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+    p
+}
+
+fn load_agent_graph(args: &[String]) -> (GraphData, String, PathBuf) {
+    let path = agent_graph_path(args);
+    let raw = match fs::read_to_string(&path) {
+        Ok(r) => r,
+        Err(_) => {
+            eprintln!(
+                "graph.json not found at {} — run {C_CYAN}ug gen{C_RESET} for this project first.",
+                path.display()
+            );
+            std::process::exit(1);
+        }
+    };
+    match serde_json::from_str::<GraphData>(&raw) {
+        Ok(graph) => (graph, raw, path),
+        Err(e) => {
+            eprintln!("Failed to parse {}: {}", path.display(), e);
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Repo root for reading source files: $UG_REPO_ROOT > project.json's
+/// repoRoot (sibling of graph.json) > graph stats.repoRoot > cwd.
+fn agent_repo_root(graph: &GraphData, graph_path: &Path) -> PathBuf {
+    if let Ok(r) = std::env::var("UG_REPO_ROOT") {
+        if !r.trim().is_empty() {
+            return PathBuf::from(r);
+        }
+    }
+    if let Some(dir) = graph_path.parent() {
+        if let Some(meta) = project::read_meta(dir) {
+            if !meta.repo_root.is_empty() {
+                return PathBuf::from(meta.repo_root);
+            }
+        }
+    }
+    if let Some(stats) = &graph.stats {
+        if !stats.repo_root.is_empty() {
+            return PathBuf::from(&stats.repo_root);
+        }
+    }
+    PathBuf::from(".")
+}
+
+fn print_find_symbol_help() {
+    println!("Usage: ug find_symbol <name> [-t|--type <node-type>]... [-f|--file <prefix>] [-l|--limit <n>] [-n|--name <project>]");
+    println!("Exact-name symbol lookup (no embeddings). Use when you already know an identifier.");
+    println!("  <name>                 Symbol name or fragment");
+    println!("  -t, --type <type>      Restrict to node type (Function, Class, Interface, etc.)");
+    println!("  -f, --file <prefix>     Only symbols under this file path prefix");
+    println!("  -l, --limit <n>        Max hits (default 20)");
+    println!("  -n, --name <project>   Project name (default: current directory's)");
+}
+
+fn print_file_outline_help() {
+    println!("Usage: ug file_outline <file> [-n|--name <project>]");
+    println!("List every indexed symbol in one file, in line order.");
+    println!("  <file>                 Repo-relative path or unique basename");
+    println!("  -n, --name <project>   Project name (default: current directory's)");
+}
+
+fn print_get_code_help() {
+    println!("Usage: ug get_code --id <node-id> | --file <file> [--start <n>] [--end <n>] [--max <chars>] [-n|--name <project>]");
+    println!("Read full source for a node id or file/line range.");
+    println!("  --id <node-id>        Node id from other tools");
+    println!("  --file <file>         Repo-relative file path");
+    println!("  --start <n>          First line (1-based, with --file)");
+    println!("  --end <n>            Last line, inclusive (with --file)");
+    println!("  --max <chars>        Character cap (default 20000)");
+    println!("  -n, --name <project>   Project name (default: current directory's)");
+}
+
+fn print_project_overview_help() {
+    println!("Usage: ug project_overview [-n|--name <project>]");
+    println!("One-call orientation: repo root, node/edge counts, biggest files, hotspots.");
+    println!("  -n, --name <project>   Project name (default: current directory's)");
+}
+
+fn print_shortest_path_help() {
+    println!("Usage: ug shortest_path --source <id> --target <id> [-n|--name <project>]");
+    println!("Find shortest directed path between two node ids.");
+    println!("  --source <id>         Start node id");
+    println!("  --target <id>         End node id");
+    println!("  -n, --name <project>   Project name (default: current directory's)");
+}
+
+fn run_find_symbol(args: &[String]) {
+    if has_flag(args, "-h") || has_flag(args, "--help") {
+        print_find_symbol_help();
+        return;
+    }
+    let Some(query) = first_positional(args, AGENT_VALUE_FLAGS) else {
+        eprintln!("Usage: ug find_symbol <name> [-t|--type <node-type>]... [-f|--file <prefix>] [-l|--limit <n>] [-n|--name <project>]");
+        std::process::exit(1);
+    };
+    let types: Vec<String> = multi_flag(args, &["-t", "--type"])
+        .iter()
+        .map(|t| t.to_lowercase())
+        .collect();
+    let file_prefix = flag_value(args, &["-f", "--file"]);
+    let limit: usize = flag_value(args, &["-l", "--limit"])
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(20);
+    let (graph, _raw, _path) = load_agent_graph(args);
+
+    let q = query.to_lowercase();
+    let mut hits: Vec<(u8, &GraphNode)> = Vec::new();
+    for n in &graph.nodes {
+        if !types.is_empty() && !types.contains(&node_type_str(&n.node_type).to_lowercase()) {
+            continue;
+        }
+        if let Some(p) = &file_prefix {
+            if !n.file.as_deref().unwrap_or("").starts_with(p.as_str()) {
+                continue;
+            }
+        }
+        let nm = n.name.to_lowercase();
+        // exact > prefix > substring; ties broken by shorter (closer) name.
+        let rank = if nm == q {
+            0
+        } else if nm.starts_with(&q) {
+            1
+        } else if nm.contains(&q) {
+            2
+        } else {
+            3
+        };
+        if rank < 3 {
+            hits.push((rank, n));
+        }
+    }
+    hits.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.name.len().cmp(&b.1.name.len())));
+    let total = hits.len();
+
+    let showing = if total > limit {
+        format!(", showing {}", limit)
+    } else {
+        String::new()
+    };
+    println!("{C_BOLD}Symbols matching '{}'{C_RESET} — {} match(es){}", query, total, showing);
+    println!();
+    if total == 0 {
+        println!("No name matches. Try a shorter fragment, drop --type/--file, or use {C_CYAN}ug hybrid_search{C_RESET} for a concept-level query.");
+        return;
+    }
+    for (_, n) in hits.iter().take(limit) {
+        println!(
+            "- {} {C_BOLD}{}{C_RESET}  {C_DIM}{}{C_RESET}",
+            node_type_str(&n.node_type),
+            n.name,
+            node_loc(n)
+        );
+        println!("  id: {C_CYAN}{}{C_RESET}", n.id);
+        if let Some(d) = &n.docstring {
+            let preview: String = d.replace('\n', " ").chars().take(200).collect();
+            println!("  {C_DIM}doc: {}{C_RESET}", preview);
+        }
+    }
+    println!();
+    println!("{C_DIM}Next:{C_RESET} {C_CYAN}ug get_code <id>{C_RESET} for source · {C_CYAN}ug traverse <id>{C_RESET} for neighbors · {C_CYAN}ug shortest_path <id> <id>{C_RESET}");
+}
+
+fn run_file_outline(args: &[String]) {
+    if has_flag(args, "-h") || has_flag(args, "--help") {
+        print_file_outline_help();
+        return;
+    }
+    let Some(file) = first_positional(args, AGENT_VALUE_FLAGS) else {
+        eprintln!("Usage: ug file_outline <file> [-n|--name <project>]");
+        std::process::exit(1);
+    };
+    let (graph, _raw, _path) = load_agent_graph(args);
+
+    // Exact repo-relative match first, then unique suffix match.
+    let mut resolved: Option<String> = graph
+        .nodes
+        .iter()
+        .find(|n| n.file.as_deref() == Some(file.as_str()))
+        .map(|_| file.clone());
+    if resolved.is_none() {
+        let suffix = if file.starts_with('/') {
+            file.clone()
+        } else {
+            format!("/{}", file)
+        };
+        let mut files: Vec<String> = graph
+            .nodes
+            .iter()
+            .filter_map(|n| n.file.as_ref())
+            .filter(|f| f.as_str() == file || f.ends_with(&suffix))
+            .cloned()
+            .collect();
+        files.sort();
+        files.dedup();
+        if files.len() > 1 {
+            println!("'{}' matches {} files — pass one of:", file, files.len());
+            for f in &files {
+                println!("- {}", f);
+            }
+            return;
+        }
+        resolved = files.into_iter().next();
+    }
+    let Some(resolved) = resolved else {
+        eprintln!(
+            "No indexed file matches '{}'. Pass a repo-relative path (see {C_CYAN}ug project_overview{C_RESET} for the biggest files), or re-run {C_CYAN}ug gen{C_RESET} if the file is new.",
+            file
+        );
+        std::process::exit(1);
+    };
+
+    let mut symbols: Vec<&GraphNode> = graph
+        .nodes
+        .iter()
+        .filter(|n| n.file.as_deref() == Some(resolved.as_str()))
+        .filter(|n| !matches!(n.node_type, GraphNodeType::File | GraphNodeType::Folder))
+        .collect();
+    symbols.sort_by_key(|n| n.start_line.unwrap_or(0));
+
+    println!("{C_BOLD}Outline of {}{C_RESET} — {} symbol(s)", resolved, symbols.len());
+    println!();
+    for n in &symbols {
+        let s = n.start_line.map(|v| v.to_string()).unwrap_or_else(|| "?".into());
+        let e = n.end_line.map(|v| v.to_string()).unwrap_or_else(|| "?".into());
+        println!(
+            "- L{}-{}  {}  {C_BOLD}{}{C_RESET}  id: {C_CYAN}{}{C_RESET}",
+            s,
+            e,
+            node_type_str(&n.node_type),
+            n.name,
+            n.id
+        );
+    }
+    println!();
+    println!(
+        "{C_DIM}Next:{C_RESET} {C_CYAN}ug get_code <id>{C_RESET} to read one symbol, or {C_CYAN}ug get_code -f {}{C_RESET} for the whole file.",
+        resolved
+    );
+}
+
+fn run_get_code(args: &[String]) {
+    if has_flag(args, "-h") || has_flag(args, "--help") {
+        print_get_code_help();
+        return;
+    }
+    let node_id = first_positional(args, AGENT_VALUE_FLAGS);
+    let file_flag = flag_value(args, &["-f", "--file"]);
+    if node_id.is_none() && file_flag.is_none() {
+        eprintln!("Usage: ug get_code <node-id> | -f|--file <file> [-s|--start <line>] [-e|--end <line>] [--max-chars <n>] [-n|--name <project>]");
+        std::process::exit(1);
+    }
+    let (graph, _raw, graph_path) = load_agent_graph(args);
+    let repo_root = agent_repo_root(&graph, &graph_path);
+
+    let mut node: Option<&GraphNode> = None;
+    let (file, start, end): (String, usize, usize) = if let Some(id) = &node_id {
+        let Some(n) = graph.nodes.iter().find(|n| &n.id == id) else {
+            eprintln!(
+                "No node with id '{}' — get ids from {C_CYAN}ug find_symbol{C_RESET} or {C_CYAN}ug file_outline{C_RESET}.",
+                id
+            );
+            std::process::exit(1);
+        };
+        let Some(f) = &n.file else {
+            eprintln!("Node '{}' ({}) has no source file.", id, node_type_str(&n.node_type));
+            std::process::exit(1);
+        };
+        node = Some(n);
+        let s = n.start_line.unwrap_or(1) as usize;
+        (f.clone(), s, n.end_line.map(|v| v as usize).unwrap_or(s))
+    } else {
+        (
+            file_flag.unwrap(),
+            flag_value(args, &["-s", "--start"])
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1),
+            flag_value(args, &["-e", "--end"])
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(usize::MAX),
+        )
+    };
+
+    let abs = repo_root.join(&file);
+    let content = match fs::read_to_string(&abs) {
+        Ok(c) => c,
+        Err(_) => {
+            eprintln!(
+                "{} not found under repo root {} — the index may be stale (re-run {C_CYAN}ug gen{C_RESET}).",
+                file,
+                repo_root.display()
+            );
+            std::process::exit(1);
+        }
+    };
+    let all: Vec<&str> = content.split('\n').collect();
+    let from = start.max(1).min(all.len());
+    let to = end.min(all.len()).max(from);
+    let mut text = all[from - 1..to].join("\n");
+    let max_chars: usize = flag_value(args, &["--max-chars"])
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(20000);
+    let char_count = text.chars().count();
+    let mut truncated = 0;
+    if char_count > max_chars {
+        truncated = char_count - max_chars;
+        text = text.chars().take(max_chars).collect();
+    }
+
+    let title = match node {
+        Some(n) => format!("{} {}", node_type_str(&n.node_type), n.name),
+        None => file.clone(),
+    };
+    println!(
+        "{C_BOLD}{}{C_RESET}  —  {}:{}-{} (of {} lines)",
+        title,
+        file,
+        from,
+        to,
+        all.len()
+    );
+    if let Some(d) = node.and_then(|n| n.docstring.as_ref()) {
+        println!("{C_DIM}doc: {}{C_RESET}", d);
+    }
+    println!();
+    println!("{}", text);
+    if truncated > 0 {
+        println!();
+        println!(
+            "{C_DIM}(truncated — {} more chars; narrow the line range or raise --max-chars){C_RESET}",
+            truncated
+        );
+    }
+}
+
+fn run_project_overview(args: &[String]) {
+    if has_flag(args, "-h") || has_flag(args, "--help") {
+        print_project_overview_help();
+        return;
+    }
+    let (graph, _raw, graph_path) = load_agent_graph(args);
+    let repo_root = agent_repo_root(&graph, &graph_path);
+
+    use std::collections::HashMap;
+    let mut node_types: HashMap<&'static str, usize> = HashMap::new();
+    let mut symbols_per_file: HashMap<&str, usize> = HashMap::new();
+    for n in &graph.nodes {
+        *node_types.entry(node_type_str(&n.node_type)).or_insert(0) += 1;
+        if let Some(f) = &n.file {
+            if !matches!(n.node_type, GraphNodeType::File | GraphNodeType::Folder) {
+                *symbols_per_file.entry(f.as_str()).or_insert(0) += 1;
+            }
+        }
+    }
+    let mut edge_types: HashMap<&'static str, usize> = HashMap::new();
+    let mut in_degree: HashMap<&str, usize> = HashMap::new();
+    for e in &graph.edges {
+        *edge_types.entry(edge_type_str(&e.edge_type)).or_insert(0) += 1;
+        // Contains edges are pure structure (folder→file→symbol); skipping
+        // them makes inbound degree mean "how much code depends on this".
+        if !matches!(e.edge_type, GraphEdgeType::Contains) {
+            *in_degree.entry(e.target.as_str()).or_insert(0) += 1;
+        }
+    }
+    let by_id: HashMap<&str, &GraphNode> =
+        graph.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+
+    fn top<K: Copy>(m: &std::collections::HashMap<K, usize>, k: usize) -> Vec<(K, usize)> {
+        let mut v: Vec<(K, usize)> = m.iter().map(|(key, c)| (*key, *c)).collect();
+        v.sort_by(|a, b| b.1.cmp(&a.1));
+        v.truncate(k);
+        v
+    }
+
+    println!("{C_BOLD}Project overview{C_RESET}");
+    println!("{C_DIM}repo: {}{C_RESET}", repo_root.display());
+    println!("{C_DIM}graph: {}{C_RESET}", graph_path.display());
+    println!();
+    println!("{C_BOLD}Nodes ({}){C_RESET}", graph.nodes.len());
+    for (t, c) in top(&node_types, 10) {
+        println!("- {}: {}", t, c);
+    }
+    println!();
+    println!("{C_BOLD}Edges ({}){C_RESET}", graph.edges.len());
+    for (t, c) in top(&edge_types, 10) {
+        println!("- {}: {}", t, c);
+    }
+    println!();
+    println!("{C_BOLD}Biggest files (by symbol count){C_RESET}");
+    for (f, c) in top(&symbols_per_file, 10) {
+        println!("- {}  ({})", f, c);
+    }
+    println!();
+    println!("{C_BOLD}Most depended-upon symbols{C_RESET} {C_DIM}(inbound edges, excluding containment){C_RESET}");
+    for (id, c) in top(&in_degree, 12) {
+        let Some(n) = by_id.get(id) else { continue };
+        println!(
+            "- {} {C_BOLD}{}{C_RESET}  ←{}  {C_DIM}{}{C_RESET}  id: {C_CYAN}{}{C_RESET}",
+            node_type_str(&n.node_type),
+            n.name,
+            c,
+            node_loc(n),
+            id
+        );
+    }
+    println!();
+    println!("{C_DIM}Next:{C_RESET} {C_CYAN}ug file_outline <file>{C_RESET} on a big file · {C_CYAN}ug get_code <id>{C_RESET} on a hotspot · {C_CYAN}ug hybrid_search <query>{C_RESET} for a concept");
+}
+
+fn run_shortest_path(args: &[String]) {
+    if has_flag(args, "-h") || has_flag(args, "--help") {
+        print_shortest_path_help();
+        return;
+    }
+    let pos = positionals(args, AGENT_VALUE_FLAGS);
+    if pos.len() < 2 {
+        eprintln!("Usage: ug shortest_path <source-id> <target-id> [-n|--name <project>]");
+        std::process::exit(1);
+    }
+    let (source, target) = (pos[0].clone(), pos[1].clone());
+    let (graph, raw, _path) = load_agent_graph(args);
+    let by_id: std::collections::HashMap<&str, &GraphNode> =
+        graph.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+    for id in [&source, &target] {
+        if !by_id.contains_key(id.as_str()) {
+            eprintln!(
+                "No node with id '{}' — get ids from {C_CYAN}ug find_symbol{C_RESET} first.",
+                id
+            );
+            std::process::exit(1);
+        }
+    }
+
+    let parse = |json: String| -> PathResult {
+        serde_json::from_str(&json).unwrap_or(PathResult {
+            path: vec![],
+            found: false,
+            length: None,
+        })
+    };
+    // Edges are directed; when no forward path exists, try the reverse
+    // direction and label it as such (same behavior as the MCP tool).
+    let mut reversed = false;
+    let mut result = parse(find_shortest_path(raw.clone(), source.clone(), target.clone()));
+    if !result.found {
+        reversed = true;
+        result = parse(find_shortest_path(raw, target.clone(), source.clone()));
+    }
+
+    if !result.found {
+        println!(
+            "No directed path between {C_CYAN}{}{C_RESET} and {C_CYAN}{}{C_RESET} in either direction.",
+            source, target
+        );
+        println!("They may be connected only through shared ancestors — try {C_CYAN}ug traverse{C_RESET} from each id.");
+        return;
+    }
+
+    let hops = result
+        .length
+        .unwrap_or(result.path.len().saturating_sub(1) as u32);
+    if reversed {
+        println!(
+            "{C_BOLD}Path {} → {}{C_RESET} {C_YELLOW}(reverse direction — no forward path existed){C_RESET} — {} hop(s)",
+            target, source, hops
+        );
+    } else {
+        println!("{C_BOLD}Path {} → {}{C_RESET} — {} hop(s)", source, target, hops);
+    }
+    println!();
+    for (i, id) in result.path.iter().enumerate() {
+        let desc = match by_id.get(id.as_str()) {
+            Some(n) => format!(
+                "{} {C_BOLD}{}{C_RESET}  {C_DIM}{}{C_RESET}",
+                node_type_str(&n.node_type),
+                n.name,
+                node_loc(n)
+            ),
+            None => "(unknown node)".to_string(),
+        };
+        println!(
+            "{} {}  id: {C_CYAN}{}{C_RESET}",
+            if i == 0 { "·" } else { "↓" },
+            desc,
+            id
+        );
+    }
+    println!();
+    println!("{C_DIM}Next:{C_RESET} {C_CYAN}ug get_code <id>{C_RESET} on any id above to see the code that makes the link.");
 }
 
 // full pipeline: index -> graph -> ingest -> search
@@ -3723,3 +4321,4 @@ fn print_help() {
     println!();
     println!("Run {C_CYAN}ug <command> -h{C_RESET} for that command's options and examples.");
 }
+// test change

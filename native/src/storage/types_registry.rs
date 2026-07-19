@@ -20,6 +20,7 @@ pub const NODE_TYPE_INTERFACE: u32 = 5;
 pub const NODE_TYPE_CONCEPT: u32 = 6;
 pub const NODE_TYPE_DEPENDENCY: u32 = 7;
 pub const NODE_TYPE_CONFIG: u32 = 8;
+pub const NODE_TYPE_CONSTANT: u32 = 9;
 // Generic catch-all for anything not modeled above; used by the JSON
 // hydration path so older graphs don't crash a newer build.
 pub const NODE_TYPE_UNKNOWN: u32 = 99;
@@ -49,6 +50,7 @@ pub fn node_type_to_id(s: &str) -> u32 {
         "concept" => NODE_TYPE_CONCEPT,
         "dependency" => NODE_TYPE_DEPENDENCY,
         "config" => NODE_TYPE_CONFIG,
+        "constant" => NODE_TYPE_CONSTANT,
         _ => NODE_TYPE_UNKNOWN,
     }
 }
@@ -63,6 +65,7 @@ pub fn node_type_from_id(id: u32) -> &'static str {
         NODE_TYPE_CONCEPT => "Concept",
         NODE_TYPE_DEPENDENCY => "Dependency",
         NODE_TYPE_CONFIG => "Config",
+        NODE_TYPE_CONSTANT => "Constant",
         _ => "Unknown",
     }
 }

@@ -7,6 +7,7 @@
 //! than copying logic into the language module.
 
 use crate::types::{ImportInfo, Param, Symbol};
+use ignore::overrides::OverrideBuilder;
 use ignore::WalkBuilder;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -266,15 +267,47 @@ pub fn is_ignored_path(path: &Path) -> bool {
     IGNORED_DIRS.iter().any(|&d| path_str.contains(d))
 }
 
-/// Walk `path` honouring `.gitignore` rules and return every supported source
-/// file. Hidden files and directories listed in `IGNORED_DIRS` are skipped.
-pub fn scan_files(path: &str) -> Vec<PathBuf> {
-    let walker = WalkBuilder::new(path)
-        .hidden(true)
-        .git_ignore(true)
-        .build();
+/// Generated build artifacts masquerading as source. Even when committed
+/// (so `.gitignore` doesn't cover them), indexing these floods the graph
+/// with thousands of minified/bundled symbols that drown real code in both
+/// vector search and structural stats.
+pub const IGNORED_ARTIFACT_GLOBS: &[&str] = &[
+    "*.min.js", "*.min.mjs", "*.min.css",
+    "*.bundle.js", "*.bundle.mjs", "*.bundle.css",
+    "dist/",
+];
 
-    walker
+/// Exclusion globs applied on top of `.gitignore`: the built-in artifact
+/// patterns plus any comma-separated gitignore-style globs from `UG_IGNORE`
+/// (e.g. `UG_IGNORE="vendor/,*.generated.ts"`). Uses the walker's override
+/// mechanism (a `!` prefix inverts a whitelist entry into an exclusion), so
+/// user patterns get full gitignore glob semantics for free.
+fn artifact_overrides(root: &str) -> Option<ignore::overrides::Override> {
+    let mut b = OverrideBuilder::new(root);
+    for pat in IGNORED_ARTIFACT_GLOBS {
+        b.add(&format!("!{pat}")).ok()?;
+    }
+    if let Ok(extra) = std::env::var("UG_IGNORE") {
+        for pat in extra.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            // A user typo shouldn't kill the whole scan — skip bad globs.
+            let _ = b.add(&format!("!{pat}"));
+        }
+    }
+    b.build().ok()
+}
+
+/// Walk `path` honouring `.gitignore` rules and return every supported source
+/// file. Hidden files, directories listed in `IGNORED_DIRS`, and build
+/// artifacts matching `IGNORED_ARTIFACT_GLOBS` / `UG_IGNORE` are skipped.
+pub fn scan_files(path: &str) -> Vec<PathBuf> {
+    let mut builder = WalkBuilder::new(path);
+    builder.hidden(true).git_ignore(true);
+    if let Some(overrides) = artifact_overrides(path) {
+        builder.overrides(overrides);
+    }
+
+    builder
+        .build()
         .filter_map(|e| e.ok())
         .filter(|e| e.path().is_file() && is_supported_file(e.path()) && !is_ignored_path(e.path()))
         .map(|e| e.path().to_path_buf())

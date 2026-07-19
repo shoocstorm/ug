@@ -163,13 +163,17 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
                     "function" | "function_declaration" | "method_definition" => GraphNodeType::Function,
                     "class" | "class_declaration" => GraphNodeType::Class,
                     "interface" | "interface_declaration" => GraphNodeType::Interface,
+                    // `variable` stays Function on purpose: in JS/TS the
+                    // common case is `const foo = () => ...` — a function
+                    // bound to a variable.
                     "variable" | "variable_declaration" => GraphNodeType::Function,
                     "type" | "type_alias_declaration" => GraphNodeType::Interface,
                     // Rust kinds — structs/enums map to Class, traits and
-                    // type aliases map to Interface, constants/macros fall
-                    // through to Function via the catch-all.
+                    // type aliases map to Interface; macros fall through to
+                    // Function via the catch-all (they're callable).
                     "struct" | "enum" => GraphNodeType::Class,
                     "trait" | "type_alias" => GraphNodeType::Interface,
+                    "constant" => GraphNodeType::Constant,
                     _ => GraphNodeType::Function,
                 }
             };

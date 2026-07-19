@@ -677,12 +677,36 @@ const MCP_TOOLS = [
     },
   },
   {
+    name: 'list_projects',
+    description:
+      "List every indexed project on this machine (name, repo path, graph size). Every other tool accepts project: '<name>' to query one of these instead of the current project — use this to work across repos (e.g. a service in one repo calling an API defined in another) or when the user mentions a codebase that isn't the current directory.",
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'reindex',
+    description:
+      'Re-run the index → graph → embed pipeline for the current (or named) project. Call it when tool outputs carry an "Index may be stale" warning, when the user says results look outdated, or after you (or they) changed many files. Incremental — unchanged files are skipped via content hashes — but embedding changed nodes needs the embedding backend, so it can take a while on big diffs; the structural tools are refreshed even if embedding fails.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
     name: 'ping_embedder',
     description:
       "Probe the configured embedding endpoint. Returns 'ok' on success or throws with the upstream error. Call this when search_kb / semantic_search_kb fails with an embedding-related error, or as a one-off health check before kicking off a batch of queries.",
     inputSchema: { type: 'object', properties: {} },
   },
 ];
+
+// Every tool (list_projects aside) accepts an optional `project` to target
+// another indexed project — one server instance serves all repos on the
+// machine. Injected here rather than repeated in each definition.
+for (const t of MCP_TOOLS) {
+  if (t.name === 'list_projects') continue;
+  t.inputSchema.properties.project = {
+    type: 'string',
+    description:
+      "Optional: name of another indexed project to query (see list_projects). Default: the project this server was started for.",
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Formatters — these are what the agent actually reads. Put enough metadata
@@ -871,9 +895,32 @@ function formatTraversal(traversal, header) {
 // they stay exact and cheap. Loaded lazily once per server process.
 // ---------------------------------------------------------------------------
 
-let graphCache = null;
+// Per-call project resolution: every tool accepts an optional `project`
+// arg naming another indexed project under ~/.ug; without it the server's
+// startup resolution (UG_PROJECT / UG_DB_PATH / cwd) applies. Contexts and
+// graphs are cached per project for the life of the server process.
+const projectCtxCache = new Map();
+function projectCtx(project) {
+  const key = project || '';
+  if (projectCtxCache.has(key)) return projectCtxCache.get(key);
+  let ctx;
+  if (project) {
+    const dir = projectDir(project);
+    if (!existsSync(join(dir, 'ugdb')) && !existsSync(join(dir, 'graph.json'))) {
+      throw new Error(`No indexed project '${project}' under ${ugHome()} — call list_projects to see what exists.`);
+    }
+    const meta = readProjectMeta(dir);
+    ctx = { dbPath: join(dir, 'ugdb'), repoRoot: meta?.repoRoot || process.cwd() };
+  } else {
+    ctx = resolveDbAndRoot();
+  }
+  projectCtxCache.set(key, ctx);
+  return ctx;
+}
+
+const graphCaches = new Map();
 function loadGraph(dbPath) {
-  if (graphCache) return graphCache;
+  if (graphCaches.has(dbPath)) return graphCaches.get(dbPath);
   const path = join(dirname(resolve(dbPath)), 'graph.json');
   if (!existsSync(path)) {
     throw new Error(`graph.json not found at ${path} — run \`ug gen\` for this project first.`);
@@ -881,12 +928,197 @@ function loadGraph(dbPath) {
   const raw = readFileSync(path, 'utf-8');
   const graph = JSON.parse(raw);
   const byId = new Map(graph.nodes.map((n) => [n.id, n]));
-  graphCache = { raw, graph, byId, path };
-  return graphCache;
+  const cache = { raw, graph, byId, path };
+  graphCaches.set(dbPath, cache);
+  return cache;
+}
+
+// Index-freshness probe: graph.json's mtime vs the current mtimes of the
+// files it indexed. One stat per indexed file, computed once per project
+// per server process. Brand-new files aren't visible (that would need a
+// full walk); changed + deleted indexed files are enough to warn usefully.
+const stalenessCache = new Map();
+function indexStaleness(dbPath, repoRoot) {
+  if (stalenessCache.has(dbPath)) return stalenessCache.get(dbPath);
+  let result = null;
+  try {
+    const cache = loadGraph(dbPath);
+    const builtAt = statSync(cache.path).mtimeMs;
+    const files = new Set();
+    for (const n of cache.graph.nodes) {
+      if (n.file && n.node_type !== 'Folder') files.add(n.file);
+    }
+    let changed = 0;
+    let missing = 0;
+    for (const f of files) {
+      try {
+        if (statSync(join(repoRoot, f)).mtimeMs > builtAt) changed += 1;
+      } catch {
+        missing += 1;
+      }
+    }
+    result = { builtAt, files: files.size, changed, missing };
+  } catch {
+    // No graph yet — the tool that needed it raises its own error.
+  }
+  stalenessCache.set(dbPath, result);
+  return result;
+}
+
+// Appended to tool outputs so agents don't silently trust an outdated
+// index — confidently stale context is worse than none.
+function stalenessNote(dbPath, repoRoot) {
+  const s = indexStaleness(dbPath, repoRoot);
+  if (!s || (s.changed === 0 && s.missing === 0)) return '';
+  const days = Math.floor((Date.now() - s.builtAt) / 86400000);
+  const bits = [];
+  if (s.changed) bits.push(`${s.changed} changed`);
+  if (s.missing) bits.push(`${s.missing} deleted`);
+  const age = days > 0 ? ` (index built ${days} day(s) ago)` : '';
+  return `\n\n⚠ Index may be stale: ${bits.join(', ')} of ${s.files} indexed files since the last index${age}. Call the reindex tool to refresh.`;
+}
+
+function invalidateProjectCaches(dbPath) {
+  graphCaches.delete(dbPath);
+  stalenessCache.delete(dbPath);
 }
 
 function nodeLoc(n) {
   return n.file ? `${n.file}:${n.startLine ?? '?'}-${n.endLine ?? '?'}` : '(no file)';
+}
+
+// `(name?: type = default, ...) -> return` from a node's structured
+// signature (mirrors render_signature in native/src/storage/text.rs).
+function renderSignature(sig) {
+  if (!sig || (!sig.params?.length && !sig.returnType)) return '';
+  const params = (sig.params ?? []).map((p) => {
+    let s = p.name ?? '';
+    if (p.optional) s += '?';
+    if (p.type) s += `: ${p.type}`;
+    if (p.default) s += ` = ${p.default}`;
+    return s;
+  });
+  let out = `(${params.join(', ')})`;
+  if (sig.returnType) out += ` -> ${sig.returnType}`;
+  return out;
+}
+
+// Scan a caller's own source slice for lines mentioning the target name —
+// heuristic call-site evidence (a name can appear in a comment), but one
+// file read per caller and each hit is a jumpable file:line.
+function findCallSites(repoRoot, callerNode, targetName, cap = 3) {
+  if (!callerNode?.file || !targetName) return [];
+  try {
+    const lines = readFileSync(join(repoRoot, callerNode.file), 'utf-8').split('\n');
+    const from = Math.max(0, (callerNode.start_line ?? 1) - 1);
+    const to = Math.min(lines.length, callerNode.end_line ?? lines.length);
+    const out = [];
+    for (let i = from; i < to; i++) {
+      if (lines[i].includes(targetName)) {
+        out.push({ line: i + 1, text: lines[i].trim().slice(0, 160) });
+        if (out.length >= cap) break;
+      }
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+// Appended to find_usages output: the exact line(s) inside each direct
+// caller that mention the target, so the agent can verify a usage without
+// one get_code round-trip per caller.
+function formatCallSites(traversal, target, repoRoot) {
+  const callers = (traversal.nodes ?? []).filter((n) => n.distance === 1 && n.file).slice(0, 20);
+  if (!callers.length) return '';
+  const lines = ['', '## call sites'];
+  let any = false;
+  for (const caller of callers) {
+    const sites = findCallSites(repoRoot, caller, target.name);
+    for (const s of sites) {
+      any = true;
+      lines.push(`- ${caller.name}  ${caller.file}:${s.line}: \`${s.text}\``);
+    }
+  }
+  if (!any) return '';
+  lines.push('(lines matched by name — a hit inside a comment or string is possible)');
+  return lines.join('\n');
+}
+
+function listProjectsInfo() {
+  const root = ugHome();
+  const out = [];
+  let entries = [];
+  try {
+    entries = readdirSync(root);
+  } catch {
+    return out;
+  }
+  for (const name of entries) {
+    const dir = join(root, name);
+    try {
+      if (!statSync(dir).isDirectory()) continue;
+    } catch {
+      continue;
+    }
+    if (!existsSync(join(dir, 'ugdb')) && !existsSync(join(dir, 'graph.json'))) continue;
+    const meta = readProjectMeta(dir);
+    out.push({
+      name,
+      repoRoot: meta?.repoRoot ?? '(unknown)',
+      nodes: meta?.nodes,
+      edges: meta?.edges,
+    });
+  }
+  return out;
+}
+
+function formatProjectList(projects, currentRepoRoot) {
+  if (!projects.length) {
+    return `No indexed projects under ${ugHome()} — run \`ug gen\` in a repo first.`;
+  }
+  const lines = [`# Indexed projects (${projects.length})`, ''];
+  for (const p of projects) {
+    const here = p.repoRoot === currentRepoRoot ? '  ← current' : '';
+    lines.push(`- **${p.name}**  ${p.repoRoot}  (${p.nodes ?? '?'} nodes, ${p.edges ?? '?'} edges)${here}`);
+  }
+  lines.push('');
+  lines.push("Pass project: '<name>' to any tool to query that project instead of the current one.");
+  return lines.join('\n');
+}
+
+// Quiet re-run of the gen pipeline (index → graph → ingest) for the MCP
+// reindex tool — no console output (stdout belongs to the protocol), blake3
+// cache in the project dir keeps repeat runs cheap. Ingest failure (embedder
+// down) is reported but doesn't fail the call: the graph-backed tools are
+// already fresh at that point.
+async function regenerateProject(dbPath, repoRoot) {
+  if (!existsSync(repoRoot)) {
+    throw new Error(`Repo root ${repoRoot} no longer exists — re-run \`ug gen -i <path>\` manually.`);
+  }
+  const outputDir = dirname(resolve(dbPath));
+  mkdirSync(outputDir, { recursive: true });
+  const indexJson = ug.indexWithCache(repoRoot, outputDir);
+  const graph = ug.buildGraph(indexJson);
+  writeFileSync(join(outputDir, 'graph.json'), graph);
+  writeFileSync(join(outputDir, 'indexed-tree.json'), indexJson);
+  const gd = JSON.parse(graph);
+  const meta = readProjectMeta(outputDir);
+  writeProjectMeta(outputDir, {
+    name: meta?.name || basename(outputDir),
+    repoRoot,
+    nodes: gd.nodes?.length ?? 0,
+    edges: gd.edges?.length ?? 0,
+  });
+  let ingestMsg;
+  try {
+    const stats = JSON.parse(await ug.dbIngest(graph, dbPath, embedderOptionsJson(), destOptionsJson()));
+    ingestMsg = `db ingest: ${stats.nodes_written ?? stats.nodesWritten ?? '?'} nodes, ${stats.edges_written ?? stats.edgesWritten ?? '?'} edges embedded`;
+  } catch (e) {
+    ingestMsg = `db ingest FAILED (${e.message}) — graph tools (find_symbol/get_code/...) are fresh, but search_kb serves the previous embeddings until the embedder is reachable`;
+  }
+  invalidateProjectCaches(dbPath);
+  return `Reindexed ${repoRoot} → ${outputDir}\n${gd.nodes?.length ?? 0} nodes, ${gd.edges?.length ?? 0} edges\n${ingestMsg}`;
 }
 
 function findSymbolMatches(graph, { name, nodeTypes, filePrefix, limit }) {
@@ -912,7 +1144,8 @@ function formatSymbolHits(query, { total, items }) {
     return lines.join('\n');
   }
   for (const n of items) {
-    lines.push(`- ${n.node_type} **${n.name}**  ${nodeLoc(n)}`);
+    const sig = renderSignature(n.signature);
+    lines.push(`- ${n.node_type} **${n.name}**${sig ? sig : ''}  ${nodeLoc(n)}`);
     lines.push(`  id: \`${n.id}\``);
     if (n.docstring) lines.push(`  doc: ${String(n.docstring).slice(0, 200)}`);
   }
@@ -951,7 +1184,8 @@ function formatFileOutline(query, r) {
   }
   const lines = [`# Outline of ${r.file}`, `${r.symbols.length} symbol(s)  •  types=[${summarizeNodeTypes(r.symbols)}]`, ''];
   for (const n of r.symbols) {
-    lines.push(`- L${n.startLine ?? '?'}-${n.endLine ?? '?'}  ${n.node_type}  **${n.name}**  id: \`${n.id}\``);
+    const sig = renderSignature(n.signature);
+    lines.push(`- L${n.startLine ?? '?'}-${n.endLine ?? '?'}  ${n.node_type}  **${n.name}**${sig}  id: \`${n.id}\``);
   }
   lines.push('');
   lines.push('Next: get_code(nodeId) to read one symbol, or get_code(file) for the whole file.');
@@ -1419,124 +1653,116 @@ async function runMcpServer() {
 
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
     const { name, arguments: rawArgs } = req.params;
+    const project = rawArgs?.project;
+    const { dbPath, repoRoot } = projectCtx(project);
+    const args = { ...(rawArgs ?? {}), project: undefined };
 
     try {
       if (name === 'search_kb') {
-        const args = SearchKbInput.parse(rawArgs ?? {});
-        const opts = { ...args, repoRoot: REPO_ROOT };
-        const json = await ug.dbHybridSearch(
-          DB_PATH,
-          JSON.stringify(opts),
-          embedderOptionsJson(),
-          destOptionsJson(),
-        );
+        const parsed = SearchKbInput.parse(args);
+        const opts = { ...parsed, repoRoot };
+        const json = await ug.dbHybridSearch(dbPath, JSON.stringify(opts), embedderOptionsJson(), destOptionsJson());
         const ctx = JSON.parse(json);
-        return {
-          content: [{ type: 'text', text: formatRankedContext(ctx) }],
-        };
+        let text = formatRankedContext(ctx);
+        text += stalenessNote(dbPath, repoRoot);
+        return { content: [{ type: 'text', text }] };
       }
 
       if (name === 'semantic_search_kb') {
-        const args = SemanticSearchInput.parse(rawArgs ?? {});
-        const json = await ug.dbSemanticSearch(
-          DB_PATH,
-          args.query,
-          args.k ?? 10,
-          args.whereClause ?? null,
-          embedderOptionsJson(),
-          destOptionsJson(),
-        );
+        const parsed = SemanticSearchInput.parse(args);
+        const json = await ug.dbSemanticSearch(dbPath, parsed.query, parsed.k ?? 10, parsed.whereClause ?? null, embedderOptionsJson(), destOptionsJson());
         const hits = JSON.parse(json);
-        return {
-          content: [{ type: 'text', text: formatSemanticHits(args.query, hits) }],
-        };
+        let text = formatSemanticHits(parsed.query, hits);
+        text += stalenessNote(dbPath, repoRoot);
+        return { content: [{ type: 'text', text }] };
       }
 
       if (name === 'traverse_kb') {
-        const args = TraverseInput.parse(rawArgs ?? {});
-        const json = await ug.dbTraverse(
-          DB_PATH,
-          args.startNodeIds,
-          args.hops,
-          args.edgeTypes ?? null,
-          args.direction,
-          destOptionsJson(),
-        );
+        const parsed = TraverseInput.parse(args);
+        const json = await ug.dbTraverse(dbPath, parsed.startNodeIds, parsed.hops, parsed.edgeTypes ?? null, parsed.direction, destOptionsJson());
         const traversal = JSON.parse(json);
-        const header = `Traversal from [${args.startNodeIds.join(', ')}] (hops=${args.hops}, dir=${args.direction})`;
-        return {
-          content: [{ type: 'text', text: formatTraversal(traversal, header) }],
-        };
+        const header = `Traversal from [${parsed.startNodeIds.join(', ')}] (hops=${parsed.hops}, dir=${parsed.direction})`;
+        let text = formatTraversal(traversal, header);
+        text += stalenessNote(dbPath, repoRoot);
+        return { content: [{ type: 'text', text }] };
       }
 
       if (name === 'find_usages') {
-        const args = FindUsagesInput.parse(rawArgs ?? {});
-        const edgeTypes = args.edgeTypes ?? [
-          'calls',
-          'references',
-          'imports',
-          'extends',
-          'implements',
-        ];
-        const json = await ug.dbTraverse(
-          DB_PATH,
-          [args.nodeId],
-          args.hops,
-          edgeTypes,
-          'inbound',
-          destOptionsJson(),
-        );
+        const parsed = FindUsagesInput.parse(args);
+        const edgeTypes = parsed.edgeTypes ?? ['calls', 'references', 'imports', 'extends', 'implements'];
+        const json = await ug.dbTraverse(dbPath, [parsed.nodeId], parsed.hops, edgeTypes, 'inbound', destOptionsJson());
         const traversal = JSON.parse(json);
-        const header = `Usages of ${args.nodeId} (hops=${args.hops}, edges=[${edgeTypes.join(', ')}])`;
-        return {
-          content: [{ type: 'text', text: formatTraversal(traversal, header) }],
-        };
+        const cache = loadGraph(dbPath);
+        const targetNode = cache.byId.get(parsed.nodeId);
+        const header = `Usages of ${parsed.nodeId} (hops=${parsed.hops}, edges=[${edgeTypes.join(', ')}])`;
+        let text = formatTraversal(traversal, header);
+        text += formatCallSites(traversal, targetNode, repoRoot);
+        text += stalenessNote(dbPath, repoRoot);
+        return { content: [{ type: 'text', text }] };
       }
 
       if (name === 'find_symbol') {
-        const args = FindSymbolInput.parse(rawArgs ?? {});
-        const { graph } = loadGraph(DB_PATH);
-        const hits = findSymbolMatches(graph, args);
-        return { content: [{ type: 'text', text: formatSymbolHits(args.name, hits) }] };
+        const parsed = FindSymbolInput.parse(args);
+        const { graph } = loadGraph(dbPath);
+        const hits = findSymbolMatches(graph, parsed);
+        let text = formatSymbolHits(parsed.name, hits);
+        text += stalenessNote(dbPath, repoRoot);
+        return { content: [{ type: 'text', text }] };
       }
 
       if (name === 'file_outline') {
-        const args = FileOutlineInput.parse(rawArgs ?? {});
-        const { graph } = loadGraph(DB_PATH);
-        return { content: [{ type: 'text', text: formatFileOutline(args.file, fileOutline(graph, args.file)) }] };
+        const parsed = FileOutlineInput.parse(args);
+        const { graph } = loadGraph(dbPath);
+        let text = formatFileOutline(parsed.file, fileOutline(graph, parsed.file));
+        text += stalenessNote(dbPath, repoRoot);
+        return { content: [{ type: 'text', text }] };
       }
 
       if (name === 'get_code') {
-        const args = GetCodeInput.parse(rawArgs ?? {});
-        const cache = loadGraph(DB_PATH);
-        const slice = getCodeSlice(cache, REPO_ROOT, args);
-        return { content: [{ type: 'text', text: formatCodeSlice(slice) }] };
+        const parsed = GetCodeInput.parse(args);
+        const cache = loadGraph(dbPath);
+        const slice = getCodeSlice(cache, repoRoot, parsed);
+        let text = formatCodeSlice(slice);
+        text += stalenessNote(dbPath, repoRoot);
+        return { content: [{ type: 'text', text }] };
       }
 
       if (name === 'project_overview') {
-        const cache = loadGraph(DB_PATH);
+        const cache = loadGraph(dbPath);
         const merged = { ...cache.graph, byId: cache.byId };
-        return { content: [{ type: 'text', text: projectOverview(merged, REPO_ROOT, DB_PATH) }] };
+        let text = projectOverview(merged, repoRoot, dbPath);
+        text += stalenessNote(dbPath, repoRoot);
+        return { content: [{ type: 'text', text }] };
       }
 
       if (name === 'shortest_path') {
-        const args = ShortestPathInput.parse(rawArgs ?? {});
-        const cache = loadGraph(DB_PATH);
-        for (const id of [args.sourceId, args.targetId]) {
-          if (!cache.byId.has(id)) {
-            throw new Error(`No node with id '${id}' — get ids from find_symbol or search_kb first.`);
-          }
+        const parsed = ShortestPathInput.parse(args);
+        const cache = loadGraph(dbPath);
+        for (const id of [parsed.sourceId, parsed.targetId]) {
+          if (!cache.byId.has(id)) throw new Error(`No node with id '${id}' — get ids from find_symbol or search_kb first.`);
         }
         let reversed = false;
-        let result = JSON.parse(ug.findShortestPath(cache.raw, args.sourceId, args.targetId));
+        let result = JSON.parse(ug.findShortestPath(cache.raw, parsed.sourceId, parsed.targetId));
         if (!result.found) {
           reversed = true;
-          result = JSON.parse(ug.findShortestPath(cache.raw, args.targetId, args.sourceId));
+          result = JSON.parse(ug.findShortestPath(cache.raw, parsed.targetId, parsed.sourceId));
         }
         const merged = { ...cache.graph, byId: cache.byId };
-        return {
-          content: [{ type: 'text', text: formatShortestPath(merged, args.sourceId, args.targetId, result, reversed) }],
-        };
+        let text = formatShortestPath(merged, parsed.sourceId, parsed.targetId, result, reversed);
+        text += stalenessNote(dbPath, repoRoot);
+        return { content: [{ type: 'text', text }] };
+      }
+
+      if (name === 'list_projects') {
+        const projects = listProjectsInfo();
+        let text = formatProjectList(projects, REPO_ROOT);
+        if (project) text = `\n⚠ list_projects ignores the project parameter — listing all projects under ${ugHome()}.\n\n` + text;
+        return { content: [{ type: 'text', text }] };
+      }
+
+      if (name === 'reindex') {
+        const text = await regenerateProject(dbPath, repoRoot);
+        return { content: [{ type: 'text', text }] };
       }
 
       if (name === 'ping_embedder') {
@@ -1940,9 +2166,108 @@ const commands = {
     }
   },
   mcp: {
-    usage: `[install|uninstall [${Object.keys(MCP_INSTALL_TARGETS).join('|')}] [--global|--project]]`,
-    desc: 'Start the MCP server (no args; see env vars in the source header), write this project into an MCP client config with `install [target]`, or remove it with `uninstall [target]`. Omitted target/scope are asked for interactively.',
+    usage: `[install|uninstall [${Object.keys(MCP_INSTALL_TARGETS).join('|')}] [--global|--project]] | call <tool> <json> | list`,
+    desc: 'Start the MCP server (no args; see env vars in the source header), write this project into an MCP client config with `install [target]`, remove it with `uninstall [target]`, invoke a tool one-shot with `call <tool> <json>`, or list available tools. Omitted target/scope are asked for interactively.',
     run: async (args) => {
+      if (args[0] === 'call' || args[0] === 'c') {
+        const tool = args[1];
+        if (!tool) throw new Error('Usage: mcp call <tool> <json>');
+        const json = args[2] || '{}';
+        let parsed;
+        try {
+          parsed = JSON.parse(json);
+        } catch {
+          throw new Error(`Invalid JSON: ${json}`);
+        }
+        const toolDef = MCP_TOOLS.find((t) => t.name === tool);
+        if (!toolDef) throw new Error(`Unknown tool '${tool}' — see \`ug mcp list\` for available tools.`);
+        const { dbPath, repoRoot } = projectCtx(parsed.project);
+        const result = await (async () => {
+          if (tool === 'search_kb') {
+            const p = SearchKbInput.parse(parsed);
+            const opts = { ...p, repoRoot };
+            const r = await ug.dbHybridSearch(dbPath, JSON.stringify(opts), embedderOptionsJson(), destOptionsJson());
+            return formatRankedContext(JSON.parse(r)) + stalenessNote(dbPath, repoRoot);
+          }
+          if (tool === 'semantic_search_kb') {
+            const p = SemanticSearchInput.parse(parsed);
+            const r = await ug.dbSemanticSearch(dbPath, p.query, p.k ?? 10, p.whereClause ?? null, embedderOptionsJson(), destOptionsJson());
+            return formatSemanticHits(p.query, JSON.parse(r)) + stalenessNote(dbPath, repoRoot);
+          }
+          if (tool === 'traverse_kb') {
+            const p = TraverseInput.parse(parsed);
+            const r = await ug.dbTraverse(dbPath, p.startNodeIds, p.hops, p.edgeTypes ?? null, p.direction, destOptionsJson());
+            return formatTraversal(JSON.parse(r), `Traversal from [${p.startNodeIds.join(', ')}]`) + stalenessNote(dbPath, repoRoot);
+          }
+          if (tool === 'find_usages') {
+            const p = FindUsagesInput.parse(parsed);
+            const et = p.edgeTypes ?? ['calls', 'references', 'imports', 'extends', 'implements'];
+            const r = await ug.dbTraverse(dbPath, [p.nodeId], p.hops, et, 'inbound', destOptionsJson());
+            const trav = JSON.parse(r);
+            const cache = loadGraph(dbPath);
+            const target = cache.byId.get(p.nodeId);
+            let txt = formatTraversal(trav, `Usages of ${p.nodeId}`);
+            return txt + formatCallSites(trav, target, repoRoot) + stalenessNote(dbPath, repoRoot);
+          }
+          if (tool === 'find_symbol') {
+            const p = FindSymbolInput.parse(parsed);
+            const { graph } = loadGraph(dbPath);
+            return formatSymbolHits(p.name, findSymbolMatches(graph, p)) + stalenessNote(dbPath, repoRoot);
+          }
+          if (tool === 'file_outline') {
+            const p = FileOutlineInput.parse(parsed);
+            const { graph } = loadGraph(dbPath);
+            return formatFileOutline(p.file, fileOutline(graph, p.file)) + stalenessNote(dbPath, repoRoot);
+          }
+          if (tool === 'get_code') {
+            const p = GetCodeInput.parse(parsed);
+            const cache = loadGraph(dbPath);
+            return formatCodeSlice(getCodeSlice(cache, repoRoot, p)) + stalenessNote(dbPath, repoRoot);
+          }
+          if (tool === 'project_overview') {
+            const cache = loadGraph(dbPath);
+            const merged = { ...cache.graph, byId: cache.byId };
+            return projectOverview(merged, repoRoot, dbPath) + stalenessNote(dbPath, repoRoot);
+          }
+          if (tool === 'shortest_path') {
+            const p = ShortestPathInput.parse(parsed);
+            const cache = loadGraph(dbPath);
+            let rev = false;
+            let res = JSON.parse(ug.findShortestPath(cache.raw, p.sourceId, p.targetId));
+            if (!res.found) {
+              rev = true;
+              res = JSON.parse(ug.findShortestPath(cache.raw, p.targetId, p.sourceId));
+            }
+            return formatShortestPath({ ...cache.graph, byId: cache.byId }, p.sourceId, p.targetId, res, rev) + stalenessNote(dbPath, repoRoot);
+          }
+          if (tool === 'list_projects') {
+            return formatProjectList(listProjectsInfo(), repoRoot);
+          }
+          if (tool === 'reindex') {
+            return regenerateProject(dbPath, repoRoot);
+          }
+          if (tool === 'ping_embedder') {
+            return await ug.pingEmbedder(embedderOptionsJson());
+          }
+          throw new Error(`Tool '${tool}' not yet wired in call mode — file an issue or use stdio MCP`);
+        })();
+        console.log(result);
+        return '';
+      }
+
+      if (args[0] === 'list' || args[0] === 'ls') {
+        const current = resolveDbAndRoot();
+        console.log(chalk.bold(`Available MCP tools (project: ${basename(dirname(current.dbPath))}, repo: ${current.repoRoot})`));
+        console.log();
+        for (const t of MCP_TOOLS) {
+          console.log(chalk.cyan(t.name.padEnd(18)) + chalk.gray(t.description.split('.')[0]));
+        }
+        console.log();
+        console.log(`Run ${chalk.cyan('ug mcp call <tool> <json>')} to invoke one. Example:`);
+        console.log(`  ${chalk.gray('ug mcp call find_symbol \'{"name":"run_mcp"}\'')}`);
+        return '';
+      }
+
       if (args[0] === 'install' || args[0] === 'uninstall') {
         const action = args[0];
         const rest = args.slice(1);
