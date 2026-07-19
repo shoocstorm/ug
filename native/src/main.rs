@@ -1473,10 +1473,12 @@ fn run_uninstall(args: &[String]) {
 /// startup logo is suppressed for that mode (see `is_mcp_server_mode` in
 /// `main`).
 fn run_mcp(args: &[String]) {
-    let cli_path = std::env::current_exe().ok().and_then(|exe| {
-        let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
-        exe.parent().map(|d| d.join("cli.mjs"))
-    });
+    let exe_path = std::env::current_exe()
+        .ok()
+        .map(|exe| std::fs::canonicalize(&exe).unwrap_or(exe));
+    let cli_path = exe_path
+        .as_ref()
+        .and_then(|exe| exe.parent().map(|d| d.join("cli.mjs")));
 
     let cli_path = match cli_path {
         Some(p) if p.exists() => p,
@@ -1490,11 +1492,14 @@ fn run_mcp(args: &[String]) {
         }
     };
 
-    let status = std::process::Command::new("node")
-        .arg(&cli_path)
-        .arg("mcp")
-        .args(args)
-        .status();
+    // UG_BIN tells cli.mjs where this binary lives, so `mcp install` writes
+    // client configs that launch `ug mcp` directly instead of node+cli.mjs.
+    let mut cmd = std::process::Command::new("node");
+    cmd.arg(&cli_path).arg("mcp").args(args);
+    if let Some(exe) = &exe_path {
+        cmd.env("UG_BIN", exe);
+    }
+    let status = cmd.status();
 
     match status {
         Ok(status) => std::process::exit(status.code().unwrap_or(1)),
@@ -3297,8 +3302,8 @@ fn print_help() {
     println!("{C_BOLD}Quick start:{C_RESET}");
     println!("  {C_CYAN}ug gen{C_RESET}     Index this directory, build the graph, and ingest it (→ ~/.ug/<name>/)");
     println!("  {C_CYAN}ug{C_RESET}         Bare `ug` starts the server (visualization + REST API at http://localhost:8080)");
-    println!("{C_BOLD}MCP (Claude Desktop / Claude Code / Cursor / Windsurf / VS Code / Gemini CLI / Codex CLI / Hermes Agent / opencode):{C_RESET}");
-    println!("  {C_CYAN}ug mcp install claude{C_RESET}     Install/config MCP for your local coding agent");
+    println!("{C_BOLD}MCP (Claude Code / Claude Desktop / Cursor / Windsurf / VS Code / Gemini CLI / Codex CLI / Hermes Agent / opencode):{C_RESET}");
+    println!("  {C_CYAN}ug mcp install{C_RESET}            Wire the MCP server into a client config (interactive picker; or name a target, e.g. `ug mcp install claude`)");
 
     println!();
     println!("{C_BOLD}Commands:{C_RESET}");

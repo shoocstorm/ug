@@ -3648,6 +3648,8 @@ dependencies = [
 [[package]]
 name = "overgraph"
 version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "064819167ff43917464f5a2da5e78873f7ba49ef9b14580140ca2ad8516d446a"
 dependencies = [
  "arc-swap",
  "crc32fast",

@@ -768,37 +768,63 @@ function mcpServersRemove(config) {
   return existed;
 }
 
-// Each target: where its config lives, and how to graft a { command, args,
-// env } server entry into that target's own JSON shape (schemas differ).
-// `format: 'toml'` targets skip `apply`/JSON entirely — see `upsertTomlServer`.
+// VS Code's user-level MCP config (`mcp.json` in the user profile dir) —
+// same platform spread as Claude Desktop's config.
+function vscodeGlobalConfigPath() {
+  const home = homedir();
+  if (process.platform === 'darwin') {
+    return join(home, 'Library', 'Application Support', 'Code', 'User', 'mcp.json');
+  }
+  if (process.platform === 'win32') {
+    return join(process.env.APPDATA || join(home, 'AppData', 'Roaming'), 'Code', 'User', 'mcp.json');
+  }
+  return join(home, '.config', 'Code', 'User', 'mcp.json');
+}
+
+// Each target: where its config lives (per scope), and how to graft a
+// { command, args, env } server entry into that target's own JSON shape
+// (schemas differ). `scopes.project` configs live in the current directory
+// and apply to this repo only; `scopes.global` configs live in the user's
+// home/profile dir and apply everywhere. Targets that only support one
+// scope just omit the other. `format: 'toml'` targets skip `apply`/JSON
+// entirely — see `upsertTomlServer`.
 const MCP_INSTALL_TARGETS = {
   claude: {
-    label: 'Claude Desktop',
-    configPath: claudeDesktopConfigPath,
+    label: 'Claude Code',
+    scopes: {
+      project: () => join(process.cwd(), '.mcp.json'),
+      global: () => join(homedir(), '.claude.json'),
+    },
     apply: mcpServersApply,
     remove: mcpServersRemove,
   },
-  'claude-code': {
-    label: 'Claude Code',
-    configPath: () => join(process.cwd(), '.mcp.json'),
+  'claude-desk': {
+    label: 'Claude Desktop',
+    scopes: { global: claudeDesktopConfigPath },
     apply: mcpServersApply,
     remove: mcpServersRemove,
   },
   cursor: {
     label: 'Cursor',
-    configPath: () => join(process.cwd(), '.cursor', 'mcp.json'),
+    scopes: {
+      project: () => join(process.cwd(), '.cursor', 'mcp.json'),
+      global: () => join(homedir(), '.cursor', 'mcp.json'),
+    },
     apply: mcpServersApply,
     remove: mcpServersRemove,
   },
   windsurf: {
     label: 'Windsurf',
-    configPath: () => join(homedir(), '.codeium', 'windsurf', 'mcp_config.json'),
+    scopes: { global: () => join(homedir(), '.codeium', 'windsurf', 'mcp_config.json') },
     apply: mcpServersApply,
     remove: mcpServersRemove,
   },
   vscode: {
     label: 'VS Code',
-    configPath: () => join(process.cwd(), '.vscode', 'mcp.json'),
+    scopes: {
+      project: () => join(process.cwd(), '.vscode', 'mcp.json'),
+      global: vscodeGlobalConfigPath,
+    },
     apply: (config, server) => {
       config.servers = config.servers || {};
       config.servers.ultragraph = { type: 'stdio', ...server };
@@ -811,23 +837,29 @@ const MCP_INSTALL_TARGETS = {
   },
   gemini: {
     label: 'Gemini CLI',
-    configPath: () => join(homedir(), '.gemini', 'settings.json'),
+    scopes: {
+      project: () => join(process.cwd(), '.gemini', 'settings.json'),
+      global: () => join(homedir(), '.gemini', 'settings.json'),
+    },
     apply: mcpServersApply,
     remove: mcpServersRemove,
   },
   codex: {
     label: 'Codex CLI',
     format: 'toml',
-    configPath: () => join(homedir(), '.codex', 'config.toml'),
+    scopes: { global: () => join(homedir(), '.codex', 'config.toml') },
   },
   hermes: {
     label: 'Hermes Agent',
     format: 'yaml',
-    configPath: () => join(homedir(), '.hermes', 'config.yaml'),
+    scopes: { global: () => join(homedir(), '.hermes', 'config.yaml') },
   },
   opencode: {
     label: 'opencode',
-    configPath: () => join(process.cwd(), 'opencode.json'),
+    scopes: {
+      project: () => join(process.cwd(), 'opencode.json'),
+      global: () => join(homedir(), '.config', 'opencode', 'opencode.json'),
+    },
     // opencode's schema keys servers directly under `mcp` (no `servers`
     // nesting), and McpLocalConfig wants one `command` array (binary +
     // args combined) plus `environment` — not the generic {command, args,
@@ -849,6 +881,13 @@ const MCP_INSTALL_TARGETS = {
       return existed;
     },
   },
+};
+
+// Back-compat spellings for targets that were renamed; resolved before
+// lookup so old docs/scripts keep working without showing up in usage.
+const MCP_TARGET_ALIASES = {
+  'claude-code': 'claude', // `claude` used to mean Claude Desktop (now `claude-desk`)
+  'claude-desktop': 'claude-desk',
 };
 
 // Codex's config is TOML, not JSON — rather than pull in a full TOML
@@ -907,17 +946,69 @@ function upsertYamlServer(content, name, server) {
   return doc.toString();
 }
 
-// Writes (or merges into) an MCP client's config file so `ug` shows up as a
-// tool source without the user hand-editing JSON / absolute paths themselves.
-function installMcpConfig(target) {
+// The command clients should launch for the MCP server. Prefer the native
+// `ug` binary (its path is handed down via UG_BIN by the Rust wrapper, or
+// found sitting next to this script in `.ug/`) so client configs are a
+// plain `ug mcp` and don't depend on how Node is installed. Falls back to
+// `node cli.mjs mcp` for Node-only installs with no binary around.
+function resolveMcpServerCommand() {
+  const candidates = [];
+  if (process.env.UG_BIN) candidates.push(process.env.UG_BIN);
+  const selfDir = dirname(fileURLToPath(import.meta.url));
+  candidates.push(join(selfDir, process.platform === 'win32' ? 'ug.exe' : 'ug'));
+  for (const bin of candidates) {
+    if (existsSync(bin)) return { command: bin, args: ['mcp'] };
+  }
+  return { command: 'node', args: [fileURLToPath(import.meta.url), 'mcp'] };
+}
+
+function resolveMcpTarget(target) {
+  target = MCP_TARGET_ALIASES[target] || target;
   const targetDef = MCP_INSTALL_TARGETS[target];
   if (!targetDef) {
     throw new Error(`Unknown MCP target '${target}' (expected: ${Object.keys(MCP_INSTALL_TARGETS).join(', ')})`);
   }
-  const configPath = targetDef.configPath();
+  return { target, targetDef };
+}
+
+// Numbered-list picker on stdin — used when `mcp install`/`uninstall` needs
+// an answer the command line didn't provide. Non-TTY sessions (piped/CI)
+// can't answer, so fail with the caller's usage hint instead of hanging.
+async function promptChoice(title, choices, nonInteractiveHint) {
+  if (!process.stdin.isTTY) {
+    throw new Error(nonInteractiveHint);
+  }
+  console.log(chalk.bold(title));
+  for (const [i, c] of choices.entries()) {
+    console.log(`  ${chalk.cyan(String(i + 1).padStart(2))}) ${c.name.padEnd(14)} ${chalk.gray(c.hint || '')}`);
+  }
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    for (;;) {
+      const answer = (await rl.question(`Select [1-${choices.length}]: `)).trim();
+      const idx = Number(answer);
+      if (Number.isInteger(idx) && idx >= 1 && idx <= choices.length) return choices[idx - 1].value;
+      const byName = choices.find((c) => c.name === answer);
+      if (byName) return byName.value;
+      console.log(chalk.yellow(`Enter a number between 1 and ${choices.length} (Ctrl+C to abort).`));
+    }
+  } finally {
+    rl.close();
+  }
+}
+
+// Writes (or merges into) an MCP client's config file so `ug` shows up as a
+// tool source without the user hand-editing JSON / absolute paths themselves.
+// `scope` is 'project' or 'global' and must be one the target supports.
+function installMcpConfig(target, scope) {
+  const { targetDef } = resolveMcpTarget(target);
+  const pathFor = targetDef.scopes[scope];
+  if (!pathFor) {
+    throw new Error(`Target '${target}' has no ${scope} config (supported: ${Object.keys(targetDef.scopes).join(', ')})`);
+  }
+  const configPath = pathFor();
   const server = {
-    command: 'node',
-    args: [fileURLToPath(import.meta.url), 'mcp'],
+    ...resolveMcpServerCommand(),
     env: { UG_PROJECT: deriveProjectName('.') },
   };
 
@@ -954,12 +1045,13 @@ function installMcpConfig(target) {
 // config, leaving everything else (other servers, comments, formatting)
 // untouched. Returns `removed: false` (no write) when there was nothing to
 // remove — a missing config file or a config that never had our entry.
-function uninstallMcpConfig(target) {
-  const targetDef = MCP_INSTALL_TARGETS[target];
-  if (!targetDef) {
-    throw new Error(`Unknown MCP target '${target}' (expected: ${Object.keys(MCP_INSTALL_TARGETS).join(', ')})`);
+function uninstallMcpConfig(target, scope) {
+  const { targetDef } = resolveMcpTarget(target);
+  const pathFor = targetDef.scopes[scope];
+  if (!pathFor) {
+    throw new Error(`Target '${target}' has no ${scope} config (supported: ${Object.keys(targetDef.scopes).join(', ')})`);
   }
-  const configPath = targetDef.configPath();
+  const configPath = pathFor();
   if (!existsSync(configPath)) {
     return { configPath, removed: false };
   }
@@ -1113,7 +1205,7 @@ function quickstartBanner() {
     '',
     chalk.bold('Quick start:'),
     '  ' + chalk.cyan('node cli.mjs gen') + '   Index this directory, build the graph, and ingest it (→ ~/.ug/<name>/)',
-    '  ' + chalk.cyan('node cli.mjs mcp install claude') + '   Wire this up as an MCP server (or cursor, claude-code, windsurf, vscode, gemini, codex, hermes, opencode)',
+    '  ' + chalk.cyan('node cli.mjs mcp install') + '   Wire this up as an MCP server (interactive picker; or name claude, claude-desk, cursor, windsurf, vscode, gemini, codex, hermes, opencode)',
     '  ' + chalk.cyan('node cli.mjs doctor') + '  Show resolved project/db/embedder config and where it came from',
     '  ' + chalk.cyan('node cli.mjs help') + '  Full command reference',
     '',
@@ -1472,27 +1564,70 @@ const commands = {
     }
   },
   mcp: {
-    usage: `[install|uninstall <${Object.keys(MCP_INSTALL_TARGETS).join('|')}>]`,
-    desc: 'Start the MCP server (no args; see env vars in the source header), write this project into an MCP client config with `install <target>`, or remove it with `uninstall <target>`.',
+    usage: `[install|uninstall [${Object.keys(MCP_INSTALL_TARGETS).join('|')}] [--global|--project]]`,
+    desc: 'Start the MCP server (no args; see env vars in the source header), write this project into an MCP client config with `install [target]`, or remove it with `uninstall [target]`. Omitted target/scope are asked for interactively.',
     run: async (args) => {
       if (args[0] === 'install' || args[0] === 'uninstall') {
         const action = args[0];
-        const target = args[1];
-        if (!target) {
-          throw new Error(`Usage: mcp ${action} <${Object.keys(MCP_INSTALL_TARGETS).join('|')}>`);
+        const rest = args.slice(1);
+        const wantsGlobal = rest.includes('--global') || rest.includes('-g');
+        const wantsProject = rest.includes('--project');
+        if (wantsGlobal && wantsProject) {
+          throw new Error('Pass at most one of --global / --project.');
         }
+
+        let target = rest.find((a) => !a.startsWith('-'));
+        if (!target) {
+          target = await promptChoice(
+            `${action === 'install' ? 'Install' : 'Uninstall'} the UltraGraph MCP server for which client?`,
+            Object.entries(MCP_INSTALL_TARGETS).map(([name, def]) => ({ name, hint: def.label, value: name })),
+            `Usage: mcp ${action} <${Object.keys(MCP_INSTALL_TARGETS).join('|')}> [--global|--project]`,
+          );
+        }
+        const { target: resolved, targetDef } = resolveMcpTarget(target);
+        target = resolved;
+        const scopeNames = Object.keys(targetDef.scopes);
+
+        const flagScope = wantsGlobal ? 'global' : wantsProject ? 'project' : null;
+        if (flagScope && !targetDef.scopes[flagScope]) {
+          throw new Error(`${targetDef.label} has no ${flagScope} config — it only supports: ${scopeNames.join(', ')}`);
+        }
+
+        const describeScope = (s) => s === 'project'
+          ? `${targetDef.scopes.project()}  — this directory only`
+          : `${targetDef.scopes.global()}  — all projects`;
+
         if (action === 'install') {
-          const configPath = installMcpConfig(target);
-          console.log(chalk.green('✓') + ' ' + chalk.white(`Wrote MCP config to ${configPath}`));
-          console.log(chalk.cyan(`Restart ${MCP_INSTALL_TARGETS[target].label} to pick it up.`));
-        } else {
-          const { configPath, removed } = uninstallMcpConfig(target);
-          if (removed) {
-            console.log(chalk.green('✓') + ' ' + chalk.white(`Removed ultragraph from ${configPath}`));
-            console.log(chalk.cyan(`Restart ${MCP_INSTALL_TARGETS[target].label} to pick it up.`));
-          } else {
-            console.log(chalk.yellow('•') + ' ' + chalk.white(`No ultragraph entry found in ${configPath} — nothing to do.`));
+          let scope = flagScope || (scopeNames.length === 1 ? scopeNames[0] : null);
+          if (!scope) {
+            scope = await promptChoice(
+              `Where should ${targetDef.label} pick up the server?`,
+              scopeNames.map((s) => ({ name: s, hint: describeScope(s), value: s })),
+              `'${target}' supports both a project and a global config — re-run with --project or --global.`,
+            );
           }
+          const configPath = installMcpConfig(target, scope);
+          console.log(chalk.green('✓') + ' ' + chalk.white(`Wrote MCP config to ${configPath}`));
+          console.log(chalk.cyan(`Restart ${targetDef.label} to pick it up.`));
+          return;
+        }
+
+        // uninstall: a scope flag narrows it; with no flag, sweep every
+        // scope the target supports and strip our entry wherever it is —
+        // removal is precise (just the `ultragraph` key), so no prompt.
+        const scopes = flagScope ? [flagScope] : scopeNames;
+        let removedAny = false;
+        for (const scope of scopes) {
+          const { configPath, removed } = uninstallMcpConfig(target, scope);
+          if (removed) {
+            removedAny = true;
+            console.log(chalk.green('✓') + ' ' + chalk.white(`Removed ultragraph from ${configPath}`));
+          }
+        }
+        if (removedAny) {
+          console.log(chalk.cyan(`Restart ${targetDef.label} to pick it up.`));
+        } else {
+          console.log(chalk.yellow('•') + ' ' + chalk.white(`No ultragraph entry found for ${targetDef.label} — nothing to do.`));
         }
         return;
       }

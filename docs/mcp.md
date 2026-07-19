@@ -59,26 +59,34 @@ with which env var (if any) drove each value.
 ### The easy way
 
 ```bash
-node .ug/cli.mjs mcp install claude        # Claude Desktop
-node .ug/cli.mjs mcp install claude-code   # Claude Code (.mcp.json in cwd)
-node .ug/cli.mjs mcp install cursor        # Cursor (.cursor/mcp.json in cwd)
-node .ug/cli.mjs mcp install windsurf      # Windsurf (~/.codeium/windsurf/mcp_config.json)
-node .ug/cli.mjs mcp install vscode        # VS Code (.vscode/mcp.json in cwd)
-node .ug/cli.mjs mcp install gemini        # Gemini CLI (~/.gemini/settings.json)
-node .ug/cli.mjs mcp install codex         # Codex CLI (~/.codex/config.toml)
-node .ug/cli.mjs mcp install hermes        # Hermes Agent (~/.hermes/config.yaml)
-node .ug/cli.mjs mcp install opencode      # opencode (opencode.json in cwd)
+ug mcp install                # No target: pick the client from an interactive list
+ug mcp install claude         # Claude Code (project .mcp.json or global ~/.claude.json)
+ug mcp install claude-desk    # Claude Desktop (global only)
+ug mcp install cursor         # Cursor (.cursor/mcp.json — project or ~/.cursor/mcp.json)
+ug mcp install windsurf       # Windsurf (global: ~/.codeium/windsurf/mcp_config.json)
+ug mcp install vscode         # VS Code (.vscode/mcp.json — project or user-profile mcp.json)
+ug mcp install gemini         # Gemini CLI (.gemini/settings.json — project or global)
+ug mcp install codex          # Codex CLI (global: ~/.codex/config.toml)
+ug mcp install hermes         # Hermes Agent (global: ~/.hermes/config.yaml)
+ug mcp install opencode       # opencode (opencode.json — project or ~/.config/opencode/)
 ```
 
-This writes (or merges into, preserving any other configured servers) the
-target's config file with the correct absolute path to this `cli.mjs` and
-`UG_PROJECT` set to the current directory's project name. Restart the app
-afterward. For any other MCP client, or to configure things manually, see below.
+For targets that support both a **project** config (in the current directory,
+this repo only) and a **global** config (in your home dir, all projects),
+you're asked which one to write — or pass `--project` / `--global` to skip
+the question (required in non-interactive shells).
 
-To remove it again, swap `install` for `uninstall` (e.g. `node .ug/cli.mjs mcp
-uninstall cursor`) — this strips just the `ultragraph` entry and leaves any
-other servers, comments, and formatting in the target's config untouched. If
-there's nothing to remove (no config file, or no `ultragraph` entry in it),
+The written entry launches `ug mcp` via the absolute path of the `ug` binary
+(falling back to `node <path>/cli.mjs mcp` for Node-only installs without the
+binary) with `UG_PROJECT` set to the current directory's project name, and is
+merged into the target's config file preserving any other configured servers.
+Restart the app afterward. For any other MCP client, or to configure things
+manually, see below.
+
+To remove it again, swap `install` for `uninstall` (e.g. `ug mcp uninstall
+cursor`) — this strips just the `ultragraph` entry from every scope the
+target supports (narrow it with `--project`/`--global`) and leaves any other
+servers, comments, and formatting untouched. If there's nothing to remove,
 it's a no-op.
 
 ### Claude Desktop (manual)

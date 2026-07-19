@@ -97,7 +97,9 @@ node .ug/cli.mjs list
 
 ### MCP server
 ```bash
-node .ug/cli.mjs mcp install claude   # or: claude-code, cursor, windsurf, vscode, gemini, codex, hermes, opencode
+node .ug/cli.mjs mcp install          # Interactive picker; or name one of: claude (Claude Code),
+                                      # claude-desk, cursor, windsurf, vscode, gemini, codex, hermes, opencode.
+                                      # --project / --global picks where the config lands when both exist.
 # Writes/merges the ultragraph entry into the target's own MCP config
 # for you — no hand-edited absolute-path JSON needed.
 ```
@@ -204,7 +206,7 @@ same pipeline stages under `node node/cli.mjs <command>`, see
 | `ug chat "<question>"` | RAG-grounded chat against an LLM, one-shot or REPL — see [RAG Chat](#-rag-chat-ug-chat) |
 | `ug list` / `ug rm <project>` | List projects under `~/.ug`, or delete one |
 | `ug doctor` | Print resolved project/db/embedder/chat config and where each value came from |
-| `ug mcp install claude` | Wire the MCP server into a client's config (see [MCP Server](#-mcp-server)) |
+| `ug mcp install [target]` | Wire the MCP server into a client's config — interactive picker when no target, `--project`/`--global` to choose scope (see [MCP Server](#-mcp-server)) |
 | `ug uninstall` | Delete ALL indexed projects and the standalone install itself (prebuilt installs only) |
 
 Every command that selects a project takes `-n/--name <project>`
