@@ -217,6 +217,192 @@ impl ChatClient {
         let _ = choice.finish_reason; // currently ignored; surfaced via logs upstream if needed
         Ok((text, parsed.usage))
     }
+
+    /// Streaming round-trip (`stream: true`, SSE wire format). Calls
+    /// `on_delta` for every incremental piece as it arrives and returns
+    /// the fully accumulated `(content, reasoning, usage)` at the end.
+    ///
+    /// Provider quirks handled here so callers don't have to:
+    /// * a 200 with a plain JSON body (provider silently ignored
+    ///   `stream: true`) is accepted and emitted as one big delta;
+    /// * `delta.reasoning_content` / `delta.reasoning` (DeepSeek-R1 /
+    ///   OpenRouter style) are surfaced separately from `delta.content`;
+    /// * a non-2xx status comes back as `ChatError::BadStatus` — callers
+    ///   fall back to the non-streaming `complete()` on that.
+    pub async fn complete_stream<F>(
+        &self,
+        messages: &[ChatMessage],
+        mut on_delta: F,
+    ) -> Result<(String, String, Option<Usage>), ChatError>
+    where
+        F: FnMut(StreamDelta),
+    {
+        use futures::StreamExt;
+
+        let url = format!(
+            "{}/chat/completions",
+            self.cfg.base_url.trim_end_matches('/')
+        );
+        let req = ChatRequest {
+            model: &self.cfg.model,
+            messages,
+            temperature: self.cfg.temperature,
+            max_tokens: self.cfg.max_tokens,
+            stream: true,
+        };
+
+        let resp = self
+            .client
+            .post(&url)
+            .bearer_auth(&self.cfg.api_key)
+            .json(&req)
+            .send()
+            .await
+            .map_err(ChatError::Http)?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(ChatError::BadStatus(status.as_u16(), body));
+        }
+
+        let is_sse = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.contains("text/event-stream"))
+            .unwrap_or(false);
+        if !is_sse {
+            // Provider ignored `stream: true` and sent one JSON body.
+            let parsed: ChatResponse = resp.json().await.map_err(ChatError::Http)?;
+            let choice = parsed
+                .choices
+                .into_iter()
+                .next()
+                .ok_or(ChatError::EmptyChoices)?;
+            let text = choice.message.content.unwrap_or_default();
+            on_delta(StreamDelta {
+                content: Some(text.clone()),
+                finish_reason: choice.finish_reason,
+                usage: parsed.usage.clone(),
+                ..Default::default()
+            });
+            return Ok((text, String::new(), parsed.usage));
+        }
+
+        let mut content = String::new();
+        let mut reasoning = String::new();
+        let mut usage: Option<Usage> = None;
+        let mut buf = String::new();
+        let mut body = resp.bytes_stream();
+        'outer: while let Some(chunk) = body.next().await {
+            let chunk = chunk.map_err(ChatError::Http)?;
+            buf.push_str(&String::from_utf8_lossy(&chunk));
+            while let Some(pos) = buf.find('\n') {
+                let line: String = buf.drain(..=pos).collect();
+                match parse_sse_line(line.trim_end()) {
+                    SseLine::Done => break 'outer,
+                    SseLine::Skip => {}
+                    SseLine::Delta(d) => {
+                        if let Some(c) = &d.content {
+                            content.push_str(c);
+                        }
+                        if let Some(r) = &d.reasoning {
+                            reasoning.push_str(r);
+                        }
+                        if d.usage.is_some() {
+                            usage = d.usage.clone();
+                        }
+                        on_delta(d);
+                    }
+                }
+            }
+        }
+        Ok((content, reasoning, usage))
+    }
+}
+
+/// One incremental piece of a streaming completion.
+#[derive(Debug, Default, Clone)]
+pub struct StreamDelta {
+    pub content: Option<String>,
+    /// Chain-of-thought text some providers stream separately
+    /// (`delta.reasoning_content` / `delta.reasoning`).
+    pub reasoning: Option<String>,
+    pub finish_reason: Option<String>,
+    pub usage: Option<Usage>,
+}
+
+enum SseLine {
+    Delta(StreamDelta),
+    Done,
+    Skip,
+}
+
+// SSE `delta` payloads, OpenAI wire format plus the two common
+// reasoning-field dialects.
+#[derive(Deserialize)]
+struct StreamResp {
+    #[serde(default)]
+    choices: Vec<StreamChoice>,
+    #[serde(default)]
+    usage: Option<Usage>,
+}
+
+#[derive(Deserialize)]
+struct StreamChoice {
+    #[serde(default)]
+    delta: Option<StreamDeltaMsg>,
+    #[serde(default)]
+    finish_reason: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+struct StreamDeltaMsg {
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    reasoning_content: Option<String>,
+    #[serde(default)]
+    reasoning: Option<String>,
+}
+
+/// Parse one SSE line: `data: [DONE]` ends the stream, `data: {json}`
+/// carries a delta, everything else (blank lines, comments, `event:`
+/// fields, unparseable payloads) is skipped — mid-stream garbage
+/// shouldn't kill an otherwise fine completion.
+fn parse_sse_line(line: &str) -> SseLine {
+    let Some(payload) = line.strip_prefix("data:").map(str::trim) else {
+        return SseLine::Skip;
+    };
+    if payload == "[DONE]" {
+        return SseLine::Done;
+    }
+    let Ok(parsed) = serde_json::from_str::<StreamResp>(payload) else {
+        return SseLine::Skip;
+    };
+    let mut out = StreamDelta {
+        usage: parsed.usage,
+        ..Default::default()
+    };
+    if let Some(choice) = parsed.choices.into_iter().next() {
+        out.finish_reason = choice.finish_reason;
+        if let Some(delta) = choice.delta {
+            out.content = delta.content.filter(|s| !s.is_empty());
+            out.reasoning = delta
+                .reasoning_content
+                .or(delta.reasoning)
+                .filter(|s| !s.is_empty());
+        }
+    }
+    if out.content.is_none()
+        && out.reasoning.is_none()
+        && out.finish_reason.is_none()
+        && out.usage.is_none()
+    {
+        return SseLine::Skip;
+    }
+    SseLine::Delta(out)
 }
 
 // ---------- Prompt assembly ----------
@@ -336,6 +522,10 @@ pub fn build_rag_messages(
 /// usage info so callers can surface latency and token counts.
 pub struct ChatRagOutcome {
     pub answer: String,
+    /// Separately-streamed chain-of-thought text, when the provider
+    /// sends one (`reasoning_content`). Empty for providers that inline
+    /// it in `answer` as `<think>` tags — callers handle those.
+    pub reasoning: String,
     pub context: RankedContext,
     pub retrieval_ms: u128,
     pub completion_ms: u128,
@@ -455,6 +645,52 @@ mod tests {
     }
 
     #[test]
+    fn sse_line_parses_content_delta() {
+        let line = r#"data: {"choices":[{"delta":{"content":"hel"},"finish_reason":null}]}"#;
+        match parse_sse_line(line) {
+            SseLine::Delta(d) => assert_eq!(d.content.as_deref(), Some("hel")),
+            _ => panic!("expected delta"),
+        }
+    }
+
+    #[test]
+    fn sse_line_parses_reasoning_dialects() {
+        for field in ["reasoning_content", "reasoning"] {
+            let line = format!(r#"data: {{"choices":[{{"delta":{{"{}":"hmm"}}}}]}}"#, field);
+            match parse_sse_line(&line) {
+                SseLine::Delta(d) => assert_eq!(d.reasoning.as_deref(), Some("hmm"), "{}", field),
+                _ => panic!("expected delta for {}", field),
+            }
+        }
+    }
+
+    #[test]
+    fn sse_line_done_and_noise() {
+        assert!(matches!(parse_sse_line("data: [DONE]"), SseLine::Done));
+        assert!(matches!(parse_sse_line(""), SseLine::Skip));
+        assert!(matches!(parse_sse_line(": keep-alive"), SseLine::Skip));
+        assert!(matches!(parse_sse_line("event: message"), SseLine::Skip));
+        assert!(matches!(parse_sse_line("data: {not json"), SseLine::Skip));
+        // Empty delta object → nothing to report.
+        assert!(matches!(
+            parse_sse_line(r#"data: {"choices":[{"delta":{}}]}"#),
+            SseLine::Skip
+        ));
+    }
+
+    #[test]
+    fn sse_line_captures_finish_and_usage() {
+        let line = r#"data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"total_tokens":42}}"#;
+        match parse_sse_line(line) {
+            SseLine::Delta(d) => {
+                assert_eq!(d.finish_reason.as_deref(), Some("stop"));
+                assert_eq!(d.usage.unwrap().total_tokens, Some(42));
+            }
+            _ => panic!("expected delta"),
+        }
+    }
+
+    #[test]
     fn build_rag_messages_handles_empty_context() {
         let ctx = RankedContext {
             query: "q".into(),
@@ -466,6 +702,27 @@ mod tests {
         assert_eq!(msgs[0].content, DEFAULT_SYSTEM_PROMPT);
         assert!(msgs[1].content.starts_with("No retrieved context"));
     }
+}
+
+/// The retrieval half of a RAG turn, shared by the streaming and
+/// non-streaming paths.
+pub async fn retrieve_context(
+    store: &dyn KnowledgeStore,
+    embedder: &Embedder,
+    repo_root: &std::path::Path,
+    query: &str,
+    opts: &ChatRagOptions<'_>,
+) -> Result<RankedContext, Box<dyn std::error::Error + Send + Sync>> {
+    let mut search_opts = SearchKbOptions::new(query, repo_root);
+    search_opts.k = opts.k;
+    search_opts.hops = opts.hops;
+    search_opts.strategy = opts.strategy;
+    search_opts.direction = opts.direction;
+    search_opts.edge_types = opts.edge_types;
+    search_opts.include_snippets = opts.include_snippets;
+    search_opts.max_chars = opts.max_context_chars;
+    search_opts.where_clause = opts.where_clause;
+    storage_search_kb(store, embedder, search_opts).await
 }
 
 /// Single-turn RAG: retrieve from `store`, then ask `chat` to answer
@@ -481,17 +738,7 @@ pub async fn run_chat_rag(
     opts: ChatRagOptions<'_>,
 ) -> Result<ChatRagOutcome, Box<dyn std::error::Error + Send + Sync>> {
     let t_ret = std::time::Instant::now();
-    let mut search_opts = SearchKbOptions::new(query, repo_root);
-    search_opts.k = opts.k;
-    search_opts.hops = opts.hops;
-    search_opts.strategy = opts.strategy;
-    search_opts.direction = opts.direction;
-    search_opts.edge_types = opts.edge_types;
-    search_opts.include_snippets = opts.include_snippets;
-    search_opts.max_chars = opts.max_context_chars;
-    search_opts.where_clause = opts.where_clause;
-
-    let context = storage_search_kb(store, embedder, search_opts).await?;
+    let context = retrieve_context(store, embedder, repo_root, query, &opts).await?;
     let retrieval_ms = t_ret.elapsed().as_millis();
 
     let messages = build_rag_messages(
@@ -508,6 +755,70 @@ pub async fn run_chat_rag(
 
     Ok(ChatRagOutcome {
         answer,
+        reasoning: String::new(),
+        context,
+        retrieval_ms,
+        completion_ms,
+        usage,
+    })
+}
+
+/// Streaming variant of `run_chat_rag`. `on_context` fires once after
+/// retrieval (so callers can surface citations before the first token);
+/// `on_delta` fires per streamed chunk. Falls back to the non-streaming
+/// `complete()` when the provider rejects `stream: true` (4xx/5xx on
+/// the streaming request), emitting the whole answer as one delta — so
+/// callers get streaming when the provider supports it and identical
+/// behaviour when it doesn't.
+pub async fn run_chat_rag_stream<C, F>(
+    store: &dyn KnowledgeStore,
+    embedder: &Embedder,
+    chat: &ChatClient,
+    repo_root: &std::path::Path,
+    query: &str,
+    history: &[ChatMessage],
+    opts: ChatRagOptions<'_>,
+    mut on_context: C,
+    mut on_delta: F,
+) -> Result<ChatRagOutcome, Box<dyn std::error::Error + Send + Sync>>
+where
+    C: FnMut(&RankedContext),
+    F: FnMut(StreamDelta),
+{
+    let t_ret = std::time::Instant::now();
+    let context = retrieve_context(store, embedder, repo_root, query, &opts).await?;
+    let retrieval_ms = t_ret.elapsed().as_millis();
+    on_context(&context);
+
+    let messages = build_rag_messages(
+        query,
+        &context,
+        history,
+        opts.system_prompt,
+        opts.max_context_chars,
+    );
+
+    let t_cmp = std::time::Instant::now();
+    let (answer, reasoning, usage) = match chat.complete_stream(&messages, &mut on_delta).await {
+        Ok(out) => out,
+        Err(ChatError::BadStatus(code, body)) => {
+            // Provider refused the streaming request — retry plain.
+            tracing::debug!(code, body = %body, "stream refused; falling back to non-streaming");
+            let (answer, usage) = chat.complete(&messages).await?;
+            on_delta(StreamDelta {
+                content: Some(answer.clone()),
+                usage: usage.clone(),
+                ..Default::default()
+            });
+            (answer, String::new(), usage)
+        }
+        Err(e) => return Err(Box::new(e)),
+    };
+    let completion_ms = t_cmp.elapsed().as_millis();
+
+    Ok(ChatRagOutcome {
+        answer,
+        reasoning,
         context,
         retrieval_ms,
         completion_ms,

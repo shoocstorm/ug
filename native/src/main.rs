@@ -2518,32 +2518,61 @@ fn run_chat(args: &[String]) {
             o
         };
 
+        // Tokens stream to the terminal as they arrive unless the output
+        // is structured (--json) or the user opts out (--no-stream).
+        let no_stream = has_flag(args, "--no-stream");
+
         match oneshot_query {
             Some(q) => {
-                let outcome = match chat::run_chat_rag(
-                    store.as_ref(),
-                    &embedder,
-                    &chat_client,
-                    repo_root.as_path(),
-                    &q,
-                    &[],
-                    opts_factory(&q),
-                )
-                .await
-                {
-                    Ok(o) => o,
-                    Err(e) => {
-                        eprintln!("chat failed: {}", e);
-                        std::process::exit(1);
-                    }
-                };
+                if json_output || no_stream {
+                    let outcome = match chat::run_chat_rag(
+                        store.as_ref(),
+                        &embedder,
+                        &chat_client,
+                        repo_root.as_path(),
+                        &q,
+                        &[],
+                        opts_factory(&q),
+                    )
+                    .await
+                    {
+                        Ok(o) => o,
+                        Err(e) => {
+                            eprintln!("chat failed: {}", e);
+                            std::process::exit(1);
+                        }
+                    };
 
-                if json_output {
-                    let body = chat_outcome_to_json(&q, &outcome);
-                    let text = serde_json::to_string_pretty(&body).unwrap_or_default();
-                    write_or_print(output_path.as_deref(), &text, "chat result");
+                    if json_output {
+                        let body = chat_outcome_to_json(&q, &outcome);
+                        let text = serde_json::to_string_pretty(&body).unwrap_or_default();
+                        write_or_print(output_path.as_deref(), &text, "chat result");
+                    } else {
+                        print_chat_outcome(&q, &outcome, show_context);
+                        if let Some(p) = output_path.as_deref() {
+                            write_file(p, &outcome.answer);
+                            println!("Wrote answer to {}", p);
+                        }
+                    }
                 } else {
-                    print_chat_outcome(&q, &outcome, show_context);
+                    let outcome = match stream_chat_turn(
+                        store.as_ref(),
+                        &embedder,
+                        &chat_client,
+                        repo_root.as_path(),
+                        &q,
+                        &[],
+                        opts_factory(&q),
+                        show_context,
+                    )
+                    .await
+                    {
+                        Ok(o) => o,
+                        Err(e) => {
+                            eprintln!("chat failed: {}", e);
+                            std::process::exit(1);
+                        }
+                    };
                     if let Some(p) = output_path.as_deref() {
                         write_file(p, &outcome.answer);
                         println!("Wrote answer to {}", p);
@@ -2562,6 +2591,7 @@ fn run_chat(args: &[String]) {
                     repo_root.as_path(),
                     opts_factory,
                     show_context,
+                    no_stream,
                 )
                 .await;
             }
@@ -2602,37 +2632,32 @@ fn chat_outcome_to_json(query: &str, outcome: &chat::ChatRagOutcome) -> serde_js
     })
 }
 
-fn print_chat_outcome(query: &str, outcome: &chat::ChatRagOutcome, show_context: bool) {
-    println!();
-    println!("{C_BOLD}{C_CYAN}❯ Query:{C_RESET} {}", query);
-    println!();
-    if show_context {
-        println!("{C_BOLD}{C_MAGENTA}Retrieved context ({} items):{C_RESET}", outcome.context.items.len());
-        for (i, it) in outcome.context.items.iter().enumerate() {
-            let line_label = if it.start_line > 0 {
-                format!(":{}-{}", it.start_line, it.end_line)
+fn print_context_items(items: &[ultragraph::storage::ContextItem]) {
+    println!("{C_BOLD}{C_MAGENTA}Retrieved context ({} items):{C_RESET}", items.len());
+    for (i, it) in items.iter().enumerate() {
+        let line_label = if it.start_line > 0 {
+            format!(":{}-{}", it.start_line, it.end_line)
+        } else {
+            String::new()
+        };
+        println!(
+            "  {C_CYAN}[#{}]{C_RESET} {C_BOLD}{}{C_RESET} {C_YELLOW}({}){C_RESET} {} {}{}",
+            i + 1,
+            it.name,
+            it.node_type,
+            if it.file.is_empty() { "<unknown>" } else { it.file.as_str() },
+            line_label,
+            if it.hop > 0 {
+                format!(" {}hop={}{}", C_BLUE, it.hop, C_RESET)
             } else {
                 String::new()
-            };
-            println!(
-                "  {C_CYAN}[#{}]{C_RESET} {C_BOLD}{}{C_RESET} {C_YELLOW}({}){C_RESET} {} {}{}",
-                i + 1,
-                it.name,
-                it.node_type,
-                if it.file.is_empty() { "<unknown>" } else { it.file.as_str() },
-                line_label,
-                if it.hop > 0 {
-                    format!(" {}hop={}{}", C_BLUE, it.hop, C_RESET)
-                } else {
-                    String::new()
-                }
-            );
-        }
-        println!();
+            }
+        );
     }
-    println!("{C_BOLD}{C_GREEN}Answer:{C_RESET}");
-    println!("{}", outcome.answer.trim_end());
     println!();
+}
+
+fn print_chat_meta(outcome: &chat::ChatRagOutcome) {
     println!(
         "{C_CYAN}▸{C_RESET} retrieval={}ms · completion={}ms · {} citation(s){}",
         outcome.retrieval_ms,
@@ -2650,6 +2675,95 @@ fn print_chat_outcome(query: &str, outcome: &chat::ChatRagOutcome, show_context:
     );
 }
 
+fn print_chat_outcome(query: &str, outcome: &chat::ChatRagOutcome, show_context: bool) {
+    println!();
+    println!("{C_BOLD}{C_CYAN}❯ Query:{C_RESET} {}", query);
+    println!();
+    if show_context {
+        print_context_items(&outcome.context.items);
+    }
+    println!("{C_BOLD}{C_GREEN}Answer:{C_RESET}");
+    println!("{}", outcome.answer.trim_end());
+    println!();
+    print_chat_meta(outcome);
+}
+
+/// One RAG turn with live token streaming to the terminal: a transient
+/// "retrieving" line while search runs, the context list (when enabled)
+/// as soon as it's ready, provider reasoning dimmed, then answer tokens
+/// as they arrive. Falls back to a single chunk automatically when the
+/// provider doesn't stream (handled in `run_chat_rag_stream`).
+async fn stream_chat_turn(
+    store: &dyn KnowledgeStore,
+    embedder: &Embedder,
+    chat_client: &chat::ChatClient,
+    repo_root: &std::path::Path,
+    query: &str,
+    history: &[chat::ChatMessage],
+    opts: chat::ChatRagOptions<'_>,
+    show_context: bool,
+) -> Result<chat::ChatRagOutcome, Box<dyn std::error::Error + Send + Sync>> {
+    use std::io::Write;
+
+    println!();
+    println!("{C_BOLD}{C_CYAN}❯ Query:{C_RESET} {}", query);
+    println!();
+    eprint!("{C_DIM}⣾ retrieving context…{C_RESET}");
+    let _ = std::io::stderr().flush();
+
+    let mut in_reasoning = false;
+    let mut printed_answer_header = false;
+    let outcome = chat::run_chat_rag_stream(
+        store,
+        embedder,
+        chat_client,
+        repo_root,
+        query,
+        history,
+        opts,
+        |ctx| {
+            // Clear the transient retrieval line before real output.
+            eprint!("\r\x1b[2K");
+            let _ = std::io::stderr().flush();
+            if show_context {
+                print_context_items(&ctx.items);
+            }
+        },
+        |d| {
+            if let Some(r) = &d.reasoning {
+                if !in_reasoning {
+                    println!("{C_DIM}Reasoning:{C_RESET}");
+                    print!("{C_DIM}");
+                    in_reasoning = true;
+                }
+                print!("{}", r);
+            }
+            if let Some(c) = &d.content {
+                if in_reasoning {
+                    print!("{C_RESET}");
+                    println!();
+                    println!();
+                    in_reasoning = false;
+                }
+                if !printed_answer_header {
+                    println!("{C_BOLD}{C_GREEN}Answer:{C_RESET}");
+                    printed_answer_header = true;
+                }
+                print!("{}", c);
+            }
+            let _ = std::io::stdout().flush();
+        },
+    )
+    .await?;
+    if in_reasoning {
+        print!("{C_RESET}");
+    }
+    println!();
+    println!();
+    print_chat_meta(&outcome);
+    Ok(outcome)
+}
+
 async fn run_chat_repl<'a, F>(
     store: &dyn KnowledgeStore,
     embedder: &Embedder,
@@ -2657,6 +2771,7 @@ async fn run_chat_repl<'a, F>(
     repo_root: &std::path::Path,
     mut opts_factory: F,
     show_context: bool,
+    no_stream: bool,
 ) where
     F: for<'b> FnMut(&'b str) -> chat::ChatRagOptions<'a>,
 {
@@ -2715,25 +2830,39 @@ async fn run_chat_repl<'a, F>(
         }
 
         let opts = opts_factory(q);
-        let outcome = match chat::run_chat_rag(
-            store,
-            embedder,
-            chat_client,
-            repo_root,
-            q,
-            &history,
-            opts,
-        )
-        .await
-        {
-            Ok(o) => o,
-            Err(e) => {
-                eprintln!("{C_YELLOW}chat error:{C_RESET} {}", e);
-                continue;
+        let outcome = if no_stream {
+            match chat::run_chat_rag(store, embedder, chat_client, repo_root, q, &history, opts)
+                .await
+            {
+                Ok(o) => {
+                    print_chat_outcome(q, &o, show_ctx);
+                    o
+                }
+                Err(e) => {
+                    eprintln!("{C_YELLOW}chat error:{C_RESET} {}", e);
+                    continue;
+                }
+            }
+        } else {
+            match stream_chat_turn(
+                store,
+                embedder,
+                chat_client,
+                repo_root,
+                q,
+                &history,
+                opts,
+                show_ctx,
+            )
+            .await
+            {
+                Ok(o) => o,
+                Err(e) => {
+                    eprintln!("{C_YELLOW}chat error:{C_RESET} {}", e);
+                    continue;
+                }
             }
         };
-
-        print_chat_outcome(q, &outcome, show_ctx);
 
         // Keep the last 6 exchanges to bound prompt growth.
         history.push(chat::ChatMessage {

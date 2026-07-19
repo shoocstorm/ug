@@ -2529,6 +2529,35 @@ struct ChatBody {
     /// Optional destination name; defaults to the primary backend.
     #[serde(default)]
     dest: Option<String>,
+    /// `true` → respond as an SSE stream (`context` / `delta` / `done`
+    /// / `error` events) instead of one JSON body. Providers that
+    /// reject streaming still work: the server falls back to a plain
+    /// completion and emits it as a single delta.
+    #[serde(default)]
+    stream: Option<bool>,
+}
+
+/// Citation list shared by the JSON and SSE chat responses.
+fn citations_json(items: &[ultragraph::storage::ContextItem]) -> Vec<serde_json::Value> {
+    items
+        .iter()
+        .enumerate()
+        .map(|(i, it)| {
+            serde_json::json!({
+                "index": i + 1,
+                "id": it.id,
+                "name": it.name,
+                "node_type": it.node_type,
+                "file": it.file,
+                "start_line": it.start_line,
+                "end_line": it.end_line,
+                "description": it.description,
+                "distance": it.distance,
+                "hop": it.hop,
+                "snippet": it.snippet,
+            })
+        })
+        .collect()
 }
 
 async fn api_chat(State(state): State<ServeState>, Json(body): Json<ChatBody>) -> Response {
@@ -2566,6 +2595,10 @@ async fn api_chat(State(state): State<ServeState>, Json(body): Json<ChatBody>) -
             )
         }
     };
+
+    if body.stream.unwrap_or(false) {
+        return api_chat_stream(state, body, db, embedder, chat_client);
+    }
 
     let k = body.k.unwrap_or(8).min(50).max(1);
     let hops = body.hops.unwrap_or(2).min(4);
@@ -2616,27 +2649,7 @@ async fn api_chat(State(state): State<ServeState>, Json(body): Json<ChatBody>) -
 
     match outcome {
         Ok(o) => {
-            let citations: Vec<serde_json::Value> = o
-                .context
-                .items
-                .iter()
-                .enumerate()
-                .map(|(i, it)| {
-                    serde_json::json!({
-                        "index": i + 1,
-                        "id": it.id,
-                        "name": it.name,
-                        "node_type": it.node_type,
-                        "file": it.file,
-                        "start_line": it.start_line,
-                        "end_line": it.end_line,
-                        "description": it.description,
-                        "distance": it.distance,
-                        "hop": it.hop,
-                        "snippet": it.snippet,
-                    })
-                })
-                .collect();
+            let citations = citations_json(&o.context.items);
             let body_json = serde_json::json!({
                 "query": body.query,
                 "answer": o.answer,
@@ -2655,6 +2668,139 @@ async fn api_chat(State(state): State<ServeState>, Json(body): Json<ChatBody>) -
             &format!("chat: {}", e),
         ),
     }
+}
+
+/// SSE variant of `/api/chat` (`"stream": true` in the body). Event
+/// sequence the UI consumes:
+///
+/// ```text
+/// event: context   data: {"citations":[…],"seed_id":…,"retrieval_ms":…}
+/// event: delta     data: {"content":"…"} | {"reasoning":"…"}
+/// event: done      data: {"answer":…,"usage":…,"completion_ms":…,…}
+/// event: error     data: {"error":"…"}      (terminal, replaces done)
+/// ```
+///
+/// The RAG turn runs in a spawned task feeding an unbounded channel, so
+/// the response starts (and heartbeats) immediately while retrieval is
+/// still working.
+fn api_chat_stream(
+    state: ServeState,
+    body: ChatBody,
+    db: Arc<dyn KnowledgeStore>,
+    embedder: Arc<Embedder>,
+    chat_client: ChatClient,
+) -> Response {
+    use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
+    use futures::StreamExt;
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<SseEvent>();
+    let repo_root = state.repo_root();
+    let embed_lock = state.embed_lock.clone();
+
+    tokio::spawn(async move {
+        let dest_name = db.backend_name();
+        let model = chat_client.config().model.clone();
+        let emit = |name: &'static str, payload: serde_json::Value| {
+            let _ = tx.send(SseEvent::default().event(name).data(payload.to_string()));
+        };
+
+        let _permit = match embed_lock.acquire_owned().await {
+            Ok(p) => p,
+            Err(_) => {
+                emit("error", serde_json::json!({ "error": "embed semaphore closed" }));
+                return;
+            }
+        };
+
+        let k = body.k.unwrap_or(8).min(50).max(1);
+        let hops = body.hops.unwrap_or(2).min(4);
+        let strategy = body
+            .strategy
+            .as_deref()
+            .map(RankStrategy::from_str_lossy)
+            .unwrap_or(RankStrategy::Ppr);
+        let direction = body
+            .direction
+            .as_deref()
+            .map(Direction::from_str_lossy)
+            .unwrap_or(Direction::Both);
+        let include_snippets = body.include_snippets.unwrap_or(true);
+        let max_context_chars = body
+            .max_context_chars
+            .unwrap_or(chat::DEFAULT_CTX_MAX_CHARS)
+            .min(64_000);
+        let edge_types_owned: Option<Vec<String>> = body.edge_types.filter(|v| !v.is_empty());
+        let history_owned: Vec<ChatMessage> = body.history.unwrap_or_default();
+
+        let mut opts = ChatRagOptions::new();
+        opts.k = k;
+        opts.hops = hops;
+        opts.strategy = strategy;
+        opts.direction = direction;
+        opts.edge_types = edge_types_owned.as_deref();
+        opts.include_snippets = include_snippets;
+        opts.max_context_chars = max_context_chars;
+        opts.where_clause = body.where_clause.as_deref();
+        opts.system_prompt = body.system_prompt.as_deref();
+
+        emit("phase", serde_json::json!({ "phase": "retrieving" }));
+
+        let t_ret = std::time::Instant::now();
+        let emit_ctx = emit.clone();
+        let emit_delta = emit.clone();
+        let outcome = chat::run_chat_rag_stream(
+            &*db,
+            &embedder,
+            &chat_client,
+            repo_root.as_path(),
+            &body.query,
+            &history_owned,
+            opts,
+            |ctx| {
+                emit_ctx(
+                    "context",
+                    serde_json::json!({
+                        "citations": citations_json(&ctx.items),
+                        "seed_id": ctx.seed_id,
+                        "retrieval_ms": t_ret.elapsed().as_millis() as u64,
+                    }),
+                );
+            },
+            |d| {
+                let mut obj = serde_json::Map::new();
+                if let Some(c) = d.content {
+                    obj.insert("content".into(), serde_json::Value::String(c));
+                }
+                if let Some(r) = d.reasoning {
+                    obj.insert("reasoning".into(), serde_json::Value::String(r));
+                }
+                if !obj.is_empty() {
+                    emit_delta("delta", serde_json::Value::Object(obj));
+                }
+            },
+        )
+        .await;
+
+        match outcome {
+            Ok(o) => emit(
+                "done",
+                serde_json::json!({
+                    "answer": o.answer,
+                    "reasoning": if o.reasoning.is_empty() { None } else { Some(o.reasoning) },
+                    "retrieval_ms": o.retrieval_ms,
+                    "completion_ms": o.completion_ms,
+                    "usage": o.usage,
+                    "dest": dest_name,
+                    "chat_model": model,
+                }),
+            ),
+            Err(e) => emit("error", serde_json::json!({ "error": format!("chat: {}", e) })),
+        }
+    });
+
+    let stream =
+        futures::stream::poll_fn(move |cx| rx.poll_recv(cx)).map(Ok::<_, std::convert::Infallible>);
+    Sse::new(stream).keep_alive(KeepAlive::default()).into_response()
 }
 
 /// Combine a default `ChatConfig` (from CLI/env at startup) with
