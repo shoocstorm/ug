@@ -325,3 +325,104 @@ fn test_index_metrics() {
         assert_eq!(metrics.params, 1);
     }
 }
+
+// --- index_with_cache: cached runs must still return every scanned file ---
+// Regression tests for the MCP reindex bug where cache-hit files were
+// dropped from the IndexResult, so the rewritten indexed-tree.json/graph.json
+// lost all nodes for unmodified files.
+
+use ultragraph::index_with_cache;
+
+/// Mimic the caller contract (cli.mjs regenerateProject / `ug gen -c`):
+/// the previous run's IndexResult is persisted as indexed-tree.json in the
+/// same directory that holds cache.json.
+fn run_cached(repo: &Path, cache_dir: &Path) -> IndexResult {
+    let result = index_with_cache(
+        repo.to_string_lossy().to_string(),
+        cache_dir.to_string_lossy().to_string(),
+    );
+    fs::write(cache_dir.join("indexed-tree.json"), &result).expect("Failed to write indexed-tree.json");
+    serde_json::from_str(&result).expect("Failed to parse result")
+}
+
+#[test]
+fn test_cached_rerun_keeps_all_files() {
+    let dir = create_test_dir();
+    let cache = create_test_dir();
+    write_file(dir.path(), "a.ts", "export function alpha(): void { }");
+    write_file(dir.path(), "b.ts", "export function beta(): void { }");
+
+    let first = run_cached(dir.path(), cache.path());
+    assert_eq!(first.stats.total_files, 2);
+    assert_eq!(first.stats.cached_files, 0);
+
+    // Nothing changed: everything is a cache hit, yet the result must still
+    // contain both files with their symbols.
+    let second = run_cached(dir.path(), cache.path());
+    assert_eq!(second.stats.cached_files, 2);
+    assert_eq!(second.stats.total_files, 2);
+    assert_eq!(second.files.len(), 2);
+    assert_eq!(second.stats.total_symbols, first.stats.total_symbols);
+    for f in &second.files {
+        assert!(!f.symbols.is_empty(), "cached file {} lost its symbols", f.path);
+    }
+}
+
+#[test]
+fn test_cached_rerun_reparses_modified_and_keeps_unmodified() {
+    let dir = create_test_dir();
+    let cache = create_test_dir();
+    write_file(dir.path(), "a.ts", "export function alpha(): void { }");
+    write_file(dir.path(), "b.ts", "export function beta(): void { }");
+    run_cached(dir.path(), cache.path());
+
+    write_file(
+        dir.path(),
+        "b.ts",
+        "export function beta(): void { }\nexport function gamma(): void { }",
+    );
+    let second = run_cached(dir.path(), cache.path());
+    assert_eq!(second.stats.cached_files, 1);
+    assert_eq!(second.files.len(), 2);
+
+    let b = second.files.iter().find(|f| f.path.contains("b.ts")).unwrap();
+    assert_eq!(b.symbols.len(), 2);
+    let a = second.files.iter().find(|f| f.path.contains("a.ts")).unwrap();
+    assert!(!a.symbols.is_empty());
+}
+
+#[test]
+fn test_cached_rerun_prunes_deleted_files() {
+    let dir = create_test_dir();
+    let cache = create_test_dir();
+    write_file(dir.path(), "a.ts", "export function alpha(): void { }");
+    write_file(dir.path(), "b.ts", "export function beta(): void { }");
+    run_cached(dir.path(), cache.path());
+
+    fs::remove_file(dir.path().join("b.ts")).unwrap();
+    let second = run_cached(dir.path(), cache.path());
+    assert_eq!(second.files.len(), 1);
+    assert!(second.files[0].path.contains("a.ts"));
+
+    // cache.json must not keep the deleted file's hash around.
+    let hashes: std::collections::HashMap<String, String> =
+        serde_json::from_str(&fs::read_to_string(cache.path().join("cache.json")).unwrap()).unwrap();
+    assert_eq!(hashes.len(), 1);
+}
+
+#[test]
+fn test_cache_hit_without_previous_tree_reparses() {
+    let dir = create_test_dir();
+    let cache = create_test_dir();
+    write_file(dir.path(), "a.ts", "export function alpha(): void { }");
+    run_cached(dir.path(), cache.path());
+
+    // Simulate a caller that kept cache.json but lost indexed-tree.json:
+    // the file hash still matches, but the node can't be recovered, so it
+    // must be re-parsed rather than dropped.
+    fs::remove_file(cache.path().join("indexed-tree.json")).unwrap();
+    let second = run_cached(dir.path(), cache.path());
+    assert_eq!(second.files.len(), 1);
+    assert!(!second.files[0].symbols.is_empty());
+    assert_eq!(second.stats.cached_files, 0);
+}

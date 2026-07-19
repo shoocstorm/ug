@@ -192,12 +192,28 @@ pub fn index_with_cache(path: String, cache_path: String) -> String {
         }
     }
 
+    // Previous run's FileNodes, keyed by repo-relative path. The returned
+    // IndexResult must cover every scanned file — callers overwrite
+    // indexed-tree.json / graph.json wholesale — so a cache hit is only
+    // usable if the file's node can be recovered from the previous tree.
+    let mut prev_files: HashMap<String, FileNode> = HashMap::new();
+    let prev_tree = Path::new(&cache_path).join("indexed-tree.json");
+    if let Ok(content) = fs::read_to_string(&prev_tree) {
+        if let Ok(prev) = serde_json::from_str::<IndexResult>(&content) {
+            for f in prev.files {
+                prev_files.insert(f.path.clone(), f);
+            }
+        }
+    }
+
     let files_paths = scan_files(&path);
     let dependencies = extract_package_json_dependencies(&path);
     let mut files: Vec<FileNode> = Vec::new();
     let mut total_symbols = 0;
     let mut total_lines = 0u64;
     let mut cached = 0;
+    // Rebuilt from scratch each run so hashes of deleted files get pruned.
+    let mut new_hashes: HashMap<String, String> = HashMap::new();
 
     // Folder hierarchy is derived from the full scanned set, not just the
     // re-parsed slice. This keeps the forest stable across cached runs
@@ -227,13 +243,19 @@ pub fn index_with_cache(path: String, cache_path: String) -> String {
             None => continue,
         };
 
-        // Cache hit: skip parsing entirely.
+        // Cache hit: reuse the previous run's FileNode instead of re-parsing.
+        // If it can't be recovered (missing/corrupt indexed-tree.json), fall
+        // through and re-parse — skipping the file would drop its nodes from
+        // the rewritten tree and graph.
         if cached_hashes.get(&relative) == Some(&hash) {
-            cached += 1;
-            if let Ok(content) = fs::read_to_string(&file_path) {
-                total_lines += content.lines().count() as u64;
+            if let Some(prev) = prev_files.remove(&relative) {
+                cached += 1;
+                total_symbols += prev.symbols.len();
+                total_lines += prev.lines as u64;
+                files.push(prev);
+                new_hashes.insert(relative, hash);
+                continue;
             }
-            continue;
         }
 
         if let Some(mut file_node) = process_file(&file_path, Some(&repo_root)) {
@@ -241,7 +263,7 @@ pub fn index_with_cache(path: String, cache_path: String) -> String {
             total_lines += file_node.lines as u64;
             file_node.hash = hash.clone();
             files.push(file_node);
-            cached_hashes.insert(relative, hash);
+            new_hashes.insert(relative, hash);
         }
     }
     println!(
@@ -257,7 +279,7 @@ pub fn index_with_cache(path: String, cache_path: String) -> String {
         cached
     );
 
-    if let Ok(json) = serde_json::to_string(&cached_hashes) {
+    if let Ok(json) = serde_json::to_string(&new_hashes) {
         let _ = fs::create_dir_all(&cache_path);
         let _ = fs::write(&cache_file, json);
     }
