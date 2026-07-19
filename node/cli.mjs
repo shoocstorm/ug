@@ -1089,7 +1089,7 @@ async function runMcpServer() {
   const { dbPath: DB_PATH, repoRoot: REPO_ROOT } = resolveDbAndRoot();
 
   const server = new Server(
-    { name: 'ultragraph', version: '0.2.0' },
+    { name: 'ultragraph', version: UG_VERSION },
     { capabilities: { tools: {} } },
   );
 
@@ -1192,9 +1192,19 @@ async function runMcpServer() {
 
   const transport = new StdioServerTransport();
   // stdout is reserved for MCP's JSON-RPC frames — log status to stderr.
-  console.error('start ultragraph mcp server...');
+  // A TTY on stdin means a human ran this by hand, not an MCP client —
+  // explain what this mode is instead of hanging silently.
+  if (process.stdin.isTTY) {
+    console.error(chalk.bold('UltraGraph MCP server (stdio mode)'));
+    console.error('This command is meant to be launched by an AI agent, not run by hand:');
+    console.error('agents spawn it themselves and speak JSON-RPC over stdin/stdout.');
+    console.error(`To wire an agent up to it, run ${chalk.cyan('ug mcp install')} instead.`);
+    console.error('(Waiting for JSON-RPC on stdin — Ctrl+C to exit.)');
+  } else {
+    console.error('start ultragraph mcp server...');
+  }
   await server.connect(transport);
-  console.error('ultragraph mcp server started.');
+  if (!process.stdin.isTTY) console.error('ultragraph mcp server started.');
 }
 
 // Shown for bare `node cli.mjs` with no subcommand — a short "what do I do

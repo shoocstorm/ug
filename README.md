@@ -7,6 +7,9 @@ A high-performance, local-first knowledge base engine that transforms codebases 
 curl -fsSL https://ultra-graph.web.app/install.sh | sh
 ```
 
+Already installed? `ug upgrade` self-updates to the latest release
+(`ug upgrade --check` just reports whether one is available).
+
 ## Run
 ```
 ug app
@@ -207,6 +210,7 @@ same pipeline stages under `node node/cli.mjs <command>`, see
 | `ug list` / `ug rm <project>` | List projects under `~/.ug`, or delete one |
 | `ug doctor` | Print resolved project/db/embedder/chat config and where each value came from |
 | `ug mcp install [target]` | Wire the MCP server into a client's config — interactive picker when no target, `--project`/`--global` to choose scope (see [MCP Server](#-mcp-server)) |
+| `ug upgrade [vX.Y.Z]` | Self-update the standalone install from the latest GitHub release (or a pinned tag) — `--check` only reports, `--force` reinstalls |
 | `ug uninstall` | Delete ALL indexed projects and the standalone install itself (prebuilt installs only) |
 
 Every command that selects a project takes `-n/--name <project>`

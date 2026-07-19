@@ -80,6 +80,10 @@ The written entry launches `ug mcp` via the absolute path of the `ug` binary
 (falling back to `node <path>/cli.mjs mcp` for Node-only installs without the
 binary) with `UG_PROJECT` set to the current directory's project name, and is
 merged into the target's config file preserving any other configured servers.
+`ug mcp` still runs the server on Node.js: it needs `node` on PATH, but when
+launched by a GUI client with a minimal PATH it also checks the usual install
+locations (Homebrew, `/usr/local`, `/usr/bin`, volta, fnm, nvm) before
+failing.
 Restart the app afterward. For any other MCP client, or to configure things
 manually, see below.
 

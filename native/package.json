@@ -1,6 +1,6 @@
 {
   "name": "ultragraph",
-  "version": "0.1.0",
+  "version": "0.1.3",
   "description": "High-Performance Knowledge Base Indexer",
   "main": "index.js",
   "napi": {
