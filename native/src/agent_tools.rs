@@ -168,6 +168,32 @@ pub fn node_loc(n: &GraphNode) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Param decoding
+// ---------------------------------------------------------------------------
+
+/// Accept `"x"` or `["x", "y"]` for the same field.
+///
+/// The batch-friendly params (`node_id`, `name`, `file`) are documented to
+/// take one value or an array, and callers rely on both — so normalise here
+/// rather than making every transport branch on the shape.
+fn de_one_or_many<'de, D>(d: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(String),
+        Many(Vec<String>),
+    }
+    Ok(match Option::<OneOrMany>::deserialize(d)? {
+        None => vec![],
+        Some(OneOrMany::One(s)) => vec![s],
+        Some(OneOrMany::Many(v)) => v,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Shared result pieces
 // ---------------------------------------------------------------------------
 
@@ -271,17 +297,24 @@ fn next_actions(out: &mut String, style: Render, hints: &[(&str, &str)]) {
 // find_symbol
 // ---------------------------------------------------------------------------
 
+/// Params are canonical snake_case. The `alias` attributes accept the legacy
+/// MCP camelCase spellings so existing agent calls keep working unchanged.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct FindSymbolParams {
     /// Direct node id lookup — O(1), skips the search entirely.
+    #[serde(alias = "nodeId", alias = "nodeIds", deserialize_with = "de_one_or_many")]
     pub node_id: Vec<String>,
     /// Identifier (or fragment) to match against node names.
+    #[serde(deserialize_with = "de_one_or_many")]
     pub name: Vec<String>,
     /// Restrict to these node types (case-insensitive).
+    #[serde(alias = "nodeTypes", deserialize_with = "de_one_or_many")]
     pub node_types: Vec<String>,
     /// Only symbols whose file path starts with this repo-relative prefix.
+    #[serde(alias = "filePrefix")]
     pub file_prefix: Option<String>,
+    #[serde(alias = "k")]
     pub limit: Option<usize>,
 }
 
@@ -443,8 +476,10 @@ pub fn render_find_symbol(r: &FindSymbolResult, style: Render) -> String {
 #[serde(default)]
 pub struct FileOutlineParams {
     /// Direct File node id lookup.
+    #[serde(alias = "nodeId", alias = "nodeIds", deserialize_with = "de_one_or_many")]
     pub node_id: Vec<String>,
     /// Repo-relative path, unique suffix, or `file:<path>` id.
+    #[serde(deserialize_with = "de_one_or_many")]
     pub file: Vec<String>,
 }
 
@@ -647,11 +682,15 @@ pub fn render_file_outline(r: &FileOutlineResult, style: Render) -> String {
 #[serde(default)]
 pub struct GetCodeParams {
     /// Read exactly these symbols' line ranges.
+    #[serde(alias = "nodeId", alias = "nodeIds", deserialize_with = "de_one_or_many")]
     pub node_id: Vec<String>,
     /// Repo-relative path, used when `node_id` is empty.
     pub file: Option<String>,
+    #[serde(alias = "startLine", alias = "start")]
     pub start_line: Option<usize>,
+    #[serde(alias = "endLine", alias = "end")]
     pub end_line: Option<usize>,
+    #[serde(alias = "maxChars")]
     pub max_chars: Option<usize>,
 }
 
@@ -875,11 +914,22 @@ pub fn render_get_code(r: &GetCodeResult, style: Render) -> String {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct FindUsagesParams {
+    #[serde(alias = "nodeId", alias = "nodeIds", deserialize_with = "de_one_or_many")]
     pub node_id: Vec<String>,
     /// Transitive depth, 1-3. Default 1 = direct users only.
     pub hops: Option<u32>,
     /// Defaults to [`USAGE_EDGE_TYPES`].
+    #[serde(alias = "edgeTypes", deserialize_with = "de_one_or_many")]
     pub edge_types: Vec<String>,
+}
+
+/// A line inside a caller that mentions the subject by name. Heuristic —
+/// the name could appear in a comment or string — but each hit is a
+/// jumpable `file:line` and saves a `get_code` round-trip per caller.
+#[derive(Debug, Clone, Serialize)]
+pub struct CallSite {
+    pub line: usize,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -892,7 +942,17 @@ pub struct Usage {
     pub via_edge: String,
     /// The node this user points at — the subject itself at depth 1.
     pub via_target: String,
+    /// Populated for direct (depth 1) users only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub call_sites: Vec<CallSite>,
 }
+
+/// How many direct callers get a source scan, and how many matching lines
+/// each contributes. Bounds the file reads on a hot symbol with hundreds of
+/// callers.
+const CALL_SITE_CALLER_CAP: usize = 20;
+const CALL_SITE_PER_CALLER: usize = 3;
+const CALL_SITE_TEXT_CHARS: usize = 160;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct UsagesEntry {
@@ -917,7 +977,54 @@ impl FindUsagesResult {
     }
 }
 
-pub fn find_usages(graph: &GraphData, p: &FindUsagesParams) -> FindUsagesResult {
+/// Scan a caller's own source slice for lines mentioning `target_name`.
+/// `files` caches each file's lines, so several callers in one file cost a
+/// single read.
+fn call_sites_for(
+    repo_root: &Path,
+    caller: &SymbolRef,
+    target_name: &str,
+    files: &mut HashMap<String, Option<Vec<String>>>,
+) -> Vec<CallSite> {
+    if target_name.is_empty() {
+        return vec![];
+    }
+    let Some(file) = &caller.file else {
+        return vec![];
+    };
+
+    let lines = files.entry(file.clone()).or_insert_with(|| {
+        std::fs::read_to_string(repo_root.join(file))
+            .ok()
+            .map(|c| c.split('\n').map(|s| s.to_string()).collect())
+    });
+    let Some(lines) = lines else {
+        return vec![];
+    };
+
+    let from = caller.start_line.unwrap_or(1).saturating_sub(1) as usize;
+    let to = caller
+        .end_line
+        .map(|e| e as usize)
+        .unwrap_or(lines.len())
+        .min(lines.len());
+
+    let mut out = Vec::new();
+    for i in from..to {
+        if lines[i].contains(target_name) {
+            out.push(CallSite {
+                line: i + 1,
+                text: lines[i].trim().chars().take(CALL_SITE_TEXT_CHARS).collect(),
+            });
+            if out.len() >= CALL_SITE_PER_CALLER {
+                break;
+            }
+        }
+    }
+    out
+}
+
+pub fn find_usages(graph: &GraphData, repo_root: &Path, p: &FindUsagesParams) -> FindUsagesResult {
     let hops = p.hops.unwrap_or(1).clamp(1, 3);
     let edge_types: Vec<String> = if p.edge_types.is_empty() {
         USAGE_EDGE_TYPES.iter().map(|s| s.to_string()).collect()
@@ -984,6 +1091,7 @@ pub fn find_usages(graph: &GraphData, p: &FindUsagesParams) -> FindUsagesResult 
                             depth,
                             via_edge: (*et).to_string(),
                             via_target: (*target).to_string(),
+                            call_sites: vec![],
                         });
                         next.push(src);
                     }
@@ -993,6 +1101,17 @@ pub fn find_usages(graph: &GraphData, p: &FindUsagesParams) -> FindUsagesResult 
             if frontier.is_empty() {
                 break;
             }
+        }
+
+        // Evidence for direct users only: transitive ones don't mention the
+        // subject by name, so scanning them would just produce noise.
+        let mut files: HashMap<String, Option<Vec<String>>> = HashMap::new();
+        for u in users
+            .iter_mut()
+            .filter(|u| u.depth == 1 && u.symbol.file.is_some())
+            .take(CALL_SITE_CALLER_CAP)
+        {
+            u.call_sites = call_sites_for(repo_root, &u.symbol, &subject.name, &mut files);
         }
 
         nodes.push(UsagesEntry {
@@ -1083,6 +1202,25 @@ pub fn render_find_usages(r: &FindUsagesResult, style: Render) -> String {
                 ),
             );
             line(&mut out, &format!("  id: {}", style.id(&u.symbol.id)));
+            for site in &u.call_sites {
+                line(
+                    &mut out,
+                    &format!(
+                        "    {}:{}  {}",
+                        u.symbol.file.as_deref().unwrap_or("?"),
+                        site.line,
+                        style.id(&site.text)
+                    ),
+                );
+            }
+        }
+        if e.users.iter().any(|u| !u.call_sites.is_empty()) {
+            line(
+                &mut out,
+                &style.dim(
+                    "(call-site lines matched by name — a hit inside a comment or string is possible)",
+                ),
+            );
         }
     }
     next_actions(
@@ -1393,6 +1531,17 @@ pub fn render_graph_schema(r: &GraphSchemaResult, style: Render) -> String {
 // ---------------------------------------------------------------------------
 // shortest_path
 // ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ShortestPathParams {
+    #[serde(alias = "sourceId", alias = "from")]
+    pub source: String,
+    #[serde(alias = "targetId", alias = "to")]
+    pub target: String,
+    /// Don't retry the reverse direction when no forward path exists.
+    pub strict: bool,
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ShortestPathResult {
@@ -1755,6 +1904,7 @@ mod tests {
         let g = fixture();
         let r = find_usages(
             &g,
+            Path::new("/nonexistent"),
             &FindUsagesParams {
                 node_id: vec!["function:src/a.rs:7:callee".into()],
                 ..Default::default()
@@ -1769,6 +1919,7 @@ mod tests {
         // The Contains edge into `caller` must not count as a usage.
         let r2 = find_usages(
             &g,
+            Path::new("/nonexistent"),
             &FindUsagesParams {
                 node_id: vec!["function:src/a.rs:1:caller".into()],
                 ..Default::default()
@@ -1824,6 +1975,7 @@ mod tests {
         );
         let usages = find_usages(
             &g,
+            Path::new("/nonexistent"),
             &FindUsagesParams {
                 node_id: vec![
                     "function:src/a.rs:7:callee".into(),

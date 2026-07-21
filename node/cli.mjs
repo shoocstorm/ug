@@ -980,6 +980,26 @@ function projectCtx(project) {
   return ctx;
 }
 
+// graph.json sits next to the project's ugdb.
+function graphPathFor(dbPath) {
+  return join(dirname(resolve(dbPath)), 'graph.json');
+}
+
+// One call into the Rust agent-tool core (native/src/agent_tools.rs). Every
+// graph-backed MCP tool goes through here, so MCP output is produced by the
+// same code as `ug <tool>` instead of a parallel JS implementation that can
+// drift. Params are passed through as-is: the Rust structs accept both the
+// canonical snake_case names and these legacy camelCase spellings.
+function agentTool(name, dbPath, repoRoot, params) {
+  return ug.agentTool(
+    name,
+    graphPathFor(dbPath),
+    repoRoot,
+    JSON.stringify(params ?? {}),
+    'markdown',
+  );
+}
+
 const graphCaches = new Map();
 function loadGraph(dbPath) {
   if (graphCaches.has(dbPath)) return graphCaches.get(dbPath);
@@ -1043,71 +1063,6 @@ function stalenessNote(dbPath, repoRoot) {
 function invalidateProjectCaches(dbPath) {
   graphCaches.delete(dbPath);
   stalenessCache.delete(dbPath);
-}
-
-function nodeLoc(n) {
-  if (!n.file) return '(no file)';
-  // File nodes carry no line range — "path:?-?" reads like an error.
-  if (n.startLine == null && n.endLine == null) return n.file;
-  return `${n.file}:${n.startLine ?? '?'}-${n.endLine ?? '?'}`;
-}
-
-// `(name?: type = default, ...) -> return` from a node's structured
-// signature (mirrors render_signature in native/src/storage/text.rs).
-function renderSignature(sig) {
-  if (!sig || (!sig.params?.length && !sig.returnType)) return '';
-  const params = (sig.params ?? []).map((p) => {
-    let s = p.name ?? '';
-    if (p.optional) s += '?';
-    if (p.type) s += `: ${p.type}`;
-    if (p.default) s += ` = ${p.default}`;
-    return s;
-  });
-  let out = `(${params.join(', ')})`;
-  if (sig.returnType) out += ` -> ${sig.returnType}`;
-  return out;
-}
-
-// Scan a caller's own source slice for lines mentioning the target name —
-// heuristic call-site evidence (a name can appear in a comment), but one
-// file read per caller and each hit is a jumpable file:line.
-function findCallSites(repoRoot, callerNode, targetName, cap = 3) {
-  if (!callerNode?.file || !targetName) return [];
-  try {
-    const lines = readFileSync(join(repoRoot, callerNode.file), 'utf-8').split('\n');
-    const from = Math.max(0, (callerNode.start_line ?? 1) - 1);
-    const to = Math.min(lines.length, callerNode.end_line ?? lines.length);
-    const out = [];
-    for (let i = from; i < to; i++) {
-      if (lines[i].includes(targetName)) {
-        out.push({ line: i + 1, text: lines[i].trim().slice(0, 160) });
-        if (out.length >= cap) break;
-      }
-    }
-    return out;
-  } catch {
-    return [];
-  }
-}
-
-// Appended to find_usages output: the exact line(s) inside each direct
-// caller that mention the target, so the agent can verify a usage without
-// one get_code round-trip per caller.
-function formatCallSites(traversal, target, repoRoot) {
-  const callers = (traversal.nodes ?? []).filter((n) => n.distance === 1 && n.file).slice(0, 20);
-  if (!callers.length) return '';
-  const lines = ['', '## call sites'];
-  let any = false;
-  for (const caller of callers) {
-    const sites = findCallSites(repoRoot, caller, target.name);
-    for (const s of sites) {
-      any = true;
-      lines.push(`- ${caller.name}  ${caller.file}:${s.line}: \`${s.text}\``);
-    }
-  }
-  if (!any) return '';
-  lines.push('(lines matched by name — a hit inside a comment or string is possible)');
-  return lines.join('\n');
 }
 
 function listProjectsInfo() {
@@ -1186,259 +1141,6 @@ async function regenerateProject(dbPath, repoRoot) {
   return `Reindexed ${repoRoot} → ${outputDir}\n${gd.nodes?.length ?? 0} nodes, ${gd.edges?.length ?? 0} edges\n${ingestMsg}`;
 }
 
-function findSymbolMatches(graph, { name, nodeTypes, filePrefix, limit }) {
-  const q = name.toLowerCase();
-  const types = nodeTypes?.map((t) => t.toLowerCase());
-  const hits = [];
-  for (const n of graph.nodes) {
-    if (types && !types.includes((n.node_type || '').toLowerCase())) continue;
-    if (filePrefix && !(n.file || '').startsWith(filePrefix)) continue;
-    const nm = (n.name || '').toLowerCase();
-    // exact > prefix > substring; ties broken by shorter (closer) name.
-    const rank = nm === q ? 0 : nm.startsWith(q) ? 1 : nm.includes(q) ? 2 : 3;
-    if (rank < 3) hits.push([rank, n]);
-  }
-  hits.sort((a, b) => a[0] - b[0] || a[1].name.length - b[1].name.length);
-  return { total: hits.length, items: hits.slice(0, limit ?? 20).map(([, n]) => n) };
-}
-
-function formatSymbolHits(query, { total, items }) {
-  const lines = [`# Symbols matching '${query}'`, `${total} match(es)${total > items.length ? `, showing ${items.length}` : ''}`, ''];
-  if (!items.length) {
-    lines.push('No name matches. Try a shorter fragment, drop nodeTypes/filePrefix, or use search_kb for a concept-level query.');
-    return lines.join('\n');
-  }
-  for (const n of items) {
-    const sig = renderSignature(n.signature);
-    lines.push(`- ${n.node_type} **${n.name}**${sig ? sig : ''}  ${nodeLoc(n)}`);
-    lines.push(`  id: \`${n.id}\``);
-    if (n.docstring) lines.push(`  doc: ${String(n.docstring).slice(0, 200)}`);
-  }
-  lines.push('');
-  lines.push('Next: get_code(nodeId) for source, find_usages(nodeId) for callers, traverse_kb for dependencies.');
-  return lines.join('\n');
-}
-
-// File nodes print their id as `file:<path>` (e.g. `file:docs/mcp.md`) and
-// agents/users copy that straight into file parameters. Accept both forms.
-function stripFileIdPrefix(file) {
-  return file.startsWith('file:') ? file.slice('file:'.length) : file;
-}
-
-function fileOutline(graph, file) {
-  file = stripFileIdPrefix(file);
-  // Exact repo-relative match first, then unique suffix match.
-  let matches = graph.nodes.filter((n) => n.file === file);
-  if (!matches.length) {
-    const suffix = file.startsWith('/') ? file : `/${file}`;
-    const files = new Set(
-      graph.nodes.filter((n) => n.file && (n.file === file || n.file.endsWith(suffix))).map((n) => n.file),
-    );
-    if (files.size > 1) return { ambiguous: [...files].sort() };
-    if (files.size === 1) {
-      const resolved = [...files][0];
-      matches = graph.nodes.filter((n) => n.file === resolved);
-    }
-  }
-  if (!matches.length) return { matches: [] };
-  const symbols = matches
-    .filter((n) => n.node_type !== 'File' && n.node_type !== 'Folder')
-    .sort((a, b) => (a.startLine ?? 0) - (b.startLine ?? 0));
-  return { file: matches[0].file, symbols };
-}
-
-function formatFileOutline(query, r) {
-  if (r.ambiguous) {
-    return [`'${query}' matches ${r.ambiguous.length} files — pass one of:`, ...r.ambiguous.map((f) => `- ${f}`)].join('\n');
-  }
-  if (!r.symbols || !r.file) {
-    return `No indexed file matches '${query}'. Pass a repo-relative path (see project_overview for the biggest files), or re-run \`ug gen\` if the file is new.`;
-  }
-  const lines = [`# Outline of ${r.file}`, `${r.symbols.length} symbol(s)  •  types=[${summarizeNodeTypes(r.symbols)}]`, ''];
-  for (const n of r.symbols) {
-    const sig = renderSignature(n.signature);
-    lines.push(`- L${n.startLine ?? '?'}-${n.endLine ?? '?'}  ${n.node_type}  **${n.name}**${sig}  id: \`${n.id}\``);
-  }
-  lines.push('');
-  lines.push('Next: get_code(nodeId) to read one symbol, or get_code(file) for the whole file.');
-  return lines.join('\n');
-}
-
-function getCodeSlice(graph, repoRoot, args) {
-  let { file, startLine, endLine } = args;
-  let node = null;
-  if (args.nodeId) {
-    node = graph.byId.get(args.nodeId);
-    if (!node) throw new Error(`No node with id '${args.nodeId}' — ids come from find_symbol / search_kb / file_outline.`);
-    if (!node.file) throw new Error(`Node '${args.nodeId}' (${node.node_type}) has no source file.`);
-    file = node.file;
-    startLine = node.startLine ?? 1;
-    // No line range at all (File nodes) means the whole file, not line 1.
-    endLine = node.endLine ?? (node.startLine != null ? startLine : undefined);
-  }
-  if (file) file = stripFileIdPrefix(file);
-  const abs = join(repoRoot, file);
-  if (!existsSync(abs)) {
-    throw new Error(`${file} not found under repo root ${repoRoot} — the index may be stale (re-run \`ug gen\`).`);
-  }
-  const all = readFileSync(abs, 'utf-8').split('\n');
-  const from = Math.max(1, startLine ?? 1);
-  const to = Math.min(all.length, endLine ?? all.length);
-  let text = all.slice(from - 1, to).join('\n');
-  const maxChars = args.maxChars ?? 20000;
-  let truncated = 0;
-  if (text.length > maxChars) {
-    truncated = text.length - maxChars;
-    text = text.slice(0, maxChars);
-  }
-  return { node, file, from, to, totalLines: all.length, text, truncated };
-}
-
-function formatCodeSlice(r) {
-  const lines = [];
-  const title = r.node ? `${r.node.node_type} ${r.node.name}` : r.file;
-  lines.push(`# ${title}  —  ${r.file}:${r.from}-${r.to} (of ${r.totalLines} lines)`);
-  if (r.node?.docstring) lines.push(`doc: ${r.node.docstring}`);
-  lines.push('```');
-  lines.push(r.text);
-  lines.push('```');
-  if (r.truncated) {
-    lines.push(`(truncated — ${r.truncated} more chars; narrow the line range or raise maxChars)`);
-  }
-  return lines.join('\n');
-}
-
-function projectOverview(graph, repoRoot, dbPath) {
-  const nodeTypes = new Map();
-  const symbolsPerFile = new Map();
-  for (const n of graph.nodes) {
-    nodeTypes.set(n.node_type, (nodeTypes.get(n.node_type) ?? 0) + 1);
-    if (n.file && n.node_type !== 'File' && n.node_type !== 'Folder') {
-      symbolsPerFile.set(n.file, (symbolsPerFile.get(n.file) ?? 0) + 1);
-    }
-  }
-  const edgeTypes = new Map();
-  const inDegree = new Map();
-  for (const e of graph.edges) {
-    edgeTypes.set(e.edge_type, (edgeTypes.get(e.edge_type) ?? 0) + 1);
-    // Contains edges are pure structure (folder→file→symbol); skipping them
-    // makes inbound degree mean "how much code depends on this".
-    if ((e.edge_type || '').toLowerCase() !== 'contains') {
-      inDegree.set(e.target, (inDegree.get(e.target) ?? 0) + 1);
-    }
-  }
-  const top = (m, k) => [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, k);
-
-  const lines = [`# Project overview`, `repo: ${repoRoot}`, `db: ${dbPath}`, ''];
-  lines.push(`## Nodes (${graph.nodes.length})`);
-  for (const [t, c] of top(nodeTypes, 10)) lines.push(`- ${t}: ${c}`);
-  lines.push('');
-  lines.push(`## Edges (${graph.edges.length})`);
-  for (const [t, c] of top(edgeTypes, 10)) lines.push(`- ${t}: ${c}`);
-  lines.push('');
-  lines.push('## Biggest files (by symbol count)');
-  for (const [f, c] of top(symbolsPerFile, 10)) lines.push(`- ${f}  (${c})`);
-  lines.push('');
-  lines.push('## Most depended-upon symbols (inbound edges, excluding containment)');
-  for (const [id, c] of top(inDegree, 12)) {
-    const n = graph.byId.get(id);
-    if (!n) continue;
-    lines.push(`- ${n.node_type} **${n.name}**  ←${c}  ${nodeLoc(n)}  id: \`${id}\``);
-  }
-  lines.push('');
-  lines.push('Next: file_outline on a big file, get_code / find_usages on a hotspot id, or search_kb for a concept.');
-  return lines.join('\n');
-}
-
-// Run a per-item formatter over a batch, isolating failures: one bad id
-// yields an inline error section instead of sinking the whole call. The
-// point of batching is fewer agent round trips — a thrown error would
-// force a retry turn and erase that saving.
-async function batchSections(items, fn) {
-  const sections = [];
-  for (const item of items) {
-    try {
-      sections.push(await fn(item));
-    } catch (err) {
-      sections.push(`✗ ${item}: ${err.message ?? String(err)}`);
-    }
-  }
-  return sections.join('\n\n---\n\n');
-}
-
-// The full edge-type vocabulary indexers can emit (GraphEdgeType in
-// native/src/types.rs) — shown so agents know what *could* appear, not
-// just what this graph happens to contain.
-const EDGE_TYPE_VOCABULARY = [
-  'DependsOn', 'Calls', 'Extends', 'Implements', 'References',
-  'Contains', 'Imports', 'Exports', 'Requires', 'Uses',
-];
-
-function graphSchema(graph, graphPath) {
-  const nodeCounts = new Map();
-  for (const n of graph.nodes) {
-    nodeCounts.set(n.node_type, (nodeCounts.get(n.node_type) ?? 0) + 1);
-  }
-  // Edge types keyed by source→target node types so the reader learns not
-  // just which types exist but what they connect.
-  const edgeCounts = new Map();
-  const edgeShapes = new Map();
-  for (const e of graph.edges) {
-    edgeCounts.set(e.edge_type, (edgeCounts.get(e.edge_type) ?? 0) + 1);
-    const st = graph.byId.get(e.source)?.node_type ?? '?';
-    const tt = graph.byId.get(e.target)?.node_type ?? '?';
-    const key = `${e.edge_type}|${st}→${tt}`;
-    edgeShapes.set(key, (edgeShapes.get(key) ?? 0) + 1);
-  }
-  const sorted = (m) => [...m.entries()].sort((a, b) => b[1] - a[1]);
-
-  const lines = [`# Graph schema`, `graph: ${graphPath}`, ''];
-  lines.push('## Node types in this graph');
-  for (const [t, c] of sorted(nodeCounts)) lines.push(`- ${t}: ${c}`);
-  lines.push('');
-  lines.push('## Edge types in this graph (source type → target type)');
-  for (const [t, c] of sorted(edgeCounts)) {
-    const shapes = [...edgeShapes.entries()]
-      .filter(([k]) => k.startsWith(`${t}|`))
-      .map(([k, sc]) => [k.slice(t.length + 1), sc])
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 4)
-      .map(([s, sc]) => `${s} (${sc})`)
-      .join(', ');
-    lines.push(`- ${t}: ${c}  ${shapes}`);
-  }
-  lines.push('');
-  lines.push('## Full edge-type vocabulary (what indexers can emit)');
-  lines.push(EDGE_TYPE_VOCABULARY.join(', '));
-  lines.push('');
-  lines.push('Notes:');
-  lines.push('- Edges are directed: Calls A→B means A calls B; inbound edges on B are its callers.');
-  lines.push("- Contains is structure (Folder→File→Symbol) — exclude it when you mean 'depends on'.");
-  lines.push('- Pass these names to edgeTypes in find_usages / traverse_kb, and node types to nodeTypes in find_symbol.');
-  return lines.join('\n');
-}
-
-function formatShortestPath(graph, sourceId, targetId, result, reversed) {
-  if (!result.found) {
-    return [
-      `No directed path between \`${sourceId}\` and \`${targetId}\` in either direction.`,
-      'They may be connected only through shared ancestors — try traverse_kb from each with direction=both.',
-    ].join('\n');
-  }
-  const lines = [
-    `# Path ${reversed ? `${targetId} → ${sourceId} (reverse direction — no forward path existed)` : `${sourceId} → ${targetId}`}`,
-    `${result.length ?? result.path.length - 1} hop(s)`,
-    '',
-  ];
-  result.path.forEach((id, i) => {
-    const n = graph.byId.get(id);
-    const desc = n ? `${n.node_type} **${n.name}**  ${nodeLoc(n)}` : '(unknown node)';
-    lines.push(`${i === 0 ? '·' : '↓'} ${desc}  id: \`${id}\``);
-  });
-  lines.push('');
-  lines.push('Next: get_code on any id above to see the code that makes the link.');
-  return lines.join('\n');
-}
 
 function claudeDesktopConfigPath() {
   const home = homedir();
@@ -1851,6 +1553,100 @@ function uninstallMcpConfig(target, scope) {
   return { configPath, removed };
 }
 
+/**
+ * Run one MCP tool and return its text output.
+ *
+ * The single dispatch shared by the stdio server and `ug mcp call` — they
+ * used to carry separate copies that drifted. Throws on unknown tools and
+ * on validation failures; callers decide how to surface the error.
+ *
+ * The graph-backed tools delegate to the Rust core via `agentTool`, so their
+ * output is identical to the matching `ug <tool>` command. The DB-backed
+ * ones (search, traversal, embeddings) already shared Rust code through
+ * their own napi entry points.
+ */
+async function callTool(name, rawArgs) {
+  const project = rawArgs?.project;
+  const { dbPath, repoRoot } = projectCtx(project);
+  const args = { ...(rawArgs ?? {}), project: undefined };
+  const withStaleness = (text) => text + stalenessNote(dbPath, repoRoot);
+
+  // DB-backed: OverGraph/Neo4j + embeddings.
+  if (name === 'search_kb') {
+    const parsed = SearchKbInput.parse(args);
+    const json = await ug.dbHybridSearch(
+      dbPath,
+      JSON.stringify({ ...parsed, repoRoot }),
+      embedderOptionsJson(),
+      destOptionsJson(),
+    );
+    return withStaleness(formatRankedContext(JSON.parse(json)));
+  }
+
+  if (name === 'semantic_search_kb') {
+    const parsed = SemanticSearchInput.parse(args);
+    const json = await ug.dbSemanticSearch(
+      dbPath,
+      parsed.query,
+      parsed.k ?? 10,
+      parsed.whereClause ?? null,
+      embedderOptionsJson(),
+      destOptionsJson(),
+    );
+    return withStaleness(formatSemanticHits(parsed.query, JSON.parse(json)));
+  }
+
+  if (name === 'traverse_kb') {
+    const parsed = TraverseInput.parse(args);
+    const json = await ug.dbTraverse(
+      dbPath,
+      parsed.nodeId,
+      parsed.hops,
+      parsed.edgeTypes ?? null,
+      parsed.direction,
+      destOptionsJson(),
+    );
+    const header = `Traversal from [${parsed.nodeId.join(', ')}] (hops=${parsed.hops}, dir=${parsed.direction})`;
+    return withStaleness(formatTraversal(JSON.parse(json), header));
+  }
+
+  // Graph-backed: one Rust implementation, shared with the CLI and HTTP API.
+  // The zod schemas still validate and normalize; the lookup and formatting
+  // live in native/src/agent_tools.rs.
+  const GRAPH_TOOLS = {
+    find_symbol: FindSymbolInput,
+    file_outline: FileOutlineInput,
+    get_code: GetCodeInput,
+    find_usages: FindUsagesInput,
+    shortest_path: ShortestPathInput,
+    project_overview: null,
+    graph_schema: null,
+  };
+  if (name in GRAPH_TOOLS) {
+    const schema = GRAPH_TOOLS[name];
+    const params = schema ? schema.parse(args) : {};
+    return withStaleness(agentTool(name, dbPath, repoRoot, params));
+  }
+
+  // Project-level.
+  if (name === 'list_projects') {
+    const text = formatProjectList(listProjectsInfo(), repoRoot);
+    return project
+      ? `\n⚠ list_projects ignores the project parameter — listing all projects under ${ugHome()}.\n\n` + text
+      : text;
+  }
+
+  if (name === 'reindex') {
+    return await regenerateProject(dbPath, repoRoot);
+  }
+
+  if (name === 'ping_embedder') {
+    return await ug.pingEmbedder(embedderOptionsJson());
+  }
+
+  throw new Error(`Unknown tool: ${name}`);
+}
+
 async function runMcpServer() {
   const { dbPath: DB_PATH, repoRoot: REPO_ROOT } = resolveDbAndRoot();
 
@@ -1865,172 +1661,8 @@ async function runMcpServer() {
 
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
     const { name, arguments: rawArgs } = req.params;
-    const project = rawArgs?.project;
-    const { dbPath, repoRoot } = projectCtx(project);
-    const args = { ...(rawArgs ?? {}), project: undefined };
-
     try {
-      if (name === 'search_kb') {
-        const parsed = SearchKbInput.parse(args);
-        const opts = { ...parsed, repoRoot };
-        const json = await ug.dbHybridSearch(dbPath, JSON.stringify(opts), embedderOptionsJson(), destOptionsJson());
-        const ctx = JSON.parse(json);
-        let text = formatRankedContext(ctx);
-        text += stalenessNote(dbPath, repoRoot);
-        return { content: [{ type: 'text', text }] };
-      }
-
-      if (name === 'semantic_search_kb') {
-        const parsed = SemanticSearchInput.parse(args);
-        const json = await ug.dbSemanticSearch(dbPath, parsed.query, parsed.k ?? 10, parsed.whereClause ?? null, embedderOptionsJson(), destOptionsJson());
-        const hits = JSON.parse(json);
-        let text = formatSemanticHits(parsed.query, hits);
-        text += stalenessNote(dbPath, repoRoot);
-        return { content: [{ type: 'text', text }] };
-      }
-
-      if (name === 'traverse_kb') {
-        const parsed = TraverseInput.parse(args);
-        const json = await ug.dbTraverse(dbPath, parsed.nodeId, parsed.hops, parsed.edgeTypes ?? null, parsed.direction, destOptionsJson());
-        const traversal = JSON.parse(json);
-        const header = `Traversal from [${parsed.nodeId.join(', ')}] (hops=${parsed.hops}, dir=${parsed.direction})`;
-        let text = formatTraversal(traversal, header);
-        text += stalenessNote(dbPath, repoRoot);
-        return { content: [{ type: 'text', text }] };
-      }
-
-      if (name === 'find_usages') {
-        const parsed = FindUsagesInput.parse(args);
-        const edgeTypes = parsed.edgeTypes ?? ['calls', 'references', 'imports', 'extends', 'implements'];
-        const cache = loadGraph(dbPath);
-        let text = await batchSections(parsed.nodeId, async (id) => {
-          const json = await ug.dbTraverse(dbPath, [id], parsed.hops, edgeTypes, 'inbound', destOptionsJson());
-          const traversal = JSON.parse(json);
-          const header = `Usages of ${id} (hops=${parsed.hops}, edges=[${edgeTypes.join(', ')}])`;
-          return formatTraversal(traversal, header) + formatCallSites(traversal, cache.byId.get(id), repoRoot);
-        });
-        text += stalenessNote(dbPath, repoRoot);
-        return { content: [{ type: 'text', text }] };
-      }
-
-      if (name === 'find_symbol') {
-        const parsed = FindSymbolInput.parse(args);
-        const { graph, byId } = loadGraph(dbPath);
-        let text;
-        if (parsed.nodeId) {
-          // Direct nodeId lookup — O(1) access
-          text = await batchSections(parsed.nodeId, (id) => {
-            const node = byId.get(id);
-            if (!node) {
-              return `# Node '${id}'\n\nNo node with id '${id}' — ids come from find_symbol / search_kb / file_outline.`;
-            }
-            return formatSymbolHits(id, { total: 1, items: [node] });
-          });
-        } else {
-          // Name search
-          text = await batchSections(parsed.name, (nm) =>
-            formatSymbolHits(nm, findSymbolMatches(graph, { ...parsed, name: nm })),
-          );
-        }
-        text += stalenessNote(dbPath, repoRoot);
-        return { content: [{ type: 'text', text }] };
-      }
-
-      if (name === 'file_outline') {
-        const parsed = FileOutlineInput.parse(args);
-        const { graph, byId } = loadGraph(dbPath);
-        let text;
-        if (parsed.nodeId) {
-          // Direct nodeId lookup — O(1) access
-          text = await batchSections(parsed.nodeId, (id) => {
-            const node = byId.get(id);
-            if (!node) {
-              return `# Node '${id}'\n\nNo node with id '${id}' — ids come from find_symbol / search_kb / file_outline.`;
-            }
-            if (node.node_type !== 'File') {
-              return `# Node '${id}'\n\nNode '${id}' is a ${node.node_type}, not a File. file_outline requires File node ids.`;
-            }
-            const filePath = node.file || id.replace(/^file:/, '');
-            return formatFileOutline(filePath, fileOutline(graph, filePath));
-          });
-        } else {
-          // File path lookup
-          text = await batchSections(parsed.file, (f) => formatFileOutline(f, fileOutline(graph, f)));
-        }
-        text += stalenessNote(dbPath, repoRoot);
-        return { content: [{ type: 'text', text }] };
-      }
-
-      if (name === 'get_code') {
-        const parsed = GetCodeInput.parse(args);
-        const cache = loadGraph(dbPath);
-        let text;
-        if (parsed.nodeId) {
-          text = await batchSections(parsed.nodeId, (id) =>
-            formatCodeSlice(getCodeSlice(cache, repoRoot, { ...parsed, nodeId: id })),
-          );
-        } else {
-          text = formatCodeSlice(getCodeSlice(cache, repoRoot, { ...parsed, nodeId: undefined }));
-        }
-        text += stalenessNote(dbPath, repoRoot);
-        return { content: [{ type: 'text', text }] };
-      }
-
-      if (name === 'project_overview') {
-        const cache = loadGraph(dbPath);
-        const merged = { ...cache.graph, byId: cache.byId };
-        let text = projectOverview(merged, repoRoot, dbPath);
-        text += stalenessNote(dbPath, repoRoot);
-        return { content: [{ type: 'text', text }] };
-      }
-
-      if (name === 'shortest_path') {
-        const parsed = ShortestPathInput.parse(args);
-        const cache = loadGraph(dbPath);
-        for (const id of [parsed.sourceId, parsed.targetId]) {
-          if (!cache.byId.has(id)) throw new Error(`No node with id '${id}' — get ids from find_symbol or search_kb first.`);
-        }
-        let reversed = false;
-        let result = JSON.parse(ug.findShortestPath(cache.raw, parsed.sourceId, parsed.targetId));
-        if (!result.found) {
-          reversed = true;
-          result = JSON.parse(ug.findShortestPath(cache.raw, parsed.targetId, parsed.sourceId));
-        }
-        const merged = { ...cache.graph, byId: cache.byId };
-        let text = formatShortestPath(merged, parsed.sourceId, parsed.targetId, result, reversed);
-        text += stalenessNote(dbPath, repoRoot);
-        return { content: [{ type: 'text', text }] };
-      }
-
-      if (name === 'graph_schema') {
-        const cache = loadGraph(dbPath);
-        const merged = { ...cache.graph, byId: cache.byId };
-        let text = graphSchema(merged, cache.path);
-        text += stalenessNote(dbPath, repoRoot);
-        return { content: [{ type: 'text', text }] };
-      }
-
-      if (name === 'list_projects') {
-        const projects = listProjectsInfo();
-        let text = formatProjectList(projects, REPO_ROOT);
-        if (project) text = `\n⚠ list_projects ignores the project parameter — listing all projects under ${ugHome()}.\n\n` + text;
-        return { content: [{ type: 'text', text }] };
-      }
-
-      if (name === 'reindex') {
-        const text = await regenerateProject(dbPath, repoRoot);
-        return { content: [{ type: 'text', text }] };
-      }
-
-      if (name === 'ping_embedder') {
-        const r = await ug.pingEmbedder(embedderOptionsJson());
-        return { content: [{ type: 'text', text: r }] };
-      }
-
-      return {
-        isError: true,
-        content: [{ type: 'text', text: `Unknown tool: ${name}` }],
-      };
+      return { content: [{ type: 'text', text: await callTool(name, rawArgs) }] };
     } catch (err) {
       return {
         isError: true,
@@ -2438,122 +2070,9 @@ const commands = {
         }
         const toolDef = MCP_TOOLS.find((t) => t.name === tool);
         if (!toolDef) throw new Error(`Unknown tool '${tool}' — see \`ug mcp list\` for available tools.`);
-        const { dbPath, repoRoot } = projectCtx(parsed.project);
-        const result = await (async () => {
-          if (tool === 'search_kb') {
-            const p = SearchKbInput.parse(parsed);
-            const opts = { ...p, repoRoot };
-            const r = await ug.dbHybridSearch(dbPath, JSON.stringify(opts), embedderOptionsJson(), destOptionsJson());
-            return formatRankedContext(JSON.parse(r)) + stalenessNote(dbPath, repoRoot);
-          }
-          if (tool === 'semantic_search_kb') {
-            const p = SemanticSearchInput.parse(parsed);
-            const r = await ug.dbSemanticSearch(dbPath, p.query, p.k ?? 10, p.whereClause ?? null, embedderOptionsJson(), destOptionsJson());
-            return formatSemanticHits(p.query, JSON.parse(r)) + stalenessNote(dbPath, repoRoot);
-          }
-          if (tool === 'traverse_kb') {
-            const p = TraverseInput.parse(parsed);
-            const r = await ug.dbTraverse(dbPath, p.nodeId, p.hops, p.edgeTypes ?? null, p.direction, destOptionsJson());
-            return formatTraversal(JSON.parse(r), `Traversal from [${p.nodeId.join(', ')}]`) + stalenessNote(dbPath, repoRoot);
-          }
-          if (tool === 'find_usages') {
-            const p = FindUsagesInput.parse(parsed);
-            const et = p.edgeTypes ?? ['calls', 'references', 'imports', 'extends', 'implements'];
-            const cache = loadGraph(dbPath);
-            const txt = await batchSections(p.nodeId, async (id) => {
-              const r = await ug.dbTraverse(dbPath, [id], p.hops, et, 'inbound', destOptionsJson());
-              const trav = JSON.parse(r);
-              return formatTraversal(trav, `Usages of ${id}`) + formatCallSites(trav, cache.byId.get(id), repoRoot);
-            });
-            return txt + stalenessNote(dbPath, repoRoot);
-          }
-          if (tool === 'find_symbol') {
-            const p = FindSymbolInput.parse(parsed);
-            const { graph, byId } = loadGraph(dbPath);
-            let txt;
-            if (p.nodeId) {
-              // Direct nodeId lookup — O(1) access
-              txt = await batchSections(p.nodeId, (id) => {
-                const node = byId.get(id);
-                if (!node) {
-                  return `# Node '${id}'\n\nNo node with id '${id}' — ids come from find_symbol / search_kb / file_outline.`;
-                }
-                return formatSymbolHits(id, { total: 1, items: [node] });
-              });
-            } else {
-              // Name search
-              txt = await batchSections(p.name, (nm) =>
-                formatSymbolHits(nm, findSymbolMatches(graph, { ...p, name: nm })),
-              );
-            }
-            return txt + stalenessNote(dbPath, repoRoot);
-          }
-          if (tool === 'file_outline') {
-            const p = FileOutlineInput.parse(parsed);
-            const { graph, byId } = loadGraph(dbPath);
-            let txt;
-            if (p.nodeId) {
-              // Direct nodeId lookup — O(1) access
-              txt = await batchSections(p.nodeId, (id) => {
-                const node = byId.get(id);
-                if (!node) {
-                  return `# Node '${id}'\n\nNo node with id '${id}' — ids come from find_symbol / search_kb / file_outline.`;
-                }
-                if (node.node_type !== 'File') {
-                  return `# Node '${id}'\n\nNode '${id}' is a ${node.node_type}, not a File. file_outline requires File node ids.`;
-                }
-                const filePath = node.file || id.replace(/^file:/, '');
-                return formatFileOutline(filePath, fileOutline(graph, filePath));
-              });
-            } else {
-              // File path lookup
-              txt = await batchSections(p.file, (f) => formatFileOutline(f, fileOutline(graph, f)));
-            }
-            return txt + stalenessNote(dbPath, repoRoot);
-          }
-          if (tool === 'get_code') {
-            const p = GetCodeInput.parse(parsed);
-            const cache = loadGraph(dbPath);
-            if (p.nodeId) {
-              const txt = await batchSections(p.nodeId, (id) =>
-                formatCodeSlice(getCodeSlice(cache, repoRoot, { ...p, nodeId: id })),
-              );
-              return txt + stalenessNote(dbPath, repoRoot);
-            }
-            return formatCodeSlice(getCodeSlice(cache, repoRoot, { ...p, nodeId: undefined })) + stalenessNote(dbPath, repoRoot);
-          }
-          if (tool === 'project_overview') {
-            const cache = loadGraph(dbPath);
-            const merged = { ...cache.graph, byId: cache.byId };
-            return projectOverview(merged, repoRoot, dbPath) + stalenessNote(dbPath, repoRoot);
-          }
-          if (tool === 'shortest_path') {
-            const p = ShortestPathInput.parse(parsed);
-            const cache = loadGraph(dbPath);
-            let rev = false;
-            let res = JSON.parse(ug.findShortestPath(cache.raw, p.sourceId, p.targetId));
-            if (!res.found) {
-              rev = true;
-              res = JSON.parse(ug.findShortestPath(cache.raw, p.targetId, p.sourceId));
-            }
-            return formatShortestPath({ ...cache.graph, byId: cache.byId }, p.sourceId, p.targetId, res, rev) + stalenessNote(dbPath, repoRoot);
-          }
-          if (tool === 'graph_schema') {
-            const cache = loadGraph(dbPath);
-            return graphSchema({ ...cache.graph, byId: cache.byId }, cache.path) + stalenessNote(dbPath, repoRoot);
-          }
-          if (tool === 'list_projects') {
-            return formatProjectList(listProjectsInfo(), repoRoot);
-          }
-          if (tool === 'reindex') {
-            return regenerateProject(dbPath, repoRoot);
-          }
-          if (tool === 'ping_embedder') {
-            return await ug.pingEmbedder(embedderOptionsJson());
-          }
-          throw new Error(`Tool '${tool}' not yet wired in call mode — file an issue or use stdio MCP`);
-        })();
-        console.log(result);
+        // Same dispatch the stdio server uses, so `mcp call` is a faithful
+        // preview of what an agent sees.
+        console.log(await callTool(tool, parsed));
         return '';
       }
 

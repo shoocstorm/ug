@@ -1730,14 +1730,15 @@ fn run_find_usages(args: &[String]) {
         eprintln!("Usage: ug find_usages <node-id>... [-k|--hops <n>] [-t|--edge-type <type>]... [-n|--name <project>]");
         std::process::exit(1);
     }
-    let (graph, _raw, _path) = load_agent_graph(args);
+    let (graph, _raw, graph_path) = load_agent_graph(args);
+    let repo_root = agent_repo_root(&graph, &graph_path);
 
     let params = agent_tools::FindUsagesParams {
         node_id: node_ids,
         hops: flag_value(args, &["--hops", "-k"]).and_then(|s| s.parse().ok()),
         edge_types: multi_flag(args, &["--edge-type", "-t"]),
     };
-    let result = agent_tools::find_usages(&graph, &params);
+    let result = agent_tools::find_usages(&graph, &repo_root, &params);
     let ok = result.ok();
     emit_agent_result(
         args,
