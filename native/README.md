@@ -68,7 +68,7 @@ ug graph_cycles --min-len 3 --fail-on-cycle       # cycle detection (CI guard)
 ug graph_analyze -n my-repo                       # both, written to analysis.json/cycles.json
 ```
 
-The pre-rename names (`search_graph`, `bfs`, `path`, `filter`, `centrality`,
+The pre-rename names (`bfs`, `path`, `filter`, `centrality`,
 `cycles`, `analyze`, `shortest_path`) still work as aliases, including the old
 `<graph-file>` first positional.
 

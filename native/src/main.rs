@@ -92,7 +92,7 @@ fn main() {
         // the MCP tools one-for-one.
         "find_symbols" | "find_symbol" => run_find_symbols(cmd_args),
         // Same scan as find_symbols, with docstring matching on by default.
-        "graph_search" | "search_graph" => run_graph_search(cmd_args),
+        "graph_search" => run_graph_search(cmd_args),
         "file_outline" => run_file_outline(cmd_args),
         "get_code" => run_get_code(cmd_args),
         "find_usages" => run_find_usages(cmd_args),
