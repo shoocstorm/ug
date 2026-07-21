@@ -21,19 +21,19 @@ description: |
 | `shortest_path` | cheap | — | Shortest directed path between two nodeIds |
 | `list_projects` | cheap | — | List all indexed repos on this machine |
 | `semantic_search` | medium | — | Pure vector lookup → candidate nodeIds (no code snippets) |
-| `traverse` | medium | ✅ `nodeId[]` | N-hop graph walk from nodeId(s) — deps or dependents |
+| `traverse` | cheap | ✅ `nodeId[]` | N-hop graph walk from nodeId(s) — deps or dependents |
 | `search` | expensive | — | Full GraphRAG: PPR-ranked snippets with code context |
 | `reindex` | expensive | — | Re-run index→graph→embed pipeline |
 
-**Storage**: `search`, `semantic_search` and `traverse` read the OverGraph db
-(`ugdb/`); `search`/`semantic_search` additionally need a reachable embedding
-backend. **Every other tool reads `graph.json` only.** So if search fails with
-an embedding or db error, don't give up — `find_symbols`, `file_outline`,
-`get_code`, `find_usages`, `shortest_path`, `project_overview` and
-`graph_schema` all still work, and together they cover most questions.
+**Storage**: only `search` and `semantic_search` need the OverGraph db and a
+reachable embedding backend. **Every other tool reads `graph.json` only.** So
+if search fails with an embedding or db error, don't give up — `find_symbols`,
+`file_outline`, `get_code`, `find_usages`, `traverse`, `shortest_path`,
+`project_overview` and `graph_schema` all still work, and together they cover
+most questions.
 
-**Cheap tools**: no DB round-trip or cheap name-only scan.  
-**Medium tools**: single DB query (embedding or graph hop).  
+**Cheap tools**: in-memory scan or walk over `graph.json`. No network, no DB.  
+**Medium tools**: one embedding call + one vector query.  
 **Expensive tools**: multi-pass (embed → rank → expand → snippet-read).
 
 **Batch?**: those params accept a single string OR an array of up to 10.

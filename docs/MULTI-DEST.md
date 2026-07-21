@@ -87,10 +87,17 @@ Then commands collapse to:
 
 ```bash
 ug semantic_search "..." --dest neo4j
-ug hybrid_search   "..." --dest neo4j
+ug search          "..." --dest neo4j
 ug traverse <id>          --dest neo4j
 ug ingest -i .ug/graph.json --dest overgraph,neo4j -o .ug/ugdb
 ```
+
+> **Note on `traverse`:** with no `--dest` it walks the local `graph.json`,
+> which needs no database and holds the same edges. Pass `--dest <name>` (as
+> above) to run the walk against a destination store instead — that is how you
+> verify what actually landed there. The same split exists over HTTP:
+> `POST /api/tools/traverse` reads `graph.json`, `GET /api/db/traverse/:id`
+> reads the store and accepts `?dest=`.
 
 For the MCP server (`node node/cli.mjs mcp`), Node 20+ supports the
 same file natively:

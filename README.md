@@ -229,16 +229,23 @@ backend is reachable.
 
 | Reads | CLI | MCP tools | HTTP |
 | :--- | :--- | :--- | :--- |
-| **`graph.json`** — structural, no DB or embedder needed | `find_symbols`, `file_outline`, `get_code`, `find_usages`, `shortest_path`, `project_overview`, `graph_schema`, `graph_search`, `graph_bfs`, `graph_filter`, `graph_centrality`, `graph_cycles`, `graph_analyze` | `find_symbols`, `file_outline`, `get_code`, `find_usages`, `shortest_path`, `project_overview`, `graph_schema` | `POST /api/tools/<name>`, `GET /api/graph/*`, `GET /api/file`, `GET /graph.json` |
-| **`ugdb/`** — needs the ingest step | `traverse` | `traverse` | `GET /api/db/node/:id`, `GET /api/db/traverse/:id` |
+| **`graph.json`** — structural, no DB or embedder needed | `find_symbols`, `file_outline`, `get_code`, `find_usages`, `traverse`, `shortest_path`, `project_overview`, `graph_schema`, `graph_search`, `graph_bfs`, `graph_filter`, `graph_centrality`, `graph_cycles`, `graph_analyze` | `find_symbols`, `file_outline`, `get_code`, `find_usages`, `traverse`, `shortest_path`, `project_overview`, `graph_schema` | `POST /api/tools/<name>`, `GET /api/graph/*`, `GET /api/file`, `GET /graph.json` |
+| **`ugdb/`** — needs the ingest step | `traverse --dest <name>` | — | `GET /api/db/node/:id`, `GET /api/db/traverse/:id` |
 | **`ugdb/` + an embedder** — needs ingest *and* a reachable embedding backend | `search`, `semantic_search`, `chat` | `search`, `semantic_search` | `POST /api/search/hybrid`, `POST /api/search/semantic`, `POST /api/chat` |
 
-The practical consequence: **every agent tool except `search`,
-`semantic_search` and `traverse` runs off `graph.json` alone.** After
-`ug gen --no-ingest` — or if your embedding endpoint is down — symbol lookup,
-outlines, source reads, usage analysis and pathfinding all still work; only
-the three semantic/DB entries degrade. `ug ingest` is what populates `ugdb/`,
-and `ug doctor` prints which of the two exist for the resolved project.
+The practical consequence: **only `search`, `semantic_search` and `chat` need
+the database.** After `ug gen --no-ingest` — or if your embedding endpoint is
+down — symbol lookup, outlines, source reads, usage analysis, traversal and
+pathfinding all still work.
+
+`traverse` reads `graph.json` by default, because the store holds the same
+edges and the walk is the same one `find_usages` does. Passing `--dest <name>`
+(CLI) or using `/api/db/traverse` (HTTP) runs it against a destination store
+instead — that's how you verify what actually landed in OverGraph or Neo4j,
+see [MULTI-DEST.md](docs/MULTI-DEST.md).
+
+`ug ingest` is what populates `ugdb/`, and `ug doctor` prints which of the two
+exist for the resolved project.
 
 ### `ug doctor`
 

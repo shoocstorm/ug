@@ -90,7 +90,7 @@ fn main() {
         "graph_cycles" | "cycles" => run_graph_cycles(cmd_args),
         // Agent tools (graph.json-backed, for AI coding agents). Names match
         // the MCP tools one-for-one.
-        "find_symbols" | "find_symbol" => run_find_symbols(cmd_args),
+        "find_symbols" => run_find_symbols(cmd_args),
         // Same scan as find_symbols, with docstring matching on by default.
         "graph_search" => run_graph_search(cmd_args),
         "file_outline" => run_file_outline(cmd_args),
@@ -3801,6 +3801,30 @@ fn run_traverse(args: &[String]) {
         .and_then(|s| s.parse().ok())
         .unwrap_or(2);
     let output_path = flag_value(args, &["-o", "--output"]);
+
+    // graph.json holds the same edges the store does and needs no db, so it
+    // is the default — this is the same walk `find_usages` does. `--dest`
+    // still routes to the store, which is how you verify what actually
+    // landed in a destination (see docs/MULTI-DEST.md).
+    if flag_value(args, &["--dest"]).is_none() {
+        let (graph, _raw, _path) = load_agent_graph(args);
+        let params = agent_tools::TraverseParams {
+            node_id: starts,
+            hops: Some(hops),
+            edge_types: multi_flag(args, &["--edge-type", "-t"]),
+            direction: flag_value(args, &["--direction", "-d"]),
+        };
+        let result = agent_tools::traverse(&graph, &params);
+        let ok = result.ok();
+        emit_agent_result(
+            args,
+            &result,
+            || agent_tools::render_traverse(&result, Render::Ansi),
+            "traverse result",
+            ok,
+        );
+        return;
+    }
 
     let rt = tokio_runtime();
     let json = rt.block_on(async {

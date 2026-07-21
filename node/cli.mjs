@@ -363,7 +363,10 @@ const TraverseInput = z
     direction: z.enum(['outbound', 'inbound', 'both']).default('outbound'),
   })
   .refine((v) => v.nodeId || v.startNodeIds, { message: 'Pass nodeId (one id or an array).' })
-  .transform((v) => ({ ...v, nodeId: v.nodeId ?? v.startNodeIds }));
+  // Collapse the deprecated startNodeIds onto nodeId and drop it — leaving
+  // both would send two spellings of the same field to the Rust params
+  // struct, which rejects it as a duplicate.
+  .transform(({ startNodeIds, ...v }) => ({ ...v, nodeId: v.nodeId ?? startNodeIds }));
 
 const FindUsagesInput = z.object({
   nodeId: oneOrMany,
@@ -545,7 +548,8 @@ const MCP_TOOLS = [
     name: 'traverse',
     description:
       'Walk the graph N hops from given seed node ids. The natural follow-up to search / semantic_search: take a node id you got back, expand outward to see what it imports, calls, contains, or extends. Filters by edge type and direction. ' +
-      "Use 'outbound' to see what the seed depends on; 'inbound' to see who depends on the seed. Output groups edges by type so the structure is easy to scan.",
+      "Use 'outbound' to see what the seed depends on; 'inbound' to see who depends on the seed. Output is grouped by hop, with an edge-type tally, so the structure is easy to scan. " +
+      'Reads the structural graph directly — no database or embedding backend needed, so it keeps working when search does not.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -896,64 +900,6 @@ function formatSemanticHits(query, hits) {
   lines.push(
     `Next: search({ query: "${query}" }) for graph-ranked snippets, or traverse({ nodeId: "${hits[0].id}" }) to expand.`,
   );
-  return lines.join('\n');
-}
-
-function formatTraversal(traversal, header) {
-  const nodes = traversal.nodes ?? [];
-  const edges = traversal.edges ?? [];
-  const lines = [];
-  lines.push(`# ${header}`);
-  lines.push(`nodes=${nodes.length}  •  edges=${edges.length}`);
-  lines.push('');
-
-  if (!nodes.length) {
-    lines.push('Empty neighborhood — the seed may be isolated or filters were too tight.');
-    return lines.join('\n');
-  }
-
-  // Group nodes by hop distance so the agent sees the seed first, then
-  // 1-hop neighbors, then 2-hop, etc.
-  const byHop = new Map();
-  for (const n of nodes) {
-    const d = n.distance ?? 0;
-    if (!byHop.has(d)) byHop.set(d, []);
-    byHop.get(d).push(n);
-  }
-  const hops = [...byHop.keys()].sort((a, b) => a - b);
-  for (const h of hops) {
-    lines.push(`## hop=${h}  (${byHop.get(h).length} nodes)`);
-    for (const n of byHop.get(h)) {
-      const loc = n.file ? `  •  ${n.file}` : '';
-      lines.push(`- ${n.node_type} ${n.name}  \`${n.id}\`${loc}`);
-    }
-    lines.push('');
-  }
-
-  // Group edges by type for a readable structural view.
-  if (edges.length) {
-    const byType = new Map();
-    for (const e of edges) {
-      const t = e.edge_type || '(unknown)';
-      if (!byType.has(t)) byType.set(t, []);
-      byType.get(t).push(e);
-    }
-    lines.push('## edges by type');
-    for (const [t, es] of byType) {
-      lines.push(`- ${t}: ${es.length}`);
-      // Show up to 8 examples per type — enough for the agent to spot
-      // the pattern without flooding the prompt.
-      for (const e of es.slice(0, 8)) {
-        lines.push(`  - ${e.source}  →  ${e.target}`);
-      }
-      if (es.length > 8) lines.push(`  - … and ${es.length - 8} more`);
-    }
-    lines.push('');
-  }
-
-  lines.push('Drill-down hints:');
-  lines.push('- Pick an interesting node id above and call traverse again to keep walking.');
-  lines.push('- Call get_code with a node id to read its actual source.');
   return lines.join('\n');
 }
 
@@ -1566,17 +1512,22 @@ function uninstallMcpConfig(target, scope) {
 const TOOL_ALIASES = {
   search_kb: 'search',
   hybrid_search: 'search',
+  semantic_search_kb: 'semantic_search',
+  traverse_kb: 'traverse',
   graph_path: 'shortest_path',
   path: 'shortest_path',
   list: 'list_projects',
   find_symbol: 'find_symbols',
-  // graph_search was find_symbols over names *and* docstrings.
-  graph_search: 'find_symbols'
+  // graph_search was find_symbols over names *and* docstrings; the docstring
+  // half comes back via ALIAS_DEFAULTS below.
+  graph_search: 'find_symbols',
+  search_graph: 'find_symbols',
 };
 
 // Tools whose legacy name implied a non-default param value.
 const ALIAS_DEFAULTS = {
-  graph_search: { includeDocs: true }
+  graph_search: { includeDocs: true },
+  search_graph: { includeDocs: true },
 };
 
 // Handled by callTool but deliberately absent from tools/list — operator
@@ -1632,20 +1583,6 @@ async function callTool(rawName, rawArgs) {
     return withStaleness(formatSemanticHits(parsed.query, JSON.parse(json)));
   }
 
-  if (name === 'traverse') {
-    const parsed = TraverseInput.parse(args);
-    const json = await ug.dbTraverse(
-      dbPath,
-      parsed.nodeId,
-      parsed.hops,
-      parsed.edgeTypes ?? null,
-      parsed.direction,
-      destOptionsJson(),
-    );
-    const header = `Traversal from [${parsed.nodeId.join(', ')}] (hops=${parsed.hops}, dir=${parsed.direction})`;
-    return withStaleness(formatTraversal(JSON.parse(json), header));
-  }
-
   // Graph-backed: one Rust implementation, shared with the CLI and HTTP API.
   // The zod schemas still validate and normalize; the lookup and formatting
   // live in native/src/agent_tools.rs.
@@ -1654,6 +1591,7 @@ async function callTool(rawName, rawArgs) {
     file_outline: FileOutlineInput,
     get_code: GetCodeInput,
     find_usages: FindUsagesInput,
+    traverse: TraverseInput,
     shortest_path: ShortestPathInput,
     project_overview: null,
     graph_schema: null,
