@@ -279,8 +279,8 @@ pub fn index_with_cache(path: String, cache_path: String) -> String {
         cached
     );
 
+    let _ = fs::create_dir_all(&cache_path);
     if let Ok(json) = serde_json::to_string(&new_hashes) {
-        let _ = fs::create_dir_all(&cache_path);
         let _ = fs::write(&cache_file, json);
     }
 
@@ -302,11 +302,23 @@ pub fn index_with_cache(path: String, cache_path: String) -> String {
         repo_root,
     };
 
-    serde_json::to_string(&IndexResult {
+    let json = serde_json::to_string(&IndexResult {
         files,
         folders,
         dependencies,
         stats,
     })
-    .unwrap_or_default()
+    .unwrap_or_default();
+
+    // Snapshot the tree next to cache.json so the *next* run can recover
+    // FileNodes for its cache hits. Without this the cache can never hit:
+    // `cached_hashes` would match but `prev_files` would always be empty,
+    // because callers write their tree wherever `-o` points — which usually
+    // isn't the cache directory. Keeping the snapshot here makes the cache
+    // directory self-contained and independent of where output goes.
+    if !json.is_empty() {
+        let _ = fs::write(Path::new(&cache_path).join("indexed-tree.json"), &json);
+    }
+
+    json
 }

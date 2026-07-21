@@ -333,15 +333,14 @@ fn test_index_metrics() {
 
 use ultragraph::index_with_cache;
 
-/// Mimic the caller contract (cli.mjs regenerateProject / `ug gen -c`):
-/// the previous run's IndexResult is persisted as indexed-tree.json in the
-/// same directory that holds cache.json.
+/// The cache directory is self-contained: `index_with_cache` persists its
+/// own indexed-tree.json snapshot next to cache.json, so callers only have
+/// to pass the same cache dir twice. Nothing extra to write.
 fn run_cached(repo: &Path, cache_dir: &Path) -> IndexResult {
     let result = index_with_cache(
         repo.to_string_lossy().to_string(),
         cache_dir.to_string_lossy().to_string(),
     );
-    fs::write(cache_dir.join("indexed-tree.json"), &result).expect("Failed to write indexed-tree.json");
     serde_json::from_str(&result).expect("Failed to parse result")
 }
 
