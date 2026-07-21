@@ -42,7 +42,7 @@ Before using the MCP server, ensure you have:
    npm run ingest -- -i ~/.ug/src/graph.json -o ~/.ug/src/ugdb
    ```
 
-3. **Embedding endpoint** (for `search_kb` / `semantic_search_kb`): not required by
+3. **Embedding endpoint** (for `search` / `semantic_search`): not required by
    default — UltraGraph ships an in-process ONNX embedder (no external service).
    Set `UG_EMBED_BASE_URL` to opt into a remote OpenAI-compatible endpoint instead
    (e.g. `ollama serve` with `nomic-embed-text`).
@@ -181,11 +181,11 @@ UG_DB_PATH=/path/to/ug-db UG_EMBED_BASE_URL=http://localhost:11434/v1 node /path
 
 ## Available Tools
 
-### 1. `search_kb` - Primary Knowledge-Base Search
+### 1. `search` - Primary Knowledge-Base Search
 
 **PRIMARY KNOWLEDGE-BASE SEARCH** for this codebase. Use this whenever the user asks about anything that might exist in the indexed repository: how a feature works, where something is defined, what a symbol does, why some code exists, how modules connect, or to gather context before making a code change.
 
-Returns ranked code snippets with file:line locations, descriptions, and node IDs you can drill into via `traverse_kb` / `find_usages`.
+Returns ranked code snippets with file:line locations, descriptions, and node IDs you can drill into via `traverse` / `find_usages`.
 
 **Trigger phrases:** "how does X work", "where is X", "what is X", "find/show me code for X", "explain X", "is there a function that...", "how is X implemented", "before I change X look up...", "context on X", or any question whose answer likely lives in the repo.
 
@@ -211,29 +211,29 @@ Returns ranked code snippets with file:line locations, descriptions, and node ID
 
 **Example usage:**
 ```
-search_kb: { query: "how authentication works in this codebase", k: 10 }
+search: { query: "how authentication works in this codebase", k: 10 }
 
-search_kb: { query: "where is the main entry point", k: 5, whereClause: "node_type = 'Function'" }
+search: { query: "where is the main entry point", k: 5, whereClause: "node_type = 'Function'" }
 
-search_kb: { query: "payment processing logic", k: 15, strategy: "mmr", hops: 3 }
+search: { query: "payment processing logic", k: 15, strategy: "mmr", hops: 3 }
 
-search_kb: { query: "error handling", k: 8, edgeTypes: ["calls", "references"], direction: "both" }
+search: { query: "error handling", k: 8, edgeTypes: ["calls", "references"], direction: "both" }
 
-search_kb: { query: "database schema", k: 12, maxChars: 5000, pprRestartProb: 0.3 }
+search: { query: "database schema", k: 12, maxChars: 5000, pprRestartProb: 0.3 }
 ```
 
 ---
 
-### 2. `semantic_search_kb` - Lightweight Vector Lookup
+### 2. `semantic_search` - Lightweight Vector Lookup
 
 **Lightweight pure-vector lookup** over the knowledge base — no graph expansion, no snippet read, no PPR. Returns the top-k nearest nodes with id/name/type/file/lines/description/distance.
 
-Use this when `search_kb` would be overkill:
+Use this when `search` would be overkill:
 - Quick disambiguation ("which node is the user talking about?")
-- Candidate generation before a deeper `traverse_kb`
+- Candidate generation before a deeper `traverse`
 - Filtered lookups via `whereClause` (e.g. only Functions in a given folder)
 
-Cheaper and faster than `search_kb`. Switch to `search_kb` when you need actual code snippets or graph-aware ranking.
+Cheaper and faster than `search`. Switch to `search` when you need actual code snippets or graph-aware ranking.
 
 **Parameters:**
 | Parameter | Type | Required | Description |
@@ -244,20 +244,20 @@ Cheaper and faster than `search_kb`. Switch to `search_kb` when you need actual 
 
 **Example usage:**
 ```
-semantic_search_kb: { query: "auth middleware", k: 5, whereClause: "node_type = 'Function'" }
+semantic_search: { query: "auth middleware", k: 5, whereClause: "node_type = 'Function'" }
 
-semantic_search_kb: { query: "User class", k: 3, whereClause: "node_type IN ('Class', 'Interface')" }
+semantic_search: { query: "User class", k: 3, whereClause: "node_type IN ('Class', 'Interface')" }
 
-semantic_search_kb: { query: "database connection", k: 10, whereClause: "file LIKE 'src/db/%'" }
+semantic_search: { query: "database connection", k: 10, whereClause: "file LIKE 'src/db/%'" }
 
-semantic_search_kb: { query: "API handler", k: 5 }
+semantic_search: { query: "API handler", k: 5 }
 ```
 
 ---
 
-### 3. `traverse_kb` - Graph Traversal
+### 3. `traverse` - Graph Traversal
 
-**Walk the graph N hops** from given seed node ids. The natural follow-up to `search_kb` / `semantic_search_kb`: take a node id you got back, expand outward to see what it imports, calls, contains, or extends.
+**Walk the graph N hops** from given seed node ids. The natural follow-up to `search` / `semantic_search`: take a node id you got back, expand outward to see what it imports, calls, contains, or extends.
 
 Use `'outbound'` to see what the seed depends on; `'inbound'` to see who depends on the seed. Output groups edges by type so the structure is easy to scan.
 
@@ -271,13 +271,13 @@ Use `'outbound'` to see what the seed depends on; `'inbound'` to see who depends
 
 **Example usage:**
 ```
-traverse_kb: { nodeId: "func-123", hops: 2, edgeTypes: ["calls", "imports"] }
+traverse: { nodeId: "func-123", hops: 2, edgeTypes: ["calls", "imports"] }
 
-traverse_kb: { nodeId: "class-456", hops: 1, direction: "outbound" }
+traverse: { nodeId: "class-456", hops: 1, direction: "outbound" }
 
-traverse_kb: { nodeId: ["func-789", "class-101"], hops: 2, direction: "both" }
+traverse: { nodeId: ["func-789", "class-101"], hops: 2, direction: "both" }
 
-traverse_kb: { nodeId: "file-202", hops: 3, edgeTypes: ["contains", "imports"] }
+traverse: { nodeId: "file-202", hops: 3, edgeTypes: ["contains", "imports"] }
 ```
 
 ---
@@ -286,14 +286,14 @@ traverse_kb: { nodeId: "file-202", hops: 3, edgeTypes: ["contains", "imports"] }
 
 **Find inbound references** to a node — i.e. callers of a function, importers of a module, subclasses of a class, or anything else pointing at the node.
 
-Convenience wrapper over `traverse_kb` with `direction='inbound'` and a sensible default edge-type set: `['calls', 'references', 'imports', 'extends', 'implements']`.
+Convenience wrapper over `traverse` with `direction='inbound'` and a sensible default edge-type set: `['calls', 'references', 'imports', 'extends', 'implements']`.
 
 Use this when the user asks "who uses X", "what calls X", "where is X imported", "what would break if I change X", or before a refactor.
 
 **Parameters:**
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `nodeId` | string \| string[] | ✅ | The node id to look up usages for (or an array of up to 10 — batch related checks into one call). Get ids from search_kb or find_symbol. |
+| `nodeId` | string \| string[] | ✅ | The node id to look up usages for (or an array of up to 10 — batch related checks into one call). Get ids from search or find_symbol. |
 | `hops` | integer (1-3) | ❌ | How many hops out to walk (default 1 = direct callers only). Bump to 2 to catch transitive usages. |
 | `edgeTypes` | string[] | ❌ | Override the default set if you only care about a subset (e.g. ['calls']). |
 
@@ -312,7 +312,7 @@ find_usages: { nodeId: "file-101", hops: 1, edgeTypes: ["imports"] }
 
 ### 5. `find_symbol` - Exact-Name Symbol Lookup
 
-**Exact-name lookup, no embeddings.** Use instead of `search_kb` whenever you already know (part of) an identifier: a function/class the user named, a symbol from a stack trace, something you are about to edit. Case-insensitive, ranked exact > prefix > substring. Cheaper and more precise than vector search for known names. **Direct nodeId lookup is also supported** — if you already have a nodeId from a prior search, pass it for O(1) direct access.
+**Exact-name lookup, no embeddings.** Use instead of `search` whenever you already know (part of) an identifier: a function/class the user named, a symbol from a stack trace, something you are about to edit. Case-insensitive, ranked exact > prefix > substring. Cheaper and more precise than vector search for known names. **Direct nodeId lookup is also supported** — if you already have a nodeId from a prior search, pass it for O(1) direct access.
 
 **Parameters:**
 | Parameter | Type | Required | Description |
@@ -387,7 +387,7 @@ project_overview: {}
 
 ### 9. `shortest_path` - How Are Two Symbols Connected?
 
-**Shortest directed edge path between two node ids.** Answers "does A reach B", "how does the route reach the db call", "can editing A affect B". If no forward path exists the reverse direction is tried and labeled. Get ids from `find_symbol` or `search_kb` first.
+**Shortest directed edge path between two node ids.** Answers "does A reach B", "how does the route reach the db call", "can editing A affect B". If no forward path exists the reverse direction is tried and labeled. Get ids from `find_symbol` or `search` first.
 
 **Parameters:**
 | Parameter | Type | Required | Description |
@@ -403,7 +403,7 @@ shortest_path: { sourceId: "file:node/cli.mjs", targetId: "function:native/src/m
 
 ### 10. `graph_schema` - Node & Edge Type Metadata
 
-**What node and edge types this graph actually contains**, with counts and what each edge type connects (e.g. `Calls: Function→Function (305)`), plus the full edge-type vocabulary indexers can emit. Check it before passing `edgeTypes` to `find_usages` / `traverse_kb` or `nodeTypes` to `find_symbol` — filtering on a type the graph doesn't contain silently returns nothing.
+**What node and edge types this graph actually contains**, with counts and what each edge type connects (e.g. `Calls: Function→Function (305)`), plus the full edge-type vocabulary indexers can emit. Check it before passing `edgeTypes` to `find_usages` / `traverse` or `nodeTypes` to `find_symbol` — filtering on a type the graph doesn't contain silently returns nothing.
 
 **Parameters:** None
 
@@ -421,7 +421,7 @@ graph_schema: {}
 
 ```
 list_projects: {}
-search_kb: { query: "auth flow", project: "other-repo" }
+search: { query: "auth flow", project: "other-repo" }
 ```
 
 ---
@@ -447,7 +447,7 @@ reindex: {}
 
 **Probe the configured embedding endpoint.** Returns 'ok' on success or throws with the upstream error.
 
-Call this when `search_kb` / `semantic_search_kb` fails with an embedding-related error, or as a one-off health check before kicking off a batch of queries.
+Call this when `search` / `semantic_search` fails with an embedding-related error, or as a one-off health check before kicking off a batch of queries.
 
 **Parameters:** None
 
@@ -458,12 +458,12 @@ ping_embedder: {}
 
 **When to use:**
 - Before running a batch of search queries
-- After `search_kb` fails with an embedding-related error
+- After `search` fails with an embedding-related error
 - When troubleshooting "embedding endpoint unreachable" errors
 
 ## Sample Queries
 
-Here are 20 common questions end users might ask when using the MCP tools. These examples demonstrate how to leverage `search_kb` and `traverse_kb` effectively.
+Here are 20 common questions end users might ask when using the MCP tools. These examples demonstrate how to leverage `search` and `traverse` effectively.
 
 ### General Code Understanding
 1. "How is authentication handled in this codebase?"
@@ -498,9 +498,9 @@ Here are 20 common questions end users might ask when using the MCP tools. These
 ### Example Tool Calls
 
 ```claude
-search_kb: { query: "How is authentication handled in this codebase?", k: 10 }
+search: { query: "How is authentication handled in this codebase?", k: 10 }
 
-semantic_search_kb: { query: "auth middleware", k: 5, whereClause: "node_type = 'Function'" }
+semantic_search: { query: "auth middleware", k: 5, whereClause: "node_type = 'Function'" }
 
 # Name search
 find_symbol: { name: "authenticateUser" }
@@ -512,7 +512,7 @@ file_outline: { file: "src/auth.ts" }
 # Direct nodeId lookup for File nodes (O(1))
 file_outline: { nodeId: "file:src/auth.ts" }
 
-traverse_kb: { nodeId: "func-123", hops: 2, edgeTypes: ["calls", "imports"] }
+traverse: { nodeId: "func-123", hops: 2, edgeTypes: ["calls", "imports"] }
 
 find_usages: { nodeId: "func-123", hops: 1 }
 
@@ -545,7 +545,7 @@ ug mcp list
 ug mcp call find_symbol '{"name":"run_mcp"}'
 ug mcp call file_outline '{"file":"chat.rs"}'
 ug mcp call list_projects '{}'
-ug mcp call search_kb '{"query":"how does auth work","k":8}'
+ug mcp call search '{"query":"how does auth work","k":8}'
 ug mcp call reindex '{}'
 ```
 

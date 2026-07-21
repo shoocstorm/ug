@@ -60,7 +60,7 @@ arguments accept a node id, a file path, or a symbol name.
 ```bash
 ug graph_search "visualization" -t Concept        # substring scan over names + docstrings
 ug graph_bfs docs/VISUALIZATION-FEATURES.md -k 2  # K-hop traversal (-d out|in|both)
-ug graph_path run_gen run_ingest                  # shortest path between two nodes
+ug shortest_path run_gen run_ingest                  # shortest path between two nodes
 ug graph_filter                                   # edge types + counts
 ug graph_filter Calls --from run_gen              # edges by type/endpoint
 ug graph_centrality --top 30 -t Function          # degree + betweenness ranking
@@ -88,12 +88,12 @@ Semantic vector search.
 ug semantic_search "build a tree" -d ./ugdb --filter "node_type = 'Function'"
 ```
 
-### `ug hybrid_search`
+### `ug search`
 
 Hybrid (keyword + vector) search over OverGraph, with RRF and PPR/MMR.
 
 ```bash
-ug hybrid_search "build a tree" -d ./ugdb -k 2
+ug search "build a tree" -d ./ugdb -k 2
 ```
 
 ### `ug traverse`
@@ -251,7 +251,7 @@ native/
 - Code snippet extraction
 - Token-budgeted context assembly
 - Folder-aware embedding text: pre-enrichment, folder nodes embed with a synthesized synopsis ("`<classification>` folder, N typescript and M markdown files, depth D"); the storage layer prefers `folder.summary` once enrichment fills it
-- `search_kb` — Phase 4 entry point
+- `search` — Phase 4 entry point
 
 ## Dependencies
 

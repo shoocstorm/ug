@@ -203,11 +203,12 @@ same pipeline stages under `node node/cli.mjs <command>`, see
 | `ug serve` | Serve the visualization + REST API (multi-project by default) |
 | `ug app` | Open the native desktop shell (Tauri) — starts `ug serve` and a window pointed at it |
 | `ug index` / `ug graph` / `ug ingest` | The individual pipeline stages `gen` runs for you |
-| `ug hybrid_search "<query>"` | GraphRAG: semantic search → graph expansion → ranked context |
+| `ug search "<query>"` | GraphRAG: semantic search → graph expansion → ranked context |
 | `ug semantic_search "<query>"` | Plain vector search, no graph expansion |
 | `ug traverse <node-id>` | K-hop BFS over the stored OverGraph edges |
 | `ug chat "<question>"` | RAG-grounded chat against an LLM, one-shot or REPL — see [RAG Chat](#-rag-chat-ug-chat) |
-| `ug list` / `ug rm <project>` | List projects under `~/.ug`, or delete one |
+| `ug project_overview` / `ug find_symbol` / `ug file_outline` / `ug get_code` / `ug find_usages` / `ug shortest_path` / `ug graph_schema` | Agent tools — the same names, params and output the MCP tools and `POST /api/tools/<name>` expose. Add `--json` for the machine-readable envelope. |
+| `ug list_projects` / `ug rm <project>` | List projects under `~/.ug`, or delete one |
 | `ug doctor` | Print resolved project/db/embedder/chat config and where each value came from |
 | `ug mcp install [target]` | Wire the MCP server into a client's config — interactive picker when no target, `--project`/`--global` to choose scope (see [MCP Server](#-mcp-server)) |
 | `ug upgrade [vX.Y.Z]` | Self-update the standalone install from the latest GitHub release (or a pinned tag) — `--check` only reports, `--force` reinstalls |
@@ -233,7 +234,7 @@ Project
   project dir:  /Users/you/.ug/my-repo (exists)
   db path:      /Users/you/.ug/my-repo/ugdb (exists)  [default: ...]
 
-Embeddings (ingest / gen / semantic_search / hybrid_search / serve)
+Embeddings (ingest / gen / semantic_search / search / serve)
   backend:      local (in-process ONNX)  [default]
   model:        BAAI/bge-small-en-v1.5  [default]
   ...
@@ -319,7 +320,7 @@ tier actually won for each setting — see [`ug doctor`](#ug-doctor) above.
 
 ## 🧠 Embeddings
 
-UltraGraph picks a backend based on a single flag: **omit `--base-url` for the local in-process embedder (default), or pass `--base-url` to use a remote OpenAI-compatible endpoint.** The same flags apply to `ingest`, `gen`, `semantic_search`, and `hybrid_search`. `--base-url`/`--api-key`/`--model` fall back to `$UG_EMBED_BASE_URL`/`$UG_EMBED_API_KEY`/`$UG_EMBED_MODEL` when omitted.
+UltraGraph picks a backend based on a single flag: **omit `--base-url` for the local in-process embedder (default), or pass `--base-url` to use a remote OpenAI-compatible endpoint.** The same flags apply to `ingest`, `gen`, `semantic_search`, and `search`. `--base-url`/`--api-key`/`--model` fall back to `$UG_EMBED_BASE_URL`/`$UG_EMBED_API_KEY`/`$UG_EMBED_MODEL` when omitted.
 
 ### Local backend (default) — in-process ONNX via `fastembed-rs`
 
@@ -372,7 +373,7 @@ You don't need to know your model's dim. On first ingest, UltraGraph runs a one-
 ## 💬 RAG Chat (`ug chat`)
 
 `ug chat` closes the loop: it retrieves graph-aware context via the same
-GraphRAG pipeline that `hybrid_search` uses, then sends it to an
+GraphRAG pipeline that `search` uses, then sends it to an
 OpenAI-compatible chat model and prints the answer. Use it to verify
 the *quality* of the indexed knowledge base end-to-end — not just that
 retrieval works, but that a real LLM agent can actually answer
@@ -417,7 +418,7 @@ ug chat \
 | `-n, --name <project>` | Project name (default: cwd basename, else the most recently generated project under `~/.ug`) |
 | `--chat-model <name>` | Chat completion model (required for remote chat; falls back to `$UG_CHAT_MODEL`) |
 | `--base-url` / `--api-key` | OpenAI-compatible endpoint, shared with embeddings (`--chat-base-url`/`--chat-api-key`/`--embedding-*` override each independently) |
-| `--strategy ppr\|mmr`, `--hops`, `-k/--limit` | Retrieval tuning — same as `hybrid_search` |
+| `--strategy ppr\|mmr`, `--hops`, `-k/--limit` | Retrieval tuning — same as `search` |
 | `--show-context, -v` / `--json` | Print citations alongside the answer, or emit one JSON document for scripting |
 
 Run `ug chat -h` for the complete flag reference (temperature, max-tokens,
@@ -465,9 +466,9 @@ gracefully when chat isn't configured.
 Integrate UltraGraph directly into your AI Agent (Cursor, Claude Desktop, etc.).
 
 ### Tools Exposed
-1.  **search_kb**: Graph-based RAG retrieval (PPR-based).
-2.  **semantic_search_kb**: Lightweight pure-vector lookup.
-3.  **traverse_kb**: Structural walk from specific node IDs.
+1.  **search**: Graph-based RAG retrieval (PPR-based).
+2.  **semantic_search**: Lightweight pure-vector lookup.
+3.  **traverse**: Structural walk from specific node IDs.
 4.  **find_usages**: Inbound references — callers, importers, subclasses.
 5.  **find_symbol**: Exact-name symbol lookup (no embeddings).
 6.  **file_outline**: All symbols in a file, in line order.
