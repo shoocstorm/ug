@@ -8,11 +8,10 @@ use ultragraph::storage::{
     EmbedderConfig, KnowledgeStore, RankStrategy, SearchKbOptions, StoreSet, StoreSpec,
     DEFAULT_BASE_URL as DEFAULT_EMBED_BASE_URL, DEFAULT_MODEL as DEFAULT_EMBED_MODEL,
 };
-use ultragraph::types::{GraphData, GraphEdgeType, GraphNode, GraphNodeType, PathResult};
+use ultragraph::types::{GraphData, GraphEdge, GraphEdgeType, GraphNode, GraphNodeType, PathResult};
 use ultragraph::{
-    build_graph, calculate_centrality, detect_cycles, filter_edges_by_type, find_shortest_path,
-    graph_keyword_search, index, index_with_cache, k_hop_bfs, C_BLUE, C_BOLD, C_CYAN, C_DIM,
-    C_GREEN, C_MAGENTA, C_RESET, C_YELLOW,
+    build_graph, calculate_centrality, detect_cycles, find_shortest_path, index, index_with_cache,
+    C_BLUE, C_BOLD, C_CYAN, C_DIM, C_GREEN, C_MAGENTA, C_RESET, C_YELLOW,
 };
 
 mod chat;
@@ -78,21 +77,21 @@ fn main() {
         "index" => run_index(cmd_args),
         "graph" => run_graph(cmd_args),
         "ingest" => run_ingest(cmd_args),
-        // Graph analysis (offline, in-memory).
-        "analyze" => run_analyze(cmd_args),
-        "bfs" => run_bfs(cmd_args),
-        "path" => run_path(cmd_args),
-        "filter" => run_filter(cmd_args),
-        "centrality" => run_centrality(cmd_args),
-        "cycles" => run_cycles(cmd_args),
-        "search_graph" => run_search_graph(cmd_args),
+        // Graph analysis (offline, in-memory). Project-scoped via
+        // -n/--name; the pre-rename names stay as aliases.
+        "graph_analyze" | "analyze" => run_graph_analyze(cmd_args),
+        "graph_bfs" | "bfs" => run_graph_bfs(cmd_args),
+        "graph_filter" | "filter" => run_graph_filter(cmd_args),
+        "graph_centrality" | "centrality" => run_graph_centrality(cmd_args),
+        "graph_cycles" | "cycles" => run_graph_cycles(cmd_args),
+        "graph_search" | "search_graph" => run_graph_search(cmd_args),
         // Agent tools (graph.json-backed, for AI coding agents).
         "find_symbol" => run_find_symbol(cmd_args),
         "file_outline" => run_file_outline(cmd_args),
         "get_code" => run_get_code(cmd_args),
         "find_usages" => run_find_usages(cmd_args),
         "project_overview" => run_project_overview(cmd_args),
-        "shortest_path" => run_shortest_path(cmd_args),
+        "graph_path" | "path" | "shortest_path" => run_graph_path(cmd_args),
         "graph_schema" => run_graph_schema(cmd_args),
         // Retrieval (OverGraph-backed).
         "semantic_search" => run_semantic_search(cmd_args),
@@ -547,161 +546,903 @@ fn run_graph(args: &[String]) {
     );
 }
 
-// simple breadth-first search on the graph (json)
-fn run_bfs(args: &[String]) {
-    if has_flag(args, "-h") || has_flag(args, "--help") {
-        print_bfs_help();
-        return;
-    }
-    if args.len() < 2 {
-        eprintln!("Usage: ug bfs <graph-file> <start-node-id> [k] [-o|--output <file>]");
-        std::process::exit(1);
-    }
-    let graph_file = &args[0];
-    let start_node = args[1].clone();
-    let k: u32 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(1);
-    let output_path = flag_value(args, &["-o", "--output"]);
+// ---------- Graph analysis (project-scoped, in-memory) ----------
+//
+// These commands read a project's graph.json — selected with
+// `-n/--name`, else the cwd's project, else the most recently generated
+// one — the same resolution the agent tools use. `-i/--input` still
+// accepts an explicit graph.json for one-off files, and a legacy
+// `<graph-file>` first positional is still honoured.
+//
+// Output: a readable report by default, raw JSON with `--json`, and
+// `-o/--output <file>` writes that JSON to disk.
 
-    let graph_json = fs::read_to_string(graph_file).expect("Failed to read graph file");
-    let result = k_hop_bfs(graph_json, start_node, k);
-    write_or_print(output_path.as_deref(), &result, "BFS result");
+/// Value-taking flags shared by the graph-analysis commands, so
+/// positionals can be told apart from flag values.
+const GRAPH_VALUE_FLAGS: &[&str] = &[
+    "-i",
+    "--input",
+    "-n",
+    "--name",
+    "-o",
+    "--output",
+    "-t",
+    "--type",
+    "--edge-type",
+    "-f",
+    "--file",
+    "-l",
+    "--limit",
+    "-k",
+    "--hops",
+    "-d",
+    "--direction",
+    "--top",
+    "--min-len",
+    "--max-len",
+    "--from",
+    "--to",
+];
+
+/// Split an analysis command's arguments into (args used to locate the
+/// graph, remaining positionals). A legacy `<graph-file>` first
+/// positional — an existing `.json` file — is promoted to `-i` and
+/// dropped from the positionals, so the pre-rename call style keeps
+/// working.
+fn analysis_input(args: &[String]) -> (Vec<String>, Vec<String>) {
+    let mut load_args = args.to_vec();
+    let mut pos = positionals(args, GRAPH_VALUE_FLAGS);
+    if flag_value(args, &["-i", "--input"]).is_none() {
+        if let Some(first) = pos.first().cloned() {
+            if first.ends_with(".json") && Path::new(&first).is_file() {
+                pos.remove(0);
+                load_args.push("-i".to_string());
+                load_args.push(first);
+            }
+        }
+    }
+    (load_args, pos)
 }
 
-// keyword-based in-memory graph search by loading the graph file into memory (json)
-fn run_search_graph(args: &[String]) {
-    if has_flag(args, "-h") || has_flag(args, "--help") {
-        print_search_graph_help();
-        return;
-    }
-    if args.len() < 2 {
-        eprintln!("Usage: ug search_graph <graph-file> <keyword> [-t|--type <node-type>]... [-o|--output <file>]");
-        std::process::exit(1);
-    }
-    let graph_file = &args[0];
-    let keyword = first_positional(&args[1..], &["-t", "--type", "-o", "--output"]).unwrap_or_else(|| {
-        eprintln!("Usage: ug search_graph <graph-file> <keyword> [-t|--type <node-type>]... [-o|--output <file>]");
-        std::process::exit(1);
-    });
-    let node_types = multi_flag(args, &["-t", "--type"]);
-    let output_path = flag_value(args, &["-o", "--output"]);
+/// Where a command's result should go.
+enum Emit {
+    Human,
+    Json,
+    File(String),
+}
 
-    let graph_json = fs::read_to_string(graph_file).expect("Failed to read graph");
-    let types_opt = if node_types.is_empty() {
-        None
+fn emit_mode(args: &[String]) -> Emit {
+    if let Some(p) = flag_value(args, &["-o", "--output"]) {
+        Emit::File(p)
+    } else if has_flag(args, "--json") {
+        Emit::Json
     } else {
-        Some(node_types)
-    };
-    let result = graph_keyword_search(graph_json, keyword, types_opt);
-    write_or_print(output_path.as_deref(), &result, "search result");
+        Emit::Human
+    }
 }
 
-fn run_filter(args: &[String]) {
-    if has_flag(args, "-h") || has_flag(args, "--help") {
-        print_filter_help();
-        return;
+/// Write or print the raw JSON when `-o`/`--json` was given. Returns
+/// true when the output was consumed, so the caller skips its
+/// human-readable rendering.
+fn emit_raw(args: &[String], json: &str, label: &str) -> bool {
+    match emit_mode(args) {
+        Emit::File(p) => {
+            write_or_print(Some(&p), json, label);
+            true
+        }
+        Emit::Json => {
+            println!("{}", json);
+            true
+        }
+        Emit::Human => false,
     }
-    if args.len() < 2 {
+}
+
+/// Lowercased `-t/--type` values (node types for most commands).
+fn type_filter(args: &[String], names: &[&str]) -> Vec<String> {
+    multi_flag(args, names)
+        .iter()
+        .map(|t| t.to_lowercase())
+        .collect()
+}
+
+fn limit_or(args: &[String], names: &[&str], default: usize) -> usize {
+    flag_value(args, names)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default)
+}
+
+/// Resolve a user-supplied node reference to a node id. Accepts an exact
+/// nodeId, a repo-relative (or suffix-unique) file path, or a symbol
+/// name ranked exact > prefix > substring. Ambiguity and misses print
+/// candidates and exit — every downstream algorithm needs one id.
+fn resolve_node_ref(graph: &GraphData, input: &str) -> String {
+    if let Some(n) = graph.nodes.iter().find(|n| n.id == input) {
+        return n.id.clone();
+    }
+
+    // File path: exact repo-relative match, else unique path suffix.
+    let path = strip_file_id_prefix(input);
+    let suffix = format!("/{}", path.trim_start_matches('/'));
+    let mut file_hits: Vec<&GraphNode> = graph
+        .nodes
+        .iter()
+        .filter(|n| matches!(n.node_type, GraphNodeType::File))
+        .filter(|n| {
+            n.file.as_deref() == Some(path)
+                || n.file.as_deref().map(|f| f.ends_with(&suffix)).unwrap_or(false)
+        })
+        .collect();
+    file_hits.sort_by(|a, b| a.id.cmp(&b.id));
+    file_hits.dedup_by(|a, b| a.id == b.id);
+    if file_hits.len() == 1 {
+        return file_hits[0].id.clone();
+    }
+    if file_hits.len() > 1 {
+        exit_ambiguous(input, &file_hits);
+    }
+
+    // Symbol name.
+    let q = input.to_lowercase();
+    let mut hits: Vec<(u8, &GraphNode)> = Vec::new();
+    for n in &graph.nodes {
+        let nm = n.name.to_lowercase();
+        let rank = if nm == q {
+            0
+        } else if nm.starts_with(&q) {
+            1
+        } else if nm.contains(&q) {
+            2
+        } else {
+            3
+        };
+        if rank < 3 {
+            hits.push((rank, n));
+        }
+    }
+    if hits.is_empty() {
         eprintln!(
-            "Usage: ug filter <graph-file> <edge-type> [<edge-type>...] [-o|--output <file>]"
+            "✗ Nothing in the graph matches '{}' — look it up with {C_CYAN}ug find_symbol{C_RESET}, or pass a node id directly.",
+            input
         );
         std::process::exit(1);
     }
-    let graph_file = &args[0];
-    let edge_types: Vec<String> = args[1..]
+    let best = hits.iter().map(|(r, _)| *r).min().unwrap_or(0);
+    let best_hits: Vec<&GraphNode> = hits
         .iter()
-        .take_while(|s| !s.starts_with('-'))
-        .map(|s| s.to_lowercase())
+        .filter(|(r, _)| *r == best)
+        .map(|(_, n)| *n)
         .collect();
-    let output_path = flag_value(args, &["-o", "--output"]);
-
-    let graph_json = fs::read_to_string(graph_file).expect("Failed to read graph");
-    let result = filter_edges_by_type(graph_json, edge_types);
-    write_or_print(output_path.as_deref(), &result, "filtered edges");
+    if best_hits.len() > 1 {
+        exit_ambiguous(input, &best_hits);
+    }
+    best_hits[0].id.clone()
 }
 
-fn run_path(args: &[String]) {
+/// Print the candidates behind an ambiguous reference and exit — the
+/// user picks one id and re-runs.
+fn exit_ambiguous(input: &str, candidates: &[&GraphNode]) -> ! {
+    eprintln!(
+        "'{}' matches {} nodes — re-run with one of these ids:",
+        input,
+        candidates.len()
+    );
+    for n in candidates.iter().take(15) {
+        eprintln!(
+            "  {} {}  {}  id: {}",
+            node_type_str(&n.node_type),
+            n.name,
+            node_loc(n),
+            n.id
+        );
+    }
+    if candidates.len() > 15 {
+        eprintln!("  … and {} more", candidates.len() - 15);
+    }
+    std::process::exit(1);
+}
+
+/// One-line description of a node, used across the analysis reports.
+fn node_line(n: &GraphNode) -> String {
+    format!(
+        "{} {C_BOLD}{}{C_RESET}  {C_DIM}{}{C_RESET}  id: {C_CYAN}{}{C_RESET}",
+        node_type_str(&n.node_type),
+        n.name,
+        node_loc(n),
+        n.id
+    )
+}
+
+fn by_id_map(graph: &GraphData) -> std::collections::HashMap<&str, &GraphNode> {
+    graph.nodes.iter().map(|n| (n.id.as_str(), n)).collect()
+}
+
+/// Does this node pass the `-t/--type` (node type) and `-f/--file`
+/// (path prefix) filters?
+fn node_passes(n: &GraphNode, types: &[String], file_prefix: Option<&str>) -> bool {
+    if !types.is_empty() && !types.contains(&node_type_str(&n.node_type).to_lowercase()) {
+        return false;
+    }
+    if let Some(p) = file_prefix {
+        if !n.file.as_deref().unwrap_or("").starts_with(p) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Which way edges are followed by `graph_bfs`.
+#[derive(Clone, Copy, PartialEq)]
+enum BfsDir {
+    Out,
+    In,
+    Both,
+}
+
+fn bfs_dir_from_args(args: &[String]) -> BfsDir {
+    match flag_value_or(args, &["-d", "--direction"], "out").to_lowercase().as_str() {
+        "out" | "outbound" | "forward" => BfsDir::Out,
+        "in" | "inbound" | "reverse" => BfsDir::In,
+        "both" | "any" | "undirected" => BfsDir::Both,
+        other => {
+            eprintln!("Error: unknown --direction '{}' (expected: out, in, both)", other);
+            std::process::exit(2);
+        }
+    }
+}
+
+fn bfs_dir_str(d: BfsDir) -> &'static str {
+    match d {
+        BfsDir::Out => "out",
+        BfsDir::In => "in",
+        BfsDir::Both => "both",
+    }
+}
+
+/// K-hop BFS over the in-memory graph, honouring direction and an
+/// optional edge-type allowlist. Returns hop distances per node id plus
+/// the edges walked.
+fn k_hop(
+    graph: &GraphData,
+    start: &str,
+    k: u32,
+    dir: BfsDir,
+    edge_types: &[String],
+) -> (std::collections::HashMap<String, u32>, Vec<GraphEdge>) {
+    use std::collections::HashMap;
+
+    let mut adj: HashMap<&str, Vec<(&str, &GraphEdge)>> = HashMap::new();
+    for e in &graph.edges {
+        if !edge_types.is_empty()
+            && !edge_types.contains(&edge_type_str(&e.edge_type).to_lowercase())
+        {
+            continue;
+        }
+        if matches!(dir, BfsDir::Out | BfsDir::Both) {
+            adj.entry(e.source.as_str()).or_default().push((e.target.as_str(), e));
+        }
+        if matches!(dir, BfsDir::In | BfsDir::Both) {
+            adj.entry(e.target.as_str()).or_default().push((e.source.as_str(), e));
+        }
+    }
+
+    let mut dist: HashMap<String, u32> = HashMap::new();
+    let mut walked: Vec<GraphEdge> = Vec::new();
+    dist.insert(start.to_string(), 0);
+    let mut frontier: Vec<String> = vec![start.to_string()];
+
+    for d in 1..=k {
+        let mut next: Vec<String> = Vec::new();
+        for id in &frontier {
+            let Some(neighbors) = adj.get(id.as_str()) else {
+                continue;
+            };
+            for (nbr, e) in neighbors {
+                walked.push((*e).clone());
+                if !dist.contains_key(*nbr) {
+                    dist.insert((*nbr).to_string(), d);
+                    next.push((*nbr).to_string());
+                }
+            }
+        }
+        if next.is_empty() {
+            break;
+        }
+        frontier = next;
+    }
+
+    walked.sort_by(|a, b| {
+        (a.source.as_str(), a.target.as_str(), edge_type_str(&a.edge_type)).cmp(&(
+            b.source.as_str(),
+            b.target.as_str(),
+            edge_type_str(&b.edge_type),
+        ))
+    });
+    walked.dedup_by(|a, b| {
+        a.source == b.source && a.target == b.target && edge_type_str(&a.edge_type) == edge_type_str(&b.edge_type)
+    });
+    (dist, walked)
+}
+
+fn run_graph_bfs(args: &[String]) {
     if has_flag(args, "-h") || has_flag(args, "--help") {
-        print_path_help();
+        print_graph_bfs_help();
         return;
     }
-    if args.len() < 3 {
-        eprintln!("Usage: ug path <graph-file> <source> <target> [-o|--output <file>]");
+    let (load_args, pos) = analysis_input(args);
+    if pos.is_empty() {
+        eprintln!("Usage: ug graph_bfs <node-id-or-name> [k] [-k|--hops <n>] [-d|--direction out|in|both] [-t|--type <node-type>]... [--edge-type <type>]... [-l|--limit <n>] [-n|--name <project>]");
         std::process::exit(1);
     }
-    let graph_file = &args[0];
-    let source = args[1].clone();
-    let target = args[2].clone();
-    let output_path = flag_value(args, &["-o", "--output"]);
+    // `k` is a flag, but the old positional form (`... <start> 2`) still works.
+    let k: u32 = flag_value(args, &["-k", "--hops"])
+        .or_else(|| pos.get(1).cloned())
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    let dir = bfs_dir_from_args(args);
+    let edge_types = type_filter(args, &["--edge-type"]);
+    let types = type_filter(args, &["-t", "--type"]);
+    let file_prefix = flag_value(args, &["-f", "--file"]);
+    let limit = limit_or(args, &["-l", "--limit"], 50);
 
-    let graph_json = fs::read_to_string(graph_file).expect("Failed to read graph");
-    let result = find_shortest_path(graph_json, source, target);
-    write_or_print(output_path.as_deref(), &result, "path result");
-}
+    let (graph, _raw, _path) = load_agent_graph(&load_args);
+    let start = resolve_node_ref(&graph, &pos[0]);
+    let (dist, edges) = k_hop(&graph, &start, k, dir, &edge_types);
 
-fn run_centrality(args: &[String]) {
-    if has_flag(args, "-h") || has_flag(args, "--help") {
-        print_centrality_help();
+    // Hop order first, then type, then name — reads like an expanding ring.
+    let mut reached: Vec<(u32, &GraphNode)> = graph
+        .nodes
+        .iter()
+        .filter_map(|n| dist.get(&n.id).map(|d| (*d, n)))
+        .filter(|(d, n)| *d == 0 || node_passes(n, &types, file_prefix.as_deref()))
+        .collect();
+    reached.sort_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then(node_type_str(&a.1.node_type).cmp(node_type_str(&b.1.node_type)))
+            .then(a.1.name.cmp(&b.1.name))
+    });
+
+    let json = {
+        let nodes: Vec<serde_json::Value> = reached
+            .iter()
+            .map(|(d, n)| {
+                let mut v = serde_json::to_value(n).unwrap_or_else(|_| serde_json::json!({}));
+                if let Some(o) = v.as_object_mut() {
+                    o.insert("distance".to_string(), serde_json::json!(d));
+                }
+                v
+            })
+            .collect();
+        serde_json::json!({
+            "start": start,
+            "hops": k,
+            "direction": bfs_dir_str(dir),
+            "count": nodes.len(),
+            "nodes": nodes,
+            "edges": edges,
+        })
+        .to_string()
+    };
+    if emit_raw(args, &json, "BFS result") {
         return;
     }
-    if args.is_empty() {
-        eprintln!("Usage: ug centrality <graph-file> [-o|--output <file>]");
+
+    let start_node = graph.nodes.iter().find(|n| n.id == start);
+    println!(
+        "{C_BOLD}{}-hop BFS ({}bound){C_RESET} from {}",
+        k,
+        bfs_dir_str(dir),
+        start_node.map(node_line).unwrap_or_else(|| start.clone())
+    );
+    println!(
+        "{C_DIM}{} node(s) reached, {} edge(s) walked{}{C_RESET}",
+        reached.len().saturating_sub(1),
+        edges.len(),
+        if edge_types.is_empty() {
+            String::new()
+        } else {
+            format!(" · edge types: {}", edge_types.join(", "))
+        }
+    );
+    println!();
+
+    let mut shown = 0usize;
+    let mut current_hop = u32::MAX;
+    for (d, n) in reached.iter().filter(|(d, _)| *d > 0) {
+        if shown >= limit {
+            println!();
+            println!(
+                "{C_DIM}(+{} more — raise -l/--limit or narrow with -t/--type){C_RESET}",
+                reached.len().saturating_sub(1) - shown
+            );
+            break;
+        }
+        if *d != current_hop {
+            if current_hop != u32::MAX {
+                println!();
+            }
+            println!("{C_BOLD}hop {}{C_RESET}", d);
+            current_hop = *d;
+        }
+        println!("  {}", node_line(n));
+        shown += 1;
+    }
+    if shown == 0 {
+        println!("No neighbors within {} hop(s). Try -d both, a larger -k, or drop the filters.", k);
+    }
+    println!();
+    println!("{C_DIM}Next:{C_RESET} {C_CYAN}ug get_code <id>{C_RESET} to read one · {C_CYAN}ug graph_path <a> <b>{C_RESET} to see how two connect");
+}
+
+fn run_graph_search(args: &[String]) {
+    if has_flag(args, "-h") || has_flag(args, "--help") {
+        print_graph_search_help();
+        return;
+    }
+    let (load_args, pos) = analysis_input(args);
+    if pos.is_empty() {
+        eprintln!("Usage: ug graph_search <keyword> [-t|--type <node-type>]... [-f|--file <prefix>] [-l|--limit <n>] [-n|--name <project>]");
         std::process::exit(1);
     }
-    let graph_file = &args[0];
-    let output_path = flag_value(args, &["-o", "--output"]);
+    let keyword = pos[0].to_lowercase();
+    let types = type_filter(args, &["-t", "--type"]);
+    let file_prefix = flag_value(args, &["-f", "--file"]);
+    let limit = limit_or(args, &["-l", "--limit"], 20);
+    let names_only = has_flag(args, "--names-only");
 
-    let graph_json = fs::read_to_string(graph_file).expect("Failed to read graph");
-    let result = calculate_centrality(graph_json);
-    write_or_print(output_path.as_deref(), &result, "centrality");
-}
+    let (graph, _raw, _path) = load_agent_graph(&load_args);
+    let matched: Vec<&GraphNode> = graph
+        .nodes
+        .iter()
+        .filter(|n| node_passes(n, &types, file_prefix.as_deref()))
+        .filter(|n| {
+            if keyword.is_empty() {
+                return true;
+            }
+            if n.name.to_lowercase().contains(&keyword) {
+                return true;
+            }
+            !names_only
+                && n.docstring
+                    .as_ref()
+                    .map(|d| d.to_lowercase().contains(&keyword))
+                    .unwrap_or(false)
+        })
+        .collect();
 
-fn run_cycles(args: &[String]) {
-    if has_flag(args, "-h") || has_flag(args, "--help") {
-        print_cycles_help();
+    let json = serde_json::json!({ "count": matched.len(), "nodes": matched }).to_string();
+    if emit_raw(args, &json, "search result") {
         return;
     }
-    if args.is_empty() {
-        eprintln!("Usage: ug cycles <graph-file> [-o|--output <file>]");
+
+    println!(
+        "{C_BOLD}Nodes matching '{}'{C_RESET} — {} match(es){}",
+        pos[0],
+        matched.len(),
+        if matched.len() > limit {
+            format!(", showing {}", limit)
+        } else {
+            String::new()
+        }
+    );
+    println!();
+    for n in matched.iter().take(limit) {
+        println!("- {}", node_line(n));
+        if let Some(d) = &n.docstring {
+            let preview: String = d.replace('\n', " ").chars().take(160).collect();
+            println!("  {C_DIM}doc: {}{C_RESET}", preview);
+        }
+    }
+    if matched.is_empty() {
+        println!("Nothing matched. Try a shorter fragment, drop -t/-f, or use {C_CYAN}ug hybrid_search{C_RESET} for a concept-level query.");
+    }
+    println!();
+    println!("{C_DIM}Note:{C_RESET} this is a raw substring scan over names + docstrings. {C_CYAN}ug find_symbol{C_RESET} ranks exact > prefix > substring.");
+}
+
+fn run_graph_filter(args: &[String]) {
+    if has_flag(args, "-h") || has_flag(args, "--help") {
+        print_graph_filter_help();
+        return;
+    }
+    let (load_args, pos) = analysis_input(args);
+    let mut edge_types: Vec<String> = pos.iter().map(|s| s.to_lowercase()).collect();
+    edge_types.extend(type_filter(args, &["-t", "--type", "--edge-type"]));
+    let limit = limit_or(args, &["-l", "--limit"], 50);
+    let file_prefix = flag_value(args, &["-f", "--file"]);
+    let from_ref = flag_value(args, &["--from"]);
+    let to_ref = flag_value(args, &["--to"]);
+
+    let (graph, _raw, _path) = load_agent_graph(&load_args);
+    let by_id = by_id_map(&graph);
+
+    // No edge type given: report what's available instead of erroring —
+    // that's the question a user without the type list is really asking.
+    if edge_types.is_empty() && from_ref.is_none() && to_ref.is_none() {
+        use std::collections::HashMap;
+        let mut counts: HashMap<&'static str, usize> = HashMap::new();
+        for e in &graph.edges {
+            *counts.entry(edge_type_str(&e.edge_type)).or_insert(0) += 1;
+        }
+        let mut rows: Vec<(&str, usize)> = counts.into_iter().collect();
+        rows.sort_by(|a, b| b.1.cmp(&a.1));
+        println!("{C_BOLD}Edge types in this graph{C_RESET} — {} edge(s) total", graph.edges.len());
+        println!();
+        for (t, c) in rows {
+            println!("- {C_CYAN}{}{C_RESET}  {}", t, c);
+        }
+        println!();
+        println!("Pass one or more to filter, e.g. {C_CYAN}ug graph_filter Calls Imports{C_RESET}");
+        return;
+    }
+
+    let from_id = from_ref.map(|r| resolve_node_ref(&graph, &r));
+    let to_id = to_ref.map(|r| resolve_node_ref(&graph, &r));
+
+    let matched: Vec<&GraphEdge> = graph
+        .edges
+        .iter()
+        .filter(|e| {
+            edge_types.is_empty()
+                || edge_types.contains(&edge_type_str(&e.edge_type).to_lowercase())
+        })
+        .filter(|e| from_id.as_deref().map(|id| e.source == id).unwrap_or(true))
+        .filter(|e| to_id.as_deref().map(|id| e.target == id).unwrap_or(true))
+        .filter(|e| match &file_prefix {
+            None => true,
+            Some(p) => [&e.source, &e.target].iter().any(|id| {
+                by_id
+                    .get(id.as_str())
+                    .and_then(|n| n.file.as_deref())
+                    .map(|f| f.starts_with(p.as_str()))
+                    .unwrap_or(false)
+            }),
+        })
+        .collect();
+
+    let json = serde_json::json!({ "count": matched.len(), "edges": matched }).to_string();
+    if emit_raw(args, &json, "filtered edges") {
+        return;
+    }
+
+    println!(
+        "{C_BOLD}Edges{C_RESET} — {} match(es) of {}{}",
+        matched.len(),
+        graph.edges.len(),
+        if matched.len() > limit {
+            format!(", showing {}", limit)
+        } else {
+            String::new()
+        }
+    );
+    println!();
+    let label = |id: &str| -> String {
+        match by_id.get(id) {
+            Some(n) => format!("{} {C_BOLD}{}{C_RESET} {C_DIM}{}{C_RESET}", node_type_str(&n.node_type), n.name, node_loc(n)),
+            None => format!("{C_DIM}{}{C_RESET}", id),
+        }
+    };
+    for e in matched.iter().take(limit) {
+        println!(
+            "- {C_CYAN}{}{C_RESET}  {}  {C_DIM}→{C_RESET}  {}",
+            edge_type_str(&e.edge_type),
+            label(&e.source),
+            label(&e.target)
+        );
+    }
+    if matched.is_empty() {
+        println!("No edges matched. Run {C_CYAN}ug graph_filter{C_RESET} with no arguments to see the available edge types.");
+    }
+}
+
+fn run_graph_path(args: &[String]) {
+    if has_flag(args, "-h") || has_flag(args, "--help") {
+        print_graph_path_help();
+        return;
+    }
+    let (load_args, pos) = analysis_input(args);
+    if pos.len() < 2 {
+        eprintln!("Usage: ug graph_path <source> <target> [--strict] [-n|--name <project>]");
         std::process::exit(1);
     }
-    let graph_file = &args[0];
-    let output_path = flag_value(args, &["-o", "--output"]);
+    let (graph, raw, _path) = load_agent_graph(&load_args);
+    let source = resolve_node_ref(&graph, &pos[0]);
+    let target = resolve_node_ref(&graph, &pos[1]);
+    let by_id = by_id_map(&graph);
 
-    let graph_json = fs::read_to_string(graph_file).expect("Failed to read graph");
-    let result = detect_cycles(graph_json);
-    write_or_print(output_path.as_deref(), &result, "cycle result");
-}
+    let parse = |json: String| -> PathResult {
+        serde_json::from_str(&json).unwrap_or(PathResult {
+            path: vec![],
+            found: false,
+            length: None,
+        })
+    };
+    // Edges are directed; unless --strict, retry the reverse direction
+    // when no forward path exists and label the result as reversed.
+    let mut reversed = false;
+    let mut result = parse(find_shortest_path(raw.clone(), source.clone(), target.clone()));
+    if !result.found && !has_flag(args, "--strict") {
+        reversed = true;
+        result = parse(find_shortest_path(raw, target.clone(), source.clone()));
+    }
+    let hops = result
+        .length
+        .unwrap_or(result.path.len().saturating_sub(1) as u32);
 
-fn run_analyze(args: &[String]) {
-    if has_flag(args, "-h") || has_flag(args, "--help") {
-        print_analyze_help();
+    let json = serde_json::json!({
+        "source": source,
+        "target": target,
+        "found": result.found,
+        "reversed": result.found && reversed,
+        "length": if result.found { Some(hops) } else { None },
+        "path": result.path,
+        "nodes": result.path.iter().filter_map(|id| by_id.get(id.as_str()).map(|n| serde_json::to_value(n).unwrap_or_else(|_| serde_json::json!({})))).collect::<Vec<_>>(),
+    })
+    .to_string();
+    if emit_raw(args, &json, "path result") {
         return;
     }
-    let project_dir = project::project_dir(&project::resolve_project_name(args, "."));
-    let input = flag_value(args, &["-i", "--input"])
-        .unwrap_or_else(|| project_dir.join("graph.json").to_string_lossy().into_owned());
-    let output_dir = flag_value(args, &["-o", "--output"])
-        .unwrap_or_else(|| project_dir.to_string_lossy().into_owned());
 
-    let graph_json = fs::read_to_string(&input).expect("Failed to read graph");
-    let centrality = calculate_centrality(graph_json.clone());
-    let cycles = detect_cycles(graph_json);
+    if !result.found {
+        println!(
+            "No directed path between {C_CYAN}{}{C_RESET} and {C_CYAN}{}{C_RESET}{}.",
+            source,
+            target,
+            if has_flag(args, "--strict") {
+                " (--strict: reverse direction not tried)"
+            } else {
+                " in either direction"
+            }
+        );
+        println!("They may be connected only through shared ancestors — try {C_CYAN}ug graph_bfs <id> -d both{C_RESET} from each id.");
+        return;
+    }
 
-    let _ = fs::create_dir_all(&output_dir);
-    fs::write(format!("{}/analysis.json", output_dir), &centrality)
-        .expect("Failed to write analysis.json");
-    fs::write(format!("{}/cycles.json", output_dir), &cycles).expect("Failed to write cycles.json");
+    if reversed {
+        println!(
+            "{C_BOLD}Path {} → {}{C_RESET} {C_YELLOW}(reverse direction — no forward path existed){C_RESET} — {} hop(s)",
+            target, source, hops
+        );
+    } else {
+        println!("{C_BOLD}Path {} → {}{C_RESET} — {} hop(s)", source, target, hops);
+    }
+    println!();
+    for (i, id) in result.path.iter().enumerate() {
+        let desc = match by_id.get(id.as_str()) {
+            Some(n) => node_line(n),
+            None => format!("(unknown node) id: {C_CYAN}{}{C_RESET}", id),
+        };
+        println!("{} {}", if i == 0 { "·" } else { "↓" }, desc);
+    }
+    println!();
+    println!("{C_DIM}Next:{C_RESET} {C_CYAN}ug get_code <id>{C_RESET} on any id above to see the code that makes the link.");
+}
 
-    println!("{C_GREEN}✓{C_RESET} Analyzed graph:");
-    println!("  {C_CYAN}▸{C_RESET} analysis.json (centrality)");
-    println!("  {C_CYAN}▸{C_RESET} cycles.json (cycle detection)");
+/// Rows behind the centrality report: one per node, both scores joined.
+fn centrality_rows<'a>(
+    graph: &'a GraphData,
+    centrality_json: &str,
+    types: &[String],
+    file_prefix: Option<&str>,
+) -> Vec<(&'a GraphNode, f64, f64)> {
+    let parsed: serde_json::Value =
+        serde_json::from_str(centrality_json).unwrap_or_else(|_| serde_json::json!({}));
+    let degree = parsed.get("degree_centrality").cloned().unwrap_or_else(|| serde_json::json!({}));
+    let between = parsed
+        .get("betweenness_centrality")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let score = |v: &serde_json::Value, id: &str| -> f64 {
+        v.get(id).and_then(|x| x.as_f64()).unwrap_or(0.0)
+    };
+    graph
+        .nodes
+        .iter()
+        .filter(|n| node_passes(n, types, file_prefix))
+        .map(|n| (n, score(&degree, &n.id), score(&between, &n.id)))
+        .collect()
+}
+
+fn run_graph_centrality(args: &[String]) {
+    if has_flag(args, "-h") || has_flag(args, "--help") {
+        print_graph_centrality_help();
+        return;
+    }
+    let (load_args, _pos) = analysis_input(args);
+    let types = type_filter(args, &["-t", "--type"]);
+    let file_prefix = flag_value(args, &["-f", "--file"]);
+    let top = limit_or(args, &["--top", "-l", "--limit"], 20);
+
+    let (graph, raw, _path) = load_agent_graph(&load_args);
+    let centrality = calculate_centrality(raw);
+
+    // Raw output keeps the lib's shape so existing consumers of
+    // analysis.json keep working.
+    if emit_raw(args, &centrality, "centrality") {
+        return;
+    }
+
+    let mut rows = centrality_rows(&graph, &centrality, &types, file_prefix.as_deref());
+
+    println!("{C_BOLD}Centrality{C_RESET} — {} node(s) scored", rows.len());
+    println!();
+    println!("{C_BOLD}Top {} by degree{C_RESET} {C_DIM}(how connected){C_RESET}", top);
+    rows.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    for (n, deg, _) in rows.iter().take(top) {
+        println!("  {C_BOLD}{:.4}{C_RESET}  {}", deg, node_line(n));
+    }
+    println!();
+    println!(
+        "{C_BOLD}Top {} by betweenness{C_RESET} {C_DIM}(bridges between parts of the graph){C_RESET}",
+        top
+    );
+    rows.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+    for (n, _, btw) in rows.iter().take(top) {
+        println!("  {C_BOLD}{:.4}{C_RESET}  {}", btw, node_line(n));
+    }
+    println!();
+    println!("{C_DIM}Next:{C_RESET} {C_CYAN}ug find_usages <id>{C_RESET} to see who depends on a hotspot.");
+}
+
+fn run_graph_cycles(args: &[String]) {
+    if has_flag(args, "-h") || has_flag(args, "--help") {
+        print_graph_cycles_help();
+        return;
+    }
+    let (load_args, _pos) = analysis_input(args);
+    let limit = limit_or(args, &["-l", "--limit"], 20);
+    let min_len = limit_or(args, &["--min-len"], 0);
+    let max_len = limit_or(args, &["--max-len"], usize::MAX);
+    let file_prefix = flag_value(args, &["-f", "--file"]);
+
+    let (graph, raw, _path) = load_agent_graph(&load_args);
+    let by_id = by_id_map(&graph);
+    let cycles_json = detect_cycles(raw);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&cycles_json).unwrap_or_else(|_| serde_json::json!({}));
+    let all: Vec<Vec<String>> = parsed
+        .get("cycles")
+        .and_then(|c| serde_json::from_value(c.clone()).ok())
+        .unwrap_or_default();
+
+    let cycles: Vec<&Vec<String>> = all
+        .iter()
+        .filter(|c| c.len() >= min_len && c.len() <= max_len)
+        .filter(|c| match &file_prefix {
+            None => true,
+            Some(p) => c.iter().any(|id| {
+                by_id
+                    .get(id.as_str())
+                    .and_then(|n| n.file.as_deref())
+                    .map(|f| f.starts_with(p.as_str()))
+                    .unwrap_or(false)
+            }),
+        })
+        .collect();
+
+    let json = serde_json::json!({
+        "hasCycles": !cycles.is_empty(),
+        "count": cycles.len(),
+        "cycles": cycles,
+    })
+    .to_string();
+    let consumed = emit_raw(args, &json, "cycle result");
+
+    if !consumed {
+        println!(
+            "{C_BOLD}Cycles{C_RESET} — {} found{}",
+            cycles.len(),
+            if all.len() != cycles.len() {
+                format!(" ({} before filters)", all.len())
+            } else {
+                String::new()
+            }
+        );
+        println!();
+        for (i, c) in cycles.iter().take(limit).enumerate() {
+            println!("{C_BOLD}cycle {} ({} nodes){C_RESET}", i + 1, c.len());
+            for id in c.iter() {
+                match by_id.get(id.as_str()) {
+                    Some(n) => println!("  ↻ {}", node_line(n)),
+                    None => println!("  ↻ {C_DIM}{}{C_RESET}", id),
+                }
+            }
+            println!();
+        }
+        if cycles.len() > limit {
+            println!("{C_DIM}(+{} more — raise -l/--limit){C_RESET}", cycles.len() - limit);
+        }
+        if cycles.is_empty() {
+            println!("{C_GREEN}✓{C_RESET} No cycles matched.");
+        }
+    }
+
+    // CI use: non-zero exit when the graph has cycles.
+    if has_flag(args, "--fail-on-cycle") && !cycles.is_empty() {
+        std::process::exit(1);
+    }
+}
+
+fn run_graph_analyze(args: &[String]) {
+    if has_flag(args, "-h") || has_flag(args, "--help") {
+        print_graph_analyze_help();
+        return;
+    }
+    let (load_args, _pos) = analysis_input(args);
+    let top = limit_or(args, &["--top", "-l", "--limit"], 10);
+    let (graph, raw, graph_path) = load_agent_graph(&load_args);
+
+    let centrality = calculate_centrality(raw.clone());
+    let cycles = detect_cycles(raw);
+    let cycle_count = serde_json::from_str::<serde_json::Value>(&cycles)
+        .ok()
+        .and_then(|v| v.get("cycles").and_then(|c| c.as_array()).map(|a| a.len()))
+        .unwrap_or(0);
+
+    // Written next to the graph by default so `ug serve` and the
+    // visualization pick them up; `--no-write` makes this a pure report.
+    if !has_flag(args, "--no-write") {
+        let output_dir = flag_value(args, &["-o", "--output"]).unwrap_or_else(|| {
+            graph_path
+                .parent()
+                .unwrap_or(Path::new("."))
+                .to_string_lossy()
+                .into_owned()
+        });
+        let _ = fs::create_dir_all(&output_dir);
+        fs::write(format!("{}/analysis.json", output_dir), &centrality)
+            .expect("Failed to write analysis.json");
+        fs::write(format!("{}/cycles.json", output_dir), &cycles)
+            .expect("Failed to write cycles.json");
+        println!("{C_GREEN}✓{C_RESET} Wrote analysis to {C_BOLD}{}{C_RESET}:", output_dir);
+        println!("  {C_CYAN}▸{C_RESET} analysis.json (centrality)");
+        println!("  {C_CYAN}▸{C_RESET} cycles.json (cycle detection)");
+        println!();
+    }
+
+    if has_flag(args, "--json") {
+        println!(
+            "{}",
+            serde_json::json!({
+                "graph": graph_path.to_string_lossy(),
+                "nodes": graph.nodes.len(),
+                "edges": graph.edges.len(),
+                "cycles": cycle_count,
+                "centrality": serde_json::from_str::<serde_json::Value>(&centrality).unwrap_or_default(),
+            })
+        );
+        return;
+    }
+
+    let mut rows = centrality_rows(&graph, &centrality, &[], None);
+    println!(
+        "{C_BOLD}Graph analysis{C_RESET} — {} nodes, {} edges, {} cycle(s)",
+        graph.nodes.len(),
+        graph.edges.len(),
+        cycle_count
+    );
+    println!("{C_DIM}graph: {}{C_RESET}", graph_path.display());
+    println!();
+    println!("{C_BOLD}Top {} by degree{C_RESET}", top);
+    rows.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    for (n, deg, _) in rows.iter().take(top) {
+        println!("  {C_BOLD}{:.4}{C_RESET}  {}", deg, node_line(n));
+    }
+    println!();
+    println!("{C_BOLD}Top {} by betweenness{C_RESET}", top);
+    rows.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+    for (n, _, btw) in rows.iter().take(top) {
+        println!("  {C_BOLD}{:.4}{C_RESET}  {}", btw, node_line(n));
+    }
+    println!();
+    println!("{C_DIM}Next:{C_RESET} {C_CYAN}ug graph_cycles{C_RESET} for the cycle detail · {C_CYAN}ug graph_centrality --top 50{C_RESET} for a longer ranking");
 }
 
 // ---------- Agent tools ----------
 //
 // The MCP server (node/cli.mjs) exposes five graph.json-backed tools that
 // AI coding agents call to understand an indexed repo: find_symbol,
-// file_outline, get_code, project_overview, shortest_path. The commands
+// file_outline, get_code, project_overview, graph_path. The commands
 // below are those same tools callable by hand — same lookup logic over the
 // same graph.json, no embeddings — so a human can run them to explore the
 // repo the way an agent does, or to verify what an agent will see.
@@ -941,23 +1682,6 @@ fn print_project_overview_help() {
     println!("  • Most depended-upon symbols (hotspots)");
 }
 
-fn print_shortest_path_help() {
-    println!("  {C_CYAN}ug shortest_path{C_RESET}  {C_YELLOW}— how are two symbols connected?{C_RESET}");
-    println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
-    println!();
-    println!("{C_BOLD}Usage:{C_RESET}  ug shortest_path <source-id> <target-id> [options]");
-    println!();
-    println!("{C_BOLD}Options:{C_RESET}");
-    println!("  {C_CYAN}-n, --name <project>{C_RESET}  Project name (default: cwd basename)");
-    println!();
-    println!("{C_BOLD}Examples:{C_RESET}");
-    println!("  {C_CYAN}ug shortest_path{C_RESET} file:src/a.ts file:src/b.ts");
-    println!();
-    println!("Finds the shortest directed edge path between two node ids. Edges are");
-    println!("directed (imports/calls/contains flow source→target); if no forward path");
-    println!("exists the reverse direction is tried and labeled as such.");
-}
-
 /// Printed between per-item sections when a command gets several
 /// positionals (names/files/ids) in one invocation.
 fn batch_separator(i: usize) {
@@ -1078,7 +1802,7 @@ fn run_find_symbol(args: &[String]) {
         }
     }
     println!();
-    println!("{C_DIM}Next:{C_RESET} {C_CYAN}ug get_code <id>{C_RESET} for source · {C_CYAN}ug traverse <id>{C_RESET} for neighbors · {C_CYAN}ug shortest_path <id> <id>{C_RESET}");
+    println!("{C_DIM}Next:{C_RESET} {C_CYAN}ug get_code <id>{C_RESET} for source · {C_CYAN}ug traverse <id>{C_RESET} for neighbors · {C_CYAN}ug graph_path <a> <b>{C_RESET}");
 }
 
 fn run_file_outline(args: &[String]) {
@@ -1406,88 +2130,6 @@ fn run_project_overview(args: &[String]) {
     }
     println!();
     println!("{C_DIM}Next:{C_RESET} {C_CYAN}ug file_outline <file>{C_RESET} on a big file · {C_CYAN}ug get_code <id>{C_RESET} on a hotspot · {C_CYAN}ug hybrid_search <query>{C_RESET} for a concept");
-}
-
-fn run_shortest_path(args: &[String]) {
-    if has_flag(args, "-h") || has_flag(args, "--help") {
-        print_shortest_path_help();
-        return;
-    }
-    let pos = positionals(args, AGENT_VALUE_FLAGS);
-    if pos.len() < 2 {
-        eprintln!("Usage: ug shortest_path <source-id> <target-id> [-n|--name <project>]");
-        std::process::exit(1);
-    }
-    let (source, target) = (pos[0].clone(), pos[1].clone());
-    let (graph, raw, _path) = load_agent_graph(args);
-    let by_id: std::collections::HashMap<&str, &GraphNode> =
-        graph.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
-    for id in [&source, &target] {
-        if !by_id.contains_key(id.as_str()) {
-            eprintln!(
-                "No node with id '{}' — get ids from {C_CYAN}ug find_symbol{C_RESET} first.",
-                id
-            );
-            std::process::exit(1);
-        }
-    }
-
-    let parse = |json: String| -> PathResult {
-        serde_json::from_str(&json).unwrap_or(PathResult {
-            path: vec![],
-            found: false,
-            length: None,
-        })
-    };
-    // Edges are directed; when no forward path exists, try the reverse
-    // direction and label it as such (same behavior as the MCP tool).
-    let mut reversed = false;
-    let mut result = parse(find_shortest_path(raw.clone(), source.clone(), target.clone()));
-    if !result.found {
-        reversed = true;
-        result = parse(find_shortest_path(raw, target.clone(), source.clone()));
-    }
-
-    if !result.found {
-        println!(
-            "No directed path between {C_CYAN}{}{C_RESET} and {C_CYAN}{}{C_RESET} in either direction.",
-            source, target
-        );
-        println!("They may be connected only through shared ancestors — try {C_CYAN}ug traverse{C_RESET} from each id.");
-        return;
-    }
-
-    let hops = result
-        .length
-        .unwrap_or(result.path.len().saturating_sub(1) as u32);
-    if reversed {
-        println!(
-            "{C_BOLD}Path {} → {}{C_RESET} {C_YELLOW}(reverse direction — no forward path existed){C_RESET} — {} hop(s)",
-            target, source, hops
-        );
-    } else {
-        println!("{C_BOLD}Path {} → {}{C_RESET} — {} hop(s)", source, target, hops);
-    }
-    println!();
-    for (i, id) in result.path.iter().enumerate() {
-        let desc = match by_id.get(id.as_str()) {
-            Some(n) => format!(
-                "{} {C_BOLD}{}{C_RESET}  {C_DIM}{}{C_RESET}",
-                node_type_str(&n.node_type),
-                n.name,
-                node_loc(n)
-            ),
-            None => "(unknown node)".to_string(),
-        };
-        println!(
-            "{} {}  id: {C_CYAN}{}{C_RESET}",
-            if i == 0 { "·" } else { "↓" },
-            desc,
-            id
-        );
-    }
-    println!();
-    println!("{C_DIM}Next:{C_RESET} {C_CYAN}ug get_code <id>{C_RESET} on any id above to see the code that makes the link.");
 }
 
 /// Default edge types for `find_usages` — dependency-ish edges only, no
@@ -3347,7 +3989,7 @@ const API_ENDPOINTS: &[(&str, &[ApiEntry])] = &[
         &[
             ApiEntry { method: "GET", path: "/api/graph/stats", desc: "node/edge counts by type", availability: "always (empty if no project active)", cli_equivalent: None },
             ApiEntry { method: "GET", path: "/api/graph/node/:id", desc: "fetch one node by id", availability: "always (empty if no project active)", cli_equivalent: None },
-            ApiEntry { method: "GET", path: "/api/graph/search", desc: "keyword search over graph nodes", availability: "always (empty if no project active)", cli_equivalent: Some("ug search_graph") },
+            ApiEntry { method: "GET", path: "/api/graph/search", desc: "keyword search over graph nodes", availability: "always (empty if no project active)", cli_equivalent: Some("ug graph_search") },
             ApiEntry { method: "GET", path: "/api/graph/bfs/:id", desc: "k-hop BFS traversal from a node", availability: "always (empty if no project active)", cli_equivalent: Some("ug bfs") },
             ApiEntry { method: "GET", path: "/api/graph/path", desc: "shortest path between two nodes", availability: "always (empty if no project active)", cli_equivalent: Some("ug path") },
             ApiEntry { method: "GET", path: "/api/graph/filter", desc: "filter edges by type", availability: "always (empty if no project active)", cli_equivalent: Some("ug filter") },
@@ -4329,103 +4971,166 @@ fn print_graph_help() {
     println!("  {C_CYAN}ug graph{C_RESET} (uses defaults)");
 }
 
-fn print_analyze_help() {
-    println!("  {C_CYAN}ug analyze{C_RESET}  {C_YELLOW}— run full graph analysis (centrality + cycles){C_RESET}");
-    println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
-    println!();
-    println!("{C_BOLD}Usage:{C_RESET}  ug analyze [options]");
-    println!();
-    println!("{C_BOLD}Options:{C_RESET}");
-    println!("  {C_CYAN}-i, --input{C_RESET} <file>  Graph file (default: ~/.ug/<name>/graph.json)");
-    println!("  {C_CYAN}-o, --output{C_RESET} <dir>  Output directory (default: ~/.ug/<name>)");
-    println!("  {C_CYAN}-n, --name{C_RESET} <name>   Project name (default: cwd basename)");
-    println!();
-    println!("{C_BOLD}Examples:{C_RESET}");
-    println!("  {C_CYAN}ug analyze{C_RESET}");
+/// Options every graph-analysis command shares.
+fn print_graph_common_options() {
+    println!("  {C_CYAN}-n, --name{C_RESET} <project>  Project under ~/.ug (default: cwd's project, else most recent)");
+    println!("  {C_CYAN}-i, --input{C_RESET} <file>    Explicit graph.json (overrides --name)");
+    println!("  {C_CYAN}--json{C_RESET}                Print the raw JSON result instead of a report");
+    println!("  {C_CYAN}-o, --output{C_RESET} <file>   Write the raw JSON to a file");
 }
 
-fn print_bfs_help() {
-    println!("  {C_CYAN}ug bfs{C_RESET}  {C_YELLOW}— K-hop breadth-first traversal from a node{C_RESET}");
+fn print_graph_analyze_help() {
+    println!("  {C_CYAN}ug graph_analyze{C_RESET}  {C_YELLOW}— full graph analysis (centrality + cycles){C_RESET}");
     println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
     println!();
-    println!("{C_BOLD}Usage:{C_RESET}  ug bfs <graph-file> <start-node-id> [k] [options]");
+    println!("{C_BOLD}Usage:{C_RESET}  ug graph_analyze [options]        {C_DIM}(alias: analyze){C_RESET}");
+    println!();
+    println!("  Writes analysis.json + cycles.json next to the project's graph.json");
+    println!("  (so {C_CYAN}ug serve{C_RESET} picks them up) and prints a ranked summary.");
     println!();
     println!("{C_BOLD}Options:{C_RESET}");
-    println!("  {C_CYAN}-o, --output{C_RESET} <file>  Output file (optional, omit for stdout)");
+    println!("  {C_CYAN}--top{C_RESET} <n>             Rows per ranking in the summary (default 10)");
+    println!("  {C_CYAN}--no-write{C_RESET}            Report only — don't write analysis.json/cycles.json");
+    println!("  {C_CYAN}-o, --output{C_RESET} <dir>    Output directory (default: the project dir)");
+    println!("  {C_CYAN}-n, --name{C_RESET} <project>  Project under ~/.ug (default: cwd's project, else most recent)");
+    println!("  {C_CYAN}-i, --input{C_RESET} <file>    Explicit graph.json (overrides --name)");
     println!();
     println!("{C_BOLD}Examples:{C_RESET}");
-    println!("  {C_CYAN}ug bfs{C_RESET} graph.json file:src/index.ts 2");
+    println!("  {C_CYAN}ug graph_analyze{C_RESET}");
+    println!("  {C_CYAN}ug graph_analyze{C_RESET} -n my-repo --top 25");
+    println!("  {C_CYAN}ug graph_analyze{C_RESET} --no-write --json");
 }
 
-fn print_search_graph_help() {
-    println!("  {C_CYAN}ug search_graph{C_RESET}  {C_YELLOW}— keyword search over graph nodes (in-memory){C_RESET}");
+fn print_graph_bfs_help() {
+    println!("  {C_CYAN}ug graph_bfs{C_RESET}  {C_YELLOW}— K-hop breadth-first traversal from a node{C_RESET}");
     println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
     println!();
-    println!("  Low-level keyword scan of an explicit graph.json file (raw JSON out).");
-    println!("  For everyday name lookups prefer {C_CYAN}ug find_symbol{C_RESET} — it resolves the");
-    println!("  project for you, ranks exact > prefix > substring, and prints readable");
-    println!("  results with next-step commands.");
+    println!("{C_BOLD}Usage:{C_RESET}  ug graph_bfs <node-id-or-name> [options]   {C_DIM}(alias: bfs){C_RESET}");
     println!();
-    println!("{C_BOLD}Usage:{C_RESET}  ug search_graph <graph-file> <keyword> [options]");
+    println!("  The start node takes a node id, a file path, or a symbol name —");
+    println!("  ambiguous names list the candidate ids instead of guessing.");
     println!();
     println!("{C_BOLD}Options:{C_RESET}");
-    println!("  {C_CYAN}-t, --type{C_RESET} <type>    Restrict to node type (repeatable)");
-    println!("  {C_CYAN}-o, --output{C_RESET} <file>  Output file (optional, omit for stdout)");
+    println!("  {C_CYAN}-k, --hops{C_RESET} <n>        Hop radius (default 1)");
+    println!("  {C_CYAN}-d, --direction{C_RESET} <dir> out (callees/imports, default) | in (callers) | both");
+    println!("  {C_CYAN}--edge-type{C_RESET} <type>    Only follow these edges (repeatable; see graph_schema)");
+    println!("  {C_CYAN}-t, --type{C_RESET} <type>     Only show these node types (repeatable)");
+    println!("  {C_CYAN}-f, --file{C_RESET} <prefix>   Only show nodes under this path prefix");
+    println!("  {C_CYAN}-l, --limit{C_RESET} <n>       Max nodes printed (default 50)");
+    print_graph_common_options();
     println!();
     println!("{C_BOLD}Examples:{C_RESET}");
-    println!("  {C_CYAN}ug search_graph{C_RESET} graph.json loadConfig --type function --type class");
+    println!("  {C_CYAN}ug graph_bfs{C_RESET} run_serve -k 2");
+    println!("  {C_CYAN}ug graph_bfs{C_RESET} src/index.ts -k 2 --edge-type imports");
+    println!("  {C_CYAN}ug graph_bfs{C_RESET} loadConfig -d in   {C_YELLOW}# what reaches this symbol{C_RESET}");
+    println!("  {C_CYAN}ug graph_bfs{C_RESET} run_gen -n other-project -t Function");
 }
 
-fn print_filter_help() {
-    println!("  {C_CYAN}ug filter{C_RESET}  {C_YELLOW}— filter graph edges by type{C_RESET}");
+fn print_graph_search_help() {
+    println!("  {C_CYAN}ug graph_search{C_RESET}  {C_YELLOW}— substring scan over graph node names + docstrings{C_RESET}");
     println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
     println!();
-    println!("{C_BOLD}Usage:{C_RESET}  ug filter <graph-file> <edge-type> [<edge-type>...] [options]");
+    println!("{C_BOLD}Usage:{C_RESET}  ug graph_search <keyword> [options]   {C_DIM}(alias: search_graph){C_RESET}");
+    println!();
+    println!("  Matches anywhere in a name or docstring — good for grep-like sweeps.");
+    println!("  For everyday name lookups prefer {C_CYAN}ug find_symbol{C_RESET}: it ranks");
+    println!("  exact > prefix > substring.");
     println!();
     println!("{C_BOLD}Options:{C_RESET}");
-    println!("  {C_CYAN}-o, --output{C_RESET} <file>  Output file (optional, omit for stdout)");
+    println!("  {C_CYAN}-t, --type{C_RESET} <type>     Restrict to node types (repeatable)");
+    println!("  {C_CYAN}-f, --file{C_RESET} <prefix>   Only nodes under this path prefix");
+    println!("  {C_CYAN}-l, --limit{C_RESET} <n>       Max hits printed (default 20)");
+    println!("  {C_CYAN}--names-only{C_RESET}          Skip docstring matches");
+    print_graph_common_options();
     println!();
     println!("{C_BOLD}Examples:{C_RESET}");
-    println!("  {C_CYAN}ug filter{C_RESET} graph.json Contains Imports");
+    println!("  {C_CYAN}ug graph_search{C_RESET} loadConfig -t Function -t Class");
+    println!("  {C_CYAN}ug graph_search{C_RESET} cache -f native/src/ --names-only");
+    println!("  {C_CYAN}ug graph_search{C_RESET} visualization -n ug --json");
 }
 
-fn print_path_help() {
-    println!("  {C_CYAN}ug path{C_RESET}  {C_YELLOW}— shortest path between two nodes{C_RESET}");
+fn print_graph_filter_help() {
+    println!("  {C_CYAN}ug graph_filter{C_RESET}  {C_YELLOW}— list graph edges by type/endpoint{C_RESET}");
     println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
     println!();
-    println!("{C_BOLD}Usage:{C_RESET}  ug path <graph-file> <source> <target> [options]");
+    println!("{C_BOLD}Usage:{C_RESET}  ug graph_filter [<edge-type>...] [options]   {C_DIM}(alias: filter){C_RESET}");
+    println!();
+    println!("  With no arguments it prints every edge type in the graph with counts.");
     println!();
     println!("{C_BOLD}Options:{C_RESET}");
-    println!("  {C_CYAN}-o, --output{C_RESET} <file>  Output file (optional, omit for stdout)");
+    println!("  {C_CYAN}-t, --edge-type{C_RESET} <t>   Edge type (repeatable; same as a positional)");
+    println!("  {C_CYAN}--from{C_RESET} <node>         Only edges out of this node (id/name/file)");
+    println!("  {C_CYAN}--to{C_RESET} <node>           Only edges into this node (id/name/file)");
+    println!("  {C_CYAN}-f, --file{C_RESET} <prefix>   Only edges touching this path prefix");
+    println!("  {C_CYAN}-l, --limit{C_RESET} <n>       Max edges printed (default 50)");
+    print_graph_common_options();
     println!();
     println!("{C_BOLD}Examples:{C_RESET}");
-    println!("  {C_CYAN}ug path{C_RESET} graph.json file:src/a.ts file:src/b.ts");
+    println!("  {C_CYAN}ug graph_filter{C_RESET}                     {C_YELLOW}# what edge types exist?{C_RESET}");
+    println!("  {C_CYAN}ug graph_filter{C_RESET} Calls Imports");
+    println!("  {C_CYAN}ug graph_filter{C_RESET} Calls --from run_gen");
+    println!("  {C_CYAN}ug graph_filter{C_RESET} Imports -f node/ -l 100");
 }
 
-fn print_centrality_help() {
-    println!("  {C_CYAN}ug centrality{C_RESET}  {C_YELLOW}— degree & betweenness centrality{C_RESET}");
+fn print_graph_path_help() {
+    println!("  {C_CYAN}ug graph_path{C_RESET}  {C_YELLOW}— how are two nodes connected?{C_RESET}");
     println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
     println!();
-    println!("{C_BOLD}Usage:{C_RESET}  ug centrality <graph-file> [options]");
+    println!("{C_BOLD}Usage:{C_RESET}  ug graph_path <source> <target> [options]   {C_DIM}(aliases: path, shortest_path){C_RESET}");
+    println!();
+    println!("  Source/target take a node id, a file path, or a symbol name. Edges are");
+    println!("  directed (imports/calls/contains flow source→target); if no forward path");
+    println!("  exists the reverse direction is tried and labeled as such.");
     println!();
     println!("{C_BOLD}Options:{C_RESET}");
-    println!("  {C_CYAN}-o, --output{C_RESET} <file>  Output file (optional, omit for stdout)");
+    println!("  {C_CYAN}--strict{C_RESET}              Don't retry the reverse direction");
+    print_graph_common_options();
     println!();
     println!("{C_BOLD}Examples:{C_RESET}");
-    println!("  {C_CYAN}ug centrality{C_RESET} graph.json");
+    println!("  {C_CYAN}ug graph_path{C_RESET} run_gen run_ingest");
+    println!("  {C_CYAN}ug graph_path{C_RESET} src/a.ts src/b.ts --strict");
+    println!("  {C_CYAN}ug graph_path{C_RESET} file:src/a.ts file:src/b.ts -n my-repo");
 }
 
-fn print_cycles_help() {
-    println!("  {C_CYAN}ug cycles{C_RESET}  {C_YELLOW}— detect cycles in the graph{C_RESET}");
+fn print_graph_centrality_help() {
+    println!("  {C_CYAN}ug graph_centrality{C_RESET}  {C_YELLOW}— degree & betweenness centrality{C_RESET}");
     println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
     println!();
-    println!("{C_BOLD}Usage:{C_RESET}  ug cycles <graph-file> [options]");
+    println!("{C_BOLD}Usage:{C_RESET}  ug graph_centrality [options]   {C_DIM}(alias: centrality){C_RESET}");
+    println!();
+    println!("  Degree = how connected a node is. Betweenness = how often it sits on");
+    println!("  the shortest path between others (architectural bridges).");
     println!();
     println!("{C_BOLD}Options:{C_RESET}");
-    println!("  {C_CYAN}-o, --output{C_RESET} <file>  Output file (optional, omit for stdout)");
+    println!("  {C_CYAN}--top{C_RESET} <n>             Rows per ranking (default 20)");
+    println!("  {C_CYAN}-t, --type{C_RESET} <type>     Only rank these node types (repeatable)");
+    println!("  {C_CYAN}-f, --file{C_RESET} <prefix>   Only rank nodes under this path prefix");
+    print_graph_common_options();
     println!();
     println!("{C_BOLD}Examples:{C_RESET}");
-    println!("  {C_CYAN}ug cycles{C_RESET} graph.json");
+    println!("  {C_CYAN}ug graph_centrality{C_RESET} --top 30");
+    println!("  {C_CYAN}ug graph_centrality{C_RESET} -t Function -f native/src/");
+    println!("  {C_CYAN}ug graph_centrality{C_RESET} -n my-repo -o centrality.json");
+}
+
+fn print_graph_cycles_help() {
+    println!("  {C_CYAN}ug graph_cycles{C_RESET}  {C_YELLOW}— detect dependency cycles{C_RESET}");
+    println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
+    println!();
+    println!("{C_BOLD}Usage:{C_RESET}  ug graph_cycles [options]   {C_DIM}(alias: cycles){C_RESET}");
+    println!();
+    println!("{C_BOLD}Options:{C_RESET}");
+    println!("  {C_CYAN}-l, --limit{C_RESET} <n>       Max cycles printed (default 20)");
+    println!("  {C_CYAN}--min-len{C_RESET} <n>         Only cycles with at least n nodes");
+    println!("  {C_CYAN}--max-len{C_RESET} <n>         Only cycles with at most n nodes");
+    println!("  {C_CYAN}-f, --file{C_RESET} <prefix>   Only cycles touching this path prefix");
+    println!("  {C_CYAN}--fail-on-cycle{C_RESET}       Exit 1 when any cycle matches (CI guard)");
+    print_graph_common_options();
+    println!();
+    println!("{C_BOLD}Examples:{C_RESET}");
+    println!("  {C_CYAN}ug graph_cycles{C_RESET}");
+    println!("  {C_CYAN}ug graph_cycles{C_RESET} --min-len 3 -f src/");
+    println!("  {C_CYAN}ug graph_cycles{C_RESET} --fail-on-cycle --json   {C_YELLOW}# CI{C_RESET}");
 }
 
 fn print_ingest_help() {
@@ -4755,14 +5460,14 @@ fn print_help() {
     println!("  {C_CYAN}graph{C_RESET}            Build graph from index result");
     println!("  {C_CYAN}ingest{C_RESET}           Embed graph nodes and write to OverGraph");
     println!();
-    println!("  {C_DIM}Graph analysis (offline, in-memory){C_RESET}");
-    println!("  {C_CYAN}analyze{C_RESET}          Run full graph analysis (centrality + cycles)");
-    println!("  {C_CYAN}bfs{C_RESET}              K-hop BFS traversal");
-    println!("  {C_CYAN}path{C_RESET}             Find shortest path between two nodes");
-    println!("  {C_CYAN}filter{C_RESET}           Filter edges by type");
-    println!("  {C_CYAN}centrality{C_RESET}       Calculate degree/betweenness centrality");
-    println!("  {C_CYAN}cycles{C_RESET}           Detect cycles in graph");
-    println!("  {C_CYAN}search_graph{C_RESET}     Keyword scan of an explicit graph.json (raw JSON; prefer find_symbol)");
+    println!("  {C_DIM}Graph analysis (offline, in-memory) — all take {C_RESET}{C_CYAN}-n <project>{C_RESET}{C_DIM}, {C_RESET}{C_CYAN}--json{C_RESET}{C_DIM}, {C_RESET}{C_CYAN}-o <file>{C_RESET}");
+    println!("  {C_CYAN}graph_analyze{C_RESET}    Full analysis (centrality + cycles) → analysis.json/cycles.json");
+    println!("  {C_CYAN}graph_bfs{C_RESET}        K-hop BFS from a node/name (-k hops, -d in|out|both)");
+    println!("  {C_CYAN}graph_path{C_RESET}       Shortest path between two nodes/names");
+    println!("  {C_CYAN}graph_filter{C_RESET}     List edges by type/endpoint (no args: edge types + counts)");
+    println!("  {C_CYAN}graph_centrality{C_RESET} Rank nodes by degree/betweenness (--top, -t, -f)");
+    println!("  {C_CYAN}graph_cycles{C_RESET}     Detect cycles (--min-len, --fail-on-cycle for CI)");
+    println!("  {C_CYAN}graph_search{C_RESET}     Substring scan over names + docstrings (prefer find_symbol)");
     println!();
     println!("  {C_DIM}Agent tools — what AI coding agents use (via MCP) to understand a repo; run by hand to explore or verify{C_RESET}");
     println!("  {C_CYAN}project_overview{C_RESET} Orient in the codebase: stats, biggest files, most depended-upon symbols");
@@ -4770,8 +5475,7 @@ fn print_help() {
     println!("  {C_CYAN}file_outline{C_RESET}     List every indexed symbol in one file, in line order");
     println!("  {C_CYAN}get_code{C_RESET}         Read the source for a node id or file/line range");
     println!("  {C_CYAN}find_usages{C_RESET}      Who uses this symbol? (inbound callers/importers; -t filters edge types)");
-    println!("  {C_CYAN}shortest_path{C_RESET}    How two symbols are connected (shortest directed edge path)");
-    println!("  {C_CYAN}graph_schema{C_RESET}     Node & edge types in this graph — what to pass to -t/--edge-type filters");
+        println!("  {C_CYAN}graph_schema{C_RESET}     Node & edge types in this graph — what to pass to -t/--edge-type filters");
     println!();
 
     println!("  {C_DIM}Project management{C_RESET}");

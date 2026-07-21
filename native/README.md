@@ -49,21 +49,28 @@ Build graph.json from the indexed-tree.json.
 ug graph -i indexed-tree.json -o graph.json
 ```
 
-### `ug search_graph`
+### Graph analysis (`graph_*`)
 
-Keyword search over graph nodes from graph.json.
-
-```bash
-ug search_graph graph.json "visualization" -t Concept
-```
-
-### `ug bfs`
-
-K-hop BFS traversal over in-memory graph.json.
+All of these read a project's `graph.json` — picked with `-n/--name`, else the
+cwd's project, else the most recently generated one — so no file paths are
+needed. `-i/--input <file>` still takes an explicit graph.json, `--json` prints
+the raw result, and `-o/--output <file>` writes that JSON to disk. Node
+arguments accept a node id, a file path, or a symbol name.
 
 ```bash
-ug bfs graph.json "file:docs/VISUALIZATION-FEATURES.md" 2
+ug graph_search "visualization" -t Concept        # substring scan over names + docstrings
+ug graph_bfs docs/VISUALIZATION-FEATURES.md -k 2  # K-hop traversal (-d out|in|both)
+ug graph_path run_gen run_ingest                  # shortest path between two nodes
+ug graph_filter                                   # edge types + counts
+ug graph_filter Calls --from run_gen              # edges by type/endpoint
+ug graph_centrality --top 30 -t Function          # degree + betweenness ranking
+ug graph_cycles --min-len 3 --fail-on-cycle       # cycle detection (CI guard)
+ug graph_analyze -n my-repo                       # both, written to analysis.json/cycles.json
 ```
+
+The pre-rename names (`search_graph`, `bfs`, `path`, `filter`, `centrality`,
+`cycles`, `analyze`, `shortest_path`) still work as aliases, including the old
+`<graph-file>` first positional.
 
 ### `ug ingest`
 
