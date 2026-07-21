@@ -20,6 +20,7 @@ use ultragraph::{build_graph, index};
 /// than a runtime panic.
 const HELLO_PDF: &[u8] = include_bytes!("fixtures/hello.pdf");
 const UNICODE_PDF: &[u8] = include_bytes!("fixtures/unicode.pdf");
+const LATIN1_PDF: &[u8] = include_bytes!("fixtures/latin1.pdf");
 
 /// Write the bundled `hello.pdf` to a `<TempDir>/<name>.pdf` path.
 /// Returns the temp dir (must be kept alive for the file to exist) and
@@ -68,7 +69,9 @@ fn pdf_extracts_one_symbol_per_page() {
     assert_eq!(file.symbols.len(), 1);
     let sym = &file.symbols[0];
     assert_eq!(sym.kind, "heading_1", "PDF pages reuse heading_1 so the graph layer maps them to Concept");
-    assert_eq!(sym.id, "pdf_page:1");
+    // `doc_page`, not `pdf_page`: the indexer that produces these also
+    // handles Word/Excel/PowerPoint, so the id is format-agnostic.
+    assert_eq!(sym.id, "doc_page:1");
     assert_eq!(sym.start_line, 1);
     assert_eq!(sym.end_line, 1);
 }
@@ -92,19 +95,52 @@ fn pdf_page_text_lands_in_docstring() {
 }
 
 #[test]
-fn pdf_unicode_content_survives_extraction() {
-    let (dir, _) = stage_pdf("unicode.pdf", UNICODE_PDF);
+fn pdf_multibyte_text_survives_extraction() {
+    let (dir, _) = stage_pdf("latin1.pdf", LATIN1_PDF);
     let result = run_index(&dir);
     let sym = &result.files[0].symbols[0];
     let docstring = sym.docstring.as_deref().unwrap_or("");
-    // unicode.pdf contains '😀 🔧 🔨' — verify at least one of those
-    // emoji survives the round-trip. The exact UTF-8 path matters
-    // because pdf-extract has to handle PDF's mixed encodings and the
-    // truncate() helper has to respect char boundaries.
+    // The fixture's high Latin-1 bytes become multi-byte UTF-8 once
+    // extracted, which is the path that matters: the extractor has to
+    // decode PDF's mixed encodings, and truncate() has to respect char
+    // boundaries rather than slicing mid-codepoint.
     assert!(
-        docstring.contains('😀') || docstring.contains('🔧') || docstring.contains('🔨'),
-        "expected at least one emoji in extracted text, got: {:?}",
+        docstring.contains("café") && docstring.contains("münchen"),
+        "expected accented text to survive extraction, got: {:?}",
         docstring
+    );
+    assert!(
+        docstring.chars().any(|c| c.len_utf8() > 1),
+        "fixture should contain at least one multi-byte character"
+    );
+}
+
+#[test]
+fn pdf_without_extractable_text_degrades_gracefully() {
+    // unicode.pdf draws emoji through an embedded font with no usable
+    // Unicode mapping, so the extractor legitimately gets nothing back.
+    // That must still yield a well-formed page symbol rather than a panic
+    // or a dropped file — an unreadable page is normal in the wild
+    // (scans, image-only exports).
+    let (dir, _) = stage_pdf("unicode.pdf", UNICODE_PDF);
+    let result = run_index(&dir);
+    assert_eq!(result.files.len(), 1, "the file must still be indexed");
+    let file = &result.files[0];
+    assert_eq!(file.language, "pdf");
+    assert_eq!(file.symbols.len(), 1, "one page → one symbol, text or not");
+
+    let sym = &file.symbols[0];
+    assert_eq!(sym.id, "doc_page:1");
+    assert_eq!(sym.start_line, 1);
+    assert!(
+        sym.docstring.as_deref().unwrap_or("").is_empty(),
+        "no extractable text should mean no docstring, got: {:?}",
+        sym.docstring
+    );
+    assert!(
+        sym.name.contains("no text"),
+        "the name should say the page had no text, got: {:?}",
+        sym.name
     );
 }
 
