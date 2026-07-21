@@ -99,39 +99,72 @@ pub fn extract_docstring(node: &Node, source: &[u8]) -> Option<String> {
     }
 }
 
-/// Approximate the maximum nesting depth reachable beneath a function/class
-/// definition. Cheap heuristic: only major scope-defining node kinds across
-/// our supported languages are counted.
-pub fn calculate_nesting(node: &Node) -> u32 {
-    let mut max_nesting: u32 = 0;
-    let mut current_nesting: u32 = 0;
-
-    let kind = node.kind();
-    if matches!(
+/// Is this node kind a control-flow construct that indents its body?
+///
+/// Covers the four tree-sitter grammars we index. `else_clause` is
+/// deliberately excluded: in `if a {} else if b {}` the else wraps another
+/// `if`, so counting both would make a flat chain look deeply nested.
+fn is_nesting_kind(kind: &str) -> bool {
+    matches!(
         kind,
-        "function_declaration"
-            | "function_definition"
-            | "method_definition"
-            | "method_declaration"
-            | "constructor_declaration"
-            | "class_declaration"
-            | "class_definition"
-            | "interface_declaration"
-            | "enum_declaration"
-            | "record_declaration"
-    ) {
-        current_nesting += 1;
+        // conditionals
+        "if_statement"
+            | "if_expression"
+            // loops
+            | "for_statement"
+            | "for_expression"
+            | "for_in_statement"
+            | "enhanced_for_statement"
+            | "while_statement"
+            | "while_expression"
+            | "loop_expression"
+            | "do_statement"
+            // branching
+            | "match_expression"
+            | "match_statement"
+            | "switch_statement"
+            | "switch_expression"
+            // scoping / error handling
+            | "try_statement"
+            | "try_expression"
+            | "catch_clause"
+            | "with_statement"
+    )
+}
+
+/// Maximum control-flow nesting depth *inside* a function or class body.
+///
+/// A function whose body is a flat sequence of statements scores 0; one with
+/// a loop containing an `if` scores 2. This is the "how hairy is this" signal
+/// that `project_overview` reports alongside LOC.
+///
+/// The previous implementation counted *declaration* kinds
+/// (`function_declaration`, `class_declaration`, …) rather than control flow,
+/// which meant two things: the number described how deeply nested the
+/// declaration itself was rather than its body, and Rust — whose nodes are
+/// `function_item` / `struct_item`, absent from that list — always scored 0.
+pub fn calculate_nesting(node: &Node) -> u32 {
+    fn walk(node: &Node, depth: u32) -> u32 {
+        let depth = if is_nesting_kind(node.kind()) {
+            depth + 1
+        } else {
+            depth
+        };
+        let mut max = depth;
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            max = max.max(walk(&child, depth));
+        }
+        max
     }
 
+    // Start beneath the definition: the function's own node is not nesting.
+    let mut max = 0;
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        let child_nesting = calculate_nesting(&child);
-        if child_nesting > max_nesting {
-            max_nesting = child_nesting;
-        }
+        max = max.max(walk(&child, 0));
     }
-
-    current_nesting + max_nesting
+    max
 }
 
 /// Extract a function's return type. Tries the tree-sitter `return_type`

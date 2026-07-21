@@ -407,3 +407,65 @@ pub trait C { fn m(&self); }
         );
     }
 }
+
+/// `metrics.max_nesting` measures control-flow depth *inside* a body.
+///
+/// Regression test: the original heuristic counted declaration node kinds
+/// (`function_declaration`, `class_declaration`, …). Rust's nodes are
+/// `function_item` / `struct_item`, so every Rust symbol scored 0 — which
+/// made the metric useless on this very repo.
+#[test]
+fn rust_metrics_report_control_flow_nesting() {
+    let (dir, _) = stage_rs(
+        r#"
+pub fn flat(a: u32, b: u32) -> u32 {
+    let c = a + b;
+    c
+}
+
+pub fn one_level(items: &[u32]) -> u32 {
+    let mut total = 0;
+    for i in items {
+        total += i;
+    }
+    total
+}
+
+pub fn three_levels(items: &[u32]) -> u32 {
+    let mut total = 0;
+    for i in items {
+        if *i > 0 {
+            match i {
+                _ => total += i,
+            }
+        }
+    }
+    total
+}
+"#,
+        "nesting.rs",
+    );
+    let result = run_index(&dir);
+    let symbols = &result.files[0].symbols;
+
+    let nesting = |name: &str| -> u32 {
+        symbols
+            .iter()
+            .find(|s| s.name == name)
+            .unwrap_or_else(|| panic!("missing symbol {}", name))
+            .metrics
+            .as_ref()
+            .expect("rust functions should carry metrics")
+            .max_nesting
+    };
+
+    assert_eq!(nesting("flat"), 0, "a straight-line body has no nesting");
+    assert_eq!(nesting("one_level"), 1, "a single for-loop is one level");
+    assert_eq!(nesting("three_levels"), 3, "for > if > match is three levels");
+
+    // LOC and params should keep working alongside it.
+    let flat = symbols.iter().find(|s| s.name == "flat").unwrap();
+    let m = flat.metrics.as_ref().unwrap();
+    assert_eq!(m.params, 2);
+    assert!(m.loc >= 3, "loc should span the body, got {}", m.loc);
+}

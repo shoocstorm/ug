@@ -1747,12 +1747,37 @@ async fn api_stats(State(state): State<ServeState>) -> Response {
     for e in &snap.parsed.edges {
         *edge_types.entry(format!("{:?}", e.edge_type)).or_insert(0) += 1;
     }
+    // The repo-root folder node carries the per-language file counts and the
+    // code/docs/mixed classification the indexer computed.
+    let root_folder = snap
+        .parsed
+        .nodes
+        .iter()
+        .filter_map(|n| n.folder.as_ref())
+        .min_by_key(|f| f.depth);
+
     let body = serde_json::json!({
         "nodes": snap.parsed.nodes.len(),
         "edges": snap.parsed.edges.len(),
         "node_types": node_types,
         "edge_types": edge_types,
         "graph_bytes": snap.encoded.identity.len(),
+        // Indexer-side counts (files, lines, timing). Present in graph.json
+        // all along; surfaced here so the UI can show what was scanned, not
+        // just what ended up in the graph.
+        "index": snap.parsed.stats.as_ref().map(|s| serde_json::json!({
+            "files": s.total_files,
+            "cached_files": s.cached_files,
+            "symbols": s.total_symbols,
+            "folders": s.total_folders,
+            "lines": s.total_lines,
+            "indexed_at": s.last_indexed_at,
+            "indexing_time_ms": s.indexing_time_ms,
+        })),
+        "languages": root_folder.map(|f| f.language_breakdown.clone()),
+        "kb_type": root_folder
+            .and_then(|f| f.classification.as_ref())
+            .map(|c| format!("{:?}", c).to_lowercase()),
     });
     ok_json(body.to_string())
 }
