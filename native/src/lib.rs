@@ -1,3 +1,4 @@
+pub mod agent_tools;
 mod graph;
 mod indexer;
 pub mod storage;

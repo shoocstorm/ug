@@ -8,10 +8,14 @@ use ultragraph::storage::{
     EmbedderConfig, KnowledgeStore, RankStrategy, SearchKbOptions, StoreSet, StoreSpec,
     DEFAULT_BASE_URL as DEFAULT_EMBED_BASE_URL, DEFAULT_MODEL as DEFAULT_EMBED_MODEL,
 };
-use ultragraph::types::{GraphData, GraphEdge, GraphEdgeType, GraphNode, GraphNodeType, PathResult};
+use ultragraph::agent_tools::{
+    self, by_id_map, edge_type_str, looks_like_node_id, node_loc, node_type_str,
+    strip_file_id_prefix, Render,
+};
+use ultragraph::types::{GraphData, GraphEdge, GraphNode, GraphNodeType};
 use ultragraph::{
-    build_graph, calculate_centrality, detect_cycles, find_shortest_path, index, index_with_cache,
-    C_BLUE, C_BOLD, C_CYAN, C_DIM, C_GREEN, C_MAGENTA, C_RESET, C_YELLOW,
+    build_graph, calculate_centrality, detect_cycles, index, index_with_cache, C_BLUE, C_BOLD,
+    C_CYAN, C_DIM, C_GREEN, C_MAGENTA, C_RESET, C_YELLOW,
 };
 
 mod chat;
@@ -753,10 +757,6 @@ fn node_line(n: &GraphNode) -> String {
     )
 }
 
-fn by_id_map(graph: &GraphData) -> std::collections::HashMap<&str, &GraphNode> {
-    graph.nodes.iter().map(|n| (n.id.as_str(), n)).collect()
-}
-
 /// Does this node pass the `-t/--type` (node type) and `-f/--file`
 /// (path prefix) filters?
 fn node_passes(n: &GraphNode, types: &[String], file_prefix: Option<&str>) -> bool {
@@ -1146,76 +1146,20 @@ fn run_graph_path(args: &[String]) {
         std::process::exit(1);
     }
     let (graph, raw, _path) = load_agent_graph(&load_args);
+    // The CLI resolves names/paths to ids before handing off; MCP and HTTP
+    // pass ids directly.
     let source = resolve_node_ref(&graph, &pos[0]);
     let target = resolve_node_ref(&graph, &pos[1]);
-    let by_id = by_id_map(&graph);
+    let strict = has_flag(args, "--strict");
 
-    let parse = |json: String| -> PathResult {
-        serde_json::from_str(&json).unwrap_or(PathResult {
-            path: vec![],
-            found: false,
-            length: None,
-        })
-    };
-    // Edges are directed; unless --strict, retry the reverse direction
-    // when no forward path exists and label the result as reversed.
-    let mut reversed = false;
-    let mut result = parse(find_shortest_path(raw.clone(), source.clone(), target.clone()));
-    if !result.found && !has_flag(args, "--strict") {
-        reversed = true;
-        result = parse(find_shortest_path(raw, target.clone(), source.clone()));
-    }
-    let hops = result
-        .length
-        .unwrap_or(result.path.len().saturating_sub(1) as u32);
-
-    let json = serde_json::json!({
-        "source": source,
-        "target": target,
-        "found": result.found,
-        "reversed": result.found && reversed,
-        "length": if result.found { Some(hops) } else { None },
-        "path": result.path,
-        "nodes": result.path.iter().filter_map(|id| by_id.get(id.as_str()).map(|n| serde_json::to_value(n).unwrap_or_else(|_| serde_json::json!({})))).collect::<Vec<_>>(),
-    })
-    .to_string();
-    if emit_raw(args, &json, "path result") {
-        return;
-    }
-
-    if !result.found {
-        println!(
-            "No directed path between {C_CYAN}{}{C_RESET} and {C_CYAN}{}{C_RESET}{}.",
-            source,
-            target,
-            if has_flag(args, "--strict") {
-                " (--strict: reverse direction not tried)"
-            } else {
-                " in either direction"
-            }
-        );
-        println!("They may be connected only through shared ancestors — try {C_CYAN}ug graph_bfs <id> -d both{C_RESET} from each id.");
-        return;
-    }
-
-    if reversed {
-        println!(
-            "{C_BOLD}Path {} → {}{C_RESET} {C_YELLOW}(reverse direction — no forward path existed){C_RESET} — {} hop(s)",
-            target, source, hops
-        );
-    } else {
-        println!("{C_BOLD}Path {} → {}{C_RESET} — {} hop(s)", source, target, hops);
-    }
-    println!();
-    for (i, id) in result.path.iter().enumerate() {
-        let desc = match by_id.get(id.as_str()) {
-            Some(n) => node_line(n),
-            None => format!("(unknown node) id: {C_CYAN}{}{C_RESET}", id),
-        };
-        println!("{} {}", if i == 0 { "·" } else { "↓" }, desc);
-    }
-    println!();
-    println!("{C_DIM}Next:{C_RESET} {C_CYAN}ug get_code <id>{C_RESET} on any id above to see the code that makes the link.");
+    let result = agent_tools::shortest_path(&graph, &raw, &source, &target, strict);
+    emit_agent_result(
+        args,
+        &result,
+        || agent_tools::render_shortest_path(&result, Render::Ansi, strict),
+        "path result",
+        true,
+    );
 }
 
 /// Rows behind the centrality report: one per node, both scores joined.
@@ -1489,52 +1433,6 @@ fn positionals(args: &[String], value_flags: &[&str]) -> Vec<String> {
     out
 }
 
-fn node_type_str(t: &GraphNodeType) -> &'static str {
-    match t {
-        GraphNodeType::File => "File",
-        GraphNodeType::Folder => "Folder",
-        GraphNodeType::Function => "Function",
-        GraphNodeType::Class => "Class",
-        GraphNodeType::Interface => "Interface",
-        GraphNodeType::Concept => "Concept",
-        GraphNodeType::Dependency => "Dependency",
-        GraphNodeType::Config => "Config",
-        GraphNodeType::Constant => "Constant",
-    }
-}
-
-fn edge_type_str(t: &GraphEdgeType) -> &'static str {
-    match t {
-        GraphEdgeType::DependsOn => "DependsOn",
-        GraphEdgeType::Calls => "Calls",
-        GraphEdgeType::Extends => "Extends",
-        GraphEdgeType::Implements => "Implements",
-        GraphEdgeType::References => "References",
-        GraphEdgeType::Contains => "Contains",
-        GraphEdgeType::Imports => "Imports",
-        GraphEdgeType::Exports => "Exports",
-        GraphEdgeType::Requires => "Requires",
-        GraphEdgeType::Uses => "Uses",
-    }
-}
-
-fn node_loc(n: &GraphNode) -> String {
-    match &n.file {
-        Some(f) => match (n.start_line, n.end_line) {
-            // File nodes carry no line range — showing "?-?" reads like
-            // an error, so just print the path.
-            (None, None) => f.clone(),
-            (s, e) => format!(
-                "{}:{}-{}",
-                f,
-                s.map(|v| v.to_string()).unwrap_or_else(|| "?".into()),
-                e.map(|v| v.to_string()).unwrap_or_else(|| "?".into())
-            ),
-        },
-        None => "(no file)".into(),
-    }
-}
-
 /// graph.json for the agent-tool commands: `-i/--input` wins, else the
 /// `-n/--name` (or cwd-derived) project dir, else the most recently
 /// updated project under ~/.ug — same fallback spirit as the db reads.
@@ -1682,20 +1580,32 @@ fn print_project_overview_help() {
     println!("  • Most depended-upon symbols (hotspots)");
 }
 
-/// Printed between per-item sections when a command gets several
-/// positionals (names/files/ids) in one invocation.
-fn batch_separator(i: usize) {
-    if i > 0 {
-        println!();
-        println!("{C_DIM}────────────────────────────────────────{C_RESET}");
-        println!();
+/// Emit an agent-tool result: raw JSON when `--json`/`-o` was given,
+/// otherwise the ANSI rendering. Exits non-zero when any item in the batch
+/// failed, so a bad id in a script is still detectable.
+fn emit_agent_result<T: serde::Serialize>(
+    args: &[String],
+    result: &T,
+    render: impl FnOnce() -> String,
+    label: &str,
+    ok: bool,
+) {
+    let json = serde_json::to_string_pretty(result).unwrap_or_default();
+    if !emit_raw(args, &json, label) {
+        print!("{}", render());
+    }
+    if !ok {
+        std::process::exit(1);
     }
 }
 
-/// Check if a string looks like a nodeId (contains ':' like 'function:path:line:name').
-/// This is a heuristic — nodeIds from the indexer contain ':' separators.
-fn looks_like_node_id(s: &str) -> bool {
-    s.contains(':')
+/// Split bare positionals into (node ids, names/paths). The CLI takes
+/// untagged arguments where MCP and HTTP have separate `node_id` / `name`
+/// params, so it guesses using the indexer's id shape.
+fn split_ids_and_names(pos: &[String]) -> (Vec<String>, Vec<String>) {
+    pos.iter()
+        .cloned()
+        .partition(|s| looks_like_node_id(s))
 }
 
 fn run_find_symbol(args: &[String]) {
@@ -1708,101 +1618,26 @@ fn run_find_symbol(args: &[String]) {
         eprintln!("Usage: ug find_symbol <name>... [-t|--type <node-type>]... [-f|--file <prefix>] [-l|--limit <n>] [-n|--name <project>]");
         std::process::exit(1);
     }
-    let types: Vec<String> = multi_flag(args, &["-t", "--type"])
-        .iter()
-        .map(|t| t.to_lowercase())
-        .collect();
-    let file_prefix = flag_value(args, &["-f", "--file"]);
-    let limit: usize = flag_value(args, &["-l", "--limit"])
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(20);
+    let (node_id, name) = split_ids_and_names(&queries);
+    let params = agent_tools::FindSymbolParams {
+        node_id,
+        name,
+        // `--node-type` is the canonical spelling; `-t/--type` still parses.
+        node_types: multi_flag(args, &["--node-type", "-t", "--type"]),
+        file_prefix: flag_value(args, &["--file-prefix", "-f", "--file"]),
+        limit: flag_value(args, &["-k", "--limit", "-l"]).and_then(|s| s.parse().ok()),
+    };
     let (graph, _raw, _path) = load_agent_graph(args);
 
-    for (qi, query) in queries.iter().enumerate() {
-        batch_separator(qi);
-
-        // Fast path: direct nodeId lookup when query contains ':' (nodeId format)
-        if looks_like_node_id(query) {
-            if let Some(node) = graph.nodes.iter().find(|n| n.id == *query) {
-                println!("{C_BOLD}Node by direct ID lookup{C_RESET}");
-                println!();
-                println!(
-                    "- {} {C_BOLD}{}{C_RESET}  {C_DIM}{}{C_RESET}",
-                    node_type_str(&node.node_type),
-                    node.name,
-                    node_loc(node)
-                );
-                println!("  id: {C_CYAN}{}{C_RESET}", node.id);
-                if let Some(d) = &node.docstring {
-                    let preview: String = d.replace('\n', " ").chars().take(200).collect();
-                    println!("  {C_DIM}doc: {}{C_RESET}", preview);
-                }
-            } else {
-                println!(
-                    "✗ No node with id '{}' — get ids from {C_CYAN}ug find_symbol{C_RESET} or {C_CYAN}ug file_outline{C_RESET}.",
-                    query
-                );
-            }
-            continue;
-        }
-
-        // Name search path
-        let q = query.to_lowercase();
-        let mut hits: Vec<(u8, &GraphNode)> = Vec::new();
-        for n in &graph.nodes {
-            if !types.is_empty() && !types.contains(&node_type_str(&n.node_type).to_lowercase()) {
-                continue;
-            }
-            if let Some(p) = &file_prefix {
-                if !n.file.as_deref().unwrap_or("").starts_with(p.as_str()) {
-                    continue;
-                }
-            }
-            let nm = n.name.to_lowercase();
-            // exact > prefix > substring; ties broken by shorter (closer) name.
-            let rank = if nm == q {
-                0
-            } else if nm.starts_with(&q) {
-                1
-            } else if nm.contains(&q) {
-                2
-            } else {
-                3
-            };
-            if rank < 3 {
-                hits.push((rank, n));
-            }
-        }
-        hits.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.name.len().cmp(&b.1.name.len())));
-        let total = hits.len();
-
-        let showing = if total > limit {
-            format!(", showing {}", limit)
-        } else {
-            String::new()
-        };
-        println!("{C_BOLD}Symbols matching '{}'{C_RESET} — {} match(es){}", query, total, showing);
-        println!();
-        if total == 0 {
-            println!("No name matches. Try a shorter fragment, drop --type/--file, or use {C_CYAN}ug hybrid_search{C_RESET} for a concept-level query.");
-            continue;
-        }
-        for (_, n) in hits.iter().take(limit) {
-            println!(
-                "- {} {C_BOLD}{}{C_RESET}  {C_DIM}{}{C_RESET}",
-                node_type_str(&n.node_type),
-                n.name,
-                node_loc(n)
-            );
-            println!("  id: {C_CYAN}{}{C_RESET}", n.id);
-            if let Some(d) = &n.docstring {
-                let preview: String = d.replace('\n', " ").chars().take(200).collect();
-                println!("  {C_DIM}doc: {}{C_RESET}", preview);
-            }
-        }
-    }
-    println!();
-    println!("{C_DIM}Next:{C_RESET} {C_CYAN}ug get_code <id>{C_RESET} for source · {C_CYAN}ug traverse <id>{C_RESET} for neighbors · {C_CYAN}ug graph_path <a> <b>{C_RESET}");
+    let result = agent_tools::find_symbol(&graph, &params);
+    let ok = result.ok();
+    emit_agent_result(
+        args,
+        &result,
+        || agent_tools::render_find_symbol(&result, Render::Ansi),
+        "find_symbol result",
+        ok,
+    );
 }
 
 fn run_file_outline(args: &[String]) {
@@ -1817,118 +1652,20 @@ fn run_file_outline(args: &[String]) {
     }
     let (graph, _raw, _path) = load_agent_graph(args);
 
-    let mut any_failed = false;
-    for (fi, file) in files.iter().enumerate() {
-        batch_separator(fi);
-        if !print_one_outline(&graph, file) {
-            any_failed = true;
-        }
-    }
-    println!();
-    println!("{C_DIM}Next:{C_RESET} {C_CYAN}ug get_code <id>{C_RESET} to read one symbol, or {C_CYAN}ug get_code -f <file>{C_RESET} for a whole file.");
-    if any_failed {
-        std::process::exit(1);
-    }
-}
-
-/// Outline one file to stdout; false when it couldn't be resolved (in a
-/// batch the remaining files still print — one bad path shouldn't sink
-/// the invocation, only the exit code).
-fn print_one_outline(graph: &GraphData, file: &str) -> bool {
-    // Fast path: direct nodeId lookup when input contains ':' (nodeId format)
-    if looks_like_node_id(file) {
-        if let Some(node) = graph.nodes.iter().find(|n| n.id == *file) {
-            if !matches!(node.node_type, GraphNodeType::File | GraphNodeType::Folder) {
-                println!("✗ Node '{}' is a {}, not a File. file_outline requires File node ids.", file, node_type_str(&node.node_type));
-                return false;
-            }
-            if let Some(f) = &node.file {
-                return print_file_outline_by_path(graph, f);
-            } else {
-                println!("✗ File node '{}' has no file path.", file);
-                return false;
-            }
-        } else {
-            println!("✗ No node with id '{}' — get ids from {C_CYAN}ug find_symbol{C_RESET} or {C_CYAN}ug file_outline{C_RESET}.", file);
-            return false;
-        }
-    }
-
-    // Path-based lookup
-    let file = strip_file_id_prefix(file);
-    print_file_outline_by_path(graph, file)
-}
-
-/// Helper: outline a file by its repo-relative path.
-fn print_file_outline_by_path(graph: &GraphData, file: &str) -> bool {
-    // Exact repo-relative match first, then unique suffix match.
-    let mut resolved: Option<String> = graph
-        .nodes
-        .iter()
-        .find(|n| n.file.as_deref() == Some(file))
-        .map(|_| file.to_string());
-    if resolved.is_none() {
-        let suffix = if file.starts_with('/') {
-            file.to_string()
-        } else {
-            format!("/{}", file)
-        };
-        let mut files: Vec<String> = graph
-            .nodes
-            .iter()
-            .filter_map(|n| n.file.as_ref())
-            .filter(|f| f.as_str() == file || f.ends_with(&suffix))
-            .cloned()
-            .collect();
-        files.sort();
-        files.dedup();
-        if files.len() > 1 {
-            println!("'{}' matches {} files — pass one of:", file, files.len());
-            for f in &files {
-                println!("- {}", f);
-            }
-            return false;
-        }
-        resolved = files.into_iter().next();
-    }
-    let Some(resolved) = resolved else {
-        println!(
-            "✗ No indexed file matches '{}'. Pass a repo-relative path (see {C_CYAN}ug project_overview{C_RESET} for the biggest files), or re-run {C_CYAN}ug gen{C_RESET} if the file is new.",
-            file
-        );
-        return false;
-    };
-
-    let mut symbols: Vec<&GraphNode> = graph
-        .nodes
-        .iter()
-        .filter(|n| n.file.as_deref() == Some(resolved.as_str()))
-        .filter(|n| !matches!(n.node_type, GraphNodeType::File | GraphNodeType::Folder))
-        .collect();
-    symbols.sort_by_key(|n| n.start_line.unwrap_or(0));
-
-    println!("{C_BOLD}Outline of {}{C_RESET} — {} symbol(s)", resolved, symbols.len());
-    println!();
-    for n in &symbols {
-        let s = n.start_line.map(|v| v.to_string()).unwrap_or_else(|| "?".into());
-        let e = n.end_line.map(|v| v.to_string()).unwrap_or_else(|| "?".into());
-        println!(
-            "- L{}-{}  {}  {C_BOLD}{}{C_RESET}  id: {C_CYAN}{}{C_RESET}",
-            s,
-            e,
-            node_type_str(&n.node_type),
-            n.name,
-            n.id
-        );
-    }
-    true
-}
-
-/// File nodes print their id as `file:<path>` (e.g. `file:docs/mcp.md`),
-/// and users copy that straight into file-taking commands. Accept it:
-/// strip the `file:` node-id prefix so both forms work.
-fn strip_file_id_prefix(file: &str) -> &str {
-    file.strip_prefix("file:").unwrap_or(file)
+    // A `file:`-prefixed id is a File node id *and* a path — `file_outline`
+    // resolves either, so both buckets end up in the same place.
+    let (node_id, file) = files
+        .into_iter()
+        .partition(|s| looks_like_node_id(s) && !s.starts_with("file:"));
+    let result = agent_tools::file_outline(&graph, &agent_tools::FileOutlineParams { node_id, file });
+    let ok = result.ok();
+    emit_agent_result(
+        args,
+        &result,
+        || agent_tools::render_file_outline(&result, Render::Ansi),
+        "file_outline result",
+        ok,
+    );
 }
 
 fn run_get_code(args: &[String]) {
@@ -1944,118 +1681,25 @@ fn run_get_code(args: &[String]) {
     }
     let (graph, _raw, graph_path) = load_agent_graph(args);
     let repo_root = agent_repo_root(&graph, &graph_path);
-    let max_chars: usize = flag_value(args, &["--max-chars"])
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(20000);
 
-    // File mode: one file with an optional line range.
-    if node_ids.is_empty() {
-        let file = file_flag.unwrap();
-        let file = strip_file_id_prefix(&file).to_string();
-        let start = flag_value(args, &["-s", "--start"])
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(1);
-        let end = flag_value(args, &["-e", "--end"])
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(usize::MAX);
-        if !print_one_slice(&repo_root, &file, start, end, None, max_chars) {
-            std::process::exit(1);
-        }
-        return;
-    }
-
-    // Node-id mode: each positional is one symbol; a bad id prints an
-    // error section and the rest still print.
-    let mut any_failed = false;
-    for (i, id) in node_ids.iter().enumerate() {
-        batch_separator(i);
-        let Some(n) = graph.nodes.iter().find(|n| &n.id == id) else {
-            println!(
-                "✗ No node with id '{}' — get ids from {C_CYAN}ug find_symbol{C_RESET} or {C_CYAN}ug file_outline{C_RESET}.",
-                id
-            );
-            any_failed = true;
-            continue;
-        };
-        let Some(f) = &n.file else {
-            println!("✗ Node '{}' ({}) has no source file.", id, node_type_str(&n.node_type));
-            any_failed = true;
-            continue;
-        };
-        let s = n.start_line.unwrap_or(1) as usize;
-        // Nodes without an end line (File nodes have no range at all)
-        // mean "the whole file", not "one line".
-        let e = n.end_line.map(|v| v as usize).unwrap_or(if n.start_line.is_some() {
-            s
-        } else {
-            usize::MAX
-        });
-        if !print_one_slice(&repo_root, f, s, e, Some(n), max_chars) {
-            any_failed = true;
-        }
-    }
-    if any_failed {
-        std::process::exit(1);
-    }
-}
-
-/// Print one source slice; false when the file can't be read (stale index).
-fn print_one_slice(
-    repo_root: &Path,
-    file: &str,
-    start: usize,
-    end: usize,
-    node: Option<&GraphNode>,
-    max_chars: usize,
-) -> bool {
-    let abs = repo_root.join(file);
-    let content = match fs::read_to_string(&abs) {
-        Ok(c) => c,
-        Err(_) => {
-            println!(
-                "✗ {} not found under repo root {} — the index may be stale (re-run {C_CYAN}ug gen{C_RESET}).",
-                file,
-                repo_root.display()
-            );
-            return false;
-        }
+    let params = agent_tools::GetCodeParams {
+        node_id: node_ids,
+        file: file_flag,
+        start_line: flag_value(args, &["--start-line", "-s", "--start"])
+            .and_then(|s| s.parse().ok()),
+        end_line: flag_value(args, &["--end-line", "-e", "--end"]).and_then(|s| s.parse().ok()),
+        max_chars: flag_value(args, &["--max-chars"]).and_then(|s| s.parse().ok()),
     };
-    let all: Vec<&str> = content.split('\n').collect();
-    let from = start.max(1).min(all.len());
-    let to = end.min(all.len()).max(from);
-    let mut text = all[from - 1..to].join("\n");
-    let char_count = text.chars().count();
-    let mut truncated = 0;
-    if char_count > max_chars {
-        truncated = char_count - max_chars;
-        text = text.chars().take(max_chars).collect();
-    }
 
-    let title = match node {
-        Some(n) => format!("{} {}", node_type_str(&n.node_type), n.name),
-        None => file.to_string(),
-    };
-    println!(
-        "{C_BOLD}{}{C_RESET}  —  {}:{}-{} (of {} lines)",
-        title,
-        file,
-        from,
-        to,
-        all.len()
+    let result = agent_tools::get_code(&graph, &repo_root, &params);
+    let ok = result.ok();
+    emit_agent_result(
+        args,
+        &result,
+        || agent_tools::render_get_code(&result, Render::Ansi),
+        "get_code result",
+        ok,
     );
-    if let Some(d) = node.and_then(|n| n.docstring.as_ref()) {
-        println!("{C_DIM}doc: {}{C_RESET}", d);
-    }
-    println!();
-    println!("{}", text);
-    if truncated > 0 {
-        println!();
-        println!(
-            "{C_DIM}(truncated — {} more chars; narrow the line range or raise --max-chars){C_RESET}",
-            truncated
-        );
-    }
-    true
 }
 
 fn run_project_overview(args: &[String]) {
@@ -2066,76 +1710,15 @@ fn run_project_overview(args: &[String]) {
     let (graph, _raw, graph_path) = load_agent_graph(args);
     let repo_root = agent_repo_root(&graph, &graph_path);
 
-    use std::collections::HashMap;
-    let mut node_types: HashMap<&'static str, usize> = HashMap::new();
-    let mut symbols_per_file: HashMap<&str, usize> = HashMap::new();
-    for n in &graph.nodes {
-        *node_types.entry(node_type_str(&n.node_type)).or_insert(0) += 1;
-        if let Some(f) = &n.file {
-            if !matches!(n.node_type, GraphNodeType::File | GraphNodeType::Folder) {
-                *symbols_per_file.entry(f.as_str()).or_insert(0) += 1;
-            }
-        }
-    }
-    let mut edge_types: HashMap<&'static str, usize> = HashMap::new();
-    let mut in_degree: HashMap<&str, usize> = HashMap::new();
-    for e in &graph.edges {
-        *edge_types.entry(edge_type_str(&e.edge_type)).or_insert(0) += 1;
-        // Contains edges are pure structure (folder→file→symbol); skipping
-        // them makes inbound degree mean "how much code depends on this".
-        if !matches!(e.edge_type, GraphEdgeType::Contains) {
-            *in_degree.entry(e.target.as_str()).or_insert(0) += 1;
-        }
-    }
-    let by_id: HashMap<&str, &GraphNode> =
-        graph.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
-
-    fn top<K: Copy>(m: &std::collections::HashMap<K, usize>, k: usize) -> Vec<(K, usize)> {
-        let mut v: Vec<(K, usize)> = m.iter().map(|(key, c)| (*key, *c)).collect();
-        v.sort_by(|a, b| b.1.cmp(&a.1));
-        v.truncate(k);
-        v
-    }
-
-    println!("{C_BOLD}Project overview{C_RESET}");
-    println!("{C_DIM}repo: {}{C_RESET}", repo_root.display());
-    println!("{C_DIM}graph: {}{C_RESET}", graph_path.display());
-    println!();
-    println!("{C_BOLD}Nodes ({}){C_RESET}", graph.nodes.len());
-    for (t, c) in top(&node_types, 10) {
-        println!("- {}: {}", t, c);
-    }
-    println!();
-    println!("{C_BOLD}Edges ({}){C_RESET}", graph.edges.len());
-    for (t, c) in top(&edge_types, 10) {
-        println!("- {}: {}", t, c);
-    }
-    println!();
-    println!("{C_BOLD}Biggest files (by symbol count){C_RESET}");
-    for (f, c) in top(&symbols_per_file, 10) {
-        println!("- {}  ({})", f, c);
-    }
-    println!();
-    println!("{C_BOLD}Most depended-upon symbols{C_RESET} {C_DIM}(inbound edges, excluding containment){C_RESET}");
-    for (id, c) in top(&in_degree, 12) {
-        let Some(n) = by_id.get(id) else { continue };
-        println!(
-            "- {} {C_BOLD}{}{C_RESET}  ←{}  {C_DIM}{}{C_RESET}  id: {C_CYAN}{}{C_RESET}",
-            node_type_str(&n.node_type),
-            n.name,
-            c,
-            node_loc(n),
-            id
-        );
-    }
-    println!();
-    println!("{C_DIM}Next:{C_RESET} {C_CYAN}ug file_outline <file>{C_RESET} on a big file · {C_CYAN}ug get_code <id>{C_RESET} on a hotspot · {C_CYAN}ug hybrid_search <query>{C_RESET} for a concept");
+    let result = agent_tools::project_overview(&graph, &repo_root, &graph_path);
+    emit_agent_result(
+        args,
+        &result,
+        || agent_tools::render_project_overview(&result, Render::Ansi),
+        "project_overview result",
+        true,
+    );
 }
-
-/// Default edge types for `find_usages` — dependency-ish edges only, no
-/// Contains (structure) so results mean "code that uses this", not "the
-/// folder that holds it". Mirrors the MCP tool's default.
-const USAGE_EDGE_TYPES: &[&str] = &["calls", "references", "imports", "extends", "implements"];
 
 fn run_find_usages(args: &[String]) {
     if has_flag(args, "-h") || has_flag(args, "--help") {
@@ -2147,115 +1730,22 @@ fn run_find_usages(args: &[String]) {
         eprintln!("Usage: ug find_usages <node-id>... [-k|--hops <n>] [-t|--edge-type <type>]... [-n|--name <project>]");
         std::process::exit(1);
     }
-    let hops: u32 = flag_value(args, &["-k", "--hops"])
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(1)
-        .clamp(1, 3);
-    let edge_filter: Vec<String> = {
-        let given = multi_flag(args, &["-t", "--edge-type"]);
-        if given.is_empty() {
-            USAGE_EDGE_TYPES.iter().map(|s| s.to_string()).collect()
-        } else {
-            given.iter().map(|t| t.to_lowercase()).collect()
-        }
-    };
     let (graph, _raw, _path) = load_agent_graph(args);
-    let by_id: std::collections::HashMap<&str, &GraphNode> =
-        graph.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
 
-    // Inbound adjacency, built once and shared across the batch: edges
-    // that *end* at a node — their sources are its users/callers.
-    let mut inbound: std::collections::HashMap<&str, Vec<(&str, &'static str)>> =
-        std::collections::HashMap::new();
-    for e in &graph.edges {
-        if edge_filter.contains(&edge_type_str(&e.edge_type).to_lowercase()) {
-            inbound
-                .entry(e.target.as_str())
-                .or_default()
-                .push((e.source.as_str(), edge_type_str(&e.edge_type)));
-        }
-    }
-
-    let mut any_failed = false;
-    for (bi, node_id) in node_ids.iter().enumerate() {
-        batch_separator(bi);
-        if !by_id.contains_key(node_id.as_str()) {
-            println!(
-                "✗ No node with id '{}' — get ids from {C_CYAN}ug find_symbol{C_RESET} or {C_CYAN}ug file_outline{C_RESET} first.",
-                node_id
-            );
-            any_failed = true;
-            continue;
-        }
-
-        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
-        seen.insert(node_id.as_str());
-        // (id, depth, via-edge-type, used-target-id)
-        let mut results: Vec<(&str, u32, &'static str, &str)> = Vec::new();
-        let mut frontier: Vec<&str> = vec![node_id.as_str()];
-        for depth in 1..=hops {
-            let mut next: Vec<&str> = Vec::new();
-            for target in &frontier {
-                if let Some(sources) = inbound.get(target) {
-                    for (src, et) in sources {
-                        if seen.insert(src) {
-                            results.push((src, depth, et, target));
-                            next.push(src);
-                        }
-                    }
-                }
-            }
-            frontier = next;
-            if frontier.is_empty() {
-                break;
-            }
-        }
-
-        let subject = by_id[node_id.as_str()];
-        println!(
-            "{C_BOLD}Usages of {} {}{C_RESET}  {C_DIM}{}{C_RESET}",
-            node_type_str(&subject.node_type),
-            subject.name,
-            node_loc(subject)
-        );
-        println!(
-            "{C_DIM}hops={} · edges=[{}] · {} user(s){C_RESET}",
-            hops,
-            edge_filter.join(", "),
-            results.len()
-        );
-        println!();
-        if results.is_empty() {
-            println!("Nothing points at this node via [{}].", edge_filter.join(", "));
-            println!("Try more hops ({C_CYAN}-k 2{C_RESET}), different edge types ({C_CYAN}ug graph_schema{C_RESET} lists what this graph has),");
-            println!("or {C_CYAN}ug traverse{C_RESET} for outbound dependencies instead.");
-            continue;
-        }
-        for (id, depth, et, target) in &results {
-            let desc = match by_id.get(id) {
-                Some(n) => format!(
-                    "{} {C_BOLD}{}{C_RESET}  {C_DIM}{}{C_RESET}",
-                    node_type_str(&n.node_type),
-                    n.name,
-                    node_loc(n)
-                ),
-                None => format!("(unknown node) {}", id),
-            };
-            let via = if *depth > 1 {
-                let target_name = by_id.get(target).map(|n| n.name.as_str()).unwrap_or(target);
-                format!("{C_DIM}—{}→ {} (hop {}){C_RESET}", et, target_name, depth)
-            } else {
-                format!("{C_DIM}—{}→{C_RESET}", et)
-            };
-            println!("- {} {}", desc, via);
-            println!("  id: {C_CYAN}{}{C_RESET}", id);
-        }
-    }
-    println!();
-    println!("{C_DIM}Next:{C_RESET} {C_CYAN}ug get_code <id>{C_RESET} to read a caller · {C_CYAN}ug find_usages <id> -k 2{C_RESET} for transitive users.");
-    if any_failed {
-        std::process::exit(1);
-    }
+    let params = agent_tools::FindUsagesParams {
+        node_id: node_ids,
+        hops: flag_value(args, &["--hops", "-k"]).and_then(|s| s.parse().ok()),
+        edge_types: multi_flag(args, &["--edge-type", "-t"]),
+    };
+    let result = agent_tools::find_usages(&graph, &params);
+    let ok = result.ok();
+    emit_agent_result(
+        args,
+        &result,
+        || agent_tools::render_find_usages(&result, Render::Ansi),
+        "find_usages result",
+        ok,
+    );
 }
 
 fn run_graph_schema(args: &[String]) {
@@ -2265,61 +1755,14 @@ fn run_graph_schema(args: &[String]) {
     }
     let (graph, _raw, graph_path) = load_agent_graph(args);
 
-    use std::collections::HashMap;
-    let mut node_counts: HashMap<&'static str, usize> = HashMap::new();
-    for n in &graph.nodes {
-        *node_counts.entry(node_type_str(&n.node_type)).or_insert(0) += 1;
-    }
-    // Edge types keyed by (source node type → target node type) so the
-    // reader learns not just which types exist but what they connect.
-    let by_id: HashMap<&str, &GraphNode> =
-        graph.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
-    let mut edge_counts: HashMap<&'static str, usize> = HashMap::new();
-    let mut edge_shapes: HashMap<(&'static str, &'static str, &'static str), usize> =
-        HashMap::new();
-    for e in &graph.edges {
-        let et = edge_type_str(&e.edge_type);
-        *edge_counts.entry(et).or_insert(0) += 1;
-        let st = by_id.get(e.source.as_str()).map(|n| node_type_str(&n.node_type)).unwrap_or("?");
-        let tt = by_id.get(e.target.as_str()).map(|n| node_type_str(&n.node_type)).unwrap_or("?");
-        *edge_shapes.entry((et, st, tt)).or_insert(0) += 1;
-    }
-
-    println!("{C_BOLD}Graph schema{C_RESET}  {C_DIM}{}{C_RESET}", graph_path.display());
-    println!();
-    println!("{C_BOLD}Node types in this graph:{C_RESET}");
-    let mut nodes_sorted: Vec<_> = node_counts.iter().collect();
-    nodes_sorted.sort_by(|a, b| b.1.cmp(a.1));
-    for (t, c) in nodes_sorted {
-        println!("  {C_CYAN}{:<12}{C_RESET} {}", t, c);
-    }
-    println!();
-    println!("{C_BOLD}Edge types in this graph{C_RESET} {C_DIM}(source type → target type){C_RESET}{C_BOLD}:{C_RESET}");
-    let mut edges_sorted: Vec<_> = edge_counts.iter().collect();
-    edges_sorted.sort_by(|a, b| b.1.cmp(a.1));
-    for (t, c) in edges_sorted {
-        let mut shapes: Vec<_> = edge_shapes
-            .iter()
-            .filter(|((et, _, _), _)| et == t)
-            .map(|((_, st, tt), c)| (format!("{}→{}", st, tt), *c))
-            .collect();
-        shapes.sort_by(|a, b| b.1.cmp(&a.1));
-        let shape_str = shapes
-            .iter()
-            .take(4)
-            .map(|(s, c)| format!("{} ({})", s, c))
-            .collect::<Vec<_>>()
-            .join(", ");
-        println!("  {C_CYAN}{:<12}{C_RESET} {:<6} {C_DIM}{}{C_RESET}", t, c, shape_str);
-    }
-    println!();
-    println!("{C_BOLD}Full edge-type vocabulary{C_RESET} {C_DIM}(what indexers can emit — pass these to --edge-type filters){C_RESET}{C_BOLD}:{C_RESET}");
-    println!("  DependsOn, Calls, Extends, Implements, References, Contains, Imports, Exports, Requires, Uses");
-    println!();
-    println!("{C_DIM}Notes:{C_RESET}");
-    println!("  • Edges are directed: {C_CYAN}Calls{C_RESET} A→B means A calls B; inbound edges on B are its callers.");
-    println!("  • {C_CYAN}Contains{C_RESET} is structure (Folder→File→Symbol) — exclude it when you mean \"depends on\".");
-    println!("  • Filters accepting edge types: {C_CYAN}ug find_usages -t{C_RESET}, {C_CYAN}ug filter{C_RESET}, and the MCP traverse_kb/find_usages tools.");
+    let result = agent_tools::graph_schema(&graph, &graph_path);
+    emit_agent_result(
+        args,
+        &result,
+        || agent_tools::render_graph_schema(&result, Render::Ansi),
+        "graph_schema result",
+        true,
+    );
 }
 
 fn print_find_usages_help() {
