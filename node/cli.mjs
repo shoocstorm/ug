@@ -1512,8 +1512,6 @@ function uninstallMcpConfig(target, scope) {
 const TOOL_ALIASES = {
   search_kb: 'search',
   hybrid_search: 'search',
-  semantic_search_kb: 'semantic_search',
-  traverse_kb: 'traverse',
   graph_path: 'shortest_path',
   path: 'shortest_path',
   list: 'list_projects',
@@ -1521,13 +1519,11 @@ const TOOL_ALIASES = {
   // graph_search was find_symbols over names *and* docstrings; the docstring
   // half comes back via ALIAS_DEFAULTS below.
   graph_search: 'find_symbols',
-  search_graph: 'find_symbols',
 };
 
 // Tools whose legacy name implied a non-default param value.
 const ALIAS_DEFAULTS = {
   graph_search: { includeDocs: true },
-  search_graph: { includeDocs: true },
 };
 
 // Handled by callTool but deliberately absent from tools/list — operator
