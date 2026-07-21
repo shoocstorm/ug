@@ -89,21 +89,23 @@ fn main() {
         "graph_centrality" | "centrality" => run_graph_centrality(cmd_args),
         "graph_cycles" | "cycles" => run_graph_cycles(cmd_args),
         "graph_search" | "search_graph" => run_graph_search(cmd_args),
-        // Agent tools (graph.json-backed, for AI coding agents).
+        // Agent tools (graph.json-backed, for AI coding agents). Names match
+        // the MCP tools one-for-one.
         "find_symbol" => run_find_symbol(cmd_args),
         "file_outline" => run_file_outline(cmd_args),
         "get_code" => run_get_code(cmd_args),
         "find_usages" => run_find_usages(cmd_args),
         "project_overview" => run_project_overview(cmd_args),
-        "graph_path" | "path" | "shortest_path" => run_graph_path(cmd_args),
+        "shortest_path" | "graph_path" | "path" => run_graph_path(cmd_args),
         "graph_schema" => run_graph_schema(cmd_args),
-        // Retrieval (OverGraph-backed).
+        // Retrieval (OverGraph-backed). `search` is the canonical name the
+        // MCP tool uses; `hybrid_search` is the pre-rename alias.
         "semantic_search" => run_semantic_search(cmd_args),
-        "hybrid_search" => run_hybrid_search(cmd_args),
+        "search" | "hybrid_search" => run_hybrid_search(cmd_args),
         "traverse" => run_traverse(cmd_args),
         "chat" => run_chat(cmd_args),
         // Project management.
-        "list" => run_list(cmd_args),
+        "list_projects" | "list" => run_list(cmd_args),
         "rm" => run_rm(cmd_args),
         "uninstall" => run_uninstall(cmd_args),
         "upgrade" | "update" => run_upgrade(cmd_args),
@@ -1034,7 +1036,7 @@ fn run_graph_search(args: &[String]) {
         }
     }
     if matched.is_empty() {
-        println!("Nothing matched. Try a shorter fragment, drop -t/-f, or use {C_CYAN}ug hybrid_search{C_RESET} for a concept-level query.");
+        println!("Nothing matched. Try a shorter fragment, drop -t/-f, or use {C_CYAN}ug search{C_RESET} for a concept-level query.");
     }
     println!();
     println!("{C_DIM}Note:{C_RESET} this is a raw substring scan over names + docstrings. {C_CYAN}ug find_symbol{C_RESET} ranks exact > prefix > substring.");
@@ -1976,7 +1978,7 @@ fn run_gen(args: &[String]) {
         project_name
     );
     println!(
-        "Run ' ug hybrid_search \"hello\" -n {} ' to perform a hybrid graph + semantic RAG query.",
+        "Run ' ug search \"hello\" -n {} ' to perform a hybrid graph + semantic RAG query.",
         project_name
     );
     println!("Total time: {:?}", start_total.elapsed());
@@ -3331,7 +3333,7 @@ fn run_doctor(args: &[String]) {
     );
     println!();
 
-    println!("{C_BOLD}Embeddings{C_RESET} (ingest / gen / semantic_search / hybrid_search / serve)");
+    println!("{C_BOLD}Embeddings{C_RESET} (ingest / gen / semantic_search / search / serve)");
     let (base_url, base_src) =
         config::resolve_pref_cfg(flag_value(args, &["--base-url"]), "embed.base_url");
     let (_api_key, api_src) =
@@ -3443,12 +3445,25 @@ const API_ENDPOINTS: &[(&str, &[ApiEntry])] = &[
         ],
     ),
     (
+        "Agent tools (graph.json-backed — same names/params as the CLI and MCP)",
+        &[
+            ApiEntry { method: "GET", path: "/api/tools", desc: "list the agent tools and their paths (HTTP equivalent of MCP tools/list)", availability: "always", cli_equivalent: Some("ug help") },
+            ApiEntry { method: "POST", path: "/api/tools/project_overview", desc: "stats, biggest files, most depended-upon symbols", availability: "always (empty if no project active)", cli_equivalent: Some("ug project_overview --json") },
+            ApiEntry { method: "POST", path: "/api/tools/find_symbol", desc: "exact-name symbol lookup", availability: "always (empty if no project active)", cli_equivalent: Some("ug find_symbol --json") },
+            ApiEntry { method: "POST", path: "/api/tools/file_outline", desc: "every indexed symbol in one file, in line order", availability: "always (empty if no project active)", cli_equivalent: Some("ug file_outline --json") },
+            ApiEntry { method: "POST", path: "/api/tools/get_code", desc: "source for a node id or file/line range", availability: "always (empty if no project active)", cli_equivalent: Some("ug get_code --json") },
+            ApiEntry { method: "POST", path: "/api/tools/find_usages", desc: "inbound callers/importers, with call sites", availability: "always (empty if no project active)", cli_equivalent: Some("ug find_usages --json") },
+            ApiEntry { method: "POST", path: "/api/tools/shortest_path", desc: "shortest directed edge path between two node ids", availability: "always (empty if no project active)", cli_equivalent: Some("ug shortest_path --json") },
+            ApiEntry { method: "POST", path: "/api/tools/graph_schema", desc: "node & edge types present, with counts", availability: "always (empty if no project active)", cli_equivalent: Some("ug graph_schema --json") },
+        ],
+    ),
+    (
         "OverGraph search & chat (Phase 3 — needs a DB + embedder)",
         &[
             ApiEntry { method: "GET", path: "/api/db/node/:id", desc: "fetch one node from the OverGraph store", availability: "503 if no DB backend configured", cli_equivalent: None },
             ApiEntry { method: "GET", path: "/api/db/traverse/:id", desc: "k-hop BFS over the OverGraph edges table", availability: "503 if no DB backend configured", cli_equivalent: Some("ug traverse") },
             ApiEntry { method: "POST", path: "/api/search/semantic", desc: "semantic vector search", availability: "503 if no DB + embedder configured", cli_equivalent: Some("ug semantic_search") },
-            ApiEntry { method: "POST", path: "/api/search/hybrid", desc: "GraphRAG: semantic search → graph expansion → ranked context", availability: "503 if no DB + embedder configured", cli_equivalent: Some("ug hybrid_search") },
+            ApiEntry { method: "POST", path: "/api/search/hybrid", desc: "GraphRAG: semantic search → graph expansion → ranked context", availability: "503 if no DB + embedder configured", cli_equivalent: Some("ug search") },
             ApiEntry { method: "POST", path: "/api/chat", desc: "GraphRAG-grounded chat completion", availability: "503 if no DB + embedder + chat model configured", cli_equivalent: Some("ug chat") },
         ],
     ),
@@ -3696,7 +3711,7 @@ fn run_hybrid_search(args: &[String]) {
     }
     if args.is_empty() {
         eprintln!(
-            "Usage: ug hybrid_search <query> [-n|--name <project>] [-k|--limit <n>] [--hops <n>] \\
+            "Usage: ug search <query> [-n|--name <project>] [-k|--limit <n>] [--hops <n>] \\
                  [--filter <sql>] [--strategy <ppr|mmr>] [--direction <out|in|both>] \\
                  [-t|--edge-type <type>]... [--max-chars <n>] [--mmr-lambda <f>] \\
                  [--no-snippets] [--repo-root <path>] \\
@@ -4590,7 +4605,7 @@ fn print_ingest_help() {
     println!();
     println!("{C_BOLD}Destinations (default: overgraph):{C_RESET}");
     println!("  {C_CYAN}--dest{C_RESET} <kind[,kind...]>   {C_BOLD}overgraph{C_RESET} | {C_BOLD}neo4j{C_RESET}. Comma-separated for fan-out ingest.");
-    println!("                              Reads (semantic_search/hybrid_search/traverse) accept");
+    println!("                              Reads (semantic_search/search/traverse) accept");
     println!("                              exactly one --dest.");
     println!("  {C_CYAN}--neo4j-uri{C_RESET} <uri>      e.g. neo4j://localhost:7687 (env: UG_NEO4J_URI)");
     println!("  {C_CYAN}--neo4j-user{C_RESET} <user>    Default: neo4j (env: UG_NEO4J_USER)");
@@ -4636,7 +4651,7 @@ fn print_semantic_search_help() {
     println!("  the closest symbols by embedding similarity. Needs an ingested db ({C_CYAN}ug gen{C_RESET})");
     println!("  and an embedding endpoint. If you already know the identifier's name, use");
     println!("  {C_CYAN}ug find_symbol{C_RESET} (exact, no embeddings); for search {C_BOLD}plus{C_RESET} related-code context,");
-    println!("  use {C_CYAN}ug hybrid_search{C_RESET}.");
+    println!("  use {C_CYAN}ug search{C_RESET}.");
     println!();
     println!("{C_BOLD}Usage:{C_RESET}  ug semantic_search <query> [options]");
     println!();
@@ -4653,16 +4668,16 @@ fn print_semantic_search_help() {
 
 fn print_hybrid_search_help() {
     println!(
-        "  {C_BOLD}{C_YELLOW}★ ug hybrid_search{C_RESET}  {C_YELLOW}— GraphRAG: semantic search → graph expansion → ranked context{C_RESET}"
+        "  {C_BOLD}{C_YELLOW}★ ug search{C_RESET}  {C_YELLOW}— GraphRAG: semantic search → graph expansion → ranked context{C_RESET}"
     );
     println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
     println!();
     println!("  The most complete search: semantic seeds ({C_CYAN}semantic_search{C_RESET}) expanded along");
     println!("  graph edges, then ranked into one context bundle with source snippets —");
-    println!("  what the MCP {C_BOLD}search_kb{C_RESET} tool runs for agents. Best when you want to hand");
+    println!("  what the MCP {C_BOLD}search{C_RESET} tool runs for agents. Best when you want to hand");
     println!("  code + its related code to an LLM, or answer \"where is X and what touches it\".");
     println!();
-    println!("{C_BOLD}Usage:{C_RESET}  ug hybrid_search <query> [options]");
+    println!("{C_BOLD}Usage:{C_RESET}  ug search <query> [options]");
     println!();
     println!("{C_BOLD}Options:{C_RESET}");
     println!("  {C_CYAN}-n, --name{C_RESET} <name>    Project name (default: cwd basename, else most recent under ~/.ug)");
@@ -4680,7 +4695,7 @@ fn print_hybrid_search_help() {
     println!("  {C_CYAN}-o, --output{C_RESET} <file>  Output file (optional, omit for stdout)");
     println!();
     println!("{C_BOLD}Examples:{C_RESET}");
-    println!("  {C_CYAN}ug hybrid_search{C_RESET} \"oauth login flow\" -k 8");
+    println!("  {C_CYAN}ug search{C_RESET} \"oauth login flow\" -k 8");
 }
 
 fn print_traverse_help() {
@@ -4752,7 +4767,7 @@ fn print_chat_help() {
     println!("{C_BOLD}Usage:{C_RESET}  ug chat [\"<one-shot prompt>\"] [options]");
     println!("  Omit the prompt to drop into an interactive REPL with conversational history.");
     println!();
-    println!("{C_BOLD}Retrieval (matches `ug hybrid_search`):{C_RESET}");
+    println!("{C_BOLD}Retrieval (matches `ug search`):{C_RESET}");
     println!("  {C_CYAN}-n, --name{C_RESET} <name>        Project name (default: cwd basename, else most recent under ~/.ug)");
     println!("  {C_CYAN}-k, --limit{C_RESET} <n>          Context items to retrieve (default: 8)");
     println!("  {C_CYAN}--hops{C_RESET} <n>               Graph expansion hops (default: 2)");
@@ -4890,10 +4905,10 @@ fn print_help() {
     println!("  {C_CYAN}api{C_RESET}              List every HTTP endpoint `ug serve` exposes");
     println!();
     println!("  {C_DIM}Retrieval (OverGraph-backed){C_RESET}");
-    println!("  {C_CYAN}semantic_search{C_RESET}  Search by meaning/concept (embeddings; use find_symbol for exact names)");
     println!(
-        "  {C_BOLD}{C_YELLOW}hybrid_search{C_RESET}    {C_YELLOW}GraphRAG: semantic search → graph expansion → ranked context{C_RESET}"
+        "  {C_BOLD}{C_YELLOW}search{C_RESET}           {C_YELLOW}GraphRAG: semantic search → graph expansion → ranked context{C_RESET}"
     );
+    println!("  {C_CYAN}semantic_search{C_RESET}  Search by meaning/concept (embeddings; use find_symbol for exact names)");
     println!("  {C_CYAN}traverse{C_RESET}         K-hop BFS over the OverGraph edges table");
     println!(
         "  {C_BOLD}{C_MAGENTA}chat{C_RESET}             {C_BOLD}{C_MAGENTA}💬 GraphRAG-grounded chat (one-shot or REPL){C_RESET}"
@@ -4906,8 +4921,7 @@ fn print_help() {
     println!();
     println!("  {C_DIM}Graph analysis (offline, in-memory) — all take {C_RESET}{C_CYAN}-n <project>{C_RESET}{C_DIM}, {C_RESET}{C_CYAN}--json{C_RESET}{C_DIM}, {C_RESET}{C_CYAN}-o <file>{C_RESET}");
     println!("  {C_CYAN}graph_analyze{C_RESET}    Full analysis (centrality + cycles) → analysis.json/cycles.json");
-    println!("  {C_CYAN}graph_bfs{C_RESET}        K-hop BFS from a node/name (-k hops, -d in|out|both)");
-    println!("  {C_CYAN}graph_path{C_RESET}       Shortest path between two nodes/names");
+    println!("  {C_CYAN}graph_bfs{C_RESET}        K-hop BFS from a node/name (--hops, -d in|out|both)");
     println!("  {C_CYAN}graph_filter{C_RESET}     List edges by type/endpoint (no args: edge types + counts)");
     println!("  {C_CYAN}graph_centrality{C_RESET} Rank nodes by degree/betweenness (--top, -t, -f)");
     println!("  {C_CYAN}graph_cycles{C_RESET}     Detect cycles (--min-len, --fail-on-cycle for CI)");
@@ -4918,12 +4932,14 @@ fn print_help() {
     println!("  {C_CYAN}find_symbol{C_RESET}      Exact-name symbol lookup (no embeddings) — returns ids for the tools below");
     println!("  {C_CYAN}file_outline{C_RESET}     List every indexed symbol in one file, in line order");
     println!("  {C_CYAN}get_code{C_RESET}         Read the source for a node id or file/line range");
-    println!("  {C_CYAN}find_usages{C_RESET}      Who uses this symbol? (inbound callers/importers; -t filters edge types)");
-        println!("  {C_CYAN}graph_schema{C_RESET}     Node & edge types in this graph — what to pass to -t/--edge-type filters");
+    println!("  {C_CYAN}find_usages{C_RESET}      Who uses this symbol? (inbound callers/importers + call sites)");
+    println!("  {C_CYAN}shortest_path{C_RESET}    How two symbols are connected (directed edge path)");
+    println!("  {C_CYAN}graph_schema{C_RESET}     Node & edge types in this graph — what to pass to --edge-type filters");
+    println!("  {C_DIM}  All accept {C_RESET}{C_CYAN}--json{C_RESET}{C_DIM} and take the same names/params as the MCP tools.{C_RESET}");
     println!();
 
     println!("  {C_DIM}Project management{C_RESET}");
-    println!("  {C_BOLD}{C_GREEN}list{C_RESET}           {C_GREEN}List generated projects under ~/.ug (or $UG_HOME){C_RESET}");
+    println!("  {C_BOLD}{C_GREEN}list_projects{C_RESET}  {C_GREEN}List generated projects under ~/.ug (or $UG_HOME){C_RESET}");
     println!("  {C_CYAN}rm{C_RESET}               Delete a project's data directory");
     println!("  {C_CYAN}upgrade{C_RESET}          Check GitHub for a new release and self-update (`--check` to only report)");
     println!("  {C_CYAN}uninstall{C_RESET}        Delete ALL indexed projects and uninstall ug itself");

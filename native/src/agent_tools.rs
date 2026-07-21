@@ -1685,6 +1685,112 @@ pub fn render_shortest_path(r: &ShortestPathResult, style: Render, strict: bool)
     out
 }
 
+// ---------------------------------------------------------------------------
+// Dispatch
+// ---------------------------------------------------------------------------
+
+/// Canonical tool names, in the order they're most useful to an agent.
+pub const TOOL_NAMES: &[&str] = &[
+    "project_overview",
+    "find_symbol",
+    "file_outline",
+    "get_code",
+    "find_usages",
+    "shortest_path",
+    "graph_schema",
+];
+
+/// One-line summaries, for `ug api` / `GET /api/tools` discovery.
+pub fn tool_summary(tool: &str) -> &'static str {
+    match tool {
+        "project_overview" => "Orient in the codebase: stats, biggest files, most depended-upon symbols.",
+        "find_symbol" => "Exact-name symbol lookup — returns node ids for the other tools.",
+        "file_outline" => "Every indexed symbol in one file, in line order.",
+        "get_code" => "Read source for a node id, or a file/line range.",
+        "find_usages" => "Who uses this symbol — inbound callers/importers, with call sites.",
+        "shortest_path" => "Shortest directed edge path between two node ids.",
+        "graph_schema" => "Node & edge types present in this graph, with counts.",
+        _ => "",
+    }
+}
+
+/// What a tool call produced.
+pub enum ToolOutput {
+    Json(serde_json::Value),
+    Text(String),
+}
+
+/// Run one graph-backed tool by canonical name.
+///
+/// The single dispatch behind every transport: the napi bridge (MCP) and the
+/// HTTP `/api/tools/:name` route both call this, so adding a tool or changing
+/// one's shape can't leave a surface behind. `style` of `None` returns the
+/// JSON envelope; `Some(_)` returns rendered text.
+pub fn run_tool(
+    tool: &str,
+    graph: &GraphData,
+    raw: &str,
+    repo_root: &Path,
+    graph_path: &Path,
+    params: serde_json::Value,
+    style: Option<Render>,
+) -> Result<ToolOutput, String> {
+    fn decode<T: serde::de::DeserializeOwned>(v: serde_json::Value) -> Result<T, String> {
+        serde_json::from_value(v).map_err(|e| format!("invalid params: {}", e))
+    }
+    fn out<T: Serialize>(
+        result: T,
+        style: Option<Render>,
+        render: impl FnOnce(&T, Render) -> String,
+    ) -> Result<ToolOutput, String> {
+        Ok(match style {
+            Some(s) => ToolOutput::Text(render(&result, s)),
+            None => ToolOutput::Json(
+                serde_json::to_value(&result).map_err(|e| format!("serialize result: {}", e))?,
+            ),
+        })
+    }
+
+    match tool {
+        "find_symbol" => out(find_symbol(graph, &decode(params)?), style, render_find_symbol),
+        "file_outline" => out(file_outline(graph, &decode(params)?), style, render_file_outline),
+        "get_code" => out(
+            get_code(graph, repo_root, &decode(params)?),
+            style,
+            render_get_code,
+        ),
+        "find_usages" => out(
+            find_usages(graph, repo_root, &decode(params)?),
+            style,
+            render_find_usages,
+        ),
+        "project_overview" => out(
+            project_overview(graph, repo_root, graph_path),
+            style,
+            render_project_overview,
+        ),
+        "graph_schema" => out(graph_schema(graph, graph_path), style, render_graph_schema),
+        "shortest_path" => {
+            let p: ShortestPathParams = decode(params)?;
+            if p.source.is_empty() || p.target.is_empty() {
+                return Err("shortest_path needs both source and target node ids.".into());
+            }
+            let result = shortest_path(graph, raw, &p.source, &p.target, p.strict);
+            Ok(match style {
+                Some(s) => ToolOutput::Text(render_shortest_path(&result, s, p.strict)),
+                None => ToolOutput::Json(
+                    serde_json::to_value(&result).map_err(|e| format!("serialize result: {}", e))?,
+                ),
+            })
+        }
+        other => Err(format!(
+            "Unknown agent tool '{}'. Expected one of: {}.",
+            other,
+            TOOL_NAMES.join(", ")
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

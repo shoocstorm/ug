@@ -261,6 +261,16 @@ impl ProjectRegistry {
         self.loaded.read().expect("loaded poisoned").get(name).cloned()
     }
 
+    /// Cache a loaded project without changing the active selection.
+    /// Per-request project scoping uses this: a read targeting another
+    /// project must not reconfigure the UI for every other client.
+    fn insert_loaded(&self, ctx: Arc<ProjectContext>) {
+        self.loaded
+            .write()
+            .expect("loaded poisoned")
+            .insert(ctx.name.clone(), ctx);
+    }
+
     fn insert_and_activate(&self, ctx: Arc<ProjectContext>) {
         let name = ctx.name.clone();
         self.loaded
@@ -877,6 +887,9 @@ pub fn run_serve(args: &[String]) {
             .route("/api/graph/filter", get(api_filter))
             .route("/api/graph/centrality", get(api_centrality))
             .route("/api/graph/cycles", get(api_cycles))
+            // Agent tools — the same seven the CLI and MCP expose.
+            .route("/api/tools", get(api_tools))
+            .route("/api/tools/:tool", post(api_tool))
             // Source file content for the right-panel "Preview" tab.
             .route("/api/file", get(api_file))
             // Phase 3 — DB / embedder backed
@@ -1024,6 +1037,106 @@ async fn activate_project(
     registry.insert_and_activate(ctx.clone());
     tracing::info!(project = %name, "project activated");
     Ok(ctx)
+}
+
+/// Resolve which project a request targets: the one it named (loaded on
+/// demand) or the server's active one. Unlike [`activate_project`] this
+/// leaves the active selection alone — see [`ProjectRegistry::insert_loaded`].
+async fn resolve_ctx(
+    registry: &Arc<ProjectRegistry>,
+    name: Option<&str>,
+) -> Result<Arc<ProjectContext>, String> {
+    let Some(name) = name.filter(|n| !n.trim().is_empty()) else {
+        return Ok(registry.active_ctx());
+    };
+    let name = crate::project::sanitize_name(name);
+    if let Some(ctx) = registry.get_loaded(&name) {
+        return Ok(ctx);
+    }
+    let (dir, _meta) = crate::project::list_projects()
+        .into_iter()
+        .find(|(_, m)| m.name == name)
+        .ok_or_else(|| format!("unknown project '{}'", name))?;
+    let ctx = build_project_context(
+        &name,
+        dir.join("graph.json"),
+        dir.join("ugdb"),
+        None,
+        registry.no_db,
+    )
+    .await?;
+    registry.insert_loaded(ctx.clone());
+    Ok(ctx)
+}
+
+/// GET /api/tools — discovery for the graph-backed agent tools, so an agent
+/// speaking HTTP can enumerate them the way an MCP client reads `tools/list`.
+async fn api_tools() -> Response {
+    let tools: Vec<serde_json::Value> = ultragraph::agent_tools::TOOL_NAMES
+        .iter()
+        .map(|name| {
+            serde_json::json!({
+                "name": name,
+                "summary": ultragraph::agent_tools::tool_summary(name),
+                "path": format!("/api/tools/{}", name),
+                "method": "POST",
+            })
+        })
+        .collect();
+    ok_json(
+        serde_json::json!({
+            "tools": tools,
+            "params": "Canonical snake_case, same as the CLI flags and MCP tool params. Legacy camelCase spellings are accepted.",
+            "project": "Optional `project` field targets another indexed project without changing the server's active one.",
+        })
+        .to_string(),
+    )
+}
+
+/// POST /api/tools/:name — run one graph-backed agent tool and return its
+/// JSON envelope. Same dispatch, params and output as `ug <name> --json` and
+/// the matching MCP tool.
+async fn api_tool(
+    State(state): State<ServeState>,
+    AxPath(tool): AxPath<String>,
+    body: Option<Json<serde_json::Value>>,
+) -> Response {
+    let mut params = match body {
+        Some(Json(serde_json::Value::Object(m))) => m,
+        // No body, or a non-object body, means "no params" — valid for
+        // project_overview and graph_schema.
+        _ => serde_json::Map::new(),
+    };
+    let project = params
+        .remove("project")
+        .and_then(|v| v.as_str().map(str::to_string));
+
+    let ctx = match resolve_ctx(&state.registry, project.as_deref()).await {
+        Ok(c) => c,
+        Err(e) if e.starts_with("unknown project") => {
+            return err_json(StatusCode::NOT_FOUND, &e)
+        }
+        Err(e) => return err_json(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    };
+
+    let snap = ctx.graph.read().expect("graph state poisoned").clone();
+    let result = ultragraph::agent_tools::run_tool(
+        &tool,
+        &snap.parsed,
+        &snap.raw_json,
+        ctx.repo_root.as_path(),
+        ctx.graph_path.as_path(),
+        serde_json::Value::Object(params),
+        None,
+    );
+
+    match result {
+        Ok(ultragraph::agent_tools::ToolOutput::Json(v)) => ok_json(v.to_string()),
+        // `run_tool` only returns Text when a render style was requested.
+        Ok(ultragraph::agent_tools::ToolOutput::Text(t)) => ok_json(serde_json::json!({ "text": t }).to_string()),
+        Err(e) if e.starts_with("Unknown agent tool") => err_json(StatusCode::NOT_FOUND, &e),
+        Err(e) => err_json(StatusCode::BAD_REQUEST, &e),
+    }
 }
 
 /// GET /api/projects — mode, active project, and the project list.

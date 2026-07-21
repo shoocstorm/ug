@@ -411,9 +411,9 @@ const ShortestPathInput = z.object({
 // install footprint tiny.
 const MCP_TOOLS = [
   {
-    name: 'search_kb',
+    name: 'search',
     description:
-      "PRIMARY KNOWLEDGE-BASE SEARCH for this codebase. Use this whenever the user asks about anything that might exist in the indexed repository: how a feature works, where something is defined, what a symbol does, why some code exists, how modules connect, or to gather context before making a code change. Returns ranked code snippets with file:line locations, descriptions, and node IDs you can drill into via traverse_kb / find_usages. " +
+      "PRIMARY KNOWLEDGE-BASE SEARCH for this codebase. Use this whenever the user asks about anything that might exist in the indexed repository: how a feature works, where something is defined, what a symbol does, why some code exists, how modules connect, or to gather context before making a code change. Returns ranked code snippets with file:line locations, descriptions, and node IDs you can drill into via traverse / find_usages. " +
       "Trigger phrases include: 'how does X work', 'where is X', 'what is X', 'find / show me code for X', 'explain X', 'is there a function that...', 'how is X implemented', 'before I change X look up...', 'context on X', or any question whose answer likely lives in the repo. Prefer calling this once with a focused natural-language query over guessing file paths. " +
       'Internals: RRF fuses vector + FTS hits to seed Personalized PageRank over the edge graph, so results combine semantic relevance with structural importance. Pass strategy=\'mmr\' for the legacy diversity-first BFS+MMR cascade.',
     inputSchema: {
@@ -511,13 +511,13 @@ const MCP_TOOLS = [
     },
   },
   {
-    name: 'semantic_search_kb',
+    name: 'semantic_search',
     description:
-      'Lightweight pure-vector lookup over the knowledge base — no graph expansion, no snippet read, no PPR. Returns the top-k nearest nodes with id/name/type/file/lines/description/distance. Use this when search_kb would be overkill: ' +
+      'Lightweight pure-vector lookup over the knowledge base — no graph expansion, no snippet read, no PPR. Returns the top-k nearest nodes with id/name/type/file/lines/description/distance. Use this when search would be overkill: ' +
       "(a) quick disambiguation ('which node is the user talking about?'), " +
-      '(b) candidate generation before a deeper traverse_kb, ' +
+      '(b) candidate generation before a deeper traverse, ' +
       '(c) filtered lookups via whereClause (e.g. only Functions in a given folder). ' +
-      'Cheaper and faster than search_kb. Switch to search_kb when you need actual code snippets or graph-aware ranking.',
+      'Cheaper and faster than search. Switch to search when you need actual code snippets or graph-aware ranking.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -541,9 +541,9 @@ const MCP_TOOLS = [
     },
   },
   {
-    name: 'traverse_kb',
+    name: 'traverse',
     description:
-      'Walk the graph N hops from given seed node ids. The natural follow-up to search_kb / semantic_search_kb: take a node id you got back, expand outward to see what it imports, calls, contains, or extends. Filters by edge type and direction. ' +
+      'Walk the graph N hops from given seed node ids. The natural follow-up to search / semantic_search: take a node id you got back, expand outward to see what it imports, calls, contains, or extends. Filters by edge type and direction. ' +
       "Use 'outbound' to see what the seed depends on; 'inbound' to see who depends on the seed. Output groups edges by type so the structure is easy to scan.",
     inputSchema: {
       type: 'object',
@@ -554,7 +554,7 @@ const MCP_TOOLS = [
             { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 10 },
           ],
           description:
-            'Seed node id(s) — one id or an array of up to 10, typically copied from a prior search_kb / find_symbol result. (`startNodeIds` is the deprecated legacy name for the same parameter.)',
+            'Seed node id(s) — one id or an array of up to 10, typically copied from a prior search / find_symbol result. (`startNodeIds` is the deprecated legacy name for the same parameter.)',
         },
         hops: {
           type: 'integer',
@@ -581,7 +581,7 @@ const MCP_TOOLS = [
   {
     name: 'find_usages',
     description:
-      "Find inbound references to a node — i.e. callers of a function, importers of a module, subclasses of a class, or anything else pointing at the node. Convenience wrapper over traverse_kb with direction='inbound' and a sensible default edge-type set ['calls', 'references', 'imports', 'extends', 'implements']. " +
+      "Find inbound references to a node — i.e. callers of a function, importers of a module, subclasses of a class, or anything else pointing at the node. Convenience wrapper over traverse with direction='inbound' and a sensible default edge-type set ['calls', 'references', 'imports', 'extends', 'implements']. " +
       "Use this when the user asks 'who uses X', 'what calls X', 'where is X imported', 'what would break if I change X', or before a refactor. Batch-friendly: pass an ARRAY of up to 10 nodeIds to check them all in one call (e.g. every symbol a refactor touches).",
     inputSchema: {
       type: 'object',
@@ -592,7 +592,7 @@ const MCP_TOOLS = [
             { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 10 },
           ],
           description:
-            'The node id (or an array of up to 10 ids — batch related lookups into ONE call instead of several) to look up usages for. Get ids from search_kb or find_symbol.',
+            'The node id (or an array of up to 10 ids — batch related lookups into ONE call instead of several) to look up usages for. Get ids from search or find_symbol.',
         },
         hops: {
           type: 'integer',
@@ -614,9 +614,9 @@ const MCP_TOOLS = [
   {
     name: 'find_symbol',
     description:
-      'EXACT-NAME symbol lookup — no embeddings, no fuzziness beyond substring. Use this instead of search_kb whenever you already know (part of) an identifier: a function, class, interface, or file the user named, an id you saw in a stack trace, a symbol you are about to edit. ' +
+      'EXACT-NAME symbol lookup — no embeddings, no fuzziness beyond substring. Use this instead of search whenever you already know (part of) an identifier: a function, class, interface, or file the user named, an id you saw in a stack trace, a symbol you are about to edit. ' +
       'Direct nodeId lookup is also supported: if you already have a nodeId from a prior search, pass it for O(1) direct access instead of re-searching. ' +
-      'Matches case-insensitively against node names, ranked exact > prefix > substring. Returns id/type/file:line for each hit — feed the id straight into get_code (source), find_usages (callers), or traverse_kb (dependencies). Cheaper and more precise than vector search for known names; fall back to search_kb when you only know the concept, not the name. Batch-friendly: pass an ARRAY of up to 10 names/nodeIds to resolve them all in one call.',
+      'Matches case-insensitively against node names, ranked exact > prefix > substring. Returns id/type/file:line for each hit — feed the id straight into get_code (source), find_usages (callers), or traverse (dependencies). Cheaper and more precise than vector search for known names; fall back to search when you only know the concept, not the name. Batch-friendly: pass an ARRAY of up to 10 names/nodeIds to resolve them all in one call.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -659,7 +659,7 @@ const MCP_TOOLS = [
     description:
       "List every indexed symbol in one file, in line order — a structural table of contents. Use before opening or editing a file to know what's in it, or to map a file the user mentioned. " +
       "Direct nodeId lookup is also supported: if you already have a File node id from a prior search, pass it for O(1) direct access. " +
-      "Accepts a repo-relative path or a unique suffix (e.g. just the basename), a File node id ('file:native/src/main.rs'), or an ARRAY of up to 10 files/ids to outline them all in one call. Returns name/type/line-range/id per symbol; ids feed get_code / find_usages / traverse_kb.",
+      "Accepts a repo-relative path or a unique suffix (e.g. just the basename), a File node id ('file:native/src/main.rs'), or an ARRAY of up to 10 files/ids to outline them all in one call. Returns name/type/line-range/id per symbol; ids feed get_code / find_usages / traverse.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -685,7 +685,7 @@ const MCP_TOOLS = [
   {
     name: 'get_code',
     description:
-      'Read the full source for a node id or an arbitrary file/line range from the indexed repo. THE follow-up to every other tool: search_kb previews truncate at ~1200 chars and traverse/find_usages return no code at all — call this to see the real implementation before reasoning about it or editing it. ' +
+      'Read the full source for a node id or an arbitrary file/line range from the indexed repo. THE follow-up to every other tool: search previews truncate at ~1200 chars and traverse/find_usages return no code at all — call this to see the real implementation before reasoning about it or editing it. ' +
       'Pass a nodeId from any prior result — or an ARRAY of up to 10 ids to read several symbols in one call instead of several calls — or file (+ optional startLine/endLine) for raw ranges. Reads from the indexed repo root, so it works even when you have no direct file access (e.g. Claude Desktop).',
     inputSchema: {
       type: 'object',
@@ -696,7 +696,7 @@ const MCP_TOOLS = [
             { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 10 },
           ],
           description:
-            "Node id from find_symbol / search_kb / file_outline / traverse_kb — reads exactly that symbol's line range. Pass an array of up to 10 ids to read several symbols in ONE call (per-symbol maxChars still applies).",
+            "Node id from find_symbol / search / file_outline / traverse — reads exactly that symbol's line range. Pass an array of up to 10 ids to read several symbols in ONE call (per-symbol maxChars still applies).",
         },
         file: {
           type: 'string',
@@ -716,13 +716,13 @@ const MCP_TOOLS = [
   {
     name: 'project_overview',
     description:
-      "Orient yourself in the indexed codebase in one call: repo root, node/edge counts by type, the biggest files by symbol count, and the most depended-upon symbols (highest inbound degree, ignoring folder-containment edges). Call this FIRST in a new session, or when the user asks 'what is this project', 'how is it structured', 'where should I start'. The listed hotspot ids are good seeds for traverse_kb / get_code.",
+      "Orient yourself in the indexed codebase in one call: repo root, node/edge counts by type, the biggest files by symbol count, and the most depended-upon symbols (highest inbound degree, ignoring folder-containment edges). Call this FIRST in a new session, or when the user asks 'what is this project', 'how is it structured', 'where should I start'. The listed hotspot ids are good seeds for traverse / get_code.",
     inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'shortest_path',
     description:
-      "How are two symbols connected? Finds the shortest directed edge path between two node ids — use it to answer 'does A reach B', 'how does the request get from the route to the db call', or to check whether an edit to A can affect B. Edges are directed (imports/calls/contains flow source→target); if no forward path exists the reverse direction is tried and labeled as such. Get ids from find_symbol or search_kb first.",
+      "How are two symbols connected? Finds the shortest directed edge path between two node ids — use it to answer 'does A reach B', 'how does the request get from the route to the db call', or to check whether an edit to A can affect B. Edges are directed (imports/calls/contains flow source→target); if no forward path exists the reverse direction is tried and labeled as such. Get ids from find_symbol or search first.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -735,7 +735,7 @@ const MCP_TOOLS = [
   {
     name: 'graph_schema',
     description:
-      "Node & edge types actually present in this project's graph, with counts and what each edge type connects (e.g. Calls: Function→Function). Call this before passing edgeTypes to find_usages / traverse_kb or nodeTypes to find_symbol — filtering on a type the graph doesn't contain silently returns nothing. Also lists the full edge-type vocabulary indexers can emit. Edges are directed (Calls A→B means A calls B); Contains is pure structure (Folder→File→Symbol), exclude it when you mean 'depends on'.",
+      "Node & edge types actually present in this project's graph, with counts and what each edge type connects (e.g. Calls: Function→Function). Call this before passing edgeTypes to find_usages / traverse or nodeTypes to find_symbol — filtering on a type the graph doesn't contain silently returns nothing. Also lists the full edge-type vocabulary indexers can emit. Edges are directed (Calls A→B means A calls B); Contains is pure structure (Folder→File→Symbol), exclude it when you mean 'depends on'.",
     inputSchema: { type: 'object', properties: {} },
   },
   {
@@ -753,7 +753,7 @@ const MCP_TOOLS = [
   {
     name: 'ping_embedder',
     description:
-      "Probe the configured embedding endpoint. Returns 'ok' on success or throws with the upstream error. Call this when search_kb / semantic_search_kb fails with an embedding-related error, or as a one-off health check before kicking off a batch of queries.",
+      "Probe the configured embedding endpoint. Returns 'ok' on success or throws with the upstream error. Call this when search / semantic_search fails with an embedding-related error, or as a one-off health check before kicking off a batch of queries.",
     inputSchema: { type: 'object', properties: {} },
   },
 ];
@@ -812,7 +812,7 @@ function formatRankedContext(ctx) {
   if (!items.length) {
     lines.push('No matches. Try:');
     lines.push('- a broader query (drop qualifiers)');
-    lines.push('- semantic_search_kb for a pure-vector pass with whereClause filters');
+    lines.push('- semantic_search for a pure-vector pass with whereClause filters');
     lines.push('- ping_embedder to confirm the embedding endpoint is up');
     return lines.join('\n');
   }
@@ -852,10 +852,10 @@ function formatRankedContext(ctx) {
   const topId = items[0].id;
   lines.push('---');
   lines.push('Drill-down hints:');
-  lines.push(`- Walk neighbors:  traverse_kb({ nodeId: "${topId}", hops: 1 })`);
+  lines.push(`- Walk neighbors:  traverse({ nodeId: "${topId}", hops: 1 })`);
   lines.push(`- Find callers:    find_usages({ nodeId: "${topId}" })`);
   lines.push(
-    `- Narrow search:   search_kb({ query: "...", whereClause: "node_type = 'Function'" })`,
+    `- Narrow search:   search({ query: "...", whereClause: "node_type = 'Function'" })`,
   );
   lines.push(
     `- Read full file:  use the loc above (file:start-end) with your file-read tool`,
@@ -873,7 +873,7 @@ function formatSemanticHits(query, hits) {
   lines.push('');
 
   if (!hits.length) {
-    lines.push('No matches. Loosen the whereClause or try search_kb for graph-aware ranking.');
+    lines.push('No matches. Loosen the whereClause or try search for graph-aware ranking.');
     return lines.join('\n');
   }
 
@@ -887,7 +887,7 @@ function formatSemanticHits(query, hits) {
 
   lines.push('');
   lines.push(
-    `Next: search_kb({ query: "${query}" }) for graph-ranked snippets, or traverse_kb({ nodeId: "${hits[0].id}" }) to expand.`,
+    `Next: search({ query: "${query}" }) for graph-ranked snippets, or traverse({ nodeId: "${hits[0].id}" }) to expand.`,
   );
   return lines.join('\n');
 }
@@ -945,7 +945,7 @@ function formatTraversal(traversal, header) {
   }
 
   lines.push('Drill-down hints:');
-  lines.push('- Pick an interesting node id above and call traverse_kb again to keep walking.');
+  lines.push('- Pick an interesting node id above and call traverse again to keep walking.');
   lines.push('- Call get_code with a node id to read its actual source.');
   return lines.join('\n');
 }
@@ -1135,7 +1135,7 @@ async function regenerateProject(dbPath, repoRoot) {
     const stats = JSON.parse(await ug.dbIngest(graph, dbPath, embedderOptionsJson(), destOptionsJson()));
     ingestMsg = `db ingest: ${stats.nodes_written ?? stats.nodesWritten ?? '?'} nodes, ${stats.edges_written ?? stats.edgesWritten ?? '?'} edges embedded`;
   } catch (e) {
-    ingestMsg = `db ingest FAILED (${e.message}) — graph tools (find_symbol/get_code/...) are fresh, but search_kb serves the previous embeddings until the embedder is reachable`;
+    ingestMsg = `db ingest FAILED (${e.message}) — graph tools (find_symbol/get_code/...) are fresh, but search serves the previous embeddings until the embedder is reachable`;
   }
   invalidateProjectCaches(dbPath);
   return `Reindexed ${repoRoot} → ${outputDir}\n${gd.nodes?.length ?? 0} nodes, ${gd.edges?.length ?? 0} edges\n${ingestMsg}`;
@@ -1553,6 +1553,23 @@ function uninstallMcpConfig(target, scope) {
   return { configPath, removed };
 }
 
+// Pre-rename tool names. `tools/list` advertises only the canonical set, but
+// an agent may have the old name cached from an earlier session, so keep
+// accepting them. Same aliases the CLI honours for its subcommands.
+const TOOL_ALIASES = {
+  search_kb: 'search',
+  hybrid_search: 'search',
+  semantic_search_kb: 'semantic_search',
+  traverse_kb: 'traverse',
+  graph_path: 'shortest_path',
+  path: 'shortest_path',
+  list: 'list_projects',
+};
+
+function canonicalToolName(name) {
+  return TOOL_ALIASES[name] ?? name;
+}
+
 /**
  * Run one MCP tool and return its text output.
  *
@@ -1565,14 +1582,15 @@ function uninstallMcpConfig(target, scope) {
  * ones (search, traversal, embeddings) already shared Rust code through
  * their own napi entry points.
  */
-async function callTool(name, rawArgs) {
+async function callTool(rawName, rawArgs) {
+  const name = canonicalToolName(rawName);
   const project = rawArgs?.project;
   const { dbPath, repoRoot } = projectCtx(project);
   const args = { ...(rawArgs ?? {}), project: undefined };
   const withStaleness = (text) => text + stalenessNote(dbPath, repoRoot);
 
   // DB-backed: OverGraph/Neo4j + embeddings.
-  if (name === 'search_kb') {
+  if (name === 'search') {
     const parsed = SearchKbInput.parse(args);
     const json = await ug.dbHybridSearch(
       dbPath,
@@ -1583,7 +1601,7 @@ async function callTool(name, rawArgs) {
     return withStaleness(formatRankedContext(JSON.parse(json)));
   }
 
-  if (name === 'semantic_search_kb') {
+  if (name === 'semantic_search') {
     const parsed = SemanticSearchInput.parse(args);
     const json = await ug.dbSemanticSearch(
       dbPath,
@@ -1596,7 +1614,7 @@ async function callTool(name, rawArgs) {
     return withStaleness(formatSemanticHits(parsed.query, JSON.parse(json)));
   }
 
-  if (name === 'traverse_kb') {
+  if (name === 'traverse') {
     const parsed = TraverseInput.parse(args);
     const json = await ug.dbTraverse(
       dbPath,
@@ -2037,7 +2055,7 @@ const commands = {
       console.log(line('repo root:', repoRoot, process.env.UG_REPO_ROOT ? 'env:UG_REPO_ROOT' : 'project.json / cwd'));
       console.log();
 
-      console.log(chalk.bold('Embeddings') + chalk.gray(' (used by search_kb / traverse_kb / ping_embedder)'));
+      console.log(chalk.bold('Embeddings') + chalk.gray(' (used by search / traverse / ping_embedder)'));
       console.log(line('base_url:', process.env.UG_EMBED_BASE_URL || '(n/a — local in-process ONNX)', process.env.UG_EMBED_BASE_URL ? 'env:UG_EMBED_BASE_URL' : 'default'));
       console.log(line('api_key:', process.env.UG_EMBED_API_KEY ? '(set)' : '(default placeholder)', process.env.UG_EMBED_API_KEY ? 'env:UG_EMBED_API_KEY' : 'default'));
       console.log(line('model:', process.env.UG_EMBED_MODEL || '(default: bge-small-en-v1.5)', process.env.UG_EMBED_MODEL ? 'env:UG_EMBED_MODEL' : 'default'));
@@ -2068,7 +2086,7 @@ const commands = {
         } catch {
           throw new Error(`Invalid JSON: ${json}`);
         }
-        const toolDef = MCP_TOOLS.find((t) => t.name === tool);
+        const toolDef = MCP_TOOLS.find((t) => t.name === canonicalToolName(tool));
         if (!toolDef) throw new Error(`Unknown tool '${tool}' — see \`ug mcp list\` for available tools.`);
         // Same dispatch the stdio server uses, so `mcp call` is a faithful
         // preview of what an agent sees.

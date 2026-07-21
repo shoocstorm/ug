@@ -72,10 +72,10 @@ fn load_graph(graph_path: &str) -> napi::Result<(Arc<GraphData>, Arc<String>)> {
     Ok((parsed, raw))
 }
 
-fn parse_params<T: serde::de::DeserializeOwned + Default>(json: Option<String>) -> napi::Result<T> {
+fn parse_params(json: Option<String>) -> napi::Result<serde_json::Value> {
     match json {
-        None => Ok(T::default()),
-        Some(s) if s.trim().is_empty() => Ok(T::default()),
+        None => Ok(serde_json::json!({})),
+        Some(s) if s.trim().is_empty() => Ok(serde_json::json!({})),
         Some(s) => serde_json::from_str(&s)
             .map_err(|e| napi::Error::from_reason(format!("invalid params: {}", e))),
     }
@@ -104,71 +104,29 @@ pub fn agent_tool(
     let graph_path_ref = Path::new(&graph_path);
 
     let render = render.unwrap_or_else(|| "markdown".into());
-    let as_json = render.eq_ignore_ascii_case("json");
-    let style = if render.eq_ignore_ascii_case("ansi") {
-        Render::Ansi
+    let style = if render.eq_ignore_ascii_case("json") {
+        None
+    } else if render.eq_ignore_ascii_case("ansi") {
+        Some(Render::Ansi)
     } else {
-        Render::Markdown
+        Some(Render::Markdown)
     };
 
-    // Each arm: parse params -> run -> hand back JSON or rendered text.
-    macro_rules! finish {
-        ($result:expr, $render_fn:expr) => {{
-            let result = $result;
-            if as_json {
-                serde_json::to_string(&result)
-                    .map_err(|e| napi::Error::from_reason(format!("serialize result: {}", e)))
-            } else {
-                let f: fn(&_, Render) -> String = $render_fn;
-                Ok(f(&result, style))
-            }
-        }};
-    }
+    let output = tools::run_tool(
+        &tool,
+        graph,
+        &raw,
+        repo_root,
+        graph_path_ref,
+        parse_params(params_json)?,
+        style,
+    )
+    .map_err(napi::Error::from_reason)?;
 
-    match tool.as_str() {
-        "find_symbol" => finish!(
-            tools::find_symbol(graph, &parse_params(params_json)?),
-            tools::render_find_symbol
-        ),
-        "file_outline" => finish!(
-            tools::file_outline(graph, &parse_params(params_json)?),
-            tools::render_file_outline
-        ),
-        "get_code" => finish!(
-            tools::get_code(graph, repo_root, &parse_params(params_json)?),
-            tools::render_get_code
-        ),
-        "find_usages" => finish!(
-            tools::find_usages(graph, repo_root, &parse_params(params_json)?),
-            tools::render_find_usages
-        ),
-        "project_overview" => finish!(
-            tools::project_overview(graph, repo_root, graph_path_ref),
-            tools::render_project_overview
-        ),
-        "graph_schema" => finish!(
-            tools::graph_schema(graph, graph_path_ref),
-            tools::render_graph_schema
-        ),
-        "shortest_path" => {
-            let p: tools::ShortestPathParams = parse_params(params_json)?;
-            if p.source.is_empty() || p.target.is_empty() {
-                return Err(napi::Error::from_reason(
-                    "shortest_path needs both source and target node ids.".to_string(),
-                ));
-            }
-            let result = tools::shortest_path(graph, &raw, &p.source, &p.target, p.strict);
-            if as_json {
-                serde_json::to_string(&result)
-                    .map_err(|e| napi::Error::from_reason(format!("serialize result: {}", e)))
-            } else {
-                Ok(tools::render_shortest_path(&result, style, p.strict))
-            }
-        }
-        other => Err(napi::Error::from_reason(format!(
-            "Unknown agent tool '{}'. Expected one of: find_symbol, file_outline, get_code, find_usages, project_overview, graph_schema, shortest_path.",
-            other
-        ))),
+    match output {
+        tools::ToolOutput::Text(t) => Ok(t),
+        tools::ToolOutput::Json(v) => serde_json::to_string_pretty(&v)
+            .map_err(|e| napi::Error::from_reason(format!("serialize result: {}", e))),
     }
 }
 
