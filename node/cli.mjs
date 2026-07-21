@@ -371,12 +371,13 @@ const FindUsagesInput = z.object({
   edgeTypes: z.array(z.string()).optional(),
 });
 
-const FindSymbolInput = z.object({
+const FindSymbolsInput = z.object({
   nodeId: oneOrMany.optional(),
   name: oneOrMany.optional(),
   nodeTypes: z.array(z.string()).optional(),
   filePrefix: z.string().optional(),
   limit: z.number().int().min(1).max(100).optional(),
+  includeDocs: z.boolean().optional(),
 }).refine((v) => v.nodeId || v.name, {
   message: 'Pass nodeId (one id or an array) for direct lookup, or name (one or an array) for name search.',
 });
@@ -554,7 +555,7 @@ const MCP_TOOLS = [
             { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 10 },
           ],
           description:
-            'Seed node id(s) — one id or an array of up to 10, typically copied from a prior search / find_symbol result. (`startNodeIds` is the deprecated legacy name for the same parameter.)',
+            'Seed node id(s) — one id or an array of up to 10, typically copied from a prior search / find_symbols result. (`startNodeIds` is the deprecated legacy name for the same parameter.)',
         },
         hops: {
           type: 'integer',
@@ -592,7 +593,7 @@ const MCP_TOOLS = [
             { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 10 },
           ],
           description:
-            'The node id (or an array of up to 10 ids — batch related lookups into ONE call instead of several) to look up usages for. Get ids from search or find_symbol.',
+            'The node id (or an array of up to 10 ids — batch related lookups into ONE call instead of several) to look up usages for. Get ids from search or find_symbols.',
         },
         hops: {
           type: 'integer',
@@ -612,11 +613,12 @@ const MCP_TOOLS = [
     },
   },
   {
-    name: 'find_symbol',
+    name: 'find_symbols',
     description:
       'EXACT-NAME symbol lookup — no embeddings, no fuzziness beyond substring. Use this instead of search whenever you already know (part of) an identifier: a function, class, interface, or file the user named, an id you saw in a stack trace, a symbol you are about to edit. ' +
       'Direct nodeId lookup is also supported: if you already have a nodeId from a prior search, pass it for O(1) direct access instead of re-searching. ' +
-      'Matches case-insensitively against node names, ranked exact > prefix > substring. Returns id/type/file:line for each hit — feed the id straight into get_code (source), find_usages (callers), or traverse (dependencies). Cheaper and more precise than vector search for known names; fall back to search when you only know the concept, not the name. Batch-friendly: pass an ARRAY of up to 10 names/nodeIds to resolve them all in one call.',
+      'Matches case-insensitively against node names, ranked exact > prefix > substring. Returns id/type/file:line for each hit — feed the id straight into get_code (source), find_usages (callers), or traverse (dependencies). Cheaper and more precise than vector search for known names; fall back to search when you only know the concept, not the name. Batch-friendly: pass an ARRAY of up to 10 names/nodeIds to resolve them all in one call. ' +
+      'Set includeDocs to also match docstring text — a keyword scan that finds symbols described by a word they do not contain in their name. Docstring hits rank below every name hit.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -650,6 +652,11 @@ const MCP_TOOLS = [
           minimum: 1,
           maximum: 100,
           description: 'Max hits to return (default 20).',
+        },
+        includeDocs: {
+          type: 'boolean',
+          description:
+            'Also match docstrings, not just names (default false). Use when the concept may be described in prose rather than named — e.g. "cache invalidation" when the function is called `drop_stale`. Docstring hits rank below all name hits.',
         },
       },
     },
@@ -696,7 +703,7 @@ const MCP_TOOLS = [
             { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 10 },
           ],
           description:
-            "Node id from find_symbol / search / file_outline / traverse — reads exactly that symbol's line range. Pass an array of up to 10 ids to read several symbols in ONE call (per-symbol maxChars still applies).",
+            "Node id from find_symbols / search / file_outline / traverse — reads exactly that symbol's line range. Pass an array of up to 10 ids to read several symbols in ONE call (per-symbol maxChars still applies).",
         },
         file: {
           type: 'string',
@@ -722,7 +729,7 @@ const MCP_TOOLS = [
   {
     name: 'shortest_path',
     description:
-      "How are two symbols connected? Finds the shortest directed edge path between two node ids — use it to answer 'does A reach B', 'how does the request get from the route to the db call', or to check whether an edit to A can affect B. Edges are directed (imports/calls/contains flow source→target); if no forward path exists the reverse direction is tried and labeled as such. Get ids from find_symbol or search first.",
+      "How are two symbols connected? Finds the shortest directed edge path between two node ids — use it to answer 'does A reach B', 'how does the request get from the route to the db call', or to check whether an edit to A can affect B. Edges are directed (imports/calls/contains flow source→target); if no forward path exists the reverse direction is tried and labeled as such. Get ids from find_symbols or search first.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -735,7 +742,7 @@ const MCP_TOOLS = [
   {
     name: 'graph_schema',
     description:
-      "Node & edge types actually present in this project's graph, with counts and what each edge type connects (e.g. Calls: Function→Function). Call this before passing edgeTypes to find_usages / traverse or nodeTypes to find_symbol — filtering on a type the graph doesn't contain silently returns nothing. Also lists the full edge-type vocabulary indexers can emit. Edges are directed (Calls A→B means A calls B); Contains is pure structure (Folder→File→Symbol), exclude it when you mean 'depends on'.",
+      "Node & edge types actually present in this project's graph, with counts and what each edge type connects (e.g. Calls: Function→Function). Call this before passing edgeTypes to find_usages / traverse or nodeTypes to find_symbols — filtering on a type the graph doesn't contain silently returns nothing. Also lists the full edge-type vocabulary indexers can emit. Edges are directed (Calls A→B means A calls B); Contains is pure structure (Folder→File→Symbol), exclude it when you mean 'depends on'.",
     inputSchema: { type: 'object', properties: {} },
   },
   {
@@ -750,13 +757,13 @@ const MCP_TOOLS = [
       'Re-run the index → graph → embed pipeline for the current (or named) project. Call it when tool outputs carry an "Index may be stale" warning, when the user says results look outdated, or after you (or they) changed many files. Incremental — unchanged files are skipped via content hashes — but embedding changed nodes needs the embedding backend, so it can take a while on big diffs; the structural tools are refreshed even if embedding fails.',
     inputSchema: { type: 'object', properties: {} },
   },
-  {
-    name: 'ping_embedder',
-    description:
-      "Probe the configured embedding endpoint. Returns 'ok' on success or throws with the upstream error. Call this when search / semantic_search fails with an embedding-related error, or as a one-off health check before kicking off a batch of queries.",
-    inputSchema: { type: 'object', properties: {} },
-  },
 ];
+
+// `ping_embedder` used to be listed here. It's an operator diagnostic, not
+// something an agent should spend a tool call on: search / semantic_search
+// already surface the upstream embedding error directly, so a pre-flight
+// probe only adds a round trip. Still reachable as `ug doctor` and via
+// `ug mcp call ping_embedder` for debugging.
 
 // Every tool (list_projects aside) accepts an optional `project` to target
 // another indexed project — one server instance serves all repos on the
@@ -951,7 +958,7 @@ function formatTraversal(traversal, header) {
 }
 
 // ---------------------------------------------------------------------------
-// Graph-file-backed tools (find_symbol / file_outline / get_code /
+// Graph-file-backed tools (find_symbols / file_outline / get_code /
 // project_overview / shortest_path). These run off graph.json — the sibling
 // of the ugdb dir — instead of the vector db: no embeddings involved, so
 // they stay exact and cheap. Loaded lazily once per server process.
@@ -1135,7 +1142,7 @@ async function regenerateProject(dbPath, repoRoot) {
     const stats = JSON.parse(await ug.dbIngest(graph, dbPath, embedderOptionsJson(), destOptionsJson()));
     ingestMsg = `db ingest: ${stats.nodes_written ?? stats.nodesWritten ?? '?'} nodes, ${stats.edges_written ?? stats.edgesWritten ?? '?'} edges embedded`;
   } catch (e) {
-    ingestMsg = `db ingest FAILED (${e.message}) — graph tools (find_symbol/get_code/...) are fresh, but search serves the previous embeddings until the embedder is reachable`;
+    ingestMsg = `db ingest FAILED (${e.message}) — graph tools (find_symbols/get_code/...) are fresh, but search serves the previous embeddings until the embedder is reachable`;
   }
   invalidateProjectCaches(dbPath);
   return `Reindexed ${repoRoot} → ${outputDir}\n${gd.nodes?.length ?? 0} nodes, ${gd.edges?.length ?? 0} edges\n${ingestMsg}`;
@@ -1564,7 +1571,23 @@ const TOOL_ALIASES = {
   graph_path: 'shortest_path',
   path: 'shortest_path',
   list: 'list_projects',
+  find_symbol: 'find_symbols',
+  // graph_search was find_symbols over names *and* docstrings. Callers using
+  // the old name get that behaviour back via the includeDocs default below.
+  graph_search: 'find_symbols',
+  search_graph: 'find_symbols',
 };
+
+// Tools whose legacy name implied a non-default param value.
+const ALIAS_DEFAULTS = {
+  graph_search: { includeDocs: true },
+  search_graph: { includeDocs: true },
+};
+
+// Handled by callTool but deliberately absent from tools/list — operator
+// diagnostics that would only waste an agent's tool call. Still invocable
+// through `ug mcp call` for debugging.
+const UNLISTED_TOOLS = new Set(['ping_embedder']);
 
 function canonicalToolName(name) {
   return TOOL_ALIASES[name] ?? name;
@@ -1586,7 +1609,7 @@ async function callTool(rawName, rawArgs) {
   const name = canonicalToolName(rawName);
   const project = rawArgs?.project;
   const { dbPath, repoRoot } = projectCtx(project);
-  const args = { ...(rawArgs ?? {}), project: undefined };
+  const args = { ...(ALIAS_DEFAULTS[rawName] ?? {}), ...(rawArgs ?? {}), project: undefined };
   const withStaleness = (text) => text + stalenessNote(dbPath, repoRoot);
 
   // DB-backed: OverGraph/Neo4j + embeddings.
@@ -1632,7 +1655,7 @@ async function callTool(rawName, rawArgs) {
   // The zod schemas still validate and normalize; the lookup and formatting
   // live in native/src/agent_tools.rs.
   const GRAPH_TOOLS = {
-    find_symbol: FindSymbolInput,
+    find_symbols: FindSymbolsInput,
     file_outline: FileOutlineInput,
     get_code: GetCodeInput,
     find_usages: FindUsagesInput,
@@ -2086,8 +2109,10 @@ const commands = {
         } catch {
           throw new Error(`Invalid JSON: ${json}`);
         }
-        const toolDef = MCP_TOOLS.find((t) => t.name === canonicalToolName(tool));
-        if (!toolDef) throw new Error(`Unknown tool '${tool}' — see \`ug mcp list\` for available tools.`);
+        const canonical = canonicalToolName(tool);
+        const known =
+          MCP_TOOLS.some((t) => t.name === canonical) || UNLISTED_TOOLS.has(canonical);
+        if (!known) throw new Error(`Unknown tool '${tool}' — see \`ug mcp list\` for available tools.`);
         // Same dispatch the stdio server uses, so `mcp call` is a faithful
         // preview of what an agent sees.
         console.log(await callTool(tool, parsed));
@@ -2103,7 +2128,7 @@ const commands = {
         }
         console.log();
         console.log(`Run ${chalk.cyan('ug mcp call <tool> <json>')} to invoke one. Example:`);
-        console.log(`  ${chalk.gray('ug mcp call find_symbol \'{"name":"run_mcp"}\'')}`);
+        console.log(`  ${chalk.gray('ug mcp call find_symbols \'{"name":"run_mcp"}\'')}`);
         return '';
       }
 

@@ -83,7 +83,7 @@ fn parse_params(json: Option<String>) -> napi::Result<serde_json::Value> {
 
 /// Run one graph-backed agent tool.
 ///
-/// `tool` is the canonical name (`find_symbol`, `file_outline`, `get_code`,
+/// `tool` is the canonical name (`find_symbols`, `file_outline`, `get_code`,
 /// `find_usages`, `project_overview`, `graph_schema`, `shortest_path`).
 /// `params_json` uses the canonical snake_case vocabulary; the legacy MCP
 /// camelCase spellings are accepted as aliases.

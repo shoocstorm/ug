@@ -207,7 +207,7 @@ same pipeline stages under `node node/cli.mjs <command>`, see
 | `ug semantic_search "<query>"` | Plain vector search, no graph expansion |
 | `ug traverse <node-id>` | K-hop BFS over the stored OverGraph edges |
 | `ug chat "<question>"` | RAG-grounded chat against an LLM, one-shot or REPL — see [RAG Chat](#-rag-chat-ug-chat) |
-| `ug project_overview` / `ug find_symbol` / `ug file_outline` / `ug get_code` / `ug find_usages` / `ug shortest_path` / `ug graph_schema` | Agent tools — the same names, params and output the MCP tools and `POST /api/tools/<name>` expose. Add `--json` for the machine-readable envelope. |
+| `ug project_overview` / `ug find_symbols` / `ug file_outline` / `ug get_code` / `ug find_usages` / `ug shortest_path` / `ug graph_schema` | Agent tools — the same names, params and output the MCP tools and `POST /api/tools/<name>` expose. Add `--json` for the machine-readable envelope. |
 | `ug list_projects` / `ug rm <project>` | List projects under `~/.ug`, or delete one |
 | `ug doctor` | Print resolved project/db/embedder/chat config and where each value came from |
 | `ug mcp install [target]` | Wire the MCP server into a client's config — interactive picker when no target, `--project`/`--global` to choose scope (see [MCP Server](#-mcp-server)) |
@@ -218,6 +218,27 @@ Every command that selects a project takes `-n/--name <project>`
 (default: current directory's basename, else the most recently
 generated project under `~/.ug`). Destructive commands (`rm`,
 `uninstall`) prompt for confirmation unless `-f/--force`/`-y/--yes` is given.
+
+### Which storage backs what
+
+Two stores exist per project under `~/.ug/<name>/`: **`graph.json`** (the
+structural graph, written by `ug graph`) and **`ugdb/`** (the OverGraph
+vector+edge store, written by `ug ingest`). Knowing which a command reads
+tells you what still works after `ug gen --no-ingest`, or when no embedding
+backend is reachable.
+
+| Reads | CLI | MCP tools | HTTP |
+| :--- | :--- | :--- | :--- |
+| **`graph.json`** — structural, no DB or embedder needed | `find_symbols`, `file_outline`, `get_code`, `find_usages`, `shortest_path`, `project_overview`, `graph_schema`, `graph_search`, `graph_bfs`, `graph_filter`, `graph_centrality`, `graph_cycles`, `graph_analyze` | `find_symbols`, `file_outline`, `get_code`, `find_usages`, `shortest_path`, `project_overview`, `graph_schema` | `POST /api/tools/<name>`, `GET /api/graph/*`, `GET /api/file`, `GET /graph.json` |
+| **`ugdb/`** — needs the ingest step | `traverse` | `traverse` | `GET /api/db/node/:id`, `GET /api/db/traverse/:id` |
+| **`ugdb/` + an embedder** — needs ingest *and* a reachable embedding backend | `search`, `semantic_search`, `chat` | `search`, `semantic_search` | `POST /api/search/hybrid`, `POST /api/search/semantic`, `POST /api/chat` |
+
+The practical consequence: **every agent tool except `search`,
+`semantic_search` and `traverse` runs off `graph.json` alone.** After
+`ug gen --no-ingest` — or if your embedding endpoint is down — symbol lookup,
+outlines, source reads, usage analysis and pathfinding all still work; only
+the three semantic/DB entries degrade. `ug ingest` is what populates `ugdb/`,
+and `ug doctor` prints which of the two exist for the resolved project.
 
 ### `ug doctor`
 
@@ -470,7 +491,7 @@ Integrate UltraGraph directly into your AI Agent (Cursor, Claude Desktop, etc.).
 2.  **semantic_search**: Lightweight pure-vector lookup.
 3.  **traverse**: Structural walk from specific node IDs.
 4.  **find_usages**: Inbound references — callers, importers, subclasses.
-5.  **find_symbol**: Exact-name symbol lookup (no embeddings).
+5.  **find_symbols**: Exact-name symbol lookup (no embeddings).
 6.  **file_outline**: All symbols in a file, in line order.
 7.  **get_code**: Full source for a node id or file/line range.
 8.  **project_overview**: Structure, hotspots, and stats in one call.

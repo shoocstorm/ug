@@ -293,7 +293,7 @@ Use this when the user asks "who uses X", "what calls X", "where is X imported",
 **Parameters:**
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `nodeId` | string \| string[] | ✅ | The node id to look up usages for (or an array of up to 10 — batch related checks into one call). Get ids from search or find_symbol. |
+| `nodeId` | string \| string[] | ✅ | The node id to look up usages for (or an array of up to 10 — batch related checks into one call). Get ids from search or find_symbols. |
 | `hops` | integer (1-3) | ❌ | How many hops out to walk (default 1 = direct callers only). Bump to 2 to catch transitive usages. |
 | `edgeTypes` | string[] | ❌ | Override the default set if you only care about a subset (e.g. ['calls']). |
 
@@ -310,7 +310,7 @@ find_usages: { nodeId: "file-101", hops: 1, edgeTypes: ["imports"] }
 
 ---
 
-### 5. `find_symbol` - Exact-Name Symbol Lookup
+### 5. `find_symbols` - Exact-Name Symbol Lookup
 
 **Exact-name lookup, no embeddings.** Use instead of `search` whenever you already know (part of) an identifier: a function/class the user named, a symbol from a stack trace, something you are about to edit. Case-insensitive, ranked exact > prefix > substring. Cheaper and more precise than vector search for known names. **Direct nodeId lookup is also supported** — if you already have a nodeId from a prior search, pass it for O(1) direct access.
 
@@ -326,9 +326,9 @@ find_usages: { nodeId: "file-101", hops: 1, edgeTypes: ["imports"] }
 *One of `nodeId` or `name` is required.
 
 ```
-find_symbol: { name: "installMcpConfig" }
-find_symbol: { nodeId: "function:node/cli.mjs:912:installMcpConfig" }
-find_symbol: { name: "config", nodeTypes: ["Class"], filePrefix: "native/src/" }
+find_symbols: { name: "installMcpConfig" }
+find_symbols: { nodeId: "function:node/cli.mjs:912:installMcpConfig" }
+find_symbols: { name: "config", nodeTypes: ["Class"], filePrefix: "native/src/" }
 ```
 
 ---
@@ -387,7 +387,7 @@ project_overview: {}
 
 ### 9. `shortest_path` - How Are Two Symbols Connected?
 
-**Shortest directed edge path between two node ids.** Answers "does A reach B", "how does the route reach the db call", "can editing A affect B". If no forward path exists the reverse direction is tried and labeled. Get ids from `find_symbol` or `search` first.
+**Shortest directed edge path between two node ids.** Answers "does A reach B", "how does the route reach the db call", "can editing A affect B". If no forward path exists the reverse direction is tried and labeled. Get ids from `find_symbols` or `search` first.
 
 **Parameters:**
 | Parameter | Type | Required | Description |
@@ -403,7 +403,7 @@ shortest_path: { sourceId: "file:node/cli.mjs", targetId: "function:native/src/m
 
 ### 10. `graph_schema` - Node & Edge Type Metadata
 
-**What node and edge types this graph actually contains**, with counts and what each edge type connects (e.g. `Calls: Function→Function (305)`), plus the full edge-type vocabulary indexers can emit. Check it before passing `edgeTypes` to `find_usages` / `traverse` or `nodeTypes` to `find_symbol` — filtering on a type the graph doesn't contain silently returns nothing.
+**What node and edge types this graph actually contains**, with counts and what each edge type connects (e.g. `Calls: Function→Function (305)`), plus the full edge-type vocabulary indexers can emit. Check it before passing `edgeTypes` to `find_usages` / `traverse` or `nodeTypes` to `find_symbols` — filtering on a type the graph doesn't contain silently returns nothing.
 
 **Parameters:** None
 
@@ -503,9 +503,9 @@ search: { query: "How is authentication handled in this codebase?", k: 10 }
 semantic_search: { query: "auth middleware", k: 5, whereClause: "node_type = 'Function'" }
 
 # Name search
-find_symbol: { name: "authenticateUser" }
+find_symbols: { name: "authenticateUser" }
 # Direct nodeId lookup (O(1) when you already have the id)
-find_symbol: { nodeId: "function:src/auth.ts:42:authenticateUser" }
+find_symbols: { nodeId: "function:src/auth.ts:42:authenticateUser" }
 
 # File path lookup
 file_outline: { file: "src/auth.ts" }
@@ -542,7 +542,7 @@ The fastest way to poke at any tool — no JSON-RPC framing, no client config:
 ug mcp list
 
 # Invoke any tool one-shot with its arguments as a JSON string
-ug mcp call find_symbol '{"name":"run_mcp"}'
+ug mcp call find_symbols '{"name":"run_mcp"}'
 ug mcp call file_outline '{"file":"chat.rs"}'
 ug mcp call list_projects '{}'
 ug mcp call search '{"query":"how does auth work","k":8}'

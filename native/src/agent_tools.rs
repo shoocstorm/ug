@@ -1,7 +1,7 @@
 //! Graph.json-backed agent tools — one implementation, three transports.
 //!
-//! `ug find_symbol` (CLI), `POST /api/tools/find_symbol` (HTTP) and the MCP
-//! `find_symbol` tool all land in the same function here. Each tool takes a
+//! `ug find_symbols` (CLI), `POST /api/tools/find_symbols` (HTTP) and the MCP
+//! `find_symbols` tool all land in the same function here. Each tool takes a
 //! typed params struct and returns a typed result that both serializes to the
 //! canonical JSON envelope and renders to text through [`Render`] — so the
 //! three surfaces agree by construction instead of by discipline.
@@ -294,14 +294,14 @@ fn next_actions(out: &mut String, style: Render, hints: &[(&str, &str)]) {
 }
 
 // ---------------------------------------------------------------------------
-// find_symbol
+// find_symbols
 // ---------------------------------------------------------------------------
 
 /// Params are canonical snake_case. The `alias` attributes accept the legacy
 /// MCP camelCase spellings so existing agent calls keep working unchanged.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
-pub struct FindSymbolParams {
+pub struct FindSymbolsParams {
     /// Direct node id lookup — O(1), skips the search entirely.
     #[serde(alias = "nodeId", alias = "nodeIds", deserialize_with = "de_one_or_many")]
     pub node_id: Vec<String>,
@@ -316,6 +316,11 @@ pub struct FindSymbolParams {
     pub file_prefix: Option<String>,
     #[serde(alias = "k")]
     pub limit: Option<usize>,
+    /// Also match against docstrings, not just names. This is what the old
+    /// `graph_search` command did; a docstring hit ranks below every name
+    /// hit, since matching the identifier is the stronger signal.
+    #[serde(alias = "includeDocs")]
+    pub include_docs: bool,
 }
 
 const DEFAULT_SYMBOL_LIMIT: usize = 20;
@@ -332,17 +337,17 @@ pub struct SymbolQueryResult {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct FindSymbolResult {
+pub struct FindSymbolsResult {
     pub queries: Vec<SymbolQueryResult>,
 }
 
-impl FindSymbolResult {
+impl FindSymbolsResult {
     pub fn ok(&self) -> bool {
         self.queries.iter().all(|q| q.error.is_none())
     }
 }
 
-pub fn find_symbol(graph: &GraphData, p: &FindSymbolParams) -> FindSymbolResult {
+pub fn find_symbols(graph: &GraphData, p: &FindSymbolsParams) -> FindSymbolsResult {
     let limit = p.limit.unwrap_or(DEFAULT_SYMBOL_LIMIT);
     let types: Vec<String> = p.node_types.iter().map(|t| t.to_lowercase()).collect();
     let mut queries = Vec::new();
@@ -362,7 +367,7 @@ pub fn find_symbol(graph: &GraphData, p: &FindSymbolParams) -> FindSymbolResult 
                 total: 0,
                 items: vec![],
                 error: Some(format!(
-                    "No node with id '{}' — ids come from find_symbol, search or file_outline.",
+                    "No node with id '{}' — ids come from find_symbols, search or file_outline.",
                     id
                 )),
             },
@@ -382,17 +387,26 @@ pub fn find_symbol(graph: &GraphData, p: &FindSymbolParams) -> FindSymbolResult 
                 }
             }
             let nm = n.name.to_lowercase();
-            // exact > prefix > substring; ties broken by shorter (closer) name.
+            // exact > prefix > substring > docstring; ties broken by shorter
+            // (closer) name. Matching the identifier always outranks matching
+            // prose about it.
             let rank = if nm == q {
                 0
             } else if nm.starts_with(&q) {
                 1
             } else if nm.contains(&q) {
                 2
-            } else {
+            } else if p.include_docs
+                && n.docstring
+                    .as_ref()
+                    .map(|d| d.to_lowercase().contains(&q))
+                    .unwrap_or(false)
+            {
                 3
+            } else {
+                4
             };
-            if rank < 3 {
+            if rank < 4 {
                 hits.push((rank, n));
             }
         }
@@ -411,10 +425,10 @@ pub fn find_symbol(graph: &GraphData, p: &FindSymbolParams) -> FindSymbolResult 
         });
     }
 
-    FindSymbolResult { queries }
+    FindSymbolsResult { queries }
 }
 
-pub fn render_find_symbol(r: &FindSymbolResult, style: Render) -> String {
+pub fn render_find_symbols(r: &FindSymbolsResult, style: Render) -> String {
     let mut out = String::new();
     for (i, q) in r.queries.iter().enumerate() {
         section_break(&mut out, i, style);
@@ -518,7 +532,7 @@ pub fn file_outline(graph: &GraphData, p: &FileOutlineParams) -> FileOutlineResu
                 symbols: vec![],
                 candidates: vec![],
                 error: Some(format!(
-                    "No node with id '{}' — ids come from find_symbol, search or file_outline.",
+                    "No node with id '{}' — ids come from find_symbols, search or file_outline.",
                     id
                 )),
             },
@@ -765,7 +779,7 @@ pub fn get_code(graph: &GraphData, repo_root: &Path, p: &GetCodeParams) -> GetCo
             slices.push(err_slice(
                 id,
                 format!(
-                    "No node with id '{}' — ids come from find_symbol, search or file_outline.",
+                    "No node with id '{}' — ids come from find_symbols, search or file_outline.",
                     id
                 ),
             ));
@@ -1055,7 +1069,7 @@ pub fn find_usages(graph: &GraphData, repo_root: &Path, p: &FindUsagesParams) ->
                 subject: None,
                 users: vec![],
                 error: Some(format!(
-                    "No node with id '{}' — ids come from find_symbol, search or file_outline.",
+                    "No node with id '{}' — ids come from find_symbols, search or file_outline.",
                     node_id
                 )),
             });
@@ -1692,7 +1706,7 @@ pub fn render_shortest_path(r: &ShortestPathResult, style: Render, strict: bool)
 /// Canonical tool names, in the order they're most useful to an agent.
 pub const TOOL_NAMES: &[&str] = &[
     "project_overview",
-    "find_symbol",
+    "find_symbols",
     "file_outline",
     "get_code",
     "find_usages",
@@ -1704,7 +1718,7 @@ pub const TOOL_NAMES: &[&str] = &[
 pub fn tool_summary(tool: &str) -> &'static str {
     match tool {
         "project_overview" => "Orient in the codebase: stats, biggest files, most depended-upon symbols.",
-        "find_symbol" => "Exact-name symbol lookup — returns node ids for the other tools.",
+        "find_symbols" => "Exact-name symbol lookup — returns node ids for the other tools.",
         "file_outline" => "Every indexed symbol in one file, in line order.",
         "get_code" => "Read source for a node id, or a file/line range.",
         "find_usages" => "Who uses this symbol — inbound callers/importers, with call sites.",
@@ -1752,7 +1766,7 @@ pub fn run_tool(
     }
 
     match tool {
-        "find_symbol" => out(find_symbol(graph, &decode(params)?), style, render_find_symbol),
+        "find_symbols" => out(find_symbols(graph, &decode(params)?), style, render_find_symbols),
         "file_outline" => out(file_outline(graph, &decode(params)?), style, render_file_outline),
         "get_code" => out(
             get_code(graph, repo_root, &decode(params)?),
@@ -1880,9 +1894,9 @@ mod tests {
             edges: vec![],
             stats: None,
         };
-        let r = find_symbol(
+        let r = find_symbols(
             &g,
-            &FindSymbolParams {
+            &FindSymbolsParams {
                 name: vec!["call".into()],
                 ..Default::default()
             },
@@ -1893,20 +1907,63 @@ mod tests {
     }
 
     #[test]
+    /// `include_docs` is what the old `graph_search` command did. Docstring
+    /// matches must be additive and must rank below every name match.
+    fn find_symbol_include_docs_ranks_below_name_hits() {
+        let mut g = GraphData {
+            nodes: vec![
+                node("f:1:cache_get", "cache_get", GraphNodeType::Function, "a.rs", Some((1, 2))),
+                node("f:2:drop_stale", "drop_stale", GraphNodeType::Function, "a.rs", Some((3, 4))),
+            ],
+            edges: vec![],
+            stats: None,
+        };
+        g.nodes[1].docstring = Some("Evicts entries from the cache.".into());
+
+        // Name-only: the docstring mention is invisible.
+        let names_only = find_symbols(
+            &g,
+            &FindSymbolsParams {
+                name: vec!["cache".into()],
+                ..Default::default()
+            },
+        );
+        assert_eq!(names_only.queries[0].total, 1);
+        assert_eq!(names_only.queries[0].items[0].name, "cache_get");
+
+        // With docs: both, and the name hit still comes first.
+        let with_docs = find_symbols(
+            &g,
+            &FindSymbolsParams {
+                name: vec!["cache".into()],
+                include_docs: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(with_docs.queries[0].total, 2);
+        let order: Vec<&str> = with_docs.queries[0]
+            .items
+            .iter()
+            .map(|i| i.name.as_str())
+            .collect();
+        assert_eq!(order, vec!["cache_get", "drop_stale"]);
+    }
+
+    #[test]
     fn find_symbol_honours_type_and_file_filters() {
         let g = fixture();
-        let all = find_symbol(
+        let all = find_symbols(
             &g,
-            &FindSymbolParams {
+            &FindSymbolsParams {
                 name: vec!["a".into()],
                 ..Default::default()
             },
         );
         assert!(all.queries[0].total >= 3);
 
-        let functions_only = find_symbol(
+        let functions_only = find_symbols(
             &g,
-            &FindSymbolParams {
+            &FindSymbolsParams {
                 name: vec!["a".into()],
                 node_types: vec!["function".into()],
                 ..Default::default()
@@ -1917,9 +1974,9 @@ mod tests {
             .iter()
             .all(|i| i.node_type == "Function"));
 
-        let nothing = find_symbol(
+        let nothing = find_symbols(
             &g,
-            &FindSymbolParams {
+            &FindSymbolsParams {
                 name: vec!["a".into()],
                 file_prefix: Some("other/".into()),
                 ..Default::default()
@@ -1931,9 +1988,9 @@ mod tests {
     #[test]
     fn find_symbol_respects_limit_but_reports_full_total() {
         let g = fixture();
-        let r = find_symbol(
+        let r = find_symbols(
             &g,
-            &FindSymbolParams {
+            &FindSymbolsParams {
                 name: vec!["call".into()],
                 limit: Some(1),
                 ..Default::default()
@@ -1946,9 +2003,9 @@ mod tests {
     #[test]
     fn find_symbol_direct_id_lookup() {
         let g = fixture();
-        let r = find_symbol(
+        let r = find_symbols(
             &g,
-            &FindSymbolParams {
+            &FindSymbolsParams {
                 node_id: vec!["function:src/a.rs:7:callee".into()],
                 ..Default::default()
             },
@@ -1961,9 +2018,9 @@ mod tests {
     #[test]
     fn find_symbol_reports_missing_id() {
         let g = fixture();
-        let r = find_symbol(
+        let r = find_symbols(
             &g,
-            &FindSymbolParams {
+            &FindSymbolsParams {
                 node_id: vec!["function:nope".into()],
                 ..Default::default()
             },
@@ -2065,9 +2122,9 @@ mod tests {
         let repo = Path::new("/repo");
         let gp = Path::new("/repo/graph.json");
 
-        let symbols = find_symbol(
+        let symbols = find_symbols(
             &g,
-            &FindSymbolParams {
+            &FindSymbolsParams {
                 name: vec!["caller".into(), "nothing-matches-this".into()],
                 ..Default::default()
             },
@@ -2103,7 +2160,7 @@ mod tests {
         };
 
         let cases: Vec<(&str, Box<dyn Fn(Render) -> String>)> = vec![
-            ("find_symbol", Box::new(move |s| render_find_symbol(&symbols, s))),
+            ("find_symbols", Box::new(move |s| render_find_symbols(&symbols, s))),
             ("file_outline", Box::new(move |s| render_file_outline(&outline, s))),
             ("find_usages", Box::new(move |s| render_find_usages(&usages, s))),
             (

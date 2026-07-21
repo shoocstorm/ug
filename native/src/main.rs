@@ -88,10 +88,11 @@ fn main() {
         "graph_filter" | "filter" => run_graph_filter(cmd_args),
         "graph_centrality" | "centrality" => run_graph_centrality(cmd_args),
         "graph_cycles" | "cycles" => run_graph_cycles(cmd_args),
-        "graph_search" | "search_graph" => run_graph_search(cmd_args),
         // Agent tools (graph.json-backed, for AI coding agents). Names match
         // the MCP tools one-for-one.
-        "find_symbol" => run_find_symbol(cmd_args),
+        "find_symbols" | "find_symbol" => run_find_symbols(cmd_args),
+        // Same scan as find_symbols, with docstring matching on by default.
+        "graph_search" | "search_graph" => run_graph_search(cmd_args),
         "file_outline" => run_file_outline(cmd_args),
         "get_code" => run_get_code(cmd_args),
         "find_usages" => run_find_usages(cmd_args),
@@ -708,7 +709,7 @@ fn resolve_node_ref(graph: &GraphData, input: &str) -> String {
     }
     if hits.is_empty() {
         eprintln!(
-            "✗ Nothing in the graph matches '{}' — look it up with {C_CYAN}ug find_symbol{C_RESET}, or pass a node id directly.",
+            "✗ Nothing in the graph matches '{}' — look it up with {C_CYAN}ug find_symbols{C_RESET}, or pass a node id directly.",
             input
         );
         std::process::exit(1);
@@ -974,72 +975,6 @@ fn run_graph_bfs(args: &[String]) {
     }
     println!();
     println!("{C_DIM}Next:{C_RESET} {C_CYAN}ug get_code <id>{C_RESET} to read one · {C_CYAN}ug graph_path <a> <b>{C_RESET} to see how two connect");
-}
-
-fn run_graph_search(args: &[String]) {
-    if has_flag(args, "-h") || has_flag(args, "--help") {
-        print_graph_search_help();
-        return;
-    }
-    let (load_args, pos) = analysis_input(args);
-    if pos.is_empty() {
-        eprintln!("Usage: ug graph_search <keyword> [-t|--type <node-type>]... [-f|--file <prefix>] [-l|--limit <n>] [-n|--name <project>]");
-        std::process::exit(1);
-    }
-    let keyword = pos[0].to_lowercase();
-    let types = type_filter(args, &["-t", "--type"]);
-    let file_prefix = flag_value(args, &["-f", "--file"]);
-    let limit = limit_or(args, &["-l", "--limit"], 20);
-    let names_only = has_flag(args, "--names-only");
-
-    let (graph, _raw, _path) = load_agent_graph(&load_args);
-    let matched: Vec<&GraphNode> = graph
-        .nodes
-        .iter()
-        .filter(|n| node_passes(n, &types, file_prefix.as_deref()))
-        .filter(|n| {
-            if keyword.is_empty() {
-                return true;
-            }
-            if n.name.to_lowercase().contains(&keyword) {
-                return true;
-            }
-            !names_only
-                && n.docstring
-                    .as_ref()
-                    .map(|d| d.to_lowercase().contains(&keyword))
-                    .unwrap_or(false)
-        })
-        .collect();
-
-    let json = serde_json::json!({ "count": matched.len(), "nodes": matched }).to_string();
-    if emit_raw(args, &json, "search result") {
-        return;
-    }
-
-    println!(
-        "{C_BOLD}Nodes matching '{}'{C_RESET} — {} match(es){}",
-        pos[0],
-        matched.len(),
-        if matched.len() > limit {
-            format!(", showing {}", limit)
-        } else {
-            String::new()
-        }
-    );
-    println!();
-    for n in matched.iter().take(limit) {
-        println!("- {}", node_line(n));
-        if let Some(d) = &n.docstring {
-            let preview: String = d.replace('\n', " ").chars().take(160).collect();
-            println!("  {C_DIM}doc: {}{C_RESET}", preview);
-        }
-    }
-    if matched.is_empty() {
-        println!("Nothing matched. Try a shorter fragment, drop -t/-f, or use {C_CYAN}ug search{C_RESET} for a concept-level query.");
-    }
-    println!();
-    println!("{C_DIM}Note:{C_RESET} this is a raw substring scan over names + docstrings. {C_CYAN}ug find_symbol{C_RESET} ranks exact > prefix > substring.");
 }
 
 fn run_graph_filter(args: &[String]) {
@@ -1387,7 +1322,7 @@ fn run_graph_analyze(args: &[String]) {
 // ---------- Agent tools ----------
 //
 // The MCP server (node/cli.mjs) exposes five graph.json-backed tools that
-// AI coding agents call to understand an indexed repo: find_symbol,
+// AI coding agents call to understand an indexed repo: find_symbols,
 // file_outline, get_code, project_overview, graph_path. The commands
 // below are those same tools callable by hand — same lookup logic over the
 // same graph.json, no embeddings — so a human can run them to explore the
@@ -1499,27 +1434,35 @@ fn agent_repo_root(graph: &GraphData, graph_path: &Path) -> PathBuf {
     PathBuf::from(".")
 }
 
-fn print_find_symbol_help() {
-    println!("  {C_CYAN}ug find_symbol{C_RESET}  {C_YELLOW}— exact-name symbol lookup (no embeddings){C_RESET}");
+fn print_find_symbols_help() {
+    println!("  {C_CYAN}ug find_symbols{C_RESET}  {C_YELLOW}— exact-name symbol lookup (no embeddings){C_RESET}");
     println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
     println!();
-    println!("{C_BOLD}Usage:{C_RESET}  ug find_symbol <name-or-id>... [options]");
+    println!("{C_BOLD}Usage:{C_RESET}  ug find_symbols <name-or-id>... [options]");
     println!();
     println!("  Accepts several names or nodeIds in one call (up to you; sections are separated) —");
     println!("  agents should batch related lookups instead of running the command repeatedly.");
     println!("  {C_CYAN}Direct nodeId lookup{C_RESET} (O(1)): if input contains ':' it's treated as a nodeId.");
     println!();
     println!("{C_BOLD}Options:{C_RESET}");
-    println!("  {C_CYAN}-t, --type <type>{C_RESET}    Restrict to node type (repeatable; e.g. Function, Class, Interface)");
-    println!("  {C_CYAN}-f, --file <prefix>{C_RESET}  Only symbols under this file path prefix");
-    println!("  {C_CYAN}-l, --limit <n>{C_RESET}     Max hits (default 20)");
+    println!("  {C_CYAN}--node-type <type>{C_RESET}   Restrict to node type (repeatable; e.g. Function, Class, Interface)");
+    println!("  {C_CYAN}--file-prefix <p>{C_RESET}    Only symbols under this file path prefix");
+    println!("  {C_CYAN}-k, --limit <n>{C_RESET}      Max hits per query (default 20)");
+    println!("  {C_CYAN}--include-docs{C_RESET}       Also match docstrings, not just names");
     println!("  {C_CYAN}-n, --name <project>{C_RESET} Project name (default: cwd basename)");
+    println!("  {C_DIM}(-t/--type and -f/--file still parse as the old spellings){C_RESET}");
+    println!();
+    println!("{C_BOLD}Ranking:{C_RESET} exact > prefix > substring > docstring; ties go to the shorter name.");
     println!();
     println!("{C_BOLD}Examples:{C_RESET}");
-    println!("  {C_CYAN}ug find_symbol{C_RESET} resolveDb");
-    println!("  {C_CYAN}ug find_symbol{C_RESET} loadConfig -t Function -f src/auth/");
-    println!("  {C_CYAN}ug find_symbol{C_RESET} run_serve run_app run_gen   {C_YELLOW}# batch: three lookups, one call{C_RESET}");
-    println!("  {C_CYAN}ug find_symbol{C_RESET} 'function:src/auth.rs:42:login'  {C_YELLOW}# direct nodeId lookup (O(1)){C_RESET}");
+    println!("  {C_CYAN}ug find_symbols{C_RESET} resolveDb");
+    println!("  {C_CYAN}ug find_symbols{C_RESET} loadConfig --node-type Function --file-prefix src/auth/");
+    println!("  {C_CYAN}ug find_symbols{C_RESET} run_serve run_app run_gen   {C_YELLOW}# batch: three lookups, one call{C_RESET}");
+    println!("  {C_CYAN}ug find_symbols{C_RESET} 'function:src/auth.rs:42:login'  {C_YELLOW}# direct nodeId lookup (O(1)){C_RESET}");
+    println!("  {C_CYAN}ug find_symbols{C_RESET} embedder --include-docs   {C_YELLOW}# what `ug graph_search` does{C_RESET}");
+    println!();
+    println!("  {C_DIM}`ug graph_search` is an alias for {C_RESET}{C_CYAN}find_symbols --include-docs{C_RESET}{C_DIM} — it was the same");
+    println!("  scan, minus the ranking and batching.{C_RESET}");
 }
 
 fn print_file_outline_help() {
@@ -1557,7 +1500,7 @@ fn print_get_code_help() {
     println!("  {C_CYAN}-n, --name <project>{C_RESET}  Project name (default: cwd basename)");
     println!();
     println!("{C_BOLD}Examples:{C_RESET}");
-    println!("  {C_CYAN}ug get_code{C_RESET} \"function:native/src/main.rs:124:flag_value\"  {C_YELLOW}# id from find_symbol{C_RESET}");
+    println!("  {C_CYAN}ug get_code{C_RESET} \"function:native/src/main.rs:124:flag_value\"  {C_YELLOW}# id from find_symbols{C_RESET}");
     println!("  {C_CYAN}ug get_code{C_RESET} <id1> <id2> <id3>   {C_YELLOW}# batch: several symbols in one call (--max-chars applies per symbol){C_RESET}");
     println!("  {C_CYAN}ug get_code{C_RESET} -f native/src/types.rs -s 180 -e 210");
     println!("  {C_CYAN}ug get_code{C_RESET} -f README.md  {C_YELLOW}# whole file{C_RESET}");
@@ -1610,34 +1553,49 @@ fn split_ids_and_names(pos: &[String]) -> (Vec<String>, Vec<String>) {
         .partition(|s| looks_like_node_id(s))
 }
 
-fn run_find_symbol(args: &[String]) {
+fn run_find_symbols(args: &[String]) {
+    run_find_symbols_with(args, false)
+}
+
+/// `ug graph_search` is `find_symbols` with docstring matching on — that was
+/// the only behavioural difference between the two commands. It stays as a
+/// separate entry point so the old invocation keeps its old default.
+fn run_graph_search(args: &[String]) {
+    // `--names-only` was graph_search's way of asking for name-only matching,
+    // i.e. exactly what plain find_symbols does.
+    run_find_symbols_with(args, !has_flag(args, "--names-only"))
+}
+
+fn run_find_symbols_with(args: &[String], include_docs: bool) {
     if has_flag(args, "-h") || has_flag(args, "--help") {
-        print_find_symbol_help();
+        print_find_symbols_help();
         return;
     }
-    let queries = positionals(args, AGENT_VALUE_FLAGS);
+    // Accept graph_search's legacy leading `<graph-file>` positional.
+    let (load_args, queries) = analysis_input(args);
     if queries.is_empty() {
-        eprintln!("Usage: ug find_symbol <name>... [-t|--type <node-type>]... [-f|--file <prefix>] [-l|--limit <n>] [-n|--name <project>]");
+        eprintln!("Usage: ug find_symbols <name>... [--node-type <type>]... [--file-prefix <prefix>] [-k <n>] [--include-docs] [-n <project>]");
         std::process::exit(1);
     }
     let (node_id, name) = split_ids_and_names(&queries);
-    let params = agent_tools::FindSymbolParams {
+    let params = agent_tools::FindSymbolsParams {
         node_id,
         name,
         // `--node-type` is the canonical spelling; `-t/--type` still parses.
         node_types: multi_flag(args, &["--node-type", "-t", "--type"]),
         file_prefix: flag_value(args, &["--file-prefix", "-f", "--file"]),
         limit: flag_value(args, &["-k", "--limit", "-l"]).and_then(|s| s.parse().ok()),
+        include_docs: include_docs || has_flag(args, "--include-docs"),
     };
-    let (graph, _raw, _path) = load_agent_graph(args);
+    let (graph, _raw, _path) = load_agent_graph(&load_args);
 
-    let result = agent_tools::find_symbol(&graph, &params);
+    let result = agent_tools::find_symbols(&graph, &params);
     let ok = result.ok();
     emit_agent_result(
         args,
         &result,
-        || agent_tools::render_find_symbol(&result, Render::Ansi),
-        "find_symbol result",
+        || agent_tools::render_find_symbols(&result, Render::Ansi),
+        "find_symbols result",
         ok,
     );
 }
@@ -3449,7 +3407,7 @@ const API_ENDPOINTS: &[(&str, &[ApiEntry])] = &[
         &[
             ApiEntry { method: "GET", path: "/api/tools", desc: "list the agent tools and their paths (HTTP equivalent of MCP tools/list)", availability: "always", cli_equivalent: Some("ug help") },
             ApiEntry { method: "POST", path: "/api/tools/project_overview", desc: "stats, biggest files, most depended-upon symbols", availability: "always (empty if no project active)", cli_equivalent: Some("ug project_overview --json") },
-            ApiEntry { method: "POST", path: "/api/tools/find_symbol", desc: "exact-name symbol lookup", availability: "always (empty if no project active)", cli_equivalent: Some("ug find_symbol --json") },
+            ApiEntry { method: "POST", path: "/api/tools/find_symbols", desc: "exact-name symbol lookup", availability: "always (empty if no project active)", cli_equivalent: Some("ug find_symbols --json") },
             ApiEntry { method: "POST", path: "/api/tools/file_outline", desc: "every indexed symbol in one file, in line order", availability: "always (empty if no project active)", cli_equivalent: Some("ug file_outline --json") },
             ApiEntry { method: "POST", path: "/api/tools/get_code", desc: "source for a node id or file/line range", availability: "always (empty if no project active)", cli_equivalent: Some("ug get_code --json") },
             ApiEntry { method: "POST", path: "/api/tools/find_usages", desc: "inbound callers/importers, with call sites", availability: "always (empty if no project active)", cli_equivalent: Some("ug find_usages --json") },
@@ -4485,29 +4443,6 @@ fn print_graph_bfs_help() {
     println!("  {C_CYAN}ug graph_bfs{C_RESET} run_gen -n other-project -t Function");
 }
 
-fn print_graph_search_help() {
-    println!("  {C_CYAN}ug graph_search{C_RESET}  {C_YELLOW}— substring scan over graph node names + docstrings{C_RESET}");
-    println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
-    println!();
-    println!("{C_BOLD}Usage:{C_RESET}  ug graph_search <keyword> [options]   {C_DIM}(alias: search_graph){C_RESET}");
-    println!();
-    println!("  Matches anywhere in a name or docstring — good for grep-like sweeps.");
-    println!("  For everyday name lookups prefer {C_CYAN}ug find_symbol{C_RESET}: it ranks");
-    println!("  exact > prefix > substring.");
-    println!();
-    println!("{C_BOLD}Options:{C_RESET}");
-    println!("  {C_CYAN}-t, --type{C_RESET} <type>     Restrict to node types (repeatable)");
-    println!("  {C_CYAN}-f, --file{C_RESET} <prefix>   Only nodes under this path prefix");
-    println!("  {C_CYAN}-l, --limit{C_RESET} <n>       Max hits printed (default 20)");
-    println!("  {C_CYAN}--names-only{C_RESET}          Skip docstring matches");
-    print_graph_common_options();
-    println!();
-    println!("{C_BOLD}Examples:{C_RESET}");
-    println!("  {C_CYAN}ug graph_search{C_RESET} loadConfig -t Function -t Class");
-    println!("  {C_CYAN}ug graph_search{C_RESET} cache -f native/src/ --names-only");
-    println!("  {C_CYAN}ug graph_search{C_RESET} visualization -n ug --json");
-}
-
 fn print_graph_filter_help() {
     println!("  {C_CYAN}ug graph_filter{C_RESET}  {C_YELLOW}— list graph edges by type/endpoint{C_RESET}");
     println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
@@ -4650,7 +4585,7 @@ fn print_semantic_search_help() {
     println!("  Search by {C_BOLD}meaning{C_RESET}: describe what the code does (\"oauth login flow\") and get");
     println!("  the closest symbols by embedding similarity. Needs an ingested db ({C_CYAN}ug gen{C_RESET})");
     println!("  and an embedding endpoint. If you already know the identifier's name, use");
-    println!("  {C_CYAN}ug find_symbol{C_RESET} (exact, no embeddings); for search {C_BOLD}plus{C_RESET} related-code context,");
+    println!("  {C_CYAN}ug find_symbols{C_RESET} (exact, no embeddings); for search {C_BOLD}plus{C_RESET} related-code context,");
     println!("  use {C_CYAN}ug search{C_RESET}.");
     println!();
     println!("{C_BOLD}Usage:{C_RESET}  ug semantic_search <query> [options]");
@@ -4908,7 +4843,7 @@ fn print_help() {
     println!(
         "  {C_BOLD}{C_YELLOW}search{C_RESET}           {C_YELLOW}GraphRAG: semantic search → graph expansion → ranked context{C_RESET}"
     );
-    println!("  {C_CYAN}semantic_search{C_RESET}  Search by meaning/concept (embeddings; use find_symbol for exact names)");
+    println!("  {C_CYAN}semantic_search{C_RESET}  Search by meaning/concept (embeddings; use find_symbols for exact names)");
     println!("  {C_CYAN}traverse{C_RESET}         K-hop BFS over the OverGraph edges table");
     println!(
         "  {C_BOLD}{C_MAGENTA}chat{C_RESET}             {C_BOLD}{C_MAGENTA}💬 GraphRAG-grounded chat (one-shot or REPL){C_RESET}"
@@ -4925,11 +4860,11 @@ fn print_help() {
     println!("  {C_CYAN}graph_filter{C_RESET}     List edges by type/endpoint (no args: edge types + counts)");
     println!("  {C_CYAN}graph_centrality{C_RESET} Rank nodes by degree/betweenness (--top, -t, -f)");
     println!("  {C_CYAN}graph_cycles{C_RESET}     Detect cycles (--min-len, --fail-on-cycle for CI)");
-    println!("  {C_CYAN}graph_search{C_RESET}     Substring scan over names + docstrings (prefer find_symbol)");
+    println!("  {C_CYAN}graph_search{C_RESET}     Substring scan over names + docstrings (prefer find_symbols)");
     println!();
     println!("  {C_DIM}Agent tools — what AI coding agents use (via MCP) to understand a repo; run by hand to explore or verify{C_RESET}");
     println!("  {C_CYAN}project_overview{C_RESET} Orient in the codebase: stats, biggest files, most depended-upon symbols");
-    println!("  {C_CYAN}find_symbol{C_RESET}      Exact-name symbol lookup (no embeddings) — returns ids for the tools below");
+    println!("  {C_CYAN}find_symbols{C_RESET}      Exact-name symbol lookup (no embeddings) — returns ids for the tools below");
     println!("  {C_CYAN}file_outline{C_RESET}     List every indexed symbol in one file, in line order");
     println!("  {C_CYAN}get_code{C_RESET}         Read the source for a node id or file/line range");
     println!("  {C_CYAN}find_usages{C_RESET}      Who uses this symbol? (inbound callers/importers + call sites)");
