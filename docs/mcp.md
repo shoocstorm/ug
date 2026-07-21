@@ -189,25 +189,28 @@ Returns ranked code snippets with file:line locations, descriptions, and node ID
 
 **Trigger phrases:** "how does X work", "where is X", "what is X", "find/show me code for X", "explain X", "is there a function that...", "how is X implemented", "before I change X look up...", "context on X", or any question whose answer likely lives in the repo.
 
-**Internals:** RRF fuses vector + FTS hits to seed Personalized PageRank over the edge graph, so results combine semantic relevance with structural importance. Pass `strategy='mmr'` for the legacy diversity-first BFS+MMR cascade.
+**Internals:** RRF fuses vector + FTS hits to seed Personalized PageRank over the edge graph, so results combine semantic relevance with structural importance.
 
 **Parameters:**
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `query` | string | ✅ | Natural-language query. Be specific — name the concept, function, or behavior you're after. |
 | `k` | integer (1-50) | ❌ | How many context items to return (default 8). Bump to 15-20 when surveying a subsystem. |
-| `hops` | integer (0-5) | ❌ | MMR-only: graph expansion radius from each seed (default 2). Ignored under PPR. |
 | `edgeTypes` | string[] | ❌ | Restrict the walk to these edge types (case-insensitive). Common: imports, calls, extends, implements, contains, references. |
 | `direction` | string | ❌ | Edge direction during the walk (default 'both'). Use 'inbound' for who depends on the seed; 'outbound' for what the seed depends on. |
 | `maxChars` | integer (100-200000) | ❌ | Approximate character budget for assembled context (default ~16k). |
-| `mmrLambda` | number (0-1) | ❌ | MMR balance (only when strategy='mmr'): 1 = max relevance, 0 = max diversity (default 0.6). |
 | `whereClause` | string | ❌ | Optional SQL WHERE applied during seed search. Examples: `node_type = 'Function'`, `file LIKE 'src/auth/%'`. |
 | `includeSnippets` | boolean | ❌ | Read source slice for each item (default true). Set false when you only need IDs and locations. |
-| `strategy` | string | ❌ | Ranking strategy. 'ppr' (default) = Personalized PageRank seeded by RRF. 'mmr' = legacy seed+BFS+MMR. |
-| `pprRestartProb` | number (0.01-0.99) | ❌ | PPR teleport probability (default 0.15). Higher = stay closer to seeds. |
-| `pprMaxIter` | integer (1-200) | ❌ | PPR power-iteration cap (default 30). |
-| `pprSeedPool` | integer (1-200) | ❌ | How many RRF hits feed the personalization vector (default 16). |
-| `pprEdgeWeights` | object | ❌ | Override edge-type weights, e.g. `{ calls: 1.0, imports: 0.7 }`. |
+
+> **Ranking is not tunable from the tool.** `strategy`, `hops`, `mmrLambda`,
+> `pprRestartProb`, `pprMaxIter`, `pprSeedPool` and `pprEdgeWeights` used to be
+> listed here. They are operator knobs — a wrong value degrades results
+> silently, and the defaults are what an agent wants. They still parse (via
+> `ug search` and `ug mcp call search`) but no longer appear in `tools/list`.
+>
+> In particular `strategy: 'mmr'` is not a choice any more: MMR survives only
+> as the automatic fallback for backends without native PPR (Neo4j without the
+> GDS plugin), which `search_kb` selects on its own.
 
 **Example usage:**
 ```
@@ -215,11 +218,9 @@ search: { query: "how authentication works in this codebase", k: 10 }
 
 search: { query: "where is the main entry point", k: 5, whereClause: "node_type = 'Function'" }
 
-search: { query: "payment processing logic", k: 15, strategy: "mmr", hops: 3 }
-
 search: { query: "error handling", k: 8, edgeTypes: ["calls", "references"], direction: "both" }
 
-search: { query: "database schema", k: 12, maxChars: 5000, pprRestartProb: 0.3 }
+search: { query: "database schema", k: 12, maxChars: 5000 }
 ```
 
 ---

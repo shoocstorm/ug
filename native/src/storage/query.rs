@@ -298,10 +298,13 @@ pub fn read_snippet(
 }
 
 /// Ranking strategy for the candidate pool produced by seed search +
-/// graph context. PPR is the default — it replaces the old BFS+MMR
-/// cascade with a single graph-aware ranking. MMR is kept as an opt-in
-/// fallback for callers who want diversity-first behavior or need to
-/// avoid the bulk-edge scan PPR performs.
+/// graph context.
+///
+/// PPR is the only strategy the public surfaces expose — the MCP tool, the
+/// CLI help and the HTTP docs no longer offer a choice. `Mmr` survives
+/// because [`search_kb`] selects it automatically for backends without
+/// native PPR (Neo4j without the GDS plugin); it is a fallback, not a user
+/// option. The `--strategy` flag still parses for operator debugging.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RankStrategy {
     Ppr,
@@ -371,13 +374,13 @@ impl<'a> SearchKbOptions<'a> {
     }
 }
 
-/// [Advanced RAG Search] Phase 4 GraphRAG: seed search -> rank (PPR by default, MMR optional)
-/// -> snippet attachment -> token-budgeted assembly. Returns a
-/// JSON-friendly [`RankedContext`].
+/// [Advanced RAG Search] Phase 4 GraphRAG: seed search -> PPR ranking ->
+/// snippet attachment -> token-budgeted assembly. Returns a JSON-friendly
+/// [`RankedContext`].
 ///
-/// Backends without native PPR (Neo4j without GDS) silently fall back
-/// to MMR with a single warning log line — callers don't need to opt
-/// in.
+/// Backends without native PPR (Neo4j without GDS) silently fall back to
+/// MMR with a single warning log line — callers don't need to opt in, and
+/// that fallback is the only reason [`RankStrategy::Mmr`] still exists.
 pub async fn search_kb(
     store: &dyn KnowledgeStore,
     embedder: &Embedder,

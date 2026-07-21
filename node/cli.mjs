@@ -322,13 +322,20 @@ function destOptionsJson() {
 const SearchKbInput = z.object({
   query: z.string().min(1),
   k: z.number().int().min(1).max(50).optional(),
-  hops: z.number().int().min(0).max(5).optional(),
   edgeTypes: z.array(z.string()).optional(),
   direction: z.enum(['outbound', 'inbound', 'both']).optional(),
   maxChars: z.number().int().min(100).max(200000).optional(),
-  mmrLambda: z.number().min(0).max(1).optional(),
   whereClause: z.string().optional(),
   includeSnippets: z.boolean().optional(),
+
+  // Ranking internals — still validated and honoured (`ug mcp call search`
+  // and `ug search` can set them for tuning), but absent from the tool's
+  // advertised inputSchema so agents aren't asked to reason about them.
+  // `strategy: 'mmr'` in particular is not a user-facing choice any more: MMR
+  // survives only as the automatic fallback for backends without native PPR
+  // (Neo4j without the GDS plugin), which search_kb selects on its own.
+  hops: z.number().int().min(0).max(5).optional(),
+  mmrLambda: z.number().min(0).max(1).optional(),
   strategy: z.enum(['ppr', 'mmr']).optional(),
   pprRestartProb: z.number().min(0.01).max(0.99).optional(),
   pprMaxIter: z.number().int().min(1).max(200).optional(),
@@ -419,7 +426,7 @@ const MCP_TOOLS = [
     description:
       "PRIMARY KNOWLEDGE-BASE SEARCH for this codebase. Use this whenever the user asks about anything that might exist in the indexed repository: how a feature works, where something is defined, what a symbol does, why some code exists, how modules connect, or to gather context before making a code change. Returns ranked code snippets with file:line locations, descriptions, and node IDs you can drill into via traverse / find_usages. " +
       "Trigger phrases include: 'how does X work', 'where is X', 'what is X', 'find / show me code for X', 'explain X', 'is there a function that...', 'how is X implemented', 'before I change X look up...', 'context on X', or any question whose answer likely lives in the repo. Prefer calling this once with a focused natural-language query over guessing file paths. " +
-      'Internals: RRF fuses vector + FTS hits to seed Personalized PageRank over the edge graph, so results combine semantic relevance with structural importance. Pass strategy=\'mmr\' for the legacy diversity-first BFS+MMR cascade.',
+      'Internals: RRF fuses vector + FTS hits to seed Personalized PageRank over the edge graph, so results combine semantic relevance with structural importance.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -434,13 +441,6 @@ const MCP_TOOLS = [
           maximum: 50,
           description:
             'How many context items to return (default 8). Bump to 15-20 when surveying a subsystem; keep 5-8 when answering a focused question.',
-        },
-        hops: {
-          type: 'integer',
-          minimum: 0,
-          maximum: 5,
-          description:
-            'MMR-only: graph expansion radius from each seed (default 2). Ignored under PPR.',
         },
         edgeTypes: {
           type: 'array',
@@ -461,13 +461,6 @@ const MCP_TOOLS = [
           description:
             'Approximate character budget for assembled context (default ~16k). Lower it when you only need a sketch.',
         },
-        mmrLambda: {
-          type: 'number',
-          minimum: 0,
-          maximum: 1,
-          description:
-            "MMR balance (only when strategy='mmr'): 1 = max relevance, 0 = max diversity (default 0.6).",
-        },
         whereClause: {
           type: 'string',
           description:
@@ -478,38 +471,10 @@ const MCP_TOOLS = [
           description:
             'Read source slice for each item (default true). Set false when you only need IDs and locations for a follow-up traversal.',
         },
-        strategy: {
-          type: 'string',
-          enum: ['ppr', 'mmr'],
-          description:
-            "Ranking strategy. 'ppr' (default) = Personalized PageRank seeded by RRF — best general-purpose. 'mmr' = legacy seed+BFS+MMR, prefer when you specifically want diversity over centrality.",
-        },
-        pprRestartProb: {
-          type: 'number',
-          minimum: 0.01,
-          maximum: 0.99,
-          description:
-            'PPR teleport probability (default 0.15). Higher = stay closer to seeds; lower = let centrality dominate.',
-        },
-        pprMaxIter: {
-          type: 'integer',
-          minimum: 1,
-          maximum: 200,
-          description: 'PPR power-iteration cap (default 30).',
-        },
-        pprSeedPool: {
-          type: 'integer',
-          minimum: 1,
-          maximum: 200,
-          description:
-            'How many RRF hits feed the personalization vector (default 16). Larger = more robust to a noisy top hit.',
-        },
-        pprEdgeWeights: {
-          type: 'object',
-          additionalProperties: { type: 'number', minimum: 0 },
-          description:
-            'Override edge-type weights, e.g. { calls: 1.0, imports: 0.7, contains: 0.3 }. Keys are case-insensitive.',
-        },
+        // Ranking internals (strategy, mmrLambda, hops, ppr*) are accepted but
+        // deliberately not advertised: they are operator tuning knobs, they cost
+        // description tokens on every tools/list, and a wrong value degrades
+        // results silently. Defaults are the right answer for agents.
       },
       required: ['query'],
     },

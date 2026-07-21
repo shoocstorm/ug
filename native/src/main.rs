@@ -3669,9 +3669,9 @@ fn run_hybrid_search(args: &[String]) {
     }
     if args.is_empty() {
         eprintln!(
-            "Usage: ug search <query> [-n|--name <project>] [-k|--limit <n>] [--hops <n>] \\
-                 [--filter <sql>] [--strategy <ppr|mmr>] [--direction <out|in|both>] \\
-                 [-t|--edge-type <type>]... [--max-chars <n>] [--mmr-lambda <f>] \\
+            "Usage: ug search <query> [-n|--name <project>] [-k|--limit <n>] \\
+                 [--filter <sql>] [--direction <out|in|both>] \\
+                 [-t|--edge-type <type>]... [--max-chars <n>] \\
                  [--no-snippets] [--repo-root <path>] \\
                  [--base-url <url>] [--api-key <key>] [--model <name>] [--embedding-dim <n>] \\
                  [-o|--output <file>]"
@@ -4641,17 +4641,20 @@ fn print_hybrid_search_help() {
     println!("{C_BOLD}Options:{C_RESET}");
     println!("  {C_CYAN}-n, --name{C_RESET} <name>    Project name (default: cwd basename, else most recent under ~/.ug)");
     println!("  {C_CYAN}-k, --limit{C_RESET} <n>      Final results (default: 8)");
-    println!("  {C_CYAN}--hops{C_RESET} <n>           Graph expansion hops (default: 2)");
     println!("  {C_CYAN}--filter{C_RESET} <sql>       SQL WHERE clause for semantic seed filter");
-    println!("  {C_CYAN}--strategy{C_RESET} <s>       ppr (default) or mmr (max marginal relevance)");
     println!("  {C_CYAN}--direction{C_RESET} <dir>    outbound|inbound|both (default: both)");
     println!("  {C_CYAN}-t, --edge-type{C_RESET} <t>  Restrict expansion to edge type (repeatable)");
     println!("  {C_CYAN}--max-chars{C_RESET} <n>      Char budget for assembled context (default: 12000)");
-    println!("  {C_CYAN}--mmr-lambda{C_RESET} <f>     MMR diversity/relevance balance 0..1 (default: 0.6)");
     println!("  {C_CYAN}--no-snippets{C_RESET}        Skip reading source snippets from disk");
     println!("  {C_CYAN}--repo-root{C_RESET} <path>   Repo root for snippet resolution (default: cwd)");
     println!("  {C_CYAN}--base-url/--api-key/--model/--embedding-dim{C_RESET}  Embedding endpoint overrides");
     println!("  {C_CYAN}-o, --output{C_RESET} <file>  Output file (optional, omit for stdout)");
+    println!();
+    println!("{C_DIM}Ranking is Personalized PageRank over the edge graph, seeded by RRF");
+    println!("(vector + full-text). Its tuning knobs (--strategy, --hops, --mmr-lambda,");
+    println!("--ppr-*) still parse but are undocumented operator controls — the defaults");
+    println!("are what you want. Backends without native PPR (Neo4j without GDS) fall back");
+    println!("to MMR automatically.{C_RESET}");
     println!();
     println!("{C_BOLD}Examples:{C_RESET}");
     println!("  {C_CYAN}ug search{C_RESET} \"oauth login flow\" -k 8");
@@ -4729,8 +4732,6 @@ fn print_chat_help() {
     println!("{C_BOLD}Retrieval (matches `ug search`):{C_RESET}");
     println!("  {C_CYAN}-n, --name{C_RESET} <name>        Project name (default: cwd basename, else most recent under ~/.ug)");
     println!("  {C_CYAN}-k, --limit{C_RESET} <n>          Context items to retrieve (default: 8)");
-    println!("  {C_CYAN}--hops{C_RESET} <n>               Graph expansion hops (default: 2)");
-    println!("  {C_CYAN}--strategy{C_RESET} <s>           ppr (default) or mmr");
     println!("  {C_CYAN}--direction{C_RESET} <dir>        outbound|inbound|both (default: both)");
     println!("  {C_CYAN}-t, --edge-type{C_RESET} <t>      Restrict expansion to edge type (repeatable)");
     println!("  {C_CYAN}--filter{C_RESET} <sql>           Optional SQL WHERE clause for the seed filter");

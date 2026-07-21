@@ -57,7 +57,7 @@ UltraGraph implements a complete four-phase pipeline for building and querying a
 | | **Local ONNX embedding** via `fastembed-rs` (in-process, no service needed) | ✅ |
 | | Optional remote OpenAI-compatible `/v1/embeddings` backend | ✅ |
 | | Auto-probed embedding dim; persisted to `<db>/ug-meta.json` | ✅ |
-| **Retrieval** | **GraphRAG**: Personalized PageRank (PPR) & MMR strategies | ✅ |
+| **Retrieval** | **GraphRAG**: Personalized PageRank (PPR) ranking over the edge graph | ✅ |
 | | RRF (Reciprocal Rank Fusion) for hybrid search | ✅ |
 | **Chat** | **`ug chat`**: RAG-grounded chat against any OpenAI-compatible LLM | ✅ |
 | | One-shot + interactive REPL; per-turn citations; `--json` output | ✅ |
@@ -446,7 +446,7 @@ ug chat \
 | `-n, --name <project>` | Project name (default: cwd basename, else the most recently generated project under `~/.ug`) |
 | `--chat-model <name>` | Chat completion model (required for remote chat; falls back to `$UG_CHAT_MODEL`) |
 | `--base-url` / `--api-key` | OpenAI-compatible endpoint, shared with embeddings (`--chat-base-url`/`--chat-api-key`/`--embedding-*` override each independently) |
-| `--strategy ppr\|mmr`, `--hops`, `-k/--limit` | Retrieval tuning — same as `search` |
+| `-k/--limit`, `--max-chars`, `--filter` | Retrieval tuning — same as `search` |
 | `--show-context, -v` / `--json` | Print citations alongside the answer, or emit one JSON document for scripting |
 
 Run `ug chat -h` for the complete flag reference (temperature, max-tokens,
@@ -480,7 +480,7 @@ curl -s http://127.0.0.1:8080/api/chat \
 
 Per-request overrides supported in the body: `chat_model`,
 `chat_base_url`, `chat_api_key`, `temperature`, `max_tokens`,
-`system_prompt`, `dest`, `edge_types`, `strategy`, `direction`,
+`system_prompt`, `dest`, `edge_types`, `direction`,
 `include_snippets`, `max_context_chars`, `where`.
 
 `GET /api/capabilities` reports `chat_ready` plus the current
