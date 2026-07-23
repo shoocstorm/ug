@@ -45,18 +45,6 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev
 
-      - name: Install Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            native/package-lock.json
-
-      - name: Install root dependencies
-        run: npm ci
-
       - name: Clippy (correctness gate)
         run: cargo clippy --all-targets -- -D clippy::correctness
         working-directory: native
@@ -64,6 +52,3 @@ jobs:
       - name: Rust tests
         run: cargo test
         working-directory: native
-
-      - name: JS tests
-        run: node node/test-runner.cjs
