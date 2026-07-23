@@ -63,7 +63,6 @@ command works in `ug serve` and the MCP server without flag plumbing.
 | Variable | Equivalent CLI flag |
 |---|---|
 | `UG_DEST` | `--dest` |
-| `UG_DB_PATH` | `-o` / `-d` for OverGraph |
 | `UG_NEO4J_URI` | `--neo4j-uri` |
 | `UG_NEO4J_USER` | `--neo4j-user` |
 | `UG_NEO4J_PASSWORD` | `--neo4j-password` |

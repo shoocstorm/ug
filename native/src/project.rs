@@ -185,7 +185,7 @@ pub(crate) fn list_projects() -> Vec<(PathBuf, ProjectMeta)> {
 }
 
 /// Default db path for read commands (chat, semantic_search, …) when
-/// no `-n/--name` flag and no `UG_DB_PATH` env var is given:
+/// no `-n/--name` flag is given:
 /// `~/.ug/<cwd-basename>/ugdb` if it exists → legacy `./.ug/ugdb` if it
 /// exists → the most recently updated project under `~/.ug` (covers
 /// running a read command from outside any indexed repo) →

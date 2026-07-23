@@ -64,8 +64,7 @@ The MCP server uses environment variables for configuration:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `UG_PROJECT` | Project name under `~/.ug` — db is `~/.ug/<project>/ugdb`, repo root read from `project.json`. **Preferred.** | none |
-| `UG_DB_PATH` | Explicit OverGraph directory (overrides `UG_PROJECT`) | `~/.ug/<cwd-basename>/ugdb` if it exists, else `./ugdb` |
+| `UG_PROJECT` | Project name under `~/.ug` — db is `~/.ug/<project>/ugdb`, repo root read from `project.json`. **Preferred.** | `~/.ug/<cwd-basename>` if it exists, else `./ugdb` |
 | `UG_HOME` | Override the `~/.ug` root | `~/.ug` |
 | `UG_REPO_ROOT` | Root directory for resolving file paths in snippets | `project.json`'s `repoRoot`, else cwd |
 | `UG_EMBED_MODEL` | Override embedding model (local fastembed alias or remote model name) | built-in default |
@@ -136,7 +135,7 @@ Add the MCP server configuration:
       "command": "node",
       "args": ["/absolute/path/to/ug/.ug/cli.mjs", "mcp"],
       "env": {
-        "UG_DB_PATH": "/absolute/path/to/.ug/<project>/ugdb",
+        "UG_PROJECT": "<project>",
         "UG_REPO_ROOT": "/absolute/path/to/your/project",
         "UG_EMBED_BASE_URL": "http://localhost:11434/v1",
         "UG_EMBED_MODEL": "nomic-embed-text"
@@ -159,7 +158,7 @@ Cursor supports MCP servers via its configuration. Create or edit `.cursor/mcp.j
       "command": "node",
       "args": ["/absolute/path/to/ug/.ug/cli.mjs", "mcp"],
       "env": {
-        "UG_DB_PATH": "/absolute/path/to/.ug/<project>/ugdb",
+        "UG_PROJECT": "<project>",
         "UG_REPO_ROOT": "/absolute/path/to/your/project"
       }
     }
@@ -176,7 +175,7 @@ For any MCP client that supports stdio transport, use:
 node /path/to/ug/.ug/cli.mjs mcp
 
 # With environment variables
-UG_DB_PATH=/path/to/ug-db UG_EMBED_BASE_URL=http://localhost:11434/v1 node /path/to/ug/.ug/cli.mjs mcp
+UG_PROJECT=<project> UG_EMBED_BASE_URL=http://localhost:11434/v1 node /path/to/ug/.ug/cli.mjs mcp
 ```
 
 ## Available Tools
@@ -550,7 +549,7 @@ ug mcp call search '{"query":"how does auth work","k":8}'
 ug mcp call reindex '{}'
 ```
 
-`ug mcp call` resolves the same project/env configuration as the stdio server (`UG_PROJECT`, `UG_DB_PATH`, `.env`, …), so what you see is exactly what an agent would get. Pass `"project":"<name>"` inside the JSON to target another indexed project.
+`ug mcp call` resolves the same project/env configuration as the stdio server (`UG_PROJECT`, `.env`, …), so what you see is exactly what an agent would get. Pass `"project":"<name>"` inside the JSON to target another indexed project.
 
 ### Running the stdio server directly
 
@@ -558,7 +557,7 @@ You can also test the MCP server using the MCP inspector or by running it direct
 
 ```bash
 # Set environment variables
-export UG_DB_PATH=~/.ug/<project>/ugdb
+export UG_PROJECT=<project>
 export UG_EMBED_BASE_URL=http://localhost:11434/v1
 export UG_EMBED_MODEL=nomic-embed-text
 
@@ -578,7 +577,7 @@ npx @modelcontextprotocol/inspector node node/cli.mjs mcp
 - Run `npm run build` to build the native addon
 
 **"Database not found" errors**
-- Ensure `UG_DB_PATH` (or `UG_PROJECT`) points to a valid OverGraph directory
+- Ensure `UG_PROJECT` names a project with a valid OverGraph directory under `~/.ug`
 - Run `npm run gen` (or `npm run ingest`) to create the database
 - Run `node node/cli.mjs doctor` to see exactly which db path got resolved and why
 

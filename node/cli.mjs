@@ -212,7 +212,6 @@ function parseEmbedderOptions(args) {
 // ---------------------------------------------------------------------------
 // MCP server — exposes UltraGraph's GraphRAG knowledge-base tools over
 // stdio. Configuration via env vars:
-//   UG_DB_PATH         - OverGraph directory (overrides everything)
 //   UG_PROJECT         - project name under ~/.ug (or $UG_HOME); the db is
 //                        ~/.ug/<project>/ugdb and the repo root comes from
 //                        that project's project.json
@@ -234,16 +233,10 @@ function parseEmbedderOptions(args) {
 //   UG_NEO4J_DATABASE  - optional database name
 // ---------------------------------------------------------------------------
 
-// DB + repo-root resolution, most explicit first: UG_DB_PATH →
-// UG_PROJECT → the ~/.ug project matching the cwd → legacy ./ugdb.
-// UG_REPO_ROOT always wins over project.json's repoRoot.
+// DB + repo-root resolution, most explicit first: UG_PROJECT → the
+// ~/.ug project matching the cwd → legacy ./ugdb. UG_REPO_ROOT always
+// wins over project.json's repoRoot.
 function resolveDbAndRoot() {
-  if (process.env.UG_DB_PATH) {
-    return {
-      dbPath: process.env.UG_DB_PATH,
-      repoRoot: process.env.UG_REPO_ROOT || process.cwd(),
-    };
-  }
   const fromProject = (dir) => {
     const meta = readProjectMeta(dir);
     return {
@@ -877,7 +870,7 @@ function formatSemanticHits(query, hits) {
 
 // Per-call project resolution: every tool accepts an optional `project`
 // arg naming another indexed project under ~/.ug; without it the server's
-// startup resolution (UG_PROJECT / UG_DB_PATH / cwd) applies. Contexts and
+// startup resolution (UG_PROJECT / cwd) applies. Contexts and
 // graphs are cached per project for the life of the server process.
 const projectCtxCache = new Map();
 function projectCtx(project) {
@@ -1960,9 +1953,7 @@ const commands = {
       console.log(line('UG_HOME:', ugHome(), process.env.UG_HOME ? 'env:UG_HOME' : 'default: ~/.ug'));
 
       const { dbPath, repoRoot } = resolveDbAndRoot();
-      const dbSource = process.env.UG_DB_PATH
-        ? 'env:UG_DB_PATH'
-        : process.env.UG_PROJECT
+      const dbSource = process.env.UG_PROJECT
         ? 'env:UG_PROJECT'
         : existsSync(dbPath)
         ? 'derived from cwd basename'

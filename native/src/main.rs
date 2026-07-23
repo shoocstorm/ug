@@ -397,7 +397,6 @@ fn store_specs_from_args(args: &[String], embedding_dim: u32) -> Vec<StoreSpec> 
     let og_path = flag_value(args, &["-n", "--name"])
         .map(|n| project::project_dir(&project::sanitize_name(&n)).join("ugdb").to_string_lossy().into_owned())
         .or_else(|| flag_value(args, &["-o", "--output"]))
-        .or_else(|| std::env::var("UG_DB_PATH").ok())
         .unwrap_or_else(project::default_read_db_path);
 
     let neo4j_uri = flag_value(args, &["--neo4j-uri"]).or_else(|| std::env::var("UG_NEO4J_URI").ok());
@@ -1806,10 +1805,9 @@ fn run_gen(args: &[String]) {
         .unwrap_or_else(|| project::project_dir(&project_name).to_string_lossy().into_owned());
     let no_ingest = has_flag(args, "--no-ingest");
     let chain_serve = has_flag(args, "--serve");
-    // Full precedence here: -d/--db flag → UG_DB_PATH env → <output-dir>/ugdb.
+    // Full precedence here: -d/--db flag → <output-dir>/ugdb.
     // run_gen_ingest then pins the default OverGraph spec to this path.
     let db_path = flag_value(args, &["-d", "--db"])
-        .or_else(|| std::env::var("UG_DB_PATH").ok())
         .unwrap_or_else(|| format!("{}/ugdb", output_dir));
 
     let pipeline_summary = if no_ingest {
@@ -2169,7 +2167,7 @@ fn run_gen_ingest(
         // behavior pointed at `db_path`.
         let mut specs = store_specs_from_args(args, dim);
         // gen already resolved the db path with full precedence
-        // (-d/--db → UG_DB_PATH → <output-dir>/ugdb), so pin the
+        // (-d/--db → <output-dir>/ugdb), so pin the
         // OverGraph-only default spec to it.
         if specs.len() == 1 {
             if let StoreSpec::Overgraph {
