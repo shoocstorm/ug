@@ -11,8 +11,8 @@
 //!   provides `--base-url`.
 //!
 //! The downstream API (`embed`, `probe_dim`, `ping`, `config`,
-//! `set_dim`) is identical for both, so `ingest.rs` / `query.rs` /
-//! `napi_bindings.rs` are agnostic to the backend.
+//! `set_dim`) is identical for both, so `ingest.rs` / `query.rs` are
+//! agnostic to the backend.
 
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -168,8 +168,8 @@ impl Embedder {
         }
     }
 
-    /// Override the configured embedding dimension. Used by the napi
-    /// `db_ingest` path when the dim was not specified by the caller —
+    /// Override the configured embedding dimension. Used by the reindex
+    /// ingest path when the dim was not specified by the caller —
     /// we probe the endpoint and patch the embedder so its per-batch
     /// validator agrees with the model's actual output size.
     pub fn set_dim(&mut self, dim: usize) {

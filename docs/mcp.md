@@ -27,19 +27,19 @@ Before using the MCP server, ensure you have:
 
 1. **Built the project:**
    ```bash
-   npm run build
+   cd native && cargo build --release
    ```
 
 2. **Generated a knowledge graph and ingested it into OverGraph:**
    ```bash
    # Full pipeline (index + graph + visualization + ingest).
    # Output goes to ~/.ug/<project-name>/ by default.
-   npm run gen -- -i ./src
+   ug gen -i ./src
 
    # Or step by step:
-   npm run index -- -i ./src
-   npm run graph -- -i ~/.ug/src/indexed-tree.json
-   npm run ingest -- -i ~/.ug/src/graph.json -o ~/.ug/src/ugdb
+   ug index -i ./src
+   ug graph -i ~/.ug/src/indexed-tree.json
+   ug ingest -i ~/.ug/src/graph.json -o ~/.ug/src/ugdb
    ```
 
 3. **Embedding endpoint** (for `search` / `semantic_search`): not required by
@@ -75,7 +75,7 @@ The MCP server uses environment variables for configuration:
 
 These can also be set in a `.env` file in the directory you launch the
 server from — a real environment variable of the same name always wins
-over `.env`. Run `node node/cli.mjs doctor` any time to print the fully
+over `.env`. Run `ug doctor` any time to print the fully
 resolved db path, repo root, embedder, and destination config, along
 with which env var (if any) drove each value.
 
@@ -101,14 +101,10 @@ this repo only) and a **global** config (in your home dir, all projects),
 you're asked which one to write — or pass `--project` / `--global` to skip
 the question (required in non-interactive shells).
 
-The written entry launches `ug mcp` via the absolute path of the `ug` binary
-(falling back to `node <path>/cli.mjs mcp` for Node-only installs without the
-binary) with `UG_PROJECT` set to the current directory's project name, and is
-merged into the target's config file preserving any other configured servers.
-`ug mcp` still runs the server on Node.js: it needs `node` on PATH, but when
-launched by a GUI client with a minimal PATH it also checks the usual install
-locations (Homebrew, `/usr/local`, `/usr/bin`, volta, fnm, nvm) before
-failing.
+The written entry launches `ug mcp` via the absolute path of the `ug` binary,
+with `UG_PROJECT` set to the current directory's project name, and is merged
+into the target's config file preserving any other configured servers. The
+server is a self-contained native binary — no Node.js runtime required.
 Restart the app afterward. For any other MCP client, or to configure things
 manually, see below.
 
@@ -132,8 +128,8 @@ Add the MCP server configuration:
 {
   "mcpServers": {
     "ultragraph": {
-      "command": "node",
-      "args": ["/absolute/path/to/ug/.ug/cli.mjs", "mcp"],
+      "command": "/absolute/path/to/ug",
+      "args": ["mcp"],
       "env": {
         "UG_PROJECT": "<project>",
         "UG_REPO_ROOT": "/absolute/path/to/your/project",
@@ -155,8 +151,8 @@ Cursor supports MCP servers via its configuration. Create or edit `.cursor/mcp.j
 {
   "mcpServers": {
     "ultragraph": {
-      "command": "node",
-      "args": ["/absolute/path/to/ug/.ug/cli.mjs", "mcp"],
+      "command": "/absolute/path/to/ug",
+      "args": ["mcp"],
       "env": {
         "UG_PROJECT": "<project>",
         "UG_REPO_ROOT": "/absolute/path/to/your/project"
@@ -172,10 +168,10 @@ For any MCP client that supports stdio transport, use:
 
 ```bash
 # Command to start the server
-node /path/to/ug/.ug/cli.mjs mcp
+ug mcp
 
 # With environment variables
-UG_PROJECT=<project> UG_EMBED_BASE_URL=http://localhost:11434/v1 node /path/to/ug/.ug/cli.mjs mcp
+UG_PROJECT=<project> UG_EMBED_BASE_URL=http://localhost:11434/v1 ug mcp
 ```
 
 ## Available Tools
@@ -326,8 +322,8 @@ find_usages: { nodeId: "file-101", hops: 1, edgeTypes: ["imports"] }
 *One of `nodeId` or `name` is required.
 
 ```
-find_symbols: { name: "installMcpConfig" }
-find_symbols: { nodeId: "function:node/cli.mjs:912:installMcpConfig" }
+find_symbols: { name: "install_config" }
+find_symbols: { nodeId: "function:native/src/mcp/install.rs:412:install_config" }
 find_symbols: { name: "config", nodeTypes: ["Class"], filePrefix: "native/src/" }
 ```
 
@@ -346,8 +342,8 @@ find_symbols: { name: "config", nodeTypes: ["Class"], filePrefix: "native/src/" 
 *One of `nodeId` or `file` is required.
 
 ```
-file_outline: { file: "node/cli.mjs" }
-file_outline: { nodeId: "file:node/cli.mjs" }
+file_outline: { file: "native/src/mcp/install.rs" }
+file_outline: { nodeId: "file:native/src/mcp/install.rs" }
 ```
 
 ---
@@ -367,7 +363,7 @@ file_outline: { nodeId: "file:node/cli.mjs" }
 *One of `nodeId` or `file` is required.
 
 ```
-get_code: { nodeId: "function:node/cli.mjs:912:installMcpConfig" }
+get_code: { nodeId: "function:native/src/mcp/install.rs:412:install_config" }
 get_code: { file: "native/src/serve.rs", startLine: 100, endLine: 180 }
 ```
 
@@ -396,7 +392,7 @@ project_overview: {}
 | `targetId` | string | ✅ | End node id. |
 
 ```
-shortest_path: { sourceId: "file:node/cli.mjs", targetId: "function:native/src/main.rs:1475:run_mcp" }
+shortest_path: { sourceId: "file:native/src/mcp/install.rs", targetId: "function:native/src/main.rs:2874:run_mcp" }
 ```
 
 ---
@@ -562,24 +558,28 @@ export UG_EMBED_BASE_URL=http://localhost:11434/v1
 export UG_EMBED_MODEL=nomic-embed-text
 
 # Run the server (it speaks MCP protocol over stdio)
-node node/cli.mjs mcp
+ug mcp
 ```
 
 For a more interactive test, use the [MCP Inspector](https://github.com/modelcontextprotocol/inspector):
 
 ```bash
-npx @modelcontextprotocol/inspector node node/cli.mjs mcp
+npx @modelcontextprotocol/inspector ug mcp
 ```
+
+Or invoke a single tool without a client via `ug mcp call <tool> '<json>'`
+(e.g. `ug mcp call find_symbols '{"name":"run_mcp"}'`), and list the tools
+with `ug mcp list`.
 
 ## Troubleshooting
 
-**"Cannot find module 'ug.node'"**
-- Run `npm run build` to build the native addon
+**"graph.json not found" errors**
+- Run `ug gen` for the project first to build its graph.json + ugdb
 
 **"Database not found" errors**
 - Ensure `UG_PROJECT` names a project with a valid OverGraph directory under `~/.ug`
-- Run `npm run gen` (or `npm run ingest`) to create the database
-- Run `node node/cli.mjs doctor` to see exactly which db path got resolved and why
+- Run `ug gen` (or `ug ingest`) to create the database
+- Run `ug doctor` to see exactly which db path got resolved and why
 
 **"Embedding endpoint unreachable"**
 - Only relevant if you opted into the remote backend via `UG_EMBED_BASE_URL`

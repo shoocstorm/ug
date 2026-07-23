@@ -1,5 +1,4 @@
 pub mod agent_tools;
-pub mod agent_tools_napi;
 mod graph;
 mod indexer;
 pub mod storage;

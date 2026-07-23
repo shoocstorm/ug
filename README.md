@@ -12,11 +12,11 @@ queryable **Semantic Knowledge Graph**. Built with Rust and Node.js for speed.
 curl -fsSL https://ultra-graph.web.app/install.sh | sh
 ```
 
-Installs `ug` (+ the native addon and Node CLI it ships with) to
+Installs the `ug` binary (and the `ug-app` desktop shell) to
 `~/.local/share/ultragraph/.ug/` and symlinks `ug` onto `~/.local/bin`.
 Windows: download `ultragraph-windows-x64.zip` from
 [Releases](https://github.com/shoocstorm/ug/releases/latest). Build from source
-with **Rust** (latest stable) + **Node.js** 20+ and `npm run build`.
+with **Rust** (latest stable): `cd native && cargo build --release`.
 
 `ug upgrade` self-updates (`--check` reports whether a release is available).
 
@@ -40,8 +40,8 @@ ug            # bare `ug` == `ug serve`: visualization + REST API at :8080
 ug gen -i ~/code/other-repo -n other --no-ingest   # index another repo
 ```
 
-`ug -h` lists every command; `ug <command> -h` prints its full flags. From
-source, use `npm run gen --` and `npm start`.
+`ug -h` lists every command; `ug <command> -h` prints its full flags. From a
+source build, the binary is `native/target/release/ug`.
 
 No external embedding service is required: UltraGraph ships an in-process
 **ONNX embedder** ([`fastembed-rs`](https://github.com/Anush008/fastembed-rs)).
@@ -90,7 +90,7 @@ root with `UG_HOME`):
 
 `ug list` shows every project with counts and last-generated times; `ug rm
 <project>` deletes one (prompts unless `-f/--force`/`-y/--yes`). The repo-local
-`.ug/` folder only holds build artifacts (`ug` binary, `ug.node`), not data.
+`.ug/` folder only holds the `ug` binary, not data.
 
 ## Command Line Interface
 
@@ -200,18 +200,23 @@ own MCP config; `--project`/`--global` picks the scope.
 `find_symbols`, `file_outline`, `get_code`, `project_overview`, `shortest_path`,
 `ping_embedder`.
 
+The easiest way to wire this up is `ug mcp install` (interactive picker, or name
+a client: `claude`, `claude-desk`, `cursor`, `windsurf`, `vscode`, `gemini`,
+`codex`, `hermes`, `opencode`). It writes the config below into the client's
+config file and drops an agent rule file next to it.
+
 Point the server at a project with `UG_PROJECT` (a name under `~/.ug`); with no
 env set it falls back to `~/.ug/<cwd-basename>/ugdb` if it exists. Set
-`UG_EMBED_BASE_URL` to opt into the remote embedder. Run `node node/cli.mjs
-doctor` to preview what resolves. Full tool reference, client setup, and
-troubleshooting: [docs/mcp.md](docs/mcp.md).
+`UG_EMBED_BASE_URL` to opt into the remote embedder. Run `ug doctor` to preview
+what resolves. Full tool reference, client setup, and troubleshooting:
+[docs/mcp.md](docs/mcp.md).
 
 ```json
 {
   "mcpServers": {
     "ultragraph": {
-      "command": "node",
-      "args": ["~/.ug/cli.mjs", "mcp"],
+      "command": "ug",
+      "args": ["mcp"],
       "env": { "UG_PROJECT": "ug" }
     }
   }
@@ -222,29 +227,15 @@ troubleshooting: [docs/mcp.md](docs/mcp.md).
 
 The standalone binary is the default path, but the same core is reachable other ways:
 
-- **Node CLI** — `node .ug/cli.mjs gen`, `node .ug/cli.mjs list`. Same pipeline via
-  the JS wrapper; no `serve`/`chat` (those are Rust-binary-only).
-- **Embed the native addon** — `require('.ug/ug.node')` and call the Rust core
-  directly, no CLI or subprocess. Build with `npm run build`; TypeScript types
-  come from the generated `.ug/index.d.ts`.
-
-```js
-const { index, buildGraph, dbHybridSearch } = require('/path/to/ug/.ug/ug.node');
-const symbols = index('./src');
-const graph = buildGraph(symbols);
-const context = await dbHybridSearch('./ugdb', JSON.stringify({
-  query: 'how does authentication work?', k: 8,
-}));
-```
-
-Prefer not to link the addon? Spawn the `ug` binary (`child_process`) and parse
-its JSON output, or run `ug serve` and call its REST API over HTTP.
+- **Spawn the `ug` binary** (`child_process`) and parse its JSON output — every
+  agent tool has a matching CLI subcommand (`ug search`, `ug find_symbols`, …).
+- **HTTP** — run `ug serve` and call its REST API (`/api/tools/:name`,
+  `/api/search/*`) from any language.
 
 ## Testing
 
 ```bash
-npm test                                     # JS test suite
-npm run build && cd native && cargo test     # native Rust tests
+cd native && cargo test     # native Rust tests
 ```
 
 ## Further Reading

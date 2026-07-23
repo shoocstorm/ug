@@ -98,11 +98,11 @@ ug ingest -i .ug/graph.json --dest overgraph,neo4j -o .ug/ugdb
 > `POST /api/tools/traverse` reads `graph.json`, `GET /api/db/traverse/:id`
 > reads the store and accepts `?dest=`.
 
-For the MCP server (`node node/cli.mjs mcp`), Node 20+ supports the
-same file natively:
+The MCP server (`ug mcp`) loads the same `.env` from the launch directory
+automatically:
 
 ```bash
-node --env-file=.env node/cli.mjs mcp
+ug mcp
 ```
 
 Real environment variables always win over `.env` values, so CI /

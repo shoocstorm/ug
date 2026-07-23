@@ -22,7 +22,6 @@ mod languages;
 mod package_json;
 
 use crate::types::{FileNode, IndexResult, IndexStats};
-use napi_derive::napi;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -94,7 +93,6 @@ pub fn process_file(path: &Path, repo_root: Option<&str>) -> Option<FileNode> {
 
 /// Index every supported source file under `path`. Returns a JSON-encoded
 /// [`IndexResult`].
-#[napi]
 pub fn index(path: String) -> String {
     let start = std::time::Instant::now();
 
@@ -173,7 +171,6 @@ pub fn index(path: String) -> String {
 /// blake3 hash matches the value stored in `<cache_path>/cache.json` from a
 /// previous run. The cache file is rewritten with the latest hashes once
 /// indexing is complete.
-#[napi]
 pub fn index_with_cache(path: String, cache_path: String) -> String {
     let start = std::time::Instant::now();
 

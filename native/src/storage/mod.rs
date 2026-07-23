@@ -16,7 +16,6 @@ pub mod db;
 pub mod embed;
 pub mod embed_local;
 pub mod ingest;
-pub mod napi_bindings;
 pub mod ppr;
 pub mod query;
 pub mod store;

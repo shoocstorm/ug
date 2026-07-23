@@ -42,8 +42,9 @@ one-line notice when that happens, e.g.
 
 ## `.env` files
 
-UltraGraph also loads a `.env` file from the current directory (both the `ug`
-binary and `node cli.mjs` do this) for per-repo env-var defaults:
+UltraGraph also loads a `.env` file from the current directory (the `ug`
+binary does this, including when launched as an MCP server) for per-repo
+env-var defaults:
 
 ```bash
 # .env in your repo root
@@ -70,8 +71,8 @@ A real env var of the same name still wins over `.env`, and both count as the
 ## `ug doctor`
 
 Config resolution has several fallback tiers (flag → env var → default, plus
-project/db path lookup through `~/.ug`). `ug doctor` (or `node node/cli.mjs
-doctor` for the MCP-server side) prints exactly what got resolved and why:
+project/db path lookup through `~/.ug`). `ug doctor` prints exactly what got
+resolved and why (the same resolution the MCP server uses):
 
 ```
 $ ug doctor

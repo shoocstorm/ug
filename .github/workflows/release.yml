@@ -63,34 +63,29 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev
 
-      - name: Install Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            native/package-lock.json
-
-      - name: Install root dependencies
-        run: npm ci
-
-      - name: Install native build dependencies
-        run: npm ci
+      - name: Build
+        run: cargo build --release
         working-directory: native
 
-      - name: Build
-        run: npm run build
+      - name: Stage binaries
+        shell: bash
+        run: |
+          mkdir -p dist
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            cp native/target/release/ug.exe native/target/release/ug-app.exe dist/
+          else
+            cp native/target/release/ug native/target/release/ug-app dist/
+          fi
 
       - name: Package (tar.gz)
         if: matrix.archive == 'tar.gz'
         shell: bash
-        run: tar -C .ug -czf ultragraph-${{ matrix.asset_name }}.tar.gz .
+        run: tar -C dist -czf ultragraph-${{ matrix.asset_name }}.tar.gz .
 
       - name: Package (zip)
         if: matrix.archive == 'zip'
         shell: pwsh
-        run: Compress-Archive -Path .ug/* -DestinationPath ultragraph-${{ matrix.asset_name }}.zip
+        run: Compress-Archive -Path dist/* -DestinationPath ultragraph-${{ matrix.asset_name }}.zip
 
       - name: Upload release assets
         uses: softprops/action-gh-release@v2

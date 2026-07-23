@@ -2,7 +2,6 @@ use crate::indexer::{normalize_path, resolve_relative};
 use crate::types::{
     GraphData, GraphEdge, GraphEdgeType, GraphNode, GraphNodeFolderMeta, GraphNodeType,
 };
-use napi_derive::napi;
 use petgraph::graph::{DiGraph, NodeIndex};
 use std::collections::HashMap;
 
@@ -661,7 +660,6 @@ fn run_k_hop_bfs(graph: &GraphData, start_node_id: &str, k: u32) -> crate::types
     }
 }
 
-#[napi]
 pub fn build_graph(index_json: String) -> String {
     let index_result: crate::types::IndexResult = match serde_json::from_str(&index_json) {
         Ok(r) => r,
@@ -672,7 +670,6 @@ pub fn build_graph(index_json: String) -> String {
     serde_json::to_string(&graph).unwrap_or_default()
 }
 
-#[napi]
 pub fn k_hop_bfs(graph_json: String, start_node_id: String, k: u32) -> String {
     let graph: GraphData = match serde_json::from_str(&graph_json) {
         Ok(g) => g,
@@ -708,7 +705,6 @@ fn build_di_graph(graph: &GraphData) -> (DiGraph<(), ()>, HashMap<String, NodeIn
     (di_graph, index_map)
 }
 
-#[napi]
 pub fn filter_edges_by_type(graph_json: String, edge_types: Vec<String>) -> String {
     let graph: GraphData = match serde_json::from_str(&graph_json) {
         Ok(g) => g,
@@ -740,7 +736,6 @@ pub fn filter_edges_by_type(graph_json: String, edge_types: Vec<String>) -> Stri
 /// is provided and non-empty, only nodes whose `node_type` (lowercased) is in
 /// the list are considered. An empty `keyword` returns every node that passes
 /// the type filter.
-#[napi]
 pub fn graph_keyword_search(
     graph_json: String,
     keyword: String,
@@ -790,7 +785,6 @@ pub fn graph_keyword_search(
     serde_json::to_string(&result).unwrap_or_default()
 }
 
-#[napi]
 pub fn find_shortest_path(graph_json: String, source_id: String, target_id: String) -> String {
     let graph: GraphData = match serde_json::from_str(&graph_json) {
         Ok(g) => g,
@@ -861,7 +855,6 @@ pub fn find_shortest_path(graph_json: String, source_id: String, target_id: Stri
     serde_json::to_string(&result).unwrap_or_default()
 }
 
-#[napi]
 pub fn calculate_centrality(graph_json: String) -> String {
     let graph: GraphData = match serde_json::from_str(&graph_json) {
         Ok(g) => g,
@@ -996,7 +989,6 @@ pub fn calculate_centrality(graph_json: String) -> String {
     serde_json::to_string(&result).unwrap_or_default()
 }
 
-#[napi]
 pub fn detect_cycles(graph_json: String) -> String {
     let graph: GraphData = match serde_json::from_str(&graph_json) {
         Ok(g) => g,

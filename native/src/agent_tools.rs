@@ -2202,10 +2202,10 @@ pub enum ToolOutput {
 
 /// Run one graph-backed tool by canonical name.
 ///
-/// The single dispatch behind every transport: the napi bridge (MCP) and the
-/// HTTP `/api/tools/:name` route both call this, so adding a tool or changing
-/// one's shape can't leave a surface behind. `style` of `None` returns the
-/// JSON envelope; `Some(_)` returns rendered text.
+/// The single dispatch behind every transport: the MCP server (`ug mcp`) and
+/// the HTTP `/api/tools/:name` route both call this, so adding a tool or
+/// changing one's shape can't leave a surface behind. `style` of `None`
+/// returns the JSON envelope; `Some(_)` returns rendered text.
 pub fn run_tool(
     tool: &str,
     graph: &GraphData,

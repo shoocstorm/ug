@@ -58,10 +58,6 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 **Always verify changes with tests before marking a task complete.**
 
-### JavaScript/TypeScript Tests
-- Run `node node/test-runner.cjs` to execute all tests
-- When adding new functionality, add corresponding test cases to `node/test-runner.cjs`
-
 ### Rust Tests (Native Code)
 - Run `cd native && cargo test` to execute all Rust tests
 - Tests are in `native/tests/`: `indexer_test.rs`, `graph_test.rs`, `search_test.rs`,

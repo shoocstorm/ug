@@ -20,6 +20,7 @@ use ultragraph::{
 
 mod chat;
 mod config;
+mod mcp;
 mod project;
 mod serve;
 
@@ -1320,7 +1321,7 @@ fn run_graph_analyze(args: &[String]) {
 
 // ---------- Agent tools ----------
 //
-// The MCP server (node/cli.mjs) exposes five graph.json-backed tools that
+// The MCP server (`ug mcp`, see src/mcp/) exposes graph.json-backed tools that
 // AI coding agents call to understand an indexed repo: find_symbols,
 // file_outline, get_code, project_overview, graph_path. The commands
 // below are those same tools callable by hand — same lookup logic over the
@@ -1481,8 +1482,8 @@ fn print_file_outline_help() {
     println!("  {C_CYAN}ug file_outline{C_RESET} native/src/main.rs");
     println!("  {C_CYAN}ug file_outline{C_RESET} main.rs  {C_YELLOW}# unique basename works too{C_RESET}");
     println!("  {C_CYAN}ug file_outline{C_RESET} file:native/src/main.rs  {C_YELLOW}# File node ids work as-is{C_RESET}");
-    println!("  {C_CYAN}ug file_outline{C_RESET} 'file:src/cli.mjs'  {C_YELLOW}# direct nodeId lookup (O(1)){C_RESET}");
-    println!("  {C_CYAN}ug file_outline{C_RESET} main.rs serve.rs cli.mjs   {C_YELLOW}# batch: outline several files at once{C_RESET}");
+    println!("  {C_CYAN}ug file_outline{C_RESET} 'file:native/src/main.rs'  {C_YELLOW}# direct nodeId lookup (O(1)){C_RESET}");
+    println!("  {C_CYAN}ug file_outline{C_RESET} main.rs serve.rs config.rs   {C_YELLOW}# batch: outline several files at once{C_RESET}");
 }
 
 fn print_get_code_help() {
@@ -2867,96 +2868,13 @@ fn run_upgrade(args: &[String]) {
     println!("  {C_DIM}(restart any running `ug serve` / MCP server to pick it up){C_RESET}");
 }
 
-/// Find a `node` executable when a bare PATH lookup fails. `ug mcp` is the
-/// command MCP clients launch, and GUI clients (Claude Desktop, etc.) spawn
-/// servers with a minimal PATH that usually misses Homebrew/nvm/volta
-/// installs — so check the usual locations before giving up.
-fn find_node_fallback() -> Option<std::path::PathBuf> {
-    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
-    if cfg!(unix) {
-        candidates.push("/opt/homebrew/bin/node".into());
-        candidates.push("/usr/local/bin/node".into());
-        candidates.push("/usr/bin/node".into());
-    }
-    if let Some(home) = dirs::home_dir() {
-        candidates.push(home.join(".volta").join("bin").join("node"));
-        candidates.push(home.join(".fnm").join("aliases").join("default").join("bin").join("node"));
-        // nvm keeps one dir per version; the lexicographic max is good
-        // enough for modern versions (v18/v20/v22 sort correctly).
-        if let Ok(entries) = std::fs::read_dir(home.join(".nvm").join("versions").join("node")) {
-            if let Some(latest) = entries.flatten().map(|e| e.path()).max() {
-                candidates.push(latest.join("bin").join("node"));
-            }
-        }
-    }
-    #[cfg(windows)]
-    {
-        if let Some(pf) = std::env::var_os("ProgramFiles") {
-            candidates.push(std::path::PathBuf::from(pf).join("nodejs").join("node.exe"));
-        }
-    }
-    candidates.into_iter().find(|p| p.is_file())
-}
-
-/// `ug mcp [install|uninstall <target>]` — there's no separate Rust MCP
-/// implementation, so this forwards straight to the bundled `cli.mjs`
-/// (sitting next to this binary in `.ug/` — see scripts/copy-wrappers.mjs).
-/// Bare `ug mcp` becomes a long-running stdio JSON-RPC server: stdio is
-/// inherited as-is so it can be wired into an MCP client directly, and the
-/// startup logo is suppressed for that mode (see `is_mcp_server_mode` in
-/// `main`). Client configs point at this command (not node+cli.mjs) exactly
-/// so this wrapper can absorb environment problems like node missing from a
-/// GUI client's minimal PATH.
+/// `ug mcp [...]` — the native MCP server and its install/uninstall/call/list
+/// subcommands. Bare `ug mcp` becomes a long-running stdio JSON-RPC server
+/// (stdio is the transport, so the startup logo is suppressed for that mode —
+/// see `is_mcp_server_mode` in `main`). This replaces the old Node.js `cli.mjs`
+/// server: every tool now runs the same Rust code the CLI and HTTP API use.
 fn run_mcp(args: &[String]) {
-    let exe_path = std::env::current_exe()
-        .ok()
-        .map(|exe| std::fs::canonicalize(&exe).unwrap_or(exe));
-    let cli_path = exe_path
-        .as_ref()
-        .and_then(|exe| exe.parent().map(|d| d.join("cli.mjs")));
-
-    let cli_path = match cli_path {
-        Some(p) if p.exists() => p,
-        _ => {
-            eprintln!("Couldn't find cli.mjs next to the `ug` binary — the MCP server/installer is Node-only.");
-            eprintln!(
-                "Run it directly instead: {C_CYAN}node <install-dir>/cli.mjs mcp {}{C_RESET}",
-                args.join(" ")
-            );
-            std::process::exit(1);
-        }
-    };
-
-    // UG_BIN tells cli.mjs where this binary lives, so `mcp install` writes
-    // client configs that launch `ug mcp` directly instead of node+cli.mjs.
-    let spawn = |node: &std::ffi::OsStr| {
-        let mut cmd = std::process::Command::new(node);
-        cmd.arg(&cli_path).arg("mcp").args(args);
-        if let Some(exe) = &exe_path {
-            cmd.env("UG_BIN", exe);
-        }
-        cmd.status()
-    };
-
-    let mut status = spawn(std::ffi::OsStr::new("node"));
-    if matches!(&status, Err(e) if e.kind() == std::io::ErrorKind::NotFound) {
-        match find_node_fallback() {
-            Some(node) => status = spawn(node.as_os_str()),
-            None => {
-                eprintln!("`node` was not found on PATH or in the usual install locations (Homebrew, /usr/local, nvm, volta).");
-                eprintln!("The MCP server runs on Node.js 20+ — install it, then retry.");
-                std::process::exit(1);
-            }
-        }
-    }
-
-    match status {
-        Ok(status) => std::process::exit(status.code().unwrap_or(1)),
-        Err(e) => {
-            eprintln!("Failed to launch `node {}`: {}", cli_path.display(), e);
-            std::process::exit(1);
-        }
-    }
+    mcp::run(args);
 }
 
 /// `ug app` — launches the native desktop shell (Tauri) for the vis

@@ -113,8 +113,8 @@ impl From<serde_json::Error> for DbError {
 }
 
 /// Wire-format DTO mirroring the previous `NodeRow` shape exactly so
-/// `query.rs`, `ingest.rs`, and the JSON outputs in `napi_bindings.rs`
-/// keep working unchanged.
+/// `query.rs`, `ingest.rs`, and the JSON outputs downstream keep working
+/// unchanged.
 #[derive(Debug, Clone)]
 pub struct NodeRow {
     pub id: String,

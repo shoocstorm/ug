@@ -7,10 +7,8 @@
 # release.yml, which builds the platform archives and publishes a GitHub
 # Release. The tag name always matches the version the built binary reports.
 #
-# Version lives in four places, all kept in lockstep here:
-#   - package.json
-#   - native/package.json
-#   - native/Cargo.toml   ([package] version)
+# Version lives in two places, both kept in lockstep here:
+#   - native/Cargo.toml   ([package] version — source of truth)
 #   - native/Cargo.lock   (the "ultragraph" entry)
 #
 # Usage:
@@ -41,8 +39,8 @@ for arg in "$@"; do
   esac
 done
 
-# --- current version (source of truth: root package.json) -------------------
-CUR_VERSION="$(node -p "require('./package.json').version")"
+# --- current version (source of truth: native/Cargo.toml) -------------------
+CUR_VERSION="$(awk -F'"' '/^version = "/ { print $2; exit }' native/Cargo.toml)"
 [[ -n "$CUR_VERSION" ]] || { echo "error: could not read current version" >&2; exit 1; }
 
 # --- compute the target version ---------------------------------------------
@@ -109,9 +107,6 @@ bump_cargo_toml() {  # $1=file — replace the first (i.e. [package]) version li
 }
 
 echo "Bumping manifests to ${NEW_VERSION}..."
-# package.json + package-lock.json (root and native) via npm — no git side effects
-npm version "$NEW_VERSION" --no-git-tag-version --allow-same-version >/dev/null
-( cd native && npm version "$NEW_VERSION" --no-git-tag-version --allow-same-version >/dev/null )
 bump_cargo_toml native/Cargo.toml
 bump_lockfile   native/Cargo.lock ultragraph
 
@@ -119,15 +114,12 @@ bump_lockfile   native/Cargo.lock ultragraph
 check() {  # $1=file $2=grep-pattern
   grep -q "$2" "$1" || { echo "error: ${1} still not at ${NEW_VERSION}" >&2; exit 1; }
 }
-check package.json           "\"version\": \"${NEW_VERSION}\""
-check native/package.json    "\"version\": \"${NEW_VERSION}\""
 check native/Cargo.toml      "^version = \"${NEW_VERSION}\""
 check native/Cargo.lock      "^version = \"${NEW_VERSION}\""
-echo "  all four manifests updated."
+echo "  both manifests updated."
 echo
 echo "Version-file diff:"
-git --no-pager diff -- package.json native/package.json native/Cargo.toml native/Cargo.lock \
-  package-lock.json native/package-lock.json | sed -n '1,80p'
+git --no-pager diff -- native/Cargo.toml native/Cargo.lock | sed -n '1,80p'
 echo
 
 # --- confirm before anything leaves the machine -----------------------------

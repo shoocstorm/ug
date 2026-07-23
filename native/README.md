@@ -1,18 +1,18 @@
 # UltraGraph-KB Native (Rust)
 
-High-performance Graph-based knowledge base generator built with Rust, tree-sitter, and NAPI-RS.
+High-performance Graph-based knowledge base generator built with Rust and tree-sitter.
 
 ## Quick Start
 
 ```bash
 # Build
-npm run build
+cargo build --release
 
 # Quick Generation (and visualization)
-.ug/ug gen -i ./docs --no-ingest --serve
+target/release/ug gen -i ./docs --no-ingest --serve
 
 # More CLI cmds
-.ug/ug help
+target/release/ug help
 ```
 
 ## CLI Commands
@@ -141,8 +141,7 @@ cargo build --release   # Release (optimized)
 
 Output:
 - Library: `target/release/libultragraph.rlib`
-- NAPI: `target/release/ug.node`
-- Binary: `target/release/ug`
+- Binaries: `target/release/ug` (CLI + MCP + server) and `target/release/ug-app` (desktop shell)
 
 ### Project Structure
 
@@ -151,10 +150,11 @@ native/
 ├── Cargo.toml
 ├── src/
 │   ├── main.rs             # CLI binary
-│   ├── lib.rs              # Library / NAPI exports
-│   ├── project.rs          # ~/.ug/<project> folder resolution (mirrors node/cli.mjs)
+│   ├── lib.rs              # Library crate root
+│   ├── project.rs          # ~/.ug/<project> folder resolution
 │   ├── serve.rs             # `ug serve` — Axum web server + REST API
 │   ├── chat.rs              # `ug chat` — RAG-grounded chat against an OpenAI-compatible LLM
+│   ├── mcp/                 # `ug mcp` — native stdio MCP server + install/uninstall
 │   ├── vis/                 # Embedded visualization HTML + JS bundle
 │   ├── indexer.rs          # Indexing entry-point + per-file pipeline
 │   ├── indexer/
@@ -177,7 +177,6 @@ native/
 │       ├── ppr.rs            # Personalized PageRank
 │       ├── store.rs          # `KnowledgeStore` trait (multi-destination)
 │       ├── types_registry.rs # Stable string↔u32 type-id mapping
-│       ├── napi_bindings.rs  # NAPI async fns
 │       ├── text.rs           # Embedding text shaping (folder synopsis fallback)
 │       └── backends/
 │           └── neo4j.rs      # Neo4j `KnowledgeStore` implementation
@@ -265,7 +264,8 @@ native/
 - `overgraph` — Graph and Vector database
 - `tokio` — Async runtime
 - `reqwest` — HTTP client (embeddings)
-- `napi-rs` — Node.js bindings
+- `axum` — HTTP server (`ug serve`)
+- `tauri` — native desktop shell (`ug-app`)
 
 ## Extensibility
 

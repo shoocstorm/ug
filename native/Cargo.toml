@@ -6,7 +6,7 @@ authors = ["Aldrick Wan"]
 description = "High-Performance Graph-Based Knowledge Base Generator & Visualizer"
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [[bin]]
 name = "ug"
@@ -20,14 +20,15 @@ path = "src/bin/ug_app.rs"
 tempfile = "3"
 
 [dependencies]
-napi = { version = "3", features = ["napi6", "tokio_rt"] }
-napi-build = "1"
-napi-derive = "3"
 rayon = "1.10"
 ignore = "0.4"
 blake3 = "1"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# `preserve_order` keeps existing keys in place when we read → mutate → write
+# an MCP client's JSON config (`ug mcp install`), instead of alphabetizing it.
+serde_json = { version = "1", features = ["preserve_order"] }
+# Read/modify/write Hermes' YAML MCP config in `ug mcp install`.
+serde_yaml = "0.9"
 tree-sitter = "0.20"
 tree-sitter-typescript = "0.20"
 tree-sitter-python = "0.20"
@@ -61,7 +62,6 @@ url = "2"
 liteparse = { version = "2.5.1", default-features = false }
 
 [build-dependencies]
-napi-build = "1"
 tauri-build = "2"
 
 [profile.release]
