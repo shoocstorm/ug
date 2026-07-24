@@ -209,6 +209,63 @@ pub(crate) fn default_read_db_path() -> String {
     new_path.to_string_lossy().into_owned()
 }
 
+/// Whether a project dir holds usable data (a graph or a db), used to
+/// validate `set_active_project` / resolve `get_active_project`.
+fn project_has_data(dir: &Path) -> bool {
+    dir.join("ugdb").exists() || dir.join("graph.json").exists()
+}
+
+/// Marker file recording the user's chosen default project:
+/// `$UG_HOME/active` (one line, the sanitized project name). A plain file
+/// alongside the per-project dirs; `list_projects` only scans dirs, so it
+/// never mistakes this for a project.
+pub(crate) fn active_path() -> PathBuf {
+    ug_home().join("active")
+}
+
+/// The persisted active project, if one is set and its data still exists.
+/// A stale marker (project since deleted) resolves to `None` rather than
+/// erroring, so callers fall through to their next default cleanly.
+pub(crate) fn get_active_project() -> Option<String> {
+    let raw = std::fs::read_to_string(active_path()).ok()?;
+    let name = sanitize_name(raw.trim());
+    if project_has_data(&project_dir(&name)) {
+        Some(name)
+    } else {
+        None
+    }
+}
+
+/// Persist `name` as the active project. Errors with `NotFound` when no
+/// such indexed project exists, so `ug active <name>` can't silently point
+/// at nothing. Returns the sanitized name that was written.
+pub(crate) fn set_active_project(name: &str) -> std::io::Result<String> {
+    let name = sanitize_name(name);
+    if !project_has_data(&project_dir(&name)) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!(
+                "no indexed project '{}' under {}",
+                name,
+                ug_home().display()
+            ),
+        ));
+    }
+    let home = ug_home();
+    std::fs::create_dir_all(&home)?;
+    std::fs::write(active_path(), format!("{}\n", name))?;
+    Ok(name)
+}
+
+/// Remove the active-project marker. A no-op (not an error) when unset.
+pub(crate) fn clear_active_project() -> std::io::Result<()> {
+    let p = active_path();
+    if p.exists() {
+        std::fs::remove_file(p)?;
+    }
+    Ok(())
+}
+
 /// Delete a project's data directory (`graph.json`, `ugdb/`,
 /// `project.json`, etc). Errors with `NotFound` instead of silently
 /// no-op'ing when the directory doesn't exist, so callers (`ug rm`) can
@@ -300,5 +357,42 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ug-rm-test-missing-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         assert!(remove_project_dir(&dir).is_err());
+    }
+
+    // Serialize the tests that mutate $UG_HOME — the env var is process-wide.
+    static UG_HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn active_project_roundtrip_and_validation() {
+        let _guard = UG_HOME_LOCK.lock().unwrap();
+        let home = std::env::temp_dir().join(format!("ug-active-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::env::set_var("UG_HOME", &home);
+
+        // No marker yet.
+        assert_eq!(get_active_project(), None);
+
+        // Setting an absent project fails and writes nothing.
+        assert!(set_active_project("ghost").is_err());
+        assert_eq!(get_active_project(), None);
+
+        // Create a project with data, then set it active.
+        let proj = project_dir("demo");
+        std::fs::create_dir_all(&proj).unwrap();
+        std::fs::write(proj.join("graph.json"), "{}").unwrap();
+        assert_eq!(set_active_project("demo").unwrap(), "demo");
+        assert_eq!(get_active_project().as_deref(), Some("demo"));
+
+        // A stale marker (data removed) resolves to None rather than erroring.
+        std::fs::remove_dir_all(&proj).unwrap();
+        assert_eq!(get_active_project(), None);
+
+        // Clear is a no-op-safe removal.
+        clear_active_project().unwrap();
+        assert!(!active_path().exists());
+        clear_active_project().unwrap();
+
+        std::env::remove_var("UG_HOME");
+        let _ = std::fs::remove_dir_all(&home);
     }
 }

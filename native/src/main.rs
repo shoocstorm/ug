@@ -108,6 +108,7 @@ fn main() {
         "chat" => run_chat(cmd_args),
         // Project management.
         "list_projects" | "list" => run_list(cmd_args),
+        "active" => run_active(cmd_args),
         "rm" => run_rm(cmd_args),
         "uninstall" => run_uninstall(cmd_args),
         "upgrade" | "update" => run_upgrade(cmd_args),
@@ -2338,6 +2339,7 @@ fn run_list(args: &[String]) {
         return;
     }
     let cwd_name = project::derive_project_name(".");
+    let active = project::get_active_project();
     println!(
         "{C_BOLD}Projects in {}{C_RESET} ({}):\n",
         root.display(),
@@ -2348,14 +2350,90 @@ fn run_list(args: &[String]) {
         "NAME", "NODES", "EDGES", "UPDATED", "REPO"
     );
     for (_dir, meta) in &projects {
+        // `*` = matches the current directory; `→` = the active project
+        // (`ug active`). When one project is both, `*` wins the leading slot
+        // and the row still carries the active tag.
+        let is_active = active.as_deref() == Some(meta.name.as_str());
         let marker = if meta.name == cwd_name { "*" } else { " " };
+        let tag = if is_active {
+            format!("  {C_YELLOW}← active{C_RESET}")
+        } else {
+            String::new()
+        };
         let updated = format_epoch(meta.updated_at);
         println!(
-            "{C_GREEN}{}{C_RESET} {C_CYAN}{:<24}{C_RESET} {:>8} {:>8}  {:<19}  {}",
-            marker, meta.name, meta.nodes, meta.edges, updated, meta.repo_root
+            "{C_GREEN}{}{C_RESET} {C_CYAN}{:<24}{C_RESET} {:>8} {:>8}  {:<19}  {}{}",
+            marker, meta.name, meta.nodes, meta.edges, updated, meta.repo_root, tag
         );
     }
-    println!("\n{C_BOLD}*{C_RESET} matches the current directory. Serve them with {C_CYAN}ug serve{C_RESET}.");
+    println!(
+        "\n{C_BOLD}*{C_RESET} matches the current directory; {C_YELLOW}← active{C_RESET} is the default for {C_CYAN}ug mcp{C_RESET} (set with {C_CYAN}ug active <name>{C_RESET}). Serve them with {C_CYAN}ug serve{C_RESET}."
+    );
+}
+
+/// `ug active [<project>|--clear]` — view or set the persisted active
+/// project. The active project is the default `ug mcp` resolves to when no
+/// `UG_PROJECT` env var is set and the current directory isn't itself an
+/// indexed project — so `ug mcp call <tool>` works from anywhere.
+fn run_active(args: &[String]) {
+    if has_flag(args, "-h") || has_flag(args, "--help") {
+        println!("Usage: {C_BOLD}ug active{C_RESET} [<project> | --clear]");
+        println!("  No args: show the current active project.");
+        println!("  <project>: set it (must be an indexed project — see {C_CYAN}ug list{C_RESET}).");
+        println!("  --clear: unset it.");
+        return;
+    }
+
+    // Clear: `--clear`/`--unset`, or a bare `clear`/`none` positional.
+    let positional = first_positional(args, &[]);
+    let wants_clear = has_flag(args, "--clear")
+        || has_flag(args, "--unset")
+        || matches!(positional.as_deref(), Some("clear") | Some("none"));
+
+    if wants_clear {
+        match project::clear_active_project() {
+            Ok(()) => println!("{C_GREEN}✓{C_RESET} Cleared the active project."),
+            Err(e) => {
+                eprintln!("Failed to clear active project: {}", e);
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
+    match positional {
+        Some(name) => match project::set_active_project(&name) {
+            Ok(set) => {
+                println!("{C_GREEN}✓{C_RESET} Active project set to {C_CYAN}{}{C_RESET}.", set);
+                if let Some(meta) = project::read_meta(&project::project_dir(&set)) {
+                    if !meta.repo_root.is_empty() {
+                        println!("  repo: {}", meta.repo_root);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("{}", e);
+                eprintln!("Run {C_CYAN}ug list{C_RESET} to see available projects.");
+                std::process::exit(1);
+            }
+        },
+        None => match project::get_active_project() {
+            Some(name) => {
+                println!("Active project: {C_CYAN}{}{C_RESET}", name);
+                if let Some(meta) = project::read_meta(&project::project_dir(&name)) {
+                    if !meta.repo_root.is_empty() {
+                        println!("  repo: {}", meta.repo_root);
+                    }
+                }
+            }
+            None => {
+                println!("No active project set.");
+                println!(
+                    "Set one with {C_CYAN}ug active <name>{C_RESET} (see {C_CYAN}ug list{C_RESET})."
+                );
+            }
+        },
+    }
 }
 
 /// `ug rm [<project>]` — delete a project's data directory under
@@ -2413,12 +2491,22 @@ fn run_rm(args: &[String]) {
         }
     }
 
+    // Captured before removal: get_active_project() validates the project
+    // still has data, so it must be read while the dir still exists.
+    let was_active = project::get_active_project().as_deref() == Some(project_name.as_str());
+
     match project::remove_project_dir(&dir) {
-        Ok(()) => println!(
-            "{C_GREEN}✓{C_RESET} Removed {C_BOLD}{}{C_RESET} ({})",
-            project_name,
-            dir.display()
-        ),
+        Ok(()) => {
+            // Drop the now-dangling active-project marker.
+            if was_active {
+                let _ = project::clear_active_project();
+            }
+            println!(
+                "{C_GREEN}✓{C_RESET} Removed {C_BOLD}{}{C_RESET} ({})",
+                project_name,
+                dir.display()
+            );
+        }
         Err(e) => {
             eprintln!("Failed to remove {}: {}", dir.display(), e);
             std::process::exit(1);
@@ -3181,6 +3269,12 @@ fn run_doctor(args: &[String]) {
         format!("{C_YELLOW}not generated yet — run `ug gen`{C_RESET}")
     };
     println!("  project dir:  {} ({})", project_dir.display(), dir_status);
+
+    println!(
+        "  active proj:  {}  [{}]",
+        project::get_active_project().unwrap_or_else(|| "(none)".to_string()),
+        "ug active — default for `ug mcp` when no $UG_PROJECT / cwd match"
+    );
 
     let db_flag = flag_value(args, &["-d", "--db"]);
     let db_path = db_flag.clone().unwrap_or_else(project::default_read_db_path);
@@ -4816,6 +4910,7 @@ fn print_help() {
 
     println!("  {C_DIM}Project management{C_RESET}");
     println!("  {C_BOLD}{C_GREEN}list_projects{C_RESET}  {C_GREEN}List generated projects under ~/.ug (or $UG_HOME){C_RESET}");
+    println!("  {C_CYAN}active{C_RESET}           View/set the active project (default for `ug mcp` when no UG_PROJECT)");
     println!("  {C_CYAN}rm{C_RESET}               Delete a project's data directory");
     println!("  {C_CYAN}upgrade{C_RESET}          Check GitHub for a new release and self-update (`--check` to only report)");
     println!("  {C_CYAN}uninstall{C_RESET}        Delete ALL indexed projects and uninstall ug itself");
