@@ -3070,8 +3070,10 @@ fn api_chat_stream(
                     serde_json::json!({
                         "name": t.name,
                         "args": t.args,
+                        "args_json": t.args_json,
                         "state": if t.summary.is_some() { "done" } else { "start" },
                         "summary": t.summary,
+                        "result": t.result,
                     }),
                 );
             },

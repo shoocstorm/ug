@@ -4373,7 +4373,7 @@ fn tour_progress_printer() -> impl FnMut(tour::TourProgress) + Send {
                     stop.title
                 );
             }
-            tour::TourProgress::Tool { name, args, summary } => {
+            tour::TourProgress::Tool { name, args, summary, .. } => {
                 end_writing(&mut err, &mut writing);
                 match summary {
                     None => { let _ = writeln!(err, "{C_DIM}  ▸ {} {}{C_RESET}", name, args); }

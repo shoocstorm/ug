@@ -132,6 +132,8 @@ pub enum TourProgress {
         args: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         summary: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        result: Option<String>,
     },
     /// The first reply was unusable; asking for a repair.
     Repairing { reason: String },
@@ -1509,6 +1511,7 @@ pub async fn plan_tour_with_progress(
                     name: e.name,
                     args: e.args,
                     summary: e.summary,
+                    result: e.result,
                 });
             })
             .await?;

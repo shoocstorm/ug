@@ -717,8 +717,13 @@ pub struct ToolEvent {
     pub name: String,
     /// Compact one-line rendering of the arguments.
     pub args: String,
+    /// The arguments as sent, pretty-printed.
+    pub args_json: String,
     /// `None` while the call is running, `Some(summary)` once it returned.
     pub summary: Option<String>,
+    /// What the tool returned — the same text the model was handed, so a
+    /// user can check the answer against its evidence.
+    pub result: Option<String>,
 }
 
 /// Run the model's tool calls until it answers in prose.
@@ -762,10 +767,13 @@ where
             let args: Value = serde_json::from_str(&call.function.arguments)
                 .unwrap_or(Value::Object(Default::default()));
             let arg_line = compact_args(&args);
+            let args_json = serde_json::to_string_pretty(&args).unwrap_or_default();
             on_event(ToolEvent {
                 name: call.function.name.clone(),
                 args: arg_line.clone(),
+                args_json: args_json.clone(),
                 summary: None,
+                result: None,
             });
 
             let result = (toolbox.run)(&call.function.name, args).await;
@@ -781,7 +789,9 @@ where
             on_event(ToolEvent {
                 name: call.function.name.clone(),
                 args: arg_line,
+                args_json,
                 summary: Some(summary),
+                result: Some(text.clone()),
             });
             messages.push(ChatMessage {
                 role: "tool".into(),

@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use serde_json::{json, Map, Value};
 
 use crate::project::derive_project_name;
-use ultragraph::{C_BOLD, C_CYAN, C_GREEN, C_RESET, C_YELLOW};
+use ultragraph::{C_BOLD, C_CYAN, C_DIM, C_GREEN, C_RESET, C_YELLOW};
 
 const SKILL_MD: &str = include_str!("ug-mcp-skill.md");
 
@@ -202,6 +202,44 @@ impl Scope {
     }
 }
 
+/// Which project the installed server should serve, and why.
+///
+/// The MCP server is launched by an editor from whatever directory it
+/// happens to be in, so deriving the project from the *installer's* cwd
+/// produced a name that often didn't exist (`native`, `src`, …). Resolve
+/// it the same way the rest of `ug` does instead: the active project
+/// (`ug active`), else the only sensible default — the first indexed
+/// project — and say so, since the value is baked into a config file the
+/// user won't look at again.
+fn resolve_ug_project() -> (String, &'static str) {
+    let first = crate::project::list_projects()
+        .first()
+        .and_then(|(path, _)| path.file_name().map(|n| n.to_string_lossy().into_owned()));
+    pick_ug_project(
+        crate::project::get_active_project(),
+        first,
+        derive_project_name("."),
+    )
+}
+
+/// The precedence itself, separated from the filesystem so it can be
+/// tested without racing other tests over `$UG_HOME`.
+fn pick_ug_project(
+    active: Option<String>,
+    first_indexed: Option<String>,
+    cwd_name: String,
+) -> (String, &'static str) {
+    if let Some(name) = active {
+        return (name, "active project");
+    }
+    if let Some(name) = first_indexed {
+        return (name, "first indexed project — no active project set");
+    }
+    // Nothing indexed yet: fall back to the cwd name so the entry is at
+    // least a plausible target once the user runs `ug gen` here.
+    (cwd_name, "current folder — no indexed projects found")
+}
+
 /// The command clients should launch for the MCP server: the resolved path to
 /// this very `ug` binary (via `UG_BIN` when the launcher set it, else
 /// `current_exe`), falling back to a bare `ug` on PATH.
@@ -218,10 +256,11 @@ fn server_entry() -> Value {
             })
         })
         .unwrap_or_else(|| "ug".to_string());
+    let (project, _why) = resolve_ug_project();
     json!({
         "command": bin,
         "args": ["mcp"],
-        "env": { "UG_PROJECT": derive_project_name(".") },
+        "env": { "UG_PROJECT": project },
     })
 }
 
@@ -439,48 +478,107 @@ fn skill_body() -> String {
     text.trim().to_string()
 }
 
-/// Frontmatter for each target's rule file, plus where it lives. `None`
-/// frontmatter writes the raw body.
-fn skill_target(target: &str, scope: Scope) -> Option<(PathBuf, Option<String>)> {
+/// How a target wants the guide written.
+enum SkillKind {
+    /// An agent *skill*: a directory holding `SKILL.md`, whose own
+    /// frontmatter (name + description) is what makes the agent load it.
+    /// Stripping that frontmatter is what makes a skill invisible.
+    Skill,
+    /// A rule file: body only, under the target's own frontmatter.
+    Rule(String),
+}
+
+/// Where the guide goes for each target, and in which form.
+fn skill_target(target: &str, scope: Scope) -> Option<(PathBuf, SkillKind)> {
     let root = if scope == Scope::Global && target != "windsurf" {
         home()
     } else {
         cwd()
     };
     match target {
-        "claude" => Some((root.join(".claude/rules/ug-mcp.md"), None)),
+        // Claude Code discovers skills as `<root>/.claude/skills/<name>/SKILL.md`
+        // — global under $HOME, or per-project next to the repo.
+        "claude" => Some((
+            root.join(".claude/skills/ug-mcp/SKILL.md"),
+            SkillKind::Skill,
+        )),
         "cursor" => {
             let fm = "description: \"UltraGraph MCP tools guide — efficient codebase and knowledge-base search via a semantic knowledge graph\"\nalwaysApply: false";
-            Some((root.join(".cursor/rules/ug-mcp.mdc"), Some(fm.to_string())))
+            Some((
+                root.join(".cursor/rules/ug-mcp.mdc"),
+                SkillKind::Rule(fm.to_string()),
+            ))
         }
         "windsurf" => {
             // Windsurf rules always live in the project dir.
             let fm = "trigger: model_decision\ndescription: \"UltraGraph MCP tools guide — efficient codebase and knowledge-base search via a semantic knowledge graph\"";
-            Some((cwd().join(".windsurf/rules/ug-mcp.md"), Some(fm.to_string())))
+            Some((
+                cwd().join(".windsurf/rules/ug-mcp.md"),
+                SkillKind::Rule(fm.to_string()),
+            ))
         }
         _ => None,
     }
 }
 
-fn install_skill_file(target: &str, scope: Scope) {
-    let Some((path, frontmatter)) = skill_target(target, scope) else {
-        return;
-    };
-    let body = skill_body();
-    let content = match frontmatter {
-        Some(fm) => format!("---\n{}\n---\n\n{}\n", fm, body),
-        None => format!("{}\n", body),
+/// Where older versions wrote the guide. Cleaned up on install and
+/// uninstall so a stale copy can't shadow or duplicate the real one.
+fn legacy_skill_paths(target: &str, scope: Scope) -> Vec<PathBuf> {
+    let root = if scope == Scope::Global { home() } else { cwd() };
+    match target {
+        "claude" => vec![root.join(".claude/rules/ug-mcp.md")],
+        _ => Vec::new(),
+    }
+}
+
+fn install_skill_file(target: &str, scope: Scope) -> Option<PathBuf> {
+    let (path, kind) = skill_target(target, scope)?;
+    let content = match kind {
+        // Hand the skill over intact: its frontmatter is the part the
+        // agent reads to decide the skill exists at all.
+        SkillKind::Skill => {
+            let text = SKILL_MD.trim_end();
+            format!("{}\n", text)
+        }
+        SkillKind::Rule(fm) => format!("---\n{}\n---\n\n{}\n", fm, skill_body()),
     };
     if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            eprintln!("{C_YELLOW}!{C_RESET} could not create {}: {}", parent.display(), e);
+            return None;
+        }
     }
-    let _ = std::fs::write(path, content);
+    match std::fs::write(&path, content) {
+        Ok(()) => {
+            for old in legacy_skill_paths(target, scope) {
+                if old.exists() {
+                    let _ = std::fs::remove_file(&old);
+                }
+            }
+            Some(path)
+        }
+        Err(e) => {
+            eprintln!("{C_YELLOW}!{C_RESET} could not write {}: {}", path.display(), e);
+            None
+        }
+    }
 }
 
 fn uninstall_skill_file(target: &str, scope: Scope) {
+    let mut paths: Vec<PathBuf> = legacy_skill_paths(target, scope);
     if let Some((path, _)) = skill_target(target, scope) {
-        if path.exists() {
-            let _ = std::fs::remove_file(path);
+        paths.push(path);
+    }
+    for path in paths {
+        if !path.exists() {
+            continue;
+        }
+        let _ = std::fs::remove_file(&path);
+        // A skill lives in its own directory; leave no empty shell behind.
+        if let Some(dir) = path.parent() {
+            if dir.file_name().map(|n| n == "ug-mcp").unwrap_or(false) {
+                let _ = std::fs::remove_dir(dir);
+            }
         }
     }
 }
@@ -521,7 +619,12 @@ fn install_config(target: &Target, scope: Scope) -> Result<PathBuf, String> {
             let mut cfg = read_json(&path)?;
             apply_json(&mut cfg, json_format, &server);
             write_json(&path, &cfg)?;
-            install_skill_file(target.key, scope);
+            if let Some(skill) = install_skill_file(target.key, scope) {
+                println!(
+                    "{C_GREEN}✓{C_RESET} Installed the ug tool guide to {}",
+                    skill.display()
+                );
+            }
         }
     }
     Ok(path)
@@ -709,6 +812,18 @@ fn do_install(args: &[String]) -> Result<(), String> {
 
     let path = install_config(&target, scope)?;
     println!("{C_GREEN}✓{C_RESET} Wrote MCP config to {}", path.display());
+
+    // The server will answer questions about *this* project; that's baked
+    // into the config as UG_PROJECT, so make it visible now rather than
+    // leaving the user to wonder which graph they're querying.
+    let (project, why) = resolve_ug_project();
+    println!(
+        "{C_CYAN}▸{C_RESET} It will serve project {C_BOLD}{}{C_RESET} {}({}){C_RESET}",
+        project, C_DIM, why
+    );
+    println!(
+        "{C_DIM}  Change it with `ug active <name>` then re-run this, or edit UG_PROJECT in the config.{C_RESET}"
+    );
     println!("{C_CYAN}Restart {} to pick it up.{C_RESET}", target.label);
     Ok(())
 }
@@ -792,6 +907,58 @@ mod tests {
         assert!(changed);
         assert!(!removed.contains("ultragraph"));
         assert!(removed.contains("other"));
+    }
+
+    #[test]
+    fn ug_project_prefers_the_active_project() {
+        // The editor launches the server from wherever it likes, so the
+        // installer's cwd is the last resort, not the first choice.
+        let (name, why) = pick_ug_project(
+            Some("beta".into()),
+            Some("alpha".into()),
+            "cwd-folder".into(),
+        );
+        assert_eq!((name.as_str(), why), ("beta", "active project"));
+
+        let (name, why) = pick_ug_project(None, Some("alpha".into()), "cwd-folder".into());
+        assert_eq!(name, "alpha");
+        assert!(why.contains("first indexed"), "unexpected reason: {}", why);
+
+        let (name, why) = pick_ug_project(None, None, "cwd-folder".into());
+        assert_eq!(name, "cwd-folder");
+        assert!(why.contains("no indexed projects"), "unexpected reason: {}", why);
+    }
+
+    #[test]
+    fn claude_gets_a_skill_dir_with_frontmatter_intact() {
+        // Claude Code discovers skills by their frontmatter; a rules file
+        // with the frontmatter stripped is invisible to it.
+        let (path, kind) = skill_target("claude", Scope::Global).expect("claude skill target");
+        assert!(
+            path.ends_with(".claude/skills/ug-mcp/SKILL.md"),
+            "unexpected path: {}",
+            path.display()
+        );
+        assert!(matches!(kind, SkillKind::Skill));
+        assert!(SKILL_MD.starts_with("---\nname: ug-mcp"), "skill needs its frontmatter");
+    }
+
+    #[test]
+    fn rule_targets_still_get_their_own_frontmatter() {
+        let (path, kind) = skill_target("cursor", Scope::Project).expect("cursor target");
+        assert!(path.ends_with(".cursor/rules/ug-mcp.mdc"));
+        match kind {
+            SkillKind::Rule(fm) => assert!(fm.contains("alwaysApply")),
+            _ => panic!("cursor should get a rule file"),
+        }
+    }
+
+    #[test]
+    fn legacy_claude_rule_path_is_cleaned_up() {
+        assert!(legacy_skill_paths("claude", Scope::Global)
+            .iter()
+            .any(|p| p.ends_with(".claude/rules/ug-mcp.md")));
+        assert!(legacy_skill_paths("cursor", Scope::Global).is_empty());
     }
 
     #[test]
