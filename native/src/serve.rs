@@ -3038,7 +3038,7 @@ fn api_chat_stream(
         };
         let toolbox = if body.tools.unwrap_or(true) {
             Some(chat::ToolBox {
-                schemas: chat_tool_schemas(),
+                schemas: crate::mcp::tools::openai_tool_schemas(),
                 run: &runner,
                 max_rounds: body.max_tool_rounds.unwrap_or(4).min(8),
                 max_result_chars: 6_000,
@@ -3199,7 +3199,7 @@ async fn api_chat_config(State(state): State<ServeState>) -> Response {
         })
     };
 
-    let tools: Vec<serde_json::Value> = chat_tool_schemas()
+    let tools: Vec<serde_json::Value> = crate::mcp::tools::openai_tool_schemas()
         .into_iter()
         .filter_map(|t| {
             let f = t.get("function")?;
@@ -3254,50 +3254,6 @@ async fn api_chat_config(State(state): State<ServeState>) -> Response {
 /// description to maintain, not two. Tools that mutate or that only make
 /// sense to an operator (`reindex`, `list_projects`) are left out: a chat
 /// turn should read the graph, not reshape it.
-const CHAT_TOOL_DENYLIST: &[&str] = &["reindex", "list_projects"];
-
-fn chat_tool_schemas() -> Vec<serde_json::Value> {
-    let listed = crate::mcp::tools::tool_list();
-    listed
-        .as_array()
-        .map(|tools| {
-            tools
-                .iter()
-                .filter(|t| {
-                    t.get("name")
-                        .and_then(|n| n.as_str())
-                        .map(|n| !CHAT_TOOL_DENYLIST.contains(&n))
-                        .unwrap_or(false)
-                })
-                .map(|t| {
-                    // MCP calls it `inputSchema`; OpenAI wants
-                    // `function.parameters`. Same JSON Schema either way.
-                    let mut params = t.get("inputSchema").cloned().unwrap_or_else(
-                        || serde_json::json!({ "type": "object", "properties": {} }),
-                    );
-                    // `project` is an MCP nicety — the server already knows
-                    // which project it serves, and letting the model pick
-                    // another one mid-answer just invites confusion.
-                    if let Some(props) = params
-                        .get_mut("properties")
-                        .and_then(|p| p.as_object_mut())
-                    {
-                        props.remove("project");
-                    }
-                    serde_json::json!({
-                        "type": "function",
-                        "function": {
-                            "name": t.get("name").cloned().unwrap_or_default(),
-                            "description": t.get("description").cloned().unwrap_or_default(),
-                            "parameters": params,
-                        }
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 /// Run one tool against the server's live state.
 ///
 /// Graph tools go through the same `agent_tools::run_tool` the MCP server
@@ -3315,7 +3271,7 @@ async fn run_chat_tool(
     // Undo the model's stringified arrays/numbers before anything reads them.
     let mut args = args;
     crate::mcp::tools::normalize_args(&name, &mut args);
-    if CHAT_TOOL_DENYLIST.contains(&name.as_str()) {
+    if crate::mcp::tools::CHAT_TOOL_DENYLIST.contains(&name.as_str()) {
         return Err(format!("{} is not available from chat", name));
     }
 
@@ -3589,7 +3545,7 @@ fn api_tour_stream(
                 as futures::future::BoxFuture<'static, Result<String, String>>
         };
         let toolbox = opts.research.then(|| chat::ToolBox {
-            schemas: chat_tool_schemas(),
+            schemas: crate::mcp::tools::openai_tool_schemas(),
             run: &runner,
             max_rounds: body.max_tool_rounds.unwrap_or(3).min(8),
             max_result_chars: 4_000,

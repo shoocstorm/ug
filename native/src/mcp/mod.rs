@@ -35,7 +35,7 @@ use ultragraph::storage::{
     Embedder, EmbedderConfig, RankStrategy, SearchKbOptions, StoreSpec,
 };
 use ultragraph::types::{GraphData, GraphNodeType};
-use ultragraph::{build_graph, index_with_cache, C_CYAN, C_RESET};
+use ultragraph::{build_graph, index_with_cache, C_BOLD, C_CYAN, C_RESET, C_YELLOW};
 
 use crate::project;
 
@@ -45,6 +45,16 @@ const PROTOCOL_VERSION: &str = "2024-11-05";
 
 /// `ug mcp [...]` entry point, replacing the old node-spawning `run_mcp`.
 pub fn run(args: &[String]) {
+    // `ug mcp` with no subcommand *is* the server — it's what an editor
+    // launches over stdio. So only an explicit -h prints help; otherwise a
+    // stray flag would leave the client waiting for a handshake.
+    if args.first().map(String::as_str) == Some("-h")
+        || args.first().map(String::as_str) == Some("--help")
+        || (args.is_empty() && std::io::stdin().is_terminal())
+    {
+        print_mcp_help();
+        return;
+    }
     match args.first().map(String::as_str) {
         Some("install") => install::run_mcp_install(&args[1..]),
         Some("uninstall") => install::run_mcp_uninstall(&args[1..]),
@@ -52,6 +62,41 @@ pub fn run(args: &[String]) {
         Some("list") | Some("ls") => run_list_tools(),
         _ => run_server(),
     }
+}
+
+/// `ug mcp -h`. Also what a bare `ug mcp` prints from a terminal — the
+/// server speaks JSON-RPC over stdin, so a human who lands here by hand
+/// wants the map, not a silent process.
+fn print_mcp_help() {
+    println!("  {C_CYAN}ug mcp{C_RESET}  {C_YELLOW}— serve this project's graph to AI coding agents{C_RESET}");
+    println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
+    println!();
+    println!("{C_BOLD}Usage:{C_RESET}  ug mcp [<subcommand>]");
+    println!();
+    println!("  Run bare (with stdin piped) it {C_BOLD}is{C_RESET} the MCP server: JSON-RPC over stdio,");
+    println!("  exposing this project's knowledge graph as tools an agent can call");
+    println!("  ({C_CYAN}search{C_RESET}, {C_CYAN}find_symbols{C_RESET}, {C_CYAN}find_usages{C_RESET}, {C_CYAN}get_code{C_RESET}, …). Editors launch it for you;");
+    println!("  you rarely type it yourself.");
+    println!();
+    println!("{C_BOLD}Subcommands:{C_RESET}");
+    println!("  {C_CYAN}install{C_RESET} <agent>     Register the server in an agent's config, and drop in");
+    println!("                      the tool guide. Agents: claude, claude-desk, cursor,");
+    println!("                      windsurf, vscode, gemini, codex, opencode, zed, …");
+    println!("                      Scope: {C_CYAN}--project{C_RESET} (this repo) or {C_CYAN}--global{C_RESET} (everywhere).");
+    println!("  {C_CYAN}uninstall{C_RESET} <agent>   Remove it again, same scope flags.");
+    println!("  {C_CYAN}list{C_RESET}, {C_CYAN}ls{C_RESET}            Print the tools this server advertises.");
+    println!("  {C_CYAN}call{C_RESET} <tool> [json]  Invoke one tool directly — the fastest way to see what");
+    println!("                      an agent would get back.");
+    println!();
+    println!("{C_BOLD}Which project does it serve?{C_RESET}");
+    println!("  {C_CYAN}UG_PROJECT{C_RESET} (baked into the config by {C_CYAN}install{C_RESET}) → the ~/.ug project matching");
+    println!("  the cwd → the active project ({C_CYAN}ug active{C_RESET}) → a local ./ugdb.");
+    println!();
+    println!("{C_BOLD}Examples:{C_RESET}");
+    println!("  {C_CYAN}ug mcp{C_RESET} install claude --global");
+    println!("  {C_CYAN}ug mcp{C_RESET} list");
+    println!("  {C_CYAN}ug mcp{C_RESET} call find_symbols '{{\"name\":\"normalize_path\"}}'");
+    println!("  {C_CYAN}ug mcp{C_RESET} uninstall cursor --project");
 }
 
 // ── project resolution ─────────────────────────────────────────────────────

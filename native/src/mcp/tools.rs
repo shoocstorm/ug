@@ -60,6 +60,50 @@ pub fn is_known_tool(canonical: &str) -> bool {
     TOOL_NAMES.contains(&canonical) || is_unlisted_tool(canonical)
 }
 
+pub const CHAT_TOOL_DENYLIST: &[&str] = &["reindex", "list_projects"];
+
+pub fn openai_tool_schemas() -> Vec<serde_json::Value> {
+    let listed = tool_list();
+    listed
+        .as_array()
+        .map(|tools| {
+            tools
+                .iter()
+                .filter(|t| {
+                    t.get("name")
+                        .and_then(|n| n.as_str())
+                        .map(|n| !CHAT_TOOL_DENYLIST.contains(&n))
+                        .unwrap_or(false)
+                })
+                .map(|t| {
+                    // MCP calls it `inputSchema`; OpenAI wants
+                    // `function.parameters`. Same JSON Schema either way.
+                    let mut params = t.get("inputSchema").cloned().unwrap_or_else(
+                        || json!({ "type": "object", "properties": {} }),
+                    );
+                    // `project` is an MCP nicety — the server already knows
+                    // which project it serves, and letting the model pick
+                    // another one mid-answer just invites confusion.
+                    if let Some(props) = params
+                        .get_mut("properties")
+                        .and_then(|p| p.as_object_mut())
+                    {
+                        props.remove("project");
+                    }
+                    json!({
+                        "type": "function",
+                        "function": {
+                            "name": t.get("name").cloned().unwrap_or_default(),
+                            "description": t.get("description").cloned().unwrap_or_default(),
+                            "parameters": params,
+                        }
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Coerce arguments that a model stringified back into real JSON.
 ///
 /// Models routinely send `"nodeId": "[\"function:…\"]"` — a JSON array

@@ -3972,6 +3972,13 @@ fn run_chat(args: &[String]) {
     // Reasoning models spend most of the wall-clock deliberating; the
     // answer is grounded in retrieved context either way.
     let think = has_flag(args, "--think");
+    // Tools are on by default: an answer that can check itself against the
+    // graph beats one that can only paraphrase what retrieval happened to find.
+    let no_tools = has_flag(args, "--no-tools");
+    let max_tool_rounds: usize = flag_value(args, &["--max-tool-rounds"])
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(4)
+        .min(8);
 
     let k: usize = flag_value(args, &["-k", "--limit"])
         .and_then(|s| s.parse().ok())
@@ -4009,12 +4016,31 @@ fn run_chat(args: &[String]) {
                 eprintln!("failed to open {} store: {}", spec.name(), e);
                 std::process::exit(1);
             });
+        // Shared with the tool runner, which outlives any single turn.
+        let store: std::sync::Arc<dyn KnowledgeStore> = std::sync::Arc::from(store);
+        let embedder = std::sync::Arc::new(embedder);
 
         let edge_types_owned: Option<Vec<String>> = if edge_types.is_empty() {
             None
         } else {
             Some(edge_types)
         };
+
+        // The same graph toolbox the UI and MCP clients get, so a terminal
+        // answer is reached the same way as one in the browser. `--no-tools`
+        // opts out; a project without a graph.json simply has none.
+        let runner = if no_tools {
+            None
+        } else {
+            Some(cli_tool_runner(args, store.clone(), embedder.clone()))
+        };
+        let toolbox = runner.as_ref().map(|run| chat::ToolBox {
+            schemas: crate::mcp::tools::openai_tool_schemas(),
+            run,
+            max_rounds: max_tool_rounds,
+            max_result_chars: 6_000,
+        });
+
         let opts_factory = |q: &str| {
             let mut o = chat::ChatRagOptions::new();
             o.k = k;
@@ -4076,7 +4102,7 @@ fn run_chat(args: &[String]) {
                         &q,
                         &[],
                         opts_factory(&q),
-                        None,
+                        toolbox.as_ref(),
                         show_context,
                     )
                     .await
@@ -4305,6 +4331,93 @@ fn wrap_indent(text: &str, width: usize, indent: &str) -> String {
         }
     }
     out
+}
+
+/// The graph toolbox for `ug chat`, over this project's own graph and
+/// store — the same tools the MCP server and `ug serve` expose, so an
+/// answer in the terminal is reached the same way as one in the browser.
+///
+/// Returns the pieces the caller must keep alive: the runner closure is
+/// borrowed by the `ToolBox`, so both have to outlive the chat turn.
+fn cli_tool_runner(
+    args: &[String],
+    store: std::sync::Arc<dyn KnowledgeStore>,
+    embedder: std::sync::Arc<Embedder>,
+) -> impl Fn(&str, serde_json::Value) -> futures::future::BoxFuture<'static, Result<String, String>>
+{
+    let (graph, raw, graph_path) = load_agent_graph(args);
+    let repo_root = agent_repo_root(&graph, &graph_path);
+    let graph = std::sync::Arc::new(graph);
+    let raw = std::sync::Arc::new(raw);
+
+    move |name: &str, args: serde_json::Value| {
+        let name = crate::mcp::tools::canonical_tool_name(name).to_string();
+        let graph = graph.clone();
+        let raw = raw.clone();
+        let repo_root = repo_root.clone();
+        let graph_path = graph_path.clone();
+        let store = store.clone();
+        let embedder = embedder.clone();
+        Box::pin(async move {
+            let mut args = args;
+            crate::mcp::tools::normalize_args(&name, &mut args);
+            match name.as_str() {
+                // The two search tools need the vector store; everything
+                // else answers from the loaded graph.
+                "search" | "semantic_search" => {
+                    let query = args
+                        .get("query")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    if query.trim().is_empty() {
+                        return Err("query is required".into());
+                    }
+                    let k = args.get("k").and_then(|v| v.as_u64()).unwrap_or(8).clamp(1, 25) as usize;
+                    if name == "semantic_search" {
+                        let hits = ultragraph::storage::semantic_search(&*store, &embedder, &query, k)
+                            .await
+                            .map_err(|e| e.to_string())?;
+                        let mut out = String::new();
+                        for (i, h) in hits.iter().enumerate() {
+                            out.push_str(&format!(
+                                "{}. {} ({}) — {}:{} · distance {:.3}\n",
+                                i + 1, h.node.name, h.node.node_type, h.node.file,
+                                h.node.start_line, h.distance
+                            ));
+                        }
+                        return Ok(if out.is_empty() { "No matches.".into() } else { out });
+                    }
+                    let mut opts = SearchKbOptions::new(&query, repo_root.as_path());
+                    opts.k = k;
+                    opts.hops = args.get("hops").and_then(|v| v.as_u64()).unwrap_or(2).min(4) as u32;
+                    opts.include_snippets = true;
+                    opts.max_chars = 6_000;
+                    let ctx = ultragraph::storage::search_kb(&*store, &embedder, opts)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    Ok(chat::render_context(&ctx.items, 6_000))
+                }
+                _ => {
+                    let out = ultragraph::agent_tools::run_tool(
+                        &name,
+                        &graph,
+                        &raw,
+                        repo_root.as_path(),
+                        graph_path.as_path(),
+                        args,
+                        Some(ultragraph::agent_tools::Render::Markdown),
+                    )?;
+                    Ok(match out {
+                        ultragraph::agent_tools::ToolOutput::Text(t) => t,
+                        ultragraph::agent_tools::ToolOutput::Json(v) => {
+                            serde_json::to_string_pretty(&v).unwrap_or_default()
+                        }
+                    })
+                }
+            }
+        }) as futures::future::BoxFuture<'static, Result<String, String>>
+    }
 }
 
 /// A progress sink that keeps the terminal alive during a long plan.
@@ -5241,6 +5354,8 @@ fn print_chat_help() {
     println!("  {C_CYAN}--max-chars{C_RESET} <n>          Context char budget (default: 12000)");
     println!("  {C_CYAN}--no-snippets{C_RESET}            Don't read source snippets from disk");
     println!("  {C_CYAN}--think{C_RESET}                  Let a reasoning model deliberate (slower, rarely better)");
+    println!("  {C_CYAN}--no-tools{C_RESET}               Answer from retrieved context only — no graph tool calls");
+    println!("  {C_CYAN}--max-tool-rounds{C_RESET} <n>    Cap tool-calling rounds (default: 4, max 8)");
     println!("  {C_CYAN}--repo-root{C_RESET} <path>       Repo root for snippet resolution (default: cwd)");
     println!();
     println!("{C_BOLD}Chat model:{C_RESET}");

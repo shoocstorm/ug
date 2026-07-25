@@ -1888,7 +1888,10 @@
             cursor: crosshair;
         }
 
-        .section.cap-hidden {
+        /* Applies to anything, not just sections — a banner or a chip can be
+           capability-gated too, and a class that silently does nothing on
+           some elements is a trap. */
+        .cap-hidden {
             display: none;
         }
 
