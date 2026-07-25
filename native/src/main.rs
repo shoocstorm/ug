@@ -4076,6 +4076,7 @@ fn run_chat(args: &[String]) {
                         &q,
                         &[],
                         opts_factory(&q),
+                        None,
                         show_context,
                     )
                     .await
@@ -4229,6 +4230,7 @@ fn run_tour(args: &[String]) {
                 repo_root.as_path(),
                 &query,
                 opts.clone(),
+                None,
                 &mut on_progress,
             )
             .await
@@ -4370,6 +4372,13 @@ fn tour_progress_printer() -> impl FnMut(tour::TourProgress) + Send {
                     index + 1,
                     stop.title
                 );
+            }
+            tour::TourProgress::Tool { name, args, summary } => {
+                end_writing(&mut err, &mut writing);
+                match summary {
+                    None => { let _ = writeln!(err, "{C_DIM}  ▸ {} {}{C_RESET}", name, args); }
+                    Some(sum) => { let _ = writeln!(err, "{C_DIM}  ✓ {} — {}{C_RESET}", name, sum); }
+                }
             }
             tour::TourProgress::Repairing { .. } => {
                 end_writing(&mut err, &mut writing);
@@ -4641,10 +4650,14 @@ fn print_context_items(items: &[ultragraph::storage::ContextItem]) {
 
 fn print_chat_meta(outcome: &chat::ChatRagOutcome) {
     println!(
-        "{C_CYAN}▸{C_RESET} retrieval={}ms · completion={}ms · {} citation(s){}",
+        "{C_CYAN}▸{C_RESET} retrieval={}ms · completion={}ms · {} citation(s){}{}",
         outcome.retrieval_ms,
         outcome.completion_ms,
         outcome.context.items.len(),
+        match outcome.tool_calls {
+            0 => String::new(),
+            n => format!(" · {} tool call(s)", n),
+        },
         match &outcome.usage {
             Some(u) => format!(
                 " · tokens prompt={} completion={} total={}",
@@ -4683,6 +4696,7 @@ async fn stream_chat_turn(
     query: &str,
     history: &[chat::ChatMessage],
     opts: chat::ChatRagOptions<'_>,
+    toolbox: Option<&chat::ToolBox<'_>>,
     show_context: bool,
 ) -> Result<chat::ChatRagOutcome, Box<dyn std::error::Error + Send + Sync>> {
     use std::io::Write;
@@ -4703,12 +4717,20 @@ async fn stream_chat_turn(
         query,
         history,
         opts,
+        toolbox,
         |ctx| {
             // Clear the transient retrieval line before real output.
             eprint!("\r\x1b[2K");
             let _ = std::io::stderr().flush();
             if show_context {
                 print_context_items(&ctx.items);
+            }
+        },
+        |t: chat::ToolEvent| {
+            // One line per tool call so a long agentic turn is legible.
+            match &t.summary {
+                None => eprintln!("{C_DIM}  ▸ {} {}{C_RESET}", t.name, t.args),
+                Some(sum) => eprintln!("{C_DIM}  ✓ {} — {}{C_RESET}", t.name, sum),
             }
         },
         |d| {
@@ -4834,6 +4856,7 @@ async fn run_chat_repl<'a, F>(
                 q,
                 &history,
                 opts,
+                None,
                 show_ctx,
             )
             .await
@@ -4847,14 +4870,8 @@ async fn run_chat_repl<'a, F>(
         };
 
         // Keep the last 6 exchanges to bound prompt growth.
-        history.push(chat::ChatMessage {
-            role: "user".into(),
-            content: q.to_string(),
-        });
-        history.push(chat::ChatMessage {
-            role: "assistant".into(),
-            content: outcome.answer.clone(),
-        });
+        history.push(chat::ChatMessage::new("user", q.to_string()));
+        history.push(chat::ChatMessage::new("assistant", outcome.answer.clone()));
         let max_history = 12;
         if history.len() > max_history {
             let drop_n = history.len() - max_history;

@@ -5224,6 +5224,163 @@
         body.perf-mode #viewbar .vtoggle.active {
             box-shadow: none;
         }
+        /* ─── Chat: live turn (progress strip, reasoning, tools) ─── */
+
+        .chat-progress {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            font-size: 10.5px;
+            color: var(--text-dim);
+            margin-bottom: 6px;
+        }
+
+        .chat-progress .cp-phase { color: var(--text-muted); }
+
+        .chat-progress .cp-stats {
+            margin-left: auto;
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+        }
+
+        .chat-msg.streaming .chat-body::after {
+            content: '▋';
+            color: var(--accent);
+            animation: tourblink 1s step-end infinite;
+            margin-left: 1px;
+        }
+
+        .chat-body { white-space: pre-wrap; }
+
+        /* What the model asked the graph for, in the order it asked. */
+        .chat-tool {
+            font-family: 'JetBrains Mono', ui-monospace, monospace;
+            font-size: 10px;
+            color: var(--text-dim);
+            padding: 2px 0;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .chat-tool.done { color: var(--accent); }
+
+        .chat-think { margin-bottom: 6px; }
+
+        .chat-think summary {
+            font-size: 10px;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: var(--text-dim);
+            cursor: pointer;
+        }
+
+        .chat-think summary:hover { color: var(--accent); }
+
+        .chat-think pre {
+            margin: 6px 0 0;
+            padding: 8px 9px;
+            background: var(--bg-deep);
+            border-radius: 6px;
+            font-size: 10.5px;
+            line-height: 1.5;
+            color: var(--text-dim);
+            white-space: pre-wrap;
+            word-break: break-word;
+            max-height: 160px;
+            overflow: auto;
+        }
+
+        /* ─── Node detail: indexed chunk ─────────────────────── */
+
+        .chunk-stats {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            font-size: 10px;
+            color: var(--text-dim);
+            padding-bottom: 9px;
+            margin-bottom: 10px;
+            border-bottom: 1px solid var(--border-soft);
+        }
+
+        .chunk-stats b {
+            color: var(--accent);
+            font-weight: 600;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .chunk-section { margin-bottom: 11px; }
+
+        .chunk-label {
+            font-size: 9px;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            font-weight: 700;
+            color: var(--text-dim);
+            margin-bottom: 4px;
+        }
+
+        .chunk-value {
+            font-size: 11.5px;
+            line-height: 1.55;
+            color: var(--text);
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .chunk-section.mono .chunk-value {
+            font-family: 'JetBrains Mono', ui-monospace, monospace;
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+
+        .chunk-related { display: flex; flex-wrap: wrap; gap: 4px; }
+
+        .chunk-chip {
+            font-size: 10px;
+            padding: 2px 7px;
+            border-radius: 999px;
+            background: var(--bg-elevated);
+            color: var(--text-muted);
+            font-family: 'JetBrains Mono', ui-monospace, monospace;
+        }
+
+        .chunk-chip.linked {
+            cursor: pointer;
+            color: var(--accent);
+            background: color-mix(in srgb, var(--accent) 10%, transparent);
+        }
+
+        .chunk-chip.linked:hover { background: color-mix(in srgb, var(--accent) 20%, transparent); }
+
+        .chunk-raw { margin-top: 12px; }
+
+        .chunk-raw summary {
+            font-size: 10px;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: var(--text-dim);
+            cursor: pointer;
+        }
+
+        .chunk-raw summary:hover { color: var(--accent); }
+
+        .chunk-raw pre {
+            margin: 8px 0 0;
+            padding: 9px 10px;
+            background: var(--bg-deep);
+            border: 1px solid var(--border-soft);
+            border-radius: 6px;
+            font-family: 'JetBrains Mono', ui-monospace, monospace;
+            font-size: 10.5px;
+            line-height: 1.5;
+            color: var(--text-muted);
+            white-space: pre-wrap;
+            word-break: break-word;
+            max-height: 240px;
+            overflow: auto;
+        }
+
         /* ─── Guided Tour: launcher (sidebar) ─── */
         #tour-input {
             width: 100%;
@@ -8473,15 +8630,21 @@
             }
             if (state.semDest) body.dest = state.semDest;
 
+            body.stream = true;
+
             appendChatMessage('user', query);
             inputEl.value = '';
-            const pendingEl = appendChatMessage('assistant', 'Retrieving context…', { pending: true });
+            // The answer bubble exists from the first moment and fills in as
+            // tokens arrive, with a live account of what the server is doing
+            // above it — a chat that sits silent for a minute reads as broken.
+            const turn = createChatTurn();
 
             state.chatInFlight = true;
             sendBtn.disabled = true;
-            statusEl.textContent = 'Thinking…';
+            statusEl.textContent = 'Retrieving context…';
 
             const t0 = performance.now();
+            let answer = '';
             try {
                 const res = await fetch('/api/chat', {
                     method: 'POST',
@@ -8489,32 +8652,47 @@
                     body: JSON.stringify(body)
                 });
                 if (!res.ok) throw new Error(await readErr(res));
-                const data = await res.json();
+
+                let cites = [], done = null, streamErr = null;
+                if (res.body && (res.headers.get('content-type') || '').includes('event-stream')) {
+                    await readSseStream(res, (name, payload) => {
+                        switch (name) {
+                            case 'phase':
+                                turn.phase(payload.phase === 'retrieving'
+                                    ? 'Searching the graph…' : payload.phase);
+                                break;
+                            case 'context':
+                                cites = payload.citations || [];
+                                turn.context(cites, payload.retrieval_ms);
+                                break;
+                            case 'tool':
+                                turn.tool(payload);
+                                break;
+                            case 'delta':
+                                if (payload.reasoning) turn.reasoning(payload.reasoning);
+                                if (payload.content) { answer += payload.content; turn.append(payload.content); }
+                                break;
+                            case 'done':
+                                done = payload;
+                                break;
+                            case 'error':
+                                streamErr = payload.error || 'stream error';
+                                break;
+                        }
+                    });
+                } else {
+                    // Server without the streaming route — one JSON payload.
+                    const data = await res.json();
+                    answer = data.answer || '';
+                    cites = data.citations || [];
+                    turn.append(answer);
+                    done = data;
+                }
+                if (streamErr) throw new Error(streamErr);
+
                 const totalMs = Math.round(performance.now() - t0);
-                pendingEl.remove();
-
-                const answer = (data.answer || '').trim() || '(no answer)';
-                const cites = (data.citations || []).map(c => ({
-                    index: c.index,
-                    id: c.id,
-                    name: c.name,
-                    node_type: c.node_type,
-                    file: c.file,
-                    start_line: c.start_line,
-                    end_line: c.end_line,
-                    description: c.description,
-                }));
-                const usageParts = [];
-                if (data.retrieval_ms != null) usageParts.push(`retrieval=${data.retrieval_ms}ms`);
-                if (data.completion_ms != null) usageParts.push(`completion=${data.completion_ms}ms`);
-                if (data.usage && data.usage.total_tokens) usageParts.push(`tokens=${data.usage.total_tokens}`);
-                if (data.dest) usageParts.push(`dest=${data.dest}`);
-                if (data.chat_model) usageParts.push(`model=${data.chat_model}`);
-
-                appendChatMessage('assistant', answer, {
-                    citations: cites,
-                    meta: usageParts.join(' · ')
-                });
+                answer = (answer || (done && done.answer) || '').trim();
+                turn.finish(answer, cites, done, totalMs);
 
                 state.chatHistory.push({ role: 'user', content: query });
                 state.chatHistory.push({ role: 'assistant', content: answer });
@@ -8523,8 +8701,7 @@
                 }
                 statusEl.textContent = `${cites.length} citation${cites.length === 1 ? '' : 's'} · ${totalMs} ms total`;
             } catch (err) {
-                pendingEl.remove();
-                appendChatMessage('assistant', `Error: ${err.message || err}`, { error: true });
+                turn.fail(err.message || err);
                 statusEl.classList.add('error');
                 statusEl.textContent = `Chat failed: ${err.message || err}`;
                 console.error(err);
@@ -8533,6 +8710,119 @@
                 sendBtn.disabled = false;
                 inputEl.focus();
             }
+        }
+
+        // One streaming assistant turn: a status strip that narrates the
+        // server's progress, the answer text as it arrives, and the citation
+        // list once retrieval reports it.
+        function createChatTurn() {
+            const list = document.getElementById('chat-messages');
+            const el = document.createElement('div');
+            el.className = 'chat-msg assistant streaming';
+
+            const strip = document.createElement('div');
+            strip.className = 'chat-progress';
+            strip.innerHTML = '<span class="tour-spinner"></span><span class="cp-phase">Searching the graph…</span>'
+                + '<span class="cp-stats"></span>';
+            const bodyEl = document.createElement('div');
+            bodyEl.className = 'chat-body';
+            const think = document.createElement('details');
+            think.className = 'chat-think';
+            think.hidden = true;
+            think.innerHTML = '<summary>Model reasoning</summary><pre></pre>';
+
+            el.append(strip, think, bodyEl);
+            list.appendChild(el);
+            list.scrollTop = list.scrollHeight;
+
+            const t0 = performance.now();
+            let chars = 0, reasoningChars = 0, citeCount = 0, retrievalMs = null;
+            const stats = () => {
+                const secs = Math.max(0.001, (performance.now() - t0) / 1000);
+                const tokens = Math.round((chars + reasoningChars) / 4);
+                const bits = [];
+                if (retrievalMs != null) bits.push(`${citeCount} sources · ${retrievalMs} ms`);
+                if (tokens) bits.push(`${tokens.toLocaleString()} tokens · ${Math.round(tokens / secs)}/s`);
+                strip.querySelector('.cp-stats').textContent = bits.join('  ·  ');
+            };
+            const nearBottom = () => list.scrollHeight - list.scrollTop - list.clientHeight < 60;
+
+            return {
+                phase(text) { strip.querySelector('.cp-phase').textContent = text; },
+                context(cites, ms) {
+                    citeCount = cites.length;
+                    retrievalMs = ms;
+                    strip.querySelector('.cp-phase').textContent = 'Writing the answer…';
+                    stats();
+                },
+                tool(t) {
+                    strip.querySelector('.cp-phase').textContent =
+                        t.state === 'done' ? `${t.name} → ${t.summary || 'done'}` : `Calling ${t.name}…`;
+                    const row = document.createElement('div');
+                    row.className = 'chat-tool' + (t.state === 'done' ? ' done' : '');
+                    row.textContent = t.state === 'done'
+                        ? `✓ ${t.name}${t.summary ? ' · ' + t.summary : ''}`
+                        : `▸ ${t.name}${t.args ? ' ' + t.args : ''}`;
+                    el.insertBefore(row, bodyEl);
+                    if (nearBottom()) list.scrollTop = list.scrollHeight;
+                },
+                reasoning(text) {
+                    reasoningChars += text.length;
+                    think.hidden = false;
+                    think.querySelector('pre').textContent += text;
+                    strip.querySelector('.cp-phase').textContent = 'Thinking…';
+                    stats();
+                },
+                append(text) {
+                    chars += text.length;
+                    const stick = nearBottom();
+                    bodyEl.textContent += text;
+                    stats();
+                    if (stick) list.scrollTop = list.scrollHeight;
+                },
+                finish(text, cites, done, totalMs) {
+                    el.classList.remove('streaming');
+                    strip.remove();
+                    bodyEl.textContent = text || '(no answer)';
+                    if (cites && cites.length) {
+                        const box = document.createElement('div');
+                        box.className = 'chat-citations';
+                        cites.forEach(c => {
+                            const a = document.createElement('div');
+                            a.className = 'chat-cite';
+                            const lineLabel = c.start_line
+                                ? `:${c.start_line}${c.end_line && c.end_line !== c.start_line ? '–' + c.end_line : ''}`
+                                : '';
+                            a.textContent = `[#${c.index}] ${c.name || c.id} · ${c.node_type || '?'} · ${c.file || '<unknown>'}${lineLabel}`;
+                            a.title = c.description ? c.description.slice(0, 200) : (c.id || c.name || '');
+                            a.addEventListener('click', () => focusCitation(c));
+                            box.appendChild(a);
+                        });
+                        el.appendChild(box);
+                    }
+                    const bits = [];
+                    if (done && done.retrieval_ms != null) bits.push(`retrieval=${done.retrieval_ms}ms`);
+                    if (done && done.completion_ms != null) bits.push(`completion=${done.completion_ms}ms`);
+                    else if (totalMs != null) bits.push(`total=${totalMs}ms`);
+                    if (done && done.usage && done.usage.total_tokens) bits.push(`tokens=${done.usage.total_tokens}`);
+                    if (done && done.tool_calls) bits.push(`tools=${done.tool_calls}`);
+                    if (done && done.dest) bits.push(`dest=${done.dest}`);
+                    if (done && done.chat_model) bits.push(`model=${done.chat_model}`);
+                    if (bits.length) {
+                        const m = document.createElement('div');
+                        m.className = 'chat-meta';
+                        m.textContent = bits.join(' · ');
+                        el.appendChild(m);
+                    }
+                    list.scrollTop = list.scrollHeight;
+                },
+                fail(msg) {
+                    el.classList.remove('streaming');
+                    el.classList.add('error');
+                    strip.remove();
+                    bodyEl.textContent = `Error: ${msg}`;
+                },
+            };
         }
 
         function renderSemanticHits(container, hits, mode) {
@@ -11754,15 +12044,19 @@
             if (d.extends && d.extends.length) html += `<div class="info-row"><span class="info-label">Extends</span><span class="info-value">${escapeHtml(d.extends.join(', '))}</span></div>`;
             if (d.implements && d.implements.length) html += `<div class="info-row"><span class="info-label">Implements</span><span class="info-value">${escapeHtml(d.implements.join(', '))}</span></div>`;
 
-            const activeTab = ['related', 'hierarchy'].includes(state.infoTab) ? state.infoTab : 'preview';
+            const activeTab = ['related', 'hierarchy', 'chunk'].includes(state.infoTab) ? state.infoTab : 'preview';
             html += `<div class="related-section">
                 <div class="info-tabs">
                     <button class="info-tab${activeTab === 'preview' ? ' active' : ''}" data-view="preview">Preview</button>
+                    <button class="info-tab${activeTab === 'chunk' ? ' active' : ''}" data-view="chunk">Chunk</button>
                     <button class="info-tab${activeTab === 'hierarchy' ? ' active' : ''}" data-view="hierarchy">Hierarchy</button>
                     <button class="info-tab${activeTab === 'related' ? ' active' : ''}" data-view="related">Related${related.length ? ' (' + related.length + ')' : ''}</button>
                 </div>
                 <div class="info-view${activeTab === 'preview' ? ' active' : ''}" data-view="preview">
                     <div id="preview-content"></div>
+                </div>
+                <div class="info-view${activeTab === 'chunk' ? ' active' : ''}" data-view="chunk">
+                    <div id="chunk-content"></div>
                 </div>
                 <div class="info-view${activeTab === 'hierarchy' ? ' active' : ''}" data-view="hierarchy">
                     ${buildHierarchyHtml(d)}
@@ -11810,6 +12104,7 @@
             // immediately from any cached row, then again when the fetch lands.
             const cachedRow = state.dbRowCache ? state.dbRowCache.get(d.id) : null;
             renderPreview(d, cachedRow);
+            renderChunk(d, cachedRow);
 
             body.querySelectorAll('.info-tab').forEach(tab => {
                 tab.addEventListener('click', () => {
@@ -11858,9 +12153,152 @@
                 state.dbRowCache.set(requestedId, row);
                 if (!state.selectedNode || state.selectedNode.id !== requestedId) return;
                 renderPreview(state.selectedNode, row);
+                renderChunk(state.selectedNode, row);
             } catch (err) {
                 // graceful fallthrough — graph.json data remains as-is
             }
+        }
+
+        // Fills the "Chunk" tab with what the knowledge base actually stores
+        // for this node — the text that was embedded, broken back into the
+        // parts `build_node_text` assembled it from. This is the honest
+        // answer to "why did semantic search match this?", which the raw
+        // source in Preview can't give.
+        function renderChunk(node, row) {
+            const container = document.getElementById('chunk-content');
+            if (!container) return;
+            container.innerHTML = '';
+
+            const dbReady = !!(state.capabilities && state.capabilities.db_ready);
+            if (!dbReady) {
+                container.innerHTML = '<div class="hier-empty">No knowledge base attached — '
+                    + 'run <code>ug serve</code> with an indexed project to see chunks.</div>';
+                return;
+            }
+            if (!row) {
+                container.innerHTML = '<div class="hier-empty">Loading chunk…</div>';
+                return;
+            }
+            const text = (row.node_text || '').trim();
+            if (!text) {
+                container.innerHTML = '<div class="hier-empty">This node has no indexed chunk '
+                    + '(it exists in graph.json but not in the vector store).</div>';
+                return;
+            }
+
+            const parts = parseChunkText(text);
+            const frag = document.createDocumentFragment();
+
+            const stats = document.createElement('div');
+            stats.className = 'chunk-stats';
+            const lines = (row.description || '').split('\n').length;
+            stats.innerHTML = `<span><b>${text.length.toLocaleString()}</b> chars embedded</span>`
+                + `<span><b>${parts.related.length}</b> related name${parts.related.length === 1 ? '' : 's'}</span>`
+                + (row.start_line ? `<span><b>${(row.end_line || row.start_line) - row.start_line + 1}</b> source lines</span>` : '');
+            frag.appendChild(stats);
+            void lines;
+
+            const section = (label, value, cls) => {
+                if (!value) return;
+                const d = document.createElement('div');
+                d.className = 'chunk-section' + (cls ? ' ' + cls : '');
+                const l = document.createElement('div');
+                l.className = 'chunk-label';
+                l.textContent = label;
+                const v = document.createElement('div');
+                v.className = 'chunk-value';
+                v.textContent = value;
+                d.append(l, v);
+                frag.appendChild(d);
+            };
+
+            section('Heading', parts.heading);
+            section('Description', parts.description);
+            section('Signature', parts.signature, 'mono');
+            if (parts.rest) section('Also indexed', parts.rest);
+
+            if (parts.related.length) {
+                const d = document.createElement('div');
+                d.className = 'chunk-section';
+                const l = document.createElement('div');
+                l.className = 'chunk-label';
+                l.textContent = `Related names (${parts.related.length})`;
+                const list = document.createElement('div');
+                list.className = 'chunk-related';
+                parts.related.forEach(name => {
+                    const chip = document.createElement('span');
+                    chip.className = 'chunk-chip';
+                    chip.textContent = name;
+                    // These are the names the embedder saw; many are real
+                    // nodes, so make the ones we can resolve clickable.
+                    const hit = state.nodeById && findNodeByName(name);
+                    if (hit) {
+                        chip.classList.add('linked');
+                        chip.title = hit.id;
+                        chip.addEventListener('click', () => { handleClick(null, hit); focusNode(hit); });
+                    }
+                    list.appendChild(chip);
+                });
+                d.append(l, list);
+                frag.appendChild(d);
+            }
+
+            const raw = document.createElement('details');
+            raw.className = 'chunk-raw';
+            const sum = document.createElement('summary');
+            sum.textContent = 'Raw embedded text';
+            const pre = document.createElement('pre');
+            pre.textContent = text;
+            raw.append(sum, pre);
+            frag.appendChild(raw);
+
+            container.appendChild(frag);
+        }
+
+        // `build_node_text` writes "<Type>: <name>. <description>. Signature:
+        // <sig>. Related: a, b, c" — split it back into its parts so the panel
+        // can show them as fields instead of one run-on paragraph.
+        function parseChunkText(text) {
+            const out = { heading: '', description: '', signature: '', related: [], rest: '' };
+            let body = text;
+
+            const relIdx = body.search(/(^|\.\s|\n)Related:\s/);
+            if (relIdx >= 0) {
+                const after = body.slice(relIdx).replace(/^[.\s]*Related:\s*/, '');
+                out.related = after.split(',').map(s => s.trim()).filter(Boolean);
+                body = body.slice(0, relIdx);
+            }
+            const sigIdx = body.search(/(^|\.\s|\n)Signature:\s/);
+            if (sigIdx >= 0) {
+                out.signature = body.slice(sigIdx).replace(/^[.\s]*Signature:\s*/, '').trim()
+                    .replace(/\.$/, '');
+                body = body.slice(0, sigIdx);
+            }
+            // The head is "<Type>: <name>." — the rest of the first block is
+            // the node's description.
+            const head = body.match(/^([^.\n]{0,80}?:\s*[^.\n]+?)\.\s*/);
+            if (head) {
+                out.heading = head[1].trim();
+                body = body.slice(head[0].length);
+            }
+            out.description = body.trim().replace(/\.+$/, '');
+            return out;
+        }
+
+        // Resolve a bare symbol name from a chunk's "Related:" list back to a
+        // graph node, when one exists.
+        function findNodeByName(name) {
+            if (!state.nodeById) return null;
+            if (state.nodeById.has(name)) return state.nodeById.get(name);
+            if (!state._nameIndex) {
+                state._nameIndex = new Map();
+                state.graph.nodes.forEach(n => {
+                    if (!state._nameIndex.has(n.name)) state._nameIndex.set(n.name, n);
+                    const short = String(n.name).split('/').pop();
+                    if (short && !state._nameIndex.has(short)) state._nameIndex.set(short, n);
+                });
+            }
+            return state._nameIndex.get(name) || null;
         }
 
         // Fills the right-panel "Preview" tab with the *actual* source content of

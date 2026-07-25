@@ -2793,6 +2793,13 @@ struct ChatBody {
     /// completion and emits it as a single delta.
     #[serde(default)]
     stream: Option<bool>,
+    /// Give the model the graph toolbox (search, outlines, call sites, …).
+    /// On by default: a grounded answer beats a fluent one.
+    #[serde(default)]
+    tools: Option<bool>,
+    /// Cap on tool-calling rounds before the model must answer.
+    #[serde(default)]
+    max_tool_rounds: Option<usize>,
     /// Let a reasoning model deliberate before answering. Off by default —
     /// the answer is grounded in retrieved context, and thinking is where a
     /// local model spends its minutes.
@@ -3010,8 +3017,33 @@ fn api_chat_stream(
 
         emit("phase", serde_json::json!({ "phase": "retrieving" }));
 
+        // Hand the model the graph toolbox so it can chase what retrieval
+        // only pointed at — call sites, outlines, exact source, paths.
+        let tool_state = state.clone();
+        let tool_db = db.clone();
+        let tool_embedder = Some(embedder.clone());
+        let runner = move |name: &str, args: serde_json::Value| {
+            let state = tool_state.clone();
+            let db = tool_db.clone();
+            let embedder = tool_embedder.clone();
+            let name = name.to_string();
+            Box::pin(async move { run_chat_tool(state, db, embedder, name, args).await })
+                as futures::future::BoxFuture<'static, Result<String, String>>
+        };
+        let toolbox = if body.tools.unwrap_or(true) {
+            Some(chat::ToolBox {
+                schemas: chat_tool_schemas(),
+                run: &runner,
+                max_rounds: body.max_tool_rounds.unwrap_or(4).min(8),
+                max_result_chars: 6_000,
+            })
+        } else {
+            None
+        };
+
         let t_ret = std::time::Instant::now();
         let emit_ctx = emit.clone();
+        let emit_tool = emit.clone();
         let emit_delta = emit.clone();
         let outcome = chat::run_chat_rag_stream(
             &*db,
@@ -3021,6 +3053,7 @@ fn api_chat_stream(
             &body.query,
             &history_owned,
             opts,
+            toolbox.as_ref(),
             |ctx| {
                 emit_ctx(
                     "context",
@@ -3028,6 +3061,17 @@ fn api_chat_stream(
                         "citations": citations_json(&ctx.items),
                         "seed_id": ctx.seed_id,
                         "retrieval_ms": t_ret.elapsed().as_millis() as u64,
+                    }),
+                );
+            },
+            |t: chat::ToolEvent| {
+                emit_tool(
+                    "tool",
+                    serde_json::json!({
+                        "name": t.name,
+                        "args": t.args,
+                        "state": if t.summary.is_some() { "done" } else { "start" },
+                        "summary": t.summary,
                     }),
                 );
             },
@@ -3054,6 +3098,7 @@ fn api_chat_stream(
                     "reasoning": if o.reasoning.is_empty() { None } else { Some(o.reasoning) },
                     "retrieval_ms": o.retrieval_ms,
                     "completion_ms": o.completion_ms,
+                    "tool_calls": o.tool_calls,
                     "usage": o.usage,
                     "dest": dest_name,
                     "chat_model": model,
@@ -3093,6 +3138,143 @@ fn merge_chat_cfg(default: &Option<ChatConfig>, body: &ChatBody) -> Option<ChatC
         max_tokens,
         timeout_secs: base_default.timeout_secs,
     })
+}
+
+// ---------- Agent tools for chat & tour (`ToolBox`) ----------
+
+/// Tools a chat/tour model may call, in OpenAI function-calling form.
+///
+/// The schemas come straight from the MCP registry, so the model behind
+/// `/api/chat` sees exactly the toolbox an MCP client sees — one
+/// description to maintain, not two. Tools that mutate or that only make
+/// sense to an operator (`reindex`, `list_projects`) are left out: a chat
+/// turn should read the graph, not reshape it.
+const CHAT_TOOL_DENYLIST: &[&str] = &["reindex", "list_projects"];
+
+fn chat_tool_schemas() -> Vec<serde_json::Value> {
+    let listed = crate::mcp::tools::tool_list();
+    listed
+        .as_array()
+        .map(|tools| {
+            tools
+                .iter()
+                .filter(|t| {
+                    t.get("name")
+                        .and_then(|n| n.as_str())
+                        .map(|n| !CHAT_TOOL_DENYLIST.contains(&n))
+                        .unwrap_or(false)
+                })
+                .map(|t| {
+                    // MCP calls it `inputSchema`; OpenAI wants
+                    // `function.parameters`. Same JSON Schema either way.
+                    let mut params = t.get("inputSchema").cloned().unwrap_or_else(
+                        || serde_json::json!({ "type": "object", "properties": {} }),
+                    );
+                    // `project` is an MCP nicety — the server already knows
+                    // which project it serves, and letting the model pick
+                    // another one mid-answer just invites confusion.
+                    if let Some(props) = params
+                        .get_mut("properties")
+                        .and_then(|p| p.as_object_mut())
+                    {
+                        props.remove("project");
+                    }
+                    serde_json::json!({
+                        "type": "function",
+                        "function": {
+                            "name": t.get("name").cloned().unwrap_or_default(),
+                            "description": t.get("description").cloned().unwrap_or_default(),
+                            "parameters": params,
+                        }
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Run one tool against the server's live state.
+///
+/// Graph tools go through the same `agent_tools::run_tool` the MCP server
+/// and `/api/tools/:tool` use; the two search tools need the vector store
+/// and embedder, so they're wired here to the already-open handles rather
+/// than opening their own.
+async fn run_chat_tool(
+    state: ServeState,
+    db: Arc<dyn KnowledgeStore>,
+    embedder: Option<Arc<Embedder>>,
+    name: String,
+    args: serde_json::Value,
+) -> Result<String, String> {
+    let name = crate::mcp::tools::canonical_tool_name(&name).to_string();
+    if CHAT_TOOL_DENYLIST.contains(&name.as_str()) {
+        return Err(format!("{} is not available from chat", name));
+    }
+
+    match name.as_str() {
+        "search" | "semantic_search" => {
+            let embedder = embedder.ok_or("no embedder configured — semantic tools are offline")?;
+            let query = args
+                .get("query")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            if query.trim().is_empty() {
+                return Err("query is required".into());
+            }
+            let k = args.get("k").and_then(|v| v.as_u64()).unwrap_or(8).clamp(1, 25) as usize;
+            let repo_root = state.repo_root();
+
+            if name == "semantic_search" {
+                let hits = storage_semantic_search(&*db, &embedder, &query, k)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let mut out = String::new();
+                for (i, h) in hits.iter().enumerate() {
+                    out.push_str(&format!(
+                        "{}. {} ({}) — {}:{} · distance {:.3}\n",
+                        i + 1,
+                        h.node.name,
+                        h.node.node_type,
+                        h.node.file,
+                        h.node.start_line,
+                        h.distance
+                    ));
+                }
+                return Ok(if out.is_empty() { "No matches.".into() } else { out });
+            }
+
+            let hops = args.get("hops").and_then(|v| v.as_u64()).unwrap_or(2).min(4) as u32;
+            let mut opts = SearchKbOptions::new(&query, repo_root.as_path());
+            opts.k = k;
+            opts.hops = hops;
+            opts.include_snippets = true;
+            opts.max_chars = 6_000;
+            let ctx = storage_search_kb(&*db, &embedder, opts)
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(chat::render_context(&ctx.items, 6_000))
+        }
+        _ => {
+            let snap = state.snapshot();
+            let ctx = state.active();
+            let out = ultragraph::agent_tools::run_tool(
+                &name,
+                &snap.parsed,
+                &snap.raw_json,
+                ctx.repo_root.as_path(),
+                ctx.graph_path.as_path(),
+                args,
+                Some(ultragraph::agent_tools::Render::Markdown),
+            )?;
+            Ok(match out {
+                ultragraph::agent_tools::ToolOutput::Text(t) => t,
+                ultragraph::agent_tools::ToolOutput::Json(v) => {
+                    serde_json::to_string_pretty(&v).unwrap_or_default()
+                }
+            })
+        }
+    }
 }
 
 // ---------- Guided tour (/api/tour) ----------
@@ -3142,6 +3324,12 @@ struct TourBody {
     /// structured extraction, not a reasoning problem.
     #[serde(default)]
     think: Option<bool>,
+    /// Let the guide research with the graph tools before routing.
+    #[serde(default)]
+    research: Option<bool>,
+    /// Cap on research rounds.
+    #[serde(default)]
+    max_tool_rounds: Option<usize>,
     // Per-request chat overrides, same shape as /api/chat.
     #[serde(default)]
     chat_model: Option<String>,
@@ -3215,6 +3403,7 @@ fn tour_opts_from_body<'a>(
     opts.include_debug = body.include_debug.unwrap_or(true);
     opts.stream = body.stream.unwrap_or(false);
     opts.fast = !body.think.unwrap_or(false);
+    opts.research = body.research.unwrap_or(false);
     opts
 }
 
@@ -3277,6 +3466,27 @@ fn api_tour_stream(
             body.edge_types.clone().filter(|v| !v.is_empty());
         let opts = tour_opts_from_body(&body, edge_types_owned.as_deref());
 
+        // Same graph toolbox chat gets, so a tour can look past the nodes
+        // retrieval happened to surface. Off unless asked for: every tool
+        // round is another wait before the first stop.
+        let tool_state = state.clone();
+        let tool_db = db.clone();
+        let tool_embedder = Some(embedder.clone());
+        let runner = move |name: &str, args: serde_json::Value| {
+            let state = tool_state.clone();
+            let db = tool_db.clone();
+            let embedder = tool_embedder.clone();
+            let name = name.to_string();
+            Box::pin(async move { run_chat_tool(state, db, embedder, name, args).await })
+                as futures::future::BoxFuture<'static, Result<String, String>>
+        };
+        let toolbox = opts.research.then(|| chat::ToolBox {
+            schemas: chat_tool_schemas(),
+            run: &runner,
+            max_rounds: body.max_tool_rounds.unwrap_or(3).min(8),
+            max_result_chars: 4_000,
+        });
+
         let mut used_model: Option<String> = None;
         let result = match chat_cfg {
             Some(cfg) => match ChatClient::new(cfg) {
@@ -3296,6 +3506,7 @@ fn api_tour_stream(
                         repo_root.as_path(),
                         &body.query,
                         opts.clone(),
+                        toolbox.as_ref(),
                         &mut on_progress,
                     )
                     .await

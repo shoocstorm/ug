@@ -83,6 +83,13 @@ long the user waits before seeing anything. Four rules, in order of impact:
 Verify with a real slow endpoint, not a mock: mocks answer instantly and hide exactly the
 problem you're trying to fix.
 
+**One toolbox, two doors.** When a model needs to reach into the graph, give it the MCP
+tools rather than a parallel set: `mcp::tools::tool_list()` is the single source of schemas
+and descriptions, converted to OpenAI `function` shape for `/api/chat`. Descriptions are
+load-bearing prompt text — writing a second copy means two things to keep true. Run tool
+rounds non-streaming (partial `tool_calls` deltas are the ugliest corner of the wire
+format), stream only the final answer, and show every call to the user as it happens.
+
 ## 6. Test Before Commit
 
 **Always verify changes with tests before marking a task complete.**

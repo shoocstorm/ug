@@ -17,7 +17,7 @@
 
 mod format;
 mod install;
-mod tools;
+pub mod tools;
 
 use std::collections::HashMap;
 use std::io::IsTerminal;

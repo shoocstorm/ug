@@ -126,6 +126,13 @@ pub enum TourProgress {
     /// The walk can start on this one while the rest is still being
     /// written — on a slow local model that's minutes of waiting saved.
     Drafted { index: usize, stop: TourStop },
+    /// The guide called a graph tool while researching the route.
+    Tool {
+        name: String,
+        args: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        summary: Option<String>,
+    },
     /// The first reply was unusable; asking for a repair.
     Repairing { reason: String },
     /// Binding the plan back onto graph nodes.
@@ -302,6 +309,10 @@ pub struct TourOptions<'a> {
     /// On by default: a tour is a structured extraction, not a reasoning
     /// task, and thinking is where the minutes go.
     pub fast: bool,
+    /// Let the guide research with the graph tools before it commits to a
+    /// route. Off by default: retrieval already hands it a good candidate
+    /// set, and every tool round is another wait.
+    pub research: bool,
 }
 
 impl<'a> TourOptions<'a> {
@@ -322,6 +333,7 @@ impl<'a> TourOptions<'a> {
             include_debug: true,
             stream: false,
             fast: true,
+            research: false,
         }
     }
 }
@@ -985,14 +997,8 @@ fn build_plan_messages(
     }
     user.push_str("\nDesign the guided tour as JSON now.");
     let messages = vec![
-        ChatMessage {
-            role: "system".into(),
-            content: tour_system_prompt(max_stops),
-        },
-        ChatMessage {
-            role: "user".into(),
-            content: user,
-        },
+        ChatMessage::new("system", tour_system_prompt(max_stops)),
+        ChatMessage::new("user", user),
     ];
     (messages, shown)
 }
@@ -1371,14 +1377,8 @@ async fn run_plan(
         "Your previous reply had no stop that referenced a real item number."
     };
     let mut repair = messages;
-    repair.push(ChatMessage {
-        role: "assistant".into(),
-        content: answer,
-    });
-    repair.push(ChatMessage {
-        role: "user".into(),
-        content: repair_prompt(items.len().min(prompt_item_cap(max_stops)), problem),
-    });
+    repair.push(ChatMessage::new("assistant", answer));
+    repair.push(ChatMessage::new("user", repair_prompt(items.len().min(prompt_item_cap(max_stops)), problem)));
 
     debug.repaired = true;
     on_progress(TourProgress::Repairing {
@@ -1447,7 +1447,7 @@ pub async fn plan_tour(
     opts: TourOptions<'_>,
 ) -> Result<Tour, Box<dyn std::error::Error + Send + Sync>> {
     let mut quiet = silent_progress();
-    plan_tour_with_progress(store, embedder, chat, repo_root, query, opts, &mut quiet).await
+    plan_tour_with_progress(store, embedder, chat, repo_root, query, opts, None, &mut quiet).await
 }
 
 /// As [`plan_tour`], but reporting each step to `on_progress` as it
@@ -1461,6 +1461,7 @@ pub async fn plan_tour_with_progress(
     repo_root: &std::path::Path,
     query: &str,
     opts: TourOptions<'_>,
+    toolbox: Option<&crate::chat::ToolBox<'_>>,
     on_progress: ProgressFn<'_>,
 ) -> Result<Tour, Box<dyn std::error::Error + Send + Sync>> {
     let (items, seed_id, retrieval_ms) =
@@ -1495,6 +1496,25 @@ pub async fn plan_tour_with_progress(
         candidates_shown: shown,
         max_stops: opts.max_stops,
     });
+
+    // Optional research pass: the guide can pull outlines, call sites and
+    // exact source before committing to a route. The tool results ride
+    // along into the planning prompt as extra context.
+    let mut messages = messages;
+    let mut research_usage = None;
+    if let Some(tb) = toolbox {
+        let (msgs, usage, _calls) =
+            crate::chat::run_tool_rounds(planner, tb, messages, |e| {
+                on_progress(TourProgress::Tool {
+                    name: e.name,
+                    args: e.args,
+                    summary: e.summary,
+                });
+            })
+            .await?;
+        messages = msgs;
+        research_usage = usage;
+    }
 
     let t_cmp = Instant::now();
     let (assembled, debug, usage) = run_plan(
@@ -1538,7 +1558,7 @@ max-tokens (currently {}) or lower --max-stops.",
     tour.seed_id = seed_id;
     tour.retrieval_ms = retrieval_ms;
     tour.completion_ms = completion_ms;
-    tour.usage = usage;
+    tour.usage = merge_usage(research_usage, usage);
     bind_route(&mut tour, &edges);
     bind_candidates(&mut tour, &items, shown);
     add_quality_warnings(&mut tour, &items, &dropped);

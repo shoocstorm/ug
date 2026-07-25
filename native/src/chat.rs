@@ -14,6 +14,7 @@
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use ultragraph::storage::{
     search_kb as storage_search_kb, ContextItem, Direction, Embedder, KnowledgeStore,
@@ -132,10 +133,58 @@ pub fn fast_client(chat: &ChatClient) -> Option<ChatClient> {
     ChatClient::new(cfg).ok()
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+/// One message on the wire. `tool_calls` / `tool_call_id` are only set on
+/// the assistant and tool turns of a function-calling exchange; they stay
+/// absent otherwise so plain chat requests are byte-identical to before.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCall>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+impl ChatMessage {
+    pub fn new(role: &str, content: impl Into<String>) -> Self {
+        Self {
+            role: role.to_string(),
+            content: content.into(),
+            ..Default::default()
+        }
+    }
+}
+
+/// One assistant turn as the provider returned it.
+#[derive(Clone, Debug, Default)]
+pub struct Completion {
+    pub content: String,
+    pub reasoning: String,
+    pub tool_calls: Vec<ToolCall>,
+    pub usage: Option<Usage>,
+    pub finish_reason: Option<String>,
+}
+
+/// A tool invocation the model asked for.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ToolCall {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default, rename = "type")]
+    pub kind: Option<String>,
+    pub function: ToolCallFunction,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ToolCallFunction {
+    #[serde(default)]
+    pub name: String,
+    /// JSON-encoded arguments. Models emit this as a *string*, not an object.
+    #[serde(default)]
+    pub arguments: String,
 }
 
 #[derive(Serialize)]
@@ -145,6 +194,12 @@ struct ChatRequest<'a> {
     temperature: f32,
     max_tokens: u32,
     stream: bool,
+    /// OpenAI function-calling tool list. Omitted entirely when empty so
+    /// endpoints that don't support tools see the request they always saw.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<&'a [Value]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_choice: Option<&'a str>,
 }
 
 #[derive(Deserialize)]
@@ -166,6 +221,10 @@ struct ChatChoiceMessage {
     #[allow(dead_code)]
     role: Option<String>,
     content: Option<String>,
+    #[serde(default)]
+    reasoning_content: Option<String>,
+    #[serde(default)]
+    tool_calls: Option<Vec<ToolCall>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Default)]
@@ -286,6 +345,18 @@ impl ChatClient {
         &self,
         messages: &[ChatMessage],
     ) -> Result<(String, Option<Usage>, Option<String>), ChatError> {
+        let out = self.complete_raw(messages, None).await?;
+        Ok((out.content, out.usage, out.finish_reason))
+    }
+
+    /// The full assistant turn, including any tools it wants called. `tools`
+    /// is the OpenAI function-calling schema list; pass `None` for a plain
+    /// completion.
+    pub async fn complete_raw(
+        &self,
+        messages: &[ChatMessage],
+        tools: Option<&[Value]>,
+    ) -> Result<Completion, ChatError> {
         let url = format!(
             "{}/chat/completions",
             self.cfg.base_url.trim_end_matches('/')
@@ -296,6 +367,8 @@ impl ChatClient {
             temperature: self.cfg.temperature,
             max_tokens: self.cfg.max_tokens,
             stream: false,
+            tools,
+            tool_choice: tools.map(|_| "auto"),
         };
 
         let resp = self.post_chat(&url, &req).await?;
@@ -308,8 +381,13 @@ impl ChatClient {
 
         let parsed: ChatResponse = resp.json().await.map_err(ChatError::Http)?;
         let choice = parsed.choices.into_iter().next().ok_or(ChatError::EmptyChoices)?;
-        let text = choice.message.content.unwrap_or_default();
-        Ok((text, parsed.usage, choice.finish_reason))
+        Ok(Completion {
+            content: choice.message.content.unwrap_or_default(),
+            reasoning: choice.message.reasoning_content.unwrap_or_default(),
+            tool_calls: choice.message.tool_calls.unwrap_or_default(),
+            usage: parsed.usage,
+            finish_reason: choice.finish_reason,
+        })
     }
 
     /// Streaming round-trip (`stream: true`, SSE wire format). Calls
@@ -343,6 +421,8 @@ impl ChatClient {
             temperature: self.cfg.temperature,
             max_tokens: self.cfg.max_tokens,
             stream: true,
+            tools: None,
+            tool_choice: None,
         };
 
         let resp = self.post_chat(&url, &req).await?;
@@ -569,10 +649,7 @@ pub fn build_rag_messages(
     let system = system_prompt.unwrap_or(DEFAULT_SYSTEM_PROMPT);
     let mut msgs: Vec<ChatMessage> = Vec::with_capacity(history.len() + 3);
 
-    msgs.push(ChatMessage {
-        role: "system".into(),
-        content: system.into(),
-    });
+    msgs.push(ChatMessage::new("system", system));
 
     let rendered = render_context(&context.items, ctx_max_chars);
     let preface = if rendered.is_empty() {
@@ -583,20 +660,14 @@ pub fn build_rag_messages(
             rendered.trim_end()
         )
     };
-    msgs.push(ChatMessage {
-        role: "system".into(),
-        content: preface,
-    });
+    msgs.push(ChatMessage::new("system", preface));
 
     // Prior turns (already in role/content shape).
     for m in history {
         msgs.push(m.clone());
     }
 
-    msgs.push(ChatMessage {
-        role: "user".into(),
-        content: query.to_string(),
-    });
+    msgs.push(ChatMessage::new("user", query.to_string()));
 
     msgs
 }
@@ -608,6 +679,8 @@ pub fn build_rag_messages(
 /// point. Returns the answer text, the retrieval result, and timing /
 /// usage info so callers can surface latency and token counts.
 pub struct ChatRagOutcome {
+    /// How many tool calls the model made getting to this answer.
+    pub tool_calls: usize,
     pub answer: String,
     /// Separately-streamed chain-of-thought text, when the provider
     /// sends one (`reasoning_content`). Empty for providers that inline
@@ -617,6 +690,162 @@ pub struct ChatRagOutcome {
     pub retrieval_ms: u128,
     pub completion_ms: u128,
     pub usage: Option<Usage>,
+}
+
+/// A tool the model may call, plus the code that runs it.
+///
+/// The schemas come from the MCP registry (`mcp::tools`) so an agent
+/// talking to `ug` over MCP and the model behind `/api/chat` see exactly
+/// the same toolbox — one place to describe a tool, two ways to reach it.
+pub struct ToolBox<'a> {
+    /// OpenAI function-calling schemas, as sent in `tools`.
+    pub schemas: Vec<Value>,
+    /// Runs one call. Errors come back as text for the model to read;
+    /// a failed tool call should teach it, not abort the turn.
+    pub run: &'a (dyn Fn(&str, Value) -> futures::future::BoxFuture<'static, Result<String, String>>
+             + Send
+             + Sync),
+    /// Cap on tool rounds, so a confused model can't loop forever.
+    pub max_rounds: usize,
+    /// Cap on how much one tool's output may add to the prompt.
+    pub max_result_chars: usize,
+}
+
+/// What happened during a tool-calling exchange, for progress reporting.
+#[derive(Clone, Debug)]
+pub struct ToolEvent {
+    pub name: String,
+    /// Compact one-line rendering of the arguments.
+    pub args: String,
+    /// `None` while the call is running, `Some(summary)` once it returned.
+    pub summary: Option<String>,
+}
+
+/// Run the model's tool calls until it answers in prose.
+///
+/// Tool rounds are deliberately non-streaming: partial `tool_calls` deltas
+/// are the messiest part of the OpenAI wire format, and the rounds produce
+/// no user-visible text anyway. The caller streams the *final* answer.
+/// Returns the messages to send for that final turn, plus the usage the
+/// rounds cost.
+pub async fn run_tool_rounds<F>(
+    chat: &ChatClient,
+    toolbox: &ToolBox<'_>,
+    mut messages: Vec<ChatMessage>,
+    mut on_event: F,
+) -> Result<(Vec<ChatMessage>, Option<Usage>, usize), ChatError>
+where
+    F: FnMut(ToolEvent),
+{
+    let mut usage: Option<Usage> = None;
+    let mut calls = 0usize;
+    for _ in 0..toolbox.max_rounds {
+        let out = chat.complete_raw(&messages, Some(&toolbox.schemas)).await?;
+        usage = merge_usage(usage, out.usage.clone());
+        if out.tool_calls.is_empty() {
+            // The model answered instead of calling a tool. Drop that draft
+            // and let the caller redo it streamed — the context it built up
+            // (the tool results) is what matters.
+            return Ok((messages, usage, calls));
+        }
+
+        // Record the assistant turn verbatim; providers reject tool results
+        // that don't follow the call that asked for them.
+        messages.push(ChatMessage {
+            role: "assistant".into(),
+            content: out.content.clone(),
+            tool_calls: Some(out.tool_calls.clone()),
+            ..Default::default()
+        });
+
+        for call in &out.tool_calls {
+            let args: Value = serde_json::from_str(&call.function.arguments)
+                .unwrap_or(Value::Object(Default::default()));
+            let arg_line = compact_args(&args);
+            on_event(ToolEvent {
+                name: call.function.name.clone(),
+                args: arg_line.clone(),
+                summary: None,
+            });
+
+            let result = (toolbox.run)(&call.function.name, args).await;
+            calls += 1;
+            let (text, summary) = match result {
+                Ok(t) => {
+                    let lines = t.lines().count();
+                    (t, format!("{} line(s)", lines))
+                }
+                Err(e) => (format!("Tool error: {}", e), format!("failed: {}", e)),
+            };
+            let text = clip_tool_result(&text, toolbox.max_result_chars);
+            on_event(ToolEvent {
+                name: call.function.name.clone(),
+                args: arg_line,
+                summary: Some(summary),
+            });
+            messages.push(ChatMessage {
+                role: "tool".into(),
+                content: text,
+                tool_call_id: Some(call.id.clone()),
+                name: Some(call.function.name.clone()),
+                ..Default::default()
+            });
+        }
+    }
+    // Out of rounds: tell the model to answer with what it has.
+    messages.push(ChatMessage::new(
+        "user",
+        "You have used all available tool calls. Answer now with what you have.",
+    ));
+    Ok((messages, usage, calls))
+}
+
+/// One-line rendering of tool arguments for the progress feed.
+fn compact_args(args: &Value) -> String {
+    let Some(obj) = args.as_object() else {
+        return String::new();
+    };
+    let mut parts: Vec<String> = obj
+        .iter()
+        .map(|(k, v)| {
+            let val = match v {
+                Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            let val: String = val.chars().take(40).collect();
+            format!("{}={}", k, val)
+        })
+        .collect();
+    parts.sort();
+    parts.join(" ")
+}
+
+/// Keep one tool result from eating the whole context window.
+fn clip_tool_result(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let head: String = text.chars().take(max_chars).collect();
+    format!("{}\n… (result truncated at {} chars)", head, max_chars)
+}
+
+fn merge_usage(a: Option<Usage>, b: Option<Usage>) -> Option<Usage> {
+    match (a, b) {
+        (None, x) => x,
+        (x, None) => x,
+        (Some(x), Some(y)) => {
+            let add = |l: Option<u32>, r: Option<u32>| match (l, r) {
+                (None, v) => v,
+                (v, None) => v,
+                (Some(l), Some(r)) => Some(l + r),
+            };
+            Some(Usage {
+                prompt_tokens: add(x.prompt_tokens, y.prompt_tokens),
+                completion_tokens: add(x.completion_tokens, y.completion_tokens),
+                total_tokens: add(x.total_tokens, y.total_tokens),
+            })
+        }
+    }
 }
 
 /// Per-request RAG knobs. Mirrors the subset of `SearchKbOptions` that
@@ -722,8 +951,8 @@ mod tests {
             seed_id: Some("seed".into()),
         };
         let history = vec![
-            ChatMessage { role: "user".into(), content: "prev?".into() },
-            ChatMessage { role: "assistant".into(), content: "prev!".into() },
+            ChatMessage::new("user", "prev?"),
+            ChatMessage::new("assistant", "prev!"),
         ];
         let msgs = build_rag_messages("now?", &ctx, &history, Some("CUSTOM"), 10_000);
 
@@ -857,6 +1086,7 @@ pub async fn run_chat_rag(
         retrieval_ms,
         completion_ms,
         usage,
+        tool_calls: 0,
     })
 }
 
@@ -867,7 +1097,7 @@ pub async fn run_chat_rag(
 /// the streaming request), emitting the whole answer as one delta — so
 /// callers get streaming when the provider supports it and identical
 /// behaviour when it doesn't.
-pub async fn run_chat_rag_stream<C, F>(
+pub async fn run_chat_rag_stream<C, F, T>(
     store: &dyn KnowledgeStore,
     embedder: &Embedder,
     chat: &ChatClient,
@@ -875,11 +1105,14 @@ pub async fn run_chat_rag_stream<C, F>(
     query: &str,
     history: &[ChatMessage],
     opts: ChatRagOptions<'_>,
+    toolbox: Option<&ToolBox<'_>>,
     mut on_context: C,
+    mut on_tool: T,
     mut on_delta: F,
 ) -> Result<ChatRagOutcome, Box<dyn std::error::Error + Send + Sync>>
 where
     C: FnMut(&RankedContext),
+    T: FnMut(ToolEvent),
     F: FnMut(StreamDelta),
 {
     let t_ret = std::time::Instant::now();
@@ -887,7 +1120,7 @@ where
     let retrieval_ms = t_ret.elapsed().as_millis();
     on_context(&context);
 
-    let messages = build_rag_messages(
+    let mut messages = build_rag_messages(
         query,
         &context,
         history,
@@ -899,6 +1132,18 @@ where
     let chat = fast.as_ref().unwrap_or(chat);
 
     let t_cmp = std::time::Instant::now();
+    // Let the model dig through the graph first — retrieval gives it a
+    // starting neighbourhood, the tools let it follow the threads it finds.
+    let mut tool_usage = None;
+    let mut tool_calls = 0;
+    if let Some(tb) = toolbox {
+        let (msgs, usage, calls) =
+            run_tool_rounds(chat, tb, messages, |e| on_tool(e)).await?;
+        messages = msgs;
+        tool_usage = usage;
+        tool_calls = calls;
+    }
+
     let (answer, reasoning, usage) = match chat.complete_stream(&messages, &mut on_delta).await {
         Ok(out) => out,
         Err(ChatError::BadStatus(code, body)) => {
@@ -922,6 +1167,7 @@ where
         context,
         retrieval_ms,
         completion_ms,
-        usage,
+        usage: merge_usage(tool_usage, usage),
+        tool_calls,
     })
 }
