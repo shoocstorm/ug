@@ -3078,6 +3078,7 @@ fn merge_chat_cfg(default: &Option<ChatConfig>, body: &ChatBody) -> Option<ChatC
     let temperature = body.temperature.unwrap_or(base_default.temperature);
     let max_tokens = body.max_tokens.unwrap_or(base_default.max_tokens);
     Some(ChatConfig {
+        extra_body: None,
         base_url,
         api_key,
         model,
@@ -3129,6 +3130,11 @@ struct TourBody {
     /// UI wants a running account rather than a spinner.
     #[serde(default)]
     stream: Option<bool>,
+    /// Let a reasoning model deliberate before planning. Off by default —
+    /// thinking is where a local model spends its minutes, and a tour is a
+    /// structured extraction, not a reasoning problem.
+    #[serde(default)]
+    think: Option<bool>,
     // Per-request chat overrides, same shape as /api/chat.
     #[serde(default)]
     chat_model: Option<String>,
@@ -3158,6 +3164,7 @@ fn merge_tour_chat_cfg(default: &Option<ChatConfig>, body: &TourBody) -> Option<
     let temperature = body.temperature.unwrap_or(base_default.temperature);
     let max_tokens = body.max_tokens.unwrap_or(base_default.max_tokens);
     Some(ChatConfig {
+        extra_body: None,
         base_url,
         api_key,
         model,
@@ -3200,6 +3207,7 @@ fn tour_opts_from_body<'a>(
     opts.max_per_file = body.max_per_file.unwrap_or(opts.max_per_file).min(20);
     opts.include_debug = body.include_debug.unwrap_or(true);
     opts.stream = body.stream.unwrap_or(false);
+    opts.fast = !body.think.unwrap_or(false);
     opts
 }
 

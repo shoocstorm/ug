@@ -5313,10 +5313,13 @@
         }
         #tour-overlay.dragging { transition: opacity .35s ease; }
         #tour-overlay.dragging .tour-card { box-shadow: 0 30px 70px -12px rgba(0, 0, 0, .7); }
+        /* Deliberately see-through: the graph is the subject, and the card
+           sits over the part of it the camera just flew to. Blur keeps the
+           text readable over whatever is behind. */
         .tour-card {
-            background: linear-gradient(180deg, rgba(26, 23, 21, .93), rgba(18, 16, 15, .95));
-            backdrop-filter: blur(16px) saturate(1.15);
-            -webkit-backdrop-filter: blur(16px) saturate(1.15);
+            background: linear-gradient(180deg, rgba(26, 23, 21, .72), rgba(18, 16, 15, .78));
+            backdrop-filter: blur(22px) saturate(1.2);
+            -webkit-backdrop-filter: blur(22px) saturate(1.2);
             border: 1px solid rgba(249, 115, 22, .28);
             border-radius: 16px;
             box-shadow: 0 22px 60px -14px rgba(0, 0, 0, .6), 0 0 0 1px rgba(255, 255, 255, .03) inset;
@@ -5544,6 +5547,11 @@
         /* `display: flex` below would otherwise beat the UA's [hidden] rule,
            leaving stale "up next" / warning rows on screen. */
         .tour-next[hidden], .tour-warnings[hidden] { display: none; }
+        .tour-streaming[hidden] { display: none; }
+        .tour-streaming {
+            display: flex; align-items: center; gap: 4px; margin-top: 9px;
+            font-size: 11px; color: #cbb096;
+        }
         .tour-warnings { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; }
         .tour-warn {
             font-size: 11px; line-height: 1.45; color: #f5c6a0;
@@ -5977,6 +5985,11 @@
                     </div>
                     <div class="tour-next" id="tour-o-next-up" hidden>
                         <span class="lbl">Up next</span><span class="val" id="tour-o-next-title"></span>
+                    </div>
+                    <!-- Shown while the walk is running ahead of the guide. -->
+                    <div class="tour-streaming" id="tour-o-streaming" hidden>
+                        <span class="tour-spinner"></span>
+                        <span>The guide is still writing the rest of the tour…</span>
                     </div>
                 </div>
                 <!-- Live planning read-out. A local model can take minutes,
@@ -8590,6 +8603,8 @@
             planStep: -1,
             planTimer: null,
             planDetail: {},
+            streaming: false,      // stops are still arriving from the guide
+            awaitingMore: false,   // playback caught up with the stream
         };
 
         const TOUR_TYPE_MS = 16;      // per-character reveal cadence at 1×
@@ -8985,6 +9000,8 @@
             tourState.active = true;
             tourState.index = -1;
             tourState.isolate = false;
+            tourState.streaming = false;
+            tourState.awaitingMore = false;
             tourState.routeIds = new Set();
             tourState.nearIds = new Set();
             tourState.routeEdges = new Set();
@@ -9138,6 +9155,10 @@
                     tourEl('tplan-hint').textContent =
                         'The first reply came back unusable; asking the guide to try again.';
                     break;
+                case 'drafted':
+                    setPlanStep('writing', `${p.index + 1} stop${p.index === 0 ? '' : 's'} ready`);
+                    acceptDraftedStop(p.stop);
+                    break;
                 case 'assembling':
                     setPlanStep('assembling', `${p.stops} stop${p.stops === 1 ? '' : 's'}`);
                     break;
@@ -9146,6 +9167,77 @@
                         `The guide is unreachable (${p.reason || 'error'}); falling back to a ranked itinerary.`;
                     break;
             }
+        }
+
+        // A stop finished streaming. The first one starts the walk — there's
+        // no reason to stare at a spinner when the camera could already be
+        // flying — and the rest append as they arrive.
+        function acceptDraftedStop(stop) {
+            if (!tourState.active || !stop) return;
+            if (tourState.data && !tourState.streaming) return;   // final tour already in
+
+            if (!tourState.data) {
+                stopPlanProgress();
+                enterTourMode({
+                    query: tourEl('tour-o-title').textContent,
+                    title: tourEl('tour-o-title').textContent,
+                    intro: '',
+                    outro: '',
+                    stops: [stop],
+                    route: [],
+                    warnings: [],
+                }, { streaming: true });
+                return;
+            }
+
+            const tour = tourState.data;
+            if (tour.stops.some(s => s.node_id === stop.node_id)) return;
+            tour.stops.push(stop);
+            buildTourRoute(tour);
+            appendProgressSegment(tour.stops.length - 1);
+            renderStreamingHint();
+            // Auto-advance parked at the end waiting for this stop.
+            if (tourState.awaitingMore) {
+                tourState.awaitingMore = false;
+                goToStop(tour.stops.length - 1);
+            } else {
+                updateNavButtons();
+                renderNextUp(tour.stops[tourState.index + 1] || null);
+            }
+        }
+
+        function appendProgressSegment(i) {
+            const prog = tourEl('tour-o-progress');
+            const seg = document.createElement('div');
+            seg.className = 'tour-seg';
+            const s = tourState.data.stops[i];
+            seg.title = `${i + 1}. ${s.title || s.name || 'Stop ' + (i + 1)}`;
+            seg.addEventListener('click', () => { pauseTour(); goToStop(i); });
+            prog.appendChild(seg);
+            // The counter's denominator grows with the plan.
+            tourEl('tour-o-counter').textContent =
+                `${String(tourState.index + 1).padStart(2, '0')} / ${String(tourState.data.stops.length).padStart(2, '0')}`;
+        }
+
+        // A quiet line saying the guide is still writing, so a short first
+        // tour doesn't look like the whole answer.
+        function renderStreamingHint() {
+            const el = tourEl('tour-o-streaming');
+            if (!el) return;
+            el.hidden = !tourState.streaming;
+        }
+
+        // Swap a streaming preview for the finished tour, keeping the user
+        // where they are if that stop survived into the final plan.
+        function upgradeToFinalTour(tour) {
+            const current = tourCurrentStop();
+            tourState.streaming = false;
+            tourState.awaitingMore = false;
+            renderStreamingHint();
+            const idx = current ? tour.stops.findIndex(s => s.node_id === current.node_id) : -1;
+            const wasPlaying = tourState.playing;
+            enterTourMode(tour, { startAt: idx >= 0 ? idx : Math.min(tourState.index, tour.stops.length - 1) });
+            if (!wasPlaying) pauseTour();
         }
 
         // Minimal SSE reader over `fetch` (EventSource can't POST). Calls
@@ -9231,6 +9323,13 @@
                 if (!tour) throw new Error('the server closed the stream without a tour');
 
                 stopPlanProgress();
+                if (tourState.streaming && tour.stops && tour.stops.length) {
+                    recordTourInHistory(tour, query, maxStops);
+                    upgradeToFinalTour(tour);
+                    statusEl.textContent =
+                        `${tour.fallback ? 'ranked itinerary' : 'guided tour'} ready · ${tour.stops.length} stops`;
+                    return;
+                }
                 if (!tour.stops || !tour.stops.length) {
                     note.hidden = false;
                     note.innerHTML = escapeHtml(tour.intro || 'No stops could be planned for that question.');
@@ -9250,9 +9349,12 @@
             }
         }
 
-        function enterTourMode(tour) {
+        function enterTourMode(tour, opts) {
+            opts = opts || {};
             tourState.data = tour;
             tourState.active = true;
+            tourState.streaming = !!opts.streaming;
+            tourState.awaitingMore = false;
             tourEl('tour-o-note').hidden = true;
             tourEl('tour-o-stage').style.display = '';
             tourEl('tour-o-title').textContent = tour.title || tour.query || 'Guided tour';
@@ -9280,7 +9382,8 @@
             tourState.playing = true;
             updatePlayButton();
             updateSpeedButton();
-            goToStop(0);
+            renderStreamingHint();
+            goToStop(Math.max(0, Math.min(opts.startAt || 0, tour.stops.length - 1)));
         }
 
         function renderTourWarnings(tour) {
@@ -9466,6 +9569,11 @@
             if (!tour) return;
             if (tourState.index < tour.stops.length - 1) {
                 goToStop(tourState.index + 1);
+            } else if (tourState.streaming) {
+                // Caught up with the guide — hold here and resume the moment
+                // the next stop finishes streaming.
+                tourState.awaitingMore = true;
+                updateNavButtons();
             } else {
                 // Reached the end: stop playing and show the takeaway.
                 tourState.playing = false;

@@ -47,10 +47,19 @@ pub const MAX_STOPS_LIMIT: usize = 40;
 const TOUR_SNIPPET_MAX_CHARS: usize = 900;
 const TOUR_SNIPPET_MAX_LINES: usize = 22;
 
-/// Tighter budget for the code shown to the *planner*: enough to tell what
-/// a candidate does, small enough that a dozen of them still fit the prompt.
-const PROMPT_SNIPPET_MAX_CHARS: usize = 480;
-const PROMPT_SNIPPET_MAX_LINES: usize = 14;
+/// Tighter budget for the code shown to the *planner*. The guide only has
+/// to recognise what a candidate is, not review it — and every extra
+/// thousand characters is prefill time plus more for the model to chew on
+/// before it starts writing.
+const PROMPT_SNIPPET_MAX_CHARS: usize = 260;
+const PROMPT_SNIPPET_MAX_LINES: usize = 8;
+
+/// Only the strongest candidates are worth spending code on; the rest are
+/// listed by name, type, location and description alone.
+const PROMPT_SNIPPET_ITEMS: usize = 10;
+
+/// Descriptions are model-written prose and occasionally run long.
+const PROMPT_DESC_MAX_CHARS: usize = 240;
 
 /// How many candidates we read source for / offer to the guide. Beyond
 /// this the prompt stops being a menu and starts being a haystack — but a
@@ -113,6 +122,10 @@ pub enum TourProgress {
         reasoning_chars: usize,
         elapsed_ms: u128,
     },
+    /// A stop finished streaming and has been bound to a real graph node.
+    /// The walk can start on this one while the rest is still being
+    /// written — on a slow local model that's minutes of waiting saved.
+    Drafted { index: usize, stop: TourStop },
     /// The first reply was unusable; asking for a repair.
     Repairing { reason: String },
     /// Binding the plan back onto graph nodes.
@@ -285,6 +298,10 @@ pub struct TourOptions<'a> {
     /// Stream the completion so token-level progress can be reported.
     /// Only worth turning on when someone is watching a progress sink.
     pub stream: bool,
+    /// Ask the model to answer without deliberating (see `no_think_body`).
+    /// On by default: a tour is a structured extraction, not a reasoning
+    /// task, and thinking is where the minutes go.
+    pub fast: bool,
 }
 
 impl<'a> TourOptions<'a> {
@@ -304,6 +321,7 @@ impl<'a> TourOptions<'a> {
             max_per_file: DEFAULT_MAX_PER_FILE,
             include_debug: true,
             stream: false,
+            fast: true,
         }
     }
 }
@@ -327,23 +345,28 @@ pub fn tour_system_prompt(max_stops: usize) -> String {
     } else {
         format!("between {} and {} stops", lo, hi)
     };
+    // Every word the model writes is wall-clock on a local endpoint, so the
+    // shape asks for the shortest text that still reads as a guided tour,
+    // and the first rule is "don't deliberate" — reasoning models otherwise
+    // spend thousands of tokens before the first `{`.
     format!(
         "You are UltraGraph's Tour Guide. You are given a numbered set of code/knowledge context \
 items ([#1], [#2], …) retrieved from a knowledge graph over the user's repository, a LINKS list of \
 the graph edges between those items, and a question. Design a short guided walking tour that \
 ANSWERS the question by visiting a subset of these items in a logical narrative order — begin at \
 the entry point and follow the flow of control, data, or dependencies from there.\n\n\
-Return ONLY a single JSON object — no prose before or after, no markdown code fences — of exactly \
-this shape:\n\
+Answer immediately. Do NOT deliberate, plan out loud, or explain your choices: your first \
+character must be `{{` and your last must be `}}`. No prose, no markdown fences.\n\n\
+The JSON object, exactly this shape:\n\
 {{\n\
-  \"title\": \"<a short, engaging title for the tour>\",\n\
-  \"intro\": \"<1-2 sentences framing what we'll walk through>\",\n\
+  \"title\": \"<short, engaging tour title, max 8 words>\",\n\
+  \"intro\": \"<ONE sentence framing the walk>\",\n\
   \"stops\": [\n\
-    {{ \"ref\": <the [#N] number of the item to visit>, \"title\": \"<short stop headline, max 6 words>\", \
-\"narration\": \"<2-4 sentences: this item's role in answering the question, naming the concrete \
-symbols involved, and how it connects to the previous or next stop>\" }}\n\
+    {{ \"ref\": <the [#N] number of the item to visit>, \"title\": \"<stop headline, max 6 words>\", \
+\"narration\": \"<TWO sentences at most: this item's role in answering the question, naming the \
+concrete symbols involved, and how it connects to the next stop>\" }}\n\
   ],\n\
-  \"outro\": \"<1-2 sentences answering the question outright>\"\n\
+  \"outro\": \"<ONE sentence answering the question outright>\"\n\
 }}\n\n\
 Rules:\n\
 - Use only `ref` numbers that appear in the provided items; each item at most once.\n\
@@ -354,9 +377,9 @@ complete one.\n\
 (\"…which calls…\", \"…imported by…\").\n\
 - Ground every narration in the shown code and descriptions; never invent code, files, or symbols \
 that aren't present.\n\
-- Write narration in a warm, second-person guide voice (\"Notice how…\", \"From here we follow…\"), \
-plain prose, no markdown.\n\
-- The outro must actually answer the question, not just summarise the walk.",
+- Warm, second-person guide voice (\"Notice how…\", \"From here we follow…\"), plain prose, no \
+markdown, no line breaks inside strings.\n\
+- Keep every narration under 40 words. Brevity is the point.",
         count = count
     )
 }
@@ -435,6 +458,17 @@ fn strip_reasoning(raw: &str) -> &str {
 /// Scanning (rather than "first `{` to last `}`") is what makes this
 /// survive a model that thinks out loud in prose containing braces.
 fn top_level_objects(text: &str) -> Vec<&str> {
+    top_level_object_ranges(text)
+        .into_iter()
+        .map(|r| &text[r])
+        .collect()
+}
+
+/// As [`top_level_objects`], but returning byte ranges — the incremental
+/// scanner needs to know where each object ended so it can resume there.
+///
+/// [`top_level_objects`]: top_level_objects
+fn top_level_object_ranges(text: &str) -> Vec<std::ops::Range<usize>> {
     let bytes = text.as_bytes();
     let mut out = Vec::new();
     let mut i = 0usize;
@@ -474,7 +508,7 @@ fn top_level_objects(text: &str) -> Vec<&str> {
         }
         match end {
             Some(e) => {
-                out.push(&text[start..=e]);
+                out.push(start..e + 1);
                 i = e + 1;
             }
             // Unbalanced from here on (usually a truncated reply) — nothing
@@ -770,7 +804,7 @@ fn attach_snippets(tour: &mut Tour, repo_root: &std::path::Path) {
 /// the guide narrates from descriptions alone, which is where invented
 /// details creep in.
 fn attach_prompt_snippets(items: &mut [ContextItem], repo_root: &std::path::Path, cap: usize) {
-    for item in items.iter_mut().take(cap) {
+    for item in items.iter_mut().take(cap.min(PROMPT_SNIPPET_ITEMS)) {
         if item.snippet.is_some() {
             continue;
         }
@@ -873,8 +907,16 @@ fn render_numbered_items(items: &[ContextItem], max_chars: usize, cap: usize) ->
             item.file.clone()
         };
         let mut block = format!("[#{}] {} ({}) — {}\n", i + 1, item.name, item.node_type, loc);
-        if !item.description.trim().is_empty() {
-            block.push_str(item.description.trim());
+        let desc = item.description.trim();
+        if !desc.is_empty() {
+            // One clipped line: the guide needs the gist, not the essay.
+            let one_line = desc.split_whitespace().collect::<Vec<_>>().join(" ");
+            if one_line.chars().count() > PROMPT_DESC_MAX_CHARS {
+                block.extend(one_line.chars().take(PROMPT_DESC_MAX_CHARS));
+                block.push('\u{2026}');
+            } else {
+                block.push_str(&one_line);
+            }
             block.push('\n');
         }
         if let Some(snippet) = item.snippet.as_ref().filter(|s| !s.trim().is_empty()) {
@@ -1080,14 +1122,37 @@ fn looks_truncated(raw: &str, finish_reason: Option<&str>) -> bool {
     raw.contains('{') && top_level_objects(strip_reasoning(raw)).is_empty()
 }
 
-/// A client with enough completion budget — and enough wall-clock — to
-/// finish a plan. Values the caller raised themselves are left alone, so
-/// an explicit `--max-tokens` / `--chat-timeout` always wins.
-fn planning_client(chat: &ChatClient) -> Option<ChatClient> {
+/// Ask a reasoning model to answer without deliberating.
+///
+/// Thinking is a property of the chat template, not the prompt — telling
+/// a Qwen3-class model "don't think out loud" in the system prompt does
+/// nothing, and it will happily spend 20k tokens (ten minutes on a local
+/// box) reasoning before writing a single stop. Each provider spells the
+/// off switch differently, so we send all the common ones; anything the
+/// endpoint doesn't recognise is either ignored or triggers the 400
+/// fallback in `complete_tracked`.
+fn no_think_body() -> serde_json::Map<String, serde_json::Value> {
+    let mut m = serde_json::Map::new();
+    // vLLM / SGLang / llama.cpp-server pass this through to the template.
+    m.insert(
+        "chat_template_kwargs".into(),
+        serde_json::json!({ "enable_thinking": false }),
+    );
+    // OpenAI o-series, newer llama.cpp and LM Studio builds.
+    m.insert("reasoning_effort".into(), serde_json::json!("low"));
+    m
+}
+
+/// A client set up for planning: enough completion budget and wall-clock
+/// to finish, and thinking turned off. Values the caller raised
+/// themselves are left alone, so an explicit `--max-tokens` /
+/// `--chat-timeout` always wins.
+fn planning_client(chat: &ChatClient, fast: bool) -> Option<ChatClient> {
     let cfg = chat.config();
     let raise_tokens = cfg.max_tokens <= crate::chat::DEFAULT_MAX_TOKENS;
     let raise_timeout = cfg.timeout_secs <= crate::chat::DEFAULT_TIMEOUT_SECS;
-    if !raise_tokens && !raise_timeout {
+    let add_extras = fast && cfg.extra_body.is_none();
+    if !raise_tokens && !raise_timeout && !add_extras {
         return None;
     }
     let mut raised = cfg.clone();
@@ -1097,7 +1162,111 @@ fn planning_client(chat: &ChatClient) -> Option<ChatClient> {
     if raise_timeout {
         raised.timeout_secs = TOUR_MIN_TIMEOUT_SECS;
     }
+    if add_extras {
+        raised.extra_body = Some(no_think_body());
+    }
     ChatClient::new(raised).ok()
+}
+
+/// The same client with the no-think fields stripped, for endpoints that
+/// reject unknown request fields outright.
+fn without_extra_body(chat: &ChatClient) -> Option<ChatClient> {
+    let cfg = chat.config();
+    cfg.extra_body.as_ref()?;
+    let mut plain = cfg.clone();
+    plain.extra_body = None;
+    ChatClient::new(plain).ok()
+}
+
+/// Pulls finished stop objects out of a plan that is still streaming.
+///
+/// The model writes `"stops": [ {…}, {…} …]` one object at a time; each
+/// completed object is a stop we can bind and hand to the UI immediately,
+/// so the walk starts while the rest of the plan is still being written.
+#[derive(Default)]
+struct StopScanner {
+    /// Byte offset just past the `[` that opens the stops array.
+    array_start: Option<usize>,
+    /// Where the next scan resumes (past the last object we emitted).
+    cursor: usize,
+}
+
+impl StopScanner {
+    /// Stop objects completed since the last call, in order.
+    fn take_new(&mut self, buf: &str) -> Vec<PlanStop> {
+        let start = match self.array_start {
+            Some(s) => s,
+            None => {
+                let key = match buf.find("\"stops\"") {
+                    Some(k) => k,
+                    None => return Vec::new(),
+                };
+                let open = match buf[key..].find('[') {
+                    Some(o) => key + o + 1,
+                    None => return Vec::new(),
+                };
+                self.array_start = Some(open);
+                self.cursor = open;
+                open
+            }
+        };
+        let from = self.cursor.max(start);
+        if from >= buf.len() {
+            return Vec::new();
+        }
+        // The array ends before the outro; once we see `]` at this level,
+        // there is nothing further to harvest.
+        let region = &buf[from..];
+        let mut out = Vec::new();
+        for range in top_level_object_ranges(region) {
+            let text = &region[range.clone()];
+            if let Ok(ps) = serde_json::from_str::<PlanStop>(text) {
+                out.push(ps);
+            }
+            self.cursor = from + range.end;
+        }
+        out
+    }
+}
+
+/// Bind a streamed stop to a real node, skipping refs that don't resolve
+/// or repeat. Mirrors `assemble_from_plan`'s rules so a previewed stop is
+/// never one the final tour would have thrown away.
+fn draft_stop(
+    ps: &PlanStop,
+    items: &[ContextItem],
+    seen: &mut HashSet<String>,
+    repo_root: &std::path::Path,
+) -> Option<TourStop> {
+    let idx = ps.r#ref.as_ref().and_then(coerce_ref)?;
+    if idx == 0 || idx > items.len() {
+        return None;
+    }
+    let item = &items[idx - 1];
+    if !seen.insert(item.id.clone()) {
+        return None;
+    }
+    let narration = ps.narration.as_deref().unwrap_or("").trim();
+    let narration = if narration.is_empty() { item.description.as_str() } else { narration };
+    let mut stop = stop_from_item(idx, item, ps.title.as_deref(), narration);
+    stop.snippet = bounded_snippet(
+        repo_root,
+        &stop.file,
+        stop.start_line,
+        stop.end_line,
+        TOUR_SNIPPET_MAX_CHARS,
+        TOUR_SNIPPET_MAX_LINES,
+    );
+    Some(stop)
+}
+
+/// What `complete_tracked` needs to bind a stop the moment it finishes
+/// streaming. Absent on the repair pass, where a preview would fight the
+/// stops already on screen.
+struct DraftSink<'a> {
+    items: &'a [ContextItem],
+    repo_root: &'a std::path::Path,
+    max_stops: usize,
 }
 
 /// One completion, with token-level progress when `stream` is on.
@@ -1110,6 +1279,7 @@ async fn complete_tracked(
     chat: &ChatClient,
     messages: &[ChatMessage],
     stream: bool,
+    draft: Option<DraftSink<'_>>,
     on_progress: ProgressFn<'_>,
 ) -> Result<(String, Option<Usage>, Option<String>), Box<dyn std::error::Error + Send + Sync>> {
     if !stream {
@@ -1122,12 +1292,30 @@ async fn complete_tracked(
     let mut chars = 0usize;
     let mut reasoning_chars = 0usize;
     let mut finish: Option<String> = None;
+    // Accumulated content, scanned for finished stops as it grows.
+    let mut buf = String::new();
+    let mut scanner = StopScanner::default();
+    let mut drafted = 0usize;
+    let mut seen: HashSet<String> = HashSet::new();
 
     let outcome = {
         let progress = &mut *on_progress;
+        let mut draft = draft;
         chat.complete_stream(messages, |d| {
             if let Some(c) = &d.content {
                 chars += c.len();
+                if let Some(sink) = draft.as_mut() {
+                    buf.push_str(c);
+                    for ps in scanner.take_new(&buf) {
+                        if drafted >= sink.max_stops {
+                            break;
+                        }
+                        if let Some(stop) = draft_stop(&ps, sink.items, &mut seen, sink.repo_root) {
+                            progress(TourProgress::Drafted { index: drafted, stop });
+                            drafted += 1;
+                        }
+                    }
+                }
             }
             if let Some(r) = &d.reasoning {
                 reasoning_chars += r.len();
@@ -1159,10 +1347,14 @@ async fn complete_tracked(
             let text = if content.trim().is_empty() { reasoning } else { content };
             Ok((text, usage, finish))
         }
-        // The endpoint refused SSE — take the blocking path instead.
+        // A 4xx here is usually one of two things: the endpoint doesn't do
+        // SSE, or it rejects the no-think fields. Retry plainly, dropping
+        // the extras first, so neither can break a working setup.
         Err(crate::chat::ChatError::BadStatus(code, _)) => {
-            tracing::debug!(status = code, "tour: streaming rejected; falling back to a blocking completion");
-            let (text, usage, reason) = chat.complete_with_reason(messages).await?;
+            tracing::debug!(status = code, "tour: request rejected; retrying without streaming/extras");
+            let plain = without_extra_body(chat);
+            let fallback = plain.as_ref().unwrap_or(chat);
+            let (text, usage, reason) = fallback.complete_with_reason(messages).await?;
             Ok((text, usage, reason))
         }
         Err(e) => Err(Box::new(e)),
@@ -1178,6 +1370,7 @@ async fn run_plan(
     items: &[ContextItem],
     max_stops: usize,
     stream: bool,
+    repo_root: &std::path::Path,
     on_progress: ProgressFn<'_>,
 ) -> Result<(Option<Assembled>, TourDebug, Option<Usage>), Box<dyn std::error::Error + Send + Sync>>
 {
@@ -1187,7 +1380,9 @@ async fn run_plan(
         ..Default::default()
     };
 
-    let (answer, usage, finish) = complete_tracked(chat, &messages, stream, on_progress).await?;
+    let draft = DraftSink { items, repo_root, max_stops };
+    let (answer, usage, finish) =
+        complete_tracked(chat, &messages, stream, Some(draft), on_progress).await?;
     debug.raw_response = answer.clone();
     debug.plan = plan_value(&answer);
 
@@ -1222,7 +1417,7 @@ async fn run_plan(
     on_progress(TourProgress::Repairing {
         reason: problem.to_string(),
     });
-    let (retry, usage2, finish2) = complete_tracked(chat, &repair, stream, on_progress).await?;
+    let (retry, usage2, finish2) = complete_tracked(chat, &repair, stream, None, on_progress).await?;
     debug.repair_response = Some(retry.clone());
     debug.truncated = looks_truncated(&retry, finish2.as_deref());
     if let Some(v) = plan_value(&retry) {
@@ -1324,7 +1519,7 @@ pub async fn plan_tour_with_progress(
     let (messages, shown) = build_plan_messages(query, &items, &edges, ctx_chars, opts.max_stops);
 
     // Plan with a completion budget big enough to hold the whole object.
-    let raised = planning_client(chat);
+    let raised = planning_client(chat, opts.fast);
     let planner = raised.as_ref().unwrap_or(chat);
 
     on_progress(TourProgress::Planning {
@@ -1342,6 +1537,7 @@ pub async fn plan_tour_with_progress(
         &items,
         opts.max_stops,
         opts.stream,
+        repo_root,
         on_progress,
     )
     .await?;
@@ -1573,6 +1769,47 @@ mod tests {
         let raw = "{\"stops\":[{\"ref\":1,\"narration\":\"uses fn f() { g(); } here\"}]}";
         let v = plan_value(raw).expect("value");
         assert_eq!(v["stops"][0]["ref"], 1);
+    }
+
+    #[test]
+    fn scanner_yields_stops_as_they_stream() {
+        // Feed the plan in the order a model emits it, a few characters at
+        // a time; each finished object should surface exactly once.
+        let full = r#"{"title":"T","intro":"i","stops":[{"ref":2,"title":"a","narration":"one"},{"ref":1,"title":"b","narration":"two"}],"outro":"o"}"#;
+        let mut scanner = StopScanner::default();
+        let mut buf = String::new();
+        let mut got: Vec<usize> = Vec::new();
+        for chunk in full.as_bytes().chunks(7) {
+            buf.push_str(std::str::from_utf8(chunk).unwrap());
+            for ps in scanner.take_new(&buf) {
+                got.push(ps.r#ref.as_ref().and_then(coerce_ref).unwrap());
+            }
+        }
+        assert_eq!(got, vec![2, 1], "each stop emitted once, in order");
+    }
+
+    #[test]
+    fn scanner_ignores_a_half_written_stop() {
+        let mut scanner = StopScanner::default();
+        // The object hasn't closed yet, so there is nothing to hand over.
+        assert!(scanner
+            .take_new(r#"{"title":"T","stops":[{"ref":1,"narration":"unfini"#)
+            .is_empty());
+    }
+
+    #[test]
+    fn drafted_stops_skip_bad_and_duplicate_refs() {
+        let items = vec![item(1), item(2)];
+        let mut seen = HashSet::new();
+        let root = std::path::Path::new("/nonexistent");
+        let mk = |r: u64| PlanStop {
+            r#ref: Some(serde_json::json!(r)),
+            title: Some("t".into()),
+            narration: Some("n".into()),
+        };
+        assert!(draft_stop(&mk(1), &items, &mut seen, root).is_some());
+        assert!(draft_stop(&mk(1), &items, &mut seen, root).is_none(), "duplicate");
+        assert!(draft_stop(&mk(9), &items, &mut seen, root).is_none(), "out of range");
     }
 
     #[test]

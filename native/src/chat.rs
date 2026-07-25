@@ -37,6 +37,12 @@ pub const DEFAULT_CTX_MAX_CHARS: usize = 12_000;
 
 #[derive(Clone, Debug)]
 pub struct ChatConfig {
+    /// Extra top-level fields merged into the request body. Providers
+    /// disagree on how you ask a reasoning model to skip deliberation
+    /// (`chat_template_kwargs.enable_thinking`, `reasoning_effort`, …),
+    /// so callers that care pass whatever their endpoint understands and
+    /// fall back if it 400s.
+    pub extra_body: Option<serde_json::Map<String, serde_json::Value>>,
     pub base_url: String,
     pub api_key: String,
     pub model: String,
@@ -48,6 +54,7 @@ pub struct ChatConfig {
 impl Default for ChatConfig {
     fn default() -> Self {
         Self {
+            extra_body: None,
             base_url: DEFAULT_CHAT_BASE_URL.to_string(),
             api_key: DEFAULT_CHAT_API_KEY.to_string(),
             model: DEFAULT_CHAT_MODEL.to_string(),
@@ -178,8 +185,17 @@ impl ChatClient {
         &self.cfg
     }
 
-    /// Single non-streaming round-trip. Returns the assistant text and
-    /// (when the server reports it) token-usage stats.
+    /// Serialize a request, folding in `extra_body` when present.
+    fn request_body(&self, req: &ChatRequest<'_>) -> serde_json::Value {
+        let mut v = serde_json::to_value(req).unwrap_or_else(|_| serde_json::json!({}));
+        if let (Some(extra), Some(obj)) = (self.cfg.extra_body.as_ref(), v.as_object_mut()) {
+            for (k, val) in extra {
+                obj.insert(k.clone(), val.clone());
+            }
+        }
+        v
+    }
+
     /// Non-streaming round-trip. See [`complete_with_reason`] when the
     /// caller needs to know *why* the model stopped (e.g. to tell a
     /// truncated reply apart from a badly formatted one).
@@ -217,7 +233,7 @@ impl ChatClient {
             .client
             .post(&url)
             .bearer_auth(&self.cfg.api_key)
-            .json(&req)
+            .json(&self.request_body(&req))
             .send()
             .await
             .map_err(ChatError::Http)?;
@@ -271,7 +287,7 @@ impl ChatClient {
             .client
             .post(&url)
             .bearer_auth(&self.cfg.api_key)
-            .json(&req)
+            .json(&self.request_body(&req))
             .send()
             .await
             .map_err(ChatError::Http)?;

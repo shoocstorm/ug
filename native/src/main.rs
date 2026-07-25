@@ -4143,6 +4143,9 @@ fn run_tour(args: &[String]) {
     // Print the guide's raw JSON plan alongside the itinerary — the CLI
     // twin of the web UI's "view plan JSON" panel.
     let show_plan = has_flag(args, "--show-plan");
+    // Reasoning models spend most of a tour's wall-clock deliberating, so
+    // the guide is asked not to unless the user wants it.
+    let think = has_flag(args, "--think");
     let k: usize = flag_value(args, &["-k", "--limit"])
         .and_then(|s| s.parse().ok())
         .unwrap_or(14);
@@ -4202,6 +4205,7 @@ fn run_tour(args: &[String]) {
         opts.max_per_file = max_per_file;
         // The transcript is only worth carrying when something will print it.
         opts.include_debug = json_output || show_plan;
+        opts.fast = !think;
 
         let result = if no_llm {
             eprintln!("{C_CYAN}▸{C_RESET} Planning tour (ranked, no LLM)…");
@@ -4353,6 +4357,15 @@ fn tour_progress_printer() -> impl FnMut(tour::TourProgress) + Send {
                 );
                 let _ = err.flush();
                 writing = true;
+            }
+            tour::TourProgress::Drafted { index, stop } => {
+                end_writing(&mut err, &mut writing);
+                let _ = writeln!(
+                    err,
+                    "{C_GREEN}  ✓{C_RESET} {C_DIM}stop {} ready — {}{C_RESET}",
+                    index + 1,
+                    stop.title
+                );
             }
             tour::TourProgress::Repairing { .. } => {
                 end_writing(&mut err, &mut writing);
@@ -4545,6 +4558,7 @@ fn print_tour_help() {
     println!("  {C_YELLOW}--no-llm{C_RESET}             Skip the guide; emit a ranked itinerary from retrieval only");
     println!("  {C_CYAN}--no-snippets{C_RESET}         Omit code snippets from stops");
     println!("  {C_CYAN}--show-plan{C_RESET}           Print the raw JSON plan the guide produced");
+    println!("  {C_CYAN}--think{C_RESET}               Let a reasoning model deliberate (slower, rarely better)");
     println!("  {C_CYAN}--strategy{C_RESET} <s>        Rank strategy (ppr|semantic|…, default: ppr)");
     println!("  {C_CYAN}--direction{C_RESET} <d>       Edge direction (out|in|both, default: both)");
     println!("  {C_CYAN}-t, --edge-type{C_RESET} <t>   Restrict expansion to an edge type (repeatable)");
