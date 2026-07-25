@@ -4210,13 +4210,18 @@ fn run_tour(args: &[String]) {
         } else {
             let chat_client = chat_client_from_args(args);
             eprintln!("{C_CYAN}▸{C_RESET} Planning tour for {C_BOLD}\u{201c}{}\u{201d}{C_RESET}…", query);
-            match tour::plan_tour(
+            // A local model can spend minutes on this; stream so the wait
+            // has a visible pulse instead of a frozen terminal.
+            opts.stream = true;
+            let mut on_progress = tour_progress_printer();
+            match tour::plan_tour_with_progress(
                 store.as_ref(),
                 &embedder,
                 &chat_client,
                 repo_root.as_path(),
                 &query,
                 opts.clone(),
+                &mut on_progress,
             )
             .await
             {
@@ -4290,6 +4295,75 @@ fn wrap_indent(text: &str, width: usize, indent: &str) -> String {
         }
     }
     out
+}
+
+/// A progress sink that keeps the terminal alive during a long plan.
+/// Phase changes print a line; token counts rewrite one status line in
+/// place (`\r`) so a five-minute completion doesn't scroll the screen.
+fn tour_progress_printer() -> impl FnMut(tour::TourProgress) + Send {
+    use std::io::Write;
+    let mut writing = false;
+    move |p| {
+        let mut err = std::io::stderr();
+        // Close off the in-place token line before printing anything else.
+        let end_writing = |err: &mut std::io::Stderr, writing: &mut bool| {
+            if *writing {
+                let _ = writeln!(err);
+                *writing = false;
+            }
+        };
+        match p {
+            tour::TourProgress::Retrieving => {
+                end_writing(&mut err, &mut writing);
+                let _ = writeln!(err, "{C_DIM}  · searching the graph…{C_RESET}");
+            }
+            tour::TourProgress::Retrieved { candidates, retrieval_ms } => {
+                end_writing(&mut err, &mut writing);
+                let _ = writeln!(
+                    err,
+                    "{C_DIM}  · {} candidate(s) in {}ms{C_RESET}",
+                    candidates, retrieval_ms
+                );
+            }
+            tour::TourProgress::ReadingCode { items } => {
+                end_writing(&mut err, &mut writing);
+                let _ = writeln!(err, "{C_DIM}  · read source for {} candidate(s){C_RESET}", items);
+            }
+            tour::TourProgress::Linking { edges } => {
+                end_writing(&mut err, &mut writing);
+                let _ = writeln!(err, "{C_DIM}  · {} edge(s) between candidates{C_RESET}", edges);
+            }
+            tour::TourProgress::Planning { model, prompt_chars, candidates_shown, max_stops } => {
+                end_writing(&mut err, &mut writing);
+                let _ = writeln!(
+                    err,
+                    "{C_DIM}  · asking {}{C_RESET}{C_DIM} for up to {} stop(s) from {} item(s) ({} char prompt){C_RESET}",
+                    model, max_stops, candidates_shown, prompt_chars
+                );
+            }
+            tour::TourProgress::Writing { chars, reasoning_chars, elapsed_ms } => {
+                let secs = elapsed_ms as f64 / 1000.0;
+                // ~4 chars/token is close enough for a progress read-out.
+                let tokens = (chars + reasoning_chars) as f64 / 4.0;
+                let rate = if secs > 0.0 { tokens / secs } else { 0.0 };
+                let _ = write!(
+                    err,
+                    "\r{C_DIM}  · writing… ~{:.0} tokens · {:.0}/s · {:.0}s{C_RESET}\x1b[K",
+                    tokens, rate, secs
+                );
+                let _ = err.flush();
+                writing = true;
+            }
+            tour::TourProgress::Repairing { .. } => {
+                end_writing(&mut err, &mut writing);
+                let _ = writeln!(err, "{C_YELLOW}  · reply unusable; asking again{C_RESET}");
+            }
+            tour::TourProgress::Assembling { stops } => {
+                end_writing(&mut err, &mut writing);
+                let _ = writeln!(err, "{C_DIM}  · binding {} stop(s) to graph nodes{C_RESET}", stops);
+            }
+        }
+    }
 }
 
 /// Render a `Tour` as a terminal itinerary. `color` toggles ANSI so the

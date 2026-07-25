@@ -3124,6 +3124,11 @@ struct TourBody {
     /// model is configured, so a tour always works with just the DB.
     #[serde(default)]
     no_llm: Option<bool>,
+    /// Stream planning progress as SSE instead of blocking until the tour
+    /// is ready. Planning against a local model runs for minutes, so the
+    /// UI wants a running account rather than a spinner.
+    #[serde(default)]
+    stream: Option<bool>,
     // Per-request chat overrides, same shape as /api/chat.
     #[serde(default)]
     chat_model: Option<String>,
@@ -3162,6 +3167,189 @@ fn merge_tour_chat_cfg(default: &Option<ChatConfig>, body: &TourBody) -> Option<
     })
 }
 
+/// Shape a `TourOptions` from a request body. `edge_types` is passed
+/// separately because it has to outlive the borrow.
+fn tour_opts_from_body<'a>(
+    body: &'a TourBody,
+    edge_types: Option<&'a [String]>,
+) -> crate::tour::TourOptions<'a> {
+    let mut opts = crate::tour::TourOptions::new();
+    opts.k = body.k.unwrap_or(14).clamp(1, 80);
+    opts.hops = body.hops.unwrap_or(2).min(4);
+    opts.max_stops = body
+        .max_stops
+        .unwrap_or(crate::tour::DEFAULT_MAX_STOPS)
+        .clamp(1, crate::tour::MAX_STOPS_LIMIT);
+    opts.strategy = body
+        .strategy
+        .as_deref()
+        .map(RankStrategy::from_str_lossy)
+        .unwrap_or(RankStrategy::Ppr);
+    opts.direction = body
+        .direction
+        .as_deref()
+        .map(Direction::from_str_lossy)
+        .unwrap_or(Direction::Both);
+    opts.edge_types = edge_types;
+    opts.include_snippets = body.include_snippets.unwrap_or(true);
+    opts.max_context_chars = body
+        .max_context_chars
+        .unwrap_or(chat::DEFAULT_CTX_MAX_CHARS)
+        .min(64_000);
+    opts.where_clause = body.where_clause.as_deref();
+    opts.max_per_file = body.max_per_file.unwrap_or(opts.max_per_file).min(20);
+    opts.include_debug = body.include_debug.unwrap_or(true);
+    opts.stream = body.stream.unwrap_or(false);
+    opts
+}
+
+/// Attach the fields the route adds on top of a planned `Tour`.
+fn tour_response_json(
+    tour: &crate::tour::Tour,
+    dest: &str,
+    model: Option<&str>,
+) -> Result<serde_json::Value, serde_json::Error> {
+    let mut v = serde_json::to_value(tour)?;
+    if let Some(obj) = v.as_object_mut() {
+        obj.insert("dest".into(), serde_json::Value::String(dest.to_string()));
+        if let Some(m) = model {
+            obj.insert("chat_model".into(), serde_json::Value::String(m.to_string()));
+        }
+    }
+    Ok(v)
+}
+
+/// SSE variant of `/api/tour` (`"stream": true` in the body). Planning a
+/// tour against a local model is a minutes-long wait dominated by token
+/// generation, so the route narrates itself:
+///
+/// ```text
+/// event: progress  data: {"phase":"retrieved","candidates":14,…}
+/// event: progress  data: {"phase":"writing","chars":812,…}
+/// event: tour      data: {…the full Tour…}
+/// event: error     data: {"error":"…"}      (terminal, replaces tour)
+/// ```
+fn api_tour_stream(
+    state: ServeState,
+    body: TourBody,
+    db: Arc<dyn KnowledgeStore>,
+    embedder: Arc<Embedder>,
+    chat_cfg: Option<ChatConfig>,
+    want_llm: bool,
+) -> Response {
+    use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
+    use futures::StreamExt;
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<SseEvent>();
+    let repo_root = state.repo_root();
+    let embed_lock = state.embed_lock.clone();
+
+    tokio::spawn(async move {
+        let dest_name = db.backend_name();
+        let emit = |name: &'static str, payload: serde_json::Value| {
+            let _ = tx.send(SseEvent::default().event(name).data(payload.to_string()));
+        };
+
+        let _permit = match embed_lock.acquire_owned().await {
+            Ok(p) => p,
+            Err(_) => {
+                emit("error", serde_json::json!({ "error": "embed semaphore closed" }));
+                return;
+            }
+        };
+
+        let edge_types_owned: Option<Vec<String>> =
+            body.edge_types.clone().filter(|v| !v.is_empty());
+        let opts = tour_opts_from_body(&body, edge_types_owned.as_deref());
+
+        let mut used_model: Option<String> = None;
+        let result = match chat_cfg {
+            Some(cfg) => match ChatClient::new(cfg) {
+                Ok(client) => {
+                    used_model = Some(client.config().model.clone());
+                    let emit_progress = emit;
+                    let mut on_progress = move |p: crate::tour::TourProgress| {
+                        match serde_json::to_value(&p) {
+                            Ok(v) => emit_progress("progress", v),
+                            Err(e) => tracing::debug!(error = %e, "tour: progress encode failed"),
+                        }
+                    };
+                    match crate::tour::plan_tour_with_progress(
+                        &*db,
+                        &embedder,
+                        &client,
+                        repo_root.as_path(),
+                        &body.query,
+                        opts.clone(),
+                        &mut on_progress,
+                    )
+                    .await
+                    {
+                        Ok(t) => Ok(t),
+                        Err(e) => {
+                            tracing::warn!(error = %e, "tour guide LLM failed; falling back to ranked itinerary");
+                            used_model = None;
+                            let reason = e.to_string();
+                            emit(
+                                "progress",
+                                serde_json::json!({ "phase": "fallback", "reason": reason }),
+                            );
+                            crate::tour::plan_tour_no_llm(
+                                &*db,
+                                &embedder,
+                                repo_root.as_path(),
+                                &body.query,
+                                opts.clone(),
+                            )
+                            .await
+                            .map(|mut t| {
+                                t.warnings.push(format!(
+                                    "The tour guide model was unreachable ({}); showing a ranked itinerary.",
+                                    reason
+                                ));
+                                t
+                            })
+                        }
+                    }
+                }
+                Err(e) => Err(Box::new(e) as Box<dyn std::error::Error + Send + Sync>),
+            },
+            None => {
+                emit("progress", serde_json::json!({ "phase": "retrieving" }));
+                crate::tour::plan_tour_no_llm(
+                    &*db,
+                    &embedder,
+                    repo_root.as_path(),
+                    &body.query,
+                    opts.clone(),
+                )
+                .await
+                .map(|mut t| {
+                    if want_llm && !t.stops.is_empty() {
+                        t.warnings.push(
+                            "No chat model is configured, so this is a ranked itinerary rather than a narrated tour."
+                                .to_string(),
+                        );
+                    }
+                    t
+                })
+            }
+        };
+
+        match result {
+            Ok(tour) => match tour_response_json(&tour, dest_name, used_model.as_deref()) {
+                Ok(v) => emit("tour", v),
+                Err(e) => emit("error", serde_json::json!({ "error": format!("encode: {}", e) })),
+            },
+            Err(e) => emit("error", serde_json::json!({ "error": format!("tour: {}", e) })),
+        }
+    });
+
+    let stream =
+        futures::stream::poll_fn(move |cx| rx.poll_recv(cx)).map(Ok::<_, std::convert::Infallible>);
+    Sse::new(stream).keep_alive(KeepAlive::default()).into_response()
+}
+
 /// `POST /api/tour` — plan a guided, narrated walkthrough for a question.
 /// Retrieval is required (needs DB + embedder); the LLM guide is optional
 /// (falls back to a ranked itinerary), so this route works whenever
@@ -3180,27 +3368,6 @@ async fn api_tour(State(state): State<ServeState>, Json(body): Json<TourBody>) -
         Err(r) => return r,
     };
 
-    let k = body.k.unwrap_or(14).min(80).max(1);
-    let hops = body.hops.unwrap_or(2).min(4);
-    let max_stops = body
-        .max_stops
-        .unwrap_or(crate::tour::DEFAULT_MAX_STOPS)
-        .clamp(1, crate::tour::MAX_STOPS_LIMIT);
-    let strategy = body
-        .strategy
-        .as_deref()
-        .map(RankStrategy::from_str_lossy)
-        .unwrap_or(RankStrategy::Ppr);
-    let direction = body
-        .direction
-        .as_deref()
-        .map(Direction::from_str_lossy)
-        .unwrap_or(Direction::Both);
-    let include_snippets = body.include_snippets.unwrap_or(true);
-    let max_context_chars = body
-        .max_context_chars
-        .unwrap_or(chat::DEFAULT_CTX_MAX_CHARS)
-        .min(64_000);
     let edge_types_owned: Option<Vec<String>> = body.edge_types.clone().filter(|v| !v.is_empty());
 
     // Decide the LLM path up front so we can fall back cleanly.
@@ -3212,6 +3379,10 @@ async fn api_tour(State(state): State<ServeState>, Json(body): Json<TourBody>) -
         None
     };
 
+    if body.stream.unwrap_or(false) {
+        return api_tour_stream(state, body, db, embedder, chat_cfg, want_llm);
+    }
+
     let _permit = match state.embed_lock.acquire().await {
         Ok(p) => p,
         Err(_) => return err_json(StatusCode::SERVICE_UNAVAILABLE, "embed semaphore closed"),
@@ -3220,18 +3391,7 @@ async fn api_tour(State(state): State<ServeState>, Json(body): Json<TourBody>) -
     let repo_root = state.repo_root();
     let dest_name = db.backend_name();
 
-    let mut opts = crate::tour::TourOptions::new();
-    opts.k = k;
-    opts.hops = hops;
-    opts.max_stops = max_stops;
-    opts.strategy = strategy;
-    opts.direction = direction;
-    opts.edge_types = edge_types_owned.as_deref();
-    opts.include_snippets = include_snippets;
-    opts.max_context_chars = max_context_chars;
-    opts.where_clause = body.where_clause.as_deref();
-    opts.max_per_file = body.max_per_file.unwrap_or(opts.max_per_file).min(20);
-    opts.include_debug = body.include_debug.unwrap_or(true);
+    let opts = tour_opts_from_body(&body, edge_types_owned.as_deref());
 
     let mut used_model: Option<String> = None;
     let result = match chat_cfg {
@@ -3297,16 +3457,8 @@ async fn api_tour(State(state): State<ServeState>, Json(body): Json<TourBody>) -
     drop(_permit);
 
     match result {
-        Ok(tour) => match serde_json::to_value(&tour) {
-            Ok(mut v) => {
-                if let Some(obj) = v.as_object_mut() {
-                    obj.insert("dest".into(), serde_json::Value::String(dest_name.to_string()));
-                    if let Some(m) = used_model {
-                        obj.insert("chat_model".into(), serde_json::Value::String(m));
-                    }
-                }
-                ok_json(v.to_string())
-            }
+        Ok(tour) => match tour_response_json(&tour, dest_name, used_model.as_deref()) {
+            Ok(v) => ok_json(v.to_string()),
             Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &format!("encode: {}", e)),
         },
         Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &format!("tour: {}", e)),

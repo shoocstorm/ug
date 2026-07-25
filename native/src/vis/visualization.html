@@ -5450,6 +5450,58 @@
             height: 28px; padding: 0 11px; border-radius: 8px; transition: color .15s, border-color .15s;
         }
         .tour-exit:hover { color: #fca5a5; border-color: rgba(248, 113, 113, .4); }
+        /* ─── Guided Tour: live planning read-out ─── */
+        .tour-plan { padding: 2px 0 4px; }
+        .tplan-head { display: flex; align-items: center; gap: 9px; margin-bottom: 10px; }
+        .tplan-phase { flex: 1; font-size: 13px; font-weight: 600; color: #f2ede6; }
+        .tplan-elapsed {
+            font-size: 11px; color: #a89b8d; font-variant-numeric: tabular-nums; letter-spacing: .06em;
+        }
+        /* Indeterminate sweep: the model gives no completion percentage, so
+           this shows liveness rather than pretending to know how far along
+           we are. */
+        .tplan-track {
+            height: 3px; border-radius: 2px; overflow: hidden;
+            background: rgba(255, 255, 255, .09); margin-bottom: 12px;
+        }
+        .tplan-bar {
+            height: 100%; width: 34%; border-radius: 2px;
+            background: linear-gradient(90deg, transparent, #fb923c, #f97316, transparent);
+            animation: tplan-sweep 1.5s ease-in-out infinite;
+        }
+        @keyframes tplan-sweep {
+            0% { transform: translateX(-110%); }
+            100% { transform: translateX(320%); }
+        }
+        .tplan-steps { display: flex; flex-direction: column; gap: 5px; }
+        .tplan-step {
+            display: flex; align-items: center; gap: 8px;
+            font-size: 11.5px; color: #7d7264; transition: color .2s;
+        }
+        .tplan-step .tick {
+            width: 14px; height: 14px; flex-shrink: 0; border-radius: 50%;
+            border: 1.5px solid rgba(255, 255, 255, .16);
+            display: inline-flex; align-items: center; justify-content: center;
+            font-size: 9px; line-height: 1; color: transparent;
+        }
+        .tplan-step.active { color: #f2ede6; }
+        .tplan-step.active .tick { border-color: #f97316; box-shadow: 0 0 0 3px rgba(249, 115, 22, .15); }
+        .tplan-step.done { color: #cbb096; }
+        .tplan-step.done .tick { border-color: rgba(249, 115, 22, .55); background: rgba(249, 115, 22, .55); color: #1a120b; }
+        .tplan-step .detail { color: #a89b8d; font-variant-numeric: tabular-nums; }
+        .tplan-stats {
+            display: flex; gap: 14px; flex-wrap: wrap; margin-top: 11px;
+            padding-top: 10px; border-top: 1px solid rgba(255, 255, 255, .07);
+        }
+        .tplan-stat { display: flex; flex-direction: column; gap: 1px; }
+        .tplan-stat .v {
+            font-size: 15px; font-weight: 650; color: #fdba74; font-variant-numeric: tabular-nums;
+        }
+        .tplan-stat .k {
+            font-size: 9px; letter-spacing: .1em; text-transform: uppercase; color: #7d7264; font-weight: 700;
+        }
+        .tplan-hint { margin-top: 10px; font-size: 11px; line-height: 1.5; color: #7d7264; }
+
         .tour-note { font-size: 13px; line-height: 1.55; color: #e9dfd2; }
         .tour-note.error { color: #fca5a5; }
         .tour-spinner {
@@ -5927,6 +5979,19 @@
                         <span class="lbl">Up next</span><span class="val" id="tour-o-next-title"></span>
                     </div>
                 </div>
+                <!-- Live planning read-out. A local model can take minutes,
+                     so the wait shows what it's actually doing. -->
+                <div id="tour-o-plan" class="tour-plan" hidden>
+                    <div class="tplan-head">
+                        <span class="tour-spinner"></span>
+                        <span class="tplan-phase" id="tplan-phase">Charting a path through the graph…</span>
+                        <span class="tplan-elapsed" id="tplan-elapsed">0:00</span>
+                    </div>
+                    <div class="tplan-track"><div class="tplan-bar" id="tplan-bar"></div></div>
+                    <div class="tplan-steps" id="tplan-steps"></div>
+                    <div class="tplan-stats" id="tplan-stats" hidden></div>
+                    <div class="tplan-hint" id="tplan-hint"></div>
+                </div>
                 <div id="tour-o-note" class="tour-note" hidden></div>
                 <div class="tour-warnings" id="tour-o-warnings" hidden></div>
                 <!-- Transport: centred like a media player, speed on the
@@ -6103,14 +6168,14 @@
             <div class="sidebar-resize-handle" id="sidebar-resize" title="Drag to resize"></div>
 
             <div class="panel-tabs" role="tablist">
-                <button class="panel-tab" data-tab="graph" type="button">Summary</button>
+                <button class="panel-tab active" data-tab="graph" type="button">Summary</button>
                 <button class="panel-tab" data-tab="discover" type="button">Discover</button>
-                <button class="panel-tab active" data-tab="catalog" type="button">Catalog</button>
+                <button class="panel-tab" data-tab="catalog" type="button">Catalog</button>
             </div>
 
             <div class="sidebar-body">
                 <!-- ─── Catalog tab (default): inline repository tree ─── -->
-                <div class="tab-pane active" data-tab="catalog" id="pane-catalog">
+                <div class="tab-pane" data-tab="catalog" id="pane-catalog">
                     <div class="catalog-toolbar">
                         <div class="catalog-search-wrapper">
                             <svg class="catalog-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -6393,7 +6458,7 @@
                 </div><!-- /#pane-discover -->
 
                 <!-- ─── Graph tab: repo meta + filters + analysis tools ─── -->
-                <div class="tab-pane" data-tab="graph" id="pane-graph">
+                <div class="tab-pane active" data-tab="graph" id="pane-graph">
 
                 <!-- Index stats -->
                 <div class="section" data-section="index-stats">
@@ -8521,6 +8586,10 @@
             restore: null,         // panel/spin state to put back on exit
             jsonTab: 'plan',
             jsonData: null,        // archived tour being inspected, if any
+            planStarted: 0,        // wall clock for the planning read-out
+            planStep: -1,
+            planTimer: null,
+            planDetail: {},
         };
 
         const TOUR_TYPE_MS = 16;      // per-character reveal cadence at 1×
@@ -8898,6 +8967,7 @@
                 statusEl.textContent = `Replaying saved tour · ${entry.stops} stop${entry.stops === 1 ? '' : 's'}`;
             }
             beginTourSession();
+            stopPlanProgress();
             tourEl('tour-o-title').textContent = entry.title || entry.query;
             enterTourMode(entry.tour);
         }
@@ -8936,6 +9006,177 @@
             setTourControlsEnabled(false);
         }
 
+        // The steps a plan goes through, in order. Rendered as a checklist so
+        // a multi-minute wait shows position, not just motion.
+        const TOUR_PLAN_STEPS = [
+            { id: 'retrieving', label: 'Searching the graph' },
+            { id: 'reading_code', label: 'Reading the code' },
+            { id: 'linking', label: 'Mapping connections' },
+            { id: 'planning', label: 'Briefing the guide' },
+            { id: 'writing', label: 'Writing the tour' },
+            { id: 'assembling', label: 'Placing the stops' },
+        ];
+
+        function resetPlanProgress(query) {
+            const box = tourEl('tour-o-plan');
+            tourState.planStarted = performance.now();
+            tourState.planStep = -1;
+            tourState.planDetail = {};
+            tourEl('tplan-phase').textContent = 'Charting a path through the graph…';
+            tourEl('tplan-elapsed').textContent = '0:00';
+            tourEl('tplan-stats').hidden = true;
+            tourEl('tplan-stats').innerHTML = '';
+            tourEl('tplan-hint').textContent =
+                'Local models answer at their own pace — this can take a few minutes.';
+            const steps = tourEl('tplan-steps');
+            steps.innerHTML = '';
+            TOUR_PLAN_STEPS.forEach(s => {
+                const row = document.createElement('div');
+                row.className = 'tplan-step';
+                row.dataset.step = s.id;
+                row.innerHTML = '<span class="tick">✓</span><span class="label"></span>'
+                    + '<span class="detail"></span>';
+                row.querySelector('.label').textContent = s.label;
+                steps.appendChild(row);
+            });
+            box.hidden = false;
+            if (tourState.planTimer) clearInterval(tourState.planTimer);
+            tourState.planTimer = setInterval(tickPlanElapsed, 500);
+        }
+
+        function tickPlanElapsed() {
+            if (!tourState.planStarted) return;
+            const secs = Math.floor((performance.now() - tourState.planStarted) / 1000);
+            const el = tourEl('tplan-elapsed');
+            if (el) el.textContent = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+        }
+
+        function stopPlanProgress() {
+            if (tourState.planTimer) { clearInterval(tourState.planTimer); tourState.planTimer = null; }
+            const box = tourEl('tour-o-plan');
+            if (box) box.hidden = true;
+        }
+
+        function setPlanStep(id, detail) {
+            const idx = TOUR_PLAN_STEPS.findIndex(s => s.id === id);
+            if (idx < 0) return;
+            tourState.planStep = Math.max(tourState.planStep, idx);
+            const rows = tourEl('tplan-steps').children;
+            for (let i = 0; i < rows.length; i++) {
+                rows[i].classList.toggle('done', i < tourState.planStep);
+                rows[i].classList.toggle('active', i === tourState.planStep);
+            }
+            if (detail !== undefined) {
+                const row = tourEl('tplan-steps').querySelector(`[data-step="${id}"] .detail`);
+                if (row) row.textContent = detail;
+            }
+            const step = TOUR_PLAN_STEPS[tourState.planStep];
+            if (step) tourEl('tplan-phase').textContent = step.label + '…';
+        }
+
+        function renderPlanStats(stats) {
+            const box = tourEl('tplan-stats');
+            if (!stats.length) { box.hidden = true; return; }
+            box.innerHTML = '';
+            stats.forEach(s => {
+                const d = document.createElement('div');
+                d.className = 'tplan-stat';
+                d.innerHTML = '<span class="v"></span><span class="k"></span>';
+                d.querySelector('.v').textContent = s.value;
+                d.querySelector('.k').textContent = s.label;
+                box.appendChild(d);
+            });
+            box.hidden = false;
+        }
+
+        // Translate one server progress event into the read-out.
+        function applyTourProgress(p) {
+            switch (p.phase) {
+                case 'retrieving':
+                    setPlanStep('retrieving');
+                    break;
+                case 'retrieved':
+                    setPlanStep('retrieving', `${p.candidates} found · ${p.retrieval_ms} ms`);
+                    tourState.planDetail.candidates = p.candidates;
+                    break;
+                case 'reading_code':
+                    setPlanStep('reading_code', `${p.items} file${p.items === 1 ? '' : 's'}`);
+                    break;
+                case 'linking':
+                    setPlanStep('linking', `${p.edges} edge${p.edges === 1 ? '' : 's'}`);
+                    break;
+                case 'planning':
+                    setPlanStep('planning', `${p.candidates_shown} item${p.candidates_shown === 1 ? '' : 's'}`);
+                    tourState.planDetail.model = p.model;
+                    tourEl('tplan-hint').textContent =
+                        `${p.model} is reading ${Math.round(p.prompt_chars / 1000)}k characters of context `
+                        + `and planning up to ${p.max_stops} stops.`;
+                    break;
+                case 'writing': {
+                    setPlanStep('writing');
+                    // ~4 chars per token is close enough for a live read-out.
+                    const tokens = Math.round((p.chars + p.reasoning_chars) / 4);
+                    const secs = Math.max(0.001, p.elapsed_ms / 1000);
+                    const stats = [
+                        { value: tokens.toLocaleString(), label: 'tokens' },
+                        { value: Math.round(tokens / secs) + '/s', label: 'rate' },
+                    ];
+                    if (tourState.planDetail.candidates != null) {
+                        stats.push({ value: tourState.planDetail.candidates, label: 'candidates' });
+                    }
+                    renderPlanStats(stats);
+                    // Reasoning models spend most of the wait thinking; say so
+                    // rather than letting it look stuck.
+                    if (p.reasoning_chars > p.chars) {
+                        tourEl('tplan-hint').textContent =
+                            'The model is reasoning before it writes — the plan lands once it finishes thinking.';
+                    }
+                    break;
+                }
+                case 'repairing':
+                    setPlanStep('writing', 'retrying');
+                    tourEl('tplan-hint').textContent =
+                        'The first reply came back unusable; asking the guide to try again.';
+                    break;
+                case 'assembling':
+                    setPlanStep('assembling', `${p.stops} stop${p.stops === 1 ? '' : 's'}`);
+                    break;
+                case 'fallback':
+                    tourEl('tplan-hint').textContent =
+                        `The guide is unreachable (${p.reason || 'error'}); falling back to a ranked itinerary.`;
+                    break;
+            }
+        }
+
+        // Minimal SSE reader over `fetch` (EventSource can't POST). Calls
+        // `onEvent(name, data)` per complete `event:`/`data:` block.
+        async function readSseStream(res, onEvent) {
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            for (;;) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+                let split;
+                // Blocks are separated by a blank line; \r\n tolerated.
+                while ((split = buffer.search(/\r?\n\r?\n/)) >= 0) {
+                    const raw = buffer.slice(0, split);
+                    buffer = buffer.slice(split + buffer.slice(split).match(/^\r?\n\r?\n/)[0].length);
+                    let name = 'message';
+                    const dataLines = [];
+                    raw.split(/\r?\n/).forEach(line => {
+                        if (line.startsWith('event:')) name = line.slice(6).trim();
+                        else if (line.startsWith('data:')) dataLines.push(line.slice(5).replace(/^ /, ''));
+                    });
+                    if (!dataLines.length) continue;
+                    let payload = null;
+                    try { payload = JSON.parse(dataLines.join('\n')); } catch (e) { continue; }
+                    onEvent(name, payload);
+                }
+            }
+        }
+
         async function startTour(query, maxStops) {
             query = (query || '').trim();
             if (!query) return;
@@ -8949,12 +9190,21 @@
             beginTourSession();
             tourEl('tour-o-title').textContent = query;
             const note = tourEl('tour-o-note');
-            note.hidden = false;
+            note.hidden = true;
             note.classList.remove('error');
-            note.innerHTML = '<span class="tour-spinner"></span>Charting a path through the graph…';
+            resetPlanProgress(query);
 
-            const body = { query, max_stops: maxStops };
+            const body = { query, max_stops: maxStops, stream: true };
             if (state.semDest) body.dest = state.semDest;
+
+            const fail = (msg) => {
+                stopPlanProgress();
+                note.hidden = false;
+                note.classList.add('error');
+                note.textContent = `Tour failed: ${msg}`;
+                statusEl.classList.add('error');
+                statusEl.textContent = `Tour failed: ${msg}`;
+            };
 
             try {
                 const res = await fetch('/api/tour', {
@@ -8963,9 +9213,26 @@
                     body: JSON.stringify(body),
                 });
                 if (!res.ok) throw new Error(await readErr(res));
-                const tour = await res.json();
-                if (!tourState.active) return; // user bailed while we waited
+
+                let tour = null, streamErr = null;
+                if (res.body && (res.headers.get('content-type') || '').includes('event-stream')) {
+                    await readSseStream(res, (name, payload) => {
+                        if (!tourState.active) return;         // user bailed
+                        if (name === 'progress') applyTourProgress(payload);
+                        else if (name === 'tour') tour = payload;
+                        else if (name === 'error') streamErr = payload.error || 'stream error';
+                    });
+                } else {
+                    // Server without the streaming route — take the plain JSON.
+                    tour = await res.json();
+                }
+                if (!tourState.active) return;
+                if (streamErr) throw new Error(streamErr);
+                if (!tour) throw new Error('the server closed the stream without a tour');
+
+                stopPlanProgress();
                 if (!tour.stops || !tour.stops.length) {
+                    note.hidden = false;
                     note.innerHTML = escapeHtml(tour.intro || 'No stops could be planned for that question.');
                     statusEl.textContent = '';
                     return;
@@ -8976,11 +9243,7 @@
                 recordTourInHistory(tour, query, maxStops);
                 enterTourMode(tour);
             } catch (err) {
-                note.hidden = false;
-                note.classList.add('error');
-                note.textContent = `Tour failed: ${err.message || err}`;
-                statusEl.classList.add('error');
-                statusEl.textContent = `Tour failed: ${err.message || err}`;
+                fail(err.message || err);
                 console.error(err);
             } finally {
                 if (startBtn) startBtn.disabled = false;
@@ -8999,6 +9262,7 @@
             });
 
             setTourControlsEnabled(true);
+            stopPlanProgress();
             buildTourRoute(tour);
             renderTourWarnings(tour);
 
@@ -9389,6 +9653,7 @@
 
         function exitTour() {
             clearTourTimers();
+            stopPlanProgress();
             closeTourJson();
             tourState.active = false;
             tourState.playing = false;
@@ -11289,9 +11554,10 @@
             // user is actually working in a panel (see pointerOverCanvas).
             if (d && !pointerOverCanvas()) d = null;
             // While a tour is playing the camera sweeps nodes under a parked
-            // pointer every frame; tooltips there are noise, not intent.
-            // Pausing hands hovering back to the user.
-            if (d && tourState.active && tourState.playing) d = null;
+            // pointer every frame; tooltips there are noise, not intent. Same
+            // while a plan is still being charted — nothing on screen is the
+            // user's doing yet. Pausing hands hovering back to the user.
+            if (d && tourState.active && (tourState.playing || !tourState.data)) d = null;
             state._hoverNode = d || null;
             const el = document.getElementById('graph-3d');
             if (el) el.style.cursor = d ? 'pointer' : null;

@@ -83,6 +83,48 @@ pub const TOUR_MIN_TIMEOUT_SECS: u64 = 900;
 /// detail pass; five is a file dump wearing a tour's clothes.
 const DEFAULT_MAX_PER_FILE: usize = 2;
 
+/// A step of the planning pipeline, reported as it happens. Planning a
+/// tour against a local model can take minutes — most of it spent waiting
+/// on tokens — so callers get a running account instead of a spinner.
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "phase", rename_all = "snake_case")]
+pub enum TourProgress {
+    /// GraphRAG retrieval started.
+    Retrieving,
+    Retrieved {
+        candidates: usize,
+        retrieval_ms: u128,
+    },
+    /// Reading source for the candidates the guide will be shown.
+    ReadingCode { items: usize },
+    /// Probing the graph for edges between candidates.
+    Linking { edges: usize },
+    /// The guide has been given the prompt; tokens are next.
+    Planning {
+        model: String,
+        prompt_chars: usize,
+        candidates_shown: usize,
+        max_stops: usize,
+    },
+    /// Throttled progress while the model writes. `reasoning_chars`
+    /// counts think-out-loud text providers stream separately.
+    Writing {
+        chars: usize,
+        reasoning_chars: usize,
+        elapsed_ms: u128,
+    },
+    /// The first reply was unusable; asking for a repair.
+    Repairing { reason: String },
+    /// Binding the plan back onto graph nodes.
+    Assembling { stops: usize },
+}
+
+/// How often `Writing` events are emitted while tokens stream in.
+const PROGRESS_TICK: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// A progress sink. `Send` so it can live inside a spawned SSE task.
+pub type ProgressFn<'a> = &'a mut (dyn FnMut(TourProgress) + Send);
+
 /// A graph edge between two nodes on the tour (or between two candidates).
 #[derive(Clone, Debug, Serialize)]
 pub struct TourEdge {
@@ -240,6 +282,9 @@ pub struct TourOptions<'a> {
     pub max_per_file: usize,
     /// Attach the planning transcript to the result (`Tour::debug`).
     pub include_debug: bool,
+    /// Stream the completion so token-level progress can be reported.
+    /// Only worth turning on when someone is watching a progress sink.
+    pub stream: bool,
 }
 
 impl<'a> TourOptions<'a> {
@@ -258,6 +303,7 @@ impl<'a> TourOptions<'a> {
             where_clause: None,
             max_per_file: DEFAULT_MAX_PER_FILE,
             include_debug: true,
+            stream: false,
         }
     }
 }
@@ -1054,6 +1100,75 @@ fn planning_client(chat: &ChatClient) -> Option<ChatClient> {
     ChatClient::new(raised).ok()
 }
 
+/// One completion, with token-level progress when `stream` is on.
+///
+/// Streaming is the only way to tell "the model is thinking" apart from
+/// "the connection is dead" on a minutes-long local completion. A provider
+/// that rejects `stream: true` falls back to the blocking call, so turning
+/// this on can't break a working setup.
+async fn complete_tracked(
+    chat: &ChatClient,
+    messages: &[ChatMessage],
+    stream: bool,
+    on_progress: ProgressFn<'_>,
+) -> Result<(String, Option<Usage>, Option<String>), Box<dyn std::error::Error + Send + Sync>> {
+    if !stream {
+        let (text, usage, finish) = chat.complete_with_reason(messages).await?;
+        return Ok((text, usage, finish));
+    }
+
+    let started = Instant::now();
+    let mut last_tick = Instant::now();
+    let mut chars = 0usize;
+    let mut reasoning_chars = 0usize;
+    let mut finish: Option<String> = None;
+
+    let outcome = {
+        let progress = &mut *on_progress;
+        chat.complete_stream(messages, |d| {
+            if let Some(c) = &d.content {
+                chars += c.len();
+            }
+            if let Some(r) = &d.reasoning {
+                reasoning_chars += r.len();
+            }
+            if let Some(f) = &d.finish_reason {
+                finish = Some(f.clone());
+            }
+            if last_tick.elapsed() >= PROGRESS_TICK {
+                last_tick = Instant::now();
+                progress(TourProgress::Writing {
+                    chars,
+                    reasoning_chars,
+                    elapsed_ms: started.elapsed().as_millis(),
+                });
+            }
+        })
+        .await
+    };
+
+    match outcome {
+        Ok((content, reasoning, usage)) => {
+            on_progress(TourProgress::Writing {
+                chars,
+                reasoning_chars,
+                elapsed_ms: started.elapsed().as_millis(),
+            });
+            // Some providers put the whole reply on the reasoning channel;
+            // if `content` came back empty, that's where the JSON is.
+            let text = if content.trim().is_empty() { reasoning } else { content };
+            Ok((text, usage, finish))
+        }
+        // The endpoint refused SSE — take the blocking path instead.
+        Err(crate::chat::ChatError::BadStatus(code, _)) => {
+            tracing::debug!(status = code, "tour: streaming rejected; falling back to a blocking completion");
+            let (text, usage, reason) = chat.complete_with_reason(messages).await?;
+            Ok((text, usage, reason))
+        }
+        Err(e) => Err(Box::new(e)),
+    }
+}
+
 /// Run the planning pass, repairing one bad reply before giving up.
 /// Returns the assembled tour (if any) plus the debug transcript.
 async fn run_plan(
@@ -1062,6 +1177,8 @@ async fn run_plan(
     query: &str,
     items: &[ContextItem],
     max_stops: usize,
+    stream: bool,
+    on_progress: ProgressFn<'_>,
 ) -> Result<(Option<Assembled>, TourDebug, Option<Usage>), Box<dyn std::error::Error + Send + Sync>>
 {
     let mut debug = TourDebug {
@@ -1070,7 +1187,7 @@ async fn run_plan(
         ..Default::default()
     };
 
-    let (answer, usage, finish) = chat.complete_with_reason(&messages).await?;
+    let (answer, usage, finish) = complete_tracked(chat, &messages, stream, on_progress).await?;
     debug.raw_response = answer.clone();
     debug.plan = plan_value(&answer);
 
@@ -1102,7 +1219,10 @@ async fn run_plan(
     });
 
     debug.repaired = true;
-    let (retry, usage2, finish2) = chat.complete_with_reason(&repair).await?;
+    on_progress(TourProgress::Repairing {
+        reason: problem.to_string(),
+    });
+    let (retry, usage2, finish2) = complete_tracked(chat, &repair, stream, on_progress).await?;
     debug.repair_response = Some(retry.clone());
     debug.truncated = looks_truncated(&retry, finish2.as_deref());
     if let Some(v) = plan_value(&retry) {
@@ -1124,16 +1244,31 @@ async fn gather_candidates(
     query: &str,
     opts: &TourOptions<'_>,
     with_snippets: bool,
+    on_progress: ProgressFn<'_>,
 ) -> Result<(Vec<ContextItem>, Option<String>, u128), Box<dyn std::error::Error + Send + Sync>> {
     let rag = retrieval_opts(opts);
+    on_progress(TourProgress::Retrieving);
     let t_ret = Instant::now();
     let context = retrieve_context(store, embedder, repo_root, query, &rag).await?;
     let retrieval_ms = t_ret.elapsed().as_millis();
     let mut items = diversify(context.items, opts.max_per_file);
+    on_progress(TourProgress::Retrieved {
+        candidates: items.len(),
+        retrieval_ms,
+    });
     if with_snippets {
-        attach_prompt_snippets(&mut items, repo_root, prompt_item_cap(opts.max_stops));
+        let cap = prompt_item_cap(opts.max_stops);
+        attach_prompt_snippets(&mut items, repo_root, cap);
+        on_progress(TourProgress::ReadingCode {
+            items: items.iter().take(cap).filter(|i| i.snippet.is_some()).count(),
+        });
     }
     Ok((items, context.seed_id, retrieval_ms))
+}
+
+/// No-op progress sink for callers that don't want a running commentary.
+fn silent_progress() -> impl FnMut(TourProgress) + Send {
+    |_| {}
 }
 
 /// Plan a guided tour for `query`: retrieve, ask the guide to order and
@@ -1149,8 +1284,25 @@ pub async fn plan_tour(
     query: &str,
     opts: TourOptions<'_>,
 ) -> Result<Tour, Box<dyn std::error::Error + Send + Sync>> {
+    let mut quiet = silent_progress();
+    plan_tour_with_progress(store, embedder, chat, repo_root, query, opts, &mut quiet).await
+}
+
+/// As [`plan_tour`], but reporting each step to `on_progress` as it
+/// happens — what the SSE route and the CLI's live status line consume.
+///
+/// [`plan_tour`]: plan_tour
+pub async fn plan_tour_with_progress(
+    store: &dyn KnowledgeStore,
+    embedder: &Embedder,
+    chat: &ChatClient,
+    repo_root: &std::path::Path,
+    query: &str,
+    opts: TourOptions<'_>,
+    on_progress: ProgressFn<'_>,
+) -> Result<Tour, Box<dyn std::error::Error + Send + Sync>> {
     let (items, seed_id, retrieval_ms) =
-        gather_candidates(store, embedder, repo_root, query, &opts, true).await?;
+        gather_candidates(store, embedder, repo_root, query, &opts, true, on_progress).await?;
 
     if items.is_empty() {
         return Ok(empty_tour(query, retrieval_ms));
@@ -1167,15 +1319,32 @@ pub async fn plan_tour(
     };
 
     let edges = candidate_edges(store, &items, opts.edge_types, cap).await;
+    on_progress(TourProgress::Linking { edges: edges.len() });
+
     let (messages, shown) = build_plan_messages(query, &items, &edges, ctx_chars, opts.max_stops);
 
     // Plan with a completion budget big enough to hold the whole object.
     let raised = planning_client(chat);
     let planner = raised.as_ref().unwrap_or(chat);
 
+    on_progress(TourProgress::Planning {
+        model: planner.config().model.clone(),
+        prompt_chars: messages.iter().map(|m| m.content.len()).sum(),
+        candidates_shown: shown,
+        max_stops: opts.max_stops,
+    });
+
     let t_cmp = Instant::now();
-    let (assembled, debug, usage) =
-        run_plan(planner, messages, query, &items, opts.max_stops).await?;
+    let (assembled, debug, usage) = run_plan(
+        planner,
+        messages,
+        query,
+        &items,
+        opts.max_stops,
+        opts.stream,
+        on_progress,
+    )
+    .await?;
     let completion_ms = t_cmp.elapsed().as_millis();
 
     let dropped = assembled.as_ref().map(|a| a.dropped.clone()).unwrap_or_default();
@@ -1198,6 +1367,10 @@ max-tokens (currently {}) or lower --max-stops.",
             t
         }
     };
+
+    on_progress(TourProgress::Assembling {
+        stops: tour.stops.len(),
+    });
 
     tour.seed_id = seed_id;
     tour.retrieval_ms = retrieval_ms;
@@ -1229,8 +1402,9 @@ pub async fn plan_tour_no_llm(
     query: &str,
     opts: TourOptions<'_>,
 ) -> Result<Tour, Box<dyn std::error::Error + Send + Sync>> {
+    let mut quiet = silent_progress();
     let (items, seed_id, retrieval_ms) =
-        gather_candidates(store, embedder, repo_root, query, &opts, false).await?;
+        gather_candidates(store, embedder, repo_root, query, &opts, false, &mut quiet).await?;
 
     let mut tour = if items.is_empty() {
         empty_tour(query, retrieval_ms)
