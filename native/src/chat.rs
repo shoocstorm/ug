@@ -583,6 +583,25 @@ items when possible. Cite the supporting items inline using their bracketed numb
 If the answer is not in the context, say so plainly instead of guessing. Prefer concise, structured \
 answers with code references and file paths when relevant.";
 
+/// Appended to the system prompt when the model has the graph toolbox.
+///
+/// The base prompt tells it to answer from the retrieved items — which on
+/// its own reads as "don't go looking", and the model duly doesn't. This
+/// says the opposite where it matters: retrieval is a starting point, and
+/// anything specific should be checked against the graph itself.
+pub const TOOL_SYSTEM_SUFFIX: &str = "\n\nYou ALSO have tools over the same knowledge graph, and \
+the retrieved items above are only a starting point — they are the neighbourhood of the question, \
+not the whole answer. Call tools before answering whenever the question asks for something the \
+items don't already show completely:\n\
+- `find_usages` for \"what calls / uses X\" — the items rarely contain every call site.\n\
+- `get_code` to read a symbol's exact source before describing or quoting it.\n\
+- `file_outline` to see everything a file declares.\n\
+- `find_symbols` to resolve a name you were given into a real node id.\n\
+- `search` / `semantic_search` to widen the net when the items look thin or off-topic.\n\
+- `shortest_path` / `traverse` to show how two things connect.\n\
+Prefer one or two well-aimed calls over guessing. Cite retrieved items with [#N] as usual; describe \
+tool findings in prose. If the items already answer the question completely, just answer.";
+
 /// Render a retrieval pack into a single prompt string. Each item is
 /// labelled `[#i]` so the model can cite it; the answerer can then map
 /// `[#i]` back to a `ContextItem` for the final citation list.
@@ -1146,6 +1165,12 @@ where
     // starting neighbourhood, the tools let it follow the threads it finds.
     let mut tool_usage = None;
     let mut tool_calls = 0;
+    if toolbox.is_some() {
+        // Tell it the tools exist, and when they're worth using.
+        if let Some(sys) = messages.first_mut().filter(|m| m.role == "system") {
+            sys.content.push_str(TOOL_SYSTEM_SUFFIX);
+        }
+    }
     if let Some(tb) = toolbox {
         let (msgs, usage, calls) =
             run_tool_rounds(chat, tb, messages, |e| on_tool(e)).await?;

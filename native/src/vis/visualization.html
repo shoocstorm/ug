@@ -1328,7 +1328,7 @@
             position: fixed;
             top: 0;
             right: 0;
-            width: 420px;
+            width: var(--info-width, 420px);
             height: 100vh;
             background: rgba(15, 15, 17, 0.85);
             backdrop-filter: blur(24px);
@@ -1364,14 +1364,6 @@
             display: flex;
             align-items: center;
             gap: 8px;
-        }
-
-        #info .drag-handle .dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background: var(--accent);
-            box-shadow: 0 0 8px currentColor;
         }
 
         #info .info-actions {
@@ -4819,7 +4811,6 @@
         body.perf-mode .filter-chip .chip-dot,
         body.perf-mode .sidebar-header .brand-dot,
         body.perf-mode .edge-breakdown-row .dot,
-        body.perf-mode #info .drag-handle .dot,
         body.perf-mode #info .related-item .dot,
         body.perf-mode .hier-row .dot,
         body.perf-mode .header h1 {
@@ -5405,10 +5396,58 @@
 
         details.chat-tool .ct-detail {
             margin: 4px 0 6px 15px;
-            padding: 7px 8px;
-            background: var(--bg-deep);
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .ct-wait { font-size: 10px; color: var(--text-dim); padding: 4px 0; }
+
+        .ct-block {
             border-left: 2px solid var(--border);
             border-radius: 0 5px 5px 0;
+            background: var(--bg-deep);
+            overflow: hidden;
+        }
+
+        .ct-block-head {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 5px 8px 3px;
+            font-size: 9px;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: var(--text-dim);
+        }
+
+        .ct-block-head span {
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .ct-copy {
+            background: none;
+            border: 1px solid var(--border-soft);
+            color: var(--text-dim);
+            border-radius: 4px;
+            padding: 1px 6px;
+            font-family: inherit;
+            font-size: 9px;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            cursor: pointer;
+            flex: 0 0 auto;
+        }
+
+        .ct-copy:hover { color: var(--accent); border-color: var(--accent-dim); }
+
+        .ct-block pre {
+            margin: 0;
+            padding: 0 8px 7px;
             font-size: 10px;
             line-height: 1.5;
             color: var(--text-muted);
@@ -5417,6 +5456,66 @@
             max-height: 220px;
             overflow: auto;
         }
+
+        /* The whole set of calls behind one label, alongside the citations. */
+        .chat-notools {
+            font-size: 9.5px;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: var(--text-dim);
+            padding: 3px 0 5px;
+        }
+
+        details.chat-tools { margin-bottom: 6px; }
+
+        details.chat-tools > summary {
+            font-size: 10px;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: var(--text-dim);
+            cursor: pointer;
+            padding: 4px 0;
+        }
+
+        details.chat-tools > summary:hover { color: var(--accent); }
+        details.chat-tools > details.chat-tool { margin-left: 8px; }
+
+        /* The details panel resizes from its left edge, same as the
+           sidebar does from its right. */
+        .info-resize-handle {
+            position: absolute;
+            top: 0;
+            left: -3px;
+            width: 7px;
+            height: 100%;
+            cursor: ew-resize;
+            z-index: 42;
+        }
+
+        .info-resize-handle::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 3px;
+            width: 2px;
+            height: 100%;
+            background: transparent;
+            transition: background 0.15s ease;
+        }
+
+        .info-resize-handle:hover::after,
+        body.resizing .info-resize-handle::after { background: var(--accent); }
+
+        body.resizing #info { transition: none; }
+
+        /* The node's type, as its icon, in the panel title. */
+        .info-title-icon {
+            display: inline-flex;
+            align-items: center;
+            flex-shrink: 0;
+        }
+
+        .info-title-icon .node-icon { width: 15px; height: 15px; }
 
         /* ─── Node type icons ───────────────────────────────── */
 
@@ -6924,8 +7023,9 @@
         </button>
 
         <div id="info">
+            <div class="info-resize-handle" id="info-resize" title="Drag to resize · double-click to reset"></div>
             <div class="drag-handle">
-                <h3><span class="dot"></span><span id="info-title">Node Details</span></h3>
+                <h3><span id="info-type-icon" class="info-title-icon"></span><span id="info-title">Node Details</span></h3>
                 <div class="info-actions">
                     <button class="icon-btn" id="find-path-btn" title="Find path from this node">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -8019,6 +8119,7 @@
             wireSearch();
             wireToggle();
             wireSidebarResize();
+            wireInfoResize();
             wireToolTabs();
             wireFooter();
             wireFilterActions();
@@ -9111,6 +9212,35 @@
             });
         }
 
+        // Once the answer lands, the individual tool rows fold into one
+        // labelled group. They stay one click from the answer they produced,
+        // without a wall of them sitting above every reply.
+        // Both land *below* the answer, beside the sources: that's where
+        // provenance belongs, and it's the part still on screen when a long
+        // reply finishes — above the answer it just scrolls out of sight.
+        function groupToolRows(el) {
+            const rows = [...el.querySelectorAll(':scope > details.chat-tool')];
+            if (!rows.length) {
+                // Say so rather than showing nothing: "no tools" and "tools
+                // hidden somewhere" look identical otherwise, and only one of
+                // them tells you how the answer was reached.
+                const none = document.createElement('div');
+                none.className = 'chat-notools';
+                none.textContent = 'No tool calls — answered from the retrieved sources alone';
+                el.appendChild(none);
+                return;
+            }
+            const group = document.createElement('details');
+            group.className = 'chat-tools';
+            group.open = !!state.chatToolsOpen;
+            group.addEventListener('toggle', () => { state.chatToolsOpen = group.open; });
+            const sum = document.createElement('summary');
+            sum.textContent = `${rows.length} tool call${rows.length === 1 ? '' : 's'} — inspect parameters and responses`;
+            group.appendChild(sum);
+            rows.forEach(r => { r.open = false; group.appendChild(r); });
+            el.appendChild(group);
+        }
+
         // A tool call, inspectable: the summary line is the toggle, the
         // arguments and the tool's own output sit inside. Answers that lean
         // on tools are only trustworthy if you can see what they read.
@@ -9135,11 +9265,57 @@
             row.querySelector('.ct-name').textContent = t.name;
             row.querySelector('.ct-args').textContent = t.args || '';
             row.querySelector('.ct-sum').textContent = done ? (t.summary || 'done') : 'running…';
-            const parts = [];
-            if (t.args_json && t.args_json !== '{}') parts.push('arguments\n' + t.args_json);
-            if (t.result) parts.push('result\n' + t.result);
-            row.querySelector('.ct-detail').textContent = parts.join('\n\n')
-                || (done ? '(no output)' : 'waiting for the tool…');
+
+            // Parameters and response as separate, copyable blocks: checking an
+            // answer against its evidence means reading the evidence verbatim,
+            // not a paraphrase of it.
+            const detail = row.querySelector('.ct-detail');
+            detail.innerHTML = '';
+            if (!done && !t.result) {
+                const wait = document.createElement('div');
+                wait.className = 'ct-wait';
+                wait.textContent = 'waiting for the tool…';
+                detail.appendChild(wait);
+                return;
+            }
+            const block = (label, body, note) => {
+                const wrap = document.createElement('div');
+                wrap.className = 'ct-block';
+                const head = document.createElement('div');
+                head.className = 'ct-block-head';
+                const l = document.createElement('span');
+                l.textContent = label + (note ? ` · ${note}` : '');
+                const copy = document.createElement('button');
+                copy.type = 'button';
+                copy.className = 'ct-copy';
+                copy.textContent = 'copy';
+                copy.addEventListener('click', async (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    try {
+                        await navigator.clipboard.writeText(body);
+                        copy.textContent = 'copied';
+                    } catch (err) {
+                        copy.textContent = 'failed';
+                    }
+                    setTimeout(() => { copy.textContent = 'copy'; }, 1200);
+                });
+                head.append(l, copy);
+                const pre = document.createElement('pre');
+                pre.textContent = body;
+                wrap.append(head, pre);
+                return wrap;
+            };
+            const argsText = t.args_json && t.args_json !== '{}' ? t.args_json : '(no parameters)';
+            detail.appendChild(block('Parameters sent', argsText));
+            if (t.result != null) {
+                const truncated = /result truncated at \d+ chars/.test(t.result);
+                detail.appendChild(block(
+                    'Response the model saw',
+                    t.result,
+                    truncated ? 'truncated' : `${t.result.length.toLocaleString()} chars`
+                ));
+            }
         }
 
         // One streaming assistant turn: a status strip that narrates the
@@ -9223,6 +9399,7 @@
                     // half-written); the finished answer gets rendered.
                     if (text) setMarkdown(bodyEl, text, cites);
                     else bodyEl.textContent = '(no answer)';
+                    groupToolRows(el);
                     if (cites && cites.length) el.appendChild(buildCitationBox(cites));
                     const bits = [];
                     if (done && done.retrieval_ms != null) bits.push(`retrieval=${done.retrieval_ms}ms`);
@@ -10947,6 +11124,43 @@
             });
         }
 
+        // Drag the left edge of the details panel to resize it; width
+        // persists across reloads, same contract as the sidebar.
+        function wireInfoResize() {
+            const handle = document.getElementById('info-resize');
+            const root = document.documentElement;
+            if (!handle) return;
+            const MIN = 320, MAX = 900;
+            const apply = (px) => root.style.setProperty('--info-width', px + 'px');
+            const readWidth = () =>
+                parseInt(getComputedStyle(root).getPropertyValue('--info-width'), 10) || 420;
+
+            const saved = parseInt(localStorage.getItem('ug-info-width'), 10);
+            if (saved >= MIN && saved <= MAX) apply(saved);
+
+            let startX = 0, startW = 0;
+            // The panel is anchored right, so it widens as the pointer moves left.
+            const onMove = (e) => apply(Math.min(MAX, Math.max(MIN, startW - (e.clientX - startX))));
+            const onUp = () => {
+                document.body.classList.remove('resizing');
+                window.removeEventListener('mousemove', onMove);
+                window.removeEventListener('mouseup', onUp);
+                localStorage.setItem('ug-info-width', readWidth());
+            };
+            handle.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                startX = e.clientX;
+                startW = readWidth();
+                document.body.classList.add('resizing');
+                window.addEventListener('mousemove', onMove);
+                window.addEventListener('mouseup', onUp);
+            });
+            handle.addEventListener('dblclick', () => {
+                apply(420);
+                localStorage.setItem('ug-info-width', 420);
+            });
+        }
+
         function wireToolTabs() {
             const tabs = document.querySelectorAll('.tool-tab');
             const panels = document.querySelectorAll('.tool-panel');
@@ -12473,8 +12687,13 @@
             const jumpBtn = document.getElementById('jump-btn');
             const typeColor = config.getColor(d.group);
 
-            const dot = info.querySelector('.drag-handle .dot');
-            if (dot) dot.style.background = typeColor;
+            // The title carries the node's type as its icon — the same glyph
+            // used in the legend, so the panel identifies itself at a glance.
+            const icon = document.getElementById('info-type-icon');
+            if (icon) {
+                icon.innerHTML = nodeIconSvg(d.group);
+                icon.title = d.group || '';
+            }
             document.getElementById('info-title').textContent = truncateName(d.name);
 
             const related = [];
