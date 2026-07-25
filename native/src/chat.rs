@@ -258,6 +258,21 @@ impl std::fmt::Display for ChatError {
 
 impl std::error::Error for ChatError {}
 
+impl ChatError {
+    /// Whether this is "the endpoint isn't answering" rather than "the
+    /// model said no". Callers use it to offer configuration instead of
+    /// printing a transport error at someone who can't act on it.
+    pub fn is_unreachable(&self) -> bool {
+        match self {
+            ChatError::Http(e) => e.is_connect() || e.is_timeout() || e.is_request(),
+            // 404 on the completions path is the other classic symptom of a
+            // base URL pointing at something that isn't an OpenAI-style API.
+            ChatError::BadStatus(code, _) => *code == 404,
+            ChatError::EmptyChoices => false,
+        }
+    }
+}
+
 /// Minimal client for OpenAI-compatible `/v1/chat/completions`.
 pub struct ChatClient {
     cfg: ChatConfig,
@@ -598,7 +613,14 @@ items don't already show completely:\n\
 - `file_outline` to see everything a file declares.\n\
 - `find_symbols` to resolve a name you were given into a real node id.\n\
 - `search` / `semantic_search` to widen the net when the items look thin or off-topic.\n\
-- `shortest_path` / `traverse` to show how two things connect.\n\
+- `shortest_path` / `traverse` to show how two things connect.\n\n\
+The items above were retrieved from the user's wording alone. If they look thin, off-topic, or miss \
+the part being asked about, REWRITE the query in the vocabulary the codebase actually uses and call \
+`search` again — swap plain words for likely symbol or file names, drop filler, try a synonym, or \
+split a compound question into separate searches. Searching two or three times with better wording \
+is normal and expected; answering from a poor first pass is not.\n\n\
+Pass arguments as real JSON, not JSON inside a string: `\"nodeId\": \"function:src/a.rs:1:foo\"` for \
+one id, `\"nodeId\": [\"id1\", \"id2\"]` for several. Never `\"nodeId\": \"[\\\"id1\\\"]\"`.\n\n\
 Prefer one or two well-aimed calls over guessing. Cite retrieved items with [#N] as usual; describe \
 tool findings in prose. If the items already answer the question completely, just answer.";
 

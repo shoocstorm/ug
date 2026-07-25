@@ -355,6 +355,9 @@ impl Mcp {
         if let Some(obj) = args.as_object_mut() {
             obj.remove("project");
         }
+        // Same coercion the chat path applies — MCP clients stringify
+        // array arguments just as readily as chat models do.
+        tools::normalize_args(name, &mut args);
 
         let with_staleness = |text: String| -> String { text + &self.staleness_note(&ctx) };
 

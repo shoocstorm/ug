@@ -1122,13 +1122,17 @@ async fn api_tool(
     };
 
     let snap = ctx.graph.read().expect("graph state poisoned").clone();
+    // Same coercion the chat and MCP paths apply — every entry point sees
+    // the same stringified-array mistakes, so normalise in all of them.
+    let mut args = serde_json::Value::Object(params);
+    crate::mcp::tools::normalize_args(&tool, &mut args);
     let result = ultragraph::agent_tools::run_tool(
         &tool,
         &snap.parsed,
         &snap.raw_json,
         ctx.repo_root.as_path(),
         ctx.graph_path.as_path(),
-        serde_json::Value::Object(params),
+        args,
         None,
     );
 
@@ -2972,6 +2976,7 @@ fn api_chat_stream(
     tokio::spawn(async move {
         let dest_name = db.backend_name();
         let model = chat_client.config().model.clone();
+        let endpoint = chat_client.config().base_url.clone();
         let emit = |name: &'static str, payload: serde_json::Value| {
             let _ = tx.send(SseEvent::default().event(name).data(payload.to_string()));
         };
@@ -3107,7 +3112,23 @@ fn api_chat_stream(
                     "chat_model": model,
                 }),
             ),
-            Err(e) => emit("error", serde_json::json!({ "error": format!("chat: {}", e) })),
+            Err(e) => {
+                // Distinguish "your endpoint is down" from "the model erred":
+                // only one of them is something the user can fix, and the UI
+                // offers the fix when we say which it is.
+                let unreachable = e
+                    .downcast_ref::<chat::ChatError>()
+                    .map(|c| c.is_unreachable())
+                    .unwrap_or(false);
+                emit(
+                    "error",
+                    serde_json::json!({
+                        "error": format!("chat: {}", e),
+                        "kind": if unreachable { "llm_unreachable" } else { "chat_failed" },
+                        "endpoint": endpoint,
+                    }),
+                );
+            }
         }
     });
 
@@ -3291,6 +3312,9 @@ async fn run_chat_tool(
     args: serde_json::Value,
 ) -> Result<String, String> {
     let name = crate::mcp::tools::canonical_tool_name(&name).to_string();
+    // Undo the model's stringified arrays/numbers before anything reads them.
+    let mut args = args;
+    crate::mcp::tools::normalize_args(&name, &mut args);
     if CHAT_TOOL_DENYLIST.contains(&name.as_str()) {
         return Err(format!("{} is not available from chat", name));
     }

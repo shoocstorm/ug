@@ -5280,6 +5280,28 @@
             overflow: auto;
         }
 
+        /* A call-to-action inside a capability banner: the thing that's
+           missing is configurable at runtime, so offer the fix here. */
+        .cap-banner .cap-cta {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            margin-top: 8px;
+            background: rgba(249, 115, 22, 0.14);
+            border: 1px solid var(--accent-dim);
+            color: var(--accent);
+            border-radius: 6px;
+            padding: 5px 11px;
+            font-family: inherit;
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+
+        .cap-banner .cap-cta:hover { background: rgba(249, 115, 22, 0.24); }
+        .cap-banner strong { display: block; margin-bottom: 3px; color: var(--text); }
+
         /* ─── Chat: the setup inspector ─────────────────────── */
 
         .chat-setup { margin-bottom: 10px; }
@@ -6852,6 +6874,13 @@
                             </button>
                         </div>
                         <div class="tour-examples" id="tour-examples"></div>
+                        <!-- Tours still run without a model; only the narration needs one. -->
+                        <div class="cap-banner warn cap-hidden" id="tour-nollm-msg">
+                            <strong>No language model configured.</strong>
+                            Tours still run — you'll get the most relevant stops in ranked order —
+                            but the guide can't write the narration or order the route into a story.
+                            <button class="cap-cta" type="button" data-open-settings>Set up a model</button>
+                        </div>
                         <div id="tour-launch-status"></div>
                     </div>
                 </div>
@@ -6959,9 +6988,12 @@
                     </div>
                     <div class="section-body">
                         <div class="cap-banner warn" id="chat-disabled-msg">
-                            Chat unavailable. Restart <code>ug serve</code> with
-                            <code>--chat-model</code> (and optionally <code>--base-url</code>/<code>--api-key</code>)
-                            to enable RAG-grounded chat.
+                            <strong>Chat needs a language model.</strong>
+                            Point UltraGraph at any OpenAI-compatible endpoint — a local one
+                            (Ollama, LM Studio, llama.cpp) or a hosted API — and chat turns on
+                            straight away. Nothing else here needs it: search, the catalog and the
+                            graph all work as they are.
+                            <button class="cap-cta" type="button" data-open-settings>Set up a model</button>
                         </div>
                     </div>
                 </div>
@@ -8356,6 +8388,12 @@
                     hideSection(tourSection);
                     showSection(tourDisabled);
                 }
+                // Tours degrade gracefully without a model; say so where the
+                // user is about to start one, not in a banner elsewhere.
+                const tourNoLlm = document.getElementById('tour-nollm-msg');
+                if (tourNoLlm) {
+                    tourNoLlm.classList.toggle('cap-hidden', !(caps.search_ready && !caps.chat_ready));
+                }
                 markSubtabAvailability(caps);
                 // History survives page loads, and the key is per project, so
                 // it can only be read once capabilities name the project.
@@ -8686,6 +8724,12 @@
 
         (function initSettingsUi() {
             const overlay = settingsOverlayEl();
+            // Any "set up a model" call-to-action opens the same settings panel
+            // the header button does — the model is editable at runtime, so
+            // "restart the server" was never the right advice.
+            document.querySelectorAll('[data-open-settings]').forEach(btn => {
+                btn.addEventListener('click', openSettings);
+            });
             document.getElementById('settings-open-btn').addEventListener('click', openSettings);
             document.getElementById('kb-settings-btn').addEventListener('click', openSettings);
             document.getElementById('settings-close').addEventListener('click', closeSettings);
@@ -9176,6 +9220,7 @@
                 if (!res.ok) throw new Error(await readErr(res));
 
                 let cites = [], done = null, streamErr = null;
+                let streamErrKind = null, streamErrEndpoint = null;
                 if (res.body && (res.headers.get('content-type') || '').includes('event-stream')) {
                     await readSseStream(res, (name, payload) => {
                         switch (name) {
@@ -9199,6 +9244,8 @@
                                 break;
                             case 'error':
                                 streamErr = payload.error || 'stream error';
+                                streamErrKind = payload.kind || null;
+                                streamErrEndpoint = payload.endpoint || null;
                                 break;
                         }
                     });
@@ -9210,7 +9257,17 @@
                     turn.append(answer);
                     done = data;
                 }
-                if (streamErr) throw new Error(streamErr);
+                if (streamErr) {
+                    // A dead endpoint isn't the user's mistake to decode —
+                    // say what's wrong in plain words and offer the fix.
+                    if (streamErrKind === 'llm_unreachable') {
+                        turn.unreachable(streamErrEndpoint);
+                        statusEl.classList.add('error');
+                        statusEl.textContent = 'No answer — the model endpoint isn\'t responding.';
+                        return;
+                    }
+                    throw new Error(streamErr);
+                }
 
                 const totalMs = Math.round(performance.now() - t0);
                 answer = (answer || (done && done.answer) || '').trim();
@@ -9685,6 +9742,27 @@
                     el.classList.add('error');
                     strip.remove();
                     bodyEl.textContent = `Error: ${msg}`;
+                },
+                // Configured, but nothing answered at the other end.
+                unreachable(endpoint) {
+                    el.classList.remove('streaming');
+                    strip.remove();
+                    bodyEl.innerHTML = '';
+                    const box = document.createElement('div');
+                    box.className = 'cap-banner warn';
+                    const head = document.createElement('strong');
+                    head.textContent = 'The model endpoint isn\'t responding.';
+                    const p1 = document.createElement('span');
+                    p1.textContent = endpoint
+                        ? `Nothing answered at ${endpoint}. Start your local model server, or point UltraGraph somewhere else — everything else here keeps working in the meantime.`
+                        : 'Start your local model server, or point UltraGraph somewhere else — everything else here keeps working in the meantime.';
+                    const cta = document.createElement('button');
+                    cta.type = 'button';
+                    cta.className = 'cap-cta';
+                    cta.textContent = 'Check model settings';
+                    cta.addEventListener('click', () => openSettings());
+                    box.append(head, p1, cta);
+                    bodyEl.appendChild(box);
                 },
             };
         }

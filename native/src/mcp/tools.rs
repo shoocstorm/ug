@@ -60,6 +60,83 @@ pub fn is_known_tool(canonical: &str) -> bool {
     TOOL_NAMES.contains(&canonical) || is_unlisted_tool(canonical)
 }
 
+/// Coerce arguments that a model stringified back into real JSON.
+///
+/// Models routinely send `"nodeId": "[\"function:…\"]"` — a JSON array
+/// *encoded as a string* — instead of `"nodeId": ["function:…"]`. Union
+/// types in our schemas (`string | array`) make that especially tempting,
+/// and the result is a lookup for a node whose id literally contains
+/// brackets and quotes. Same story for `"hops": "2"`.
+///
+/// So before dispatch, re-read each argument against what its schema
+/// says it should be. Rejecting a well-meant call over quoting teaches
+/// the model nothing and costs the user a round-trip.
+pub fn normalize_args(tool: &str, args: &mut Value) {
+    let canonical = canonical_tool_name(tool);
+    let schema = raw_tools();
+    let Some(props) = schema
+        .as_array()
+        .and_then(|tools| tools.iter().find(|t| t["name"] == json!(canonical)))
+        .and_then(|t| t["inputSchema"]["properties"].as_object())
+    else {
+        return;
+    };
+    let Some(obj) = args.as_object_mut() else {
+        return;
+    };
+
+    for (key, value) in obj.iter_mut() {
+        let Some(spec) = props.get(key) else { continue };
+        let Some(text) = value.as_str() else { continue };
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        // Only rewrite when the schema says this field isn't a plain
+        // string, so an id that happens to look numeric stays a string.
+        if !accepts_non_string(spec) {
+            continue;
+        }
+        let looks_encoded = trimmed.starts_with('[') || trimmed.starts_with('{');
+        let parsed = if looks_encoded {
+            serde_json::from_str::<Value>(trimmed).ok()
+        } else if accepts_kind(spec, "integer") || accepts_kind(spec, "number") {
+            trimmed.parse::<i64>().ok().map(Value::from)
+        } else if accepts_kind(spec, "boolean") {
+            match trimmed {
+                "true" => Some(Value::Bool(true)),
+                "false" => Some(Value::Bool(false)),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        if let Some(p) = parsed {
+            if !p.is_string() {
+                *value = p;
+            }
+        }
+    }
+}
+
+/// Does this property schema admit something other than a plain string?
+fn accepts_non_string(spec: &Value) -> bool {
+    ["array", "object", "integer", "number", "boolean"]
+        .iter()
+        .any(|k| accepts_kind(spec, k))
+}
+
+/// Whether `spec` allows `kind`, looking through a `oneOf` union.
+fn accepts_kind(spec: &Value, kind: &str) -> bool {
+    if spec["type"] == json!(kind) {
+        return true;
+    }
+    spec["oneOf"]
+        .as_array()
+        .map(|alts| alts.iter().any(|a| a["type"] == json!(kind)))
+        .unwrap_or(false)
+}
+
 /// The `tools/list` payload: every advertised tool's JSON Schema, with an
 /// optional `project` property injected into all but `list_projects`.
 pub fn tool_list() -> Value {
@@ -214,6 +291,54 @@ fn raw_tools() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unwraps_a_stringified_id_array() {
+        // The exact shape models keep sending for a `string | array` param.
+        let mut args = json!({
+            "nodeId": "[\"function:native/src/storage/embed.rs:265:RemoteEmbedder::embed\"]"
+        });
+        normalize_args("find_usages", &mut args);
+        assert_eq!(
+            args["nodeId"],
+            json!(["function:native/src/storage/embed.rs:265:RemoteEmbedder::embed"])
+        );
+    }
+
+    #[test]
+    fn leaves_a_plain_id_alone() {
+        let mut args = json!({ "nodeId": "function:src/a.rs:1:foo" });
+        normalize_args("get_code", &mut args);
+        assert_eq!(args["nodeId"], json!("function:src/a.rs:1:foo"));
+    }
+
+    #[test]
+    fn coerces_stringified_numbers_only_where_the_schema_wants_one() {
+        let mut args = json!({ "nodeId": "42", "hops": "2" });
+        normalize_args("find_usages", &mut args);
+        // `hops` is an integer in the schema…
+        assert_eq!(args["hops"], json!(2));
+        // …but a numeric-looking id is still an id.
+        assert_eq!(args["nodeId"], json!("42"));
+    }
+
+    #[test]
+    fn unknown_tools_and_params_pass_through_untouched() {
+        let mut args = json!({ "nodeId": "[\"x\"]" });
+        normalize_args("not_a_tool", &mut args);
+        assert_eq!(args["nodeId"], json!("[\"x\"]"));
+
+        let mut args2 = json!({ "mystery": "[1,2]" });
+        normalize_args("find_usages", &mut args2);
+        assert_eq!(args2["mystery"], json!("[1,2]"), "no schema, no rewrite");
+    }
+
+    #[test]
+    fn aliased_tool_names_resolve_to_the_same_schema() {
+        let mut args = json!({ "nodeId": "[\"a\",\"b\"]" });
+        normalize_args("find_symbol", &mut args);   // alias of find_symbols
+        assert_eq!(args["nodeId"], json!(["a", "b"]));
+    }
 
     #[test]
     fn advertises_every_named_tool() {
