@@ -1122,27 +1122,6 @@ fn looks_truncated(raw: &str, finish_reason: Option<&str>) -> bool {
     raw.contains('{') && top_level_objects(strip_reasoning(raw)).is_empty()
 }
 
-/// Ask a reasoning model to answer without deliberating.
-///
-/// Thinking is a property of the chat template, not the prompt — telling
-/// a Qwen3-class model "don't think out loud" in the system prompt does
-/// nothing, and it will happily spend 20k tokens (ten minutes on a local
-/// box) reasoning before writing a single stop. Each provider spells the
-/// off switch differently, so we send all the common ones; anything the
-/// endpoint doesn't recognise is either ignored or triggers the 400
-/// fallback in `complete_tracked`.
-fn no_think_body() -> serde_json::Map<String, serde_json::Value> {
-    let mut m = serde_json::Map::new();
-    // vLLM / SGLang / llama.cpp-server pass this through to the template.
-    m.insert(
-        "chat_template_kwargs".into(),
-        serde_json::json!({ "enable_thinking": false }),
-    );
-    // OpenAI o-series, newer llama.cpp and LM Studio builds.
-    m.insert("reasoning_effort".into(), serde_json::json!("low"));
-    m
-}
-
 /// A client set up for planning: enough completion budget and wall-clock
 /// to finish, and thinking turned off. Values the caller raised
 /// themselves are left alone, so an explicit `--max-tokens` /
@@ -1163,19 +1142,9 @@ fn planning_client(chat: &ChatClient, fast: bool) -> Option<ChatClient> {
         raised.timeout_secs = TOUR_MIN_TIMEOUT_SECS;
     }
     if add_extras {
-        raised.extra_body = Some(no_think_body());
+        raised.extra_body = Some(crate::chat::no_think_body());
     }
     ChatClient::new(raised).ok()
-}
-
-/// The same client with the no-think fields stripped, for endpoints that
-/// reject unknown request fields outright.
-fn without_extra_body(chat: &ChatClient) -> Option<ChatClient> {
-    let cfg = chat.config();
-    cfg.extra_body.as_ref()?;
-    let mut plain = cfg.clone();
-    plain.extra_body = None;
-    ChatClient::new(plain).ok()
 }
 
 /// Pulls finished stop objects out of a plan that is still streaming.
@@ -1351,10 +1320,8 @@ async fn complete_tracked(
         // SSE, or it rejects the no-think fields. Retry plainly, dropping
         // the extras first, so neither can break a working setup.
         Err(crate::chat::ChatError::BadStatus(code, _)) => {
-            tracing::debug!(status = code, "tour: request rejected; retrying without streaming/extras");
-            let plain = without_extra_body(chat);
-            let fallback = plain.as_ref().unwrap_or(chat);
-            let (text, usage, reason) = fallback.complete_with_reason(messages).await?;
+            tracing::debug!(status = code, "tour: streaming rejected; falling back to a blocking completion");
+            let (text, usage, reason) = chat.complete_with_reason(messages).await?;
             Ok((text, usage, reason))
         }
         Err(e) => Err(Box::new(e)),

@@ -99,6 +99,39 @@ impl ChatConfig {
     }
 }
 
+/// Request fields that ask a reasoning model to answer without
+/// deliberating first.
+///
+/// Thinking is a property of the chat template, not the prompt: telling a
+/// Qwen3-class model "don't think out loud" in the system prompt changes
+/// nothing, and it will spend tens of thousands of tokens — minutes, on a
+/// local box — reasoning before the first useful character. Providers
+/// spell the off switch differently, so send all the common ones;
+/// anything unrecognised is ignored, or triggers the retry in
+/// `ChatClient::post_chat`.
+pub fn no_think_body() -> serde_json::Map<String, serde_json::Value> {
+    let mut m = serde_json::Map::new();
+    // vLLM / SGLang / llama.cpp-server pass this through to the template.
+    m.insert(
+        "chat_template_kwargs".into(),
+        serde_json::json!({ "enable_thinking": false }),
+    );
+    // OpenAI o-series, newer llama.cpp and LM Studio builds.
+    m.insert("reasoning_effort".into(), serde_json::json!("low"));
+    m
+}
+
+/// The same client with deliberation switched off. `None` when the caller
+/// already set `extra_body` themselves — an explicit choice always wins.
+pub fn fast_client(chat: &ChatClient) -> Option<ChatClient> {
+    if chat.config().extra_body.is_some() {
+        return None;
+    }
+    let mut cfg = chat.config().clone();
+    cfg.extra_body = Some(no_think_body());
+    ChatClient::new(cfg).ok()
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: String,
@@ -196,6 +229,42 @@ impl ChatClient {
         v
     }
 
+    /// POST a request body, retrying once without `extra_body` if the
+    /// endpoint rejects it. The extras are optimisations (see
+    /// [`no_think_body`]), never requirements, so a provider that refuses
+    /// unknown fields must still get a working request.
+    ///
+    /// [`no_think_body`]: no_think_body
+    async fn post_chat(
+        &self,
+        url: &str,
+        req: &ChatRequest<'_>,
+    ) -> Result<reqwest::Response, ChatError> {
+        let resp = self
+            .client
+            .post(url)
+            .bearer_auth(&self.cfg.api_key)
+            .json(&self.request_body(req))
+            .send()
+            .await
+            .map_err(ChatError::Http)?;
+        if resp.status().is_client_error() && self.cfg.extra_body.is_some() {
+            tracing::debug!(
+                status = resp.status().as_u16(),
+                "chat: endpoint rejected the request; retrying without extra_body"
+            );
+            return self
+                .client
+                .post(url)
+                .bearer_auth(&self.cfg.api_key)
+                .json(&serde_json::to_value(req).unwrap_or_else(|_| serde_json::json!({})))
+                .send()
+                .await
+                .map_err(ChatError::Http);
+        }
+        Ok(resp)
+    }
+
     /// Non-streaming round-trip. See [`complete_with_reason`] when the
     /// caller needs to know *why* the model stopped (e.g. to tell a
     /// truncated reply apart from a badly formatted one).
@@ -229,14 +298,7 @@ impl ChatClient {
             stream: false,
         };
 
-        let resp = self
-            .client
-            .post(&url)
-            .bearer_auth(&self.cfg.api_key)
-            .json(&self.request_body(&req))
-            .send()
-            .await
-            .map_err(ChatError::Http)?;
+        let resp = self.post_chat(&url, &req).await?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -283,14 +345,7 @@ impl ChatClient {
             stream: true,
         };
 
-        let resp = self
-            .client
-            .post(&url)
-            .bearer_auth(&self.cfg.api_key)
-            .json(&self.request_body(&req))
-            .send()
-            .await
-            .map_err(ChatError::Http)?;
+        let resp = self.post_chat(&url, &req).await?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -578,6 +633,12 @@ pub struct ChatRagOptions<'a> {
     pub max_context_chars: usize,
     pub where_clause: Option<&'a str>,
     pub system_prompt: Option<&'a str>,
+    /// Answer without deliberating (see [`no_think_body`]). On by default:
+    /// the answer is grounded in retrieved context, so the wall-clock cost
+    /// of a chain of thought rarely buys anything.
+    ///
+    /// [`no_think_body`]: no_think_body
+    pub fast: bool,
 }
 
 impl<'a> ChatRagOptions<'a> {
@@ -592,6 +653,7 @@ impl<'a> ChatRagOptions<'a> {
             max_context_chars: DEFAULT_CTX_MAX_CHARS,
             where_clause: None,
             system_prompt: None,
+            fast: true,
         }
     }
 }
@@ -781,6 +843,9 @@ pub async fn run_chat_rag(
         opts.max_context_chars,
     );
 
+    let fast = opts.fast.then(|| fast_client(chat)).flatten();
+    let chat = fast.as_ref().unwrap_or(chat);
+
     let t_cmp = std::time::Instant::now();
     let (answer, usage) = chat.complete(&messages).await?;
     let completion_ms = t_cmp.elapsed().as_millis();
@@ -829,6 +894,9 @@ where
         opts.system_prompt,
         opts.max_context_chars,
     );
+
+    let fast = opts.fast.then(|| fast_client(chat)).flatten();
+    let chat = fast.as_ref().unwrap_or(chat);
 
     let t_cmp = std::time::Instant::now();
     let (answer, reasoning, usage) = match chat.complete_stream(&messages, &mut on_delta).await {

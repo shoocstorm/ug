@@ -2793,6 +2793,11 @@ struct ChatBody {
     /// completion and emits it as a single delta.
     #[serde(default)]
     stream: Option<bool>,
+    /// Let a reasoning model deliberate before answering. Off by default —
+    /// the answer is grounded in retrieved context, and thinking is where a
+    /// local model spends its minutes.
+    #[serde(default)]
+    think: Option<bool>,
 }
 
 /// Citation list shared by the JSON and SSE chat responses.
@@ -2890,6 +2895,7 @@ async fn api_chat(State(state): State<ServeState>, Json(body): Json<ChatBody>) -
     opts.max_context_chars = max_context_chars;
     opts.where_clause = body.where_clause.as_deref();
     opts.system_prompt = body.system_prompt.as_deref();
+    opts.fast = !body.think.unwrap_or(false);
 
     let dest_name = db.backend_name();
     let repo_root = state.repo_root();
@@ -3000,6 +3006,7 @@ fn api_chat_stream(
         opts.max_context_chars = max_context_chars;
         opts.where_clause = body.where_clause.as_deref();
         opts.system_prompt = body.system_prompt.as_deref();
+        opts.fast = !body.think.unwrap_or(false);
 
         emit("phase", serde_json::json!({ "phase": "retrieving" }));
 

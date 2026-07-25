@@ -54,7 +54,36 @@ For multi-step tasks, state a brief plan:
 
 Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
 
-## 5. Test Before Commit
+## 5. LLM Features Must Feel Fast
+
+**Most of the wall-clock is the model writing tokens. Budget them like money.**
+
+`ug` is routinely pointed at a local endpoint doing ~30 tokens/second. At that rate a
+feature is fast or slow depending almost entirely on how many tokens it asks for and how
+long the user waits before seeing anything. Four rules, in order of impact:
+
+1. **Turn thinking off unless the task needs it.** A reasoning model spends tens of
+   thousands of tokens deliberating *before* its first useful character — the guided tour
+   took over ten minutes this way. Prompt instructions do NOT stop it: thinking lives in
+   the chat template. Send the real switches instead — `chat::no_think_body()`
+   (`chat_template_kwargs.enable_thinking:false` + `reasoning_effort:"low"`), which
+   `ChatClient` merges via `ChatConfig::extra_body` and retries without on a 4xx. Same
+   tour, same model: **10+ min → 9.4 s**. Give users `--think` to opt back in.
+2. **Show progress from the first second.** Stream the completion and report phases
+   (`TourProgress` → SSE `event: progress`, or the CLI's in-place status line): what was
+   retrieved, which model is writing, tokens so far, rate, elapsed. A silent wait feels
+   broken; a narrated one feels like work being done.
+3. **Deliver partial results as they arrive.** Don't wait for the whole reply to be
+   parseable. `StopScanner` pulls each finished stop out of the still-streaming JSON so the
+   tour starts walking on stop 1 — roughly half the wait removed on every tour.
+4. **Ask for less.** Shorter prompts (clip snippets and descriptions; only send code for
+   the top candidates) and shorter outputs (cap narration length explicitly) cut generation
+   time directly. The tour's prompt went 10.8k → 6.9k chars with no loss of quality.
+
+Verify with a real slow endpoint, not a mock: mocks answer instantly and hide exactly the
+problem you're trying to fix.
+
+## 6. Test Before Commit
 
 **Always verify changes with tests before marking a task complete.**
 

@@ -5240,11 +5240,18 @@
             margin-bottom: 8px;
         }
         #tour-input:focus { border-color: var(--accent); }
-        .tour-blurb {
+        /* One-line "what this mode is for", so the three Discover tabs
+           aren't three unlabelled text boxes. */
+        .pane-blurb {
             font-size: 11.5px;
-            line-height: 1.5;
+            line-height: 1.55;
             color: var(--text-dim, #8a7f72);
             margin: 0 0 10px;
+        }
+
+        .pane-blurb strong {
+            color: var(--text-muted);
+            font-weight: 600;
         }
         /* Matches the Send / Search action buttons in the sibling panels,
            in the tour's own accent. */
@@ -5276,12 +5283,12 @@
             padding: 4px 9px;
             border-radius: 999px;
             cursor: pointer;
-            background: color-mix(in srgb, var(--accent) 12%, transparent);
-            border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
-            color: var(--accent);
-            transition: background .15s;
+            background: var(--bg-elevated);
+            border: 1px solid transparent;
+            color: var(--text-muted);
+            transition: background .15s, color .15s;
         }
-        .tour-chip:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+        .tour-chip:hover { background: var(--bg-hover); color: var(--accent); }
         #tour-launch-status { font-size: 11px; margin-top: 8px; color: var(--text-dim, #8a7f72); }
         #tour-launch-status.error { color: #dc2626; }
 
@@ -6262,8 +6269,9 @@
                         </svg>
                     </div>
                     <div class="section-body">
-                        <p class="tour-blurb">Ask a question and take a cinematic, narrated fly-through of
-                            the code that answers it — the camera visits each stop while a guide explains it.</p>
+                        <p class="pane-blurb"><strong>Watch the answer.</strong> Ask a question and the guide
+                            plans a route through the code that answers it, then flies the camera stop to stop,
+                            narrating each one. Best for understanding how something works end to end.</p>
                         <textarea id="tour-input" rows="2"
                             placeholder="e.g. how does authentication work?"></textarea>
                         <div class="chat-controls">
@@ -6328,6 +6336,9 @@
                         </svg>
                     </div>
                     <div class="section-body">
+                        <p class="pane-blurb"><strong>Read the answer.</strong> Ask in plain language and get a
+                            written reply, grounded in the code the graph retrieves for your question and
+                            footnoted with the exact nodes it used. Best for specifics and follow-ups.</p>
                         <div id="chat-model-badge" class="sem-dest-row" hidden>
                             <span class="sem-dest-label">Model:</span>
                             <span class="sem-dest-badge" id="chat-model-pill" hidden></span>

@@ -3969,6 +3969,9 @@ fn run_chat(args: &[String]) {
     let json_output = has_flag(args, "--json");
     let show_context = has_flag(args, "--show-context") || has_flag(args, "-v");
     let no_snippets = has_flag(args, "--no-snippets");
+    // Reasoning models spend most of the wall-clock deliberating; the
+    // answer is grounded in retrieved context either way.
+    let think = has_flag(args, "--think");
 
     let k: usize = flag_value(args, &["-k", "--limit"])
         .and_then(|s| s.parse().ok())
@@ -4023,6 +4026,7 @@ fn run_chat(args: &[String]) {
             o.max_context_chars = max_chars;
             o.where_clause = where_clause.as_deref();
             o.system_prompt = system_prompt.as_deref();
+            o.fast = !think;
             let _ = q; // q reserved for future per-call overrides
             o
         };
@@ -4557,8 +4561,8 @@ fn print_tour_help() {
     println!("  {C_CYAN}--max-per-file{C_RESET} <n>    Candidates kept per file, 0 = no cap (default: 2)");
     println!("  {C_YELLOW}--no-llm{C_RESET}             Skip the guide; emit a ranked itinerary from retrieval only");
     println!("  {C_CYAN}--no-snippets{C_RESET}         Omit code snippets from stops");
-    println!("  {C_CYAN}--show-plan{C_RESET}           Print the raw JSON plan the guide produced");
     println!("  {C_CYAN}--think{C_RESET}               Let a reasoning model deliberate (slower, rarely better)");
+    println!("  {C_CYAN}--show-plan{C_RESET}           Print the raw JSON plan the guide produced");
     println!("  {C_CYAN}--strategy{C_RESET} <s>        Rank strategy (ppr|semantic|…, default: ppr)");
     println!("  {C_CYAN}--direction{C_RESET} <d>       Edge direction (out|in|both, default: both)");
     println!("  {C_CYAN}-t, --edge-type{C_RESET} <t>   Restrict expansion to an edge type (repeatable)");
@@ -5219,6 +5223,7 @@ fn print_chat_help() {
     println!("  {C_CYAN}--filter{C_RESET} <sql>           Optional SQL WHERE clause for the seed filter");
     println!("  {C_CYAN}--max-chars{C_RESET} <n>          Context char budget (default: 12000)");
     println!("  {C_CYAN}--no-snippets{C_RESET}            Don't read source snippets from disk");
+    println!("  {C_CYAN}--think{C_RESET}                  Let a reasoning model deliberate (slower, rarely better)");
     println!("  {C_CYAN}--repo-root{C_RESET} <path>       Repo root for snippet resolution (default: cwd)");
     println!();
     println!("{C_BOLD}Chat model:{C_RESET}");
