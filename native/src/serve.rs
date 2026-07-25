@@ -898,6 +898,7 @@ pub fn run_serve(args: &[String]) {
             .route("/api/search/semantic", post(api_search_semantic))
             .route("/api/search/hybrid", post(api_search_hybrid))
             .route("/api/chat", post(api_chat))
+            .route("/api/tour", post(api_tour))
             // CompressionLayer skips responses that already have Content-Encoding,
             // so it only kicks in for the dynamic /api/* JSON.
             .layer(CompressionLayer::new().br(true))
@@ -3086,6 +3087,201 @@ fn merge_chat_cfg(default: &Option<ChatConfig>, body: &ChatBody) -> Option<ChatC
     })
 }
 
+// ---------- Guided tour (/api/tour) ----------
+
+#[derive(serde::Deserialize)]
+struct TourBody {
+    query: String,
+    #[serde(default)]
+    k: Option<usize>,
+    #[serde(default)]
+    hops: Option<u32>,
+    #[serde(default)]
+    max_stops: Option<usize>,
+    #[serde(default)]
+    strategy: Option<String>,
+    #[serde(default)]
+    direction: Option<String>,
+    #[serde(default)]
+    edge_types: Option<Vec<String>>,
+    #[serde(default)]
+    include_snippets: Option<bool>,
+    #[serde(default)]
+    max_context_chars: Option<usize>,
+    #[serde(default, rename = "where")]
+    where_clause: Option<String>,
+    /// Skip the LLM guide and return a ranked itinerary from retrieval
+    /// only. The route also degrades to this automatically when no chat
+    /// model is configured, so a tour always works with just the DB.
+    #[serde(default)]
+    no_llm: Option<bool>,
+    // Per-request chat overrides, same shape as /api/chat.
+    #[serde(default)]
+    chat_model: Option<String>,
+    #[serde(default)]
+    chat_base_url: Option<String>,
+    #[serde(default)]
+    chat_api_key: Option<String>,
+    #[serde(default)]
+    temperature: Option<f32>,
+    #[serde(default)]
+    max_tokens: Option<u32>,
+    #[serde(default)]
+    dest: Option<String>,
+}
+
+/// Merge the default `ChatConfig` with per-request overrides for a tour.
+/// Returns `None` when no model can be resolved — the caller then plans a
+/// narration-free ranked tour instead of erroring.
+fn merge_tour_chat_cfg(default: &Option<ChatConfig>, body: &TourBody) -> Option<ChatConfig> {
+    let base_default = default.clone().unwrap_or_default();
+    let model = body
+        .chat_model
+        .clone()
+        .or_else(|| default.as_ref().map(|c| c.model.clone()))?;
+    let base_url = body.chat_base_url.clone().unwrap_or(base_default.base_url);
+    let api_key = body.chat_api_key.clone().unwrap_or(base_default.api_key);
+    let temperature = body.temperature.unwrap_or(base_default.temperature);
+    let max_tokens = body.max_tokens.unwrap_or(base_default.max_tokens);
+    Some(ChatConfig {
+        base_url,
+        api_key,
+        model,
+        temperature,
+        max_tokens,
+        timeout_secs: base_default.timeout_secs,
+    })
+}
+
+/// `POST /api/tour` — plan a guided, narrated walkthrough for a question.
+/// Retrieval is required (needs DB + embedder); the LLM guide is optional
+/// (falls back to a ranked itinerary), so this route works whenever
+/// semantic search does. Returns the full `Tour` (stops carry node ids the
+/// UI flies the camera to).
+async fn api_tour(State(state): State<ServeState>, Json(body): Json<TourBody>) -> Response {
+    if body.query.trim().is_empty() {
+        return err_json(StatusCode::BAD_REQUEST, "query is required");
+    }
+    let db = match pick_store(&state, body.dest.as_deref()) {
+        Ok(d) => d,
+        Err(r) => return r,
+    };
+    let embedder = match embedder_or_503(&state) {
+        Ok(e) => e,
+        Err(r) => return r,
+    };
+
+    let k = body.k.unwrap_or(12).min(50).max(1);
+    let hops = body.hops.unwrap_or(2).min(4);
+    let max_stops = body.max_stops.unwrap_or(crate::tour::DEFAULT_MAX_STOPS).clamp(1, 20);
+    let strategy = body
+        .strategy
+        .as_deref()
+        .map(RankStrategy::from_str_lossy)
+        .unwrap_or(RankStrategy::Ppr);
+    let direction = body
+        .direction
+        .as_deref()
+        .map(Direction::from_str_lossy)
+        .unwrap_or(Direction::Both);
+    let include_snippets = body.include_snippets.unwrap_or(true);
+    let max_context_chars = body
+        .max_context_chars
+        .unwrap_or(chat::DEFAULT_CTX_MAX_CHARS)
+        .min(64_000);
+    let edge_types_owned: Option<Vec<String>> = body.edge_types.clone().filter(|v| !v.is_empty());
+
+    // Decide the LLM path up front so we can fall back cleanly.
+    let want_llm = !body.no_llm.unwrap_or(false);
+    let chat_default = state.chat_default.read().expect("chat_default poisoned").clone();
+    let chat_cfg = if want_llm {
+        merge_tour_chat_cfg(&chat_default, &body)
+    } else {
+        None
+    };
+
+    let _permit = match state.embed_lock.acquire().await {
+        Ok(p) => p,
+        Err(_) => return err_json(StatusCode::SERVICE_UNAVAILABLE, "embed semaphore closed"),
+    };
+
+    let repo_root = state.repo_root();
+    let dest_name = db.backend_name();
+
+    let mut opts = crate::tour::TourOptions::new();
+    opts.k = k;
+    opts.hops = hops;
+    opts.max_stops = max_stops;
+    opts.strategy = strategy;
+    opts.direction = direction;
+    opts.edge_types = edge_types_owned.as_deref();
+    opts.include_snippets = include_snippets;
+    opts.max_context_chars = max_context_chars;
+    opts.where_clause = body.where_clause.as_deref();
+
+    let mut used_model: Option<String> = None;
+    let result = match chat_cfg {
+        Some(cfg) => match ChatClient::new(cfg) {
+            Ok(client) => {
+                used_model = Some(client.config().model.clone());
+                match crate::tour::plan_tour(
+                    &*db,
+                    &embedder,
+                    &client,
+                    repo_root.as_path(),
+                    &body.query,
+                    opts.clone(),
+                )
+                .await
+                {
+                    Ok(t) => Ok(t),
+                    Err(e) => {
+                        // LLM unreachable/failed — still give a tour.
+                        tracing::warn!(error = %e, "tour guide LLM failed; falling back to ranked itinerary");
+                        used_model = None;
+                        crate::tour::plan_tour_no_llm(
+                            &*db,
+                            &embedder,
+                            repo_root.as_path(),
+                            &body.query,
+                            opts.clone(),
+                        )
+                        .await
+                    }
+                }
+            }
+            Err(e) => Err(Box::new(e) as Box<dyn std::error::Error + Send + Sync>),
+        },
+        None => {
+            crate::tour::plan_tour_no_llm(
+                &*db,
+                &embedder,
+                repo_root.as_path(),
+                &body.query,
+                opts.clone(),
+            )
+            .await
+        }
+    };
+    drop(_permit);
+
+    match result {
+        Ok(tour) => match serde_json::to_value(&tour) {
+            Ok(mut v) => {
+                if let Some(obj) = v.as_object_mut() {
+                    obj.insert("dest".into(), serde_json::Value::String(dest_name.to_string()));
+                    if let Some(m) = used_model {
+                        obj.insert("chat_model".into(), serde_json::Value::String(m));
+                    }
+                }
+                ok_json(v.to_string())
+            }
+            Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &format!("encode: {}", e)),
+        },
+        Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &format!("tour: {}", e)),
+    }
+}
+
 fn node_row_to_json(n: &storage::NodeRow) -> serde_json::Value {
     serde_json::json!({
         "id": n.id,
@@ -3143,6 +3339,7 @@ pub fn print_serve_help() {
     println!("  {C_CYAN}GET{C_RESET}  /api/db/{{node/<id>, traverse/<id>?k=&dir=&types=}}");
     println!("  {C_CYAN}POST{C_RESET} /api/search/{{semantic, hybrid}}  body: JSON");
     println!("  {C_CYAN}POST{C_RESET} /api/chat  body: {{ query, history?, k?, hops?, chat_model?, ... }}");
+    println!("  {C_CYAN}POST{C_RESET} /api/tour  body: {{ query, k?, hops?, max_stops?, no_llm?, ... }}");
     println!();
     println!("{C_BOLD}Examples:{C_RESET}");
     println!("  {C_CYAN}ug serve{C_RESET}                          {C_YELLOW}# all projects under ~/.ug{C_RESET}");

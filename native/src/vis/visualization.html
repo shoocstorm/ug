@@ -4998,6 +4998,140 @@
         body.perf-mode #viewbar .vtoggle.active {
             box-shadow: none;
         }
+        /* ─── Guided Tour: launcher (sidebar) ─── */
+        #tour-input {
+            width: 100%;
+            min-height: 52px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 8px 10px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-family: inherit;
+            outline: none;
+            resize: vertical;
+            margin-bottom: 8px;
+        }
+        #tour-input:focus { border-color: var(--accent); }
+        .tour-blurb {
+            font-size: 11.5px;
+            line-height: 1.5;
+            color: var(--text-dim, #8a7f72);
+            margin: 0 0 10px;
+        }
+        .tour-examples { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+        .tour-chip {
+            font-size: 11px;
+            padding: 4px 9px;
+            border-radius: 999px;
+            cursor: pointer;
+            background: color-mix(in srgb, var(--accent) 12%, transparent);
+            border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+            color: var(--accent);
+            transition: background .15s;
+        }
+        .tour-chip:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+        #tour-launch-status { font-size: 11px; margin-top: 8px; color: var(--text-dim, #8a7f72); }
+        #tour-launch-status.error { color: #dc2626; }
+
+        /* ─── Guided Tour: cinematic narration overlay ─── */
+        #tour-overlay {
+            position: absolute;
+            left: 50%;
+            bottom: 26px;
+            transform: translateX(-50%) translateY(14px);
+            width: min(720px, 92vw);
+            z-index: 60;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity .35s ease, transform .4s cubic-bezier(.16, 1, .3, 1);
+        }
+        #tour-overlay.visible {
+            opacity: 1;
+            transform: translateX(-50%) translateY(0);
+            pointer-events: auto;
+        }
+        .tour-card {
+            background: linear-gradient(180deg, rgba(26, 23, 21, .93), rgba(18, 16, 15, .95));
+            backdrop-filter: blur(16px) saturate(1.15);
+            -webkit-backdrop-filter: blur(16px) saturate(1.15);
+            border: 1px solid rgba(249, 115, 22, .28);
+            border-radius: 16px;
+            box-shadow: 0 22px 60px -14px rgba(0, 0, 0, .6), 0 0 0 1px rgba(255, 255, 255, .03) inset;
+            padding: 15px 20px 13px;
+            color: #f2ede6;
+        }
+        .tour-top { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+        .tour-badge {
+            font-size: 9.5px; letter-spacing: .14em; text-transform: uppercase; font-weight: 800;
+            color: #1a120b; background: linear-gradient(90deg, #fb923c, #f97316);
+            padding: 3px 8px; border-radius: 999px; white-space: nowrap;
+        }
+        .tour-title-main {
+            font-size: 12.5px; font-weight: 600; color: #f7f2ea; flex: 1;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .tour-counter { font-size: 11px; color: #d8b48f; font-variant-numeric: tabular-nums; letter-spacing: .1em; }
+        .tour-close {
+            background: none; border: none; color: #a89b8d; cursor: pointer;
+            font-size: 17px; line-height: 1; padding: 2px 5px; border-radius: 6px;
+        }
+        .tour-close:hover { color: #fff; background: rgba(255, 255, 255, .09); }
+        .tour-progress { display: flex; gap: 5px; margin-bottom: 13px; }
+        .tour-seg {
+            height: 3px; flex: 1; border-radius: 2px; cursor: pointer;
+            background: rgba(255, 255, 255, .14); overflow: hidden; position: relative;
+        }
+        .tour-seg.done { background: rgba(249, 115, 22, .6); }
+        .tour-seg.active { background: rgba(249, 115, 22, .28); }
+        .tour-seg.active::after {
+            content: ''; position: absolute; inset: 0 auto 0 0; width: var(--seg, 0%);
+            background: linear-gradient(90deg, #fb923c, #f97316); border-radius: 2px;
+        }
+        .tour-stop-title { font-size: 17px; font-weight: 650; color: #fff; margin-bottom: 4px; line-height: 1.25; }
+        .tour-stop-meta {
+            font-size: 11px; color: #cbb096; margin-bottom: 10px;
+            display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+        }
+        .tour-stop-meta .type { color: #fb923c; font-weight: 600; }
+        .tour-stop-meta .file { font-family: ui-monospace, "SF Mono", Menlo, monospace; opacity: .85; }
+        .tour-jump {
+            color: #8fb8dd; cursor: pointer; text-decoration: none;
+            border-bottom: 1px dashed rgba(143, 184, 221, .45);
+        }
+        .tour-jump:hover { color: #bcd6ef; }
+        .tour-narration { font-size: 14px; line-height: 1.58; color: #e9dfd2; min-height: 3.4em; }
+        .tour-narration .caret {
+            display: inline-block; width: 7px; color: #f97316; font-weight: 700;
+            animation: tourblink 1s step-end infinite;
+        }
+        @keyframes tourblink { 50% { opacity: 0; } }
+        .tour-controls { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
+        .tour-controls .spacer { flex: 1; }
+        .tour-btn {
+            background: rgba(255, 255, 255, .06); border: 1px solid rgba(255, 255, 255, .13);
+            color: #f2ede6; border-radius: 9px; height: 32px; padding: 0 12px; cursor: pointer;
+            font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px;
+            transition: background .15s, border-color .15s, transform .1s;
+        }
+        .tour-btn:hover:not(:disabled) { background: rgba(255, 255, 255, .12); border-color: rgba(249, 115, 22, .45); }
+        .tour-btn:active:not(:disabled) { transform: translateY(1px); }
+        .tour-btn:disabled { opacity: .4; cursor: default; }
+        .tour-btn.primary { background: linear-gradient(90deg, #fb923c, #f97316); color: #1a120b; border-color: transparent; }
+        .tour-btn.primary:hover { filter: brightness(1.07); }
+        .tour-btn svg { width: 14px; height: 14px; fill: currentColor; }
+        .tour-exit { background: none; border: none; color: #a89b8d; cursor: pointer; font-size: 11px; letter-spacing: .05em; }
+        .tour-exit:hover { color: #fff; text-decoration: underline; }
+        .tour-note { font-size: 13px; line-height: 1.55; color: #e9dfd2; }
+        .tour-note.error { color: #fca5a5; }
+        .tour-spinner {
+            display: inline-block; width: 13px; height: 13px; margin-right: 8px; vertical-align: -2px;
+            border: 2px solid rgba(249, 115, 22, .3); border-top-color: #f97316;
+            border-radius: 50%; animation: tourspin .7s linear infinite;
+        }
+        @keyframes tourspin { to { transform: rotate(360deg); } }
+        body.tour-active #legend, body.tour-active #axis-gizmo { opacity: .22; transition: opacity .3s; }
     </style>
 </head>
 
@@ -5285,6 +5419,39 @@
     <div id="container">
         <div id="graph-3d"></div>
 
+        <!-- Guided Tour: cinematic narration overlay (camera flies stop to stop) -->
+        <div id="tour-overlay" aria-live="polite">
+            <div class="tour-card">
+                <div class="tour-top">
+                    <span class="tour-badge">Guided Tour</span>
+                    <span class="tour-title-main" id="tour-o-title"></span>
+                    <span class="tour-counter" id="tour-o-counter"></span>
+                    <button class="tour-close" id="tour-o-close" title="Exit tour (Esc)">✕</button>
+                </div>
+                <div class="tour-progress" id="tour-o-progress"></div>
+                <div id="tour-o-stage">
+                    <div class="tour-stop-title" id="tour-o-stop-title"></div>
+                    <div class="tour-stop-meta" id="tour-o-stop-meta"></div>
+                    <div class="tour-narration" id="tour-o-narration"></div>
+                </div>
+                <div id="tour-o-note" class="tour-note" hidden></div>
+                <div class="tour-controls">
+                    <button class="tour-btn" id="tour-o-prev" title="Previous stop (←)">
+                        <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7z"/></svg>
+                    </button>
+                    <button class="tour-btn primary" id="tour-o-play" title="Play / pause (space)">
+                        <svg viewBox="0 0 24 24" id="tour-o-play-icon"><path d="M6 4l14 8-14 8z"/></svg>
+                        <span id="tour-o-play-label">Play</span>
+                    </button>
+                    <button class="tour-btn" id="tour-o-next" title="Next stop (→)">
+                        <svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7z"/></svg>
+                    </button>
+                    <span class="spacer"></span>
+                    <button class="tour-exit" id="tour-o-exit">Exit tour</button>
+                </div>
+            </div>
+        </div>
+
         <!-- Navigation / breadcrumb bar (visible while exploring a node) -->
         <div id="navbar" class="canvas-overlay">
             <button class="nav-btn" id="nav-back" title="Back (Backspace)" disabled>
@@ -5442,6 +5609,29 @@
 
                 <!-- ─── Discover tab: chat + semantic / hybrid / keyword search ─── -->
                 <div class="tab-pane" data-tab="discover" id="pane-discover">
+
+                <!-- Guided Tour (RAG + LLM narrated camera walkthrough) - Featured -->
+                <div class="section featured cap-hidden" data-section="tour" id="section-tour">
+                    <div class="section-header">
+                        <span class="label">Guided Tour</span>
+                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="6 9 12 15 18 9" />
+                        </svg>
+                    </div>
+                    <div class="section-body">
+                        <p class="tour-blurb">Ask a question and take a cinematic, narrated fly-through of
+                            the code that answers it — the camera visits each stop while a guide explains it.</p>
+                        <textarea id="tour-input" rows="2"
+                            placeholder="e.g. how does authentication work?"></textarea>
+                        <div class="chat-controls">
+                            <span class="chat-num-label" title="Maximum stops on the tour">stops</span>
+                            <input type="number" id="tour-stops" class="chat-num" value="6" min="2" max="20">
+                            <button id="tour-start" type="button">Start tour</button>
+                        </div>
+                        <div class="tour-examples" id="tour-examples"></div>
+                        <div id="tour-launch-status"></div>
+                    </div>
+                </div>
 
                 <!-- Chat (RAG + LLM) - Featured -->
                 <div class="section featured cap-hidden" data-section="chat" id="section-chat">
@@ -6694,6 +6884,7 @@
             wireFilterActions();
             wireSemanticPanel();
             wireChatPanel();
+            wireTourPanel();
             wireFindPathBtn();
             wirePanelTabs();
             wireCatalog();
@@ -6745,6 +6936,7 @@
         async function probeCapabilities() {
             const semSection = document.getElementById('section-semantic');
             const chatSection = document.getElementById('section-chat');
+            const tourSection = document.getElementById('section-tour');
             const chatDisabled = document.getElementById('section-chat-disabled');
             const disabledSection = document.getElementById('section-cap-disabled');
             const disabledMsg = document.getElementById('cap-disabled-msg');
@@ -6782,6 +6974,12 @@
                     }
                 }
 
+                // A tour needs retrieval (DB + embedder); LLM narration is
+                // optional — the server falls back to a ranked itinerary — so
+                // gate the launcher on search readiness, not chat.
+                if (caps.search_ready) showSection(tourSection);
+                else hideSection(tourSection);
+
                 if (caps.chat_ready) {
                     showSection(chatSection);
                     hideSection(chatDisabled);
@@ -6806,6 +7004,7 @@
                 state.capabilities = { db_ready: false, embedder_ready: false, search_ready: false, chat_ready: false };
                 hideSection(semSection);
                 hideSection(chatSection);
+                hideSection(tourSection);
                 showSection(disabledSection);
                 disabledMsg.textContent = 'Capabilities probe failed — server unreachable?';
                 if (dot) {
@@ -7625,6 +7824,372 @@
                     }
                 });
                 container.appendChild(card);
+            });
+        }
+
+        // ─── Guided Tour (cinematic narrated walkthrough) ───
+        //
+        // POST /api/tour returns an ordered list of stops, each bound to a
+        // real graph node id + narration. The engine flies the camera to
+        // each stop (reusing handleClick + focusNode), types the narration
+        // out, and — while playing — auto-advances after a dwell. Manual
+        // controls (prev/next/play/exit, progress-segment clicks, keyboard)
+        // sit on top.
+
+        const TOUR_EXAMPLES = [
+            'How does authentication work?',
+            'Trace the request lifecycle',
+            'How is data indexed and stored?',
+            'Where does error handling happen?',
+            'What are the core data structures?',
+        ];
+
+        const tourState = {
+            data: null,
+            index: -1,
+            playing: false,
+            typeTimer: null,
+            dwellRaf: null,
+            active: false,
+        };
+
+        const TOUR_TYPE_MS = 16;      // per-character reveal cadence
+        const TOUR_DWELL_MS = 3600;   // pause after narration finishes before auto-advancing
+
+        function tourEl(id) { return document.getElementById(id); }
+
+        function clearTourTimers() {
+            if (tourState.typeTimer) { clearTimeout(tourState.typeTimer); tourState.typeTimer = null; }
+            if (tourState.dwellRaf) { cancelAnimationFrame(tourState.dwellRaf); tourState.dwellRaf = null; }
+        }
+
+        async function startTour(query, maxStops) {
+            query = (query || '').trim();
+            if (!query) return;
+            const statusEl = tourEl('tour-launch-status');
+            const startBtn = tourEl('tour-start');
+            statusEl.classList.remove('error');
+            statusEl.textContent = 'Planning your tour…';
+            if (startBtn) startBtn.disabled = true;
+
+            // Show the overlay immediately in a loading state so the wait feels alive.
+            tourState.data = null;
+            tourState.active = true;
+            document.body.classList.add('tour-active');
+            const overlay = tourEl('tour-overlay');
+            overlay.classList.add('visible');
+            tourEl('tour-o-title').textContent = query;
+            tourEl('tour-o-counter').textContent = '';
+            tourEl('tour-o-progress').innerHTML = '';
+            tourEl('tour-o-stage').style.display = 'none';
+            const note = tourEl('tour-o-note');
+            note.hidden = false;
+            note.classList.remove('error');
+            note.innerHTML = '<span class="tour-spinner"></span>Charting a path through the graph…';
+
+            const body = { query, max_stops: maxStops };
+            if (state.semDest) body.dest = state.semDest;
+
+            try {
+                const res = await fetch('/api/tour', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                if (!res.ok) throw new Error(await readErr(res));
+                const tour = await res.json();
+                if (!tourState.active) return; // user bailed while we waited
+                if (!tour.stops || !tour.stops.length) {
+                    note.innerHTML = escapeHtml(tour.intro || 'No stops could be planned for that question.');
+                    statusEl.textContent = '';
+                    return;
+                }
+                statusEl.textContent = `Tour ready · ${tour.stops.length} stop${tour.stops.length === 1 ? '' : 's'}`;
+                enterTourMode(tour);
+            } catch (err) {
+                note.hidden = false;
+                note.classList.add('error');
+                note.textContent = `Tour failed: ${err.message || err}`;
+                statusEl.classList.add('error');
+                statusEl.textContent = `Tour failed: ${err.message || err}`;
+                console.error(err);
+            } finally {
+                if (startBtn) startBtn.disabled = false;
+            }
+        }
+
+        function enterTourMode(tour) {
+            tourState.data = tour;
+            tourState.active = true;
+            tourEl('tour-o-note').hidden = true;
+            tourEl('tour-o-stage').style.display = '';
+            tourEl('tour-o-title').textContent = tour.title || tour.query || 'Guided tour';
+
+            // Build one progress segment per stop; click to jump.
+            const prog = tourEl('tour-o-progress');
+            prog.innerHTML = '';
+            tour.stops.forEach((s, i) => {
+                const seg = document.createElement('div');
+                seg.className = 'tour-seg';
+                seg.title = s.title || s.name || `Stop ${i + 1}`;
+                seg.addEventListener('click', () => { pauseTour(); goToStop(i); });
+                prog.appendChild(seg);
+            });
+
+            tourState.playing = true;
+            updatePlayButton();
+            goToStop(0);
+        }
+
+        function goToStop(i) {
+            const tour = tourState.data;
+            if (!tour || !tour.stops.length) return;
+            clearTourTimers();
+            i = Math.max(0, Math.min(i, tour.stops.length - 1));
+            tourState.index = i;
+            const stop = tour.stops[i];
+
+            tourEl('tour-o-counter').textContent =
+                `${String(i + 1).padStart(2, '0')} / ${String(tour.stops.length).padStart(2, '0')}`;
+
+            // Progress segments: past = done, current = active (fills during dwell).
+            const segs = tourEl('tour-o-progress').children;
+            for (let s = 0; s < segs.length; s++) {
+                segs[s].classList.toggle('done', s < i);
+                segs[s].classList.toggle('active', s === i);
+                if (s !== i) segs[s].style.removeProperty('--seg');
+                if (s === i) segs[s].style.setProperty('--seg', '0%');
+            }
+
+            tourEl('tour-o-stop-title').textContent = stop.title || stop.name || `Stop ${i + 1}`;
+
+            // Meta line: type · file:lines · jump-to-code.
+            const meta = tourEl('tour-o-stop-meta');
+            meta.innerHTML = '';
+            if (stop.node_type) {
+                const t = document.createElement('span');
+                t.className = 'type';
+                t.textContent = stop.node_type;
+                meta.appendChild(t);
+            }
+            if (stop.file) {
+                const lineLabel = stop.start_line
+                    ? `:${stop.start_line}${stop.end_line && stop.end_line !== stop.start_line ? '–' + stop.end_line : ''}`
+                    : '';
+                const f = document.createElement('span');
+                f.className = 'file';
+                f.textContent = `${stop.file}${lineLabel}`;
+                meta.appendChild(f);
+            }
+            const localNode = state.nodeById ? state.nodeById.get(stop.node_id) : null;
+            if (localNode) {
+                const j = document.createElement('span');
+                j.className = 'tour-jump';
+                j.textContent = 'view code';
+                j.addEventListener('click', () => flyToStopNode(stop));
+                meta.appendChild(j);
+            }
+
+            // Fly the camera + select the node (opens the code preview panel).
+            flyToStopNode(stop);
+
+            // Type the narration; auto-advance kicks in when typing completes.
+            typewriteNarration(stop.narration || '', () => {
+                if (tourState.playing) beginDwell(i);
+            });
+
+            updateNavButtons();
+        }
+
+        function flyToStopNode(stop) {
+            const node = state.nodeById ? state.nodeById.get(stop.node_id) : null;
+            if (!node) return; // DB-only node not present in graph.json — narration still shows
+            handleClick(null, node);
+            focusNode(node);
+        }
+
+        function typewriteNarration(text, onDone) {
+            const el = tourEl('tour-o-narration');
+            const full = text || '';
+            let pos = 0;
+            const caret = '<span class="caret">▋</span>';
+            const step = () => {
+                pos = Math.min(full.length, pos + 1);
+                el.innerHTML = escapeHtml(full.slice(0, pos)) + (pos < full.length ? caret : '');
+                if (pos < full.length) {
+                    tourState.typeTimer = setTimeout(step, TOUR_TYPE_MS);
+                } else {
+                    tourState.typeTimer = null;
+                    if (onDone) onDone();
+                }
+            };
+            el.innerHTML = caret;
+            tourState.typeTimer = setTimeout(step, TOUR_TYPE_MS);
+        }
+
+        // Fill the active progress segment over TOUR_DWELL_MS, then advance.
+        function beginDwell(stopIndex) {
+            const segs = tourEl('tour-o-progress').children;
+            const seg = segs[stopIndex];
+            const start = performance.now();
+            const tick = (now) => {
+                if (!tourState.playing || tourState.index !== stopIndex) return;
+                const pct = Math.min(100, ((now - start) / TOUR_DWELL_MS) * 100);
+                if (seg) seg.style.setProperty('--seg', pct + '%');
+                if (pct < 100) {
+                    tourState.dwellRaf = requestAnimationFrame(tick);
+                } else {
+                    tourState.dwellRaf = null;
+                    advanceTour();
+                }
+            };
+            tourState.dwellRaf = requestAnimationFrame(tick);
+        }
+
+        function advanceTour() {
+            const tour = tourState.data;
+            if (!tour) return;
+            if (tourState.index < tour.stops.length - 1) {
+                goToStop(tourState.index + 1);
+            } else {
+                // Reached the end: stop playing and show the takeaway.
+                tourState.playing = false;
+                updatePlayButton();
+                const segs = tourEl('tour-o-progress').children;
+                if (segs[tourState.index]) {
+                    segs[tourState.index].classList.remove('active');
+                    segs[tourState.index].classList.add('done');
+                }
+                if (tour.outro) {
+                    const note = tourEl('tour-o-note');
+                    note.hidden = false;
+                    note.classList.remove('error');
+                    note.innerHTML = '<strong style="color:#fb923c">Takeaway · </strong>' + escapeHtml(tour.outro);
+                }
+                updateNavButtons();
+            }
+        }
+
+        function nextStop() {
+            if (!tourState.data) return;
+            clearTourTimers();
+            if (tourState.index < tourState.data.stops.length - 1) {
+                goToStop(tourState.index + 1);
+            }
+        }
+
+        function prevStop() {
+            if (!tourState.data) return;
+            clearTourTimers();
+            tourEl('tour-o-note').hidden = true;
+            if (tourState.index > 0) goToStop(tourState.index - 1);
+            else goToStop(0);
+        }
+
+        function playTour() {
+            if (!tourState.data) return;
+            tourState.playing = true;
+            updatePlayButton();
+            // Resume: re-run the current stop so narration + dwell restart cleanly.
+            goToStop(tourState.index < 0 ? 0 : tourState.index);
+        }
+
+        function pauseTour() {
+            tourState.playing = false;
+            clearTourTimers();
+            updatePlayButton();
+        }
+
+        function togglePlayTour() {
+            if (tourState.playing) pauseTour(); else playTour();
+        }
+
+        function updatePlayButton() {
+            const icon = tourEl('tour-o-play-icon');
+            const label = tourEl('tour-o-play-label');
+            if (!icon || !label) return;
+            const atEnd = tourState.data && tourState.index >= tourState.data.stops.length - 1 && !tourState.playing;
+            if (tourState.playing) {
+                icon.innerHTML = '<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>';   // pause
+                label.textContent = 'Pause';
+            } else if (atEnd) {
+                icon.innerHTML = '<path d="M12 5V1L7 6l5 5V7a5 5 0 1 1-5 5H5a7 7 0 1 0 7-7z"/>'; // replay-ish
+                label.textContent = 'Replay';
+            } else {
+                icon.innerHTML = '<path d="M6 4l14 8-14 8z"/>';             // play
+                label.textContent = 'Play';
+            }
+        }
+
+        function updateNavButtons() {
+            const prev = tourEl('tour-o-prev');
+            const next = tourEl('tour-o-next');
+            if (prev) prev.disabled = tourState.index <= 0;
+            if (next) next.disabled = !tourState.data || tourState.index >= tourState.data.stops.length - 1;
+            updatePlayButton();
+        }
+
+        function exitTour() {
+            clearTourTimers();
+            tourState.active = false;
+            tourState.playing = false;
+            tourState.data = null;
+            tourState.index = -1;
+            document.body.classList.remove('tour-active');
+            const overlay = tourEl('tour-overlay');
+            if (overlay) overlay.classList.remove('visible');
+            // Drop the focus dimming the tour left behind.
+            exitFocus();
+            bumpGraphStyles();
+        }
+
+        function wireTourPanel() {
+            const startBtn = tourEl('tour-start');
+            const input = tourEl('tour-input');
+            const stopsInput = tourEl('tour-stops');
+            const examples = tourEl('tour-examples');
+
+            const launch = () => {
+                const maxStops = clampInt(stopsInput ? stopsInput.value : 6, 2, 20, 6);
+                startTour(input ? input.value : '', maxStops);
+            };
+            if (startBtn) startBtn.addEventListener('click', launch);
+            if (input) {
+                input.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); launch(); }
+                });
+            }
+            if (examples) {
+                examples.innerHTML = '';
+                TOUR_EXAMPLES.forEach(q => {
+                    const chip = document.createElement('span');
+                    chip.className = 'tour-chip';
+                    chip.textContent = q;
+                    chip.addEventListener('click', () => {
+                        if (input) input.value = q;
+                        launch();
+                    });
+                    examples.appendChild(chip);
+                });
+            }
+
+            // Overlay controls.
+            const bind = (id, fn) => { const el = tourEl(id); if (el) el.addEventListener('click', fn); };
+            bind('tour-o-prev', prevStop);
+            bind('tour-o-next', nextStop);
+            bind('tour-o-play', togglePlayTour);
+            bind('tour-o-exit', exitTour);
+            bind('tour-o-close', exitTour);
+
+            // Keyboard control while a tour is on screen (and not typing in a field).
+            document.addEventListener('keydown', (e) => {
+                if (!tourState.active) return;
+                const tag = (document.activeElement && document.activeElement.tagName) || '';
+                if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+                if (e.key === 'Escape') { e.preventDefault(); exitTour(); }
+                else if (e.key === 'ArrowRight') { e.preventDefault(); pauseTour(); nextStop(); }
+                else if (e.key === 'ArrowLeft') { e.preventDefault(); pauseTour(); prevStop(); }
+                else if (e.key === ' ') { e.preventDefault(); togglePlayTour(); }
             });
         }
 

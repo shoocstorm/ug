@@ -23,6 +23,7 @@ mod config;
 mod mcp;
 mod project;
 mod serve;
+mod tour;
 
 // Bundled visualization assets so `ug gen` can produce a self-contained
 // output directory without needing the source tree at runtime.
@@ -106,6 +107,7 @@ fn main() {
         "search" | "hybrid_search" => run_hybrid_search(cmd_args),
         "traverse" => run_traverse(cmd_args),
         "chat" => run_chat(cmd_args),
+        "tour" => run_tour(cmd_args),
         // Project management.
         "list_projects" | "list" => run_list(cmd_args),
         "active" => run_active(cmd_args),
@@ -3433,6 +3435,7 @@ const API_ENDPOINTS: &[(&str, &[ApiEntry])] = &[
             ApiEntry { method: "POST", path: "/api/search/semantic", desc: "semantic vector search", availability: "503 if no DB + embedder configured", cli_equivalent: Some("ug semantic_search") },
             ApiEntry { method: "POST", path: "/api/search/hybrid", desc: "GraphRAG: semantic search → graph expansion → ranked context", availability: "503 if no DB + embedder configured", cli_equivalent: Some("ug search") },
             ApiEntry { method: "POST", path: "/api/chat", desc: "GraphRAG-grounded chat completion", availability: "503 if no DB + embedder + chat model configured", cli_equivalent: Some("ug chat") },
+            ApiEntry { method: "POST", path: "/api/tour", desc: "Guided, narrated walkthrough — ordered stops bound to node ids", availability: "503 if no DB + embedder; LLM narration optional (ranked fallback)", cli_equivalent: Some("ug tour") },
         ],
     ),
     (
@@ -4103,6 +4106,307 @@ fn run_chat(args: &[String]) {
             }
         }
     });
+}
+
+// ---------- Tour (guided, narrated graph walkthrough) ----------
+
+fn run_tour(args: &[String]) {
+    if has_flag(args, "-h") || has_flag(args, "--help") {
+        print_tour_help();
+        return;
+    }
+
+    // Value-bearing flags so the first bare positional is the question.
+    let value_flags = [
+        "-n", "--name", "-k", "--limit", "--hops", "--max-stops", "--strategy", "--direction",
+        "-t", "--edge-type", "--max-chars", "--repo-root", "--base-url", "--api-key", "--model",
+        "--embedding-dim", "--embedding-model", "--embedding-base-url", "--embedding-api-key",
+        "--chat-base-url", "--chat-api-key", "--chat-model", "--temperature", "--max-tokens",
+        "--chat-timeout", "--filter", "-o", "--output", "--dest", "--neo4j-uri", "--neo4j-user",
+        "--neo4j-password", "--neo4j-database",
+    ];
+
+    let query = match first_positional(args, &value_flags) {
+        Some(q) => q,
+        None => {
+            eprintln!(
+                "Usage: ug tour <question> [-k <n>] [--hops <n>] [--max-stops <n>] [--no-llm] [--json] [-o <file>]\n       (run `ug tour -h` for the full flag list)"
+            );
+            std::process::exit(1);
+        }
+    };
+
+    let json_output = has_flag(args, "--json");
+    let no_llm = has_flag(args, "--no-llm");
+    let no_snippets = has_flag(args, "--no-snippets");
+    let k: usize = flag_value(args, &["-k", "--limit"])
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(12);
+    let hops: u32 = flag_value(args, &["--hops"])
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(2);
+    let max_stops: usize = flag_value(args, &["--max-stops"])
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(tour::DEFAULT_MAX_STOPS)
+        .clamp(1, 20);
+    let max_chars: usize = flag_value(args, &["--max-chars"])
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(chat::DEFAULT_CTX_MAX_CHARS);
+    let strategy = flag_value(args, &["--strategy"])
+        .map(|s| RankStrategy::from_str_lossy(&s))
+        .unwrap_or(RankStrategy::Ppr);
+    let direction = flag_value(args, &["--direction"])
+        .map(|s| Direction::from_str_lossy(&s))
+        .unwrap_or(Direction::Both);
+    let edge_types = multi_flag(args, &["-t", "--edge-type"]);
+    let where_clause = flag_value(args, &["--filter"]);
+    let repo_root: PathBuf = flag_value(args, &["--repo-root"])
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let output_path = flag_value(args, &["-o", "--output"]);
+
+    let embedder = embedder_from_chat_args(args);
+    let rt = tokio_runtime();
+
+    rt.block_on(async {
+        let dim = embedder.config().dim as u32;
+        let spec = single_store_spec_from_args(args, dim);
+        let store = open_store(&spec)
+            .await
+            .unwrap_or_else(|e| panic!("failed to open {} store: {}", spec.name(), e));
+
+        let edge_types_owned: Option<Vec<String>> = if edge_types.is_empty() {
+            None
+        } else {
+            Some(edge_types.clone())
+        };
+        let mut opts = tour::TourOptions::new();
+        opts.k = k;
+        opts.hops = hops;
+        opts.max_stops = max_stops;
+        opts.strategy = strategy;
+        opts.direction = direction;
+        opts.edge_types = edge_types_owned.as_deref();
+        opts.include_snippets = !no_snippets;
+        opts.max_context_chars = max_chars;
+        opts.where_clause = where_clause.as_deref();
+
+        let result = if no_llm {
+            eprintln!("{C_CYAN}▸{C_RESET} Planning tour (ranked, no LLM)…");
+            tour::plan_tour_no_llm(store.as_ref(), &embedder, repo_root.as_path(), &query, opts.clone())
+                .await
+        } else {
+            let chat_client = chat_client_from_args(args);
+            eprintln!("{C_CYAN}▸{C_RESET} Planning tour for {C_BOLD}\u{201c}{}\u{201d}{C_RESET}…", query);
+            match tour::plan_tour(
+                store.as_ref(),
+                &embedder,
+                &chat_client,
+                repo_root.as_path(),
+                &query,
+                opts.clone(),
+            )
+            .await
+            {
+                Ok(t) => Ok(t),
+                Err(e) => {
+                    eprintln!(
+                        "{C_YELLOW}▸{C_RESET} tour guide (LLM) unavailable ({}); falling back to a ranked itinerary.",
+                        e
+                    );
+                    tour::plan_tour_no_llm(
+                        store.as_ref(),
+                        &embedder,
+                        repo_root.as_path(),
+                        &query,
+                        opts.clone(),
+                    )
+                    .await
+                }
+            }
+        };
+
+        let the_tour = match result {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("tour failed: {}", e);
+                std::process::exit(1);
+            }
+        };
+
+        if json_output {
+            let text = serde_json::to_string_pretty(&the_tour).unwrap_or_default();
+            write_or_print(output_path.as_deref(), &text, "tour");
+        } else {
+            print!("{}", render_tour(&the_tour, true));
+            if let Some(p) = output_path.as_deref() {
+                write_file(p, &render_tour(&the_tour, false));
+                println!("Wrote tour to {}", p);
+            }
+        }
+    });
+}
+
+/// Word-wrap `text` to `width` columns, prefixing every line with `indent`.
+fn wrap_indent(text: &str, width: usize, indent: &str) -> String {
+    let mut out = String::new();
+    for (pi, para) in text.split('\n').enumerate() {
+        if pi > 0 {
+            out.push('\n');
+        }
+        let mut line_len = 0usize;
+        let mut first_word = true;
+        out.push_str(indent);
+        for word in para.split_whitespace() {
+            let wlen = word.chars().count();
+            if !first_word && line_len + 1 + wlen > width {
+                out.push('\n');
+                out.push_str(indent);
+                line_len = 0;
+                first_word = true;
+            }
+            if !first_word {
+                out.push(' ');
+                line_len += 1;
+            }
+            out.push_str(word);
+            line_len += wlen;
+            first_word = false;
+        }
+    }
+    out
+}
+
+/// Render a `Tour` as a terminal itinerary. `color` toggles ANSI so the
+/// same routine produces a clean plain-text file with `-o`.
+fn render_tour(t: &tour::Tour, color: bool) -> String {
+    let c = |code: &'static str| if color { code } else { "" };
+    let bold = c(C_BOLD);
+    let reset = c(C_RESET);
+    let cyan = c(C_CYAN);
+    let dim = c(C_DIM);
+    let green = c(C_GREEN);
+    let yellow = c(C_YELLOW);
+    let magenta = c(C_MAGENTA);
+
+    let mut out = String::new();
+    out.push('\n');
+    out.push_str(&format!("{bold}{cyan}❯ {}{reset}\n", t.title));
+    if t.fallback {
+        out.push_str(&format!(
+            "{dim}  (ranked itinerary — no tour-guide LLM configured; pass --chat-model to narrate){reset}\n"
+        ));
+    }
+    if !t.intro.is_empty() {
+        out.push('\n');
+        out.push_str(&wrap_indent(&t.intro, 76, "  "));
+        out.push('\n');
+    }
+
+    if t.stops.is_empty() {
+        out.push('\n');
+        out.push_str(&format!("{yellow}  No stops on this tour.{reset}\n"));
+        return out;
+    }
+
+    let total = t.stops.len();
+    for (i, s) in t.stops.iter().enumerate() {
+        out.push('\n');
+        let loc = if s.start_line > 0 {
+            format!(
+                "{}:{}{}",
+                if s.file.is_empty() { "<unknown>" } else { s.file.as_str() },
+                s.start_line,
+                if s.end_line > s.start_line { format!("-{}", s.end_line) } else { String::new() }
+            )
+        } else if !s.file.is_empty() {
+            s.file.clone()
+        } else {
+            String::new()
+        };
+        out.push_str(&format!(
+            "{green}  ●{reset} {dim}Stop {}/{}{reset} · {bold}{}{reset} {dim}({}){reset}\n",
+            i + 1,
+            total,
+            s.title,
+            s.node_type
+        ));
+        if !loc.is_empty() {
+            out.push_str(&format!("{dim}     {}{reset}\n", loc));
+        }
+        if !s.narration.is_empty() {
+            out.push_str(&wrap_indent(&s.narration, 74, "     "));
+            out.push('\n');
+        }
+        if let Some(snip) = s.snippet.as_ref() {
+            let snip = snip.trim_end_matches('\n');
+            if !snip.is_empty() {
+                for line in snip.lines().take(6) {
+                    out.push_str(&format!("{dim}     │ {}{reset}\n", line));
+                }
+                if snip.lines().count() > 6 {
+                    out.push_str(&format!("{dim}     │ …{reset}\n"));
+                }
+            }
+        }
+    }
+
+    if !t.outro.is_empty() {
+        out.push('\n');
+        out.push_str(&format!("{magenta}  ✦{reset} "));
+        // Continue the outro after the marker, wrapped and re-indented.
+        let wrapped = wrap_indent(&t.outro, 74, "     ");
+        out.push_str(wrapped.trim_start());
+        out.push('\n');
+    }
+
+    out.push('\n');
+    let mut meta = format!("retrieval={}ms", t.retrieval_ms);
+    if t.completion_ms > 0 {
+        meta.push_str(&format!(" · guide={}ms", t.completion_ms));
+    }
+    meta.push_str(&format!(" · {} stop(s)", total));
+    if let Some(u) = &t.usage {
+        if let Some(tk) = u.total_tokens {
+            meta.push_str(&format!(" · tokens={}", tk));
+        }
+    }
+    out.push_str(&format!("{cyan}▸{reset} {dim}{}{reset}\n", meta));
+    out
+}
+
+fn print_tour_help() {
+    println!("  {C_CYAN}ug tour{C_RESET}  {C_YELLOW}— guided, narrated walk through the graph{C_RESET}");
+    println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
+    println!();
+    println!("{C_BOLD}Usage:{C_RESET}  ug tour <question> [options]");
+    println!();
+    println!("  GraphRAG picks the nodes that matter for your question, an LLM");
+    println!("  \u{201c}tour guide\u{201d} orders them into a narrative and narrates each stop,");
+    println!("  and the result is an ordered itinerary bound to real graph nodes.");
+    println!("  In the web UI ({C_CYAN}ug serve{C_RESET}) the same tour flies the camera stop to stop.");
+    println!();
+    println!("{C_BOLD}Options:{C_RESET}");
+    println!("  {C_CYAN}-k, --limit{C_RESET} <n>       Candidate nodes to retrieve (default: 12)");
+    println!("  {C_CYAN}--hops{C_RESET} <n>            Graph expansion hops (default: 2)");
+    println!("  {C_CYAN}--max-stops{C_RESET} <n>       Max stops on the tour (default: {}, max 20)", tour::DEFAULT_MAX_STOPS);
+    println!("  {C_YELLOW}--no-llm{C_RESET}             Skip the guide; emit a ranked itinerary from retrieval only");
+    println!("  {C_CYAN}--no-snippets{C_RESET}         Omit code snippets from stops");
+    println!("  {C_CYAN}--strategy{C_RESET} <s>        Rank strategy (ppr|semantic|…, default: ppr)");
+    println!("  {C_CYAN}--direction{C_RESET} <d>       Edge direction (out|in|both, default: both)");
+    println!("  {C_CYAN}-t, --edge-type{C_RESET} <t>   Restrict expansion to an edge type (repeatable)");
+    println!("  {C_CYAN}--filter{C_RESET} <sql>        WHERE clause over node columns");
+    println!("  {C_CYAN}-n, --name{C_RESET} <project>  Project under ~/.ug (default: cwd basename)");
+    println!("  {C_CYAN}--json{C_RESET}                Emit the tour as JSON (node ids, timings, usage)");
+    println!("  {C_CYAN}-o, --output{C_RESET} <file>   Write the itinerary/JSON to a file");
+    println!();
+    println!("  Chat/embedding endpoint flags match {C_CYAN}ug chat{C_RESET}: {C_CYAN}--chat-model{C_RESET}, {C_CYAN}--base-url{C_RESET},");
+    println!("  {C_CYAN}--api-key{C_RESET}, {C_CYAN}--temperature{C_RESET}, {C_CYAN}--max-tokens{C_RESET}, … (or persist via {C_CYAN}ug config set{C_RESET}).");
+    println!();
+    println!("{C_BOLD}Examples:{C_RESET}");
+    println!("  {C_CYAN}ug tour{C_RESET} \"how does authentication work?\"");
+    println!("  {C_CYAN}ug tour{C_RESET} \"the request lifecycle\" --max-stops 6 --hops 3");
+    println!("  {C_CYAN}ug tour{C_RESET} \"error handling\" --no-llm --json -o tour.json");
 }
 
 fn chat_outcome_to_json(query: &str, outcome: &chat::ChatRagOutcome) -> serde_json::Value {
@@ -4882,6 +5186,9 @@ fn print_help() {
     println!("  {C_CYAN}traverse{C_RESET}         K-hop BFS over the OverGraph edges table");
     println!(
         "  {C_BOLD}{C_MAGENTA}chat{C_RESET}             {C_BOLD}{C_MAGENTA}💬 GraphRAG-grounded chat (one-shot or REPL){C_RESET}"
+    );
+    println!(
+        "  {C_BOLD}{C_MAGENTA}tour{C_RESET}             {C_BOLD}{C_MAGENTA}🎬 guided, narrated walkthrough — flies the camera in the web UI{C_RESET}"
     );
     println!();
     println!("  {C_DIM}Pipeline steps (gen runs these for you){C_RESET}");
