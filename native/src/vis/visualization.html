@@ -2230,8 +2230,8 @@
         }
 
         .chat-msg .chat-citations {
-            margin-top: 8px;
-            padding-top: 8px;
+            margin-top: 0px;
+            padding-top: 0px;
             border-top: 1px dashed var(--border-soft);
             font-size: 10px;
             color: var(--text-dim);
@@ -5280,6 +5280,129 @@
             overflow: auto;
         }
 
+        /* ─── Chat: the setup inspector ─────────────────────── */
+
+        .chat-setup { margin-bottom: 10px; }
+
+        .chat-setup > summary {
+            font-size: 10px;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: var(--text-dim);
+            cursor: pointer;
+            padding: 3px 0;
+        }
+
+        .chat-setup > summary:hover { color: var(--accent); }
+
+        .chat-setup-body {
+            margin-top: 6px;
+            padding: 9px 10px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-soft);
+            border-radius: 7px;
+        }
+
+        .setup-head {
+            font-size: 9px;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            font-weight: 700;
+            color: var(--accent);
+            margin: 12px 0 5px;
+        }
+
+        .setup-head:first-child { margin-top: 0; }
+
+        .setup-note {
+            margin: 0 0 7px;
+            font-size: 10.5px;
+            line-height: 1.5;
+            color: var(--text-dim);
+        }
+
+        .setup-steps {
+            margin: 0 0 8px;
+            padding-left: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        .setup-steps li { font-size: 10.5px; line-height: 1.5; color: var(--text-dim); }
+        .setup-steps b { display: block; color: var(--text-muted); font-weight: 600; }
+
+        .setup-facts { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 4px; }
+
+        .setup-facts span {
+            display: inline-flex;
+            align-items: baseline;
+            gap: 4px;
+            font-size: 9.5px;
+            padding: 2px 7px;
+            border-radius: 999px;
+            background: var(--bg-deep);
+        }
+
+        .setup-facts b {
+            color: var(--text-dim);
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+        }
+
+        .setup-facts i {
+            font-style: normal;
+            color: var(--accent);
+            font-family: 'JetBrains Mono', ui-monospace, monospace;
+        }
+
+        .setup-tool { margin-bottom: 3px; }
+
+        .setup-tool > summary {
+            display: flex;
+            gap: 7px;
+            align-items: baseline;
+            cursor: pointer;
+            padding: 2px 0;
+            font-size: 10px;
+            color: var(--text-dim);
+            list-style: none;
+        }
+
+        .setup-tool > summary::-webkit-details-marker { display: none; }
+
+        .setup-tool code {
+            color: var(--accent);
+            font-family: 'JetBrains Mono', ui-monospace, monospace;
+            flex-shrink: 0;
+        }
+
+        .setup-tool > summary span {
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .setup-tool pre {
+            margin: 4px 0 8px;
+            padding: 7px 8px;
+            background: var(--bg-deep);
+            border-radius: 5px;
+            font-size: 9.5px;
+            line-height: 1.45;
+            color: var(--text-muted);
+            white-space: pre-wrap;
+            word-break: break-word;
+            max-height: 180px;
+            overflow: auto;
+        }
+
+        .chat-setup-body .ct-block { margin-bottom: 6px; }
+        .chat-setup-body .ct-block pre { max-height: 170px; }
+
         /* ─── Chat: rendered markdown ───────────────────────── */
 
         .chat-body { white-space: pre-wrap; }
@@ -5466,7 +5589,7 @@
             padding: 3px 0 5px;
         }
 
-        details.chat-tools { margin-bottom: 6px; }
+        details.chat-tools { margin-top: 6px; }
 
         details.chat-tools > summary {
             font-size: 10px;
@@ -6783,6 +6906,12 @@
                         <p class="pane-blurb"><strong>Read the answer.</strong> Ask in plain language and get a
                             written reply, grounded in the code the graph retrieves for your question and
                             footnoted with the exact nodes it used. Best for specifics and follow-ups.</p>
+                        <!-- What the model is actually given: retrieval method,
+                             system prompt, and the tools it may call. -->
+                        <details class="chat-setup" id="chat-setup">
+                            <summary>How this answers · retrieval, prompt, tools</summary>
+                            <div class="chat-setup-body" id="chat-setup-body">Loading…</div>
+                        </details>
                         <div id="chat-model-badge" class="sem-dest-row" hidden>
                             <span class="sem-dest-label">Model:</span>
                             <span class="sem-dest-badge" id="chat-model-pill" hidden></span>
@@ -9105,6 +9234,140 @@
             }
         }
 
+        // ─── Chat setup inspector ───────────────────────────
+        //
+        // Three things decide what the model says — how context was
+        // retrieved, what it was told to do, and what it could call. All
+        // three are invisible by default, so publish them verbatim.
+
+        async function loadChatSetup() {
+            const box = document.getElementById('chat-setup-body');
+            if (!box || box.dataset.loaded) return;
+            try {
+                const res = await fetch('/api/chat/config');
+                if (!res.ok) throw new Error(await readErr(res));
+                renderChatSetup(box, await res.json());
+                box.dataset.loaded = '1';
+            } catch (err) {
+                box.textContent = `Couldn't load the chat setup: ${err.message || err}`;
+            }
+        }
+
+        function renderChatSetup(box, cfg) {
+            box.innerHTML = '';
+            const section = (title) => {
+                const h = document.createElement('div');
+                h.className = 'setup-head';
+                h.textContent = title;
+                box.appendChild(h);
+            };
+
+            // ── retrieval ──
+            const r = cfg.retrieval || {};
+            section('Retrieval');
+            const sum = document.createElement('p');
+            sum.className = 'setup-note';
+            sum.textContent = r.summary || '';
+            box.appendChild(sum);
+
+            const steps = document.createElement('ol');
+            steps.className = 'setup-steps';
+            (r.stages || []).forEach(st => {
+                const li = document.createElement('li');
+                const b = document.createElement('b');
+                b.textContent = st.label;
+                const d = document.createElement('span');
+                d.textContent = st.detail || '';
+                li.append(b, d);
+                steps.appendChild(li);
+            });
+            box.appendChild(steps);
+
+            const facts = document.createElement('div');
+            facts.className = 'setup-facts';
+            const dflt = r.defaults || {};
+            [
+                ['store', r.backend || '—'],
+                ['ranking', (r.strategy || '').toUpperCase()],
+                ['k', dflt.k],
+                ['hops', dflt.hops],
+                ['context budget', dflt.max_context_chars ? `${Math.round(dflt.max_context_chars / 1000)}k chars` : '—'],
+            ].forEach(([k, v]) => {
+                if (v == null) return;
+                const chip = document.createElement('span');
+                chip.innerHTML = '<b></b><i></i>';
+                chip.querySelector('b').textContent = k;
+                chip.querySelector('i').textContent = v;
+                facts.appendChild(chip);
+            });
+            box.appendChild(facts);
+
+            // ── system prompt ──
+            section('System prompt');
+            const promptNote = document.createElement('p');
+            promptNote.className = 'setup-note';
+            promptNote.textContent = 'Sent with every question. The second half is appended only when tools are enabled.';
+            box.appendChild(promptNote);
+            box.appendChild(copyBlock('Base', cfg.system_prompt || ''));
+            if (cfg.tool_suffix) box.appendChild(copyBlock('Appended when tools are on', cfg.tool_suffix.trim()));
+
+            // ── tools ──
+            const tools = cfg.tools || [];
+            section(`Tools · ${tools.length}`);
+            const toolNote = document.createElement('p');
+            toolNote.className = 'setup-note';
+            toolNote.textContent = tools.length
+                ? 'The model chooses which to call, if any. Expand one to see its parameters.'
+                : 'No tools are available to this server.';
+            box.appendChild(toolNote);
+            tools.forEach(t => {
+                const d = document.createElement('details');
+                d.className = 'setup-tool';
+                const s2 = document.createElement('summary');
+                s2.innerHTML = '<code></code><span></span>';
+                s2.querySelector('code').textContent = t.name;
+                // First sentence only — the full text is the model's to read.
+                s2.querySelector('span').textContent =
+                    String(t.description || '').split(/(?<=\.)\s/)[0].slice(0, 130);
+                const pre = document.createElement('pre');
+                pre.textContent = JSON.stringify(t.parameters || {}, null, 2);
+                const desc = document.createElement('p');
+                desc.className = 'setup-note';
+                desc.textContent = t.description || '';
+                d.append(s2, desc, pre);
+                box.appendChild(d);
+            });
+        }
+
+        // A labelled, copyable block of verbatim text.
+        function copyBlock(label, text) {
+            const wrap = document.createElement('div');
+            wrap.className = 'ct-block';
+            const head = document.createElement('div');
+            head.className = 'ct-block-head';
+            const l = document.createElement('span');
+            l.textContent = label;
+            const copy = document.createElement('button');
+            copy.type = 'button';
+            copy.className = 'ct-copy';
+            copy.textContent = 'copy';
+            copy.addEventListener('click', async (e) => {
+                e.preventDefault();
+                try {
+                    await navigator.clipboard.writeText(text);
+                    copy.textContent = 'copied';
+                } catch (err) {
+                    copy.textContent = 'failed';
+                }
+                setTimeout(() => { copy.textContent = 'copy'; }, 1200);
+            });
+            head.append(l, copy);
+            const pre = document.createElement('pre');
+            pre.textContent = text;
+            wrap.append(head, pre);
+            return wrap;
+        }
+
         // ─── Minimal markdown renderer ──────────────────────
         //
         // Models answer in markdown, so rendering it is the difference
@@ -11021,6 +11284,9 @@
                     if (e.target === jsonOverlay) closeTourJson();
                 });
             }
+
+            const setup = document.getElementById('chat-setup');
+            if (setup) setup.addEventListener('toggle', () => { if (setup.open) loadChatSetup(); });
 
             const clearBtn = tourEl('tour-history-clear');
             if (clearBtn) clearBtn.addEventListener('click', clearTourHistory);

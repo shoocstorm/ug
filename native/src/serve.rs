@@ -899,6 +899,7 @@ pub fn run_serve(args: &[String]) {
             .route("/api/search/hybrid", post(api_search_hybrid))
             .route("/api/chat", post(api_chat))
             .route("/api/tour", post(api_tour))
+            .route("/api/chat/config", get(api_chat_config))
             // CompressionLayer skips responses that already have Content-Encoding,
             // so it only kicks in for the dynamic /api/* JSON.
             .layer(CompressionLayer::new().br(true))
@@ -3140,6 +3141,87 @@ fn merge_chat_cfg(default: &Option<ChatConfig>, body: &ChatBody) -> Option<ChatC
         max_tokens,
         timeout_secs: base_default.timeout_secs,
     })
+}
+
+/// `GET /api/chat/config` — what the chat turn is actually made of.
+///
+/// The answer a model gives depends entirely on three things the UI
+/// otherwise hides: the system prompt it was given, the tools it could
+/// call, and how the context was retrieved. "Semantic search" is the
+/// usual guess for the last one and it's wrong — so publish all three
+/// rather than making people read the source to trust the output.
+async fn api_chat_config(State(state): State<ServeState>) -> Response {
+    use serde_json::json;
+
+    let stores = state.stores();
+    let primary = stores.as_ref().and_then(|s| s.get(&s.primary).cloned());
+    let native_ppr = primary.as_ref().map(|p| p.supports_native_ppr());
+    let backend = primary.as_ref().map(|p| p.backend_name());
+
+    // PPR is the default; a backend without it silently ranks with MMR
+    // instead, which changes the results enough to be worth naming.
+    let effective = match native_ppr {
+        Some(false) => "mmr",
+        _ => "ppr",
+    };
+    let ranking = if effective == "ppr" {
+        json!({
+            "id": "ppr",
+            "label": "Personalized PageRank over the graph",
+            "detail": "The fused hits seed a PageRank run across the edge graph, so nodes that neighbour several good hits outrank a single lucky match.",
+        })
+    } else {
+        json!({
+            "id": "mmr",
+            "label": "Maximal Marginal Relevance rerank",
+            "detail": "This backend has no native PageRank, so results are reranked for relevance-vs-diversity instead of expanded through the graph.",
+        })
+    };
+
+    let tools: Vec<serde_json::Value> = chat_tool_schemas()
+        .into_iter()
+        .filter_map(|t| {
+            let f = t.get("function")?;
+            Some(json!({
+                "name": f.get("name").cloned().unwrap_or_default(),
+                "description": f.get("description").cloned().unwrap_or_default(),
+                "parameters": f.get("parameters").cloned().unwrap_or_default(),
+            }))
+        })
+        .collect();
+
+    let body = json!({
+        "system_prompt": chat::DEFAULT_SYSTEM_PROMPT,
+        "tool_suffix": chat::TOOL_SYSTEM_SUFFIX,
+        "tools_enabled_by_default": true,
+        "tools": tools,
+        "retrieval": {
+            "summary": "Hybrid search (dense + keyword) seeds a graph ranking — not semantic-only.",
+            "backend": backend,
+            "strategy": effective,
+            "stages": [
+                {
+                    "id": "hybrid",
+                    "label": "Hybrid seed search — dense + keyword, fused with RRF",
+                    "detail": "Your question is embedded and searched by vector similarity, and separately matched as keywords; the two rankings are merged by Reciprocal Rank Fusion so a hit either side can surface.",
+                },
+                ranking,
+                {
+                    "id": "budget",
+                    "label": "Char-budgeted context pack",
+                    "detail": "Top nodes are hydrated with their descriptions and source snippets, then trimmed to the context budget and numbered [#1], [#2] … for citation.",
+                },
+            ],
+            "defaults": {
+                "k": 8,
+                "hops": 2,
+                "direction": "both",
+                "include_snippets": true,
+                "max_context_chars": chat::DEFAULT_CTX_MAX_CHARS,
+            },
+        },
+    });
+    ok_json(body.to_string())
 }
 
 // ---------- Agent tools for chat & tour (`ToolBox`) ----------
