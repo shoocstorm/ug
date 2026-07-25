@@ -5036,12 +5036,15 @@
         #tour-launch-status.error { color: #dc2626; }
 
         /* ─── Guided Tour: cinematic narration overlay ─── */
+        /* Fixed (not absolute) so drag positions are plain viewport
+           coordinates; `.dragged` drops the centring transform once the
+           user has parked the card somewhere themselves. */
         #tour-overlay {
-            position: absolute;
+            position: fixed;
             left: 50%;
             bottom: 26px;
             transform: translateX(-50%) translateY(14px);
-            width: min(720px, 92vw);
+            width: min(760px, 94vw);
             z-index: 60;
             opacity: 0;
             pointer-events: none;
@@ -5052,6 +5055,14 @@
             transform: translateX(-50%) translateY(0);
             pointer-events: auto;
         }
+        #tour-overlay.dragged,
+        #tour-overlay.dragged.visible {
+            transform: none;
+            bottom: auto;
+            transition: opacity .35s ease;
+        }
+        #tour-overlay.dragging { transition: opacity .35s ease; }
+        #tour-overlay.dragging .tour-card { box-shadow: 0 30px 70px -12px rgba(0, 0, 0, .7); }
         .tour-card {
             background: linear-gradient(180deg, rgba(26, 23, 21, .93), rgba(18, 16, 15, .95));
             backdrop-filter: blur(16px) saturate(1.15);
@@ -5062,7 +5073,19 @@
             padding: 15px 20px 13px;
             color: #f2ede6;
         }
-        .tour-top { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+        /* The header doubles as the drag handle (buttons opt out below). */
+        .tour-top {
+            display: flex; align-items: center; gap: 10px; margin-bottom: 10px;
+            cursor: grab; user-select: none;
+        }
+        #tour-overlay.dragging .tour-top { cursor: grabbing; }
+        .tour-top button, .tour-top .tour-counter { cursor: pointer; }
+        .tour-grip {
+            display: flex; flex-direction: column; gap: 2px; flex-shrink: 0;
+            opacity: .45; transition: opacity .15s;
+        }
+        .tour-top:hover .tour-grip { opacity: .85; }
+        .tour-grip i { display: block; width: 12px; height: 1.5px; border-radius: 1px; background: #d8b48f; }
         .tour-badge {
             font-size: 9.5px; letter-spacing: .14em; text-transform: uppercase; font-weight: 800;
             color: #1a120b; background: linear-gradient(90deg, #fb923c, #f97316);
@@ -5101,6 +5124,15 @@
             border-bottom: 1px dashed rgba(143, 184, 221, .45);
         }
         .tour-jump:hover { color: #bcd6ef; }
+        /* "→ calls" / "← called by": the real graph edge we followed to
+           get to this stop. Absent when the hop is thematic, not structural. */
+        .tour-hop {
+            display: inline-flex; align-items: center; gap: 4px;
+            font-size: 10px; letter-spacing: .06em; text-transform: uppercase; font-weight: 700;
+            color: #fdba74; background: rgba(249, 115, 22, .13);
+            border: 1px solid rgba(249, 115, 22, .3);
+            padding: 2px 7px; border-radius: 999px;
+        }
         .tour-narration { font-size: 14px; line-height: 1.58; color: #e9dfd2; min-height: 3.4em; }
         .tour-narration .caret {
             display: inline-block; width: 7px; color: #f97316; font-weight: 700;
@@ -5131,7 +5163,118 @@
             border-radius: 50%; animation: tourspin .7s linear infinite;
         }
         @keyframes tourspin { to { transform: rotate(360deg); } }
-        body.tour-active #legend, body.tour-active #axis-gizmo { opacity: .22; transition: opacity .3s; }
+
+        /* Inline code for the current stop — the reason the tour can hide
+           the right-hand details panel and still show you the code. */
+        .tour-code {
+            margin-top: 11px; border-top: 1px solid rgba(255, 255, 255, .08); padding-top: 9px;
+        }
+        .tour-code-toggle {
+            background: none; border: none; padding: 0; cursor: pointer;
+            color: #cbb096; font-size: 11px; font-weight: 600; letter-spacing: .04em;
+            display: inline-flex; align-items: center; gap: 6px;
+        }
+        .tour-code-toggle:hover { color: #fdba74; }
+        .tour-code-toggle .chev { transition: transform .18s; display: inline-block; }
+        .tour-code.open .tour-code-toggle .chev { transform: rotate(90deg); }
+        .tour-code pre {
+            display: none; margin: 8px 0 0; padding: 10px 12px; max-height: 190px; overflow: auto;
+            background: rgba(0, 0, 0, .32); border: 1px solid rgba(255, 255, 255, .07);
+            border-radius: 9px; font-family: ui-monospace, "SF Mono", Menlo, monospace;
+            font-size: 11.5px; line-height: 1.5; color: #d9d2c7; white-space: pre;
+        }
+        .tour-code.open pre { display: block; }
+
+        /* "Up next" teaser: keeps the walk feeling like a route. */
+        .tour-next {
+            margin-top: 10px; font-size: 11px; color: #a89b8d;
+            display: flex; align-items: center; gap: 6px;
+        }
+        .tour-next .lbl { color: #7d7264; letter-spacing: .08em; text-transform: uppercase; font-size: 9.5px; font-weight: 700; }
+        .tour-next .val { color: #d8b48f; cursor: pointer; }
+        .tour-next .val:hover { color: #fdba74; text-decoration: underline; }
+
+        /* `display: flex` below would otherwise beat the UA's [hidden] rule,
+           leaving stale "up next" / warning rows on screen. */
+        .tour-next[hidden], .tour-warnings[hidden] { display: none; }
+        .tour-warnings { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; }
+        .tour-warn {
+            font-size: 11px; line-height: 1.45; color: #f5c6a0;
+            display: flex; gap: 6px; align-items: flex-start;
+        }
+        .tour-warn::before { content: '!'; color: #fb923c; font-weight: 800; }
+
+        .tour-speed {
+            background: rgba(255, 255, 255, .06); border: 1px solid rgba(255, 255, 255, .13);
+            color: #d8b48f; border-radius: 9px; height: 32px; padding: 0 10px; cursor: pointer;
+            font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums;
+        }
+        .tour-speed:hover { border-color: rgba(249, 115, 22, .45); color: #fdba74; }
+
+        /* ─── Guided Tour: plan JSON viewer ─── */
+        #tour-json {
+            position: fixed; inset: 0; z-index: 90; display: none;
+            background: rgba(10, 9, 8, .55); backdrop-filter: blur(3px);
+            align-items: center; justify-content: center; padding: 5vh 4vw;
+        }
+        #tour-json.visible { display: flex; }
+        /* The canvas keeps raycasting under a parked pointer, so a node
+           tooltip could otherwise float over the dialog. */
+        body.tour-json-open #tooltip { display: none; }
+        .tjson-card {
+            width: min(940px, 100%); max-height: 90vh; display: flex; flex-direction: column;
+            background: linear-gradient(180deg, rgba(26, 23, 21, .98), rgba(18, 16, 15, .99));
+            border: 1px solid rgba(249, 115, 22, .3); border-radius: 16px;
+            box-shadow: 0 30px 80px -18px rgba(0, 0, 0, .75); color: #f2ede6; overflow: hidden;
+        }
+        .tjson-head {
+            display: flex; align-items: center; gap: 10px;
+            padding: 13px 16px; border-bottom: 1px solid rgba(255, 255, 255, .08);
+        }
+        .tjson-head .title { font-size: 13px; font-weight: 700; flex: 1; }
+        .tjson-head .sub { font-size: 11px; color: #a89b8d; font-variant-numeric: tabular-nums; }
+        .tjson-tabs { display: flex; gap: 5px; padding: 10px 16px 0; flex-wrap: wrap; }
+        .tjson-tab {
+            background: rgba(255, 255, 255, .05); border: 1px solid rgba(255, 255, 255, .1);
+            color: #cbb096; border-radius: 8px; padding: 5px 11px; cursor: pointer;
+            font-size: 11px; font-weight: 600;
+        }
+        .tjson-tab:hover { border-color: rgba(249, 115, 22, .4); color: #fdba74; }
+        .tjson-tab.active { background: rgba(249, 115, 22, .18); border-color: rgba(249, 115, 22, .5); color: #fdba74; }
+        .tjson-body { flex: 1; overflow: auto; padding: 12px 16px 16px; }
+        .tjson-body pre {
+            margin: 0; font-family: ui-monospace, "SF Mono", Menlo, monospace;
+            font-size: 11.5px; line-height: 1.55; color: #d9d2c7; white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .tjson-note { font-size: 11.5px; color: #a89b8d; margin: 0 0 10px; line-height: 1.5; }
+        .tjson-foot {
+            display: flex; align-items: center; gap: 8px;
+            padding: 10px 16px; border-top: 1px solid rgba(255, 255, 255, .08);
+        }
+        .tjson-foot .spacer { flex: 1; }
+
+        /* Immersive mode: the graph is the show, so the chrome steps back.
+           Faded panels come back on hover, and the sidebar/details panel are
+           collapsed outright (JS restores whatever was open before). */
+        body.tour-active #legend,
+        body.tour-active #axis-gizmo,
+        body.tour-active #viewbar,
+        body.tour-active #navbar,
+        body.tour-active #sidebar-launcher {
+            opacity: .18;
+            transition: opacity .35s ease;
+        }
+        body.tour-active #legend:hover,
+        body.tour-active #axis-gizmo:hover,
+        body.tour-active #viewbar:hover,
+        body.tour-active #navbar:hover,
+        body.tour-active #sidebar-launcher:hover { opacity: 1; }
+        /* A vignette that pulls the eye to the middle of the canvas. */
+        body.tour-active #graph-3d::after {
+            content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 5;
+            background: radial-gradient(ellipse at 50% 45%, transparent 45%, rgba(20, 16, 12, .16) 100%);
+        }
     </style>
 </head>
 
@@ -5419,13 +5562,17 @@
     <div id="container">
         <div id="graph-3d"></div>
 
-        <!-- Guided Tour: cinematic narration overlay (camera flies stop to stop) -->
+        <!-- Guided Tour: cinematic narration overlay (camera flies stop to
+             stop). Draggable by its header; the JSON button opens the plan
+             the LLM produced. -->
         <div id="tour-overlay" aria-live="polite">
             <div class="tour-card">
-                <div class="tour-top">
+                <div class="tour-top" id="tour-o-drag">
+                    <span class="tour-grip" aria-hidden="true"><i></i><i></i><i></i></span>
                     <span class="tour-badge">Guided Tour</span>
                     <span class="tour-title-main" id="tour-o-title"></span>
                     <span class="tour-counter" id="tour-o-counter"></span>
+                    <button class="tour-close" id="tour-o-json" title="View the plan JSON the guide generated (J)">{ }</button>
                     <button class="tour-close" id="tour-o-close" title="Exit tour (Esc)">✕</button>
                 </div>
                 <div class="tour-progress" id="tour-o-progress"></div>
@@ -5433,8 +5580,18 @@
                     <div class="tour-stop-title" id="tour-o-stop-title"></div>
                     <div class="tour-stop-meta" id="tour-o-stop-meta"></div>
                     <div class="tour-narration" id="tour-o-narration"></div>
+                    <div class="tour-code" id="tour-o-code" hidden>
+                        <button class="tour-code-toggle" id="tour-o-code-toggle">
+                            <span class="chev">▸</span><span id="tour-o-code-label">Show code</span>
+                        </button>
+                        <pre id="tour-o-code-body"></pre>
+                    </div>
+                    <div class="tour-next" id="tour-o-next-up" hidden>
+                        <span class="lbl">Up next</span><span class="val" id="tour-o-next-title"></span>
+                    </div>
                 </div>
                 <div id="tour-o-note" class="tour-note" hidden></div>
+                <div class="tour-warnings" id="tour-o-warnings" hidden></div>
                 <div class="tour-controls">
                     <button class="tour-btn" id="tour-o-prev" title="Previous stop (←)">
                         <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7z"/></svg>
@@ -5446,8 +5603,33 @@
                     <button class="tour-btn" id="tour-o-next" title="Next stop (→)">
                         <svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7z"/></svg>
                     </button>
+                    <button class="tour-speed" id="tour-o-speed" title="Playback speed (S)">1×</button>
+                    <button class="tour-btn" id="tour-o-details" title="Show the full details panel for this stop (D)">Details</button>
                     <span class="spacer"></span>
                     <button class="tour-exit" id="tour-o-exit">Exit tour</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Guided Tour: what the guide actually generated (plan JSON, the
+             pack it chose from, and the prompts behind both). -->
+        <div id="tour-json" role="dialog" aria-label="Tour plan JSON">
+            <div class="tjson-card">
+                <div class="tjson-head">
+                    <span class="title">Tour plan</span>
+                    <span class="sub" id="tjson-sub"></span>
+                    <button class="tour-close" id="tjson-close" title="Close (Esc)">✕</button>
+                </div>
+                <div class="tjson-tabs" id="tjson-tabs"></div>
+                <div class="tjson-body">
+                    <p class="tjson-note" id="tjson-note"></p>
+                    <pre id="tjson-pre"></pre>
+                </div>
+                <div class="tjson-foot">
+                    <button class="tour-btn" id="tjson-copy">Copy</button>
+                    <button class="tour-btn" id="tjson-download">Download .json</button>
+                    <span class="spacer"></span>
+                    <span class="sub" id="tjson-meta" style="font-size:11px;color:#a89b8d"></span>
                 </div>
             </div>
         </div>
@@ -7438,6 +7620,9 @@
                 runFindPathTo(d.id);
                 return;
             }
+            // Poking around the graph mid-tour means the user wants to look at
+            // something; don't yank the camera away on the next auto-advance.
+            if (tourState.active && tourState.playing) pauseTour();
             handleClick(event, d);
         }
 
@@ -7830,11 +8015,13 @@
         // ─── Guided Tour (cinematic narrated walkthrough) ───
         //
         // POST /api/tour returns an ordered list of stops, each bound to a
-        // real graph node id + narration. The engine flies the camera to
-        // each stop (reusing handleClick + focusNode), types the narration
-        // out, and — while playing — auto-advances after a dwell. Manual
-        // controls (prev/next/play/exit, progress-segment clicks, keyboard)
-        // sit on top.
+        // real graph node id + narration, plus the route edges between them
+        // and the plan JSON the guide produced. The engine flies the camera
+        // to each stop, lowlights everything that isn't on the route, types
+        // the narration out, and — while playing — auto-advances after a
+        // dwell. Manual controls (prev/next/play/speed/exit, progress-segment
+        // clicks, keyboard) sit on top, and the whole card can be dragged
+        // wherever the user wants it.
 
         const TOUR_EXAMPLES = [
             'How does authentication work?',
@@ -7851,17 +8038,239 @@
             typeTimer: null,
             dwellRaf: null,
             active: false,
+            speed: 1,
+            showCode: false,       // sticky across stops
+            showPanel: false,      // user asked for the full details panel
+            routeIds: new Set(),   // every node the tour visits
+            nearIds: new Set(),    // 1-hop neighbours of the current stop
+            routeEdges: new Set(), // "a b" keys for route edges (both directions)
+            restore: null,         // panel/spin state to put back on exit
+            jsonTab: 'plan',
         };
 
-        const TOUR_TYPE_MS = 16;      // per-character reveal cadence
+        const TOUR_TYPE_MS = 16;      // per-character reveal cadence at 1×
         const TOUR_DWELL_MS = 3600;   // pause after narration finishes before auto-advancing
+        const TOUR_SPEEDS = [1, 1.5, 2, 0.75];
+        // How brightly each ring of the graph reads while a tour is running.
+        const TOUR_TIER_OPACITY = { current: 1, stop: 0.92, near: 0.34, far: 0.035 };
+        const TOUR_POS_KEY = 'ug-tour-pos';
 
         function tourEl(id) { return document.getElementById(id); }
+
+        function tourTypeMs() { return Math.max(4, Math.round(TOUR_TYPE_MS / tourState.speed)); }
+        function tourDwellMs() { return Math.max(600, Math.round(TOUR_DWELL_MS / tourState.speed)); }
 
         function clearTourTimers() {
             if (tourState.typeTimer) { clearTimeout(tourState.typeTimer); tourState.typeTimer = null; }
             if (tourState.dwellRaf) { cancelAnimationFrame(tourState.dwellRaf); tourState.dwellRaf = null; }
         }
+
+        function tourCurrentStop() {
+            const t = tourState.data;
+            if (!t || !t.stops || tourState.index < 0) return null;
+            return t.stops[tourState.index] || null;
+        }
+
+        // ── Graph emphasis ────────────────────────────────────
+        //
+        // Four rings: the stop we're at, the rest of the route, the current
+        // stop's immediate neighbours, and everything else (lowlit almost to
+        // the background so the route reads as a path through a haze).
+
+        function tourTier(id) {
+            if (!tourState.active || !tourState.data) return null;
+            const cur = tourCurrentStop();
+            if (cur && id === cur.node_id) return 'current';
+            if (tourState.routeIds.has(id)) return 'stop';
+            if (tourState.nearIds.has(id)) return 'near';
+            return 'far';
+        }
+
+        function edgeKey(a, b) { return a + ' ' + b; }
+
+        // Route edges: the graph edges the backend found between visited
+        // nodes, plus every consecutive pair (so the walk is drawn even when
+        // two stops aren't directly linked).
+        function buildTourRoute(tour) {
+            const ids = new Set();
+            (tour.stops || []).forEach(s => ids.add(s.node_id));
+            const edges = new Set();
+            const add = (a, b) => { edges.add(edgeKey(a, b)); edges.add(edgeKey(b, a)); };
+            (tour.route || []).forEach(e => add(e.source, e.target));
+            for (let i = 1; i < (tour.stops || []).length; i++) {
+                add(tour.stops[i - 1].node_id, tour.stops[i].node_id);
+            }
+            tourState.routeIds = ids;
+            tourState.routeEdges = edges;
+        }
+
+        function isTourRouteEdge(e) {
+            if (!tourState.active || !tourState.routeEdges.size) return false;
+            const sId = e.source.id || e.source;
+            const tId = e.target.id || e.target;
+            return tourState.routeEdges.has(edgeKey(sId, tId));
+        }
+
+        // Re-anchor the focus sets on the current stop: the whole route plus
+        // this stop's neighbourhood stays lit, everything else recedes.
+        function applyTourFocus(stop) {
+            const near = state.nodeById && state.nodeById.get(stop.node_id)
+                ? neighborIdsOf(stop.node_id)
+                : new Set();
+            tourState.nearIds = near;
+            state.focusNode = stop.node_id;
+            state.focusSet = new Set([...tourState.routeIds, ...near, stop.node_id]);
+            document.body.classList.add('focus-active');
+            bumpGraphStyles();
+        }
+
+        // ── Camera ────────────────────────────────────────────
+
+        function tourVec(n) { return { x: +n.x || 0, y: +n.y || 0, z: +n.z || 0 }; }
+        function vSub(a, b) { return { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z }; }
+        function vAdd(a, b) { return { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z }; }
+        function vScale(a, s) { return { x: a.x * s, y: a.y * s, z: a.z * s }; }
+        function vLen(a) { return Math.sqrt(a.x * a.x + a.y * a.y + a.z * a.z); }
+        function vNorm(a) { const l = vLen(a) || 1; return vScale(a, 1 / l); }
+        function vCross(a, b) {
+            return {
+                x: a.y * b.z - a.z * b.y,
+                y: a.z * b.x - a.x * b.z,
+                z: a.x * b.y - a.y * b.x,
+            };
+        }
+        function vLerp(a, b, t) { return vAdd(a, vScale(vSub(b, a), t)); }
+
+        // Fly to a stop with framing that tells the story: the camera sits
+        // broadside to the direction of travel (so the hop we just took is
+        // visible, not hidden behind us), pulled back far enough to hold the
+        // stop's neighbourhood, and aimed a touch toward the next stop so
+        // where we're heading is already on screen.
+        function flyToTourStop(stop, opts) {
+            opts = opts || {};
+            const node = state.nodeById ? state.nodeById.get(stop.node_id) : null;
+            if (!node || !Graph) return;
+            const prevNode = opts.prev && state.nodeById ? state.nodeById.get(opts.prev.node_id) : null;
+            const nextNode = opts.next && state.nodeById ? state.nodeById.get(opts.next.node_id) : null;
+
+            const p = tourVec(node);
+            // Everything we'd like in frame, to pick a distance from.
+            const context = [];
+            if (prevNode) context.push(tourVec(prevNode));
+            if (nextNode) context.push(tourVec(nextNode));
+            tourState.nearIds.forEach(id => {
+                const nn = state.nodeById && state.nodeById.get(id);
+                if (nn) context.push(tourVec(nn));
+            });
+            let spread = 0;
+            context.forEach(c => { spread = Math.max(spread, vLen(vSub(c, p))); });
+            const dist = Math.max(230, Math.min(900, 200 + spread * 1.35));
+
+            const travel = prevNode ? vSub(p, tourVec(prevNode))
+                : (nextNode ? vSub(tourVec(nextNode), p) : null);
+            let dir;
+            if (travel && vLen(travel) > 1e-3) {
+                const t = vNorm(travel);
+                let up = { x: 0, y: 1, z: 0 };
+                let side = vCross(t, up);
+                // Travelling straight up/down: pick another reference axis so
+                // the cross product doesn't collapse.
+                if (vLen(side) < 0.2) { up = { x: 0, y: 0, z: 1 }; side = vCross(t, up); }
+                side = vNorm(side);
+                dir = vNorm(vAdd(vScale(side, 1), vAdd(vScale(up, 0.5), vScale(t, -0.3))));
+            } else {
+                const d = 1 / Math.sqrt(3);
+                dir = { x: d, y: d, z: d };
+            }
+            const look = nextNode ? vLerp(p, tourVec(nextNode), 0.16) : p;
+            const cam = vAdd(p, vScale(dir, dist));
+            // One frame of slack so any panel toggle commits its layout first.
+            requestAnimationFrame(() => {
+                Graph.cameraPosition(cam, look, opts.ms || 1100);
+            });
+        }
+
+        // Select the stop's node without letting the details panel slide back
+        // over the graph (the card carries the code inline instead).
+        function selectStopNode(stop) {
+            const node = state.nodeById ? state.nodeById.get(stop.node_id) : null;
+            if (!node) return;
+            handleClick(null, node);
+            if (!tourState.showPanel) {
+                const info = document.getElementById('info');
+                if (info) info.classList.remove('visible');
+            }
+        }
+
+        // ── Immersive mode ────────────────────────────────────
+
+        function syncSpinButton() {
+            const spinBtn = document.getElementById('toggle-spin');
+            if (!spinBtn) return;
+            spinBtn.classList.toggle('active', state.autoSpin);
+            spinBtn.classList.toggle('spinning', state.autoSpin);
+        }
+
+        // Clear the deck: collapse the sidebar, close the details panel, stop
+        // any auto-rotation. Everything is remembered so exiting the tour puts
+        // the workspace back exactly as the user left it.
+        function syncBoxButton() {
+            const boxBtn = document.getElementById('toggle-box');
+            if (boxBtn) boxBtn.classList.toggle('active', state.showBoundary);
+        }
+
+        function enterImmersive() {
+            if (tourState.restore) return;
+            const sidebar = document.getElementById('sidebar');
+            const info = document.getElementById('info');
+            tourState.restore = {
+                sidebarCollapsed: sidebar ? sidebar.classList.contains('collapsed') : null,
+                infoVisible: info ? info.classList.contains('visible') : null,
+                autoSpin: state.autoSpin,
+                showBoundary: state.showBoundary,
+            };
+            if (sidebar) sidebar.classList.add('collapsed');
+            if (info) info.classList.remove('visible');
+            if (state.autoSpin) {
+                state.autoSpin = false;
+                applyAutoSpin();
+                syncSpinButton();
+            }
+            // The dashed boundary box and its face digits are workspace
+            // furniture; they'd cut across every shot of the route.
+            if (state.showBoundary) {
+                state.showBoundary = false;
+                applyBoundaryVisibility();
+                syncBoxButton();
+            }
+            // A tooltip left over from before the tour would hang over the
+            // card, and the camera is about to move out from under the pointer.
+            handleNodeHover(null);
+            document.body.classList.add('tour-active');
+        }
+
+        function exitImmersive() {
+            const r = tourState.restore;
+            tourState.restore = null;
+            document.body.classList.remove('tour-active');
+            if (!r) return;
+            const sidebar = document.getElementById('sidebar');
+            const info = document.getElementById('info');
+            if (sidebar && r.sidebarCollapsed === false) sidebar.classList.remove('collapsed');
+            if (info && r.infoVisible === false) info.classList.remove('visible');
+            if (r.autoSpin) {
+                state.autoSpin = true;
+                applyAutoSpin();
+                syncSpinButton();
+            }
+            if (r.showBoundary) {
+                state.showBoundary = true;
+                applyBoundaryVisibility();
+                syncBoxButton();
+            }
+        }
+
+        // ── Launch ────────────────────────────────────────────
 
         async function startTour(query, maxStops) {
             query = (query || '').trim();
@@ -7875,13 +8284,20 @@
             // Show the overlay immediately in a loading state so the wait feels alive.
             tourState.data = null;
             tourState.active = true;
-            document.body.classList.add('tour-active');
+            tourState.index = -1;
+            tourState.routeIds = new Set();
+            tourState.nearIds = new Set();
+            tourState.routeEdges = new Set();
+            enterImmersive();
             const overlay = tourEl('tour-overlay');
+            restoreTourPosition();
             overlay.classList.add('visible');
             tourEl('tour-o-title').textContent = query;
             tourEl('tour-o-counter').textContent = '';
             tourEl('tour-o-progress').innerHTML = '';
             tourEl('tour-o-stage').style.display = 'none';
+            tourEl('tour-o-warnings').hidden = true;
+            tourEl('tour-o-json').style.display = 'none';
             const note = tourEl('tour-o-note');
             note.hidden = false;
             note.classList.remove('error');
@@ -7904,7 +8320,9 @@
                     statusEl.textContent = '';
                     return;
                 }
-                statusEl.textContent = `Tour ready · ${tour.stops.length} stop${tour.stops.length === 1 ? '' : 's'}`;
+                const kind = tour.fallback ? 'ranked itinerary' : 'guided tour';
+                statusEl.textContent =
+                    `${kind} ready · ${tour.stops.length} stop${tour.stops.length === 1 ? '' : 's'}`;
                 enterTourMode(tour);
             } catch (err) {
                 note.hidden = false;
@@ -7924,6 +8342,10 @@
             tourEl('tour-o-note').hidden = true;
             tourEl('tour-o-stage').style.display = '';
             tourEl('tour-o-title').textContent = tour.title || tour.query || 'Guided tour';
+            tourEl('tour-o-json').style.display = '';
+
+            buildTourRoute(tour);
+            renderTourWarnings(tour);
 
             // Build one progress segment per stop; click to jump.
             const prog = tourEl('tour-o-progress');
@@ -7931,14 +8353,29 @@
             tour.stops.forEach((s, i) => {
                 const seg = document.createElement('div');
                 seg.className = 'tour-seg';
-                seg.title = s.title || s.name || `Stop ${i + 1}`;
+                seg.title = `${i + 1}. ${s.title || s.name || 'Stop ' + (i + 1)}`;
                 seg.addEventListener('click', () => { pauseTour(); goToStop(i); });
                 prog.appendChild(seg);
             });
 
             tourState.playing = true;
             updatePlayButton();
+            updateSpeedButton();
             goToStop(0);
+        }
+
+        function renderTourWarnings(tour) {
+            const box = tourEl('tour-o-warnings');
+            const list = (tour.warnings || []).slice(0, 3);
+            box.innerHTML = '';
+            if (!list.length) { box.hidden = true; return; }
+            list.forEach(w => {
+                const d = document.createElement('div');
+                d.className = 'tour-warn';
+                d.appendChild(document.createTextNode(w));
+                box.appendChild(d);
+            });
+            box.hidden = false;
         }
 
         function goToStop(i) {
@@ -7946,8 +8383,11 @@
             if (!tour || !tour.stops.length) return;
             clearTourTimers();
             i = Math.max(0, Math.min(i, tour.stops.length - 1));
+            const prevIndex = tourState.index;
             tourState.index = i;
             const stop = tour.stops[i];
+            const prev = i > 0 ? tour.stops[i - 1] : null;
+            const next = i < tour.stops.length - 1 ? tour.stops[i + 1] : null;
 
             tourEl('tour-o-counter').textContent =
                 `${String(i + 1).padStart(2, '0')} / ${String(tour.stops.length).padStart(2, '0')}`;
@@ -7962,10 +8402,41 @@
             }
 
             tourEl('tour-o-stop-title').textContent = stop.title || stop.name || `Stop ${i + 1}`;
+            renderStopMeta(stop, i);
+            renderStopCode(stop);
+            renderNextUp(next);
 
-            // Meta line: type · file:lines · jump-to-code.
+            // Selection + emphasis + camera. The camera reads the hop we just
+            // took, so jumping backwards frames the reverse direction.
+            selectStopNode(stop);
+            applyTourFocus(stop);
+            flyToTourStop(stop, {
+                prev: prevIndex > i ? next : prev,
+                next: prevIndex > i ? prev : next,
+                ms: 1100,
+            });
+
+            // Type the narration; auto-advance kicks in when typing completes.
+            typewriteNarration(stop.narration || '', () => {
+                if (tourState.playing) beginDwell(i);
+            });
+
+            updateNavButtons();
+        }
+
+        // Meta line: the graph edge we followed to get here · type · file:lines.
+        function renderStopMeta(stop, i) {
             const meta = tourEl('tour-o-stop-meta');
             meta.innerHTML = '';
+            if (i > 0 && stop.edge_from_prev) {
+                const hop = document.createElement('span');
+                hop.className = 'tour-hop';
+                hop.title = 'Graph edge connecting this stop to the previous one';
+                hop.textContent = stop.edge_from_prev.reverse
+                    ? `← ${stop.edge_from_prev.edge_type}`
+                    : `→ ${stop.edge_from_prev.edge_type}`;
+                meta.appendChild(hop);
+            }
             if (stop.node_type) {
                 const t = document.createElement('span');
                 t.className = 'type';
@@ -7985,27 +8456,37 @@
             if (localNode) {
                 const j = document.createElement('span');
                 j.className = 'tour-jump';
-                j.textContent = 'view code';
-                j.addEventListener('click', () => flyToStopNode(stop));
+                j.textContent = 're-centre';
+                j.title = 'Fly the camera back to this node';
+                j.addEventListener('click', () => flyToTourStop(stop, { ms: 700 }));
                 meta.appendChild(j);
+            } else {
+                const miss = document.createElement('span');
+                miss.className = 'file';
+                miss.textContent = '(not in the loaded graph.json)';
+                meta.appendChild(miss);
             }
-
-            // Fly the camera + select the node (opens the code preview panel).
-            flyToStopNode(stop);
-
-            // Type the narration; auto-advance kicks in when typing completes.
-            typewriteNarration(stop.narration || '', () => {
-                if (tourState.playing) beginDwell(i);
-            });
-
-            updateNavButtons();
         }
 
-        function flyToStopNode(stop) {
-            const node = state.nodeById ? state.nodeById.get(stop.node_id) : null;
-            if (!node) return; // DB-only node not present in graph.json — narration still shows
-            handleClick(null, node);
-            focusNode(node);
+        // The stop's source, inline — so the tour never has to reopen the
+        // side panel to show you code.
+        function renderStopCode(stop) {
+            const wrap = tourEl('tour-o-code');
+            const pre = tourEl('tour-o-code-body');
+            if (!stop.snippet) { wrap.hidden = true; return; }
+            wrap.hidden = false;
+            pre.textContent = stop.snippet;
+            wrap.classList.toggle('open', tourState.showCode);
+            tourEl('tour-o-code-label').textContent = tourState.showCode ? 'Hide code' : 'Show code';
+        }
+
+        function renderNextUp(next) {
+            const box = tourEl('tour-o-next-up');
+            if (!next) { box.hidden = true; return; }
+            box.hidden = false;
+            const val = tourEl('tour-o-next-title');
+            val.textContent = next.title || next.name || 'next stop';
+            val.onclick = () => { pauseTour(); nextStop(); };
         }
 
         function typewriteNarration(text, onDone) {
@@ -8014,27 +8495,42 @@
             let pos = 0;
             const caret = '<span class="caret">▋</span>';
             const step = () => {
-                pos = Math.min(full.length, pos + 1);
+                // Longer narrations reveal a few characters per tick so the
+                // cadence stays readable instead of glacial.
+                const chunk = full.length > 320 ? 2 : 1;
+                pos = Math.min(full.length, pos + chunk);
                 el.innerHTML = escapeHtml(full.slice(0, pos)) + (pos < full.length ? caret : '');
                 if (pos < full.length) {
-                    tourState.typeTimer = setTimeout(step, TOUR_TYPE_MS);
+                    tourState.typeTimer = setTimeout(step, tourTypeMs());
                 } else {
                     tourState.typeTimer = null;
                     if (onDone) onDone();
                 }
             };
             el.innerHTML = caret;
-            tourState.typeTimer = setTimeout(step, TOUR_TYPE_MS);
+            tourState.typeTimer = setTimeout(step, tourTypeMs());
         }
 
-        // Fill the active progress segment over TOUR_DWELL_MS, then advance.
+        // Skip the typewriter and show the full narration immediately.
+        function revealNarration() {
+            const stop = tourCurrentStop();
+            if (!stop || !tourState.typeTimer) return false;
+            clearTimeout(tourState.typeTimer);
+            tourState.typeTimer = null;
+            tourEl('tour-o-narration').textContent = stop.narration || '';
+            if (tourState.playing) beginDwell(tourState.index);
+            return true;
+        }
+
+        // Fill the active progress segment over the dwell, then advance.
         function beginDwell(stopIndex) {
             const segs = tourEl('tour-o-progress').children;
             const seg = segs[stopIndex];
             const start = performance.now();
+            const dwell = tourDwellMs();
             const tick = (now) => {
                 if (!tourState.playing || tourState.index !== stopIndex) return;
-                const pct = Math.min(100, ((now - start) / TOUR_DWELL_MS) * 100);
+                const pct = Math.min(100, ((now - start) / dwell) * 100);
                 if (seg) seg.style.setProperty('--seg', pct + '%');
                 if (pct < 100) {
                     tourState.dwellRaf = requestAnimationFrame(tick);
@@ -8066,13 +8562,38 @@
                     note.classList.remove('error');
                     note.innerHTML = '<strong style="color:#fb923c">Takeaway · </strong>' + escapeHtml(tour.outro);
                 }
+                // Pull back to show the whole route at once — the walk you
+                // just took, in one frame.
+                frameTourRoute();
                 updateNavButtons();
             }
+        }
+
+        // Frame every stop on the route, so the ending shot is the shape of
+        // the answer rather than one more close-up.
+        function frameTourRoute() {
+            if (!Graph || !tourState.data) return;
+            const pts = [];
+            tourState.routeIds.forEach(id => {
+                const n = state.nodeById && state.nodeById.get(id);
+                if (n) pts.push(tourVec(n));
+            });
+            if (pts.length < 2) return;
+            const c = pts.reduce((a, p) => vAdd(a, p), { x: 0, y: 0, z: 0 });
+            const centre = vScale(c, 1 / pts.length);
+            let radius = 0;
+            pts.forEach(p => { radius = Math.max(radius, vLen(vSub(p, centre))); });
+            const d = Math.max(320, Math.min(1600, radius * 2.4 + 260)) / Math.sqrt(3);
+            Graph.cameraPosition(
+                { x: centre.x + d, y: centre.y + d * 0.8, z: centre.z + d },
+                centre,
+                1400);
         }
 
         function nextStop() {
             if (!tourState.data) return;
             clearTourTimers();
+            tourEl('tour-o-note').hidden = true;
             if (tourState.index < tourState.data.stops.length - 1) {
                 goToStop(tourState.index + 1);
             }
@@ -8090,8 +8611,10 @@
             if (!tourState.data) return;
             tourState.playing = true;
             updatePlayButton();
-            // Resume: re-run the current stop so narration + dwell restart cleanly.
-            goToStop(tourState.index < 0 ? 0 : tourState.index);
+            // Replay from the top once the tour has run to the end.
+            const atEnd = tourState.index >= tourState.data.stops.length - 1;
+            tourEl('tour-o-note').hidden = true;
+            goToStop(atEnd ? 0 : Math.max(0, tourState.index));
         }
 
         function pauseTour() {
@@ -8102,6 +8625,35 @@
 
         function togglePlayTour() {
             if (tourState.playing) pauseTour(); else playTour();
+        }
+
+        function cycleTourSpeed() {
+            const i = TOUR_SPEEDS.indexOf(tourState.speed);
+            tourState.speed = TOUR_SPEEDS[(i + 1) % TOUR_SPEEDS.length];
+            updateSpeedButton();
+        }
+
+        function updateSpeedButton() {
+            const btn = tourEl('tour-o-speed');
+            if (btn) btn.textContent = `${tourState.speed}×`;
+        }
+
+        function toggleTourCode() {
+            tourState.showCode = !tourState.showCode;
+            const wrap = tourEl('tour-o-code');
+            wrap.classList.toggle('open', tourState.showCode);
+            tourEl('tour-o-code-label').textContent = tourState.showCode ? 'Hide code' : 'Show code';
+        }
+
+        // The details panel stays closed during a tour unless asked for —
+        // this is the ask.
+        function toggleTourDetails() {
+            const info = document.getElementById('info');
+            if (!info) return;
+            tourState.showPanel = !info.classList.contains('visible');
+            info.classList.toggle('visible', tourState.showPanel);
+            const btn = tourEl('tour-o-details');
+            if (btn) btn.textContent = tourState.showPanel ? 'Hide details' : 'Details';
         }
 
         function updatePlayButton() {
@@ -8131,16 +8683,243 @@
 
         function exitTour() {
             clearTourTimers();
+            closeTourJson();
             tourState.active = false;
             tourState.playing = false;
             tourState.data = null;
             tourState.index = -1;
-            document.body.classList.remove('tour-active');
+            tourState.routeIds = new Set();
+            tourState.nearIds = new Set();
+            tourState.routeEdges = new Set();
+            tourState.showPanel = false;
+            const detailsBtn = tourEl('tour-o-details');
+            if (detailsBtn) detailsBtn.textContent = 'Details';
             const overlay = tourEl('tour-overlay');
             if (overlay) overlay.classList.remove('visible');
+            exitImmersive();
             // Drop the focus dimming the tour left behind.
             exitFocus();
             bumpGraphStyles();
+        }
+
+        // ── Plan JSON viewer ──────────────────────────────────
+        //
+        // Everything the guide produced, in the open: the JSON plan itself,
+        // the stops it bound to real nodes, the candidate pack it chose from,
+        // the prompts it was given, and its verbatim reply.
+
+        function tourJsonTabs() {
+            const t = tourState.data;
+            if (!t) return [];
+            const d = t.debug || {};
+            const tabs = [];
+            if (d.plan || d.raw_response) tabs.push({ id: 'plan', label: 'Plan JSON' });
+            tabs.push({ id: 'stops', label: 'Stops' });
+            if (t.candidates && t.candidates.length) tabs.push({ id: 'candidates', label: 'Candidates' });
+            if (d.system_prompt || d.user_prompt) tabs.push({ id: 'prompt', label: 'Prompt' });
+            if (d.raw_response) tabs.push({ id: 'raw', label: 'Raw reply' });
+            tabs.push({ id: 'full', label: 'Full response' });
+            return tabs;
+        }
+
+        function tourJsonContent(tab) {
+            const t = tourState.data;
+            if (!t) return { note: '', text: '' };
+            const d = t.debug || {};
+            const pretty = (v) => JSON.stringify(v, null, 2);
+            switch (tab) {
+                case 'plan':
+                    return {
+                        note: d.plan
+                            ? 'The JSON object the tour-guide model generated. Each "ref" points at a numbered candidate, which the server binds to a real graph node.'
+                            : 'The model did not return parseable JSON; showing its raw reply.',
+                        text: d.plan ? pretty(d.plan) : (d.raw_response || ''),
+                    };
+                case 'stops':
+                    return {
+                        note: 'The plan after binding: every stop resolved to a graph node id, with the edge that connects it to the previous stop.',
+                        text: pretty((t.stops || []).map(s => ({
+                            ref: s.ref_index,
+                            node_id: s.node_id,
+                            name: s.name,
+                            node_type: s.node_type,
+                            file: s.file,
+                            lines: [s.start_line, s.end_line],
+                            title: s.title,
+                            edge_from_prev: s.edge_from_prev || null,
+                        }))),
+                    };
+                case 'candidates':
+                    return {
+                        note: 'What retrieval surfaced. "used" marks the ones the guide visited; "shown_to_guide" marks the ones that fit the prompt budget.',
+                        text: pretty(t.candidates || []),
+                    };
+                case 'prompt':
+                    return {
+                        note: 'Exactly what the guide was asked, including the numbered candidate pack and the graph edges between them.',
+                        text: `=== system ===\n${d.system_prompt || ''}\n\n=== user ===\n${d.user_prompt || ''}`,
+                    };
+                case 'raw':
+                    return {
+                        note: d.repaired
+                            ? 'The first reply was unusable, so the guide was asked to repair it. Both replies are shown.'
+                            : 'The model’s reply, verbatim.',
+                        text: d.repair_response
+                            ? `=== first reply ===\n${d.raw_response}\n\n=== repaired reply ===\n${d.repair_response}`
+                            : (d.raw_response || ''),
+                    };
+                default:
+                    return { note: 'The complete /api/tour response.', text: pretty(t) };
+            }
+        }
+
+        function renderTourJson() {
+            const tabs = tourJsonTabs();
+            if (!tabs.some(x => x.id === tourState.jsonTab)) {
+                tourState.jsonTab = tabs.length ? tabs[0].id : 'full';
+            }
+            const bar = tourEl('tjson-tabs');
+            bar.innerHTML = '';
+            tabs.forEach(tb => {
+                const b = document.createElement('button');
+                b.className = 'tjson-tab' + (tb.id === tourState.jsonTab ? ' active' : '');
+                b.textContent = tb.label;
+                b.addEventListener('click', () => { tourState.jsonTab = tb.id; renderTourJson(); });
+                bar.appendChild(b);
+            });
+            const { note, text } = tourJsonContent(tourState.jsonTab);
+            tourEl('tjson-note').textContent = note;
+            tourEl('tjson-pre').textContent = text;
+
+            const t = tourState.data || {};
+            const bits = [];
+            if (t.chat_model) bits.push(t.chat_model);
+            if (t.fallback) bits.push('ranked fallback (no guide)');
+            if (t.debug && t.debug.repaired) bits.push('repaired');
+            if (t.completion_ms) bits.push(`${t.completion_ms} ms`);
+            if (t.usage && t.usage.total_tokens) bits.push(`${t.usage.total_tokens} tokens`);
+            tourEl('tjson-sub').textContent = bits.join(' · ');
+            const dropped = (t.debug && t.debug.dropped) || [];
+            tourEl('tjson-meta').textContent = dropped.length
+                ? `${dropped.length} ref(s) skipped: ${dropped.map(d => `${d.raw} (${d.reason})`).join('; ')}`
+                : '';
+        }
+
+        function openTourJson() {
+            if (!tourState.data) return;
+            renderTourJson();
+            tourEl('tour-json').classList.add('visible');
+            document.body.classList.add('tour-json-open');
+            handleNodeHover(null);
+        }
+
+        function closeTourJson() {
+            const el = tourEl('tour-json');
+            if (el) el.classList.remove('visible');
+            document.body.classList.remove('tour-json-open');
+        }
+
+        function tourJsonOpen() {
+            const el = tourEl('tour-json');
+            return !!el && el.classList.contains('visible');
+        }
+
+        // ── Dragging the narration card ───────────────────────
+
+        function clampTourPosition(left, top) {
+            const overlay = tourEl('tour-overlay');
+            const rect = overlay.getBoundingClientRect();
+            const margin = 8;
+            const maxLeft = Math.max(margin, window.innerWidth - rect.width - margin);
+            const maxTop = Math.max(margin, window.innerHeight - rect.height - margin);
+            return {
+                left: Math.min(maxLeft, Math.max(margin, left)),
+                top: Math.min(maxTop, Math.max(margin, top)),
+            };
+        }
+
+        function placeTourCard(left, top) {
+            const overlay = tourEl('tour-overlay');
+            const p = clampTourPosition(left, top);
+            overlay.classList.add('dragged');
+            overlay.style.left = p.left + 'px';
+            overlay.style.top = p.top + 'px';
+            return p;
+        }
+
+        function restoreTourPosition() {
+            const overlay = tourEl('tour-overlay');
+            let saved = null;
+            try { saved = JSON.parse(localStorage.getItem(TOUR_POS_KEY) || 'null'); } catch (e) { saved = null; }
+            if (!saved || typeof saved.left !== 'number') {
+                resetTourPosition();
+                return;
+            }
+            // Measure first (the overlay may still be hidden), then clamp into
+            // the current viewport in case the window shrank since last time.
+            overlay.classList.add('dragged');
+            overlay.style.left = saved.left + 'px';
+            overlay.style.top = saved.top + 'px';
+            placeTourCard(saved.left, saved.top);
+        }
+
+        function resetTourPosition() {
+            const overlay = tourEl('tour-overlay');
+            overlay.classList.remove('dragged');
+            overlay.style.left = '';
+            overlay.style.top = '';
+            try { localStorage.removeItem(TOUR_POS_KEY); } catch (e) { /* private mode */ }
+        }
+
+        function wireTourDrag() {
+            const overlay = tourEl('tour-overlay');
+            const handle = tourEl('tour-o-drag');
+            if (!overlay || !handle) return;
+            let dx = 0, dy = 0, moved = false;
+
+            const onMove = (e) => {
+                moved = true;
+                placeTourCard(e.clientX - dx, e.clientY - dy);
+            };
+            const onUp = () => {
+                overlay.classList.remove('dragging');
+                window.removeEventListener('pointermove', onMove);
+                window.removeEventListener('pointerup', onUp);
+                if (!moved) return;
+                try {
+                    localStorage.setItem(TOUR_POS_KEY, JSON.stringify({
+                        left: parseFloat(overlay.style.left) || 0,
+                        top: parseFloat(overlay.style.top) || 0,
+                    }));
+                } catch (e) { /* private mode */ }
+            };
+
+            handle.addEventListener('pointerdown', (e) => {
+                // Buttons in the header keep their own click behaviour.
+                if (e.target.closest('button')) return;
+                e.preventDefault();
+                const rect = overlay.getBoundingClientRect();
+                dx = e.clientX - rect.left;
+                dy = e.clientY - rect.top;
+                moved = false;
+                // Freeze the card where it is, then follow the pointer.
+                placeTourCard(rect.left, rect.top);
+                overlay.classList.add('dragging');
+                window.addEventListener('pointermove', onMove);
+                window.addEventListener('pointerup', onUp);
+            });
+
+            // Double-click the header to send the card home.
+            handle.addEventListener('dblclick', (e) => {
+                if (e.target.closest('button')) return;
+                resetTourPosition();
+            });
+
+            // Keep a dragged card on screen when the window resizes.
+            window.addEventListener('resize', () => {
+                if (!overlay.classList.contains('dragged')) return;
+                placeTourCard(parseFloat(overlay.style.left) || 0, parseFloat(overlay.style.top) || 0);
+            });
         }
 
         function wireTourPanel() {
@@ -8175,21 +8954,68 @@
 
             // Overlay controls.
             const bind = (id, fn) => { const el = tourEl(id); if (el) el.addEventListener('click', fn); };
-            bind('tour-o-prev', prevStop);
-            bind('tour-o-next', nextStop);
+            bind('tour-o-prev', () => { pauseTour(); prevStop(); });
+            bind('tour-o-next', () => { pauseTour(); nextStop(); });
             bind('tour-o-play', togglePlayTour);
             bind('tour-o-exit', exitTour);
             bind('tour-o-close', exitTour);
+            bind('tour-o-speed', cycleTourSpeed);
+            bind('tour-o-details', toggleTourDetails);
+            bind('tour-o-code-toggle', toggleTourCode);
+            bind('tour-o-json', openTourJson);
+            bind('tjson-close', closeTourJson);
+            bind('tjson-copy', async () => {
+                const btn = tourEl('tjson-copy');
+                try {
+                    await navigator.clipboard.writeText(tourEl('tjson-pre').textContent);
+                    btn.textContent = 'Copied';
+                } catch (e) {
+                    btn.textContent = 'Copy failed';
+                }
+                setTimeout(() => { btn.textContent = 'Copy'; }, 1400);
+            });
+            bind('tjson-download', () => {
+                const blob = new Blob([tourEl('tjson-pre').textContent], { type: 'application/json' });
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = `tour-${tourState.jsonTab}.json`;
+                a.click();
+                setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+            });
+            const jsonOverlay = tourEl('tour-json');
+            if (jsonOverlay) {
+                // Click the backdrop (not the card) to dismiss.
+                jsonOverlay.addEventListener('click', (e) => {
+                    if (e.target === jsonOverlay) closeTourJson();
+                });
+            }
+
+            wireTourDrag();
+            updateSpeedButton();
 
             // Keyboard control while a tour is on screen (and not typing in a field).
             document.addEventListener('keydown', (e) => {
                 if (!tourState.active) return;
                 const tag = (document.activeElement && document.activeElement.tagName) || '';
                 if (tag === 'INPUT' || tag === 'TEXTAREA') return;
-                if (e.key === 'Escape') { e.preventDefault(); exitTour(); }
-                else if (e.key === 'ArrowRight') { e.preventDefault(); pauseTour(); nextStop(); }
+                if (e.metaKey || e.ctrlKey || e.altKey) return;
+                if (e.key === 'Escape') {
+                    e.preventDefault();
+                    if (tourJsonOpen()) closeTourJson(); else exitTour();
+                } else if (e.key === 'ArrowRight') { e.preventDefault(); pauseTour(); nextStop(); }
                 else if (e.key === 'ArrowLeft') { e.preventDefault(); pauseTour(); prevStop(); }
-                else if (e.key === ' ') { e.preventDefault(); togglePlayTour(); }
+                else if (e.key === ' ') {
+                    e.preventDefault();
+                    // Space first skips the typewriter, then plays/pauses.
+                    if (!revealNarration()) togglePlayTour();
+                }
+                else if (e.key === 'j' || e.key === 'J') {
+                    e.preventDefault();
+                    if (tourJsonOpen()) closeTourJson(); else openTourJson();
+                }
+                else if (e.key === 'd' || e.key === 'D') { e.preventDefault(); toggleTourDetails(); }
+                else if (e.key === 's' || e.key === 'S') { e.preventDefault(); cycleTourSpeed(); }
+                else if (e.key === 'c' || e.key === 'C') { e.preventDefault(); toggleTourCode(); }
             });
         }
 
@@ -8639,9 +9465,16 @@
             const D = state._labelDist || 340;
             const D2 = D * D;
             const focusOn = !!state.focusNode;
+            const tourOn = tourState.active && tourState.routeIds.size > 0;
             state.graph.nodes.forEach(n => {
                 const s = n.__nodeLabel;
                 if (!s) return;
+                // On a tour only the stops are named — the surrounding
+                // neighbourhood stays present but anonymous.
+                if (tourOn) {
+                    s.visible = tourState.routeIds.has(n.id);
+                    return;
+                }
                 if (focusOn) {
                     // While focused, always label the neighbourhood; hide the rest.
                     s.visible = state.focusSet.has(n.id);
@@ -8807,10 +9640,25 @@
         function nodeColorFor(n) {
             if (state.selectedNode && n.id === state.selectedNode.id) return '#ff3d00';
             if (state.highlightNodes.has(n.id)) return '#f96716';
+            // On a tour the other stops burn amber so the route reads as one
+            // chain; everything else keeps its type colour and gets lowlit
+            // by opacity instead (see bumpGraphStyles).
+            if (tourTier(n.id) === 'stop') return '#fb923c';
             return config.getColor(n.group);
         }
         function linkColorFor(e) {
             if (state.highlightLinks.has(e)) return '#f96716';
+            // On a tour the route glows and everything else fades out, so the
+            // path through the graph is the only thing the eye can follow.
+            if (tourTier(e.source.id || e.source)) {
+                const sId = e.source.id || e.source;
+                const tId = e.target.id || e.target;
+                if (isTourRouteEdge(e)) return '#f97316';
+                const cur = tourCurrentStop();
+                if (cur && (sId === cur.node_id || tId === cur.node_id)) return config.getRelColor(e.rel);
+                if (tourState.routeIds.has(sId) && tourState.routeIds.has(tId)) return '#f8cda2';
+                return '#f2efe9';
+            }
             // In focus mode, links not wholly inside the focused neighbourhood
             // recede to a near-background grey so the local structure stands out.
             if (state.focusNode) {
@@ -8819,6 +9667,14 @@
                 if (!(state.focusSet.has(sId) && state.focusSet.has(tId))) return '#e9e5de';
             }
             return config.getRelColor(e.rel);
+        }
+
+        // Particles crawl along highlighted links, and along the tour route so
+        // the walk has visible direction of travel.
+        function linkParticlesFor(e) {
+            if (state.highlightLinks.has(e)) return 4;
+            if (tourState.active && isTourRouteEdge(e)) return 2;
+            return 0;
         }
 
         function nodeRadiusFor(n) {
@@ -8942,6 +9798,10 @@
                             opacity: 0.14,
                             depthWrite: false,
                         }));
+                    // Kept on the node so dimming (focus / tour) can fade the
+                    // shell too — otherwise big nodes stay visible through it.
+                    n.__nodeShell = shell;
+                    n.__shellBase = 0.14;
                     group.add(shell);
                 }
             }
@@ -9024,7 +9884,7 @@
                 .linkVisibility(e => !(state.linkHidden && state.linkHidden(e)))
                 .linkDirectionalArrowLength(state.perfMode ? 0 : 3)
                 .linkDirectionalArrowRelPos(1)
-                .linkDirectionalParticles(e => state.highlightLinks.has(e) ? 4 : 0)
+                .linkDirectionalParticles(linkParticlesFor)
                 .linkDirectionalParticleWidth(1.6)
                 .linkDirectionalParticleSpeed(0.012)
                 .linkDirectionalParticleColor(() => '#ff3d00')
@@ -9606,16 +10466,36 @@
             state.graph.nodes.forEach(n => {
                 if (n.__nodeMat) n.__nodeMat.color.set(nodeColorFor(n));
                 const sel = state.selectedNode && n.id === state.selectedNode.id;
-                // In focus mode, nodes outside the neighbourhood fade into the
-                // background (kept faintly visible so spatial context survives).
-                const dim = focusOn && !state.focusSet.has(n.id);
-                if (n.__nodeMat) n.__nodeMat.opacity = dim ? 0.06 : 0.95;
+                // On a tour, brightness is a four-ring gradient (this stop →
+                // the rest of the route → its neighbours → everything else).
+                // Otherwise focus mode's binary dim applies.
+                const tier = tourTier(n.id);
+                const dim = tier ? tier === 'far' : (focusOn && !state.focusSet.has(n.id));
+                if (n.__nodeMat) {
+                    n.__nodeMat.opacity = tier ? TOUR_TIER_OPACITY[tier] : (dim ? 0.06 : 0.95);
+                }
                 // Dimmed labels hide immediately; otherwise distance owns it (see
                 // updateAdaptiveLabels), so we only force-hide here.
                 if (dim && n.__nodeLabel) n.__nodeLabel.visible = false;
+                // Tour stops get their names inked in warm orange so the route
+                // is readable at a glance. Re-tinting rebuilds the sprite
+                // texture, so only do it when the tint actually changes.
+                if (n.__nodeLabel) {
+                    const wantTint = tier === 'current' || tier === 'stop';
+                    if (wantTint !== !!n.__labelTinted) {
+                        n.__nodeLabel.color = wantTint ? 'rgba(194,65,12,0.98)' : 'rgba(71,85,105,0.95)';
+                        n.__labelTinted = wantTint;
+                    }
+                }
+                if (n.__nodeShell) {
+                    const base = n.__shellBase || 0.14;
+                    n.__nodeShell.material.opacity = dim ? 0
+                        : (tier === 'near' ? base * 0.4 : base);
+                }
                 if (n.__nodeHalo) {
                     const hot = sel || state.highlightNodes.has(n.id);
-                    n.__nodeHalo.material.opacity = dim ? 0 : (hot ? 0.75 : 0.25);
+                    n.__nodeHalo.material.opacity = dim ? 0
+                        : (hot ? 0.75 : (tier === 'stop' ? 0.5 : (tier === 'near' ? 0.1 : 0.25)));
                     // Non-selected halos return to base size; the selected one is
                     // animated by the selection rAF loop.
                     if (!sel && n.__haloBase) n.__nodeHalo.scale.setScalar(n.__haloBase);
@@ -9626,7 +10506,7 @@
             Graph.nodeVisibility(Graph.nodeVisibility())
                 .linkColor(linkColorFor)
                 .linkVisibility(Graph.linkVisibility())
-                .linkDirectionalParticles(Graph.linkDirectionalParticles());
+                .linkDirectionalParticles(linkParticlesFor);
         }
 
         function truncateName(name) {
@@ -9655,6 +10535,10 @@
             // Suppress hovers raycast from a stale pointer position while the
             // user is actually working in a panel (see pointerOverCanvas).
             if (d && !pointerOverCanvas()) d = null;
+            // While a tour is playing the camera sweeps nodes under a parked
+            // pointer every frame; tooltips there are noise, not intent.
+            // Pausing hands hovering back to the user.
+            if (d && tourState.active && tourState.playing) d = null;
             state._hoverNode = d || null;
             const el = document.getElementById('graph-3d');
             if (el) el.style.cursor = d ? 'pointer' : null;

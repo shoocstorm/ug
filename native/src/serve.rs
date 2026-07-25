@@ -3108,6 +3108,15 @@ struct TourBody {
     include_snippets: Option<bool>,
     #[serde(default)]
     max_context_chars: Option<usize>,
+    /// Cap on how many candidates may come from one file (0 = no cap).
+    /// Keeps a single large file from swallowing the whole itinerary.
+    #[serde(default)]
+    max_per_file: Option<usize>,
+    /// Attach the planning transcript (prompts + raw model reply + parsed
+    /// plan) to the response. On by default so the UI can show the user
+    /// the JSON the guide actually produced.
+    #[serde(default)]
+    include_debug: Option<bool>,
     #[serde(default, rename = "where")]
     where_clause: Option<String>,
     /// Skip the LLM guide and return a ranked itinerary from retrieval
@@ -3218,6 +3227,8 @@ async fn api_tour(State(state): State<ServeState>, Json(body): Json<TourBody>) -
     opts.include_snippets = include_snippets;
     opts.max_context_chars = max_context_chars;
     opts.where_clause = body.where_clause.as_deref();
+    opts.max_per_file = body.max_per_file.unwrap_or(opts.max_per_file).min(20);
+    opts.include_debug = body.include_debug.unwrap_or(true);
 
     let mut used_model: Option<String> = None;
     let result = match chat_cfg {
@@ -3236,9 +3247,11 @@ async fn api_tour(State(state): State<ServeState>, Json(body): Json<TourBody>) -
                 {
                     Ok(t) => Ok(t),
                     Err(e) => {
-                        // LLM unreachable/failed — still give a tour.
+                        // LLM unreachable/failed — still give a tour, but
+                        // say why it isn't narrated.
                         tracing::warn!(error = %e, "tour guide LLM failed; falling back to ranked itinerary");
                         used_model = None;
+                        let reason = e.to_string();
                         crate::tour::plan_tour_no_llm(
                             &*db,
                             &embedder,
@@ -3247,12 +3260,18 @@ async fn api_tour(State(state): State<ServeState>, Json(body): Json<TourBody>) -
                             opts.clone(),
                         )
                         .await
+                        .map(|mut t| {
+                            t.warnings
+                                .push(format!("The tour guide model was unreachable ({}); showing a ranked itinerary.", reason));
+                            t
+                        })
                     }
                 }
             }
             Err(e) => Err(Box::new(e) as Box<dyn std::error::Error + Send + Sync>),
         },
         None => {
+            let asked_for_llm = want_llm;
             crate::tour::plan_tour_no_llm(
                 &*db,
                 &embedder,
@@ -3261,6 +3280,15 @@ async fn api_tour(State(state): State<ServeState>, Json(body): Json<TourBody>) -
                 opts.clone(),
             )
             .await
+            .map(|mut t| {
+                if asked_for_llm && !t.stops.is_empty() {
+                    t.warnings.push(
+                        "No chat model is configured, so this is a ranked itinerary rather than a narrated tour."
+                            .to_string(),
+                    );
+                }
+                t
+            })
         }
     };
     drop(_permit);

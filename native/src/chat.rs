@@ -180,10 +180,27 @@ impl ChatClient {
 
     /// Single non-streaming round-trip. Returns the assistant text and
     /// (when the server reports it) token-usage stats.
+    /// Non-streaming round-trip. See [`complete_with_reason`] when the
+    /// caller needs to know *why* the model stopped (e.g. to tell a
+    /// truncated reply apart from a badly formatted one).
+    ///
+    /// [`complete_with_reason`]: ChatClient::complete_with_reason
     pub async fn complete(
         &self,
         messages: &[ChatMessage],
     ) -> Result<(String, Option<Usage>), ChatError> {
+        let (text, usage, _) = self.complete_with_reason(messages).await?;
+        Ok((text, usage))
+    }
+
+    /// As [`complete`], plus the provider's `finish_reason` (`"stop"`,
+    /// `"length"`, …) when it sends one.
+    ///
+    /// [`complete`]: ChatClient::complete
+    pub async fn complete_with_reason(
+        &self,
+        messages: &[ChatMessage],
+    ) -> Result<(String, Option<Usage>, Option<String>), ChatError> {
         let url = format!(
             "{}/chat/completions",
             self.cfg.base_url.trim_end_matches('/')
@@ -214,8 +231,7 @@ impl ChatClient {
         let parsed: ChatResponse = resp.json().await.map_err(ChatError::Http)?;
         let choice = parsed.choices.into_iter().next().ok_or(ChatError::EmptyChoices)?;
         let text = choice.message.content.unwrap_or_default();
-        let _ = choice.finish_reason; // currently ignored; surfaced via logs upstream if needed
-        Ok((text, parsed.usage))
+        Ok((text, parsed.usage, choice.finish_reason))
     }
 
     /// Streaming round-trip (`stream: true`, SSE wire format). Calls
