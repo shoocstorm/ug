@@ -37,7 +37,10 @@ use crate::chat::{retrieve_context, ChatClient, ChatMessage, ChatRagOptions, Usa
 
 /// Default number of stops when the caller doesn't specify one. Small
 /// enough to stay a "guided" tour rather than a full dump.
-pub const DEFAULT_MAX_STOPS: usize = 8;
+pub const DEFAULT_MAX_STOPS: usize = 10;
+
+/// Hard ceiling on stops, shared by the CLI and `/api/tour`.
+pub const MAX_STOPS_LIMIT: usize = 40;
 
 /// Per-stop snippet cap. A tour shows a *taste* of each node, and this
 /// also stops one huge (e.g. minified) file from dominating the payload.
@@ -50,8 +53,15 @@ const PROMPT_SNIPPET_MAX_CHARS: usize = 480;
 const PROMPT_SNIPPET_MAX_LINES: usize = 14;
 
 /// How many candidates we read source for / offer to the guide. Beyond
-/// this the prompt stops being a menu and starts being a haystack.
-const MAX_PROMPT_ITEMS: usize = 24;
+/// this the prompt stops being a menu and starts being a haystack — but a
+/// long tour needs a menu at least as long as its itinerary, so the cap
+/// grows with the stop budget.
+const MIN_PROMPT_ITEMS: usize = 24;
+const MAX_PROMPT_ITEMS: usize = 64;
+
+fn prompt_item_cap(max_stops: usize) -> usize {
+    (max_stops + 8).clamp(MIN_PROMPT_ITEMS, MAX_PROMPT_ITEMS)
+}
 
 /// Cap on the rendered `[#a] --rel--> [#b]` link map.
 const MAX_LINK_LINES: usize = 120;
@@ -62,7 +72,12 @@ const MAX_LINK_LINES: usize = 120;
 /// 1024-token chat default the object gets cut off mid-string and the
 /// whole plan is lost. `max_tokens` is a ceiling, not a reservation, so a
 /// generous one costs nothing for models that answer straight away.
-pub const TOUR_MIN_COMPLETION_TOKENS: u32 = 8192;
+pub const TOUR_MIN_COMPLETION_TOKENS: u32 = 32_768;
+
+/// Matching HTTP timeout. Raising the token ceiling without raising this
+/// just trades a truncated plan for a timed-out one: a local model
+/// emitting 30k tokens can easily run past the 180s chat default.
+pub const TOUR_MIN_TIMEOUT_SECS: u64 = 900;
 
 /// Default per-file candidate cap. Two chunks of the same file is a
 /// detail pass; five is a file dump wearing a tour's clothes.
@@ -641,7 +656,9 @@ fn default_title(query: &str) -> String {
 /// afterwards — see `bounded_snippet`.
 fn retrieval_opts<'a>(opts: &TourOptions<'a>) -> ChatRagOptions<'a> {
     let mut rag = ChatRagOptions::new();
-    rag.k = opts.k;
+    // Never retrieve fewer candidates than the itinerary could hold — a
+    // 20-stop tour drawn from 14 candidates is not a tour, it's the list.
+    rag.k = opts.k.max(opts.max_stops + 4);
     rag.hops = opts.hops;
     rag.strategy = opts.strategy;
     rag.direction = opts.direction;
@@ -706,8 +723,8 @@ fn attach_snippets(tour: &mut Tour, repo_root: &std::path::Path) {
 /// Give the *planner* a taste of each candidate's real code. Without this
 /// the guide narrates from descriptions alone, which is where invented
 /// details creep in.
-fn attach_prompt_snippets(items: &mut [ContextItem], repo_root: &std::path::Path) {
-    for item in items.iter_mut().take(MAX_PROMPT_ITEMS) {
+fn attach_prompt_snippets(items: &mut [ContextItem], repo_root: &std::path::Path, cap: usize) {
+    for item in items.iter_mut().take(cap) {
         if item.snippet.is_some() {
             continue;
         }
@@ -755,8 +772,9 @@ async fn candidate_edges(
     store: &dyn KnowledgeStore,
     items: &[ContextItem],
     edge_types: Option<&[String]>,
+    cap: usize,
 ) -> Vec<TourEdge> {
-    let ids: Vec<String> = items.iter().take(MAX_PROMPT_ITEMS).map(|i| i.id.clone()).collect();
+    let ids: Vec<String> = items.iter().take(cap).map(|i| i.id.clone()).collect();
     if ids.len() < 2 {
         return Vec::new();
     }
@@ -792,10 +810,10 @@ async fn candidate_edges(
 
 /// Number the context items for the prompt, returning how many actually
 /// fit the char budget — refs beyond that were never shown to the model.
-fn render_numbered_items(items: &[ContextItem], max_chars: usize) -> (String, usize) {
+fn render_numbered_items(items: &[ContextItem], max_chars: usize, cap: usize) -> (String, usize) {
     let mut out = String::with_capacity(items.len() * 320);
     let mut shown = 0usize;
-    for (i, item) in items.iter().take(MAX_PROMPT_ITEMS).enumerate() {
+    for (i, item) in items.iter().take(cap).enumerate() {
         let loc = if item.start_line > 0 && item.end_line >= item.start_line {
             format!(
                 "{}:{}-{}",
@@ -866,7 +884,7 @@ fn build_plan_messages(
     ctx_max_chars: usize,
     max_stops: usize,
 ) -> (Vec<ChatMessage>, usize) {
-    let (rendered, shown) = render_numbered_items(items, ctx_max_chars);
+    let (rendered, shown) = render_numbered_items(items, ctx_max_chars, prompt_item_cap(max_stops));
     let links = render_links(items, edges, shown);
     let mut user = format!(
         "Question: {}\n\nContext items:\n\n{}\n",
@@ -1016,16 +1034,23 @@ fn looks_truncated(raw: &str, finish_reason: Option<&str>) -> bool {
     raw.contains('{') && top_level_objects(strip_reasoning(raw)).is_empty()
 }
 
-/// A client with enough completion budget to finish a plan. Returns
-/// `None` when the caller already asked for more than the chat default,
-/// so an explicit `--max-tokens` is never overridden.
+/// A client with enough completion budget — and enough wall-clock — to
+/// finish a plan. Values the caller raised themselves are left alone, so
+/// an explicit `--max-tokens` / `--chat-timeout` always wins.
 fn planning_client(chat: &ChatClient) -> Option<ChatClient> {
     let cfg = chat.config();
-    if cfg.max_tokens > crate::chat::DEFAULT_MAX_TOKENS {
+    let raise_tokens = cfg.max_tokens <= crate::chat::DEFAULT_MAX_TOKENS;
+    let raise_timeout = cfg.timeout_secs <= crate::chat::DEFAULT_TIMEOUT_SECS;
+    if !raise_tokens && !raise_timeout {
         return None;
     }
     let mut raised = cfg.clone();
-    raised.max_tokens = TOUR_MIN_COMPLETION_TOKENS;
+    if raise_tokens {
+        raised.max_tokens = TOUR_MIN_COMPLETION_TOKENS;
+    }
+    if raise_timeout {
+        raised.timeout_secs = TOUR_MIN_TIMEOUT_SECS;
+    }
     ChatClient::new(raised).ok()
 }
 
@@ -1073,7 +1098,7 @@ async fn run_plan(
     });
     repair.push(ChatMessage {
         role: "user".into(),
-        content: repair_prompt(items.len().min(MAX_PROMPT_ITEMS), problem),
+        content: repair_prompt(items.len().min(prompt_item_cap(max_stops)), problem),
     });
 
     debug.repaired = true;
@@ -1106,7 +1131,7 @@ async fn gather_candidates(
     let retrieval_ms = t_ret.elapsed().as_millis();
     let mut items = diversify(context.items, opts.max_per_file);
     if with_snippets {
-        attach_prompt_snippets(&mut items, repo_root);
+        attach_prompt_snippets(&mut items, repo_root, prompt_item_cap(opts.max_stops));
     }
     Ok((items, context.seed_id, retrieval_ms))
 }
@@ -1131,9 +1156,18 @@ pub async fn plan_tour(
         return Ok(empty_tour(query, retrieval_ms));
     }
 
-    let edges = candidate_edges(store, &items, opts.edge_types).await;
-    let (messages, shown) =
-        build_plan_messages(query, &items, &edges, opts.max_context_chars, opts.max_stops);
+    // A long itinerary needs a long menu — and enough prompt budget to show
+    // it. Both scale with the stop count, but only when the caller left them
+    // at their defaults.
+    let cap = prompt_item_cap(opts.max_stops);
+    let ctx_chars = if opts.max_context_chars <= crate::chat::DEFAULT_CTX_MAX_CHARS {
+        (cap * 700).clamp(crate::chat::DEFAULT_CTX_MAX_CHARS, 48_000)
+    } else {
+        opts.max_context_chars
+    };
+
+    let edges = candidate_edges(store, &items, opts.edge_types, cap).await;
+    let (messages, shown) = build_plan_messages(query, &items, &edges, ctx_chars, opts.max_stops);
 
     // Plan with a completion budget big enough to hold the whole object.
     let raised = planning_client(chat);
@@ -1206,7 +1240,7 @@ pub async fn plan_tour_no_llm(
     tour.seed_id = seed_id;
     tour.retrieval_ms = retrieval_ms;
     if !items.is_empty() {
-        let edges = candidate_edges(store, &items, opts.edge_types).await;
+        let edges = candidate_edges(store, &items, opts.edge_types, prompt_item_cap(opts.max_stops)).await;
         bind_route(&mut tour, &edges);
         // No guide ran, so nothing was "shown to" one.
         bind_candidates(&mut tour, &items, 0);
@@ -1368,6 +1402,14 @@ mod tests {
     }
 
     #[test]
+    fn prompt_menu_grows_with_the_stop_budget() {
+        assert_eq!(prompt_item_cap(4), MIN_PROMPT_ITEMS, "short tours use the floor");
+        assert_eq!(prompt_item_cap(20), 28, "a long tour needs more candidates than stops");
+        assert_eq!(prompt_item_cap(MAX_STOPS_LIMIT), 48);
+        assert!(prompt_item_cap(1000) <= MAX_PROMPT_ITEMS);
+    }
+
+    #[test]
     fn system_prompt_carries_the_stop_budget() {
         assert!(tour_system_prompt(6).contains("between 4 and 6 stops"));
         assert!(tour_system_prompt(3).contains("exactly 3 stops"));
@@ -1397,12 +1439,15 @@ mod tests {
     #[test]
     fn render_numbered_items_reports_how_many_fit() {
         let items = vec![item(1), item(2), item(3)];
-        let (text, shown) = render_numbered_items(&items, 100_000);
+        let (text, shown) = render_numbered_items(&items, 100_000, 24);
         assert_eq!(shown, 3);
         assert!(text.contains("[#3] fn_3 (Function) — src/a3.rs:10-20"));
         // A tight budget always keeps at least the first item.
-        let (_, shown_small) = render_numbered_items(&items, 10);
+        let (_, shown_small) = render_numbered_items(&items, 10, 24);
         assert_eq!(shown_small, 1);
+        // The cap alone can also cut the menu short.
+        let (_, shown_capped) = render_numbered_items(&items, 100_000, 2);
+        assert_eq!(shown_capped, 2);
     }
 
     #[test]

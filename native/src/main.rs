@@ -4152,7 +4152,7 @@ fn run_tour(args: &[String]) {
     let max_stops: usize = flag_value(args, &["--max-stops"])
         .and_then(|s| s.parse().ok())
         .unwrap_or(tour::DEFAULT_MAX_STOPS)
-        .clamp(1, 20);
+        .clamp(1, tour::MAX_STOPS_LIMIT);
     let max_chars: usize = flag_value(args, &["--max-chars"])
         .and_then(|s| s.parse().ok())
         .unwrap_or(chat::DEFAULT_CTX_MAX_CHARS);
@@ -4466,7 +4466,7 @@ fn print_tour_help() {
     println!("{C_BOLD}Options:{C_RESET}");
     println!("  {C_CYAN}-k, --limit{C_RESET} <n>       Candidate nodes to retrieve (default: 14)");
     println!("  {C_CYAN}--hops{C_RESET} <n>            Graph expansion hops (default: 2)");
-    println!("  {C_CYAN}--max-stops{C_RESET} <n>       Max stops on the tour (default: {}, max 20)", tour::DEFAULT_MAX_STOPS);
+    println!("  {C_CYAN}--max-stops{C_RESET} <n>       Max stops on the tour (default: {}, max {})", tour::DEFAULT_MAX_STOPS, tour::MAX_STOPS_LIMIT);
     println!("  {C_CYAN}--max-per-file{C_RESET} <n>    Candidates kept per file, 0 = no cap (default: 2)");
     println!("  {C_YELLOW}--no-llm{C_RESET}             Skip the guide; emit a ranked itinerary from retrieval only");
     println!("  {C_CYAN}--no-snippets{C_RESET}         Omit code snippets from stops");

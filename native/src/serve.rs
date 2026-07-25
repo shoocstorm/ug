@@ -3180,9 +3180,12 @@ async fn api_tour(State(state): State<ServeState>, Json(body): Json<TourBody>) -
         Err(r) => return r,
     };
 
-    let k = body.k.unwrap_or(12).min(50).max(1);
+    let k = body.k.unwrap_or(14).min(80).max(1);
     let hops = body.hops.unwrap_or(2).min(4);
-    let max_stops = body.max_stops.unwrap_or(crate::tour::DEFAULT_MAX_STOPS).clamp(1, 20);
+    let max_stops = body
+        .max_stops
+        .unwrap_or(crate::tour::DEFAULT_MAX_STOPS)
+        .clamp(1, crate::tour::MAX_STOPS_LIMIT);
     let strategy = body
         .strategy
         .as_deref()

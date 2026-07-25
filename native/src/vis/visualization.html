@@ -61,14 +61,15 @@
             width: 100vw;
             height: 100vh;
             position: relative;
-            /* Light "ink on paper" backdrop matching the 3D scene, so there is
-               no dark flash before the canvas initialises. */
+            /* Dark backdrop matching the 3D scene, so there is no flash
+               before the canvas initialises and the saturated node inks read
+               as luminous rather than flat. */
             background:
-                radial-gradient(ellipse 70% 55% at 78% 18%, rgba(233, 100, 28, 0.10) 0%, transparent 55%),
-                radial-gradient(ellipse 60% 50% at 15% 75%, rgba(58, 110, 165, 0.10) 0%, transparent 55%),
-                radial-gradient(ellipse 50% 40% at 30% 15%, rgba(91, 143, 201, 0.07) 0%, transparent 50%),
-                radial-gradient(ellipse 55% 45% at 88% 85%, rgba(194, 65, 12, 0.06) 0%, transparent 50%),
-                #fdfcfa;
+                radial-gradient(ellipse 70% 55% at 78% 18%, rgba(233, 100, 28, 0.16) 0%, transparent 55%),
+                radial-gradient(ellipse 60% 50% at 15% 75%, rgba(58, 110, 165, 0.18) 0%, transparent 55%),
+                radial-gradient(ellipse 50% 40% at 30% 15%, rgba(91, 143, 201, 0.10) 0%, transparent 50%),
+                radial-gradient(ellipse 55% 45% at 88% 85%, rgba(194, 65, 12, 0.10) 0%, transparent 50%),
+                #0d0d10;
             background-attachment: fixed;
         }
 
@@ -183,6 +184,18 @@
             text-align: center;
             pointer-events: none;
             z-index: 5;
+        }
+
+        /* The graph runs right under the title, so give it a soft pool of
+           ground tone to sit on rather than competing with bright nodes. */
+        .header::before {
+            content: '';
+            position: absolute;
+            inset: -16px -40px -12px;
+            background: radial-gradient(ellipse at 50% 45%,
+                rgba(10, 10, 13, 0.82) 0%, rgba(10, 10, 13, 0.55) 55%, rgba(10, 10, 13, 0) 78%);
+            z-index: -1;
+            pointer-events: none;
         }
 
         /* Echoes the Knowledge Base Manager's kicker-over-wordmark pairing
@@ -514,6 +527,219 @@
             overflow-y: auto;
             padding: 8px 0;
         }
+
+        /* Discover keeps its mode switcher pinned while the mode scrolls. */
+        #pane-discover.active {
+            padding-top: 0;
+        }
+
+        /* ─── Discover sub-tabs (Search / Tour / Chat) ───────── */
+
+        .subtabs {
+            position: sticky;
+            top: 0;
+            z-index: 3;
+            display: flex;
+            gap: 2px;
+            margin: 8px 10px 10px;
+            padding: 4px;
+            border-radius: 11px;
+            background: rgba(20, 19, 22, 0.92);
+            border: 1px solid var(--border-soft);
+            backdrop-filter: blur(12px);
+            box-shadow: 0 4px 18px -8px rgba(0, 0, 0, 0.7);
+        }
+
+        /* A single lit pill slides between the tabs instead of three
+           independent backgrounds popping on and off. */
+        .subtab-glider {
+            position: absolute;
+            top: 4px;
+            left: 4px;
+            height: calc(100% - 8px);
+            border-radius: 8px;
+            background: linear-gradient(135deg, rgba(249, 115, 22, 0.22), rgba(249, 115, 22, 0.1));
+            border: 1px solid var(--accent-dim);
+            box-shadow: 0 2px 10px -3px rgba(249, 115, 22, 0.55);
+            transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1), width 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+            pointer-events: none;
+        }
+
+        .subtab {
+            position: relative;
+            z-index: 1;
+            flex: 1;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            font-family: inherit;
+            font-size: 10.5px;
+            font-weight: 600;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            padding: 7px 4px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: color 0.18s;
+        }
+
+        .subtab svg {
+            width: 13px;
+            height: 13px;
+            flex-shrink: 0;
+        }
+
+        .subtab:hover { color: var(--text); }
+        .subtab.active { color: var(--accent); }
+
+        /* Capability-gated modes stay clickable — the pane explains why. */
+        .subtab.unavailable::after {
+            content: '';
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+            background: var(--warn, #f59e0b);
+            opacity: 0.75;
+        }
+
+        .subpane { display: none; }
+        .subpane.active { display: block; animation: subpane-in 0.22s ease both; }
+
+        @keyframes subpane-in {
+            from { opacity: 0; transform: translateY(4px); }
+            to { opacity: 1; transform: none; }
+        }
+
+        /* One mode per sub-tab, so the mode's own section header would just
+           repeat the tab label. */
+        .subpane > .section.featured {
+            border: none;
+            background: none;
+            margin: 0 6px;
+        }
+
+        .subpane > .section.featured::before,
+        .subpane > .section.featured > .section-header {
+            display: none;
+        }
+
+        .subpane > .section.featured > .section-body {
+            display: block;
+            padding-top: 2px;
+        }
+
+        /* ─── Recent tours (saved tour history) ─────────────── */
+
+        .thist-list { display: flex; flex-direction: column; gap: 5px; }
+
+        .thist-row {
+            display: flex;
+            align-items: stretch;
+            gap: 3px;
+            border: 1px solid var(--border-soft);
+            border-radius: 9px;
+            background: var(--bg-elevated);
+            padding: 3px;
+            transition: border-color 0.15s, background 0.15s;
+        }
+
+        .thist-row:hover {
+            border-color: var(--accent-dim);
+            background: var(--bg-hover);
+        }
+
+        .thist-main {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            align-items: flex-start;
+            background: none;
+            border: none;
+            padding: 5px 7px;
+            border-radius: 7px;
+            cursor: pointer;
+            font-family: inherit;
+            text-align: left;
+        }
+
+        .thist-title {
+            font-size: 11.5px;
+            font-weight: 600;
+            color: var(--text);
+            max-width: 100%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .thist-row:hover .thist-title { color: var(--accent); }
+
+        .thist-meta {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 10px;
+            color: var(--text-dim);
+        }
+
+        .thist-stops { color: var(--accent); font-weight: 600; }
+        .thist-dot { opacity: 0.5; }
+
+        .thist-tag {
+            border: 1px solid var(--border-soft);
+            border-radius: 999px;
+            padding: 0 5px;
+            font-size: 9px;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+        }
+
+        .thist-icon {
+            width: 26px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background: none;
+            border: none;
+            border-radius: 7px;
+            color: var(--text-dim);
+            cursor: pointer;
+            padding: 0;
+            flex-shrink: 0;
+            transition: color 0.15s, background 0.15s;
+        }
+
+        .thist-icon svg { width: 13px; height: 13px; }
+        .thist-icon:hover { color: var(--accent); background: rgba(249, 115, 22, 0.1); }
+        .thist-icon.danger:hover { color: #f87171; background: rgba(248, 113, 113, 0.1); }
+
+        .thist-foot {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 8px;
+        }
+
+        .thist-hint { flex: 1; font-size: 10px; color: var(--text-dim); }
+
+        .thist-clear {
+            background: none;
+            border: 1px solid var(--border-soft);
+            color: var(--text-muted);
+            border-radius: 6px;
+            padding: 4px 8px;
+            font-size: 10px;
+            font-family: inherit;
+            cursor: pointer;
+        }
+
+        .thist-clear:hover { color: #f87171; border-color: rgba(248, 113, 113, 0.4); }
 
         /* Catalog pane keeps a sticky toolbar/footer while the tree scrolls. */
         #pane-catalog.active {
@@ -5020,6 +5246,30 @@
             color: var(--text-dim, #8a7f72);
             margin: 0 0 10px;
         }
+        /* Matches the Send / Search action buttons in the sibling panels,
+           in the tour's own accent. */
+        .chat-controls #tour-start {
+            flex: 1;
+            min-width: 110px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            background: rgba(249, 115, 22, 0.12);
+            border: 1px solid var(--accent-dim);
+            color: var(--accent);
+            padding: 6px 10px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 500;
+            font-family: inherit;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+        .chat-controls #tour-start svg { width: 11px; height: 11px; }
+        .chat-controls #tour-start:hover:not(:disabled) { background: rgba(249, 115, 22, 0.2); }
+        .chat-controls #tour-start:disabled { opacity: 0.5; cursor: progress; }
+
         .tour-examples { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
         .tour-chip {
             font-size: 11px;
@@ -5101,6 +5351,24 @@
             font-size: 17px; line-height: 1; padding: 2px 5px; border-radius: 6px;
         }
         .tour-close:hover { color: #fff; background: rgba(255, 255, 255, .09); }
+
+        /* Header tool cluster: solo / details / JSON / close. */
+        .tour-tools { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
+        .tour-icon {
+            width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center;
+            background: none; border: 1px solid transparent; border-radius: 8px;
+            color: #a89b8d; cursor: pointer; padding: 0;
+            transition: color .15s, background .15s, border-color .15s;
+        }
+        .tour-icon svg { width: 15px; height: 15px; }
+        .tour-icon:hover { color: #fff; background: rgba(255, 255, 255, .09); }
+        .tour-icon.danger:hover { color: #fca5a5; background: rgba(248, 113, 113, .12); }
+        /* Toggles read as lit when engaged. */
+        .tour-icon[aria-pressed="true"] {
+            color: #1a120b; background: linear-gradient(135deg, #fdba74, #f97316);
+            border-color: transparent;
+        }
+        .tour-icon[aria-pressed="true"]:hover { filter: brightness(1.08); color: #1a120b; }
         .tour-progress { display: flex; gap: 5px; margin-bottom: 13px; }
         .tour-seg {
             height: 3px; flex: 1; border-radius: 2px; cursor: pointer;
@@ -5139,22 +5407,49 @@
             animation: tourblink 1s step-end infinite;
         }
         @keyframes tourblink { 50% { opacity: 0; } }
-        .tour-controls { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
-        .tour-controls .spacer { flex: 1; }
-        .tour-btn {
-            background: rgba(255, 255, 255, .06); border: 1px solid rgba(255, 255, 255, .13);
-            color: #f2ede6; border-radius: 9px; height: 32px; padding: 0 12px; cursor: pointer;
-            font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px;
-            transition: background .15s, border-color .15s, transform .1s;
+        /* Transport deck: three columns so the play button sits dead centre
+           no matter how wide the side content gets. */
+        .tour-controls {
+            display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;
+            margin-top: 16px; padding-top: 13px; border-top: 1px solid rgba(255, 255, 255, .07);
         }
-        .tour-btn:hover:not(:disabled) { background: rgba(255, 255, 255, .12); border-color: rgba(249, 115, 22, .45); }
-        .tour-btn:active:not(:disabled) { transform: translateY(1px); }
-        .tour-btn:disabled { opacity: .4; cursor: default; }
-        .tour-btn.primary { background: linear-gradient(90deg, #fb923c, #f97316); color: #1a120b; border-color: transparent; }
-        .tour-btn.primary:hover { filter: brightness(1.07); }
-        .tour-btn svg { width: 14px; height: 14px; fill: currentColor; }
-        .tour-exit { background: none; border: none; color: #a89b8d; cursor: pointer; font-size: 11px; letter-spacing: .05em; }
-        .tour-exit:hover { color: #fff; text-decoration: underline; }
+        .tour-controls-side { display: flex; align-items: center; gap: 10px; min-width: 0; }
+        .tour-controls-side.right { justify-content: flex-end; }
+        .tour-transport { display: flex; align-items: center; justify-content: center; gap: 14px; }
+        .tour-tbtn {
+            width: 38px; height: 38px; border-radius: 50%; cursor: pointer; padding: 0;
+            display: inline-flex; align-items: center; justify-content: center;
+            background: rgba(255, 255, 255, .07); border: 1px solid rgba(255, 255, 255, .12);
+            color: #f2ede6;
+            transition: background .15s, border-color .15s, transform .12s, box-shadow .15s, opacity .15s;
+        }
+        .tour-tbtn svg { width: 17px; height: 17px; }
+        .tour-tbtn:hover:not(:disabled) {
+            background: rgba(255, 255, 255, .14); border-color: rgba(249, 115, 22, .5); transform: scale(1.06);
+        }
+        .tour-tbtn:active:not(:disabled) { transform: scale(.95); }
+        .tour-tbtn:disabled { opacity: .3; cursor: default; }
+        /* The play button is the anchor of the whole deck. */
+        .tour-tbtn.play {
+            width: 54px; height: 54px; border-color: transparent; color: #1a120b;
+            background: linear-gradient(145deg, #fdba74, #f97316);
+            box-shadow: 0 6px 20px -6px rgba(249, 115, 22, .75), 0 0 0 1px rgba(255, 255, 255, .08) inset;
+        }
+        .tour-tbtn.play svg { width: 24px; height: 24px; margin-left: 1px; }
+        .tour-tbtn.play:hover { filter: brightness(1.06); transform: scale(1.05); }
+        /* Pause and replay glyphs are centred; only the play triangle needs
+           the optical nudge above. */
+        .tour-tbtn.play.is-pause svg, .tour-tbtn.play.is-replay svg { margin-left: 0; }
+        .tour-play-state {
+            font-size: 10px; letter-spacing: .12em; text-transform: uppercase; font-weight: 700;
+            color: #7d7264; white-space: nowrap;
+        }
+        .tour-exit {
+            background: none; border: 1px solid rgba(255, 255, 255, .12); color: #a89b8d;
+            cursor: pointer; font-size: 11px; letter-spacing: .05em; font-weight: 600;
+            height: 28px; padding: 0 11px; border-radius: 8px; transition: color .15s, border-color .15s;
+        }
+        .tour-exit:hover { color: #fca5a5; border-color: rgba(248, 113, 113, .4); }
         .tour-note { font-size: 13px; line-height: 1.55; color: #e9dfd2; }
         .tour-note.error { color: #fca5a5; }
         .tour-spinner {
@@ -5206,10 +5501,15 @@
 
         .tour-speed {
             background: rgba(255, 255, 255, .06); border: 1px solid rgba(255, 255, 255, .13);
-            color: #d8b48f; border-radius: 9px; height: 32px; padding: 0 10px; cursor: pointer;
-            font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums;
+            color: #d8b48f; border-radius: 999px; height: 28px; min-width: 46px; padding: 0 11px;
+            cursor: pointer; font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums;
+            transition: color .15s, border-color .15s;
         }
-        .tour-speed:hover { border-color: rgba(249, 115, 22, .45); color: #fdba74; }
+        .tour-speed:hover:not(:disabled) { border-color: rgba(249, 115, 22, .45); color: #fdba74; }
+        /* While a tour is still being planned there is nothing to drive, so
+           the whole deck goes inert — only Exit stays live. */
+        .tour-speed:disabled, .tour-icon:disabled { opacity: .35; cursor: default; }
+        .tour-icon:disabled:hover { background: none; color: #a89b8d; }
 
         /* ─── Guided Tour: plan JSON viewer ─── */
         #tour-json {
@@ -5253,6 +5553,13 @@
             padding: 10px 16px; border-top: 1px solid rgba(255, 255, 255, .08);
         }
         .tjson-foot .spacer { flex: 1; }
+        .tjson-btn {
+            background: rgba(255, 255, 255, .06); border: 1px solid rgba(255, 255, 255, .13);
+            color: #f2ede6; border-radius: 8px; height: 30px; padding: 0 12px; cursor: pointer;
+            font-family: inherit; font-size: 11.5px; font-weight: 600;
+            transition: background .15s, border-color .15s;
+        }
+        .tjson-btn:hover { background: rgba(255, 255, 255, .12); border-color: rgba(249, 115, 22, .45); }
 
         /* Immersive mode: the graph is the show, so the chrome steps back.
            Faded panels come back on hover, and the sidebar/details panel are
@@ -5273,7 +5580,7 @@
         /* A vignette that pulls the eye to the middle of the canvas. */
         body.tour-active #graph-3d::after {
             content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 5;
-            background: radial-gradient(ellipse at 50% 45%, transparent 45%, rgba(20, 16, 12, .16) 100%);
+            background: radial-gradient(ellipse at 50% 45%, transparent 42%, rgba(0, 0, 0, .5) 100%);
         }
     </style>
 </head>
@@ -5572,8 +5879,38 @@
                     <span class="tour-badge">Guided Tour</span>
                     <span class="tour-title-main" id="tour-o-title"></span>
                     <span class="tour-counter" id="tour-o-counter"></span>
-                    <button class="tour-close" id="tour-o-json" title="View the plan JSON the guide generated (J)">{ }</button>
-                    <button class="tour-close" id="tour-o-close" title="Exit tour (Esc)">✕</button>
+                    <div class="tour-tools">
+                        <button class="tour-icon" id="tour-o-solo" title="Show only the nodes on this tour (O)"
+                            aria-pressed="false">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+                                stroke-linecap="round" stroke-linejoin="round">
+                                <circle cx="6" cy="6" r="2.4" /><circle cx="18" cy="10" r="2.4" />
+                                <circle cx="9" cy="18" r="2.4" />
+                                <path d="M8.1 7.1 15.9 9M16.6 12.2 10.8 16.3" />
+                            </svg>
+                        </button>
+                        <button class="tour-icon" id="tour-o-details" title="Open the full details panel for this stop (D)"
+                            aria-pressed="false">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+                                stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="3" y="4" width="18" height="16" rx="2.5" />
+                                <path d="M14 4v16M17 9h1M17 13h1" />
+                            </svg>
+                        </button>
+                        <button class="tour-icon" id="tour-o-json" title="View the plan JSON the guide generated (J)">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+                                stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M9 4H8a3 3 0 0 0-3 3v2a3 3 0 0 1-3 3 3 3 0 0 1 3 3v2a3 3 0 0 0 3 3h1" />
+                                <path d="M15 4h1a3 3 0 0 1 3 3v2a3 3 0 0 0 3 3 3 3 0 0 0-3 3v2a3 3 0 0 1-3 3h-1" />
+                            </svg>
+                        </button>
+                        <button class="tour-icon danger" id="tour-o-close" title="Exit tour (Esc)">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1"
+                                stroke-linecap="round">
+                                <path d="M6 6l12 12M18 6 6 18" />
+                            </svg>
+                        </button>
+                    </div>
                 </div>
                 <div class="tour-progress" id="tour-o-progress"></div>
                 <div id="tour-o-stage">
@@ -5592,21 +5929,35 @@
                 </div>
                 <div id="tour-o-note" class="tour-note" hidden></div>
                 <div class="tour-warnings" id="tour-o-warnings" hidden></div>
+                <!-- Transport: centred like a media player, speed on the
+                     left, exit on the right so the deck stays symmetric. -->
                 <div class="tour-controls">
-                    <button class="tour-btn" id="tour-o-prev" title="Previous stop (←)">
-                        <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7z"/></svg>
-                    </button>
-                    <button class="tour-btn primary" id="tour-o-play" title="Play / pause (space)">
-                        <svg viewBox="0 0 24 24" id="tour-o-play-icon"><path d="M6 4l14 8-14 8z"/></svg>
-                        <span id="tour-o-play-label">Play</span>
-                    </button>
-                    <button class="tour-btn" id="tour-o-next" title="Next stop (→)">
-                        <svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7z"/></svg>
-                    </button>
-                    <button class="tour-speed" id="tour-o-speed" title="Playback speed (S)">1×</button>
-                    <button class="tour-btn" id="tour-o-details" title="Show the full details panel for this stop (D)">Details</button>
-                    <span class="spacer"></span>
-                    <button class="tour-exit" id="tour-o-exit">Exit tour</button>
+                    <div class="tour-controls-side left">
+                        <button class="tour-speed" id="tour-o-speed" title="Playback speed (S)">1×</button>
+                    </div>
+                    <div class="tour-transport">
+                        <button class="tour-tbtn" id="tour-o-prev" title="Previous stop (←)" aria-label="Previous stop">
+                            <svg viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M7 5.5a1 1 0 0 1 2 0v13a1 1 0 0 1-2 0z"/>
+                                <path d="M18.4 5.9v12.2c0 .8-.9 1.3-1.6.9l-8.5-6.1a1.1 1.1 0 0 1 0-1.8l8.5-6.1c.7-.4 1.6 0 1.6.9z"/>
+                            </svg>
+                        </button>
+                        <button class="tour-tbtn play" id="tour-o-play" title="Play / pause (space)" aria-label="Play">
+                            <svg viewBox="0 0 24 24" fill="currentColor" id="tour-o-play-icon">
+                                <path d="M8 5.2c0-.9 1-1.4 1.7-.9l9 6.8c.6.4.6 1.4 0 1.8l-9 6.8c-.7.5-1.7 0-1.7-.9z"/>
+                            </svg>
+                        </button>
+                        <button class="tour-tbtn" id="tour-o-next" title="Next stop (→)" aria-label="Next stop">
+                            <svg viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M15 5.5a1 1 0 0 1 2 0v13a1 1 0 0 1-2 0z"/>
+                                <path d="M5.6 5.9v12.2c0 .8.9 1.3 1.6.9l8.5-6.1a1.1 1.1 0 0 0 0-1.8L7.2 5c-.7-.4-1.6 0-1.6.9z"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="tour-controls-side right">
+                        <span class="tour-play-state" id="tour-o-play-label">Play</span>
+                        <button class="tour-exit" id="tour-o-exit">Exit</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -5626,8 +5977,8 @@
                     <pre id="tjson-pre"></pre>
                 </div>
                 <div class="tjson-foot">
-                    <button class="tour-btn" id="tjson-copy">Copy</button>
-                    <button class="tour-btn" id="tjson-download">Download .json</button>
+                    <button class="tjson-btn" id="tjson-copy">Copy</button>
+                    <button class="tjson-btn" id="tjson-download">Download .json</button>
                     <span class="spacer"></span>
                     <span class="sub" id="tjson-meta" style="font-size:11px;color:#a89b8d"></span>
                 </div>
@@ -5740,7 +6091,6 @@
                             <rect x="14" y="14" width="7" height="7" rx="1.5" />
                         </svg>
                     </button>
-                    <span class="meta" id="sidebar-meta">0 / 0</span>
                     <button id="sidebar-collapse" title="Collapse panel">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                             stroke-linecap="round" stroke-linejoin="round">
@@ -5753,9 +6103,9 @@
             <div class="sidebar-resize-handle" id="sidebar-resize" title="Drag to resize"></div>
 
             <div class="panel-tabs" role="tablist">
-                <button class="panel-tab active" data-tab="catalog" type="button">Catalog</button>
+                <button class="panel-tab" data-tab="graph" type="button">Summary</button>
                 <button class="panel-tab" data-tab="discover" type="button">Discover</button>
-                <button class="panel-tab" data-tab="graph" type="button">Graph</button>
+                <button class="panel-tab active" data-tab="catalog" type="button">Catalog</button>
             </div>
 
             <div class="sidebar-body">
@@ -5789,8 +6139,41 @@
                     </div>
                 </div>
 
-                <!-- ─── Discover tab: chat + semantic / hybrid / keyword search ─── -->
+                <!-- ─── Discover tab ───────────────────────────────
+                     Three modes that answer questions about the graph, one
+                     per sub-tab so each gets the whole pane instead of
+                     competing for the same scroll. -->
                 <div class="tab-pane" data-tab="discover" id="pane-discover">
+
+                <div class="subtabs" id="discover-subtabs" role="tablist">
+                    <div class="subtab-glider" id="discover-glider" aria-hidden="true"></div>
+                    <button class="subtab active" data-sub="search" type="button" role="tab">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="11" cy="11" r="7" /><path d="M20 20l-3.6-3.6" />
+                        </svg>
+                        <span>Search</span>
+                    </button>
+                    <button class="subtab" data-sub="tour" type="button" role="tab">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="5.5" cy="6" r="2.2" /><circle cx="18.5" cy="12" r="2.2" />
+                            <circle cx="8" cy="18.5" r="2.2" />
+                            <path d="M7.6 6.9 16.4 11M16.7 13.7 9.8 17.4" />
+                        </svg>
+                        <span>Tour</span>
+                    </button>
+                    <button class="subtab" data-sub="chat" type="button" role="tab">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M20 15a2 2 0 0 1-2 2H8l-4 3.5V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2z" />
+                        </svg>
+                        <span>Chat</span>
+                    </button>
+                </div>
+
+                <!-- ── Tour sub-pane ── -->
+                <div class="subpane" data-sub="tour">
 
                 <!-- Guided Tour (RAG + LLM narrated camera walkthrough) - Featured -->
                 <div class="section featured cap-hidden" data-section="tour" id="section-tour">
@@ -5807,13 +6190,56 @@
                             placeholder="e.g. how does authentication work?"></textarea>
                         <div class="chat-controls">
                             <span class="chat-num-label" title="Maximum stops on the tour">stops</span>
-                            <input type="number" id="tour-stops" class="chat-num" value="6" min="2" max="20">
-                            <button id="tour-start" type="button">Start tour</button>
+                            <input type="number" id="tour-stops" class="chat-num" value="8" min="2" max="40">
+                            <button id="tour-start" type="button">
+                                <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                    <path d="M8 5.2c0-.9 1-1.4 1.7-.9l9 6.8c.6.4.6 1.4 0 1.8l-9 6.8c-.7.5-1.7 0-1.7-.9z"/>
+                                </svg>
+                                Start tour
+                            </button>
                         </div>
                         <div class="tour-examples" id="tour-examples"></div>
                         <div id="tour-launch-status"></div>
                     </div>
                 </div>
+
+                <!-- Saved tours: replay or inspect without re-planning. -->
+                <div class="section" id="tour-history" hidden>
+                    <div class="section-header">
+                        <span class="label">Recent Tours</span>
+                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="6 9 12 15 18 9" />
+                        </svg>
+                    </div>
+                    <div class="section-body">
+                        <div class="thist-list" id="tour-history-list"></div>
+                        <div class="thist-foot">
+                            <span class="thist-hint">Click a tour to replay it — no model call.</span>
+                            <button class="thist-clear" id="tour-history-clear" type="button">Clear all</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Shown in the Tour sub-tab when retrieval isn't available -->
+                <div class="section cap-disabled-section cap-hidden" id="section-tour-disabled">
+                    <div class="section-header">
+                        <span class="label">Guided Tour</span>
+                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="6 9 12 15 18 9" />
+                        </svg>
+                    </div>
+                    <div class="section-body">
+                        <div class="cap-banner warn" id="tour-disabled-msg">
+                            Guided tours need DB-backed retrieval. Index this project and restart
+                            <code>ug serve</code> with an embedder to enable them.
+                        </div>
+                    </div>
+                </div>
+
+                </div><!-- /tour sub-pane -->
+
+                <!-- ── Chat sub-pane ── -->
+                <div class="subpane" data-sub="chat">
 
                 <!-- Chat (RAG + LLM) - Featured -->
                 <div class="section featured cap-hidden" data-section="chat" id="section-chat">
@@ -5859,6 +6285,29 @@
                         <div id="chat-status"></div>
                     </div>
                 </div>
+
+                <!-- Banner shown when chat endpoint isn't configured -->
+                <div class="section cap-disabled-section cap-hidden" data-section="chat-disabled"
+                    id="section-chat-disabled">
+                    <div class="section-header">
+                        <span class="label">Chat</span>
+                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="6 9 12 15 18 9" />
+                        </svg>
+                    </div>
+                    <div class="section-body">
+                        <div class="cap-banner warn" id="chat-disabled-msg">
+                            Chat unavailable. Restart <code>ug serve</code> with
+                            <code>--chat-model</code> (and optionally <code>--base-url</code>/<code>--api-key</code>)
+                            to enable RAG-grounded chat.
+                        </div>
+                    </div>
+                </div>
+
+                </div><!-- /chat sub-pane -->
+
+                <!-- ── Search sub-pane ── -->
+                <div class="subpane active" data-sub="search">
 
                 <!-- Semantic / Hybrid search (DB-backed) - Featured -->
                 <div class="section featured cap-hidden" data-section="semantic" id="section-semantic">
@@ -5923,24 +6372,6 @@
                     </div>
                 </div>
 
-                <!-- Banner shown when chat endpoint isn't configured -->
-                <div class="section cap-disabled-section cap-hidden" data-section="chat-disabled"
-                    id="section-chat-disabled">
-                    <div class="section-header">
-                        <span class="label">Chat</span>
-                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <polyline points="6 9 12 15 18 9" />
-                        </svg>
-                    </div>
-                    <div class="section-body">
-                        <div class="cap-banner warn" id="chat-disabled-msg">
-                            Chat unavailable. Restart <code>ug serve</code> with
-                            <code>--chat-model</code> (and optionally <code>--base-url</code>/<code>--api-key</code>)
-                            to enable RAG-grounded chat.
-                        </div>
-                    </div>
-                </div>
-
                 <!-- Banner shown when capabilities probe says DB isn't queryable -->
                 <div class="section cap-disabled-section cap-hidden" data-section="cap-disabled"
                     id="section-cap-disabled">
@@ -5956,6 +6387,8 @@
                         </div>
                     </div>
                 </div>
+
+                </div><!-- /search sub-pane -->
 
                 </div><!-- /#pane-discover -->
 
@@ -6166,6 +6599,19 @@
             _labelDist: 340,        // world distance beyond which labels auto-hide
             showBoundary: true,     // dashed boundary box + corners + face labels
             autoSpin: false         // camera auto-rotation
+        };
+
+        // Canvas palette. Everything that has to sit *against* the 3D
+        // background lives here, so the scene's ground tone and the colours
+        // that recede into it can never drift apart.
+        const CANVAS = {
+            bg: '#0d0d10',
+            fog: 0x0d0d10,
+            label: 'rgba(214,219,230,0.92)',
+            labelTour: 'rgba(253,186,116,0.98)',
+            linkRecede: '#26262e',    // focus mode: outside the neighbourhood
+            linkFar: '#1b1b21',       // tour: off the route entirely
+            linkRouteDim: '#9c5f2c',  // tour: on the route, away from this stop
         };
 
         // The 3d-force-graph instance and its scene-decor handles.
@@ -7041,7 +7487,6 @@
             state.nodeById = new Map(state.graph.nodes.map(n => [n.id, n]));
             document.body.classList.toggle('perf-mode', state.perfMode);
 
-            document.getElementById('sidebar-meta').textContent = `${nodeCount}N · ${edgeCount}E`;
             document.getElementById('graph-title').textContent =
                 `${nodeCount} nodes, ${edgeCount} edges` +
                 (state.perfMode ? ' · perf mode' : '');
@@ -7068,6 +7513,7 @@
             wireChatPanel();
             wireTourPanel();
             wireFindPathBtn();
+            wireDiscoverSubtabs();
             wirePanelTabs();
             wireCatalog();
             probeCapabilities();
@@ -7119,6 +7565,7 @@
             const semSection = document.getElementById('section-semantic');
             const chatSection = document.getElementById('section-chat');
             const tourSection = document.getElementById('section-tour');
+            const tourDisabled = document.getElementById('section-tour-disabled');
             const chatDisabled = document.getElementById('section-chat-disabled');
             const disabledSection = document.getElementById('section-cap-disabled');
             const disabledMsg = document.getElementById('cap-disabled-msg');
@@ -7159,8 +7606,17 @@
                 // A tour needs retrieval (DB + embedder); LLM narration is
                 // optional — the server falls back to a ranked itinerary — so
                 // gate the launcher on search readiness, not chat.
-                if (caps.search_ready) showSection(tourSection);
-                else hideSection(tourSection);
+                if (caps.search_ready) {
+                    showSection(tourSection);
+                    hideSection(tourDisabled);
+                } else {
+                    hideSection(tourSection);
+                    showSection(tourDisabled);
+                }
+                markSubtabAvailability(caps);
+                // History survives page loads, and the key is per project, so
+                // it can only be read once capabilities name the project.
+                renderTourHistory();
 
                 if (caps.chat_ready) {
                     showSection(chatSection);
@@ -7187,6 +7643,8 @@
                 hideSection(semSection);
                 hideSection(chatSection);
                 hideSection(tourSection);
+                showSection(tourDisabled);
+                markSubtabAvailability(state.capabilities);
                 showSection(disabledSection);
                 disabledMsg.textContent = 'Capabilities probe failed — server unreachable?';
                 if (dot) {
@@ -7195,6 +7653,21 @@
                 }
                 console.warn('capabilities probe failed:', err);
             }
+        }
+
+        // Dot a Discover sub-tab whose backend isn't available. The tab stays
+        // clickable on purpose — its pane explains what's missing, which beats
+        // a mode that silently vanishes.
+        function markSubtabAvailability(caps) {
+            const set = (sub, ok) => {
+                const el = document.querySelector(`.subtab[data-sub="${sub}"]`);
+                if (!el) return;
+                el.classList.toggle('unavailable', !ok);
+                el.title = ok ? '' : 'Not available with the current server setup';
+            };
+            set('search', !!(caps && caps.search_ready));
+            set('tour', !!(caps && caps.search_ready));
+            set('chat', !!(caps && caps.chat_ready));
         }
 
         // ─── Settings modal (view + persist ~/.ug/config.json) ─────
@@ -8041,11 +8514,13 @@
             speed: 1,
             showCode: false,       // sticky across stops
             showPanel: false,      // user asked for the full details panel
+            isolate: false,        // solo mode: hide everything off the route
             routeIds: new Set(),   // every node the tour visits
             nearIds: new Set(),    // 1-hop neighbours of the current stop
             routeEdges: new Set(), // "a b" keys for route edges (both directions)
             restore: null,         // panel/spin state to put back on exit
             jsonTab: 'plan',
+            jsonData: null,        // archived tour being inspected, if any
         };
 
         const TOUR_TYPE_MS = 16;      // per-character reveal cadence at 1×
@@ -8270,7 +8745,196 @@
             }
         }
 
+        // ── History ───────────────────────────────────────────
+        //
+        // The last few tours are kept verbatim (the whole /api/tour response,
+        // plan JSON and all) so a tour can be replayed or inspected later
+        // without paying for the model again. Scoped per project, since node
+        // ids only mean something inside one graph.
+
+        const TOUR_HISTORY_MAX = 5;
+
+        function tourHistoryKey() {
+            const p = state.capabilities && state.capabilities.project;
+            return 'ug-tour-history:' + ((p && p.name) || 'default');
+        }
+
+        function loadTourHistory() {
+            try {
+                const raw = localStorage.getItem(tourHistoryKey());
+                const list = raw ? JSON.parse(raw) : [];
+                return Array.isArray(list) ? list : [];
+            } catch (e) {
+                return [];
+            }
+        }
+
+        function saveTourHistory(list) {
+            // A tour with snippets and prompts is chunky; if the quota bites,
+            // shed the heaviest parts before dropping entries outright.
+            const attempts = [
+                list,
+                list.map(e => ({ ...e, tour: stripTourDebugText(e.tour) })),
+                list.slice(0, 3).map(e => ({ ...e, tour: stripTourDebugText(e.tour) })),
+                list.slice(0, 1).map(e => ({ ...e, tour: stripTourDebugText(e.tour) })),
+            ];
+            for (const attempt of attempts) {
+                try {
+                    localStorage.setItem(tourHistoryKey(), JSON.stringify(attempt));
+                    return attempt;
+                } catch (e) { /* quota — try a lighter payload */ }
+            }
+            try { localStorage.removeItem(tourHistoryKey()); } catch (e) { /* private mode */ }
+            return [];
+        }
+
+        // Drop the bulky prompt transcript but keep the plan the user wants
+        // to look at.
+        function stripTourDebugText(tour) {
+            if (!tour || !tour.debug) return tour;
+            const { system_prompt, user_prompt, raw_response, repair_response, ...rest } = tour.debug;
+            return { ...tour, debug: { ...rest, trimmed: true } };
+        }
+
+        function recordTourInHistory(tour, query, maxStops) {
+            const entry = {
+                id: 'tour-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7),
+                query,
+                title: tour.title || query,
+                stops: (tour.stops || []).length,
+                fallback: !!tour.fallback,
+                model: tour.chat_model || null,
+                max_stops: maxStops,
+                ts: Date.now(),
+                tour,
+            };
+            // Same question again replaces the older run rather than stacking.
+            const rest = loadTourHistory().filter(e => e.query !== query);
+            const saved = saveTourHistory([entry, ...rest].slice(0, TOUR_HISTORY_MAX));
+            renderTourHistory(saved);
+        }
+
+        function removeTourFromHistory(id) {
+            renderTourHistory(saveTourHistory(loadTourHistory().filter(e => e.id !== id)));
+        }
+
+        function clearTourHistory() {
+            renderTourHistory(saveTourHistory([]));
+        }
+
+        function relativeTime(ts) {
+            const secs = Math.max(0, (Date.now() - ts) / 1000);
+            if (secs < 60) return 'just now';
+            const mins = Math.round(secs / 60);
+            if (mins < 60) return `${mins}m ago`;
+            const hours = Math.round(mins / 60);
+            if (hours < 24) return `${hours}h ago`;
+            return `${Math.round(hours / 24)}d ago`;
+        }
+
+        function renderTourHistory(list) {
+            const box = tourEl('tour-history-list');
+            const wrap = tourEl('tour-history');
+            if (!box || !wrap) return;
+            const items = list || loadTourHistory();
+            wrap.hidden = items.length === 0;
+            box.innerHTML = '';
+            items.forEach(entry => {
+                const row = document.createElement('div');
+                row.className = 'thist-row';
+
+                const main = document.createElement('button');
+                main.type = 'button';
+                main.className = 'thist-main';
+                main.title = `Replay: ${entry.query}`;
+                main.innerHTML =
+                    `<span class="thist-title"></span>
+                     <span class="thist-meta">
+                        <span class="thist-stops">${entry.stops} stop${entry.stops === 1 ? '' : 's'}</span>
+                        <span class="thist-dot">·</span>
+                        <span>${escapeHtml(relativeTime(entry.ts))}</span>
+                        ${entry.fallback ? '<span class="thist-dot">·</span><span class="thist-tag">ranked</span>' : ''}
+                     </span>`;
+                main.querySelector('.thist-title').textContent = entry.title || entry.query;
+                main.addEventListener('click', () => replayTourFromHistory(entry.id));
+
+                const jsonBtn = document.createElement('button');
+                jsonBtn.type = 'button';
+                jsonBtn.className = 'thist-icon';
+                jsonBtn.title = 'View this tour\'s JSON';
+                jsonBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+                    + 'stroke-linecap="round" stroke-linejoin="round">'
+                    + '<path d="M9 4H8a3 3 0 0 0-3 3v2a3 3 0 0 1-3 3 3 3 0 0 1 3 3v2a3 3 0 0 0 3 3h1"/>'
+                    + '<path d="M15 4h1a3 3 0 0 1 3 3v2a3 3 0 0 0 3 3 3 3 0 0 0-3 3v2a3 3 0 0 1-3 3h-1"/></svg>';
+                jsonBtn.addEventListener('click', () => {
+                    const e2 = loadTourHistory().find(x => x.id === entry.id);
+                    // Shown read-only: opening an archive never disturbs a
+                    // tour that happens to be playing.
+                    if (e2) openTourJson(e2.tour);
+                });
+
+                const del = document.createElement('button');
+                del.type = 'button';
+                del.className = 'thist-icon danger';
+                del.title = 'Remove from history';
+                del.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+                    + 'stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>';
+                del.addEventListener('click', () => removeTourFromHistory(entry.id));
+
+                row.append(main, jsonBtn, del);
+                box.appendChild(row);
+            });
+        }
+
+        // Re-enter a saved tour without another round-trip to the model.
+        function replayTourFromHistory(id) {
+            const entry = loadTourHistory().find(e => e.id === id);
+            if (!entry || !entry.tour || !entry.tour.stops || !entry.tour.stops.length) return;
+            const input = tourEl('tour-input');
+            if (input) input.value = entry.query;
+            const statusEl = tourEl('tour-launch-status');
+            if (statusEl) {
+                statusEl.classList.remove('error');
+                statusEl.textContent = `Replaying saved tour · ${entry.stops} stop${entry.stops === 1 ? '' : 's'}`;
+            }
+            beginTourSession();
+            tourEl('tour-o-title').textContent = entry.title || entry.query;
+            enterTourMode(entry.tour);
+        }
+
         // ── Launch ────────────────────────────────────────────
+
+        // Shared setup for a tour about to start (fresh or replayed): reset
+        // per-tour state, clear the deck, and show the card.
+        function beginTourSession() {
+            // Starting a second tour over a running one: stop the old
+            // typewriter/dwell before the new stops take over the card.
+            clearTourTimers();
+            tourState.playing = false;
+            tourState.data = null;
+            tourState.active = true;
+            tourState.index = -1;
+            tourState.isolate = false;
+            tourState.routeIds = new Set();
+            tourState.nearIds = new Set();
+            tourState.routeEdges = new Set();
+            const soloBtn = tourEl('tour-o-solo');
+            if (soloBtn) soloBtn.setAttribute('aria-pressed', 'false');
+            // Tools that need a planned tour stay out of the way until one exists.
+            ['tour-o-solo', 'tour-o-json'].forEach(id => {
+                const el = tourEl(id);
+                if (el) el.style.display = 'none';
+            });
+            enterImmersive();
+            restoreTourPosition();
+            tourEl('tour-overlay').classList.add('visible');
+            tourEl('tour-o-counter').textContent = '';
+            tourEl('tour-o-progress').innerHTML = '';
+            tourEl('tour-o-stage').style.display = 'none';
+            tourEl('tour-o-warnings').hidden = true;
+            tourEl('tour-o-play-label').textContent = 'Planning';
+            setTourControlsEnabled(false);
+        }
 
         async function startTour(query, maxStops) {
             query = (query || '').trim();
@@ -8282,22 +8946,8 @@
             if (startBtn) startBtn.disabled = true;
 
             // Show the overlay immediately in a loading state so the wait feels alive.
-            tourState.data = null;
-            tourState.active = true;
-            tourState.index = -1;
-            tourState.routeIds = new Set();
-            tourState.nearIds = new Set();
-            tourState.routeEdges = new Set();
-            enterImmersive();
-            const overlay = tourEl('tour-overlay');
-            restoreTourPosition();
-            overlay.classList.add('visible');
+            beginTourSession();
             tourEl('tour-o-title').textContent = query;
-            tourEl('tour-o-counter').textContent = '';
-            tourEl('tour-o-progress').innerHTML = '';
-            tourEl('tour-o-stage').style.display = 'none';
-            tourEl('tour-o-warnings').hidden = true;
-            tourEl('tour-o-json').style.display = 'none';
             const note = tourEl('tour-o-note');
             note.hidden = false;
             note.classList.remove('error');
@@ -8323,6 +8973,7 @@
                 const kind = tour.fallback ? 'ranked itinerary' : 'guided tour';
                 statusEl.textContent =
                     `${kind} ready · ${tour.stops.length} stop${tour.stops.length === 1 ? '' : 's'}`;
+                recordTourInHistory(tour, query, maxStops);
                 enterTourMode(tour);
             } catch (err) {
                 note.hidden = false;
@@ -8342,8 +8993,12 @@
             tourEl('tour-o-note').hidden = true;
             tourEl('tour-o-stage').style.display = '';
             tourEl('tour-o-title').textContent = tour.title || tour.query || 'Guided tour';
-            tourEl('tour-o-json').style.display = '';
+            ['tour-o-solo', 'tour-o-json'].forEach(id => {
+                const el = tourEl(id);
+                if (el) el.style.display = '';
+            });
 
+            setTourControlsEnabled(true);
             buildTourRoute(tour);
             renderTourWarnings(tour);
 
@@ -8571,7 +9226,7 @@
 
         // Frame every stop on the route, so the ending shot is the shape of
         // the answer rather than one more close-up.
-        function frameTourRoute() {
+        function frameTourRoute(ms) {
             if (!Graph || !tourState.data) return;
             const pts = [];
             tourState.routeIds.forEach(id => {
@@ -8583,11 +9238,11 @@
             const centre = vScale(c, 1 / pts.length);
             let radius = 0;
             pts.forEach(p => { radius = Math.max(radius, vLen(vSub(p, centre))); });
-            const d = Math.max(320, Math.min(1600, radius * 2.4 + 260)) / Math.sqrt(3);
+            const d = Math.max(300, Math.min(1500, radius * 2 + 200)) / Math.sqrt(3);
             Graph.cameraPosition(
                 { x: centre.x + d, y: centre.y + d * 0.8, z: centre.z + d },
                 centre,
-                1400);
+                ms || 1400);
         }
 
         function nextStop() {
@@ -8653,23 +9308,57 @@
             tourState.showPanel = !info.classList.contains('visible');
             info.classList.toggle('visible', tourState.showPanel);
             const btn = tourEl('tour-o-details');
-            if (btn) btn.textContent = tourState.showPanel ? 'Hide details' : 'Details';
+            if (btn) {
+                btn.setAttribute('aria-pressed', String(tourState.showPanel));
+                btn.title = tourState.showPanel
+                    ? 'Hide the details panel (D)'
+                    : 'Open the full details panel for this stop (D)';
+            }
         }
 
         function updatePlayButton() {
             const icon = tourEl('tour-o-play-icon');
             const label = tourEl('tour-o-play-label');
-            if (!icon || !label) return;
+            const btn = tourEl('tour-o-play');
+            if (!icon || !label || !btn) return;
             const atEnd = tourState.data && tourState.index >= tourState.data.stops.length - 1 && !tourState.playing;
+            let mode, glyph, text;
             if (tourState.playing) {
-                icon.innerHTML = '<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>';   // pause
-                label.textContent = 'Pause';
+                mode = 'is-pause';
+                glyph = '<rect x="7" y="5" width="3.6" height="14" rx="1.3"/>'
+                    + '<rect x="13.4" y="5" width="3.6" height="14" rx="1.3"/>';
+                text = 'Playing';
             } else if (atEnd) {
-                icon.innerHTML = '<path d="M12 5V1L7 6l5 5V7a5 5 0 1 1-5 5H5a7 7 0 1 0 7-7z"/>'; // replay-ish
-                label.textContent = 'Replay';
+                mode = 'is-replay';
+                glyph = '<path d="M12 5a7 7 0 1 1-6.8 8.7 1 1 0 0 1 1.94-.47A5 5 0 1 0 12 7v2.2c0 .5-.6.75-.95.4L7.6 6.1a.55.55 0 0 1 0-.78l3.45-3.5c.35-.35.95-.1.95.4z"/>';
+                text = 'Replay';
             } else {
-                icon.innerHTML = '<path d="M6 4l14 8-14 8z"/>';             // play
-                label.textContent = 'Play';
+                mode = 'is-play';
+                glyph = '<path d="M8 5.2c0-.9 1-1.4 1.7-.9l9 6.8c.6.4.6 1.4 0 1.8l-9 6.8c-.7.5-1.7 0-1.7-.9z"/>';
+                text = 'Paused';
+            }
+            icon.innerHTML = glyph;
+            btn.classList.remove('is-play', 'is-pause', 'is-replay');
+            btn.classList.add(mode);
+            btn.setAttribute('aria-label', tourState.playing ? 'Pause' : (atEnd ? 'Replay tour' : 'Play'));
+            label.textContent = text;
+        }
+
+        // Solo mode: hide everything that isn't a stop on this tour, so the
+        // route stands alone as a diagram of the answer.
+        function toggleTourSolo() {
+            if (!tourState.data) return;
+            tourState.isolate = !tourState.isolate;
+            const btn = tourEl('tour-o-solo');
+            if (btn) btn.setAttribute('aria-pressed', String(tourState.isolate));
+            bumpGraphStyles();
+            // Re-frame: the whole route when soloing, the current stop when
+            // the surrounding graph comes back.
+            if (tourState.isolate) {
+                frameTourRoute(900);
+            } else {
+                const stop = tourCurrentStop();
+                if (stop) flyToTourStop(stop, { ms: 900 });
             }
         }
 
@@ -8679,6 +9368,23 @@
             if (prev) prev.disabled = tourState.index <= 0;
             if (next) next.disabled = !tourState.data || tourState.index >= tourState.data.stops.length - 1;
             updatePlayButton();
+        }
+
+        // Nothing on the deck means anything until a tour exists, so while
+        // the plan is still being charted every control is inert — except
+        // Exit and the close button, which must always let the user out.
+        const TOUR_CONTROL_IDS = [
+            'tour-o-prev', 'tour-o-next', 'tour-o-play',
+            'tour-o-speed', 'tour-o-details', 'tour-o-solo', 'tour-o-json',
+        ];
+
+        function setTourControlsEnabled(on) {
+            TOUR_CONTROL_IDS.forEach(id => {
+                const el = tourEl(id);
+                if (el) el.disabled = !on;
+            });
+            const card = document.querySelector('.tour-card');
+            if (card) card.classList.toggle('planning', !on);
         }
 
         function exitTour() {
@@ -8692,14 +9398,20 @@
             tourState.nearIds = new Set();
             tourState.routeEdges = new Set();
             tourState.showPanel = false;
+            tourState.isolate = false;
             const detailsBtn = tourEl('tour-o-details');
-            if (detailsBtn) detailsBtn.textContent = 'Details';
+            if (detailsBtn) detailsBtn.setAttribute('aria-pressed', 'false');
+            const soloBtn = tourEl('tour-o-solo');
+            if (soloBtn) soloBtn.setAttribute('aria-pressed', 'false');
             const overlay = tourEl('tour-overlay');
             if (overlay) overlay.classList.remove('visible');
             exitImmersive();
-            // Drop the focus dimming the tour left behind.
+            // Drop the focus dimming the tour left behind. The last stop stays
+            // selected on purpose — it's usually where the user wants to carry
+            // on exploring — so the breadcrumb is resynced, not cleared.
             exitFocus();
             bumpGraphStyles();
+            updateNavbar();
         }
 
         // ── Plan JSON viewer ──────────────────────────────────
@@ -8708,8 +9420,14 @@
         // the stops it bound to real nodes, the candidate pack it chose from,
         // the prompts it was given, and its verbatim reply.
 
+        // What the viewer is showing: the running tour, or an archived one
+        // opened straight from the history list.
+        function tourJsonSource() {
+            return tourState.jsonData || tourState.data;
+        }
+
         function tourJsonTabs() {
-            const t = tourState.data;
+            const t = tourJsonSource();
             if (!t) return [];
             const d = t.debug || {};
             const tabs = [];
@@ -8723,7 +9441,7 @@
         }
 
         function tourJsonContent(tab) {
-            const t = tourState.data;
+            const t = tourJsonSource();
             if (!t) return { note: '', text: '' };
             const d = t.debug || {};
             const pretty = (v) => JSON.stringify(v, null, 2);
@@ -8791,7 +9509,7 @@
             tourEl('tjson-note').textContent = note;
             tourEl('tjson-pre').textContent = text;
 
-            const t = tourState.data || {};
+            const t = tourJsonSource() || {};
             const bits = [];
             if (t.chat_model) bits.push(t.chat_model);
             if (t.fallback) bits.push('ranked fallback (no guide)');
@@ -8805,8 +9523,11 @@
                 : '';
         }
 
-        function openTourJson() {
-            if (!tourState.data) return;
+        // `tour` is supplied when inspecting an archived run from the history
+        // list; without it the viewer shows whatever is playing.
+        function openTourJson(tour) {
+            tourState.jsonData = tour && tour.stops ? tour : null;
+            if (!tourJsonSource()) return;
             renderTourJson();
             tourEl('tour-json').classList.add('visible');
             document.body.classList.add('tour-json-open');
@@ -8817,6 +9538,7 @@
             const el = tourEl('tour-json');
             if (el) el.classList.remove('visible');
             document.body.classList.remove('tour-json-open');
+            tourState.jsonData = null;
         }
 
         function tourJsonOpen() {
@@ -8929,7 +9651,7 @@
             const examples = tourEl('tour-examples');
 
             const launch = () => {
-                const maxStops = clampInt(stopsInput ? stopsInput.value : 6, 2, 20, 6);
+                const maxStops = clampInt(stopsInput ? stopsInput.value : 8, 2, 40, 8);
                 startTour(input ? input.value : '', maxStops);
             };
             if (startBtn) startBtn.addEventListener('click', launch);
@@ -8961,8 +9683,9 @@
             bind('tour-o-close', exitTour);
             bind('tour-o-speed', cycleTourSpeed);
             bind('tour-o-details', toggleTourDetails);
+            bind('tour-o-solo', toggleTourSolo);
             bind('tour-o-code-toggle', toggleTourCode);
-            bind('tour-o-json', openTourJson);
+            bind('tour-o-json', () => openTourJson());
             bind('tjson-close', closeTourJson);
             bind('tjson-copy', async () => {
                 const btn = tourEl('tjson-copy');
@@ -8990,18 +9713,29 @@
                 });
             }
 
+            const clearBtn = tourEl('tour-history-clear');
+            if (clearBtn) clearBtn.addEventListener('click', clearTourHistory);
+
             wireTourDrag();
             updateSpeedButton();
+            renderTourHistory();
 
             // Keyboard control while a tour is on screen (and not typing in a field).
             document.addEventListener('keydown', (e) => {
+                // The JSON viewer can be open over an archived tour with no
+                // tour playing, so Escape has to work outside tour mode too.
+                if (e.key === 'Escape' && tourJsonOpen()) {
+                    e.preventDefault();
+                    closeTourJson();
+                    return;
+                }
                 if (!tourState.active) return;
                 const tag = (document.activeElement && document.activeElement.tagName) || '';
                 if (tag === 'INPUT' || tag === 'TEXTAREA') return;
                 if (e.metaKey || e.ctrlKey || e.altKey) return;
                 if (e.key === 'Escape') {
                     e.preventDefault();
-                    if (tourJsonOpen()) closeTourJson(); else exitTour();
+                    exitTour();
                 } else if (e.key === 'ArrowRight') { e.preventDefault(); pauseTour(); nextStop(); }
                 else if (e.key === 'ArrowLeft') { e.preventDefault(); pauseTour(); prevStop(); }
                 else if (e.key === ' ') {
@@ -9016,6 +9750,7 @@
                 else if (e.key === 'd' || e.key === 'D') { e.preventDefault(); toggleTourDetails(); }
                 else if (e.key === 's' || e.key === 'S') { e.preventDefault(); cycleTourSpeed(); }
                 else if (e.key === 'c' || e.key === 'C') { e.preventDefault(); toggleTourCode(); }
+                else if (e.key === 'o' || e.key === 'O') { e.preventDefault(); toggleTourSolo(); }
             });
         }
 
@@ -9656,17 +10391,34 @@
                 if (isTourRouteEdge(e)) return '#f97316';
                 const cur = tourCurrentStop();
                 if (cur && (sId === cur.node_id || tId === cur.node_id)) return config.getRelColor(e.rel);
-                if (tourState.routeIds.has(sId) && tourState.routeIds.has(tId)) return '#f8cda2';
-                return '#f2efe9';
+                if (tourState.routeIds.has(sId) && tourState.routeIds.has(tId)) return CANVAS.linkRouteDim;
+                return CANVAS.linkFar;
             }
             // In focus mode, links not wholly inside the focused neighbourhood
-            // recede to a near-background grey so the local structure stands out.
+            // recede to a near-background tone so the local structure stands out.
             if (state.focusNode) {
                 const sId = e.source.id || e.source;
                 const tId = e.target.id || e.target;
-                if (!(state.focusSet.has(sId) && state.focusSet.has(tId))) return '#e9e5de';
+                if (!(state.focusSet.has(sId) && state.focusSet.has(tId))) return CANVAS.linkRecede;
             }
             return config.getRelColor(e.rel);
+        }
+
+        // Visibility accessors handed to the graph. Filters own the base
+        // answer; a tour in "solo" mode narrows it further to the route,
+        // which turns the walk into a standalone diagram of the answer.
+        function nodeVisibleFor(n) {
+            if (tourState.active && tourState.isolate && !tourState.routeIds.has(n.id)) return false;
+            return !(state.nodeHidden && state.nodeHidden(n));
+        }
+
+        function linkVisibleFor(e) {
+            if (tourState.active && tourState.isolate) {
+                const sId = e.source.id || e.source;
+                const tId = e.target.id || e.target;
+                if (!(tourState.routeIds.has(sId) && tourState.routeIds.has(tId))) return false;
+            }
+            return !(state.linkHidden && state.linkHidden(e));
         }
 
         // Particles crawl along highlighted links, and along the tour route so
@@ -9726,28 +10478,28 @@
             return _ringTex;
         }
 
-        // A subtle scene backdrop: warm paper-white with soft out-of-focus
-        // washes of the two ink families (orange / steel blue), so the
-        // background reads like the blurred far layer of the reference art
-        // rather than a flat white void.
+        // Scene backdrop: a near-black ground with soft out-of-focus washes of
+        // the two ink families (orange / steel blue). Dark makes the saturated
+        // node colours glow instead of sitting flat, and gives the dimmed
+        // rings of a tour somewhere to disappear into.
         function backgroundTexture() {
             const c = document.createElement('canvas');
             c.width = c.height = 1024;
             const ctx = c.getContext('2d');
-            ctx.fillStyle = '#fdfcfa';
+            ctx.fillStyle = CANVAS.bg;
             ctx.fillRect(0, 0, 1024, 1024);
             const glow = (x, y, r, color) => {
                 const g = ctx.createRadialGradient(x, y, 0, x, y, r);
                 g.addColorStop(0, color);
-                g.addColorStop(1, 'rgba(253,252,250,0)');
+                g.addColorStop(1, 'rgba(13,13,16,0)');
                 ctx.fillStyle = g;
                 ctx.fillRect(0, 0, 1024, 1024);
             };
-            glow(790, 190, 620, 'rgba(233,100,28,0.10)');   // warm haze, top-right
-            glow(170, 780, 640, 'rgba(58,110,165,0.11)');   // blue haze, bottom-left
-            glow(320, 150, 460, 'rgba(91,143,201,0.07)');   // pale blue, top-left
-            glow(880, 880, 520, 'rgba(194,65,12,0.07)');    // rust haze, bottom-right
-            glow(512, 512, 700, 'rgba(255,255,255,0.5)');   // bright centre, keeps focus mid-frame
+            glow(790, 190, 620, 'rgba(233,100,28,0.16)');   // warm haze, top-right
+            glow(170, 780, 640, 'rgba(58,110,165,0.20)');   // blue haze, bottom-left
+            glow(320, 150, 460, 'rgba(91,143,201,0.12)');   // pale blue, top-left
+            glow(880, 880, 520, 'rgba(194,65,12,0.12)');    // rust haze, bottom-right
+            glow(512, 512, 760, 'rgba(120,130,150,0.10)');  // faint lift mid-frame
             const t = new THREE.CanvasTexture(c);
             t.colorSpace = THREE.SRGBColorSpace;
             t.minFilter = THREE.LinearFilter;
@@ -9810,7 +10562,7 @@
                 const label = truncateName(n.name);
                 if (label) {
                     const s = new SpriteText(label);
-                    s.color = 'rgba(71,85,105,0.95)';
+                    s.color = CANVAS.label;
                     s.fontFace = 'JetBrains Mono, monospace';
                     s.textHeight = 3.5;
                     s.material.depthWrite = false;
@@ -9871,17 +10623,19 @@
             });
 
             Graph = ForceGraph3D({ controlType: 'orbit' })(el)
-                .backgroundColor('#fdfcfa')
+                .backgroundColor(CANVAS.bg)
                 .graphData({ nodes: state.graph.nodes, links: state.graph.edges })
                 .nodeId('id')
-                .nodeVisibility(n => !(state.nodeHidden && state.nodeHidden(n)))
+                .nodeVisibility(nodeVisibleFor)
                 .nodeThreeObject(makeNodeObject)
                 .linkColor(linkColorFor)
-                .linkOpacity(0.5)
+                // Strands read stronger on a dark ground than they did on
+                // paper, so they're pulled back to keep nodes dominant.
+                .linkOpacity(0.38)
                 // Containment edges are the thick orange branches of the
                 // reference art; everything else stays a fine strand.
                 .linkWidth(e => e.rel === 'Contains' ? 1.1 : 0.45)
-                .linkVisibility(e => !(state.linkHidden && state.linkHidden(e)))
+                .linkVisibility(linkVisibleFor)
                 .linkDirectionalArrowLength(state.perfMode ? 0 : 3)
                 .linkDirectionalArrowRelPos(1)
                 .linkDirectionalParticles(linkParticlesFor)
@@ -9915,12 +10669,9 @@
             // reads as blurred ambient washes instead of a flat white void).
             Graph.scene().background = backgroundTexture();
 
-            // White fog doubles as depth-of-field: far nodes and strands melt
-            // into the paper exactly like the out-of-focus layers of the
-            // reference art. (The old dark theme used bloom for atmosphere;
-            // additive bloom washes out on a light background, so fog + tinted
-            // halos carry the effect instead.)
-            Graph.scene().fog = new THREE.FogExp2(0xfdfcfa, 0.001);
+            // Fog doubles as depth-of-field: far nodes and strands melt into
+            // the ground tone, so depth reads without needing bloom.
+            Graph.scene().fog = new THREE.FogExp2(CANVAS.fog, 0.001);
 
             // Animated selection marker: a spinning, pulsing ring that sits on the
             // currently selected node (added to the scene, repositioned each frame).
@@ -10168,7 +10919,9 @@
             const r = 18, pad = 8;
             ctx.beginPath();
             ctx.roundRect(pad, pad, W - 2 * pad, H - 2 * pad, r);
-            ctx.fillStyle = 'rgba(255,255,255,0.35)';
+            // Faint glass on the dark ground — a milky fill would read as a
+            // bright rectangle floating in the scene.
+            ctx.fillStyle = 'rgba(255,255,255,0.05)';
             ctx.fill();
             ctx.lineWidth = 4;
             ctx.strokeStyle = hex;
@@ -10483,7 +11236,7 @@
                 if (n.__nodeLabel) {
                     const wantTint = tier === 'current' || tier === 'stop';
                     if (wantTint !== !!n.__labelTinted) {
-                        n.__nodeLabel.color = wantTint ? 'rgba(194,65,12,0.98)' : 'rgba(71,85,105,0.95)';
+                        n.__nodeLabel.color = wantTint ? CANVAS.labelTour : CANVAS.label;
                         n.__labelTinted = wantTint;
                     }
                 }
@@ -10503,9 +11256,9 @@
                 // Non-selected cores return to normal scale.
                 if (!sel && n.__nodeCore) n.__nodeCore.scale.setScalar(1);
             });
-            Graph.nodeVisibility(Graph.nodeVisibility())
+            Graph.nodeVisibility(nodeVisibleFor)
                 .linkColor(linkColorFor)
-                .linkVisibility(Graph.linkVisibility())
+                .linkVisibility(linkVisibleFor)
                 .linkDirectionalParticles(linkParticlesFor);
         }
 
@@ -10981,6 +11734,41 @@
 
         // ─── Catalog (repo TOC) ────────────────────────────
 
+        // Discover's three modes (Search / Tour / Chat). The glider is a
+        // single pill that slides to the active tab, so switching reads as
+        // one movement rather than three separate highlights.
+        function wireDiscoverSubtabs() {
+            const bar = document.getElementById('discover-subtabs');
+            const glider = document.getElementById('discover-glider');
+            if (!bar || !glider) return;
+            const tabs = [...bar.querySelectorAll('.subtab')];
+            const panes = [...document.querySelectorAll('#pane-discover .subpane')];
+
+            const moveGlider = () => {
+                const active = bar.querySelector('.subtab.active');
+                if (!active) return;
+                glider.style.width = active.offsetWidth + 'px';
+                glider.style.transform = `translateX(${active.offsetLeft - 4}px)`;
+            };
+
+            const activate = (name) => {
+                tabs.forEach(t => t.classList.toggle('active', t.dataset.sub === name));
+                panes.forEach(p => p.classList.toggle('active', p.dataset.sub === name));
+                state.discoverSub = name;
+                moveGlider();
+                if (name === 'tour') renderTourHistory();
+            };
+
+            tabs.forEach(t => t.addEventListener('click', () => activate(t.dataset.sub)));
+            state.discoverSub = state.discoverSub || 'search';
+            activate(state.discoverSub);
+            // The bar is hidden until the Discover tab is shown, so its
+            // widths only settle once it's on screen.
+            window.addEventListener('resize', moveGlider);
+            state.syncDiscoverGlider = moveGlider;
+            state.showDiscoverSub = activate;
+        }
+
         // Switches between the three left-panel tabs (Catalog / Discover / Graph).
         function wirePanelTabs() {
             const tabs = document.querySelectorAll('.panel-tab');
@@ -10991,6 +11779,11 @@
                 state.activeTab = name;
                 // Catalog renders lazily — make sure it's populated when revealed.
                 if (name === 'catalog') renderCatalog();
+                // The sub-tab glider can only measure itself once visible.
+                if (name === 'discover' && state.syncDiscoverGlider) {
+                    requestAnimationFrame(state.syncDiscoverGlider);
+                    renderTourHistory();
+                }
             };
             tabs.forEach(tab => tab.addEventListener('click', () => activate(tab.dataset.tab)));
         }
