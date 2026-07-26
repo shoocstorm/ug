@@ -33,13 +33,14 @@ OverGraph keys nodes by `(type_id: u32, key: String)` and edges by `(from_id, to
 
 | Project field | OverGraph location |
 |---|---|
-| `id: String` (e.g. `"function:src/foo.ts:1:foo"`) | `key: String` |
+| `id: String` (e.g. `"function:src/foo.ts:foo"`, `+"#2"` on collision) | `key: String` |
 | `node_type: String` (`"Function"`, `"Class"`, …) | `type_id: u32` via `types_registry::node_type_to_id` |
 | `name`, `description`, `file`, `node_text` | `props["name" \| "description" \| "file" \| "node_text"]` (all `PropValue::String`) |
 | `start_line`, `end_line` | `props["start_line" \| "end_line"]` (`PropValue::UInt`) |
 | `last_update_at: i64` | `props["last_update_at"]` (`PropValue::Int`) — also reflected in `NodeRecord.updated_at` (auto) |
 | `vector: Vec<f32>` (dim per `<db>/ug-meta.json`, default 384) | `dense_vector: Option<DenseVector>` |
-| _(new)_ sparse keyword vector | `sparse_vector: Option<SparseVector>` — built at query time, see "Sparse keyword vectors" below |
+| `code`, `file_hash` | `props["code" \| "file_hash"]` (`PropValue::String`) — the node's captured source and the blake3 of the file it came from |
+| sparse keyword vector | `sparse_vector: Option<SparseVector>` — built at ingest from `node_text` + `code`, see "Sparse keyword vectors" below |
 
 ### Edges (OverGraph `EdgeRecord`)
 
@@ -57,7 +58,7 @@ OverGraph keys nodes by `(type_id: u32, key: String)` and edges by `(from_id, to
 ### Embedding Generation (Explicit)
 
 1. Load embedding endpoint config once.
-2. For each node, build `node_text = "{type}: {name} ({name_words}). {description}. Related: {list_of_related_names}"`.
+2. For each node, build `node_text = "{type}: {name} ({name_words}). {description}. Notes: {comments}. Related: {list_of_related_names}"`.
    - For Folder nodes the `{name}` slot uses the full path (from `folder:<path>`), not the basename.
    - `{description}` priority: `folder.summary` → `docstring` → synthesized folder synopsis → empty.
    - `{name_words}` is the identifier split into words by `text::split_identifier`
@@ -67,8 +68,23 @@ OverGraph keys nodes by `(type_id: u32, key: String)` and edges by `(from_id, to
      `Related:` — those names are context rather than primary signal, and
      splitting all 24 would roughly triple the text while diluting the node's
      own terms.
+   - `{description}` falls back, for code nodes with neither a docstring nor a
+     signature, to a synthesized synopsis (`text::synthesize_code_synopsis`):
+     the file path, plus `extends` / `implements`. `calls` is deliberately
+     excluded — `Related:` already names those neighbours, and call lists churn
+     on every body edit, which would re-embed undocumented functions each time
+     their body changed for signal already present.
+   - `{comments}` is prose lifted from the node's own source span
+     (`storage::comments`), filtered to drop commented-out code, tool
+     directives (`eslint-disable`, shebangs), and separator lines; repeated
+     licence/banner blocks are indexed once per graph rather than on every node
+     of a file. Only nodes with a real line range participate — a File node's
+     span is the whole file, so including it would hand it every comment and
+     starve the symbols underneath. This is the one addition that adds churn:
+     editing a comment now re-embeds that node.
    - Rationale: ~47% of nodes in a typical graph carry neither a docstring nor
-     a signature, so the identifier is their entire description.
+     a signature, so without these three the identifier is their entire
+     description.
 3. Batch-encode: `texts → Vec<Vec<f32>>` (dim configured on the embedder; auto-probed at ingest if not specified).
 4. Store vectors via `Db::upsert_nodes` → OverGraph `batch_upsert_nodes`.
 5. Incremental: steps 2–4 only run for nodes that actually changed — see
@@ -83,7 +99,26 @@ body-independent); ~10% of function bodies exceed the default model's
 512-token window and would be silently truncated by fastembed, which
 validates only the returned dimension; and body tokens dilute the semantic
 signal that docstrings and names carry. Code belongs in the sparse/keyword
-index and (planned) in a stored `code` column, not in the dense vector.
+index and in the stored `code` column, not in the dense vector.
+
+### Stored source
+
+Every node with a file gets its source span captured at ingest
+(`storage::source`), alongside the blake3 hash of the file it came from.
+Without it the store is a pointer index: it can say *where* code lives but
+never *what it says*, so every read goes back to the working tree — which means
+the row's description and the code an agent sees can disagree, and a line range
+that has merely drifted still resolves, silently returning the wrong lines.
+
+Retrieval prefers the stored copy (`query::snippet_for`, `agent_tools::
+get_code_with_stored`) and falls back to the filesystem for rows written before
+the column existed. `get_code` marks a slice `stale` when the file no longer
+matches `file_hash`, so out-of-date source is reported rather than served as
+current. Search and `get_code` therefore work with **no working tree present
+at all**.
+
+Cost measured on this repo: captured spans came to 1.04x the raw source, and
+the source is smaller than the dense vectors already in the same database.
 
 ### Incremental re-ingest
 
@@ -93,8 +128,15 @@ before anything is embedded, sorting each node into one of three buckets:
 | bucket | condition | embed? | write? |
 | --- | --- | --- | --- |
 | unchanged | stored row identical | no | no |
-| reusable | `node_text` unchanged, another column moved (usually line numbers) | no | yes, carrying the stored vector |
+| reusable | `node_text` unchanged, another column moved (line numbers, or the `code` span) | no | yes, carrying the stored vector |
 | to embed | new node, or `node_text` changed | yes | yes |
+
+After the upserts, `prune_to_graph` deletes stored nodes absent from the
+incoming graph — ingest is otherwise a pure upsert, so a deleted file's nodes
+would linger and keep surfacing in search. It refuses to run on an empty graph
+(a failed index must not erase the store), is on by default for `ug gen`
+(`--no-prune` to disable) and opt-in for `ug ingest` (`--prune`), since fanning
+several graphs into one store is a legitimate use of the latter.
 
 `KnowledgeStore::nodes_for_upsert` does the read-back. It takes each node's
 type alongside its id because OverGraph keys nodes by `(type_id, key)` — with
@@ -133,12 +175,17 @@ OverGraph has no built-in BM25. To preserve the keyword-search half of `rrf_sear
 
 The same hash + tokenizer run at both ends, so tokens collide deterministically. No IDF — fine for distinctive identifier queries; weaker for description-heavy queries. Upgrade path is SPLADE/BGE-M3 sparse embeddings; deferred to v2.
 
-> **Known gap:** the sparse vector is currently built at *query* time only
-> (`query.rs`). `Db::upsert_nodes` writes `sparse_vector: None` for every node
-> (`db.rs`), so the keyword half of `hybrid_search` presently matches against
-> nothing and fusion degenerates to dense-only. Populating it at ingest is
-> tracked as a fix; it is also the right home for code tokens, since the sparse
-> side has no token-window limit and no dense-vector dilution.
+Node-side vectors are built at ingest by `text::build_node_sparse_vector`
+from the node's `node_text` at full weight plus its stored `code` at
+`CODE_TOKEN_WEIGHT` (0.35), capped at 512 dimensions. The sparse side is where
+source code belongs: no token-window limit, exact identifier matching, and no
+dilution of the dense semantic signal. Code is discounted rather than equal-
+weighted because bodies are far longer than descriptive text and this tokenizer
+has no IDF to discount their boilerplate.
+
+> **Fixed 2026-07-26:** `Db::upsert_nodes` previously wrote
+> `sparse_vector: None` for every node, so the keyword half of `hybrid_search`
+> matched against nothing and fusion silently degenerated to dense-only.
 
 ## OverGraph Setup
 

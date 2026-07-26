@@ -766,7 +766,14 @@ fn retrieval_opts<'a>(opts: &TourOptions<'a>) -> ChatRagOptions<'a> {
 /// Read a source snippet clipped to `max_lines` / `max_chars`. Long
 /// (minified) lines are clipped char-wise so we never split a UTF-8
 /// sequence mid-byte, and one such line can't eat the whole budget.
+///
+/// `source` is the code already carried on the item/stop — which, since
+/// ingest captures spans, is normally what the store returned rather than
+/// a live file read. Preferring it keeps a tour's narration and its code
+/// from drifting apart, and avoids re-reading a file per stop. `None`
+/// falls back to the working tree.
 fn bounded_snippet(
+    source: Option<&str>,
     repo_root: &std::path::Path,
     file: &str,
     start_line: u32,
@@ -774,7 +781,10 @@ fn bounded_snippet(
     max_chars: usize,
     max_lines: usize,
 ) -> Option<String> {
-    let full = read_snippet(repo_root, file, start_line, end_line)?;
+    let full = match source {
+        Some(s) if !s.is_empty() => s.to_string(),
+        _ => read_snippet(repo_root, file, start_line, end_line)?,
+    };
     let mut out = String::new();
     for (i, line) in full.lines().enumerate() {
         if i >= max_lines || out.len() >= max_chars {
@@ -802,6 +812,7 @@ fn bounded_snippet(
 fn attach_snippets(tour: &mut Tour, repo_root: &std::path::Path) {
     for stop in &mut tour.stops {
         if let Some(s) = bounded_snippet(
+            stop.snippet.as_deref(),
             repo_root,
             &stop.file,
             stop.start_line,
@@ -823,6 +834,7 @@ fn attach_prompt_snippets(items: &mut [ContextItem], repo_root: &std::path::Path
             continue;
         }
         item.snippet = bounded_snippet(
+            None,
             repo_root,
             &item.file,
             item.start_line,
@@ -1227,6 +1239,7 @@ fn draft_stop(
     let narration = if narration.is_empty() { item.description.as_str() } else { narration };
     let mut stop = stop_from_item(idx, item, ps.title.as_deref(), narration);
     stop.snippet = bounded_snippet(
+        stop.snippet.as_deref(),
         repo_root,
         &stop.file,
         stop.start_line,

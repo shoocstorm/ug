@@ -81,10 +81,18 @@ async fn seed(db: &Db, g: &GraphData) -> Vec<String> {
             last_update_at: 1_700_000_000,
             node_text: text.clone(),
             vector: unit_vector(i + 1),
+            code: String::new(),
+            file_hash: String::new(),
         })
         .collect();
     db.upsert_nodes(&rows).await.unwrap();
     texts
+}
+
+/// These fixtures have no repo on disk, so nothing is captured — the
+/// planner falls back to comparing everything but the source columns.
+fn no_code() -> std::collections::HashMap<String, ultragraph::storage::CapturedCode> {
+    std::collections::HashMap::new()
 }
 
 fn sample_graph() -> GraphData {
@@ -109,7 +117,7 @@ async fn first_ingest_embeds_everything() {
     let g = sample_graph();
     let texts = texts_for(&g);
 
-    let plan = plan_incremental_ingest(&db as &dyn KnowledgeStore, &g, &texts, false)
+    let plan = plan_incremental_ingest(&db as &dyn KnowledgeStore, &g, &texts, false, &no_code())
         .await
         .unwrap();
 
@@ -125,7 +133,7 @@ async fn unchanged_graph_embeds_and_writes_nothing() {
     let g = sample_graph();
     let texts = seed(&db, &g).await;
 
-    let plan = plan_incremental_ingest(&db as &dyn KnowledgeStore, &g, &texts, false)
+    let plan = plan_incremental_ingest(&db as &dyn KnowledgeStore, &g, &texts, false, &no_code())
         .await
         .unwrap();
 
@@ -146,7 +154,7 @@ async fn edited_node_is_the_only_one_re_embedded() {
     g.nodes[2].docstring = Some("now documented differently".to_string());
     let texts = texts_for(&g);
 
-    let plan = plan_incremental_ingest(&db as &dyn KnowledgeStore, &g, &texts, false)
+    let plan = plan_incremental_ingest(&db as &dyn KnowledgeStore, &g, &texts, false, &no_code())
         .await
         .unwrap();
 
@@ -169,7 +177,7 @@ async fn moved_node_reuses_its_vector() {
     g.nodes[1].end_line = Some(125);
     let texts = texts_for(&g);
 
-    let plan = plan_incremental_ingest(&db as &dyn KnowledgeStore, &g, &texts, false)
+    let plan = plan_incremental_ingest(&db as &dyn KnowledgeStore, &g, &texts, false, &no_code())
         .await
         .unwrap();
 
@@ -197,7 +205,7 @@ async fn new_node_embeds_without_disturbing_the_rest() {
     g.nodes.push(node("function:d", "delta", Some("brand new"), 60));
     let texts = texts_for(&g);
 
-    let plan = plan_incremental_ingest(&db as &dyn KnowledgeStore, &g, &texts, false)
+    let plan = plan_incremental_ingest(&db as &dyn KnowledgeStore, &g, &texts, false, &no_code())
         .await
         .unwrap();
 
@@ -222,7 +230,7 @@ async fn new_edge_re_embeds_both_endpoints() {
     });
     let texts = texts_for(&g);
 
-    let plan = plan_incremental_ingest(&db as &dyn KnowledgeStore, &g, &texts, false)
+    let plan = plan_incremental_ingest(&db as &dyn KnowledgeStore, &g, &texts, false, &no_code())
         .await
         .unwrap();
 
@@ -241,7 +249,7 @@ async fn always_write_keeps_every_row_for_fan_out() {
 
     // Multi-destination ingest plans against one store but must still
     // write every row to all of them.
-    let plan = plan_incremental_ingest(&db as &dyn KnowledgeStore, &g, &texts, true)
+    let plan = plan_incremental_ingest(&db as &dyn KnowledgeStore, &g, &texts, true, &no_code())
         .await
         .unwrap();
 
@@ -261,14 +269,14 @@ async fn finish_assembles_rows_in_plan_order() {
     g.nodes[1].start_line = Some(200);
     let texts = texts_for(&g);
 
-    let plan = plan_incremental_ingest(&db as &dyn KnowledgeStore, &g, &texts, false)
+    let plan = plan_incremental_ingest(&db as &dyn KnowledgeStore, &g, &texts, false, &no_code())
         .await
         .unwrap();
     assert_eq!(plan.to_embed.len(), 1);
     assert_eq!(plan.reusable.len(), 1);
 
     let fresh = unit_vector(999);
-    let rows = plan.finish(&g, vec![fresh.clone()]).unwrap();
+    let rows = plan.finish(&g, vec![fresh.clone()], &no_code()).unwrap();
     assert_eq!(rows.len(), 2, "one moved row + one re-embedded row");
 
     let moved = rows.iter().find(|r| r.id == "function:b").unwrap();
@@ -287,12 +295,12 @@ async fn finish_rejects_a_vector_count_mismatch() {
     let g = sample_graph();
     let texts = texts_for(&g);
 
-    let plan = plan_incremental_ingest(&db as &dyn KnowledgeStore, &g, &texts, false)
+    let plan = plan_incremental_ingest(&db as &dyn KnowledgeStore, &g, &texts, false, &no_code())
         .await
         .unwrap();
     assert_eq!(plan.to_embed.len(), 3);
 
-    let err = plan.finish(&g, vec![unit_vector(1)]).unwrap_err();
+    let err = plan.finish(&g, vec![unit_vector(1)], &no_code()).unwrap_err();
     assert!(err.contains("1 vectors for 3 nodes"), "got: {err}");
 }
 
@@ -310,7 +318,7 @@ async fn planning_warms_the_id_cache_for_skipped_nodes() {
     drop(db);
     let db = Db::open(tmp.path().to_str().unwrap()).await.unwrap();
 
-    let plan = plan_incremental_ingest(&db as &dyn KnowledgeStore, &g, &texts, false)
+    let plan = plan_incremental_ingest(&db as &dyn KnowledgeStore, &g, &texts, false, &no_code())
         .await
         .unwrap();
     assert_eq!(plan.unchanged, 3, "nothing to write");
@@ -338,4 +346,88 @@ async fn planning_warms_the_id_cache_for_skipped_nodes() {
         .unwrap();
     assert_eq!(outs.len(), 1);
     assert_eq!(outs[0].target, "function:b");
+}
+
+// ─── Pruning ────────────────────────────────────────────────────────────
+//
+// Ingest is an upsert, so a node that disappears from the source used to
+// linger in the store forever and keep surfacing in search results.
+
+#[tokio::test]
+async fn prune_removes_nodes_the_graph_no_longer_has() {
+    let tmp = TempDir::new().unwrap();
+    let db = Db::open(tmp.path().to_str().unwrap()).await.unwrap();
+    let g = sample_graph();
+    seed(&db, &g).await;
+
+    // `gamma` is deleted from the source.
+    let mut shrunk = g.clone();
+    shrunk.nodes.retain(|n| n.id != "function:c");
+
+    let removed = ultragraph::storage::prune_to_graph(&db as &dyn KnowledgeStore, &shrunk)
+        .await
+        .unwrap();
+    assert_eq!(removed, 1, "exactly the dropped node");
+
+    let left = db.count_nodes().await.unwrap();
+    assert_eq!(left, 2, "survivors stay: {left}");
+    assert!(
+        db.fetch_node("function:c").unwrap().is_none(),
+        "pruned node must be gone"
+    );
+    assert!(
+        db.fetch_node("function:a").unwrap().is_some(),
+        "kept node must remain"
+    );
+}
+
+#[tokio::test]
+async fn prune_is_a_noop_when_nothing_was_removed() {
+    let tmp = TempDir::new().unwrap();
+    let db = Db::open(tmp.path().to_str().unwrap()).await.unwrap();
+    let g = sample_graph();
+    seed(&db, &g).await;
+
+    let removed = ultragraph::storage::prune_to_graph(&db as &dyn KnowledgeStore, &g)
+        .await
+        .unwrap();
+    assert_eq!(removed, 0);
+    assert_eq!(db.count_nodes().await.unwrap(), 3);
+}
+
+/// The guard that stops a failed index from erasing the store.
+#[tokio::test]
+async fn prune_refuses_to_run_against_an_empty_graph() {
+    let tmp = TempDir::new().unwrap();
+    let db = Db::open(tmp.path().to_str().unwrap()).await.unwrap();
+    let g = sample_graph();
+    seed(&db, &g).await;
+
+    let empty = graph(Vec::new(), Vec::new());
+    let removed = ultragraph::storage::prune_to_graph(&db as &dyn KnowledgeStore, &empty)
+        .await
+        .unwrap();
+    assert_eq!(removed, 0, "an empty graph must not be treated as 'delete all'");
+    assert_eq!(db.count_nodes().await.unwrap(), 3, "store untouched");
+}
+
+/// A pruned key must not stay resolvable through the id cache.
+#[tokio::test]
+async fn prune_clears_the_id_cache_for_removed_nodes() {
+    let tmp = TempDir::new().unwrap();
+    let db = Db::open(tmp.path().to_str().unwrap()).await.unwrap();
+    let g = sample_graph();
+    seed(&db, &g).await;
+    // seed() populated key_to_id for all three via upsert.
+
+    let mut shrunk = g.clone();
+    shrunk.nodes.retain(|n| n.id != "function:c");
+    ultragraph::storage::prune_to_graph(&db as &dyn KnowledgeStore, &shrunk)
+        .await
+        .unwrap();
+
+    assert!(
+        db.lookup_id("function:c").unwrap().is_none(),
+        "stale id must not resolve after prune"
+    );
 }

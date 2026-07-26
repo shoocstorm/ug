@@ -2652,7 +2652,7 @@ fn build_chat_default_from_args(args: &[String]) -> Option<ChatConfig> {
 // ---------- Settings (/api/config) ----------
 
 /// JSON view of every persistable config key for the settings UI:
-/// saved value, effective value after flag/env precedence, and which
+/// saved value, effective value after flag precedence, and which
 /// tier won. Secrets are masked — a raw API key never leaves the
 /// server, only a short prefix for recognition.
 fn config_payload(state: &ServeState) -> serde_json::Value {
@@ -2666,14 +2666,9 @@ fn config_payload(state: &ServeState) -> serde_json::Value {
             let (effective, source) = crate::config::resolve_pref_cfg(flag_val, key.name);
             let source_label = match source {
                 crate::PrefSource::Flag => "flag",
-                crate::PrefSource::Env(_) => "env",
                 crate::PrefSource::Config(_) => "config",
                 crate::PrefSource::Default => "default",
             };
-            let env_active = key
-                .env
-                .map(|e| std::env::var(e).map(|v| !v.trim().is_empty()).unwrap_or(false))
-                .unwrap_or(false);
             let mask = |v: &String| {
                 if key.secret {
                     crate::config::display_value(key, v)
@@ -2695,8 +2690,6 @@ fn config_payload(state: &ServeState) -> serde_json::Value {
                 "saved": saved.as_ref().map(&mask),
                 "effective": effective.as_ref().map(&mask),
                 "source": source_label,
-                "env": key.env,
-                "env_active": env_active,
                 "flag": key.flag,
                 "flag_active": flag_active,
                 "default": crate::config::default_for(key),

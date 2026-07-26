@@ -28,21 +28,22 @@
 //! the docstring/name signal. Code belongs in the sparse index and in a
 //! stored column, not in the dense vector.
 //!
-//! Planned additions, in the order they were agreed:
+//! What fills that room, in the order it was added:
 //!
-//! 1. **Identifier splitting** — done; see [`split_identifier`].
-//! 2. **Structural synthesis** for undocumented nodes — extend the folder
-//!    synopsis idea to functions, templating a description out of graph
-//!    edges the node already has ("called by X, Y; calls Z"). Free, and it
-//!    targets the 47% directly.
-//! 3. **Inline comments** from the body — natural language aimed at
-//!    natural-language queries. Three caveats to handle when it lands:
-//!    drop commented-out code (high symbol density, trailing `;`/`{`),
-//!    dedup license/banner blocks so they don't dominate every File node,
-//!    and accept that editing a comment now triggers a re-embed (correct,
-//!    since the meaning changed, but it raises re-index cost).
-//! 4. **LLM summarization** — opt-in only (`ug gen --enrich`), cached on
-//!    the code's content hash so unchanged bodies reuse their summary.
+//! 1. **Identifier splitting** — [`split_identifier`]. The name is the
+//!    whole description for the 47%, so it is split into words alongside
+//!    the exact form.
+//! 2. **Structural synthesis** — [`synthesize_code_synopsis`], the code
+//!    counterpart of the folder synopsis. Contributes the file path, which
+//!    is real prose signal that appeared nowhere in the text before.
+//! 3. **Inline comments** — [`build_node_text_with_comments`], filtered by
+//!    [`crate::storage::comments`]. Usually the only natural language a
+//!    symbol has, written in the vocabulary people query in.
+//!
+//! Still open: **LLM summarization**, deliberately deferred. If added it
+//! should be opt-in (`ug gen --enrich`) and cached on the code's content
+//! hash, so unchanged bodies reuse their summary and the incremental path
+//! keeps working.
 
 use crate::types::{GraphData, GraphNode, GraphNodeFolderMeta, GraphNodeType};
 use std::collections::HashMap;
@@ -115,6 +116,27 @@ fn humanize_identifier(ident: &str) -> Option<String> {
 }
 
 pub fn build_node_text(node: &GraphNode, related_names: &[String]) -> String {
+    build_node_text_with_comments(node, related_names, "")
+}
+
+/// As [`build_node_text`], plus prose lifted from the node's own source
+/// comments.
+///
+/// Inline comments are usually the only natural language attached to an
+/// undocumented symbol, and they are written in the vocabulary people
+/// query in — which is exactly what a dense embedding can use and what a
+/// bare identifier cannot supply. See [`crate::storage::comments`] for what
+/// gets filtered out before it reaches here.
+///
+/// The cost is churn: editing a comment now changes the text and triggers
+/// a re-embed of that node. That is the correct outcome — the node's
+/// described meaning did change — but it does raise the price of a
+/// comment-only edit from zero.
+pub fn build_node_text_with_comments(
+    node: &GraphNode,
+    related_names: &[String],
+    comments: &str,
+) -> String {
     let kind = format!("{:?}", node.node_type);
 
     // For folders, prefer the full path over the basename so the embedding
@@ -149,9 +171,15 @@ pub fn build_node_text(node: &GraphNode, related_names: &[String]) -> String {
         None => name,
     };
 
+    let notes = if comments.trim().is_empty() {
+        String::new()
+    } else {
+        format!(" Notes: {}.", comments.trim())
+    };
+
     format!(
-        "{}: {}. {}. Related: {}",
-        kind, name_field, description, related
+        "{}: {}. {}.{} Related: {}",
+        kind, name_field, description, notes, related
     )
 }
 
@@ -195,7 +223,9 @@ fn node_description(node: &GraphNode) -> String {
         }
     }
 
-    String::new()
+    // Nothing written about this node — fall back to what the graph knows
+    // structurally rather than embedding an empty description.
+    synthesize_code_synopsis(node)
 }
 
 /// Render `(name?: type, ...) -> return` from a node's structured signature.
@@ -235,6 +265,52 @@ fn render_signature(sig: &crate::types::GraphNodeSignature) -> String {
 /// pre-enrichment so the folder node still carries retrieval signal.
 /// Example output: "components folder, 8 typescript and 2 markdown files
 /// (depth 2)".
+/// Cap on names listed in a synthesized synopsis, so a hub node's
+/// relations don't crowd out its own terms.
+const MAX_SYNOPSIS_NAMES: usize = 8;
+
+/// Describe a code node that has neither a docstring nor a signature,
+/// using structure the graph already knows.
+///
+/// This exists because ~47% of nodes in a typical graph reach the embedder
+/// with an empty description — their text is a bare `"Function: name. .
+/// Related: …"`. Folder nodes already got this treatment (see
+/// [`synthesize_folder_synopsis`]); this extends the same idea to code.
+///
+/// The file path is the valuable part: it is real natural-language signal
+/// ("storage", "indexer", "backends") that appeared nowhere in the
+/// embedding text before, and it is stable across edits.
+///
+/// `calls` is deliberately left out even though the node carries it. The
+/// `Related:` list already names those neighbours, and call lists churn on
+/// every body edit — folding them in here would re-embed undocumented
+/// functions each time their body changed, for signal that is already
+/// present.
+fn synthesize_code_synopsis(node: &GraphNode) -> String {
+    let mut parts: Vec<String> = Vec::new();
+
+    if let Some(file) = node.file.as_deref().filter(|f| !f.is_empty()) {
+        parts.push(format!("defined in {}", file));
+    }
+    if !node.extends.is_empty() {
+        parts.push(format!("extends {}", join_capped(&node.extends)));
+    }
+    if !node.implements.is_empty() {
+        parts.push(format!("implements {}", join_capped(&node.implements)));
+    }
+
+    parts.join("; ")
+}
+
+fn join_capped(names: &[String]) -> String {
+    names
+        .iter()
+        .take(MAX_SYNOPSIS_NAMES)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn synthesize_folder_synopsis(meta: &GraphNodeFolderMeta) -> String {
     let mut parts: Vec<String> = Vec::new();
 
@@ -366,6 +442,66 @@ pub fn build_sparse_keyword_vector(text: &str) -> Vec<(u32, f32)> {
     let mut out: Vec<(u32, f32)> = weights.into_iter().collect();
     out.sort_unstable_by_key(|&(dim, _)| dim);
     out
+}
+
+/// Weight applied to tokens coming from a node's source body, relative to
+/// the 1.0 of its name/docstring/signature text.
+///
+/// Bodies are far longer than the descriptive text, so at equal weight
+/// their tokens would swamp the vector — and this tokenizer has no IDF to
+/// discount the boilerplate (`let`, `self`, `return`) that dominates them.
+/// Discounting keeps code reachable by keyword without letting it outvote
+/// the terms that actually name the node.
+const CODE_TOKEN_WEIGHT: f32 = 0.35;
+
+/// Cap on dimensions kept per node. A large function tokenizes into
+/// thousands of terms; without a cap the sparse index would grow faster
+/// than the dense one it is supposed to complement.
+const MAX_SPARSE_DIMS: usize = 512;
+
+/// Sparse vector for a node: its embedding text at full weight, plus its
+/// source body at [`CODE_TOKEN_WEIGHT`].
+///
+/// This is the counterpart to the dense vector, and the reason source code
+/// is *not* embedded densely: the sparse side has no token-window limit,
+/// gives exact identifier matches, and doesn't dilute the semantic signal
+/// that names and docstrings carry.
+pub fn build_node_sparse_vector(node_text: &str, code: &str) -> Vec<(u32, f32)> {
+    let mut weights: HashMap<u32, f32> = HashMap::new();
+    accumulate_tokens(node_text, 1.0, &mut weights);
+    if !code.is_empty() {
+        accumulate_tokens(code, CODE_TOKEN_WEIGHT, &mut weights);
+    }
+
+    let mut out: Vec<(u32, f32)> = weights.into_iter().collect();
+    if out.len() > MAX_SPARSE_DIMS {
+        // Keep the heaviest terms, then restore dimension order —
+        // OverGraph expects sparse vectors sorted by dimension id.
+        out.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        out.truncate(MAX_SPARSE_DIMS);
+    }
+    out.sort_unstable_by_key(|&(dim, _)| dim);
+    out
+}
+
+/// Tokenize `text` and add each token's frequency, scaled by `weight`.
+fn accumulate_tokens(text: &str, weight: f32, out: &mut HashMap<u32, f32>) {
+    let mut scratch: HashMap<u32, f32> = HashMap::new();
+    let mut buf = String::new();
+    for ch in text.chars() {
+        if ch.is_alphanumeric() {
+            buf.push(ch);
+        } else if !buf.is_empty() {
+            emit_run(&buf, &mut scratch);
+            buf.clear();
+        }
+    }
+    if !buf.is_empty() {
+        emit_run(&buf, &mut scratch);
+    }
+    for (dim, w) in scratch {
+        *out.entry(dim).or_insert(0.0) += w * weight;
+    }
 }
 
 /// Emit one alphanumeric run: the run itself, plus its constituent words
@@ -510,6 +646,48 @@ mod sparse_tests {
     }
 
     #[test]
+    fn code_tokens_are_searchable_but_outweighed_by_the_node_text() {
+        let text = "Function: parseConfig. Reads settings.";
+        let code = "fn parseConfig() { let raw = fs::read(); toml::from_str(&raw) }";
+
+        let with_code = build_node_sparse_vector(text, code);
+        let without = build_node_sparse_vector(text, "");
+
+        let dim = |t: &str| {
+            let v = build_sparse_keyword_vector(t);
+            v[0].0
+        };
+        let weight_of = |v: &Vec<(u32, f32)>, d: u32| {
+            v.iter().find(|(x, _)| *x == d).map(|(_, w)| *w)
+        };
+
+        // A term that appears only in the body is reachable...
+        let toml = dim("toml");
+        assert!(weight_of(&without, toml).is_none(), "not in the text alone");
+        assert!(weight_of(&with_code, toml).is_some(), "body term indexed");
+
+        // ...but weighs less than a term from the node's own text.
+        let parse = dim("parse");
+        assert!(
+            weight_of(&with_code, parse).unwrap() > weight_of(&with_code, toml).unwrap(),
+            "descriptive terms must outrank body terms"
+        );
+    }
+
+    #[test]
+    fn sparse_vector_is_capped_and_dimension_sorted() {
+        // A body far larger than any real function.
+        let code: String = (0..5000).map(|i| format!("ident{} ", i)).collect();
+        let v = build_node_sparse_vector("Function: big.", &code);
+
+        assert!(v.len() <= 512, "capped, got {}", v.len());
+        assert!(
+            v.windows(2).all(|w| w[0].0 < w[1].0),
+            "OverGraph requires ascending dimension ids"
+        );
+    }
+
+    #[test]
     fn humanized_name_lands_in_node_text() {
         // A node with no docstring and no signature — the 47% case, where
         // the identifier is the only retrieval signal there is.
@@ -533,6 +711,44 @@ mod sparse_tests {
         let text = build_node_text(&node, &[]);
         assert!(text.contains("buildSparseKeywordVector"), "exact name kept: {text}");
         assert!(text.contains("build sparse keyword vector"), "words added: {text}");
+    }
+
+    #[test]
+    fn undocumented_node_falls_back_to_structural_synopsis() {
+        let mut n = GraphNode {
+            id: "class:src/net/pool.ts:ConnectionPool".into(),
+            name: "ConnectionPool".into(),
+            node_type: GraphNodeType::Class,
+            file: Some("src/net/pool.ts".into()),
+            start_line: Some(1),
+            end_line: Some(40),
+            metrics: None,
+            signature: None,
+            docstring: None,
+            imports: vec![],
+            exports: vec![],
+            extends: vec!["BasePool".into()],
+            implements: vec!["Closeable".into()],
+            calls: vec!["connect".into()],
+            folder: None,
+        };
+        let text = build_node_text(&n, &[]);
+        assert!(text.contains("defined in src/net/pool.ts"), "path is signal: {text}");
+        assert!(text.contains("extends BasePool"), "{text}");
+        assert!(text.contains("implements Closeable"), "{text}");
+        assert!(
+            !text.contains("calls connect"),
+            "call lists churn per edit and Related: already covers them: {text}"
+        );
+
+        // A real docstring must win outright — the synopsis is a fallback.
+        n.docstring = Some("Pools TCP connections.".into());
+        let documented = build_node_text(&n, &[]);
+        assert!(documented.contains("Pools TCP connections."));
+        assert!(
+            !documented.contains("defined in"),
+            "synopsis must not dilute a written description: {documented}"
+        );
     }
 
     #[test]

@@ -152,7 +152,9 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
         // files never push to the stack.
         let mut heading_stack: Vec<(usize, String)> = Vec::new();
 
-        for sym in &file.symbols {
+        let sym_ids = symbol_node_ids(file, &normalized_file_path);
+
+        for (sym_idx, sym) in file.symbols.iter().enumerate() {
             let heading_level = parse_heading_level(&sym.kind);
 
             let node_type = if heading_level.is_some() {
@@ -177,18 +179,7 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
                 }
             };
 
-            // Symbol IDs are scoped by `<file>:<line>:<name>` so two files
-            // declaring the same `class Foo` get distinct nodes. Headings
-            // use a slimmer `<file>:<line>` key since markdown headings carry
-            // no kind variation worth disambiguating on.
-            let sym_node_id = if heading_level.is_some() {
-                format!("heading:{}:{}", normalized_file_path, sym.start_line)
-            } else {
-                format!(
-                    "{}:{}:{}:{}",
-                    sym.kind, normalized_file_path, sym.start_line, sym.name
-                )
-            };
+            let sym_node_id = sym_ids[sym_idx].clone();
 
             let signature = sym.signature.as_ref().map(|s| crate::types::GraphNodeSignature {
                 params: s.params.iter().map(|p| crate::types::Param {
@@ -275,14 +266,15 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
     // in multiple files we prefer the one in the same file as the caller.
     for file in &index_result.files {
         let normalized_file_path = normalize_path(&file.path);
-        for sym in &file.symbols {
+        // Recomputed rather than carried over from pass 1, but through the
+        // same function — the two passes must agree on every id, and
+        // `symbol_node_ids` is deterministic for a given `FileNode`.
+        let sym_ids = symbol_node_ids(file, &normalized_file_path);
+        for (sym_idx, sym) in file.symbols.iter().enumerate() {
             if parse_heading_level(&sym.kind).is_some() {
                 continue;
             }
-            let sym_node_id = format!(
-                "{}:{}:{}:{}",
-                sym.kind, normalized_file_path, sym.start_line, sym.name
-            );
+            let sym_node_id = sym_ids[sym_idx].clone();
 
             for extended in &sym.extends {
                 if let Some(target_id) = resolve_symbol(&symbol_id_map, extended, &normalized_file_path) {
@@ -534,6 +526,54 @@ fn lookup_basename(
 
 fn shared_prefix_len(a: &str, b: &str) -> usize {
     a.bytes().zip(b.bytes()).take_while(|(x, y)| x == y).count()
+}
+
+/// Assign a stable node id to every symbol in `file`, returned aligned
+/// with `file.symbols`.
+///
+/// Ids are `<kind>:<file>:<name>` (headings: `heading:<file>:<name>`, since
+/// heading level carries no disambiguation worth encoding). When the same
+/// `(kind, name)` appears more than once in one file — a method defined in
+/// both an inherent and a trait `impl`, several `From` impls, repeated
+/// markdown headings — the second and later occurrences get a `#N` suffix
+/// in source order.
+///
+/// **Line numbers are deliberately absent.** They used to sit in the id,
+/// which meant every symbol below an edit was assigned a brand-new id on
+/// the next index: it re-embedded as if new, and its previous row was
+/// orphaned in the store forever. Measured on a real graph, dropping the
+/// line costs almost nothing in uniqueness — 98.7% of symbols are already
+/// unique on `(kind, file, name)` alone, because names arrive qualified
+/// (`Db::upsert_nodes`, not `upsert_nodes`) — while making ids survive
+/// unrelated edits elsewhere in the file.
+///
+/// The residual instability is narrow: reordering two same-named overloads
+/// within one file swaps their ids. That is rare, and self-corrects on the
+/// next index.
+///
+/// Must stay deterministic for a given `FileNode` — `build_graph` calls it
+/// once per pass and the passes have to agree.
+fn symbol_node_ids(file: &crate::types::FileNode, normalized_file_path: &str) -> Vec<String> {
+    let mut seen: HashMap<(String, String), usize> = HashMap::new();
+    let mut out = Vec::with_capacity(file.symbols.len());
+
+    for sym in &file.symbols {
+        let prefix = if parse_heading_level(&sym.kind).is_some() {
+            "heading".to_string()
+        } else {
+            sym.kind.clone()
+        };
+        let base = format!("{}:{}:{}", prefix, normalized_file_path, sym.name);
+
+        let n = seen.entry((prefix, sym.name.clone())).or_insert(0);
+        *n += 1;
+        out.push(if *n == 1 {
+            base
+        } else {
+            format!("{}#{}", base, n)
+        });
+    }
+    out
 }
 
 /// Parse a markdown heading kind like `heading_3` into its level (1-6).

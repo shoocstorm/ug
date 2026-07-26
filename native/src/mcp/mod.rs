@@ -411,7 +411,13 @@ impl Mcp {
             "semantic_search" => {
                 Ok(with_staleness(self.tool_semantic_search(&ctx, &args).await?))
             }
-            "find_symbols" | "file_outline" | "get_code" | "find_usages" | "traverse"
+            // get_code is split out because it is the one graph tool that
+            // benefits from the store: serving a node's indexed source
+            // keeps the code an agent reads consistent with the
+            // description and embedding it searched on, and lets a stale
+            // file be reported instead of silently mis-sliced.
+            "get_code" => Ok(with_staleness(self.tool_get_code(&ctx, args).await?)),
+            "find_symbols" | "file_outline" | "find_usages" | "traverse"
             | "shortest_path" | "project_overview" | "graph_schema" => {
                 Ok(with_staleness(self.tool_graph(name, &ctx, args)?))
             }
@@ -433,6 +439,52 @@ impl Mcp {
             }
             other => Err(format!("Unknown tool: {}", other)),
         }
+    }
+
+    /// `get_code`, served from the index where possible.
+    ///
+    /// Falls back to the plain graph path whenever the store can't be
+    /// opened or has nothing for these ids — reading source must keep
+    /// working even with no database, which is what the CLI does.
+    async fn tool_get_code(&self, ctx: &ProjectCtx, args: Value) -> Result<String, String> {
+        let params: ultragraph::agent_tools::GetCodeParams =
+            serde_json::from_value(args.clone())
+                .map_err(|e| format!("invalid get_code params: {}", e))?;
+
+        let mut stored: HashMap<String, ultragraph::agent_tools::StoredSource> = HashMap::new();
+        if !params.node_id.is_empty() {
+            if let Ok(dim) = self.embedder().map(|e| e.config().dim as u32) {
+                if let Ok(spec) = store_spec(&ctx.db_path, dim) {
+                    if let Ok(store) = open_store(&spec).await {
+                        if let Ok(rows) = store.nodes_by_ids(&params.node_id).await {
+                            for r in rows {
+                                if !r.code.is_empty() {
+                                    stored.insert(
+                                        r.id.clone(),
+                                        ultragraph::agent_tools::StoredSource {
+                                            code: r.code,
+                                            file_hash: r.file_hash,
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let (graph, _raw) = self.load_graph(&ctx.graph_path)?;
+        let result = ultragraph::agent_tools::get_code_with_stored(
+            graph.as_ref(),
+            &ctx.repo_root,
+            &params,
+            &stored,
+        );
+        Ok(ultragraph::agent_tools::render_get_code(
+            &result,
+            Render::Markdown,
+        ))
     }
 
     fn tool_graph(&self, name: &str, ctx: &ProjectCtx, args: Value) -> Result<String, String> {

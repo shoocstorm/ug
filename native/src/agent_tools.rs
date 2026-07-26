@@ -140,8 +140,9 @@ pub fn strip_file_id_prefix(file: &str) -> &str {
     file.strip_prefix("file:").unwrap_or(file)
 }
 
-/// Node ids from the indexer are `<kind>:<path>:<line>:<name>`. The CLI takes
-/// bare positionals, so it needs a heuristic to tell an id from a name.
+/// Node ids from the indexer are `<kind>:<path>:<name>` (with a `#N` suffix
+/// when a file declares that name more than once). The CLI takes bare
+/// positionals, so it needs a heuristic to tell an id from a name.
 pub fn looks_like_node_id(s: &str) -> bool {
     s.contains(':')
 }
@@ -727,8 +728,21 @@ pub struct CodeSlice {
     pub code: Option<String>,
     /// Characters dropped to honour `max_chars`; 0 when nothing was cut.
     pub truncated_chars: usize,
+    /// Set when this slice came from the index rather than the working
+    /// tree *and* the file has changed since it was indexed. The code is
+    /// still returned — it is what the node's description and embedding
+    /// describe — but the caller is told not to trust it as current.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stale: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+/// Source captured at index time for one node, as held by the store.
+#[derive(Debug, Clone, Default)]
+pub struct StoredSource {
+    pub code: String,
+    pub file_hash: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -742,7 +756,25 @@ impl GetCodeResult {
     }
 }
 
+/// Read source for nodes, from the working tree only.
+///
+/// Prefer [`get_code_with_stored`] where a store handle is available: the
+/// indexed copy is what the node's description and embedding were built
+/// from, so serving it keeps the two consistent and removes the case where
+/// a drifted line range silently returns the wrong lines.
 pub fn get_code(graph: &GraphData, repo_root: &Path, p: &GetCodeParams) -> GetCodeResult {
+    get_code_with_stored(graph, repo_root, p, &HashMap::new())
+}
+
+/// As [`get_code`], but serving each node's indexed source when the store
+/// has it. `stored` is keyed by node id; ids absent from it fall back to
+/// reading the file.
+pub fn get_code_with_stored(
+    graph: &GraphData,
+    repo_root: &Path,
+    p: &GetCodeParams,
+    stored: &HashMap<String, StoredSource>,
+) -> GetCodeResult {
     let max_chars = p.max_chars.unwrap_or(DEFAULT_MAX_CHARS);
     let mut slices = Vec::new();
 
@@ -758,6 +790,7 @@ pub fn get_code(graph: &GraphData, repo_root: &Path, p: &GetCodeParams) -> GetCo
                     doc: None,
                     code: None,
                     truncated_chars: 0,
+                    stale: None,
                     error: Some("Pass node_id (one or more ids) or file.".into()),
                 }],
             };
@@ -806,10 +839,53 @@ pub fn get_code(graph: &GraphData, repo_root: &Path, p: &GetCodeParams) -> GetCo
                 usize::MAX
             }
         });
-        slices.push(read_slice(repo_root, f, start, end, Some(n), max_chars));
+        slices.push(match stored.get(id).filter(|s| !s.code.is_empty()) {
+            Some(src) => stored_slice(src, repo_root, f, start, end, n, max_chars),
+            None => read_slice(repo_root, f, start, end, Some(n), max_chars),
+        });
     }
 
     GetCodeResult { slices }
+}
+
+/// Build a slice from indexed source, flagging it when the file it came
+/// from no longer hashes the same.
+fn stored_slice(
+    src: &StoredSource,
+    repo_root: &Path,
+    file: &str,
+    start: usize,
+    end: usize,
+    node: &GraphNode,
+    max_chars: usize,
+) -> CodeSlice {
+    let total_lines = src.code.lines().count();
+    let (code, truncated_chars) = if src.code.len() > max_chars {
+        let cut = src.code.char_indices().nth(max_chars).map(|(i, _)| i).unwrap_or(src.code.len());
+        (src.code[..cut].to_string(), src.code.len() - cut)
+    } else {
+        (src.code.clone(), 0)
+    };
+    let stale = match crate::storage::file_matches_hash(repo_root, file, &src.file_hash) {
+        Some(true) => None,
+        Some(false) => Some(format!(
+            "{} has changed since indexing — this is the indexed copy; re-run `ug gen` to refresh",
+            file
+        )),
+        None => None,
+    };
+    CodeSlice {
+        title: format!("{} {}", node_type_str(&node.node_type), node.name),
+        file: Some(file.to_string()),
+        start_line: Some(start),
+        end_line: Some(if end == usize::MAX { total_lines } else { end }),
+        total_lines: Some(total_lines),
+        doc: node.docstring.clone(),
+        code: Some(code),
+        truncated_chars,
+        stale,
+        error: None,
+    }
 }
 
 fn err_slice(title: &str, error: String) -> CodeSlice {
@@ -822,6 +898,7 @@ fn err_slice(title: &str, error: String) -> CodeSlice {
         doc: None,
         code: None,
         truncated_chars: 0,
+        stale: None,
         error: Some(error),
     }
 }
@@ -873,6 +950,8 @@ fn read_slice(
         doc: node.and_then(|n| n.docstring.clone()),
         code: Some(text),
         truncated_chars: truncated,
+        // Read live from the working tree, so current by definition.
+        stale: None,
         error: None,
     }
 }
@@ -898,6 +977,11 @@ pub fn render_get_code(r: &GetCodeResult, style: Render) -> String {
         );
         if let Some(d) = &s.doc {
             line(&mut out, &style.dim(&format!("doc: {}", d)));
+        }
+        // Loud rather than dim: an agent acting on out-of-date source is
+        // the failure this whole column exists to make visible.
+        if let Some(why) = &s.stale {
+            line(&mut out, &format!("⚠ {}", why));
         }
         out.push('\n');
         if style == Render::Markdown {

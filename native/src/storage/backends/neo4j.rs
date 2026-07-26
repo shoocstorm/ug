@@ -165,8 +165,13 @@ async fn ensure_schema(graph: &Graph, embedding_dim: u32) -> Result<(), StoreErr
              OPTIONS {{ indexConfig: {{ `vector.dimensions`: {}, `vector.similarity_function`: 'cosine' }} }}",
             VECTOR_INDEX, NODE_LABEL, embedding_dim
         ),
+        // `n.code` is included so keyword search reaches source text, the
+        // Neo4j counterpart of the sparse vector the OverGraph backend
+        // builds at upsert. Note `IF NOT EXISTS` will not *widen* an index
+        // that already exists — databases created before this line need
+        // the index dropped and recreated to pick up `n.code`.
         format!(
-            "CREATE FULLTEXT INDEX {} IF NOT EXISTS FOR (n:{}) ON EACH [n.name, n.description, n.node_text]",
+            "CREATE FULLTEXT INDEX {} IF NOT EXISTS FOR (n:{}) ON EACH [n.name, n.description, n.node_text, n.code]",
             FTS_INDEX, NODE_LABEL
         ),
     ];
@@ -254,6 +259,8 @@ fn node_to_row(node: &Node) -> NodeRow {
         last_update_at: node_i64(node, "last_update_at"),
         node_text: node_str(node, "node_text"),
         vector: node_embedding(node),
+        code: node_str(node, "code"),
+        file_hash: node_str(node, "file_hash"),
     }
 }
 
@@ -316,6 +323,8 @@ impl KnowledgeStore for Neo4jStore {
                      n.end_line       = r.end_line, \
                      n.last_update_at = r.last_update_at, \
                      n.node_text      = r.node_text, \
+                     n.code           = r.code, \
+                     n.file_hash      = r.file_hash, \
                      n.embedding      = r.embedding, \
                      n:`{label}`",
                 base = NODE_LABEL,
@@ -585,6 +594,36 @@ impl KnowledgeStore for Neo4jStore {
             nodes: nodes_out,
             edges: edges_out,
         })
+    }
+
+    async fn prune_nodes_absent_from(
+        &self,
+        keep: &std::collections::HashSet<String>,
+    ) -> Result<usize, StoreError> {
+        // DETACH so the node's edges go with it, matching OverGraph's
+        // tombstoning. `keep` is passed whole rather than diffed
+        // client-side — Neo4j can do the anti-join far more cheaply than
+        // streaming every id back over the bolt connection.
+        let keep_list: Vec<String> = keep.iter().cloned().collect();
+        let cypher = format!(
+            "MATCH (n:{}) WHERE NOT n.id IN $keep \
+             WITH n, count(*) AS _c DETACH DELETE n RETURN count(*) AS removed",
+            NODE_LABEL
+        );
+        let mut result = self
+            .graph
+            .execute(query(&cypher).param("keep", keep_list))
+            .await
+            .map_err(|e| StoreError::Backend(format!("neo4j prune: {}", e)))?;
+        let mut removed = 0usize;
+        if let Some(row) = result
+            .next()
+            .await
+            .map_err(|e| StoreError::Backend(format!("neo4j prune row: {}", e)))?
+        {
+            removed = row.get::<i64>("removed").unwrap_or(0).max(0) as usize;
+        }
+        Ok(removed)
     }
 
     async fn nodes_by_ids(&self, ids: &[String]) -> Result<Vec<NodeRow>, StoreError> {
@@ -898,6 +937,11 @@ fn node_to_bolt_map(r: &NodeRow) -> BoltMap {
     m.put(
         BoltString::from("node_text"),
         BoltType::from(r.node_text.as_str()),
+    );
+    m.put(BoltString::from("code"), BoltType::from(r.code.as_str()));
+    m.put(
+        BoltString::from("file_hash"),
+        BoltType::from(r.file_hash.as_str()),
     );
     let vec_f64: Vec<f64> = r.vector.iter().map(|x| *x as f64).collect();
     m.put(BoltString::from("embedding"), BoltType::from(vec_f64));

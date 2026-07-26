@@ -12,12 +12,14 @@
 //!   - `types_registry`  - stable string ↔ u32 mapping for OverGraph type ids
 
 pub mod backends;
+pub mod comments;
 pub mod db;
 pub mod embed;
 pub mod embed_local;
 pub mod ingest;
 pub mod ppr;
 pub mod query;
+pub mod source;
 pub mod store;
 pub mod text;
 pub mod types_registry;
@@ -29,12 +31,14 @@ pub use embed::{
 };
 pub use embed_local::LocalEmbedder;
 pub use ingest::{
-    ingest_graph, ingest_graph_multi, plan_incremental_ingest, reembed_nodes, IngestPlan,
-    IngestStats,
+    build_texts, capture_for_graph, graph_id_set, ingest_graph, ingest_graph_multi, plan_incremental_ingest, prune_to_graph,
+    reembed_nodes, IngestPlan, IngestStats,
 };
+pub use comments::extract_prose_comments;
+pub use source::{capture_graph_code, file_matches_hash, CapturedCode};
 pub use ppr::{default_edge_type_weights, run_ppr};
 pub use query::{
-    mmr_rerank, read_snippet, rrf_search, search_kb, semantic_search, semantic_search_w_where,
+    mmr_rerank, read_snippet, rrf_search, snippet_for, search_kb, semantic_search, semantic_search_w_where,
     traverse, traverse_filtered, ContextItem, RankStrategy, RankedContext, SearchHit,
     SearchKbOptions, TraversalResult,
 };

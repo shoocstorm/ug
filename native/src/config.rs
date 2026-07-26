@@ -1,14 +1,13 @@
 //! Persisted user configuration: `$UG_HOME/config.json` (`~/.ug/config.json`).
 //!
-//! Sits one tier below env vars in the precedence chain every command
-//! resolves:
+//! Sits below CLI flags in the precedence chain:
 //!
-//!   CLI flag  >  env var  >  config file  >  built-in default
+//!   CLI flag  >  config file  >  built-in default
 //!
 //! `ug config set/get/unset/list` manage the file; `resolve_pref_cfg`
 //! is the shared lookup used by the embedder/chat builders. When a
-//! flag or env var overrides a value the user persisted, we print a
-//! one-time stderr notice so the override never happens silently.
+//! flag overrides a value the user persisted, we print a one-time
+//! stderr notice so the override never happens silently.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -33,13 +32,12 @@ pub(crate) enum Kind {
 }
 
 /// One persistable setting: its dotted CLI name, where it lives in the
-/// JSON file (`section` + camelCase `field`), the env var and flag that
-/// outrank it, and how to validate it.
+/// JSON file (`section` + camelCase `field`), the flag that overrides it,
+/// and how to validate it.
 pub(crate) struct ConfigKey {
     pub name: &'static str,
     pub section: &'static str,
     pub field: &'static str,
-    pub env: Option<&'static str>,
     pub flag: &'static str,
     pub kind: Kind,
     pub secret: bool,
@@ -50,16 +48,16 @@ pub(crate) struct ConfigKey {
 /// make a new setting persistable — the list/get/set/unset commands and
 /// the resolver are all registry-driven.
 pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
-    ConfigKey { name: "chat.model", section: "chat", field: "model", env: Some("UG_CHAT_MODEL"), flag: "--chat-model", kind: Kind::Str, secret: false, desc: "chat completion model (ug chat / POST /api/chat)" },
-    ConfigKey { name: "chat.base_url", section: "chat", field: "baseUrl", env: Some("UG_CHAT_BASE_URL"), flag: "--chat-base-url", kind: Kind::Str, secret: false, desc: "OpenAI-compatible chat endpoint base URL" },
-    ConfigKey { name: "chat.api_key", section: "chat", field: "apiKey", env: Some("UG_CHAT_API_KEY"), flag: "--chat-api-key", kind: Kind::Str, secret: true, desc: "API key for the chat endpoint" },
-    ConfigKey { name: "chat.temperature", section: "chat", field: "temperature", env: None, flag: "--temperature", kind: Kind::F32, secret: false, desc: "chat sampling temperature" },
-    ConfigKey { name: "chat.max_tokens", section: "chat", field: "maxTokens", env: None, flag: "--max-tokens", kind: Kind::U32, secret: false, desc: "chat completion max tokens" },
-    ConfigKey { name: "chat.timeout_secs", section: "chat", field: "timeoutSecs", env: None, flag: "--chat-timeout", kind: Kind::U64, secret: false, desc: "chat request timeout (seconds)" },
-    ConfigKey { name: "embed.model", section: "embed", field: "model", env: Some("UG_EMBED_MODEL"), flag: "--model", kind: Kind::Str, secret: false, desc: "embedding model (local alias or remote model name)" },
-    ConfigKey { name: "embed.base_url", section: "embed", field: "baseUrl", env: Some("UG_EMBED_BASE_URL"), flag: "--base-url", kind: Kind::Str, secret: false, desc: "remote /v1/embeddings base URL (unset = local in-process)" },
-    ConfigKey { name: "embed.api_key", section: "embed", field: "apiKey", env: Some("UG_EMBED_API_KEY"), flag: "--api-key", kind: Kind::Str, secret: true, desc: "API key for the embeddings endpoint" },
-    ConfigKey { name: "embed.dim", section: "embed", field: "dim", env: None, flag: "--embedding-dim", kind: Kind::U32, secret: false, desc: "embedding dimension override (normally auto-probed)" },
+    ConfigKey { name: "chat.model", section: "chat", field: "model", flag: "--chat-model", kind: Kind::Str, secret: false, desc: "chat completion model (ug chat / POST /api/chat)" },
+    ConfigKey { name: "chat.base_url", section: "chat", field: "baseUrl", flag: "--chat-base-url", kind: Kind::Str, secret: false, desc: "OpenAI-compatible chat endpoint base URL" },
+    ConfigKey { name: "chat.api_key", section: "chat", field: "apiKey", flag: "--chat-api-key", kind: Kind::Str, secret: true, desc: "API key for the chat endpoint" },
+    ConfigKey { name: "chat.temperature", section: "chat", field: "temperature", flag: "--temperature", kind: Kind::F32, secret: false, desc: "chat sampling temperature" },
+    ConfigKey { name: "chat.max_tokens", section: "chat", field: "maxTokens", flag: "--max-tokens", kind: Kind::U32, secret: false, desc: "chat completion max tokens" },
+    ConfigKey { name: "chat.timeout_secs", section: "chat", field: "timeoutSecs", flag: "--chat-timeout", kind: Kind::U64, secret: false, desc: "chat request timeout (seconds)" },
+    ConfigKey { name: "embed.model", section: "embed", field: "model", flag: "--model", kind: Kind::Str, secret: false, desc: "embedding model (local alias or remote model name)" },
+    ConfigKey { name: "embed.base_url", section: "embed", field: "baseUrl", flag: "--base-url", kind: Kind::Str, secret: false, desc: "remote /v1/embeddings base URL (unset = local in-process)" },
+    ConfigKey { name: "embed.api_key", section: "embed", field: "apiKey", flag: "--api-key", kind: Kind::Str, secret: true, desc: "API key for the embeddings endpoint" },
+    ConfigKey { name: "embed.dim", section: "embed", field: "dim", flag: "--embedding-dim", kind: Kind::U32, secret: false, desc: "embedding dimension override (normally auto-probed)" },
 ];
 
 /// Look up a registry entry by dotted name. Accepts `-` for `_` and is
@@ -233,42 +231,26 @@ pub(crate) fn display_value(key: &ConfigKey, val: &str) -> String {
     format!("{}… ({} chars)", prefix, val.chars().count())
 }
 
-/// Four-tier precedence: flag > env > config file > default. Same
-/// contract as `resolve_pref`, plus the persisted tier. When a flag or
-/// env var outranks a *different* value the user saved with `ug config
-/// set`, print a one-time stderr notice — the override still wins, the
-/// user just gets told.
+/// Three-tier precedence: flag > config file > default. When a flag
+/// outranks a *different* value the user saved with `ug config set`,
+/// print a one-time stderr notice — the flag still wins, the user just
+/// gets told.
 pub(crate) fn resolve_pref_cfg(
     flag: Option<String>,
     cfg_name: &'static str,
 ) -> (Option<String>, PrefSource) {
     let key = find_key(cfg_name).unwrap_or_else(|| panic!("unknown config key: {}", cfg_name));
     let saved = with_loaded(|cfg| value_get(cfg, key));
-    let (resolved, src) = match key.env {
-        Some(env_key) => crate::resolve_pref(flag, env_key),
-        None => match flag {
-            Some(v) => (Some(v), PrefSource::Flag),
-            None => (None, PrefSource::Default),
-        },
-    };
-    match (&resolved, src) {
-        (Some(v), PrefSource::Flag) => {
+    match flag {
+        Some(v) => {
             if let Some(s) = &saved {
-                if s != v {
+                if s != &v {
                     notice_override(key, "CLI flag", key.flag, s);
                 }
             }
-            (resolved, src)
+            (Some(v), PrefSource::Flag)
         }
-        (Some(v), PrefSource::Env(env_key)) => {
-            if let Some(s) = &saved {
-                if s != v {
-                    notice_override(key, "env var", env_key, s);
-                }
-            }
-            (resolved, src)
-        }
-        _ => match saved {
+        None => match saved {
             Some(s) => (Some(s), PrefSource::Config(key.name)),
             None => (None, PrefSource::Default),
         },

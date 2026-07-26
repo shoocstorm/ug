@@ -29,9 +29,10 @@
 use crate::storage::db::{EdgeRow, NodeRow};
 use crate::storage::embed::Embedder;
 use crate::storage::store::{KnowledgeStore, NodeKey, StoreError, StoreSet};
+use crate::storage::source::{capture_graph_code, CapturedCode};
 use crate::storage::text::{build_node_text, collect_related_names};
 use crate::types::{GraphData, GraphNode};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// How many nodes to read back from the store at a time while planning.
 /// Caps peak memory: the fetched rows carry their dense vectors, so an
@@ -49,6 +50,8 @@ pub struct IngestStats {
     /// Nodes whose stored row was already identical — neither embedded
     /// nor written.
     pub nodes_unchanged: usize,
+    /// Stale rows removed because the incoming graph no longer has them.
+    pub nodes_pruned: usize,
 }
 
 /// The work a re-ingest actually has to do, after diffing against the store.
@@ -73,7 +76,12 @@ impl IngestPlan {
     /// progress) can still share the row assembly.
     ///
     /// [`to_embed`]: IngestPlan::to_embed
-    pub fn finish(self, graph: &GraphData, vectors: Vec<Vec<f32>>) -> Result<Vec<NodeRow>, String> {
+    pub fn finish(
+        self,
+        graph: &GraphData,
+        vectors: Vec<Vec<f32>>,
+        captured: &HashMap<String, CapturedCode>,
+    ) -> Result<Vec<NodeRow>, String> {
         if vectors.len() != self.to_embed.len() {
             return Err(format!(
                 "embedder returned {} vectors for {} nodes",
@@ -92,6 +100,7 @@ impl IngestPlan {
                 node_text,
                 vector,
                 now,
+                captured.get(&n.id),
             ));
         }
         Ok(rows)
@@ -113,6 +122,7 @@ pub async fn plan_incremental_ingest(
     graph: &GraphData,
     texts: &[String],
     always_write: bool,
+    captured: &HashMap<String, CapturedCode>,
 ) -> Result<IngestPlan, StoreError> {
     let mut plan = IngestPlan {
         reusable: Vec::new(),
@@ -150,7 +160,8 @@ pub async fn plan_incremental_ingest(
             // forward and rejected at upsert.
             match stored.remove(&n.id) {
                 Some(prev) if prev.node_text == *text && prev.vector.len() == dim => {
-                    if !always_write && stored_row_matches(&prev, n, node_type) {
+                    let cap = captured.get(&n.id);
+                    if !always_write && stored_row_matches(&prev, n, node_type, cap) {
                         plan.unchanged += 1;
                     } else {
                         plan.reusable.push(node_row(
@@ -159,6 +170,7 @@ pub async fn plan_incremental_ingest(
                             text.clone(),
                             prev.vector,
                             now,
+                            cap,
                         ));
                     }
                 }
@@ -180,7 +192,21 @@ pub async fn plan_incremental_ingest(
 /// when ingest last ran. `vector` is excluded because the caller has
 /// already established that `node_text` matches, which is what the
 /// vector is derived from.
-fn stored_row_matches(prev: &NodeRow, n: &GraphNode, node_type: &str) -> bool {
+fn stored_row_matches(
+    prev: &NodeRow,
+    n: &GraphNode,
+    node_type: &str,
+    captured: Option<&CapturedCode>,
+) -> bool {
+    // Body edits move `code` without touching `node_text`, so this is what
+    // routes an edited function into the reusable bucket — rewritten, not
+    // re-embedded. Compared only when capture succeeded; a failed read
+    // must not make every node look changed on every run.
+    if let Some(c) = captured {
+        if prev.code != c.code || prev.file_hash != c.file_hash {
+            return false;
+        }
+    }
     prev.name == n.name
         && prev.node_type == node_type
         && prev.description == n.docstring.as_deref().unwrap_or("")
@@ -198,6 +224,7 @@ fn node_row(
     node_text: String,
     vector: Vec<f32>,
     now: i64,
+    captured: Option<&CapturedCode>,
 ) -> NodeRow {
     NodeRow {
         id: n.id.clone(),
@@ -210,6 +237,8 @@ fn node_row(
         last_update_at: now,
         node_text,
         vector,
+        code: captured.map(|c| c.code.clone()).unwrap_or_default(),
+        file_hash: captured.map(|c| c.file_hash.clone()).unwrap_or_default(),
     }
 }
 
@@ -220,25 +249,85 @@ async fn rows_from_plan(
     plan: IngestPlan,
     embedder: &Embedder,
     graph: &GraphData,
+    captured: &HashMap<String, CapturedCode>,
 ) -> Result<(Vec<NodeRow>, usize), Box<dyn std::error::Error + Send + Sync>> {
     let embedded = plan.to_embed.len();
     if embedded == 0 {
-        return Ok((plan.finish(graph, Vec::new())?, 0));
+        return Ok((plan.finish(graph, Vec::new(), captured)?, 0));
     }
     let texts: Vec<String> = plan.to_embed.iter().map(|(_, t)| t.clone()).collect();
     let vectors = embedder.embed(&texts).await?;
-    Ok((plan.finish(graph, vectors)?, embedded))
+    Ok((plan.finish(graph, vectors, captured)?, embedded))
+}
+
+/// Repo root recorded on the graph's index stats, if any. Capture needs
+/// it to resolve the relative paths nodes carry.
+fn repo_root_of(graph: &GraphData) -> Option<std::path::PathBuf> {
+    let root = &graph.stats.as_ref()?.repo_root;
+    if root.is_empty() {
+        return None;
+    }
+    Some(std::path::PathBuf::from(root))
+}
+
+/// The complete id set of `graph`, for [`prune_nodes_absent_from`].
+///
+/// [`prune_nodes_absent_from`]: KnowledgeStore::prune_nodes_absent_from
+pub fn graph_id_set(graph: &GraphData) -> HashSet<String> {
+    graph.nodes.iter().map(|n| n.id.clone()).collect()
+}
+
+/// Drop store rows that the incoming graph no longer contains.
+///
+/// Refuses to run on an empty graph: ingest is an upsert of a *complete*
+/// index, so an empty node list means indexing produced nothing (a bad
+/// path, a failed parse) rather than "the repo is now empty" — and pruning
+/// against it would erase the whole store.
+pub async fn prune_to_graph(
+    store: &dyn KnowledgeStore,
+    graph: &GraphData,
+) -> Result<usize, StoreError> {
+    if graph.nodes.is_empty() {
+        return Ok(0);
+    }
+    store.prune_nodes_absent_from(&graph_id_set(graph)).await
+}
+
+/// Capture the graph's source, resolving the repo root from its index
+/// stats. Empty when no root is recorded (a hand-built or legacy graph),
+/// in which case every code read falls back to the filesystem.
+pub fn capture_for_graph(graph: &GraphData) -> HashMap<String, CapturedCode> {
+    match repo_root_of(graph) {
+        Some(root) => capture_graph_code(graph, &root),
+        None => HashMap::new(),
+    }
 }
 
 /// Build the per-node embedding texts for a graph, in `graph.nodes` order.
-fn build_texts(graph: &GraphData) -> Vec<String> {
+///
+/// Takes the captured source so each node's own comments can be folded in
+/// — for most nodes that is the only prose attached to them.
+pub fn build_texts(graph: &GraphData, captured: &HashMap<String, CapturedCode>) -> Vec<String> {
     let related = collect_related_names(graph);
+    // Shared across the graph so a licence header or file banner is
+    // indexed once rather than on every node of the file.
+    let mut seen_banner = HashSet::new();
     graph
         .nodes
         .iter()
         .map(|n| {
             let names = related.get(&n.id).map(|v| v.as_slice()).unwrap_or(&[][..]);
-            build_node_text(n, names)
+            // Only nodes with a real line range get comments. A File node's
+            // "span" is the entire file, so letting it participate would
+            // hand it every comment in the file and — through the banner
+            // dedup — starve the symbols underneath it.
+            let comments = match (n.start_line, n.end_line, captured.get(&n.id)) {
+                (Some(_), Some(_), Some(c)) => {
+                    crate::storage::comments::extract_prose_comments(&c.code, &mut seen_banner)
+                }
+                _ => String::new(),
+            };
+            crate::storage::text::build_node_text_with_comments(n, names, &comments)
         })
         .collect()
 }
@@ -250,14 +339,16 @@ pub async fn ingest_graph(
     embedder: &Embedder,
     graph: &GraphData,
 ) -> Result<IngestStats, Box<dyn std::error::Error + Send + Sync>> {
-    let texts = build_texts(graph);
-    let plan = plan_incremental_ingest(store, graph, &texts, false).await?;
+    let captured = capture_for_graph(graph);
+    let texts = build_texts(graph, &captured);
+    let plan = plan_incremental_ingest(store, graph, &texts, false, &captured).await?;
     let unchanged = plan.unchanged;
-    let (node_rows, embedded) = rows_from_plan(plan, embedder, graph).await?;
+    let (node_rows, embedded) = rows_from_plan(plan, embedder, graph, &captured).await?;
     let edge_rows = build_edge_rows(graph);
 
     store.upsert_nodes(&node_rows).await?;
     store.upsert_edges(&edge_rows).await?;
+    let pruned = prune_to_graph(store, graph).await?;
 
     Ok(IngestStats {
         nodes_written: node_rows.len(),
@@ -265,6 +356,7 @@ pub async fn ingest_graph(
         embedding_calls: usize::from(embedded > 0),
         nodes_embedded: embedded,
         nodes_unchanged: unchanged,
+        nodes_pruned: pruned,
     })
 }
 
@@ -283,16 +375,24 @@ pub async fn ingest_graph_multi(
     embedder: &Embedder,
     graph: &GraphData,
 ) -> Result<IngestStats, Box<dyn std::error::Error + Send + Sync>> {
-    let texts = build_texts(graph);
+    let captured = capture_for_graph(graph);
+    let texts = build_texts(graph, &captured);
     let plan = match set.stores.first() {
-        Some(store) => plan_incremental_ingest(store.as_ref(), graph, &texts, true).await?,
+        Some(store) => {
+            plan_incremental_ingest(store.as_ref(), graph, &texts, true, &captured).await?
+        }
         None => return Err("empty StoreSet".into()),
     };
-    let (node_rows, embedded) = rows_from_plan(plan, embedder, graph).await?;
+    let (node_rows, embedded) = rows_from_plan(plan, embedder, graph, &captured).await?;
     let edge_rows = build_edge_rows(graph);
 
     set.upsert_nodes(&node_rows).await?;
     set.upsert_edges(&edge_rows).await?;
+    // Every destination is pruned, not just the one the plan read from.
+    let mut pruned = 0usize;
+    for store in &set.stores {
+        pruned += prune_to_graph(store.as_ref(), graph).await?;
+    }
 
     Ok(IngestStats {
         nodes_written: node_rows.len(),
@@ -300,6 +400,7 @@ pub async fn ingest_graph_multi(
         embedding_calls: usize::from(embedded > 0),
         nodes_embedded: embedded,
         nodes_unchanged: 0,
+        nodes_pruned: pruned,
     })
 }
 
@@ -335,6 +436,10 @@ pub async fn reembed_nodes(
     }
     let related = collect_related_names(graph);
     let now = current_unix_secs();
+    let captured = match repo_root_of(graph) {
+        Some(root) => capture_graph_code(graph, &root),
+        None => HashMap::new(),
+    };
     let id_set: std::collections::HashSet<&str> = changed_ids.iter().map(|s| s.as_str()).collect();
 
     let mut texts: Vec<String> = Vec::new();
@@ -354,7 +459,14 @@ pub async fn reembed_nodes(
         .zip(texts.into_iter())
         .zip(vectors.into_iter())
         .map(|((n, node_text), vector)| {
-            node_row(n, format!("{:?}", n.node_type), node_text, vector, now)
+            node_row(
+                n,
+                format!("{:?}", n.node_type),
+                node_text,
+                vector,
+                now,
+                captured.get(&n.id),
+            )
         })
         .collect();
 
@@ -366,6 +478,7 @@ pub async fn reembed_nodes(
         embedding_calls: 1,
         nodes_embedded: rows.len(),
         nodes_unchanged: 0,
+        nodes_pruned: 0,
     })
 }
 

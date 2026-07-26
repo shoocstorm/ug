@@ -286,6 +286,25 @@ pub trait KnowledgeStore: Send + Sync {
         self.nodes_by_ids(&ids).await
     }
 
+    /// Delete stored nodes whose id is **not** in `keep`, returning how many
+    /// were removed.
+    ///
+    /// Ingest is an upsert, so without this a node that disappears from the
+    /// source — a deleted file, a renamed symbol — lingers in the store and
+    /// keeps turning up in search results forever. Callers must pass the
+    /// complete id set of a full graph; pruning against a partial graph
+    /// would delete everything else.
+    ///
+    /// The default implementation prunes nothing and reports 0, for backends
+    /// that cannot enumerate their key space. That is a silent divergence
+    /// from a backend that *does* prune, so implement it where you can.
+    async fn prune_nodes_absent_from(
+        &self,
+        _keep: &std::collections::HashSet<String>,
+    ) -> Result<usize, StoreError> {
+        Ok(0)
+    }
+
     async fn fetch_node(&self, key: &str) -> Result<Option<NodeRow>, StoreError>;
     async fn count_nodes(&self) -> Result<usize, StoreError>;
     async fn count_edges(&self) -> Result<usize, StoreError>;

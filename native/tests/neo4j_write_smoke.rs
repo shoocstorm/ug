@@ -37,6 +37,8 @@ fn sample_node(id: &str, name: &str, kind: &str, seed: f32) -> NodeRow {
         last_update_at: 1_700_000_000,
         node_text: format!("{}: {} description", kind, name),
         vector: unit_vec(seed),
+        code: String::new(),
+        file_hash: String::new(),
     }
 }
 

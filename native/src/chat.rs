@@ -162,6 +162,7 @@ impl ChatMessage {
 #[derive(Clone, Debug, Default)]
 pub struct Completion {
     pub content: String,
+    #[allow(dead_code)]
     pub reasoning: String,
     pub tool_calls: Vec<ToolCall>,
     pub usage: Option<Usage>,

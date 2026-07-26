@@ -127,6 +127,20 @@ pub struct NodeRow {
     pub last_update_at: i64,
     pub node_text: String,
     pub vector: Vec<f32>,
+    /// The node's source text, captured at index time.
+    ///
+    /// Stored so retrieval is self-contained: without it every code read
+    /// goes back to the working tree, which means the row's description
+    /// and the code an agent sees can disagree, and a shifted line range
+    /// silently returns the wrong lines with no error. Empty for nodes
+    /// with no source (folders) and for rows written before this column
+    /// existed — callers fall back to the filesystem in that case.
+    ///
+    /// Deliberately *not* part of `node_text`: bodies are not embedded.
+    pub code: String,
+    /// blake3 of the whole file `code` was taken from, so staleness is
+    /// checkable against disk with one hash instead of guessed at.
+    pub file_hash: String,
 }
 
 #[derive(Debug, Clone)]
@@ -261,6 +275,13 @@ impl Db {
         self.id_to_key.write().unwrap().insert(id, key);
     }
 
+    /// Drop a key from both caches after its node is deleted, so a later
+    /// `lookup_id` can't hand out an id that no longer resolves.
+    fn forget(&self, key: &str, id: u64) {
+        self.key_to_id.write().unwrap().remove(key);
+        self.id_to_key.write().unwrap().remove(&id);
+    }
+
     /// Translate an OverGraph numeric id back to its project string id.
     /// Falls back to a synthetic `"node:<id>"` placeholder when the
     /// reverse cache misses; that should only happen for traversal hits
@@ -298,7 +319,13 @@ impl Db {
                 props: node_props(r),
                 weight: 1.0,
                 dense_vector: Some(r.vector.clone()),
-                sparse_vector: None,
+                // Was `None`, which left the keyword half of
+                // `hybrid_search` matching against nothing — queries built
+                // a sparse vector but no node had one to score against.
+                sparse_vector: Some(crate::storage::text::build_node_sparse_vector(
+                    &r.node_text,
+                    &r.code,
+                )),
             });
         }
         let ids = self.engine.batch_upsert_nodes(&inputs)?;
@@ -395,6 +422,8 @@ fn node_props(r: &NodeRow) -> BTreeMap<String, PropValue> {
     m.insert("end_line".into(), PropValue::UInt(r.end_line as u64));
     m.insert("last_update_at".into(), PropValue::Int(r.last_update_at));
     m.insert("node_text".into(), PropValue::String(r.node_text.clone()));
+    m.insert("code".into(), PropValue::String(r.code.clone()));
+    m.insert("file_hash".into(), PropValue::String(r.file_hash.clone()));
     m
 }
 
@@ -440,6 +469,8 @@ fn node_record_to_row(rec: &NodeRecord) -> NodeRow {
         last_update_at: prop_i64(&rec.props, "last_update_at"),
         node_text: prop_string(&rec.props, "node_text"),
         vector: rec.dense_vector.clone().unwrap_or_default(),
+        code: prop_string(&rec.props, "code"),
+        file_hash: prop_string(&rec.props, "file_hash"),
     }
 }
 
@@ -618,21 +649,48 @@ pub async fn nodes_for_upsert(db: &Db, keys: &[NodeKey]) -> Result<Vec<NodeRow>,
     if keys.is_empty() {
         return Ok(Vec::new());
     }
-    let mut out: Vec<NodeRow> = Vec::with_capacity(keys.len());
-    for k in keys {
-        let cached = db.key_to_id.read().unwrap().get(&k.id).copied();
-        let rec = match cached {
-            Some(numeric) => db.engine.get_node(numeric)?,
-            None => db
-                .engine
-                .get_node_by_key(node_type_to_id(&k.node_type), &k.id)?,
-        };
-        if let Some(rec) = rec {
-            db.remember(rec.key.clone(), rec.id);
-            out.push(node_record_to_row(&rec));
-        }
+    // One batched engine round-trip for the whole chunk, keyed by
+    // `(type_id, key)` — the pair OverGraph actually indexes on. Going
+    // through `lookup_id` instead would probe all ten type ids per node on
+    // a cold cache, which is precisely the situation ingest runs in.
+    let lookup: Vec<(u32, &str)> = keys
+        .iter()
+        .map(|k| (node_type_to_id(&k.node_type), k.id.as_str()))
+        .collect();
+    let recs = db.engine.get_nodes_by_keys(&lookup)?;
+
+    let mut out: Vec<NodeRow> = Vec::with_capacity(recs.len());
+    for rec in recs.into_iter().flatten() {
+        db.remember(rec.key.clone(), rec.id);
+        out.push(node_record_to_row(&rec));
     }
     Ok(out)
+}
+
+/// Delete every stored node whose key is absent from `keep`.
+///
+/// Sweeps each node type in turn (OverGraph indexes nodes per type, so
+/// there is no single "all nodes" cursor) and deletes the misses. Edges
+/// pointing at a deleted node are left to OverGraph's own tombstoning.
+///
+/// The caller is responsible for `keep` being a *complete* graph — see
+/// [`KnowledgeStore::prune_nodes_absent_from`].
+pub async fn prune_nodes_absent_from(
+    db: &Db,
+    keep: &std::collections::HashSet<String>,
+) -> Result<usize, DbError> {
+    let mut removed = 0usize;
+    for &type_id in crate::storage::types_registry::ALL_NODE_TYPE_IDS {
+        for rec in db.engine.get_nodes_by_type(type_id)? {
+            if keep.contains(&rec.key) {
+                continue;
+            }
+            db.engine.delete_node(rec.id)?;
+            db.forget(&rec.key, rec.id);
+            removed += 1;
+        }
+    }
+    Ok(removed)
 }
 
 /// Helper used by Phase D's `query::traverse_filtered` retarget — wraps
@@ -792,6 +850,15 @@ impl KnowledgeStore for Db {
 
     async fn nodes_for_upsert(&self, keys: &[NodeKey]) -> Result<Vec<NodeRow>, StoreError> {
         nodes_for_upsert(self, keys)
+            .await
+            .map_err(StoreError::from)
+    }
+
+    async fn prune_nodes_absent_from(
+        &self,
+        keep: &std::collections::HashSet<String>,
+    ) -> Result<usize, StoreError> {
+        prune_nodes_absent_from(self, keep)
             .await
             .map_err(StoreError::from)
     }

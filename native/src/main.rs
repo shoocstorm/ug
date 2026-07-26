@@ -223,67 +223,8 @@ fn write_or_print(output_path: Option<&str>, data: &str, label: &str) {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PrefSource {
     Flag,
-    Env(&'static str),
     Config(&'static str),
     Default,
-}
-
-/// Three-tier precedence: an explicit flag value wins, else the named
-/// env var (blank values are treated as unset), else `None`/`Default`.
-pub(crate) fn resolve_pref(
-    flag: Option<String>,
-    env_key: &'static str,
-) -> (Option<String>, PrefSource) {
-    if let Some(v) = flag {
-        return (Some(v), PrefSource::Flag);
-    }
-    match std::env::var(env_key) {
-        Ok(v) if !v.trim().is_empty() => (Some(v), PrefSource::Env(env_key)),
-        _ => (None, PrefSource::Default),
-    }
-}
-
-#[cfg(test)]
-mod pref_tests {
-    use super::{resolve_pref, PrefSource};
-
-    // Each test uses its own env var name so they can't race each other
-    // under cargo's default parallel test execution.
-
-    #[test]
-    fn flag_wins_over_env_and_default() {
-        std::env::set_var("UG_TEST_PREF_FLAG_WINS", "from-env");
-        let (val, src) = resolve_pref(Some("from-flag".to_string()), "UG_TEST_PREF_FLAG_WINS");
-        assert_eq!(val.as_deref(), Some("from-flag"));
-        assert_eq!(src, PrefSource::Flag);
-        std::env::remove_var("UG_TEST_PREF_FLAG_WINS");
-    }
-
-    #[test]
-    fn env_wins_when_no_flag() {
-        std::env::set_var("UG_TEST_PREF_ENV_WINS", "from-env");
-        let (val, src) = resolve_pref(None, "UG_TEST_PREF_ENV_WINS");
-        assert_eq!(val.as_deref(), Some("from-env"));
-        assert_eq!(src, PrefSource::Env("UG_TEST_PREF_ENV_WINS"));
-        std::env::remove_var("UG_TEST_PREF_ENV_WINS");
-    }
-
-    #[test]
-    fn default_when_neither_set() {
-        std::env::remove_var("UG_TEST_PREF_NEITHER_SET");
-        let (val, src) = resolve_pref(None, "UG_TEST_PREF_NEITHER_SET");
-        assert_eq!(val, None);
-        assert_eq!(src, PrefSource::Default);
-    }
-
-    #[test]
-    fn blank_env_value_treated_as_unset() {
-        std::env::set_var("UG_TEST_PREF_BLANK", "   ");
-        let (val, src) = resolve_pref(None, "UG_TEST_PREF_BLANK");
-        assert_eq!(val, None);
-        assert_eq!(src, PrefSource::Default);
-        std::env::remove_var("UG_TEST_PREF_BLANK");
-    }
 }
 
 // ---------- Embedder / runtime helpers ----------
@@ -1943,8 +1884,7 @@ fn run_gen(args: &[String]) {
             return;
         }
         println!(
-            "Run '{C_BOLD} ug serve and open {C_CYAN}http://127.0.0.1:8080{C_RESET}",
-            graph_path
+            "Run '{C_BOLD}ug serve{C_RESET}' and open {C_CYAN}http://127.0.0.1:8080{C_RESET}"
         );
         println!("Total time: {C_BOLD}{:?}{C_RESET}", start_total.elapsed());
         return;
@@ -1988,9 +1928,7 @@ fn run_gen(args: &[String]) {
         chain_to_serve(args, &graph_path, &db_path, false, &repo_root);
     } else {
         println!(
-            "Run '{C_BOLD} ug serve and open {C_CYAN}http://127.0.0.1:8080{C_RESET} to view the graph.",
-            graph_path,
-            repo_root
+            "Run '{C_BOLD}ug serve{C_RESET}' and open {C_CYAN}http://127.0.0.1:8080{C_RESET} to view the graph."
         );
     }
 }
@@ -2041,6 +1979,7 @@ async fn ingest_graph_with_progress(
     store: &dyn KnowledgeStore,
     embedder: &Embedder,
     graph: &GraphData,
+    prune: bool,
 ) -> Result<(usize, usize), String> {
     let nodes_count = graph.nodes.len();
     let edges_count = graph.edges.len();
@@ -2049,15 +1988,10 @@ async fn ingest_graph_with_progress(
     print!("{C_CYAN}▸{C_RESET} Building node texts ({})", nodes_count);
     let _ = std::io::Write::flush(&mut std::io::stdout());
 
-    let related = storage::collect_related_names(graph);
-    let texts: Vec<String> = graph
-        .nodes
-        .iter()
-        .map(|n| {
-            let names = related.get(&n.id).map(|v| v.as_slice()).unwrap_or(&[][..]);
-            storage::build_node_text(n, names)
-        })
-        .collect();
+    // Capture first: node texts fold in each node's own comments, and the
+    // same captured source is written to the rows further down.
+    let captured = storage::capture_for_graph(graph);
+    let texts = storage::build_texts(graph, &captured);
     println!(
         "\r{C_CYAN}▸{C_RESET} Building node texts: {C_GREEN}100.0% ✓ done{C_RESET} in {C_BOLD}{:?}{C_RESET}",
         t0.elapsed()
@@ -2069,7 +2003,7 @@ async fn ingest_graph_with_progress(
     let tp = std::time::Instant::now();
     print!("{C_CYAN}▸{C_RESET} Diffing against Graph DB ({})", nodes_count);
     let _ = std::io::Write::flush(&mut std::io::stdout());
-    let plan = storage::plan_incremental_ingest(store, graph, &texts, false)
+    let plan = storage::plan_incremental_ingest(store, graph, &texts, false, &captured)
         .await
         .map_err(|e| format!("reading existing nodes: {}", e))?;
     let to_embed = plan.to_embed.len();
@@ -2110,7 +2044,7 @@ async fn ingest_graph_with_progress(
     }
 
     let t2 = std::time::Instant::now();
-    let node_rows = plan.finish(graph, vectors)?;
+    let node_rows = plan.finish(graph, vectors, &captured)?;
 
     let write_batch = 1000;
     let total = node_rows.len();
@@ -2179,6 +2113,20 @@ async fn ingest_graph_with_progress(
         t3.elapsed()
     );
 
+    if prune {
+        let t4 = std::time::Instant::now();
+        let removed = storage::prune_to_graph(store, graph)
+            .await
+            .map_err(|e| format!("prune stale nodes: {}", e))?;
+        if removed > 0 {
+            println!(
+                "{C_CYAN}▸{C_RESET} Pruning stale nodes: {C_GREEN}✓ removed {}{C_RESET} in {C_BOLD}{:?}{C_RESET}",
+                removed,
+                t4.elapsed()
+            );
+        }
+    }
+
     Ok((nodes_count, edges_count))
 }
 
@@ -2189,6 +2137,11 @@ fn run_gen_ingest(
 ) -> Result<(usize, usize), String> {
     let graph: GraphData =
         serde_json::from_str(graph_json).map_err(|e| format!("parse graph: {}", e))?;
+    // Ingest upserts, so a node dropped from the source would otherwise
+    // linger in the store and keep surfacing in search. Pruning is on by
+    // default because `ug gen` indexes a whole repo; `--no-prune` is for
+    // the case where several inputs deliberately share one project dir.
+    let prune = !has_flag(args, "--no-prune");
     let mut embedder = embedder_from_args(args);
     let dim_was_explicit = flag_value(args, &["--embedding-dim"]).is_some();
     let rt = tokio_runtime();
@@ -2220,7 +2173,7 @@ fn run_gen_ingest(
             }
         }
         announce_destinations(&specs);
-        ingest_with_specs(&specs, &embedder, &graph).await
+        ingest_with_specs(&specs, &embedder, &graph, prune).await
     })
 }
 
@@ -2231,6 +2184,7 @@ async fn ingest_with_specs(
     specs: &[StoreSpec],
     embedder: &Embedder,
     graph: &GraphData,
+    prune: bool,
 ) -> Result<(usize, usize), String> {
     let mut stores: Vec<Box<dyn KnowledgeStore>> = Vec::with_capacity(specs.len());
     for spec in specs {
@@ -2241,11 +2195,11 @@ async fn ingest_with_specs(
     }
     if stores.len() == 1 {
         let store = stores.into_iter().next().unwrap();
-        ingest_graph_with_progress(store.as_ref(), embedder, graph).await
+        ingest_graph_with_progress(store.as_ref(), embedder, graph, prune).await
     } else {
         let set = StoreSet::new(stores);
         set.validate_dims().map_err(|e| format!("dim mismatch across destinations: {}", e))?;
-        ingest_graph_multi_with_progress(&set, embedder, graph).await
+        ingest_graph_multi_with_progress(&set, embedder, graph, prune).await
     }
 }
 
@@ -2256,22 +2210,15 @@ async fn ingest_graph_multi_with_progress(
     set: &StoreSet,
     embedder: &Embedder,
     graph: &GraphData,
+    prune: bool,
 ) -> Result<(usize, usize), String> {
-    use storage::{collect_related_names, build_node_text};
 
     let nodes_count = graph.nodes.len();
     let edges_count = graph.edges.len();
 
     let t0 = std::time::Instant::now();
-    let related = collect_related_names(graph);
-    let texts: Vec<String> = graph
-        .nodes
-        .iter()
-        .map(|n| {
-            let names = related.get(&n.id).map(|v| v.as_slice()).unwrap_or(&[][..]);
-            build_node_text(n, names)
-        })
-        .collect();
+    let captured = storage::capture_for_graph(graph);
+    let texts = storage::build_texts(graph, &captured);
     println!(
         "{C_CYAN}▸{C_RESET} Building node texts: {C_GREEN}done{C_RESET} ({}) in {C_BOLD}{:?}{C_RESET}",
         nodes_count,
@@ -2285,7 +2232,7 @@ async fn ingest_graph_multi_with_progress(
         .stores
         .first()
         .ok_or_else(|| "empty StoreSet".to_string())?;
-    let plan = storage::plan_incremental_ingest(first.as_ref(), graph, &texts, true)
+    let plan = storage::plan_incremental_ingest(first.as_ref(), graph, &texts, true, &captured)
         .await
         .map_err(|e| format!("reading existing nodes: {}", e))?;
     let to_embed = plan.to_embed.len();
@@ -2313,7 +2260,7 @@ async fn ingest_graph_multi_with_progress(
         t1.elapsed()
     );
 
-    let node_rows = plan.finish(graph, vectors)?;
+    let node_rows = plan.finish(graph, vectors, &captured)?;
     let edge_rows: Vec<storage::EdgeRow> = graph
         .edges
         .iter()
@@ -2349,6 +2296,25 @@ async fn ingest_graph_multi_with_progress(
         set.len(),
         t3.elapsed()
     );
+
+    if prune {
+        let t4 = std::time::Instant::now();
+        // Every destination, not just the one the plan was built against.
+        let mut removed = 0usize;
+        for store in &set.stores {
+            removed += storage::prune_to_graph(store.as_ref(), graph)
+                .await
+                .map_err(|e| format!("prune stale nodes: {}", e))?;
+        }
+        if removed > 0 {
+            println!(
+                "{C_CYAN}▸{C_RESET} Pruning stale nodes: {C_GREEN}done{C_RESET} (removed {}, ×{} backends) in {C_BOLD}{:?}{C_RESET}",
+                removed,
+                set.len(),
+                t4.elapsed()
+            );
+        }
+    }
 
     Ok((nodes_count, edges_count))
 }
@@ -3137,16 +3103,9 @@ fn run_config(args: &[String]) {
                 config::display_value(key, value),
                 path.display()
             );
-            // A live env var still outranks what was just saved — say so
-            // now rather than letting the next command surprise them.
-            if let Some(env_key) = key.env {
-                if std::env::var(env_key).map(|v| !v.trim().is_empty()).unwrap_or(false) {
-                    println!(
-                        "{C_YELLOW}▸ note:{C_RESET} ${} is set in your environment and overrides this value until unset"
-                        , env_key
-                    );
-                }
-            }
+            // Env vars are no longer consulted for config keys — `ug config
+            // set` is the way to persist. This block intentionally empty to
+            // make that clear; remove when the dust settles.
         }
         "unset" | "rm" => {
             let Some(name) = args.get(1) else {
@@ -3191,7 +3150,7 @@ fn config_key_or_exit(name: &str) -> &'static config::ConfigKey {
 fn run_config_list() {
     let path = config::config_path();
     println!("{C_BOLD}UltraGraph config{C_RESET}  {C_DIM}{}{C_RESET}", path.display());
-    println!("{C_DIM}precedence: CLI flag > env var > this file > built-in default{C_RESET}");
+    println!("{C_DIM}precedence: CLI flag > this file > built-in default{C_RESET}");
     println!();
     for key in config::CONFIG_KEYS {
         let saved = config::get(key.name);
@@ -3199,18 +3158,8 @@ fn run_config_list() {
             Some(v) => format!("{C_CYAN}{}{C_RESET}", config::display_value(key, v)),
             None => format!("{C_DIM}(not set){C_RESET}"),
         };
-        // Flag an active env var: the saved value (or lack of one) is
-        // not what commands will actually use right now.
-        let env_note = key
-            .env
-            .filter(|e| std::env::var(e).map(|v| !v.trim().is_empty()).unwrap_or(false))
-            .map(|e| format!("  {C_YELLOW}⚠ overridden by ${}{C_RESET}", e))
-            .unwrap_or_default();
-        let overrides = match key.env {
-            Some(env) => format!("{} / ${}", key.flag, env),
-            None => key.flag.to_string(),
-        };
-        println!("  {C_BOLD}{:<18}{C_RESET} {}{}", key.name, value_label, env_note);
+        let overrides = key.flag.to_string();
+        println!("  {C_BOLD}{:<18}{C_RESET} {}", key.name, value_label);
         println!("  {C_DIM}{:<18} {} [{}]{C_RESET}", "", key.desc, overrides);
     }
     println!();
@@ -3224,11 +3173,11 @@ fn print_config_help() {
     println!("{C_BOLD}Usage:{C_RESET}  ug config [list|get|set|unset|path] [<key>] [<value>]");
     println!();
     println!("  Saved to {C_CYAN}$UG_HOME/config.json{C_RESET} (default ~/.ug/config.json) and used by every");
-    println!("  command as the fallback below CLI flags and env vars:");
+    println!("  command as the fallback below CLI flags:");
     println!();
-    println!("    {C_BOLD}CLI flag  >  env var  >  ug config  >  built-in default{C_RESET}");
+    println!("    {C_BOLD}CLI flag  >  ug config  >  built-in default{C_RESET}");
     println!();
-    println!("  A flag or env var that overrides a saved value prints a one-line notice.");
+    println!("  A flag that overrides a saved value prints a one-line notice.");
     println!();
     println!("{C_BOLD}Subcommands:{C_RESET}");
     println!("  {C_CYAN}list{C_RESET}               Show every key and its saved value (default)");
@@ -3252,7 +3201,6 @@ fn print_config_help() {
 fn doctor_source_label(s: PrefSource) -> String {
     match s {
         PrefSource::Flag => "flag".to_string(),
-        PrefSource::Env(name) => format!("env:{}", name),
         PrefSource::Config(key) => format!("config:{}", key),
         PrefSource::Default => "default".to_string(),
     }
@@ -3602,7 +3550,13 @@ fn run_ingest(args: &[String]) {
         let specs = store_specs_from_args(args, dim);
         announce_destinations(&specs);
         let dest_label: Vec<String> = specs.iter().map(|s| s.name().to_string()).collect();
-        match ingest_with_specs(&specs, &embedder, &graph).await {
+        // Opt-in here, unlike `ug gen`. `ug gen` owns a project and its
+        // store should mirror the repo it indexed, so it prunes by
+        // default. `ug ingest` just pushes a graph file at a destination,
+        // and fanning several graphs into one store is a legitimate use —
+        // pruning by default would make each ingest erase the last.
+        let prune = has_flag(args, "--prune");
+        match ingest_with_specs(&specs, &embedder, &graph, prune).await {
             Ok((nodes_written, edges_written)) => {
                 println!("────────────────────────────────────────");
                 println!(
@@ -5205,6 +5159,12 @@ fn print_ingest_help() {
     println!("  {C_CYAN}-i, --input{C_RESET} <file>  Graph JSON (default: ~/.ug/<name>/graph.json)");
     println!("  {C_CYAN}-o, --output{C_RESET} <dir>  OverGraph directory (default: ~/.ug/<name>/ugdb)");
     println!("  {C_CYAN}-n, --name{C_RESET} <name>   Project name (default: cwd basename)");
+    println!(
+        "  {C_YELLOW}--prune{C_RESET}             Delete stored nodes absent from this graph"
+    );
+    println!(
+        "                          (off by default: several graphs may share one store)"
+    );
     println!();
     println!("{C_BOLD}Destinations (default: overgraph):{C_RESET}");
     println!("  {C_CYAN}--dest{C_RESET} <kind[,kind...]>   {C_BOLD}overgraph{C_RESET} | {C_BOLD}neo4j{C_RESET}. Comma-separated for fan-out ingest.");
@@ -5441,6 +5401,9 @@ fn print_gen_help() {
     );
     println!(
         "  {C_YELLOW}--no-cache{C_RESET}                Re-parse every file, ignoring the parse cache"
+    );
+    println!(
+        "  {C_YELLOW}--no-prune{C_RESET}                Keep store rows for nodes no longer in the graph"
     );
     println!(
         "  {C_CYAN}-n, --name{C_RESET} <name>        Project name (default: input dir basename)"

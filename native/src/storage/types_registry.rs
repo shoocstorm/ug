@@ -25,6 +25,24 @@ pub const NODE_TYPE_CONSTANT: u32 = 9;
 // hydration path so older graphs don't crash a newer build.
 pub const NODE_TYPE_UNKNOWN: u32 = 99;
 
+/// Every node type id that can appear on disk.
+///
+/// Callers that must sweep the whole store — `lookup_id`'s slow path, the
+/// ingest pruner — iterate this rather than hardcoding the list, so adding
+/// a type above cannot leave a sweep silently missing it.
+pub const ALL_NODE_TYPE_IDS: &[u32] = &[
+    NODE_TYPE_FILE,
+    NODE_TYPE_FOLDER,
+    NODE_TYPE_FUNCTION,
+    NODE_TYPE_CLASS,
+    NODE_TYPE_INTERFACE,
+    NODE_TYPE_CONCEPT,
+    NODE_TYPE_DEPENDENCY,
+    NODE_TYPE_CONFIG,
+    NODE_TYPE_CONSTANT,
+    NODE_TYPE_UNKNOWN,
+];
+
 // ---- Edge types ----
 pub const EDGE_TYPE_DEPENDS_ON: u32 = 100;
 pub const EDGE_TYPE_CALLS: u32 = 101;

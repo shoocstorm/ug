@@ -40,6 +40,8 @@ fn make_node(i: usize) -> NodeRow {
         last_update_at: 1_700_000_000,
         node_text: format!("Function: fn_{}. synthetic", i),
         vector: fake_vector(i),
+        code: String::new(),
+        file_hash: String::new(),
     }
 }
 

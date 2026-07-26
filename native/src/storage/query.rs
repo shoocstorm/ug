@@ -263,6 +263,21 @@ pub struct RankedContext {
 /// Read `start_line..=end_line` from `file` (1-indexed line numbers, both
 /// inclusive). Returns `None` for missing files, unreadable files, or zero
 /// line ranges. `repo_root` is prepended when the path is relative.
+/// Source for a row, preferring what ingest captured over the working tree.
+///
+/// The stored copy is what the row's description and embedding were built
+/// from, so serving it keeps everything an agent sees internally
+/// consistent. It also removes the silent-corruption case: a line range
+/// that has drifted still *resolves* against the file on disk, handing back
+/// the wrong lines with no error. Falls back to reading the file for rows
+/// written before the column existed, or whose capture failed.
+pub fn snippet_for(row: &NodeRow, repo_root: &Path) -> Option<String> {
+    if !row.code.is_empty() {
+        return Some(row.code.clone());
+    }
+    read_snippet(repo_root, &row.file, row.start_line, row.end_line)
+}
+
 pub fn read_snippet(
     repo_root: &Path,
     file: &str,
@@ -474,7 +489,7 @@ async fn search_kb_ppr(
         };
         let score = score_by_id.get(id).copied().unwrap_or(0.0);
         let snippet = if opts.include_snippets {
-            read_snippet(opts.repo_root, &n.file, n.start_line, n.end_line)
+            snippet_for(n, opts.repo_root)
         } else {
             None
         };
@@ -576,12 +591,7 @@ async fn search_kb_mmr(
     for hit in reranked {
         let hop = traversal.distances.get(&hit.node.id).copied().unwrap_or(0);
         let snippet = if opts.include_snippets {
-            read_snippet(
-                opts.repo_root,
-                &hit.node.file,
-                hit.node.start_line,
-                hit.node.end_line,
-            )
+            snippet_for(&hit.node, opts.repo_root)
         } else {
             None
         };

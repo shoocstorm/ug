@@ -41,6 +41,8 @@ fn sample_node(id: &str, name: &str, node_type: &str, vector_seed: f32) -> NodeR
         last_update_at: 1_700_000_000,
         node_text: format!("Function: {}", name),
         vector: unit_vector(vector_seed),
+        code: String::new(),
+        file_hash: String::new(),
     }
 }
 
