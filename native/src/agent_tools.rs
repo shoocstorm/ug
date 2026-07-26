@@ -2252,7 +2252,7 @@ pub fn render_shortest_path(r: &ShortestPathResult, style: Render, strict: bool)
 // ---------------------------------------------------------------------------
 
 /// Canonical tool names, in the order they're most useful to an agent.
-pub const TOOL_NAMES: &[&str] = &[
+pub const AGENT_TOOL_NAMES: &[&str] = &[
     "project_overview",
     "find_symbols",
     "file_outline",
@@ -2351,7 +2351,7 @@ pub fn run_tool(
         other => Err(format!(
             "Unknown agent tool '{}'. Expected one of: {}.",
             other,
-            TOOL_NAMES.join(", ")
+            AGENT_TOOL_NAMES.join(", ")
         )),
     }
 }

@@ -1104,7 +1104,7 @@ async fn resolve_ctx(
 /// GET /api/tools — discovery for the graph-backed agent tools, so an agent
 /// speaking HTTP can enumerate them the way an MCP client reads `tools/list`.
 async fn api_tools() -> Response {
-    let tools: Vec<serde_json::Value> = ultragraph::agent_tools::TOOL_NAMES
+    let tools: Vec<serde_json::Value> = ultragraph::agent_tools::AGENT_TOOL_NAMES
         .iter()
         .map(|name| {
             serde_json::json!({

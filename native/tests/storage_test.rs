@@ -14,7 +14,7 @@ use ultragraph::storage::db::{
     edges_from, edges_to, hybrid_search, nodes_by_ids, traverse_string_ids, vector_search, Db,
     EdgeRow, NodeRow,
 };
-use ultragraph::storage::embed::EMBEDDING_DIM;
+use ultragraph::storage::embed::DEFAULT_EMBEDDING_DIM;
 use ultragraph::storage::ppr::run_ppr;
 use ultragraph::storage::query::Direction;
 use ultragraph::storage::text::build_sparse_keyword_vector;
@@ -23,8 +23,8 @@ fn unit_vector(seed: f32) -> Vec<f32> {
     // Deterministic 1024-dim vector with a single high component so
     // ANN search returns the seeded node first. Cosine metric uses
     // direction only, magnitude is irrelevant.
-    let mut v = vec![0.0f32; EMBEDDING_DIM];
-    let idx = (seed as usize) % EMBEDDING_DIM;
+    let mut v = vec![0.0f32; DEFAULT_EMBEDDING_DIM];
+    let idx = (seed as usize) % DEFAULT_EMBEDDING_DIM;
     v[idx] = 1.0;
     v
 }

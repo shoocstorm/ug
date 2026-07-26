@@ -30,9 +30,6 @@ pub const DEFAULT_API_KEY: &str = "1234";
 /// 384 matches `bge-small-en-v1.5` and `all-MiniLM-L6-v2`. Acts as the
 /// fallback dim for legacy databases without a `ug-meta.json` sidecar.
 pub const DEFAULT_EMBEDDING_DIM: usize = 384;
-/// Legacy alias preserved for existing tests/benches that use this as the
-/// fixture size. New code should use `EmbedderConfig::dim` instead.
-pub const EMBEDDING_DIM: usize = DEFAULT_EMBEDDING_DIM;
 pub const DEFAULT_BATCH_SIZE: usize = 32;
 
 #[derive(Clone, Debug)]

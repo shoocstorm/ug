@@ -11,14 +11,14 @@
 
 use tempfile::TempDir;
 use ultragraph::storage::db::{Db, NodeRow};
-use ultragraph::storage::embed::EMBEDDING_DIM;
+use ultragraph::storage::embed::DEFAULT_EMBEDDING_DIM;
 use ultragraph::storage::store::KnowledgeStore;
 use ultragraph::storage::{build_node_text, collect_related_names, plan_incremental_ingest};
 use ultragraph::types::{GraphData, GraphEdge, GraphEdgeType, GraphNode, GraphNodeType};
 
 fn unit_vector(seed: usize) -> Vec<f32> {
-    let mut v = vec![0.0f32; EMBEDDING_DIM];
-    v[seed % EMBEDDING_DIM] = 1.0;
+    let mut v = vec![0.0f32; DEFAULT_EMBEDDING_DIM];
+    v[seed % DEFAULT_EMBEDDING_DIM] = 1.0;
     v
 }
 

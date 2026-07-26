@@ -11,7 +11,7 @@
 use std::time::Instant;
 use tempfile::TempDir;
 use ultragraph::storage::db::{hybrid_search, Db, EdgeRow, NodeRow};
-use ultragraph::storage::embed::EMBEDDING_DIM;
+use ultragraph::storage::embed::DEFAULT_EMBEDDING_DIM;
 use ultragraph::storage::text::build_sparse_keyword_vector;
 
 const N_NODES: usize = 1000;
@@ -19,11 +19,11 @@ const N_EDGES: usize = 5000;
 const N_QUERIES: usize = 100;
 
 fn fake_vector(seed: usize) -> Vec<f32> {
-    let mut v = vec![0.0f32; EMBEDDING_DIM];
+    let mut v = vec![0.0f32; DEFAULT_EMBEDDING_DIM];
     // Spread the energy across 4 dimensions per seed so cosine search
     // produces meaningful rankings instead of degenerate ties.
     for offset in 0..4 {
-        v[(seed + offset * 257) % EMBEDDING_DIM] = 1.0 / (offset as f32 + 1.0);
+        v[(seed + offset * 257) % DEFAULT_EMBEDDING_DIM] = 1.0 / (offset as f32 + 1.0);
     }
     v
 }
