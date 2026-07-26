@@ -113,8 +113,9 @@ Before reaching the embedder the body is cleaned:
   `ingest guide`. The URL is not query vocabulary, and the path is already an
   `Imports` edge.
 - **blank lines collapse**, so the section arrives as one run of prose.
-- **capped at 1,500 bytes**, char-boundary-safe, with a trailing `…`. Long
-  sections keep their leading paragraphs, which in practice state the topic.
+- **capped at 8,192 bytes** (`SECTION_TEXT_HARD_CAP`) for storage. That is a
+  bound on `graph.json`, not on the embedding — how much of it reaches the
+  vector is decided later, per §6.2.
 
 Markdown also **opts out of comment extraction** (`storage/ingest.rs`,
 `PROSE_EXTS`). The comment scanner treats `#` as a line-comment marker — which
@@ -201,13 +202,15 @@ section's own lines keeps that churn local to the edited section.
 question about a documented concept reaches the doc section directly rather
 than only via its heading words.
 
-**Sparse channel** — `build_node_sparse_vector` tokenizes `node_text` at weight
-1.0 plus `code` at weight 0.35, capped at 512 dimensions, keeping the heaviest
-terms. This is why keyword search found markdown content even while the dense
-side was blind to it, and why fenced code excluded from the embedding is still
-searchable. Both ingest and query use the same tokenizer (FNV-1a over
-lowercased alphanumeric runs, plus identifier splitting), so dimensions collide
-by construction.
+**Sparse channel — BM25.** `build_node_sparse_vector` tokenizes `node_text` at
+weight 1.0 plus `code` at weight 0.35, then puts each term's accumulated
+frequency through BM25 saturation. Both ingest and query use the same tokenizer
+(FNV-1a over lowercased alphanumeric runs, plus identifier splitting), so
+dimensions collide by construction. This is why keyword search finds markdown
+content the dense side may have trimmed, and why fenced code excluded from the
+embedding is still searchable.
+
+See §5.1 for how BM25 fits an engine that only computes dot products.
 
 **Snippets** — `query::snippet_for` returns the stored `code` column and only
 falls back to reading the working tree when that column is empty: folders,
@@ -220,13 +223,68 @@ store predating that column to stop the fallback reads.
 range that has merely shifted still *resolves* against a changed file and would
 silently return the wrong lines; `get_code` compares the hash and flags the
 slice instead (`agent_tools.rs`, `stored_slice`). Search results do not
-currently carry that flag.
+currently carry that flag, but the Chunk tab does.
+
+### 5.1 BM25 without a second index
+
+OverGraph's sparse scoring is a plain dot product over posting lists —
+`score += query_weight × stored_weight` (`sparse_postings.rs`). It has no
+notion of a scoring model, no IDF, no `df`. That turns out to be exactly what
+BM25 needs, because BM25 factorizes:
+
+```
+score = Σ  IDF(t) · [ tf(t,d)·(k1+1) / (tf(t,d) + k1·(1 − b + b·|d|/avgdl)) ]
+           ------    ---------------------------------------------------
+           query side                     document side
+```
+
+Store the document-side factor as the sparse weight, put IDF in the **query**
+vector, and the dot product the engine already computes *is* BM25 — exactly,
+not approximately. No second index, no full-text engine, no OverGraph change.
+This is the same trick Qdrant, Vespa and Pinecone sparse indexes use.
+
+**`b = 0`, deliberately.** Length normalization is the one term that couples a
+document's weight to the corpus (through `avgdl`), so any edit would invalidate
+every stored vector and incremental re-ingest would be dead. With `b = 0` the
+document factor `tf·(k1+1)/(tf+k1)` depends only on the node itself, stored
+vectors stay valid exactly as before, and the two effects that matter most —
+IDF and term-frequency saturation — are both kept. Node spans are also far more
+uniform in length than the web documents `b` was designed for.
+
+**Where the statistics live.** `refresh_sparse_stats` counts document frequency
+over the whole graph during ingest, in the same pass that already has every
+node's text in memory, and writes `ug-sparse-stats.json` next to
+`ug-meta.json`. Terms appearing in a single node are omitted and read back as
+`df = 1` — they are most of any code vocabulary and all share the same
+near-maximum IDF, so dropping them typically halves the sidecar.
+
+Document frequency therefore never invalidates a stored vector. It is read at
+query time to weight the query, and at ingest only to rank the per-node
+dimension cap.
+
+**IDF must be positive.** OverGraph rejects negative sparse weights on the
+query side as well as the stored side (the query goes through the same
+`canonicalize_sparse_vector`), and the classic Robertson IDF goes negative once
+a term appears in more than half the corpus. So `SparseStats::idf` uses
+Lucene's smoothed form, `ln(1 + (N − df + 0.5)/(df + 0.5))`, which is strictly
+positive everywhere.
+
+**The dimension cap got fixed on the way.** `MAX_SPARSE_DIMS` used to keep the
+heaviest *raw frequency* terms — i.e. the most repeated common words, precisely
+backwards. It now keeps the highest `saturated_tf × idf`, so a long file loses
+its boilerplate instead of its distinctive identifiers.
+
+**Fallbacks.** A store with no stats sidecar (ingested before this existed)
+weights queries by plain term frequency — the previous behaviour, not an error.
+Neo4j is unaffected either way: it has no sparse-vector type and scores its
+keyword leg through a Lucene full-text index, which is already BM25.
 
 ## 6. Caps, in one place
 
 | Cap | Value | Stage | Where |
 |---|---|---|---|
-| Markdown section prose | 1,500 bytes | index | `SECTION_TEXT_CAP`, `languages/markdown.rs` |
+| Embedded description | derived from the model | embed | `EmbedBudget`, `limits.rs` |
+| Markdown section capture | 8,192 bytes | index | `SECTION_TEXT_HARD_CAP`, `languages/markdown.rs` |
 | Document page text | 8,192 bytes | index | `PAGE_TEXT_CAP`, `indexer/document.rs` |
 | Document page name | 100 bytes | index | `NAME_CAP`, `indexer/document.rs` |
 | Extracted comments per node | 600 chars | embed | `MAX_COMMENT_CHARS`, `storage/comments.rs` |
@@ -259,10 +317,15 @@ published rather than left to be inferred from a chunk that looks cut off:
   exactly full, or a keyword vector at the dimension cap. The section
   auto-expands when something was reached, and the summary reads
   `Indexing limits — 1 reached`.
-- **A *Storage metadata* section** in the same tab, collapsed by default,
-  shows the rest of the stored row: dense and sparse vector sizes, embedded
-  text and captured source lengths, when the row last changed, and the file
-  hash with a live staleness check. It auto-expands and its summary reads
+- **A *Captured source* section**, collapsed, showing the `code` column
+  verbatim — the snapshot an agent's snippet reads return and the keyword index
+  was built from. Deliberately separate from the Preview tab, which reads the
+  same span live from disk: when the two disagree the store is stale, and
+  seeing both is the only way to tell that from the UI. Capped at 20,000 chars
+  for display, with the full length reported.
+- **A *Storage metadata* section**, also collapsed: dense and sparse vector
+  sizes, embedded-text length, when the row last changed, and the file hash
+  with a live staleness check. It auto-expands and its summary reads
   `Storage metadata — stale` when the file has changed since indexing.
 
   These come from `GET /api/db/node/:id`, which returns them under a
@@ -276,31 +339,81 @@ rather than a sentence, so both the detail panel's **Doc** row and the Chunk
 tab's **Description** and **Notes from comments** fields show a one-line
 preview plus a character count above 180 chars, and expand on click.
 
-`native/src/limits.rs` is the single list. It defines no values of its own —
-every entry reads the constant that enforces the behaviour, and a unit test
-asserts the published numbers still track those constants. Adding a cap means
-adding an entry there.
+`native/src/limits.rs` is the single list. Every entry reads the constant that
+enforces the behaviour, and a unit test asserts the published numbers still
+track those constants — the one value defined in that module is the description
+budget, which is not a constant at all (§6.2). Adding a cap means adding an
+entry there.
 
-### 6.2 The cap above all the others
+### 6.2 The description budget follows the model
 
 The embedding model's own input window binds above every number in the table,
 and it applies with **no truncation marker anywhere** — the tokenizer simply
-stops reading.
+stops reading. So the one cap that could not be a constant is the description
+budget: it exists *because of* the window, and the user picks the model.
 
-The default `bge-small-en-v1.5` takes **512 tokens**, roughly 2,000 characters
-of English. That has one immediate consequence worth knowing:
-`document_page_text` is 8,192 bytes, so a dense PDF page is stored and
-displayed in full but **embedded only up to about the first quarter of it**.
-Markdown's 1,500-byte cap was chosen to sit inside the window once the name and
-a 24-name `Related:` list are added; the page cap was not.
+`EmbedBudget::resolve` derives it:
 
-`/api/capabilities` reports the active model's window
-(`limits::model_token_window`, `null` for models whose window we can't state),
-and the Chunk tab compares it against an estimated token count for the chunk on
-screen. Models with a larger window exist and are selectable —
-`nomic-embed-text-v1.5` and `jina-embeddings-v2-base-code` both take 8,192
-tokens — which is the real lever if you want longer chunks embedded, rather
-than raising the byte caps.
+```
+budget  = clamp(window_tokens × 3.7 − reserve, 500, 8_000)
+reserve = 150 (type + name + split name) + MAX_COMMENT_CHARS
+```
+
+`bge-small-en-v1.5` (512 tokens) → **1,144 chars**; `nomic-embed-text-v1.5`
+(8,192) → the 8,000 ceiling; an unrecognised or remote model → a fixed 1,500,
+which is what markdown sections were hard-coded to before this existed, so
+behaviour for those models is unchanged.
+
+The reserve deliberately **excludes** the `Related:` list. Position in the
+template decides who loses to the tokenizer, and `Related:` comes last —
+so an overflowing node drops neighbour names, never its description. Reserving
+for them would shrink the description to protect the designated casualty.
+`EmbedBudget::related_advisory` reports when `MAX_RELATED` exceeds what fits,
+because the knob to turn there is `MAX_RELATED`, not `--section-cap`.
+
+**Why this is an embed-stage cap.** It used to live in `markdown.rs` as
+`SECTION_TEXT_CAP = 1500`, applied while reading files — before any embedder
+existed, so the number could only ever have been a guess about the model. Two
+things follow from moving it: the guess is replaced by the actual window, and
+switching models now needs a re-embed rather than a re-index. The indexer keeps
+the full prose up to `SECTION_TEXT_HARD_CAP`; only the vector is trimmed.
+
+Applying it uniformly to every node's description also **fixes the PDF case**
+noted in earlier revisions of this doc: a page is captured at 8 KB for storage
+and display, and now only what fits the window reaches the vector, rather than
+overflowing it silently.
+
+**Adjusting it.** In precedence order:
+
+1. `--section-cap <chars>` on `ug gen` / `ug ingest`.
+2. `ug config set embed.section_cap <chars>` to persist it.
+3. Otherwise auto-derived from the model.
+
+`ug gen` prints the resolved number, its origin, and a warning when the two
+disagree:
+
+```
+▸ Embedding budget: 1144 chars per description (512 token window, derived from the model)
+⚠  description budget is 4000 chars but BAAI/bge-small-en-v1.5 reads only ~1894 chars
+   (512 tokens) — text past that is dropped by the tokenizer with no marker
+```
+
+`/api/capabilities` carries the same information as `budget_source`,
+`embedder_token_window`, `advisory` and `related_advisory`.
+
+### 6.3 Switching models is now safe
+
+The store records the model it was ingested with in `ug-meta.json`, and
+`plan_incremental_ingest` refuses to reuse a stored vector when that model has
+changed.
+
+This closes a silent correctness hole. The dim check alone does not catch a
+model swap — `bge-small-en-v1.5` and `all-MiniLM-L6-v2` are both 384-dimensional,
+so switching between them left `node_text` identical, the planner called every
+row unchanged, and the store ended up holding vectors from two incompatible
+embedding spaces with nothing to indicate it. An unrecorded model (a store
+written before the field existed) reads as "unknown", not "mismatched", so
+older stores keep their incremental behaviour.
 
 ## 7. Adding a new file type
 
@@ -310,7 +423,8 @@ than raising the byte caps.
    `document::is_supported_ext` and the `process_file` short-circuit.
 3. Decide the chunk unit and set `start_line` / `end_line` to it.
 4. **Decide what `docstring` holds.** For a prose format that is the chunk's
-   text (capped); for a code format it is the written doc comment only.
+   text, capped only for storage — the embedding budget (§6.2) trims it later,
+   so do not pre-truncate to a guess about the model.
 5. If the format is prose, add its extensions to `PROSE_EXTS` in
    `storage/ingest.rs` so the code-comment scanner doesn't mangle it.
 6. Add the extensions to `DOCUMENT_EXTS` in `indexer/classifier.rs` if they

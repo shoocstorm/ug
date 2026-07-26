@@ -281,7 +281,10 @@ pub(crate) fn budget_from_args(embedder: &Embedder, args: &[String]) -> EmbedBud
         "{C_CYAN}▸{C_RESET} Embedding budget: {C_BOLD}{}{C_RESET} chars per description ({}, {})",
         budget.description_chars, window, origin
     );
-    if let Some(advice) = budget.advisory(model) {
+    for advice in [budget.advisory(model), budget.related_advisory()]
+        .into_iter()
+        .flatten()
+    {
         eprintln!("{C_YELLOW}⚠{C_RESET}  {}", advice);
     }
     budget
@@ -1950,9 +1953,13 @@ async fn ingest_graph_with_progress(
     // same captured source is written to the rows further down.
     let captured = storage::capture_for_graph(graph);
     let texts = storage::build_texts(graph, &captured, budget);
+    // Corpus statistics for BM25 keyword weighting. Must land before the
+    // upsert — they decide which terms survive each node's dimension cap.
+    let stats = storage::refresh_sparse_stats(&[store], &texts, &captured, graph);
     println!(
-        "\r{C_CYAN}▸{C_RESET} Building node texts: {C_GREEN}100.0% ✓ done{C_RESET} in {C_BOLD}{:?}{C_RESET}",
-        t0.elapsed()
+        "\r{C_CYAN}▸{C_RESET} Building node texts: {C_GREEN}100.0% ✓ done{C_RESET} in {C_BOLD}{:?}{C_RESET} — {} keyword terms tracked",
+        t0.elapsed(),
+        stats.terms()
     );
 
     // Diff against what's already stored so a re-index only pays for what
@@ -2185,6 +2192,8 @@ async fn ingest_graph_multi_with_progress(
     let t0 = std::time::Instant::now();
     let captured = storage::capture_for_graph(graph);
     let texts = storage::build_texts(graph, &captured, budget);
+    let refs: Vec<&dyn KnowledgeStore> = set.stores.iter().map(|s| s.as_ref()).collect();
+    storage::refresh_sparse_stats(&refs, &texts, &captured, graph);
     println!(
         "{C_CYAN}▸{C_RESET} Building node texts: {C_GREEN}done{C_RESET} ({}) in {C_BOLD}{:?}{C_RESET}",
         nodes_count,

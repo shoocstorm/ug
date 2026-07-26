@@ -2143,6 +2143,7 @@ fn indexing_limits(state: &ServeState) -> serde_json::Value {
         // server never sees a --section-cap, so it never reports "flag".
         "budget_source": budget.source,
         "advisory": budget.advisory(&model),
+        "related_advisory": budget.related_advisory(),
         "caps": caps,
         "docs": "docs/INDEXING-AND-CHUNKING.md",
     })

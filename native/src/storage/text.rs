@@ -743,11 +743,114 @@ mod sparse_tests {
         );
     }
 
+    /// The corpus stats for a small synthetic set where one term is
+    /// everywhere and one is rare.
+    fn stats_for(docs: &[&str]) -> SparseStats {
+        let dims: Vec<Vec<u32>> = docs
+            .iter()
+            .map(|d| {
+                build_sparse_keyword_vector(d)
+                    .into_iter()
+                    .map(|(dim, _)| dim)
+                    .collect()
+            })
+            .collect();
+        SparseStats::from_documents(dims.iter().map(|d| d.as_slice()))
+    }
+
+    fn weight_of(v: &[(u32, f32)], term: &str) -> Option<f32> {
+        let dim = build_sparse_keyword_vector(term).first()?.0;
+        v.iter().find(|(d, _)| *d == dim).map(|(_, w)| *w)
+    }
+
+    #[test]
+    fn idf_makes_a_rare_query_term_outweigh_a_ubiquitous_one() {
+        // "the" is in every document; "quaternion" in one.
+        let corpus = [
+            "the parser reads the file",
+            "the writer flushes the buffer",
+            "the server accepts the request",
+            "the quaternion rotates the mesh",
+        ];
+        let stats = stats_for(&corpus);
+
+        let q = build_sparse_query_vector("the quaternion", Some(&stats));
+        let common = weight_of(&q, "the").expect("common term present");
+        let rare = weight_of(&q, "quaternion").expect("rare term present");
+        assert!(
+            rare > common * 2.0,
+            "rare term must dominate: rare={rare} common={common}"
+        );
+
+        // Without stats the two are indistinguishable — the behaviour this
+        // replaced, and still the fallback for stores with no sidecar.
+        let flat = build_sparse_query_vector("the quaternion", None);
+        assert_eq!(
+            weight_of(&flat, "the"),
+            weight_of(&flat, "quaternion"),
+            "unweighted fallback treats every term alike"
+        );
+    }
+
+    #[test]
+    fn document_weights_saturate_rather_than_scale_with_repetition() {
+        let once = build_node_sparse_vector("alpha", "", None);
+        let many = build_node_sparse_vector("alpha alpha alpha alpha alpha alpha", "", None);
+
+        let w1 = weight_of(&once, "alpha").unwrap();
+        let w6 = weight_of(&many, "alpha").unwrap();
+        assert!(w6 > w1, "repetition still counts for something");
+        assert!(
+            w6 < w1 * 2.0,
+            "but nowhere near six times: once={w1} six={w6}"
+        );
+    }
+
+    #[test]
+    fn document_weights_never_go_negative() {
+        // OverGraph rejects negative sparse weights on write.
+        let v = build_node_sparse_vector("Function: parse. Reads settings.", "fn parse() {}", None);
+        assert!(!v.is_empty());
+        assert!(v.iter().all(|&(_, w)| w > 0.0), "{v:?}");
+    }
+
+    #[test]
+    fn the_dimension_cap_keeps_distinctive_terms_over_common_ones() {
+        // A node whose text is dominated by one very common word plus a
+        // long tail of unique identifiers, sized past the cap.
+        let mut text = String::new();
+        for i in 0..MAX_SPARSE_DIMS + 200 {
+            text.push_str(&format!("ident{} ", i));
+        }
+        // "the" repeated enough that raw term frequency would rank it top.
+        for _ in 0..50 {
+            text.push_str("the ");
+        }
+
+        // A corpus where "the" is everywhere and the identifiers are not.
+        let corpus: Vec<String> = (0..20).map(|i| format!("the thing number {}", i)).collect();
+        let refs: Vec<&str> = corpus.iter().map(|s| s.as_str()).collect();
+        let stats = stats_for(&refs);
+
+        let with_stats = build_node_sparse_vector(&text, "", Some(&stats));
+        let without = build_node_sparse_vector(&text, "", None);
+
+        assert_eq!(with_stats.len(), MAX_SPARSE_DIMS);
+        assert!(
+            weight_of(&without, "the").is_some(),
+            "raw frequency keeps the most repeated word"
+        );
+        assert!(
+            weight_of(&with_stats, "the").is_none(),
+            "idf-ranked truncation drops the term that carries no information"
+        );
+    }
+
     #[test]
     fn sparse_vector_is_capped_and_dimension_sorted() {
         // A body far larger than any real function.
         let code: String = (0..5000).map(|i| format!("ident{} ", i)).collect();
-        let v = build_node_sparse_vector("Function: big.", &code);
+        let v = build_node_sparse_vector("Function: big.", &code, None);
 
         assert!(v.len() <= 512, "capped, got {}", v.len());
         assert!(

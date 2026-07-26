@@ -416,9 +416,7 @@ mod tests {
 
     #[test]
     fn a_section_past_the_storage_cap_is_truncated() {
-        let body: String = std::iter::repeat("the quick brown fox jumps over it. ")
-            .take(400)
-            .collect();
+        let body = "the quick brown fox jumps over it. ".repeat(400);
         assert!(body.len() > SECTION_TEXT_HARD_CAP, "fixture must exceed the cap");
         let syms = headings(&format!("# Long\n{}\n", body));
         let doc = doc_of(&syms, "Long").unwrap();
@@ -431,9 +429,7 @@ mod tests {
         // The narrower embedding budget is applied later, at ingest — the
         // indexer must not pre-truncate to it, or switching to a
         // longer-window model would need a re-index to take effect.
-        let body: String = std::iter::repeat("the quick brown fox jumps over it. ")
-            .take(100)
-            .collect();
+        let body = "the quick brown fox jumps over it. ".repeat(100);
         let syms = headings(&format!("# Long\n{}\n", body));
         let doc = doc_of(&syms, "Long").unwrap();
         assert!(!doc.ends_with('…'), "3.5 KB is under the storage cap: {}", doc.len());

@@ -5977,36 +5977,6 @@
 
         .chunk-raw summary:hover { color: var(--accent); }
 
-        .chunk-source-view {
-            margin-top: 8px;
-        }
-
-        .chunk-source-view summary {
-            font-size: 10px;
-            letter-spacing: 0.06em;
-            text-transform: uppercase;
-            color: var(--text-dim);
-            cursor: pointer;
-        }
-
-        .chunk-source-view summary:hover { color: var(--accent); }
-
-        .chunk-source-code {
-            margin: 6px 0 0;
-            padding: 9px 10px;
-            background: var(--bg-deep);
-            border: 1px solid var(--border-soft);
-            border-radius: 6px;
-            font-family: 'JetBrains Mono', ui-monospace, monospace;
-            font-size: 10.5px;
-            line-height: 1.5;
-            color: var(--text-muted);
-            white-space: pre-wrap;
-            word-break: break-word;
-            max-height: 360px;
-            overflow: auto;
-        }
-
         .chunk-raw pre {
             margin: 8px 0 0;
             padding: 9px 10px;
@@ -13548,7 +13518,7 @@
             const lines = (row.description || '').split('\n').length;
             stats.innerHTML = `<span title="Total characters of embedded text that semantic search matches against"><b>${text.length.toLocaleString()}</b> chars embedded</span>`
                 + `<span title="Names of related nodes folded into the embedding as context"><b>${parts.related.length}</b> related name${parts.related.length === 1 ? '' : 's'}</span>`
-                + (row.start_line ? `<span id="chunk-source-link" title="Click to view captured source content" style="cursor:pointer;text-decoration:underline dotted"><b>${(row.end_line || row.start_line) - row.start_line + 1}</b> source lines</span>` : '');
+                + (row.start_line ? `<span title="Lines this node spans in its file. The text itself is under Captured source below."><b>${(row.end_line || row.start_line) - row.start_line + 1}</b> source lines</span>` : '');
             frag.appendChild(stats);
             void lines;
 
@@ -13644,6 +13614,9 @@
             raw.append(sum, pre);
             frag.appendChild(raw);
 
+            const stored = renderStoredSource(row);
+            if (stored) frag.appendChild(stored);
+
             const meta = renderChunkStorage(row);
             if (meta) frag.appendChild(meta);
 
@@ -13651,43 +13624,45 @@
             if (limits) frag.appendChild(limits);
 
             container.appendChild(frag);
+        }
 
-            // Wire source viewing: clicking the source lines stat fetches
-            // the actual file content from /api/file and shows it inline.
-            const sourceLink = document.getElementById('chunk-source-link');
-            if (sourceLink) {
-                const file = (row && row.file) || (node && node.file) || '';
-                if (file) {
-                    sourceLink.addEventListener('click', async () => {
-                        const existing = container.querySelector('.chunk-source-view');
-                        if (existing) {
-                            existing.remove();
-                            return;
-                        }
-                        const start = (node && node.startLine) || (row && row.start_line) || null;
-                        const end = (row && row.end_line) || null;
-                        let qs = `path=${encodeURIComponent(file)}`;
-                        if (start) { qs += `&start=${start}`; if (end) qs += `&end=${end}`; }
-                        const view = document.createElement('details');
-                        view.className = 'chunk-source-view';
-                        view.open = true;
-                        view.innerHTML = `<summary>${escapeHtml(file)}${start ? ' · L' + start + (end && end !== start ? '–' + end : '') : ''}</summary><pre class="chunk-source-code">Loading…</pre>`;
-                        stats.after(view);
-                        try {
-                            const res = await fetch(`/api/file?${qs}`);
-                            if (res.ok) {
-                                const data = await res.json();
-                                const content = (data && typeof data.content === 'string') ? data.content : '';
-                                view.querySelector('.chunk-source-code').textContent = content || '(empty)';
-                            } else {
-                                view.querySelector('.chunk-source-code').textContent = `Failed to load: HTTP ${res.status}`;
-                            }
-                        } catch (e) {
-                            view.querySelector('.chunk-source-code').textContent = `Error: ${e.message}`;
-                        }
-                    });
-                }
-            }
+        // The `code` column: the exact source the store captured at index
+        // time.
+        //
+        // Worth its own section rather than a line in the metadata, because
+        // it is not the same text as the Preview tab. Preview reads the file
+        // as it is on disk *now*; this is the snapshot an agent's snippet
+        // reads return and the keyword index was built from. When the two
+        // disagree the store is stale, and being able to see both is the
+        // only way to tell that from the UI.
+        function renderStoredSource(row) {
+            const s = row.storage;
+            if (!s || !s.code) return null;
+
+            const details = document.createElement('details');
+            details.className = 'chunk-raw';
+            const summary = document.createElement('summary');
+            const chars = Number(s.code_chars || 0).toLocaleString();
+            summary.textContent = s.stale === true
+                ? `Captured source — ${chars} chars, stale`
+                : `Captured source — ${chars} chars`;
+            details.appendChild(summary);
+
+            const note = document.createElement('div');
+            note.className = 'chunk-limit-note';
+            note.textContent = s.stale === true
+                ? 'What the store holds and what search returns. The file on disk has '
+                    + 'changed since indexing, so Preview above will not match this.'
+                : 'What the store holds and what search returns, captured at index time. '
+                    + 'Preview above reads the same span live from disk.';
+            details.appendChild(note);
+
+            const pre = document.createElement('pre');
+            pre.textContent = s.code_truncated
+                ? s.code + `\n… truncated for display (${chars} chars stored)`
+                : s.code;
+            details.appendChild(pre);
+            return details;
         }
 
         // The rest of the stored row: everything the vector store holds about
@@ -13717,9 +13692,9 @@
                     cap && s.sparse_dims >= cap ? `at the ${cap.toLocaleString()}-dim cap — rarest terms dropped` : null);
             }
             push('Embedded text', `${Number(s.node_text_chars || 0).toLocaleString()} chars`);
-            push('Captured source', s.code_chars
-                ? `${Number(s.code_chars).toLocaleString()} chars`
-                : 'none — snippets read from disk');
+            if (!s.code_chars) {
+                push('Captured source', 'none — snippets read from disk');
+            }
             if (s.last_update_at) {
                 const d = new Date(s.last_update_at * 1000);
                 push('Row updated', isNaN(d) ? String(s.last_update_at) : d.toLocaleString());
@@ -13933,6 +13908,18 @@
             const end = isFileNode ? null : ((node && node.endLine) || (row && row.end_line) || null);
             const isMd = /\.(md|markdown|mdx)$/i.test(file);
 
+            // Selecting a node renders this panel twice: once synchronously from
+            // whatever row is cached, then again when the DB hydrate lands —
+            // because the hydrate can supply a file path or line range the
+            // graph node doesn't carry. When it supplies nothing new, the
+            // second render would refetch the identical span, so requests are
+            // keyed on what actually determines the output and skipped when
+            // that hasn't moved. The node id is in the key so two nodes
+            // sharing a span still get their own header.
+            const key = `${(node && node.id) || ''}|${file}|${start || ''}|${end || ''}`;
+            if (state.previewKey === key) return;
+            state.previewKey = key;
+
             // Guard against a slow fetch for a previously-selected node landing
             // after the user has moved on.
             const token = (state.previewToken = (state.previewToken || 0) + 1);
@@ -13947,6 +13934,9 @@
                 if (!res.ok) throw new Error('HTTP ' + res.status);
                 data = await res.json();
             } catch (err) {
+                // Release the key so the hydrate's render — or a re-selection —
+                // can retry rather than inheriting a failure.
+                state.previewKey = null;
                 if (state.previewToken !== token) return;
                 const fallback = (row && row.description) || (node && node.docstring) || '';
                 container.innerHTML = fallback

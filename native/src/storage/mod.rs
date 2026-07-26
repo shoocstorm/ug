@@ -33,7 +33,7 @@ pub use embed::{
 pub use embed_local::LocalEmbedder;
 pub use ingest::{
     build_texts, capture_for_graph, graph_id_set, ingest_graph, ingest_graph_multi, plan_incremental_ingest, prune_to_graph,
-    reembed_nodes, IngestPlan, IngestStats,
+    reembed_nodes, refresh_sparse_stats, IngestPlan, IngestStats,
 };
 pub use comments::extract_prose_comments;
 pub use source::{capture_graph_code, file_matches_hash, CapturedCode};

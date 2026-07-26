@@ -2,22 +2,23 @@
 //! machine-readable list.
 //!
 //! These caps are not incidental — they decide what a node's vector can
-//! possibly match on. A markdown section longer than
-//! [`SECTION_TEXT_CAP`][sec] embeds only its opening paragraphs; a node with
-//! more than [`MAX_RELATED`][rel] neighbours embeds only the first 24 names.
-//! A user who does not know that reads a search miss as "semantic search is
-//! bad" rather than "that sentence was past the cap".
+//! possibly match on. A description longer than [`EmbedBudget`] embeds only
+//! its opening paragraphs; a node with more neighbours than
+//! [`MAX_RELATED`][rel] embeds only the first of them. A user who does not
+//! know that reads a search miss as "semantic search is bad" rather than
+//! "that sentence was past the cap".
 //!
 //! So the numbers are published: `/api/capabilities` serves this list and
 //! the visualization's Chunk tab shows which of them applied to the node on
 //! screen, and which actually bit.
 //!
-//! This module deliberately holds **no cap values of its own**. Every entry
-//! reads the constant that actually enforces the behaviour, so the published
-//! number cannot drift from the real one. Adding a cap means adding an entry
-//! here — see `docs/INDEXING-AND-CHUNKING.md` §6.
+//! Every entry in [`all`] reads the constant that actually enforces the
+//! behaviour, so a published number cannot drift from the real one. The one
+//! exception is [`EmbedBudget`], which is defined here because it is not a
+//! constant at all — it is derived from the loaded model's token window.
+//! Adding a cap means adding an entry here — see
+//! `docs/INDEXING-AND-CHUNKING.md` §6.
 //!
-//! [sec]: crate::indexer::languages::markdown::SECTION_TEXT_CAP
 //! [rel]: crate::storage::text::MAX_RELATED
 
 use serde::Serialize;
@@ -63,13 +64,31 @@ pub struct Limit {
 /// which is the right direction to be wrong in when overflow is silent.
 const CHARS_PER_TOKEN: f32 = 3.7;
 
-/// Chars of the embedding template that are not the description: the type
-/// prefix, the name and its split form, and up to [`MAX_RELATED`] neighbour
-/// names. Reserved out of the window so a full `Related:` list can't push
-/// the description past it.
+/// Chars of the template that precede the description: the type prefix and
+/// the name in both its exact and split forms.
+const NAME_RESERVE_CHARS: usize = 150;
+
+/// Typical rendered length of one neighbour name in the `Related:` list,
+/// used only to *warn* about the list overflowing the window.
+const AVG_RELATED_NAME_CHARS: usize = 20;
+
+/// Chars reserved out of the window for everything that competes with the
+/// description.
 ///
-/// [`MAX_RELATED`]: crate::storage::text::MAX_RELATED
-const TEMPLATE_RESERVE_CHARS: usize = 600;
+/// Deliberately excludes the `Related:` list. Ordering in the template
+/// decides who loses a fight with the tokenizer, and `Related:` comes last
+/// — so when the text overflows, neighbour names are what get dropped, not
+/// the description. Reserving for them would shrink the description to
+/// protect the field that is already the designated casualty.
+///
+/// `Notes:` *does* sit before `Related:`, so its cap is reserved: it is
+/// read from [`MAX_COMMENT_CHARS`] rather than duplicated, so changing one
+/// cap cannot silently desynchronise the other.
+///
+/// [`MAX_COMMENT_CHARS`]: crate::storage::comments::MAX_COMMENT_CHARS
+fn template_reserve_chars() -> usize {
+    NAME_RESERVE_CHARS + crate::storage::comments::MAX_COMMENT_CHARS
+}
 
 /// Floor on the derived budget. Below this a description is too clipped to
 /// carry meaning, and a model with a window that small is better rejected
@@ -137,8 +156,8 @@ impl EmbedBudget {
     /// Resolve the budget for `model`, with `override_chars` winning when
     /// set (an explicit `--section-cap`).
     ///
-    /// The derivation reserves [`TEMPLATE_RESERVE_CHARS`] for the parts of
-    /// the template that aren't the description, then clamps. With the
+    /// The derivation reserves [`template_reserve_chars`] for the parts of
+    /// the template that precede the description, then clamps. With the
     /// default 512-token model that lands near the old hard-coded 1,500;
     /// with an 8,192-token model it opens up to the ceiling.
     pub fn resolve(model: &str, override_chars: Option<usize>) -> Self {
@@ -153,7 +172,7 @@ impl EmbedBudget {
         match window {
             Some(tokens) => {
                 let raw = (tokens as f32 * CHARS_PER_TOKEN) as usize;
-                let usable = raw.saturating_sub(TEMPLATE_RESERVE_CHARS);
+                let usable = raw.saturating_sub(template_reserve_chars());
                 Self {
                     description_chars: usable.clamp(MIN_DESCRIPTION_CHARS, MAX_DESCRIPTION_CHARS),
                     window_tokens: Some(tokens),
@@ -171,7 +190,7 @@ impl EmbedBudget {
     pub fn advisory(&self, model: &str) -> Option<String> {
         let window = self.window_tokens?;
         let usable = (window as f32 * CHARS_PER_TOKEN) as usize;
-        if self.description_chars + TEMPLATE_RESERVE_CHARS > usable {
+        if self.description_chars + template_reserve_chars() > usable {
             return Some(format!(
                 "description budget is {} chars but {} reads only ~{} chars ({} tokens) — \
                  text past that is dropped by the tokenizer with no marker",
@@ -188,6 +207,33 @@ impl EmbedBudget {
             ));
         }
         None
+    }
+
+    /// Whether a full `Related:` list cannot fit the window after the
+    /// description, i.e. whether hub nodes are spending `MAX_RELATED` on
+    /// names the embedder will never read.
+    ///
+    /// Separate from [`advisory`] because it reports a different decision:
+    /// `MAX_RELATED` is the knob to turn, not `--section-cap`, and the
+    /// description is unaffected either way — `Related:` comes last in the
+    /// template, so it is what the tokenizer drops.
+    ///
+    /// [`advisory`]: EmbedBudget::advisory
+    pub fn related_advisory(&self) -> Option<String> {
+        let window = self.window_tokens?;
+        let usable = (window as f32 * CHARS_PER_TOKEN) as usize;
+        let related = crate::storage::text::MAX_RELATED * AVG_RELATED_NAME_CHARS;
+        let spent = self.description_chars + template_reserve_chars();
+        if spent + related <= usable {
+            return None;
+        }
+        let room = usable.saturating_sub(spent) / AVG_RELATED_NAME_CHARS;
+        Some(format!(
+            "MAX_RELATED is {} but only about {} neighbour names fit the remaining window — \
+             `Related:` is last in the template, so the rest are dropped by the tokenizer \
+             (the description is unaffected)",
+            crate::storage::text::MAX_RELATED, room
+        ))
     }
 }
 
@@ -268,8 +314,9 @@ pub fn all(budget: &EmbedBudget) -> Vec<Limit> {
             unit: "names",
             stage: Stage::Embed,
             extensions: &[],
-            effect: "Neighbour names folded into the embedding as context. A hub node \
-                     with more neighbours embeds only the first 128, alphabetically.",
+            effect: "Neighbour names folded into the embedding as context, alphabetically. \
+                     Sits last in the template, so it is also the first field the \
+                     model's token window truncates.",
             source: "storage/text.rs:MAX_RELATED",
         },
         Limit {
@@ -380,10 +427,14 @@ mod tests {
         assert_eq!(small.source, BudgetSource::Auto);
         assert_eq!(small.window_tokens, Some(512));
         assert!(
-            (1_200..=1_600).contains(&small.description_chars),
+            (1_000..=1_600).contains(&small.description_chars),
             "got {}",
             small.description_chars
         );
+        // And it must actually fit, reserve included — the whole point.
+        let usable = (512.0 * CHARS_PER_TOKEN) as usize;
+        assert!(small.description_chars + template_reserve_chars() <= usable);
+        assert!(small.advisory("bge-small-en-v1.5").is_none());
 
         // A long-window model opens up to the ceiling.
         let long = EmbedBudget::resolve("nomic-embed-text-v1.5", None);
@@ -404,6 +455,28 @@ mod tests {
         // 512-token model can read.
         let advice = b.advisory("bge-small-en-v1.5").expect("over-window is advised");
         assert!(advice.contains("dropped by the tokenizer"), "{advice}");
+    }
+
+    #[test]
+    fn a_large_related_cap_is_reported_against_a_small_window() {
+        // MAX_RELATED is a compile-time choice, so this asserts the
+        // relationship rather than a fixed verdict: whether the advisory
+        // fires must agree with whether the names actually fit.
+        let small = EmbedBudget::resolve("bge-small-en-v1.5", None);
+        let usable = (512.0 * CHARS_PER_TOKEN) as usize;
+        let needed = small.description_chars
+            + template_reserve_chars()
+            + crate::storage::text::MAX_RELATED * AVG_RELATED_NAME_CHARS;
+        assert_eq!(
+            small.related_advisory().is_some(),
+            needed > usable,
+            "advisory must fire exactly when the Related: list overflows"
+        );
+
+        // A long-window model has room for the whole list.
+        assert!(EmbedBudget::resolve("nomic-embed-text-v1.5", None)
+            .related_advisory()
+            .is_none());
     }
 
     #[test]
