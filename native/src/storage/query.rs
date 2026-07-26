@@ -312,6 +312,14 @@ pub fn read_snippet(
     }
 }
 
+/// Default total snippet budget for one `search_kb` call, in chars.
+///
+/// Retrieval stops adding results once the assembled context passes this,
+/// so it is the cap a user actually feels as "search returned fewer hits
+/// than `k`". Unlike the index-time caps it costs nothing to change —
+/// callers override it per call, and no re-index is involved.
+pub const DEFAULT_CONTEXT_CHARS: usize = 12_000;
+
 /// Ranking strategy for the candidate pool produced by seed search +
 /// graph context.
 ///
@@ -375,7 +383,7 @@ impl<'a> SearchKbOptions<'a> {
             hops: 2,
             edge_types: None,
             direction: Direction::Both,
-            max_chars: 12_000,
+            max_chars: DEFAULT_CONTEXT_CHARS,
             mmr_lambda: 0.6,
             repo_root,
             where_clause: None,

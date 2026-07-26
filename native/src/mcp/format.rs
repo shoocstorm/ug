@@ -10,7 +10,7 @@ use ultragraph::storage::query::{RankedContext, SearchHit};
 
 /// Long snippets blow up the prompt. Cap each item but indicate truncation so
 /// the agent knows it can re-fetch the full slice via `get_code`.
-const SNIPPET_PREVIEW_CHARS: usize = 1200;
+pub(crate) const SNIPPET_PREVIEW_CHARS: usize = 1200;
 
 struct SnippetPreview {
     text: String,

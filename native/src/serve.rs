@@ -2076,6 +2076,53 @@ async fn api_cycles(State(state): State<ServeState>) -> Response {
 /// off — it requires DB open, embedder configured, **and** at least one
 /// node row in the table (an opened-but-empty DB still 200s on the
 /// existing routes but returns nothing useful).
+/// The `limits` block of `/api/capabilities`: every cap that shaped what
+/// is in the store, plus the embedder's own token window.
+///
+/// The list comes from `ultragraph::limits`, which reads the enforcing
+/// constants directly so the published numbers can't drift from the real
+/// ones. Two entries are added here rather than there: the MCP snippet
+/// preview, which is this binary's formatting concern and not the library's,
+/// and the model token window, which depends on the embedder this server
+/// happens to have open.
+///
+/// `embedder_token_window` is the honest headline. It binds *above* every
+/// cap in the list — text past it is dropped by the tokenizer with no
+/// truncation marker anywhere — and with the default 512-token model it
+/// already sits below `document_page_text`. `null` means the active model
+/// isn't one whose window we can state; see `limits::model_token_window`.
+fn indexing_limits(state: &ServeState) -> serde_json::Value {
+    let mut caps: Vec<serde_json::Value> = ultragraph::limits::all()
+        .iter()
+        .map(|l| serde_json::to_value(l).unwrap_or(serde_json::Value::Null))
+        .collect();
+
+    caps.push(serde_json::json!({
+        "id": "mcp_snippet_preview",
+        "label": "MCP snippet preview",
+        "value": crate::mcp::format::SNIPPET_PREVIEW_CHARS,
+        "unit": "chars",
+        "stage": "retrieve",
+        "extensions": [],
+        "effect": "How much of each snippet an MCP search prints inline. Truncation \
+                   is marked, and the full slice is one get_code call away.",
+        "source": "mcp/format.rs:SNIPPET_PREVIEW_CHARS",
+    }));
+
+    let model = state
+        .embedder
+        .as_ref()
+        .map(|e| e.config().model.clone())
+        .unwrap_or_default();
+
+    serde_json::json!({
+        "embedder_model": if model.is_empty() { serde_json::Value::Null } else { model.clone().into() },
+        "embedder_token_window": ultragraph::limits::model_token_window(&model),
+        "caps": caps,
+        "docs": "docs/INDEXING-AND-CHUNKING.md",
+    })
+}
+
 async fn api_capabilities(State(state): State<ServeState>) -> Response {
     let active_stores = state.stores();
     let db_ready = active_stores.is_some();
@@ -2162,6 +2209,11 @@ async fn api_capabilities(State(state): State<ServeState>) -> Response {
     let body = serde_json::json!({
         "db_ready": db_ready,
         "embedder_ready": embedder_ready,
+        // What the indexer had to leave out. Published because these caps
+        // decide what a node's vector can match on at all, and a user who
+        // doesn't know them reads a truncated chunk as a search failure.
+        // See `ultragraph::limits` and docs/INDEXING-AND-CHUNKING.md.
+        "limits": indexing_limits(&state),
         "search_ready": search_ready,
         "chat_ready": chat_ready,
         "chat": chat_info,

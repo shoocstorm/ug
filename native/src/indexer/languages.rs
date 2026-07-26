@@ -19,7 +19,7 @@
 //! No other module needs to change.
 
 mod java;
-mod markdown;
+pub(crate) mod markdown;
 mod python;
 mod rust;
 mod typescript;

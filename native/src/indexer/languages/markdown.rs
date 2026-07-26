@@ -35,7 +35,7 @@ use tree_sitter::Node;
 /// state what the section is about; the full text is still reachable —
 /// ingest captures the whole span into the row's `code` column, which feeds
 /// the sparse keyword index and every snippet read.
-const SECTION_TEXT_CAP: usize = 1_500;
+pub(crate) const SECTION_TEXT_CAP: usize = 1_500;
 
 pub struct MarkdownIndexer;
 

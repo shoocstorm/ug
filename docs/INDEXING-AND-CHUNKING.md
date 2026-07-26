@@ -224,20 +224,66 @@ currently carry that flag.
 
 ## 6. Caps, in one place
 
-| Cap | Value | Where |
-|---|---|---|
-| Markdown section prose | 1,500 bytes | `SECTION_TEXT_CAP`, `languages/markdown.rs` |
-| Document page text | 8,192 bytes | `PAGE_TEXT_CAP`, `indexer/document.rs` |
-| Document page name | 100 bytes | `NAME_CAP`, `indexer/document.rs` |
-| Extracted comments per node | 600 chars | `MAX_COMMENT_CHARS`, `storage/comments.rs` |
-| `Related:` names per node | 24 | `MAX_RELATED`, `storage/text.rs` |
-| Sparse dimensions per node | 512 | `MAX_SPARSE_DIMS`, `storage/text.rs` |
-| Captured `code` | uncapped | `storage/source.rs` |
-| Dense vector dimension | 384 (default) | `EMBEDDING_DIM`, `storage/embed.rs` |
+| Cap | Value | Stage | Where |
+|---|---|---|---|
+| Markdown section prose | 1,500 bytes | index | `SECTION_TEXT_CAP`, `languages/markdown.rs` |
+| Document page text | 8,192 bytes | index | `PAGE_TEXT_CAP`, `indexer/document.rs` |
+| Document page name | 100 bytes | index | `NAME_CAP`, `indexer/document.rs` |
+| Extracted comments per node | 600 chars | embed | `MAX_COMMENT_CHARS`, `storage/comments.rs` |
+| `Related:` names per node | 24 | embed | `MAX_RELATED`, `storage/text.rs` |
+| Sparse dimensions per node | 512 | embed | `MAX_SPARSE_DIMS`, `storage/text.rs` |
+| Search result budget | 12,000 chars | retrieve | `DEFAULT_CONTEXT_CHARS`, `storage/query.rs` |
+| MCP snippet preview | 1,200 chars | retrieve | `SNIPPET_PREVIEW_CHARS`, `mcp/format.rs` |
+| Captured `code` | uncapped | index | `storage/source.rs` |
+| Dense vector dimension | 384 (default) | embed | `EMBEDDING_DIM`, `storage/embed.rs` |
+
+**Stage** says what it costs to change one. `index` needs a re-index; `embed`
+needs a re-embed, which `ug gen` does automatically because the text changes;
+`retrieve` takes effect on the next query with no re-index at all.
 
 Measured on a representative graph, the median `node_text` uses about 6% of the
-embedder's 512-token window and p99 about 200 tokens — so the binding
-constraint on what goes in is *signal*, not budget.
+embedder's 512-token window and p99 about 200 tokens — so for most nodes the
+binding constraint on what goes in is *signal*, not budget.
+
+### 6.1 Where a user sees them
+
+These caps decide what a node's vector can match on at all, so they are
+published rather than left to be inferred from a chunk that looks cut off:
+
+- **`GET /api/capabilities`** returns a `limits` object: `caps[]` (each with
+  `id`, `label`, `value`, `unit`, `stage`, `extensions`, `effect` and the
+  `source` constant), plus `embedder_model` and `embedder_token_window`.
+- **The visualization's Chunk tab** shows an *Indexing limits* section listing
+  the caps that apply to that node's file type, marking the ones that
+  measurably bit it — a truncation ellipsis, or a `Related:` list that came
+  back exactly full. The section auto-expands when something was reached, and
+  the summary reads `Indexing limits — 1 reached`.
+
+`native/src/limits.rs` is the single list. It defines no values of its own —
+every entry reads the constant that enforces the behaviour, and a unit test
+asserts the published numbers still track those constants. Adding a cap means
+adding an entry there.
+
+### 6.2 The cap above all the others
+
+The embedding model's own input window binds above every number in the table,
+and it applies with **no truncation marker anywhere** — the tokenizer simply
+stops reading.
+
+The default `bge-small-en-v1.5` takes **512 tokens**, roughly 2,000 characters
+of English. That has one immediate consequence worth knowing:
+`document_page_text` is 8,192 bytes, so a dense PDF page is stored and
+displayed in full but **embedded only up to about the first quarter of it**.
+Markdown's 1,500-byte cap was chosen to sit inside the window once the name and
+a 24-name `Related:` list are added; the page cap was not.
+
+`/api/capabilities` reports the active model's window
+(`limits::model_token_window`, `null` for models whose window we can't state),
+and the Chunk tab compares it against an estimated token count for the chunk on
+screen. Models with a larger window exist and are selectable —
+`nomic-embed-text-v1.5` and `jina-embeddings-v2-base-code` both take 8,192
+tokens — which is the real lever if you want longer chunks embedded, rather
+than raising the byte caps.
 
 ## 7. Adding a new file type
 
@@ -254,6 +300,8 @@ constraint on what goes in is *signal*, not budget.
    should classify as `Documentation` regardless of path.
 7. Nothing in `storage/` needs to change — `node_text`, both vectors, capture
    and staleness all follow from the `Symbol` fields.
+8. Add any new cap to `native/src/limits.rs` so it reaches
+   `/api/capabilities` and the Chunk tab instead of silently shaping results.
 
 Steps 4 and 5 are the ones that were missed for markdown, and the symptom was
 silent: search still worked through the sparse channel, so the dense side being

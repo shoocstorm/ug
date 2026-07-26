@@ -3295,7 +3295,7 @@ const API_ENDPOINTS: &[(&str, &[ApiEntry])] = &[
             ApiEntry { method: "POST", path: "/api/generate", desc: "spawn `ug gen` against a folder, returns a job id", availability: "multi-project mode only", cli_equivalent: Some("ug gen") },
             ApiEntry { method: "GET", path: "/api/generate/status", desc: "poll a generation job's progress/log", availability: "multi-project mode only", cli_equivalent: None },
             ApiEntry { method: "GET", path: "/api/browse-dir", desc: "list subdirectories of a path (KB wizard folder picker)", availability: "always", cli_equivalent: None },
-            ApiEntry { method: "GET", path: "/api/capabilities", desc: "report db/embedder/chat readiness for the active project", availability: "always", cli_equivalent: Some("ug doctor (similar info)") },
+            ApiEntry { method: "GET", path: "/api/capabilities", desc: "db/embedder/chat readiness, plus the indexing caps that shaped the store", availability: "always", cli_equivalent: Some("ug doctor (similar info)") },
             ApiEntry { method: "GET", path: "/api/config", desc: "persisted + effective settings with per-key source (flag/env/config/default)", availability: "always", cli_equivalent: Some("ug config list") },
             ApiEntry { method: "POST", path: "/api/config", desc: "persist settings to ~/.ug/config.json (chat changes apply immediately)", availability: "always", cli_equivalent: Some("ug config set") },
         ],

@@ -15,7 +15,7 @@
 //!   UG_DEST / UG_NEO4J_URI / UG_NEO4J_USER / UG_NEO4J_PASSWORD /
 //!       UG_NEO4J_DATABASE                        — destination backend
 
-mod format;
+pub(crate) mod format;
 mod install;
 pub mod tools;
 

@@ -1,6 +1,7 @@
 pub mod agent_tools;
 mod graph;
 mod indexer;
+pub mod limits;
 pub mod storage;
 pub mod types;
 

@@ -37,13 +37,13 @@ use std::sync::OnceLock;
 /// generously enough for full-page prose, low enough that a 100-page
 /// document can't dominate the embedder's per-batch token budget. Long
 /// pages get truncated with a trailing `…`.
-const PAGE_TEXT_CAP: usize = 8_192;
+pub(crate) const PAGE_TEXT_CAP: usize = 8_192;
 
 /// Hard cap on how many bytes of page text we use as the symbol `name`.
 /// The first line of the page is usually short (heading / title), but we
 /// cap defensively for the worst-case "100-character keyword stuffing"
 /// first line.
-const NAME_CAP: usize = 100;
+pub(crate) const NAME_CAP: usize = 100;
 
 /// Word-processor extensions liteparse converts to PDF via LibreOffice
 /// before parsing.

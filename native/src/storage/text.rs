@@ -50,7 +50,7 @@ use std::collections::HashMap;
 
 /// Cap on related-name fan-out per node. Embedding context is bounded; a
 /// hub node with thousands of edges would otherwise dominate every query.
-const MAX_RELATED: usize = 24;
+pub const MAX_RELATED: usize = 24;
 
 /// Split an identifier into its constituent words.
 ///
@@ -457,7 +457,7 @@ const CODE_TOKEN_WEIGHT: f32 = 0.35;
 /// Cap on dimensions kept per node. A large function tokenizes into
 /// thousands of terms; without a cap the sparse index would grow faster
 /// than the dense one it is supposed to complement.
-const MAX_SPARSE_DIMS: usize = 512;
+pub const MAX_SPARSE_DIMS: usize = 512;
 
 /// Sparse vector for a node: its embedding text at full weight, plus its
 /// source body at [`CODE_TOKEN_WEIGHT`].

@@ -26,7 +26,7 @@
 /// Cap on extracted comment text per node. Comments are a supplement to
 /// the name and docstring, not a replacement — and the embedder's window,
 /// while roomy, is not unlimited.
-const MAX_COMMENT_CHARS: usize = 600;
+pub const MAX_COMMENT_CHARS: usize = 600;
 
 /// A comment line must be at least this long to be worth indexing, which
 /// drops separators (`// ---`), closing markers, and stray `//`.

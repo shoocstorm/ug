@@ -16,9 +16,9 @@
 
 mod classifier;
 mod common;
-mod document;
+pub(crate) mod document;
 mod folder;
-mod languages;
+pub(crate) mod languages;
 mod package_json;
 
 use crate::types::{FileNode, IndexResult, IndexStats};

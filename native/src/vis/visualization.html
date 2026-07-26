@@ -5893,6 +5893,63 @@
             overflow: auto;
         }
 
+        /* Indexing caps. `.hit` marks a cap that measurably bit this node —
+           that row is the explanation for a chunk that looks cut off, so it
+           gets the warning colour and the rest stay quiet reference. */
+        .chunk-limit {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 2px 10px;
+            padding: 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+            font-size: 10.5px;
+        }
+
+        .chunk-limit:last-child { border-bottom: none; }
+
+        .chunk-limit-name { color: var(--text-muted); }
+
+        .chunk-limit-value {
+            font-family: 'JetBrains Mono', ui-monospace, monospace;
+            color: var(--text-dim);
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+        }
+
+        .chunk-limit-effect {
+            grid-column: 1 / -1;
+            font-size: 10px;
+            line-height: 1.45;
+            color: var(--text-dim);
+            opacity: 0.85;
+        }
+
+        .chunk-limit.hit .chunk-limit-name,
+        .chunk-limit.hit .chunk-limit-value { color: var(--warning); }
+
+        .chunk-limit.hit .chunk-limit-name::after {
+            content: 'reached';
+            margin-left: 6px;
+            padding: 1px 5px;
+            border-radius: 999px;
+            font-size: 8.5px;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            background: color-mix(in srgb, var(--warning) 18%, transparent);
+        }
+
+        .chunk-limit-note {
+            margin-top: 8px;
+            font-size: 10px;
+            line-height: 1.5;
+            color: var(--text-dim);
+        }
+
+        .chunk-limit-note code {
+            font-family: 'JetBrains Mono', ui-monospace, monospace;
+            font-size: 9.5px;
+        }
+
         /* ─── Guided Tour: launcher (sidebar) ─── */
         #tour-input {
             width: 100%;
@@ -13357,6 +13414,7 @@
             section('Heading', parts.heading);
             section('Description', parts.description);
             section('Signature', parts.signature, 'mono');
+            section('Notes from comments', parts.notes);
             if (parts.rest) section('Also indexed', parts.rest);
 
             if (parts.related.length) {
@@ -13394,14 +13452,98 @@
             raw.append(sum, pre);
             frag.appendChild(raw);
 
+            const limits = renderChunkLimits(row, parts, text);
+            if (limits) frag.appendChild(limits);
+
             container.appendChild(frag);
+        }
+
+        // The caps that shaped this chunk, from /api/capabilities.
+        //
+        // A chunk that looks cut off is almost always a cap doing its job,
+        // not a bug — but nothing on screen said so, so the honest reading
+        // was "the index is broken". This lists the caps that apply to this
+        // node's file type and marks the ones that measurably bit it.
+        function renderChunkLimits(row, parts, text) {
+            const info = state.capabilities && state.capabilities.limits;
+            if (!info || !Array.isArray(info.caps) || !info.caps.length) return null;
+
+            const ext = String(row.file || '').split('.').pop().toLowerCase();
+            const applies = c => !c.extensions || !c.extensions.length || c.extensions.includes(ext);
+            const caps = info.caps.filter(applies);
+            if (!caps.length) return null;
+
+            // Whether a cap left a visible mark. Only claims a hit where the
+            // evidence is in the chunk itself: a truncation ellipsis, or a
+            // list that came back exactly full. The rest are reference.
+            const truncated = s => /…\.?$/.test((s || '').trim());
+            const hitOf = c => {
+                if (c.id === 'markdown_section_text' || c.id === 'document_page_text') {
+                    return truncated(parts.description);
+                }
+                if (c.id === 'related_names') return parts.related.length >= c.value;
+                if (c.id === 'node_comments') return parts.notes.length >= c.value;
+                if (c.id === 'document_page_name') return truncated(parts.heading);
+                return false;
+            };
+
+            const hits = caps.filter(hitOf);
+            const details = document.createElement('details');
+            details.className = 'chunk-raw';
+            const summary = document.createElement('summary');
+            summary.textContent = hits.length
+                ? `Indexing limits — ${hits.length} reached`
+                : 'Indexing limits';
+            details.appendChild(summary);
+            if (hits.length) details.open = true;
+
+            const wrap = document.createElement('div');
+            caps.forEach(c => {
+                const rowEl = document.createElement('div');
+                rowEl.className = 'chunk-limit' + (hitOf(c) ? ' hit' : '');
+                const name = document.createElement('span');
+                name.className = 'chunk-limit-name';
+                name.textContent = c.label;
+                const val = document.createElement('span');
+                val.className = 'chunk-limit-value';
+                val.textContent = `${Number(c.value).toLocaleString()} ${c.unit}`;
+                val.title = c.source;
+                const eff = document.createElement('div');
+                eff.className = 'chunk-limit-effect';
+                eff.textContent = c.effect;
+                rowEl.append(name, val, eff);
+                wrap.appendChild(rowEl);
+            });
+
+            // The model's own window binds above every cap above, and applies
+            // with no marker of any kind — worth stating even though we can
+            // only estimate the token count (~4 chars/token for English).
+            const note = document.createElement('div');
+            note.className = 'chunk-limit-note';
+            const win = info.embedder_token_window;
+            const est = Math.round(text.length / 4);
+            if (win) {
+                const over = est > win;
+                note.innerHTML = `Embedder <code>${escapeHtml(info.embedder_model || '')}</code> reads at most `
+                    + `<b>${win.toLocaleString()}</b> tokens. This chunk is ~<b>${est.toLocaleString()}</b>`
+                    + (over
+                        ? ' — past the window, so the tail was dropped before embedding.'
+                        : ', within the window.');
+            } else {
+                note.textContent = 'The embedding model also truncates at its own token window, '
+                    + 'which is unknown for the model this server has open.';
+            }
+            wrap.appendChild(note);
+
+            details.appendChild(wrap);
+            return details;
         }
 
         // `build_node_text` writes "<Type>: <name>. <description>. Signature:
         // <sig>. Related: a, b, c" — split it back into its parts so the panel
         // can show them as fields instead of one run-on paragraph.
         function parseChunkText(text) {
-            const out = { heading: '', description: '', signature: '', related: [], rest: '' };
+            const out = { heading: '', description: '', signature: '', notes: '', related: [], rest: '' };
             let body = text;
 
             const relIdx = body.search(/(^|\.\s|\n)Related:\s/);
@@ -13409,6 +13551,15 @@
                 const after = body.slice(relIdx).replace(/^[.\s]*Related:\s*/, '');
                 out.related = after.split(',').map(s => s.trim()).filter(Boolean);
                 body = body.slice(0, relIdx);
+            }
+            // Prose lifted from the symbol's own comments. Its own field
+            // rather than part of the description: it comes from a different
+            // source and is governed by its own cap.
+            const notesIdx = body.search(/(^|\.\s|\n)Notes:\s/);
+            if (notesIdx >= 0) {
+                out.notes = body.slice(notesIdx).replace(/^[.\s]*Notes:\s*/, '').trim()
+                    .replace(/\.$/, '');
+                body = body.slice(0, notesIdx);
             }
             const sigIdx = body.search(/(^|\.\s|\n)Signature:\s/);
             if (sigIdx >= 0) {
