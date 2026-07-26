@@ -1431,6 +1431,49 @@
 
         #info .info-row.block .info-label { display: block; margin-bottom: 5px; }
 
+        /* A label with an explanation attached. The dotted underline is the
+           only cue a tooltip exists — without it users don't hover, and the
+           explanations might as well not be there. */
+        #info .info-label.has-tip {
+            cursor: help;
+            text-decoration: underline dotted var(--border);
+            text-underline-offset: 3px;
+        }
+
+        #info .info-label.has-tip:hover { color: var(--text); text-decoration-color: var(--accent); }
+
+        #info .info-dim { color: var(--text-dim); }
+
+        /* List-valued fields (calls / extends / implements). Wrap rather than
+           run off the panel, and navigate when the name resolves to a node. */
+        #info .info-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin-top: 2px;
+        }
+
+        #info .info-chip {
+            font-size: 10px;
+            padding: 2px 7px;
+            border-radius: 999px;
+            background: var(--bg-elevated);
+            color: var(--text-muted);
+            font-family: 'JetBrains Mono', ui-monospace, monospace;
+            max-width: 100%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        #info .info-chip.linked {
+            cursor: pointer;
+            color: var(--accent);
+            background: color-mix(in srgb, var(--accent) 10%, transparent);
+        }
+
+        #info .info-chip.linked:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+
         #info .info-collapse summary {
             display: flex;
             gap: 8px;
@@ -1595,13 +1638,23 @@
             border: none;
             color: var(--text-muted);
             font-size: 11px;
-            padding: 6px 8px;
+            padding: 6px 6px;
             border-radius: 6px;
             cursor: pointer;
             font-family: inherit;
             text-transform: uppercase;
-            letter-spacing: 0.6px;
+            letter-spacing: 0.4px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
             transition: background 0.15s, color 0.15s;
+        }
+
+        .info-tab .tab-count {
+            letter-spacing: 0;
+            font-size: 9.5px;
+            opacity: 0.65;
+            margin-left: 3px;
         }
 
         .info-tab:hover {
@@ -8394,6 +8447,106 @@
                 + ` aria-hidden="true">${body}</svg>`;
         }
 
+        // What every field in the node panel means, in one place.
+        //
+        // Each entry is `[label, tip]`. The tip answers the three questions a
+        // field can't answer by itself: where the value came from, what reads
+        // it, and how it relates to the other fields. They are wordier than a
+        // typical tooltip on purpose — the panel shows four different data
+        // sources side by side, and the cost of guessing wrong is
+        // misreading a search result.
+        //
+        // Keyed rather than inlined so the label and its explanation cannot
+        // drift apart, and so renaming a field is a one-line change.
+        const FIELD_DOCS = {
+            name: ['Name', 'The symbol or file name the indexer extracted. Names arrive already '
+                + 'qualified where the language allows it (Db::upsert_nodes, not upsert_nodes). '
+                + 'This is also the first thing in the embedded text, so it is searchable both '
+                + 'exactly and as separate words.'],
+            type: ['Node type', 'What kind of thing this is in the graph. Decided by the indexer '
+                + 'from the symbol kind — Concept means a document section or page rather than '
+                + 'code. Node type sets the colour in the graph and can be filtered on in search.'],
+            file: ['File', 'Path the node was indexed from, relative to the repo root. Shared by '
+                + 'every node declared in that file, and the key the Source tab reads from disk.'],
+            lines: ['Line range', 'Where this node lives in its file. For PDF and Office pages '
+                + 'this is the page number instead — those formats have no lines. The Source tab '
+                + 'reads exactly this range; the range stored with the vector may differ if the '
+                + 'file changed since indexing.'],
+            metrics: ['Metrics', 'Measured by the indexer when the symbol was parsed. LOC is '
+                + 'lines of code, Params the parameter count, Nest the deepest block nesting. '
+                + 'Not part of the embedding — these describe shape, not meaning.'],
+            signature: ['Signature', 'Parameters and return type as the parser saw them. Folded '
+                + 'into the embedded text, so a query naming a parameter type can reach this '
+                + 'node even when it has no doc comment.'],
+            docstring: ['Docstring', 'The doc comment the indexer extracted — /** */, """ """, '
+                + '/// or, for a document, the prose under the heading. This is the main body of '
+                + 'the embedded text: for a code symbol it is the description, and for a '
+                + 'document section it is essentially the whole node.'],
+            calls: ['Calls out to', 'Function and method names invoked inside this node\'s body, '
+                + 'as the parser saw them. Deliberately kept out of the embedded text — the '
+                + 'Related names list already covers the neighbours, and call lists churn on '
+                + 'every body edit. Names that resolve to an indexed node are clickable.'],
+            extends: ['Extends', 'Base class or parent type. Becomes an Extends edge in the '
+                + 'graph, so it is walkable in the Related tab and carries weight in '
+                + 'graph-aware ranking.'],
+            implements: ['Implements', 'Interfaces or traits this node implements. Becomes an '
+                + 'Implements edge, walkable in the Related tab.'],
+        };
+
+        // What each edge type means. Edge type is not decoration — it carries
+        // the weight graph-aware ranking walks with, so "Calls" and "Contains"
+        // pull results with very different strength.
+        const EDGE_DOCS = {
+            Calls: 'A call site found in the body. The strongest signal in graph ranking.',
+            Imports: 'A module or file dependency declared at the top of the file.',
+            Contains: 'Structural containment — a folder, file or enclosing symbol.',
+            Extends: 'Class or type inheritance.',
+            Implements: 'An interface or trait implementation.',
+            References: 'A mention that is neither a call nor an import — for a document, a link.',
+            Exports: 'A re-export of this symbol.',
+            DependsOn: 'A declared package dependency.',
+        };
+
+        // Present tense, subject-first, so the tooltip reads as a sentence
+        // rather than as a schema name.
+        function edgeVerb(rel) {
+            switch (rel) {
+                case 'Calls': return 'calls';
+                case 'Imports': return 'imports';
+                case 'Contains': return 'contains';
+                case 'Extends': return 'extends';
+                case 'Implements': return 'implements';
+                case 'References': return 'references';
+                case 'Exports': return 'exports';
+                case 'DependsOn': return 'depends on';
+                default: return 'links to';
+            }
+        }
+
+        // What a cap's stage means in practice: the cost of changing it.
+        const STAGE_DOCS = {
+            index: 'Applied while reading files, so changing it needs a full re-index.',
+            embed: 'Applied while building the text that gets embedded, so changing it needs a '
+                + 're-embed — ug gen picks that up on its own.',
+            retrieve: 'Applied when answering a query, so changing it takes effect on the next '
+                + 'search with no re-index at all.',
+        };
+
+        const TAB_DOCS = {
+            preview: ['Source', 'The file as it is on disk right now, read live. This is the '
+                + 'only tab that does not come from the index, so it is where you see changes '
+                + 'made since the last ug gen.'],
+            chunk: ['Indexed', 'What the knowledge base actually stores for this node: the text '
+                + 'that was embedded, the source captured alongside it, and the caps that shaped '
+                + 'both. The honest answer to "why did search return this?".'],
+            hierarchy: ['Hierarchy', 'Containment only — the folder and file this node sits in, '
+                + 'and the symbols declared inside it. Follows Contains edges, ignoring calls '
+                + 'and imports.'],
+            related: ['Related', 'Every edge touching this node in either direction — calls, '
+                + 'imports, extends, implements, references. This is the neighbourhood that '
+                + 'graph-aware search expands into when ranking results.'],
+        };
+
         // Every panel section says where its data came from. The panel mixes
         // three very different sources — the graph file, the vector store and
         // the working tree — and "which of these am I looking at?" is a fair
@@ -8405,28 +8558,40 @@
                 : '';
             const notes = {
                 fields: {
-                    label: 'graph.json',
+                    label: dbReady ? 'graph.json + vector store' : 'graph.json',
                     detail: dbReady
-                        ? 'Indexed metadata, hydrated with the store row from /api/db/node.'
-                        : 'Indexed metadata from the loaded graph file.',
+                        ? 'What the indexer recorded about this node, from the loaded graph file, '
+                          + 'hydrated with the stored row via /api/db/node. Describes the node as '
+                          + 'it was indexed — compare with the Source tab to see what has changed '
+                          + 'on disk since.'
+                        : 'What the indexer recorded about this node, from the loaded graph file. '
+                          + 'No knowledge base is attached, so store-only fields are unavailable.',
                 },
                 preview: {
-                    label: 'working tree',
+                    label: 'working tree — live',
                     detail: loc
-                        ? `Read live from ${loc} via /api/file — the file as it is on disk now, not as indexed.`
-                        : 'Read live from disk via /api/file.',
+                        ? `Read from ${loc} via /api/file: the file as it is on disk right now. `
+                          + 'This is the only tab not served from the index, so it is where edits '
+                          + 'made since the last ug gen show up.'
+                        : 'Read live from disk via /api/file — the file as it is now, not as indexed.',
                 },
                 chunk: {
-                    label: 'vector store',
-                    detail: 'The embedded text this node was indexed as, from /api/db/node — what semantic search actually matches against.',
+                    label: 'vector store — as indexed',
+                    detail: 'Everything the knowledge base holds for this node, from /api/db/node: '
+                        + 'the text that was embedded (what semantic search matches against), the '
+                        + 'source captured beside it (what snippet reads return), and the caps that '
+                        + 'shaped both.',
                 },
                 hierarchy: {
                     label: 'graph.json · Contains edges',
-                    detail: 'Containment only: folders, files and the symbols declared inside them.',
+                    detail: 'Containment only: the folder and file this node sits in, and the '
+                        + 'symbols declared inside it. Calls and imports are in the Related tab.',
                 },
                 related: {
                     label: 'graph.json · all edges',
-                    detail: 'Every edge touching this node — calls, imports, implements, references.',
+                    detail: 'Every edge touching this node in either direction — calls, imports, '
+                        + 'extends, implements, references. This is the neighbourhood graph-aware '
+                        + 'search expands into when ranking.',
                 },
             };
             const n = notes[view];
@@ -13310,24 +13475,69 @@
             const jumpBtn = document.getElementById('jump-btn');
             const typeColor = config.getColor(d.group);
 
+            // `<span class="info-label">` with the field's explanation attached.
+            const fieldLabel = (key) => {
+                const [label, tip] = FIELD_DOCS[key] || [key, ''];
+                return `<span class="info-label has-tip" title="${escapeHtml(tip)}">${escapeHtml(label)}</span>`;
+            };
+
+            // A short, single-value field.
+            const fieldRow = (key, valueHtml) =>
+                `<div class="info-row">${fieldLabel(key)}<span class="info-value">${valueHtml}</span></div>`;
+
             // A field whose value may be a paragraph rather than a token.
             // Markdown sections and PDF pages carry their whole prose as a
             // docstring, so an inline value would push everything below it —
             // tabs included — off the panel. Short values stay a plain row;
-            // long ones collapse to a one-line preview.
+            // long ones collapse to a preview.
             const LONG_FIELD_CHARS = 180;
-            function longFieldRow(label, value) {
+            function longFieldRow(key, value) {
                 const text = String(value);
-                if (text.length <= LONG_FIELD_CHARS) {
-                    return `<div class="info-row"><span class="info-label">${escapeHtml(label)}</span>`
-                        + `<span class="info-value">${escapeHtml(text)}</span></div>`;
-                }
-                const preview = text.replace(/\s+/g, ' ').slice(0, 90);
-                return `<div class="info-row block"><span class="info-label">${escapeHtml(label)}</span>`
+                if (text.length <= LONG_FIELD_CHARS) return fieldRow(key, escapeHtml(text));
+
+                // Cut on a word boundary — a mid-word truncation reads as
+                // corruption rather than as a preview.
+                const flat = text.replace(/\s+/g, ' ').trim();
+                let preview = flat.slice(0, 100);
+                const lastSpace = preview.lastIndexOf(' ');
+                if (lastSpace > 50) preview = preview.slice(0, lastSpace);
+
+                return `<div class="info-row block">${fieldLabel(key)}`
                     + `<details class="info-collapse"><summary>`
                     + `<span class="info-preview">${escapeHtml(preview)}…</span>`
                     + `<span class="info-preview-count">${text.length.toLocaleString()} chars</span>`
                     + `</summary><div class="info-full">${escapeHtml(text)}</div></details></div>`;
+            }
+
+            // A list-valued field (calls, extends, implements) as chips.
+            //
+            // These were comma-joined into one `info-value`, which for a
+            // function calling thirty things produced an unreadable wall that
+            // pushed the tabs off screen — and gave no way to act on any of
+            // it. Chips wrap, count themselves, collapse past a threshold,
+            // and the ones that resolve to an indexed node navigate to it.
+            const CHIPS_INLINE_MAX = 8;
+            function chipRow(key, names) {
+                const list = names.filter(Boolean).map(String);
+                if (!list.length) return '';
+                const chips = list.map(n => {
+                    const hit = state.nodeById ? findNodeByName(n) : null;
+                    const cls = hit ? 'info-chip linked' : 'info-chip';
+                    const attr = hit ? ` data-id="${escapeHtml(hit.id)}" title="Go to ${escapeHtml(hit.id)}"`
+                        : ' title="Not indexed as its own node — an external or unresolved name"';
+                    return `<span class="${cls}"${attr}>${escapeHtml(n)}</span>`;
+                }).join('');
+
+                if (list.length <= CHIPS_INLINE_MAX) {
+                    return `<div class="info-row block">${fieldLabel(key)}`
+                        + `<div class="info-chips">${chips}</div></div>`;
+                }
+                const [label] = FIELD_DOCS[key] || [key];
+                return `<div class="info-row block">${fieldLabel(key)}`
+                    + `<details class="info-collapse"><summary>`
+                    + `<span class="info-preview">${escapeHtml(list.slice(0, 3).join(', '))}…</span>`
+                    + `<span class="info-preview-count">${list.length} ${label === 'Calls out to' ? 'calls' : 'names'}</span>`
+                    + `</summary><div class="info-chips">${chips}</div></details></div>`;
             }
 
             // The title carries the node's type as its icon — the same glyph
@@ -13349,29 +13559,51 @@
 
             let html = `
                 ${sourceNote('fields', d)}
-                <div class="info-row"><span class="info-label">Name</span><span class="info-value">${escapeHtml(d.name)}</span></div>
-                <div class="info-row"><span class="info-label">Type</span><span class="info-type-badge" style="background:${typeColor}20;color:${typeColor}">${nodeIconSvg(d.group, 'badge-icon')}${d.group}</span></div>
+                ${fieldRow('name', escapeHtml(d.name))}
+                <div class="info-row">${fieldLabel('type')}<span class="info-type-badge" style="background:${typeColor}20;color:${typeColor}">${nodeIconSvg(d.group, 'badge-icon')}${d.group}</span></div>
             `;
-            if (d.file) html += `<div class="info-row"><span class="info-label">File</span><span class="info-value">${escapeHtml(d.file)}</span></div>`;
-            if (d.startLine) html += `<div class="info-row"><span class="info-label">Lines</span><span class="info-value">${d.startLine}${d.endLine && d.endLine !== d.startLine ? '–' + d.endLine : ''}</span></div>`;
-            if (d.metrics) html += `<div class="info-row"><span class="info-label">Metrics</span><span class="info-value">LOC ${d.metrics.loc ?? '–'} · Params ${d.metrics.params ?? '–'} · Nest ${d.metrics.maxNesting ?? d.metrics.max_nesting ?? '–'}</span></div>`;
+            if (d.file) html += fieldRow('file', escapeHtml(d.file));
+            if (d.startLine) {
+                // These formats aren't line-oriented — the indexer repurposes
+                // the field as a page index, so labelling it "lines" would be
+                // a straight lie.
+                const isPaged = /\.(pdf|docx?|xlsx?|pptx?|odt|ods|odp|rtf)$/i.test(d.file || '');
+                const span = d.endLine && d.endLine !== d.startLine ? `${d.startLine}–${d.endLine}` : `${d.startLine}`;
+                const count = (d.endLine || d.startLine) - d.startLine + 1;
+                html += fieldRow('lines', isPaged
+                    ? `p.${span}`
+                    : `${span}<span class="info-dim"> · ${count} line${count === 1 ? '' : 's'}</span>`);
+            }
+            if (d.metrics) {
+                const m = d.metrics;
+                const nest = m.maxNesting ?? m.max_nesting ?? '–';
+                html += fieldRow('metrics',
+                    `<span title="Lines of code in this symbol's body">LOC ${m.loc ?? '–'}</span>`
+                    + `<span class="info-dim"> · </span><span title="Number of declared parameters">Params ${m.params ?? '–'}</span>`
+                    + `<span class="info-dim"> · </span><span title="Deepest level of nested blocks — a rough complexity proxy">Nest ${nest}</span>`);
+            }
             if (d.signature) {
                 const params = d.signature.params ? d.signature.params.map(p => p.name + (p.type || p.param_type ? ':' + (p.type || p.param_type) : '')).join(', ') : '';
                 const ret = d.signature.returnType || d.signature.return_type ? ' => ' + (d.signature.returnType || d.signature.return_type) : '';
-                html += `<div class="info-row"><span class="info-label">Signature</span><span class="info-value">(${escapeHtml(params)})${escapeHtml(ret)}</span></div>`;
+                html += fieldRow('signature', `(${escapeHtml(params)})${escapeHtml(ret)}`);
             }
-            if (d.docstring) html += longFieldRow('Doc', d.docstring);
-            if (d.calls && d.calls.length) html += `<div class="info-row"><span class="info-label">Calls</span><span class="info-value">${escapeHtml(d.calls.join(', '))}</span></div>`;
-            if (d.extends && d.extends.length) html += `<div class="info-row"><span class="info-label">Extends</span><span class="info-value">${escapeHtml(d.extends.join(', '))}</span></div>`;
-            if (d.implements && d.implements.length) html += `<div class="info-row"><span class="info-label">Implements</span><span class="info-value">${escapeHtml(d.implements.join(', '))}</span></div>`;
+            if (d.docstring) html += longFieldRow('docstring', d.docstring);
+            if (d.calls) html += chipRow('calls', d.calls);
+            if (d.extends) html += chipRow('extends', d.extends);
+            if (d.implements) html += chipRow('implements', d.implements);
 
             const activeTab = ['related', 'hierarchy', 'chunk'].includes(state.infoTab) ? state.infoTab : 'preview';
+            const tabButton = (key, suffix = '') => {
+                const [label, tip] = TAB_DOCS[key];
+                return `<button class="info-tab${activeTab === key ? ' active' : ''}" data-view="${key}"`
+                    + ` title="${escapeHtml(tip)}">${escapeHtml(label)}${suffix}</button>`;
+            };
             html += `<div class="related-section">
                 <div class="info-tabs">
-                    <button class="info-tab${activeTab === 'preview' ? ' active' : ''}" data-view="preview">Preview</button>
-                    <button class="info-tab${activeTab === 'chunk' ? ' active' : ''}" data-view="chunk">Chunk</button>
-                    <button class="info-tab${activeTab === 'hierarchy' ? ' active' : ''}" data-view="hierarchy">Hierarchy</button>
-                    <button class="info-tab${activeTab === 'related' ? ' active' : ''}" data-view="related">Related${related.length ? ' (' + related.length + ')' : ''}</button>
+                    ${tabButton('preview')}
+                    ${tabButton('chunk')}
+                    ${tabButton('hierarchy')}
+                    ${tabButton('related', related.length ? '<span class="tab-count">' + related.length + '</span>' : '')}
                 </div>
                 <div class="info-view${activeTab === 'preview' ? ' active' : ''}" data-view="preview">
                     ${sourceNote('preview', d)}
@@ -13391,7 +13623,14 @@
                 html += `<div class="related-list">`;
                 related.forEach(({ node, rel, dir }) => {
                     const arrow = dir === 'out' ? '→' : '←';
-                    html += `<div class="related-item" data-id="${node.id}">
+                    // The arrow alone is ambiguous — spell the direction out,
+                    // and say what the edge type means, since edge type is
+                    // also what weights graph-aware ranking.
+                    const phrase = dir === 'out'
+                        ? `This node ${edgeVerb(rel)} ${node.name}`
+                        : `${node.name} ${edgeVerb(rel)} this node`;
+                    const tip = `${phrase}. ${EDGE_DOCS[rel] || ''} Click to select it.`;
+                    html += `<div class="related-item" data-id="${node.id}" title="${escapeHtml(tip.trim())}">
                         ${nodeIconSvg(node.group)}
                         <span class="name">${escapeHtml(truncateName(node.name))}</span>
                         <span class="rel">${arrow} ${rel || ''}</span>
@@ -13399,14 +13638,15 @@
                 });
                 html += `</div>`;
             } else {
-                html += `<div class="hier-empty">No related nodes.</div>`;
+                html += `<div class="hier-empty">No edges touch this node — it is isolated in the graph.</div>`;
             }
             html += `</div>
             </div>`;
 
             body.innerHTML = html;
-            // Related entries and hierarchy rows both navigate to their node.
-            body.querySelectorAll('.related-item, .hier-row').forEach(item => {
+            // Related entries, hierarchy rows and resolvable chips all
+            // navigate to their node.
+            body.querySelectorAll('.related-item, .hier-row, .info-chip.linked').forEach(item => {
                 item.addEventListener('click', () => {
                     const t = state.graph.nodes.find(n => n.id === item.dataset.id);
                     if (t) {
@@ -13516,19 +13756,37 @@
             const stats = document.createElement('div');
             stats.className = 'chunk-stats';
             const lines = (row.description || '').split('\n').length;
-            stats.innerHTML = `<span title="Total characters of embedded text that semantic search matches against"><b>${text.length.toLocaleString()}</b> chars embedded</span>`
-                + `<span title="Names of related nodes folded into the embedding as context"><b>${parts.related.length}</b> related name${parts.related.length === 1 ? '' : 's'}</span>`
-                + (row.start_line ? `<span title="Lines this node spans in its file. The text itself is under Captured source below."><b>${(row.end_line || row.start_line) - row.start_line + 1}</b> source lines</span>` : '');
+            stats.innerHTML = `<span title="Length of the whole embedded string. The dense vector is a function of exactly this text — nothing longer reached the model, nothing shorter was left out.">`
+                + `<b>${text.length.toLocaleString()}</b> chars embedded</span>`
+                + `<span title="Neighbour names folded in as context. Comes last in the embedded text, so it is the first field the model's token window truncates.">`
+                + `<b>${parts.related.length}</b> related name${parts.related.length === 1 ? '' : 's'}</span>`
+                + (row.start_line ? `<span title="Lines this node spans in its file. The text of those lines is under Captured source below, and read live in the Source tab.">`
+                    + `<b>${(row.end_line || row.start_line) - row.start_line + 1}</b> source lines</span>` : '');
             frag.appendChild(stats);
             void lines;
 
+            // What each part of the embedded text is, where it came from, and
+            // what it does for retrieval. These sections are not stored
+            // separately — they are `node_text` split back into the fields
+            // `build_node_text` assembled it from, which is worth saying so
+            // nobody goes looking for a "description column".
             const tooltips = {
-                'Heading': 'The symbol name or document title extracted from the indexed source',
-                'Description': 'Prose describing what this symbol does — the main body of the embedded text',
-                'Signature': 'Function or type signature, if applicable',
-                'Notes from comments': 'Doc-comment prose attached to this symbol',
-                'Also indexed': 'Additional unstructured text captured from the same source region',
-                'Related names': 'Neighbour symbol names folded into the embedding as search context',
+                'Heading': 'The "Type: Name" prefix the embedding text opens with. Reconstructed '
+                    + 'from node_text, not stored on its own. The name appears twice — exactly, and '
+                    + 'split into words — so both an exact-symbol query and a prose query can reach it.',
+                'Description': 'The node\'s docstring, or for a document section its prose. The main '
+                    + 'body of what was embedded, and usually the only natural language the node has. '
+                    + 'Trimmed to the description budget shown under Indexing limits.',
+                'Signature': 'Parameters and return type, folded in so a query naming a type can '
+                    + 'reach an otherwise undocumented symbol.',
+                'Notes from comments': 'Prose lifted from inline comments inside the node\'s body, '
+                    + 'after filtering out commented-out code, licence banners and tool directives. '
+                    + 'A separate source from the docstring, with its own cap.',
+                'Also indexed': 'Text present in the embedded string that did not match any known '
+                    + 'field — usually a synthesized structural synopsis such as "defined in src/x.rs".',
+                'Related names': 'Neighbour node names folded in as context. Comes last in the '
+                    + 'embedded text, which makes it the first thing the model\'s token window '
+                    + 'truncates. Names that resolve to an indexed node are clickable.',
             };
 
             const section = (label, value, cls) => {
@@ -13584,6 +13842,7 @@
                 l.className = 'chunk-label';
                 l.textContent = `Related names (${parts.related.length})`;
                 l.title = tooltips['Related names'];
+                s.title = tooltips['Related names'];
                 s.appendChild(l);
                 const list = document.createElement('div');
                 list.className = 'chunk-related';
@@ -13608,7 +13867,10 @@
             const raw = document.createElement('details');
             raw.className = 'chunk-raw';
             const sum = document.createElement('summary');
-            sum.textContent = 'Raw embedded text';
+            sum.textContent = 'Embedded text, verbatim';
+            sum.title = 'The exact string that was sent to the embedding model, before it was '
+                + 'split into the fields above. This is the node_text column — the dense vector '
+                + 'is a function of precisely this text and nothing else.';
             const pre = document.createElement('pre');
             pre.textContent = text;
             raw.append(sum, pre);
@@ -13646,6 +13908,10 @@
             summary.textContent = s.stale === true
                 ? `Captured source — ${chars} chars, stale`
                 : `Captured source — ${chars} chars`;
+            summary.title = 'The source this node was indexed from, stored in the knowledge base. '
+                + 'This is what a snippet read returns and what the keyword vector was built from. '
+                + 'The Source tab shows the same span read live from disk — when the two differ, '
+                + 'the index is behind.';
             details.appendChild(summary);
 
             const note = document.createElement('div');
@@ -13670,12 +13936,21 @@
         // it answers follow-up questions ("is this copy stale?", "did the
         // keyword vector get truncated?") rather than the first one.
         const storageTooltips = {
-            'Dense vector': 'Fixed-dimension embedding vector used for semantic similarity search',
-            'Keyword vector': 'Sparse keyword (BM25-style) vector for hybrid retrieval',
-            'Embedded text': 'The text that was actually embedded — what semantic search matches against',
-            'Captured source': 'Source code snippets included in the embedding for this node',
-            'Row updated': 'When this row was last written to the vector store',
-            'File hash': 'Content hash of the source file at index time, used to detect staleness',
+            'Dense vector': 'Width of the semantic vector, set by the embedding model. A query is '
+                + 'embedded by the same model and compared against this by cosine similarity. '
+                + 'Changing model changes this width and requires a re-ingest.',
+            'Keyword vector': 'How many distinct terms this node contributes to keyword search, '
+                + 'BM25-weighted. Built from the embedded text plus the captured source at a '
+                + 'discount, so code is findable by keyword without outvoting the description.',
+            'Embedded text': 'Length of the node_text string the dense vector was computed from — '
+                + 'the same text shown verbatim above.',
+            'Captured source': 'Whether the store holds its own copy of the source. When it does '
+                + 'not, snippet reads fall back to the working tree, which can disagree with what '
+                + 'was indexed.',
+            'Row updated': 'When this row last changed. Incremental ingest leaves untouched rows '
+                + 'alone, so this marks the last real change rather than the last ug gen.',
+            'File hash': 'blake3 of the whole file at index time. Compared against disk on every '
+                + 'hydrate, which is what makes staleness detectable instead of silent.',
         };
 
         function renderChunkStorage(row) {
@@ -13710,6 +13985,9 @@
             details.className = 'chunk-raw';
             const summary = document.createElement('summary');
             summary.textContent = s.stale === true ? 'Storage metadata — stale' : 'Storage metadata';
+            summary.title = 'What the knowledge base holds about this node rather than in it: '
+                + 'vector sizes, when the row last changed, and whether the file it came from '
+                + 'still matches.';
             details.appendChild(summary);
             if (s.stale === true) details.open = true;
 
@@ -13781,6 +14059,9 @@
             summary.textContent = hits.length
                 ? `Indexing limits — ${hits.length} reached`
                 : 'Indexing limits';
+            summary.title = 'Caps that shaped what you see above. They decide what this node\'s '
+                + 'vector can possibly match on, so a search miss is often a cap rather than a bad '
+                + 'embedding. Ones marked "reached" measurably bit this node.';
             details.appendChild(summary);
             if (hits.length) details.open = true;
 
@@ -13791,10 +14072,11 @@
                 const name = document.createElement('span');
                 name.className = 'chunk-limit-name';
                 name.textContent = c.label;
+                name.title = `${STAGE_DOCS[c.stage] || ''} Defined at ${c.source}.`.trim();
                 const val = document.createElement('span');
                 val.className = 'chunk-limit-value';
                 val.textContent = `${Number(c.value).toLocaleString()} ${c.unit}`;
-                val.title = c.source;
+                val.title = `${Number(c.value).toLocaleString()} ${c.unit} — from ${c.source}`;
                 const eff = document.createElement('div');
                 eff.className = 'chunk-limit-effect';
                 eff.textContent = c.effect;
@@ -13953,11 +14235,21 @@
             const lineLabel = start
                 ? `L${start}${end && end !== start ? '–' + end : ''}`
                 : (data && data.total_lines ? `${data.total_lines} lines` : '');
-            const kindLabel = isMd ? 'Markdown' : (isFileNode ? 'File' : 'Chunk');
+            // Says how much of the file is on screen. "Chunk" used to appear
+            // here, which now collides with the Indexed tab's vocabulary —
+            // this label is only ever about extent.
+            const kindLabel = isFileNode ? 'Whole file' : 'Line span';
+            const kindTip = isFileNode
+                ? 'This node is the file itself, so the whole file is shown.'
+                : 'Only the lines this node spans are shown, not the whole file.';
+            const renderTip = isMd
+                ? 'Rendered as Markdown. Toggle nothing — the raw text is under Captured source in the Indexed tab.'
+                : '';
 
             const meta = `<div class="preview-meta">
-                <span>${kindLabel}</span>
-                <span class="src">${escapeHtml(file)}${lineLabel ? ' · ' + lineLabel : ''}</span>
+                <span title="${escapeHtml(kindTip)}">${kindLabel}</span>
+                ${isMd ? `<span title="${escapeHtml(renderTip)}">Markdown</span>` : ''}
+                <span class="src" title="Path and line range read from disk for this view.">${escapeHtml(file)}${lineLabel ? ' · ' + lineLabel : ''}</span>
             </div>`;
 
             if (!content) {

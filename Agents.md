@@ -110,6 +110,22 @@ format), stream only the final answer, and show every call to the user as it hap
 3. ./native/target/release/ug help      → CLI works
 ```
 
+## 7. Documentation & Website
+
+**Significant changes must be reflected in both the docs and the ug website.**
+
+`docs/ug-website/` is the public-facing promotional portal for ug — what end users see first. It is deployed to Firebase and contains:
+
+| Page | What it presents |
+|------|-----------------|
+| `index.html` | Slide-deck landing page: product intro, demo video, problem/solution, features, MCP integration, install/upgrade instructions |
+| `api-reference.html` | Full multi-tab API reference: CLI commands, HTTP API routes, MCP tools, storage backends, pipeline & schemas (generated from `docs/api-reference.md`) |
+| `architecture.html` | Architecture diagram and component overview |
+
+When making significant changes (new commands, new API routes, new MCP tools, storage changes, pipeline changes), update both:
+1. The relevant markdown docs in `docs/` (especially `docs/api-reference.md`)
+2. The corresponding `docs/ug-website/*.html` pages
+
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.

@@ -11,7 +11,9 @@
 
 use std::fs;
 use tempfile::TempDir;
-use ultragraph::limits::EmbedBudget;
+use std::collections::HashMap;
+use ultragraph::limits::{BudgetSource, EmbedBudget};
+use ultragraph::storage::source::CapturedCode;
 use ultragraph::storage::ingest::{build_texts, capture_for_graph};
 use ultragraph::{build_graph, index, GraphData};
 
@@ -118,5 +120,140 @@ fn link_targets_are_flattened_to_their_text() {
     assert!(
         !text.contains("./ingest.md"),
         "a relative path is not query vocabulary; it is already an edge: {text}"
+    );
+}
+
+// ---- the embedding budget, through the real pipeline ---------------------
+//
+// `EmbedBudget` is unit-tested in `limits`, but the property that matters is
+// end-to-end: the indexer must keep the full prose while only the *embedded*
+// text is trimmed. Getting that split wrong is what made the cap a re-index
+// concern instead of a re-embed one, and nothing below the limits module
+// would have noticed.
+
+/// Index a document whose section prose is deliberately longer than any
+/// budget under test, and return the graph plus a text-builder closure.
+fn long_section_graph() -> (TempDir, GraphData, HashMap<String, CapturedCode>) {
+    let dir = TempDir::new().expect("temp dir");
+    let body = "The ingest pipeline reads every supported file and slices each symbol out. "
+        .repeat(40);
+    fs::write(
+        dir.path().join("LONG.md"),
+        format!("# Long section\n\n{}\n", body),
+    )
+    .expect("write doc");
+
+    let graph_json = build_graph(index(dir.path().to_string_lossy().to_string()));
+    let graph: GraphData = serde_json::from_str(&graph_json).expect("graph parses");
+    let captured = capture_for_graph(&graph);
+    (dir, graph, captured)
+}
+
+fn concept_text<'a>(graph: &GraphData, texts: &'a [String]) -> &'a str {
+    let idx = graph
+        .nodes
+        .iter()
+        .position(|n| n.name == "Long section")
+        .expect("heading node");
+    &texts[idx]
+}
+
+#[test]
+fn the_indexer_keeps_full_prose_regardless_of_any_budget() {
+    let (_dir, graph, _captured) = long_section_graph();
+    let doc = graph
+        .nodes
+        .iter()
+        .find(|n| n.name == "Long section")
+        .and_then(|n| n.docstring.as_deref())
+        .expect("section prose captured");
+
+    // ~3 KB: well past every budget below, and kept in full at index time.
+    assert!(doc.len() > 2_500, "indexer kept {} chars", doc.len());
+    assert!(
+        !doc.ends_with('…'),
+        "the index-stage cap is 8 KB, so this must not be truncated yet"
+    );
+}
+
+#[test]
+fn a_tight_budget_trims_the_embedded_text_not_the_graph() {
+    let (_dir, graph, captured) = long_section_graph();
+    let budget = EmbedBudget {
+        description_chars: 400,
+        window_tokens: Some(512),
+        source: BudgetSource::Flag,
+    };
+    let texts = build_texts(&graph, &captured, &budget);
+    let text = concept_text(&graph, &texts);
+
+    assert!(
+        text.contains('…'),
+        "trimming must be visible in the embedded text: {text}"
+    );
+    // The description is bounded by the budget; the rest of the text is the
+    // heading, the split name and the Related: list.
+    assert!(
+        text.len() < 400 + 400,
+        "embedded text should be near the budget, got {}",
+        text.len()
+    );
+    // The graph still carries everything.
+    let doc = graph
+        .nodes
+        .iter()
+        .find(|n| n.name == "Long section")
+        .and_then(|n| n.docstring.as_deref())
+        .unwrap();
+    assert!(doc.len() > text.len(), "the graph keeps more than the vector sees");
+}
+
+#[test]
+fn a_generous_budget_embeds_more_of_the_same_graph() {
+    let (_dir, graph, captured) = long_section_graph();
+    let tight = build_texts(
+        &graph,
+        &captured,
+        &EmbedBudget {
+            description_chars: 400,
+            window_tokens: Some(512),
+            source: BudgetSource::Flag,
+        },
+    );
+    let roomy = build_texts(
+        &graph,
+        &captured,
+        &EmbedBudget {
+            description_chars: 4_000,
+            window_tokens: Some(8_192),
+            source: BudgetSource::Flag,
+        },
+    );
+
+    let a = concept_text(&graph, &tight).len();
+    let b = concept_text(&graph, &roomy).len();
+    assert!(b > a * 2, "a longer window must embed more: {a} vs {b}");
+
+    // This is the whole point of moving the cap to embed stage: the same
+    // indexed graph yields different embedded text, so switching to a
+    // longer-window model needs a re-embed, not a re-index.
+    assert!(!concept_text(&graph, &roomy).contains('…'), "4 KB fits the prose");
+}
+
+#[test]
+fn the_default_budget_matches_the_model_derivation() {
+    // `ug gen` resolves the budget from the loaded model; a caller that only
+    // has `EmbedBudget::default()` must get the documented fallback rather
+    // than an unbounded description.
+    let (_dir, graph, captured) = long_section_graph();
+    let texts = build_texts(&graph, &captured, &EmbedBudget::default());
+    let text = concept_text(&graph, &texts);
+    assert!(text.contains('…'), "the 1,500-char fallback still bounds it");
+
+    let derived = EmbedBudget::resolve("bge-small-en-v1.5", None);
+    let derived_texts = build_texts(&graph, &captured, &derived);
+    assert!(
+        concept_text(&graph, &derived_texts).len() < text.len(),
+        "the 512-token derivation is tighter than the unknown-model fallback"
     );
 }

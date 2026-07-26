@@ -93,7 +93,7 @@ pub struct FileNode {
     pub exports: Vec<ExportInfo>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum FileClassification {
     Component,

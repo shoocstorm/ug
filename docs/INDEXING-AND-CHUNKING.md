@@ -152,11 +152,21 @@ text lives in `docstring` instead.
 
 - **File / Config** — one per indexed file, spanning the whole file. No
   docstring, so the embedding text is the path plus its split words plus the
-  `Related:` list. A file classified `Config` (under a `/config/` directory, or
-  named `config` / `settings`) becomes a `Config` node instead of a `File`
-  node; the content handling is identical. Anything ending in a document
-  extension is classified `Documentation` before any path heuristic runs, so
-  `docs/components/intro.md` is not mistaken for a component.
+  `Related:` list. Anything ending in a document extension is classified
+  `Documentation` before any path heuristic runs, so `docs/components/intro.md`
+  is not mistaken for a component.
+
+  `Config` is the **only** classification that changes a node's *type* — every
+  other one is a metadata label — so its rule is deliberately narrow. It fires
+  for a configuration data format (`.json`, `.yaml`, `.toml`, …), the
+  `*.config.*` entry-point convention (`vite.config.ts`), or a dotfile `rc`
+  (`.eslintrc.js`). It does **not** fire for a source module merely *named*
+  `config` or `settings`, nor for source files sitting under a `/config/`
+  directory: `native/src/config.rs` is a Rust module full of functions, and
+  typing it as `Config` moved it out of `File` entirely — wrong colour in the
+  visualization, wrong answer to a type-filtered search, and it read as a
+  non-code artifact. A directory name and a module name are both too weak to
+  override "this is source code".
 - **Folder** — derived from the file set, never parsed. Pre-enrichment the
   embedding text is synthesized from classification, language breakdown and
   depth. Folder nodes use their **full path** as the name so `tests/components`
@@ -223,7 +233,7 @@ store predating that column to stop the fallback reads.
 range that has merely shifted still *resolves* against a changed file and would
 silently return the wrong lines; `get_code` compares the hash and flags the
 slice instead (`agent_tools.rs`, `stored_slice`). Search results do not
-currently carry that flag, but the Chunk tab does.
+currently carry that flag, but the Indexed tab does.
 
 ### 5.1 BM25 without a second index
 
@@ -311,7 +321,7 @@ published rather than left to be inferred from a chunk that looks cut off:
 - **`GET /api/capabilities`** returns a `limits` object: `caps[]` (each with
   `id`, `label`, `value`, `unit`, `stage`, `extensions`, `effect` and the
   `source` constant), plus `embedder_model` and `embedder_token_window`.
-- **The visualization's Chunk tab** shows an *Indexing limits* section listing
+- **The visualization's Indexed tab** shows an *Indexing limits* section listing
   the caps that apply to that node's file type, marking the ones that
   measurably bit it — a truncation ellipsis, a `Related:` list that came back
   exactly full, or a keyword vector at the dimension cap. The section
@@ -319,7 +329,7 @@ published rather than left to be inferred from a chunk that looks cut off:
   `Indexing limits — 1 reached`.
 - **A *Captured source* section**, collapsed, showing the `code` column
   verbatim — the snapshot an agent's snippet reads return and the keyword index
-  was built from. Deliberately separate from the Preview tab, which reads the
+  was built from. Deliberately separate from the Source tab, which reads the
   same span live from disk: when the two disagree the store is stale, and
   seeing both is the only way to tell that from the UI. Capped at 20,000 chars
   for display, with the full length reported.
@@ -335,9 +345,39 @@ published rather than left to be inferred from a chunk that looks cut off:
   fine per traversal node.
 
 Long values collapse. A document section's `docstring` is now a paragraph
-rather than a sentence, so both the detail panel's **Doc** row and the Chunk
-tab's **Description** and **Notes from comments** fields show a one-line
-preview plus a character count above 180 chars, and expand on click.
+rather than a sentence, so the field block's **Docstring** row and the Indexed
+tab's **Description** and **Notes from comments** fields show a one-line preview
+plus a character count above 180 chars, and expand on click. List-valued fields
+(**Calls out to**, **Extends**, **Implements**) render as chips that wrap,
+collapse past eight entries, and navigate when the name resolves to an indexed
+node.
+
+### 6.4 Panel vocabulary
+
+The node panel shows four data sources side by side, and the cost of confusing
+them is misreading a search result. So the naming distinguishes them, and every
+label, tab and section carries a tooltip saying where its value came from, what
+reads it, and how it relates to the other fields:
+
+| Surface | Source | Reads |
+|---|---|---|
+| field block | `graph.json`, hydrated from `/api/db/node` | the node as it was **indexed** |
+| **Source** tab | working tree, via `/api/file` | the file as it is **now** |
+| **Indexed** tab | vector store, via `/api/db/node` | what search **matches against** |
+| **Hierarchy** tab | `Contains` edges | containment only |
+| **Related** tab | all edges | the neighbourhood ranking expands into |
+
+`FIELD_DOCS`, `TAB_DOCS`, `EDGE_DOCS` and `STAGE_DOCS` in `visualization.html`
+hold those explanations, keyed rather than inlined so a label and its
+explanation cannot drift apart. Labels that carry one are marked with a dotted
+underline — without the cue nobody hovers, and the explanations might as well
+not exist.
+
+Two renames worth knowing if you have older screenshots: the **Preview** tab is
+now **Source**, and the **Chunk** tab is now **Indexed**. "Chunk" was a term of
+art that also collided with this document's use of the word for a unit of
+indexing, and the Source tab's content label said `Chunk` while meaning "a line
+span rather than the whole file" — it now says `Line span` or `Whole file`.
 
 `native/src/limits.rs` is the single list. Every entry reads the constant that
 enforces the behaviour, and a unit test asserts the published numbers still
@@ -432,7 +472,7 @@ older stores keep their incremental behaviour.
 7. Nothing in `storage/` needs to change — `node_text`, both vectors, capture
    and staleness all follow from the `Symbol` fields.
 8. Add any new cap to `native/src/limits.rs` so it reaches
-   `/api/capabilities` and the Chunk tab instead of silently shaping results.
+   `/api/capabilities` and the Indexed tab instead of silently shaping results.
 
 Steps 4 and 5 are the ones that were missed for markdown, and the symptom was
 silent: search still worked through the sparse channel, so the dense side being
