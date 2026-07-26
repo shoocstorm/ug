@@ -73,6 +73,23 @@ fn prompt_item_cap(max_stops: usize) -> usize {
     (max_stops + 8).clamp(MIN_PROMPT_ITEMS, MAX_PROMPT_ITEMS)
 }
 
+/// Roughly how much prompt each listed candidate costs (name, location,
+/// description, sometimes a snippet).
+const PLAN_CHARS_PER_ITEM: usize = 700;
+
+/// Ceiling on the auto-scaled planning budget.
+const MAX_PLAN_CONTEXT_CHARS: usize = 48_000;
+
+/// Planning context budget for a tour of `max_stops`, when the caller left
+/// `max_context_chars` at (or below) the default. The menu grows with the
+/// itinerary, but never below the default budget nor above
+/// [`MAX_PLAN_CONTEXT_CHARS`] — whichever of those two is larger wins the
+/// ceiling, so raising `DEFAULT_CONTEXT_CHARS` can't invert the range.
+fn plan_context_chars(max_stops: usize) -> usize {
+    let ceiling = MAX_PLAN_CONTEXT_CHARS.max(DEFAULT_CONTEXT_CHARS);
+    (prompt_item_cap(max_stops) * PLAN_CHARS_PER_ITEM).clamp(DEFAULT_CONTEXT_CHARS, ceiling)
+}
+
 /// Cap on the rendered `[#a] --rel--> [#b]` link map.
 const MAX_LINK_LINES: usize = 120;
 
@@ -1492,7 +1509,7 @@ pub async fn plan_tour_with_progress(
     // at their defaults.
     let cap = prompt_item_cap(opts.max_stops);
     let ctx_chars = if opts.max_context_chars <= DEFAULT_CONTEXT_CHARS {
-        (cap * 700).clamp(DEFAULT_CONTEXT_CHARS, 48_000)
+        plan_context_chars(opts.max_stops)
     } else {
         opts.max_context_chars
     };
@@ -1648,6 +1665,20 @@ mod tests {
         let mut it = item(idx);
         it.file = file.to_string();
         it
+    }
+
+    #[test]
+    fn plan_context_budget_never_inverts_its_range() {
+        // Regression: the ceiling used to be a bare literal below
+        // DEFAULT_CONTEXT_CHARS, so `clamp` panicked with "min > max".
+        for stops in [0, 1, DEFAULT_MAX_STOPS, MAX_STOPS_LIMIT, 10_000] {
+            let chars = plan_context_chars(stops);
+            assert!(chars >= DEFAULT_CONTEXT_CHARS, "stops={stops} chars={chars}");
+            assert!(
+                chars <= MAX_PLAN_CONTEXT_CHARS.max(DEFAULT_CONTEXT_CHARS),
+                "stops={stops} chars={chars}"
+            );
+        }
     }
 
     #[test]

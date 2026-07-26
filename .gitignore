@@ -27,3 +27,4 @@ docs/notes.md
 .claude
 prompt.md
 .agents
+*.code-workspace
