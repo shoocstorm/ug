@@ -57,23 +57,88 @@ OverGraph keys nodes by `(type_id: u32, key: String)` and edges by `(from_id, to
 ### Embedding Generation (Explicit)
 
 1. Load embedding endpoint config once.
-2. For each node, build `node_text = "{type}: {name}. {description}. Related: {list_of_related_names}"`.
+2. For each node, build `node_text = "{type}: {name} ({name_words}). {description}. Related: {list_of_related_names}"`.
    - For Folder nodes the `{name}` slot uses the full path (from `folder:<path>`), not the basename.
    - `{description}` priority: `folder.summary` → `docstring` → synthesized folder synopsis → empty.
+   - `{name_words}` is the identifier split into words by `text::split_identifier`
+     (`buildSparseKeywordVector` → `build sparse keyword vector`). The exact
+     identifier is kept first so exact-name queries still match verbatim; the
+     parenthetical is omitted when splitting adds nothing. **Not** applied to
+     `Related:` — those names are context rather than primary signal, and
+     splitting all 24 would roughly triple the text while diluting the node's
+     own terms.
+   - Rationale: ~47% of nodes in a typical graph carry neither a docstring nor
+     a signature, so the identifier is their entire description.
 3. Batch-encode: `texts → Vec<Vec<f32>>` (dim configured on the embedder; auto-probed at ingest if not specified).
 4. Store vectors via `Db::upsert_nodes` → OverGraph `batch_upsert_nodes`.
-5. Incremental: `reembed_nodes` re-runs steps 2–4 for a subset of ids.
+5. Incremental: steps 2–4 only run for nodes that actually changed — see
+   *Incremental re-ingest* below. `reembed_nodes` remains available for
+   re-running them against an explicit subset of ids.
+
+**Source code is deliberately not embedded.** `node_text` carries names,
+docstrings, signatures and neighbour names — never function bodies. Three
+reasons: it would defeat incremental re-ingest (a `cargo fmt` run would
+re-embed the repo, since `node_text` is otherwise whitespace- and
+body-independent); ~10% of function bodies exceed the default model's
+512-token window and would be silently truncated by fastembed, which
+validates only the returned dimension; and body tokens dilute the semantic
+signal that docstrings and names carry. Code belongs in the sparse/keyword
+index and (planned) in a stored `code` column, not in the dense vector.
+
+### Incremental re-ingest
+
+`ingest::plan_incremental_ingest` diffs the incoming graph against the store
+before anything is embedded, sorting each node into one of three buckets:
+
+| bucket | condition | embed? | write? |
+| --- | --- | --- | --- |
+| unchanged | stored row identical | no | no |
+| reusable | `node_text` unchanged, another column moved (usually line numbers) | no | yes, carrying the stored vector |
+| to embed | new node, or `node_text` changed | yes | yes |
+
+`KnowledgeStore::nodes_for_upsert` does the read-back. It takes each node's
+type alongside its id because OverGraph keys nodes by `(type_id, key)` — with
+the type in hand it does one keyed read per node instead of `lookup_id`'s
+probe across all nine type ids, which matters because ingest runs in a fresh
+process with a cold id cache. The default implementation ignores the type and
+delegates to `nodes_by_ids`, which is correct for backends with a flat id
+space (Neo4j resolves the whole batch in one `UNWIND`).
+
+Two invariants worth preserving when touching this:
+
+- The planner `remember`s every row it reads. Unchanged nodes are not written,
+  so nothing else would populate `key_to_id` for them — and the *edge* upsert
+  that follows resolves its endpoints through exactly that cache.
+- Multi-destination ingest plans against the first store but passes
+  `always_write`, so every row still reaches every backend. Skipping writes on
+  one store's say-so would let another destination silently drift.
+
+`last_update_at` is excluded from the comparison. Nothing reads it for
+correctness, and leaving it alone makes it truthful: it marks when the node
+last *changed* rather than when ingest last ran.
 
 ### Sparse keyword vectors (replaces LanceDB FTS)
 
 OverGraph has no built-in BM25. To preserve the keyword-search half of `rrf_search`, the project ships a deterministic tokenizer in `text::build_sparse_keyword_vector`:
 
 - Lowercase alphanum tokens, length 2–32 chars.
+- Compound identifiers are additionally split into words by
+  `text::split_identifier`, and **both** forms are emitted: the whole run
+  (`buildsparsekeywordvector`) plus each word (`build`, `sparse`, `keyword`,
+  `vector`). An exact identifier query therefore scores the compound dimension
+  *on top of* the word dimensions, while a prose query reaches the words alone.
 - 32-bit FNV-1a hash of each token → dimension id.
 - Term frequency as the weight.
 - Sorted ascending by dimension id for OverGraph's canonicalization.
 
-The same hash + tokenizer run at ingest (per node `node_text`) and at query time, so tokens collide deterministically. No IDF — fine for distinctive identifier queries; weaker for description-heavy queries. Upgrade path is SPLADE/BGE-M3 sparse embeddings; deferred to v2.
+The same hash + tokenizer run at both ends, so tokens collide deterministically. No IDF — fine for distinctive identifier queries; weaker for description-heavy queries. Upgrade path is SPLADE/BGE-M3 sparse embeddings; deferred to v2.
+
+> **Known gap:** the sparse vector is currently built at *query* time only
+> (`query.rs`). `Db::upsert_nodes` writes `sparse_vector: None` for every node
+> (`db.rs`), so the keyword half of `hybrid_search` presently matches against
+> nothing and fusion degenerates to dense-only. Populating it at ingest is
+> tracked as a fix; it is also the right home for code tokens, since the sparse
+> side has no token-window limit and no dense-vector dilution.
 
 ## OverGraph Setup
 

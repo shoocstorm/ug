@@ -12,6 +12,37 @@
 //! synthesize a description from the folder's classification and language
 //! breakdown so the embedding still has retrieval signal; once the
 //! Semantic Enrichment phase fills `folder.summary` we prefer that.
+//!
+//! # What goes in the embedding text, and what doesn't
+//!
+//! Measured on a representative graph: ~47% of nodes have neither a
+//! docstring nor a signature, and the median `node_text` uses about 6% of
+//! the embedder's 512-token window (p99 ~200 tokens). So the constraint
+//! here is *signal*, not budget — there is ample room, and the job is to
+//! find things worth putting in it.
+//!
+//! Source code is deliberately excluded. Embedding bodies would defeat
+//! incremental re-ingest (this text is otherwise whitespace- and
+//! body-independent, so reformatting costs zero re-embeds), ~10% of bodies
+//! overflow the window and get silently truncated, and body tokens dilute
+//! the docstring/name signal. Code belongs in the sparse index and in a
+//! stored column, not in the dense vector.
+//!
+//! Planned additions, in the order they were agreed:
+//!
+//! 1. **Identifier splitting** — done; see [`split_identifier`].
+//! 2. **Structural synthesis** for undocumented nodes — extend the folder
+//!    synopsis idea to functions, templating a description out of graph
+//!    edges the node already has ("called by X, Y; calls Z"). Free, and it
+//!    targets the 47% directly.
+//! 3. **Inline comments** from the body — natural language aimed at
+//!    natural-language queries. Three caveats to handle when it lands:
+//!    drop commented-out code (high symbol density, trailing `;`/`{`),
+//!    dedup license/banner blocks so they don't dominate every File node,
+//!    and accept that editing a comment now triggers a re-embed (correct,
+//!    since the meaning changed, but it raises re-index cost).
+//! 4. **LLM summarization** — opt-in only (`ug gen --enrich`), cached on
+//!    the code's content hash so unchanged bodies reuse their summary.
 
 use crate::types::{GraphData, GraphNode, GraphNodeFolderMeta, GraphNodeType};
 use std::collections::HashMap;
@@ -19,6 +50,69 @@ use std::collections::HashMap;
 /// Cap on related-name fan-out per node. Embedding context is bounded; a
 /// hub node with thousands of edges would otherwise dominate every query.
 const MAX_RELATED: usize = 24;
+
+/// Split an identifier into its constituent words.
+///
+/// `buildSparseKeywordVector` → `["build", "sparse", "keyword", "vector"]`,
+/// `Db::upsert_nodes` → `["db", "upsert", "nodes"]`,
+/// `parseXMLDocument` → `["parse", "xml", "document"]`.
+///
+/// Handles three boundary kinds: non-alphanumeric separators, lower→upper
+/// transitions (camelCase), and acronym→word runs (`XMLDoc` splits before
+/// the `D`, not after the `X`). Digits stay attached to the letters they
+/// follow, so `utf8` survives as one word rather than becoming `utf` + `8`.
+///
+/// Why this matters: 47% of nodes in a typical graph carry no docstring
+/// and no signature, so the identifier *is* the entire description. Left
+/// unsplit, a camelCase name is one opaque token that no natural-language
+/// query can reach — and the sparse tokenizer's own comment already
+/// assumed ident splitting was happening when it wasn't.
+pub fn split_identifier(ident: &str) -> Vec<String> {
+    let mut words: Vec<String> = Vec::new();
+    let mut buf = String::new();
+    let chars: Vec<char> = ident.chars().collect();
+
+    for (i, &ch) in chars.iter().enumerate() {
+        if !ch.is_alphanumeric() {
+            if !buf.is_empty() {
+                words.push(std::mem::take(&mut buf));
+            }
+            continue;
+        }
+        if ch.is_uppercase() && !buf.is_empty() {
+            let prev = chars[i - 1];
+            // lower→upper is always a boundary (`buildSparse`). upper→upper
+            // is only a boundary when the *next* char is lower, which marks
+            // the last capital as the start of a new word (`XMLDoc`).
+            let next_is_lower = chars.get(i + 1).is_some_and(|c| c.is_lowercase());
+            if prev.is_lowercase() || prev.is_numeric() || (prev.is_uppercase() && next_is_lower) {
+                words.push(std::mem::take(&mut buf));
+            }
+        }
+        for c in ch.to_lowercase() {
+            buf.push(c);
+        }
+    }
+    if !buf.is_empty() {
+        words.push(buf);
+    }
+    words
+}
+
+/// Human-readable rendering of an identifier: its words, space-joined.
+/// Returns `None` when splitting yields nothing new (single lowercase
+/// word), so callers can skip appending a redundant duplicate.
+fn humanize_identifier(ident: &str) -> Option<String> {
+    let words = split_identifier(ident);
+    if words.len() < 2 {
+        return None;
+    }
+    let joined = words.join(" ");
+    if joined == ident.to_lowercase() {
+        return None;
+    }
+    Some(joined)
+}
 
 pub fn build_node_text(node: &GraphNode, related_names: &[String]) -> String {
     let kind = format!("{:?}", node.node_type);
@@ -41,7 +135,24 @@ pub fn build_node_text(node: &GraphNode, related_names: &[String]) -> String {
         related_names.join(", ")
     };
 
-    format!("{}: {}. {}. Related: {}", kind, name, description, related)
+    // The exact identifier stays first so exact-name queries still match
+    // it verbatim; the split form rides alongside in parentheses so a
+    // natural-language query ("build sparse keyword vector") can reach a
+    // node whose only signal is its name. Omitted when splitting adds
+    // nothing, to avoid embedding the same word twice.
+    //
+    // Deliberately *not* applied to `related` — those names are context
+    // rather than primary signal, and splitting all 24 of them would
+    // roughly triple the text while diluting the node's own terms.
+    let name_field = match humanize_identifier(&name) {
+        Some(words) => format!("{} ({})", name, words),
+        None => name,
+    };
+
+    format!(
+        "{}: {}. {}. Related: {}",
+        kind, name_field, description, related
+    )
 }
 
 /// Per-node description used inside the embedding text. Falls through:
@@ -241,22 +352,40 @@ pub fn build_sparse_keyword_vector(text: &str) -> Vec<(u32, f32)> {
     let mut buf = String::new();
     for ch in text.chars() {
         if ch.is_alphanumeric() {
-            for c in ch.to_lowercase() {
-                buf.push(c);
-            }
+            buf.push(ch);
         } else if !buf.is_empty() {
-            emit_token(&buf, &mut weights);
+            emit_run(&buf, &mut weights);
             buf.clear();
         }
     }
     if !buf.is_empty() {
-        emit_token(&buf, &mut weights);
+        emit_run(&buf, &mut weights);
     }
     // Sort by dimension id so output is deterministic and matches the
     // canonical form OverGraph expects for sparse vectors.
     let mut out: Vec<(u32, f32)> = weights.into_iter().collect();
     out.sort_unstable_by_key(|&(dim, _)| dim);
     out
+}
+
+/// Emit one alphanumeric run: the run itself, plus its constituent words
+/// when it is a compound identifier.
+///
+/// Both forms are emitted so the two query styles keep working against
+/// one index: an exact identifier query (`buildSparseKeywordVector`)
+/// still lands on the whole-run dimension and scores it on top of the
+/// word dimensions, while a prose query reaches the words alone. Ingest
+/// and query share this function, so the dimension space stays
+/// consistent by construction.
+fn emit_run(run: &str, out: &mut HashMap<u32, f32>) {
+    let lowered = run.to_lowercase();
+    emit_token(&lowered, out);
+    let words = split_identifier(run);
+    if words.len() > 1 {
+        for w in words {
+            emit_token(&w, out);
+        }
+    }
 }
 
 fn emit_token(token: &str, out: &mut HashMap<u32, f32>) {
@@ -340,5 +469,92 @@ mod sparse_tests {
         let a = build_sparse_keyword_vector("foo bar");
         let b = build_sparse_keyword_vector("foo bar");
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn splits_camel_snake_and_acronyms() {
+        assert_eq!(
+            split_identifier("buildSparseKeywordVector"),
+            ["build", "sparse", "keyword", "vector"]
+        );
+        assert_eq!(split_identifier("Db::upsert_nodes"), ["db", "upsert", "nodes"]);
+        assert_eq!(split_identifier("parseXMLDocument"), ["parse", "xml", "document"]);
+        assert_eq!(split_identifier("HTTPServer"), ["http", "server"]);
+        assert_eq!(split_identifier("plain"), ["plain"]);
+        assert_eq!(split_identifier(""), Vec::<String>::new());
+    }
+
+    #[test]
+    fn digits_stay_with_the_word_they_follow() {
+        assert_eq!(split_identifier("utf8Decode"), ["utf8", "decode"]);
+        assert_eq!(split_identifier("blake3"), ["blake3"]);
+    }
+
+    #[test]
+    fn compound_identifier_is_reachable_by_prose_and_by_exact_name() {
+        let doc = build_sparse_keyword_vector("buildSparseKeywordVector");
+        let prose = build_sparse_keyword_vector("build sparse keyword vector");
+        let exact = build_sparse_keyword_vector("buildSparseKeywordVector");
+
+        let dims = |v: &Vec<(u32, f32)>| v.iter().map(|(d, _)| *d).collect::<Vec<_>>();
+        // Prose query overlaps every word dimension...
+        for d in dims(&prose) {
+            assert!(dims(&doc).contains(&d), "prose term {d} missing from doc");
+        }
+        // ...and the exact identifier still matches the whole-run dimension.
+        assert_eq!(dims(&doc), dims(&exact));
+        assert!(
+            doc.len() > prose.len(),
+            "doc carries the compound dimension on top of the word ones"
+        );
+    }
+
+    #[test]
+    fn humanized_name_lands_in_node_text() {
+        // A node with no docstring and no signature — the 47% case, where
+        // the identifier is the only retrieval signal there is.
+        let node = GraphNode {
+            id: "function:src/a.ts:1:buildSparseKeywordVector".into(),
+            name: "buildSparseKeywordVector".into(),
+            node_type: GraphNodeType::Function,
+            file: Some("src/a.ts".into()),
+            start_line: Some(1),
+            end_line: Some(9),
+            metrics: None,
+            signature: None,
+            docstring: None,
+            imports: Vec::new(),
+            exports: Vec::new(),
+            extends: Vec::new(),
+            implements: Vec::new(),
+            calls: Vec::new(),
+            folder: None,
+        };
+        let text = build_node_text(&node, &[]);
+        assert!(text.contains("buildSparseKeywordVector"), "exact name kept: {text}");
+        assert!(text.contains("build sparse keyword vector"), "words added: {text}");
+    }
+
+    #[test]
+    fn already_readable_names_are_not_duplicated() {
+        let node = GraphNode {
+            id: "concept:docs/a.md:1:overview".into(),
+            name: "overview".into(),
+            node_type: GraphNodeType::Concept,
+            file: Some("docs/a.md".into()),
+            start_line: Some(1),
+            end_line: Some(2),
+            metrics: None,
+            signature: None,
+            docstring: None,
+            imports: Vec::new(),
+            exports: Vec::new(),
+            extends: Vec::new(),
+            implements: Vec::new(),
+            calls: Vec::new(),
+            folder: None,
+        };
+        let text = build_node_text(&node, &[]);
+        assert!(!text.contains("("), "no redundant parenthetical: {text}");
     }
 }

@@ -137,21 +137,21 @@ fn ctx_from_dir(dir: &Path) -> ProjectCtx {
     }
 }
 
-/// Startup resolution, most explicit first: `UG_PROJECT` → the `~/.ug` project
-/// matching the cwd → the persisted active project (`ug active`) → legacy
-/// `./ugdb`.
+/// Startup resolution, most explicit first: `UG_PROJECT` → the persisted
+/// active project (`ug active`) → the `~/.ug` project matching the cwd →
+/// legacy `./ugdb`.
 fn default_ctx() -> ProjectCtx {
     if let Ok(name) = std::env::var("UG_PROJECT") {
         if !name.is_empty() {
             return ctx_from_dir(&project::project_dir(&name));
         }
     }
+    if let Some(active) = project::get_active_project() {
+        return ctx_from_dir(&project::project_dir(&active));
+    }
     let derived = project::project_dir(&project::derive_project_name("."));
     if derived.join("ugdb").exists() {
         return ctx_from_dir(&derived);
-    }
-    if let Some(active) = project::get_active_project() {
-        return ctx_from_dir(&project::project_dir(&active));
     }
     let repo_root = std::env::var("UG_REPO_ROOT")
         .ok()

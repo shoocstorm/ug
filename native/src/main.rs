@@ -1771,6 +1771,34 @@ fn print_graph_schema_help() {
 }
 
 // full pipeline: index -> graph -> ingest -> search
+/// Decide which directory `ug gen` should use as its incremental parse
+/// cache: `None` disables caching and forces a full re-parse.
+///
+/// Precedence: `--no-cache` → `-c/--cache` → the output dir (default).
+/// A cache written by a different `ug` version is discarded rather than
+/// trusted — `indexed-tree.json` holds parsed `FileNode`s, so an
+/// indexer change between versions would otherwise keep serving nodes
+/// in the old shape for every file whose content happened not to change.
+fn resolve_gen_cache(args: &[String], output_dir: &str) -> Option<String> {
+    if has_flag(args, "--no-cache") {
+        return None;
+    }
+    if let Some(explicit) = flag_value(args, &["-c", "--cache"]) {
+        return Some(explicit);
+    }
+    let this_version = env!("CARGO_PKG_VERSION");
+    if let Some(meta) = project::read_meta(Path::new(output_dir)) {
+        if !meta.ug_version.is_empty() && meta.ug_version != this_version {
+            println!(
+                "{C_YELLOW}▸{C_RESET} Index was built by ug {} (now {}) — re-parsing from scratch.",
+                meta.ug_version, this_version
+            );
+            return None;
+        }
+    }
+    Some(output_dir.to_string())
+}
+
 fn run_gen(args: &[String]) {
     if has_flag(args, "-h") || has_flag(args, "--help") {
         print_gen_help();
@@ -1803,10 +1831,23 @@ fn run_gen(args: &[String]) {
         })
         .unwrap_or_else(|| ".".to_string());
     let repo_root = input.clone();
-    let cache = flag_value(args, &["-c", "--cache"]);
     let project_name = project::resolve_project_name(args, &input);
     let output_dir = flag_value(args, &["-o", "--output"])
         .unwrap_or_else(|| project::project_dir(&project_name).to_string_lossy().into_owned());
+    // Parse caching is on by default, keyed to the project dir — which
+    // already holds the `indexed-tree.json` snapshot `index_with_cache`
+    // needs to restore a cached file's nodes, so enabling it costs one
+    // extra file (`cache.json`) and nothing else. Re-indexing an
+    // unchanged repo is the common case (`ug gen` again, the KB
+    // Manager's re-index button), and re-parsing every file for it is
+    // pure waste: the cache only skips *per-file* tree-sitter work, and
+    // cross-file resolution still runs fresh in `build_graph`, so it
+    // cannot produce stale edges.
+    //
+    // It is bypassed when the snapshot was written by a different `ug`
+    // build, since a parser or extractor change would otherwise be
+    // silently masked by cached nodes in the old shape.
+    let cache = resolve_gen_cache(args, &output_dir);
     let no_ingest = has_flag(args, "--no-ingest");
     let chain_serve = has_flag(args, "--serve");
     // Full precedence here: -d/--db flag → <output-dir>/ugdb.
@@ -1902,7 +1943,7 @@ fn run_gen(args: &[String]) {
             return;
         }
         println!(
-            "Run '{C_BOLD} ug serve -i {} {C_RESET}' and open {C_CYAN}http://127.0.0.1:8080{C_RESET}",
+            "Run '{C_BOLD} ug serve and open {C_CYAN}http://127.0.0.1:8080{C_RESET}",
             graph_path
         );
         println!("Total time: {C_BOLD}{:?}{C_RESET}", start_total.elapsed());
@@ -1947,7 +1988,7 @@ fn run_gen(args: &[String]) {
         chain_to_serve(args, &graph_path, &db_path, false, &repo_root);
     } else {
         println!(
-            "Run '{C_BOLD} ug serve -i {} --repo-root {} {C_RESET}' and open {C_CYAN}http://127.0.0.1:8080{C_RESET} to view the graph.",
+            "Run '{C_BOLD} ug serve and open {C_CYAN}http://127.0.0.1:8080{C_RESET} to view the graph.",
             graph_path,
             repo_root
         );
@@ -5396,7 +5437,10 @@ fn print_gen_help() {
     println!("{C_BOLD}Options:{C_RESET}");
     println!("  {C_CYAN}-i, --input{C_RESET} <path>       Input directory (default: .)");
     println!(
-        "  {C_CYAN}-c, --cache{C_RESET} <dir>        Cache directory for incremental indexing"
+        "  {C_CYAN}-c, --cache{C_RESET} <dir>        Parse cache directory (default: the output dir)"
+    );
+    println!(
+        "  {C_YELLOW}--no-cache{C_RESET}                Re-parse every file, ignoring the parse cache"
     );
     println!(
         "  {C_CYAN}-n, --name{C_RESET} <name>        Project name (default: input dir basename)"
