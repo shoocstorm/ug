@@ -28,7 +28,10 @@ pub use embed::{
     DEFAULT_MODEL, EMBEDDING_DIM,
 };
 pub use embed_local::LocalEmbedder;
-pub use ingest::{ingest_graph, ingest_graph_multi, reembed_nodes, IngestStats};
+pub use ingest::{
+    ingest_graph, ingest_graph_multi, plan_incremental_ingest, reembed_nodes, IngestPlan,
+    IngestStats,
+};
 pub use ppr::{default_edge_type_weights, run_ppr};
 pub use query::{
     mmr_rerank, read_snippet, rrf_search, search_kb, semantic_search, semantic_search_w_where,

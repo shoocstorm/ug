@@ -517,6 +517,10 @@ fn skill_target(target: &str, scope: Scope) -> Option<(PathBuf, SkillKind)> {
                 SkillKind::Rule(fm.to_string()),
             ))
         }
+        "opencode" => Some((
+            root.join(".agents/skills/ug-mcp/SKILL.md"),
+            SkillKind::Skill,
+        )),
         _ => None,
     }
 }
@@ -619,14 +623,15 @@ fn install_config(target: &Target, scope: Scope) -> Result<PathBuf, String> {
             let mut cfg = read_json(&path)?;
             apply_json(&mut cfg, json_format, &server);
             write_json(&path, &cfg)?;
-            if let Some(skill) = install_skill_file(target.key, scope) {
-                println!(
-                    "{C_GREEN}✓{C_RESET} Installed the ug tool guide to {}",
-                    skill.display()
-                );
-            }
         }
     }
+    if let Some(skill_path) = install_skill_file(target.key, scope) {
+        println!(
+            "{C_GREEN}✓{C_RESET} Installed agent skill to {}",
+            skill_path.display()
+        );
+    }
+
     Ok(path)
 }
 
@@ -798,7 +803,7 @@ fn do_install(args: &[String]) -> Result<(), String> {
                 target.key
             );
             let picked = prompt_choice(
-                &format!("Where should {} pick up the server?", target.label),
+                &format!("Where should {} pick up the MCP server?", target.label),
                 &choices,
                 &hint,
             )?;
@@ -825,6 +830,9 @@ fn do_install(args: &[String]) -> Result<(), String> {
         "{C_DIM}  Change it with `ug active <name>` then re-run this, or edit UG_PROJECT in the config.{C_RESET}"
     );
     println!("{C_CYAN}Restart {} to pick it up.{C_RESET}", target.label);
+    println!(
+        "{C_DIM}  A ug-mcp agent skill is bundled — it teaches your agent efficient tool selection and calling.{C_RESET}"
+    );
     Ok(())
 }
 

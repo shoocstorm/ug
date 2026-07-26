@@ -14,7 +14,7 @@
 
 use crate::storage::embed::DEFAULT_EMBEDDING_DIM;
 use crate::storage::store::{
-    Direction, KnowledgeStore, NodeFilter, StoreError, TraversalNode, TraversalPage,
+    Direction, KnowledgeStore, NodeFilter, NodeKey, StoreError, TraversalNode, TraversalPage,
 };
 use crate::storage::types_registry::{
     edge_type_from_id, edge_type_to_id, node_type_from_id, node_type_to_id,
@@ -601,6 +601,40 @@ pub async fn nodes_by_ids(db: &Db, ids: &[String]) -> Result<Vec<NodeRow>, DbErr
     Ok(out)
 }
 
+/// Typed counterpart to [`nodes_by_ids`], used by the incremental
+/// ingest planner.
+///
+/// Two things make this cheaper than `nodes_by_ids` on the path that
+/// matters (a fresh `ug gen` process, cold `key_to_id`):
+///
+/// 1. The caller knows each node's type, so we can go straight to
+///    `get_node_by_key(type_id, key)` instead of `lookup_id`'s probe
+///    across all nine type ids.
+/// 2. Every row found is `remember`ed. Ingest skips the upsert for
+///    unchanged nodes, so without this the id cache would be left cold
+///    and the *edge* upsert that follows would fall back to probing for
+///    each endpoint.
+pub async fn nodes_for_upsert(db: &Db, keys: &[NodeKey]) -> Result<Vec<NodeRow>, DbError> {
+    if keys.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut out: Vec<NodeRow> = Vec::with_capacity(keys.len());
+    for k in keys {
+        let cached = db.key_to_id.read().unwrap().get(&k.id).copied();
+        let rec = match cached {
+            Some(numeric) => db.engine.get_node(numeric)?,
+            None => db
+                .engine
+                .get_node_by_key(node_type_to_id(&k.node_type), &k.id)?,
+        };
+        if let Some(rec) = rec {
+            db.remember(rec.key.clone(), rec.id);
+            out.push(node_record_to_row(&rec));
+        }
+    }
+    Ok(out)
+}
+
 /// Helper used by Phase D's `query::traverse_filtered` retarget — wraps
 /// the OverGraph traversal and rehydrates results into the project's
 /// (string-id, EdgeRow) wire format.
@@ -754,6 +788,12 @@ impl KnowledgeStore for Db {
 
     async fn nodes_by_ids(&self, ids: &[String]) -> Result<Vec<NodeRow>, StoreError> {
         nodes_by_ids(self, ids).await.map_err(StoreError::from)
+    }
+
+    async fn nodes_for_upsert(&self, keys: &[NodeKey]) -> Result<Vec<NodeRow>, StoreError> {
+        nodes_for_upsert(self, keys)
+            .await
+            .map_err(StoreError::from)
     }
 
     async fn fetch_node(&self, key: &str) -> Result<Option<NodeRow>, StoreError> {

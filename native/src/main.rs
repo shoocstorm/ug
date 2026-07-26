@@ -2003,10 +2003,6 @@ async fn ingest_graph_with_progress(
 ) -> Result<(usize, usize), String> {
     let nodes_count = graph.nodes.len();
     let edges_count = graph.edges.len();
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
 
     let t0 = std::time::Instant::now();
     print!("{C_CYAN}▸{C_RESET} Building node texts ({})", nodes_count);
@@ -2026,82 +2022,82 @@ async fn ingest_graph_with_progress(
         t0.elapsed()
     );
 
-    let t1 = std::time::Instant::now();
-    print!("{C_CYAN}▸{C_RESET} Embedding nodes ({})", nodes_count);
+    // Diff against what's already stored so a re-index only pays for what
+    // actually changed. On a first run everything lands in `to_embed` and
+    // this costs one cheap miss per node.
+    let tp = std::time::Instant::now();
+    print!("{C_CYAN}▸{C_RESET} Diffing against Graph DB ({})", nodes_count);
     let _ = std::io::Write::flush(&mut std::io::stdout());
-
-    let total_nodes = texts.len();
-    let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(total_nodes);
-    for (i, chunk) in texts.chunks(embedder.config().batch_size).enumerate() {
-        let chunk_vec: Vec<String> = chunk.to_vec();
-        let chunk_vectors = embedder
-            .embed(&chunk_vec)
-            .await
-            .map_err(|e| format!("embedding failed: {}", e))?;
-        vectors.extend(chunk_vectors);
-        let processed = std::cmp::min((i + 1) * embedder.config().batch_size, total_nodes);
-        let pct = processed as f32 / total_nodes as f32 * 100.0;
-        print!(
-            "\r{C_CYAN}▸{C_RESET} Embedding: {C_YELLOW}{:>6.1}%{C_RESET} ({}/{})",
-            pct, processed, total_nodes
-        );
-        let _ = std::io::Write::flush(&mut std::io::stdout());
-    }
+    let plan = storage::plan_incremental_ingest(store, graph, &texts, false)
+        .await
+        .map_err(|e| format!("reading existing nodes: {}", e))?;
+    let to_embed = plan.to_embed.len();
     println!(
-        "\r{C_CYAN}▸{C_RESET} Embedding: {C_GREEN}100.0% ✓ done{C_RESET} in {C_BOLD}{:?}{C_RESET}",
-        t1.elapsed()
+        "\r{C_CYAN}▸{C_RESET} Diffing against Graph DB: {C_GREEN}✓ done{C_RESET} in {C_BOLD}{:?}{C_RESET} — {} unchanged, {} moved, {} to embed",
+        tp.elapsed(),
+        plan.unchanged,
+        plan.reusable.len(),
+        to_embed
     );
 
-    if vectors.len() != graph.nodes.len() {
-        return Err(format!(
-            "embedder returned {} vectors for {} nodes",
-            vectors.len(),
-            graph.nodes.len()
-        ));
+    let t1 = std::time::Instant::now();
+    let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(to_embed);
+    if to_embed == 0 {
+        println!("{C_CYAN}▸{C_RESET} Embedding: {C_GREEN}✓ skipped{C_RESET} (no node text changed)");
+    } else {
+        print!("{C_CYAN}▸{C_RESET} Embedding nodes ({})", to_embed);
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+        for (i, chunk) in plan.to_embed.chunks(embedder.config().batch_size).enumerate() {
+            let chunk_vec: Vec<String> = chunk.iter().map(|(_, t)| t.clone()).collect();
+            let chunk_vectors = embedder
+                .embed(&chunk_vec)
+                .await
+                .map_err(|e| format!("embedding failed: {}", e))?;
+            vectors.extend(chunk_vectors);
+            let processed = std::cmp::min((i + 1) * embedder.config().batch_size, to_embed);
+            let pct = processed as f32 / to_embed as f32 * 100.0;
+            print!(
+                "\r{C_CYAN}▸{C_RESET} Embedding: {C_YELLOW}{:>6.1}%{C_RESET} ({}/{})",
+                pct, processed, to_embed
+            );
+            let _ = std::io::Write::flush(&mut std::io::stdout());
+        }
+        println!(
+            "\r{C_CYAN}▸{C_RESET} Embedding: {C_GREEN}100.0% ✓ done{C_RESET} in {C_BOLD}{:?}{C_RESET}",
+            t1.elapsed()
+        );
     }
 
     let t2 = std::time::Instant::now();
-    print!("{C_CYAN}▸{C_RESET} Writing nodes to Graph DB");
-    let _ = std::io::Write::flush(&mut std::io::stdout());
-
-    let node_rows: Vec<storage::NodeRow> = graph
-        .nodes
-        .iter()
-        .zip(texts.into_iter())
-        .zip(vectors.into_iter())
-        .map(|((n, node_text), vector)| storage::NodeRow {
-            id: n.id.clone(),
-            name: n.name.clone(),
-            node_type: format!("{:?}", n.node_type),
-            description: n.docstring.clone().unwrap_or_default(),
-            file: n.file.clone().unwrap_or_default(),
-            start_line: n.start_line.unwrap_or(0),
-            end_line: n.end_line.unwrap_or(0),
-            last_update_at: now,
-            node_text,
-            vector,
-        })
-        .collect();
+    let node_rows = plan.finish(graph, vectors)?;
 
     let write_batch = 1000;
     let total = node_rows.len();
-    for (i, batch) in node_rows.chunks(write_batch).enumerate() {
-        store
-            .upsert_nodes(batch)
-            .await
-            .map_err(|e| format!("upsert nodes: {}", e))?;
-        let written = std::cmp::min((i + 1) * write_batch, total);
-        let pct = written as f32 / total as f32 * 100.0;
-        print!(
-            "\r{C_CYAN}▸{C_RESET} Writing nodes: {C_YELLOW}{:>6.1}%{C_RESET} ({}/{})",
-            pct, written, total
-        );
+    if total == 0 {
+        println!("{C_CYAN}▸{C_RESET} Writing nodes: {C_GREEN}✓ skipped{C_RESET} (all {} already up to date)", nodes_count);
+    } else {
+        print!("{C_CYAN}▸{C_RESET} Writing nodes to Graph DB");
         let _ = std::io::Write::flush(&mut std::io::stdout());
+        for (i, batch) in node_rows.chunks(write_batch).enumerate() {
+            store
+                .upsert_nodes(batch)
+                .await
+                .map_err(|e| format!("upsert nodes: {}", e))?;
+            let written = std::cmp::min((i + 1) * write_batch, total);
+            let pct = written as f32 / total as f32 * 100.0;
+            print!(
+                "\r{C_CYAN}▸{C_RESET} Writing nodes: {C_YELLOW}{:>6.1}%{C_RESET} ({}/{})",
+                pct, written, total
+            );
+            let _ = std::io::Write::flush(&mut std::io::stdout());
+        }
+        println!(
+            "\r{C_CYAN}▸{C_RESET} Writing nodes: {C_GREEN}100.0% ✓ done{C_RESET} in {C_BOLD}{:?}{C_RESET} ({}/{} changed)",
+            t2.elapsed(),
+            total,
+            nodes_count
+        );
     }
-    println!(
-        "\r{C_CYAN}▸{C_RESET} Writing nodes: {C_GREEN}100.0% ✓ done{C_RESET} in {C_BOLD}{:?}{C_RESET}",
-        t2.elapsed()
-    );
 
     let t3 = std::time::Instant::now();
     print!("{C_CYAN}▸{C_RESET} Writing edges to Graph DB");
@@ -2224,10 +2220,6 @@ async fn ingest_graph_multi_with_progress(
 
     let nodes_count = graph.nodes.len();
     let edges_count = graph.edges.len();
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
 
     let t0 = std::time::Instant::now();
     let related = collect_related_names(graph);
@@ -2245,10 +2237,29 @@ async fn ingest_graph_multi_with_progress(
         t0.elapsed()
     );
 
+    // Vector reuse is planned against the first destination, but every row
+    // is still written to every destination — see `ingest_graph_multi`.
+    let tp = std::time::Instant::now();
+    let first = set
+        .stores
+        .first()
+        .ok_or_else(|| "empty StoreSet".to_string())?;
+    let plan = storage::plan_incremental_ingest(first.as_ref(), graph, &texts, true)
+        .await
+        .map_err(|e| format!("reading existing nodes: {}", e))?;
+    let to_embed = plan.to_embed.len();
+    println!(
+        "{C_CYAN}▸{C_RESET} Diffing against {}: {C_GREEN}done{C_RESET} in {C_BOLD}{:?}{C_RESET} — {} reusable, {} to embed",
+        first.backend_name(),
+        tp.elapsed(),
+        plan.reusable.len(),
+        to_embed
+    );
+
     let t1 = std::time::Instant::now();
-    let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(nodes_count);
-    for chunk in texts.chunks(embedder.config().batch_size) {
-        let chunk_vec: Vec<String> = chunk.to_vec();
+    let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(to_embed);
+    for chunk in plan.to_embed.chunks(embedder.config().batch_size) {
+        let chunk_vec: Vec<String> = chunk.iter().map(|(_, t)| t.clone()).collect();
         let chunk_vectors = embedder
             .embed(&chunk_vec)
             .await
@@ -2256,36 +2267,12 @@ async fn ingest_graph_multi_with_progress(
         vectors.extend(chunk_vectors);
     }
     println!(
-        "{C_CYAN}▸{C_RESET} Embedding: {C_GREEN}done{C_RESET} in {C_BOLD}{:?}{C_RESET}",
+        "{C_CYAN}▸{C_RESET} Embedding: {C_GREEN}done{C_RESET} ({}) in {C_BOLD}{:?}{C_RESET}",
+        to_embed,
         t1.elapsed()
     );
 
-    if vectors.len() != graph.nodes.len() {
-        return Err(format!(
-            "embedder returned {} vectors for {} nodes",
-            vectors.len(),
-            graph.nodes.len()
-        ));
-    }
-
-    let node_rows: Vec<storage::NodeRow> = graph
-        .nodes
-        .iter()
-        .zip(texts.into_iter())
-        .zip(vectors.into_iter())
-        .map(|((n, node_text), vector)| storage::NodeRow {
-            id: n.id.clone(),
-            name: n.name.clone(),
-            node_type: format!("{:?}", n.node_type),
-            description: n.docstring.clone().unwrap_or_default(),
-            file: n.file.clone().unwrap_or_default(),
-            start_line: n.start_line.unwrap_or(0),
-            end_line: n.end_line.unwrap_or(0),
-            last_update_at: now,
-            node_text,
-            vector,
-        })
-        .collect();
+    let node_rows = plan.finish(graph, vectors)?;
     let edge_rows: Vec<storage::EdgeRow> = graph
         .edges
         .iter()
@@ -2369,7 +2356,7 @@ fn run_list(args: &[String]) {
         );
     }
     println!(
-        "\n{C_BOLD}*{C_RESET} matches the current directory; {C_YELLOW}← active{C_RESET} is the default for {C_CYAN}ug mcp{C_RESET} (set with {C_CYAN}ug active <name>{C_RESET}). Serve them with {C_CYAN}ug serve{C_RESET}."
+        "\n{C_BOLD}*{C_RESET} matches the current directory; {C_YELLOW}← active{C_RESET} is the default for {C_CYAN}ug mcp{C_RESET} and {C_CYAN}ug serve{C_RESET} (set with {C_CYAN}ug active <name>{C_RESET})."
     );
 }
 

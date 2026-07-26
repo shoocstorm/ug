@@ -634,6 +634,33 @@ fn init_tracing() {
 
 // ---------- Entry point ----------
 
+/// Which project a `--project`-less `ug serve` starts on, and why.
+///
+/// Same precedence as `ug mcp install`: the project the user explicitly
+/// pinned with `ug active` wins, then the one matching the cwd basename,
+/// then the most recently indexed one (`names` comes from
+/// `list_projects`, sorted most-recent first). Without the active step,
+/// serving from a subdirectory (`.../ug/native` → no `native` project)
+/// silently landed on whatever happened to be indexed last, so the UI
+/// disagreed with what `ug active` reported.
+///
+/// Pure so the precedence can be tested without racing other tests over
+/// `$UG_HOME`. `names` must be non-empty.
+fn pick_initial_project(
+    names: &[String],
+    active: Option<String>,
+    cwd_name: String,
+) -> (String, &'static str) {
+    // A stale marker can name a project that isn't listed; ignore it.
+    if let Some(name) = active.filter(|a| names.iter().any(|n| n == a)) {
+        return (name, "active project");
+    }
+    if let Some(name) = names.iter().find(|n| **n == cwd_name) {
+        return (name.clone(), "matches the current directory");
+    }
+    (names[0].clone(), "most recently indexed project")
+}
+
 pub fn run_serve(args: &[String]) {
     init_tracing();
 
@@ -708,13 +735,15 @@ pub fn run_serve(args: &[String]) {
                         r
                     }
                     None => {
-                        let cwd_name = crate::project::derive_project_name(".");
-                        projects
-                            .iter()
-                            .find(|(_, m)| m.name == cwd_name)
-                            .map(|(_, m)| m.name.clone())
-                            // list_projects is sorted most-recent first.
-                            .unwrap_or_else(|| projects[0].1.name.clone())
+                        let names: Vec<String> =
+                            projects.iter().map(|(_, m)| m.name.clone()).collect();
+                        let (initial, why) = pick_initial_project(
+                            &names,
+                            crate::project::get_active_project(),
+                            crate::project::derive_project_name("."),
+                        );
+                        tracing::info!(project = %initial, reason = why, "initial project");
+                        initial
                     }
                 };
                 Startup::Multi { initial }
@@ -3782,7 +3811,7 @@ pub fn print_serve_help() {
     println!("{C_BOLD}Options:{C_RESET}");
     println!("  {C_CYAN}-i, --input{C_RESET} <file>   Graph JSON to serve (forces single-project mode)");
     println!("  {C_CYAN}--project{C_RESET} <name>     Initially active project in multi-project mode");
-    println!("                       (default: cwd basename, else most recently generated)");
+    println!("                       (default: `ug active`, else cwd basename, else most recently generated)");
     println!("  {C_CYAN}-d, --db{C_RESET} <path>      OverGraph DB for /api/db + /api/search routes");
     println!("                       (default: per-project ugdb, or the graph file's sibling ugdb with -i)");
     println!("  {C_YELLOW}--no-db{C_RESET}            Don't open DB; routes return 503");
@@ -3821,4 +3850,37 @@ pub fn print_serve_help() {
     println!("  {C_CYAN}ug serve{C_RESET} \\");
     println!("           --base-url http://127.0.0.1:8000/v1 --api-key 12345 \\");
     println!("           --chat-model Qwen3.6-35B-A3B-MLX-8bit");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pick_initial_project;
+
+    #[test]
+    fn initial_project_prefers_the_active_one() {
+        // list_projects order: most recently indexed first.
+        let names: Vec<String> = ["dlab", "Ultra-Graph", "ug"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        // `ug active Ultra-Graph` wins even from a subdir whose basename
+        // (`native`) isn't a project, and even from the repo root, whose
+        // basename (`ug`) is a different project.
+        let (name, why) =
+            pick_initial_project(&names, Some("Ultra-Graph".into()), "native".into());
+        assert_eq!((name.as_str(), why), ("Ultra-Graph", "active project"));
+        let (name, _) = pick_initial_project(&names, Some("Ultra-Graph".into()), "ug".into());
+        assert_eq!(name, "Ultra-Graph");
+
+        // No active project: the cwd match, else the most recent.
+        let (name, why) = pick_initial_project(&names, None, "ug".into());
+        assert_eq!((name.as_str(), why), ("ug", "matches the current directory"));
+        let (name, why) = pick_initial_project(&names, None, "native".into());
+        assert_eq!((name.as_str(), why), ("dlab", "most recently indexed project"));
+
+        // A stale marker naming an unlisted project falls through.
+        let (name, why) = pick_initial_project(&names, Some("deleted".into()), "native".into());
+        assert_eq!((name.as_str(), why), ("dlab", "most recently indexed project"));
+    }
 }

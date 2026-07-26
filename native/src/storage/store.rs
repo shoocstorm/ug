@@ -31,6 +31,18 @@ impl Direction {
     }
 }
 
+/// A node as the ingest pipeline is about to write it: its project
+/// string id plus the type it will be stored under.
+///
+/// Exists so [`KnowledgeStore::nodes_for_upsert`] can hand backends the
+/// type alongside the id. Backends that key nodes by `(type, id)` need
+/// it to avoid probing; backends with a flat id space ignore it.
+#[derive(Debug, Clone)]
+pub struct NodeKey {
+    pub id: String,
+    pub node_type: String,
+}
+
 /// Backend-portable filter for vector / hybrid search.
 ///
 /// v1 supports node-type filtering only. Arbitrary SQL-like `WHERE`
@@ -252,6 +264,28 @@ pub trait KnowledgeStore: Send + Sync {
     ) -> Result<TraversalPage, StoreError>;
 
     async fn nodes_by_ids(&self, ids: &[String]) -> Result<Vec<NodeRow>, StoreError>;
+
+    /// Read back the rows for nodes the caller is about to upsert, so
+    /// ingest can tell which ones actually changed (see
+    /// `ingest::plan_incremental_ingest`). Missing ids are simply absent
+    /// from the result — a first-ever ingest returns an empty vec.
+    ///
+    /// Same contract as [`nodes_by_ids`], except the caller also supplies
+    /// each node's type. OverGraph keys nodes by `(type_id, key)`, so with
+    /// the type in hand it can do one keyed read per node instead of
+    /// `lookup_id`'s probe across every known type id — which matters here
+    /// because ingest runs in a fresh process with a cold id cache, where
+    /// that probe would otherwise cost ~9 engine reads per node.
+    ///
+    /// The default implementation drops the type and delegates, which is
+    /// correct for any backend whose ids are unique on their own.
+    ///
+    /// [`nodes_by_ids`]: KnowledgeStore::nodes_by_ids
+    async fn nodes_for_upsert(&self, keys: &[NodeKey]) -> Result<Vec<NodeRow>, StoreError> {
+        let ids: Vec<String> = keys.iter().map(|k| k.id.clone()).collect();
+        self.nodes_by_ids(&ids).await
+    }
+
     async fn fetch_node(&self, key: &str) -> Result<Option<NodeRow>, StoreError>;
     async fn count_nodes(&self) -> Result<usize, StoreError>;
     async fn count_edges(&self) -> Result<usize, StoreError>;

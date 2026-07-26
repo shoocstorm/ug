@@ -21,6 +21,7 @@
             --accent-dim: #c2410c;
             --danger: #f87171;
             --success: #4ade80;
+            --warning: #fbbf24;
 
             --sidebar-width: 384px;
         }
@@ -2645,6 +2646,12 @@
             background: rgba(255, 255, 255, 0.04);
         }
 
+        /* Collapsed by default, so the header is the panel's own bottom edge —
+           its divider would otherwise double up with the card border. */
+        .kb-whatsnew.collapsed .kb-whatsnew-header {
+            border-bottom-color: transparent;
+        }
+
         .kb-whatsnew-header svg {
             width: 16px;
             height: 16px;
@@ -2856,13 +2863,13 @@
             background: var(--bg-surface);
             border: 1px solid var(--border-soft);
             border-radius: 12px;
-            padding: 16px 16px 16px 20px;
+            padding: 14px 15px 13px 19px;
             cursor: pointer;
             text-align: left;
             transition: border-color 0.18s, transform 0.18s, background 0.18s, box-shadow 0.18s;
             display: flex;
             flex-direction: column;
-            gap: 9px;
+            gap: 11px;
             font-family: inherit;
             overflow: hidden;
         }
@@ -2874,7 +2881,16 @@
             top: 0;
             bottom: 0;
             width: 3px;
-            background: var(--card-accent, var(--accent));
+            background: linear-gradient(to bottom,
+                    var(--card-accent, var(--accent)),
+                    color-mix(in srgb, var(--card-accent, var(--accent)) 30%, transparent));
+            transition: width 0.18s;
+        }
+
+        .kb-card:hover::before,
+        .kb-card:focus-visible::before,
+        .kb-card.active::before {
+            width: 4px;
         }
 
         .kb-card:hover,
@@ -2890,22 +2906,25 @@
             box-shadow: 0 0 0 1px var(--card-accent, var(--accent)) inset, 0 0 24px -10px var(--card-accent, var(--accent));
         }
 
+        /* Header: graph glyph + name on one line, icon actions pinned right. */
         .kb-card-top {
             display: flex;
-            align-items: flex-start;
-            justify-content: space-between;
-            gap: 8px;
+            align-items: center;
+            gap: 9px;
+            min-width: 0;
         }
 
         .kb-card-icon {
             flex-shrink: 0;
-            width: 20px;
-            height: 20px;
+            width: 19px;
+            height: 19px;
             color: var(--card-accent, var(--accent));
             opacity: 0.9;
         }
 
         .kb-card-name {
+            flex: 1;
+            min-width: 0;
             font-family: 'JetBrains Mono', monospace;
             font-size: 13px;
             font-weight: 600;
@@ -2915,20 +2934,117 @@
             white-space: nowrap;
         }
 
-        .kb-card-badge {
+        .kb-card-actions {
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            gap: 3px;
+            margin-left: 2px;
+        }
+
+        /* Shared icon-button chrome for every per-card action (re-index,
+           delete). Each action only sets --action-tint. */
+        .kb-card-action {
+            --action-tint: var(--text-muted);
+            position: relative;
+            flex-shrink: 0;
             display: inline-flex;
             align-items: center;
-            gap: 4px;
+            justify-content: center;
+            width: 24px;
+            height: 24px;
+            padding: 0;
+            border: 1px solid transparent;
+            border-radius: 7px;
+            background: transparent;
+            color: var(--text-dim);
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s, border-color 0.15s, transform 0.12s;
+        }
+
+        .kb-card-action svg {
+            width: 14px;
+            height: 14px;
+        }
+
+        .kb-card-action:hover,
+        .kb-card-action:focus-visible {
+            color: var(--action-tint);
+            background: color-mix(in srgb, var(--action-tint) 14%, transparent);
+            border-color: color-mix(in srgb, var(--action-tint) 32%, transparent);
+        }
+
+        .kb-card-action:active {
+            transform: scale(0.92);
+        }
+
+        .kb-card-delete {
+            --action-tint: var(--danger);
+        }
+
+        /* Re-index only renders when the index is stale, so it stays tinted
+           at rest (it is a call to action, not a neutral affordance). */
+        .kb-card-reindex {
+            --action-tint: var(--warning);
+            color: var(--warning);
+            background: color-mix(in srgb, var(--warning) 10%, transparent);
+            border-color: color-mix(in srgb, var(--warning) 28%, transparent);
+            animation: kb-stale-pulse 2.6s ease-in-out infinite;
+        }
+
+        .kb-card-reindex svg {
+            transition: transform 0.45s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .kb-card-reindex:hover svg,
+        .kb-card-reindex:focus-visible svg {
+            transform: rotate(180deg);
+        }
+
+        @keyframes kb-stale-pulse {
+
+            0%,
+            100% {
+                box-shadow: 0 0 0 0 color-mix(in srgb, var(--warning) 38%, transparent);
+            }
+
+            60% {
+                box-shadow: 0 0 0 4px transparent;
+            }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .kb-card-reindex {
+                animation: none;
+            }
+        }
+
+        /* Status indicators (Active, KB kind) — one pill vocabulary, tinted
+           per state through --badge-tint. */
+        .kb-card-flags {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .kb-card-badge {
+            --badge-tint: var(--success);
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
             flex-shrink: 0;
             font-family: 'JetBrains Mono', monospace;
             font-size: 8px;
             font-weight: 700;
+            line-height: 1;
             text-transform: uppercase;
             letter-spacing: 0.5px;
-            color: var(--success);
-            border: 1px solid rgba(74, 222, 128, 0.4);
-            border-radius: 4px;
-            padding: 2px 6px;
+            color: var(--badge-tint);
+            background: color-mix(in srgb, var(--badge-tint) 9%, transparent);
+            border: 1px solid color-mix(in srgb, var(--badge-tint) 34%, transparent);
+            border-radius: 999px;
+            padding: 3px 8px 3px 6px;
         }
 
         .kb-card-badge::before {
@@ -2936,58 +3052,53 @@
             width: 4px;
             height: 4px;
             border-radius: 50%;
-            background: var(--success);
-            box-shadow: 0 0 5px var(--success);
+            background: var(--badge-tint);
+            box-shadow: 0 0 5px var(--badge-tint);
         }
 
-        .kb-card-delete {
-            flex-shrink: 0;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            width: 22px;
-            height: 22px;
-            border: none;
-            border-radius: 6px;
-            background: transparent;
-            color: var(--text-dim);
-            opacity: 0.55;
-            cursor: pointer;
-            transition: opacity 0.15s, background 0.15s, color 0.15s;
+        .kb-card-badge.is-active {
+            --badge-tint: var(--success);
         }
 
-        .kb-card-delete:hover,
-        .kb-card-delete:focus-visible {
-            opacity: 1;
-            background: rgba(248, 113, 113, 0.14);
-            color: #f87171;
+        .kb-card-badge.kind-docs {
+            --badge-tint: #5b8fc9;
         }
 
-        .kb-card-delete svg {
-            width: 14px;
-            height: 14px;
+        .kb-card-badge.kind-code {
+            --badge-tint: #22d3ee;
+        }
+
+        .kb-card-badge.kind-mixed {
+            --badge-tint: #a855f7;
         }
 
         .kb-card-stats {
             display: flex;
-            gap: 16px;
+            align-items: center;
+            gap: 14px;
         }
 
         .kb-card-metric {
             display: flex;
             flex-direction: column;
-            gap: 1px;
+            gap: 2px;
+        }
+
+        .kb-card-metric+.kb-card-metric {
+            padding-left: 14px;
+            border-left: 1px solid var(--border-soft);
         }
 
         .kb-card-metric b {
             font-family: 'JetBrains Mono', monospace;
             font-size: 14px;
             font-weight: 700;
+            line-height: 1;
             color: var(--text);
         }
 
         .kb-card-metric span {
-            font-size: 9px;
+            font-size: 8.5px;
             text-transform: uppercase;
             letter-spacing: 0.6px;
             color: var(--text-dim);
@@ -3016,64 +3127,41 @@
             white-space: nowrap;
         }
 
-        .kb-card-type {
-            display: inline-flex;
+        .kb-card-footer {
+            display: flex;
             align-items: center;
-            gap: 4px;
-            padding: 2px 8px;
-            border-radius: 4px;
-            background: rgba(249, 115, 22, 0.1);
-            border: 1px solid rgba(249, 115, 22, 0.2);
-            font-size: 8px;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            color: var(--accent);
-            margin-top: 6px;
-        }
-
-        .kb-card-type.docs {
-            background: rgba(91, 143, 201, 0.1);
-            border-color: rgba(91, 143, 201, 0.2);
-            color: #5b8fc9;
-        }
-
-        .kb-card-type.code {
-            background: rgba(74, 222, 128, 0.1);
-            border-color: rgba(74, 222, 128, 0.2);
-            color: #4ade80;
-        }
-
-        .kb-card-type.mixed {
-            background: rgba(168, 85, 247, 0.1);
-            border-color: rgba(168, 85, 247, 0.2);
-            color: #a855f7;
-        }
-
-        .kb-card-stale-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            padding: 2px 6px;
-            border-radius: 4px;
-            background: rgba(248, 113, 113, 0.1);
-            border: 1px solid rgba(248, 113, 113, 0.2);
-            font-size: 8px;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            color: #f87171;
-            margin-top: 6px;
-        }
-
-        .kb-card-stale-badge:hover {
-            background: rgba(248, 113, 113, 0.15);
-            border-color: rgba(248, 113, 113, 0.3);
+            justify-content: space-between;
+            gap: 10px;
+            margin-top: auto;
+            padding-top: 10px;
+            border-top: 1px solid var(--border-soft);
         }
 
         .kb-card-updated {
-            font-size: 10px;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-size: 9.5px;
             color: var(--text-dim);
+        }
+
+        .kb-card-stale-note {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            flex-shrink: 0;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 9px;
+            color: var(--warning);
+        }
+
+        .kb-card-stale-note::before {
+            content: '';
+            width: 4px;
+            height: 4px;
+            border-radius: 50%;
+            background: var(--warning);
         }
 
         .kb-add-tile {
@@ -6289,7 +6377,7 @@
             <div class="kb-header">
                 <div class="kb-kicker">Knowledge Base Manager</div>
                 <div class="kb-brand">
-                    <h1>ULTRAGRAPH</h1>
+                    <h1>ULTRA GRAPH</h1>
                     <span class="kb-cursor"></span>
                 </div>
                 <div class="kb-status-line">
@@ -6299,7 +6387,7 @@
             </div>
 
             <!-- What's New: Recent Enhancements -->
-            <div class="kb-whatsnew">
+            <div class="kb-whatsnew collapsed">
                 <div class="kb-whatsnew-header">
                     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
@@ -6317,8 +6405,8 @@
                         <span class="kb-whatsnew-text">Enhanced AI agent tools with batch support — <code>search</code>, <code>traverse</code>, <code>find_usages</code>, <code>get_code</code></span>
                     </div>
                     <div class="kb-whatsnew-item">
-                        <span class="kb-whatsnew-badge">Quality</span>
-                        <span class="kb-whatsnew-text">Enhanced node signatures and descriptions — better symbol context for code understanding</span>
+                        <span class="kb-whatsnew-badge">Tour</span>
+                        <span class="kb-whatsnew-text">Guided, narrated walkthroughs — ask a question, <code>ug tour</code> plans an ordered set of stops through the graph</span>
                     </div>
                     <div class="kb-whatsnew-item">
                         <span class="kb-whatsnew-badge">Reliability</span>
@@ -7365,6 +7453,21 @@
             if (el) el.textContent = text;
         }
 
+        // Compact "updated" label for the card footer — the absolute
+        // timestamp is long enough to get ellipsed next to the stale note,
+        // so the exact time moves into the row's tooltip instead.
+        function kbRelativeTime(epochSeconds) {
+            const mins = Math.round((Date.now() / 1000 - epochSeconds) / 60);
+            if (mins < 1) return 'just now';
+            if (mins < 60) return `${mins}m ago`;
+            const hours = Math.round(mins / 60);
+            if (hours < 24) return `${hours}h ago`;
+            const days = Math.round(hours / 24);
+            if (days < 30) return `${days}d ago`;
+            const months = Math.round(days / 30);
+            return months < 12 ? `${months}mo ago` : `${Math.round(months / 12)}y ago`;
+        }
+
         function kbCardIconSvg() {
             return `<svg class="kb-card-icon" viewBox="0 0 24 24" fill="none">
                 <circle cx="12" cy="5" r="2.2" fill="currentColor" />
@@ -7452,37 +7555,53 @@
                 card.tabIndex = 0;
                 card.style.setProperty('--card-accent', KB_PALETTE[i % KB_PALETTE.length]);
                 card.style.setProperty('--i', i);
-                const updated = p.updatedAt ? new Date(p.updatedAt * 1000).toLocaleString() : '—';
+                const updatedExact = p.updatedAt ? new Date(p.updatedAt * 1000).toLocaleString() : '—';
+                const updated = p.updatedAt ? kbRelativeTime(p.updatedAt) : '—';
                 // KB kind (docs / code / mixed) is computed server-side from
                 // the graph's node composition and stamped onto the cached
                 // project by refreshStaleness(). Until the first staleness
                 // poll lands, no badge is shown rather than a wrong guess.
                 const kbType = p.kbKind || '';
                 const kbTypeLabel = { docs: 'Docs', code: 'Code', mixed: 'Mixed' }[kbType] || '';
+                const isActive = p.name === caps.active;
+                const staleInfo = p.staleInfo || 'Files changed';
 
                 card.innerHTML = `
                     <div class="kb-card-top">
                         ${kbCardIconSvg()}
-                        ${p.name === caps.active ? '<span class="kb-card-badge">Active</span>' : ''}
-                        <button type="button" class="kb-card-delete" title="Delete knowledge base" aria-label="Delete ${escapeHtml(p.name)}">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m2 0-.7 12.1A2 2 0 0 1 14.3 21H9.7a2 2 0 0 1-2-1.9L7 7"/></svg>
-                        </button>
+                        <div class="kb-card-name" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</div>
+                        <div class="kb-card-actions">
+                            ${p.stale ? `
+                            <button type="button" class="kb-card-action kb-card-reindex" title="Index is stale — ${escapeHtml(staleInfo)} since last indexing. Click to re-index." aria-label="Re-index ${escapeHtml(p.name)}">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11A8 8 0 0 0 6.3 5.7L3 9m1 4a8 8 0 0 0 13.7 5.3L21 15"/><path d="M3 4v5h5M21 20v-5h-5"/></svg>
+                            </button>` : ''}
+                            <button type="button" class="kb-card-action kb-card-delete" title="Delete knowledge base" aria-label="Delete ${escapeHtml(p.name)}">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m2 0-.7 12.1A2 2 0 0 1 14.3 21H9.7a2 2 0 0 1-2-1.9L7 7"/></svg>
+                            </button>
+                        </div>
                     </div>
-                    <div class="kb-card-name" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</div>
+                    ${isActive || kbType ? `<div class="kb-card-flags">
+                        ${isActive ? '<span class="kb-card-badge is-active">Active</span>' : ''}
+                        ${kbType ? `<span class="kb-card-badge kind-${kbType}">${kbTypeLabel}</span>` : ''}
+                    </div>` : ''}
                     <div class="kb-card-stats">
                         <div class="kb-card-metric"><b>${(p.nodes || 0).toLocaleString()}</b><span>Nodes</span></div>
                         <div class="kb-card-metric"><b>${(p.edges || 0).toLocaleString()}</b><span>Edges</span></div>
                     </div>
-                    ${kbType ? `<div class="kb-card-type ${kbType}">${kbTypeLabel}</div>` : ''}
-                    ${p.stale ? '<div class="kb-card-stale-badge" role="button" tabindex="0" title="Index may be stale — files have changed since last indexing. Click to re-index.">⚠ Stale — Re-index</div>' : ''}
                     <div class="kb-card-path" title="${escapeHtml(p.repoRoot || '')}">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></svg>
                         <span>${escapeHtml(p.repoRoot || '')}</span>
                     </div>
-                    <div class="kb-card-updated">Updated ${updated}${p.stale ? ` · ${p.staleInfo || 'Files changed'}` : ''}</div>
+                    <div class="kb-card-footer">
+                        <span class="kb-card-updated" title="Last indexed ${escapeHtml(updatedExact)}">Updated ${escapeHtml(updated)}</span>
+                        ${p.stale ? `<span class="kb-card-stale-note" title="Index is stale — click the re-index button to refresh.">${escapeHtml(staleInfo)}</span>` : ''}
+                    </div>
                 `;
                 card.addEventListener('click', () => openProject(p.name, caps.active));
                 card.addEventListener('keydown', (e) => {
+                    // Enter/Space on a nested action button bubbles up here —
+                    // without this guard the card would also open the project.
+                    if (e.target !== card) return;
                     if (e.key === 'Enter' || e.key === ' ') {
                         e.preventDefault();
                         openProject(p.name, caps.active);
@@ -7492,18 +7611,11 @@
                     e.stopPropagation();
                     openDeleteConfirm(p);
                 });
-                const staleBadge = card.querySelector('.kb-card-stale-badge');
-                if (staleBadge) {
-                    staleBadge.addEventListener('click', (e) => {
+                const reindexBtn = card.querySelector('.kb-card-reindex');
+                if (reindexBtn) {
+                    reindexBtn.addEventListener('click', (e) => {
                         e.stopPropagation();
                         reindexProject(p);
-                    });
-                    staleBadge.addEventListener('keydown', (e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            reindexProject(p);
-                        }
                     });
                 }
                 grid.appendChild(card);
@@ -7571,9 +7683,11 @@
         }
 
         // Re-index a stale project by reusing the wizard's /api/generate job
-        // flow against the project's repo root — `ug gen` is incremental
-        // (blake3 cache skips unchanged files), so only touched files are
-        // re-processed. Progress streams into the wizard view.
+        // flow against the project's repo root. `ug gen` re-parses every
+        // file, but its ingest stage is incremental: it diffs against the
+        // graph DB and only re-embeds nodes whose text actually changed, so
+        // the dominant cost scales with the edit, not the repo. Progress
+        // streams into the wizard view.
         async function reindexProject(p) {
             if (!p.repoRoot) {
                 alert(`Cannot re-index "${p.name}": no repo root recorded in project.json.`);
