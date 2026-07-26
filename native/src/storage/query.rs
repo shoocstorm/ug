@@ -15,7 +15,7 @@ use crate::storage::db::{EdgeRow, NodeRow};
 use crate::storage::embed::Embedder;
 use crate::storage::ppr::run_ppr;
 use crate::storage::store::{KnowledgeStore, NodeFilter};
-use crate::storage::text::build_sparse_keyword_vector;
+use crate::storage::text::build_sparse_query_vector;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -98,7 +98,10 @@ pub async fn rrf_search(
         .into_iter()
         .next()
         .ok_or("embedder returned no vectors")?;
-    let sparse = build_sparse_keyword_vector(query);
+    // IDF-weighted when the store carries corpus statistics, so common
+    // words in a natural-language query stop scoring like rare ones. Falls
+    // back to plain term frequency on stores ingested before the sidecar.
+    let sparse = build_sparse_query_vector(query, store.sparse_stats().as_deref());
     let pool = (k * 4).max(20);
     let filter = where_clause.and_then(NodeFilter::from_legacy_where);
     let hits = store
@@ -316,9 +319,10 @@ pub fn read_snippet(
 ///
 /// Retrieval stops adding results once the assembled context passes this,
 /// so it is the cap a user actually feels as "search returned fewer hits
-/// than `k`". Unlike the index-time caps it costs nothing to change —
-/// callers override it per call, and no re-index is involved.
-pub const DEFAULT_CONTEXT_CHARS: usize = 12_000;
+/// than `k`". Also used as the default context budget for chat/tour
+/// prompt assembly. Unlike the index-time caps it costs nothing to change
+/// — callers override it per call, and no re-index is involved.
+pub const DEFAULT_CONTEXT_CHARS: usize = 60_000;
 
 /// Ranking strategy for the candidate pool produced by seed search +
 /// graph context.

@@ -11,6 +11,7 @@
 
 use std::fs;
 use tempfile::TempDir;
+use ultragraph::limits::EmbedBudget;
 use ultragraph::storage::ingest::{build_texts, capture_for_graph};
 use ultragraph::{build_graph, index, GraphData};
 
@@ -47,7 +48,7 @@ fn texts_for_doc() -> (TempDir, GraphData, Vec<String>) {
     let graph: GraphData = serde_json::from_str(&graph_json).expect("graph parses");
 
     let captured = capture_for_graph(&graph);
-    let texts = build_texts(&graph, &captured);
+    let texts = build_texts(&graph, &captured, &EmbedBudget::default());
     (dir, graph, texts)
 }
 

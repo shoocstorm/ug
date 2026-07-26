@@ -230,9 +230,9 @@ currently carry that flag.
 | Document page text | 8,192 bytes | index | `PAGE_TEXT_CAP`, `indexer/document.rs` |
 | Document page name | 100 bytes | index | `NAME_CAP`, `indexer/document.rs` |
 | Extracted comments per node | 600 chars | embed | `MAX_COMMENT_CHARS`, `storage/comments.rs` |
-| `Related:` names per node | 24 | embed | `MAX_RELATED`, `storage/text.rs` |
+| `Related:` names per node | 128 | embed | `MAX_RELATED`, `storage/text.rs` |
 | Sparse dimensions per node | 512 | embed | `MAX_SPARSE_DIMS`, `storage/text.rs` |
-| Search result budget | 12,000 chars | retrieve | `DEFAULT_CONTEXT_CHARS`, `storage/query.rs` |
+| Search result budget | 60,000 chars | retrieve | `DEFAULT_CONTEXT_CHARS`, `storage/query.rs` |
 | MCP snippet preview | 1,200 chars | retrieve | `SNIPPET_PREVIEW_CHARS`, `mcp/format.rs` |
 | Captured `code` | uncapped | index | `storage/source.rs` |
 | Dense vector dimension | 384 (default) | embed | `EMBEDDING_DIM`, `storage/embed.rs` |
@@ -255,9 +255,26 @@ published rather than left to be inferred from a chunk that looks cut off:
   `source` constant), plus `embedder_model` and `embedder_token_window`.
 - **The visualization's Chunk tab** shows an *Indexing limits* section listing
   the caps that apply to that node's file type, marking the ones that
-  measurably bit it — a truncation ellipsis, or a `Related:` list that came
-  back exactly full. The section auto-expands when something was reached, and
-  the summary reads `Indexing limits — 1 reached`.
+  measurably bit it — a truncation ellipsis, a `Related:` list that came back
+  exactly full, or a keyword vector at the dimension cap. The section
+  auto-expands when something was reached, and the summary reads
+  `Indexing limits — 1 reached`.
+- **A *Storage metadata* section** in the same tab, collapsed by default,
+  shows the rest of the stored row: dense and sparse vector sizes, embedded
+  text and captured source lengths, when the row last changed, and the file
+  hash with a live staleness check. It auto-expands and its summary reads
+  `Storage metadata — stale` when the file has changed since indexing.
+
+  These come from `GET /api/db/node/:id`, which returns them under a
+  `storage` key. They are computed only for that single-row hydrate, not for
+  `/api/db/traverse` — the staleness check hashes the file on disk and
+  `sparse_dims` rebuilds the keyword vector, which is fine per click and not
+  fine per traversal node.
+
+Long values collapse. A document section's `docstring` is now a paragraph
+rather than a sentence, so both the detail panel's **Doc** row and the Chunk
+tab's **Description** and **Notes from comments** fields show a one-line
+preview plus a character count above 180 chars, and expand on click.
 
 `native/src/limits.rs` is the single list. It defines no values of its own —
 every entry reads the constant that enforces the behaviour, and a unit test

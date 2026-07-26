@@ -20,6 +20,7 @@ pub mod ingest;
 pub mod ppr;
 pub mod query;
 pub mod source;
+pub mod sparse_stats;
 pub mod store;
 pub mod text;
 pub mod types_registry;
@@ -39,8 +40,8 @@ pub use source::{capture_graph_code, file_matches_hash, CapturedCode};
 pub use ppr::{default_edge_type_weights, run_ppr};
 pub use query::{
     mmr_rerank, read_snippet, rrf_search, snippet_for, search_kb, semantic_search, semantic_search_w_where,
-    traverse, traverse_filtered, ContextItem, RankStrategy, RankedContext, SearchHit,
-    SearchKbOptions, TraversalResult,
+    traverse, traverse_filtered, ContextItem, DEFAULT_CONTEXT_CHARS, RankStrategy, RankedContext,
+    SearchHit, SearchKbOptions, TraversalResult,
 };
 pub use store::{
     open_store, Direction, KnowledgeStore, NodeFilter, StoreError, StoreSet, StoreSpec,

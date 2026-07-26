@@ -4,7 +4,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use ultragraph::storage::{
     self, open_store, search_kb as storage_search_kb,
-    semantic_search as storage_semantic_search, Direction, Embedder,
+    semantic_search as storage_semantic_search, DEFAULT_CONTEXT_CHARS, Direction, Embedder,
     EmbedderConfig, KnowledgeStore, RankStrategy, SearchKbOptions, StoreSet, StoreSpec,
     DEFAULT_BASE_URL as DEFAULT_EMBED_BASE_URL, DEFAULT_MODEL as DEFAULT_EMBED_MODEL,
 };
@@ -12,6 +12,7 @@ use ultragraph::agent_tools::{
     self, by_id_map, edge_type_str, looks_like_node_id, node_loc, node_type_str,
     strip_file_id_prefix, Render,
 };
+use ultragraph::limits::{BudgetSource, EmbedBudget};
 use ultragraph::types::{GraphData, GraphEdge, GraphNode, GraphNodeType};
 use ultragraph::{
     build_graph, calculate_centrality, detect_cycles, index, index_with_cache, C_BLUE, C_BOLD,
@@ -252,6 +253,38 @@ pub(crate) fn embedder_from_args(args: &[String]) -> Embedder {
     });
     announce_embedder(&embedder, dim.is_some());
     embedder
+}
+
+/// Resolve how much of each node's description may be embedded, and say so.
+///
+/// The number comes from the model's token window unless `--section-cap`
+/// (or a persisted `embed.section_cap`) pins it. Announcing it matters
+/// because the alternative is invisible: text past the budget is dropped
+/// with no marker in the output, and the user chose the model that decided
+/// the number. Any mismatch between the two is printed as a warning.
+pub(crate) fn budget_from_args(embedder: &Embedder, args: &[String]) -> EmbedBudget {
+    let (raw, _) = config::resolve_pref_cfg(flag_value(args, &["--section-cap"]), "embed.section_cap");
+    let override_chars = raw.and_then(|s| s.parse::<usize>().ok());
+    let model = &embedder.config().model;
+    let budget = EmbedBudget::resolve(model, override_chars);
+
+    let window = match budget.window_tokens {
+        Some(t) => format!("{} token window", t),
+        None => "unknown window".to_string(),
+    };
+    let origin = match budget.source {
+        BudgetSource::Flag => "pinned by --section-cap",
+        BudgetSource::Auto => "derived from the model",
+        BudgetSource::Default => "default — model window unknown",
+    };
+    eprintln!(
+        "{C_CYAN}▸{C_RESET} Embedding budget: {C_BOLD}{}{C_RESET} chars per description ({}, {})",
+        budget.description_chars, window, origin
+    );
+    if let Some(advice) = budget.advisory(model) {
+        eprintln!("{C_YELLOW}⚠{C_RESET}  {}", advice);
+    }
+    budget
 }
 
 /// One-line banner on stderr so the user can see which backend the
@@ -1904,6 +1937,7 @@ async fn ingest_graph_with_progress(
     embedder: &Embedder,
     graph: &GraphData,
     prune: bool,
+    budget: &EmbedBudget,
 ) -> Result<(usize, usize), String> {
     let nodes_count = graph.nodes.len();
     let edges_count = graph.edges.len();
@@ -1915,7 +1949,7 @@ async fn ingest_graph_with_progress(
     // Capture first: node texts fold in each node's own comments, and the
     // same captured source is written to the rows further down.
     let captured = storage::capture_for_graph(graph);
-    let texts = storage::build_texts(graph, &captured);
+    let texts = storage::build_texts(graph, &captured, budget);
     println!(
         "\r{C_CYAN}▸{C_RESET} Building node texts: {C_GREEN}100.0% ✓ done{C_RESET} in {C_BOLD}{:?}{C_RESET}",
         t0.elapsed()
@@ -1927,7 +1961,8 @@ async fn ingest_graph_with_progress(
     let tp = std::time::Instant::now();
     print!("{C_CYAN}▸{C_RESET} Diffing against Graph DB ({})", nodes_count);
     let _ = std::io::Write::flush(&mut std::io::stdout());
-    let plan = storage::plan_incremental_ingest(store, graph, &texts, false, &captured)
+    let model = embedder.config().model.clone();
+    let plan = storage::plan_incremental_ingest(store, graph, &texts, false, &captured, Some(&model))
         .await
         .map_err(|e| format!("reading existing nodes: {}", e))?;
     let to_embed = plan.to_embed.len();
@@ -2051,6 +2086,10 @@ async fn ingest_graph_with_progress(
         }
     }
 
+    // Stamp the model last, so a run that died mid-write doesn't claim its
+    // vectors all came from this one.
+    store.record_ingest_model(&model);
+
     Ok((nodes_count, edges_count))
 }
 
@@ -2067,6 +2106,7 @@ fn run_gen_ingest(
     // the case where several inputs deliberately share one project dir.
     let prune = !has_flag(args, "--no-prune");
     let mut embedder = embedder_from_args(args);
+    let budget = budget_from_args(&embedder, args);
     let dim_was_explicit = flag_value(args, &["--embedding-dim"]).is_some();
     let rt = tokio_runtime();
     rt.block_on(async {
@@ -2097,7 +2137,7 @@ fn run_gen_ingest(
             }
         }
         announce_destinations(&specs);
-        ingest_with_specs(&specs, &embedder, &graph, prune).await
+        ingest_with_specs(&specs, &embedder, &graph, prune, &budget).await
     })
 }
 
@@ -2109,6 +2149,7 @@ async fn ingest_with_specs(
     embedder: &Embedder,
     graph: &GraphData,
     prune: bool,
+    budget: &EmbedBudget,
 ) -> Result<(usize, usize), String> {
     let mut stores: Vec<Box<dyn KnowledgeStore>> = Vec::with_capacity(specs.len());
     for spec in specs {
@@ -2119,11 +2160,11 @@ async fn ingest_with_specs(
     }
     if stores.len() == 1 {
         let store = stores.into_iter().next().unwrap();
-        ingest_graph_with_progress(store.as_ref(), embedder, graph, prune).await
+        ingest_graph_with_progress(store.as_ref(), embedder, graph, prune, budget).await
     } else {
         let set = StoreSet::new(stores);
         set.validate_dims().map_err(|e| format!("dim mismatch across destinations: {}", e))?;
-        ingest_graph_multi_with_progress(&set, embedder, graph, prune).await
+        ingest_graph_multi_with_progress(&set, embedder, graph, prune, budget).await
     }
 }
 
@@ -2135,6 +2176,7 @@ async fn ingest_graph_multi_with_progress(
     embedder: &Embedder,
     graph: &GraphData,
     prune: bool,
+    budget: &EmbedBudget,
 ) -> Result<(usize, usize), String> {
 
     let nodes_count = graph.nodes.len();
@@ -2142,7 +2184,7 @@ async fn ingest_graph_multi_with_progress(
 
     let t0 = std::time::Instant::now();
     let captured = storage::capture_for_graph(graph);
-    let texts = storage::build_texts(graph, &captured);
+    let texts = storage::build_texts(graph, &captured, budget);
     println!(
         "{C_CYAN}▸{C_RESET} Building node texts: {C_GREEN}done{C_RESET} ({}) in {C_BOLD}{:?}{C_RESET}",
         nodes_count,
@@ -2156,7 +2198,9 @@ async fn ingest_graph_multi_with_progress(
         .stores
         .first()
         .ok_or_else(|| "empty StoreSet".to_string())?;
-    let plan = storage::plan_incremental_ingest(first.as_ref(), graph, &texts, true, &captured)
+    let model = embedder.config().model.clone();
+    let plan =
+        storage::plan_incremental_ingest(first.as_ref(), graph, &texts, true, &captured, Some(&model))
         .await
         .map_err(|e| format!("reading existing nodes: {}", e))?;
     let to_embed = plan.to_embed.len();
@@ -2238,6 +2282,10 @@ async fn ingest_graph_multi_with_progress(
                 t4.elapsed()
             );
         }
+    }
+
+    for store in &set.stores {
+        store.record_ingest_model(&model);
     }
 
     Ok((nodes_count, edges_count))
@@ -3454,6 +3502,7 @@ fn run_ingest(args: &[String]) {
     let graph_json = fs::read_to_string(&graph_file).expect("Failed to read graph file");
     let graph: GraphData = serde_json::from_str(&graph_json).expect("Failed to parse graph JSON");
     let mut embedder = embedder_from_args(args);
+    let budget = budget_from_args(&embedder, args);
     let dim_was_explicit = flag_value(args, &["--embedding-dim"]).is_some();
     let rt = tokio_runtime();
 
@@ -3480,7 +3529,7 @@ fn run_ingest(args: &[String]) {
         // and fanning several graphs into one store is a legitimate use —
         // pruning by default would make each ingest erase the last.
         let prune = has_flag(args, "--prune");
-        match ingest_with_specs(&specs, &embedder, &graph, prune).await {
+        match ingest_with_specs(&specs, &embedder, &graph, prune, &budget).await {
             Ok((nodes_written, edges_written)) => {
                 println!("────────────────────────────────────────");
                 println!(
@@ -3894,7 +3943,7 @@ fn run_chat(args: &[String]) {
         .unwrap_or(2);
     let max_chars: usize = flag_value(args, &["--max-chars"])
         .and_then(|s| s.parse().ok())
-        .unwrap_or(chat::DEFAULT_CTX_MAX_CHARS);
+        .unwrap_or(DEFAULT_CONTEXT_CHARS);
     let strategy = flag_value(args, &["--strategy"])
         .map(|s| RankStrategy::from_str_lossy(&s))
         .unwrap_or(RankStrategy::Ppr);
@@ -4095,7 +4144,7 @@ fn run_tour(args: &[String]) {
         .clamp(1, tour::MAX_STOPS_LIMIT);
     let max_chars: usize = flag_value(args, &["--max-chars"])
         .and_then(|s| s.parse().ok())
-        .unwrap_or(chat::DEFAULT_CTX_MAX_CHARS);
+        .unwrap_or(DEFAULT_CONTEXT_CHARS);
     // Candidates drawn from any one file, so a big file can't become the
     // whole tour. 0 disables the cap.
     let max_per_file: usize = flag_value(args, &["--max-per-file"])

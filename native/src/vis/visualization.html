@@ -1421,6 +1421,68 @@
             max-width: 70%;
         }
 
+        /* A long field (a doc comment, now that document sections carry
+           their whole prose) gets its own full-width row and collapses to a
+           one-line preview, so it can't push the rest of the panel off
+           screen. Short values keep the plain label/value row. */
+        #info .info-row.block {
+            display: block;
+        }
+
+        #info .info-row.block .info-label { display: block; margin-bottom: 5px; }
+
+        #info .info-collapse summary {
+            display: flex;
+            gap: 8px;
+            align-items: baseline;
+            cursor: pointer;
+            list-style: none;
+            color: var(--text-muted);
+            font-size: 11px;
+        }
+
+        #info .info-collapse summary::-webkit-details-marker { display: none; }
+
+        #info .info-collapse summary::before {
+            content: '▸';
+            color: var(--text-dim);
+            flex-shrink: 0;
+        }
+
+        #info .info-collapse[open] summary::before { content: '▾'; }
+
+        #info .info-collapse summary:hover { color: var(--accent); }
+
+        #info .info-collapse .info-preview {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10.5px;
+            color: var(--text-dim);
+        }
+
+        #info .info-collapse[open] .info-preview { display: none; }
+
+        #info .info-collapse .info-preview-count {
+            margin-left: auto;
+            flex-shrink: 0;
+            font-size: 9.5px;
+            color: var(--text-dim);
+            font-variant-numeric: tabular-nums;
+        }
+
+        #info .info-collapse .info-full {
+            margin-top: 6px;
+            font-size: 11px;
+            line-height: 1.55;
+            color: var(--text);
+            white-space: pre-wrap;
+            word-break: break-word;
+            max-height: 320px;
+            overflow: auto;
+        }
+
         #info .info-type-badge {
             display: inline-block;
             padding: 2px 8px;
@@ -5846,6 +5908,44 @@
             color: var(--text-muted);
         }
 
+        /* Collapsed variant of `.chunk-section`, for values that run to a
+           paragraph. The label stays in place so the field is still
+           identifiable while shut. */
+        details.chunk-collapse > summary {
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+            cursor: pointer;
+            list-style: none;
+        }
+
+        details.chunk-collapse > summary::-webkit-details-marker { display: none; }
+
+        details.chunk-collapse > summary::before {
+            content: '▸';
+            font-size: 9px;
+            color: var(--text-dim);
+        }
+
+        details.chunk-collapse[open] > summary::before { content: '▾'; }
+
+        details.chunk-collapse > summary .chunk-label { margin-bottom: 0; }
+
+        details.chunk-collapse > summary:hover .chunk-label { color: var(--accent); }
+
+        .chunk-collapse-count {
+            margin-left: auto;
+            font-size: 9.5px;
+            color: var(--text-dim);
+            font-variant-numeric: tabular-nums;
+        }
+
+        details.chunk-collapse > .chunk-value {
+            margin-top: 6px;
+            max-height: 320px;
+            overflow: auto;
+        }
+
         .chunk-related { display: flex; flex-wrap: wrap; gap: 4px; }
 
         .chunk-chip {
@@ -5876,6 +5976,36 @@
         }
 
         .chunk-raw summary:hover { color: var(--accent); }
+
+        .chunk-source-view {
+            margin-top: 8px;
+        }
+
+        .chunk-source-view summary {
+            font-size: 10px;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: var(--text-dim);
+            cursor: pointer;
+        }
+
+        .chunk-source-view summary:hover { color: var(--accent); }
+
+        .chunk-source-code {
+            margin: 6px 0 0;
+            padding: 9px 10px;
+            background: var(--bg-deep);
+            border: 1px solid var(--border-soft);
+            border-radius: 6px;
+            font-family: 'JetBrains Mono', ui-monospace, monospace;
+            font-size: 10.5px;
+            line-height: 1.5;
+            color: var(--text-muted);
+            white-space: pre-wrap;
+            word-break: break-word;
+            max-height: 360px;
+            overflow: auto;
+        }
 
         .chunk-raw pre {
             margin: 8px 0 0;
@@ -7116,9 +7246,9 @@
                                 <label for="chat-temperature">Temperature</label>
                                 <input id="chat-temperature" type="number" step="0.05" min="0" max="2"
                                     placeholder="0.2">
-                                <label for="chat-max-tokens">Max tokens</label>
-                                <input id="chat-max-tokens" type="number" min="1" max="8192"
-                                    placeholder="1024">
+                                <label for="chat-max-tokens">Max resp tokens</label>
+                                <input id="chat-max-tokens" type="number" min="1" max="655360"
+                                    placeholder="32768">
                             </div>
                         </div>
                         <div id="chat-status"></div>
@@ -7299,6 +7429,7 @@
                         <div class="tool-tabs">
                             <button class="tool-tab active" data-tool="centrality">Centrality</button>
                             <button class="tool-tab" data-tool="cycles">Cycles</button>
+                            <button class="tool-tab" data-tool="export">Export</button>
                         </div>
                         <div class="tool-panel active" data-tool="centrality">
                             <div class="section-subhead" style="margin-top:0">Top by Degree</div>
@@ -7312,6 +7443,10 @@
                                 <span class="status-dot"></span>
                                 <span id="cycle-status-text">Click to run detection</span>
                             </div>
+                        </div>
+                        <div class="tool-panel" data-tool="export">
+                            <button class="primary download-btn" onclick="downloadIndex()" style="margin-bottom:6px">Download Index JSON</button>
+                            <button class="primary download-btn" onclick="downloadGraph()">Download Graph JSON</button>
                         </div>
                     </div>
                 </div>
@@ -13205,6 +13340,26 @@
             const jumpBtn = document.getElementById('jump-btn');
             const typeColor = config.getColor(d.group);
 
+            // A field whose value may be a paragraph rather than a token.
+            // Markdown sections and PDF pages carry their whole prose as a
+            // docstring, so an inline value would push everything below it —
+            // tabs included — off the panel. Short values stay a plain row;
+            // long ones collapse to a one-line preview.
+            const LONG_FIELD_CHARS = 180;
+            function longFieldRow(label, value) {
+                const text = String(value);
+                if (text.length <= LONG_FIELD_CHARS) {
+                    return `<div class="info-row"><span class="info-label">${escapeHtml(label)}</span>`
+                        + `<span class="info-value">${escapeHtml(text)}</span></div>`;
+                }
+                const preview = text.replace(/\s+/g, ' ').slice(0, 90);
+                return `<div class="info-row block"><span class="info-label">${escapeHtml(label)}</span>`
+                    + `<details class="info-collapse"><summary>`
+                    + `<span class="info-preview">${escapeHtml(preview)}…</span>`
+                    + `<span class="info-preview-count">${text.length.toLocaleString()} chars</span>`
+                    + `</summary><div class="info-full">${escapeHtml(text)}</div></details></div>`;
+            }
+
             // The title carries the node's type as its icon — the same glyph
             // used in the legend, so the panel identifies itself at a glance.
             const icon = document.getElementById('info-type-icon');
@@ -13235,7 +13390,7 @@
                 const ret = d.signature.returnType || d.signature.return_type ? ' => ' + (d.signature.returnType || d.signature.return_type) : '';
                 html += `<div class="info-row"><span class="info-label">Signature</span><span class="info-value">(${escapeHtml(params)})${escapeHtml(ret)}</span></div>`;
             }
-            if (d.docstring) html += `<div class="info-row"><span class="info-label">Doc</span><span class="info-value">${escapeHtml(d.docstring)}</span></div>`;
+            if (d.docstring) html += longFieldRow('Doc', d.docstring);
             if (d.calls && d.calls.length) html += `<div class="info-row"><span class="info-label">Calls</span><span class="info-value">${escapeHtml(d.calls.join(', '))}</span></div>`;
             if (d.extends && d.extends.length) html += `<div class="info-row"><span class="info-label">Extends</span><span class="info-value">${escapeHtml(d.extends.join(', '))}</span></div>`;
             if (d.implements && d.implements.length) html += `<div class="info-row"><span class="info-label">Implements</span><span class="info-value">${escapeHtml(d.implements.join(', '))}</span></div>`;
@@ -13391,11 +13546,20 @@
             const stats = document.createElement('div');
             stats.className = 'chunk-stats';
             const lines = (row.description || '').split('\n').length;
-            stats.innerHTML = `<span><b>${text.length.toLocaleString()}</b> chars embedded</span>`
-                + `<span><b>${parts.related.length}</b> related name${parts.related.length === 1 ? '' : 's'}</span>`
-                + (row.start_line ? `<span><b>${(row.end_line || row.start_line) - row.start_line + 1}</b> source lines</span>` : '');
+            stats.innerHTML = `<span title="Total characters of embedded text that semantic search matches against"><b>${text.length.toLocaleString()}</b> chars embedded</span>`
+                + `<span title="Names of related nodes folded into the embedding as context"><b>${parts.related.length}</b> related name${parts.related.length === 1 ? '' : 's'}</span>`
+                + (row.start_line ? `<span id="chunk-source-link" title="Click to view captured source content" style="cursor:pointer;text-decoration:underline dotted"><b>${(row.end_line || row.start_line) - row.start_line + 1}</b> source lines</span>` : '');
             frag.appendChild(stats);
             void lines;
+
+            const tooltips = {
+                'Heading': 'The symbol name or document title extracted from the indexed source',
+                'Description': 'Prose describing what this symbol does — the main body of the embedded text',
+                'Signature': 'Function or type signature, if applicable',
+                'Notes from comments': 'Doc-comment prose attached to this symbol',
+                'Also indexed': 'Additional unstructured text captured from the same source region',
+                'Related names': 'Neighbour symbol names folded into the embedding as search context',
+            };
 
             const section = (label, value, cls) => {
                 if (!value) return;
@@ -13404,6 +13568,7 @@
                 const l = document.createElement('div');
                 l.className = 'chunk-label';
                 l.textContent = label;
+                l.title = tooltips[label] || '';
                 const v = document.createElement('div');
                 v.className = 'chunk-value';
                 v.textContent = value;
@@ -13411,18 +13576,45 @@
                 frag.appendChild(d);
             };
 
+            // As `longFieldRow` in the detail panel: a document section's
+            // description is now a whole paragraph, so it collapses rather
+            // than burying the fields under it.
+            const collapsibleSection = (label, value, cls) => {
+                if (!value) return;
+                if (value.length <= 180) return section(label, value, cls);
+                const d = document.createElement('details');
+                d.className = 'chunk-section chunk-collapse' + (cls ? ' ' + cls : '');
+                const s = document.createElement('summary');
+                const l = document.createElement('span');
+                l.className = 'chunk-label';
+                l.textContent = label;
+                l.title = tooltips[label] || '';
+                const count = document.createElement('span');
+                count.className = 'chunk-collapse-count';
+                count.textContent = `${value.length.toLocaleString()} chars`;
+                s.append(l, count);
+                const v = document.createElement('div');
+                v.className = 'chunk-value';
+                v.textContent = value;
+                d.append(s, v);
+                frag.appendChild(d);
+            };
+
             section('Heading', parts.heading);
-            section('Description', parts.description);
+            collapsibleSection('Description', parts.description);
             section('Signature', parts.signature, 'mono');
-            section('Notes from comments', parts.notes);
+            collapsibleSection('Notes from comments', parts.notes);
             if (parts.rest) section('Also indexed', parts.rest);
 
             if (parts.related.length) {
-                const d = document.createElement('div');
-                d.className = 'chunk-section';
-                const l = document.createElement('div');
+                const d = document.createElement('details');
+                d.className = 'chunk-section chunk-collapse';
+                const s = document.createElement('summary');
+                const l = document.createElement('span');
                 l.className = 'chunk-label';
                 l.textContent = `Related names (${parts.related.length})`;
+                l.title = tooltips['Related names'];
+                s.appendChild(l);
                 const list = document.createElement('div');
                 list.className = 'chunk-related';
                 parts.related.forEach(name => {
@@ -13439,7 +13631,7 @@
                     }
                     list.appendChild(chip);
                 });
-                d.append(l, list);
+                d.append(s, list);
                 frag.appendChild(d);
             }
 
@@ -13452,10 +13644,130 @@
             raw.append(sum, pre);
             frag.appendChild(raw);
 
+            const meta = renderChunkStorage(row);
+            if (meta) frag.appendChild(meta);
+
             const limits = renderChunkLimits(row, parts, text);
             if (limits) frag.appendChild(limits);
 
             container.appendChild(frag);
+
+            // Wire source viewing: clicking the source lines stat fetches
+            // the actual file content from /api/file and shows it inline.
+            const sourceLink = document.getElementById('chunk-source-link');
+            if (sourceLink) {
+                const file = (row && row.file) || (node && node.file) || '';
+                if (file) {
+                    sourceLink.addEventListener('click', async () => {
+                        const existing = container.querySelector('.chunk-source-view');
+                        if (existing) {
+                            existing.remove();
+                            return;
+                        }
+                        const start = (node && node.startLine) || (row && row.start_line) || null;
+                        const end = (row && row.end_line) || null;
+                        let qs = `path=${encodeURIComponent(file)}`;
+                        if (start) { qs += `&start=${start}`; if (end) qs += `&end=${end}`; }
+                        const view = document.createElement('details');
+                        view.className = 'chunk-source-view';
+                        view.open = true;
+                        view.innerHTML = `<summary>${escapeHtml(file)}${start ? ' · L' + start + (end && end !== start ? '–' + end : '') : ''}</summary><pre class="chunk-source-code">Loading…</pre>`;
+                        stats.after(view);
+                        try {
+                            const res = await fetch(`/api/file?${qs}`);
+                            if (res.ok) {
+                                const data = await res.json();
+                                const content = (data && typeof data.content === 'string') ? data.content : '';
+                                view.querySelector('.chunk-source-code').textContent = content || '(empty)';
+                            } else {
+                                view.querySelector('.chunk-source-code').textContent = `Failed to load: HTTP ${res.status}`;
+                            }
+                        } catch (e) {
+                            view.querySelector('.chunk-source-code').textContent = `Error: ${e.message}`;
+                        }
+                    });
+                }
+            }
+        }
+
+        // The rest of the stored row: everything the vector store holds about
+        // this node that isn't the embedded text itself. Collapsed, because
+        // it answers follow-up questions ("is this copy stale?", "did the
+        // keyword vector get truncated?") rather than the first one.
+        const storageTooltips = {
+            'Dense vector': 'Fixed-dimension embedding vector used for semantic similarity search',
+            'Keyword vector': 'Sparse keyword (BM25-style) vector for hybrid retrieval',
+            'Embedded text': 'The text that was actually embedded — what semantic search matches against',
+            'Captured source': 'Source code snippets included in the embedding for this node',
+            'Row updated': 'When this row was last written to the vector store',
+            'File hash': 'Content hash of the source file at index time, used to detect staleness',
+        };
+
+        function renderChunkStorage(row) {
+            const s = row.storage;
+            if (!s) return null;
+
+            const rows = [];
+            const push = (label, value, note) => rows.push({ label, value, note, tip: storageTooltips[label] || '' });
+
+            if (s.vector_dim) push('Dense vector', `${s.vector_dim} dims`);
+            if (typeof s.sparse_dims === 'number') {
+                const cap = capValue('sparse_dimensions');
+                push('Keyword vector', `${s.sparse_dims.toLocaleString()} dims`,
+                    cap && s.sparse_dims >= cap ? `at the ${cap.toLocaleString()}-dim cap — rarest terms dropped` : null);
+            }
+            push('Embedded text', `${Number(s.node_text_chars || 0).toLocaleString()} chars`);
+            push('Captured source', s.code_chars
+                ? `${Number(s.code_chars).toLocaleString()} chars`
+                : 'none — snippets read from disk');
+            if (s.last_update_at) {
+                const d = new Date(s.last_update_at * 1000);
+                push('Row updated', isNaN(d) ? String(s.last_update_at) : d.toLocaleString());
+            }
+            if (s.file_hash) {
+                push('File hash', s.file_hash.slice(0, 12) + '…',
+                    s.stale === true ? 'file changed since indexing — re-run ug gen'
+                        : s.stale === false ? 'matches the file on disk' : 'file not readable now');
+            }
+            if (!rows.length) return null;
+
+            const details = document.createElement('details');
+            details.className = 'chunk-raw';
+            const summary = document.createElement('summary');
+            summary.textContent = s.stale === true ? 'Storage metadata — stale' : 'Storage metadata';
+            details.appendChild(summary);
+            if (s.stale === true) details.open = true;
+
+            const wrap = document.createElement('div');
+            rows.forEach(r => {
+                const el = document.createElement('div');
+                el.className = 'chunk-limit' + (r.note && /cap|stale|changed/.test(r.note) ? ' hit' : '');
+                const name = document.createElement('span');
+                name.className = 'chunk-limit-name';
+                name.textContent = r.label;
+                name.title = r.tip;
+                const val = document.createElement('span');
+                val.className = 'chunk-limit-value';
+                val.textContent = r.value;
+                el.append(name, val);
+                if (r.note) {
+                    const note = document.createElement('div');
+                    note.className = 'chunk-limit-effect';
+                    note.textContent = r.note;
+                    el.appendChild(note);
+                }
+                wrap.appendChild(el);
+            });
+            details.appendChild(wrap);
+            return details;
+        }
+
+        // A published cap's value by id, or null when capabilities haven't
+        // loaded (or the server is older than the limits block).
+        function capValue(id) {
+            const caps = state.capabilities && state.capabilities.limits && state.capabilities.limits.caps;
+            const hit = Array.isArray(caps) && caps.find(c => c.id === id);
+            return hit ? Number(hit.value) : null;
         }
 
         // The caps that shaped this chunk, from /api/capabilities.
@@ -13846,6 +14158,20 @@
                 text.textContent = 'No cycles found';
                 status.className = 'cycle-status no-cycles';
             }
+        }
+
+        function downloadIndex() {
+            const a = document.createElement('a');
+            a.href = '/indexed-tree.json';
+            a.download = 'indexed-tree.json';
+            a.click();
+        }
+
+        function downloadGraph() {
+            const a = document.createElement('a');
+            a.href = '/graph.json';
+            a.download = 'graph.json';
+            a.click();
         }
 
         // ─── Catalog (repo TOC) ────────────────────────────

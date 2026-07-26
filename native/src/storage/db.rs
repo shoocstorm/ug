@@ -28,8 +28,9 @@ use overgraph::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
+use crate::storage::sparse_stats::SparseStats;
 use std::path::{Path, PathBuf};
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 /// Filename of the sidecar manifest written next to the OverGraph data
 /// directory. Records the embedding dim the DB was created with so we
@@ -37,9 +38,21 @@ use std::sync::RwLock;
 /// vectors of different sizes).
 const META_FILE: &str = "ug-meta.json";
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
 struct DbMeta {
     embedding_dim: u32,
+    /// The embedding model the store was last ingested with.
+    ///
+    /// Recorded because the dim check alone does not catch a model swap:
+    /// `bge-small-en-v1.5` and `all-MiniLM-L6-v2` are both 384-dimensional,
+    /// so switching between them leaves `node_text` identical and the
+    /// incremental planner happily carries the *old* model's vectors
+    /// forward — one store holding vectors from two incompatible spaces,
+    /// with nothing to notice. Absent on stores written before this field
+    /// existed, which is treated as "unknown", not "mismatched".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
 }
 
 fn meta_path(db_path: &Path) -> PathBuf {
@@ -154,6 +167,14 @@ pub struct EdgeRow {
 
 pub struct Db {
     pub engine: DatabaseEngine,
+    /// Where the sidecar manifests live. Kept so the ingest profile and
+    /// the sparse-corpus statistics can be read and re-stamped without the
+    /// caller passing the path back in.
+    path: PathBuf,
+    /// Corpus statistics backing BM25 weighting, loaded from the sidecar at
+    /// open and refreshed by ingest once it has recomputed them. `None`
+    /// means keyword scoring falls back to plain term frequency.
+    sparse_stats: RwLock<Option<Arc<SparseStats>>>,
     /// Embedding dimension this DB was opened with. Validated against
     /// the on-disk sidecar (`ug-meta.json`) to prevent mixing vectors
     /// of different sizes across runs.
@@ -203,9 +224,31 @@ impl Db {
                 });
             }
             Some(_) => {}
-            None => write_meta(&path_buf, &DbMeta { embedding_dim })?,
+            None => write_meta(
+                &path_buf,
+                &DbMeta {
+                    embedding_dim,
+                    model: None,
+                },
+            )?,
         }
         Self::open_inner(&path_buf, embedding_dim).await
+    }
+
+    /// The embedding model this store was last ingested with, if recorded.
+    /// `None` on a fresh store or one written before the field existed.
+    pub fn recorded_model(&self) -> Option<String> {
+        read_meta(&self.path).ok().flatten().and_then(|m| m.model)
+    }
+
+    /// Stamp the model that just finished ingesting. Preserves the recorded
+    /// dim — this rewrites the sidecar, and dropping the dim would make the
+    /// next open fall back to the default and mismatch.
+    pub fn record_model(&self, model: &str) -> Result<(), DbError> {
+        let mut meta = read_meta(&self.path)?.unwrap_or_default();
+        meta.embedding_dim = self.embedding_dim;
+        meta.model = Some(model.to_string());
+        write_meta(&self.path, &meta)
     }
 
     async fn open_inner(path: &Path, embedding_dim: u32) -> Result<Self, DbError> {
@@ -223,8 +266,11 @@ impl Db {
             ..Default::default()
         };
         let engine = DatabaseEngine::open(path, &opts)?;
+        let sparse_stats = SparseStats::load(path).map(Arc::new);
         Ok(Self {
             engine,
+            path: path.to_path_buf(),
+            sparse_stats: RwLock::new(sparse_stats),
             embedding_dim,
             key_to_id: RwLock::new(HashMap::new()),
             id_to_key: RwLock::new(HashMap::new()),
@@ -305,6 +351,9 @@ impl Db {
         }
         let mut inputs: Vec<NodeInput> = Vec::with_capacity(rows.len());
         let want = self.embedding_dim as usize;
+        // One read for the whole batch — the stats only shape which terms
+        // survive the per-node dimension cap.
+        let stats = self.sparse_stats.read().ok().and_then(|g| g.clone());
         for r in rows {
             if r.vector.len() != want {
                 return Err(DbError::BadVector {
@@ -325,6 +374,7 @@ impl Db {
                 sparse_vector: Some(crate::storage::text::build_node_sparse_vector(
                     &r.node_text,
                     &r.code,
+                    stats.as_deref(),
                 )),
             });
         }
@@ -782,6 +832,31 @@ impl KnowledgeStore for Db {
 
     fn backend_name(&self) -> &'static str {
         "overgraph"
+    }
+
+    fn ingest_model(&self) -> Option<String> {
+        Db::recorded_model(self)
+    }
+
+    fn sparse_stats(&self) -> Option<Arc<SparseStats>> {
+        self.sparse_stats.read().ok().and_then(|g| g.clone())
+    }
+
+    fn set_sparse_stats(&self, stats: Arc<SparseStats>) {
+        if let Err(e) = stats.save(&self.path) {
+            tracing::warn!(error = %e, "could not write sparse-stats sidecar");
+        }
+        if let Ok(mut slot) = self.sparse_stats.write() {
+            *slot = Some(stats);
+        }
+    }
+
+    fn record_ingest_model(&self, model: &str) {
+        if let Err(e) = Db::record_model(self, model) {
+            // Losing the stamp costs a redundant re-embed on the next run,
+            // not correctness — never fail an otherwise-good ingest for it.
+            tracing::warn!(error = %e, "could not record ingest model in ug-meta.json");
+        }
     }
 
     async fn upsert_nodes(&self, rows: &[NodeRow]) -> Result<(), StoreError> {

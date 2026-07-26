@@ -29,8 +29,8 @@ use crate::{
 use ultragraph::storage::{
     self, open_store, search_kb as storage_search_kb,
     semantic_search as storage_semantic_search, semantic_search_w_where, traverse_filtered,
-    Direction, Embedder, KnowledgeStore, RankStrategy, SearchKbOptions, StoreSpec,
-    DEFAULT_EMBEDDING_DIM,
+    DEFAULT_CONTEXT_CHARS, Direction, Embedder, KnowledgeStore, RankStrategy, SearchKbOptions,
+    StoreSpec, DEFAULT_EMBEDDING_DIM,
 };
 
 /// Build the `StoreSpec`s for `ug serve` from env vars. `UG_DEST` is
@@ -898,6 +898,7 @@ pub fn run_serve(args: &[String]) {
             .route("/ug-vis.bundle.js", get(handle_bundle))
             .route("/favicon.svg", get(handle_favicon))
             .route("/graph.json", get(handle_graph))
+            .route("/indexed-tree.json", get(handle_indexed_tree))
             .route("/healthz", get(handle_health))
             .route("/api/projects", get(api_projects))
             .route("/api/projects/select", post(api_projects_select))
@@ -1716,6 +1717,21 @@ async fn handle_graph(State(state): State<ServeState>, headers: HeaderMap) -> Re
     asset_response(&snap.encoded, &headers)
 }
 
+async fn handle_indexed_tree(State(state): State<ServeState>, headers: HeaderMap) -> Response {
+    let ctx = state.active();
+    let idx_path = ctx.graph_path.with_file_name("indexed-tree.json");
+    match tokio::fs::read(&idx_path).await {
+        Ok(data) => {
+            let asset = EncodedAsset::new(data, "application/json; charset=utf-8");
+            asset_response(&asset, &headers)
+        }
+        Err(e) => err_json(
+            StatusCode::NOT_FOUND,
+            &format!("indexed-tree.json not found at {}: {}", idx_path.display(), e),
+        ),
+    }
+}
+
 async fn handle_bundle(State(state): State<ServeState>, headers: HeaderMap) -> Response {
     asset_response(&state.bundle, &headers)
 }
@@ -2092,7 +2108,17 @@ async fn api_cycles(State(state): State<ServeState>) -> Response {
 /// already sits below `document_page_text`. `null` means the active model
 /// isn't one whose window we can state; see `limits::model_token_window`.
 fn indexing_limits(state: &ServeState) -> serde_json::Value {
-    let mut caps: Vec<serde_json::Value> = ultragraph::limits::all()
+    let model = state
+        .embedder
+        .as_ref()
+        .map(|e| e.config().model.clone())
+        .unwrap_or_default();
+    // The server has no `--section-cap` of its own — it reports the budget
+    // the *model* implies. A store ingested under a pinned cap can differ;
+    // the per-node `Storage metadata` is what shows what actually happened.
+    let budget = ultragraph::limits::EmbedBudget::resolve(&model, None);
+
+    let mut caps: Vec<serde_json::Value> = ultragraph::limits::all(&budget)
         .iter()
         .map(|l| serde_json::to_value(l).unwrap_or(serde_json::Value::Null))
         .collect();
@@ -2109,15 +2135,14 @@ fn indexing_limits(state: &ServeState) -> serde_json::Value {
         "source": "mcp/format.rs:SNIPPET_PREVIEW_CHARS",
     }));
 
-    let model = state
-        .embedder
-        .as_ref()
-        .map(|e| e.config().model.clone())
-        .unwrap_or_default();
-
     serde_json::json!({
         "embedder_model": if model.is_empty() { serde_json::Value::Null } else { model.clone().into() },
-        "embedder_token_window": ultragraph::limits::model_token_window(&model),
+        "embedder_token_window": budget.window_tokens,
+        // How the description budget was arrived at: "auto" from the
+        // model's window, or "default" when that window is unknown. The
+        // server never sees a --section-cap, so it never reports "flag".
+        "budget_source": budget.source,
+        "advisory": budget.advisory(&model),
         "caps": caps,
         "docs": "docs/INDEXING-AND-CHUNKING.md",
     })
@@ -2371,7 +2396,13 @@ async fn api_db_node(
     // `KnowledgeStore::fetch_node` is the single-row hydrate; works
     // identically across OverGraph and Neo4j backends.
     match db.fetch_node(&id).await {
-        Ok(Some(n)) => ok_json(node_row_to_json(&n).to_string()),
+        Ok(Some(n)) => {
+            let mut v = node_row_to_json(&n);
+            let stats = db.sparse_stats();
+            v["storage"] =
+                node_storage_meta(&n, state.repo_root().as_path(), stats.as_deref());
+            ok_json(v.to_string())
+        }
         Ok(None) => err_json(StatusCode::NOT_FOUND, "node not found"),
         Err(e) => err_json(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -2962,7 +2993,7 @@ async fn api_chat(State(state): State<ServeState>, Json(body): Json<ChatBody>) -
         .map(Direction::from_str_lossy)
         .unwrap_or(Direction::Both);
     let include_snippets = body.include_snippets.unwrap_or(true);
-    let max_context_chars = body.max_context_chars.unwrap_or(chat::DEFAULT_CTX_MAX_CHARS).min(64_000);
+    let max_context_chars = body.max_context_chars.unwrap_or(DEFAULT_CONTEXT_CHARS).min(64_000);
     let edge_types_owned: Option<Vec<String>> = body.edge_types.filter(|v| !v.is_empty());
     let history_owned: Vec<ChatMessage> = body.history.unwrap_or_default();
 
@@ -3078,7 +3109,7 @@ fn api_chat_stream(
         let include_snippets = body.include_snippets.unwrap_or(true);
         let max_context_chars = body
             .max_context_chars
-            .unwrap_or(chat::DEFAULT_CTX_MAX_CHARS)
+            .unwrap_or(DEFAULT_CONTEXT_CHARS)
             .min(64_000);
         let edge_types_owned: Option<Vec<String>> = body.edge_types.filter(|v| !v.is_empty());
         let history_owned: Vec<ChatMessage> = body.history.unwrap_or_default();
@@ -3312,7 +3343,7 @@ async fn api_chat_config(State(state): State<ServeState>) -> Response {
                 "hops": 2,
                 "direction": "both",
                 "include_snippets": true,
-                "max_context_chars": chat::DEFAULT_CTX_MAX_CHARS,
+                "max_context_chars": DEFAULT_CONTEXT_CHARS,
             },
         },
     });
@@ -3534,7 +3565,7 @@ fn tour_opts_from_body<'a>(
     opts.include_snippets = body.include_snippets.unwrap_or(true);
     opts.max_context_chars = body
         .max_context_chars
-        .unwrap_or(chat::DEFAULT_CTX_MAX_CHARS)
+        .unwrap_or(DEFAULT_CONTEXT_CHARS)
         .min(64_000);
     opts.where_clause = body.where_clause.as_deref();
     opts.max_per_file = body.max_per_file.unwrap_or(opts.max_per_file).min(20);
@@ -3827,6 +3858,71 @@ async fn api_tour(State(state): State<ServeState>, Json(body): Json<TourBody>) -
         },
         Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &format!("tour: {}", e)),
     }
+}
+
+/// Cap on how much captured source is sent to the UI in one node hydrate.
+/// A whole-file node can be megabytes; the panel is a transparency view,
+/// not a file viewer, and the Preview tab reads the live file anyway.
+const STORED_CODE_PREVIEW_CHARS: usize = 20_000;
+
+/// The parts of a stored row that aren't its text: what the vector store
+/// holds *about* this node rather than what it embedded.
+///
+/// Split out from [`node_row_to_json`] because it costs real work — a
+/// blake3 of the file on disk for the staleness check, and a sparse-vector
+/// rebuild for the dimension count. That is fine for the single-row hydrate
+/// behind a node click, and not fine for the traverse handler, which runs
+/// `node_row_to_json` over every node it returns.
+///
+/// `sparse_dims` is the reason this exists. It is the one cap whose effect
+/// the UI could not otherwise detect: `MAX_SPARSE_DIMS` truncates silently,
+/// leaving nothing in the stored text to notice. Recomputing the vector here
+/// uses the same function ingest used, so the count is exact rather than
+/// estimated.
+fn node_storage_meta(
+    n: &storage::NodeRow,
+    repo_root: &std::path::Path,
+    stats: Option<&storage::sparse_stats::SparseStats>,
+) -> serde_json::Value {
+    let sparse_dims =
+        storage::text::build_node_sparse_vector(&n.node_text, &n.code, stats).len();
+    let stale = if n.file.is_empty() || n.file_hash.is_empty() {
+        None
+    } else {
+        storage::file_matches_hash(repo_root, &n.file, &n.file_hash).map(|matches| !matches)
+    };
+
+    // The captured source itself, so the UI can show what the store holds
+    // rather than only telling the user it holds something. This is what an
+    // agent's snippet reads return and what the keyword index was built
+    // from, and it can differ from the working tree — which is the whole
+    // reason it is worth showing next to the Preview tab's live read.
+    let code_chars = n.code.chars().count();
+    let code = if code_chars > STORED_CODE_PREVIEW_CHARS {
+        let cut = n
+            .code
+            .char_indices()
+            .nth(STORED_CODE_PREVIEW_CHARS)
+            .map(|(i, _)| i)
+            .unwrap_or(n.code.len());
+        n.code[..cut].to_string()
+    } else {
+        n.code.clone()
+    };
+
+    serde_json::json!({
+        "last_update_at": n.last_update_at,
+        "file_hash": n.file_hash,
+        "code": code,
+        "code_truncated": code_chars > STORED_CODE_PREVIEW_CHARS,
+        "code_chars": code_chars,
+        "node_text_chars": n.node_text.chars().count(),
+        "vector_dim": n.vector.len(),
+        "sparse_dims": sparse_dims,
+        // `null` when the file can't be read at all (deleted, or a binary
+        // document that was never captured) — distinct from "not stale".
+        "stale": stale,
+    })
 }
 
 fn node_row_to_json(n: &storage::NodeRow) -> serde_json::Value {

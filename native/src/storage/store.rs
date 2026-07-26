@@ -232,6 +232,38 @@ pub trait KnowledgeStore: Send + Sync {
     /// Used for logging and the `/api/capabilities` endpoint.
     fn backend_name(&self) -> &'static str;
 
+    /// The embedding model this store was last ingested with, when the
+    /// backend records one.
+    ///
+    /// Ingest compares this against the model in hand and refuses to reuse
+    /// stored vectors when they disagree — see
+    /// [`plan_incremental_ingest`]. `None` means "unrecorded", which is
+    /// treated as "reuse allowed": a backend that cannot track this (or a
+    /// store predating the field) must keep behaving as it did.
+    ///
+    /// [`plan_incremental_ingest`]: crate::storage::ingest::plan_incremental_ingest
+    fn ingest_model(&self) -> Option<String> {
+        None
+    }
+
+    /// Stamp the model that just finished ingesting. Backends without a
+    /// place to keep it no-op.
+    fn record_ingest_model(&self, _model: &str) {}
+
+    /// Corpus statistics backing BM25 weighting of the keyword channel.
+    /// `None` means the caller should fall back to unweighted term
+    /// frequency — a store ingested before the sidecar existed, or a
+    /// backend with its own full-text engine (Neo4j already scores BM25
+    /// through Lucene and ignores the sparse vector entirely).
+    fn sparse_stats(&self) -> Option<std::sync::Arc<crate::storage::sparse_stats::SparseStats>> {
+        None
+    }
+
+    /// Install freshly computed corpus statistics, persisting them where
+    /// the backend keeps its sidecars. Called by ingest before the upsert,
+    /// so the vectors written in that same run are weighted with them.
+    fn set_sparse_stats(&self, _stats: std::sync::Arc<crate::storage::sparse_stats::SparseStats>) {}
+
     async fn upsert_nodes(&self, rows: &[NodeRow]) -> Result<(), StoreError>;
     async fn upsert_edges(&self, rows: &[EdgeRow]) -> Result<(), StoreError>;
 

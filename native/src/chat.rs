@@ -17,8 +17,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use ultragraph::storage::{
-    search_kb as storage_search_kb, ContextItem, Direction, Embedder, KnowledgeStore,
-    RankStrategy, RankedContext, SearchKbOptions,
+    search_kb as storage_search_kb, ContextItem, DEFAULT_CONTEXT_CHARS, Direction, Embedder,
+    KnowledgeStore, RankStrategy, RankedContext, SearchKbOptions,
 };
 
 /// Default chat model. Picked so the CLI works as soon as the user
@@ -28,13 +28,9 @@ pub const DEFAULT_CHAT_MODEL: &str = "gpt-4o-mini";
 pub const DEFAULT_CHAT_BASE_URL: &str = "http://127.0.0.1:8000/v1";
 pub const DEFAULT_CHAT_API_KEY: &str = "1234";
 pub const DEFAULT_TEMPERATURE: f32 = 0.2;
-pub const DEFAULT_MAX_TOKENS: u32 = 1024;
+pub const DEFAULT_MAX_TOKENS: u32 = 32768;
 pub const DEFAULT_TIMEOUT_SECS: u64 = 180;
 
-/// Reasonable cap on per-chunk character budget for `assemble_context`.
-/// Keeps the prompt under ~12k chars (~3-4k tokens) which fits inside
-/// the context window of the smallest deployable chat models.
-pub const DEFAULT_CTX_MAX_CHARS: usize = 12_000;
 
 #[derive(Clone, Debug)]
 pub struct ChatConfig {
@@ -931,7 +927,7 @@ impl<'a> ChatRagOptions<'a> {
             direction: Direction::Both,
             edge_types: None,
             include_snippets: true,
-            max_context_chars: DEFAULT_CTX_MAX_CHARS,
+            max_context_chars: DEFAULT_CONTEXT_CHARS,
             where_clause: None,
             system_prompt: None,
             fast: true,

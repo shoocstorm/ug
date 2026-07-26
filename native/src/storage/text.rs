@@ -45,12 +45,15 @@
 //! hash, so unchanged bodies reuse their summary and the incremental path
 //! keeps working.
 
+use crate::indexer::common::truncate_chars;
+use crate::limits::EmbedBudget;
+use crate::storage::sparse_stats::{saturate_tf, SparseStats};
 use crate::types::{GraphData, GraphNode, GraphNodeFolderMeta, GraphNodeType};
 use std::collections::HashMap;
 
 /// Cap on related-name fan-out per node. Embedding context is bounded; a
 /// hub node with thousands of edges would otherwise dominate every query.
-pub const MAX_RELATED: usize = 24;
+pub const MAX_RELATED: usize = 128;
 
 /// Split an identifier into its constituent words.
 ///
@@ -115,8 +118,11 @@ fn humanize_identifier(ident: &str) -> Option<String> {
     Some(joined)
 }
 
+/// As [`build_node_text_with_comments`] with no comments and the default
+/// budget. Kept for callers that have neither — tests, and the
+/// `reembed_nodes` path.
 pub fn build_node_text(node: &GraphNode, related_names: &[String]) -> String {
-    build_node_text_with_comments(node, related_names, "")
+    build_node_text_with_comments(node, related_names, "", &EmbedBudget::default())
 }
 
 /// As [`build_node_text`], plus prose lifted from the node's own source
@@ -136,6 +142,7 @@ pub fn build_node_text_with_comments(
     node: &GraphNode,
     related_names: &[String],
     comments: &str,
+    budget: &EmbedBudget,
 ) -> String {
     let kind = format!("{:?}", node.node_type);
 
@@ -149,7 +156,12 @@ pub fn build_node_text_with_comments(
         _ => node.name.clone(),
     };
 
-    let description = node_description(node);
+    // The description is the one unbounded field — a markdown section's
+    // prose or a PDF page's text can run to kilobytes. Capping it here
+    // rather than in the indexer means the number can follow the loaded
+    // model's window (see [`EmbedBudget`]), and that changing models needs
+    // a re-embed rather than a re-index.
+    let description = truncate_chars(&node_description(node), budget.description_chars);
 
     let related = if related_names.is_empty() {
         String::new()
@@ -460,28 +472,85 @@ const CODE_TOKEN_WEIGHT: f32 = 0.35;
 pub const MAX_SPARSE_DIMS: usize = 512;
 
 /// Sparse vector for a node: its embedding text at full weight, plus its
-/// source body at [`CODE_TOKEN_WEIGHT`].
+/// source body at [`CODE_TOKEN_WEIGHT`], with each term's accumulated
+/// frequency put through BM25 saturation.
 ///
 /// This is the counterpart to the dense vector, and the reason source code
 /// is *not* embedded densely: the sparse side has no token-window limit,
 /// gives exact identifier matches, and doesn't dilute the semantic signal
 /// that names and docstrings carry.
-pub fn build_node_sparse_vector(node_text: &str, code: &str) -> Vec<(u32, f32)> {
+///
+/// # What BM25 contributes, and what it leaves to the query
+///
+/// Only the *document* half of BM25 lives here — the saturating term
+/// frequency, with `b = 0` so no corpus-wide quantity enters and stored
+/// vectors stay valid across incremental re-ingests. IDF is applied to the
+/// query vector instead (see [`build_sparse_query_vector`]), and the dot
+/// product OverGraph computes multiplies the two halves back together.
+///
+/// `stats` is used for one thing: ranking the truncation when a node has
+/// more than [`MAX_SPARSE_DIMS`] terms. Without it the heaviest raw weights
+/// win, which selects the *most common* words — precisely backwards. With
+/// it, terms are kept by `saturated_tf × idf`, so a long file loses its
+/// boilerplate rather than its distinctive identifiers. Passing `None` is
+/// safe and reproduces the previous selection.
+pub fn build_node_sparse_vector(
+    node_text: &str,
+    code: &str,
+    stats: Option<&SparseStats>,
+) -> Vec<(u32, f32)> {
     let mut weights: HashMap<u32, f32> = HashMap::new();
     accumulate_tokens(node_text, 1.0, &mut weights);
     if !code.is_empty() {
         accumulate_tokens(code, CODE_TOKEN_WEIGHT, &mut weights);
     }
 
-    let mut out: Vec<(u32, f32)> = weights.into_iter().collect();
+    let mut out: Vec<(u32, f32)> = weights
+        .into_iter()
+        .map(|(dim, tf)| (dim, saturate_tf(tf)))
+        .collect();
+
     if out.len() > MAX_SPARSE_DIMS {
-        // Keep the heaviest terms, then restore dimension order —
-        // OverGraph expects sparse vectors sorted by dimension id.
-        out.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        let keep_score = |dim: u32, w: f32| match stats.filter(|s| !s.is_empty()) {
+            Some(s) => w * s.idf(dim),
+            None => w,
+        };
+        out.sort_unstable_by(|a, b| {
+            keep_score(b.0, b.1)
+                .partial_cmp(&keep_score(a.0, a.1))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         out.truncate(MAX_SPARSE_DIMS);
     }
+    // OverGraph requires ascending dimension ids.
     out.sort_unstable_by_key(|&(dim, _)| dim);
     out
+}
+
+/// The query half of BM25: each term weighted by its inverse document
+/// frequency, so a query's common words stop counting as much as its rare
+/// ones.
+///
+/// Falls back to the bare term-frequency vector when there are no corpus
+/// statistics — a store ingested before the sidecar existed, or a backend
+/// that doesn't keep one. Ranking is then what it was before, rather than
+/// wrong.
+///
+/// Query-side weights must also be non-negative: OverGraph canonicalizes
+/// the query vector through the same validation as a stored one. See
+/// [`SparseStats::idf`] for why that picks the smoothed IDF formula.
+pub fn build_sparse_query_vector(query: &str, stats: Option<&SparseStats>) -> Vec<(u32, f32)> {
+    let mut v = build_sparse_keyword_vector(query);
+    let Some(stats) = stats.filter(|s| !s.is_empty()) else {
+        return v;
+    };
+    for (dim, weight) in v.iter_mut() {
+        *weight *= stats.idf(*dim);
+    }
+    // An IDF of zero is possible only in degenerate corpora, but a
+    // zero-weight dimension is dead payload either way.
+    v.retain(|&(_, w)| w > 0.0);
+    v
 }
 
 /// Tokenize `text` and add each token's frequency, scaled by `weight`.
@@ -650,8 +719,8 @@ mod sparse_tests {
         let text = "Function: parseConfig. Reads settings.";
         let code = "fn parseConfig() { let raw = fs::read(); toml::from_str(&raw) }";
 
-        let with_code = build_node_sparse_vector(text, code);
-        let without = build_node_sparse_vector(text, "");
+        let with_code = build_node_sparse_vector(text, code, None);
+        let without = build_node_sparse_vector(text, "", None);
 
         let dim = |t: &str| {
             let v = build_sparse_keyword_vector(t);

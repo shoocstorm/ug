@@ -29,13 +29,18 @@ use tree_sitter::Node;
 
 /// Per-section byte cap on the prose attached as `docstring`.
 ///
-/// The embedder's window is 512 tokens and the node's name, structural
-/// synopsis and `Related:` list all share it, so a section gets roughly a
-/// third. Longer sections keep their leading paragraphs, which in practice
-/// state what the section is about; the full text is still reachable —
-/// ingest captures the whole span into the row's `code` column, which feeds
-/// the sparse keyword index and every snippet read.
-pub(crate) const SECTION_TEXT_CAP: usize = 1_500;
+/// This is a *storage* bound, not the embedding one. It exists so a single
+/// pathological section can't bloat `graph.json`; it is set at the same
+/// order as [`crate::indexer::document::PAGE_TEXT_CAP`] so the two document
+/// pipelines capture comparable amounts.
+///
+/// How much of this reaches the vector is decided later, by
+/// [`crate::limits::EmbedBudget`], from the window of whichever embedding
+/// model is actually loaded. That split matters: the indexer runs before
+/// any embedder exists, so a cap chosen here could only ever have been a
+/// guess about the model — and baking the guess in meant switching models
+/// required a re-index rather than a re-embed.
+pub(crate) const SECTION_TEXT_HARD_CAP: usize = 8_192;
 
 pub struct MarkdownIndexer;
 
@@ -193,7 +198,7 @@ fn extract_headings(source: &[u8]) -> Vec<Symbol> {
 /// the text that gets embedded.
 ///
 /// Fenced code is dropped for the same reason bodies are: it is punctuation-
-/// heavy, it crowds out prose inside [`SECTION_TEXT_CAP`], and it is already
+/// heavy, it crowds out prose inside [`SECTION_TEXT_HARD_CAP`], and it is already
 /// searchable through the sparse channel, which indexes the captured span
 /// verbatim. A section that is *only* a code fence yields `None` and falls
 /// back to the structural synopsis, which is the honest outcome.
@@ -220,7 +225,7 @@ fn section_prose(lines: &[&str], fenced: &[bool], heading_line: u32, end: u32) -
             buf.push(' ');
         }
         buf.push_str(text);
-        if buf.len() >= SECTION_TEXT_CAP {
+        if buf.len() >= SECTION_TEXT_HARD_CAP {
             break;
         }
     }
@@ -228,7 +233,7 @@ fn section_prose(lines: &[&str], fenced: &[bool], heading_line: u32, end: u32) -
     if buf.is_empty() {
         return None;
     }
-    Some(truncate_chars(&buf, SECTION_TEXT_CAP))
+    Some(truncate_chars(&buf, SECTION_TEXT_HARD_CAP))
 }
 
 /// `[text](target)` and `![alt](target)`. The optional `(?:\s+"[^"]*")?`
@@ -410,14 +415,29 @@ mod tests {
     }
 
     #[test]
-    fn long_sections_are_capped() {
+    fn a_section_past_the_storage_cap_is_truncated() {
         let body: String = std::iter::repeat("the quick brown fox jumps over it. ")
-            .take(200)
+            .take(400)
+            .collect();
+        assert!(body.len() > SECTION_TEXT_HARD_CAP, "fixture must exceed the cap");
+        let syms = headings(&format!("# Long\n{}\n", body));
+        let doc = doc_of(&syms, "Long").unwrap();
+        assert!(doc.len() <= SECTION_TEXT_HARD_CAP + 4, "capped, got {}", doc.len());
+        assert!(doc.ends_with('…'), "truncation is visible: {doc}");
+    }
+
+    #[test]
+    fn a_section_under_the_storage_cap_keeps_all_its_prose() {
+        // The narrower embedding budget is applied later, at ingest — the
+        // indexer must not pre-truncate to it, or switching to a
+        // longer-window model would need a re-index to take effect.
+        let body: String = std::iter::repeat("the quick brown fox jumps over it. ")
+            .take(100)
             .collect();
         let syms = headings(&format!("# Long\n{}\n", body));
         let doc = doc_of(&syms, "Long").unwrap();
-        assert!(doc.len() <= SECTION_TEXT_CAP + 4, "capped, got {}", doc.len());
-        assert!(doc.ends_with('…'), "truncation is visible: {doc}");
+        assert!(!doc.ends_with('…'), "3.5 KB is under the storage cap: {}", doc.len());
+        assert!(doc.len() > 3_000, "kept in full, got {}", doc.len());
     }
 
     #[test]

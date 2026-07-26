@@ -57,6 +57,140 @@ pub struct Limit {
     pub source: &'static str,
 }
 
+/// Rough chars-per-token for the text we embed — English prose with
+/// identifiers mixed in. Subword tokenizers average ~4 for plain English
+/// and less for code; 3.7 keeps the derived budget slightly conservative,
+/// which is the right direction to be wrong in when overflow is silent.
+const CHARS_PER_TOKEN: f32 = 3.7;
+
+/// Chars of the embedding template that are not the description: the type
+/// prefix, the name and its split form, and up to [`MAX_RELATED`] neighbour
+/// names. Reserved out of the window so a full `Related:` list can't push
+/// the description past it.
+///
+/// [`MAX_RELATED`]: crate::storage::text::MAX_RELATED
+const TEMPLATE_RESERVE_CHARS: usize = 600;
+
+/// Floor on the derived budget. Below this a description is too clipped to
+/// carry meaning, and a model with a window that small is better rejected
+/// than quietly served.
+const MIN_DESCRIPTION_CHARS: usize = 500;
+
+/// Ceiling on the derived budget. A long-window model could take far more,
+/// but past this the description crowds out nothing and starts costing
+/// ingest time and store size for diminishing retrieval value.
+const MAX_DESCRIPTION_CHARS: usize = 8_000;
+
+/// Budget used when the active model's window is unknown — an unrecognised
+/// local alias, or any remote endpoint. Matches the cap markdown sections
+/// were hard-coded to before the budget was derived, so behaviour for those
+/// models is unchanged.
+const DEFAULT_DESCRIPTION_CHARS: usize = 1_500;
+
+/// Where a resolved budget's number came from. Surfaced so a user can tell
+/// "the tool picked this for my model" from "I set this".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BudgetSource {
+    /// An explicit `--section-cap` / `embed.section_cap` setting.
+    Flag,
+    /// Derived from the active model's token window.
+    Auto,
+    /// The model's window is unknown, so the fixed fallback applies.
+    Default,
+}
+
+/// How much of a node's description may enter the embedding text.
+///
+/// This is the cap that used to live in the markdown indexer as a
+/// hard-coded 1,500 bytes. It moved here for two reasons. It is really a
+/// property of the *model* — the number exists only because the embedder
+/// truncates at its window — and the indexer runs before any embedder is
+/// constructed, so it could not have known the right value even in
+/// principle. And as an embed-stage cap it is recomputable: switching to a
+/// longer-window model needs a re-embed, not a re-index.
+///
+/// It applies to every node's description uniformly, which also fixes the
+/// PDF case: pages are captured at [`crate::indexer::document::PAGE_TEXT_CAP`]
+/// (8 KB) for storage and display, and only what fits the window reaches
+/// the vector.
+#[derive(Debug, Clone, Copy)]
+pub struct EmbedBudget {
+    pub description_chars: usize,
+    /// The active model's window, when known. `None` means the budget fell
+    /// back to [`BudgetSource::Default`].
+    pub window_tokens: Option<u32>,
+    pub source: BudgetSource,
+}
+
+impl Default for EmbedBudget {
+    fn default() -> Self {
+        Self {
+            description_chars: DEFAULT_DESCRIPTION_CHARS,
+            window_tokens: None,
+            source: BudgetSource::Default,
+        }
+    }
+}
+
+impl EmbedBudget {
+    /// Resolve the budget for `model`, with `override_chars` winning when
+    /// set (an explicit `--section-cap`).
+    ///
+    /// The derivation reserves [`TEMPLATE_RESERVE_CHARS`] for the parts of
+    /// the template that aren't the description, then clamps. With the
+    /// default 512-token model that lands near the old hard-coded 1,500;
+    /// with an 8,192-token model it opens up to the ceiling.
+    pub fn resolve(model: &str, override_chars: Option<usize>) -> Self {
+        let window = model_token_window(model);
+        if let Some(chars) = override_chars.filter(|c| *c > 0) {
+            return Self {
+                description_chars: chars,
+                window_tokens: window,
+                source: BudgetSource::Flag,
+            };
+        }
+        match window {
+            Some(tokens) => {
+                let raw = (tokens as f32 * CHARS_PER_TOKEN) as usize;
+                let usable = raw.saturating_sub(TEMPLATE_RESERVE_CHARS);
+                Self {
+                    description_chars: usable.clamp(MIN_DESCRIPTION_CHARS, MAX_DESCRIPTION_CHARS),
+                    window_tokens: Some(tokens),
+                    source: BudgetSource::Auto,
+                }
+            }
+            None => Self::default(),
+        }
+    }
+
+    /// Advice for the operator, or `None` when the budget and the model are
+    /// a sensible pair. Rendered by `ug gen` and carried on
+    /// `/api/capabilities` — this is the "remind me to adjust" half of
+    /// letting users pick their own model.
+    pub fn advisory(&self, model: &str) -> Option<String> {
+        let window = self.window_tokens?;
+        let usable = (window as f32 * CHARS_PER_TOKEN) as usize;
+        if self.description_chars + TEMPLATE_RESERVE_CHARS > usable {
+            return Some(format!(
+                "description budget is {} chars but {} reads only ~{} chars ({} tokens) — \
+                 text past that is dropped by the tokenizer with no marker",
+                self.description_chars, model, usable, window
+            ));
+        }
+        // Only worth nagging about when the headroom is large enough that
+        // raising the cap would actually change what gets embedded.
+        if self.source == BudgetSource::Flag && self.description_chars * 2 < usable {
+            return Some(format!(
+                "{} reads ~{} chars ({} tokens) but the description budget is pinned to {} — \
+                 drop --section-cap to use the whole window",
+                model, usable, window, self.description_chars
+            ));
+        }
+        None
+    }
+}
+
 const MARKDOWN_EXTS: &[&str] = &["md", "mdx", "markdown"];
 const DOCUMENT_EXTS: &[&str] = &[
     "pdf", "doc", "docx", "docm", "dot", "dotm", "dotx", "odt", "ott", "rtf", "xls", "xlsx",
@@ -65,30 +199,45 @@ const DOCUMENT_EXTS: &[&str] = &[
 const CODE_EXTS: &[&str] = &["ts", "tsx", "js", "jsx", "py", "java", "rs"];
 
 /// Every published cap, in pipeline order.
-pub fn all() -> Vec<Limit> {
+///
+/// Takes the resolved [`EmbedBudget`] because one of the caps is no longer
+/// a constant — it is derived from the active model's window, so the
+/// published list can only be correct if it knows which model is loaded.
+pub fn all(budget: &EmbedBudget) -> Vec<Limit> {
     vec![
         Limit {
+            id: "description_chars",
+            label: "Embedded description",
+            value: budget.description_chars as u64,
+            unit: "chars",
+            stage: Stage::Embed,
+            extensions: &[],
+            effect: "How much of a node's description reaches the vector — a markdown \
+                     section's prose, a PDF page's text, or a doc comment. Past it the \
+                     text is still stored and searchable by keyword, but not embedded.",
+            source: "limits.rs:EmbedBudget",
+        },
+        Limit {
             id: "markdown_section_text",
-            label: "Markdown section prose",
-            value: crate::indexer::languages::markdown::SECTION_TEXT_CAP as u64,
+            label: "Markdown section capture",
+            value: crate::indexer::languages::markdown::SECTION_TEXT_HARD_CAP as u64,
             unit: "bytes",
             stage: Stage::Index,
             extensions: MARKDOWN_EXTS,
-            effect: "A heading's prose is embedded up to this length; past it the \
-                     section keeps its opening paragraphs and the rest is searchable \
-                     only by keyword.",
-            source: "indexer/languages/markdown.rs:SECTION_TEXT_CAP",
+            effect: "How much of a heading's prose is kept at index time. The embedded \
+                     slice is the smaller `description_chars`; this cap only bounds what \
+                     the graph file carries.",
+            source: "indexer/languages/markdown.rs:SECTION_TEXT_HARD_CAP",
         },
         Limit {
             id: "document_page_text",
-            label: "Document page text",
+            label: "Document page capture",
             value: crate::indexer::document::PAGE_TEXT_CAP as u64,
             unit: "bytes",
             stage: Stage::Index,
             extensions: DOCUMENT_EXTS,
-            effect: "Each PDF/Office page is stored and embedded up to this length. \
-                     These files have no captured source, so text past the cap is not \
-                     retrievable at all.",
+            effect: "How much of each PDF/Office page is extracted. These files have no \
+                     captured source, so text past this cap is not retrievable at all.",
             source: "indexer/document.rs:PAGE_TEXT_CAP",
         },
         Limit {
@@ -120,7 +269,7 @@ pub fn all() -> Vec<Limit> {
             stage: Stage::Embed,
             extensions: &[],
             effect: "Neighbour names folded into the embedding as context. A hub node \
-                     with more neighbours embeds only the first 24, alphabetically.",
+                     with more neighbours embeds only the first 128, alphabetically.",
             source: "storage/text.rs:MAX_RELATED",
         },
         Limit {
@@ -182,7 +331,7 @@ mod tests {
 
     #[test]
     fn every_limit_is_populated_and_uniquely_keyed() {
-        let all = all();
+        let all = all(&EmbedBudget::default());
         let mut ids: Vec<&str> = all.iter().map(|l| l.id).collect();
         ids.sort_unstable();
         let before = ids.len();
@@ -200,15 +349,17 @@ mod tests {
     fn published_values_track_the_real_constants() {
         // The point of this module is that it cannot drift. If someone
         // changes a cap and not its entry, this fails.
-        let by_id = |id: &str| all().into_iter().find(|l| l.id == id).unwrap().value;
+        let budget = EmbedBudget::default();
+        let by_id = |id: &str| all(&budget).into_iter().find(|l| l.id == id).unwrap().value;
         assert_eq!(
             by_id("markdown_section_text"),
-            crate::indexer::languages::markdown::SECTION_TEXT_CAP as u64
+            crate::indexer::languages::markdown::SECTION_TEXT_HARD_CAP as u64
         );
         assert_eq!(
             by_id("related_names"),
             crate::storage::text::MAX_RELATED as u64
         );
+        assert_eq!(by_id("description_chars"), budget.description_chars as u64);
     }
 
     #[test]
@@ -218,5 +369,52 @@ mod tests {
         assert_eq!(model_token_window("BAAI/bge-small-en-v1.5"), Some(512));
         assert_eq!(model_token_window("bge-small"), Some(512));
         assert_eq!(model_token_window("some-private-model"), None);
+    }
+
+    #[test]
+    fn budget_tracks_the_model_window() {
+        // The 512-token default lands near the 1,500 the markdown indexer
+        // used to hard-code — the derivation replaces that number without
+        // moving it much.
+        let small = EmbedBudget::resolve("bge-small-en-v1.5", None);
+        assert_eq!(small.source, BudgetSource::Auto);
+        assert_eq!(small.window_tokens, Some(512));
+        assert!(
+            (1_200..=1_600).contains(&small.description_chars),
+            "got {}",
+            small.description_chars
+        );
+
+        // A long-window model opens up to the ceiling.
+        let long = EmbedBudget::resolve("nomic-embed-text-v1.5", None);
+        assert_eq!(long.description_chars, MAX_DESCRIPTION_CHARS);
+
+        // An unknown or remote model keeps the previous fixed behaviour.
+        let unknown = EmbedBudget::resolve("some-private-model", None);
+        assert_eq!(unknown.source, BudgetSource::Default);
+        assert_eq!(unknown.description_chars, DEFAULT_DESCRIPTION_CHARS);
+    }
+
+    #[test]
+    fn an_override_wins_and_is_labelled_as_such() {
+        let b = EmbedBudget::resolve("bge-small-en-v1.5", Some(4_000));
+        assert_eq!(b.description_chars, 4_000);
+        assert_eq!(b.source, BudgetSource::Flag);
+        // ...and is called out, because 4,000 chars is well past what a
+        // 512-token model can read.
+        let advice = b.advisory("bge-small-en-v1.5").expect("over-window is advised");
+        assert!(advice.contains("dropped by the tokenizer"), "{advice}");
+    }
+
+    #[test]
+    fn a_pinned_cap_far_under_a_long_window_is_advised_too() {
+        let b = EmbedBudget::resolve("nomic-embed-text-v1.5", Some(1_000));
+        let advice = b.advisory("nomic-embed-text-v1.5").expect("under-use is advised");
+        assert!(advice.contains("--section-cap"), "{advice}");
+
+        // An auto-derived budget is by construction a good fit — no nag.
+        assert!(EmbedBudget::resolve("nomic-embed-text-v1.5", None)
+            .advisory("nomic-embed-text-v1.5")
+            .is_none());
     }
 }

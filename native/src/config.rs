@@ -58,6 +58,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
     ConfigKey { name: "embed.base_url", section: "embed", field: "baseUrl", flag: "--base-url", kind: Kind::Str, secret: false, desc: "remote /v1/embeddings base URL (unset = local in-process)" },
     ConfigKey { name: "embed.api_key", section: "embed", field: "apiKey", flag: "--api-key", kind: Kind::Str, secret: true, desc: "API key for the embeddings endpoint" },
     ConfigKey { name: "embed.dim", section: "embed", field: "dim", flag: "--embedding-dim", kind: Kind::U32, secret: false, desc: "embedding dimension override (normally auto-probed)" },
+    ConfigKey { name: "embed.section_cap", section: "embed", field: "sectionCap", flag: "--section-cap", kind: Kind::U32, secret: false, desc: "chars of a node's description to embed (default: derived from the model's token window)" },
 ];
 
 /// Look up a registry entry by dotted name. Accepts `-` for `_` and is

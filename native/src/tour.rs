@@ -30,7 +30,8 @@ use std::time::Instant;
 use serde::{Deserialize, Serialize};
 
 use ultragraph::storage::{
-    read_snippet, traverse_filtered, ContextItem, Direction, Embedder, KnowledgeStore, RankStrategy,
+    read_snippet, traverse_filtered, ContextItem, DEFAULT_CONTEXT_CHARS, Direction, Embedder,
+    KnowledgeStore, RankStrategy,
 };
 
 use crate::chat::{retrieve_context, ChatClient, ChatMessage, ChatRagOptions, Usage};
@@ -329,7 +330,7 @@ impl<'a> TourOptions<'a> {
             direction: Direction::Both,
             edge_types: None,
             include_snippets: true,
-            max_context_chars: crate::chat::DEFAULT_CTX_MAX_CHARS,
+            max_context_chars: DEFAULT_CONTEXT_CHARS,
             where_clause: None,
             max_per_file: DEFAULT_MAX_PER_FILE,
             include_debug: true,
@@ -1490,8 +1491,8 @@ pub async fn plan_tour_with_progress(
     // it. Both scale with the stop count, but only when the caller left them
     // at their defaults.
     let cap = prompt_item_cap(opts.max_stops);
-    let ctx_chars = if opts.max_context_chars <= crate::chat::DEFAULT_CTX_MAX_CHARS {
-        (cap * 700).clamp(crate::chat::DEFAULT_CTX_MAX_CHARS, 48_000)
+    let ctx_chars = if opts.max_context_chars <= DEFAULT_CONTEXT_CHARS {
+        (cap * 700).clamp(DEFAULT_CONTEXT_CHARS, 48_000)
     } else {
         opts.max_context_chars
     };

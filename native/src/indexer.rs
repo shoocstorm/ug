@@ -15,7 +15,7 @@
 //! Adding a new language is purely additive - see `languages.rs`.
 
 mod classifier;
-mod common;
+pub(crate) mod common;
 pub(crate) mod document;
 mod folder;
 pub(crate) mod languages;

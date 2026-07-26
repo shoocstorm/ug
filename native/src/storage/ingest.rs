@@ -18,7 +18,7 @@
 //! node into one of three buckets:
 //!
 //! - **unchanged** — the stored row is identical: no embed, no write.
-//! - **reusable** — [`build_node_text`] output is unchanged but some
+//! - **reusable** — the node's embedding text is unchanged but some
 //!   other column moved (line numbers are the usual one, since they
 //!   don't feed the embedding text). Carry the stored vector over and
 //!   write the row: no embed.
@@ -30,9 +30,12 @@ use crate::storage::db::{EdgeRow, NodeRow};
 use crate::storage::embed::Embedder;
 use crate::storage::store::{KnowledgeStore, NodeKey, StoreError, StoreSet};
 use crate::storage::source::{capture_graph_code, CapturedCode};
-use crate::storage::text::{build_node_text, collect_related_names};
+use crate::limits::EmbedBudget;
+use crate::storage::sparse_stats::SparseStats;
+use crate::storage::text::collect_related_names;
 use crate::types::{GraphData, GraphNode};
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 /// How many nodes to read back from the store at a time while planning.
 /// Caps peak memory: the fetched rows carry their dense vectors, so an
@@ -123,6 +126,7 @@ pub async fn plan_incremental_ingest(
     texts: &[String],
     always_write: bool,
     captured: &HashMap<String, CapturedCode>,
+    model: Option<&str>,
 ) -> Result<IngestPlan, StoreError> {
     let mut plan = IngestPlan {
         reusable: Vec::new(),
@@ -130,6 +134,23 @@ pub async fn plan_incremental_ingest(
         unchanged: 0,
     };
     let dim = store.embedding_dim() as usize;
+    // A stored vector is only reusable if it came out of the same model.
+    // The dim check below is not sufficient: bge-small and all-MiniLM-L6
+    // are both 384-wide, so a swap between them leaves the text identical
+    // and would carry vectors from the old embedding space forward.
+    // Unrecorded (`None`) means an older store or a backend that can't
+    // track it — reuse stays allowed there, as it always was.
+    let reuse_vectors = match (store.ingest_model(), model) {
+        (Some(stored), Some(current)) => stored == current,
+        _ => true,
+    };
+    if !reuse_vectors {
+        tracing::info!(
+            stored = ?store.ingest_model(),
+            current = ?model,
+            "embedding model changed since last ingest; re-embedding every node"
+        );
+    }
     let now = current_unix_secs();
     let mut offset = 0usize;
 
@@ -159,7 +180,7 @@ pub async fn plan_incremental_ingest(
             // written before a dim change would otherwise be carried
             // forward and rejected at upsert.
             match stored.remove(&n.id) {
-                Some(prev) if prev.node_text == *text && prev.vector.len() == dim => {
+                Some(prev) if reuse_vectors && prev.node_text == *text && prev.vector.len() == dim => {
                     let cap = captured.get(&n.id);
                     if !always_write && stored_row_matches(&prev, n, node_type, cap) {
                         plan.unchanged += 1;
@@ -303,6 +324,57 @@ pub fn capture_for_graph(graph: &GraphData) -> HashMap<String, CapturedCode> {
     }
 }
 
+/// Recompute the corpus statistics behind BM25 keyword weighting and
+/// install them on every destination.
+///
+/// Must run *before* the upsert: the stored sparse vectors are truncated to
+/// [`MAX_SPARSE_DIMS`] by `saturated_tf × idf`, so the stats decide which
+/// terms survive in the rows written by this same run.
+///
+/// Computed over the whole graph rather than the changed subset — document
+/// frequency is a corpus-wide quantity, and deriving it from a delta would
+/// make every incremental run disagree with the last. The work is one
+/// tokenizer pass over text already in memory.
+///
+/// [`MAX_SPARSE_DIMS`]: crate::storage::text::MAX_SPARSE_DIMS
+pub fn refresh_sparse_stats(
+    stores: &[&dyn KnowledgeStore],
+    texts: &[String],
+    captured: &HashMap<String, CapturedCode>,
+    graph: &GraphData,
+) -> Arc<SparseStats> {
+    let docs: Vec<Vec<u32>> = graph
+        .nodes
+        .iter()
+        .zip(texts)
+        .map(|(n, text)| {
+            let code = captured.get(&n.id).map(|c| c.code.as_str()).unwrap_or("");
+            // `None` here on purpose: this pass exists to *produce* the
+            // stats, so it must not consult them.
+            crate::storage::text::build_node_sparse_vector(text, code, None)
+                .into_iter()
+                .map(|(dim, _)| dim)
+                .collect()
+        })
+        .collect();
+
+    let stats = Arc::new(SparseStats::from_documents(docs.iter().map(|d| d.as_slice())));
+    for store in stores {
+        store.set_sparse_stats(stats.clone());
+    }
+    stats
+}
+
+/// The embedding budget implied by an embedder's model, with no explicit
+/// override.
+///
+/// The lib-side entry points take no `--section-cap`; the binary resolves
+/// that from flags/config and calls [`build_texts`] directly with its own
+/// [`EmbedBudget`].
+pub fn budget_for(embedder: &Embedder) -> EmbedBudget {
+    EmbedBudget::resolve(&embedder.config().model, None)
+}
+
 /// Extensions whose bodies are prose, not code.
 ///
 /// The scanner in [`crate::storage::comments`] keys off `//`, `/* */` and
@@ -324,8 +396,14 @@ fn is_prose_file(path: &str) -> bool {
 /// Build the per-node embedding texts for a graph, in `graph.nodes` order.
 ///
 /// Takes the captured source so each node's own comments can be folded in
-/// — for most nodes that is the only prose attached to them.
-pub fn build_texts(graph: &GraphData, captured: &HashMap<String, CapturedCode>) -> Vec<String> {
+/// — for most nodes that is the only prose attached to them — and the
+/// resolved [`EmbedBudget`], which decides how much of each description
+/// fits the loaded model's window.
+pub fn build_texts(
+    graph: &GraphData,
+    captured: &HashMap<String, CapturedCode>,
+    budget: &EmbedBudget,
+) -> Vec<String> {
     let related = collect_related_names(graph);
     // Shared across the graph so a licence header or file banner is
     // indexed once rather than on every node of the file.
@@ -345,7 +423,7 @@ pub fn build_texts(graph: &GraphData, captured: &HashMap<String, CapturedCode>) 
                 }
                 _ => String::new(),
             };
-            crate::storage::text::build_node_text_with_comments(n, names, &comments)
+            crate::storage::text::build_node_text_with_comments(n, names, &comments, budget)
         })
         .collect()
 }
@@ -358,8 +436,12 @@ pub async fn ingest_graph(
     graph: &GraphData,
 ) -> Result<IngestStats, Box<dyn std::error::Error + Send + Sync>> {
     let captured = capture_for_graph(graph);
-    let texts = build_texts(graph, &captured);
-    let plan = plan_incremental_ingest(store, graph, &texts, false, &captured).await?;
+    let budget = budget_for(embedder);
+    let model = embedder.config().model.clone();
+    let texts = build_texts(graph, &captured, &budget);
+    refresh_sparse_stats(&[store], &texts, &captured, graph);
+    let plan =
+        plan_incremental_ingest(store, graph, &texts, false, &captured, Some(&model)).await?;
     let unchanged = plan.unchanged;
     let (node_rows, embedded) = rows_from_plan(plan, embedder, graph, &captured).await?;
     let edge_rows = build_edge_rows(graph);
@@ -367,6 +449,7 @@ pub async fn ingest_graph(
     store.upsert_nodes(&node_rows).await?;
     store.upsert_edges(&edge_rows).await?;
     let pruned = prune_to_graph(store, graph).await?;
+    store.record_ingest_model(&model);
 
     Ok(IngestStats {
         nodes_written: node_rows.len(),
@@ -394,10 +477,15 @@ pub async fn ingest_graph_multi(
     graph: &GraphData,
 ) -> Result<IngestStats, Box<dyn std::error::Error + Send + Sync>> {
     let captured = capture_for_graph(graph);
-    let texts = build_texts(graph, &captured);
+    let budget = budget_for(embedder);
+    let model = embedder.config().model.clone();
+    let texts = build_texts(graph, &captured, &budget);
+    let refs: Vec<&dyn KnowledgeStore> = set.stores.iter().map(|s| s.as_ref()).collect();
+    refresh_sparse_stats(&refs, &texts, &captured, graph);
     let plan = match set.stores.first() {
         Some(store) => {
-            plan_incremental_ingest(store.as_ref(), graph, &texts, true, &captured).await?
+            plan_incremental_ingest(store.as_ref(), graph, &texts, true, &captured, Some(&model))
+                .await?
         }
         None => return Err("empty StoreSet".into()),
     };
@@ -406,6 +494,9 @@ pub async fn ingest_graph_multi(
 
     set.upsert_nodes(&node_rows).await?;
     set.upsert_edges(&edge_rows).await?;
+    for store in &set.stores {
+        store.record_ingest_model(&model);
+    }
     // Every destination is pruned, not just the one the plan read from.
     let mut pruned = 0usize;
     for store in &set.stores {
@@ -453,6 +544,7 @@ pub async fn reembed_nodes(
         return Ok(IngestStats::default());
     }
     let related = collect_related_names(graph);
+    let budget = budget_for(embedder);
     let now = current_unix_secs();
     let captured = match repo_root_of(graph) {
         Some(root) => capture_graph_code(graph, &root),
@@ -467,7 +559,9 @@ pub async fn reembed_nodes(
             continue;
         }
         let names = related.get(&n.id).map(|v| v.as_slice()).unwrap_or(&[][..]);
-        texts.push(build_node_text(n, names));
+        texts.push(crate::storage::text::build_node_text_with_comments(
+            n, names, "", &budget,
+        ));
         targets.push(n);
     }
 
