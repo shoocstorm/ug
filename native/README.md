@@ -1,149 +1,41 @@
 # UltraGraph-KB Native (Rust)
 
-High-performance Graph-based knowledge base generator built with Rust and tree-sitter.
+High-performance Graph-based knowledge base generator & visualizer built with Rust and tree-sitter.
+
+> Full documentation for all commands, API routes, schemas, and architecture: **[docs/api-reference.md](../docs/api-reference.md)**
 
 ## Quick Start
 
 ```bash
-# Build
 cargo build --release
-
-# Quick Generation (and visualization)
 target/release/ug gen -i ./docs --no-ingest --serve
-
-# More CLI cmds
 target/release/ug help
 ```
 
 ## CLI Commands
 
-### `ug gen`
-
-Full pipeline: index + graph + ingest.
+All commands are documented in full detail in [api-reference.md](../docs/api-reference.md). The most common entry points:
 
 ```bash
-ug gen -i ../ -o ../.ug
-# Produces: indexed-tree.json, graph.json and ingest graph.json into OverGraph db for semantic/hybrid search and RAG.
-# Add --no-ingest to skip the ingest step if you do not have an embedding endpoint running. (see ug gen --help for more info about the embedding endpoint configuration)
-# Adding --serve will start a http server at localhost:8080 to serve the graph.json in an visualized html page.
-```
-
-### `ug index`
-
-Scan & index a directory and output an indexed-tree.json file.
-
-```bash
-ug index -i ../docs
-ug index -i . --cache .cache -o indexed-tree.json # cache speeds up re-indexing
-```
-
-Options:
-- `-o, --output <file>` — Output file (default: `.ug/indexed-tree.json`)
-- `-c, --cache <dir>` — Cache directory for incremental indexing
-
-### `ug graph`
-
-Build graph.json from the indexed-tree.json.
-
-```bash
-ug graph -i indexed-tree.json -o graph.json
-```
-
-### Graph analysis (`graph_*`)
-
-All of these read a project's `graph.json` — picked with `-n/--name`, else the
-cwd's project, else the most recently generated one — so no file paths are
-needed. `-i/--input <file>` still takes an explicit graph.json, `--json` prints
-the raw result, and `-o/--output <file>` writes that JSON to disk. Node
-arguments accept a node id, a file path, or a symbol name.
-
-```bash
-ug graph_search "visualization" -t Concept        # substring scan over names + docstrings
-ug graph_bfs docs/VISUALIZATION-FEATURES.md -k 2  # K-hop traversal (-d out|in|both)
-ug shortest_path run_gen run_ingest                  # shortest path between two nodes
-ug graph_filter                                   # edge types + counts
-ug graph_filter Calls --from run_gen              # edges by type/endpoint
-ug graph_centrality --top 30 -t Function          # degree + betweenness ranking
-ug graph_cycles --min-len 3 --fail-on-cycle       # cycle detection (CI guard)
-ug graph_analyze -n my-repo                       # both, written to analysis.json/cycles.json
-```
-
-The pre-rename names (`bfs`, `path`, `filter`, `centrality`,
-`cycles`, `analyze`, `shortest_path`) still work as aliases, including the old
-`<graph-file>` first positional.
-
-### `ug ingest`
-
-Embed graph nodes into OverGraph.
-
-```bash
-ug ingest -i graph.json -o ./ugdb
-```
-
-### `ug semantic_search`
-
-Semantic vector search.
-
-```bash
-ug semantic_search "build a tree" -d ./ugdb --filter "node_type = 'Function'"
-```
-
-### `ug search`
-
-Hybrid (keyword + vector) search over OverGraph, with RRF and PPR/MMR.
-
-```bash
-ug search "build a tree" -d ./ugdb -k 2
-```
-
-### `ug traverse`
-
-K-hop BFS over OverGraph edges.
-
-```bash
-ug traverse file:src/index.ts -d ./ugdb -k 2
-```
-
-### `ug serve`
-
-Serve the OverGraph database with a web UI.
-
-```bash
-ug serve -d ./ -p 8080
-
-ug serve -d ./ --repo-root ~/Documents/project/aldrickbot
-```
-
-## Storage / GraphRAG (Phase 3+4)
-
-End-to-end against a running embedding endpoint:
-
-```bash
-ug ingest -i graph.json -o ./ugdb
-ug semantic_search "build a tree" -d ./ugdb --filter "node_type = 'Function'"
-ug traverse file:src/index.ts -d ./ugdb -k 2
+ug gen -i ../                     # Full pipeline: index + graph + ingest
+ug serve                     # Serve with web UI
+ug semantic_search "build a tree"           # Semantic vector search
+ug search "build a tree"                    # Hybrid (keyword + vector) search
+ug traverse file:src/index.ts               # K-hop BFS over graph edges
 ```
 
 ## Development
 
-### Running Tests
-
 ```bash
-cargo test
+cargo test                    # Run tests
+cargo build                   # Debug build
+cargo build --release         # Release build
 ```
 
-### Building
+Output: `target/release/ug` (CLI + MCP + server) and `target/release/ug-app` (desktop shell).
 
-```bash
-cargo build              # Debug
-cargo build --release   # Release (optimized)
-```
-
-Output:
-- Library: `target/release/libultragraph.rlib`
-- Binaries: `target/release/ug` (CLI + MCP + server) and `target/release/ug-app` (desktop shell)
-
-### Project Structure
+<details>
+<summary><b>Project Structure</b></summary>
 
 ```
 native/
@@ -153,131 +45,37 @@ native/
 │   ├── lib.rs              # Library crate root
 │   ├── project.rs          # ~/.ug/<project> folder resolution
 │   ├── serve.rs             # `ug serve` — Axum web server + REST API
-│   ├── chat.rs              # `ug chat` — RAG-grounded chat against an OpenAI-compatible LLM
-│   ├── mcp/                 # `ug mcp` — native stdio MCP server + install/uninstall
-│   ├── vis/                 # Embedded visualization HTML + JS bundle
-│   ├── indexer.rs          # Indexing entry-point + per-file pipeline
-│   ├── indexer/
-│   │   ├── classifier.rs   # File classification heuristics
-│   │   ├── common.rs       # File walk, hashing, path normalization
-│   │   ├── folder.rs       # Folder-node derivation from scanned paths
-│   │   ├── languages.rs    # Per-language indexer registry (TS/Py/Java/Rust/MD)
-│   │   ├── languages/      # Per-language tree-sitter extractors (ts, py, java, rust, md)
-│   │   ├── pdf.rs          # PDF text extractor (pdf-extract, one Symbol per page)
-│   │   └── package_json.rs # package.json dependency parsing
+│   ├── chat.rs              # `ug chat` — RAG-grounded chat
+│   ├── mcp/                 # MCP server + install/uninstall
+│   ├── vis/                 # Embedded visualization HTML + JS
+│   ├── indexer.rs          # Indexing entry-point
+│   ├── indexer/             # Classifier, common, folder, languages, pdf, package_json
 │   ├── graph.rs            # Graph building + BFS + analysis
 │   ├── types.rs            # Data structures
-│   └── storage/
-│       ├── mod.rs
-│       ├── db.rs             # OverGraph schemas + queries
-│       ├── embed.rs          # Remote embedding HTTP client
-│       ├── embed_local.rs    # In-process ONNX embedder (fastembed)
-│       ├── ingest.rs         # Embed + upsert pipeline
-│       ├── query.rs          # search, traverse, RRF, MMR, snippets
-│       ├── ppr.rs            # Personalized PageRank
-│       ├── store.rs          # `KnowledgeStore` trait (multi-destination)
-│       ├── types_registry.rs # Stable string↔u32 type-id mapping
-│       ├── text.rs           # Embedding text shaping (folder synopsis fallback)
-│       └── backends/
-│           └── neo4j.rs      # Neo4j `KnowledgeStore` implementation
-└── tests/
-    ├── indexer_test.rs        # 13 tests
-    ├── graph_test.rs          # 29 tests
-    ├── search_test.rs         # 13 tests
-    ├── storage_test.rs        # 7 tests
-    ├── rust_indexer_test.rs   # 17 tests
-    ├── pdf_indexer_test.rs    # 11 tests
-    ├── storage_bench.rs       # 2 tests, #[ignore] by default
-    ├── neo4j_smoke.rs         # 4 tests, #[ignore] — needs a running Neo4j
-    └── neo4j_write_smoke.rs   # 3 tests, #[ignore] — needs a running Neo4j
+│   └── storage/            # OverGraph + Neo4j backends, embedding, query, ingest
+└── tests/                  # Integration tests (indexer, graph, search, storage, etc.)
 ```
 
-## Features
+</details>
 
-### Indexer
-- Parallel directory walking (respects .gitignore)
-- Incremental hashing (blake3)
-- AST parsing (tree-sitter)
-  - TypeScript/JavaScript
-  - Python
-  - Java
-  - **Rust** (`function_item` / `struct_item` / `enum_item` / `trait_item` / `type_item` /
-    `const_item` / `static_item` / `macro_definition`; `impl` block methods get qualified
-    as `Type::method` with `implements: [Trait]` on `impl Trait for Type` methods;
-    `use` declarations expand brace-groups and `as` aliases into per-import records;
-    `///` and `//!` doc-comment runs collapse into `docstring`)
-  - Markdown / MDX (heading sections carry full-body `end_line` spans for downstream summarization)
-- Binary document parsing
-  - **PDF** via `pdf-extract` (pure-Rust, no native deps): one `Symbol` per page,
-    `kind: "heading_1"` so pages map cleanly to `Concept` graph nodes with a
-    `Contains` edge from the file. Page text → `docstring` (capped at 8 KB) so
-    semantic search can rank it. Empty / image-only pages emit a `(no text)`
-    stub. Extension match is case-insensitive (`.PDF`, `.Pdf` all work).
-- Symbol extraction:
-  - Functions, classes, interfaces
-  - Function signatures (params, return types)
-  - Docstrings (JSDoc @param/@returns)
-  - Imports/exports
-  - Inheritance (extends/implements)
-  - Type references
-  - Function calls
-- File classification
-- Folder hierarchy extraction:
-  - Synthetic `.` root, every folder with `parent` / `depth` / `childFiles` / `childFolders`
-  - Recursive `totalFiles` and `languageBreakdown` for character signal
-  - README detection (`README.md` / `_index.md` / `index.md`)
-  - Folder classification (Tests / Documentation / Components / Source / Mixed / …) via path-name + content fallback
-  - `summary` slot reserved for the Semantic Enrichment phase
-- Package.json dependency extraction
+<details>
+<summary><b>Features</b></summary>
 
-### Graph
-- Node types: File, Folder, Function, Class, Interface, Concept (markdown headings), Dependency, Config
-- Edge types: Contains, Imports, Exports, Extends, Implements, Calls, References
-- Folder forest is wired with `Contains` edges (parent_folder → child_folder, folder → immediate_file), giving a clean `folder → folder → file → symbol` traversal chain that all query primitives (BFS, centrality, shortest-path, search) work over for free
-- K-hop BFS traversal
-- Centrality (degree + betweenness)
-- Cycle detection
-- Shortest path
-- Edge-type filtering
+- **Indexer**: Parallel directory walking (respects .gitignore), incremental hashing (blake3), AST parsing via tree-sitter (TypeScript, Python, Java, Rust, Markdown/MDX), PDF extraction. Symbol extraction includes functions, classes, interfaces, signatures, docstrings, imports/exports, inheritance, type refs, calls. Folder hierarchy with classification, README detection, package.json parsing.
+- **Graph**: File/Folder/Function/Class/Interface/Concept/Dependency/Config nodes. Contains/Imports/Exports/Extends/Implements/Calls/References edges. BFS traversal, centrality (degree + betweenness), cycle detection, shortest path, edge-type filtering.
+- **Storage & GraphRAG**: OverGraph + Neo4j persistence. Vector search, FTS, RRF hybrid search, MMR reranking, graph expansion, code snippets, token-budgeted context assembly.
 
-### Storage & GraphRAG
-- OverGraph persistence (nodes + edges tables)
-- Vector search (embedding dimension is configurable per DB; default 1024, auto-probed at ingest)
-- FTS search (name + description)
-- RRF hybrid search (vector + FTS fusion)
-- MMR reranking (relevance vs. diversity)
-- Graph expansion with direction + edge-type filter
-- Code snippet extraction
-- Token-budgeted context assembly
-- Folder-aware embedding text: pre-enrichment, folder nodes embed with a synthesized synopsis ("`<classification>` folder, N typescript and M markdown files, depth D"); the storage layer prefers `folder.summary` once enrichment fills it
-- `search` — Phase 4 entry point
+</details>
 
-## Dependencies
+<details>
+<summary><b>Dependencies</b></summary>
 
-- `tree-sitter` — AST parsing
-- `tree-sitter-typescript` — TypeScript parser
-- `tree-sitter-python` — Python parser
-- `blake3` — Incremental hashing
-- `ignore` — File walking
-- `petgraph` — Graph algorithms
-- `rayon` — Parallel processing
-- `overgraph` — Graph and Vector database
-- `tokio` — Async runtime
-- `reqwest` — HTTP client (embeddings)
-- `axum` — HTTP server (`ug serve`)
-- `tauri` — native desktop shell (`ug-app`)
+`tree-sitter` · `tree-sitter-typescript` · `tree-sitter-python` · `blake3` · `ignore` · `petgraph` · `rayon` · `overgraph` · `tokio` · `reqwest` · `axum` · `tauri`
 
-## Extensibility
-
-Adding a new language is a 5-step additive change:
-1. Drop a new `languages/<name>.rs` implementing `LanguageIndexer`
-2. Add `mod <name>;` in `languages.rs`
-3. Register extensions in `for_extension`
-4. Add exts to `common::SUPPORTED_EXTS`
-5. Add `tree-sitter-<name>` to `Cargo.toml`
+</details>
 
 ## Performance
 
-- Target: < 5 seconds for 1,000-file repo
-- Target: < 100ms for 3-hop BFS
+- Indexing: < 5s for 1,000-file repo
+- BFS: < 100ms for 3-hop traversal
 - Memory: < 500MB during indexing

@@ -85,7 +85,6 @@ fn main() {
         "ingest" => run_ingest(cmd_args),
         // Graph analysis (offline, in-memory). Project-scoped via
         // -n/--name; the pre-rename names stay as aliases.
-        "graph_analyze" | "analyze" => run_graph_analyze(cmd_args),
         "graph_bfs" | "bfs" => run_graph_bfs(cmd_args),
         "graph_filter" | "filter" => run_graph_filter(cmd_args),
         "graph_centrality" | "centrality" => run_graph_centrality(cmd_args),
@@ -1186,81 +1185,6 @@ fn run_graph_cycles(args: &[String]) {
     if has_flag(args, "--fail-on-cycle") && !cycles.is_empty() {
         std::process::exit(1);
     }
-}
-
-fn run_graph_analyze(args: &[String]) {
-    if has_flag(args, "-h") || has_flag(args, "--help") {
-        print_graph_analyze_help();
-        return;
-    }
-    let (load_args, _pos) = analysis_input(args);
-    let top = limit_or(args, &["--top", "-l", "--limit"], 10);
-    let (graph, raw, graph_path) = load_agent_graph(&load_args);
-
-    let centrality = calculate_centrality(raw.clone());
-    let cycles = detect_cycles(raw);
-    let cycle_count = serde_json::from_str::<serde_json::Value>(&cycles)
-        .ok()
-        .and_then(|v| v.get("cycles").and_then(|c| c.as_array()).map(|a| a.len()))
-        .unwrap_or(0);
-
-    // Written next to the graph by default so `ug serve` and the
-    // visualization pick them up; `--no-write` makes this a pure report.
-    if !has_flag(args, "--no-write") {
-        let output_dir = flag_value(args, &["-o", "--output"]).unwrap_or_else(|| {
-            graph_path
-                .parent()
-                .unwrap_or(Path::new("."))
-                .to_string_lossy()
-                .into_owned()
-        });
-        let _ = fs::create_dir_all(&output_dir);
-        fs::write(format!("{}/analysis.json", output_dir), &centrality)
-            .expect("Failed to write analysis.json");
-        fs::write(format!("{}/cycles.json", output_dir), &cycles)
-            .expect("Failed to write cycles.json");
-        println!("{C_GREEN}✓{C_RESET} Wrote analysis to {C_BOLD}{}{C_RESET}:", output_dir);
-        println!("  {C_CYAN}▸{C_RESET} analysis.json (centrality)");
-        println!("  {C_CYAN}▸{C_RESET} cycles.json (cycle detection)");
-        println!();
-    }
-
-    if has_flag(args, "--json") {
-        println!(
-            "{}",
-            serde_json::json!({
-                "graph": graph_path.to_string_lossy(),
-                "nodes": graph.nodes.len(),
-                "edges": graph.edges.len(),
-                "cycles": cycle_count,
-                "centrality": serde_json::from_str::<serde_json::Value>(&centrality).unwrap_or_default(),
-            })
-        );
-        return;
-    }
-
-    let mut rows = centrality_rows(&graph, &centrality, &[], None);
-    println!(
-        "{C_BOLD}Graph analysis{C_RESET} — {} nodes, {} edges, {} cycle(s)",
-        graph.nodes.len(),
-        graph.edges.len(),
-        cycle_count
-    );
-    println!("{C_DIM}graph: {}{C_RESET}", graph_path.display());
-    println!();
-    println!("{C_BOLD}Top {} by degree{C_RESET}", top);
-    rows.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    for (n, deg, _) in rows.iter().take(top) {
-        println!("  {C_BOLD}{:.4}{C_RESET}  {}", deg, node_line(n));
-    }
-    println!();
-    println!("{C_BOLD}Top {} by betweenness{C_RESET}", top);
-    rows.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
-    for (n, _, btw) in rows.iter().take(top) {
-        println!("  {C_BOLD}{:.4}{C_RESET}  {}", btw, node_line(n));
-    }
-    println!();
-    println!("{C_DIM}Next:{C_RESET} {C_CYAN}ug graph_cycles{C_RESET} for the cycle detail · {C_CYAN}ug graph_centrality --top 50{C_RESET} for a longer ranking");
 }
 
 // ---------- Agent tools ----------
@@ -5018,28 +4942,6 @@ fn print_graph_common_options() {
     println!("  {C_CYAN}-o, --output{C_RESET} <file>   Write the raw JSON to a file");
 }
 
-fn print_graph_analyze_help() {
-    println!("  {C_CYAN}ug graph_analyze{C_RESET}  {C_YELLOW}— full graph analysis (centrality + cycles){C_RESET}");
-    println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
-    println!();
-    println!("{C_BOLD}Usage:{C_RESET}  ug graph_analyze [options]        {C_DIM}(alias: analyze){C_RESET}");
-    println!();
-    println!("  Writes analysis.json + cycles.json next to the project's graph.json");
-    println!("  (so {C_CYAN}ug serve{C_RESET} picks them up) and prints a ranked summary.");
-    println!();
-    println!("{C_BOLD}Options:{C_RESET}");
-    println!("  {C_CYAN}--top{C_RESET} <n>             Rows per ranking in the summary (default 10)");
-    println!("  {C_CYAN}--no-write{C_RESET}            Report only — don't write analysis.json/cycles.json");
-    println!("  {C_CYAN}-o, --output{C_RESET} <dir>    Output directory (default: the project dir)");
-    println!("  {C_CYAN}-n, --name{C_RESET} <project>  Project under ~/.ug (default: cwd's project, else most recent)");
-    println!("  {C_CYAN}-i, --input{C_RESET} <file>    Explicit graph.json (overrides --name)");
-    println!();
-    println!("{C_BOLD}Examples:{C_RESET}");
-    println!("  {C_CYAN}ug graph_analyze{C_RESET}");
-    println!("  {C_CYAN}ug graph_analyze{C_RESET} -n my-repo --top 25");
-    println!("  {C_CYAN}ug graph_analyze{C_RESET} --no-write --json");
-}
-
 fn print_graph_bfs_help() {
     println!("  {C_CYAN}ug graph_bfs{C_RESET}  {C_YELLOW}— K-hop breadth-first traversal from a node{C_RESET}");
     println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
@@ -5496,7 +5398,6 @@ fn print_help() {
     println!("  {C_CYAN}ingest{C_RESET}           Embed graph nodes and write to OverGraph");
     println!();
     println!("  {C_DIM}Graph analysis (offline, in-memory) — all take {C_RESET}{C_CYAN}-n <project>{C_RESET}{C_DIM}, {C_RESET}{C_CYAN}--json{C_RESET}{C_DIM}, {C_RESET}{C_CYAN}-o <file>{C_RESET}");
-    println!("  {C_CYAN}graph_analyze{C_RESET}    Full analysis (centrality + cycles) → analysis.json/cycles.json");
     println!("  {C_CYAN}graph_bfs{C_RESET}        K-hop BFS from a node/name (--hops, -d in|out|both)");
     println!("  {C_CYAN}graph_filter{C_RESET}     List edges by type/endpoint (no args: edge types + counts)");
     println!("  {C_CYAN}graph_centrality{C_RESET} Rank nodes by degree/betweenness (--top, -t, -f)");

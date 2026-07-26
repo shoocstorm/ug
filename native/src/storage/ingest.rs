@@ -303,6 +303,24 @@ pub fn capture_for_graph(graph: &GraphData) -> HashMap<String, CapturedCode> {
     }
 }
 
+/// Extensions whose bodies are prose, not code.
+///
+/// The scanner in [`crate::storage::comments`] keys off `//`, `/* */` and
+/// `#`, which in markdown means every heading line, and its string-literal
+/// tracking trips on ordinary apostrophes and backticks — so what it
+/// returns for a document is mangled prose, not a comment. These files
+/// carry their description in the node's docstring already (see
+/// `indexer::languages::markdown::section_prose`), so there is nothing here
+/// to recover.
+const PROSE_EXTS: &[&str] = &["md", "mdx", "markdown"];
+
+fn is_prose_file(path: &str) -> bool {
+    match path.rsplit_once('.') {
+        Some((_, ext)) => PROSE_EXTS.contains(&ext.to_ascii_lowercase().as_str()),
+        None => false,
+    }
+}
+
 /// Build the per-node embedding texts for a graph, in `graph.nodes` order.
 ///
 /// Takes the captured source so each node's own comments can be folded in
@@ -322,7 +340,7 @@ pub fn build_texts(graph: &GraphData, captured: &HashMap<String, CapturedCode>) 
             // hand it every comment in the file and — through the banner
             // dedup — starve the symbols underneath it.
             let comments = match (n.start_line, n.end_line, captured.get(&n.id)) {
-                (Some(_), Some(_), Some(c)) => {
+                (Some(_), Some(_), Some(c)) if !is_prose_file(n.file.as_deref().unwrap_or("")) => {
                     crate::storage::comments::extract_prose_comments(&c.code, &mut seen_banner)
                 }
                 _ => String::new(),

@@ -26,7 +26,7 @@
 //!
 //! [1]: https://github.com/run-llama/liteparse
 
-use crate::indexer::common::{normalize_path, strip_repo_root};
+use crate::indexer::common::{normalize_path, strip_repo_root, truncate_chars};
 use crate::types::{FileNode, Symbol};
 use liteparse::config::ImageMode;
 use liteparse::{LiteParse, LiteParseConfig, OutputFormat};
@@ -154,7 +154,7 @@ pub fn process_document(path: &Path, repo_root: Option<&str>) -> Option<FileNode
             continue;
         }
         let name = derive_page_name(trimmed, page_no);
-        let docstring = truncate(trimmed, PAGE_TEXT_CAP);
+        let docstring = truncate_chars(trimmed, PAGE_TEXT_CAP);
         symbols.push(page_symbol(page_no, name, Some(docstring)));
     }
 
@@ -217,25 +217,8 @@ fn derive_page_name(text: &str, page_no: u32) -> String {
     if first_line.is_empty() {
         return format!("Page {}", page_no);
     }
-    let snippet = truncate(&first_line, NAME_CAP);
+    let snippet = truncate_chars(&first_line, NAME_CAP);
     format!("p.{} · {}", page_no, snippet)
-}
-
-/// Truncate `s` to at most `cap` bytes on a char boundary, appending `…`
-/// when truncation actually happened. Char-boundary-aware so we never
-/// split a UTF-8 sequence — extracted text often contains ligatures and
-/// accented characters that span multiple bytes.
-fn truncate(s: &str, cap: usize) -> String {
-    if s.len() <= cap {
-        return s.to_string();
-    }
-    let mut end = cap;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    let mut out = s[..end].to_string();
-    out.push('…');
-    out
 }
 
 #[cfg(test)]
@@ -246,10 +229,10 @@ mod tests {
     fn truncate_respects_char_boundaries() {
         // "héllo" — é is two bytes; truncating to 2 must back up.
         let s = "héllo";
-        assert_eq!(truncate(s, 100), "héllo");
+        assert_eq!(truncate_chars(s, 100), "héllo");
         // cap=2 lands inside the é; the function should back up to
         // byte 1 (before é) and append the ellipsis.
-        let out = truncate(s, 2);
+        let out = truncate_chars(s, 2);
         assert!(out.ends_with('…'));
         assert!(out.is_char_boundary(out.len()));
     }

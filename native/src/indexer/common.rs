@@ -45,6 +45,26 @@ pub fn get_node_text(node: Option<Node>, source: &[u8]) -> Option<String> {
     }
 }
 
+/// Truncate `s` to at most `cap` bytes on a char boundary, appending `…`
+/// when truncation actually happened.
+///
+/// Boundary-aware so a multi-byte sequence is never split — the text this
+/// runs over is extracted prose, which is full of accented characters,
+/// ligatures and em-dashes. Shared by every extractor that caps text it
+/// hands to the embedder.
+pub fn truncate_chars(s: &str, cap: usize) -> String {
+    if s.len() <= cap {
+        return s.to_string();
+    }
+    let mut end = cap;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut out = s[..end].to_string();
+    out.push('…');
+    out
+}
+
 /// Best-effort docstring extractor for JSDoc-style `/** ... */` blocks placed
 /// immediately above a node. Languages that share this convention (TS, JS,
 /// Java) get docstring support for free; languages with native docstring
