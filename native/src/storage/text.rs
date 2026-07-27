@@ -1188,4 +1188,191 @@ mod sparse_tests {
         let text = build_node_text(&plain, &[]);
         assert_eq!(text, "Function: parse. Parses input.. Related: ");
     }
+
+    // ---- identifier splitting edge cases ------------------------------
+
+    #[test]
+    fn splitting_handles_degenerate_identifiers() {
+        assert!(split_identifier("").is_empty());
+        assert!(split_identifier("___").is_empty(), "separators only");
+        assert_eq!(split_identifier("x"), vec!["x"]);
+        assert_eq!(split_identifier("_leading"), vec!["leading"]);
+        assert_eq!(split_identifier("trailing_"), vec!["trailing"]);
+        assert_eq!(split_identifier("a__b"), vec!["a", "b"], "runs collapse");
+    }
+
+    #[test]
+    fn an_all_caps_identifier_stays_one_word() {
+        // `MAX` has no lower-case follower to mark a boundary, so splitting
+        // it would produce three single letters and no useful token.
+        assert_eq!(split_identifier("MAX"), vec!["max"]);
+        assert_eq!(split_identifier("MAX_RETRIES"), vec!["max", "retries"]);
+    }
+
+    #[test]
+    fn a_qualified_name_splits_on_its_separators() {
+        // Java members arrive as `Type.member`, Rust as `Type::method`.
+        assert_eq!(
+            split_identifier("OrderService.cancel"),
+            vec!["order", "service", "cancel"]
+        );
+        assert_eq!(
+            split_identifier("Db::upsert_nodes"),
+            vec!["db", "upsert", "nodes"]
+        );
+    }
+
+    // ---- related-name handling ----------------------------------------
+
+    #[test]
+    fn related_names_are_deduped_sorted_and_capped() {
+        // A hub node's neighbours would otherwise dominate the embedding
+        // and crowd out its own terms.
+        let mut nodes = vec![GraphNode {
+            id: "hub".into(),
+            name: "hub".into(),
+            node_type: GraphNodeType::File,
+            ..Default::default()
+        }];
+        let mut edges = Vec::new();
+        for i in 0..(MAX_RELATED + 40) {
+            nodes.push(GraphNode {
+                id: format!("n{i}"),
+                name: format!("leaf{i:04}"),
+                node_type: GraphNodeType::Function,
+                ..Default::default()
+            });
+            edges.push(crate::types::GraphEdge {
+                source: "hub".into(),
+                target: format!("n{i}"),
+                edge_type: crate::types::GraphEdgeType::Contains,
+            });
+            // A duplicate edge must not produce a duplicate name.
+            edges.push(crate::types::GraphEdge {
+                source: "hub".into(),
+                target: format!("n{i}"),
+                edge_type: crate::types::GraphEdgeType::References,
+            });
+        }
+        let graph = GraphData {
+            nodes,
+            edges,
+            stats: None,
+        };
+        let related = collect_related_names(&graph);
+        let hub = &related["hub"];
+        assert_eq!(hub.len(), MAX_RELATED);
+        assert!(hub.windows(2).all(|w| w[0] < w[1]), "sorted and deduped");
+    }
+
+    #[test]
+    fn relatedness_is_bidirectional() {
+        // An edge tells you as much about its target as its source, so both
+        // ends carry the other's name.
+        let graph = GraphData {
+            nodes: vec![
+                GraphNode {
+                    id: "a".into(),
+                    name: "alpha".into(),
+                    ..Default::default()
+                },
+                GraphNode {
+                    id: "b".into(),
+                    name: "beta".into(),
+                    ..Default::default()
+                },
+            ],
+            edges: vec![crate::types::GraphEdge {
+                source: "a".into(),
+                target: "b".into(),
+                edge_type: crate::types::GraphEdgeType::Calls,
+            }],
+            stats: None,
+        };
+        let related = collect_related_names(&graph);
+        assert_eq!(related["a"], vec!["beta".to_string()]);
+        assert_eq!(related["b"], vec!["alpha".to_string()]);
+    }
+
+    #[test]
+    fn an_edge_to_a_missing_node_contributes_no_name() {
+        // Dangling targets are dropped by the graph builder, but a
+        // hand-built or legacy graph can still carry one.
+        let graph = GraphData {
+            nodes: vec![GraphNode {
+                id: "a".into(),
+                name: "alpha".into(),
+                ..Default::default()
+            }],
+            edges: vec![crate::types::GraphEdge {
+                source: "a".into(),
+                target: "gone".into(),
+                edge_type: crate::types::GraphEdgeType::Calls,
+            }],
+            stats: None,
+        };
+        let related = collect_related_names(&graph);
+        assert!(related.get("a").is_none_or(|v| v.is_empty()));
+    }
+
+    // ---- description budget --------------------------------------------
+
+    #[test]
+    fn the_description_is_capped_by_the_budget_not_the_indexer() {
+        // A markdown section or a PDF page can run to kilobytes; the cap
+        // follows the loaded model's window so switching models needs a
+        // re-embed rather than a re-index.
+        let node = GraphNode {
+            id: "concept:docs/a.md:big".into(),
+            name: "big".into(),
+            node_type: GraphNodeType::Concept,
+            docstring: Some("word ".repeat(5_000)),
+            ..Default::default()
+        };
+        let budget = EmbedBudget {
+            description_chars: 100,
+            ..EmbedBudget::default()
+        };
+        let text = build_node_text_with_comments(&node, &[], "", &budget);
+        assert!(text.contains('…'), "should be truncated: {}", &text[..80]);
+        assert!(text.len() < 400, "got {} bytes", text.len());
+    }
+
+    #[test]
+    fn comments_ride_alongside_the_description_rather_than_replacing_it() {
+        let node = GraphNode {
+            id: "function:src/a.ts:parse".into(),
+            name: "parse".into(),
+            node_type: GraphNodeType::Function,
+            docstring: Some("Parses input.".into()),
+            ..Default::default()
+        };
+        let text =
+            build_node_text_with_comments(&node, &[], "handles the legacy format", &EmbedBudget::default());
+        assert!(text.contains("Parses input."), "{text}");
+        assert!(text.contains("Notes: handles the legacy format."), "{text}");
+    }
+
+    #[test]
+    fn a_folder_node_embeds_its_path_not_its_basename() {
+        // `src/components` and `tests/components` are different folders and
+        // must not embed identically.
+        let node = GraphNode {
+            id: "folder:tests/components".into(),
+            name: "components".into(),
+            node_type: GraphNodeType::Folder,
+            folder: Some(GraphNodeFolderMeta {
+                depth: 1,
+                parent: Some("tests".into()),
+                classification: None,
+                readme: None,
+                total_files: 3,
+                language_breakdown: HashMap::new(),
+                summary: None,
+            }),
+            ..Default::default()
+        };
+        let text = build_node_text(&node, &[]);
+        assert!(text.contains("tests/components"), "{text}");
+    }
 }

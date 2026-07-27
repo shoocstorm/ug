@@ -510,4 +510,187 @@ mod filter_tests {
     fn unknown_predicate_returns_none() {
         assert!(NodeFilter::from_legacy_where("file LIKE '%foo%'").is_none());
     }
+
+    // ---- NodeFilter edge cases -----------------------------------------
+
+    #[test]
+    fn the_predicate_is_matched_case_insensitively() {
+        // The legacy CLI accepted any casing, and a filter that silently
+        // stopped applying would quietly widen every search rather than
+        // erroring.
+        for s in [
+            "NODE_TYPE = 'Function'",
+            "Node_Type='Function'",
+            "  node_type   =   'Function'  ",
+        ] {
+            let f = NodeFilter::from_legacy_where(s)
+                .unwrap_or_else(|| panic!("should parse: {s}"));
+            assert_eq!(f.node_types.as_deref().unwrap(), &["Function".to_string()]);
+        }
+        for s in ["node_type in ('Function')", "node_type In ('Function')"] {
+            assert!(NodeFilter::from_legacy_where(s).is_some(), "should parse: {s}");
+        }
+    }
+
+    #[test]
+    fn quoted_values_keep_their_own_case() {
+        // Node types are compared exactly downstream, so lowercasing the
+        // value while detecting the predicate would match nothing.
+        let f = NodeFilter::from_legacy_where("NODE_TYPE = 'Function'").unwrap();
+        assert_eq!(f.node_types.as_deref().unwrap(), &["Function".to_string()]);
+    }
+
+    #[test]
+    fn both_quote_styles_are_accepted() {
+        for s in ["node_type = 'Class'", "node_type = \"Class\""] {
+            let f = NodeFilter::from_legacy_where(s).unwrap();
+            assert_eq!(f.node_types.as_deref().unwrap(), &["Class".to_string()]);
+        }
+    }
+
+    #[test]
+    fn an_unquoted_value_is_not_accepted() {
+        // Rejecting is the safe direction: a filter we can't read becomes
+        // no filter, which returns more than asked rather than less.
+        assert!(NodeFilter::from_legacy_where("node_type = Function").is_none());
+        assert!(NodeFilter::from_legacy_where("node_type = 'Function").is_none());
+        assert!(NodeFilter::from_legacy_where("node_type = Function'").is_none());
+    }
+
+    #[test]
+    fn an_in_list_tolerates_spacing_and_drops_unquoted_members() {
+        let f = NodeFilter::from_legacy_where("node_type IN ( 'Function' , 'Class' )").unwrap();
+        assert_eq!(
+            f.node_types.unwrap(),
+            vec!["Function".to_string(), "Class".to_string()]
+        );
+        // A partially-quoted list keeps what it can read.
+        let f = NodeFilter::from_legacy_where("node_type IN ('Function', Class)").unwrap();
+        assert_eq!(f.node_types.unwrap(), vec!["Function".to_string()]);
+    }
+
+    #[test]
+    fn an_empty_or_unparseable_in_list_returns_none() {
+        assert!(NodeFilter::from_legacy_where("node_type IN ()").is_none());
+        assert!(NodeFilter::from_legacy_where("node_type IN (Function)").is_none());
+        // Missing parentheses is not a list.
+        assert!(NodeFilter::from_legacy_where("node_type IN 'Function'").is_none());
+    }
+
+    #[test]
+    fn a_different_column_is_never_mistaken_for_node_type() {
+        // Substring matching here would make `my_node_type` or a `file`
+        // predicate silently filter on node type instead.
+        assert!(NodeFilter::from_legacy_where("my_node_type = 'Function'").is_none());
+        assert!(NodeFilter::from_legacy_where("file = 'src/a.ts'").is_none());
+        assert!(NodeFilter::from_legacy_where("").is_none());
+        assert!(NodeFilter::from_legacy_where("   ").is_none());
+    }
+
+    #[test]
+    fn type_only_builds_from_any_string_like_iterator() {
+        let f = NodeFilter::type_only(["Function", "Class"]);
+        assert_eq!(
+            f.node_types.unwrap(),
+            vec!["Function".to_string(), "Class".to_string()]
+        );
+        let f = NodeFilter::type_only(vec![String::from("Folder")]);
+        assert_eq!(f.node_types.unwrap(), vec!["Folder".to_string()]);
+        // An empty list is still a filter — it means "match nothing" — and
+        // must stay distinguishable from `None`, which means "no filter".
+        let f = NodeFilter::type_only(Vec::<String>::new());
+        assert_eq!(f.node_types.as_deref(), Some(&[][..]));
+    }
+
+    #[test]
+    fn the_default_filter_is_no_filter() {
+        assert!(NodeFilter::default().node_types.is_none());
+    }
+
+    // ---- Direction ------------------------------------------------------
+
+    #[test]
+    fn direction_accepts_every_spelling_of_each_case() {
+        for s in ["in", "IN", "In", "inbound", "INBOUND", "incoming"] {
+            assert_eq!(Direction::from_str_lossy(s), Direction::Inbound, "{s}");
+        }
+        for s in ["both", "BOTH", "all", "any", "Any"] {
+            assert_eq!(Direction::from_str_lossy(s), Direction::Both, "{s}");
+        }
+        for s in ["out", "outbound", "outgoing", "OUT"] {
+            assert_eq!(Direction::from_str_lossy(s), Direction::Outbound, "{s}");
+        }
+    }
+
+    #[test]
+    fn an_unrecognised_direction_falls_back_to_outbound() {
+        // "Lossy" is the contract: this parses user input from a CLI flag
+        // and an API field, and following a call graph forwards is the
+        // least surprising thing to do with a typo.
+        for s in ["", "sideways", "backwards", "  in  ", "inn"] {
+            assert_eq!(Direction::from_str_lossy(s), Direction::Outbound, "{s:?}");
+        }
+    }
+
+    // ---- StoreSpec ------------------------------------------------------
+
+    fn overgraph_spec(dim: u32) -> StoreSpec {
+        StoreSpec::Overgraph {
+            path: PathBuf::from("/tmp/kb"),
+            embedding_dim: dim,
+        }
+    }
+
+    fn neo4j_spec(dim: u32) -> StoreSpec {
+        StoreSpec::Neo4j {
+            uri: "bolt://localhost:7687".into(),
+            user: "neo4j".into(),
+            password: "secret".into(),
+            database: None,
+            embedding_dim: dim,
+        }
+    }
+
+    #[test]
+    fn store_spec_reports_its_backend_name() {
+        // These strings reach the user in `--dest` output and logs.
+        assert_eq!(overgraph_spec(384).name(), "overgraph");
+        assert_eq!(neo4j_spec(384).name(), "neo4j");
+    }
+
+    #[test]
+    fn embedding_dim_reads_through_either_variant() {
+        assert_eq!(overgraph_spec(384).embedding_dim(), 384);
+        assert_eq!(neo4j_spec(768).embedding_dim(), 768);
+    }
+
+    #[test]
+    fn set_embedding_dim_writes_through_either_variant() {
+        // The dimension is only known once the embedder loads, so the spec
+        // is built with a placeholder and corrected in place. A setter that
+        // missed a variant would open a store sized for the wrong model.
+        let mut og = overgraph_spec(384);
+        og.set_embedding_dim(1024);
+        assert_eq!(og.embedding_dim(), 1024);
+
+        let mut neo = neo4j_spec(384);
+        neo.set_embedding_dim(1024);
+        assert_eq!(neo.embedding_dim(), 1024);
+    }
+
+    #[test]
+    fn setting_the_dimension_leaves_the_rest_of_the_spec_alone() {
+        let mut neo = neo4j_spec(384);
+        neo.set_embedding_dim(512);
+        match neo {
+            StoreSpec::Neo4j {
+                uri, user, database, ..
+            } => {
+                assert_eq!(uri, "bolt://localhost:7687");
+                assert_eq!(user, "neo4j");
+                assert_eq!(database, None);
+            }
+            _ => panic!("variant changed"),
+        }
+    }
 }

@@ -134,8 +134,15 @@ pub fn extract_docstring(node: &Node, source: &[u8]) -> Option<String> {
     let clean = text
         .lines()
         .filter_map(|l| {
-            let line = l.trim().trim_start_matches('*').trim();
-            if line.is_empty() || line.starts_with("/**") || line.starts_with("*/") {
+            // The comment markers are stripped rather than used to drop the
+            // whole line. Discarding any line starting with `/**` meant a
+            // single-line `/** Does the thing. */` — the most common JSDoc
+            // form there is — yielded nothing at all.
+            let line = l.trim();
+            let line = line.strip_prefix("/**").unwrap_or(line);
+            let line = line.strip_suffix("*/").unwrap_or(line);
+            let line = line.trim().trim_start_matches('*').trim();
+            if line.is_empty() {
                 None
             } else if line.starts_with("@param") {
                 let parts: Vec<&str> = line.splitn(2, '-').collect();

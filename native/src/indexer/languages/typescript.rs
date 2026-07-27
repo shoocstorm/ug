@@ -161,14 +161,32 @@ fn extract_exports_from_ast(node: &Node, source: &[u8]) -> Vec<ExportInfo> {
         match child.kind() {
             "export_clause" => collect_export_specifiers(&child, source, &mut exports),
             "re_export_statement" | "export_statement" => {
-                // Only treat this as a re-export when there's a `source`
-                // field; otherwise it's something like `export const x = …`
-                // which we surface as a regular symbol elsewhere.
-                if let Some(source_node) = child.child_by_field_name("source") {
-                    let re_export_path =
-                        get_node_text(Some(source_node), source).unwrap_or_default();
-                    if !re_export_path.is_empty() {
-                        collect_export_specifiers(&child, source, &mut exports);
+                // A re-export carries a `source`; its specifiers name what
+                // is being forwarded.
+                // Either form keeps its specifiers in an `export_clause`
+                // child rather than directly on the statement, so that is
+                // what gets walked. `export * from '…'` names nothing and
+                // contributes no specifiers.
+                if let Some(clause) = child_of_kind(&child, "export_clause") {
+                    collect_export_specifiers(&clause, source, &mut exports);
+                    continue;
+                }
+                // `export function f() {}` / `export default class X {}`.
+                //
+                // This arm used to be missing entirely: the comment said such
+                // a form was "surfaced as a regular symbol elsewhere", which
+                // is true of the *symbol* but left `FileNode.exports` empty
+                // for every TypeScript file — so the graph's `Exports` edges,
+                // and the classifier's export-shape fallback, had nothing to
+                // work with.
+                if let Some(decl) = child.child_by_field_name("declaration") {
+                    let is_default = child_of_kind(&child, "default").is_some();
+                    for name in declared_names(&decl, source) {
+                        exports.push(ExportInfo {
+                            name,
+                            alias: None,
+                            is_default,
+                        });
                     }
                 }
             }
@@ -176,6 +194,23 @@ fn extract_exports_from_ast(node: &Node, source: &[u8]) -> Vec<ExportInfo> {
         }
     }
     exports
+}
+
+/// The name(s) a declaration introduces. A `lexical_declaration` can bind
+/// several at once (`export const a = 1, b = 2`); everything else binds one.
+fn declared_names(decl: &Node, source: &[u8]) -> Vec<String> {
+    match decl.kind() {
+        "lexical_declaration" | "variable_declaration" => {
+            let mut cursor = decl.walk();
+            decl.named_children(&mut cursor)
+                .filter(|c| c.kind() == "variable_declarator")
+                .filter_map(|c| get_node_text(c.child_by_field_name("name"), source))
+                .collect()
+        }
+        _ => get_node_text(decl.child_by_field_name("name"), source)
+            .into_iter()
+            .collect(),
+    }
 }
 
 fn collect_export_specifiers(node: &Node, source: &[u8], exports: &mut Vec<ExportInfo>) {
@@ -288,27 +323,45 @@ fn extract_symbol_from_node(node: &Node, source: &[u8], out: &mut Vec<Symbol>) {
                 ..Default::default()
             });
         }
-        "variable_declaration" => {
-            let Some(name) = get_node_text(node.child_by_field_name("name"), source) else {
-                return;
-            };
-            out.push(Symbol {
-                id: format!("var:{}:{}", start, name),
-                name,
-                kind: "variable".to_string(),
-                file: String::new(),
-                start_line: start,
-                end_line: end,
-                docstring: extract_docstring(node, source),
-                signature: None,
-                imports: Vec::new(),
-                exports: Vec::new(),
-                extends: Vec::new(),
-                implements: Vec::new(),
-                calls: Vec::new(),
-                metrics: None,
-                ..Default::default()
-            });
+        // `const foo = () => …` and `let x = 1` at module level.
+        //
+        // `lexical_declaration` was absent here, and `variable_declaration`
+        // has no `name` field to read — so no `const`/`let`/`var` binding
+        // ever became a symbol. That is the *common* shape of a function in
+        // this language: `graph.rs` maps the `variable` kind onto a Function
+        // node precisely because of it, and had nothing to map.
+        //
+        // Restricted to top level on purpose. The walk descends into every
+        // body, so emitting a symbol per declaration anywhere would turn
+        // each local into a graph node and bury the module's real surface.
+        "lexical_declaration" | "variable_declaration" if is_top_level(node) => {
+            let mut cursor = node.walk();
+            let declarators: Vec<Node> = node
+                .named_children(&mut cursor)
+                .filter(|c| c.kind() == "variable_declarator")
+                .collect();
+            for decl in declarators {
+                let Some(name) = get_node_text(decl.child_by_field_name("name"), source) else {
+                    continue;
+                };
+                out.push(Symbol {
+                    id: format!("var:{}:{}", start, name),
+                    name,
+                    kind: "variable".to_string(),
+                    file: String::new(),
+                    start_line: start,
+                    end_line: end,
+                    docstring: extract_docstring(node, source),
+                    signature: None,
+                    imports: Vec::new(),
+                    exports: Vec::new(),
+                    extends: Vec::new(),
+                    implements: Vec::new(),
+                    calls: extract_function_calls(&decl, source),
+                    metrics: None,
+                    ..Default::default()
+                });
+            }
         }
         "type_alias_declaration" => {
             let Some(name) = get_node_text(node.child_by_field_name("name"), source) else {
@@ -344,26 +397,36 @@ fn extract_params(node: &Node, source: &[u8]) -> Vec<Param> {
 
     if let Some(params_node) = node.child_by_field_name("parameters") {
         let mut cursor = params_node.walk();
-        for child in params_node.children(&mut cursor) {
+        for child in params_node.named_children(&mut cursor) {
             if !matches!(
                 child.kind(),
                 "required_parameter" | "optional_parameter" | "rest_parameter"
             ) {
                 continue;
             }
-            let name =
-                get_node_text(child.child_by_field_name("name"), source).unwrap_or_default();
+            // The parameter's binding has no `name` field on this grammar —
+            // it is simply the first named child. Reading a `name` field
+            // always came back empty, which emptied the whole AST branch and
+            // sent every function to the regex fallback below; that regex
+            // reads any word inside the first `(...)`, so `f(a, b = 1)` came
+            // out with three parameters: `a`, `b` and `1`.
+            let Some(name) = get_node_text(child.named_child(0), source) else {
+                continue;
+            };
+            let name = name.trim().to_string();
             if name.is_empty() {
                 continue;
             }
-            let param_type = get_node_text(child.child_by_field_name("type"), source);
-            let optional = child.kind() == "optional_parameter";
-            let default = get_node_text(child.child_by_field_name("default"), source);
+            // `type_annotation` text carries its leading colon.
+            let param_type = get_node_text(child.child_by_field_name("type"), source)
+                .map(|t| t.trim_start_matches(':').trim().to_string())
+                .filter(|t| !t.is_empty());
+            let default = default_value(&child, source);
 
             params.push(Param {
                 name,
                 param_type,
-                optional,
+                optional: child.kind() == "optional_parameter" || default.is_some(),
                 default,
             });
         }
@@ -378,30 +441,98 @@ fn extract_params(node: &Node, source: &[u8]) -> Vec<Param> {
     params
 }
 
-/// Read the `superclass` field: `class Foo extends Bar { … }` -> `["Bar"]`.
+/// Is this declaration part of the module's own surface, rather than a
+/// local inside some body? Accepts both the bare form and the one wrapped
+/// in an `export_statement`.
+fn is_top_level(node: &Node) -> bool {
+    let Some(parent) = node.parent() else {
+        return true;
+    };
+    match parent.kind() {
+        "program" => true,
+        "export_statement" => parent
+            .parent()
+            .is_some_and(|grandparent| grandparent.kind() == "program"),
+        _ => false,
+    }
+}
+
+/// The initialiser of a defaulted parameter, i.e. whatever follows the `=`.
+///
+/// There is no `default` field to read: the grammar labels the `=` token
+/// itself `value`, so the initialiser is the named node that comes after it.
+fn default_value(param: &Node, source: &[u8]) -> Option<String> {
+    let mut cursor = param.walk();
+    let children: Vec<Node> = param.children(&mut cursor).collect();
+    let eq = children.iter().position(|c| c.kind() == "=")?;
+    children
+        .iter()
+        .skip(eq + 1)
+        .find(|c| c.is_named())
+        .and_then(|c| get_node_text(Some(*c), source))
+}
+
+/// `class Foo extends Bar { … }` -> `["Bar"]`, and
+/// `interface Foo extends A, B { … }` -> `["A", "B"]`.
+///
+/// The grammar exposes neither through a field. A class's heritage is an
+/// unnamed `class_heritage` child holding an `extends_clause`; an
+/// interface's is an `extends_type_clause`. This used to read a
+/// `superclass` field that no version emits, so **no TypeScript class or
+/// interface has ever contributed an `Extends` edge**.
 fn extract_extends(node: &Node, source: &[u8]) -> Vec<String> {
     let mut extends = Vec::new();
-    if let Some(superclass) = node.child_by_field_name("superclass") {
-        if let Some(name) = get_node_text(Some(superclass), source) {
-            extends.push(name);
+
+    if let Some(heritage) = child_of_kind(node, "class_heritage") {
+        if let Some(clause) = child_of_kind(&heritage, "extends_clause") {
+            push_heritage_types(&clause, source, &mut extends);
         }
+    }
+    if let Some(clause) = child_of_kind(node, "extends_type_clause") {
+        push_heritage_types(&clause, source, &mut extends);
     }
     extends
 }
 
-/// Read the `protocols` field: `class Foo implements I1, I2 { … }` ->
-/// `["I1", "I2"]`.
+/// `class Foo implements I1, I2 { … }` -> `["I1", "I2"]`.
 fn extract_implements(node: &Node, source: &[u8]) -> Vec<String> {
     let mut implements = Vec::new();
-    if let Some(protocols) = node.child_by_field_name("protocols") {
-        let mut cursor = protocols.walk();
-        for child in protocols.children(&mut cursor) {
-            if let Some(name) = get_node_text(Some(child), source) {
-                implements.push(name);
-            }
+    if let Some(heritage) = child_of_kind(node, "class_heritage") {
+        if let Some(clause) = child_of_kind(&heritage, "implements_clause") {
+            push_heritage_types(&clause, source, &mut implements);
         }
     }
     implements
+}
+
+fn child_of_kind<'a>(node: &Node<'a>, kind: &str) -> Option<Node<'a>> {
+    let mut cursor = node.walk();
+    let found = node.children(&mut cursor).find(|c| c.kind() == kind);
+    found
+}
+
+/// Collect the type names named by an `extends` / `implements` clause.
+///
+/// Only named children are walked, so the keyword and the commas stay out.
+/// A parameterised supertype (`extends Base<T>`) reduces to `Base`: the
+/// graph resolves supertypes by declared name, and the generic form matches
+/// none of them.
+fn push_heritage_types(clause: &Node, source: &[u8], out: &mut Vec<String>) {
+    let mut cursor = clause.walk();
+    for child in clause.named_children(&mut cursor) {
+        // `type_arguments` is a sibling of the name inside a `generic_type`,
+        // and also appears directly under an `extends_clause`.
+        if child.kind() == "type_arguments" {
+            continue;
+        }
+        let Some(text) = get_node_text(Some(child), source) else {
+            continue;
+        };
+        let base = text.split('<').next().unwrap_or(&text).trim();
+        if !base.is_empty() && !out.iter().any(|e| e == base) {
+            out.push(base.to_string());
+        }
+    }
 }
 
 /// Pull property and method signatures out of an interface body. Currently
@@ -498,4 +629,323 @@ fn extract_type_refs(node: &Node, source: &[u8]) -> Vec<TypeRef> {
     }
 
     type_refs
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(src: &str) -> (Vec<Symbol>, Vec<ImportInfo>, Vec<ExportInfo>) {
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(tree_sitter_typescript::language_typescript())
+            .unwrap();
+        let tree = parser.parse(src, None).unwrap();
+        let root = tree.root_node();
+        let idx = TypeScriptIndexer;
+        (
+            idx.extract_symbols(src.as_bytes(), root),
+            idx.extract_imports(src.as_bytes(), root),
+            idx.extract_exports(src.as_bytes(), root),
+        )
+    }
+
+    fn find<'a>(symbols: &'a [Symbol], name: &str) -> &'a Symbol {
+        symbols.iter().find(|s| s.name == name).unwrap_or_else(|| {
+            let all: Vec<&str> = symbols.iter().map(|s| s.name.as_str()).collect();
+            panic!("no symbol named {name} in {all:?}")
+        })
+    }
+
+    fn names(symbols: &[Symbol]) -> Vec<&str> {
+        symbols.iter().map(|s| s.name.as_str()).collect()
+    }
+
+    // ---- registration ----------------------------------------------------
+
+    #[test]
+    fn one_grammar_serves_all_four_extensions() {
+        // The TS grammar is a superset of JS, which is why `.js` and `.jsx`
+        // route here rather than to a parser of their own.
+        assert_eq!(TypeScriptIndexer.name(), "typescript");
+        assert_eq!(TypeScriptIndexer.extensions(), &["ts", "tsx", "js", "jsx"]);
+    }
+
+    // ---- symbols ---------------------------------------------------------
+
+    #[test]
+    fn a_function_carries_its_signature_and_metrics() {
+        let (symbols, _, _) = parse(
+            r#"
+function greet(name: string, times = 1): string {
+    if (times) {
+        for (const t of []) { emit(t); }
+    }
+    return name;
+}
+"#,
+        );
+        let f = find(&symbols, "greet");
+        assert_eq!(f.kind, "function_declaration");
+
+        let sig = f.signature.as_ref().expect("signature");
+        // Regression: the AST branch read a `name` field the grammar does
+        // not expose, so every function fell through to the loose regex —
+        // which read `1` in `times = 1` as a third parameter.
+        assert_eq!(
+            sig.params.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+            vec!["name", "times"]
+        );
+        assert_eq!(sig.params[0].param_type.as_deref(), Some("string"));
+        assert_eq!(sig.params[1].default.as_deref(), Some("1"));
+        assert!(sig.params[1].optional, "a default makes it optional");
+        assert_eq!(sig.return_type.as_deref(), Some("string"));
+
+        let m = f.metrics.as_ref().unwrap();
+        assert_eq!(m.params, 2);
+        assert_eq!(m.max_nesting, 2, "a for inside an if is depth 2");
+    }
+
+    #[test]
+    fn optional_and_rest_parameters_are_read() {
+        let (symbols, _, _) = parse("function f(a?: number, ...rest: string[]) {}\n");
+        let sig = find(&symbols, "f").signature.as_ref().unwrap();
+        // The rest parameter keeps its spread so the rendered signature
+        // reads the way the source does.
+        assert_eq!(
+            sig.params.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+            vec!["a", "...rest"]
+        );
+        assert!(sig.params[0].optional);
+        assert_eq!(sig.params[0].param_type.as_deref(), Some("number"));
+        assert_eq!(sig.params[1].param_type.as_deref(), Some("string[]"));
+    }
+
+    #[test]
+    fn a_class_records_what_it_extends_and_implements() {
+        // Regression: `extends` read a `superclass` field that no version of
+        // the grammar emits, so no TypeScript class ever produced an
+        // `Extends` edge. The heritage is an unnamed `class_heritage` child.
+        let (symbols, _, _) = parse("class Svc extends Base implements Api, Closeable {}\n");
+        let c = find(&symbols, "Svc");
+        assert_eq!(c.kind, "class");
+        assert_eq!(c.extends, vec!["Base"]);
+        assert_eq!(c.implements, vec!["Api", "Closeable"]);
+    }
+
+    #[test]
+    fn a_parameterised_supertype_reduces_to_its_base_name() {
+        // `Base<T>` matches no declared class, so the generic argument has
+        // to come off or the edge is dropped.
+        let (symbols, _, _) = parse("class A extends Base<Order> implements Api<string> {}\n");
+        let c = find(&symbols, "A");
+        assert_eq!(c.extends, vec!["Base"]);
+        assert_eq!(c.implements, vec!["Api"]);
+    }
+
+    #[test]
+    fn an_interface_records_its_extends_list() {
+        let (symbols, _, _) = parse("interface Api extends Base, Other { go(): void }\n");
+        let i = find(&symbols, "Api");
+        assert_eq!(i.kind, "interface");
+        assert_eq!(i.extends, vec!["Base", "Other"]);
+    }
+
+    #[test]
+    fn a_class_with_no_heritage_records_none() {
+        let (symbols, _, _) = parse("class Plain { run() {} }\n");
+        let c = find(&symbols, "Plain");
+        assert!(c.extends.is_empty() && c.implements.is_empty());
+    }
+
+    #[test]
+    fn a_top_level_arrow_const_becomes_a_symbol() {
+        // The common shape of a function in this language. `graph.rs` maps
+        // the `variable` kind onto a Function node precisely for it, and
+        // until now had nothing to map: no const binding was ever emitted.
+        let (symbols, _, _) = parse("export const handler = (n: number) => n + 1;\n");
+        let v = find(&symbols, "handler");
+        assert_eq!(v.kind, "variable");
+    }
+
+    #[test]
+    fn one_declaration_binding_several_names_yields_several_symbols() {
+        let (symbols, _, _) = parse("const a = 1, b = 2;\n");
+        assert!(names(&symbols).contains(&"a"));
+        assert!(names(&symbols).contains(&"b"));
+    }
+
+    #[test]
+    fn a_local_declaration_is_not_a_module_symbol() {
+        // The walk descends into every body; emitting a symbol per local
+        // would turn each temporary into a graph node and bury the real
+        // module surface.
+        let (symbols, _, _) = parse(
+            r#"
+export const top = 1;
+function outer() {
+    const local = 2;
+    let alsoLocal = 3;
+    return local + alsoLocal;
+}
+"#,
+        );
+        assert!(names(&symbols).contains(&"top"));
+        assert!(!names(&symbols).contains(&"local"), "{:?}", names(&symbols));
+        assert!(!names(&symbols).contains(&"alsoLocal"));
+    }
+
+    #[test]
+    fn a_const_records_the_calls_in_its_initialiser() {
+        let (symbols, _, _) = parse("export const wired = build(makeDeps());\n");
+        let calls = &find(&symbols, "wired").calls;
+        assert!(calls.iter().any(|c| c == "build"), "{calls:?}");
+        assert!(calls.iter().any(|c| c == "makeDeps"), "{calls:?}");
+    }
+
+    #[test]
+    fn methods_classes_interfaces_and_type_aliases_all_surface() {
+        let (symbols, _, _) = parse(
+            r#"
+class Svc { run() { helper(); } }
+interface Api { go(): void }
+type Alias = string;
+"#,
+        );
+        assert_eq!(find(&symbols, "Svc").kind, "class");
+        assert_eq!(find(&symbols, "run").kind, "method_definition");
+        assert_eq!(find(&symbols, "Api").kind, "interface");
+        assert_eq!(find(&symbols, "Alias").kind, "type");
+        assert_eq!(find(&symbols, "run").calls, vec!["helper"]);
+    }
+
+    #[test]
+    fn a_jsdoc_block_becomes_the_docstring() {
+        let (symbols, _, _) = parse(
+            r#"
+/** Greets a person. */
+function greet() {}
+"#,
+        );
+        assert_eq!(
+            find(&symbols, "greet").docstring.as_deref(),
+            Some("Greets a person.")
+        );
+    }
+
+    #[test]
+    fn typescript_symbols_carry_no_java_only_metadata() {
+        // The precise-resolution path in `graph.rs` keys off the presence of
+        // a qualified name; a stray one here would route TS through it.
+        let (symbols, _, _) = parse("class C { m() {} }\nexport const x = 1;\n");
+        for s in &symbols {
+            assert!(s.qualified_name.is_none(), "{}", s.name);
+            assert!(s.annotations.is_empty(), "{}", s.name);
+            assert!(s.call_refs.is_empty(), "{}", s.name);
+            assert!(s.route.is_none(), "{}", s.name);
+        }
+    }
+
+    // ---- imports ---------------------------------------------------------
+
+    #[test]
+    fn named_default_and_namespace_imports_are_grouped_by_path() {
+        let (_, imports, _) = parse(
+            r#"
+import { a, b as c } from './x';
+import def from './y';
+import * as ns from './z';
+"#,
+        );
+        let by_path: HashMap<&str, Vec<&str>> = imports
+            .iter()
+            .map(|i| {
+                (
+                    i.path.as_str(),
+                    i.imported.iter().map(|x| x.name.as_str()).collect(),
+                )
+            })
+            .collect();
+        // An aliased import records the original name, which is what the
+        // exporting file actually declares.
+        assert_eq!(by_path["./x"], vec!["a", "b"]);
+        assert_eq!(by_path["./y"], vec!["def"]);
+        assert_eq!(by_path["./z"], vec!["ns"]);
+    }
+
+    #[test]
+    fn a_type_only_import_is_still_a_dependency() {
+        let (_, imports, _) = parse("import type { T } from './t';\n");
+        assert_eq!(imports.len(), 1);
+        assert_eq!(imports[0].path, "./t");
+        assert_eq!(imports[0].imported[0].name, "T");
+    }
+
+    #[test]
+    fn both_quote_styles_are_accepted() {
+        let (_, imports, _) = parse("import { a } from \"./double\";\n");
+        assert_eq!(imports[0].path, "./double");
+    }
+
+    #[test]
+    fn a_file_with_no_imports_yields_none() {
+        let (_, imports, _) = parse("export function f() {}\n");
+        assert!(imports.is_empty());
+    }
+
+    #[test]
+    fn invalid_utf8_yields_no_imports_rather_than_panicking() {
+        assert!(extract_imports_via_regex(&[0xff, 0xfe, 0x00]).is_empty());
+    }
+
+    // ---- exports ---------------------------------------------------------
+
+    #[test]
+    fn an_exported_declaration_is_recorded() {
+        // Regression: only re-export forms were handled, so
+        // `FileNode.exports` was empty for essentially every real module —
+        // leaving the graph's `Exports` edges and the classifier's
+        // export-shape fallback with nothing to read.
+        let (_, _, exports) = parse(
+            r#"
+export function f() {}
+export class C {}
+export interface I {}
+export type T = string;
+export const v = 1;
+"#,
+        );
+        let got: Vec<&str> = exports.iter().map(|e| e.name.as_str()).collect();
+        for expected in ["f", "C", "I", "T", "v"] {
+            assert!(got.contains(&expected), "{expected} missing from {got:?}");
+        }
+        assert!(exports.iter().all(|e| !e.is_default));
+    }
+
+    #[test]
+    fn a_default_export_is_flagged() {
+        let (_, _, exports) = parse("export default function main() {}\n");
+        let e = exports.iter().find(|e| e.name == "main").expect("main");
+        assert!(e.is_default);
+    }
+
+    #[test]
+    fn an_export_clause_lists_each_specifier() {
+        let (_, _, exports) = parse("const a = 1;\nconst b = 2;\nexport { a, b };\n");
+        let got: Vec<&str> = exports.iter().map(|e| e.name.as_str()).collect();
+        assert!(got.contains(&"a") && got.contains(&"b"), "{got:?}");
+    }
+
+    #[test]
+    fn a_re_export_keeps_its_specifiers() {
+        let (_, _, exports) = parse("export { thing } from './other';\n");
+        assert!(exports.iter().any(|e| e.name == "thing"), "{exports:?}");
+    }
+
+    #[test]
+    fn a_module_that_exports_nothing_reports_nothing() {
+        let (_, _, exports) = parse("function private_() {}\n");
+        assert!(exports.is_empty());
+    }
 }

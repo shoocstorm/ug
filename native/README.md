@@ -30,6 +30,7 @@ ug traverse file:src/index.ts               # K-hop BFS over graph edges
 cargo test                    # Run tests
 cargo build                   # Debug build
 cargo build --release         # Release build
+cargo llvm-cov --html         # test coverage
 ```
 
 Output: `target/release/ug` (CLI + MCP + server) and `target/release/ug-app` (desktop shell).

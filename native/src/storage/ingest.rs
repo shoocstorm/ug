@@ -610,3 +610,437 @@ fn current_unix_secs() -> i64 {
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::store::{
+        Direction, NodeFilter, TraversalPage,
+    };
+    use crate::types::{GraphEdge, GraphEdgeType, GraphNodeType};
+    use std::sync::Mutex;
+
+    // ---- fixtures --------------------------------------------------------
+
+    fn node(id: &str) -> GraphNode {
+        GraphNode {
+            id: id.into(),
+            name: id.into(),
+            node_type: GraphNodeType::Function,
+            file: Some("src/a.ts".into()),
+            start_line: Some(1),
+            end_line: Some(9),
+            ..Default::default()
+        }
+    }
+
+    fn edge(source: &str, target: &str, edge_type: GraphEdgeType) -> GraphEdge {
+        GraphEdge {
+            source: source.into(),
+            target: target.into(),
+            edge_type,
+        }
+    }
+
+    fn graph(nodes: Vec<GraphNode>, edges: Vec<GraphEdge>) -> GraphData {
+        GraphData {
+            nodes,
+            edges,
+            stats: None,
+        }
+    }
+
+    fn stored(n: &GraphNode) -> NodeRow {
+        NodeRow {
+            id: n.id.clone(),
+            name: n.name.clone(),
+            node_type: format!("{:?}", n.node_type),
+            description: n.docstring.clone().unwrap_or_default(),
+            file: n.file.clone().unwrap_or_default(),
+            start_line: n.start_line.unwrap_or(0),
+            end_line: n.end_line.unwrap_or(0),
+            last_update_at: 0,
+            node_text: String::new(),
+            vector: Vec::new(),
+            code: String::new(),
+            file_hash: String::new(),
+        }
+    }
+
+    /// A store that records what it was asked to prune and does nothing
+    /// else. Every other method is unreachable in these tests; reaching one
+    /// is itself the failure.
+    #[derive(Default)]
+    struct RecordingStore {
+        pruned: Mutex<Vec<HashSet<String>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl KnowledgeStore for RecordingStore {
+        fn embedding_dim(&self) -> u32 {
+            8
+        }
+        fn supports_native_ppr(&self) -> bool {
+            false
+        }
+        fn backend_name(&self) -> &'static str {
+            "recording"
+        }
+        async fn prune_nodes_absent_from(
+            &self,
+            keep: &HashSet<String>,
+        ) -> Result<usize, StoreError> {
+            self.pruned.lock().unwrap().push(keep.clone());
+            Ok(keep.len())
+        }
+        async fn upsert_nodes(&self, _rows: &[NodeRow]) -> Result<(), StoreError> {
+            unreachable!("upsert_nodes")
+        }
+        async fn upsert_edges(&self, _rows: &[EdgeRow]) -> Result<(), StoreError> {
+            unreachable!("upsert_edges")
+        }
+        async fn vector_search(
+            &self,
+            _q: Vec<f32>,
+            _k: usize,
+            _f: Option<&NodeFilter>,
+        ) -> Result<Vec<(NodeRow, f32)>, StoreError> {
+            unreachable!("vector_search")
+        }
+        async fn hybrid_search(
+            &self,
+            _q: Vec<f32>,
+            _s: Vec<(u32, f32)>,
+            _t: &str,
+            _k: usize,
+            _f: Option<&NodeFilter>,
+        ) -> Result<Vec<(NodeRow, f32)>, StoreError> {
+            unreachable!("hybrid_search")
+        }
+        async fn traverse(
+            &self,
+            _s: &str,
+            _h: u32,
+            _e: Option<&[String]>,
+            _d: Direction,
+        ) -> Result<TraversalPage, StoreError> {
+            unreachable!("traverse")
+        }
+        async fn nodes_by_ids(&self, _ids: &[String]) -> Result<Vec<NodeRow>, StoreError> {
+            unreachable!("nodes_by_ids")
+        }
+        async fn fetch_node(&self, _key: &str) -> Result<Option<NodeRow>, StoreError> {
+            unreachable!("fetch_node")
+        }
+        async fn count_nodes(&self) -> Result<usize, StoreError> {
+            unreachable!("count_nodes")
+        }
+        async fn count_edges(&self) -> Result<usize, StoreError> {
+            unreachable!("count_edges")
+        }
+        async fn personalized_pagerank(
+            &self,
+            _seeds: &[String],
+            _d: Direction,
+            _e: Option<&[String]>,
+            _r: f32,
+            _i: usize,
+            _m: Option<usize>,
+        ) -> Result<Vec<(String, f32)>, StoreError> {
+            unreachable!("personalized_pagerank")
+        }
+    }
+
+    // ---- is_prose_file ---------------------------------------------------
+
+    #[test]
+    fn prose_extensions_are_recognised_case_insensitively() {
+        for p in ["README.md", "docs/a.MD", "notes.mdx", "book.markdown", "A.MarkDown"] {
+            assert!(is_prose_file(p), "{p} should be prose");
+        }
+    }
+
+    #[test]
+    fn code_and_extensionless_paths_are_not_prose() {
+        // Getting this wrong in the other direction is what matters: a code
+        // file misread as prose loses its comments from the embedding text,
+        // which for an undocumented symbol is all the prose it had.
+        for p in [
+            "src/a.ts",
+            "src/a.rs",
+            "src/a.java",
+            "Makefile",
+            "",
+            "src/markdown/parser.ts",
+            "a.md.ts",
+        ] {
+            assert!(!is_prose_file(p), "{p} should not be prose");
+        }
+    }
+
+    #[test]
+    fn a_dotfile_without_a_further_extension_is_not_prose() {
+        // `rsplit_once('.')` on ".md" yields ("", "md"), so this pins that a
+        // bare dotfile named like an extension isn't treated as a document.
+        assert!(is_prose_file(".md"));
+        assert!(!is_prose_file("md"));
+    }
+
+    // ---- graph_id_set / prune_to_graph -----------------------------------
+
+    #[test]
+    fn graph_id_set_collects_every_id_once() {
+        let g = graph(vec![node("a"), node("b"), node("a")], vec![]);
+        let ids = graph_id_set(&g);
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains("a") && ids.contains("b"));
+    }
+
+    #[test]
+    fn graph_id_set_of_an_empty_graph_is_empty() {
+        assert!(graph_id_set(&graph(vec![], vec![])).is_empty());
+    }
+
+    #[tokio::test]
+    async fn pruning_an_empty_graph_is_refused_without_touching_the_store() {
+        // The whole point of the guard: an empty node list means indexing
+        // produced nothing — a bad path, a failed parse — not "the repo is
+        // now empty". Passing it through would erase the entire store.
+        let store = RecordingStore::default();
+        let pruned = prune_to_graph(&store, &graph(vec![], vec![])).await.unwrap();
+        assert_eq!(pruned, 0);
+        assert!(
+            store.pruned.lock().unwrap().is_empty(),
+            "the store must not be asked to prune at all"
+        );
+    }
+
+    #[tokio::test]
+    async fn pruning_a_populated_graph_passes_its_complete_id_set_through() {
+        let store = RecordingStore::default();
+        let g = graph(vec![node("a"), node("b")], vec![]);
+        let pruned = prune_to_graph(&store, &g).await.unwrap();
+
+        assert_eq!(pruned, 2);
+        let calls = store.pruned.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0], graph_id_set(&g));
+    }
+
+    // ---- build_edge_rows -------------------------------------------------
+
+    #[test]
+    fn an_edge_row_id_is_the_triple_that_makes_it_unique() {
+        // Source and target alone don't identify an edge — two nodes can be
+        // related more than one way — so the type has to be in the key or
+        // the second edge overwrites the first on upsert.
+        let g = graph(
+            vec![],
+            vec![
+                edge("a", "b", GraphEdgeType::Calls),
+                edge("a", "b", GraphEdgeType::References),
+            ],
+        );
+        let rows = build_edge_rows(&g);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].id, "a|Calls|b");
+        assert_eq!(rows[1].id, "a|References|b");
+        assert_ne!(rows[0].id, rows[1].id);
+    }
+
+    #[test]
+    fn edge_rows_carry_the_variant_name_as_their_type() {
+        // The string form is what `types_registry` maps to a stable id, so
+        // it has to match the enum variant exactly.
+        let g = graph(
+            vec![],
+            vec![
+                edge("a", "b", GraphEdgeType::Overrides),
+                edge("c", "d", GraphEdgeType::DependsOn),
+            ],
+        );
+        let rows = build_edge_rows(&g);
+        assert_eq!(rows[0].edge_type, "Overrides");
+        assert_eq!(rows[1].edge_type, "DependsOn");
+        assert_eq!(
+            crate::storage::types_registry::edge_type_to_id("Overrides"),
+            crate::storage::types_registry::EDGE_TYPE_OVERRIDES,
+            "the rendered name must round-trip through the registry"
+        );
+    }
+
+    #[test]
+    fn edge_rows_preserve_order_endpoints_and_leave_properties_empty() {
+        let g = graph(vec![], vec![edge("src", "dst", GraphEdgeType::Contains)]);
+        let rows = build_edge_rows(&g);
+        assert_eq!(rows[0].source, "src");
+        assert_eq!(rows[0].target, "dst");
+        assert!(rows[0].properties.is_empty());
+    }
+
+    #[test]
+    fn a_graph_with_no_edges_produces_no_rows() {
+        assert!(build_edge_rows(&graph(vec![node("a")], vec![])).is_empty());
+    }
+
+    // ---- stored_row_matches ----------------------------------------------
+
+    #[test]
+    fn an_identical_row_matches_and_skips_the_upsert() {
+        let n = node("a");
+        assert!(stored_row_matches(&stored(&n), &n, "Function", None));
+    }
+
+    #[test]
+    fn bookkeeping_fields_do_not_count_as_a_change() {
+        // `last_update_at`, `node_text` and `vector` are excluded on
+        // purpose: including them would make every node look changed on
+        // every run, which is exactly what incremental ingest exists to
+        // avoid.
+        let n = node("a");
+        let mut prev = stored(&n);
+        prev.last_update_at = 1_700_000_000;
+        prev.node_text = "anything".into();
+        prev.vector = vec![0.5; 8];
+        assert!(stored_row_matches(&prev, &n, "Function", None));
+    }
+
+    #[test]
+    fn each_compared_field_on_its_own_forces_a_rewrite() {
+        let n = node("a");
+        type Mutate = fn(&mut NodeRow);
+        let cases: &[(&str, Mutate)] = &[
+            ("name", |r| r.name = "other".into()),
+            ("description", |r| r.description = "doc".into()),
+            ("file", |r| r.file = "src/b.ts".into()),
+            ("start_line", |r| r.start_line = 2),
+            ("end_line", |r| r.end_line = 99),
+        ];
+        for (label, mutate) in cases {
+            let mut prev = stored(&n);
+            mutate(&mut prev);
+            assert!(
+                !stored_row_matches(&prev, &n, "Function", None),
+                "a changed {label} must not match"
+            );
+        }
+        // The type is passed in rather than read off the row.
+        assert!(!stored_row_matches(&stored(&n), &n, "Class", None));
+    }
+
+    #[test]
+    fn a_node_missing_optional_fields_compares_against_empty_defaults() {
+        // A File node carries no line range and no docstring; those must
+        // compare equal to the stored zeros rather than looking changed.
+        let bare = GraphNode {
+            id: "file:src/a.ts".into(),
+            name: "src/a.ts".into(),
+            node_type: GraphNodeType::File,
+            ..Default::default()
+        };
+        assert!(stored_row_matches(&stored(&bare), &bare, "File", None));
+    }
+
+    #[test]
+    fn an_edited_body_forces_a_rewrite_even_when_the_text_is_identical() {
+        // This is the case incremental ingest exists to catch cheaply: the
+        // body changed, so `code` must be rewritten, but `node_text` didn't,
+        // so it must not be re-embedded.
+        let n = node("a");
+        let prev = stored(&n);
+        let captured = CapturedCode {
+            code: "fn a() { changed(); }".into(),
+            file_hash: "hash-2".into(),
+        };
+        assert!(!stored_row_matches(&prev, &n, "Function", Some(&captured)));
+    }
+
+    #[test]
+    fn a_matching_capture_still_matches() {
+        let n = node("a");
+        let mut prev = stored(&n);
+        prev.code = "fn a() {}".into();
+        prev.file_hash = "hash-1".into();
+        let captured = CapturedCode {
+            code: "fn a() {}".into(),
+            file_hash: "hash-1".into(),
+        };
+        assert!(stored_row_matches(&prev, &n, "Function", Some(&captured)));
+    }
+
+    #[test]
+    fn a_failed_capture_is_ignored_rather_than_treated_as_a_change() {
+        // If a read fails we pass `None`; letting that count as a diff would
+        // make every node look changed on every run.
+        let n = node("a");
+        let mut prev = stored(&n);
+        prev.code = "fn a() {}".into();
+        prev.file_hash = "hash-1".into();
+        assert!(stored_row_matches(&prev, &n, "Function", None));
+    }
+
+    // ---- budget_for ------------------------------------------------------
+
+    /// A remote embedder builds nothing but an HTTP client — no model
+    /// download, no network — so it is the cheap way to exercise anything
+    /// that only reads the config.
+    fn embedder_for_model(model: &str) -> Embedder {
+        let cfg = crate::storage::embed::EmbedderConfig {
+            model: model.to_string(),
+            ..Default::default()
+        };
+        Embedder::remote(cfg).expect("remote embedder builds without I/O")
+    }
+
+    #[test]
+    fn the_budget_follows_the_configured_model() {
+        // The point of deriving this per model: a 512-token model and an
+        // 8192-token one must not share a description cap, or one truncates
+        // needlessly while the other overflows and gets silently cut.
+        let small = budget_for(&embedder_for_model("bge-small-en-v1.5"));
+        let large = budget_for(&embedder_for_model("nomic-embed-text-v1.5"));
+
+        assert_eq!(small.window_tokens, Some(512));
+        assert_eq!(large.window_tokens, Some(8192));
+        assert!(
+            large.description_chars > small.description_chars,
+            "{} should exceed {}",
+            large.description_chars,
+            small.description_chars
+        );
+        assert_eq!(small.source, crate::limits::BudgetSource::Auto);
+    }
+
+    #[test]
+    fn an_unknown_model_falls_back_to_the_fixed_budget() {
+        let b = budget_for(&embedder_for_model("some-model-we-have-never-seen"));
+        assert_eq!(b.window_tokens, None);
+        assert_eq!(b.source, crate::limits::BudgetSource::Default);
+        assert_eq!(b.description_chars, EmbedBudget::default().description_chars);
+    }
+
+    #[test]
+    fn budget_for_never_passes_an_override() {
+        // The lib-side entry points take no `--section-cap`; only the binary
+        // resolves one. If this ever started passing `Some(..)` the flag
+        // would apply where no flag was given.
+        for model in ["bge-small-en-v1.5", "unknown"] {
+            assert_ne!(
+                budget_for(&embedder_for_model(model)).source,
+                crate::limits::BudgetSource::Flag
+            );
+        }
+    }
+
+    // ---- current_unix_secs -----------------------------------------------
+
+    #[test]
+    fn the_clock_returns_a_plausible_and_monotonic_timestamp() {
+        let t = current_unix_secs();
+        // Later than 2020-01-01 and before 2100 — enough to catch a unit
+        // mix-up (millis, nanos) or the `unwrap_or(0)` fallback firing.
+        assert!(t > 1_577_836_800, "suspiciously early: {t}");
+        assert!(t < 4_102_444_800, "suspiciously late: {t}");
+        assert!(current_unix_secs() >= t);
+    }
+}

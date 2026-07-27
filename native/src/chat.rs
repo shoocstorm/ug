@@ -1073,6 +1073,303 @@ mod tests {
         assert_eq!(msgs[0].content, DEFAULT_SYSTEM_PROMPT);
         assert!(msgs[1].content.starts_with("No retrieved context"));
     }
+
+    // ---- ChatConfig::with_overrides -------------------------------------
+
+    #[test]
+    fn with_overrides_of_nothing_is_the_default_config() {
+        let cfg = ChatConfig::with_overrides(None, None, None, None, None, None);
+        let d = ChatConfig::default();
+        assert_eq!(cfg.base_url, d.base_url);
+        assert_eq!(cfg.api_key, d.api_key);
+        assert_eq!(cfg.model, d.model);
+        assert_eq!(cfg.temperature, d.temperature);
+        assert_eq!(cfg.max_tokens, d.max_tokens);
+        assert_eq!(cfg.timeout_secs, d.timeout_secs);
+        assert!(cfg.extra_body.is_none());
+    }
+
+    #[test]
+    fn each_override_is_applied_independently() {
+        // A setter wired to the wrong field is invisible until someone's
+        // `--model` silently changes their base URL, so check one at a time
+        // against everything else staying default.
+        let d = ChatConfig::default();
+
+        let c = ChatConfig::with_overrides(Some("http://x/v1".into()), None, None, None, None, None);
+        assert_eq!(c.base_url, "http://x/v1");
+        assert_eq!(c.model, d.model);
+
+        let c = ChatConfig::with_overrides(None, Some("sk-abc".into()), None, None, None, None);
+        assert_eq!(c.api_key, "sk-abc");
+        assert_eq!(c.base_url, d.base_url);
+
+        let c = ChatConfig::with_overrides(None, None, Some("qwen3".into()), None, None, None);
+        assert_eq!(c.model, "qwen3");
+
+        let c = ChatConfig::with_overrides(None, None, None, Some(0.9), None, None);
+        assert_eq!(c.temperature, 0.9);
+        assert_eq!(c.max_tokens, d.max_tokens);
+
+        let c = ChatConfig::with_overrides(None, None, None, None, Some(256), None);
+        assert_eq!(c.max_tokens, 256);
+
+        let c = ChatConfig::with_overrides(None, None, None, None, None, Some(5));
+        assert_eq!(c.timeout_secs, 5);
+        assert_eq!(c.temperature, d.temperature);
+    }
+
+    #[test]
+    fn zero_valued_overrides_are_honoured_rather_than_ignored() {
+        // `Some(0)` is a deliberate choice (a greedy temperature, a hard
+        // timeout); treating it as "unset" would silently ignore the flag.
+        let c = ChatConfig::with_overrides(None, None, None, Some(0.0), Some(0), Some(0));
+        assert_eq!(c.temperature, 0.0);
+        assert_eq!(c.max_tokens, 0);
+        assert_eq!(c.timeout_secs, 0);
+    }
+
+    #[test]
+    fn an_empty_string_override_still_replaces_the_default() {
+        // Passing `Some("")` is how a caller clears an API key for a local
+        // endpoint that rejects one.
+        let c = ChatConfig::with_overrides(None, Some(String::new()), None, None, None, None);
+        assert_eq!(c.api_key, "");
+    }
+
+    // ---- no_think_body / fast_client -------------------------------------
+
+    #[test]
+    fn no_think_body_sends_every_spelling_of_the_off_switch() {
+        // Providers disagree on the field name and ignore what they don't
+        // recognise, so sending all of them is the point. Dropping one
+        // silently reintroduces minutes of deliberation on that provider.
+        let m = no_think_body();
+        assert_eq!(
+            m.get("chat_template_kwargs"),
+            Some(&serde_json::json!({ "enable_thinking": false }))
+        );
+        assert_eq!(m.get("reasoning_effort"), Some(&serde_json::json!("low")));
+    }
+
+    #[test]
+    fn fast_client_switches_deliberation_off_and_keeps_everything_else() {
+        let base = ChatConfig::with_overrides(
+            Some("http://x/v1".into()),
+            Some("k".into()),
+            Some("m".into()),
+            Some(0.3),
+            Some(99),
+            Some(7),
+        );
+        let client = ChatClient::new(base).expect("client");
+        let fast = fast_client(&client).expect("a client with no extra_body gets a fast twin");
+
+        assert_eq!(fast.config().extra_body.as_ref(), Some(&no_think_body()));
+        assert_eq!(fast.config().base_url, "http://x/v1");
+        assert_eq!(fast.config().model, "m");
+        assert_eq!(fast.config().max_tokens, 99);
+        assert_eq!(fast.config().timeout_secs, 7);
+        // The original is untouched.
+        assert!(client.config().extra_body.is_none());
+    }
+
+    #[test]
+    fn an_explicit_extra_body_is_never_overridden() {
+        // The caller already told the provider how to behave; replacing that
+        // with our guess would override an explicit choice.
+        let mut cfg = ChatConfig::default();
+        let mut custom = serde_json::Map::new();
+        custom.insert("reasoning_effort".into(), serde_json::json!("high"));
+        cfg.extra_body = Some(custom);
+
+        let client = ChatClient::new(cfg).expect("client");
+        assert!(fast_client(&client).is_none());
+    }
+
+    // ---- compact_args ----------------------------------------------------
+
+    #[test]
+    fn compact_args_renders_sorted_key_value_pairs() {
+        // Sorted so the same call always prints the same way — an unsorted
+        // map iteration makes the progress feed reshuffle between runs.
+        let args = serde_json::json!({ "query": "auth", "k": 5, "deep": true });
+        assert_eq!(compact_args(&args), "deep=true k=5 query=auth");
+    }
+
+    #[test]
+    fn compact_args_unquotes_strings_but_not_other_values() {
+        let args = serde_json::json!({ "s": "plain", "n": 1.5, "arr": ["a"], "nul": null });
+        let out = compact_args(&args);
+        assert!(out.contains("s=plain"), "{out}");
+        assert!(out.contains("n=1.5"), "{out}");
+        assert!(out.contains(r#"arr=["a"]"#), "{out}");
+        assert!(out.contains("nul=null"), "{out}");
+    }
+
+    #[test]
+    fn compact_args_clips_each_value_to_forty_chars() {
+        let args = serde_json::json!({ "q": "x".repeat(100) });
+        let out = compact_args(&args);
+        assert_eq!(out, format!("q={}", "x".repeat(40)));
+    }
+
+    #[test]
+    fn compact_args_of_a_non_object_is_empty() {
+        // Tool arguments arrive as whatever the model emitted, which is not
+        // always the object the schema asked for.
+        assert_eq!(compact_args(&serde_json::json!([1, 2])), "");
+        assert_eq!(compact_args(&serde_json::json!("bare")), "");
+        assert_eq!(compact_args(&serde_json::json!(null)), "");
+        assert_eq!(compact_args(&serde_json::json!({})), "");
+    }
+
+    // ---- clip_tool_result ------------------------------------------------
+
+    #[test]
+    fn a_short_result_is_returned_untouched() {
+        assert_eq!(clip_tool_result("small", 100), "small");
+        // Exactly at the limit is still untouched — the comparison is `<=`.
+        assert_eq!(clip_tool_result("abcde", 5), "abcde");
+    }
+
+    #[test]
+    fn an_oversized_result_is_clipped_and_says_so() {
+        let out = clip_tool_result(&"a".repeat(100), 10);
+        assert!(out.starts_with(&"a".repeat(10)));
+        assert!(
+            out.contains("truncated at 10 chars"),
+            "the model has to know it saw a partial result: {out}"
+        );
+    }
+
+    #[test]
+    fn clipping_counts_characters_not_bytes() {
+        // A byte-based cap would split a multi-byte character and produce
+        // invalid output; `é` is two bytes and must count as one.
+        let out = clip_tool_result(&"é".repeat(20), 5);
+        let head: String = out.chars().take(5).collect();
+        assert_eq!(head, "ééééé");
+        assert_eq!(clip_tool_result(&"é".repeat(5), 5), "é".repeat(5));
+    }
+
+    #[test]
+    fn clipping_to_zero_keeps_only_the_notice() {
+        let out = clip_tool_result("anything", 0);
+        assert!(out.starts_with('\n'), "{out:?}");
+        assert!(out.contains("truncated at 0 chars"));
+    }
+
+    // ---- merge_usage -----------------------------------------------------
+
+    fn usage(p: Option<u32>, c: Option<u32>, t: Option<u32>) -> Usage {
+        Usage {
+            prompt_tokens: p,
+            completion_tokens: c,
+            total_tokens: t,
+        }
+    }
+
+    #[test]
+    fn merging_usage_sums_each_field() {
+        // A tool-calling turn reports usage per request; the caller wants
+        // the total for the whole exchange.
+        let m = merge_usage(
+            Some(usage(Some(10), Some(5), Some(15))),
+            Some(usage(Some(3), Some(7), Some(10))),
+        )
+        .unwrap();
+        assert_eq!(m.prompt_tokens, Some(13));
+        assert_eq!(m.completion_tokens, Some(12));
+        assert_eq!(m.total_tokens, Some(25));
+    }
+
+    #[test]
+    fn merging_with_none_returns_the_other_side() {
+        let u = usage(Some(1), Some(2), Some(3));
+        assert_eq!(
+            merge_usage(None, Some(u.clone())).unwrap().total_tokens,
+            Some(3)
+        );
+        assert_eq!(merge_usage(Some(u), None).unwrap().total_tokens, Some(3));
+        assert!(merge_usage(None, None).is_none());
+    }
+
+    #[test]
+    fn a_field_missing_on_one_side_is_carried_from_the_other() {
+        // Providers omit fields inconsistently. Treating a missing count as
+        // zero would be fine; dropping the side that *has* it would not.
+        let m = merge_usage(
+            Some(usage(Some(10), None, None)),
+            Some(usage(None, Some(4), None)),
+        )
+        .unwrap();
+        assert_eq!(m.prompt_tokens, Some(10));
+        assert_eq!(m.completion_tokens, Some(4));
+        assert_eq!(m.total_tokens, None);
+    }
+
+    // ---- ChatError::is_unreachable ---------------------------------------
+
+    #[test]
+    fn a_404_reads_as_unreachable_because_it_usually_is_a_wrong_base_url() {
+        assert!(ChatError::BadStatus(404, "Not Found".into()).is_unreachable());
+    }
+
+    #[test]
+    fn a_model_side_refusal_is_not_unreachable() {
+        // These mean the endpoint answered. Offering "configure your
+        // endpoint" here would send the user to fix the one thing that
+        // demonstrably works.
+        for code in [400, 401, 403, 422, 429, 500, 502, 503] {
+            assert!(
+                !ChatError::BadStatus(code, "x".into()).is_unreachable(),
+                "status {code}"
+            );
+        }
+        assert!(!ChatError::EmptyChoices.is_unreachable());
+    }
+
+    #[test]
+    fn chat_errors_render_with_their_detail() {
+        // These strings are what the user actually sees when a chat fails.
+        assert_eq!(
+            ChatError::BadStatus(500, "boom".into()).to_string(),
+            "chat bad status 500: boom"
+        );
+        assert_eq!(
+            ChatError::EmptyChoices.to_string(),
+            "chat response had no choices"
+        );
+    }
+
+    // ---- ChatRagOptions --------------------------------------------------
+
+    #[test]
+    fn rag_options_default_to_grounded_and_fast() {
+        let o = ChatRagOptions::default();
+        assert_eq!(o.k, 8);
+        assert_eq!(o.hops, 2);
+        assert!(matches!(o.strategy, RankStrategy::Ppr));
+        assert!(matches!(o.direction, Direction::Both));
+        assert!(o.include_snippets, "snippets are what ground the answer");
+        // On by default: the answer is grounded in retrieved context, so a
+        // chain of thought rarely buys anything and costs wall-clock time.
+        assert!(o.fast);
+        assert!(o.edge_types.is_none());
+        assert!(o.where_clause.is_none());
+        assert!(o.system_prompt.is_none());
+        assert_eq!(o.max_context_chars, DEFAULT_CONTEXT_CHARS);
+    }
+
+    #[test]
+    fn rag_options_new_and_default_agree() {
+        let (a, b) = (ChatRagOptions::new(), ChatRagOptions::default());
+        assert_eq!(a.k, b.k);
+        assert_eq!(a.hops, b.hops);
+        assert_eq!(a.fast, b.fast);
+        assert_eq!(a.max_context_chars, b.max_context_chars);
+    }
 }
 
 /// The retrieval half of a RAG turn, shared by the streaming and

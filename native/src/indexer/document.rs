@@ -267,4 +267,101 @@ mod tests {
         assert!(is_supported_ext("pptx"));
         assert!(!is_supported_ext("exe"));
     }
+
+    // ---- derive_page_name edge cases ----------------------------------
+
+    #[test]
+    fn a_long_first_line_is_capped_on_a_char_boundary() {
+        // A page whose first line is a wall of text — common in scanned
+        // documents with no heading structure. The name has to stay short
+        // enough to render in a list without becoming the list.
+        let name = derive_page_name(&"é".repeat(400), 1);
+        let prefix = "p.1 · ";
+        let snippet = name.strip_prefix(prefix).expect("prefixed with the page no");
+        assert!(name.ends_with('…'), "should be truncated: {name}");
+        assert!(name.is_char_boundary(name.len()));
+        // `truncate_chars` caps bytes and backs up to a boundary, so the
+        // snippet is at most the cap plus the ellipsis it appends.
+        assert!(
+            snippet.len() <= NAME_CAP + '…'.len_utf8(),
+            "snippet {} bytes",
+            snippet.len()
+        );
+    }
+
+    #[test]
+    fn a_first_line_exactly_at_the_cap_is_not_truncated() {
+        let line = "a".repeat(NAME_CAP);
+        let name = derive_page_name(&line, 2);
+        assert_eq!(name, format!("p.2 · {line}"));
+        assert!(!name.ends_with('…'));
+    }
+
+    #[test]
+    fn leading_whitespace_is_stripped_from_the_chosen_line() {
+        // PDF extraction routinely leaves indentation on the heading line.
+        assert_eq!(derive_page_name("\t   Chapter One   \n", 3), "p.3 · Chapter One");
+    }
+
+    #[test]
+    fn a_page_of_only_whitespace_falls_back_to_its_number() {
+        // Blank pages, separator pages and image-only pages all land here.
+        for text in ["", "\n", "   ", "\n\t \r\n  \n"] {
+            assert_eq!(derive_page_name(text, 9), "Page 9", "text {text:?}");
+        }
+    }
+
+    #[test]
+    fn page_numbering_is_carried_verbatim_including_zero() {
+        assert_eq!(derive_page_name("Intro", 0), "p.0 · Intro");
+        assert_eq!(derive_page_name("", 0), "Page 0");
+        assert!(derive_page_name("Intro", u32::MAX).starts_with(&format!("p.{} · ", u32::MAX)));
+    }
+
+    // ---- page_symbol ---------------------------------------------------
+
+    #[test]
+    fn a_page_symbol_collapses_its_line_range_onto_the_page_number() {
+        // The file is binary, so there are no lines to point at. Both ends
+        // carry the page number instead, which keeps every UI control that
+        // keys off a line range (snippet reader, scroll-to-line) working on
+        // a stable value rather than a zero.
+        let s = page_symbol(7, "p.7 · Intro".into(), Some("body text".into()));
+        assert_eq!(s.start_line, 7);
+        assert_eq!(s.end_line, 7);
+        assert_eq!(s.id, "doc_page:7");
+        assert_eq!(s.docstring.as_deref(), Some("body text"));
+    }
+
+    #[test]
+    fn a_page_symbol_is_a_top_level_heading_so_it_graphs_as_a_concept() {
+        // `heading_1` is what `graph.rs` parses into a Concept node and
+        // hangs directly off the file; any other kind would nest pages
+        // under each other or type them as code.
+        let s = page_symbol(1, "p.1".into(), None);
+        assert_eq!(s.kind, "heading_1");
+        assert_eq!(crate::indexer::document::tests::heading_level(&s.kind), Some(1));
+    }
+
+    /// Mirror of `graph::parse_heading_level`, which is private to that
+    /// module — kept here so the kind above is checked against the parse it
+    /// has to satisfy rather than against a bare string.
+    fn heading_level(kind: &str) -> Option<usize> {
+        kind.strip_prefix("heading_")?.parse().ok()
+    }
+
+    #[test]
+    fn a_page_symbol_carries_no_code_structure() {
+        // Pages have no signature, imports or calls; leaving stray defaults
+        // here would show up as empty sections in the node panel.
+        let s = page_symbol(2, "p.2".into(), None);
+        assert!(s.signature.is_none());
+        assert!(s.metrics.is_none());
+        assert!(s.imports.is_empty() && s.exports.is_empty());
+        assert!(s.extends.is_empty() && s.implements.is_empty() && s.calls.is_empty());
+        assert!(s.annotations.is_empty() && s.call_refs.is_empty());
+        assert!(s.qualified_name.is_none() && s.owner.is_none() && s.route.is_none());
+        // `file` is stamped later by the caller, once the path is known.
+        assert!(s.file.is_empty());
+    }
 }
