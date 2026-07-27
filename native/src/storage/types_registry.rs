@@ -21,6 +21,7 @@ pub const NODE_TYPE_CONCEPT: u32 = 6;
 pub const NODE_TYPE_DEPENDENCY: u32 = 7;
 pub const NODE_TYPE_CONFIG: u32 = 8;
 pub const NODE_TYPE_CONSTANT: u32 = 9;
+pub const NODE_TYPE_ROUTE: u32 = 10;
 // Generic catch-all for anything not modeled above; used by the JSON
 // hydration path so older graphs don't crash a newer build.
 pub const NODE_TYPE_UNKNOWN: u32 = 99;
@@ -40,6 +41,7 @@ pub const ALL_NODE_TYPE_IDS: &[u32] = &[
     NODE_TYPE_DEPENDENCY,
     NODE_TYPE_CONFIG,
     NODE_TYPE_CONSTANT,
+    NODE_TYPE_ROUTE,
     NODE_TYPE_UNKNOWN,
 ];
 
@@ -54,6 +56,7 @@ pub const EDGE_TYPE_IMPORTS: u32 = 106;
 pub const EDGE_TYPE_EXPORTS: u32 = 107;
 pub const EDGE_TYPE_REQUIRES: u32 = 108;
 pub const EDGE_TYPE_USES: u32 = 109;
+pub const EDGE_TYPE_OVERRIDES: u32 = 110;
 pub const EDGE_TYPE_UNKNOWN: u32 = 199;
 
 /// Map a node type string (variant name from `GraphNodeType` debug
@@ -69,6 +72,7 @@ pub fn node_type_to_id(s: &str) -> u32 {
         "dependency" => NODE_TYPE_DEPENDENCY,
         "config" => NODE_TYPE_CONFIG,
         "constant" => NODE_TYPE_CONSTANT,
+        "route" => NODE_TYPE_ROUTE,
         _ => NODE_TYPE_UNKNOWN,
     }
 }
@@ -84,6 +88,7 @@ pub fn node_type_from_id(id: u32) -> &'static str {
         NODE_TYPE_DEPENDENCY => "Dependency",
         NODE_TYPE_CONFIG => "Config",
         NODE_TYPE_CONSTANT => "Constant",
+        NODE_TYPE_ROUTE => "Route",
         _ => "Unknown",
     }
 }
@@ -100,6 +105,7 @@ pub fn edge_type_to_id(s: &str) -> u32 {
         "exports" => EDGE_TYPE_EXPORTS,
         "requires" => EDGE_TYPE_REQUIRES,
         "uses" => EDGE_TYPE_USES,
+        "overrides" => EDGE_TYPE_OVERRIDES,
         _ => EDGE_TYPE_UNKNOWN,
     }
 }
@@ -116,6 +122,7 @@ pub fn edge_type_from_id(id: u32) -> &'static str {
         EDGE_TYPE_EXPORTS => "Exports",
         EDGE_TYPE_REQUIRES => "Requires",
         EDGE_TYPE_USES => "Uses",
+        EDGE_TYPE_OVERRIDES => "Overrides",
         _ => "Unknown",
     }
 }
@@ -135,6 +142,8 @@ mod tests {
             "Concept",
             "Dependency",
             "Config",
+            "Constant",
+            "Route",
         ] {
             let id = node_type_to_id(s);
             assert_ne!(id, NODE_TYPE_UNKNOWN, "{s} should be a known node type");
@@ -155,6 +164,7 @@ mod tests {
             "Exports",
             "Requires",
             "Uses",
+            "Overrides",
         ] {
             let id = edge_type_to_id(s);
             assert_ne!(id, EDGE_TYPE_UNKNOWN, "{s} should be a known edge type");

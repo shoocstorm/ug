@@ -3,7 +3,7 @@ use crate::types::{
     GraphData, GraphEdge, GraphEdgeType, GraphNode, GraphNodeFolderMeta, GraphNodeType,
 };
 use petgraph::graph::{DiGraph, NodeIndex};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Extension permutations tried when resolving an import path against the
 /// file index. Empty string is included so that imports already carrying an
@@ -30,6 +30,121 @@ const FILE_RESOLVE_EXT_CANDIDATES: &[&str] = &[
     "/__init__.py",
 ];
 
+/// How far up a type hierarchy an inherited member is looked for. Deep
+/// enough for any real class chain; bounded so a cycle in a malformed graph
+/// can't spin.
+const MAX_SUPERTYPE_DEPTH: usize = 8;
+
+/// Cap on the implementations a single interface call expands to. A call on
+/// a `Repository` in a large codebase can have dozens of implementors, and
+/// wiring every one turns a precise edge back into noise.
+const MAX_DISPATCH_FANOUT: usize = 8;
+
+/// Cap on the types a single on-demand (`import a.b.*`) import wires up.
+const MAX_WILDCARD_FANOUT: usize = 64;
+
+/// Cross-file resolution tables, keyed on the qualified names languages
+/// like Java supply.
+///
+/// The language-agnostic resolver ([`resolve_symbol`]) matches on bare
+/// names, which is adequate where names are near-unique per file. It is not
+/// adequate for Java: `save`, `execute` and `handle` appear in every layer,
+/// and picking "the first registered id" makes each such edge a coin flip.
+/// These tables let a call that knows its receiver's type land on exactly
+/// one method, and only fall back to name matching when it doesn't.
+#[derive(Default)]
+struct QualifiedIndex {
+    /// `pkg.Type#member` -> candidate node ids, each with its parameter
+    /// count so overloads can be told apart.
+    members: HashMap<String, Vec<(String, u32)>>,
+    /// `pkg.Type` -> node id.
+    types: HashMap<String, String>,
+    /// Package -> ids of the types declared directly in it, for wildcard
+    /// imports.
+    packages: HashMap<String, Vec<String>>,
+    /// Node id -> the file node id it belongs to.
+    file_of: HashMap<String, String>,
+    /// `pkg.Type` -> its qualified supertypes.
+    supers: HashMap<String, Vec<String>>,
+    /// `pkg.Type` -> the qualified types that extend or implement it.
+    subs: HashMap<String, Vec<String>>,
+}
+
+impl QualifiedIndex {
+    /// Node id for `owner#member` taking `argc` arguments, searching the
+    /// owner first and then up its supertypes.
+    ///
+    /// Overload choice prefers an exact parameter-count match and falls back
+    /// to the first declaration, so a call through a varargs or defaulted
+    /// signature still resolves rather than dropping.
+    fn method(&self, owner: &str, member: &str, argc: u32) -> Option<String> {
+        let mut seen: HashSet<&str> = HashSet::new();
+        let mut frontier: Vec<&str> = vec![owner];
+
+        for _ in 0..MAX_SUPERTYPE_DEPTH {
+            let mut next: Vec<&str> = Vec::new();
+            for ty in frontier {
+                if !seen.insert(ty) {
+                    continue;
+                }
+                if let Some(candidates) = self.members.get(&format!("{}#{}", ty, member)) {
+                    if let Some((id, _)) = candidates.iter().find(|(_, n)| *n == argc) {
+                        return Some(id.clone());
+                    }
+                    if let Some((id, _)) = candidates.first() {
+                        return Some(id.clone());
+                    }
+                }
+                if let Some(supers) = self.supers.get(ty) {
+                    next.extend(supers.iter().map(String::as_str));
+                }
+            }
+            if next.is_empty() {
+                return None;
+            }
+            frontier = next;
+        }
+        None
+    }
+
+    /// Qualified types that implement or extend `owner`, transitively.
+    ///
+    /// This is what answers "where does this actually execute?" in a
+    /// codebase written against interfaces. A call to `OrderRepository.save`
+    /// where `OrderRepository` is an interface reaches no running code on
+    /// its own; the implementations are the code, and with constructor or
+    /// field injection they are also the only wiring that exists.
+    fn implementors(&self, owner: &str, cap: usize) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        let mut seen: HashSet<&str> = HashSet::new();
+        let mut frontier: Vec<&str> = vec![owner];
+
+        for _ in 0..MAX_SUPERTYPE_DEPTH {
+            let mut next: Vec<&str> = Vec::new();
+            for ty in frontier {
+                let Some(subs) = self.subs.get(ty) else {
+                    continue;
+                };
+                for sub in subs {
+                    if !seen.insert(sub.as_str()) {
+                        continue;
+                    }
+                    out.push(sub.clone());
+                    if out.len() >= cap {
+                        return out;
+                    }
+                    next.push(sub.as_str());
+                }
+            }
+            if next.is_empty() {
+                break;
+            }
+            frontier = next;
+        }
+        out
+    }
+}
+
 fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData {
     let mut nodes: Vec<GraphNode> = Vec::new();
     let mut edges: Vec<GraphEdge> = Vec::new();
@@ -37,6 +152,11 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
     // modules). Keep every match so cross-file resolvers can prefer the
     // one in the same file as the caller.
     let mut symbol_id_map: HashMap<String, Vec<String>> = HashMap::new();
+    let mut qualified = QualifiedIndex::default();
+    // `route:<METHOD> <path>` nodes, deduped across the repo — two handlers
+    // mapped to the same route are a real thing (different HTTP verbs share
+    // a path) and should meet at one node.
+    let mut route_ids: HashSet<String> = HashSet::new();
 
     let (path_index, basename_index) = build_file_indexes(&index_result.files);
 
@@ -79,6 +199,7 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
                 language_breakdown: f.language_breakdown.clone(),
                 summary: f.summary.clone(),
             }),
+            ..Default::default()
         });
 
         if let Some(pid) = parent_id {
@@ -142,6 +263,7 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
             implements: vec![],
             calls: vec![],
             folder: None,
+            ..Default::default()
         });
 
         // Stack of (heading_level, sym_node_id) maintained per file while
@@ -221,7 +343,92 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
                 implements: sym.implements.clone(),
                 calls: sym.calls.clone(),
                 folder: None,
+                qualified_name: sym.qualified_name.clone(),
+                annotations: sym.annotations.clone(),
+                route: sym.route.clone(),
             });
+
+            // Register the symbol under every name a later pass might use to
+            // reach it, before any edge resolution runs.
+            if let Some(fqn) = &sym.qualified_name {
+                qualified
+                    .file_of
+                    .insert(sym_node_id.clone(), file_node_id.clone());
+
+                match &sym.owner {
+                    // A member: `pkg.Type#name`, keyed with its arity.
+                    Some(_) => {
+                        let argc = sym
+                            .signature
+                            .as_ref()
+                            .map(|s| s.params.len() as u32)
+                            .unwrap_or(0);
+                        qualified
+                            .members
+                            .entry(fqn.clone())
+                            .or_default()
+                            .push((sym_node_id.clone(), argc));
+                    }
+                    // A type: also index it by package for wildcard imports,
+                    // and record both directions of its hierarchy.
+                    None => {
+                        qualified.types.insert(fqn.clone(), sym_node_id.clone());
+                        if let Some((pkg, _)) = fqn.rsplit_once('.') {
+                            qualified
+                                .packages
+                                .entry(pkg.to_string())
+                                .or_default()
+                                .push(sym_node_id.clone());
+                        }
+                    }
+                }
+
+                // Types nested inside another type still declare members, so
+                // the hierarchy is recorded for anything with supertypes.
+                let supers: Vec<String> = sym
+                    .extends
+                    .iter()
+                    .chain(sym.implements.iter())
+                    .cloned()
+                    .collect();
+                if !supers.is_empty() {
+                    for s in &supers {
+                        qualified
+                            .subs
+                            .entry(s.clone())
+                            .or_default()
+                            .push(fqn.clone());
+                    }
+                    qualified.supers.insert(fqn.clone(), supers);
+                }
+            }
+
+            // An HTTP route is a node in its own right: it is the name the
+            // outside world knows this code by, and the string people search
+            // for. Attaching it to the file as well as the handler keeps it
+            // reachable from the structural spine.
+            if let Some(route) = sym.route.as_ref().filter(|r| !r.is_empty()) {
+                let route_id = format!("route:{}", route);
+                if route_ids.insert(route_id.clone()) {
+                    nodes.push(GraphNode {
+                        id: route_id.clone(),
+                        name: route.clone(),
+                        node_type: GraphNodeType::Route,
+                        file: Some(normalized_file_path.clone()),
+                        ..Default::default()
+                    });
+                }
+                edges.push(GraphEdge {
+                    source: file_node_id.clone(),
+                    target: route_id.clone(),
+                    edge_type: GraphEdgeType::Contains,
+                });
+                edges.push(GraphEdge {
+                    source: route_id,
+                    target: sym_node_id.clone(),
+                    edge_type: GraphEdgeType::References,
+                });
+            }
 
             if let Some(level) = heading_level {
                 while let Some(&(top_level, _)) = heading_stack.last() {
@@ -251,11 +458,39 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
                     .or_default()
                     .push(sym_node_id.clone());
 
+                // A qualified language displays members as `Type.member`, so
+                // the bare member name would otherwise be unreachable by the
+                // name-matching resolver — and that resolver is the fallback
+                // for every call whose receiver we couldn't type.
+                if sym.qualified_name.is_some() {
+                    if let Some((_, simple)) = sym.name.rsplit_once('.') {
+                        symbol_id_map
+                            .entry(simple.to_string())
+                            .or_default()
+                            .push(sym_node_id.clone());
+                    }
+                }
+
                 edges.push(GraphEdge {
                     source: file_node_id.clone(),
                     target: sym_node_id.clone(),
                     edge_type: GraphEdgeType::Contains,
                 });
+
+                // Members are additionally nested under the type that
+                // declares them. The file edge above is kept so every
+                // consumer that walks file -> symbol still works; this adds
+                // the level Java actually organises code at, which is what
+                // makes "what is on this class" a single hop.
+                if let Some(owner_fqn) = &sym.owner {
+                    if let Some(owner_id) = qualified.types.get(owner_fqn) {
+                        edges.push(GraphEdge {
+                            source: owner_id.clone(),
+                            target: sym_node_id.clone(),
+                            edge_type: GraphEdgeType::Contains,
+                        });
+                    }
+                }
             }
         }
     }
@@ -277,7 +512,12 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
             let sym_node_id = sym_ids[sym_idx].clone();
 
             for extended in &sym.extends {
-                if let Some(target_id) = resolve_symbol(&symbol_id_map, extended, &normalized_file_path) {
+                if let Some(target_id) = qualified
+                    .types
+                    .get(extended)
+                    .cloned()
+                    .or_else(|| resolve_symbol(&symbol_id_map, extended, &normalized_file_path))
+                {
                     edges.push(GraphEdge {
                         source: sym_node_id.clone(),
                         target: target_id,
@@ -287,7 +527,12 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
             }
 
             for implemented in &sym.implements {
-                if let Some(target_id) = resolve_symbol(&symbol_id_map, implemented, &normalized_file_path) {
+                if let Some(target_id) = qualified
+                    .types
+                    .get(implemented)
+                    .cloned()
+                    .or_else(|| resolve_symbol(&symbol_id_map, implemented, &normalized_file_path))
+                {
                     edges.push(GraphEdge {
                         source: sym_node_id.clone(),
                         target: target_id,
@@ -296,13 +541,90 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
                 }
             }
 
-            for called in &sym.calls {
-                if let Some(target_id) = resolve_symbol(&symbol_id_map, called, &normalized_file_path) {
-                    edges.push(GraphEdge {
-                        source: sym_node_id.clone(),
-                        target: target_id,
-                        edge_type: GraphEdgeType::Calls,
-                    });
+            // A method that redeclares an inherited signature gets an
+            // `Overrides` edge to the declaration it replaces. Without it,
+            // "who implements this interface method" has no answer in the
+            // graph — `Implements` is type-level and stops at the class.
+            if let (Some(fqn), Some(owner)) = (&sym.qualified_name, &sym.owner) {
+                if let Some((_, member)) = fqn.rsplit_once('#') {
+                    let argc = sym
+                        .signature
+                        .as_ref()
+                        .map(|s| s.params.len() as u32)
+                        .unwrap_or(0);
+                    for supertype in qualified.supers.get(owner).into_iter().flatten() {
+                        if let Some(target_id) = qualified.method(supertype, member, argc) {
+                            if target_id != sym_node_id {
+                                edges.push(GraphEdge {
+                                    source: sym_node_id.clone(),
+                                    target: target_id,
+                                    edge_type: GraphEdgeType::Overrides,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+
+            if sym.call_refs.is_empty() {
+                // Languages that report only bare callee names.
+                for called in &sym.calls {
+                    if let Some(target_id) =
+                        resolve_symbol(&symbol_id_map, called, &normalized_file_path)
+                    {
+                        edges.push(GraphEdge {
+                            source: sym_node_id.clone(),
+                            target: target_id,
+                            edge_type: GraphEdgeType::Calls,
+                        });
+                    }
+                }
+            } else {
+                // Typed call sites. `sym.calls` is deliberately *not* walked
+                // as well: it holds the same call sites stripped of their
+                // receivers, and resolving those by name is exactly the
+                // guesswork the receiver types exist to replace.
+                for call in &sym.call_refs {
+                    let mut resolved = false;
+
+                    if let Some(owner) = &call.owner_type {
+                        if let Some(target_id) = qualified.method(owner, &call.name, call.argc) {
+                            edges.push(GraphEdge {
+                                source: sym_node_id.clone(),
+                                target: target_id,
+                                edge_type: GraphEdgeType::Calls,
+                            });
+                            resolved = true;
+                        }
+
+                        // Dispatch: a call typed against an interface or an
+                        // abstract base runs in the implementations, so the
+                        // edge is drawn to them too.
+                        for impl_fqn in qualified.implementors(owner, MAX_DISPATCH_FANOUT) {
+                            if let Some(target_id) =
+                                qualified.method(&impl_fqn, &call.name, call.argc)
+                            {
+                                edges.push(GraphEdge {
+                                    source: sym_node_id.clone(),
+                                    target: target_id,
+                                    edge_type: GraphEdgeType::Calls,
+                                });
+                                resolved = true;
+                            }
+                        }
+                    }
+
+                    if !resolved {
+                        if let Some(target_id) =
+                            resolve_symbol(&symbol_id_map, &call.name, &normalized_file_path)
+                        {
+                            edges.push(GraphEdge {
+                                source: sym_node_id.clone(),
+                                target: target_id,
+                                edge_type: GraphEdgeType::Calls,
+                            });
+                        }
+                    }
                 }
             }
         }
@@ -320,6 +642,33 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
         let file_node_id = format!("file:{}", normalized_file_path);
 
         for import in &file.imports {
+            // Qualified-name resolution first. An import path like
+            // `com.example.svc` is a *package*, not a location: handing it to
+            // the filesystem resolver below finds nothing, and its basename
+            // fallback would go looking for a file called `com`. Resolving
+            // against declared qualified names is the only thing that works,
+            // and it is also exact — no basename near-miss.
+            let targets = resolve_qualified_import(&qualified, import);
+            for target_id in &targets {
+                edges.push(GraphEdge {
+                    source: file_node_id.clone(),
+                    target: target_id.clone(),
+                    edge_type: GraphEdgeType::References,
+                });
+                if let Some(target_file_id) = qualified.file_of.get(target_id) {
+                    if target_file_id != &file_node_id {
+                        edges.push(GraphEdge {
+                            source: file_node_id.clone(),
+                            target: target_file_id.clone(),
+                            edge_type: GraphEdgeType::Imports,
+                        });
+                    }
+                }
+            }
+            if !targets.is_empty() {
+                continue;
+            }
+
             if !import.path.is_empty() {
                 if let Some(target_file_id) = resolve_import_to_file_id(
                     &normalized_file_path,
@@ -370,6 +719,44 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
         edges,
         stats: Some(index_result.stats.clone()),
     }
+}
+
+/// Node ids an import statement names, resolved through qualified names.
+///
+/// Returns empty for any import that doesn't resolve this way — a relative
+/// TypeScript path, a markdown link, a package that isn't in the repo — so
+/// the caller can fall through to filesystem resolution unchanged.
+fn resolve_qualified_import(
+    qualified: &QualifiedIndex,
+    import: &crate::types::ImportInfo,
+) -> Vec<String> {
+    if qualified.types.is_empty() || import.path.is_empty() {
+        return Vec::new();
+    }
+
+    let mut out = Vec::new();
+    for imp in &import.imported {
+        if imp.name == "*" {
+            // On-demand import: every type in the package, bounded. A
+            // `java.util.*` in a repo that declares no `java.util` package
+            // simply contributes nothing.
+            if let Some(ids) = qualified.packages.get(&import.path) {
+                out.extend(ids.iter().take(MAX_WILDCARD_FANOUT).cloned());
+            }
+            continue;
+        }
+        let fqn = format!("{}.{}", import.path, imp.name);
+        if let Some(id) = qualified.types.get(&fqn) {
+            out.push(id.clone());
+            continue;
+        }
+        // `import static a.b.C.member;` — the qualifier is the type and the
+        // trailing name is one of its members.
+        if let Some(candidates) = qualified.members.get(&format!("{}#{}", import.path, imp.name)) {
+            out.extend(candidates.iter().map(|(id, _)| id.clone()));
+        }
+    }
+    out
 }
 
 /// Build the lookup tables used to resolve import paths to file node IDs.

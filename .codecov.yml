@@ -1,0 +1,27 @@
+coverage:
+  precision: 1
+  round: down
+  range: "50...90"
+  status:
+    project:
+      default:
+        target: 50%
+        threshold: 5%
+    patch:
+      default:
+        target: 50%
+
+ignore:
+  - "native/tests/**/*"
+  - "native/src/bin/ug_app.rs"
+  - "native/gen/**/*"
+  - "native/build.rs"
+  - "native/tauri.conf.json"
+
+comment:
+  layout: "header, diff, files"
+  behavior: default
+  require_changes: true
+
+fixes:
+  - "native/::"

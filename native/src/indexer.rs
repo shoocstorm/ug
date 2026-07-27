@@ -27,6 +27,22 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tree_sitter::Parser;
 
+/// Extraction-format version, stored in the cache under
+/// [`CACHE_VERSION_KEY`].
+///
+/// The incremental cache keys on file *content*, which is exactly right for
+/// detecting edits and exactly wrong for detecting a change to the indexer:
+/// after an extractor gains a capability, every unchanged file is a cache
+/// hit and keeps its old, poorer symbols forever. Bumping this discards the
+/// cache once, so the improvement actually reaches an existing install.
+///
+/// Bump on any change to what the extractors *produce*.
+const INDEXER_VERSION: &str = "2";
+
+/// Reserved key in `cache.json`. Prefixed and suffixed so it cannot collide
+/// with a repo-relative path.
+const CACHE_VERSION_KEY: &str = "__ug_indexer_version__";
+
 use classifier::classify_file;
 pub use common::{normalize_path, resolve_relative};
 use common::{compute_hash, resolve_import_refs, scan_files};
@@ -183,8 +199,13 @@ pub fn index_with_cache(path: String, cache_path: String) -> String {
 
     if cache_file.exists() {
         if let Ok(content) = fs::read_to_string(&cache_file) {
-            if let Ok(hashes) = serde_json::from_str(&content) {
-                cached_hashes = hashes;
+            if let Ok(hashes) = serde_json::from_str::<HashMap<String, String>>(&content) {
+                // A cache written by a different extraction format holds
+                // symbols this build no longer agrees with. Drop it whole
+                // rather than serve a graph that is half-upgraded.
+                if hashes.get(CACHE_VERSION_KEY).map(String::as_str) == Some(INDEXER_VERSION) {
+                    cached_hashes = hashes;
+                }
             }
         }
     }
@@ -277,6 +298,7 @@ pub fn index_with_cache(path: String, cache_path: String) -> String {
     );
 
     let _ = fs::create_dir_all(&cache_path);
+    new_hashes.insert(CACHE_VERSION_KEY.to_string(), INDEXER_VERSION.to_string());
     if let Ok(json) = serde_json::to_string(&new_hashes) {
         let _ = fs::write(&cache_file, json);
     }

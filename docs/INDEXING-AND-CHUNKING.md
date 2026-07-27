@@ -43,7 +43,7 @@ content at all.
 |---|---|---|---|---|---|
 | `.ts .tsx .js .jsx` | tree-sitter (`languages/typescript.rs`) | one symbol | Function (incl. `const f = () =>`) / Class / Interface (incl. type alias) | name + JSDoc + signature + inline comments | the symbol's line span |
 | `.py` | tree-sitter (`languages/python.rs`) | one symbol | Function (incl. module-level assignments) / Class | name + docstring + signature + inline comments | the symbol's line span |
-| `.java` | tree-sitter (`languages/java.rs`) | one symbol | Function / Class / Interface | name + Javadoc + signature + inline comments | the symbol's line span |
+| `.java` | tree-sitter (`languages/java.rs`) | one symbol | Function / Class / Interface / Route | name (qualified `Type.member`) + Javadoc + signature + **framework semantics** + inline comments | the symbol's line span |
 | `.rs` | tree-sitter (`languages/rust.rs`) | one symbol | Function (incl. macros) / Class (struct, enum) / Interface (trait, type alias) / Constant | name + `///` docs + signature + inline comments | the symbol's line span |
 | `.md .mdx .markdown` | line scanner (`languages/markdown.rs`) | **one heading section** | Concept | name + **the section's prose** | the section span, *including* subsections |
 | `.pdf` | liteparse + PDFium (`indexer/document.rs`) | **one page** | Concept | name + **the page's full text** | *(nothing — binary)* |
@@ -62,9 +62,15 @@ Two things this table is deliberately explicit about:
 
 ### Skipped before any of this
 
-`node_modules/`, `.git/`, `target/`, anything matched by the repo's
-`.gitignore`, the built-in artifact globs (`*.min.js`, `*.bundle.js`,
-`dist/`), and any glob in the `UG_IGNORE` env var.
+`node_modules/`, `.git/`, anything matched by the repo's `.gitignore`, the
+built-in artifact globs (`*.min.js`, `*.bundle.js`, `dist/`), and any glob in
+the `UG_IGNORE` env var.
+
+Build output (`target/`, `build/`, `out/`) is skipped only when the build
+descriptor that produces it — `pom.xml`, `Cargo.toml`, `build.gradle` — sits
+in the same directory. Skipping those names unconditionally is wrong for
+Java, where `target` is a legal package name: `src/main/java/com/acme/target/`
+is source, and a directory beside a `pom.xml` is not.
 
 ## 3. Chunking, per pipeline
 
@@ -84,6 +90,41 @@ body for embedding purposes, and it filters hard: commented-out code (scored
 on symbol density), repeated banners and licence headers (deduped graph-wide),
 and machine directives (`eslint-disable`, shebangs, `#[allow(...)]`). Capped
 at 600 chars per node.
+
+### 3.1a Java: names, receivers and annotations
+
+Java is the one code pipeline that extracts more than names, docs and
+signatures, because in Java those three carry less of the meaning.
+
+**Names are qualified.** A type is `pkg.Outer.Inner`, a member
+`pkg.Type#member`, and the *display* name of a member is `Type.member`. The
+graph builder resolves imports and calls against the qualified form and
+embeds the display form. Both matter: `execute`, `handle` and `save` recur in
+every layer of a Java codebase, so an unqualified name identifies nothing —
+and `OrderService.cancel` splits into four searchable words where `cancel`
+gives one.
+
+**Calls carry their receiver's type.** The indexer keeps a per-method
+environment of declared types (fields, parameters, locals) and tags each call
+site with the type it dispatches on. `orderRepo.save(x)` and
+`auditLog.save(x)` become different edges. When the receiver's type is an
+interface, the graph builder also draws the call to the implementations
+(capped at 8) — which is the only path from a caller to running code in a
+codebase wired by dependency injection.
+
+**Annotations become prose.** `@Repository`, `@Entity`, `@Table(name =
+"orders")`, `@Transactional`, `@Query`, `@KafkaListener` and the mapping
+family are rendered into the dense text as the words someone would search
+with ("Spring data access repository", "mapped to table orders"). Mapping
+annotations additionally compose a route — `GET /api/orders/{id}` — which
+becomes both a field on the handler and a `Route` node of its own. That
+string appears in no identifier, no path and no Javadoc, and it is exactly
+what a question about an endpoint contains.
+
+Resolution is local to one file: its imports, its own declarations, and its
+package. There is no classpath. Where that guesses wrong it guesses outward —
+a JDK type resolving to a package-local name that matches nothing — and the
+builder falls back to bare-name matching.
 
 ### 3.2 Markdown
 

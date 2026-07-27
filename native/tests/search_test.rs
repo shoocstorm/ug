@@ -33,6 +33,7 @@ fn synthetic_graph_json() -> String {
             implements: vec![],
             calls: vec![],
             folder: None,
+            ..Default::default()
         },
         GraphNode {
             id: "class:ConfigStore".to_string(),
@@ -50,6 +51,7 @@ fn synthetic_graph_json() -> String {
             implements: vec![],
             calls: vec![],
             folder: None,
+            ..Default::default()
         },
         GraphNode {
             id: "interface:Settings".to_string(),
@@ -67,6 +69,7 @@ fn synthetic_graph_json() -> String {
             implements: vec![],
             calls: vec![],
             folder: None,
+            ..Default::default()
         },
         GraphNode {
             id: "file:src/handler.ts".to_string(),
@@ -84,6 +87,7 @@ fn synthetic_graph_json() -> String {
             implements: vec![],
             calls: vec![],
             folder: None,
+            ..Default::default()
         },
     ];
     let edges: Vec<GraphEdge> = vec![GraphEdge {

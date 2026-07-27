@@ -158,6 +158,7 @@ fn extract_symbol_from_node(node: &Node, source: &[u8], out: &mut Vec<Symbol>) {
                 implements: Vec::new(),
                 calls,
                 metrics: Some(metrics),
+                ..Default::default()
             });
         }
         "class_definition" => {
@@ -179,6 +180,7 @@ fn extract_symbol_from_node(node: &Node, source: &[u8], out: &mut Vec<Symbol>) {
                 implements: Vec::new(),
                 calls: Vec::new(),
                 metrics: None,
+                ..Default::default()
             });
         }
         "assignment" => {
@@ -205,6 +207,7 @@ fn extract_symbol_from_node(node: &Node, source: &[u8], out: &mut Vec<Symbol>) {
                 implements: Vec::new(),
                 calls: Vec::new(),
                 metrics: None,
+                ..Default::default()
             });
         }
         _ => {}

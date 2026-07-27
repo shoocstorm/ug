@@ -18,7 +18,9 @@
 //!
 //! No other module needs to change.
 
-mod java;
+// `pub(crate)` because the storage layer reuses its annotation-argument
+// parsing to turn annotations into retrieval text.
+pub(crate) mod java;
 pub(crate) mod markdown;
 mod python;
 mod rust;

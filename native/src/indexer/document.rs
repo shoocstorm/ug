@@ -200,6 +200,7 @@ fn page_symbol(page_no: u32, name: String, docstring: Option<String>) -> Symbol 
         implements: Vec::new(),
         calls: Vec::new(),
         metrics: None,
+        ..Default::default()
     }
 }
 

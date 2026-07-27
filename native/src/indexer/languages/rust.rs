@@ -191,6 +191,7 @@ fn extract_symbol_from_node(
                 implements,
                 calls,
                 metrics: Some(metrics),
+                ..Default::default()
             });
         }
         "struct_item" | "enum_item" => {
@@ -213,6 +214,7 @@ fn extract_symbol_from_node(
                 implements: Vec::new(),
                 calls: Vec::new(),
                 metrics: None,
+                ..Default::default()
             });
         }
         "trait_item" => {
@@ -237,6 +239,7 @@ fn extract_symbol_from_node(
                 implements: Vec::new(),
                 calls: Vec::new(),
                 metrics: None,
+                ..Default::default()
             });
         }
         "type_item" => {
@@ -258,6 +261,7 @@ fn extract_symbol_from_node(
                 implements: Vec::new(),
                 calls: Vec::new(),
                 metrics: None,
+                ..Default::default()
             });
         }
         "const_item" | "static_item" => {
@@ -279,6 +283,7 @@ fn extract_symbol_from_node(
                 implements: Vec::new(),
                 calls: Vec::new(),
                 metrics: None,
+                ..Default::default()
             });
         }
         "macro_definition" => {
@@ -300,6 +305,7 @@ fn extract_symbol_from_node(
                 implements: Vec::new(),
                 calls: Vec::new(),
                 metrics: None,
+                ..Default::default()
             });
         }
         _ => {}

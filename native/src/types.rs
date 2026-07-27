@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Symbol {
     pub id: String,
     pub name: String,
@@ -27,6 +27,68 @@ pub struct Symbol {
 
     #[serde(default)]
     pub metrics: Option<SymbolMetrics>,
+
+    /// Language-global unique name, when the language has one. Java fills
+    /// this with `pkg.Type` for types and `pkg.Type#member` for members;
+    /// languages without a module-path concept leave it `None`.
+    ///
+    /// `name` stays the *display* name (`OrderService.cancel`) — this is the
+    /// key the graph builder resolves imports and calls against, so it has
+    /// to be exact rather than readable.
+    #[serde(rename = "qualifiedName", default, skip_serializing_if = "Option::is_none")]
+    pub qualified_name: Option<String>,
+
+    /// [`Self::qualified_name`] of the type that declares this symbol, for
+    /// members. Drives the `Contains` edge from a class to its methods and
+    /// fields, and the supertype walk used to resolve inherited calls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+
+    /// Declaration-site annotations / decorators, in source order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub annotations: Vec<Annotation>,
+
+    /// Call sites with whatever receiver type the indexer could resolve
+    /// locally. Parallel to (not a replacement for) [`Self::calls`], which
+    /// stays a deduped list of bare callee names for display.
+    #[serde(rename = "callRefs", default, skip_serializing_if = "Vec::is_empty")]
+    pub call_refs: Vec<CallRef>,
+
+    /// Effective HTTP route this symbol serves, e.g. `GET /api/orders/{id}`,
+    /// composed from type-level and member-level mapping annotations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<String>,
+}
+
+/// One declaration-site annotation. `name` is the simple name with any
+/// package qualifier stripped (`GetMapping`, not
+/// `org.springframework.web.bind.annotation.GetMapping`), because that is
+/// how it is written at every call site and how people search for it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Annotation {
+    pub name: String,
+    /// Raw argument text with the enclosing parentheses stripped, capped in
+    /// the extractor. `None` for a marker annotation like `@Override`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<String>,
+}
+
+/// A single call site, resolved as far as one file's worth of context
+/// allows. The graph builder finishes the job against the cross-file
+/// qualified-name index.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CallRef {
+    /// Callee simple name. Constructors use `<init>`, matching the
+    /// `qualified_name` the indexer assigns them.
+    pub name: String,
+    /// Qualified name of the type the call is dispatched on, when the
+    /// receiver's declared type resolved. `None` for calls through an
+    /// expression we can't type (a chained call, a lambda parameter).
+    #[serde(rename = "ownerType", default, skip_serializing_if = "Option::is_none")]
+    pub owner_type: Option<String>,
+    /// Argument count, used to pick between overloads.
+    #[serde(default)]
+    pub argc: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -191,8 +253,9 @@ pub struct IndexStats {
     pub repo_root: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub enum GraphNodeType {
+    #[default]
     File,
     Folder,
     Function,
@@ -202,6 +265,11 @@ pub enum GraphNodeType {
     Dependency,
     Config,
     Constant,
+    /// A network entry point — an HTTP endpoint declared by mapping
+    /// annotations. Distinct from the handler `Function` it points at: the
+    /// route is what callers of the *system* know, and it is what people
+    /// search for ("the endpoint that cancels an order").
+    Route,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -216,9 +284,13 @@ pub enum GraphEdgeType {
      Exports,
      Requires,
      Uses,
+    /// Method → the supertype method it overrides. Separate from `Extends`
+    /// (which is type-level) so "who overrides this" and "what does this
+    /// class inherit from" stay different questions.
+    Overrides,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GraphNode {
     pub id: String,
     pub name: String,
@@ -248,6 +320,22 @@ pub struct GraphNode {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub folder: Option<GraphNodeFolderMeta>,
+
+    /// Mirrors [`Symbol::qualified_name`]. Kept on the node so cross-file
+    /// resolution and the MCP tools can address a symbol unambiguously
+    /// without re-deriving it from the id.
+    #[serde(rename = "qualifiedName", default, skip_serializing_if = "Option::is_none")]
+    pub qualified_name: Option<String>,
+
+    /// Mirrors [`Symbol::annotations`]. The storage layer turns these into
+    /// retrieval text — for annotation-driven frameworks they carry more of
+    /// a symbol's meaning than its body does.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub annotations: Vec<Annotation>,
+
+    /// Mirrors [`Symbol::route`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<String>,
 }
 
 /// Folder-specific metadata projected onto the generic GraphNode. Lifted from

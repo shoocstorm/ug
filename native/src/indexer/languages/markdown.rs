@@ -169,6 +169,7 @@ fn extract_headings(source: &[u8]) -> Vec<Symbol> {
             implements: Vec::new(),
             calls: Vec::new(),
             metrics: None,
+            ..Default::default()
         });
     }
 

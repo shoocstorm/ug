@@ -403,10 +403,40 @@ fn test_cached_rerun_prunes_deleted_files() {
     assert_eq!(second.files.len(), 1);
     assert!(second.files[0].path.contains("a.ts"));
 
-    // cache.json must not keep the deleted file's hash around.
+    // cache.json must not keep the deleted file's hash around. The reserved
+    // version key rides alongside the per-file hashes.
     let hashes: std::collections::HashMap<String, String> =
         serde_json::from_str(&fs::read_to_string(cache.path().join("cache.json")).unwrap()).unwrap();
-    assert_eq!(hashes.len(), 1);
+    let files: Vec<&String> = hashes
+        .keys()
+        .filter(|k| !k.starts_with("__ug_"))
+        .collect();
+    assert_eq!(files.len(), 1, "got {:?}", hashes.keys().collect::<Vec<_>>());
+}
+
+#[test]
+fn a_cache_from_a_different_indexer_version_is_discarded() {
+    // The cache keys on file *content*, so after an extractor gains a
+    // capability every unchanged file is a hit and keeps its old, poorer
+    // symbols. The version stamp is what makes the improvement reach an
+    // install that already has a cache.
+    let dir = create_test_dir();
+    let cache = create_test_dir();
+    write_file(dir.path(), "a.ts", "export function alpha(): void { }");
+    run_cached(dir.path(), cache.path());
+
+    let cache_file = cache.path().join("cache.json");
+    let mut hashes: std::collections::HashMap<String, String> =
+        serde_json::from_str(&fs::read_to_string(&cache_file).unwrap()).unwrap();
+    hashes.insert("__ug_indexer_version__".into(), "0".into());
+    fs::write(&cache_file, serde_json::to_string(&hashes).unwrap()).unwrap();
+
+    let second = run_cached(dir.path(), cache.path());
+    assert_eq!(
+        second.stats.cached_files, 0,
+        "a stale-format cache must be re-parsed, not served"
+    );
+    assert_eq!(second.files.len(), 1);
 }
 
 #[test]

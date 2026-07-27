@@ -41,6 +41,7 @@ pub fn classify_file(path: &str, symbols: &[Symbol]) -> Option<FileClassificatio
         || path_lower.contains(".spec.")
         || file_name.ends_with(".test")
         || file_name.ends_with(".spec")
+        || is_jvm_test(&path_lower, file_stem, symbols)
     {
         return Some(FileClassification::Test);
     }
@@ -160,6 +161,69 @@ pub fn classify_file(path: &str, symbols: &[Symbol]) -> Option<FileClassificatio
     None
 }
 
+/// Is this a JVM test file?
+///
+/// None of the existing rules can see one. The `.test.` / `.spec.` infix is
+/// a JavaScript convention; Java marks a test three other ways, and a
+/// codebase that uses the Maven/Gradle layout puts every one of its tests
+/// somewhere the previous chain classified by *directory* — so
+/// `src/test/java/com/example/service/OrderServiceTest.java` came out as a
+/// `Service`, the same label as the class it tests.
+///
+/// The annotation check matters most: it is the only signal that survives a
+/// project with a non-standard layout and unconventional naming.
+fn is_jvm_test(path_lower: &str, file_stem: &str, symbols: &[Symbol]) -> bool {
+    // Maven/Gradle standard layout. Left language-agnostic on purpose: a
+    // `src/test/` directory means the same thing whatever is inside it.
+    if path_lower.contains("/src/test/")
+        || path_lower.contains("/src/it/")
+        || path_lower.starts_with("src/test/")
+        || path_lower.starts_with("src/it/")
+    {
+        return true;
+    }
+
+    // JUnit / Surefire / Failsafe naming conventions — gated on the
+    // extension, because they are Java spellings and not safe anywhere else.
+    // Applied to every language they classified `TestimonialCard.tsx` and
+    // `Testable.ts` as tests: in Java a `Test` prefix is a convention, in
+    // TypeScript it is just a word that some nouns start with.
+    //
+    // Case matters too: `IT` is the Failsafe integration-test suffix, while
+    // `Latest` merely ends in the letters.
+    if path_lower.ends_with(".java")
+        && (file_stem.ends_with("Test")
+            || file_stem.ends_with("Tests")
+            || file_stem.ends_with("TestCase")
+            || file_stem.ends_with("IT")
+            || file_stem.ends_with("ITCase")
+            || file_stem.starts_with("Test"))
+    {
+        return true;
+    }
+
+    symbols.iter().any(|s| {
+        s.annotations.iter().any(|a| {
+            matches!(
+                a.name.as_str(),
+                "Test" | "ParameterizedTest" | "TestFactory" | "RepeatedTest" | "TestTemplate"
+            )
+        })
+    })
+}
+
+/// Build descriptors that configure a JVM project rather than implement it.
+/// Matched on the whole file name because the extensions involved (`.xml`,
+/// `.gradle`) are far too general to classify on their own.
+const JVM_BUILD_FILES: &[&str] = &[
+    "pom.xml",
+    "build.gradle",
+    "build.gradle.kts",
+    "settings.gradle",
+    "settings.gradle.kts",
+    "gradle.properties",
+];
+
 /// Extensions whose *content* is configuration rather than code.
 ///
 /// None of these are in `common::SUPPORTED_EXTS` yet, so this list cannot
@@ -202,6 +266,13 @@ fn is_config_file(path_lower: &str, file_stem: &str) -> bool {
         .and_then(|e| e.to_str())
         .unwrap_or("");
     if CONFIG_DATA_EXTS.contains(&ext) {
+        return true;
+    }
+    let file_name = Path::new(path_lower)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+    if JVM_BUILD_FILES.contains(&file_name) {
         return true;
     }
     // `file_stem` for `vite.config.ts` is `vite.config`, so the suffix test
@@ -378,6 +449,72 @@ mod tests {
     }
 
     #[test]
+    fn a_jvm_test_wins_over_the_layer_it_tests() {
+        use FileClassification::*;
+        // Every one of these matched a *layer* rule before — a test under
+        // `service/` came out as a `Service`, indistinguishable from the
+        // class it exercises.
+        let cases = &[
+            "src/test/java/com/example/service/OrderServiceTest.java",
+            "src/test/java/com/example/OrderServiceTests.java",
+            "src/it/java/com/example/OrderFlowIT.java",
+            "src/main/java/com/example/service/OrderServiceTest.java",
+        ];
+        for path in cases {
+            assert_eq!(classify(path).as_ref(), Some(&Test), "path {path}");
+        }
+    }
+
+    #[test]
+    fn an_it_suffix_is_matched_case_sensitively() {
+        // `IT` is the Failsafe integration-test suffix; `it` is a word, and
+        // `src/main/java/com/example/Audit.java` is not a test.
+        assert_eq!(classify("src/main/java/com/example/Audit.java"), None);
+        assert_eq!(classify("src/main/java/com/example/Deposit.java"), None);
+    }
+
+    #[test]
+    fn junit_naming_does_not_leak_into_other_languages() {
+        use FileClassification::*;
+        // A `Test` prefix is a Java convention. Elsewhere it is just how some
+        // words start, and reading it as a test rule mislabels real source —
+        // which then reads as test scaffolding in every search result.
+        assert_eq!(classify("src/components/TestimonialCard.tsx"), Some(Component));
+        assert_eq!(classify("src/utils/Testable.ts"), Some(Util));
+        assert_eq!(classify("src/api/Latest.ts"), None);
+        // The directory rule stays language-agnostic: `src/test/` is a test
+        // directory whatever it holds.
+        assert_eq!(classify("src/test/helpers/render.tsx"), Some(Test));
+    }
+
+    #[test]
+    fn a_test_annotation_identifies_a_test_whatever_the_layout() {
+        let sym = Symbol {
+            name: "Checks.works".into(),
+            kind: "function".into(),
+            annotations: vec![crate::types::Annotation {
+                name: "Test".into(),
+                args: None,
+            }],
+            ..Default::default()
+        };
+        assert_eq!(
+            classify_file("app/java/com/example/Checks.java", &[sym]),
+            Some(FileClassification::Test)
+        );
+    }
+
+    #[test]
+    fn jvm_build_descriptors_are_config() {
+        let cfg = Some(FileClassification::Config);
+        assert_eq!(classify("pom.xml"), cfg);
+        assert_eq!(classify("service-a/build.gradle.kts"), cfg);
+        assert_eq!(classify("gradle.properties"), cfg);
+        // A source file that merely lives near them is not.
+        assert_eq!(classify("src/main/java/com/example/Build.java"), None);
+    }
+
+    #[test]
     fn a_context_module_is_recognised_from_its_exports() {
         // The one symbol-shape fallback: no path heuristic matched, so the
         // decision comes from what the file exports.
@@ -400,6 +537,7 @@ mod tests {
             implements: Vec::new(),
             calls: Vec::new(),
             metrics: None,
+            ..Default::default()
         };
         assert_eq!(
             classify_file("src/theme.tsx", std::slice::from_ref(&sym)),

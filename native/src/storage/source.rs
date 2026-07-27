@@ -154,6 +154,7 @@ mod tests {
             implements: vec![],
             calls: vec![],
             folder: None,
+            ..Default::default()
         }
     }
 

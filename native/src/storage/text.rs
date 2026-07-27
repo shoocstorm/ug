@@ -213,6 +213,13 @@ fn node_description(node: &GraphNode) -> String {
     // Docstring and signature both carry retrieval signal — join whatever
     // is present so typed-but-undocumented symbols still embed usefully.
     let mut parts: Vec<String> = Vec::new();
+    // Framework semantics lead, and are added whether or not the symbol is
+    // documented: they say what the symbol *is* in a way its prose usually
+    // assumes rather than states.
+    let semantics = synthesize_framework_semantics(node);
+    if !semantics.is_empty() {
+        parts.push(semantics);
+    }
     if let Some(doc) = &node.docstring {
         let trimmed = doc.trim();
         if !trimmed.is_empty() {
@@ -238,6 +245,136 @@ fn node_description(node: &GraphNode) -> String {
     // Nothing written about this node — fall back to what the graph knows
     // structurally rather than embedding an empty description.
     synthesize_code_synopsis(node)
+}
+
+/// Annotations whose meaning is entirely in their name, and the phrase that
+/// says it in the words someone would search with.
+///
+/// This exists because annotation-driven frameworks put a symbol's purpose
+/// somewhere the rest of the pipeline can't see it. `@Repository class
+/// JdbcOrderStore` is a data-access component, but nothing in the
+/// identifier, the (usually absent) Javadoc or the file path says
+/// "repository", "data access" or "persistence". The class embeds as a bare
+/// name and a path, and a query for "where do we persist orders" doesn't
+/// reach it.
+///
+/// `@Override` is deliberately absent: it is on a large share of all methods
+/// and says nothing that distinguishes one from another. The graph records
+/// the same fact precisely, as an `Overrides` edge.
+const ROLE_ANNOTATIONS: &[(&str, &str)] = &[
+    ("RestController", "Spring REST controller"),
+    ("Controller", "Spring MVC controller"),
+    ("ControllerAdvice", "Spring controller advice, handles exceptions"),
+    ("RestControllerAdvice", "Spring controller advice, handles exceptions"),
+    ("Service", "Spring service bean"),
+    ("Repository", "Spring data access repository"),
+    ("Component", "Spring component bean"),
+    ("Configuration", "Spring configuration class"),
+    ("Bean", "Spring bean factory method"),
+    ("FeignClient", "Feign declarative HTTP client"),
+    ("Aspect", "AOP aspect"),
+    ("Entity", "JPA persistent entity"),
+    ("Embeddable", "JPA embeddable value type"),
+    ("MappedSuperclass", "JPA mapped superclass"),
+    ("Id", "primary key"),
+    ("Transactional", "runs in a database transaction"),
+    ("Async", "runs asynchronously"),
+    ("Cacheable", "result is cached"),
+    ("EventListener", "application event listener"),
+    ("ExceptionHandler", "exception handler"),
+    ("Deprecated", "deprecated"),
+    ("Test", "test case"),
+    ("ParameterizedTest", "parameterized test case"),
+    ("SpringBootTest", "Spring Boot integration test"),
+    ("Autowired", "injected dependency"),
+    ("Inject", "injected dependency"),
+];
+
+/// Annotations whose meaning is in an argument, and the key to read it from.
+/// The rendered phrase carries the *value* — a table name, a topic, a cron
+/// expression — which is the part a query is likely to contain.
+const VALUE_ANNOTATIONS: &[(&str, &[&str], &str)] = &[
+    ("Table", &["name"], "mapped to table"),
+    ("Column", &["name"], "database column"),
+    ("JoinColumn", &["name"], "joined on column"),
+    ("Query", &["value"], "query"),
+    ("NamedQuery", &["query"], "named query"),
+    ("KafkaListener", &["topics"], "consumes Kafka topic"),
+    ("RabbitListener", &["queues"], "consumes queue"),
+    ("JmsListener", &["destination"], "consumes JMS destination"),
+    ("Scheduled", &["cron"], "scheduled on cron"),
+    ("Value", &["value"], "configured by"),
+    ("Qualifier", &["value"], "qualified as"),
+    ("Profile", &["value"], "active in profile"),
+    ("ConditionalOnProperty", &["name"], "enabled by property"),
+    ("ConfigurationProperties", &["prefix"], "bound to config prefix"),
+    ("RequestMapping", &["path", "value"], "base path"),
+];
+
+/// Prose for what a node's annotations and route say it is.
+///
+/// Empty for any node without them, so nothing changes for languages that
+/// don't carry annotations.
+fn synthesize_framework_semantics(node: &GraphNode) -> String {
+    use crate::indexer::languages::java::{first_string_literal, named_or_first_string};
+
+    let mut parts: Vec<String> = Vec::new();
+
+    // The route leads. `GET /api/orders/{id}` is the highest-value string a
+    // handler has and appears nowhere else in its text.
+    if let Some(route) = node.route.as_deref().filter(|r| !r.is_empty()) {
+        parts.push(format!("HTTP endpoint {}", route));
+    }
+
+    if node.annotations.is_empty() {
+        return parts.join(". ");
+    }
+
+    for ann in &node.annotations {
+        if let Some((_, phrase)) = ROLE_ANNOTATIONS.iter().find(|(n, _)| *n == ann.name) {
+            parts.push((*phrase).to_string());
+            continue;
+        }
+        if let Some((_, keys, phrase)) = VALUE_ANNOTATIONS.iter().find(|(n, _, _)| *n == ann.name) {
+            // A route already covers the mapping annotations on a handler;
+            // repeating the base path would only dilute it.
+            if node.route.is_some() {
+                continue;
+            }
+            let value = ann
+                .args
+                .as_deref()
+                .and_then(|a| named_or_first_string(a, keys).or_else(|| first_string_literal(a)));
+            if let Some(v) = value {
+                parts.push(format!("{} {}", phrase, v.trim()));
+            } else {
+                parts.push((*phrase).to_string());
+            }
+        }
+    }
+
+    // Anything unrecognised still gets named. A house annotation
+    // (`@AuditLogged`, `@Idempotent`) is a real fact about the symbol, and
+    // its identifier splits into searchable words like any other.
+    let unknown: Vec<String> = node
+        .annotations
+        .iter()
+        .filter(|a| {
+            !ROLE_ANNOTATIONS.iter().any(|(n, _)| *n == a.name)
+                && !VALUE_ANNOTATIONS.iter().any(|(n, _, _)| *n == a.name)
+                && a.name != "Override"
+        })
+        .map(|a| match humanize_identifier(&a.name) {
+            Some(words) => format!("{} ({})", a.name, words),
+            None => a.name.clone(),
+        })
+        .take(MAX_SYNOPSIS_NAMES)
+        .collect();
+    if !unknown.is_empty() {
+        parts.push(format!("annotated {}", unknown.join(", ")));
+    }
+
+    parts.join(". ")
 }
 
 /// Render `(name?: type, ...) -> return` from a node's structured signature.
@@ -879,6 +1016,7 @@ mod sparse_tests {
             implements: Vec::new(),
             calls: Vec::new(),
             folder: None,
+            ..Default::default()
         };
         let text = build_node_text(&node, &[]);
         assert!(text.contains("buildSparseKeywordVector"), "exact name kept: {text}");
@@ -903,6 +1041,7 @@ mod sparse_tests {
             implements: vec!["Closeable".into()],
             calls: vec!["connect".into()],
             folder: None,
+            ..Default::default()
         };
         let text = build_node_text(&n, &[]);
         assert!(text.contains("defined in src/net/pool.ts"), "path is signal: {text}");
@@ -941,8 +1080,112 @@ mod sparse_tests {
             implements: Vec::new(),
             calls: Vec::new(),
             folder: None,
+            ..Default::default()
         };
         let text = build_node_text(&node, &[]);
         assert!(!text.contains("("), "no redundant parenthetical: {text}");
+    }
+
+    // ---- framework semantics ------------------------------------------
+    //
+    // These all pin the same idea: in an annotation-driven framework the
+    // annotation carries meaning that appears in no identifier, no path and
+    // no docstring, so unless it reaches the embedding text a natural
+    // question about the system can't find the code that answers it.
+
+    fn annotated(name: &str, annotations: &[(&str, Option<&str>)]) -> GraphNode {
+        GraphNode {
+            id: format!("class:src/A.java:{name}"),
+            name: name.into(),
+            node_type: GraphNodeType::Class,
+            file: Some("src/A.java".into()),
+            annotations: annotations
+                .iter()
+                .map(|(n, a)| crate::types::Annotation {
+                    name: (*n).into(),
+                    args: a.map(|s| s.to_string()),
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_route_leads_the_description() {
+        let mut n = annotated("OrderController.find", &[("GetMapping", Some("\"/{id}\""))]);
+        n.route = Some("GET /api/orders/{id}".into());
+        let text = build_node_text(&n, &[]);
+        assert!(
+            text.contains("HTTP endpoint GET /api/orders/{id}"),
+            "the URL is the string people search with: {text}"
+        );
+    }
+
+    #[test]
+    fn a_framework_role_is_spelled_out_in_searchable_words() {
+        let text = build_node_text(&annotated("JdbcOrderStore", &[("Repository", None)]), &[]);
+        assert!(
+            text.contains("Spring data access repository"),
+            "nothing else in this node says what it is: {text}"
+        );
+    }
+
+    #[test]
+    fn a_value_carrying_annotation_contributes_its_value() {
+        let text = build_node_text(
+            &annotated(
+                "Order",
+                &[("Entity", None), ("Table", Some("name = \"orders\""))],
+            ),
+            &[],
+        );
+        assert!(text.contains("JPA persistent entity"), "{text}");
+        assert!(
+            text.contains("mapped to table orders"),
+            "the table name is what a data question mentions: {text}"
+        );
+    }
+
+    #[test]
+    fn semantics_survive_alongside_a_docstring() {
+        // Unlike the structural synopsis, these are not a fallback: a
+        // documented handler still needs its URL in the text.
+        let mut n = annotated("find", &[("Transactional", None)]);
+        n.docstring = Some("Looks up an order.".into());
+        let text = build_node_text(&n, &[]);
+        assert!(text.contains("runs in a database transaction"), "{text}");
+        assert!(text.contains("Looks up an order."), "{text}");
+    }
+
+    #[test]
+    fn an_unrecognised_annotation_is_still_named_and_split() {
+        let text = build_node_text(&annotated("pay", &[("AuditLogged", None)]), &[]);
+        assert!(text.contains("AuditLogged"), "{text}");
+        assert!(
+            text.contains("audit logged"),
+            "a house annotation splits into words like any identifier: {text}"
+        );
+    }
+
+    #[test]
+    fn override_is_left_out() {
+        // It sits on a large share of all methods and distinguishes none of
+        // them; the graph records the same fact precisely, as an edge.
+        let text = build_node_text(&annotated("save", &[("Override", None)]), &[]);
+        assert!(!text.contains("Override"), "{text}");
+    }
+
+    #[test]
+    fn a_node_without_annotations_is_unchanged() {
+        let plain = GraphNode {
+            id: "function:src/a.ts:parse".into(),
+            name: "parse".into(),
+            node_type: GraphNodeType::Function,
+            file: Some("src/a.ts".into()),
+            docstring: Some("Parses input.".into()),
+            ..Default::default()
+        };
+        let text = build_node_text(&plain, &[]);
+        assert_eq!(text, "Function: parse. Parses input.. Related: ");
     }
 }

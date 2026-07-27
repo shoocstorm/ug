@@ -24,12 +24,17 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          components: clippy, llvm-tools-preview
 
       - name: Cache cargo registry and build artifacts
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: native
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
 
       - name: Install Tauri Linux build dependencies
         run: |
@@ -59,3 +64,13 @@ jobs:
       - name: Rust tests
         run: cargo test
         working-directory: native
+
+      - name: Generate coverage report
+        run: cargo llvm-cov --lcov --output-path lcov.info
+        working-directory: native
+
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: native/lcov.info
+          fail_ci_if_error: false

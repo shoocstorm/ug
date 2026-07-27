@@ -29,8 +29,51 @@ pub const SUPPORTED_EXTS: &[&str] = &[
     "ppt", "pptx", "pptm", "pot", "potm", "potx", "odp", "otp",
 ];
 
-/// Directory names that are always skipped during the file walk.
-pub const IGNORED_DIRS: &[&str] = &["node_modules", ".git", "target"];
+/// Directory names that are always skipped during the file walk. Only names
+/// that are *never* a legitimate source directory belong here — see
+/// [`BUILD_OUTPUT_DIRS`] for the ones that depend on context.
+pub const IGNORED_DIRS: &[&str] = &["node_modules", ".git"];
+
+/// Directory names that hold build output for one toolchain but are a
+/// perfectly ordinary source directory for another, paired with the build
+/// descriptors whose presence identifies them.
+///
+/// `target` was previously ignored unconditionally, which is right for Maven
+/// and Cargo and wrong for Java: `target` is a legal package name, so
+/// `src/main/java/com/acme/target/` — and every class in it — vanished from
+/// the index. Output directories sit next to the descriptor that generates
+/// them, and source packages never do, so that is what we check.
+pub const BUILD_OUTPUT_DIRS: &[(&str, &[&str])] = &[
+    ("target", &["pom.xml", "build.sbt", "Cargo.toml"]),
+    (
+        "build",
+        &[
+            "build.gradle",
+            "build.gradle.kts",
+            "settings.gradle",
+            "settings.gradle.kts",
+        ],
+    ),
+    ("out", &["build.gradle", "build.gradle.kts", "pom.xml"]),
+];
+
+/// True when `path` is a build-output directory: its name matches one of
+/// [`BUILD_OUTPUT_DIRS`] and its parent holds a descriptor that produces it.
+pub fn is_build_output_dir(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    let Some((_, descriptors)) = BUILD_OUTPUT_DIRS.iter().find(|(d, _)| *d == name) else {
+        return false;
+    };
+    if !path.is_dir() {
+        return false;
+    }
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    descriptors.iter().any(|d| parent.join(d).exists())
+}
 
 /// Read a node's source text as UTF-8, returning `None` if the byte range is
 /// invalid or the slice is not valid UTF-8.
@@ -315,9 +358,16 @@ pub fn is_supported_file(path: &Path) -> bool {
 }
 
 /// True if the path passes through one of the always-ignored directories.
+///
+/// Compared per path *component*, not as a substring. The substring form
+/// dropped any file whose path merely *contained* one of the names, so a
+/// `src/targeting/` directory read as Maven's `target/`.
 pub fn is_ignored_path(path: &Path) -> bool {
-    let path_str = path.to_string_lossy();
-    IGNORED_DIRS.iter().any(|&d| path_str.contains(d))
+    path.components().any(|c| {
+        c.as_os_str()
+            .to_str()
+            .is_some_and(|s| IGNORED_DIRS.contains(&s))
+    })
 }
 
 /// Generated build artifacts masquerading as source. Even when committed
@@ -350,11 +400,16 @@ fn artifact_overrides(root: &str) -> Option<ignore::overrides::Override> {
 }
 
 /// Walk `path` honouring `.gitignore` rules and return every supported source
-/// file. Hidden files, directories listed in `IGNORED_DIRS`, and build
-/// artifacts matching `IGNORED_ARTIFACT_GLOBS` / `UG_IGNORE` are skipped.
+/// file. Hidden files, directories listed in [`IGNORED_DIRS`], build output
+/// identified by [`is_build_output_dir`], and artifacts matching
+/// [`IGNORED_ARTIFACT_GLOBS`] / `UG_IGNORE` are skipped.
 pub fn scan_files(path: &str) -> Vec<PathBuf> {
     let mut builder = WalkBuilder::new(path);
     builder.hidden(true).git_ignore(true);
+    // Applied as an entry filter rather than a glob so a matching directory
+    // prunes its whole subtree, and so the sibling-descriptor probe runs
+    // once per directory rather than once per file.
+    builder.filter_entry(|e| !is_build_output_dir(e.path()));
     if let Some(overrides) = artifact_overrides(path) {
         builder.overrides(overrides);
     }

@@ -61,6 +61,7 @@ fn node(id: &str, docstring: &str) -> GraphNode {
         implements: Vec::new(),
         calls: Vec::new(),
         folder: None,
+        ..Default::default()
     }
 }
 

@@ -39,6 +39,7 @@ fn node(id: &str, name: &str, docstring: Option<&str>, start_line: u32) -> Graph
         implements: Vec::new(),
         calls: Vec::new(),
         folder: None,
+        ..Default::default()
     }
 }
 

@@ -96,6 +96,7 @@ pub fn node_type_str(t: &GraphNodeType) -> &'static str {
         GraphNodeType::Dependency => "Dependency",
         GraphNodeType::Config => "Config",
         GraphNodeType::Constant => "Constant",
+        GraphNodeType::Route => "Route",
     }
 }
 
@@ -111,6 +112,7 @@ pub fn edge_type_str(t: &GraphEdgeType) -> &'static str {
         GraphEdgeType::Exports => "Exports",
         GraphEdgeType::Requires => "Requires",
         GraphEdgeType::Uses => "Uses",
+        GraphEdgeType::Overrides => "Overrides",
     }
 }
 
@@ -127,12 +129,24 @@ pub const EDGE_TYPE_VOCABULARY: &[&str] = &[
     "Exports",
     "Requires",
     "Uses",
+    "Overrides",
 ];
 
 /// Default edge types for `find_usages` — dependency-ish edges only, no
 /// `Contains` (structure), so results mean "code that uses this", not "the
 /// folder that holds it".
-pub const USAGE_EDGE_TYPES: &[&str] = &["calls", "references", "imports", "extends", "implements"];
+///
+/// `overrides` is included because an override is the most useful answer
+/// there is to "what depends on this method": for an interface or abstract
+/// declaration it is the entirety of the implementing code.
+pub const USAGE_EDGE_TYPES: &[&str] = &[
+    "calls",
+    "references",
+    "imports",
+    "extends",
+    "implements",
+    "overrides",
+];
 
 /// `file:<path>` is how File node ids print, and users copy that straight
 /// into file-taking params. Accept both forms.
@@ -2384,6 +2398,7 @@ mod tests {
             implements: vec![],
             calls: vec![],
             folder: None,
+            ..Default::default()
         }
     }
 

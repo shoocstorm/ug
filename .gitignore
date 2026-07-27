@@ -28,3 +28,4 @@ docs/notes.md
 prompt.md
 .agents
 *.code-workspace
+lcov.info
