@@ -126,6 +126,46 @@ When making significant changes (new commands, new API routes, new MCP tools, st
 1. The relevant markdown docs in `docs/` (especially `docs/api-reference.md`)
 2. The corresponding `docs/ug-website/*.html` pages
 
+## 8. OverGraph — the storage engine
+
+`ug`'s graph store is [OverGraph](https://overgraph.io), an embedded Rust graph
+database. It is a sibling checkout in this VS Code workspace
+(`ug.code-workspace` → `../overgraph`), so its source is directly readable.
+
+**Full API reference: `/Users/aldrickwan/Documents/project/overgraph/docs/api-reference.md`**
+
+It is ~7,700 lines / 314 KB — **never read it whole.** It opens with a
+`## Table of Contents` (line 15) linking every method. Read the ToC, then jump
+to the one section you need. Landmarks as of v0.17.0:
+
+| Section | Line |
+|---------|------|
+| Table of Contents | 15 |
+| Data Model (nodes, edges, `PropValue`, labels) | ~27 |
+| Property Index Management | ~66 |
+| Queries (node / edge / graph-row / pipeline) | 2759 |
+| **GQL** (Cypher-style query language) | 3584 |
+| — Read Syntax | 3613 |
+| — Parameters and Options (**caps, `allow_full_scan`**) | 4325 |
+| — Explain, Profile, and Stats | 4611 |
+| — Current Limits (what GQL rejects) | 5113 |
+| Traversal (`neighbors`, `traverse`, `shortest_path`) | ~5169+ |
+
+Two things that bite immediately when writing GQL against it:
+
+- **`allow_full_scan` defaults to `false`.** Any query without a bounded anchor
+  — which is most aggregate/statistics queries — fails until you opt in.
+- **Every execution is capped** (`max_groups`, `max_frontier`, `max_path_hops`,
+  `max_rows`, …). Caps truncate rather than error, so results can be silently
+  partial. Read `caps` and `warnings` off the result and surface them.
+
+**Version discipline:** the crate moves fast and renames public API between
+minor versions (0.6 → 0.17 renamed eight symbols and changed node/edge type ids
+from `u32` to string labels). Pin exactly in `native/Cargo.toml`, read the
+changelog on every bump, and keep engine calls behind the `KnowledgeStore`
+trait (`native/src/storage/store.rs`) so upgrades stay confined to
+`native/src/storage/db.rs`.
+
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.

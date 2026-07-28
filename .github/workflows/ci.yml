@@ -54,13 +54,6 @@ jobs:
         run: cargo clippy --all-targets -- -D clippy::correctness
         working-directory: native
 
-      - name: Install PDFium
-        run: |
-          wget -q https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-linux-x64.tgz
-          tar xzf pdfium-linux-x64.tgz
-          sudo cp libpdfium.so /usr/local/lib/
-          sudo ldconfig
-
       - name: Rust tests
         run: cargo test
         working-directory: native

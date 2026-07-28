@@ -152,6 +152,12 @@ pub enum StoreError {
         existing: u32,
         requested: u32,
     },
+    /// The store on disk was written by an older build whose layout this
+    /// one cannot read. Recoverable only by reindexing.
+    StoreFormatMismatch {
+        existing: u32,
+        supported: u32,
+    },
     /// Auth / connection failures (Neo4j specific).
     Auth(String),
 }
@@ -175,6 +181,15 @@ impl std::fmt::Display for StoreError {
                 "embedding dim mismatch: store was created with dim {}, requested {}",
                 existing, requested
             ),
+            StoreError::StoreFormatMismatch {
+                existing,
+                supported,
+            } => write!(
+                f,
+                "this index was written by an older ug (store format v{}, this build needs v{}). \
+                 Run `ug reindex` (or `ug gen`) to rebuild it.",
+                existing, supported
+            ),
             StoreError::Auth(s) => write!(f, "auth error: {}", s),
         }
     }
@@ -196,6 +211,13 @@ impl From<DbError> for StoreError {
             } => StoreError::DimMismatch {
                 existing,
                 requested,
+            },
+            DbError::StoreFormatMismatch {
+                existing,
+                supported,
+            } => StoreError::StoreFormatMismatch {
+                existing,
+                supported,
             },
             DbError::Engine(e) => StoreError::Backend(format!("overgraph: {}", e)),
         }
@@ -394,6 +416,27 @@ impl StoreSpec {
             StoreSpec::Neo4j { embedding_dim, .. } => *embedding_dim = dim,
         }
     }
+}
+
+/// Clear any destination whose on-disk format this build cannot read, so
+/// the ingest that follows rebuilds it instead of failing against it.
+///
+/// Only ingest calls this — see
+/// [`crate::storage::db::reset_if_stale_format`] for why the deletion
+/// lives on the write path and not in `open_store`. Neo4j is unaffected:
+/// its schema is server-side and versionless here.
+///
+/// Returns the paths it cleared, for the caller to report.
+pub fn reset_stale_format_stores(specs: &[StoreSpec]) -> Result<Vec<PathBuf>, StoreError> {
+    let mut cleared = Vec::new();
+    for spec in specs {
+        if let StoreSpec::Overgraph { path, .. } = spec {
+            if crate::storage::db::reset_if_stale_format(path)? {
+                cleared.push(path.clone());
+            }
+        }
+    }
+    Ok(cleared)
 }
 
 /// Open a single store from a [`StoreSpec`]. The OverGraph variant uses

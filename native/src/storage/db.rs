@@ -16,14 +16,12 @@ use crate::storage::embed::DEFAULT_EMBEDDING_DIM;
 use crate::storage::store::{
     Direction, KnowledgeStore, NodeFilter, NodeKey, StoreError, TraversalNode, TraversalPage,
 };
-use crate::storage::types_registry::{
-    edge_type_from_id, edge_type_to_id, node_type_from_id, node_type_to_id,
-};
+use crate::storage::types_registry::{edge_label, node_label, ALL_NODE_LABELS};
 use async_trait::async_trait;
 use overgraph::{
     DatabaseEngine, DbOptions, DenseMetric, DenseVectorConfig, Direction as OgDirection, EdgeInput,
-    EdgeRecord, EngineError, FusionMode, HnswConfig, NeighborOptions, NodeInput, NodeRecord,
-    PprAlgorithm, PprOptions as OgPprOptions, PprResult as OgPprResult, PropValue,
+    EdgeView, EngineError, FusionMode, HnswConfig, NeighborOptions, NodeInput, NodeKeyQuery,
+    NodeView, PprAlgorithm, PprOptions as OgPprOptions, PprResult as OgPprResult, PropValue,
     VectorSearchMode, VectorSearchRequest,
 };
 use serde::{Deserialize, Serialize};
@@ -38,9 +36,25 @@ use std::sync::{Arc, RwLock};
 /// vectors of different sizes).
 const META_FILE: &str = "ug-meta.json";
 
+/// On-disk layout version for the OverGraph store.
+///
+/// Bumped to 2 for the OverGraph 0.17 upgrade, which changed node and
+/// edge typing from numeric `type_id`s to string labels. A v1 store's
+/// segments encode types the 0.17 engine reads as different labels
+/// entirely, so opening one would not fail — it would silently return
+/// nothing for every typed lookup. Rejecting it outright and asking for
+/// a reindex is the only honest option.
+///
+/// Bump this whenever the stored encoding changes in a way that makes an
+/// older directory unreadable or, worse, quietly wrong.
+const STORE_FORMAT_VERSION: u32 = 2;
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 struct DbMeta {
+    /// Absent (deserializing to 0) on stores written before this field
+    /// existed, which are by definition v1 — pre-0.17 numeric type ids.
+    store_format: u32,
     embedding_dim: u32,
     /// The embedding model the store was last ingested with.
     ///
@@ -75,6 +89,60 @@ fn write_meta(db_path: &Path, meta: &DbMeta) -> Result<(), DbError> {
     Ok(())
 }
 
+/// Reject a store whose on-disk layout this build cannot read.
+///
+/// Keyed on the manifest alone, deliberately. An earlier version also
+/// treated "data on disk but no manifest" as an old store, which is
+/// wrong: [`Db::open`] never writes a manifest, so a store created
+/// through it looked ancient the second time it was opened. Absence of a
+/// manifest is genuinely ambiguous and is not evidence of anything.
+///
+/// That leaves one narrow hole — a store old enough to predate the
+/// manifest entirely would be opened rather than rejected. Every store
+/// written by any ug that recorded `embedding_dim` (which is every ug
+/// that `ug gen` has shipped in) does have one, so the population this
+/// misses is effectively empty, and it was already unreadable before
+/// this check existed.
+fn check_store_format(meta: Option<&DbMeta>) -> Result<(), DbError> {
+    let Some(meta) = meta else {
+        return Ok(());
+    };
+    if meta.store_format == STORE_FORMAT_VERSION {
+        return Ok(());
+    }
+    // A manifest written before the field existed deserializes to 0; it
+    // is a v1 store, and reporting "v0" would just confuse.
+    Err(DbError::StoreFormatMismatch {
+        existing: meta.store_format.max(1),
+        supported: STORE_FORMAT_VERSION,
+    })
+}
+
+/// Clear a store whose on-disk layout this build cannot read, so the
+/// caller can rebuild it from scratch.
+///
+/// Read paths reject a stale store and tell the user to reindex — but the
+/// reindex has to be able to *succeed*, and it cannot open the old store
+/// to overwrite it. Something has to delete it, and ingest is the only
+/// caller entitled to: it is about to replace every node anyway.
+///
+/// Deliberately narrow. It removes the directory only when a manifest is
+/// present *and* records a different format. A missing manifest is
+/// ambiguous (see [`check_store_format`]) and is never grounds for
+/// deleting anything.
+///
+/// Returns whether it removed a store.
+pub fn reset_if_stale_format(path: &Path) -> Result<bool, DbError> {
+    let Some(meta) = read_meta(path)? else {
+        return Ok(false);
+    };
+    if meta.store_format == STORE_FORMAT_VERSION {
+        return Ok(false);
+    }
+    std::fs::remove_dir_all(path)?;
+    Ok(true)
+}
+
 #[derive(Debug)]
 pub enum DbError {
     Engine(EngineError),
@@ -84,6 +152,7 @@ pub enum DbError {
     BadVector { id: String, got: usize, want: usize },
     UnknownEndpoint(String),
     DimMismatch { existing: u32, requested: u32 },
+    StoreFormatMismatch { existing: u32, supported: u32 },
 }
 
 impl std::fmt::Display for DbError {
@@ -102,6 +171,13 @@ impl std::fmt::Display for DbError {
                 "embedding dim mismatch: db was created with dim {}, but {} was requested. \
                  Either pass the matching --embedding-dim, or delete the db directory to recreate it.",
                 existing, requested
+            ),
+            DbError::StoreFormatMismatch { existing, supported } => write!(
+                f,
+                "this index was written by an older ug (store format v{}, this build needs v{}). \
+                 Node and edge typing changed, so the old data cannot be read correctly. \
+                 Run `ug reindex` (or `ug gen`) to rebuild it.",
+                existing, supported
             ),
         }
     }
@@ -204,7 +280,9 @@ impl Db {
     /// for call-site compatibility.
     pub async fn open(path: &str) -> Result<Self, DbError> {
         let path_buf = Path::new(path).to_path_buf();
-        let dim = read_meta(&path_buf)?
+        let meta = read_meta(&path_buf)?;
+        check_store_format(meta.as_ref())?;
+        let dim = meta
             .map(|m| m.embedding_dim)
             .unwrap_or(DEFAULT_EMBEDDING_DIM as u32);
         Self::open_inner(&path_buf, dim).await
@@ -216,7 +294,9 @@ impl Db {
     /// [`DbError::DimMismatch`] rather than silently mixing vectors.
     pub async fn open_or_create(path: &str, embedding_dim: u32) -> Result<Self, DbError> {
         let path_buf = Path::new(path).to_path_buf();
-        match read_meta(&path_buf)? {
+        let meta = read_meta(&path_buf)?;
+        check_store_format(meta.as_ref())?;
+        match meta {
             Some(meta) if meta.embedding_dim != embedding_dim => {
                 return Err(DbError::DimMismatch {
                     existing: meta.embedding_dim,
@@ -227,6 +307,7 @@ impl Db {
             None => write_meta(
                 &path_buf,
                 &DbMeta {
+                    store_format: STORE_FORMAT_VERSION,
                     embedding_dim,
                     model: None,
                 },
@@ -246,6 +327,7 @@ impl Db {
     /// next open fall back to the default and mismatch.
     pub fn record_model(&self, model: &str) -> Result<(), DbError> {
         let mut meta = read_meta(&self.path)?.unwrap_or_default();
+        meta.store_format = STORE_FORMAT_VERSION;
         meta.embedding_dim = self.embedding_dim;
         meta.model = Some(model.to_string());
         write_meta(&self.path, &meta)
@@ -289,11 +371,11 @@ impl Db {
         if let Some(id) = self.key_to_id.read().unwrap().get(key).copied() {
             return Ok(Some(id));
         }
-        // Slow path — try every known node type. OverGraph keys nodes by
-        // (type_id, key) so we have to probe; in practice the cache is
+        // Slow path — try every known node label. OverGraph keys nodes by
+        // (label, key) so we have to probe; in practice the cache is
         // hot so this rarely fires.
-        for &type_id in &[1u32, 2, 3, 4, 5, 6, 7, 8, 99] {
-            if let Some(rec) = self.engine.get_node_by_key(type_id, key)? {
+        for label in ALL_NODE_LABELS {
+            if let Some(rec) = self.engine.get_node_by_key(label, key)? {
                 self.remember(key.to_string(), rec.id);
                 return Ok(Some(rec.id));
             }
@@ -363,7 +445,7 @@ impl Db {
                 });
             }
             inputs.push(NodeInput {
-                type_id: node_type_to_id(&r.node_type),
+                labels: vec![node_label(&r.node_type).to_string()],
                 key: r.id.clone(),
                 props: node_props(r),
                 weight: 1.0,
@@ -378,7 +460,7 @@ impl Db {
                 )),
             });
         }
-        let ids = self.engine.batch_upsert_nodes(&inputs)?;
+        let ids = self.engine.batch_upsert_nodes(inputs)?;
         let mut k2i = self.key_to_id.write().unwrap();
         let mut i2k = self.id_to_key.write().unwrap();
         for (row, id) in rows.iter().zip(ids.iter()) {
@@ -412,14 +494,14 @@ impl Db {
             inputs.push(EdgeInput {
                 from,
                 to,
-                type_id: edge_type_to_id(&r.edge_type),
+                label: edge_label(&r.edge_type).to_string(),
                 props: BTreeMap::new(),
                 weight,
                 valid_from: None,
                 valid_to: None,
             });
         }
-        self.engine.batch_upsert_edges(&inputs)?;
+        self.engine.batch_upsert_edges(inputs)?;
         Ok(())
     }
 
@@ -435,14 +517,14 @@ impl Db {
     }
 
     pub async fn count_nodes(&self) -> Result<usize, DbError> {
-        let stats = self.engine.stats()?;
-        // OverGraph's `stats` doesn't expose live node count directly; we
-        // fall back to summing visible types. Cheap when called rarely.
-        let total = (1u32..=99)
-            .filter_map(|tid| self.engine.nodes_by_type(tid).ok())
-            .map(|v| v.len())
-            .sum();
-        let _ = stats;
+        // OverGraph's `stats` doesn't expose a live node count, but
+        // `count_nodes_by_labels` counts a single label off the label
+        // index without hydrating records, so summing our own inventory
+        // is both precise and cheap.
+        let mut total = 0usize;
+        for label in ALL_NODE_LABELS {
+            total += self.engine.count_nodes_by_labels(*label)? as usize;
+        }
         Ok(total)
     }
 
@@ -500,14 +582,19 @@ fn prop_i64(props: &BTreeMap<String, PropValue>, k: &str) -> i64 {
     }
 }
 
-fn node_record_to_row(rec: &NodeRecord) -> NodeRow {
+fn node_record_to_row(rec: &NodeView) -> NodeRow {
     NodeRow {
         id: rec.key.clone(),
         name: prop_string(&rec.props, "name"),
         node_type: {
             let s = prop_string(&rec.props, "node_type");
             if s.is_empty() {
-                node_type_from_id(rec.type_id).to_string()
+                // Ingest writes exactly one label per node; fall back to
+                // it when the `node_type` property is missing.
+                rec.labels
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "Unknown".to_string())
             } else {
                 s
             }
@@ -540,7 +627,7 @@ pub async fn vector_search(
         dense_query: Some(query_vec),
         sparse_query: None,
         k: limit,
-        type_filter: None,
+        label_filter: None,
         ef_search: None,
         scope: None,
         dense_weight: None,
@@ -578,7 +665,7 @@ pub async fn hybrid_search(
             Some(sparse_vec)
         },
         k: limit,
-        type_filter: None,
+        label_filter: None,
         ef_search: None,
         scope: None,
         dense_weight: None,
@@ -627,7 +714,7 @@ async fn edges_in_direction(
             OgDirection::Incoming => (neighbor_key, node_id.to_string()),
             OgDirection::Both => (node_id.to_string(), neighbor_key),
         };
-        let edge_type = edge_type_from_id(n.edge_type_id).to_string();
+        let edge_type = n.label.clone();
         out.push(EdgeRow {
             id: format!("{}|{}|{}", source, edge_type, target),
             source,
@@ -689,8 +776,8 @@ pub async fn nodes_by_ids(db: &Db, ids: &[String]) -> Result<Vec<NodeRow>, DbErr
 /// matters (a fresh `ug gen` process, cold `key_to_id`):
 ///
 /// 1. The caller knows each node's type, so we can go straight to
-///    `get_node_by_key(type_id, key)` instead of `lookup_id`'s probe
-///    across all nine type ids.
+///    `get_nodes_by_keys` instead of `lookup_id`'s probe across every
+///    known node label.
 /// 2. Every row found is `remember`ed. Ingest skips the upsert for
 ///    unchanged nodes, so without this the id cache would be left cold
 ///    and the *edge* upsert that follows would fall back to probing for
@@ -700,12 +787,15 @@ pub async fn nodes_for_upsert(db: &Db, keys: &[NodeKey]) -> Result<Vec<NodeRow>,
         return Ok(Vec::new());
     }
     // One batched engine round-trip for the whole chunk, keyed by
-    // `(type_id, key)` — the pair OverGraph actually indexes on. Going
-    // through `lookup_id` instead would probe all ten type ids per node on
+    // `(label, key)` — the pair OverGraph actually indexes on. Going
+    // through `lookup_id` instead would probe every node label per node on
     // a cold cache, which is precisely the situation ingest runs in.
-    let lookup: Vec<(u32, &str)> = keys
+    let lookup: Vec<NodeKeyQuery> = keys
         .iter()
-        .map(|k| (node_type_to_id(&k.node_type), k.id.as_str()))
+        .map(|k| NodeKeyQuery {
+            label: node_label(&k.node_type).to_string(),
+            key: k.id.clone(),
+        })
         .collect();
     let recs = db.engine.get_nodes_by_keys(&lookup)?;
 
@@ -719,7 +809,7 @@ pub async fn nodes_for_upsert(db: &Db, keys: &[NodeKey]) -> Result<Vec<NodeRow>,
 
 /// Delete every stored node whose key is absent from `keep`.
 ///
-/// Sweeps each node type in turn (OverGraph indexes nodes per type, so
+/// Sweeps each node label in turn (OverGraph indexes nodes per label, so
 /// there is no single "all nodes" cursor) and deletes the misses. Edges
 /// pointing at a deleted node are left to OverGraph's own tombstoning.
 ///
@@ -730,8 +820,9 @@ pub async fn prune_nodes_absent_from(
     keep: &std::collections::HashSet<String>,
 ) -> Result<usize, DbError> {
     let mut removed = 0usize;
-    for &type_id in crate::storage::types_registry::ALL_NODE_TYPE_IDS {
-        for rec in db.engine.get_nodes_by_type(type_id)? {
+    for label in ALL_NODE_LABELS {
+        let ids = db.engine.nodes_by_labels(*label)?;
+        for rec in db.engine.get_nodes(&ids)?.into_iter().flatten() {
             if keep.contains(&rec.key) {
                 continue;
             }
@@ -750,7 +841,7 @@ pub async fn traverse_string_ids(
     db: &Db,
     start_string_id: &str,
     max_hops: u32,
-    edge_type_ids: Option<Vec<u32>>,
+    edge_labels: Option<Vec<String>>,
     direction: OgDirection,
 ) -> Result<(Vec<NodeRow>, Vec<EdgeRow>, HashMap<String, u32>), DbError> {
     use overgraph::TraverseOptions;
@@ -758,7 +849,7 @@ pub async fn traverse_string_ids(
         return Ok((Vec::new(), Vec::new(), HashMap::new()));
     };
     let opts = TraverseOptions {
-        edge_type_filter: edge_type_ids,
+        edge_label_filter: edge_labels,
         direction,
         ..Default::default()
     };
@@ -784,17 +875,17 @@ pub async fn traverse_string_ids(
     // Reconstruct edges by reading `via_edge_id` for each hit.
     let mut edges: Vec<EdgeRow> = Vec::new();
     let edge_ids: Vec<u64> = page.items.iter().filter_map(|h| h.via_edge_id).collect();
-    let edge_records: Vec<Option<EdgeRecord>> = db.engine.get_edges(&edge_ids)?;
+    let edge_records: Vec<Option<EdgeView>> = db.engine.get_edges(&edge_ids)?;
     for rec_opt in edge_records.into_iter().flatten() {
         edges.push(edge_record_to_row(db, &rec_opt));
     }
     Ok((nodes, edges, distances))
 }
 
-fn edge_record_to_row(db: &Db, rec: &EdgeRecord) -> EdgeRow {
+fn edge_record_to_row(db: &Db, rec: &EdgeView) -> EdgeRow {
     let source = db.key_for(rec.from);
     let target = db.key_for(rec.to);
-    let edge_type = edge_type_from_id(rec.type_id).to_string();
+    let edge_type = rec.label.clone();
     EdgeRow {
         id: format!("{}|{}|{}", source, edge_type, target),
         source,
@@ -903,12 +994,12 @@ impl KnowledgeStore for Db {
         edge_types: Option<&[String]>,
         direction: Direction,
     ) -> Result<TraversalPage, StoreError> {
-        let edge_type_ids: Option<Vec<u32>> = edge_types
+        let edge_labels: Option<Vec<String>> = edge_types
             .filter(|v| !v.is_empty())
-            .map(|v| v.iter().map(|s| edge_type_to_id(s)).collect());
+            .map(|v| v.iter().map(|s| edge_label(s).to_string()).collect());
         let og_dir = to_og_direction(direction);
         let (rows, edges, distances) =
-            traverse_string_ids(self, start, max_hops, edge_type_ids, og_dir).await?;
+            traverse_string_ids(self, start, max_hops, edge_labels, og_dir).await?;
         let nodes: Vec<TraversalNode> = rows
             .into_iter()
             .map(|row| {
@@ -972,16 +1063,16 @@ impl KnowledgeStore for Db {
             return Ok(Vec::new());
         }
         let damping = (1.0 - restart_prob.clamp(0.01, 0.99)) as f64;
-        let edge_type_filter: Option<Vec<u32>> = edge_types
+        let edge_label_filter: Option<Vec<String>> = edge_types
             .filter(|v| !v.is_empty())
-            .map(|v| v.iter().map(|s| edge_type_to_id(s)).collect());
+            .map(|v| v.iter().map(|s| edge_label(s).to_string()).collect());
         let opts = OgPprOptions {
             algorithm: PprAlgorithm::ExactPowerIteration,
             damping_factor: damping,
             max_iterations: max_iter.max(1) as u32,
             epsilon: 1e-6,
             approx_residual_tolerance: 1e-5,
-            edge_type_filter,
+            edge_label_filter,
             max_results,
         };
         let result: OgPprResult = self

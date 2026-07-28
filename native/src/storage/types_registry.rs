@@ -1,128 +1,90 @@
-//! Stable string ↔ u32 mapping for OverGraph type IDs.
+//! Canonical string labels for OverGraph nodes and edges.
 //!
-//! OverGraph keys nodes by `(type_id: u32, key: String)` and edges by
-//! `(from_id, to_id, type_id: u32)`. The project uses string variant
-//! names from `GraphNodeType` / `GraphEdgeType`. This module is the
-//! single source of truth for the translation.
+//! OverGraph ≥ 0.17 keys nodes by `(label: &str, key: &str)` and labels
+//! edges with a string, so the numeric `u32` id mapping this module used
+//! to own is gone. What remains is still needed:
 //!
-//! IDs are persisted on disk in OverGraph segments. **Once assigned an
-//! ID must never change** — renaming a constant would silently corrupt
-//! every existing database. New types append at the end.
+//! 1. **Canonicalization.** Edge-type filters arrive from user input and
+//!    tool arguments in whatever case the caller typed (`"calls"`,
+//!    `"Calls"`, `"CALLS"`). Labels are matched exactly by the engine, so
+//!    they have to be normalized to one spelling before they reach it.
+//! 2. **The label inventory.** Callers that must sweep the whole store —
+//!    `lookup_id`'s slow path, the ingest pruner — iterate
+//!    [`ALL_NODE_LABELS`] rather than hardcoding a list, so adding a node
+//!    type cannot leave a sweep silently missing it.
+//!
+//! Labels are persisted in OverGraph segments. Renaming one is a
+//! breaking store change: bump `STORE_FORMAT_VERSION` in `db.rs` so old
+//! databases are rejected rather than silently misread.
 
-// ---- Node types ----
-// Aligned with `GraphNodeType` in `crate::types`. IDs are reserved in
-// blocks of 100 to leave room for future additions per category.
-pub const NODE_TYPE_FILE: u32 = 1;
-pub const NODE_TYPE_FOLDER: u32 = 2;
-pub const NODE_TYPE_FUNCTION: u32 = 3;
-pub const NODE_TYPE_CLASS: u32 = 4;
-pub const NODE_TYPE_INTERFACE: u32 = 5;
-pub const NODE_TYPE_CONCEPT: u32 = 6;
-pub const NODE_TYPE_DEPENDENCY: u32 = 7;
-pub const NODE_TYPE_CONFIG: u32 = 8;
-pub const NODE_TYPE_CONSTANT: u32 = 9;
-pub const NODE_TYPE_ROUTE: u32 = 10;
-// Generic catch-all for anything not modeled above; used by the JSON
-// hydration path so older graphs don't crash a newer build.
-pub const NODE_TYPE_UNKNOWN: u32 = 99;
-
-/// Every node type id that can appear on disk.
-///
-/// Callers that must sweep the whole store — `lookup_id`'s slow path, the
-/// ingest pruner — iterate this rather than hardcoding the list, so adding
-/// a type above cannot leave a sweep silently missing it.
-pub const ALL_NODE_TYPE_IDS: &[u32] = &[
-    NODE_TYPE_FILE,
-    NODE_TYPE_FOLDER,
-    NODE_TYPE_FUNCTION,
-    NODE_TYPE_CLASS,
-    NODE_TYPE_INTERFACE,
-    NODE_TYPE_CONCEPT,
-    NODE_TYPE_DEPENDENCY,
-    NODE_TYPE_CONFIG,
-    NODE_TYPE_CONSTANT,
-    NODE_TYPE_ROUTE,
-    NODE_TYPE_UNKNOWN,
+/// Every node label that can appear on disk, including the `Unknown`
+/// fallback used by the JSON hydration path so an older graph does not
+/// crash a newer build.
+pub const ALL_NODE_LABELS: &[&str] = &[
+    "File",
+    "Folder",
+    "Function",
+    "Class",
+    "Interface",
+    "Concept",
+    "Dependency",
+    "Config",
+    "Constant",
+    "Route",
+    "Unknown",
 ];
 
-// ---- Edge types ----
-pub const EDGE_TYPE_DEPENDS_ON: u32 = 100;
-pub const EDGE_TYPE_CALLS: u32 = 101;
-pub const EDGE_TYPE_EXTENDS: u32 = 102;
-pub const EDGE_TYPE_IMPLEMENTS: u32 = 103;
-pub const EDGE_TYPE_REFERENCES: u32 = 104;
-pub const EDGE_TYPE_CONTAINS: u32 = 105;
-pub const EDGE_TYPE_IMPORTS: u32 = 106;
-pub const EDGE_TYPE_EXPORTS: u32 = 107;
-pub const EDGE_TYPE_REQUIRES: u32 = 108;
-pub const EDGE_TYPE_USES: u32 = 109;
-pub const EDGE_TYPE_OVERRIDES: u32 = 110;
-pub const EDGE_TYPE_UNKNOWN: u32 = 199;
+/// Every edge label that can appear on disk.
+pub const ALL_EDGE_LABELS: &[&str] = &[
+    "DependsOn",
+    "Calls",
+    "Extends",
+    "Implements",
+    "References",
+    "Contains",
+    "Imports",
+    "Exports",
+    "Requires",
+    "Uses",
+    "Overrides",
+    "Unknown",
+];
 
-/// Map a node type string (variant name from `GraphNodeType` debug
-/// formatting, case-insensitive) to a stable u32 id.
-pub fn node_type_to_id(s: &str) -> u32 {
+/// Normalize a node type string (a `GraphNodeType` variant name in any
+/// case) to its canonical stored label. Unrecognized input maps to
+/// `"Unknown"` rather than being passed through, so a typo cannot mint a
+/// new label in the engine's catalog.
+pub fn node_label(s: &str) -> &'static str {
     match s.to_ascii_lowercase().as_str() {
-        "file" => NODE_TYPE_FILE,
-        "folder" => NODE_TYPE_FOLDER,
-        "function" => NODE_TYPE_FUNCTION,
-        "class" => NODE_TYPE_CLASS,
-        "interface" => NODE_TYPE_INTERFACE,
-        "concept" => NODE_TYPE_CONCEPT,
-        "dependency" => NODE_TYPE_DEPENDENCY,
-        "config" => NODE_TYPE_CONFIG,
-        "constant" => NODE_TYPE_CONSTANT,
-        "route" => NODE_TYPE_ROUTE,
-        _ => NODE_TYPE_UNKNOWN,
-    }
-}
-
-pub fn node_type_from_id(id: u32) -> &'static str {
-    match id {
-        NODE_TYPE_FILE => "File",
-        NODE_TYPE_FOLDER => "Folder",
-        NODE_TYPE_FUNCTION => "Function",
-        NODE_TYPE_CLASS => "Class",
-        NODE_TYPE_INTERFACE => "Interface",
-        NODE_TYPE_CONCEPT => "Concept",
-        NODE_TYPE_DEPENDENCY => "Dependency",
-        NODE_TYPE_CONFIG => "Config",
-        NODE_TYPE_CONSTANT => "Constant",
-        NODE_TYPE_ROUTE => "Route",
+        "file" => "File",
+        "folder" => "Folder",
+        "function" => "Function",
+        "class" => "Class",
+        "interface" => "Interface",
+        "concept" => "Concept",
+        "dependency" => "Dependency",
+        "config" => "Config",
+        "constant" => "Constant",
+        "route" => "Route",
         _ => "Unknown",
     }
 }
 
-pub fn edge_type_to_id(s: &str) -> u32 {
+/// Normalize an edge type string to its canonical stored label. Accepts
+/// both `DependsOn` and `depends_on` spellings.
+pub fn edge_label(s: &str) -> &'static str {
     match s.to_ascii_lowercase().as_str() {
-        "dependson" | "depends_on" => EDGE_TYPE_DEPENDS_ON,
-        "calls" => EDGE_TYPE_CALLS,
-        "extends" => EDGE_TYPE_EXTENDS,
-        "implements" => EDGE_TYPE_IMPLEMENTS,
-        "references" => EDGE_TYPE_REFERENCES,
-        "contains" => EDGE_TYPE_CONTAINS,
-        "imports" => EDGE_TYPE_IMPORTS,
-        "exports" => EDGE_TYPE_EXPORTS,
-        "requires" => EDGE_TYPE_REQUIRES,
-        "uses" => EDGE_TYPE_USES,
-        "overrides" => EDGE_TYPE_OVERRIDES,
-        _ => EDGE_TYPE_UNKNOWN,
-    }
-}
-
-pub fn edge_type_from_id(id: u32) -> &'static str {
-    match id {
-        EDGE_TYPE_DEPENDS_ON => "DependsOn",
-        EDGE_TYPE_CALLS => "Calls",
-        EDGE_TYPE_EXTENDS => "Extends",
-        EDGE_TYPE_IMPLEMENTS => "Implements",
-        EDGE_TYPE_REFERENCES => "References",
-        EDGE_TYPE_CONTAINS => "Contains",
-        EDGE_TYPE_IMPORTS => "Imports",
-        EDGE_TYPE_EXPORTS => "Exports",
-        EDGE_TYPE_REQUIRES => "Requires",
-        EDGE_TYPE_USES => "Uses",
-        EDGE_TYPE_OVERRIDES => "Overrides",
+        "dependson" | "depends_on" => "DependsOn",
+        "calls" => "Calls",
+        "extends" => "Extends",
+        "implements" => "Implements",
+        "references" => "References",
+        "contains" => "Contains",
+        "imports" => "Imports",
+        "exports" => "Exports",
+        "requires" => "Requires",
+        "uses" => "Uses",
+        "overrides" => "Overrides",
         _ => "Unknown",
     }
 }
@@ -132,49 +94,43 @@ mod tests {
     use super::*;
 
     #[test]
-    fn node_type_roundtrip_known() {
-        for s in [
-            "File",
-            "Folder",
-            "Function",
-            "Class",
-            "Interface",
-            "Concept",
-            "Dependency",
-            "Config",
-            "Constant",
-            "Route",
-        ] {
-            let id = node_type_to_id(s);
-            assert_ne!(id, NODE_TYPE_UNKNOWN, "{s} should be a known node type");
-            assert_eq!(node_type_from_id(id), s);
+    fn node_labels_are_canonical_and_idempotent() {
+        for s in ALL_NODE_LABELS {
+            if *s == "Unknown" {
+                continue;
+            }
+            assert_eq!(node_label(s), *s, "{s} should map to itself");
+            assert_eq!(
+                node_label(&s.to_ascii_uppercase()),
+                *s,
+                "{s} should normalize case-insensitively"
+            );
         }
     }
 
     #[test]
-    fn edge_type_roundtrip_known() {
-        for s in [
-            "DependsOn",
-            "Calls",
-            "Extends",
-            "Implements",
-            "References",
-            "Contains",
-            "Imports",
-            "Exports",
-            "Requires",
-            "Uses",
-            "Overrides",
-        ] {
-            let id = edge_type_to_id(s);
-            assert_ne!(id, EDGE_TYPE_UNKNOWN, "{s} should be a known edge type");
-            assert_eq!(edge_type_from_id(id), s);
+    fn edge_labels_are_canonical_and_idempotent() {
+        for s in ALL_EDGE_LABELS {
+            if *s == "Unknown" {
+                continue;
+            }
+            assert_eq!(edge_label(s), *s, "{s} should map to itself");
+            assert_eq!(
+                edge_label(&s.to_ascii_lowercase()),
+                *s,
+                "{s} should normalize case-insensitively"
+            );
         }
     }
 
     #[test]
-    fn node_type_unknown_falls_back() {
-        assert_eq!(node_type_to_id("MadeUpType"), NODE_TYPE_UNKNOWN);
-        assert_eq!(node_type_from_id(99999), "Unknown");
+    fn snake_case_edge_alias_resolves() {
+        assert_eq!(edge_label("depends_on"), "DependsOn");
+    }
+
+    #[test]
+    fn unknown_input_falls_back_rather_than_passing_through() {
+        assert_eq!(node_label("MadeUpType"), "Unknown");
+        assert_eq!(edge_label("MadeUpEdge"), "Unknown");
     }
 }

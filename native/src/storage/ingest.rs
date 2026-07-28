@@ -850,8 +850,8 @@ mod tests {
 
     #[test]
     fn edge_rows_carry_the_variant_name_as_their_type() {
-        // The string form is what `types_registry` maps to a stable id, so
-        // it has to match the enum variant exactly.
+        // The string form is what `types_registry` canonicalizes into the
+        // stored label, so it has to match the enum variant exactly.
         let g = graph(
             vec![],
             vec![
@@ -863,8 +863,8 @@ mod tests {
         assert_eq!(rows[0].edge_type, "Overrides");
         assert_eq!(rows[1].edge_type, "DependsOn");
         assert_eq!(
-            crate::storage::types_registry::edge_type_to_id("Overrides"),
-            crate::storage::types_registry::EDGE_TYPE_OVERRIDES,
+            crate::storage::types_registry::edge_label("Overrides"),
+            "Overrides",
             "the rendered name must round-trip through the registry"
         );
     }

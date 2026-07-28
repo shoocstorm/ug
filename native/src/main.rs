@@ -448,6 +448,25 @@ fn single_store_spec_from_args(args: &[String], embedding_dim: u32) -> StoreSpec
     specs.into_iter().next().expect("at least one spec")
 }
 
+/// Open a store, exiting cleanly on the one failure every user hits at
+/// least once.
+///
+/// A store written by an older ug is an expected, actionable state after
+/// an upgrade — not a bug. Reporting it through `panic!` buries a
+/// perfectly good "run `ug reindex`" message under a backtrace notice and
+/// makes a routine migration look like a crash. Every other failure keeps
+/// panicking, because it is one.
+async fn open_store_or_exit(spec: &StoreSpec) -> Box<dyn KnowledgeStore> {
+    match storage::open_store(spec).await {
+        Ok(store) => store,
+        Err(e @ storage::store::StoreError::StoreFormatMismatch { .. }) => {
+            eprintln!("\n{C_BOLD}Index out of date{C_RESET}\n\n{}", e);
+            std::process::exit(1);
+        }
+        Err(e) => panic!("failed to open {} store: {}", spec.name(), e),
+    }
+}
+
 /// Banner indicating which backends a command is targeting.
 fn announce_destinations(specs: &[StoreSpec]) {
     let names: Vec<&str> = specs.iter().map(|s| s.name()).collect();
@@ -2158,6 +2177,17 @@ async fn ingest_with_specs(
     prune: bool,
     budget: &EmbedBudget,
 ) -> Result<(usize, usize), String> {
+    // An index written by an older ug can't be opened, and this is the
+    // command whose whole job is to replace it — so clear it first rather
+    // than failing with "run ug gen" from inside ug gen.
+    for path in storage::store::reset_stale_format_stores(specs)
+        .map_err(|e| format!("clearing out-of-date store: {}", e))?
+    {
+        eprintln!(
+            "{C_CYAN}▸{C_RESET} Rebuilding {} — it was written by an older ug",
+            path.display()
+        );
+    }
     let mut stores: Vec<Box<dyn KnowledgeStore>> = Vec::with_capacity(specs.len());
     for spec in specs {
         let store = open_store(spec)
@@ -3605,9 +3635,7 @@ fn run_semantic_search(args: &[String]) {
     let result_json = rt.block_on(async {
         let dim = embedder.config().dim as u32;
         let spec = single_store_spec_from_args(args, dim);
-        let store = open_store(&spec)
-            .await
-            .unwrap_or_else(|e| panic!("failed to open {} store: {}", spec.name(), e));
+        let store = open_store_or_exit(&spec).await;
         let hits = match filter.as_deref() {
             Some(f) => storage::semantic_search_w_where(store.as_ref(), &embedder, &query, limit, f)
                 .await
@@ -3715,9 +3743,7 @@ fn run_hybrid_search(args: &[String]) {
     let result_json = rt.block_on(async {
         let dim = embedder.config().dim as u32;
         let spec = single_store_spec_from_args(args, dim);
-        let store = open_store(&spec)
-            .await
-            .unwrap_or_else(|e| panic!("failed to open {} store: {}", spec.name(), e));
+        let store = open_store_or_exit(&spec).await;
         let mut opts = SearchKbOptions::new(&query, repo_root.as_path());
         opts.k = k;
         opts.hops = hops;
@@ -3811,9 +3837,7 @@ fn run_traverse(args: &[String]) {
         // default. The Neo4j path persists its own dim independently.
         let dim = ultragraph::storage::DEFAULT_EMBEDDING_DIM as u32;
         let spec = single_store_spec_from_args(args, dim);
-        let store = open_store(&spec)
-            .await
-            .unwrap_or_else(|e| panic!("failed to open {} store: {}", spec.name(), e));
+        let store = open_store_or_exit(&spec).await;
         let result = storage::traverse_filtered(store.as_ref(), &starts, hops, None, Direction::Outbound)
             .await
             .expect("traverse failed");
@@ -4178,9 +4202,7 @@ fn run_tour(args: &[String]) {
     rt.block_on(async {
         let dim = embedder.config().dim as u32;
         let spec = single_store_spec_from_args(args, dim);
-        let store = open_store(&spec)
-            .await
-            .unwrap_or_else(|e| panic!("failed to open {} store: {}", spec.name(), e));
+        let store = open_store_or_exit(&spec).await;
 
         let edge_types_owned: Option<Vec<String>> = if edge_types.is_empty() {
             None

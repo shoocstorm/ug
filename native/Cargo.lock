@@ -3527,9 +3527,9 @@ dependencies = [
 
 [[package]]
 name = "overgraph"
-version = "0.6.0"
+version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "064819167ff43917464f5a2da5e78873f7ba49ef9b14580140ca2ad8516d446a"
+checksum = "0b430a31a49fe2d8adfcbb9bee1d65da46b74271c26b08d2f4cd82a3dd046fad"
 dependencies = [
  "arc-swap",
  "crc32fast",
@@ -3538,6 +3538,7 @@ dependencies = [
  "rmp-serde",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
