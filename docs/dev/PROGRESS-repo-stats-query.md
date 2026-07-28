@@ -14,8 +14,8 @@ Reference for the storage engine's API: see `Agents.md` §8 (never read the
 | Phase | State | Notes |
 |-------|-------|-------|
 | **P0a** — overgraph 0.6 → 0.17 migration | ✅ done, verified, **uncommitted** | 473 tests pass; full `ug gen` + search/traverse verified |
-| **P0b** — widen `node_props`, survive embed failure | ⬜ next | |
-| **P0c** — `code_query` tool, presets, envelope | ⬜ blocked on P0b | |
+| **P0b** — widen `node_props`, survive embed failure | ✅ done, verified, **uncommitted** | 492 tests pass; degraded + recovery paths exercised for real |
+| **P0c** — `code_query` tool, presets, envelope | ⬜ next | |
 | **P1** — comment/class metrics, file facts (reindex) | ⬜ not started | |
 | **P2** — preset files, Insights viz pane | ⬜ not started | |
 | **P3** — CSV/Parquet export | ⬜ not started | |
@@ -68,6 +68,68 @@ keyed on the manifest alone.
 
 ---
 
+## P0b — widen `node_props` + survive embedding failure ✅
+
+New module `native/src/storage/facts.rs` derives per-node facts once at
+ingest; they are written as **plain sibling properties** (`n.loc`, not
+`n.f_loc`) so GQL reads the way someone would write it by hand.
+
+Facts today: `loc` · `params` · `max_nesting` · `has_doc` · `folder` ·
+`is_test` · `in_degree` · `out_degree` · `qualified_name` · `route` ·
+`annotations`. Booleans are stored as **0/1 integers** — GQL has no boolean
+aggregate, so `sum(has_doc)/count(*)` is the only way to ask "what fraction
+is documented".
+
+- [x] `NodeRow.facts`, round-tripped via `RESERVED_PROPS` (anything not a
+      fixed column is a fact). A fact can never shadow a column.
+- [x] `loc` falls back to the line span when `metrics` is absent — this is
+      what gives Class/Interface nodes a size at all, since the extractors
+      only compute metrics for functions.
+- [x] Property indexes (`ensure_query_indexes`, no-op default on the trait
+      so Neo4j is unaffected): equality on `node_type`/`is_test`/`folder`/
+      `has_doc`, range on `loc`/`in_degree`/`out_degree`/`params`/
+      `max_nesting`. Best-effort — a missing index costs speed, never
+      correctness.
+- [x] Embedding failure degrades instead of aborting: rows are written with
+      **no** dense vector (`dense_vector: None`), so the node stays out of
+      the HNSW index while every property stays queryable. A wrong-*width*
+      vector is still an error.
+- [x] `record_ingest_model` is skipped on a degraded run — the stamp claims
+      "these vectors are current for this model", which would be a lie about
+      rows that have none, and would stop the next run re-embedding them.
+- [x] Both progress paths in `main.rs` (single- and multi-destination) and
+      both `ingest.rs` paths degrade identically.
+- [x] `IngestOutcome` replaces the `(nodes, edges)` tuple so a degraded run
+      is neither reported as success nor as failure.
+
+### Two subtleties worth not re-deriving
+
+1. **`stored_row_matches` must compare facts.** `in_degree` is not a
+   property of its own node — it moves when some *other* file starts
+   calling it. Without the comparison, an incremental re-ingest would
+   freeze degrees at first-ingest values and every derived statistic would
+   drift further from the truth on each run, while the node looked current.
+2. **Test seeds must compute real facts.** `seed()` in
+   `incremental_ingest_test.rs` and `stored()` in `ingest.rs` simulate "what
+   a previous ingest wrote". Leaving their facts empty made every node look
+   changed and silently turned nine "nothing was rewritten" assertions into
+   tests of the wrong thing. The suite caught this.
+
+### Verified
+
+492 tests pass (21 neo4j-gated ignored), 19 new. New `tests/facts_test.rs`
+covers round-trip, column shadowing, persistence without a vector, wrong-width
+rejection, backfill, and index idempotency.
+
+End to end on this repo: a second `ug gen` reports **2279 unchanged, 0 to
+embed** — proof the facts round-trip byte-identically, since any mismatch
+would rewrite every node. Degradation exercised against a dead endpoint
+(`--base-url http://127.0.0.1:9`): 6 nodes + 6 edges indexed without vectors,
+honest summary, then a normal `ug gen` backfilled all 6 and semantic search
+returned correct hits.
+
+---
+
 ## Decisions already settled (do not relitigate)
 
 - **No bespoke JSON query DSL.** Use OverGraph GQL — it ships aggregation,
@@ -97,3 +159,8 @@ keyed on the manifest alone.
   Note the working tree also carries unrelated staged changes
   (`.github/workflows/ci.yml`) that are **not** part of this work — commit
   P0a with explicit paths, not `git add -A`.
+- **2026-07-28** — P0a committed as `ca7b9ac`. P0b implemented and verified;
+  uncommitted. New files: `native/src/storage/facts.rs`,
+  `native/tests/facts_test.rs`. Modified: `storage/{db,store,ingest,mod}.rs`,
+  `storage/backends/neo4j.rs`, `src/main.rs`, and five test files that build
+  `NodeRow` literals.

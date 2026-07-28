@@ -9,13 +9,15 @@
 //!   - `query`           - semantic / hybrid / traversal queries (over `&dyn KnowledgeStore`)
 //!   - `ingest`          - graph -> embed -> upsert pipeline (single + multi destination)
 //!   - `ppr`             - thin wrapper around `KnowledgeStore::personalized_pagerank`
-//!   - `types_registry`  - stable string ↔ u32 mapping for OverGraph type ids
+//!   - `facts`           - per-node queryable facts (loc, degrees, is_test, ...)
+//!   - `types_registry`  - canonical string labels for OverGraph nodes and edges
 
 pub mod backends;
 pub mod comments;
 pub mod db;
 pub mod embed;
 pub mod embed_local;
+pub mod facts;
 pub mod ingest;
 pub mod ppr;
 pub mod query;
@@ -36,6 +38,7 @@ pub use ingest::{
     reembed_nodes, refresh_sparse_stats, IngestPlan, IngestStats,
 };
 pub use comments::extract_prose_comments;
+pub use facts::{FactContext, FactValue, Facts};
 pub use source::{capture_graph_code, file_matches_hash, CapturedCode};
 pub use ppr::{default_edge_type_weights, run_ppr};
 pub use query::{

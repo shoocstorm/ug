@@ -66,6 +66,11 @@ fn texts_for(g: &GraphData) -> Vec<String> {
 /// Seed the store with exactly what a first full ingest of `g` would write.
 async fn seed(db: &Db, g: &GraphData) -> Vec<String> {
     let texts = texts_for(g);
+    // Facts have to be the ones a real ingest would derive. Seeding them
+    // empty would make every node look changed on the next plan, which
+    // silently turns each "nothing was rewritten" assertion below into a
+    // test of the wrong thing.
+    let facts_ctx = ultragraph::storage::FactContext::new(g);
     let rows: Vec<NodeRow> = g
         .nodes
         .iter()
@@ -84,6 +89,7 @@ async fn seed(db: &Db, g: &GraphData) -> Vec<String> {
             vector: unit_vector(i + 1),
             code: String::new(),
             file_hash: String::new(),
+            facts: ultragraph::storage::facts::compute(n, &facts_ctx),
         })
         .collect();
     db.upsert_nodes(&rows).await.unwrap();

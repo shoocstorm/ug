@@ -42,6 +42,7 @@ fn make_node(i: usize) -> NodeRow {
         vector: fake_vector(i),
         code: String::new(),
         file_hash: String::new(),
+        facts: Default::default(),
     }
 }
 

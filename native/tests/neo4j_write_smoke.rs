@@ -39,6 +39,7 @@ fn sample_node(id: &str, name: &str, kind: &str, seed: f32) -> NodeRow {
         vector: unit_vec(seed),
         code: String::new(),
         file_hash: String::new(),
+        facts: Default::default(),
     }
 }
 

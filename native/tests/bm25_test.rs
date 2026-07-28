@@ -41,6 +41,7 @@ fn row(id: &str, node_text: &str, seed: usize) -> NodeRow {
         vector: unit_vector(seed),
         code: String::new(),
         file_hash: String::new(),
+        facts: Default::default(),
     }
 }
 

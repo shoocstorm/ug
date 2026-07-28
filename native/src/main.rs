@@ -448,6 +448,20 @@ fn single_store_spec_from_args(args: &[String], embedding_dim: u32) -> StoreSpec
     specs.into_iter().next().expect("at least one spec")
 }
 
+/// What an ingest run actually produced.
+///
+/// Carries the degraded case explicitly rather than folding it into
+/// `Err`: a run whose embedder died still wrote a complete structural
+/// index, so it is neither a success nor a failure, and reporting it as
+/// either misleads. The caller needs both facts to say something true.
+pub(crate) struct IngestOutcome {
+    nodes: usize,
+    edges: usize,
+    /// Set when nodes were written without vectors because embedding
+    /// failed. Semantic search will miss them until the next run.
+    embedding_error: Option<String>,
+}
+
 /// Open a store, exiting cleanly on the one failure every user hits at
 /// least once.
 ///
@@ -1876,11 +1890,26 @@ fn run_gen(args: &[String]) {
         db_path
     );
     match run_gen_ingest(&graph, &db_path, args) {
-        Ok((nodes_written, edges_written)) => {
+        Ok(out) if out.embedding_error.is_some() => {
+            // Not a success. The index is real and queryable, but calling
+            // it "embedded" would be false, and the user needs to know a
+            // re-run is owed before semantic search is trustworthy.
+            println!(
+                "  {C_YELLOW}⚠ {} nodes, {} edges{C_RESET} indexed {C_BOLD}without vectors{C_RESET} in {C_BOLD}{:?}{C_RESET}",
+                out.nodes,
+                out.edges,
+                t3.elapsed()
+            );
+            println!(
+                "    Structure and statistics work now. Re-run once the embedder is up to enable semantic search:"
+            );
+            println!("      ug ingest -i {} -o {}", graph_path, db_path);
+        }
+        Ok(out) => {
             println!(
                 "  {C_GREEN}✓ {} nodes, {} edges{C_RESET} embedded in {C_BOLD}{:?}{C_RESET}",
-                nodes_written,
-                edges_written,
+                out.nodes,
+                out.edges,
                 t3.elapsed()
             );
         }
@@ -1960,7 +1989,7 @@ async fn ingest_graph_with_progress(
     graph: &GraphData,
     prune: bool,
     budget: &EmbedBudget,
-) -> Result<(usize, usize), String> {
+) -> Result<IngestOutcome, String> {
     let nodes_count = graph.nodes.len();
     let edges_count = graph.edges.len();
 
@@ -2002,6 +2031,13 @@ async fn ingest_graph_with_progress(
 
     let t1 = std::time::Instant::now();
     let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(to_embed);
+    // A failed embed degrades rather than aborts. Everything else in this
+    // pipeline is already computed — structure, source, and every derived
+    // fact — and discarding it leaves the user with no index at all when
+    // they could have had one that answers structural and statistical
+    // questions. Nodes past the failure are written with no vector; the
+    // next run sees a missing vector and backfills it.
+    let mut embed_error: Option<String> = None;
     if to_embed == 0 {
         println!("{C_CYAN}▸{C_RESET} Embedding: {C_GREEN}✓ skipped{C_RESET} (no node text changed)");
     } else {
@@ -2009,11 +2045,13 @@ async fn ingest_graph_with_progress(
         let _ = std::io::Write::flush(&mut std::io::stdout());
         for (i, chunk) in plan.to_embed.chunks(embedder.config().batch_size).enumerate() {
             let chunk_vec: Vec<String> = chunk.iter().map(|(_, t)| t.clone()).collect();
-            let chunk_vectors = embedder
-                .embed(&chunk_vec)
-                .await
-                .map_err(|e| format!("embedding failed: {}", e))?;
-            vectors.extend(chunk_vectors);
+            match embedder.embed(&chunk_vec).await {
+                Ok(chunk_vectors) => vectors.extend(chunk_vectors),
+                Err(e) => {
+                    embed_error = Some(e.to_string());
+                    break;
+                }
+            }
             let processed = std::cmp::min((i + 1) * embedder.config().batch_size, to_embed);
             let pct = processed as f32 / to_embed as f32 * 100.0;
             print!(
@@ -2022,10 +2060,25 @@ async fn ingest_graph_with_progress(
             );
             let _ = std::io::Write::flush(&mut std::io::stdout());
         }
-        println!(
-            "\r{C_CYAN}▸{C_RESET} Embedding: {C_GREEN}100.0% ✓ done{C_RESET} in {C_BOLD}{:?}{C_RESET}",
-            t1.elapsed()
-        );
+        match &embed_error {
+            None => println!(
+                "\r{C_CYAN}▸{C_RESET} Embedding: {C_GREEN}100.0% ✓ done{C_RESET} in {C_BOLD}{:?}{C_RESET}",
+                t1.elapsed()
+            ),
+            Some(e) => {
+                let done = vectors.len();
+                println!(
+                    "\r{C_YELLOW}⚠{C_RESET} Embedding failed after {}/{} — {}",
+                    done, to_embed, e
+                );
+                println!(
+                    "  Writing the remaining {} node(s) without vectors: structure and \
+                     statistics still work, semantic search will miss them until the next run.",
+                    to_embed - done
+                );
+                vectors.resize(to_embed, Vec::new());
+            }
+        }
     }
 
     let t2 = std::time::Instant::now();
@@ -2112,18 +2165,29 @@ async fn ingest_graph_with_progress(
         }
     }
 
-    // Stamp the model last, so a run that died mid-write doesn't claim its
-    // vectors all came from this one.
-    store.record_ingest_model(&model);
+    store.ensure_query_indexes();
 
-    Ok((nodes_count, edges_count))
+    // Stamp the model last, so a run that died mid-write doesn't claim its
+    // vectors all came from this one. Skipped entirely when embedding
+    // failed: the stamp says "these vectors are current for this model",
+    // which would be a lie about rows that have no vectors, and would stop
+    // the next run from re-embedding them.
+    if embed_error.is_none() {
+        store.record_ingest_model(&model);
+    }
+
+    Ok(IngestOutcome {
+        nodes: nodes_count,
+        edges: edges_count,
+        embedding_error: embed_error,
+    })
 }
 
 fn run_gen_ingest(
     graph_json: &str,
     db_path: &str,
     args: &[String],
-) -> Result<(usize, usize), String> {
+) -> Result<IngestOutcome, String> {
     let graph: GraphData =
         serde_json::from_str(graph_json).map_err(|e| format!("parse graph: {}", e))?;
     // Ingest upserts, so a node dropped from the source would otherwise
@@ -2176,7 +2240,7 @@ async fn ingest_with_specs(
     graph: &GraphData,
     prune: bool,
     budget: &EmbedBudget,
-) -> Result<(usize, usize), String> {
+) -> Result<IngestOutcome, String> {
     // An index written by an older ug can't be opened, and this is the
     // command whose whole job is to replace it — so clear it first rather
     // than failing with "run ug gen" from inside ug gen.
@@ -2214,7 +2278,7 @@ async fn ingest_graph_multi_with_progress(
     graph: &GraphData,
     prune: bool,
     budget: &EmbedBudget,
-) -> Result<(usize, usize), String> {
+) -> Result<IngestOutcome, String> {
 
     let nodes_count = graph.nodes.len();
     let edges_count = graph.edges.len();
@@ -2253,13 +2317,31 @@ async fn ingest_graph_multi_with_progress(
 
     let t1 = std::time::Instant::now();
     let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(to_embed);
+    // Degrades exactly as the single-destination path does — see the
+    // comment there for why a dead embedder must not cost the whole index.
+    let mut embed_error: Option<String> = None;
     for chunk in plan.to_embed.chunks(embedder.config().batch_size) {
         let chunk_vec: Vec<String> = chunk.iter().map(|(_, t)| t.clone()).collect();
-        let chunk_vectors = embedder
-            .embed(&chunk_vec)
-            .await
-            .map_err(|e| format!("embedding failed: {}", e))?;
-        vectors.extend(chunk_vectors);
+        match embedder.embed(&chunk_vec).await {
+            Ok(chunk_vectors) => vectors.extend(chunk_vectors),
+            Err(e) => {
+                embed_error = Some(e.to_string());
+                break;
+            }
+        }
+    }
+    if let Some(e) = &embed_error {
+        println!(
+            "{C_YELLOW}⚠{C_RESET} Embedding failed after {}/{} — {}",
+            vectors.len(),
+            to_embed,
+            e
+        );
+        println!(
+            "  Writing the remaining node(s) without vectors: structure and statistics \
+             still work, semantic search will miss them until the next run."
+        );
+        vectors.resize(to_embed, Vec::new());
     }
     println!(
         "{C_CYAN}▸{C_RESET} Embedding: {C_GREEN}done{C_RESET} ({}) in {C_BOLD}{:?}{C_RESET}",
@@ -2324,10 +2406,17 @@ async fn ingest_graph_multi_with_progress(
     }
 
     for store in &set.stores {
-        store.record_ingest_model(&model);
+        store.ensure_query_indexes();
+        if embed_error.is_none() {
+            store.record_ingest_model(&model);
+        }
     }
 
-    Ok((nodes_count, edges_count))
+    Ok(IngestOutcome {
+        nodes: nodes_count,
+        edges: edges_count,
+        embedding_error: embed_error,
+    })
 }
 
 /// `ug list` — enumerate project data dirs under `~/.ug` (or `$UG_HOME`).
@@ -3569,15 +3658,24 @@ fn run_ingest(args: &[String]) {
         // pruning by default would make each ingest erase the last.
         let prune = has_flag(args, "--prune");
         match ingest_with_specs(&specs, &embedder, &graph, prune, &budget).await {
-            Ok((nodes_written, edges_written)) => {
+            Ok(out) => {
                 println!("────────────────────────────────────────");
                 println!(
                     "Ingested {} nodes, {} edges into [{}] in {:?}",
-                    nodes_written,
-                    edges_written,
+                    out.nodes,
+                    out.edges,
                     dest_label.join(", "),
                     start_total.elapsed()
                 );
+                if let Some(e) = &out.embedding_error {
+                    eprintln!(
+                        "{C_YELLOW}⚠{C_RESET} Written without vectors — embedding failed: {}",
+                        e
+                    );
+                    eprintln!(
+                        "  Structure and statistics are queryable; re-run this command once the embedder is up."
+                    );
+                }
             }
             Err(e) => {
                 eprintln!("Error: {}", e);

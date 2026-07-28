@@ -43,6 +43,7 @@ fn sample_node(id: &str, name: &str, node_type: &str, vector_seed: f32) -> NodeR
         vector: unit_vector(vector_seed),
         code: String::new(),
         file_hash: String::new(),
+        facts: Default::default(),
     }
 }
 

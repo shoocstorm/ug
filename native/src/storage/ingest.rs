@@ -28,6 +28,7 @@
 
 use crate::storage::db::{EdgeRow, NodeRow};
 use crate::storage::embed::Embedder;
+use crate::storage::facts::FactContext;
 use crate::storage::store::{KnowledgeStore, NodeKey, StoreError, StoreSet};
 use crate::storage::source::{capture_graph_code, CapturedCode};
 use crate::limits::EmbedBudget;
@@ -55,6 +56,11 @@ pub struct IngestStats {
     pub nodes_unchanged: usize,
     /// Stale rows removed because the incoming graph no longer has them.
     pub nodes_pruned: usize,
+    /// Set when the embedder failed and nodes were written without
+    /// vectors. The index is usable for structure and statistics but not
+    /// for semantic search until the next successful ingest backfills
+    /// them — callers must surface this rather than reporting success.
+    pub embedding_error: Option<String>,
 }
 
 /// The work a re-ingest actually has to do, after diffing against the store.
@@ -93,6 +99,7 @@ impl IngestPlan {
             ));
         }
         let now = current_unix_secs();
+        let facts_ctx = FactContext::new(graph);
         let mut rows = self.reusable;
         rows.reserve(vectors.len());
         for ((idx, node_text), vector) in self.to_embed.into_iter().zip(vectors) {
@@ -104,6 +111,7 @@ impl IngestPlan {
                 vector,
                 now,
                 captured.get(&n.id),
+                &facts_ctx,
             ));
         }
         Ok(rows)
@@ -152,6 +160,7 @@ pub async fn plan_incremental_ingest(
         );
     }
     let now = current_unix_secs();
+    let facts_ctx = FactContext::new(graph);
     let mut offset = 0usize;
 
     for chunk in graph.nodes.chunks(PLAN_FETCH_CHUNK) {
@@ -182,7 +191,7 @@ pub async fn plan_incremental_ingest(
             match stored.remove(&n.id) {
                 Some(prev) if reuse_vectors && prev.node_text == *text && prev.vector.len() == dim => {
                     let cap = captured.get(&n.id);
-                    if !always_write && stored_row_matches(&prev, n, node_type, cap) {
+                    if !always_write && stored_row_matches(&prev, n, node_type, cap, &facts_ctx) {
                         plan.unchanged += 1;
                     } else {
                         plan.reusable.push(node_row(
@@ -192,6 +201,7 @@ pub async fn plan_incremental_ingest(
                             prev.vector,
                             now,
                             cap,
+                            &facts_ctx,
                         ));
                     }
                 }
@@ -218,7 +228,18 @@ fn stored_row_matches(
     n: &GraphNode,
     node_type: &str,
     captured: Option<&CapturedCode>,
+    facts_ctx: &FactContext,
 ) -> bool {
+    // Facts are compared because several of them are not properties of
+    // this node at all: `in_degree` moves when some *other* file starts or
+    // stops calling it. Skipping the rewrite on a content match would
+    // freeze those at whatever they were on first ingest, and every
+    // statistic derived from them would drift a little further from the
+    // truth on each incremental run — silently, since the node itself
+    // looks perfectly up to date.
+    if prev.facts != crate::storage::facts::compute(n, facts_ctx) {
+        return false;
+    }
     // Body edits move `code` without touching `node_text`, so this is what
     // routes an edited function into the reusable bucket — rewritten, not
     // re-embedded. Compared only when capture succeeded; a failed read
@@ -246,6 +267,7 @@ fn node_row(
     vector: Vec<f32>,
     now: i64,
     captured: Option<&CapturedCode>,
+    facts_ctx: &FactContext,
 ) -> NodeRow {
     NodeRow {
         id: n.id.clone(),
@@ -260,25 +282,49 @@ fn node_row(
         vector,
         code: captured.map(|c| c.code.clone()).unwrap_or_default(),
         file_hash: captured.map(|c| c.file_hash.clone()).unwrap_or_default(),
+        facts: crate::storage::facts::compute(n, facts_ctx),
     }
 }
 
 /// Run a plan's `to_embed` bucket through the embedder and fold the
 /// results into the rows the plan already resolved. Returns the complete
 /// set of rows to upsert plus how many nodes were embedded.
+/// Returns the rows to write, how many were embedded, and — when the
+/// embedder failed — why.
+///
+/// A failed embed is *not* fatal. Everything except the vectors is already
+/// computed by this point: names, line ranges, source text, and every
+/// derived fact. Throwing that away because one HTTP call failed leaves
+/// the user with no index at all, when what they could have had is an
+/// index that answers structural and statistical questions and is missing
+/// only semantic search. So the rows are written with empty vectors, the
+/// caller reports the failure, and the next ingest — which sees a vector
+/// of the wrong width — backfills them.
 async fn rows_from_plan(
     plan: IngestPlan,
     embedder: &Embedder,
     graph: &GraphData,
     captured: &HashMap<String, CapturedCode>,
-) -> Result<(Vec<NodeRow>, usize), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(Vec<NodeRow>, usize, Option<String>), Box<dyn std::error::Error + Send + Sync>> {
     let embedded = plan.to_embed.len();
     if embedded == 0 {
-        return Ok((plan.finish(graph, Vec::new(), captured)?, 0));
+        return Ok((plan.finish(graph, Vec::new(), captured)?, 0, None));
     }
     let texts: Vec<String> = plan.to_embed.iter().map(|(_, t)| t.clone()).collect();
-    let vectors = embedder.embed(&texts).await?;
-    Ok((plan.finish(graph, vectors, captured)?, embedded))
+    match embedder.embed(&texts).await {
+        Ok(vectors) => Ok((plan.finish(graph, vectors, captured)?, embedded, None)),
+        Err(e) => {
+            let why = e.to_string();
+            tracing::warn!(
+                error = %why,
+                nodes = embedded,
+                "embedding failed; writing nodes without vectors so the \
+                 structural index still lands"
+            );
+            let empty = vec![Vec::new(); embedded];
+            Ok((plan.finish(graph, empty, captured)?, 0, Some(why)))
+        }
+    }
 }
 
 /// Repo root recorded on the graph's index stats, if any. Capture needs
@@ -443,13 +489,20 @@ pub async fn ingest_graph(
     let plan =
         plan_incremental_ingest(store, graph, &texts, false, &captured, Some(&model)).await?;
     let unchanged = plan.unchanged;
-    let (node_rows, embedded) = rows_from_plan(plan, embedder, graph, &captured).await?;
+    let (node_rows, embedded, embedding_error) =
+        rows_from_plan(plan, embedder, graph, &captured).await?;
     let edge_rows = build_edge_rows(graph);
 
     store.upsert_nodes(&node_rows).await?;
     store.upsert_edges(&edge_rows).await?;
     let pruned = prune_to_graph(store, graph).await?;
-    store.record_ingest_model(&model);
+    store.ensure_query_indexes();
+    // Only stamp the model when the vectors actually came from it. Stamping
+    // after a failed embed would tell the next run "these vectors are
+    // current for this model" about rows that have no vectors at all.
+    if embedding_error.is_none() {
+        store.record_ingest_model(&model);
+    }
 
     Ok(IngestStats {
         nodes_written: node_rows.len(),
@@ -458,6 +511,7 @@ pub async fn ingest_graph(
         nodes_embedded: embedded,
         nodes_unchanged: unchanged,
         nodes_pruned: pruned,
+        embedding_error,
     })
 }
 
@@ -489,18 +543,22 @@ pub async fn ingest_graph_multi(
         }
         None => return Err("empty StoreSet".into()),
     };
-    let (node_rows, embedded) = rows_from_plan(plan, embedder, graph, &captured).await?;
+    let (node_rows, embedded, embedding_error) =
+        rows_from_plan(plan, embedder, graph, &captured).await?;
     let edge_rows = build_edge_rows(graph);
 
     set.upsert_nodes(&node_rows).await?;
     set.upsert_edges(&edge_rows).await?;
-    for store in &set.stores {
-        store.record_ingest_model(&model);
+    if embedding_error.is_none() {
+        for store in &set.stores {
+            store.record_ingest_model(&model);
+        }
     }
     // Every destination is pruned, not just the one the plan read from.
     let mut pruned = 0usize;
     for store in &set.stores {
         pruned += prune_to_graph(store.as_ref(), graph).await?;
+        store.ensure_query_indexes();
     }
 
     Ok(IngestStats {
@@ -510,6 +568,7 @@ pub async fn ingest_graph_multi(
         nodes_embedded: embedded,
         nodes_unchanged: 0,
         nodes_pruned: pruned,
+        embedding_error,
     })
 }
 
@@ -546,6 +605,7 @@ pub async fn reembed_nodes(
     let related = collect_related_names(graph);
     let budget = budget_for(embedder);
     let now = current_unix_secs();
+    let facts_ctx = FactContext::new(graph);
     let captured = match repo_root_of(graph) {
         Some(root) => capture_graph_code(graph, &root),
         None => HashMap::new(),
@@ -578,6 +638,7 @@ pub async fn reembed_nodes(
                 vector,
                 now,
                 captured.get(&n.id),
+                &facts_ctx,
             )
         })
         .collect();
@@ -591,6 +652,10 @@ pub async fn reembed_nodes(
         nodes_embedded: rows.len(),
         nodes_unchanged: 0,
         nodes_pruned: 0,
+        // Re-embedding is the entire point of this call, so a failed embed
+        // propagates as an error above rather than degrading — unlike a
+        // full ingest, there is no structural work here worth salvaging.
+        embedding_error: None,
     })
 }
 
@@ -650,6 +715,17 @@ mod tests {
         }
     }
 
+    /// A fact context over a graph with no edges — every degree is zero.
+    /// Enough for the row-comparison tests, which vary node content rather
+    /// than topology.
+    fn fctx() -> FactContext {
+        FactContext::new(&graph(vec![], vec![]))
+    }
+
+    /// The row a previous ingest would have written for `n`. Facts are
+    /// computed rather than left empty so this really is "what was stored
+    /// last time" — leaving them out would make every comparison test pass
+    /// or fail for the wrong reason.
     fn stored(n: &GraphNode) -> NodeRow {
         NodeRow {
             id: n.id.clone(),
@@ -664,6 +740,7 @@ mod tests {
             vector: Vec::new(),
             code: String::new(),
             file_hash: String::new(),
+            facts: crate::storage::facts::compute(n, &fctx()),
         }
     }
 
@@ -888,7 +965,7 @@ mod tests {
     #[test]
     fn an_identical_row_matches_and_skips_the_upsert() {
         let n = node("a");
-        assert!(stored_row_matches(&stored(&n), &n, "Function", None));
+        assert!(stored_row_matches(&stored(&n), &n, "Function", None, &fctx()));
     }
 
     #[test]
@@ -902,7 +979,7 @@ mod tests {
         prev.last_update_at = 1_700_000_000;
         prev.node_text = "anything".into();
         prev.vector = vec![0.5; 8];
-        assert!(stored_row_matches(&prev, &n, "Function", None));
+        assert!(stored_row_matches(&prev, &n, "Function", None, &fctx()));
     }
 
     #[test]
@@ -920,12 +997,12 @@ mod tests {
             let mut prev = stored(&n);
             mutate(&mut prev);
             assert!(
-                !stored_row_matches(&prev, &n, "Function", None),
+                !stored_row_matches(&prev, &n, "Function", None, &fctx()),
                 "a changed {label} must not match"
             );
         }
         // The type is passed in rather than read off the row.
-        assert!(!stored_row_matches(&stored(&n), &n, "Class", None));
+        assert!(!stored_row_matches(&stored(&n), &n, "Class", None, &fctx()));
     }
 
     #[test]
@@ -938,7 +1015,7 @@ mod tests {
             node_type: GraphNodeType::File,
             ..Default::default()
         };
-        assert!(stored_row_matches(&stored(&bare), &bare, "File", None));
+        assert!(stored_row_matches(&stored(&bare), &bare, "File", None, &fctx()));
     }
 
     #[test]
@@ -952,7 +1029,7 @@ mod tests {
             code: "fn a() { changed(); }".into(),
             file_hash: "hash-2".into(),
         };
-        assert!(!stored_row_matches(&prev, &n, "Function", Some(&captured)));
+        assert!(!stored_row_matches(&prev, &n, "Function", Some(&captured), &fctx()));
     }
 
     #[test]
@@ -965,7 +1042,38 @@ mod tests {
             code: "fn a() {}".into(),
             file_hash: "hash-1".into(),
         };
-        assert!(stored_row_matches(&prev, &n, "Function", Some(&captured)));
+        assert!(stored_row_matches(&prev, &n, "Function", Some(&captured), &fctx()));
+    }
+
+    /// The reason facts are part of the comparison at all. `in_degree` is
+    /// not a property of this node — it moves when some *other* file starts
+    /// calling it. If a content match short-circuited the rewrite, the
+    /// stored degree would freeze at whatever the first ingest saw, and
+    /// every statistic derived from it would drift further from the truth
+    /// on each incremental run, with the node itself looking current.
+    #[test]
+    fn a_new_caller_elsewhere_forces_a_rewrite_even_though_the_node_is_identical() {
+        let n = node("a");
+        let prev = stored(&n); // ingested when nothing called it
+        let with_caller = FactContext::new(&graph(
+            vec![],
+            vec![edge("caller", &n.id, GraphEdgeType::Calls)],
+        ));
+        assert!(
+            !stored_row_matches(&prev, &n, "Function", None, &with_caller),
+            "a node that gained a caller must be rewritten"
+        );
+    }
+
+    #[test]
+    fn a_row_stored_before_facts_existed_is_rewritten_rather_than_left_bare() {
+        // Upgrading from a store that never wrote facts must backfill them,
+        // otherwise `loc`/`in_degree` stay missing forever for untouched
+        // nodes and every query over them under-reports.
+        let n = node("a");
+        let mut prev = stored(&n);
+        prev.facts.clear();
+        assert!(!stored_row_matches(&prev, &n, "Function", None, &fctx()));
     }
 
     #[test]
@@ -976,7 +1084,7 @@ mod tests {
         let mut prev = stored(&n);
         prev.code = "fn a() {}".into();
         prev.file_hash = "hash-1".into();
-        assert!(stored_row_matches(&prev, &n, "Function", None));
+        assert!(stored_row_matches(&prev, &n, "Function", None, &fctx()));
     }
 
     // ---- budget_for ------------------------------------------------------

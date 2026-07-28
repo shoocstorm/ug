@@ -286,6 +286,14 @@ pub trait KnowledgeStore: Send + Sync {
     /// so the vectors written in that same run are weighted with them.
     fn set_sparse_stats(&self, _stats: std::sync::Arc<crate::storage::sparse_stats::SparseStats>) {}
 
+    /// Declare whatever indexes make statistical queries over the stored
+    /// facts cheap. Called once at the end of ingest, when the data exists.
+    ///
+    /// Purely a performance hint — the default no-op is correct for any
+    /// backend that indexes automatically or cannot declare indexes at
+    /// all, and no caller may depend on it having done anything.
+    fn ensure_query_indexes(&self) {}
+
     async fn upsert_nodes(&self, rows: &[NodeRow]) -> Result<(), StoreError>;
     async fn upsert_edges(&self, rows: &[EdgeRow]) -> Result<(), StoreError>;
 

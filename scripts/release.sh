@@ -81,6 +81,42 @@ echo "Working tree that will go into the release commit:"
 git status --short || true
 echo
 
+# --- generate release notes (from git log — no file changes needed) -----------
+RELEASE_NOTES=""
+generate_release_notes() {
+  local prev_tag range
+  prev_tag="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+  range="${prev_tag:+${prev_tag}..HEAD}"
+  range="${range:-HEAD}"
+
+  RELEASE_NOTES="$(git log "$range" --oneline --no-decorate 2>/dev/null | awk '
+    BEGIN { f=""; b=""; r=""; o="" }
+    {
+      m = substr($0, index($0, " ") + 1)
+      if (m ~ /^release:/) { next }
+      sub(/^feat(\([^)]*\))?:[[:space:]]*/,  "", m); if (m != $0) { f = f "* " m "\n"; next }
+      sub(/^fix(\([^)]*\))?:[[:space:]]*/,   "", m); if (m != $0) { b = b "* " m "\n"; next }
+      sub(/^refactor(\([^)]*\))?:[[:space:]]*/,"",m); if (m != $0) { r = r "* " m "\n"; next }
+      sub(/^[a-z]+(\([^)]*\))?:[[:space:]]*/, "", m)
+      o = o "* " m "\n"
+    }
+    END {
+      if (f) print "### Features\n"  f
+      if (b) print "### Bug Fixes\n" b
+      if (r) print "### Refactors\n" r
+      if (o) print "### Other\n"     o
+    }')"
+}
+generate_release_notes
+
+echo "Release notes:"
+if [[ -n "$RELEASE_NOTES" ]]; then
+  echo "$RELEASE_NOTES"
+else
+  echo "  (no changes since last release)"
+fi
+echo
+
 if [[ "$DRY_RUN" -eq 1 ]]; then
   echo "[dry-run] no files changed, nothing committed or pushed."
   exit 0
@@ -133,7 +169,7 @@ fi
 
 # --- commit, tag, push ------------------------------------------------------
 git add -A
-git commit -m "release: ${TAG}"
+git commit -m "release: ${TAG}" -m "${RELEASE_NOTES:-No changes since last release.}"
 git tag -a "${TAG}" -m "${TAG}"
 git push origin "${BRANCH}" "${TAG}"
 

@@ -16,6 +16,7 @@ use crate::storage::embed::DEFAULT_EMBEDDING_DIM;
 use crate::storage::store::{
     Direction, KnowledgeStore, NodeFilter, NodeKey, StoreError, TraversalNode, TraversalPage,
 };
+use crate::storage::facts::{FactValue, Facts};
 use crate::storage::types_registry::{edge_label, node_label, ALL_NODE_LABELS};
 use async_trait::async_trait;
 use overgraph::{
@@ -230,6 +231,14 @@ pub struct NodeRow {
     /// blake3 of the whole file `code` was taken from, so staleness is
     /// checkable against disk with one hash instead of guessed at.
     pub file_hash: String,
+    /// Derived per-node facts (`loc`, `in_degree`, `is_test`, …), stored
+    /// as individual node properties so they can be filtered and
+    /// aggregated. See [`crate::storage::facts`].
+    ///
+    /// Empty for rows read back from a store written before these
+    /// existed, which is what makes a query over them report "not
+    /// indexed" rather than a confident zero.
+    pub facts: Facts,
 }
 
 #[derive(Debug, Clone)]
@@ -437,7 +446,15 @@ impl Db {
         // survive the per-node dimension cap.
         let stats = self.sparse_stats.read().ok().and_then(|g| g.clone());
         for r in rows {
-            if r.vector.len() != want {
+            // An empty vector means "not embedded", not "bad vector". The
+            // node is written without a dense vector: it stays absent from
+            // the HNSW index (so semantic search simply doesn't surface it)
+            // while its properties — including every derived fact — are
+            // queryable. That is what lets `ug gen` produce a usable index
+            // when the embedding endpoint is down, instead of nothing.
+            // The next ingest sees `vector.len() != dim`, re-embeds it, and
+            // fills the gap.
+            if !r.vector.is_empty() && r.vector.len() != want {
                 return Err(DbError::BadVector {
                     id: r.id.clone(),
                     got: r.vector.len(),
@@ -449,7 +466,7 @@ impl Db {
                 key: r.id.clone(),
                 props: node_props(r),
                 weight: 1.0,
-                dense_vector: Some(r.vector.clone()),
+                dense_vector: (!r.vector.is_empty()).then(|| r.vector.clone()),
                 // Was `None`, which left the keyword half of
                 // `hybrid_search` matching against nothing — queries built
                 // a sparse vector but no node had one to score against.
@@ -512,6 +529,38 @@ impl Db {
         Ok(())
     }
 
+    /// Declare property indexes on the facts statistics queries filter by.
+    ///
+    /// Without these, every "how many functions over 50 lines" is an
+    /// unanchored scan. `node_type` and `is_test` are equality-shaped;
+    /// `loc` and `in_degree` are compared with `>` / `<` and need range
+    /// indexes. Called after ingest, when the data they cover exists.
+    ///
+    /// Best-effort by design: an index that fails to build costs query
+    /// speed, never correctness, so a failure is logged and swallowed
+    /// rather than failing an otherwise-good ingest.
+    pub fn ensure_fact_indexes(&self) {
+        use overgraph::{SecondaryIndexField, SecondaryIndexSpec};
+
+        const EQUALITY: &[&str] = &["node_type", "is_test", "folder", "has_doc"];
+        const RANGE: &[&str] = &["loc", "in_degree", "out_degree", "params", "max_nesting"];
+
+        for label in ALL_NODE_LABELS {
+            for key in EQUALITY {
+                let spec = SecondaryIndexSpec::equality([SecondaryIndexField::property(*key)]);
+                if let Err(e) = self.engine.ensure_node_property_index(label, spec) {
+                    tracing::debug!(label, key, error = %e, "could not declare equality index");
+                }
+            }
+            for key in RANGE {
+                let spec = SecondaryIndexSpec::range([SecondaryIndexField::property(*key)]);
+                if let Err(e) = self.engine.ensure_node_property_index(label, spec) {
+                    tracing::debug!(label, key, error = %e, "could not declare range index");
+                }
+            }
+        }
+    }
+
     pub async fn try_create_fts_index(&self) -> Result<(), DbError> {
         Ok(())
     }
@@ -541,6 +590,26 @@ impl Db {
     }
 }
 
+/// Property names owned by [`NodeRow`]'s fixed columns.
+///
+/// Facts are stored as plain sibling properties — `n.loc`, not
+/// `n.f_loc` — so a GQL query reads the way someone would write it by
+/// hand. That makes the two indistinguishable on read-back, which is what
+/// this list resolves: anything not named here came from
+/// [`crate::storage::facts`] and goes back into [`NodeRow::facts`].
+const RESERVED_PROPS: &[&str] = &[
+    "name",
+    "node_type",
+    "description",
+    "file",
+    "start_line",
+    "end_line",
+    "last_update_at",
+    "node_text",
+    "code",
+    "file_hash",
+];
+
 fn node_props(r: &NodeRow) -> BTreeMap<String, PropValue> {
     let mut m = BTreeMap::new();
     m.insert("name".into(), PropValue::String(r.name.clone()));
@@ -556,7 +625,38 @@ fn node_props(r: &NodeRow) -> BTreeMap<String, PropValue> {
     m.insert("node_text".into(), PropValue::String(r.node_text.clone()));
     m.insert("code".into(), PropValue::String(r.code.clone()));
     m.insert("file_hash".into(), PropValue::String(r.file_hash.clone()));
+    for (k, v) in &r.facts {
+        // A fact must never shadow a fixed column; the column is the one
+        // every existing reader depends on.
+        if RESERVED_PROPS.contains(&k.as_str()) {
+            continue;
+        }
+        m.insert(
+            k.clone(),
+            match v {
+                FactValue::Int(i) => PropValue::Int(*i),
+                FactValue::Str(s) => PropValue::String(s.clone()),
+            },
+        );
+    }
     m
+}
+
+/// Pull the non-column properties back out as facts.
+fn facts_from_props(props: &BTreeMap<String, PropValue>) -> Facts {
+    props
+        .iter()
+        .filter(|(k, _)| !RESERVED_PROPS.contains(&k.as_str()))
+        .filter_map(|(k, v)| {
+            let fact = match v {
+                PropValue::Int(i) => FactValue::Int(*i),
+                PropValue::UInt(u) => FactValue::Int(*u as i64),
+                PropValue::String(s) => FactValue::Str(s.clone()),
+                _ => return None,
+            };
+            Some((k.clone(), fact))
+        })
+        .collect()
 }
 
 fn prop_string(props: &BTreeMap<String, PropValue>, k: &str) -> String {
@@ -608,6 +708,7 @@ fn node_record_to_row(rec: &NodeView) -> NodeRow {
         vector: rec.dense_vector.clone().unwrap_or_default(),
         code: prop_string(&rec.props, "code"),
         file_hash: prop_string(&rec.props, "file_hash"),
+        facts: facts_from_props(&rec.props),
     }
 }
 
@@ -931,6 +1032,10 @@ impl KnowledgeStore for Db {
 
     fn sparse_stats(&self) -> Option<Arc<SparseStats>> {
         self.sparse_stats.read().ok().and_then(|g| g.clone())
+    }
+
+    fn ensure_query_indexes(&self) {
+        Db::ensure_fact_indexes(self);
     }
 
     fn set_sparse_stats(&self, stats: Arc<SparseStats>) {

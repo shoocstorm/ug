@@ -261,6 +261,11 @@ fn node_to_row(node: &Node) -> NodeRow {
         vector: node_embedding(node),
         code: node_str(node, "code"),
         file_hash: node_str(node, "file_hash"),
+        // Facts are written by the OverGraph path only for now. Reading
+        // back empty is the honest answer here, and it is what makes a
+        // statistics query over a Neo4j destination report "not indexed"
+        // instead of a confident zero.
+        facts: Default::default(),
     }
 }
 
