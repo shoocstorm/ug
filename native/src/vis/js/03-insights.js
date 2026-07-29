@@ -327,7 +327,7 @@
                 w.innerHTML = `<strong>Not indexed:</strong> ${data.unindexed.map(insEsc).join(', ')} — ` +
                     `no node carries ${data.unindexed.length === 1 ? 'this property' : 'these properties'}, ` +
                     `so every predicate on ${data.unindexed.length === 1 ? 'it' : 'them'} matched nothing. ` +
-                    `This result is not about what you asked. Run <code>ug reindex</code>.`;
+                    `This result is not about what you asked. Run <code>ug regen</code>.`;
                 box.appendChild(w);
             }
             if (data.truncated) {

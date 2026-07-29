@@ -278,7 +278,7 @@ pub struct Dependency {
 /// empty result, just a wrong number that looks right. Version 2 is the
 /// first to carry `comment_lines` / `doc_lines` / `code_lines`, `language`
 /// and `classification`, so a reader seeing version < 2 can say "not
-/// indexed — run `ug reindex`" instead.
+/// indexed — run `ug regen`" instead.
 ///
 /// - **1** (or absent): pre-comment-metrics.
 /// - **2**: comment/doc/code line counts, class metrics, file language and

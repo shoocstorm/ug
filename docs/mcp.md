@@ -490,7 +490,7 @@ search: { query: "auth flow", project: "other-repo" }
 
 ---
 
-### 13. `reindex` - Refresh a Stale Index
+### 13. `regen` - Refresh a Stale Index
 
 **Regenerate the index → graph → embeddings pipeline** for the current (or given) project. Incremental: a blake3 content cache skips files that haven't changed, so re-indexing after a few edits is fast.
 
@@ -502,7 +502,7 @@ Call this when tool outputs carry a staleness warning (see below), or after any 
 | `project` | string | ❌ | Project to re-index (default: the current one). |
 
 ```
-reindex: {}
+regen: {}
 ```
 
 ---
@@ -610,7 +610,7 @@ ug mcp call find_symbols '{"name":"run_mcp"}'
 ug mcp call file_outline '{"file":"chat.rs"}'
 ug mcp call list_projects '{}'
 ug mcp call search '{"query":"how does auth work","k":8}'
-ug mcp call reindex '{}'
+ug mcp call regen '{}'
 ```
 
 `ug mcp call` resolves the same project/env configuration as the stdio server (`UG_PROJECT`, `.env`, …), so what you see is exactly what an agent would get. Pass `"project":"<name>"` inside the JSON to target another indexed project.

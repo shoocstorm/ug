@@ -46,16 +46,14 @@ fn main() {
     // when no `.env` is present.
     let _ = dotenvy::dotenv();
 
-    let args: Vec<String> = env::args().collect();
+    // `--no-logo` is consumed here rather than passed through, so no
+    // subcommand's argument parser can mistake it for a positional.
+    let mut args: Vec<String> = env::args().collect();
+    let logo_flagged_off = args.iter().any(|a| a == "--no-logo" || a == "--quiet-logo");
+    args.retain(|a| a != "--no-logo" && a != "--quiet-logo");
+    let args = args;
 
-    // Suppressed when spawned as a subprocess by `ug serve`'s KB Manager
-    // wizard (`POST /api/generate`) — the banner would otherwise dominate
-    // the wizard's streamed log viewer. Also suppressed for bare `ug mcp`
-    // (no `install`/`uninstall` subcommand): that mode is a stdio JSON-RPC
-    // server, and the logo on stdout would corrupt the protocol stream.
-    let is_mcp_server_mode = args.get(1).map(String::as_str) == Some("mcp")
-        && !matches!(args.get(2).map(String::as_str), Some("install") | Some("uninstall"));
-    if std::env::var("UG_QUIET_LOGO").is_err() && !is_mcp_server_mode {
+    if !suppress_logo(&args, logo_flagged_off) {
         print_logo();
     }
 
@@ -82,6 +80,9 @@ fn main() {
     match cmd.as_str() {
         // Primary entry points.
         "gen" => run_gen(cmd_args),
+        // `reindex` is the name the MCP tool shipped under first; it stays
+        // accepted so anything scripted against it keeps working.
+        "regen" | "reindex" => run_regen(cmd_args),
         "serve" => serve::run_serve(cmd_args),
         "app" => run_app(cmd_args),
         "api" => run_api(cmd_args),
@@ -1910,6 +1911,105 @@ fn resolve_gen_cache(args: &[String], output_dir: &str) -> Option<String> {
         }
     }
     Some(output_dir.to_string())
+}
+
+/// `ug regen [-n <project>]` — re-run the pipeline for a project that has
+/// already been generated once.
+///
+/// This is `ug gen` with the input path remembered rather than retyped:
+/// it reads `repoRoot` out of the project's `project.json` and hands off.
+/// Everything else — the content-hash cache, the progress output, the
+/// degraded-embedder path — is `gen`'s, because re-running the pipeline
+/// and running it the first time are the same operation.
+///
+/// **On the name.** The MCP tool shipped as `reindex`, which names only
+/// the first of three stages: this indexes, rebuilds the graph, *and*
+/// re-embeds into the store. `regen` says what it does and pairs with the
+/// `gen` it repeats. `reindex` remains an accepted alias.
+fn run_regen(args: &[String]) {
+    if has_flag(args, "-h") || has_flag(args, "--help") {
+        print_regen_help();
+        return;
+    }
+
+    // Same resolution order every project-scoped command uses: -n/--name,
+    // then the active project, then the cwd's basename.
+    let name = flag_value(args, &["-n", "--name"])
+        .map(|n| project::sanitize_name(&n))
+        .or_else(project::get_active_project)
+        .unwrap_or_else(|| project::derive_project_name("."));
+
+    let dir = project::project_dir(&name);
+    let Some(meta) = project::read_meta(&dir) else {
+        eprintln!(
+            "{C_YELLOW}⚠{C_RESET}  No generated project named {C_BOLD}{}{C_RESET} under {}.",
+            name,
+            project::ug_home().display()
+        );
+        eprintln!(
+            "   Run {C_CYAN}ug gen -i <path>{C_RESET} to create it, or {C_CYAN}ug list{C_RESET} to see what exists."
+        );
+        std::process::exit(1);
+    };
+
+    if meta.repo_root.is_empty() || !Path::new(&meta.repo_root).exists() {
+        // The recorded path is how regen knows what to re-read; without a
+        // usable one there is nothing to re-run against, and guessing the
+        // cwd would silently re-index the wrong tree.
+        eprintln!(
+            "{C_YELLOW}⚠{C_RESET}  Project {C_BOLD}{}{C_RESET} points at {}, which no longer exists.",
+            name,
+            if meta.repo_root.is_empty() {
+                "(no recorded path)"
+            } else {
+                &meta.repo_root
+            }
+        );
+        eprintln!("   Re-run {C_CYAN}ug gen -i <path> -n {}{C_RESET} to repoint it.", name);
+        std::process::exit(1);
+    }
+
+    println!(
+        "{C_CYAN}▸{C_RESET} Regenerating {C_BOLD}{}{C_RESET} from {}",
+        name, meta.repo_root
+    );
+
+    // Forward the caller's flags (embedder overrides, --no-ingest, …) and
+    // add the two `gen` needs, unless they were already supplied.
+    let mut forwarded: Vec<String> = args.to_vec();
+    if flag_value(args, &["-i", "--input"]).is_none() {
+        forwarded.push("-i".into());
+        forwarded.push(meta.repo_root.clone());
+    }
+    if flag_value(args, &["-n", "--name"]).is_none() {
+        forwarded.push("-n".into());
+        forwarded.push(name);
+    }
+    run_gen(&forwarded);
+}
+
+fn print_regen_help() {
+    println!("  {C_CYAN}ug regen{C_RESET}  {C_YELLOW}— re-run the pipeline for an existing project{C_RESET}");
+    println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
+    println!();
+    println!("  {C_CYAN}ug gen{C_RESET} with the input path remembered instead of retyped — it reads");
+    println!("  the repo root from the project's own metadata. Incremental: unchanged");
+    println!("  files are skipped via content hashes, so this is cheap after a few edits.");
+    println!();
+    println!("  Runs the whole pipeline (index → graph → embed), which is why it is");
+    println!("  {C_BOLD}regen{C_RESET} and not {C_DIM}reindex{C_RESET} — though {C_CYAN}ug reindex{C_RESET} still works.");
+    println!();
+    println!("{C_BOLD}Usage:{C_RESET}  ug regen [-n <project>] [gen options]");
+    println!();
+    println!("{C_BOLD}Options:{C_RESET}");
+    println!("  {C_CYAN}-n, --name <project>{C_RESET}   Project to regenerate (default: the active one)");
+    println!("  {C_CYAN}--no-ingest{C_RESET}            Rebuild graph.json only, skip embedding");
+    println!("      {C_DIM}…plus every {C_RESET}{C_CYAN}ug gen{C_RESET}{C_DIM} option — see {C_RESET}{C_CYAN}ug gen -h{C_RESET}");
+    println!();
+    println!("{C_BOLD}Examples:{C_RESET}");
+    println!("  ug regen                    {C_DIM}# the active project{C_RESET}");
+    println!("  ug regen -n myrepo");
+    println!("  ug regen --no-ingest        {C_DIM}# structure only, no embedder needed{C_RESET}");
 }
 
 fn run_gen(args: &[String]) {
@@ -5694,6 +5794,38 @@ fn print_gen_help() {
     println!("  {C_MAGENTA}ug gen{C_RESET} -i ./src --no-ingest --serve");
 }
 
+/// Whether to skip the banner for this invocation.
+///
+/// The logo is decoration printed to **stdout**, which makes it worse than
+/// noise for anything that reads output: it sat in front of the JSON from
+/// `ug <tool> --json`, so piping to `jq` failed outright. Four ways it goes
+/// away, in the order they are checked:
+///
+/// 1. **`--no-logo`** — explicit, works everywhere.
+/// 2. **`UG_QUIET_LOGO`** — the pre-existing env contract, kept as-is.
+/// 3. **stdout is not a terminal** — the one that matters in practice.
+///    Pipes, redirects, CI and coding agents all land here and get clean
+///    output with no flag to remember. A human at a terminal still sees
+///    the banner, which is the only place it was ever doing any work.
+/// 4. **stdio server modes** — bare `ug mcp` speaks JSON-RPC on stdout, so
+///    a banner would corrupt the protocol stream outright; and `ug serve`'s
+///    KB Manager wizard spawns `ug` as a subprocess whose output it streams
+///    into a log viewer the banner would dominate.
+fn suppress_logo(args: &[String], flagged_off: bool) -> bool {
+    if flagged_off || std::env::var("UG_QUIET_LOGO").is_ok() {
+        return true;
+    }
+    if !std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+        return true;
+    }
+    // Bare `ug mcp` (no install/uninstall subcommand) is the stdio server.
+    args.get(1).map(String::as_str) == Some("mcp")
+        && !matches!(
+            args.get(2).map(String::as_str),
+            Some("install") | Some("uninstall")
+        )
+}
+
 fn print_logo() {
     println!();
     println!(
@@ -5732,14 +5864,19 @@ fn print_help() {
     println!(
         "  {C_BOLD}{C_MAGENTA}gen{C_RESET}              {C_BOLD}{C_MAGENTA}⚡ full pipeline: index → graph → visualization → ingest ⚡{C_RESET}"
     );
+    println!("  {C_CYAN}regen{C_RESET}            Re-run that pipeline for an existing project (no -i needed; incremental)");
     println!("  {C_CYAN}serve{C_RESET}            Serve the visualization + graph API");
     println!("  {C_CYAN}app{C_RESET}              Open the native desktop shell (starts serve + a window)");
     println!("  {C_CYAN}api{C_RESET}              List every HTTP endpoint `ug serve` exposes");
     println!();
-    println!("  {C_DIM}Retrieval (OverGraph-backed){C_RESET}");
+    println!("  {C_DIM}Retrieval & analysis (OverGraph-backed){C_RESET}");
     println!(
         "  {C_BOLD}{C_YELLOW}search{C_RESET}           {C_YELLOW}GraphRAG: semantic search → graph expansion → ranked context{C_RESET}"
     );
+    println!(
+        "  {C_BOLD}{C_MAGENTA}query{C_RESET}            {C_BOLD}{C_MAGENTA}📊 whole-repo statistics: counts, distributions, blast radius{C_RESET}"
+    );
+    println!("                   {C_DIM}33 named questions ({C_RESET}{C_CYAN}ug query --list{C_RESET}{C_DIM}) or write your own GQL{C_RESET}");
     println!("  {C_CYAN}semantic_search{C_RESET}  Search by meaning/concept (embeddings; use find_symbols for exact names)");
     println!("  {C_CYAN}traverse{C_RESET}         K-hop BFS over the OverGraph edges table");
     println!(
@@ -5754,10 +5891,12 @@ fn print_help() {
     println!("  {C_CYAN}graph{C_RESET}            Build graph from index result");
     println!("  {C_CYAN}ingest{C_RESET}           Embed graph nodes and write to OverGraph");
     println!();
-    println!("  {C_DIM}Graph analysis (offline, in-memory) — all take {C_RESET}{C_CYAN}-n <project>{C_RESET}{C_DIM}, {C_RESET}{C_CYAN}--json{C_RESET}{C_DIM}, {C_RESET}{C_CYAN}-o <file>{C_RESET}");
+    println!("  {C_DIM}Graph analysis (graph.json only — no database needed) — all take {C_RESET}{C_CYAN}-n <project>{C_RESET}{C_DIM}, {C_RESET}{C_CYAN}--json{C_RESET}{C_DIM}, {C_RESET}{C_CYAN}-o <file>{C_RESET}");
     println!("  {C_CYAN}graph_bfs{C_RESET}        K-hop BFS from a node/name (--hops, -d in|out|both)");
     println!("  {C_CYAN}graph_filter{C_RESET}     List edges by type/endpoint (no args: edge types + counts)");
+    println!("                   {C_DIM}with a database, {C_RESET}{C_CYAN}ug graph_schema{C_RESET}{C_DIM} and {C_RESET}{C_CYAN}ug query{C_RESET}{C_DIM} say more{C_RESET}");
     println!("  {C_CYAN}graph_centrality{C_RESET} Rank nodes by degree/betweenness (--top, -t, -f)");
+    println!("                   {C_DIM}degree ranking is {C_RESET}{C_CYAN}ug query dependency_fanin{C_RESET}{C_DIM}; only betweenness needs this{C_RESET}");
     println!("  {C_CYAN}graph_cycles{C_RESET}     Detect cycles (--min-len, --fail-on-cycle for CI)");
     println!("  {C_CYAN}graph_search{C_RESET}     Substring scan over names + docstrings (prefer find_symbols)");
     println!();
@@ -5780,6 +5919,11 @@ fn print_help() {
     println!("  {C_CYAN}uninstall{C_RESET}        Delete ALL indexed projects and uninstall ug itself");
     println!("  {C_CYAN}config{C_RESET}           View/persist defaults (chat model, endpoints, …) in ~/.ug/config.json");
     println!("  {C_CYAN}doctor{C_RESET}           Show resolved project/db/embedder/chat config");
+    println!();
+    println!("{C_BOLD}Global flags:{C_RESET}");
+    println!("  {C_CYAN}--no-logo{C_RESET}        Skip the banner. Already skipped automatically whenever stdout");
+    println!("                   is not a terminal, so piped and captured output is clean.");
+    println!("  {C_CYAN}-v, --version{C_RESET}    Print the version");
     println!();
     println!("Run {C_CYAN}ug <command> -h{C_RESET} for that command's options and examples.");
 }
@@ -5854,6 +5998,40 @@ mod tests {
         .unwrap();
         assert_eq!(p.args["from_prefix"], "src/ui");
         assert_eq!(p.args["to_prefix"], "src/db");
+    }
+
+    /// The banner goes to stdout, so anything that *reads* output has to
+    /// get it suppressed. The non-terminal case is the one that matters —
+    /// it is why `ug <tool> --json | jq` works without a flag — but it
+    /// cannot be asserted here, because the test harness's stdout is
+    /// already not a terminal and would mask every other condition.
+    #[test]
+    fn the_logo_is_suppressed_by_the_flag_and_by_env() {
+        assert!(suppress_logo(&argv("ug graph_schema"), true), "--no-logo");
+
+        // Whatever the harness's stdout is, an explicit opt-out wins.
+        std::env::set_var("UG_QUIET_LOGO", "1");
+        assert!(suppress_logo(&argv("ug gen"), false), "UG_QUIET_LOGO");
+        std::env::remove_var("UG_QUIET_LOGO");
+    }
+
+    /// Bare `ug mcp` speaks JSON-RPC on stdout — a banner there is not
+    /// noise, it corrupts the protocol. `ug mcp install` is an ordinary
+    /// interactive command and keeps it.
+    #[test]
+    fn the_stdio_server_mode_never_prints_a_banner() {
+        assert!(suppress_logo(&argv("ug mcp"), false));
+        assert!(suppress_logo(&argv("ug mcp call find_symbols"), false));
+        // These two are interactive; only a non-terminal stdout should
+        // silence them, which is the condition this test cannot control.
+        for line in ["ug mcp install claude", "ug mcp uninstall cursor"] {
+            let args = argv(line);
+            assert_eq!(
+                suppress_logo(&args, false),
+                !std::io::IsTerminal::is_terminal(&std::io::stdout()),
+                "`{line}` should only be silenced by a non-terminal stdout"
+            );
+        }
     }
 
     #[test]

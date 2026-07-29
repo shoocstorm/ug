@@ -271,7 +271,7 @@ impl std::fmt::Display for StoreError {
             } => write!(
                 f,
                 "this index was written by an older ug (store format v{}, this build needs v{}). \
-                 Run `ug reindex` (or `ug gen`) to rebuild it.",
+                 Run `ug regen` (or `ug gen`) to rebuild it.",
                 existing, supported
             ),
             StoreError::Auth(s) => write!(f, "auth error: {}", s),

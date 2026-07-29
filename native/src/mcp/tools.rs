@@ -22,7 +22,7 @@ pub const TOOL_NAMES: &[&str] = &[
     "code_query",
     "graph_schema",
     "list_projects",
-    "reindex",
+    "regen",
 ];
 
 /// Pre-rename spellings. `tools/list` advertises only the canonical set, but an
@@ -37,6 +37,11 @@ pub fn canonical_tool_name(name: &str) -> &str {
         // graph_search was find_symbols over names *and* docstrings; the
         // docstring half comes back via `alias_defaults`.
         "graph_search" => "find_symbols",
+        // `reindex` named only the first of the three stages it runs
+        // (index → graph → embed). `regen` says what it does and pairs
+        // with the `ug gen` it repeats; the old name keeps working because
+        // agents cache tool lists between sessions.
+        "reindex" => "regen",
         other => other,
     }
 }
@@ -61,7 +66,7 @@ pub fn is_known_tool(canonical: &str) -> bool {
     TOOL_NAMES.contains(&canonical) || is_unlisted_tool(canonical)
 }
 
-pub const CHAT_TOOL_DENYLIST: &[&str] = &["reindex", "list_projects"];
+pub const CHAT_TOOL_DENYLIST: &[&str] = &["regen", "list_projects"];
 
 pub fn openai_tool_schemas() -> Vec<serde_json::Value> {
     let listed = tool_list();
@@ -347,8 +352,8 @@ fn raw_tools() -> Value {
             "inputSchema": { "type": "object", "properties": {} }
         },
         {
-            "name": "reindex",
-            "description": "Re-run the index → graph → embed pipeline for the current (or named) project. Call it when tool outputs carry an \"Index may be stale\" warning, when the user says results look outdated, or after you (or they) changed many files. Incremental — unchanged files are skipped via content hashes — but embedding changed nodes needs the embedding backend, so it can take a while on big diffs; the structural tools are refreshed even if embedding fails.",
+            "name": "regen",
+            "description": "Re-run the whole pipeline (index → graph → embed) for the current (or named) project — the same thing `ug gen` does, which is why it is `regen`. Call it when tool outputs carry an \"Index may be stale\" warning, when the user says results look outdated, or after you (or they) changed many files. Incremental — unchanged files are skipped via content hashes — but embedding changed nodes needs the embedding backend, so it can take a while on big diffs; the structural tools are refreshed even if embedding fails. Accepts its former name `reindex` too.",
             "inputSchema": { "type": "object", "properties": {} }
         }
     ])
@@ -426,6 +431,30 @@ mod tests {
                 assert!(has_project, "{} should take a project arg", t["name"]);
             }
         }
+    }
+
+    /// Renaming an advertised tool breaks any agent holding a cached tool
+    /// list, so the old name has to keep resolving. This is the check that
+    /// the alias was not forgotten when the rename happened.
+    #[test]
+    fn reindex_still_resolves_after_the_rename_to_regen() {
+        assert_eq!(canonical_tool_name("reindex"), "regen");
+        assert!(is_known_tool("regen"));
+        assert!(TOOL_NAMES.contains(&"regen"));
+        assert!(!TOOL_NAMES.contains(&"reindex"), "only the new name is advertised");
+    }
+
+    /// The denylist is matched against *canonical* names, so it had to be
+    /// renamed alongside the tool — otherwise the chat model regains the
+    /// ability to kick off a full re-index mid-answer.
+    #[test]
+    fn the_chat_denylist_tracks_the_rename() {
+        assert!(CHAT_TOOL_DENYLIST.contains(&"regen"));
+        let exposed: Vec<String> = openai_tool_schemas()
+            .iter()
+            .filter_map(|t| t["function"]["name"].as_str().map(str::to_string))
+            .collect();
+        assert!(!exposed.contains(&"regen".to_string()), "{exposed:?}");
     }
 
     #[test]

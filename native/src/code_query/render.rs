@@ -197,7 +197,7 @@ fn push_caveats(out: &mut String, answer: &QueryAnswer, style: Render) {
         out.push_str(&format!(
             "\n⚠ NOT INDEXED: {} — no node carries {}, so every predicate on \
              {} matched nothing. This answer is not about what you asked. \
-             Run `ug reindex`; if the property still shows as absent, this \
+             Run `ug regen`; if the property still shows as absent, this \
              build's indexer does not produce it yet.\n",
             answer.unindexed.join(", "),
             if answer.unindexed.len() == 1 {

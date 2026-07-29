@@ -344,7 +344,7 @@ async fn an_index_predating_comment_metrics_reports_them_as_unindexed() {
     );
     let text = code_query::render::render(&answer, Render::Markdown);
     assert!(text.contains("NOT INDEXED"), "{text}");
-    assert!(text.contains("ug reindex"), "must say how to fix it: {text}");
+    assert!(text.contains("ug regen"), "must say how to fix it: {text}");
 }
 
 #[tokio::test]

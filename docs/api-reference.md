@@ -77,6 +77,7 @@ These accept the same params as their MCP counterparts and can output `--json`.
 | `ug list_projects` | `list` | List generated projects under `~/.ug` with stats. | — |
 | `ug active` | — | View or set the active project (default for `ug mcp`). | Sets with `<name>` positional |
 | `ug rm` | — | Delete a project's data directory. | `<name>` positional |
+| `ug regen` | `reindex` | Re-run the pipeline for an existing project: reads `repoRoot` from its `project.json`, so no `-i` needed. Incremental. | `-n <name>`, plus every `ug gen` flag |
 | `ug upgrade` | `update` | Check GitHub for a new release and self-update. | `--check` (report only, no update) |
 | `ug uninstall` | — | Delete ALL indexed projects and uninstall ug itself. | — |
 | `ug config` | — | View/persist defaults (chat model, endpoints, etc.) in `~/.ug/config.json`. | `set <key> <value>`, `get <key>`, `list` |
@@ -196,7 +197,7 @@ These 13 tools are advertised over MCP `tools/list` and also available via the C
 | `code_query` | **Whole-repo statistics**: counts, groups, distributions, blast radius. Takes a named `preset` or raw GQL. Read-only — mutations are rejected before write staging. Every answer reports property coverage, because aggregating over an unstored property returns `0` rather than an error. | ugdb (**no embedder**) | db missing or written by an older ug |
 | `graph_schema` | **Capability manifest**: node & edge types with counts and connection shapes (from graph.json), plus queryable properties with live coverage and the `code_query` preset list (from the db). | graph.json + ugdb | graph.json missing/invalid (the db half degrades to a note) |
 | `list_projects` | List every indexed project on this machine (name, repo path, graph size). | `~/.ug/` directory scan | — |
-| `reindex` | Re-run index → graph → embed pipeline. Incremental (content-hash cache). Graph tools refresh even if embedding fails. | Repo source → index.json → graph.json → ugdb/Neo4j | Repo root missing |
+| `regen` | Re-run index → graph → embed pipeline — the whole of `ug gen`, which is why it is not called `reindex` (that names only the first stage; the old name is still accepted). Incremental (content-hash cache). Graph tools refresh even if embedding fails. | Repo source → index.json → graph.json → ugdb/Neo4j | Repo root missing |
 
 ### 3.2 Unlisted Tools (hidden from agents, available via `ug mcp call`)
 
@@ -218,7 +219,7 @@ These 13 tools are advertised over MCP `tools/list` and also available via the C
 
 ### 3.4 Chat Tool Denylist
 
-`reindex` and `list_projects` are excluded from the OpenAI-compatible tool schemas used by `ug chat` — the LLM should not be able to reindex or list projects mid-conversation.
+`regen` and `list_projects` are excluded from the OpenAI-compatible tool schemas used by `ug chat` — the LLM should not be able to reindex or list projects mid-conversation.
 
 ### 3.5 OpenAI-compatible Tool Schemas
 
@@ -410,4 +411,4 @@ Source files
 - **One-step**: `ug gen` runs index → graph → ingest sequentially
 - **Step-by-step**: `ug index && ug graph && ug ingest`
 - **With visualization**: `ug gen --serve` (or just `ug serve`)
-- **MCP reindex**: the `reindex` MCP tool runs the full pipeline and reports results
+- **MCP regen**: the `regen` MCP tool (formerly `reindex`) runs the full pipeline and reports results

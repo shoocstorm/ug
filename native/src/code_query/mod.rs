@@ -373,7 +373,7 @@ fn explain_failure(err: &str, gql: &str) -> String {
     if err.contains("ReadOnlyViolation") {
         out.push_str(
             "\n\ncode_query is read-only. It answers questions about the graph; \
-             it cannot modify the index (use `reindex` for that).",
+             it cannot modify the index (use `regen` for that).",
         );
     } else if err.contains("max_frontier") || err.contains("exceeded configured cap") {
         // Worth an explicit hand-hold: this is the one failure mode whose

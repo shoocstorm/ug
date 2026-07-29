@@ -100,6 +100,7 @@ The native `ug` binary is the primary CLI. `ug -h` lists every command;
 | Command | Description |
 | :--- | :--- |
 | `ug gen` | Full pipeline: index → graph → visualization → OverGraph ingest |
+| `ug regen` | The same pipeline again for an already-generated project — reads the repo path from its metadata, so no `-i`. Incremental. (`ug reindex` is an accepted alias.) |
 | `ug serve` / `ug app` | Serve the viz + REST API (multi-project); `app` wraps it in a native Tauri window |
 | `ug index` / `graph` / `ingest` | The individual pipeline stages `gen` runs for you |
 | `ug search "<query>"` | GraphRAG: semantic search → graph expansion → ranked context |
@@ -199,7 +200,7 @@ own MCP config; `--project`/`--global` picks the scope.
 
 **Tools exposed:** `search`, `semantic_search`, `traverse`, `find_usages`,
 `find_symbols`, `file_outline`, `get_code`, `project_overview`, `shortest_path`,
-`code_query`, `graph_schema`, `list_projects`, `reindex`, `ping_embedder`.
+`code_query`, `graph_schema`, `list_projects`, `regen`, `ping_embedder`.
 
 `code_query` is the one to know about if you have not seen it: it answers
 counting, distribution and blast-radius questions over the whole repo in one

@@ -24,7 +24,7 @@ description: |
 | `semantic_search` | medium | — | Pure vector lookup → candidate nodeIds (no code snippets) |
 | `traverse` | cheap | ✅ `nodeId[]` | N-hop graph walk from nodeId(s) — deps or dependents |
 | `search` | expensive | — | Full GraphRAG: PPR-ranked snippets with code context |
-| `reindex` | expensive | — | Re-run index→graph→embed pipeline |
+| `regen` | expensive | — | Re-run the whole index→graph→embed pipeline (the old name `reindex` still works) |
 
 **Storage**: only `search` and `semantic_search` need a reachable embedding
 backend. `code_query` needs the OverGraph db but **no embedder**. Every other
@@ -124,7 +124,7 @@ What do you need?
 │  → shortest_path({sourceId, targetId})
 │
 └─ "Is the graph up to date?" (stale warning)
-   → reindex
+   → regen
 ```
 
 ## Concrete ug Codebase Scenarios
@@ -259,7 +259,7 @@ search({ query: "use old_crate_name", k: 15 })
 | ...want callers of symbol(s) | `find_usages` (array for several) | Pre-configured inbound walk |
 | ...want to connect 2 symbols | `shortest_path` | Targeted path query |
 | ...want to filter by edge/node type | `graph_schema` first | Absent types silently match nothing |
-| ...get stale warnings | `reindex` | Refreshes the graph |
+| ...get stale warnings | `regen` | Re-runs the whole pipeline |
 
 ## Anti-Patterns
 

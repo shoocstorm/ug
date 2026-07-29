@@ -484,7 +484,7 @@ impl Mcp {
                     None => text,
                 })
             }
-            "reindex" => self.tool_reindex(&ctx).await,
+            "regen" => self.tool_regen(&ctx).await,
             "ping_embedder" => {
                 self.embedder()?.ping().await.map_err(|e| e.to_string())?;
                 Ok("ok".to_string())
@@ -554,7 +554,7 @@ impl Mcp {
         open_store(&spec).await.map_err(|e| {
             format!(
                 "code_query needs the indexed database, and {} could not be opened: {}.\n\
-                 Run `ug reindex` for this project. (Structural tools like traverse and \
+                 Run `ug regen` for this project. (Structural tools like traverse and \
                  find_usages read graph.json and keep working without it.)",
                 ctx.db_path.display(),
                 e
@@ -788,10 +788,11 @@ impl Mcp {
         )
     }
 
-    /// Quiet re-run of the gen pipeline (index → graph → ingest). Ingest
+    /// Quiet re-run of the whole `gen` pipeline (index → graph → ingest);
+    /// the CLI half is `ug regen`. Ingest
     /// failure (embedder down) is reported but doesn't fail the call: the
     /// graph-backed tools are already fresh at that point.
-    async fn tool_reindex(&self, ctx: &ProjectCtx) -> Result<String, String> {
+    async fn tool_regen(&self, ctx: &ProjectCtx) -> Result<String, String> {
         if !ctx.repo_root.exists() {
             return Err(format!(
                 "Repo root {} no longer exists — re-run `ug gen -i <path>` manually.",
