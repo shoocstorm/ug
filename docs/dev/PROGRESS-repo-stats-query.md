@@ -13,9 +13,9 @@ Reference for the storage engine's API: see `Agents.md` §8 (never read the
 
 | Phase | State | Notes |
 |-------|-------|-------|
-| **P0a** — overgraph 0.6 → 0.17 migration | ✅ done, verified, **uncommitted** | 473 tests pass; full `ug gen` + search/traverse verified |
-| **P0b** — widen `node_props`, survive embed failure | ✅ done, verified, **uncommitted** | 492 tests pass; degraded + recovery paths exercised for real |
-| **P0c** — `code_query` tool, presets, envelope | ⬜ next | |
+| **P0a** — overgraph 0.6 → 0.17 migration | ✅ done, committed `ca7b9ac` | 473 tests pass; full `ug gen` + search/traverse verified |
+| **P0b** — widen `node_props`, survive embed failure | ✅ done, committed `5e182a6` | 492 tests pass; degraded + recovery paths exercised for real |
+| **P0c** — `code_query` tool, presets, envelope | ✅ done, verified, **uncommitted** | 529 tests pass; 25 presets run against the live index and all three transports driven end to end |
 | **P1** — comment/class metrics, file facts (reindex) | ⬜ not started | |
 | **P2** — preset files, Insights viz pane | ⬜ not started | |
 | **P3** — CSV/Parquet export | ⬜ not started | |
@@ -130,6 +130,92 @@ returned correct hits.
 
 ---
 
+## P0c — `code_query` ✅
+
+New module `native/src/code_query/` (`mod.rs` · `presets.rs` · `render.rs`),
+plus `KnowledgeStore::execute_query` and its OverGraph implementation. One
+implementation, three transports, matching `agent_tools`.
+
+- [x] **Store trait.** Portable `QueryValue` / `QueryPage` / `QueryLimits` /
+      `QueryParams` in `store.rs`; `execute_query` defaults to
+      `Unsupported` so Neo4j says so rather than answering approximately.
+      OverGraph lowers `GqlValue` → `QueryValue`, flattening nodes to their
+      **string key** (a statistics answer wants an id it can feed to
+      `get_code`, not a hydrated node carrying `code`).
+- [x] **Options pinned, not inherited.** `mode: ReadOnly`,
+      `allow_full_scan: true`, and every cap set explicitly — a cap the
+      caller never chose is one it cannot warn about.
+- [x] **25 built-in presets** across census / size / documentation / dead
+      code / architecture / tests / risk. Parameters are **bound as GQL
+      params**, never interpolated.
+- [x] **The envelope**: table (or a bare count for a 1×1 result),
+      leftover-id samples, `rows_matched` as the denominator, percentiles
+      computed from a `collect()` column, cap-truncation notice, engine
+      warnings, and the coverage line. Capped at 3k chars.
+- [x] **`graph_schema` is now the capability manifest** — the store half
+      (property coverage + preset list) is appended in `mcp/mod.rs`, so
+      `agent_tools::graph_schema` stays graph-only and the call still
+      succeeds when there is no usable store.
+- [x] **No embedder.** `db::stored_embedding_dim` reads the dim off the
+      sidecar, so statistics never start an embedding backend. Both the MCP
+      and CLI paths use it.
+- [x] Surfaces: MCP `code_query` · `ug query` (+ `--list`) · `POST
+      /api/tools/code_query` · `GET /api/presets`.
+- [x] Docs: `docs/mcp.md` (§10, §11 rewritten), `docs/api-reference.md`
+      (CLI 1.4, HTTP 2.6, tools 3.1, trait 4.3), README, and the `ug-mcp`
+      SKILL.md — source **and** the installed `~/.claude/skills/` copy.
+
+### What running the queries changed
+
+Five things were wrong in the design doc or in the first implementation, and
+every one of them was found by executing against the real index, not by
+reading:
+
+1. **`count(DISTINCT elementKey(dep))`, not `count(*)`.** A variable-length
+   match yields one row per *path*. `impact` on `storage/store.rs` reported
+   **948** dependents with a plain count and **11** with the distinct one.
+   Design Risk 4 named this; it is far bigger than "dedupe by node id"
+   suggests.
+2. **`EXISTS { MATCH … WHERE … }` needs its own `RETURN` inside.** The
+   design's example is a parse error.
+3. **Caps do not only truncate — `max_frontier` *errors*.** The design says
+   caps truncate silently, which is true of `max_rows` but not of the
+   traversal frontier. `untested_symbols` at `*1..3` exceeded it outright on
+   this 2280-node repo; at `*1..2` it answers in ~180ms. Both behaviours are
+   handled: truncation warns, and the frontier error gets a message saying
+   how to narrow the walk.
+4. **`NOT x IN [...]` must be parenthesised** as `NOT (x IN [...])`, or the
+   engine rejects the operands.
+5. **Percentiles do have to be computed in the render layer.** `percentileCont`
+   parses (it is in the aggregate-name list) but does not lower — so it fails
+   at execution, not at parse. The design's conclusion was right; its reason
+   was not.
+
+### The silent zero, demonstrated
+
+`MATCH (n:Function) WHERE n.comment_lines > 3 RETURN count(*)` returns
+`Int(0)` — no error, no engine warning. That is the whole reason the
+coverage contract is non-optional, and it is now covered by a test that
+asserts on the *rendered* output, not just the coverage struct.
+
+### Two judgement calls worth knowing
+
+- **`UnknownEdgeLabel` is suppressed for presets and shown for raw GQL.**
+  ug's presets name every dependency edge type deliberately and no single
+  language emits all of them, so `Overrides` is legitimately absent from a
+  Rust graph. In a query the caller wrote, the same warning almost always
+  means a typo'd label matching nothing. The full-scan notice is suppressed
+  always — it is true of every statistical query by construction, and
+  echoing it would train readers to skip the line where the real warnings
+  live.
+- **`code_query` does not join the `tool_graph` arm**, contrary to design
+  Part D. That arm is DB-free, and aggregation needs stored properties.
+  It has its own dispatch arm that opens the store without an embedder,
+  which preserves the useful half of the property: it keeps working when
+  `search` does not.
+
+---
+
 ## Decisions already settled (do not relitigate)
 
 - **No bespoke JSON query DSL.** Use OverGraph GQL — it ships aggregation,
@@ -164,3 +250,27 @@ returned correct hits.
   `native/tests/facts_test.rs`. Modified: `storage/{db,store,ingest,mod}.rs`,
   `storage/backends/neo4j.rs`, `src/main.rs`, and five test files that build
   `NodeRow` literals.
+- **2026-07-29** — P0b committed as `5e182a6`. **P0c implemented and
+  verified; uncommitted.** 529 tests pass (21 neo4j-gated ignored), 37 new.
+  New files: `native/src/code_query/{mod,presets,render}.rs`,
+  `native/tests/code_query_test.rs`. Modified: `storage/{store,db}.rs`,
+  `src/lib.rs`, `src/agent_tools.rs` (Render helpers → `pub(crate)`),
+  `src/main.rs`, `src/serve.rs`, `src/mcp/{mod,tools,ug-mcp-skill}.rs|md`,
+  `docs/mcp.md`, `docs/api-reference.md`, `README.md`.
+  Verified beyond the suite: all 25 presets run against this repo's live
+  index (`~/.ug/UG/ugdb`, 2280 nodes); `code_query` and `graph_schema`
+  driven through the real stdio MCP server; `ug query` run from the release
+  binary; `/api/presets` and `POST /api/tools/code_query` curled against a
+  live `ug serve`.
+  Java facts verified too: `docs/samples/java.graph.json` ingested into a
+  temp store with a dead embedder (which re-exercised P0b's degraded path —
+  749 nodes, 2728 edges, no vectors). `qualified_name` 643/749,
+  `annotations` 107/749 (`Override` 94 · `Test` 12 · `FunctionalInterface`
+  1), `route` correctly `NOT INDEXED` — that sample has no HTTP routes.
+  One bug found and fixed by that run: `-o` was missing from `ug query`'s
+  positional-skip list, so `ug query <preset> -o <path>` read the path as a
+  second preset and failed with "preset and gql together", which points
+  nowhere near the cause. Argument parsing is now a testable function with
+  a regression test (main.rs had no test module before this).
+  **Still to do before release:** the website slide deck — the one doc
+  surface from the design's P0 list not yet touched.

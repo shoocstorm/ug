@@ -919,6 +919,7 @@ pub fn run_serve(args: &[String]) {
             .route("/api/graph/cycles", get(api_cycles))
             // Agent tools — the same seven the CLI and MCP expose.
             .route("/api/tools", get(api_tools))
+            .route("/api/presets", get(api_presets))
             .route("/api/tools/:tool", post(api_tool))
             // Source file content for the right-panel "Preview" tab.
             .route("/api/file", get(api_file))
@@ -1125,6 +1126,129 @@ async fn api_tools() -> Response {
     )
 }
 
+/// GET /api/presets — the `code_query` preset registry.
+///
+/// Served from the same registry the MCP `graph_schema` manifest reads, so
+/// the UI and an agent can never disagree about what exists. `source` is
+/// there for the day presets can also come from a repo's
+/// `.ug/presets.toml`: a card built from the working tree needs to be
+/// visibly distinguishable from one ug shipped.
+async fn api_presets() -> Response {
+    let presets: Vec<serde_json::Value> = ultragraph::code_query::presets::all()
+        .iter()
+        .map(|p| {
+            serde_json::json!({
+                "name": p.name,
+                "category": p.category.as_str(),
+                "description": p.description,
+                "source": "builtin",
+                "params": p.params.iter().map(|q| serde_json::json!({
+                    "name": q.name,
+                    "description": q.description,
+                    "required": q.default.is_none(),
+                })).collect::<Vec<_>>(),
+                "headline": p.headline,
+            })
+        })
+        .collect();
+    ok_json(
+        serde_json::json!({
+            "presets": presets,
+            "run": "POST /api/tools/code_query with {\"preset\": \"<name>\", \"args\": {…}}",
+        })
+        .to_string(),
+    )
+}
+
+/// `code_query` over HTTP.
+///
+/// Split out of [`api_tool`] because it is the one tool here that needs
+/// the store rather than `graph.json` — aggregation and reachability run
+/// on indexed properties. Returns rows as JSON rather than the rendered
+/// text an agent reads, since the caller is the viz layer, which wants to
+/// build its own table and map result ids onto graph selection.
+async fn api_code_query(state: &ServeState, params: serde_json::Value) -> Response {
+    let store = match pick_store(state, None) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    // Validation lives in `code_query::run` — an unknown preset, a missing
+    // required argument and a malformed query all come back from there with
+    // a message that names the alternatives, which is more than this layer
+    // could say.
+    let request = parse_code_query_body(&params);
+
+    match ultragraph::code_query::run(store.as_ref(), &request).await {
+        Ok(answer) => ok_json(
+            serde_json::json!({
+                "title": answer.title,
+                "description": answer.description,
+                "gql": answer.gql,
+                "columns": answer.page.columns,
+                "rows": answer.page.rows.iter().map(|r| {
+                    r.iter().map(query_value_to_json).collect::<Vec<_>>()
+                }).collect::<Vec<_>>(),
+                "rowsMatched": answer.page.rows_matched,
+                "truncated": answer.page.truncated,
+                "warnings": answer.page.warnings,
+                // Coverage rides along rather than being left to the
+                // client to remember: a chart drawn over an unindexed
+                // property is the same confident lie as a printed zero.
+                "coverage": answer.coverage.iter().map(|c| serde_json::json!({
+                    "property": c.property,
+                    "present": c.present,
+                    "total": c.total,
+                })).collect::<Vec<_>>(),
+                "unindexed": answer.unindexed,
+                "text": ultragraph::code_query::render::render(
+                    &answer,
+                    ultragraph::agent_tools::Render::Markdown,
+                ),
+            })
+            .to_string(),
+        ),
+        Err(e) => err_json(StatusCode::BAD_REQUEST, &e),
+    }
+}
+
+fn query_value_to_json(v: &ultragraph::storage::store::QueryValue) -> serde_json::Value {
+    use ultragraph::storage::store::QueryValue as Q;
+    match v {
+        Q::Null => serde_json::Value::Null,
+        Q::Bool(b) => serde_json::Value::Bool(*b),
+        Q::Int(i) => serde_json::Value::from(*i),
+        Q::Float(f) => serde_json::Value::from(*f),
+        Q::Str(s) => serde_json::Value::from(s.clone()),
+        Q::List(items) => serde_json::Value::Array(items.iter().map(query_value_to_json).collect()),
+    }
+}
+
+fn parse_code_query_body(body: &serde_json::Value) -> ultragraph::code_query::CodeQueryParams {
+    let text = |k: &str| {
+        body.get(k)
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .filter(|s| !s.trim().is_empty())
+    };
+    let mut parsed = ultragraph::code_query::CodeQueryParams {
+        preset: text("preset"),
+        gql: text("gql"),
+        limit: body.get("limit").and_then(|v| v.as_u64()).map(|n| n as usize),
+        ..Default::default()
+    };
+    if let Some(obj) = body.get("args").and_then(|v| v.as_object()) {
+        for (k, v) in obj {
+            let as_text = match v {
+                serde_json::Value::String(s) => s.clone(),
+                serde_json::Value::Null => continue,
+                other => other.to_string(),
+            };
+            parsed.args.insert(k.clone(), as_text);
+        }
+    }
+    parsed
+}
+
 /// POST /api/tools/:name — run one graph-backed agent tool and return its
 /// JSON envelope. Same dispatch, params and output as `ug <name> --json` and
 /// the matching MCP tool.
@@ -1142,6 +1266,12 @@ async fn api_tool(
     let project = params
         .remove("project")
         .and_then(|v| v.as_str().map(str::to_string));
+
+    // `code_query` is store-backed, so it never reaches `run_tool` — that
+    // dispatcher only knows about graph.json.
+    if tool == "code_query" {
+        return api_code_query(&state, serde_json::Value::Object(params)).await;
+    }
 
     let ctx = match resolve_ctx(&state.registry, project.as_deref()).await {
         Ok(c) => c,

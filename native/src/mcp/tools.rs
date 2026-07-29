@@ -19,6 +19,7 @@ pub const TOOL_NAMES: &[&str] = &[
     "get_code",
     "project_overview",
     "shortest_path",
+    "code_query",
     "graph_schema",
     "list_projects",
     "reindex",
@@ -315,8 +316,28 @@ fn raw_tools() -> Value {
             }
         },
         {
+            "name": "code_query",
+            "description": format!(
+                "WHOLE-REPO STATISTICS over the indexed graph — counts, groups, distributions and blast radius. Use this for ANY question of the form 'how many', 'which are the biggest / longest / most depended-upon', 'what fraction', 'where is the worst X', 'what breaks if I change Y'. NEVER grep for a count and NEVER loop a per-file tool to build one: this answers in one call and ~100 tokens what reading the repo costs hundreds of thousands. Two ways to call it. (1) `preset` — a named question, the cheap path, e.g. {{\"preset\": \"long_functions\"}} or {{\"preset\": \"impact\", \"args\": {{\"target\": \"src/auth.ts\"}}}}. Available: {presets}. (2) `gql` — a raw OverGraph GQL (Cypher-shaped) query when no preset fits, e.g. \"MATCH (n:Function) WHERE n.loc > 50 AND n.is_test = 0 RETURN n.folder AS folder, count(*) AS c ORDER BY c DESC\". Queryable properties: node_type, name, file, folder, loc, params, max_nesting, has_doc, is_test, in_degree, out_degree, qualified_name, route, annotations, start_line, end_line — call graph_schema for their live population counts before relying on one. Booleans are stored as 0/1 so they can be summed: documented fraction is sum(n.has_doc)/count(*). Read-only; it cannot modify the index. Every answer states its coverage denominators — treat a 'NOT INDEXED' warning as meaning the number is about nothing.",
+                presets = ultragraph::code_query::presets::all()
+                    .iter()
+                    .map(|p| p.name)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "preset": { "type": "string", "description": "Name of a built-in question to run. Cheapest path — prefer this over writing GQL. See the description for the list, or call graph_schema." },
+                    "gql": { "type": "string", "description": "Raw OverGraph GQL, when no preset fits. Aggregates: count, sum, avg, min, max, collect (no percentile — a collect() column is summarised as p50/p90/p99 in the output). Supports CASE, WITH … WHERE as HAVING, EXISTS { … } (needs its own RETURN clause inside), UNION, STARTS WITH / ENDS WITH / CONTAINS, and bounded variable-length paths. Every variable-length path needs a finite bound (*1..3, never *) and unanchored walks past 2 hops can exceed the traversal cap. Parenthesise negated membership: NOT (x IN [...])." },
+                    "args": { "type": "object", "description": "Arguments for a preset, e.g. {\"target\": \"src/auth.ts\"} or {\"min_loc\": 100}. An argument the preset does not declare is an error, not an ignored key." },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 200, "description": "Rows to display (default 20). Does not change what is computed, so the reported totals stay correct when this truncates the table." }
+                }
+            }
+        },
+        {
             "name": "graph_schema",
-            "description": "Node & edge types actually present in this project's graph, with counts and what each edge type connects (e.g. Calls: Function→Function). Call this before passing edgeTypes to find_usages / traverse or nodeTypes to find_symbols — filtering on a type the graph doesn't contain silently returns nothing. Also lists the full edge-type vocabulary indexers can emit. Edges are directed (Calls A→B means A calls B); Contains is pure structure (Folder→File→Symbol), exclude it when you mean 'depends on'.",
+            "description": "The capability manifest for this project's graph, and the one call to make before any filtered or statistical query. Returns: node & edge types actually present, with counts and what each edge type connects (e.g. Calls: Function→Function); the full edge-type vocabulary indexers can emit; the properties code_query can filter and aggregate on, each with how many nodes actually carry it; and every available code_query preset. Filtering on a type the graph doesn't contain, or aggregating over a property nothing carries, returns a confident zero rather than an error — this call is how you avoid both. Edges are directed (Calls A→B means A calls B); Contains is pure structure (Folder→File→Symbol), exclude it when you mean 'depends on'.",
             "inputSchema": { "type": "object", "properties": {} }
         },
         {

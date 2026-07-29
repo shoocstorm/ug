@@ -101,6 +101,7 @@ fn main() {
         "project_overview" => run_project_overview(cmd_args),
         "shortest_path" | "graph_path" | "path" => run_graph_path(cmd_args),
         "graph_schema" => run_graph_schema(cmd_args),
+        "query" | "code_query" => run_code_query(cmd_args),
         // Retrieval (OverGraph-backed). `search` is the canonical name the
         // MCP tool uses; `hybrid_search` is the pre-rename alias.
         "semantic_search" => run_semantic_search(cmd_args),
@@ -1661,6 +1662,172 @@ fn run_graph_schema(args: &[String]) {
         "graph_schema result",
         true,
     );
+}
+
+/// `ug query` — whole-repo statistics, the CLI half of the `code_query`
+/// MCP tool.
+///
+/// Store-backed rather than graph.json-backed, unlike its neighbours in
+/// this section: aggregation and reachability need indexed properties.
+/// It still needs no embedder, so the dim comes off the store's own
+/// manifest instead of a model probe — statistics should not depend on
+/// an embedding backend being reachable.
+fn run_code_query(args: &[String]) {
+    if has_flag(args, "-h") || has_flag(args, "--help") {
+        print_code_query_help();
+        return;
+    }
+    if has_flag(args, "--list") || args.is_empty() {
+        print_presets();
+        return;
+    }
+
+    let params = match code_query_params_from_args(args) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(2);
+        }
+    };
+
+    let rt = tokio_runtime();
+    rt.block_on(async {
+        let mut spec = single_store_spec_from_args(args, 0);
+        if let StoreSpec::Overgraph { path, .. } = &spec {
+            let dim = storage::db::stored_embedding_dim(path)
+                .unwrap_or(storage::embed::DEFAULT_EMBEDDING_DIM as u32);
+            spec.set_embedding_dim(dim);
+        } else {
+            // Neo4j has no local manifest to read, and no GQL support
+            // behind this trait either — the error below says so.
+            spec.set_embedding_dim(storage::embed::DEFAULT_EMBEDDING_DIM as u32);
+        }
+        let store = open_store_or_exit(&spec).await;
+
+        match ultragraph::code_query::run(store.as_ref(), &params).await {
+            Ok(answer) => {
+                println!(
+                    "{}",
+                    ultragraph::code_query::render::render(&answer, Render::Ansi)
+                );
+            }
+            Err(e) => {
+                eprintln!("{}", e);
+                std::process::exit(1);
+            }
+        }
+    });
+}
+
+/// Parse `ug query`'s flags into the shared params struct.
+///
+/// Split out from [`run_code_query`] so it can be tested: the positional
+/// preset makes this the fiddliest argument parsing in the CLI, and the
+/// failure it produces — a flag's *value* read as a preset name — surfaces
+/// as a confusing "preset and gql together" error rather than anything
+/// resembling its cause.
+fn code_query_params_from_args(
+    args: &[String],
+) -> Result<ultragraph::code_query::CodeQueryParams, String> {
+    let gql = flag_value(args, &["-g", "--gql"]);
+    let preset = flag_value(args, &["-p", "--preset"]).or_else(|| {
+        // Only infer a positional preset when no query was given —
+        // otherwise a stray value would be read as a second query.
+        if gql.is_some() {
+            return None;
+        }
+        first_positional(
+            args,
+            &[
+                "-p", "--preset", "-g", "--gql", "-a", "--arg", "-n", "--name", "-k", "--limit",
+                // `-o` carries the store path on this command, as it does
+                // on every other store-backed one. Leaving it out made
+                // `ug query <preset> -o <path>` read the path as a second
+                // preset.
+                "-o", "--output",
+                "--dest", "--neo4j-uri", "--neo4j-user", "--neo4j-password", "--neo4j-database",
+            ],
+        )
+    });
+
+    let mut query_args = std::collections::BTreeMap::new();
+    for pair in multi_flag(args, &["-a", "--arg"]) {
+        let (k, v) = pair
+            .split_once('=')
+            .ok_or_else(|| format!("--arg expects key=value, got '{}'", pair))?;
+        query_args.insert(k.trim().to_string(), v.trim().to_string());
+    }
+
+    Ok(ultragraph::code_query::CodeQueryParams {
+        preset,
+        gql,
+        args: query_args,
+        limit: flag_value(args, &["-k", "--limit"]).and_then(|s| s.parse().ok()),
+    })
+}
+
+fn print_presets() {
+    println!("  {C_CYAN}ug query{C_RESET}  {C_YELLOW}— built-in questions{C_RESET}");
+    println!();
+    let mut category = "";
+    for p in ultragraph::code_query::presets::all() {
+        if p.category.as_str() != category {
+            category = p.category.as_str();
+            println!("{C_BOLD}{}{C_RESET}", category);
+        }
+        let args: Vec<String> = p
+            .params
+            .iter()
+            .map(|q| {
+                if q.default.is_none() {
+                    format!("{}=<required>", q.name)
+                } else {
+                    q.name.to_string()
+                }
+            })
+            .collect();
+        println!("  {C_CYAN}{:<26}{C_RESET} {}", p.name, p.description);
+        if !args.is_empty() {
+            println!("  {:<26} {C_DIM}args: {}{C_RESET}", "", args.join(", "));
+        }
+    }
+    println!();
+    println!("  Run one:  {C_CYAN}ug query <preset> [--arg key=value]{C_RESET}");
+    println!("  Raw GQL:  {C_CYAN}ug query --gql \"MATCH (n:Function) RETURN count(*) AS c\"{C_RESET}");
+}
+
+fn print_code_query_help() {
+    println!("  {C_CYAN}ug query{C_RESET}  {C_YELLOW}— whole-repo statistics over the indexed graph{C_RESET}");
+    println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
+    println!();
+    println!("  Counts, groups, distributions and blast radius — the questions that");
+    println!("  would otherwise mean grepping every file. Same engine as the");
+    println!("  {C_CYAN}code_query{C_RESET} MCP tool. Read-only.");
+    println!();
+    println!("{C_BOLD}Usage:{C_RESET}  ug query <preset> [options]");
+    println!("        ug query --gql \"<query>\" [options]");
+    println!("        ug query --list");
+    println!();
+    println!("{C_BOLD}Options:{C_RESET}");
+    println!("  {C_CYAN}-p, --preset <name>{C_RESET}    Built-in question to run (also accepted as a positional)");
+    println!("  {C_CYAN}-a, --arg <k=v>{C_RESET}        Preset argument, repeatable (e.g. --arg target=src/a.ts)");
+    println!("  {C_CYAN}-g, --gql <query>{C_RESET}      Raw OverGraph GQL, when no preset fits");
+    println!("  {C_CYAN}-k, --limit <n>{C_RESET}        Rows to display (default 20)");
+    println!("  {C_CYAN}-n, --name <project>{C_RESET}   Project to query (default: the active one)");
+    println!("      {C_CYAN}--list{C_RESET}             List every preset and exit");
+    println!();
+    println!("{C_BOLD}Examples:{C_RESET}");
+    println!("  {C_DIM}# how many functions are longer than 50 lines, and where{C_RESET}");
+    println!("  ug query long_functions_by_folder");
+    println!();
+    println!("  {C_DIM}# raise the threshold{C_RESET}");
+    println!("  ug query long_functions --arg min_loc=150");
+    println!();
+    println!("  {C_DIM}# what breaks if I change this file{C_RESET}");
+    println!("  ug query impact --arg target=native/src/storage/store.rs");
+    println!();
+    println!("  {C_DIM}# anything the presets don't cover{C_RESET}");
+    println!("  ug query --gql \"MATCH (n:Function) WHERE n.params > 6 RETURN count(*) AS c\"");
 }
 
 fn print_find_usages_help() {
@@ -5604,4 +5771,70 @@ fn print_help() {
     println!();
     println!("Run {C_CYAN}ug <command> -h{C_RESET} for that command's options and examples.");
 }
-// test change
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn argv(s: &str) -> Vec<String> {
+        s.split_whitespace().map(String::from).collect()
+    }
+
+    #[test]
+    fn a_bare_preset_name_is_the_positional() {
+        let p = code_query_params_from_args(&argv("long_functions")).unwrap();
+        assert_eq!(p.preset.as_deref(), Some("long_functions"));
+        assert!(p.gql.is_none());
+    }
+
+    /// The bug this test exists for: `-o` carries the store path, and
+    /// leaving it out of the skip list made the path itself read as a
+    /// second preset — surfacing as "preset and gql together", which
+    /// points nowhere near the cause.
+    #[test]
+    fn a_flag_value_is_never_mistaken_for_the_positional_preset() {
+        for line in [
+            "repo_census -o /tmp/db",
+            "repo_census --output /tmp/db",
+            "repo_census -n myproject",
+            "repo_census -k 5",
+            "repo_census -a target=src/a.rs",
+        ] {
+            let p = code_query_params_from_args(&argv(line)).unwrap();
+            assert_eq!(
+                p.preset.as_deref(),
+                Some("repo_census"),
+                "parsed the wrong positional from `{line}`"
+            );
+        }
+    }
+
+    #[test]
+    fn an_explicit_query_suppresses_positional_preset_inference() {
+        let args = vec![
+            "--gql".to_string(),
+            "MATCH (n) RETURN count(*) AS c".to_string(),
+            "-o".to_string(),
+            "/tmp/db".to_string(),
+        ];
+        let p = code_query_params_from_args(&args).unwrap();
+        assert!(p.preset.is_none(), "got preset {:?}", p.preset);
+        assert!(p.gql.is_some());
+    }
+
+    #[test]
+    fn repeated_arg_flags_accumulate() {
+        let p = code_query_params_from_args(&argv(
+            "layering_violations -a from_prefix=src/ui -a to_prefix=src/db",
+        ))
+        .unwrap();
+        assert_eq!(p.args["from_prefix"], "src/ui");
+        assert_eq!(p.args["to_prefix"], "src/db");
+    }
+
+    #[test]
+    fn a_malformed_arg_is_rejected_rather_than_dropped() {
+        let err = code_query_params_from_args(&argv("impact -a target")).unwrap_err();
+        assert!(err.contains("key=value"), "{err}");
+    }
+}

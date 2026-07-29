@@ -14,15 +14,17 @@
 
 use crate::storage::embed::DEFAULT_EMBEDDING_DIM;
 use crate::storage::store::{
-    Direction, KnowledgeStore, NodeFilter, NodeKey, StoreError, TraversalNode, TraversalPage,
+    Direction, KnowledgeStore, NodeFilter, NodeKey, QueryLimits, QueryPage, QueryParams,
+    QueryValue, StoreError, TraversalNode, TraversalPage,
 };
 use crate::storage::facts::{FactValue, Facts};
 use crate::storage::types_registry::{edge_label, node_label, ALL_NODE_LABELS};
 use async_trait::async_trait;
 use overgraph::{
     DatabaseEngine, DbOptions, DenseMetric, DenseVectorConfig, Direction as OgDirection, EdgeInput,
-    EdgeView, EngineError, FusionMode, HnswConfig, NeighborOptions, NodeInput, NodeKeyQuery,
-    NodeView, PprAlgorithm, PprOptions as OgPprOptions, PprResult as OgPprResult, PropValue,
+    EdgeView, EngineError, FusionMode, GqlExecutionMode, GqlExecutionOptions, GqlParamValue,
+    GqlParams, GqlValue, HnswConfig, NeighborOptions, NodeInput, NodeKeyQuery, NodeView,
+    PprAlgorithm, PprOptions as OgPprOptions, PprResult as OgPprResult, PropValue,
     VectorSearchMode, VectorSearchRequest,
 };
 use serde::{Deserialize, Serialize};
@@ -142,6 +144,25 @@ pub fn reset_if_stale_format(path: &Path) -> Result<bool, DbError> {
     }
     std::fs::remove_dir_all(path)?;
     Ok(true)
+}
+
+/// The embedding dimension a store on disk was built with, read from its
+/// sidecar without opening the engine.
+///
+/// Callers that only read properties — statistical queries especially —
+/// have no embedder and no reason to start one, but
+/// [`Db::open_or_create`] still rejects a dim that disagrees with the
+/// manifest. This lets them ask the store what it already is instead of
+/// guessing, or spinning up an embedding backend to find out.
+///
+/// `None` means no manifest, in which case the caller should fall back to
+/// [`DEFAULT_EMBEDDING_DIM`] exactly as [`Db::open`] does.
+pub fn stored_embedding_dim(path: &Path) -> Option<u32> {
+    read_meta(path)
+        .ok()
+        .flatten()
+        .map(|m| m.embedding_dim)
+        .filter(|d| *d > 0)
 }
 
 #[derive(Debug)]
@@ -561,6 +582,65 @@ impl Db {
         }
     }
 
+    /// Execute one read-only GQL statement and lower the result into the
+    /// backend-portable [`QueryPage`].
+    ///
+    /// Three of the options here are load-bearing and none of them is the
+    /// engine default:
+    ///
+    /// - **`mode: ReadOnly`** rejects mutation statements at parse time,
+    ///   before any write staging. Query text reaches here from repo
+    ///   `.ug/presets.toml` files and from agents, so "it cannot write"
+    ///   has to be a property of the call, not a promise about the input.
+    /// - **`allow_full_scan: true`**, because it defaults to `false` and a
+    ///   statistic is a full scan by nature — "how many functions exceed
+    ///   50 lines" has no bounded anchor to plan from. Without this every
+    ///   preset fails at planning and the feature looks broken.
+    /// - **the caps are pinned**, not inherited, so [`QueryPage`] can
+    ///   report which one truncated. See the truncation note below.
+    pub fn execute_gql(
+        &self,
+        gql: &str,
+        params: &QueryParams,
+        limits: &QueryLimits,
+    ) -> Result<QueryPage, DbError> {
+        let options = GqlExecutionOptions {
+            mode: GqlExecutionMode::ReadOnly,
+            allow_full_scan: true,
+            max_rows: limits.max_rows,
+            max_groups: limits.max_groups,
+            max_frontier: limits.max_frontier,
+            max_collect_items: limits.max_collect_items,
+            max_path_hops: limits.max_path_hops,
+            ..Default::default()
+        };
+        let bound: GqlParams = params
+            .iter()
+            .map(|(k, v)| (k.clone(), gql_param(v)))
+            .collect();
+
+        let result = self.engine.execute_gql(gql, &bound, &options)?;
+        let rows: Vec<Vec<QueryValue>> = result
+            .rows
+            .iter()
+            .map(|r| r.values.iter().map(query_value).collect())
+            .collect();
+
+        // The engine truncates at `max_rows` rather than erroring, and
+        // says nothing about it. A result that exactly fills the cap is
+        // indistinguishable from one that would have overflowed it, so
+        // treat both as truncated: over-warning costs a line of output,
+        // under-warning costs the caller a wrong number they trust.
+        let truncated = rows.len() >= limits.max_rows;
+        Ok(QueryPage {
+            columns: result.columns,
+            rows,
+            rows_matched: result.stats.rows_matched,
+            warnings: result.stats.warnings,
+            truncated,
+        })
+    }
+
     pub async fn try_create_fts_index(&self) -> Result<(), DbError> {
         Ok(())
     }
@@ -657,6 +737,51 @@ fn facts_from_props(props: &BTreeMap<String, PropValue>) -> Facts {
             Some((k.clone(), fact))
         })
         .collect()
+}
+
+/// Bind one portable parameter value for the engine.
+fn gql_param(v: &QueryValue) -> GqlParamValue {
+    match v {
+        QueryValue::Null => GqlParamValue::Null,
+        QueryValue::Bool(b) => GqlParamValue::Bool(*b),
+        QueryValue::Int(i) => GqlParamValue::Int(*i),
+        QueryValue::Float(f) => GqlParamValue::Float(*f),
+        QueryValue::Str(s) => GqlParamValue::String(s.clone()),
+        QueryValue::List(items) => GqlParamValue::List(items.iter().map(gql_param).collect()),
+    }
+}
+
+/// Lower one engine value into the portable [`QueryValue`].
+///
+/// Nodes, edges and paths collapse to a string — for a node, its project
+/// id, which is the one thing a caller can feed straight back into
+/// `get_code` or `find_usages`. Returning a hydrated node here would put
+/// the whole `code` property into a statistics answer, which is exactly
+/// the token cost this feature exists to avoid.
+fn query_value(v: &GqlValue) -> QueryValue {
+    match v {
+        GqlValue::Null => QueryValue::Null,
+        GqlValue::Bool(b) => QueryValue::Bool(*b),
+        GqlValue::Int(i) => QueryValue::Int(*i),
+        GqlValue::UInt(u) => QueryValue::Int(*u as i64),
+        GqlValue::Float(f) => QueryValue::Float(*f),
+        GqlValue::String(s) => QueryValue::Str(s.clone()),
+        GqlValue::List(items) => QueryValue::List(items.iter().map(query_value).collect()),
+        GqlValue::Node(n) => match (&n.key, n.id) {
+            (Some(k), _) => QueryValue::Str(k.clone()),
+            (None, Some(id)) => QueryValue::Str(format!("node:{}", id)),
+            _ => QueryValue::Null,
+        },
+        GqlValue::Edge(e) => QueryValue::Str(
+            e.label
+                .clone()
+                .unwrap_or_else(|| "edge".to_string()),
+        ),
+        GqlValue::Path(p) => QueryValue::Int(p.edge_ids.len() as i64),
+        // Byte blobs and maps have no place in an aggregate answer, and
+        // rendering them would be guesswork. Absent beats invented.
+        GqlValue::Bytes(_) | GqlValue::Map(_) => QueryValue::Null,
+    }
 }
 
 fn prop_string(props: &BTreeMap<String, PropValue>, k: &str) -> String {
@@ -1036,6 +1161,17 @@ impl KnowledgeStore for Db {
 
     fn ensure_query_indexes(&self) {
         Db::ensure_fact_indexes(self);
+    }
+
+    async fn execute_query(
+        &self,
+        gql: &str,
+        params: &QueryParams,
+        limits: &QueryLimits,
+    ) -> Result<QueryPage, StoreError> {
+        // The engine's GQL entry point is synchronous; the trait is async
+        // because Neo4j's would not be.
+        Ok(Db::execute_gql(self, gql, params, limits)?)
     }
 
     fn set_sparse_stats(&self, stats: Arc<SparseStats>) {

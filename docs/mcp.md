@@ -397,9 +397,57 @@ shortest_path: { sourceId: "file:native/src/mcp/install.rs", targetId: "function
 
 ---
 
-### 10. `graph_schema` - Node & Edge Type Metadata
+### 10. `code_query` - Whole-Repo Statistics
 
-**What node and edge types this graph actually contains**, with counts and what each edge type connects (e.g. `Calls: Function→Function (305)`), plus the full edge-type vocabulary indexers can emit. Check it before passing `edgeTypes` to `find_usages` / `traverse` or `nodeTypes` to `find_symbols` — filtering on a type the graph doesn't contain silently returns nothing.
+**Counts, groups, distributions and blast radius over the indexed graph.** This is the tool for any question of the form "how many", "what fraction", "which are the biggest / longest / most depended-upon", "what does nothing call", "which folders depend on which", "what breaks if I change this file".
+
+The point is cost. "How many methods are longer than 50 lines?" answered by grep-and-read is ~500k tokens on a medium repo and impossible on a monorepo; answered by looping `file_outline` it is ~40k tokens and 80 round trips. `code_query` answers it in one call and about 100 tokens, because ingest already stored the facts a query engine can aggregate.
+
+Two ways to call it:
+
+- **`preset`** — a named question. The cheap path (~20 tokens). Run `graph_schema` or `ug query --list` for the current set.
+- **`gql`** — a raw OverGraph GQL query (Cypher-shaped), when no preset fits.
+
+Read-only by construction: mutation statements are rejected before any write staging, so a query cannot modify the index.
+
+**Parameters:**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `preset` | string | — | Name of a built-in question. |
+| `gql` | string | — | Raw GQL, when no preset fits. Mutually exclusive with `preset`. |
+| `args` | object | — | Arguments for a preset, e.g. `{"target": "src/auth.ts"}`. An undeclared argument is an error, not an ignored key. |
+| `limit` | integer | — | Rows to display (default 20). Does not change what is computed. |
+
+```
+code_query: { preset: "long_functions", args: { min_loc: 100 } }
+code_query: { preset: "impact", args: { target: "native/src/storage/store.rs" } }
+code_query: { gql: "MATCH (n:Function) WHERE n.params > 6 RETURN n.folder AS f, count(*) AS c ORDER BY c DESC" }
+```
+
+**Queryable properties:** `node_type` · `name` · `file` · `folder` · `loc` · `params` · `max_nesting` · `has_doc` · `is_test` · `in_degree` · `out_degree` · `qualified_name` · `route` · `annotations` · `start_line` · `end_line`.
+
+**Every answer states its coverage, and this is not a nicety.** Aggregating over a property no node carries returns `0` — not an error, not a warning from the engine. `MATCH (n:Function) WHERE n.comment_lines > 3 RETURN count(*)` answers `0` on an index that has never recorded comment lines, and "no functions have long comments" is a far worse outcome than a refusal. So `code_query` probes the properties each query reads and reports their denominators, flagging any that are entirely unpopulated as `NOT INDEXED`. Call `graph_schema` first to see them all.
+
+Writing GQL by hand, three things to know:
+
+- Booleans are stored as `0`/`1` integers so they can be summed — the documented fraction is `sum(n.has_doc)` over `count(*)`.
+- Every variable-length path needs a finite bound (`*1..3`, never `*`), and an *unanchored* walk past 2 hops can exceed the traversal cap and error. Anchor one end (`WHERE t.file = $target`) or reduce the bound.
+- An `EXISTS { … }` subquery needs its own `RETURN` clause inside it, and negated membership must be parenthesised: `NOT (x IN [...])`.
+
+Also available on the CLI as `ug query` and over HTTP as `POST /api/tools/code_query` (with `GET /api/presets` for the registry).
+
+---
+
+### 11. `graph_schema` - Capability Manifest
+
+**Everything you need before filtering or aggregating**, in one cheap call:
+
+- node and edge types this graph actually contains, with counts and what each edge type connects (e.g. `Calls: Function→Function (305)`);
+- the full edge-type vocabulary indexers can emit;
+- the properties `code_query` can filter on, **each with how many nodes actually carry it**;
+- every available `code_query` preset, with its arguments.
+
+Both halves exist for the same reason: filtering on a node or edge type the graph doesn't contain silently returns nothing, and aggregating over a property nothing carries silently returns zero. Neither is an error, so this call is how you avoid both.
 
 **Parameters:** None
 
@@ -409,7 +457,7 @@ graph_schema: {}
 
 ---
 
-### 11. `list_projects` - Enumerate Indexed Projects
+### 12. `list_projects` - Enumerate Indexed Projects
 
 **List every indexed project under `~/.ug`** with name, repo root, and node/edge counts. One server instance can query all of them: every other tool accepts an optional `project: '<name>'` parameter to target another project instead of the one the server was started for.
 
@@ -422,7 +470,7 @@ search: { query: "auth flow", project: "other-repo" }
 
 ---
 
-### 12. `reindex` - Refresh a Stale Index
+### 13. `reindex` - Refresh a Stale Index
 
 **Regenerate the index → graph → embeddings pipeline** for the current (or given) project. Incremental: a blake3 content cache skips files that haven't changed, so re-indexing after a few edits is fast.
 
@@ -439,7 +487,7 @@ reindex: {}
 
 ---
 
-### 12. `ping_embedder` - Health Check
+### 14. `ping_embedder` - Health Check
 
 **Probe the configured embedding endpoint.** Returns 'ok' on success or throws with the upstream error.
 

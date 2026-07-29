@@ -32,7 +32,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use ultragraph::agent_tools::{run_tool, Render};
 use ultragraph::storage::{
     ingest_graph, open_store, search_kb, semantic_search, semantic_search_w_where, Direction,
-    Embedder, EmbedderConfig, RankStrategy, SearchKbOptions, StoreSpec,
+    Embedder, EmbedderConfig, KnowledgeStore, RankStrategy, SearchKbOptions, StoreSpec,
 };
 use ultragraph::types::{GraphData, GraphNodeType};
 use ultragraph::{build_graph, index_with_cache, C_BOLD, C_CYAN, C_RESET, C_YELLOW};
@@ -201,6 +201,47 @@ fn build_embedder() -> Result<Embedder, String> {
 
 /// Single store spec from env (`UG_DEST` and friends). Unlike `ug serve`, MCP
 /// targets exactly one backend.
+/// Read `code_query` tool arguments off the JSON-RPC params.
+///
+/// `args` values are stringified rather than passed through as JSON:
+/// preset parameters are coerced against their declared types in
+/// `code_query::bind`, which is the one place that knows whether
+/// `min_loc` wants a number. Models send `{"min_loc": 100}` and
+/// `{"min_loc": "100"}` about equally often, so both have to arrive here
+/// looking the same.
+///
+/// Infallible: every way this can be wrong — unknown preset, missing
+/// required argument, malformed query — is caught in `code_query::run`,
+/// which can name the alternatives in its error. There is nothing this
+/// layer could reject more helpfully.
+fn parse_code_query_args(args: &Value) -> ultragraph::code_query::CodeQueryParams {
+    let str_field = |k: &str| {
+        args.get(k)
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .filter(|s| !s.trim().is_empty())
+    };
+
+    let mut parsed = ultragraph::code_query::CodeQueryParams {
+        preset: str_field("preset"),
+        gql: str_field("gql"),
+        limit: args.get("limit").and_then(|v| v.as_u64()).map(|n| n as usize),
+        ..Default::default()
+    };
+
+    if let Some(obj) = args.get("args").and_then(|v| v.as_object()) {
+        for (k, v) in obj {
+            let as_text = match v {
+                Value::String(s) => s.clone(),
+                Value::Null => continue,
+                other => other.to_string(),
+            };
+            parsed.args.insert(k.clone(), as_text);
+        }
+    }
+    parsed
+}
+
 fn store_spec(db_path: &Path, dim: u32) -> Result<StoreSpec, String> {
     let dest = std::env::var("UG_DEST")
         .ok()
@@ -417,8 +458,18 @@ impl Mcp {
             // description and embedding it searched on, and lets a stale
             // file be reported instead of silently mis-sliced.
             "get_code" => Ok(with_staleness(self.tool_get_code(&ctx, args).await?)),
+            // Statistics are the one structural question that cannot be
+            // answered from graph.json: aggregation and reachability need
+            // the store's indexed properties. It still needs no embedder,
+            // so it stays available when `search` is not.
+            "code_query" => Ok(with_staleness(self.tool_code_query(&ctx, args).await?)),
+            "graph_schema" => {
+                let mut text = self.tool_graph(name, &ctx, args)?;
+                text.push_str(&self.query_capabilities(&ctx).await);
+                Ok(with_staleness(text))
+            }
             "find_symbols" | "file_outline" | "find_usages" | "traverse"
-            | "shortest_path" | "project_overview" | "graph_schema" => {
+            | "shortest_path" | "project_overview" => {
                 Ok(with_staleness(self.tool_graph(name, &ctx, args)?))
             }
             "list_projects" => {
@@ -485,6 +536,126 @@ impl Mcp {
             &result,
             Render::Markdown,
         ))
+    }
+
+    /// Open this project's store for reading properties.
+    ///
+    /// Deliberately does **not** build an embedder. Statistics read
+    /// properties, never vectors, and starting an embedding backend to
+    /// answer "how many functions are over 50 lines" would make the
+    /// cheapest tool in the set depend on the most fragile part of the
+    /// stack. The dim comes from the store's own manifest instead of from
+    /// a model probe.
+    async fn open_query_store(&self, ctx: &ProjectCtx) -> Result<Box<dyn KnowledgeStore>, String> {
+        let dim = ultragraph::storage::db::stored_embedding_dim(&ctx.db_path)
+            .unwrap_or(ultragraph::storage::embed::DEFAULT_EMBEDDING_DIM as u32);
+        let spec = store_spec(&ctx.db_path, dim)?;
+        open_store(&spec).await.map_err(|e| {
+            format!(
+                "code_query needs the indexed database, and {} could not be opened: {}.\n\
+                 Run `ug reindex` for this project. (Structural tools like traverse and \
+                 find_usages read graph.json and keep working without it.)",
+                ctx.db_path.display(),
+                e
+            )
+        })
+    }
+
+    async fn tool_code_query(&self, ctx: &ProjectCtx, args: Value) -> Result<String, String> {
+        let params = parse_code_query_args(&args);
+        let store = self.open_query_store(ctx).await?;
+        let answer = ultragraph::code_query::run(store.as_ref(), &params).await?;
+        Ok(ultragraph::code_query::render::render(
+            &answer,
+            Render::Markdown,
+        ))
+    }
+
+    /// The half of `graph_schema` that only the store can answer: which
+    /// properties are populated, and what presets exist.
+    ///
+    /// Appended rather than folded into `agent_tools::graph_schema`,
+    /// which is deliberately graph-only. Best-effort: a project with no
+    /// usable store still gets the node/edge half of the manifest, with
+    /// one line saying why the rest is missing — that is more useful than
+    /// failing the call an agent makes to orient itself.
+    async fn query_capabilities(&self, ctx: &ProjectCtx) -> String {
+        use ultragraph::code_query::presets;
+
+        let mut out = String::from("\n**Queryable properties** (code_query)\n");
+
+        match self.open_query_store(ctx).await {
+            Ok(store) => {
+                // Probe the full vocabulary at once, so a property that
+                // this build writes but this *index* predates shows up as
+                // absent rather than silently missing from the list.
+                let gql = format!(
+                    "MATCH (n) RETURN {}",
+                    ultragraph::code_query::QUERYABLE_PROPERTIES
+                        .iter()
+                        .map(|p| format!("n.{}", p))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+                let coverage = ultragraph::code_query::coverage_for(
+                    store.as_ref(),
+                    &gql,
+                    &ultragraph::storage::store::QueryLimits::default(),
+                )
+                .await;
+                if coverage.is_empty() {
+                    out.push_str("  (could not read property coverage from the index)\n");
+                } else {
+                    for c in &coverage {
+                        if c.is_absent() {
+                            out.push_str(&format!(
+                                "  {:<16} NOT INDEXED — querying it returns 0, not an error\n",
+                                c.property
+                            ));
+                        } else {
+                            out.push_str(&format!(
+                                "  {:<16} {}/{}\n",
+                                c.property, c.present, c.total
+                            ));
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                out.push_str(&format!("  unavailable — {}\n", e.lines().next().unwrap_or("")));
+            }
+        }
+
+        out.push_str("\n**code_query presets**\n");
+        let mut category = "";
+        for p in presets::all() {
+            if p.category.as_str() != category {
+                category = p.category.as_str();
+                out.push_str(&format!("  [{}]\n", category));
+            }
+            let args: Vec<String> = p
+                .params
+                .iter()
+                .map(|q| {
+                    if q.default.is_none() {
+                        format!("{}=<required>", q.name)
+                    } else {
+                        q.name.to_string()
+                    }
+                })
+                .collect();
+            out.push_str(&format!(
+                "  {:<26} {}{}\n",
+                p.name,
+                p.description,
+                if args.is_empty() {
+                    String::new()
+                } else {
+                    format!(" (args: {})", args.join(", "))
+                }
+            ));
+        }
+        out
     }
 
     fn tool_graph(&self, name: &str, ctx: &ProjectCtx, args: Value) -> Result<String, String> {

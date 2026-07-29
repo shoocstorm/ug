@@ -13,7 +13,8 @@ description: |
 | Tool | Cost | Batch? | What it does |
 |------|------|--------|-------------|
 | `project_overview` | cheap | — | One-shot repo orientation: node counts, biggest files, hotspot symbols |
-| `graph_schema` | cheap | — | Node/edge types actually in this graph + full vocabulary. Check before filtering. |
+| `graph_schema` | cheap | — | Capability manifest: node/edge types in this graph, queryable properties **with live coverage**, and every `code_query` preset. Check before filtering or aggregating. |
+| `code_query` | cheap | — | Whole-repo statistics: counts, groups, distributions, blast radius. Preset by name, or raw GQL. |
 | `find_symbols` | cheap | ✅ `nodeId[]` OR `name[]` | Direct nodeId lookup (O(1)) OR ranked name lookup → nodeId(s). `includeDocs:true` also scans docstrings. |
 | `file_outline` | cheap | ✅ `nodeId[]` OR `file[]` | Direct nodeId lookup (O(1) OR file path → symbols in file |
 | `get_code` | cheap | ✅ `nodeId[]` | Read full source for nodeId(s) or a file:line range |
@@ -25,12 +26,46 @@ description: |
 | `search` | expensive | — | Full GraphRAG: PPR-ranked snippets with code context |
 | `reindex` | expensive | — | Re-run index→graph→embed pipeline |
 
-**Storage**: only `search` and `semantic_search` need the OverGraph db and a
-reachable embedding backend. **Every other tool reads `graph.json` only.** So
-if search fails with an embedding or db error, don't give up — `find_symbols`,
-`file_outline`, `get_code`, `find_usages`, `traverse`, `shortest_path`,
-`project_overview` and `graph_schema` all still work, and together they cover
-most questions.
+**Storage**: only `search` and `semantic_search` need a reachable embedding
+backend. `code_query` needs the OverGraph db but **no embedder**. Every other
+tool reads `graph.json` only. So if search fails with an embedding error,
+don't give up — `find_symbols`, `file_outline`, `get_code`, `find_usages`,
+`traverse`, `shortest_path`, `project_overview`, `graph_schema` and
+`code_query` all still work, and together they cover most questions.
+
+## The one rule that saves the most tokens
+
+> **For any counting, aggregate, distribution or blast-radius question, call
+> `graph_schema` then `code_query`. Never grep for a count. Never loop a
+> per-file tool to build one.**
+
+"How many methods are longer than 50 lines?" is one `code_query` call and
+~100 tokens. Grepping and reading is ~500k tokens on a medium repo and
+impossible on a monorepo; looping `file_outline` is ~40k tokens and 80 round
+trips. The same is true of "which classes are biggest", "what fraction is
+documented", "what does nothing call", "which folders depend on which", and
+"what breaks if I change this file".
+
+`code_query` takes either a **preset** (a named question — the cheap path,
+~20 tokens) or raw **GQL** (Cypher-shaped) when no preset fits:
+
+```
+code_query {"preset": "long_functions", "args": {"min_loc": 100}}
+code_query {"preset": "impact", "args": {"target": "src/auth.ts"}}
+code_query {"gql": "MATCH (n:Function) WHERE n.params > 6 RETURN n.folder AS f, count(*) AS c ORDER BY c DESC"}
+```
+
+Call `graph_schema` first — it lists the presets and, more importantly, how
+many nodes actually carry each queryable property. Aggregating over a
+property nothing carries **returns 0, not an error**. Every `code_query`
+answer states its coverage; treat a `NOT INDEXED` warning as meaning the
+number is about nothing, not that the answer is zero.
+
+Writing GQL by hand, three things to know: booleans are stored as `0`/`1` so
+they can be summed (`sum(n.has_doc)` over `count(*)` is the documented
+fraction); every variable-length path needs a finite bound (`*1..3`, never
+`*`), and unanchored walks past 2 hops can exceed the traversal cap; an
+`EXISTS { … }` subquery needs its own `RETURN` clause inside.
 
 **Cheap tools**: in-memory scan or walk over `graph.json`. No network, no DB.  
 **Medium tools**: one embedding call + one vector query.  
@@ -65,7 +100,11 @@ What do you need?
 │  → traverse({nodeId, direction:"outbound", hops:1})
 │
 ├─ "What would break if I change X?"
-│  → graph_schema → find_usages({nodeId, edgeTypes:["calls"]})
+│  → code_query({preset:"impact", args:{target:"path/to/x.rs"}})   ← whole file
+│  → find_usages({nodeId, edgeTypes:["calls"]})                    ← one symbol
+│
+├─ "How many / what fraction / which are the biggest …?"
+│  → graph_schema → code_query({preset}) — NEVER grep, NEVER loop a tool
 │
 ├─ "How does A connect to B?"
 │  → shortest_path({sourceId, targetId})

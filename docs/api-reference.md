@@ -58,6 +58,7 @@ These accept the same params as their MCP counterparts and can output `--json`.
 | `ug search` | `hybrid_search` | **GraphRAG**: semantic search → graph expansion → PPR-ranked context with snippets. | `<query>` positional, `-k <limit>` (default 8), `--filter <sql>`, `--direction`, `-t <edge-type>`, `--max-chars`, `--no-snippets`, `-n <name>`, `--repo-root`, embedding overrides |
 | `ug semantic_search` | — | Pure vector search over embeddings (no graph context). | `<query>` positional, `-k <limit>` (default 10), `--filter <sql>`, `-n <name>`, embedding overrides |
 | `ug traverse` | — | K-hop BFS over the OverGraph edges table. | `<node-id>`... positionals, `-k <hops>` (default 2), `-n <name>` |
+| `ug query` | `code_query` | **Whole-repo statistics**: counts, groups, distributions, blast radius. Read-only GQL over the stored facts. Needs the db but **no embedder**. | `<preset>` positional or `-p <preset>`, `-a k=v` (repeatable), `-g/--gql <query>`, `-k <limit>` (default 20), `--list`, `-n <name>` |
 
 ### 1.5 Chat & Tour Commands
 
@@ -143,7 +144,9 @@ The HTTP server (`ug serve`) is built on **axum**. All routes listed below.
 | Method | Path | What it does | Data source |
 |--------|------|-------------|--------------|
 | GET | `/api/tools` | List available agent tools with descriptions | MCP tool registry |
+| GET | `/api/presets` | List `code_query` presets (name, category, description, params, source) | Preset registry |
 | POST | `/api/tools/:tool` | Run one agent tool (same params as MCP). Accepts body JSON with optional `project` field. | graph.json |
+| POST | `/api/tools/code_query` | Run a statistical query. Body: `{preset, args, gql, limit}`. Returns `columns`/`rows` as JSON plus `coverage`, `unindexed`, `warnings`, `truncated` and a rendered `text`. | ugdb (no embedder) |
 
 ### 2.7 File Content
 
@@ -176,7 +179,7 @@ The HTTP server (`ug serve`) is built on **axum**. All routes listed below.
 
 ### 3.1 Advertised MCP Tools (`tools/list`)
 
-These 12 tools are advertised over MCP `tools/list` and also available via the CLI and HTTP `/api/tools/:tool`. Each tool accepts an optional `project` parameter (except `list_projects`).
+These 13 tools are advertised over MCP `tools/list` and also available via the CLI and HTTP `/api/tools/:tool`. Each tool accepts an optional `project` parameter (except `list_projects`).
 
 | Tool | What it does | Data source | When it errors |
 |------|-------------|-------------|----------------|
@@ -189,7 +192,8 @@ These 12 tools are advertised over MCP `tools/list` and also available via the C
 | `get_code` | Read source for a node id or file/line range. Works from stored source in DB (consistent with search) with filesystem fallback. | ugdb (preferred) + filesystem fallback | graph.json missing + filesystem not readable |
 | `project_overview` | Orient in the codebase: repo root, node/edge counts, biggest files, most depended-upon symbols. | graph.json | graph.json missing/invalid |
 | `shortest_path` | Find shortest directed edge path between two node ids. | graph.json | graph.json missing/invalid |
-| `graph_schema` | Node & edge types present in this project's graph, with counts and connection shapes. | graph.json | graph.json missing/invalid |
+| `code_query` | **Whole-repo statistics**: counts, groups, distributions, blast radius. Takes a named `preset` or raw GQL. Read-only — mutations are rejected before write staging. Every answer reports property coverage, because aggregating over an unstored property returns `0` rather than an error. | ugdb (**no embedder**) | db missing or written by an older ug |
+| `graph_schema` | **Capability manifest**: node & edge types with counts and connection shapes (from graph.json), plus queryable properties with live coverage and the `code_query` preset list (from the db). | graph.json + ugdb | graph.json missing/invalid (the db half degrades to a note) |
 | `list_projects` | List every indexed project on this machine (name, repo path, graph size). | `~/.ug/` directory scan | — |
 | `reindex` | Re-run index → graph → embed pipeline. Incremental (content-hash cache). Graph tools refresh even if embedding fails. | Repo source → index.json → graph.json → ugdb/Neo4j | Repo root missing |
 
@@ -264,6 +268,8 @@ All backends implement this async trait:
 | `vector_search(query, k, filter)` | Dense vector search (cosine distance) |
 | `hybrid_search(query, sparse, text, k, filter)` | Dense + keyword fusion search |
 | `traverse(start, max_hops, edge_types, direction)` | K-hop graph traversal |
+| `execute_query(gql, params, limits)` | Run one **read-only** GQL statement for statistics. Default impl returns `Unsupported` — a backend without a query language must say so rather than answer approximately. Implemented on OverGraph; Neo4j inherits the default. |
+| `ensure_query_indexes()` | Declare property indexes that make statistical queries cheap. Best-effort; default no-op. |
 | `nodes_by_ids(ids)` | Bulk read nodes by id |
 | `nodes_for_upsert(keys)` | Read back rows before upsert (for incremental ingest diffing) |
 | `prune_nodes_absent_from(keep)` | Delete nodes not in the given set |

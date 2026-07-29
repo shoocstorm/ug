@@ -107,6 +107,7 @@ The native `ug` binary is the primary CLI. `ug -h` lists every command;
 | `ug traverse <node-id>` | K-hop BFS over the stored OverGraph edges |
 | `ug chat "<question>"` | RAG-grounded chat against an LLM — see [docs/CHAT.md](docs/CHAT.md) |
 | `ug project_overview` / `find_symbols` / `file_outline` / `get_code` / `find_usages` / `shortest_path` / `graph_schema` | Agent tools — same names, params and output as the MCP tools and `POST /api/tools/<name>`. Add `--json` for the machine-readable envelope. |
+| `ug query <preset>` | Whole-repo statistics: "how many functions over 50 lines", "what breaks if I change this file", "which folders are worst documented". `ug query --list` shows every preset; `--gql` runs a raw query. |
 | `ug list_projects` / `ug rm <project>` | List projects under `~/.ug`, or delete one |
 | `ug doctor` | Print resolved project/db/embedder/chat config and where each value came from |
 | `ug mcp install [target]` | Wire the MCP server into a client's config — see [MCP Server](#mcp-server) |
@@ -127,7 +128,7 @@ by `ug ingest`). Which one a command reads tells you what still works after
 | Reads | Works |
 | :--- | :--- |
 | **`graph.json`** — no DB or embedder needed | `find_symbols`, `file_outline`, `get_code`, `find_usages`, `traverse`, `shortest_path`, `project_overview`, `graph_schema`, all `graph_*` tools; `GET /api/graph/*`, `/api/file`, `/graph.json` |
-| **`ugdb/`** — needs the ingest step | `traverse --dest <name>`; `GET /api/db/node/:id`, `/api/db/traverse/:id` |
+| **`ugdb/`** — needs the ingest step, but **no embedder** | `query` (statistics); `traverse --dest <name>`; `GET /api/db/node/:id`, `/api/db/traverse/:id`, `POST /api/tools/code_query` |
 | **`ugdb/` + an embedder** — needs ingest *and* a reachable backend | `search`, `semantic_search`, `chat`; `POST /api/search/hybrid`, `/api/search/semantic`, `/api/chat` |
 
 The practical consequence: **only `search`, `semantic_search` and `chat` need
@@ -198,7 +199,12 @@ own MCP config; `--project`/`--global` picks the scope.
 
 **Tools exposed:** `search`, `semantic_search`, `traverse`, `find_usages`,
 `find_symbols`, `file_outline`, `get_code`, `project_overview`, `shortest_path`,
-`ping_embedder`.
+`code_query`, `graph_schema`, `list_projects`, `reindex`, `ping_embedder`.
+
+`code_query` is the one to know about if you have not seen it: it answers
+counting, distribution and blast-radius questions over the whole repo in one
+call — the questions an agent would otherwise answer by grepping every file
+and reading the results, at roughly a thousandth of the tokens.
 
 The easiest way to wire this up is `ug mcp install` (interactive picker, or name
 a client: `claude`, `claude-desk`, `cursor`, `windsurf`, `vscode`, `gemini`,

@@ -115,6 +115,90 @@ fn parse_with_case(s: &str) -> Option<NodeFilter> {
     None
 }
 
+// ── statistical queries ────────────────────────────────────────────────
+
+/// One cell of a query result, in the shapes every backend can produce.
+///
+/// Deliberately not `overgraph::GqlValue`: this crosses the
+/// [`KnowledgeStore`] boundary, so it has to stay backend-neutral, and the
+/// engine's node/edge/path values are flattened to their string keys on
+/// the way through — a statistics answer wants an identifier it can hand
+/// to `get_code`, not a hydrated node.
+#[derive(Debug, Clone, PartialEq)]
+pub enum QueryValue {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    Str(String),
+    List(Vec<QueryValue>),
+}
+
+impl QueryValue {
+    /// The number this cell represents, for the render layer's percentile
+    /// and ratio helpers. `None` for anything non-numeric — including
+    /// [`QueryValue::Null`], which is "no value", not zero.
+    pub fn as_f64(&self) -> Option<f64> {
+        match self {
+            QueryValue::Int(i) => Some(*i as f64),
+            QueryValue::Float(f) => Some(*f),
+            QueryValue::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+            _ => None,
+        }
+    }
+}
+
+/// Execution caps for one statistical query.
+///
+/// These are pinned by the caller rather than inherited from the engine's
+/// defaults, deliberately. Caps in OverGraph **truncate rather than
+/// error**, so a query that trips one returns a confident under-count —
+/// and a cap the caller never chose is one it cannot warn about. See
+/// [`QueryPage::truncated`].
+#[derive(Debug, Clone)]
+pub struct QueryLimits {
+    pub max_rows: usize,
+    pub max_groups: usize,
+    pub max_frontier: usize,
+    pub max_collect_items: usize,
+    /// Upper bound on variable-length path expansion. Every `*1..N` in a
+    /// query must stay under this or the walk is silently clipped.
+    pub max_path_hops: u8,
+}
+
+impl Default for QueryLimits {
+    fn default() -> Self {
+        Self {
+            max_rows: 10_000,
+            max_groups: 65_536,
+            max_frontier: 65_536,
+            max_collect_items: 65_536,
+            max_path_hops: 16,
+        }
+    }
+}
+
+/// Named query parameters, bound by the engine rather than substituted
+/// into the query text. Preset arguments arrive from users and from
+/// repo-supplied files, and interpolating them would make a preset a
+/// string-concatenation hazard.
+pub type QueryParams = std::collections::BTreeMap<String, QueryValue>;
+
+/// The result of one statistical query.
+#[derive(Debug, Clone, Default)]
+pub struct QueryPage {
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<QueryValue>>,
+    /// Rows the engine matched before projection — the denominator behind
+    /// a `LIMIT`ed answer.
+    pub rows_matched: usize,
+    /// Engine diagnostics, passed through verbatim. Includes plan notes
+    /// (missing index, fallback scan) as well as cap trips.
+    pub warnings: Vec<String>,
+    /// The row cap was reached, so this answer is a **lower bound**.
+    pub truncated: bool,
+}
+
 /// One node + its hop distance from the traversal seed.
 #[derive(Debug, Clone)]
 pub struct TraversalNode {
@@ -293,6 +377,29 @@ pub trait KnowledgeStore: Send + Sync {
     /// backend that indexes automatically or cannot declare indexes at
     /// all, and no caller may depend on it having done anything.
     fn ensure_query_indexes(&self) {}
+
+    /// Run one read-only GQL statement over the stored graph.
+    ///
+    /// This is the whole-repo statistics surface: counting, grouping and
+    /// bounded reachability over the facts ingest wrote (see
+    /// [`crate::storage::facts`]). Implementations **must** reject
+    /// mutations — presets can arrive from a cloned repository's
+    /// `.ug/presets.toml`, and read-only execution is what makes that
+    /// safe by construction rather than by review.
+    ///
+    /// The default returns [`StoreError::Unsupported`]: a backend without
+    /// a query language should say so, not answer approximately.
+    async fn execute_query(
+        &self,
+        gql: &str,
+        params: &QueryParams,
+        limits: &QueryLimits,
+    ) -> Result<QueryPage, StoreError> {
+        let _ = (gql, params, limits);
+        Err(StoreError::Unsupported(
+            "this backend cannot run GQL statistical queries",
+        ))
+    }
 
     async fn upsert_nodes(&self, rows: &[NodeRow]) -> Result<(), StoreError>;
     async fn upsert_edges(&self, rows: &[EdgeRow]) -> Result<(), StoreError>;

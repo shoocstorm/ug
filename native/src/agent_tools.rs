@@ -34,14 +34,14 @@ pub enum Render {
 }
 
 impl Render {
-    fn bold(self, s: &str) -> String {
+    pub(crate) fn bold(self, s: &str) -> String {
         match self {
             Render::Ansi => format!("{}{}{}", C_BOLD, s, C_RESET),
             Render::Markdown => format!("**{}**", s),
         }
     }
 
-    fn dim(self, s: &str) -> String {
+    pub(crate) fn dim(self, s: &str) -> String {
         match self {
             Render::Ansi => format!("{}{}{}", C_DIM, s, C_RESET),
             // Markdown has no "dim"; plain text keeps the line readable.
@@ -51,14 +51,14 @@ impl Render {
 
     /// A node id, or anything else meant to be copied verbatim into a
     /// follow-up call.
-    fn id(self, s: &str) -> String {
+    pub(crate) fn id(self, s: &str) -> String {
         match self {
             Render::Ansi => format!("{}{}{}", C_CYAN, s, C_RESET),
             Render::Markdown => format!("`{}`", s),
         }
     }
 
-    fn heading(self, s: &str) -> String {
+    pub(crate) fn heading(self, s: &str) -> String {
         match self {
             Render::Ansi => format!("{}{}{}", C_BOLD, s, C_RESET),
             Render::Markdown => format!("## {}", s),
