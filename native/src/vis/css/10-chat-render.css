@@ -1,0 +1,448 @@
+        /* ─── Chat: live turn (progress strip, reasoning, tools) ─── */
+
+        .chat-progress {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            font-size: 10.5px;
+            color: var(--text-dim);
+            margin-bottom: 6px;
+        }
+
+        .chat-progress .cp-phase { color: var(--text-muted); }
+
+        .chat-progress .cp-stats {
+            margin-left: auto;
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+        }
+
+        .chat-msg.streaming .chat-body::after {
+            content: '▋';
+            color: var(--accent);
+            animation: tourblink 1s step-end infinite;
+            margin-left: 1px;
+        }
+
+        .chat-body { white-space: pre-wrap; }
+
+        /* What the model asked the graph for, in the order it asked. */
+        .chat-tool {
+            font-family: 'JetBrains Mono', ui-monospace, monospace;
+            font-size: 10px;
+            color: var(--text-dim);
+            padding: 2px 0;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .chat-tool.done { color: var(--accent); }
+
+        .chat-think { margin-bottom: 6px; }
+
+        .chat-think summary {
+            font-size: 10px;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: var(--text-dim);
+            cursor: pointer;
+        }
+
+        .chat-think summary:hover { color: var(--accent); }
+
+        .chat-think pre {
+            margin: 6px 0 0;
+            padding: 8px 9px;
+            background: var(--bg-deep);
+            border-radius: 6px;
+            font-size: 10.5px;
+            line-height: 1.5;
+            color: var(--text-dim);
+            white-space: pre-wrap;
+            word-break: break-word;
+            max-height: 160px;
+            overflow: auto;
+        }
+
+        /* A call-to-action inside a capability banner: the thing that's
+           missing is configurable at runtime, so offer the fix here. */
+        .cap-banner .cap-cta {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            margin-top: 8px;
+            background: rgba(249, 115, 22, 0.14);
+            border: 1px solid var(--accent-dim);
+            color: var(--accent);
+            border-radius: 6px;
+            padding: 5px 11px;
+            font-family: inherit;
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+
+        .cap-banner .cap-cta:hover { background: rgba(249, 115, 22, 0.24); }
+        .cap-banner strong { display: block; margin-bottom: 3px; color: var(--text); }
+
+        /* ─── Chat: the setup inspector ─────────────────────── */
+
+        .chat-setup { margin-bottom: 10px; }
+
+        .chat-setup > summary {
+            font-size: 10px;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: var(--text-dim);
+            cursor: pointer;
+            padding: 3px 0;
+        }
+
+        .chat-setup > summary:hover { color: var(--accent); }
+
+        .chat-setup-body {
+            margin-top: 6px;
+            padding: 9px 10px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-soft);
+            border-radius: 7px;
+        }
+
+        .setup-head {
+            font-size: 9px;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            font-weight: 700;
+            color: var(--accent);
+            margin: 12px 0 5px;
+        }
+
+        .setup-head:first-child { margin-top: 0; }
+
+        .setup-note {
+            margin: 0 0 7px;
+            font-size: 10.5px;
+            line-height: 1.5;
+            color: var(--text-dim);
+        }
+
+        .setup-steps {
+            margin: 0 0 8px;
+            padding-left: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        .setup-steps li { font-size: 10.5px; line-height: 1.5; color: var(--text-dim); }
+        .setup-steps b { display: block; color: var(--text-muted); font-weight: 600; }
+
+        .setup-facts { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 4px; }
+
+        .setup-facts span {
+            display: inline-flex;
+            align-items: baseline;
+            gap: 4px;
+            font-size: 9.5px;
+            padding: 2px 7px;
+            border-radius: 999px;
+            background: var(--bg-deep);
+        }
+
+        .setup-facts b {
+            color: var(--text-dim);
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+        }
+
+        .setup-facts i {
+            font-style: normal;
+            color: var(--accent);
+            font-family: 'JetBrains Mono', ui-monospace, monospace;
+        }
+
+        .setup-tool { margin-bottom: 3px; }
+
+        .setup-tool > summary {
+            display: flex;
+            gap: 7px;
+            align-items: baseline;
+            cursor: pointer;
+            padding: 2px 0;
+            font-size: 10px;
+            color: var(--text-dim);
+            list-style: none;
+        }
+
+        .setup-tool > summary::-webkit-details-marker { display: none; }
+
+        .setup-tool code {
+            color: var(--accent);
+            font-family: 'JetBrains Mono', ui-monospace, monospace;
+            flex-shrink: 0;
+        }
+
+        .setup-tool > summary span {
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .setup-tool pre {
+            margin: 4px 0 8px;
+            padding: 7px 8px;
+            background: var(--bg-deep);
+            border-radius: 5px;
+            font-size: 9.5px;
+            line-height: 1.45;
+            color: var(--text-muted);
+            white-space: pre-wrap;
+            word-break: break-word;
+            max-height: 180px;
+            overflow: auto;
+        }
+
+        .chat-setup-body .ct-block { margin-bottom: 6px; }
+        .chat-setup-body .ct-block pre { max-height: 170px; }
+
+        /* ─── Chat: rendered markdown ───────────────────────── */
+
+        .chat-body { white-space: pre-wrap; }
+        /* Rendered markdown manages its own spacing. */
+        .chat-msg.assistant:not(.streaming) .chat-body { white-space: normal; }
+
+        .chat-body p { margin: 0 0 8px; line-height: 1.6; }
+        .chat-body > :last-child { margin-bottom: 0; }
+
+        .chat-body .md-h {
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--text);
+            margin: 12px 0 6px;
+            letter-spacing: 0.01em;
+        }
+
+        .chat-body h1.md-h, .chat-body h2.md-h { font-size: 13px; }
+        .chat-body .md-h:first-child { margin-top: 0; }
+
+        .chat-body .md-list { margin: 0 0 8px; padding-left: 18px; }
+        .chat-body .md-list li { margin-bottom: 3px; line-height: 1.55; }
+
+        .chat-body code {
+            font-family: 'JetBrains Mono', ui-monospace, monospace;
+            font-size: 10.5px;
+            background: var(--bg-deep);
+            border-radius: 4px;
+            padding: 1px 4px;
+            color: var(--accent);
+        }
+
+        .chat-body .md-code {
+            margin: 0 0 8px;
+            padding: 9px 10px;
+            background: var(--bg-deep);
+            border: 1px solid var(--border-soft);
+            border-radius: 6px;
+            overflow-x: auto;
+        }
+
+        .chat-body .md-code code {
+            background: none;
+            padding: 0;
+            color: var(--text-muted);
+            font-size: 10.5px;
+            line-height: 1.5;
+        }
+
+        .chat-body blockquote {
+            margin: 0 0 8px;
+            padding-left: 9px;
+            border-left: 2px solid var(--border);
+            color: var(--text-muted);
+        }
+
+        .chat-body hr { border: none; border-top: 1px solid var(--border-soft); margin: 10px 0; }
+        .chat-body a { color: var(--accent); }
+
+        /* Inline [#N] markers jump to the node they cite. */
+        .chat-body .md-cite {
+            color: var(--accent);
+            cursor: pointer;
+            font-variant-numeric: tabular-nums;
+            border-bottom: 1px dotted var(--accent-dim);
+        }
+
+        .chat-body .md-cite:hover { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+        .chat-body .md-cite.dead { color: var(--text-dim); border-bottom: none; cursor: default; }
+
+        /* ─── Chat: collapsible citations + inspectable tools ── */
+
+        details.chat-citations > summary {
+            font-size: 10px;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: var(--text-dim);
+            cursor: pointer;
+            padding: 4px 0;
+        }
+
+        details.chat-citations > summary:hover { color: var(--accent); }
+
+        details.chat-tool {
+            font-family: 'JetBrains Mono', ui-monospace, monospace;
+            font-size: 10px;
+            color: var(--text-dim);
+        }
+
+        details.chat-tool > summary {
+            display: flex;
+            gap: 6px;
+            align-items: baseline;
+            cursor: pointer;
+            padding: 2px 0;
+            list-style: none;
+        }
+
+        details.chat-tool > summary::-webkit-details-marker { display: none; }
+        details.chat-tool .ct-mark { width: 9px; flex-shrink: 0; }
+        details.chat-tool .ct-name { color: var(--text-muted); }
+        details.chat-tool.done .ct-name { color: var(--accent); }
+
+        details.chat-tool .ct-args {
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            opacity: 0.75;
+        }
+
+        details.chat-tool .ct-sum { flex-shrink: 0; opacity: 0.75; }
+
+        details.chat-tool .ct-detail {
+            margin: 4px 0 6px 15px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .ct-wait { font-size: 10px; color: var(--text-dim); padding: 4px 0; }
+
+        .ct-block {
+            border-left: 2px solid var(--border);
+            border-radius: 0 5px 5px 0;
+            background: var(--bg-deep);
+            overflow: hidden;
+        }
+
+        .ct-block-head {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 5px 8px 3px;
+            font-size: 9px;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: var(--text-dim);
+        }
+
+        .ct-block-head span {
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .ct-copy {
+            background: none;
+            border: 1px solid var(--border-soft);
+            color: var(--text-dim);
+            border-radius: 4px;
+            padding: 1px 6px;
+            font-family: inherit;
+            font-size: 9px;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            cursor: pointer;
+            flex: 0 0 auto;
+        }
+
+        .ct-copy:hover { color: var(--accent); border-color: var(--accent-dim); }
+
+        .ct-block pre {
+            margin: 0;
+            padding: 0 8px 7px;
+            font-size: 10px;
+            line-height: 1.5;
+            color: var(--text-muted);
+            white-space: pre-wrap;
+            word-break: break-word;
+            max-height: 220px;
+            overflow: auto;
+        }
+
+        /* The whole set of calls behind one label, alongside the citations. */
+        .chat-notools {
+            font-size: 9.5px;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: var(--text-dim);
+            padding: 3px 0 5px;
+        }
+
+        details.chat-tools { margin-top: 6px; }
+
+        details.chat-tools > summary {
+            font-size: 10px;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: var(--text-dim);
+            cursor: pointer;
+            padding: 4px 0;
+        }
+
+        details.chat-tools > summary:hover { color: var(--accent); }
+        details.chat-tools > details.chat-tool { margin-left: 8px; }
+
+        /* The details panel resizes from its left edge, same as the
+           sidebar does from its right. */
+        .info-resize-handle {
+            position: absolute;
+            top: 0;
+            left: -3px;
+            width: 7px;
+            height: 100%;
+            cursor: ew-resize;
+            z-index: 42;
+        }
+
+        .info-resize-handle::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 3px;
+            width: 2px;
+            height: 100%;
+            background: transparent;
+            transition: background 0.15s ease;
+        }
+
+        .info-resize-handle:hover::after,
+        body.resizing .info-resize-handle::after { background: var(--accent); }
+
+        body.resizing #info { transition: none; }
+
+        /* The node's type, as its icon, in the panel title. */
+        .info-title-icon {
+            display: inline-flex;
+            align-items: center;
+            flex-shrink: 0;
+        }
+
+        .info-title-icon .node-icon { width: 15px; height: 15px; }
+

@@ -1,0 +1,1114 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Knowledge Graph visualization | UltraGraph</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <style>
+{{CSS}}
+    </style>
+</head>
+
+<body>
+    <!-- Knowledge Base Manager: always shown first in multi-project mode.
+         Lists discovered ~/.ug projects to open, or a wizard to generate
+         a new one from a folder. Hidden entirely in single-project mode
+         (server started with `ug serve -i <graph.json>`). -->
+    <div id="kb-manager" class="kb-manager">
+        <div class="kb-bg" aria-hidden="true">
+            <div class="kb-glow"></div>
+            <svg viewBox="0 0 1000 600" preserveAspectRatio="xMidYMid slice">
+                <g stroke="#f97316" stroke-width="1" opacity="0.5">
+                    <line x1="120" y1="90" x2="260" y2="180" />
+                    <line x1="260" y1="180" x2="205" y2="320" />
+                    <line x1="205" y1="320" x2="80" y2="410" />
+                    <line x1="780" y1="70" x2="900" y2="160" />
+                    <line x1="900" y1="160" x2="840" y2="290" />
+                    <line x1="840" y1="290" x2="960" y2="380" />
+                    <line x1="480" y1="40" x2="560" y2="120" />
+                    <line x1="560" y1="120" x2="470" y2="200" />
+                    <line x1="120" y1="480" x2="240" y2="540" />
+                    <line x1="700" y1="470" x2="620" y2="540" />
+                </g>
+                <g fill="#5b8fc9">
+                    <circle cx="120" cy="90" r="2.2" />
+                    <circle cx="260" cy="180" r="1.6" />
+                    <circle cx="205" cy="320" r="2" />
+                    <circle cx="80" cy="410" r="1.4" />
+                    <circle cx="780" cy="70" r="1.8" />
+                    <circle cx="900" cy="160" r="2.4" />
+                    <circle cx="840" cy="290" r="1.5" />
+                    <circle cx="960" cy="380" r="2" />
+                    <circle cx="480" cy="40" r="1.6" />
+                    <circle cx="560" cy="120" r="2.2" />
+                    <circle cx="470" cy="200" r="1.4" />
+                    <circle cx="120" cy="480" r="1.8" />
+                    <circle cx="240" cy="540" r="1.4" />
+                    <circle cx="700" cy="470" r="2" />
+                    <circle cx="620" cy="540" r="1.6" />
+                    <circle cx="30" cy="220" r="1.4" />
+                    <circle cx="960" cy="60" r="1.6" />
+                    <circle cx="500" cy="560" r="1.8" />
+                </g>
+            </svg>
+        </div>
+
+        <button id="kb-settings-btn" class="kb-corner-settings" title="Settings (model, endpoints)" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+                <circle cx="12" cy="12" r="3" />
+            </svg>
+            Settings
+        </button>
+
+        <div class="kb-inner">
+            <div class="kb-header">
+                <div class="kb-kicker">Knowledge Base Manager</div>
+                <div class="kb-brand">
+                    <h1>ULTRA GRAPH</h1>
+                    <span class="kb-cursor"></span>
+                </div>
+                <div class="kb-status-line">
+                    <span class="kb-status-dot"></span>
+                    <span id="kb-status-text">Connecting…</span>
+                </div>
+            </div>
+
+            <!-- What's New: Recent Enhancements -->
+            <div class="kb-whatsnew collapsed">
+                <div class="kb-whatsnew-header">
+                    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                    </svg>
+                    <span>What's New</span>
+                    <button class="kb-whatsnew-toggle" id="kb-whatsnew-toggle" type="button" title="Toggle"></button>
+                </div>
+                <div class="kb-whatsnew-body" id="kb-whatsnew-body">
+                    <div class="kb-whatsnew-item">
+                        <span class="kb-whatsnew-badge">Performance</span>
+                        <span class="kb-whatsnew-text">Direct <code>nodeId</code> lookups in <code>find_symbols</code> and <code>file_outline</code> — O(1) when you have the id</span>
+                    </div>
+                    <div class="kb-whatsnew-item">
+                        <span class="kb-whatsnew-badge">MCP Tools</span>
+                        <span class="kb-whatsnew-text">Enhanced AI agent tools with batch support — <code>search</code>, <code>traverse</code>, <code>find_usages</code>, <code>get_code</code></span>
+                    </div>
+                    <div class="kb-whatsnew-item">
+                        <span class="kb-whatsnew-badge">Tour</span>
+                        <span class="kb-whatsnew-text">Guided, narrated walkthroughs — ask a question, <code>ug tour</code> plans an ordered set of stops through the graph</span>
+                    </div>
+                    <div class="kb-whatsnew-item">
+                        <span class="kb-whatsnew-badge">Reliability</span>
+                        <span class="kb-whatsnew-text">Project staleness detection — automatic warnings when index falls out of sync with source</span>
+                    </div>
+                    <div class="kb-whatsnew-item">
+                        <span class="kb-whatsnew-badge">Chat</span>
+                        <span class="kb-whatsnew-text">Streaming responses with real-time progress — faster, more interactive code Q&A</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="kb-body">
+                <div id="kb-loading" class="kb-state">
+                    <div class="kb-scan"></div>
+                    <p>Scanning ~/.ug for knowledge bases…</p>
+                </div>
+
+                <div id="kb-list-view" class="kb-state" hidden>
+                    <div id="kb-grid" class="kb-grid"></div>
+                </div>
+
+                <div id="kb-wizard-view" class="kb-state" hidden>
+                    <button id="kb-wizard-back" class="kb-back-btn" type="button" hidden>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
+                            stroke-linecap="round" stroke-linejoin="round" width="13" height="13">
+                            <path d="M15 18l-6-6 6-6" />
+                        </svg>
+                        Back to library
+                    </button>
+                    <svg class="kb-wizard-icon" viewBox="0 0 48 48" fill="none">
+                        <circle cx="24" cy="10" r="3.4" fill="currentColor" opacity="0.9" />
+                        <circle cx="10" cy="34" r="3.4" fill="currentColor" opacity="0.7" />
+                        <circle cx="38" cy="34" r="3.4" fill="currentColor" opacity="0.7" />
+                        <path d="M24 13.4 L11.5 31.2 M24 13.4 L36.5 31.2 M13 34 H35" stroke="currentColor"
+                            stroke-width="1.6" opacity="0.55" />
+                    </svg>
+                    <h2 class="kb-wizard-title">Generate a Knowledge Base</h2>
+                    <p class="kb-wizard-hint">Point at a local folder to index. This runs the same pipeline as
+                        <code>ug gen</code> and streams progress live below. Build artifacts (*.min.js, dist/, etc.) are automatically ignored via <code>UG_IGNORE</code> env var.</p>
+                    <form id="kb-wizard-form" class="kb-form">
+                        <label class="kb-field">
+                            <span>Folder path</span>
+                            <div class="kb-input-wrap">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                                    stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
+                                </svg>
+                                <input type="text" id="kb-path-input" placeholder="/absolute/path/to/repo"
+                                    autocomplete="off" required>
+                                <button type="button" class="kb-browse-btn" id="kb-browse-btn">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                                        stroke-linecap="round" stroke-linejoin="round">
+                                        <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
+                                    </svg>
+                                    Browse…
+                                </button>
+                            </div>
+                        </label>
+                        <label class="kb-field">
+                            <span>Project name <em>(optional)</em></span>
+                            <div class="kb-input-wrap">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                                    stroke-linecap="round" stroke-linejoin="round">
+                                    <path
+                                        d="M20.59 13.41 11 3.83A2 2 0 0 0 9.59 3H4a1 1 0 0 0-1 1v5.59a2 2 0 0 0 .59 1.41l9.58 9.58a2 2 0 0 0 2.83 0l4.59-4.59a2 2 0 0 0 0-2.58Z" />
+                                    <circle cx="7.5" cy="7.5" r="1.2" fill="currentColor" stroke="none" />
+                                </svg>
+                                <input type="text" id="kb-name-input" placeholder="defaults to folder name"
+                                    autocomplete="off">
+                            </div>
+                        </label>
+                        <label class="kb-checkbox">
+                            <input type="checkbox" id="kb-no-ingest">
+                            <span>Skip embedding ingest (faster; disables semantic/hybrid search &amp; chat)</span>
+                        </label>
+                        <div class="kb-form-actions">
+                            <button type="submit" id="kb-generate-btn">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
+                                    stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
+                                    <path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z" />
+                                </svg>
+                                Generate
+                            </button>
+                        </div>
+                    </form>
+                    <div id="kb-wizard-status" class="kb-wizard-status" hidden>
+                        <div class="kb-scan"></div>
+                        <p id="kb-wizard-status-text">Starting…</p>
+                        <pre id="kb-wizard-log"></pre>
+                    </div>
+                    <div id="kb-wizard-error" class="kb-wizard-error" hidden></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Delete-project confirmation dialog, triggered from a KB Manager
+         card's delete button. Content (name/stats/repo) is filled in by
+         JS per invocation. -->
+    <div id="kb-confirm-overlay" class="kb-confirm-overlay">
+        <div class="kb-confirm-panel" role="alertdialog" aria-modal="true" aria-labelledby="kb-confirm-title">
+            <div class="kb-confirm-stripe" aria-hidden="true"></div>
+            <div class="kb-confirm-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M10.29 3.86 1.82 18a1.5 1.5 0 0 0 1.3 2.25h17.76a1.5 1.5 0 0 0 1.3-2.25L13.71 3.86a1.5 1.5 0 0 0-2.42 0Z" />
+                    <path d="M12 9v4M12 16.5h.01" />
+                </svg>
+            </div>
+            <div class="kb-confirm-kicker">Destructive action</div>
+            <h2 class="kb-confirm-title" id="kb-confirm-title">Delete <span class="kb-confirm-name" id="kb-confirm-name"></span>?</h2>
+            <p class="kb-confirm-body" id="kb-confirm-body"></p>
+            <div class="kb-confirm-error" id="kb-confirm-error" hidden></div>
+            <div class="kb-confirm-actions">
+                <button type="button" class="kb-confirm-btn kb-confirm-cancel" id="kb-confirm-cancel">Cancel</button>
+                <button type="button" class="kb-confirm-btn kb-confirm-delete" id="kb-confirm-delete-btn">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m2 0-.7 12.1A2 2 0 0 1 14.3 21H9.7a2 2 0 0 1-2-1.9L7 7"/></svg>
+                    <span id="kb-confirm-delete-label">Delete forever</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div id="kb-browse-overlay" class="kb-browse-overlay">
+        <div class="kb-browse-panel" role="dialog" aria-modal="true" aria-label="Browse for a folder">
+            <h2 class="kb-browse-title">Choose a folder</h2>
+            <div class="kb-browse-path-row">
+                <button type="button" class="kb-browse-up" id="kb-browse-up" title="Up one level" disabled>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 19V5M5 12l7-7 7 7" />
+                    </svg>
+                </button>
+                <div class="kb-browse-path" id="kb-browse-path"></div>
+            </div>
+            <div class="kb-browse-list" id="kb-browse-list">
+                <div class="kb-browse-loading">Loading…</div>
+            </div>
+            <div class="kb-browse-actions">
+                <button type="button" class="kb-confirm-btn kb-confirm-cancel" id="kb-browse-cancel">Cancel</button>
+                <button type="button" class="kb-confirm-btn kb-browse-select" id="kb-browse-select">Select this folder</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings: view + persist ug configuration (~/.ug/config.json).
+         Groups mirror `ug config` keys; values are loaded from
+         GET /api/config and saved via POST /api/config. CLI flags and
+         env vars still outrank saved values — rows show a chip + note
+         when that's happening so overrides are never silent. -->
+    <div id="settings-overlay" class="settings-overlay">
+        <div class="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+            <div class="settings-head">
+                <div class="settings-head-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+                        <circle cx="12" cy="12" r="3" />
+                    </svg>
+                </div>
+                <div class="settings-head-text">
+                    <h2 id="settings-title">Settings</h2>
+                    <p>Saved to <code id="settings-path">~/.ug/config.json</code> — shared by the CLI, MCP server, and this UI</p>
+                </div>
+                <button type="button" class="settings-close" id="settings-close" title="Close (Esc)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M18 6 6 18M6 6l12 12" />
+                    </svg>
+                </button>
+            </div>
+            <div class="settings-precedence" title="How a value is picked when several places define it">
+                <span class="prec-step">CLI flag</span>
+                <span class="prec-arrow">›</span>
+                <span class="prec-step">env var</span>
+                <span class="prec-arrow">›</span>
+                <span class="prec-step prec-here">saved here</span>
+                <span class="prec-arrow">›</span>
+                <span class="prec-step">default</span>
+            </div>
+            <div class="settings-body" id="settings-body">
+                <div class="settings-loading">Loading configuration…</div>
+            </div>
+            <div class="settings-foot">
+                <span class="settings-status" id="settings-status"></span>
+                <button type="button" class="settings-btn secondary" id="settings-revert" disabled>Revert</button>
+                <button type="button" class="settings-btn primary" id="settings-save" disabled>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M20 6 9 17l-5-5" />
+                    </svg>
+                    Save
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div id="container">
+        <div id="graph-3d"></div>
+
+        <!-- Guided Tour: cinematic narration overlay (camera flies stop to
+             stop). Draggable by its header; the JSON button opens the plan
+             the LLM produced. -->
+        <div id="tour-overlay" aria-live="polite">
+            <div class="tour-card">
+                <div class="tour-top" id="tour-o-drag">
+                    <span class="tour-grip" aria-hidden="true"><i></i><i></i><i></i></span>
+                    <span class="tour-badge">Guided Tour</span>
+                    <span class="tour-title-main" id="tour-o-title"></span>
+                    <span class="tour-counter" id="tour-o-counter"></span>
+                    <div class="tour-tools">
+                        <button class="tour-icon" id="tour-o-code-btn" title="Show this stop's code (C)"
+                            aria-pressed="false" hidden>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+                                stroke-linecap="round" stroke-linejoin="round">
+                                <path d="m9 8-5 4 5 4M15 8l5 4-5 4" />
+                            </svg>
+                        </button>
+                        <button class="tour-icon warn" id="tour-o-warn-btn" title="Show notes about this tour (W)"
+                            aria-pressed="false" hidden>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+                                stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M12 9v4.5M12 17h.01" />
+                                <path d="M10.3 3.9 2.6 17.4A2 2 0 0 0 4.3 20.4h15.4a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" />
+                            </svg>
+                        </button>
+                        <button class="tour-icon" id="tour-o-solo" title="Show only the nodes on this tour (O)"
+                            aria-pressed="false">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+                                stroke-linecap="round" stroke-linejoin="round">
+                                <circle cx="6" cy="6" r="2.4" /><circle cx="18" cy="10" r="2.4" />
+                                <circle cx="9" cy="18" r="2.4" />
+                                <path d="M8.1 7.1 15.9 9M16.6 12.2 10.8 16.3" />
+                            </svg>
+                        </button>
+                        <button class="tour-icon" id="tour-o-details" title="Open the full details panel for this stop (D)"
+                            aria-pressed="false">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+                                stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="3" y="4" width="18" height="16" rx="2.5" />
+                                <path d="M14 4v16M17 9h1M17 13h1" />
+                            </svg>
+                        </button>
+                        <button class="tour-icon" id="tour-o-json" title="View the plan JSON the guide generated (J)">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+                                stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M9 4H8a3 3 0 0 0-3 3v2a3 3 0 0 1-3 3 3 3 0 0 1 3 3v2a3 3 0 0 0 3 3h1" />
+                                <path d="M15 4h1a3 3 0 0 1 3 3v2a3 3 0 0 0 3 3 3 3 0 0 0-3 3v2a3 3 0 0 1-3 3h-1" />
+                            </svg>
+                        </button>
+                        <button class="tour-icon danger" id="tour-o-close" title="Exit tour (Esc)">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1"
+                                stroke-linecap="round">
+                                <path d="M6 6l12 12M18 6 6 18" />
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+                <div class="tour-progress" id="tour-o-progress"></div>
+                <div id="tour-o-stage">
+                    <div class="tour-stop-title" id="tour-o-stop-title"></div>
+                    <div class="tour-stop-meta" id="tour-o-stop-meta"></div>
+                    <div class="tour-narration" id="tour-o-narration"></div>
+                    <div class="tour-code" id="tour-o-code" hidden>
+                        <pre id="tour-o-code-body"></pre>
+                    </div>
+                    <div class="tour-next" id="tour-o-next-up" hidden>
+                        <span class="lbl">Up next</span><span class="val" id="tour-o-next-title"></span>
+                    </div>
+                    <!-- Shown while the walk is running ahead of the guide. -->
+                    <div class="tour-streaming" id="tour-o-streaming" hidden>
+                        <span class="tour-spinner"></span>
+                        <span>The guide is still writing the rest of the tour…</span>
+                    </div>
+                </div>
+                <!-- Live planning read-out. A local model can take minutes,
+                     so the wait shows what it's actually doing. -->
+                <div id="tour-o-plan" class="tour-plan" hidden>
+                    <div class="tplan-head">
+                        <span class="tour-spinner"></span>
+                        <span class="tplan-phase" id="tplan-phase">Charting a path through the graph…</span>
+                        <span class="tplan-elapsed" id="tplan-elapsed">0:00</span>
+                    </div>
+                    <div class="tplan-track"><div class="tplan-bar" id="tplan-bar"></div></div>
+                    <div class="tplan-steps" id="tplan-steps"></div>
+                    <div class="tplan-stats" id="tplan-stats" hidden></div>
+                    <div class="tplan-hint" id="tplan-hint"></div>
+                </div>
+                <div id="tour-o-note" class="tour-note" hidden></div>
+                <div class="tour-warnings" id="tour-o-warnings" hidden></div>
+                <!-- Transport: centred like a media player, speed on the
+                     left, exit on the right so the deck stays symmetric. -->
+                <div class="tour-controls">
+                    <div class="tour-controls-side left">
+                        <button class="tour-speed" id="tour-o-speed" title="Playback speed (S)">1×</button>
+                    </div>
+                    <div class="tour-transport">
+                        <button class="tour-tbtn" id="tour-o-prev" title="Previous stop (←)" aria-label="Previous stop">
+                            <svg viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M7 5.5a1 1 0 0 1 2 0v13a1 1 0 0 1-2 0z"/>
+                                <path d="M18.4 5.9v12.2c0 .8-.9 1.3-1.6.9l-8.5-6.1a1.1 1.1 0 0 1 0-1.8l8.5-6.1c.7-.4 1.6 0 1.6.9z"/>
+                            </svg>
+                        </button>
+                        <button class="tour-tbtn play" id="tour-o-play" title="Play / pause (space)" aria-label="Play">
+                            <svg viewBox="0 0 24 24" fill="currentColor" id="tour-o-play-icon">
+                                <path d="M8 5.2c0-.9 1-1.4 1.7-.9l9 6.8c.6.4.6 1.4 0 1.8l-9 6.8c-.7.5-1.7 0-1.7-.9z"/>
+                            </svg>
+                        </button>
+                        <button class="tour-tbtn" id="tour-o-next" title="Next stop (→)" aria-label="Next stop">
+                            <svg viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M15 5.5a1 1 0 0 1 2 0v13a1 1 0 0 1-2 0z"/>
+                                <path d="M5.6 5.9v12.2c0 .8.9 1.3 1.6.9l8.5-6.1a1.1 1.1 0 0 0 0-1.8L7.2 5c-.7-.4-1.6 0-1.6.9z"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="tour-controls-side right">
+                        <span class="tour-play-state" id="tour-o-play-label">Play</span>
+                        <button class="tour-exit" id="tour-o-exit">Exit</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Guided Tour: what the guide actually generated (plan JSON, the
+             pack it chose from, and the prompts behind both). -->
+        <div id="tour-json" role="dialog" aria-label="Tour plan JSON">
+            <div class="tjson-card">
+                <div class="tjson-head">
+                    <span class="title">Tour plan</span>
+                    <span class="sub" id="tjson-sub"></span>
+                    <button class="tour-close" id="tjson-close" title="Close (Esc)">✕</button>
+                </div>
+                <div class="tjson-tabs" id="tjson-tabs"></div>
+                <div class="tjson-body">
+                    <p class="tjson-note" id="tjson-note"></p>
+                    <pre id="tjson-pre"></pre>
+                </div>
+                <div class="tjson-foot">
+                    <button class="tjson-btn" id="tjson-copy">Copy</button>
+                    <button class="tjson-btn" id="tjson-download">Download .json</button>
+                    <span class="spacer"></span>
+                    <span class="sub" id="tjson-meta" style="font-size:11px;color:#a89b8d"></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Navigation / breadcrumb bar (visible while exploring a node) -->
+        <div id="navbar" class="canvas-overlay">
+            <button class="nav-btn" id="nav-back" title="Back (Backspace)" disabled>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M15 18l-6-6 6-6" />
+                </svg>
+            </button>
+            <button class="nav-btn" id="nav-forward" title="Forward (Shift+Backspace)" disabled>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M9 18l6-6-6-6" />
+                </svg>
+            </button>
+            <div class="crumbs" id="nav-crumbs"></div>
+            <button class="nav-exit" id="nav-exit" title="Exit focus (Esc)">Exit focus</button>
+        </div>
+
+        <!-- Colour legend / quick type filter -->
+        <div id="legend" class="canvas-overlay">
+            <div class="legend-head" id="legend-head">
+                <span class="label">Legend</span>
+                <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                    stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M6 9l6 6 6-6" />
+                </svg>
+            </div>
+            <div class="legend-body" id="legend-body"></div>
+            <div class="legend-hint">Click a type to filter</div>
+        </div>
+
+        <!-- Camera orientation gizmo -->
+        <div id="axis-gizmo" class="canvas-overlay">
+            <svg viewBox="-40 -40 80 80" id="gizmo-svg"></svg>
+        </div>
+
+        <!-- Bottom view bar: six face projections + 3D, plus box / spin toggles.
+             Number colours match the digi labels on the boundary-box faces. -->
+        <div id="viewbar" class="canvas-overlay">
+            <button class="vbtn" data-view="1" title="View face 1 — XY plane (front)"><span class="vn" style="color:#f97316">1</span><span class="vp">XY</span></button>
+            <button class="vbtn" data-view="2" title="View face 2 — YZ plane (right)"><span class="vn" style="color:#3a6ea5">2</span><span class="vp">YZ</span></button>
+            <button class="vbtn" data-view="3" title="View face 3 — XY plane (back)"><span class="vn" style="color:#c2410c">3</span><span class="vp">XY</span></button>
+            <button class="vbtn" data-view="4" title="View face 4 — YZ plane (left)"><span class="vn" style="color:#5b8fc9">4</span><span class="vp">YZ</span></button>
+            <button class="vbtn" data-view="5" title="View face 5 — XZ plane (top)"><span class="vn" style="color:#f59e0b">5</span><span class="vp">XZ</span></button>
+            <button class="vbtn" data-view="6" title="View face 6 — XZ plane (bottom)"><span class="vn" style="color:#2f5f96">6</span><span class="vp">XZ</span></button>
+            <button class="vbtn vbtn-3d active" data-view="3d" title="Isometric 3D view"><span class="vn">3D</span><span class="vp">ISO</span></button>
+            <div class="vsep"></div>
+            <button class="vtoggle" id="zoom-in" title="Zoom in — move camera closer (mouse wheel up)"><span class="vt-ico">＋</span><span class="vt-lbl">In</span></button>
+            <button class="vtoggle" id="zoom-out" title="Zoom out — move camera farther (mouse wheel down)"><span class="vt-ico">－</span><span class="vt-lbl">Out</span></button>
+            <div class="vsep"></div>
+            <button class="vtoggle active" id="toggle-box" title="Show / hide the boundary box, corners & face labels"><span class="vt-ico">▦</span><span class="vt-lbl">Box</span></button>
+            <button class="vtoggle" id="toggle-spin" title="Toggle auto-rotation"><span class="vt-ico">⟳</span><span class="vt-lbl">Spin</span></button>
+        </div>
+
+        <div class="header">
+            <div class="header-kicker">UltraGraph</div>
+            <h1>Knowledge Graph</h1>
+            <p id="graph-title">AI-ready knowledge graph with enhanced MCP tools</p>
+            <div class="header-badges">
+                <span class="header-badge" title="MCP tools for AI agents (Claude, Cursor, Windsurf, etc.)">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <circle cx="8" cy="8" r="3"/>
+                        <path d="M8 1v4m0 6v4M1 8h4m6 0h4"/>
+                    </svg>
+                    <span>MCP</span>
+                </span>
+                <span class="header-badge" title="Enhanced with AI-ready tools: search, find_symbols, traverse, get_code">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <path d="M9 3l4 4-4 4m-5-4h9"/>
+                    </svg>
+                    <span>AI Tools</span>
+                </span>
+                <span class="header-badge" title="Direct nodeId lookups - O(1) when you have the id">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <path d="M13 8l-5 5-5-5"/>
+                    </svg>
+                    <span>Fast Lookup</span>
+                </span>
+            </div>
+        </div>
+
+        <span id="health-badge" class="health-badge" title="Checking server…">Checking…</span>
+
+        <aside id="sidebar" class="pending">
+            <div class="sidebar-header">
+                <div class="brand">
+                    <div class="brand-dot"></div>
+                    <h2 id="brand-title">UltraGraph</h2>
+                </div>
+                <div class="header-actions">
+                    <button id="settings-open-btn" title="Settings (model, endpoints)" type="button">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+                            <circle cx="12" cy="12" r="3" />
+                        </svg>
+                    </button>
+                    <button id="kb-open-btn" class="kb-open-btn" title="Browse knowledge bases" hidden>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="3" y="3" width="7" height="7" rx="1.5" />
+                            <rect x="14" y="3" width="7" height="7" rx="1.5" />
+                            <rect x="3" y="14" width="7" height="7" rx="1.5" />
+                            <rect x="14" y="14" width="7" height="7" rx="1.5" />
+                        </svg>
+                    </button>
+                    <button id="sidebar-collapse" title="Collapse panel">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="15 18 9 12 15 6" />
+                        </svg>
+                    </button>
+                </div>
+            </div>
+
+            <div class="sidebar-resize-handle" id="sidebar-resize" title="Drag to resize"></div>
+
+            <div class="panel-tabs" role="tablist">
+                <button class="panel-tab active" data-tab="graph" type="button">Summary</button>
+                <button class="panel-tab" data-tab="discover" type="button">Discover</button>
+                <button class="panel-tab" data-tab="catalog" type="button">Catalog</button>
+            </div>
+
+            <div class="sidebar-body">
+                <!-- ─── Catalog tab (default): inline repository tree ─── -->
+                <div class="tab-pane" data-tab="catalog" id="pane-catalog">
+                    <div class="catalog-toolbar">
+                        <div class="catalog-search-wrapper">
+                            <svg class="catalog-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="11" cy="11" r="8" />
+                                <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                            </svg>
+                            <input type="text" id="catalog-filter" class="catalog-search-input" placeholder="Filter by name or path…" autocomplete="off">
+                        </div>
+                    </div>
+                    <div class="catalog-actions-row">
+                        <label class="catalog-toggle">
+                            <input type="checkbox" id="catalog-symbols" checked>
+                            <span>Symbols</span>
+                        </label>
+                        <div class="catalog-toolbar-actions">
+                            <button class="catalog-mini-btn" id="catalog-expand-all" title="Expand all">Expand</button>
+                            <button class="catalog-mini-btn" id="catalog-collapse-all" title="Collapse all">Collapse</button>
+                            <button class="catalog-mini-btn" id="catalog-copy" title="Copy as Markdown"><span class="catalog-copy-label">Copy</span></button>
+                        </div>
+                    </div>
+                    <span id="catalog-subtitle" hidden></span>
+                    <div class="catalog-body" id="catalog-body"></div>
+                    <div class="catalog-footer">
+                        <span id="catalog-stats" class="catalog-stats"></span>
+                        <span class="catalog-hint">Click a row to focus it · Use <code>ug mcp install</code> to connect AI agents</span>
+                    </div>
+                </div>
+
+                <!-- ─── Discover tab ───────────────────────────────
+                     Three modes that answer questions about the graph, one
+                     per sub-tab so each gets the whole pane instead of
+                     competing for the same scroll. -->
+                <div class="tab-pane" data-tab="discover" id="pane-discover">
+
+                <div class="subtabs" id="discover-subtabs" role="tablist">
+                    <div class="subtab-glider" id="discover-glider" aria-hidden="true"></div>
+                    <button class="subtab active" data-sub="search" type="button" role="tab">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="11" cy="11" r="7" /><path d="M20 20l-3.6-3.6" />
+                        </svg>
+                        <span>Search</span>
+                    </button>
+                    <button class="subtab" data-sub="tour" type="button" role="tab">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="5.5" cy="6" r="2.2" /><circle cx="18.5" cy="12" r="2.2" />
+                            <circle cx="8" cy="18.5" r="2.2" />
+                            <path d="M7.6 6.9 16.4 11M16.7 13.7 9.8 17.4" />
+                        </svg>
+                        <span>Tour</span>
+                    </button>
+                    <button class="subtab" data-sub="chat" type="button" role="tab">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M20 15a2 2 0 0 1-2 2H8l-4 3.5V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2z" />
+                        </svg>
+                        <span>Chat</span>
+                    </button>
+                    <button class="subtab" data-sub="insights" type="button" role="tab">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />
+                        </svg>
+                        <span>Insights</span>
+                    </button>
+                </div>
+
+                <!-- ── Tour sub-pane ── -->
+                <div class="subpane" data-sub="tour">
+
+                <!-- Guided Tour (RAG + LLM narrated camera walkthrough) - Featured -->
+                <div class="section featured cap-hidden" data-section="tour" id="section-tour">
+                    <div class="section-header">
+                        <span class="label">Guided Tour</span>
+                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="6 9 12 15 18 9" />
+                        </svg>
+                    </div>
+                    <div class="section-body">
+                        <p class="pane-blurb"><strong>Watch the answer.</strong> Ask a question and the guide
+                            plans a route through the code that answers it, then flies the camera stop to stop,
+                            narrating each one. Best for understanding how something works end to end.</p>
+                        <textarea id="tour-input" rows="2"
+                            placeholder="e.g. how does authentication work?"></textarea>
+                        <div class="chat-controls">
+                            <span class="chat-num-label" title="Maximum stops on the tour">stops</span>
+                            <input type="number" id="tour-stops" class="chat-num" value="8" min="2" max="40">
+                            <button id="tour-start" type="button">
+                                <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                    <path d="M8 5.2c0-.9 1-1.4 1.7-.9l9 6.8c.6.4.6 1.4 0 1.8l-9 6.8c-.7.5-1.7 0-1.7-.9z"/>
+                                </svg>
+                                Start tour
+                            </button>
+                        </div>
+                        <div class="tour-examples" id="tour-examples"></div>
+                        <!-- Tours still run without a model; only the narration needs one. -->
+                        <div class="cap-banner warn cap-hidden" id="tour-nollm-msg">
+                            <strong>No language model configured.</strong>
+                            Tours still run — you'll get the most relevant stops in ranked order —
+                            but the guide can't write the narration or order the route into a story.
+                            <button class="cap-cta" type="button" data-open-settings>Set up a model</button>
+                        </div>
+                        <div id="tour-launch-status"></div>
+                    </div>
+                </div>
+
+                <!-- Saved tours: replay or inspect without re-planning. -->
+                <div class="section" id="tour-history" hidden>
+                    <div class="section-header">
+                        <span class="label">Recent Tours</span>
+                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="6 9 12 15 18 9" />
+                        </svg>
+                    </div>
+                    <div class="section-body">
+                        <div class="thist-list" id="tour-history-list"></div>
+                        <div class="thist-foot">
+                            <span class="thist-hint">Click a tour to replay it — no model call.</span>
+                            <button class="thist-clear" id="tour-history-clear" type="button">Clear all</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Shown in the Tour sub-tab when retrieval isn't available -->
+                <div class="section cap-disabled-section cap-hidden" id="section-tour-disabled">
+                    <div class="section-header">
+                        <span class="label">Guided Tour</span>
+                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="6 9 12 15 18 9" />
+                        </svg>
+                    </div>
+                    <div class="section-body">
+                        <div class="cap-banner warn" id="tour-disabled-msg">
+                            Guided tours need DB-backed retrieval. Index this project and restart
+                            <code>ug serve</code> with an embedder to enable them.
+                        </div>
+                    </div>
+                </div>
+
+                </div><!-- /tour sub-pane -->
+
+                <!-- ── Chat sub-pane ── -->
+                <div class="subpane" data-sub="chat">
+
+                <!-- Chat (RAG + LLM) - Featured -->
+                <div class="section featured cap-hidden" data-section="chat" id="section-chat">
+                    <div class="section-header">
+                        <span class="label">Chat</span>
+                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="6 9 12 15 18 9" />
+                        </svg>
+                    </div>
+                    <div class="section-body">
+                        <p class="pane-blurb"><strong>Read the answer.</strong> Ask in plain language and get a
+                            written reply, grounded in the code the graph retrieves for your question and
+                            footnoted with the exact nodes it used. Best for specifics and follow-ups.</p>
+                        <!-- What the model is actually given: retrieval method,
+                             system prompt, and the tools it may call. -->
+                        <details class="chat-setup" id="chat-setup">
+                            <summary>How this answers · retrieval, prompt, tools</summary>
+                            <div class="chat-setup-body" id="chat-setup-body">Loading…</div>
+                        </details>
+                        <div id="chat-model-badge" class="sem-dest-row" hidden>
+                            <span class="sem-dest-label">Model:</span>
+                            <span class="sem-dest-badge" id="chat-model-pill" hidden></span>
+                        </div>
+                        <div id="chat-messages"></div>
+                        <textarea id="chat-input" rows="2"
+                            placeholder="Ask anything about this codebase…"></textarea>
+                        <div class="chat-controls">
+                            <span class="chat-num-label" title="Retrieved context items">k</span>
+                            <input type="number" id="chat-k" class="chat-num" value="8" min="1" max="50">
+                            <span class="chat-num-label" title="Graph expansion hops">hops</span>
+                            <input type="number" id="chat-hops" class="chat-num" value="2" min="0" max="4">
+                            <button id="chat-send" type="button">Send</button>
+                            <button id="chat-reset" type="button" title="Clear conversation history">Reset</button>
+                        </div>
+                        <div class="chat-settings" id="chat-settings">
+                            <button class="chat-settings-toggle" id="chat-settings-toggle" type="button">▸ Advanced</button>
+                            <div class="chat-settings-body">
+                                <label for="chat-model-override">Chat model (override)</label>
+                                <input id="chat-model-override" type="text"
+                                    placeholder="leave blank to use server default">
+                                <label for="chat-system">System prompt (override)</label>
+                                <textarea id="chat-system" rows="2"
+                                    placeholder="leave blank for default RAG prompt"></textarea>
+                                <label for="chat-temperature">Temperature</label>
+                                <input id="chat-temperature" type="number" step="0.05" min="0" max="2"
+                                    placeholder="0.2">
+                                <label for="chat-max-tokens">Max resp tokens</label>
+                                <input id="chat-max-tokens" type="number" min="1" max="655360"
+                                    placeholder="32768">
+                            </div>
+                        </div>
+                        <div id="chat-status"></div>
+                    </div>
+                </div>
+
+                <!-- Banner shown when chat endpoint isn't configured -->
+                <div class="section cap-disabled-section cap-hidden" data-section="chat-disabled"
+                    id="section-chat-disabled">
+                    <div class="section-header">
+                        <span class="label">Chat</span>
+                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="6 9 12 15 18 9" />
+                        </svg>
+                    </div>
+                    <div class="section-body">
+                        <div class="cap-banner warn" id="chat-disabled-msg">
+                            <strong>Chat needs a language model.</strong>
+                            Point UltraGraph at any OpenAI-compatible endpoint — a local one
+                            (Ollama, LM Studio, llama.cpp) or a hosted API — and chat turns on
+                            straight away. Nothing else here needs it: search, the catalog and the
+                            graph all work as they are.
+                            <button class="cap-cta" type="button" data-open-settings>Set up a model</button>
+                        </div>
+                    </div>
+                </div>
+
+                </div><!-- /chat sub-pane -->
+
+                <!-- ── Search sub-pane ── -->
+                <div class="subpane active" data-sub="search">
+
+                <!-- Semantic / Hybrid search (DB-backed) - Featured -->
+                <div class="section featured cap-hidden" data-section="semantic" id="section-semantic">
+                    <div class="section-header">
+                        <span class="label">Semantic Search</span>
+                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="6 9 12 15 18 9" />
+                        </svg>
+                    </div>
+                    <div class="section-body">
+                        <div class="sem-mode-tabs">
+                            <button class="sem-mode active" data-mode="semantic" type="button">Semantic</button>
+                            <button class="sem-mode" data-mode="hybrid" type="button">Hybrid + Snippets</button>
+                        </div>
+                        <!-- Backend selector. Populated from /api/capabilities.
+                             Single backend → static badge; multiple → select. -->
+                        <div class="sem-dest-row" id="sem-dest-row" hidden>
+                            <span class="sem-dest-label">Searching:</span>
+                            <select id="sem-dest" hidden></select>
+                            <span class="sem-dest-badge" id="sem-dest-badge" hidden></span>
+                        </div>
+                        <textarea id="sem-input" rows="2" placeholder="Describe what you're looking for…"></textarea>
+                        <div class="sem-controls">
+                            <input type="number" id="sem-k" value="10" min="1" max="50" title="Number of results">
+                            <button id="sem-exec" type="button">Search</button>
+                        </div>
+                        <div id="sem-status"></div>
+                        <div id="sem-results"></div>
+                    </div>
+                </div>
+
+                <!-- Search -->
+                <div class="section" data-section="search">
+                    <div class="section-header">
+                        <span class="label">Keyword Search</span>
+                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="6 9 12 15 18 9" />
+                        </svg>
+                    </div>
+                    <div class="section-body">
+                        <div class="search-wrapper">
+                            <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2">
+                                <circle cx="11" cy="11" r="8" />
+                                <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                            </svg>
+                            <input type="text" id="search" class="search-input" placeholder="Search nodes by name…"
+                                autocomplete="off">
+                            <button class="search-clear" id="search-clear" title="Clear">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2">
+                                    <line x1="18" y1="6" x2="6" y2="18" />
+                                    <line x1="6" y1="6" x2="18" y2="18" />
+                                </svg>
+                            </button>
+                        </div>
+                        <div id="search-suggestions"></div>
+                        <div class="search-meta">
+                            <span id="search-meta-count"></span>
+                            <span id="search-meta-hint">↑↓ to navigate · ⏎ to select</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Banner shown when capabilities probe says DB isn't queryable -->
+                <div class="section cap-disabled-section cap-hidden" data-section="cap-disabled"
+                    id="section-cap-disabled">
+                    <div class="section-header">
+                        <span class="label">Semantic Search</span>
+                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="6 9 12 15 18 9" />
+                        </svg>
+                    </div>
+                    <div class="section-body">
+                        <div class="cap-banner warn" id="cap-disabled-msg">
+                            DB-backed search unavailable.
+                        </div>
+                    </div>
+                </div>
+
+                </div><!-- /search sub-pane -->
+
+                <!-- ── Insights sub-pane ──
+                     The same `code_query` engine the CLI and MCP tool use,
+                     with the one thing neither of them can do: clicking a
+                     result lights those nodes up in the graph. "143
+                     functions over 50 lines" stops being a number and
+                     becomes a shape — you see immediately that 90 of them
+                     sit in one folder. -->
+                <div class="subpane" data-sub="insights">
+
+                <div class="section featured" data-section="insights">
+                    <div class="section-header">
+                        <span class="label">Ask the repo a number</span>
+                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="6 9 12 15 18 9" />
+                        </svg>
+                    </div>
+                    <div class="section-body">
+                        <p class="pane-blurb"><strong>Counts, not lists.</strong> How many functions are
+                            over 50 lines, which folders are worst documented, what breaks if you change
+                            a file. Pick a question below or write your own query.</p>
+
+                        <input type="search" id="ins-filter" class="ins-filter"
+                               placeholder="Filter questions… (e.g. doc, dead, impact)"
+                               autocomplete="off" spellcheck="false">
+                        <div class="ins-cats" id="ins-cats"></div>
+                        <div class="ins-presets" id="ins-presets"></div>
+                        <div class="cap-banner warn cap-hidden" id="ins-nodb-msg">
+                            <strong>Statistics need the indexed database.</strong>
+                            Run <code>ug gen</code> for this project — structural views keep working
+                            without it, but counting and blast radius do not.
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Arguments appear only for presets that take them, so the
+                     common case stays a single click. -->
+                <div class="section" id="ins-args-section" hidden>
+                    <div class="section-header">
+                        <span class="label">Arguments</span>
+                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="6 9 12 15 18 9" />
+                        </svg>
+                    </div>
+                    <div class="section-body">
+                        <div class="ins-args" id="ins-args"></div>
+                    </div>
+                </div>
+
+                <div class="section" id="ins-result-section" hidden>
+                    <div class="section-header">
+                        <span class="label" id="ins-result-label">Result</span>
+                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="6 9 12 15 18 9" />
+                        </svg>
+                    </div>
+                    <div class="section-body">
+                        <div id="ins-result"></div>
+                    </div>
+                </div>
+
+                <!-- The escape hatch. Presets cover the common path; this is
+                     for everything else, and the examples are the fastest way
+                     to learn what the language can express. -->
+                <div class="section" id="ins-gql-section">
+                    <div class="section-header">
+                        <span class="label">Custom query (GQL)</span>
+                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="6 9 12 15 18 9" />
+                        </svg>
+                    </div>
+                    <div class="section-body">
+                        <p class="pane-blurb">Cypher-shaped, read-only. Start from an example and edit it —
+                            each one demonstrates a different capability.</p>
+                        <div class="ins-examples" id="ins-examples"></div>
+                        <textarea id="ins-gql" class="ins-gql" rows="5" spellcheck="false"
+                            placeholder="MATCH (n:Function) WHERE n.code_lines > 50 RETURN n.folder AS folder, count(*) AS c ORDER BY c DESC"></textarea>
+                        <div class="ins-gql-foot">
+                            <button id="ins-gql-run" type="button" class="ins-run">Run query</button>
+                            <button id="ins-schema" type="button" class="ins-ghost">What can I query?</button>
+                        </div>
+                        <div class="ins-schema-box" id="ins-schema-box" hidden></div>
+                    </div>
+                </div>
+
+                </div><!-- /insights sub-pane -->
+
+                </div><!-- /#pane-discover -->
+
+                <!-- ─── Graph tab: repo meta + filters + analysis tools ─── -->
+                <div class="tab-pane active" data-tab="graph" id="pane-graph">
+
+                <!-- Index stats -->
+                <div class="section" data-section="index-stats">
+                    <div class="section-header">
+                        <span class="label">Index</span>
+                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="6 9 12 15 18 9" />
+                        </svg>
+                    </div>
+                    <div class="section-body">
+                        <div class="stat-grid">
+                            <div class="stat-tile">
+                                <div class="stat-value" id="stat-files">—</div>
+                                <div class="stat-label">Files</div>
+                            </div>
+                            <div class="stat-tile">
+                                <div class="stat-value" id="stat-folders">—</div>
+                                <div class="stat-label">Folders</div>
+                            </div>
+                            <div class="stat-tile">
+                                <div class="stat-value" id="stat-symbols">—</div>
+                                <div class="stat-label">Symbols</div>
+                            </div>
+                            <div class="stat-tile">
+                                <div class="stat-value" id="stat-lines">—</div>
+                                <div class="stat-label">Lines</div>
+                            </div>
+                        </div>
+                        <div class="edge-breakdown" id="index-meta"></div>
+                    </div>
+                </div>
+
+                <!-- Filters -->
+                <div class="section" data-section="filters">
+                    <div class="section-header">
+                        <span class="label">Filters</span>
+                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="6 9 12 15 18 9" />
+                        </svg>
+                    </div>
+                    <div class="section-body">
+                        <div class="section-subhead">Node Types</div>
+                        <div class="filter-chips" id="node-filter"></div>
+                        <div class="section-subhead">Edge Types</div>
+                        <div class="filter-chips" id="edge-filter"></div>
+                        <div class="filter-actions">
+                            <button id="filter-clear">Clear all</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tools -->
+                <div class="section collapsed" data-section="tools">
+                    <div class="section-header">
+                        <span class="label">Tools</span>
+                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="6 9 12 15 18 9" />
+                        </svg>
+                    </div>
+                    <div class="section-body">
+                        <div class="tool-tabs">
+                            <button class="tool-tab active" data-tool="centrality">Centrality</button>
+                            <button class="tool-tab" data-tool="cycles">Cycles</button>
+                            <button class="tool-tab" data-tool="export">Export</button>
+                        </div>
+                        <div class="tool-panel active" data-tool="centrality">
+                            <div class="section-subhead" style="margin-top:0">Top by Degree</div>
+                            <div class="centrality-list" id="degree-centrality"></div>
+                            <div class="section-subhead">Top by Betweenness</div>
+                            <div class="centrality-list" id="betweenness-centrality"></div>
+                        </div>
+                        <div class="tool-panel" data-tool="cycles">
+                            <button class="primary" id="cycle-run">Detect Cycles</button>
+                            <div class="cycle-status" id="cycle-status">
+                                <span class="status-dot"></span>
+                                <span id="cycle-status-text">Click to run detection</span>
+                            </div>
+                        </div>
+                        <div class="tool-panel" data-tool="export">
+                            <button class="primary download-btn" id="download-index" style="margin-bottom:6px">Download Index JSON</button>
+                            <button class="primary download-btn" id="download-graph">Download Graph JSON</button>
+                        </div>
+                    </div>
+                </div>
+                </div><!-- /#pane-graph -->
+            </div>
+
+            <div class="sidebar-footer">
+                <button id="reset">Reset View</button>
+            </div>
+        </aside>
+
+        <button id="sidebar-launcher" class="pending" title="Show panel">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                stroke-linejoin="round">
+                <rect x="3" y="3" width="18" height="18" rx="2" />
+                <line x1="9" y1="3" x2="9" y2="21" />
+            </svg>
+        </button>
+
+        <div id="info">
+            <div class="info-resize-handle" id="info-resize" title="Drag to resize · double-click to reset"></div>
+            <div class="drag-handle">
+                <h3><span id="info-type-icon" class="info-title-icon"></span><span id="info-title">Node Details</span></h3>
+                <div class="info-actions">
+                    <button class="icon-btn" id="find-path-btn" title="Find path from this node">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="10" />
+                            <path d="M12 8v8" />
+                            <path d="M8 12h8" />
+                        </svg>
+                    </button>
+                    <button class="icon-btn" id="jump-btn" title="Copy file path" style="display:none">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                        </svg>
+                    </button>
+                    <button class="icon-btn" id="info-close" title="Close">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="18" y1="6" x2="6" y2="18" />
+                            <line x1="6" y1="6" x2="18" y2="18" />
+                        </svg>
+                    </button>
+                </div>
+            </div>
+            <div id="info-body"></div>
+        </div>
+
+        <div id="loading">
+            <div class="loader"></div>
+            <p>Loading graph...</p>
+        </div>
+
+        <div class="tooltip" id="tooltip">
+            <div class="tooltip-title"></div>
+            <div class="tooltip-type"></div>
+            <div class="tooltip-stats"></div>
+        </div>
+    </div>
+
+    <script type="module">
+{{JS}}
+    </script>
+</body>
+
+</html>

@@ -1,0 +1,546 @@
+        /* ─── Discover sub-tabs (Search / Tour / Chat) ───────── */
+
+        .subtabs {
+            position: sticky;
+            top: 0;
+            z-index: 3;
+            display: flex;
+            gap: 2px;
+            margin: 8px 10px 10px;
+            padding: 4px;
+            border-radius: 11px;
+            background: rgba(20, 19, 22, 0.92);
+            backdrop-filter: blur(12px);
+            box-shadow: 0 4px 18px -8px rgba(0, 0, 0, 0.7);
+        }
+
+        /* A single lit pill slides between the tabs instead of three
+           independent backgrounds popping on and off. */
+        .subtab-glider {
+            position: absolute;
+            top: 4px;
+            left: 4px;
+            height: calc(100% - 8px);
+            border-radius: 8px;
+            background: linear-gradient(135deg, rgba(249, 115, 22, 0.22), rgba(249, 115, 22, 0.1));
+            border: 1px solid var(--accent-dim);
+            box-shadow: 0 2px 10px -3px rgba(249, 115, 22, 0.55);
+            transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1), width 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+            pointer-events: none;
+        }
+
+        .subtab {
+            position: relative;
+            z-index: 1;
+            flex: 1;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            font-family: inherit;
+            font-size: 10.5px;
+            font-weight: 600;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            padding: 7px 4px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: color 0.18s;
+        }
+
+        .subtab svg {
+            width: 13px;
+            height: 13px;
+            flex-shrink: 0;
+        }
+
+        .subtab:hover { color: var(--text); }
+        .subtab.active { color: var(--accent); }
+
+        /* Capability-gated modes stay clickable — the pane explains why. */
+        .subtab.unavailable::after {
+            content: '';
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+            background: var(--warn, #f59e0b);
+            opacity: 0.75;
+        }
+
+        .subpane { display: none; }
+        .subpane.active { display: block; animation: subpane-in 0.22s ease both; }
+
+        /* ── Insights ──────────────────────────────────────────────────
+           33 presets is too many to scan, so the pane is built around
+           narrowing: filter by text, filter by category, then click. The
+           result table is deliberately plain — the interesting rendering
+           happens in the graph behind it. */
+
+        .ins-filter {
+            width: 100%;
+            box-sizing: border-box;
+            margin-bottom: 8px;
+            padding: 7px 10px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: rgba(255, 255, 255, 0.03);
+            color: var(--text);
+            font-family: inherit;
+            font-size: 12px;
+        }
+        .ins-filter:focus { outline: none; border-color: var(--accent-dim); }
+
+        .ins-cats { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 9px; }
+        .ins-cat {
+            padding: 3px 9px;
+            border-radius: 999px;
+            border: 1px solid var(--border);
+            background: none;
+            color: var(--text-muted);
+            font-family: inherit;
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: color 0.15s, border-color 0.15s, background 0.15s;
+        }
+        .ins-cat:hover { color: var(--text); }
+        .ins-cat.active {
+            color: var(--accent);
+            border-color: var(--accent-dim);
+            background: rgba(249, 115, 22, 0.1);
+        }
+
+        .ins-presets { display: flex; flex-direction: column; gap: 3px; }
+
+        .ins-preset {
+            display: block;
+            width: 100%;
+            text-align: left;
+            padding: 7px 9px;
+            border-radius: 8px;
+            border: 1px solid transparent;
+            background: rgba(255, 255, 255, 0.02);
+            color: var(--text);
+            font-family: inherit;
+            cursor: pointer;
+            transition: background 0.15s, border-color 0.15s;
+        }
+        .ins-preset:hover { background: rgba(249, 115, 22, 0.08); border-color: var(--accent-dim); }
+        .ins-preset.active { border-color: var(--accent); background: rgba(249, 115, 22, 0.12); }
+        .ins-preset .n {
+            display: block;
+            font-size: 12px;
+            font-weight: 600;
+            font-family: var(--mono, monospace);
+        }
+        .ins-preset .d {
+            display: block;
+            margin-top: 2px;
+            font-size: 10.5px;
+            line-height: 1.4;
+            color: var(--text-muted);
+        }
+        /* Presets that need an argument say so up front — clicking one and
+           then discovering it wants a file path is a wasted round trip. */
+        .ins-preset .needs {
+            display: inline-block;
+            margin-top: 3px;
+            padding: 1px 6px;
+            border-radius: 999px;
+            background: rgba(245, 158, 11, 0.14);
+            color: var(--warn, #f59e0b);
+            font-size: 9.5px;
+            font-weight: 600;
+            letter-spacing: 0.03em;
+        }
+        .ins-empty { padding: 10px 2px; font-size: 11px; color: var(--text-muted); }
+
+        .ins-args { display: flex; flex-direction: column; gap: 7px; }
+        .ins-arg label {
+            display: block;
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            margin-bottom: 3px;
+        }
+        .ins-arg input {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 6px 9px;
+            border-radius: 7px;
+            border: 1px solid var(--border);
+            background: rgba(255, 255, 255, 0.03);
+            color: var(--text);
+            font-family: var(--mono, monospace);
+            font-size: 11.5px;
+        }
+        .ins-arg input:focus { outline: none; border-color: var(--accent-dim); }
+        .ins-arg .hint { margin-top: 3px; font-size: 10px; color: var(--text-muted); }
+
+        .ins-run {
+            padding: 6px 14px;
+            border-radius: 8px;
+            border: 1px solid var(--accent-dim);
+            background: rgba(249, 115, 22, 0.16);
+            color: var(--accent);
+            font-family: inherit;
+            font-size: 11.5px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        .ins-run:hover { background: rgba(249, 115, 22, 0.26); }
+        .ins-ghost {
+            padding: 6px 12px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: none;
+            color: var(--text-muted);
+            font-family: inherit;
+            font-size: 11.5px;
+            cursor: pointer;
+        }
+        .ins-ghost:hover { color: var(--text); }
+
+        /* The table scrolls inside itself; the pane must never scroll
+           sideways. */
+        .ins-table-wrap { overflow-x: auto; margin: 2px -2px 0; }
+        .ins-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+        .ins-table th {
+            text-align: left;
+            padding: 4px 8px 5px 2px;
+            font-size: 9.5px;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            border-bottom: 1px solid var(--border);
+            white-space: nowrap;
+        }
+        .ins-table td {
+            padding: 4px 8px 4px 2px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+            white-space: nowrap;
+        }
+        .ins-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+        .ins-table tr.clickable { cursor: pointer; }
+        .ins-table tr.clickable:hover td { background: rgba(249, 115, 22, 0.1); }
+        .ins-table td.id {
+            font-family: var(--mono, monospace);
+            font-size: 10.5px;
+            max-width: 260px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .ins-meta {
+            margin-top: 8px;
+            font-size: 10.5px;
+            line-height: 1.5;
+            color: var(--text-muted);
+        }
+        .ins-meta code { font-size: 10px; }
+        /* Coverage and cap warnings are the difference between a number and
+           a trustworthy number, so they are never collapsed away. */
+        .ins-warn {
+            margin-top: 7px;
+            padding: 6px 9px;
+            border-radius: 7px;
+            border: 1px solid rgba(245, 158, 11, 0.35);
+            background: rgba(245, 158, 11, 0.09);
+            color: var(--warn, #f59e0b);
+            font-size: 10.5px;
+            line-height: 1.5;
+        }
+        .ins-err {
+            margin-top: 4px;
+            padding: 8px 10px;
+            border-radius: 7px;
+            border: 1px solid rgba(239, 68, 68, 0.35);
+            background: rgba(239, 68, 68, 0.08);
+            color: #fca5a5;
+            font-size: 11px;
+            line-height: 1.5;
+            white-space: pre-wrap;
+        }
+
+        .ins-pager { display: flex; align-items: center; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+        .ins-pager button {
+            padding: 3px 10px;
+            border-radius: 7px;
+            border: 1px solid var(--border);
+            background: none;
+            color: var(--text-muted);
+            font-family: inherit;
+            font-size: 11px;
+            cursor: pointer;
+        }
+        .ins-pager button:hover:not(:disabled) { color: var(--accent); border-color: var(--accent-dim); }
+        .ins-pager button:disabled { opacity: 0.35; cursor: default; }
+        .ins-pager .range { font-size: 10.5px; color: var(--text-muted); }
+
+        .ins-examples { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+        .ins-example {
+            padding: 3px 9px;
+            border-radius: 999px;
+            border: 1px solid var(--border);
+            background: none;
+            color: var(--text-muted);
+            font-family: inherit;
+            font-size: 10.5px;
+            cursor: pointer;
+            transition: color 0.15s, border-color 0.15s;
+        }
+        .ins-example:hover { color: var(--accent); border-color: var(--accent-dim); }
+
+        .ins-gql {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 9px 10px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: rgba(255, 255, 255, 0.03);
+            color: var(--text);
+            font-family: var(--mono, monospace);
+            font-size: 11.5px;
+            line-height: 1.55;
+            resize: vertical;
+        }
+        .ins-gql:focus { outline: none; border-color: var(--accent-dim); }
+        .ins-gql-foot { display: flex; gap: 6px; margin-top: 7px; }
+
+        .ins-schema-box {
+            margin-top: 8px;
+            padding: 8px 10px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: rgba(255, 255, 255, 0.02);
+            font-size: 10.5px;
+            line-height: 1.6;
+            color: var(--text-muted);
+            max-height: 260px;
+            overflow-y: auto;
+        }
+        .ins-schema-box b { color: var(--text); }
+        .ins-schema-box .absent { color: var(--warn, #f59e0b); }
+
+        @keyframes subpane-in {
+            from { opacity: 0; transform: translateY(4px); }
+            to { opacity: 1; transform: none; }
+        }
+
+        /* One mode per sub-tab, so the mode's own section header would just
+           repeat the tab label. */
+        .subpane > .section.featured {
+            border: none;
+            background: none;
+            margin: 0 6px;
+        }
+
+        .subpane > .section.featured::before,
+        .subpane > .section.featured > .section-header {
+            display: none;
+        }
+
+        .subpane > .section.featured > .section-body {
+            display: block;
+            padding-top: 2px;
+        }
+
+        /* ─── Recent tours (saved tour history) ─────────────── */
+
+        .thist-list { display: flex; flex-direction: column; gap: 5px; }
+
+        .thist-row {
+            display: flex;
+            align-items: stretch;
+            gap: 3px;
+            border: 1px solid var(--border-soft);
+            border-radius: 9px;
+            background: var(--bg-elevated);
+            padding: 3px;
+            transition: border-color 0.15s, background 0.15s;
+        }
+
+        .thist-row:hover {
+            border-color: var(--accent-dim);
+            background: var(--bg-hover);
+        }
+
+        .thist-main {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            align-items: flex-start;
+            background: none;
+            border: none;
+            padding: 5px 7px;
+            border-radius: 7px;
+            cursor: pointer;
+            font-family: inherit;
+            text-align: left;
+        }
+
+        .thist-title {
+            font-size: 11.5px;
+            font-weight: 600;
+            color: var(--text);
+            max-width: 100%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .thist-row:hover .thist-title { color: var(--accent); }
+
+        .thist-meta {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 10px;
+            color: var(--text-dim);
+        }
+
+        .thist-stops { color: var(--accent); font-weight: 600; }
+        .thist-dot { opacity: 0.5; }
+
+        .thist-tag {
+            border: 1px solid var(--border-soft);
+            border-radius: 999px;
+            padding: 0 5px;
+            font-size: 9px;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+        }
+
+        .thist-icon {
+            width: 26px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background: none;
+            border: none;
+            border-radius: 7px;
+            color: var(--text-dim);
+            cursor: pointer;
+            padding: 0;
+            flex-shrink: 0;
+            transition: color 0.15s, background 0.15s;
+        }
+
+        .thist-icon svg { width: 13px; height: 13px; }
+        .thist-icon:hover { color: var(--accent); background: rgba(249, 115, 22, 0.1); }
+        .thist-icon.danger:hover { color: #f87171; background: rgba(248, 113, 113, 0.1); }
+
+        .thist-foot {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 8px;
+        }
+
+        .thist-hint { flex: 1; font-size: 10px; color: var(--text-dim); }
+
+        .thist-clear {
+            background: none;
+            border: 1px solid var(--border-soft);
+            color: var(--text-muted);
+            border-radius: 6px;
+            padding: 4px 8px;
+            font-size: 10px;
+            font-family: inherit;
+            cursor: pointer;
+        }
+
+        .thist-clear:hover { color: #f87171; border-color: rgba(248, 113, 113, 0.4); }
+
+        /* Catalog pane keeps a sticky toolbar/footer while the tree scrolls. */
+        #pane-catalog.active {
+            overflow: hidden;
+        }
+
+        .catalog-actions-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            padding: 8px 16px;
+            border-bottom: 1px solid var(--border-soft);
+            flex-shrink: 0;
+        }
+
+        .section {
+            border-bottom: 1px solid var(--border-soft);
+        }
+
+        .section:last-of-type {
+            border-bottom: none;
+        }
+
+        .section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 20px;
+            cursor: pointer;
+            user-select: none;
+            transition: background 0.15s;
+        }
+
+        .section-header:hover {
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .section-header .label {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1.2px;
+            color: var(--text-muted);
+        }
+
+        .section-header .chevron {
+            width: 14px;
+            height: 14px;
+            color: var(--text-dim);
+            transition: transform 0.2s;
+        }
+
+        .section.collapsed .chevron {
+            transform: rotate(-90deg);
+        }
+
+        .section-body {
+            padding: 0 20px 16px;
+            overflow: hidden;
+            max-height: 1200px;
+            transition: max-height 0.3s ease, padding 0.3s ease;
+        }
+
+        .section.collapsed .section-body {
+            max-height: 0;
+            padding-top: 0;
+            padding-bottom: 0;
+        }
+
+        .section-subhead {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-dim);
+            margin: 12px 0 8px;
+            font-weight: 600;
+        }
+
+        .section-subhead:first-child {
+            margin-top: 0;
+        }
+

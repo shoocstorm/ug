@@ -1,0 +1,232 @@
+        /* ─── Tools ─────────────────────────────────────────── */
+
+        .tool-tabs {
+            display: flex;
+            gap: 4px;
+            background: var(--bg-elevated);
+            padding: 3px;
+            border-radius: 8px;
+            border: 1px solid var(--border-soft);
+            margin-bottom: 10px;
+        }
+
+        .tool-tab {
+            flex: 1;
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            font-size: 11px;
+            padding: 6px 8px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-family: inherit;
+            transition: background 0.15s, color 0.15s;
+        }
+
+        .tool-tab:hover {
+            color: var(--text);
+        }
+
+        .tool-tab.active {
+            background: var(--bg-hover);
+            color: var(--accent);
+        }
+
+        .tool-panel {
+            display: none;
+        }
+
+        .tool-panel.active {
+            display: block;
+        }
+
+        .tool-panel input,
+        .tool-panel button.primary {
+            width: 100%;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 8px 10px;
+            border-radius: 6px;
+            font-size: 12px;
+            outline: none;
+            margin-bottom: 6px;
+            font-family: inherit;
+        }
+
+        .tool-panel input:focus {
+            border-color: var(--accent);
+        }
+
+        .tool-panel button.primary {
+            cursor: pointer;
+            background: rgba(249, 115, 22, 0.12);
+            border-color: var(--accent-dim);
+            color: var(--accent);
+            font-weight: 500;
+            transition: background 0.15s;
+        }
+
+        .tool-panel button.primary:hover {
+            background: rgba(249, 115, 22, 0.2);
+        }
+
+        .centrality-list {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            margin-top: 6px;
+        }
+
+        .centrality-item {
+            display: grid;
+            grid-template-columns: 1fr 60px 36px;
+            gap: 6px;
+            align-items: center;
+            font-size: 11px;
+        }
+
+        .centrality-item .name {
+            color: var(--text);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-family: 'JetBrains Mono', monospace;
+            cursor: pointer;
+        }
+
+        .centrality-item .name:hover {
+            color: var(--accent);
+        }
+
+        .centrality-item .bar {
+            height: 4px;
+            border-radius: 2px;
+            background: var(--accent);
+        }
+
+        .centrality-item .value {
+            color: var(--text-dim);
+            font-family: 'JetBrains Mono', monospace;
+            text-align: right;
+        }
+
+        .cycle-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 12px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            font-size: 12px;
+            margin-top: 8px;
+        }
+
+        .cycle-status.has-cycles {
+            border-color: var(--danger);
+            color: var(--text);
+        }
+
+        .cycle-status.no-cycles {
+            border-color: var(--success);
+            color: var(--text);
+        }
+
+        .cycle-status .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--text-dim);
+        }
+
+        .cycle-status.has-cycles .status-dot {
+            background: var(--danger);
+            animation: pulse 1.5s infinite;
+        }
+
+        .cycle-status.no-cycles .status-dot {
+            background: var(--success);
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.4;
+            }
+        }
+
+        .sidebar-footer {
+            padding: 12px 20px;
+            border-top: 1px solid var(--border-soft);
+            display: flex;
+            gap: 8px;
+        }
+
+        .sidebar-footer button {
+            flex: 1;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-soft);
+            color: var(--text-muted);
+            padding: 8px 10px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.3px;
+            cursor: pointer;
+            font-family: inherit;
+            transition: background 0.15s, color 0.15s, border-color 0.15s, box-shadow 0.15s;
+        }
+
+        .sidebar-footer button:hover {
+            background: rgba(249, 115, 22, 0.08);
+            color: var(--accent);
+            border-color: var(--accent-dim);
+            box-shadow: 0 0 12px rgba(249, 115, 22, 0.15);
+        }
+
+        /* ─── Sidebar launcher (shown only when collapsed) ───── */
+
+        #sidebar-launcher {
+            position: fixed;
+            top: 16px;
+            left: 16px;
+            width: 40px;
+            height: 40px;
+            background: rgba(15, 15, 17, 0.92);
+            backdrop-filter: blur(24px);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            color: var(--text-muted);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            pointer-events: none;
+            transform: translateX(-12px);
+            transition: opacity 0.25s ease, transform 0.25s ease, background 0.15s, color 0.15s;
+            z-index: 41;
+        }
+
+        #sidebar-launcher:hover {
+            color: var(--accent);
+            background: var(--bg-elevated);
+        }
+
+        #sidebar-launcher svg {
+            width: 18px;
+            height: 18px;
+        }
+
+        #sidebar.collapsed~#sidebar-launcher {
+            opacity: 1;
+            pointer-events: auto;
+            transform: translateX(0);
+        }
+

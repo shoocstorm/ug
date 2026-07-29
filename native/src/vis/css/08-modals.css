@@ -1,0 +1,914 @@
+        /* ─── Settings modal ─────────────────────────────────── */
+
+        #settings-open-btn {
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: transparent;
+            border: none;
+            border-radius: 6px;
+            color: var(--text-muted);
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s, transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        #settings-open-btn:hover {
+            background: var(--bg-hover);
+            color: var(--accent);
+            transform: rotate(45deg);
+        }
+
+        #settings-open-btn svg {
+            width: 14px;
+            height: 14px;
+        }
+
+        /* Same gear, floated over the KB Manager splash screen. */
+        .kb-corner-settings {
+            position: absolute;
+            top: 18px;
+            right: 20px;
+            z-index: 5;
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            padding: 7px 12px;
+            background: rgba(24, 24, 27, 0.7);
+            border: 1px solid var(--border-soft);
+            border-radius: 999px;
+            color: var(--text-muted);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10.5px;
+            font-weight: 600;
+            letter-spacing: 0.8px;
+            text-transform: uppercase;
+            cursor: pointer;
+            backdrop-filter: blur(6px);
+            -webkit-backdrop-filter: blur(6px);
+            transition: border-color 0.15s, color 0.15s;
+        }
+
+        .kb-corner-settings:hover {
+            border-color: var(--accent);
+            color: var(--text);
+        }
+
+        .kb-corner-settings svg {
+            width: 13px;
+            height: 13px;
+            transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .kb-corner-settings:hover svg {
+            transform: rotate(45deg);
+            color: var(--accent);
+        }
+
+        .settings-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 760;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            background: rgba(9, 9, 11, 0.72);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+        }
+
+        .settings-overlay.visible {
+            display: flex;
+        }
+
+        .settings-panel {
+            width: 100%;
+            max-width: 620px;
+            max-height: 86vh;
+            display: flex;
+            flex-direction: column;
+            background: var(--bg-surface);
+            border: 1px solid var(--border-soft);
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: 0 30px 70px -24px rgba(0, 0, 0, 0.6);
+            animation: kb-confirm-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+        }
+
+        .settings-head {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 18px 20px 14px;
+            border-bottom: 1px solid var(--border-soft);
+        }
+
+        .settings-head-icon {
+            flex-shrink: 0;
+            width: 36px;
+            height: 36px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 10px;
+            background: rgba(249, 115, 22, 0.12);
+            border: 1px solid rgba(249, 115, 22, 0.28);
+            color: var(--accent);
+        }
+
+        .settings-head-icon svg {
+            width: 18px;
+            height: 18px;
+        }
+
+        .settings-head-text {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .settings-head-text h2 {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 14px;
+            font-weight: 700;
+            letter-spacing: 0.4px;
+        }
+
+        .settings-head-text p {
+            margin-top: 3px;
+            font-size: 11px;
+            color: var(--text-dim);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .settings-head-text p code {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            color: var(--text-muted);
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-soft);
+            border-radius: 5px;
+            padding: 1px 5px;
+        }
+
+        .settings-close {
+            flex-shrink: 0;
+            width: 26px;
+            height: 26px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: transparent;
+            border: none;
+            border-radius: 7px;
+            color: var(--text-muted);
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s;
+        }
+
+        .settings-close:hover {
+            background: var(--bg-hover);
+            color: var(--text);
+        }
+
+        .settings-close svg {
+            width: 14px;
+            height: 14px;
+        }
+
+        /* Precedence legend: how a value actually gets picked. */
+        .settings-precedence {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 6px;
+            padding: 10px 20px;
+            border-bottom: 1px solid var(--border-soft);
+            background: var(--bg-deep);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 9.5px;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            color: var(--text-dim);
+        }
+
+        .settings-precedence .prec-step {
+            padding: 3px 8px;
+            border-radius: 999px;
+            border: 1px solid var(--border-soft);
+            background: var(--bg-surface);
+            color: var(--text-muted);
+            white-space: nowrap;
+        }
+
+        .settings-precedence .prec-step.prec-here {
+            border-color: rgba(249, 115, 22, 0.45);
+            background: rgba(249, 115, 22, 0.1);
+            color: var(--accent);
+        }
+
+        .settings-precedence .prec-arrow {
+            color: var(--text-dim);
+            opacity: 0.7;
+        }
+
+        .settings-body {
+            flex: 1;
+            min-height: 0;
+            overflow-y: auto;
+            padding: 16px 20px 6px;
+        }
+
+        .settings-loading,
+        .settings-error {
+            padding: 30px 0 40px;
+            text-align: center;
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .settings-error {
+            color: var(--danger);
+        }
+
+        .settings-group {
+            margin-bottom: 16px;
+            border: 1px solid var(--border-soft);
+            border-radius: 12px;
+            background: var(--bg-deep);
+            overflow: hidden;
+        }
+
+        .settings-group-head {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 11px 14px;
+            border-bottom: 1px solid var(--border-soft);
+        }
+
+        .settings-group-head svg {
+            width: 14px;
+            height: 14px;
+            color: var(--accent);
+            flex-shrink: 0;
+        }
+
+        .settings-group-title {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11.5px;
+            font-weight: 700;
+            letter-spacing: 0.6px;
+            text-transform: uppercase;
+        }
+
+        .settings-group-sub {
+            flex: 1;
+            font-size: 10.5px;
+            color: var(--text-dim);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .settings-apply-badge {
+            flex-shrink: 0;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 9px;
+            font-weight: 600;
+            letter-spacing: 0.7px;
+            text-transform: uppercase;
+            padding: 2px 8px;
+            border-radius: 999px;
+        }
+
+        .settings-apply-badge.live {
+            color: var(--success);
+            border: 1px solid rgba(74, 222, 128, 0.3);
+            background: rgba(74, 222, 128, 0.08);
+        }
+
+        .settings-apply-badge.restart {
+            color: #fbbf24;
+            border: 1px solid rgba(251, 191, 36, 0.3);
+            background: rgba(251, 191, 36, 0.08);
+        }
+
+        .settings-rows {
+            padding: 6px 14px 12px;
+        }
+
+        .settings-row {
+            padding: 9px 0 3px;
+        }
+
+        .settings-row+.settings-row {
+            border-top: 1px solid var(--border-soft);
+        }
+
+        .settings-row-head {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 6px;
+        }
+
+        .settings-row-head label {
+            font-size: 11.5px;
+            font-weight: 600;
+            color: var(--text);
+        }
+
+        .settings-row-head .settings-key {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 9.5px;
+            color: var(--text-dim);
+        }
+
+        .settings-chip {
+            margin-left: auto;
+            flex-shrink: 0;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 9px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            padding: 2px 7px;
+            border-radius: 999px;
+            white-space: nowrap;
+        }
+
+        .settings-chip.chip-default {
+            color: var(--text-dim);
+            border: 1px solid var(--border-soft);
+        }
+
+        .settings-chip.chip-config {
+            color: var(--success);
+            border: 1px solid rgba(74, 222, 128, 0.3);
+            background: rgba(74, 222, 128, 0.08);
+        }
+
+        .settings-chip.chip-env,
+        .settings-chip.chip-flag {
+            color: #fbbf24;
+            border: 1px solid rgba(251, 191, 36, 0.35);
+            background: rgba(251, 191, 36, 0.08);
+        }
+
+        .settings-input-wrap {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .settings-input-wrap input {
+            flex: 1;
+            min-width: 0;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-soft);
+            border-radius: 8px;
+            color: var(--text);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11.5px;
+            padding: 7px 10px;
+            outline: none;
+            transition: border-color 0.15s, box-shadow 0.15s;
+        }
+
+        .settings-input-wrap input:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.15);
+        }
+
+        .settings-input-wrap input::placeholder {
+            color: var(--text-dim);
+        }
+
+        .settings-row.dirty .settings-input-wrap input {
+            border-color: rgba(249, 115, 22, 0.55);
+        }
+
+        .settings-clear-btn {
+            flex-shrink: 0;
+            width: 28px;
+            height: 28px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background: transparent;
+            border: 1px solid transparent;
+            border-radius: 7px;
+            color: var(--text-dim);
+            cursor: pointer;
+            transition: color 0.15s, border-color 0.15s;
+        }
+
+        .settings-clear-btn:hover {
+            color: var(--danger);
+            border-color: var(--border);
+        }
+
+        .settings-clear-btn[hidden] {
+            display: none;
+        }
+
+        .settings-clear-btn svg {
+            width: 12px;
+            height: 12px;
+        }
+
+        .settings-row-note {
+            margin-top: 5px;
+            font-size: 10.5px;
+            line-height: 1.5;
+            color: var(--text-dim);
+        }
+
+        .settings-row-note.override {
+            color: #fbbf24;
+        }
+
+        .settings-row-note.override code,
+        .settings-row-note code {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 9.5px;
+            background: var(--bg-elevated);
+            border-radius: 4px;
+            padding: 0 4px;
+        }
+
+        .settings-row.pending-unset .settings-input-wrap input {
+            text-decoration: line-through;
+            opacity: 0.55;
+        }
+
+        .settings-foot {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px 20px 14px;
+            border-top: 1px solid var(--border-soft);
+            background: var(--bg-deep);
+        }
+
+        .settings-status {
+            flex: 1;
+            min-width: 0;
+            font-size: 11px;
+            color: var(--text-dim);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .settings-status.ok {
+            color: var(--success);
+        }
+
+        .settings-status.err {
+            color: var(--danger);
+        }
+
+        .settings-btn {
+            flex-shrink: 0;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 7px 14px;
+            border-radius: 8px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.2px;
+            cursor: pointer;
+            transition: opacity 0.15s, border-color 0.15s, color 0.15s;
+        }
+
+        .settings-btn svg {
+            width: 12px;
+            height: 12px;
+        }
+
+        .settings-btn.secondary {
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--text-muted);
+        }
+
+        .settings-btn.secondary:hover:not(:disabled) {
+            border-color: var(--text-muted);
+            color: var(--text);
+        }
+
+        .settings-btn.primary {
+            background: var(--accent);
+            border: 1px solid var(--accent);
+            color: #1c1917;
+        }
+
+        .settings-btn.primary:hover:not(:disabled) {
+            opacity: 0.9;
+        }
+
+        .settings-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        /* ─── Catalog modal ─────────────────────────────────── */
+
+        .catalog-modal {
+            position: fixed;
+            inset: 0;
+            z-index: 200;
+            display: none;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .catalog-modal.visible {
+            display: flex;
+            animation: catalog-fade 0.18s ease-out;
+        }
+
+        @keyframes catalog-fade {
+            from { opacity: 0; }
+            to   { opacity: 1; }
+        }
+
+        .catalog-backdrop {
+            position: absolute;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.65);
+            backdrop-filter: blur(6px);
+        }
+
+        .catalog-dialog {
+            position: relative;
+            width: 80vw;
+            height: 85vh;
+            max-width: 1400px;
+            min-width: 640px;
+            background: rgba(15, 15, 17, 0.97);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            animation: catalog-pop 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        @keyframes catalog-pop {
+            from { opacity: 0; transform: scale(0.97) translateY(8px); }
+            to   { opacity: 1; transform: scale(1) translateY(0); }
+        }
+
+        .catalog-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border-soft);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            flex-shrink: 0;
+        }
+
+        .catalog-title-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-width: 0;
+        }
+
+        .catalog-title-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--accent);
+            box-shadow: 0 0 12px var(--accent);
+            flex-shrink: 0;
+        }
+
+        .catalog-header h3 {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text);
+            margin: 0;
+        }
+
+        .catalog-subtitle {
+            font-size: 11px;
+            color: var(--text-dim);
+            font-family: 'JetBrains Mono', monospace;
+            margin-left: 4px;
+        }
+
+        .catalog-header-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+
+        .catalog-toggle {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 11px;
+            color: var(--text-muted);
+            cursor: pointer;
+            user-select: none;
+            padding: 4px 8px;
+            border-radius: 6px;
+            transition: color 0.15s, background 0.15s;
+        }
+
+        .catalog-toggle:hover {
+            color: var(--text);
+            background: var(--bg-hover);
+        }
+
+        .catalog-toggle input {
+            accent-color: var(--accent);
+            cursor: pointer;
+        }
+
+        .catalog-icon-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-soft);
+            color: var(--text-muted);
+            padding: 6px 10px;
+            border-radius: 6px;
+            font-size: 11px;
+            cursor: pointer;
+            font-family: inherit;
+            transition: background 0.15s, color 0.15s, border-color 0.15s;
+        }
+
+        .catalog-icon-btn:hover {
+            background: var(--bg-hover);
+            color: var(--accent);
+            border-color: var(--accent-dim);
+        }
+
+        .catalog-icon-btn.copied {
+            color: var(--success);
+            border-color: rgba(74, 222, 128, 0.4);
+        }
+
+        .catalog-copy-label {
+            font-size: 11px;
+        }
+
+        .catalog-toolbar {
+            padding: 12px 20px;
+            border-bottom: 1px solid var(--border-soft);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-shrink: 0;
+        }
+
+        .catalog-search-wrapper {
+            position: relative;
+            flex: 1;
+        }
+
+        .catalog-search-icon {
+            position: absolute;
+            left: 11px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 14px;
+            height: 14px;
+            color: var(--text-dim);
+            pointer-events: none;
+        }
+
+        .catalog-search-input {
+            width: 100%;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 8px 12px 8px 34px;
+            border-radius: 8px;
+            font-size: 12px;
+            font-family: inherit;
+            outline: none;
+            transition: border-color 0.15s, box-shadow 0.15s;
+        }
+
+        .catalog-search-input:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.15);
+        }
+
+        .catalog-toolbar-actions {
+            display: flex;
+            gap: 6px;
+        }
+
+        .catalog-mini-btn {
+            background: transparent;
+            border: 1px solid var(--border-soft);
+            color: var(--text-muted);
+            padding: 6px 10px;
+            border-radius: 6px;
+            font-size: 11px;
+            cursor: pointer;
+            font-family: inherit;
+            transition: background 0.15s, color 0.15s, border-color 0.15s;
+        }
+
+        .catalog-mini-btn:hover {
+            background: var(--bg-hover);
+            color: var(--accent);
+            border-color: var(--accent-dim);
+        }
+
+        .catalog-body {
+            flex: 1;
+            min-height: 0;
+            overflow-y: auto;
+            padding: 8px 12px;
+        }
+
+        .catalog-empty {
+            padding: 40px;
+            text-align: center;
+            color: var(--text-dim);
+            font-size: 13px;
+        }
+
+        .catalog-tree {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+        }
+
+        .cat-node {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 8px;
+            border-radius: 6px;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: background 0.1s;
+            user-select: none;
+        }
+
+        .cat-node:hover {
+            background: var(--bg-hover);
+        }
+
+        .cat-node.match-self {
+            background: rgba(249, 115, 22, 0.1);
+        }
+
+        /* Persistent marker for the row whose node is currently focused. */
+        .cat-node.focused {
+            background: rgba(249, 115, 22, 0.14);
+            box-shadow: inset 2px 0 0 var(--accent);
+        }
+
+        /* One-shot "juice" pulse fired the instant a row is clicked. */
+        .cat-node.just-focused {
+            animation: cat-pulse 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
+        }
+
+        @keyframes cat-pulse {
+            0%   { background: rgba(249, 115, 22, 0.55); transform: translateX(2px); }
+            40%  { background: rgba(249, 115, 22, 0.28); }
+            100% { background: rgba(249, 115, 22, 0.14); transform: translateX(0); }
+        }
+
+        .cat-toggle {
+            width: 14px;
+            height: 14px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-dim);
+            flex-shrink: 0;
+            transition: transform 0.15s, color 0.15s;
+        }
+
+        .cat-node.expanded > .cat-toggle {
+            transform: rotate(90deg);
+            color: var(--accent);
+        }
+
+        .cat-toggle.empty {
+            visibility: hidden;
+        }
+
+        .cat-toggle svg {
+            width: 10px;
+            height: 10px;
+        }
+
+        .cat-icon {
+            width: 14px;
+            height: 14px;
+            flex-shrink: 0;
+        }
+
+        .cat-name {
+            color: var(--text);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            min-width: 0;
+            flex: 0 1 auto;
+        }
+
+        .cat-name mark {
+            background: rgba(249, 115, 22, 0.3);
+            color: var(--text);
+            padding: 0;
+            border-radius: 2px;
+        }
+
+        .cat-kind {
+            color: var(--text-dim);
+            font-size: 10px;
+            text-transform: lowercase;
+            flex-shrink: 0;
+        }
+
+        .cat-meta {
+            color: var(--text-dim);
+            font-size: 10px;
+            margin-left: auto;
+            flex-shrink: 0;
+            padding-left: 12px;
+        }
+
+        .cat-children {
+            margin-left: 18px;
+            border-left: 1px dashed var(--border-soft);
+            padding-left: 4px;
+            display: none;
+        }
+
+        .cat-node.expanded + .cat-children {
+            display: block;
+        }
+
+        .catalog-footer {
+            padding: 10px 20px;
+            border-top: 1px solid var(--border-soft);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            flex-shrink: 0;
+            font-size: 11px;
+        }
+
+        .catalog-stats {
+            display: flex;
+            align-items: baseline;
+            gap: 12px;
+        }
+
+        .catalog-metric {
+            display: inline-flex;
+            align-items: baseline;
+            gap: 4px;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .catalog-metric b {
+            font-size: 13px;
+            font-weight: 700;
+            color: var(--text);
+        }
+
+        .catalog-metric span {
+            font-size: 9px;
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+            color: var(--text-dim);
+        }
+
+        .catalog-hint {
+            color: var(--text-dim);
+        }
+
+        body.perf-mode .catalog-modal,
+        body.perf-mode .catalog-dialog {
+            animation: none;
+        }
+
+        body.perf-mode .catalog-backdrop {
+            backdrop-filter: none;
+            -webkit-backdrop-filter: none;
+        }
+
