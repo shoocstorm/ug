@@ -133,12 +133,44 @@ pub struct TypeRef {
     pub generic: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SymbolMetrics {
+    /// Lines the symbol spans, **inclusive** of both its first and last
+    /// line — the same convention the line-span fallback uses for symbols
+    /// with no metrics, so a Function and a Class are comparable.
+    ///
+    /// This is a span, so it counts blank and comment lines. Use
+    /// [`Self::code_lines`] when you mean "lines of code".
     pub loc: u32,
     pub params: u32,
     #[serde(rename = "maxNesting")]
     pub max_nesting: u32,
+
+    /// Comment lines inside the symbol's span. A line carrying both code
+    /// and a trailing comment counts as code, not comment.
+    ///
+    /// Zero on a graph written before this field existed — which is
+    /// indistinguishable from "genuinely uncommented" without the schema
+    /// version in [`IndexStats`]. See `graph_schema_version`.
+    #[serde(rename = "commentLines", default)]
+    pub comment_lines: u32,
+
+    /// Lines in the symbol's leading doc comment.
+    ///
+    /// Derived from the extracted docstring rather than from the lines
+    /// above the symbol, because a Python docstring lives *inside* the
+    /// function body — a position-based rule would be right for four
+    /// languages and silently wrong for the fifth.
+    #[serde(rename = "docLines", default)]
+    pub doc_lines: u32,
+
+    /// Span lines that are neither blank nor pure comment.
+    ///
+    /// The honest denominator for size questions: `loc` overstates by
+    /// roughly 30% on commented code, so "functions longer than 50 lines"
+    /// measured on `loc` is a different question than most people mean.
+    #[serde(rename = "codeLines", default)]
+    pub code_lines: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -233,8 +265,34 @@ pub struct Dependency {
     pub optional: bool,
 }
 
+/// What the current build writes into [`IndexStats::graph_schema_version`].
+///
+/// Bump whenever a *fact* is added that older graphs cannot have. This is
+/// not the same as [`crate::indexer::INDEXER_VERSION`], which invalidates
+/// the content cache: this one tells a *reader* of an already-written
+/// `graph.json` which facts it is entitled to trust.
+///
+/// The distinction matters because of the failure this whole feature is
+/// built around. A graph written before comment metrics existed answers
+/// "how many functions have comments" with `0` — not an error, not an
+/// empty result, just a wrong number that looks right. Version 2 is the
+/// first to carry `comment_lines` / `doc_lines` / `code_lines`, `language`
+/// and `classification`, so a reader seeing version < 2 can say "not
+/// indexed — run `ug reindex`" instead.
+///
+/// - **1** (or absent): pre-comment-metrics.
+/// - **2**: comment/doc/code line counts, class metrics, file language and
+///   classification on every node.
+pub const GRAPH_SCHEMA_VERSION: u32 = 2;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexStats {
+    /// Which generation of facts this graph carries — see
+    /// [`GRAPH_SCHEMA_VERSION`]. Absent (deserializing to 0) on any graph
+    /// written before the field existed, which is by definition a v1
+    /// graph; readers should treat 0 and 1 identically.
+    #[serde(rename = "graphSchemaVersion", default)]
+    pub graph_schema_version: u32,
     #[serde(rename = "totalFiles")]
     pub total_files: usize,
     #[serde(rename = "cachedFiles")]
@@ -336,6 +394,25 @@ pub struct GraphNode {
     /// Mirrors [`Symbol::route`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<String>,
+
+    /// Language of the file this node comes from, as its indexer names it
+    /// (`rust`, `typescript`, `java`, `python`, `markdown`).
+    ///
+    /// Computed by the indexer and, until now, dropped before the graph was
+    /// written — so "what is this repo made of, by language" had no answer
+    /// even though the fact existed one stage upstream. Stamped onto every
+    /// node in a file, not just the File node, so a statistic can group by
+    /// it without a join.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+
+    /// What kind of file this node lives in — see [`FileClassification`].
+    ///
+    /// The authoritative answer to "is this test code", which `is_test`
+    /// previously had to guess from the path. Also what makes it possible
+    /// to exclude config and asset files from code statistics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub classification: Option<FileClassification>,
 }
 
 /// Folder-specific metadata projected onto the generic GraphNode. Lifted from

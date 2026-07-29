@@ -424,7 +424,17 @@ code_query: { preset: "impact", args: { target: "native/src/storage/store.rs" } 
 code_query: { gql: "MATCH (n:Function) WHERE n.params > 6 RETURN n.folder AS f, count(*) AS c ORDER BY c DESC" }
 ```
 
-**Queryable properties:** `node_type` · `name` · `file` · `folder` · `loc` · `params` · `max_nesting` · `has_doc` · `is_test` · `in_degree` · `out_degree` · `qualified_name` · `route` · `annotations` · `start_line` · `end_line`.
+**Queryable properties:** `node_type` · `name` · `file` · `folder` · `language` · `classification` · `loc` · `code_lines` · `comment_lines` · `doc_lines` · `params` · `max_nesting` · `members` · `has_doc` · `has_comments` · `is_test` · `in_degree` · `out_degree` · `qualified_name` · `route` · `annotations` · `start_line` · `end_line`.
+
+Three pairs are easy to confuse, and picking the wrong one changes the answer:
+
+| Use | Not | Because |
+|---|---|---|
+| `code_lines` | `loc` | `loc` is a *span* — it counts blanks and comments. On this repo the longest function is 582 lines by span and 446 by code, a 23% gap. |
+| `has_comments` | `has_doc` | `has_doc` is a doc-comment flag only. Of 1597 functions here, 828 carry prose but just 499 have a doc comment — the other 329 are explained entirely in inline comments. |
+| `is_test` | a path filter | `is_test` prefers the indexer's file classification and falls back to a path heuristic, so it catches test files that aren't named like one. |
+
+`members` counts declared members and is only populated for languages whose class body encloses them (Java, Python, TypeScript). A Rust struct's methods live in a separate `impl` block, so Rust types carry no `members` at all — the coverage line will say so rather than ranking them all as memberless.
 
 **Every answer states its coverage, and this is not a nicety.** Aggregating over a property no node carries returns `0` — not an error, not a warning from the engine. `MATCH (n:Function) WHERE n.comment_lines > 3 RETURN count(*)` answers `0` on an index that has never recorded comment lines, and "no functions have long comments" is a far worse outcome than a refusal. So `code_query` probes the properties each query reads and reports their denominators, flagging any that are entirely unpopulated as `NOT INDEXED`. Call `graph_schema` first to see them all.
 

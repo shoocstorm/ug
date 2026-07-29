@@ -33,22 +33,32 @@ struct Sym {
     node_type: &'static str,
     file: &'static str,
     loc: i64,
+    /// Span lines that are neither blank nor comment.
+    code_lines: i64,
+    comment_lines: i64,
+    doc_lines: i64,
     has_doc: i64,
     is_test: i64,
     in_degree: i64,
+    /// Declared members, for types in languages that nest them. `None`
+    /// means the fact is absent — which is what a Rust struct looks like,
+    /// and what `classes_by_members` has to tolerate.
+    members: Option<i64>,
 }
 
 /// A miniature repo: two source folders, one test folder, a documented
 /// core symbol everything depends on, and one symbol nothing calls.
 const SYMBOLS: &[Sym] = &[
-    Sym { id: "function:src/core/auth.rs:verify", node_type: "Function", file: "src/core/auth.rs", loc: 120, has_doc: 1, is_test: 0, in_degree: 3 },
-    Sym { id: "function:src/core/auth.rs:hash",   node_type: "Function", file: "src/core/auth.rs", loc: 18,  has_doc: 0, is_test: 0, in_degree: 1 },
-    Sym { id: "function:src/api/login.rs:handle", node_type: "Function", file: "src/api/login.rs", loc: 64,  has_doc: 0, is_test: 0, in_degree: 1 },
-    Sym { id: "function:src/api/login.rs:unused", node_type: "Function", file: "src/api/login.rs", loc: 9,   has_doc: 0, is_test: 0, in_degree: 0 },
-    Sym { id: "class:src/core/auth.rs:Session",   node_type: "Class",    file: "src/core/auth.rs", loc: 200, has_doc: 0, is_test: 0, in_degree: 2 },
-    Sym { id: "function:tests/auth_test.rs:t_verify", node_type: "Function", file: "tests/auth_test.rs", loc: 25, has_doc: 0, is_test: 1, in_degree: 0 },
-    Sym { id: "file:src/core/auth.rs", node_type: "File", file: "src/core/auth.rs", loc: 400, has_doc: 0, is_test: 0, in_degree: 2 },
-    Sym { id: "file:src/api/login.rs", node_type: "File", file: "src/api/login.rs", loc: 90,  has_doc: 0, is_test: 0, in_degree: 0 },
+    Sym { id: "function:src/core/auth.rs:verify", node_type: "Function", file: "src/core/auth.rs", loc: 120, code_lines: 90, comment_lines: 20, doc_lines: 4, has_doc: 1, is_test: 0, in_degree: 3, members: None },
+    Sym { id: "function:src/core/auth.rs:hash",   node_type: "Function", file: "src/core/auth.rs", loc: 18,  code_lines: 15, comment_lines: 0,  doc_lines: 0, has_doc: 0, is_test: 0, in_degree: 1, members: None },
+    // Commented but undocumented — the case that separates `has_comments`
+    // from `has_doc`.
+    Sym { id: "function:src/api/login.rs:handle", node_type: "Function", file: "src/api/login.rs", loc: 64,  code_lines: 48, comment_lines: 11, doc_lines: 0, has_doc: 0, is_test: 0, in_degree: 1, members: None },
+    Sym { id: "function:src/api/login.rs:unused", node_type: "Function", file: "src/api/login.rs", loc: 9,   code_lines: 7,  comment_lines: 0,  doc_lines: 0, has_doc: 0, is_test: 0, in_degree: 0, members: None },
+    Sym { id: "class:src/core/auth.rs:Session",   node_type: "Class",    file: "src/core/auth.rs", loc: 200, code_lines: 150, comment_lines: 30, doc_lines: 0, has_doc: 0, is_test: 0, in_degree: 2, members: Some(7) },
+    Sym { id: "function:tests/auth_test.rs:t_verify", node_type: "Function", file: "tests/auth_test.rs", loc: 25, code_lines: 22, comment_lines: 1, doc_lines: 0, has_doc: 0, is_test: 1, in_degree: 0, members: None },
+    Sym { id: "file:src/core/auth.rs", node_type: "File", file: "src/core/auth.rs", loc: 400, code_lines: 300, comment_lines: 60, doc_lines: 0, has_doc: 0, is_test: 0, in_degree: 2, members: None },
+    Sym { id: "file:src/api/login.rs", node_type: "File", file: "src/api/login.rs", loc: 90,  code_lines: 70, comment_lines: 12, doc_lines: 0, has_doc: 0, is_test: 0, in_degree: 0, members: None },
 ];
 
 const EDGES: &[(&str, &str, &str)] = &[
@@ -83,16 +93,38 @@ async fn seeded_store(tmp: &TempDir) -> Db {
                 vector: unit_vector(i),
                 code: String::new(),
                 file_hash: String::new(),
-                facts: facts(&[
-                    ("loc", FactValue::Int(s.loc)),
-                    ("has_doc", FactValue::Int(s.has_doc)),
-                    ("is_test", FactValue::Int(s.is_test)),
-                    ("in_degree", FactValue::Int(s.in_degree)),
-                    ("out_degree", FactValue::Int(1)),
-                    ("params", FactValue::Int(2)),
-                    ("max_nesting", FactValue::Int(3)),
-                    ("folder", FactValue::Str(folder.to_string())),
-                ]),
+                facts: {
+                    let mut f = facts(&[
+                        ("loc", FactValue::Int(s.loc)),
+                        ("code_lines", FactValue::Int(s.code_lines)),
+                        ("comment_lines", FactValue::Int(s.comment_lines)),
+                        ("doc_lines", FactValue::Int(s.doc_lines)),
+                        ("has_doc", FactValue::Int(s.has_doc)),
+                        (
+                            "has_comments",
+                            FactValue::Int(i64::from(s.comment_lines > 0 || s.doc_lines > 0)),
+                        ),
+                        ("is_test", FactValue::Int(s.is_test)),
+                        ("in_degree", FactValue::Int(s.in_degree)),
+                        ("out_degree", FactValue::Int(1)),
+                        ("params", FactValue::Int(2)),
+                        ("max_nesting", FactValue::Int(3)),
+                        ("folder", FactValue::Str(folder.to_string())),
+                        ("language", FactValue::Str("rust".into())),
+                        (
+                            "classification",
+                            FactValue::Str(
+                                if s.is_test == 1 { "test" } else { "service" }.to_string(),
+                            ),
+                        ),
+                    ]);
+                    // Absent on purpose for everything but the one type
+                    // that declares members — see `Sym::members`.
+                    if let Some(m) = s.members {
+                        f.insert("members".into(), FactValue::Int(m));
+                    }
+                    f
+                },
             }
         })
         .collect();
@@ -241,11 +273,14 @@ async fn a_query_over_an_unstored_property_is_reported_not_answered() {
     let tmp = TempDir::new().unwrap();
     let db = seeded_store(&tmp).await;
 
+    // A plausible-sounding metric this indexer has never produced. The
+    // point is that the engine cannot tell the difference between "no
+    // function exceeds this" and "nothing has ever recorded this".
     let answer = code_query::run(
         &db,
         &CodeQueryParams {
             gql: Some(
-                "MATCH (n:Function) WHERE n.comment_lines > 3 RETURN count(*) AS c".into(),
+                "MATCH (n:Function) WHERE n.cyclomatic_complexity > 3 RETURN count(*) AS c".into(),
             ),
             ..Default::default()
         },
@@ -256,9 +291,60 @@ async fn a_query_over_an_unstored_property_is_reported_not_answered() {
     // The engine happily returns 0 here. Everything that stops that zero
     // from being believed lives in the envelope.
     assert_eq!(answer.page.rows[0][0], QueryValue::Int(0));
-    assert_eq!(answer.unindexed, vec!["comment_lines".to_string()]);
+    assert_eq!(
+        answer.unindexed,
+        vec!["cyclomatic_complexity".to_string()]
+    );
     let text = code_query::render::render(&answer, Render::Markdown);
     assert!(text.contains("NOT INDEXED"), "{text}");
+}
+
+/// An index built before comment metrics existed must say so.
+///
+/// This is the end-to-end version of the version gate: `ug` upgrades in
+/// place, so the common state right after an upgrade is a *current binary*
+/// reading an *old index*. Every symbol in it has `comment_lines: 0` by
+/// serde default, and storing that would answer "how well commented is
+/// this repo" with "not at all".
+#[tokio::test]
+async fn an_index_predating_comment_metrics_reports_them_as_unindexed() {
+    let tmp = TempDir::new().unwrap();
+    let db = Db::open_or_create(tmp.path().to_str().unwrap(), DEFAULT_EMBEDDING_DIM as u32)
+        .await
+        .unwrap();
+
+    // Exactly what a pre-v2 ingest wrote: the old facts, none of the new.
+    let row = NodeRow {
+        id: "function:src/old.rs:legacy".into(),
+        name: "legacy".into(),
+        node_type: "Function".into(),
+        description: String::new(),
+        file: "src/old.rs".into(),
+        start_line: 1,
+        end_line: 40,
+        last_update_at: 1_700_000_000,
+        node_text: "legacy".into(),
+        vector: unit_vector(0),
+        code: String::new(),
+        file_hash: String::new(),
+        facts: facts(&[
+            ("loc", FactValue::Int(40)),
+            ("has_doc", FactValue::Int(0)),
+            ("is_test", FactValue::Int(0)),
+            ("in_degree", FactValue::Int(0)),
+        ]),
+    };
+    db.upsert_nodes(&[row]).await.unwrap();
+
+    let answer = code_query::run(&db, &params("comment_coverage")).await.unwrap();
+    assert!(
+        answer.unindexed.contains(&"has_comments".to_string()),
+        "expected has_comments to report unindexed, got {:?}",
+        answer.unindexed
+    );
+    let text = code_query::render::render(&answer, Render::Markdown);
+    assert!(text.contains("NOT INDEXED"), "{text}");
+    assert!(text.contains("ug reindex"), "must say how to fix it: {text}");
 }
 
 #[tokio::test]

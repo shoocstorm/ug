@@ -613,9 +613,16 @@ fn extract_member(
             let (calls, call_refs) = extract_calls(node, source, ctx, owner, &params);
 
             let metrics = SymbolMetrics {
-                loc: end.saturating_sub(start),
+                // Inclusive of both the first and last line, matching the
+                // span fallback used for symbols that carry no metrics.
+                // These two disagreed by one before, which made `loc` mean
+                // subtly different things for a Function and a Class.
+                loc: end.saturating_sub(start) + 1,
                 params: params.len() as u32,
                 max_nesting: calculate_nesting(node),
+                // Comment/doc/code counts are filled in one shared pass
+                // over the file — see `indexer::annotate_line_metrics`.
+                ..Default::default()
             };
 
             // Constructors are addressed as `<init>` so `new Foo(...)` at a

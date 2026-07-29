@@ -18,7 +18,7 @@
 //!    Storing `true`/`false` would make the most common shape of question
 //!    impossible to express.
 
-use crate::types::{GraphData, GraphEdgeType, GraphNode, GraphNodeType};
+use crate::types::{FileClassification, GraphData, GraphEdgeType, GraphNode, GraphNodeType};
 use std::collections::{BTreeMap, HashMap};
 
 /// A stored fact value, in the small set of shapes every backend can hold.
@@ -52,32 +52,53 @@ pub struct FactContext {
     in_degree: HashMap<String, u32>,
     /// Outbound edges, same exclusion.
     out_degree: HashMap<String, u32>,
+    /// Outbound `Contains` edges from a type to the members it declares.
+    ///
+    /// The one place `Contains` is the signal rather than the noise. Only
+    /// meaningful for languages whose class body encloses its members —
+    /// Java has 451 such edges in the bundled sample; Rust has none,
+    /// because `impl` blocks sit outside the struct they extend. See
+    /// [`compute`] for how that asymmetry is kept honest.
+    members: HashMap<String, u32>,
+    /// Whether this graph was written by a build that records comment
+    /// metrics. A graph older than that answers "how many functions have
+    /// comments" with zero, which is worse than refusing.
+    has_line_metrics: bool,
 }
 
 impl FactContext {
     pub fn new(graph: &GraphData) -> Self {
         let mut in_degree: HashMap<String, u32> = HashMap::new();
         let mut out_degree: HashMap<String, u32> = HashMap::new();
+        let mut members: HashMap<String, u32> = HashMap::new();
         for e in &graph.edges {
             if matches!(e.edge_type, GraphEdgeType::Contains) {
+                *members.entry(e.source.clone()).or_insert(0) += 1;
                 continue;
             }
             *in_degree.entry(e.target.clone()).or_insert(0) += 1;
             *out_degree.entry(e.source.clone()).or_insert(0) += 1;
         }
+        let has_line_metrics = graph
+            .stats
+            .as_ref()
+            .map(|s| s.graph_schema_version >= 2)
+            .unwrap_or(false);
         Self {
             in_degree,
             out_degree,
+            members,
+            has_line_metrics,
         }
     }
 }
 
 /// Path segments that mark a file as test code.
 ///
-/// Deliberately a path heuristic and not the indexer's
-/// `FileClassification`: that classification is computed but never reaches
-/// `GraphNode`, so it is not available here yet. When it lands (design doc
-/// A4), `is_test` should read it and this list becomes the fallback.
+/// Now the *fallback*, not the rule: the indexer's `FileClassification`
+/// reaches `GraphNode` and takes precedence where it exists (see
+/// [`compute`]). This still matters for graphs written before that landed,
+/// and for files the classifier had no opinion about.
 const TEST_PATH_MARKERS: &[&str] = &[
     "/test/",
     "/tests/",
@@ -98,6 +119,29 @@ fn looks_like_test(file: &str) -> bool {
     TEST_PATH_MARKERS.iter().any(|m| lower.contains(m))
 }
 
+/// Stable lowercase name for a file classification.
+///
+/// Spelled out rather than derived from `Debug`, so a rename of the enum
+/// variant cannot silently change a stored property that queries and
+/// saved presets filter on.
+fn classification_str(c: &FileClassification) -> &'static str {
+    match c {
+        FileClassification::Component => "component",
+        FileClassification::Page => "page",
+        FileClassification::Hook => "hook",
+        FileClassification::Util => "util",
+        FileClassification::Service => "service",
+        FileClassification::Config => "config",
+        FileClassification::Type => "type",
+        FileClassification::Constant => "constant",
+        FileClassification::Context => "context",
+        FileClassification::Reducer => "reducer",
+        FileClassification::Test => "test",
+        FileClassification::Asset => "asset",
+        FileClassification::Documentation => "documentation",
+    }
+}
+
 /// Parent directory of a repo-relative file path, `""` for a file at the
 /// repo root. Used to group statistics by module without a query-time
 /// string function.
@@ -110,13 +154,13 @@ fn folder_of(file: &str) -> &str {
 
 /// Lines the node spans, inclusive.
 ///
-/// Prefers the indexer's `metrics.loc` where it exists and falls back to
-/// the line range, which is what gives Class and Interface nodes a size at
-/// all — the extractors only compute metrics for functions today.
+/// Prefers the indexer's `metrics.loc` and falls back to the line range.
+/// Both are inclusive of their first and last line, so a Function (which
+/// has metrics) and a Concept (which may not) are comparable.
 ///
-/// This is a *span*, so it counts blank and comment lines. A separate
-/// `code_lines` fact needs the comment scanner and lands with design doc
-/// A2; until then, do not describe this number as "lines of code".
+/// This is a *span*: it counts blank and comment lines. The `code_lines`
+/// fact is the one to use when you mean "lines of code" — on commented
+/// code the two differ by roughly 30%.
 fn span_loc(n: &GraphNode) -> Option<u32> {
     if let Some(m) = &n.metrics {
         return Some(m.loc);
@@ -137,6 +181,22 @@ pub fn compute(n: &GraphNode, ctx: &FactContext) -> Facts {
     if let Some(m) = &n.metrics {
         f.insert("params".into(), FactValue::Int(m.params as i64));
         f.insert("max_nesting".into(), FactValue::Int(m.max_nesting as i64));
+
+        // Only when the graph is new enough to actually carry them.
+        // Writing `comment_lines = 0` from a graph indexed before the
+        // metric existed would produce the exact failure this design
+        // exists to prevent: a confident zero that reads as a measurement.
+        // Omitted, the property shows up as NOT INDEXED in every answer's
+        // coverage line, which tells the caller to reindex.
+        if ctx.has_line_metrics {
+            f.insert("comment_lines".into(), FactValue::Int(m.comment_lines as i64));
+            f.insert("doc_lines".into(), FactValue::Int(m.doc_lines as i64));
+            f.insert("code_lines".into(), FactValue::Int(m.code_lines as i64));
+            f.insert(
+                "has_comments".into(),
+                FactValue::from_bool(m.comment_lines > 0 || m.doc_lines > 0),
+            );
+        }
     }
 
     f.insert(
@@ -144,13 +204,44 @@ pub fn compute(n: &GraphNode, ctx: &FactContext) -> Facts {
         FactValue::from_bool(n.docstring.as_deref().is_some_and(|d| !d.trim().is_empty())),
     );
 
+    if let Some(lang) = n.language.as_deref().filter(|s| !s.is_empty()) {
+        f.insert("language".into(), FactValue::Str(lang.to_string()));
+    }
+    if let Some(c) = &n.classification {
+        f.insert(
+            "classification".into(),
+            FactValue::Str(classification_str(c).to_string()),
+        );
+    }
+
+    // Members are only recorded where the graph genuinely has them. A
+    // Rust struct's methods live in a separate `impl` block, so it has no
+    // `Contains` edges and gets no `members` fact — absent rather than a
+    // zero that would rank every Rust type as memberless. The coverage
+    // line makes the partial population visible.
+    if matches!(n.node_type, GraphNodeType::Class | GraphNodeType::Interface) {
+        if let Some(count) = ctx.members.get(&n.id).copied().filter(|c| *c > 0) {
+            f.insert("members".into(), FactValue::Int(count as i64));
+        }
+    }
+
     // Folder and is_test are only meaningful for nodes that live in a
     // file. Folder nodes carry their own path in `file`, which would make
     // `folder` self-referential, so they are excluded.
     if !matches!(n.node_type, GraphNodeType::Folder) {
         if let Some(file) = n.file.as_deref().filter(|s| !s.is_empty()) {
             f.insert("folder".into(), FactValue::Str(folder_of(file).to_string()));
-            f.insert("is_test".into(), FactValue::from_bool(looks_like_test(file)));
+            // The indexer's classification is authoritative where it
+            // exists — it saw the file's contents, not just its name. The
+            // path heuristic stays as the fallback for graphs written
+            // before the classification reached the node, and for files
+            // the classifier had no opinion about.
+            let is_test = match &n.classification {
+                Some(FileClassification::Test) => true,
+                Some(_) => looks_like_test(file),
+                None => looks_like_test(file),
+            };
+            f.insert("is_test".into(), FactValue::from_bool(is_test));
         }
     }
 
@@ -194,11 +285,43 @@ mod tests {
         }
     }
 
+    /// A context from a graph with **no** stats block, i.e. one whose
+    /// schema version is unknown and therefore pre-v2.
     fn ctx_of(edges: Vec<GraphEdge>) -> FactContext {
         FactContext::new(&GraphData {
             nodes: vec![],
             edges,
             stats: None,
+        })
+    }
+
+    /// A context from a graph stamped with the given schema version.
+    fn ctx_at_version(version: u32, edges: Vec<GraphEdge>) -> FactContext {
+        FactContext::new(&GraphData {
+            nodes: vec![],
+            edges,
+            stats: Some(crate::types::IndexStats {
+                graph_schema_version: version,
+                total_files: 0,
+                cached_files: 0,
+                total_symbols: 0,
+                total_folders: 0,
+                total_lines: 0,
+                indexing_time_ms: 0,
+                last_indexed_at: 0,
+                repo_root: String::new(),
+            }),
+        })
+    }
+
+    fn with_line_metrics(comment: u32, doc: u32, code: u32) -> Option<SymbolMetrics> {
+        Some(SymbolMetrics {
+            loc: 40,
+            params: 1,
+            max_nesting: 2,
+            comment_lines: comment,
+            doc_lines: doc,
+            code_lines: code,
         })
     }
 
@@ -223,6 +346,7 @@ mod tests {
             loc: 7,
             params: 2,
             max_nesting: 1,
+            ..Default::default()
         });
         let f = compute(&n, &ctx_of(vec![]));
         assert_eq!(f["loc"], FactValue::Int(7), "metrics win over the span");
@@ -343,6 +467,116 @@ mod tests {
         assert_eq!(f["qualified_name"], FactValue::Str("com.x.A#f".into()));
         assert_eq!(f["route"], FactValue::Str("GET /a".into()));
         assert_eq!(f["annotations"], FactValue::Str("Test,Override".into()));
+    }
+
+    /// The single most important behaviour in this module.
+    ///
+    /// A graph indexed before comment metrics existed has `comment_lines:
+    /// 0` on every symbol, because that is what `#[serde(default)]` does.
+    /// Storing that would answer "how many functions have comments" with a
+    /// confident, wrong zero. Omitting it makes the property report as NOT
+    /// INDEXED in every answer's coverage line instead.
+    #[test]
+    fn line_metrics_are_omitted_on_a_graph_too_old_to_have_them() {
+        let mut n = node("f", Some("src/a.rs"));
+        n.metrics = with_line_metrics(0, 0, 0);
+
+        let old = compute(&n, &ctx_of(vec![]));
+        for key in ["comment_lines", "doc_lines", "code_lines", "has_comments"] {
+            assert!(
+                !old.contains_key(key),
+                "{key} must be absent, not zero, on a pre-v2 graph"
+            );
+        }
+        // Facts that always existed are unaffected.
+        assert_eq!(old["params"], FactValue::Int(1));
+    }
+
+    #[test]
+    fn line_metrics_are_stored_on_a_current_graph() {
+        let mut n = node("f", Some("src/a.rs"));
+        n.metrics = with_line_metrics(6, 3, 22);
+
+        let f = compute(&n, &ctx_at_version(2, vec![]));
+        assert_eq!(f["comment_lines"], FactValue::Int(6));
+        assert_eq!(f["doc_lines"], FactValue::Int(3));
+        assert_eq!(f["code_lines"], FactValue::Int(22));
+        assert_eq!(f["has_comments"], FactValue::Int(1));
+    }
+
+    /// `has_doc` and `has_comments` measure different things, and the gap
+    /// between them is usually the finding: a function explained entirely
+    /// in inline comments is undocumented by one measure and commented by
+    /// the other.
+    #[test]
+    fn inline_comments_count_as_commented_but_not_as_documented() {
+        let mut n = node("f", Some("src/a.rs"));
+        n.metrics = with_line_metrics(9, 0, 30);
+
+        let f = compute(&n, &ctx_at_version(2, vec![]));
+        assert_eq!(f["has_comments"], FactValue::Int(1));
+        assert_eq!(f["has_doc"], FactValue::Int(0), "no doc comment");
+    }
+
+    #[test]
+    fn a_symbol_with_no_prose_at_all_reports_neither() {
+        let mut n = node("f", Some("src/a.rs"));
+        n.metrics = with_line_metrics(0, 0, 30);
+
+        let f = compute(&n, &ctx_at_version(2, vec![]));
+        assert_eq!(f["has_comments"], FactValue::Int(0));
+        assert_eq!(f["has_doc"], FactValue::Int(0));
+    }
+
+    #[test]
+    fn language_and_classification_reach_the_store() {
+        let mut n = node("f", Some("src/a.rs"));
+        n.language = Some("rust".into());
+        n.classification = Some(FileClassification::Service);
+
+        let f = compute(&n, &ctx_of(vec![]));
+        assert_eq!(f["language"], FactValue::Str("rust".into()));
+        assert_eq!(f["classification"], FactValue::Str("service".into()));
+    }
+
+    /// The classifier saw the file's contents; the path heuristic only saw
+    /// its name. Where they disagree, the classifier wins.
+    #[test]
+    fn classification_outranks_the_path_heuristic_for_is_test() {
+        // A path that looks nothing like a test, classified as one.
+        let mut n = node("f", Some("src/checkout.rs"));
+        n.classification = Some(FileClassification::Test);
+        assert_eq!(compute(&n, &ctx_of(vec![]))["is_test"], FactValue::Int(1));
+
+        // No classification at all: fall back to the path, as before.
+        let n = node("f", Some("tests/checkout.rs"));
+        assert_eq!(compute(&n, &ctx_of(vec![]))["is_test"], FactValue::Int(1));
+    }
+
+    /// A Rust struct's methods live in a separate `impl` block, so it has
+    /// no `Contains` edges. Reporting `members: 0` would rank every Rust
+    /// type as memberless against Java types that genuinely nest theirs.
+    #[test]
+    fn members_is_absent_rather_than_zero_when_the_language_does_not_nest() {
+        let mut n = node("class:src/a.rs:S", Some("src/a.rs"));
+        n.node_type = GraphNodeType::Class;
+        let f = compute(&n, &ctx_of(vec![]));
+        assert!(!f.contains_key("members"));
+
+        let ctx = ctx_of(vec![
+            edge("class:src/a.rs:S", "fn:one", GraphEdgeType::Contains),
+            edge("class:src/a.rs:S", "fn:two", GraphEdgeType::Contains),
+        ]);
+        assert_eq!(compute(&n, &ctx)["members"], FactValue::Int(2));
+    }
+
+    #[test]
+    fn only_types_get_a_members_fact() {
+        let ctx = ctx_of(vec![edge("f", "g", GraphEdgeType::Contains)]);
+        // A File also has Contains edges, but "members" is a property of a
+        // type, and a File already reports its symbol count another way.
+        let f = compute(&node("f", Some("src/a.rs")), &ctx);
+        assert!(!f.contains_key("members"), "Function nodes have no members");
     }
 
     #[test]

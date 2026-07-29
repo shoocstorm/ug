@@ -8,6 +8,7 @@
 //! - tree-sitter parsing (using the grammar from the registered
 //!   `LanguageIndexer` for the file's extension)
 //! - symbol / import / export extraction (delegated to the indexer)
+//! - line-metric annotation (`line_metrics`), shared by every language
 //! - file classification (`classifier::classify_file`)
 //! - cache key computation (`common::compute_hash`)
 //! - dependency extraction from `package.json` (`package_json::…`)
@@ -19,9 +20,10 @@ pub(crate) mod common;
 pub(crate) mod document;
 mod folder;
 pub(crate) mod languages;
+pub(crate) mod line_metrics;
 mod package_json;
 
-use crate::types::{FileNode, IndexResult, IndexStats};
+use crate::types::{FileNode, IndexResult, IndexStats, Symbol, SymbolMetrics};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -37,7 +39,13 @@ use tree_sitter::Parser;
 /// cache once, so the improvement actually reaches an existing install.
 ///
 /// Bump on any change to what the extractors *produce*.
-const INDEXER_VERSION: &str = "2";
+///
+/// 3: comment/doc/code line metrics on every symbol, metrics on types that
+/// previously had none, and an inclusive `loc`. Without this bump an
+/// existing install would keep every unchanged file's cached symbols and
+/// the new metrics would appear only on files someone happened to edit —
+/// producing a repo-wide statistic computed over an arbitrary subset.
+const INDEXER_VERSION: &str = "3";
 
 /// Reserved key in `cache.json`. Prefixed and suffixed so it cannot collide
 /// with a repo-relative path.
@@ -93,6 +101,9 @@ pub fn process_file(path: &Path, repo_root: Option<&str>) -> Option<FileNode> {
     }
 
     resolve_import_refs(&mut symbols, &imports);
+    // One pass over the file's lines for every symbol in it — see
+    // `line_metrics` for why this is here and not in the five extractors.
+    annotate_line_metrics(&mut symbols, &content, indexer.name());
     let classification = classify_file(&path_str, &symbols);
 
     Some(FileNode {
@@ -105,6 +116,40 @@ pub fn process_file(path: &Path, repo_root: Option<&str>) -> Option<FileNode> {
         imports,
         exports,
     })
+}
+
+/// Fill the comment/doc/code line counts on every symbol in one file.
+///
+/// Runs after extraction rather than inside it so all five languages get
+/// the same definition of "a comment", and so the file's lines are
+/// classified once instead of once per symbol.
+///
+/// A symbol with no `metrics` gets one: Class and Interface nodes carry no
+/// metrics from most extractors, and leaving them out here would mean
+/// "which classes are worst documented" quietly answers about functions
+/// only. `loc` is filled from the span for those, inclusive of both ends,
+/// matching what the extractors now produce.
+fn annotate_line_metrics(symbols: &mut [Symbol], content: &str, language: &str) {
+    let syntax = line_metrics::syntax_for(language);
+    let kinds = line_metrics::classify_lines(content, syntax);
+
+    for sym in symbols.iter_mut() {
+        let (comments, code) = line_metrics::count_range(&kinds, sym.start_line, sym.end_line);
+        let doc_lines = sym
+            .docstring
+            .as_deref()
+            .map(|d| d.lines().filter(|l| !l.trim().is_empty()).count() as u32)
+            .unwrap_or(0);
+
+        let span = sym.end_line.saturating_sub(sym.start_line) + 1;
+        let metrics = sym.metrics.get_or_insert_with(|| SymbolMetrics {
+            loc: span,
+            ..Default::default()
+        });
+        metrics.comment_lines = comments;
+        metrics.code_lines = code;
+        metrics.doc_lines = doc_lines;
+    }
 }
 
 /// Index every supported source file under `path`. Returns a JSON-encoded
@@ -164,6 +209,7 @@ pub fn index(path: String) -> String {
         .unwrap_or(0);
 
     let stats = IndexStats {
+        graph_schema_version: crate::types::GRAPH_SCHEMA_VERSION,
         total_files: files.len(),
         cached_files: 0,
         total_symbols,
@@ -311,6 +357,7 @@ pub fn index_with_cache(path: String, cache_path: String) -> String {
         .unwrap_or(0);
 
     let stats = IndexStats {
+        graph_schema_version: crate::types::GRAPH_SCHEMA_VERSION,
         total_files: files.len(),
         cached_files: cached,
         total_symbols,

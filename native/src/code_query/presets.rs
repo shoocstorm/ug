@@ -133,6 +133,29 @@ pub static BUILTIN: &[Preset] = &[
         headline: None,
     },
     Preset {
+        name: "language_breakdown",
+        category: Category::Census,
+        description: "What this repo is written in: symbols and code lines per language.",
+        params: NO_PARAMS,
+        gql: "MATCH (n) \
+              WHERE n.language IS NOT NULL AND n.node_type <> 'File' AND n.node_type <> 'Folder' \
+              RETURN n.language AS language, count(*) AS symbols, \
+                     sum(n.code_lines) AS code_lines \
+              ORDER BY symbols DESC",
+        headline: None,
+    },
+    Preset {
+        name: "file_kinds",
+        category: Category::Census,
+        description: "What the files in this repo are for — the indexer's own classification.",
+        params: NO_PARAMS,
+        gql: "MATCH (n) \
+              WHERE n.classification IS NOT NULL AND n.node_type <> 'Folder' \
+              RETURN n.classification AS kind, count(*) AS symbols \
+              ORDER BY symbols DESC",
+        headline: None,
+    },
+    Preset {
         name: "where_to_start",
         category: Category::Census,
         description: "Documented, heavily depended-upon symbols — the reading order for a newcomer.",
@@ -201,6 +224,35 @@ pub static BUILTIN: &[Preset] = &[
         headline: None,
     },
     Preset {
+        name: "long_functions_by_code",
+        category: Category::Size,
+        description: "Functions over min_loc lines of ACTUAL code — blanks and comments excluded, unlike long_functions.",
+        params: MIN_LOC,
+        gql: "MATCH (n:Function) \
+              WHERE n.code_lines > $min_loc AND n.is_test = 0 \
+              RETURN elementKey(n) AS id, n.code_lines AS code_lines, n.loc AS span, \
+                     n.max_nesting AS nesting \
+              ORDER BY code_lines DESC \
+              LIMIT 50",
+        headline: None,
+    },
+    Preset {
+        name: "classes_by_members",
+        category: Category::Size,
+        // Only meaningful where the language nests members inside the type
+        // body. A Rust struct's methods live in a separate `impl` block, so
+        // it has no members fact at all and the coverage line will say so
+        // rather than ranking every Rust type as memberless.
+        description: "Types with the most declared members. Only populated for languages that nest members in the type body (Java, Python, TS) — check coverage.",
+        params: NO_PARAMS,
+        gql: "MATCH (n) \
+              WHERE n.node_type IN ['Class', 'Interface'] AND n.members IS NOT NULL \
+              RETURN elementKey(n) AS id, n.members AS members, n.loc AS loc \
+              ORDER BY members DESC \
+              LIMIT 30",
+        headline: None,
+    },
+    Preset {
         name: "param_bloat",
         category: Category::Size,
         description: "Functions taking more than min_params arguments.",
@@ -234,9 +286,72 @@ pub static BUILTIN: &[Preset] = &[
     },
     // ── documentation ─────────────────────────────────────────────────
     //
-    // `has_doc` is a doc-comment flag, not a comment count: a symbol with
-    // twenty lines of inline `//` and no leading doc comment reads as
-    // undocumented here. Comment-line metrics land with design doc A2.
+    // Two different questions live here and they are easy to confuse.
+    // `has_doc` is a *doc comment* flag; `has_comments` also counts inline
+    // prose. A function with twenty lines of `//` explaining a subtle
+    // algorithm and no leading doc block is undocumented by the first
+    // measure and well commented by the second. Presets say which they
+    // mean in their description, because the gap between the two numbers
+    // is often the actual finding.
+    Preset {
+        name: "comment_coverage",
+        category: Category::Documentation,
+        description: "How many symbols carry any prose at all — doc comment or inline — by type.",
+        params: NO_PARAMS,
+        gql: "MATCH (n) \
+              WHERE n.node_type IN ['Function', 'Class', 'Interface'] \
+              RETURN n.node_type AS kind, \
+                     count(*) AS total, \
+                     sum(n.has_comments) AS commented, \
+                     sum(n.has_doc) AS with_doc_comment \
+              ORDER BY total DESC",
+        headline: None,
+    },
+    Preset {
+        name: "comment_density",
+        category: Category::Documentation,
+        description: "Comment-to-code line ratio per folder — where the prose actually is.",
+        params: NO_PARAMS,
+        gql: "MATCH (n:Function) \
+              WHERE n.is_test = 0 \
+              WITH n.folder AS folder, \
+                   sum(n.code_lines) AS code_lines, \
+                   sum(n.comment_lines) AS comment_lines, \
+                   sum(n.doc_lines) AS doc_lines \
+              WHERE code_lines > 50 \
+              RETURN folder, code_lines, comment_lines, doc_lines \
+              ORDER BY code_lines DESC \
+              LIMIT 30",
+        headline: None,
+    },
+    Preset {
+        name: "token_docs",
+        category: Category::Documentation,
+        description: "Symbols whose doc comment is a single line — present, but saying nothing.",
+        params: NO_PARAMS,
+        gql: "MATCH (n) \
+              WHERE n.doc_lines = 1 AND n.is_test = 0 \
+                AND n.node_type IN ['Function', 'Class', 'Interface'] \
+              RETURN elementKey(n) AS id, n.code_lines AS code_lines, \
+                     n.in_degree AS depended_on_by \
+              ORDER BY code_lines DESC \
+              LIMIT 30",
+        headline: None,
+    },
+    Preset {
+        name: "undercommented_complexity",
+        category: Category::Documentation,
+        description: "Long, deeply nested functions with no prose of any kind — the hardest code to pick up.",
+        params: NO_PARAMS,
+        gql: "MATCH (n:Function) \
+              WHERE n.has_comments = 0 AND n.is_test = 0 \
+                AND n.code_lines > 40 AND n.max_nesting >= 3 \
+              RETURN elementKey(n) AS id, n.code_lines AS code_lines, \
+                     n.max_nesting AS nesting \
+              ORDER BY code_lines DESC \
+              LIMIT 30",
+        headline: None,
+    },
     Preset {
         name: "doc_coverage",
         category: Category::Documentation,

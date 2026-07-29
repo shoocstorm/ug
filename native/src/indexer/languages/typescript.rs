@@ -250,9 +250,16 @@ fn extract_symbol_from_node(node: &Node, source: &[u8], out: &mut Vec<Symbol>) {
             let implements = extract_implements(node, source);
             let docstring = extract_docstring(node, source);
             let metrics = SymbolMetrics {
-                loc: end.saturating_sub(start),
+                // Inclusive of both the first and last line, matching the
+                // span fallback used for symbols that carry no metrics.
+                // These two disagreed by one before, which made `loc` mean
+                // subtly different things for a Function and a Class.
+                loc: end.saturating_sub(start) + 1,
                 params: params.len() as u32,
                 max_nesting: calculate_nesting(node),
+                // Comment/doc/code counts are filled in one shared pass
+                // over the file — see `indexer::annotate_line_metrics`.
+                ..Default::default()
             };
 
             out.push(Symbol {

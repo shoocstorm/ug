@@ -67,6 +67,15 @@ fraction); every variable-length path needs a finite bound (`*1..3`, never
 `*`), and unanchored walks past 2 hops can exceed the traversal cap; an
 `EXISTS { … }` subquery needs its own `RETURN` clause inside.
 
+Three property pairs are easy to confuse, and the wrong one answers a
+different question: use **`code_lines`** not `loc` when you mean lines of
+code (`loc` is a span and counts blanks and comments — a ~25% difference);
+use **`has_comments`** not `has_doc` when you mean "is this explained at
+all" (`has_doc` only sees doc comments, and plenty of code is documented
+entirely in inline ones); and **`members`** is only populated for languages
+that nest members inside the type body, so check its coverage before
+ranking on it.
+
 **Cheap tools**: in-memory scan or walk over `graph.json`. No network, no DB.  
 **Medium tools**: one embedding call + one vector query.  
 **Expensive tools**: multi-pass (embed → rank → expand → snippet-read).

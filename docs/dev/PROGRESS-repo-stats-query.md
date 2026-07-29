@@ -16,7 +16,7 @@ Reference for the storage engine's API: see `Agents.md` §8 (never read the
 | **P0a** — overgraph 0.6 → 0.17 migration | ✅ done, committed `ca7b9ac` | 473 tests pass; full `ug gen` + search/traverse verified |
 | **P0b** — widen `node_props`, survive embed failure | ✅ done, committed `5e182a6` | 492 tests pass; degraded + recovery paths exercised for real |
 | **P0c** — `code_query` tool, presets, envelope | ✅ done, verified, **uncommitted** | 529 tests pass; 25 presets run against the live index and all three transports driven end to end |
-| **P1** — comment/class metrics, file facts (reindex) | ⬜ not started | |
+| **P1** — comment/class metrics, file facts (reindex) | ✅ done, verified, **uncommitted** | 554 tests pass; full `ug gen` reindex, then all 33 presets run against it |
 | **P2** — preset files, Insights viz pane | ⬜ not started | |
 | **P3** — CSV/Parquet export | ⬜ not started | |
 
@@ -216,6 +216,92 @@ asserts on the *rendered* output, not just the coverage struct.
 
 ---
 
+## P1 — the fact layer ✅
+
+The design's question 1 — *"how many methods & classes have comments?"* —
+is now answerable, and the answer is more interesting than a single number:
+
+```
+kind       total  commented  with_doc_comment
+Function    1597        828               499
+Class        211        101                25
+```
+
+329 functions carry prose but no doc comment. Collapsing those two into one
+"documented" figure would have hidden the finding, which is why
+`has_comments` and `has_doc` are separate properties rather than one.
+
+- [x] **A2 — line metrics**, in `indexer/line_metrics.rs`, computed once
+      per file in `process_file` rather than in the five extractors.
+      Adds `comment_lines` · `doc_lines` · `code_lines`.
+- [x] **A3 — metrics on types.** Handled centrally by the same pass:
+      any symbol with no `metrics` gets one, `loc` filled from its span.
+      That covers Class and Interface without touching four extractors,
+      and covers any node type added later for free.
+- [x] **A4 — `language` and `classification` on `GraphNode`**, stamped
+      onto every symbol in a file rather than just the File node, so
+      "group by language" is a scan and not a join. `is_test` now prefers
+      the classifier and keeps the path heuristic as fallback.
+- [x] **A5 — `graph_schema_version` in `IndexStats`** (`GRAPH_SCHEMA_VERSION
+      = 2`), plus `INDEXER_VERSION` 2 → 3 to discard the content cache.
+- [x] 8 new presets: `comment_coverage` · `comment_density` · `token_docs` ·
+      `undercommented_complexity` · `language_breakdown` · `file_kinds` ·
+      `long_functions_by_code` · `classes_by_members`. 33 total.
+
+### The version gate, which is the whole point of A5
+
+`ug` upgrades in place, so the ordinary state right after an upgrade is a
+**current binary reading an old index**. Every symbol in that index has
+`comment_lines: 0` — not because it has no comments, but because
+`#[serde(default)]` filled it in. Storing that would answer "how well
+commented is this repo" with "not at all".
+
+So `facts::compute` writes the line metrics **only** when the graph is
+stamped v2 or later. Verified against the bundled v1 Java graph, where
+`comment_coverage` renders:
+
+```
+kind       total  commented  with_doc_comment
+Function     552  —                        12
+⚠ NOT INDEXED: has_comments — … Run `ug reindex`
+```
+
+`sum()` over an absent property returns null, which renders as `—` rather
+than `0`. Between that and the warning, there is no reading of this output
+that produces a wrong number.
+
+### Two judgement calls
+
+- **`loc` is now inclusive everywhere.** The extractors computed
+  `end - start` while the span fallback computed `end - start + 1`, so
+  `loc` meant subtly different things for a Function and a Class and the
+  two were never comparable. Both are inclusive now. Existing numbers shift
+  by one; that is the fix, not a regression.
+- **`members` is absent, not zero, where the language does not nest.**
+  Rust `impl` blocks sit outside the struct, so a Rust type has no
+  `Contains` edges — the bundled Java sample has 451, this repo has none.
+  Writing `members: 0` would rank every Rust type as memberless against
+  Java types that genuinely declare members. Omitted, coverage reports
+  `members 71/749 (9%)` on Java and `NOT INDEXED` here, and
+  `classes_by_members` says so in its own description.
+
+### Verified
+
+554 tests pass (21 neo4j-gated ignored), 20 new. Beyond the suite: a full
+`ug gen` of this repo (2445 nodes / 5732 edges) with every new property
+landing — `code_lines`/`comment_lines`/`doc_lines`/`has_comments` at
+2337/2445, `language` 2431/2445, `classification` 433/2445 — then all **33**
+presets run against that store, none failing. `members` verified separately
+on the Java sample (`BotConfig` 71).
+
+`classification` covers only 18% here: the classifier was written for
+JS/TS project shapes and has little to say about a Rust tree. That is
+honest rather than broken — `file_kinds` reports its own 18% coverage — but
+it means the classification-based half of A4 is mostly untested against
+data on this repo.
+
+---
+
 ## Decisions already settled (do not relitigate)
 
 - **No bespoke JSON query DSL.** Use OverGraph GQL — it ships aggregation,
@@ -274,3 +360,17 @@ asserts on the *rendered* output, not just the coverage struct.
   a regression test (main.rs had no test module before this).
   **Still to do before release:** the website slide deck — the one doc
   surface from the design's P0 list not yet touched.
+- **2026-07-29** — **P1 implemented and verified; uncommitted.** 554 tests
+  pass, 20 new. New file: `native/src/indexer/line_metrics.rs`. Modified:
+  `src/types.rs` (SymbolMetrics + GraphNode + IndexStats),
+  `src/indexer.rs`, all four language extractors (`..Default::default()`
+  and the inclusive `loc`), `src/graph.rs`, `src/storage/facts.rs`,
+  `src/code_query/{mod,presets}.rs`, `tests/code_query_test.rs`,
+  `docs/mcp.md`, and the `ug-mcp` skill (source + installed copy).
+  Note for whoever commits: `INDEXER_VERSION` 2 → 3 means the first
+  `ug gen` after this lands re-indexes every file rather than hitting the
+  content cache. That is intended — without it the new metrics would appear
+  only on files someone happened to edit, and every repo-wide statistic
+  would be computed over an arbitrary subset.
+  Test project `~/.ug/UGTEST` was created for verification and can be
+  deleted (`ug rm UGTEST`).
