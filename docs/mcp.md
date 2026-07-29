@@ -416,7 +416,17 @@ Read-only by construction: mutation statements are rejected before any write sta
 | `preset` | string | — | Name of a built-in question. |
 | `gql` | string | — | Raw GQL, when no preset fits. Mutually exclusive with `preset`. |
 | `args` | object | — | Arguments for a preset, e.g. `{"target": "src/auth.ts"}`. An undeclared argument is an error, not an ignored key. |
-| `limit` | integer | — | Rows to display (default 20). Does not change what is computed. |
+| `limit` | integer | — | Rows to display (default 20). Shorthand for `range: "1-N"`. |
+| `range` | string | — | Which window of rows to show: `"20"`, `"11-35"`, `"34-end"`. 1-based, inclusive at both ends. |
+
+**Paging without re-reading.** `range` is a window over rows the query *already produced* — it changes nothing about what the engine computes, so every reported total stays the same whichever window you ask for. That is what makes it cheap: the expensive part of paging is transferring rows you already have, not recomputing them. Each answer states which rows it is showing and names the exact range to ask for next:
+
+```
+rows 11–35 of 122 · 864 graph matches before grouping
+next: rerun with range "36-55"
+```
+
+A window past the end says how many rows there actually are, rather than reporting "no rows" — those are different situations and confusing them sends you off to debug a query that is working.
 
 ```
 code_query: { preset: "long_functions", args: { min_loc: 100 } }

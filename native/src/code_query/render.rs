@@ -67,9 +67,24 @@ pub fn render(answer: &QueryAnswer, style: Render) -> String {
         return out;
     }
 
+    let total = page.rows.len();
+    let (from, to) = answer.window.slice(total);
+    if from >= to {
+        // The window starts past the last row. Saying "no rows" here would
+        // be indistinguishable from "the query matched nothing", which is a
+        // completely different situation and would send the caller off to
+        // debug a query that is working.
+        out.push_str(&format!(
+            "\nThis result has {} row(s); the requested window starts at row {}.\n",
+            total, answer.window.start
+        ));
+        push_caveats(&mut out, answer, style);
+        return out;
+    }
+
     // A one-row, one-cell result is a bare count; a table would be four
     // lines of formatting around a single number.
-    let scalar = page.rows.len() == 1 && page.rows[0].len() == 1;
+    let scalar = total == 1 && page.rows[0].len() == 1;
     out.push('\n');
     if scalar {
         out.push_str(&format!(
@@ -78,21 +93,33 @@ pub fn render(answer: &QueryAnswer, style: Render) -> String {
             cell(&page.rows[0][0])
         ));
     } else {
-        push_table(&mut out, answer, style);
+        push_table(&mut out, answer, style, from, to);
     }
 
-    // `rows_matched` counts what the engine matched before grouping and
-    // LIMIT, which is the denominator a reader wants: "127 functions over
-    // 50 lines, across 7 folders" rather than just "7 rows".
-    if !scalar && page.rows_matched > page.rows.len() {
-        out.push_str(&style.dim(&format!(
-            "\n{} rows shown · {} graph matches before grouping\n",
-            page.rows.len().min(answer.limit),
-            page.rows_matched
-        )));
+    // Two different denominators, and conflating them would mislead:
+    // `rows_matched` is what the graph matched before grouping, `total` is
+    // how many result rows exist, and the window is what you are looking at.
+    if !scalar {
+        let mut parts = vec![format!("rows {}–{} of {}", from + 1, to, total)];
+        if page.rows_matched > total {
+            parts.push(format!("{} graph matches before grouping", page.rows_matched));
+        }
+        out.push_str(&style.dim(&format!("\n{}\n", parts.join(" · "))));
+
+        if to < total {
+            out.push_str(&style.dim(&format!(
+                "next: rerun with range \"{}-{}\"{}\n",
+                to + 1,
+                (to + 20).min(total),
+                if answer.window.is_capped(total) {
+                    " (window capped at 200 rows)"
+                } else {
+                    ""
+                }
+            )));
+        }
     }
 
-    push_samples(&mut out, answer, style);
     push_caveats(&mut out, answer, style);
 
     if out.chars().count() > MAX_CHARS {
@@ -102,14 +129,14 @@ pub fn render(answer: &QueryAnswer, style: Render) -> String {
     out
 }
 
-fn push_table(out: &mut String, answer: &QueryAnswer, style: Render) {
+fn push_table(out: &mut String, answer: &QueryAnswer, style: Render, from: usize, to: usize) {
     let page = &answer.page;
-    let shown = page.rows.len().min(answer.limit);
+    let visible = &page.rows[from..to];
 
     // A `collect()` column is a distribution, not a value. Rendering the
     // list would blow the budget for no information; percentiles are what
     // the caller wanted from it.
-    let rendered: Vec<Vec<String>> = page.rows[..shown]
+    let rendered: Vec<Vec<String>> = visible
         .iter()
         .map(|r| r.iter().map(cell).collect())
         .collect();
@@ -128,7 +155,7 @@ fn push_table(out: &mut String, answer: &QueryAnswer, style: Render) {
     // mixed columns stay readable rather than ragged.
     let numeric: Vec<bool> = (0..cols)
         .map(|i| {
-            page.rows[..shown]
+            visible
                 .iter()
                 .filter_map(|r| r.get(i))
                 .all(|v| matches!(v, QueryValue::Int(_) | QueryValue::Float(_)))
@@ -154,44 +181,13 @@ fn push_table(out: &mut String, answer: &QueryAnswer, style: Render) {
         out.push('\n');
     }
 
-    if page.rows.len() > shown {
-        out.push_str(&style.dim(&format!(
-            "… {} more row(s) — raise `limit` to see them\n",
-            page.rows.len() - shown
-        )));
-    }
 }
 
-/// Node ids in the result, offered for the follow-up call.
-///
-/// The point of a statistics answer is usually the next action, and the
-/// next action needs ids: `get_code`, `find_usages`, `traverse` all take
-/// them. Only ids are worth repeating, which is why this looks for the
-/// `id` column specifically rather than sampling arbitrary strings.
-fn push_samples(out: &mut String, answer: &QueryAnswer, style: Render) {
-    let page = &answer.page;
-    let Some(ix) = page.columns.iter().position(|c| c == "id") else {
-        return;
-    };
-    if page.rows.len() <= answer.limit {
-        // Already fully listed in the table above.
-        return;
-    }
-    let ids: Vec<String> = page
-        .rows
-        .iter()
-        .skip(answer.limit)
-        .filter_map(|r| r.get(ix))
-        .filter_map(|v| match v {
-            QueryValue::Str(s) => Some(style.id(s)),
-            _ => None,
-        })
-        .take(5)
-        .collect();
-    if !ids.is_empty() {
-        out.push_str(&format!("\nalso: {}\n", ids.join(" · ")));
-    }
-}
+// A previous revision also printed a handful of node ids from beyond the
+// visible rows, as a nudge toward the next call. Row ranges replaced it:
+// "next: rerun with range 21-40" says the same thing precisely, costs a
+// line instead of five ids, and unlike a sample it does not leave the
+// reader guessing which rows it skipped.
 
 /// Everything that qualifies the number above it.
 fn push_caveats(out: &mut String, answer: &QueryAnswer, style: Render) {
@@ -337,7 +333,7 @@ mod tests {
             page,
             coverage,
             unindexed,
-            limit: 20,
+            window: crate::code_query::range::RowRange::first(20),
             gql: "MATCH (n) RETURN count(*) AS c".into(),
             from_preset: false,
         }
@@ -468,19 +464,65 @@ mod tests {
         assert!(out.contains("p90=90"), "{out}");
     }
 
+    fn numbered_rows(n: usize) -> QueryPage {
+        page(
+            &["id", "loc"],
+            (0..n)
+                .map(|i| vec![QueryValue::Str(format!("f{i}")), QueryValue::Int(i as i64)])
+                .collect(),
+        )
+    }
+
     #[test]
-    fn rows_beyond_the_limit_are_counted_not_dropped_silently() {
-        let rows: Vec<Vec<QueryValue>> = (0..30)
-            .map(|i| vec![QueryValue::Str(format!("f{i}")), QueryValue::Int(i)])
-            .collect();
-        let mut a = answer(page(&["id", "loc"], rows), vec![]);
-        a.limit = 5;
+    fn the_window_is_always_stated_so_the_reader_knows_which_rows_these_are() {
+        let mut a = answer(numbered_rows(30), vec![]);
+        a.window = crate::code_query::range::RowRange::first(5);
         let out = render(&a, Render::Markdown);
-        assert!(out.contains("25 more row(s)"), "{out}");
-        assert!(
-            out.contains("also:"),
-            "leftover ids should be offered: {out}"
-        );
+        assert!(out.contains("rows 1–5 of 30"), "{out}");
+        assert!(out.contains("f0") && out.contains("f4"), "{out}");
+        assert!(!out.contains("f5"), "row 6 is outside the window: {out}");
+    }
+
+    #[test]
+    fn a_mid_result_window_shows_exactly_that_slice() {
+        let mut a = answer(numbered_rows(122), vec![]);
+        a.window = crate::code_query::range::parse("11-35").unwrap();
+        let out = render(&a, Render::Markdown);
+        assert!(out.contains("rows 11–35 of 122"), "{out}");
+        // Rows are 1-based, so row 11 is `f10`.
+        assert!(out.contains("f10"), "{out}");
+        assert!(out.contains("f34"), "{out}");
+        assert!(!out.contains("f9"), "row 10 is before the window: {out}");
+        assert!(!out.contains("f35"), "row 36 is after the window: {out}");
+    }
+
+    #[test]
+    fn a_window_that_reaches_the_end_offers_no_next_page() {
+        let mut a = answer(numbered_rows(30), vec![]);
+        a.window = crate::code_query::range::parse("21-end").unwrap();
+        let out = render(&a, Render::Markdown);
+        assert!(out.contains("rows 21–30 of 30"), "{out}");
+        assert!(!out.contains("next:"), "nothing left to fetch: {out}");
+    }
+
+    #[test]
+    fn a_partial_window_names_the_exact_range_to_ask_for_next() {
+        let mut a = answer(numbered_rows(122), vec![]);
+        a.window = crate::code_query::range::parse("11-35").unwrap();
+        let out = render(&a, Render::Markdown);
+        assert!(out.contains(r#"range "36-55""#), "{out}");
+    }
+
+    /// Distinct from "the query matched nothing", which would send the
+    /// caller off to debug a query that is working perfectly.
+    #[test]
+    fn a_window_past_the_end_says_how_many_rows_there_actually_are() {
+        let mut a = answer(numbered_rows(12), vec![]);
+        a.window = crate::code_query::range::parse("50-60").unwrap();
+        let out = render(&a, Render::Markdown);
+        assert!(out.contains("has 12 row(s)"), "{out}");
+        assert!(out.contains("starts at row 50"), "{out}");
+        assert!(!out.contains("No rows matched"), "wrong diagnosis: {out}");
     }
 
     #[test]
@@ -489,7 +531,7 @@ mod tests {
             .map(|i| vec![QueryValue::Str("x".repeat(50)), QueryValue::Int(i)])
             .collect();
         let mut a = answer(page(&["id", "loc"], rows), vec![]);
-        a.limit = 200;
+        a.window = crate::code_query::range::parse("1-end").unwrap();
         let out = render(&a, Render::Markdown);
         assert!(out.chars().count() <= MAX_CHARS + 80, "{}", out.len());
     }

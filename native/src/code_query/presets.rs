@@ -8,13 +8,18 @@
 //! note on the reachability presets.
 //!
 //! **Every preset here must run against the facts ingest actually
-//! writes** (`crate::storage::facts`): `loc`, `params`, `max_nesting`,
-//! `has_doc`, `folder`, `is_test`, `in_degree`, `out_degree`,
-//! `qualified_name`, `route`, `annotations` — plus the fixed columns
-//! `name`, `node_type`, `file`, `start_line`, `end_line`. Querying
+//! writes** — the authoritative list is
+//! [`crate::code_query::QUERYABLE_PROPERTIES`], and
+//! `no_builtin_preset_reads_an_unindexed_property` enforces it. Querying
 //! anything else does not error; it returns a confident zero. A preset
 //! that reaches for a property the indexer does not yet produce is a
 //! shipped bug, not a forward-looking one.
+//!
+//! **List presets return up to 200 rows, not 20.** Row ranges (see
+//! [`crate::code_query::range`]) are a window over what the query
+//! returned, so a `LIMIT 30` preset could never show row 31 however the
+//! caller asked. Only the visible window is ever formatted, so the wider
+//! limit costs memory rather than tokens.
 
 /// Edge labels that mean "depends on", for reachability presets.
 ///
@@ -129,7 +134,7 @@ pub static BUILTIN: &[Preset] = &[
               WHERE n.node_type <> 'File' AND n.node_type <> 'Folder' AND n.file <> '' \
               RETURN n.file AS file, count(*) AS symbols \
               ORDER BY symbols DESC \
-              LIMIT 50",
+              LIMIT 200",
         headline: None,
     },
     Preset {
@@ -164,7 +169,7 @@ pub static BUILTIN: &[Preset] = &[
               WHERE n.has_doc = 1 AND n.node_type IN ['Function', 'Class', 'Interface'] \
               RETURN elementKey(n) AS id, n.in_degree AS depended_on_by, n.loc AS loc \
               ORDER BY depended_on_by DESC \
-              LIMIT 30",
+              LIMIT 200",
         headline: None,
     },
     // ── size and shape ────────────────────────────────────────────────
@@ -177,7 +182,7 @@ pub static BUILTIN: &[Preset] = &[
               WHERE n.loc > $min_loc AND n.is_test = 0 \
               RETURN elementKey(n) AS id, n.loc AS loc, n.max_nesting AS nesting \
               ORDER BY loc DESC \
-              LIMIT 50",
+              LIMIT 200",
         headline: None,
     },
     Preset {
@@ -191,7 +196,7 @@ pub static BUILTIN: &[Preset] = &[
               WHERE functions >= 2 \
               RETURN folder, functions, avg_loc \
               ORDER BY functions DESC \
-              LIMIT 30",
+              LIMIT 200",
         headline: None,
     },
     Preset {
@@ -220,7 +225,7 @@ pub static BUILTIN: &[Preset] = &[
               WHERE n.node_type IN ['Class', 'Interface'] \
               RETURN elementKey(n) AS id, n.loc AS loc, n.out_degree AS depends_on \
               ORDER BY loc DESC \
-              LIMIT 30",
+              LIMIT 200",
         headline: None,
     },
     Preset {
@@ -233,7 +238,7 @@ pub static BUILTIN: &[Preset] = &[
               RETURN elementKey(n) AS id, n.code_lines AS code_lines, n.loc AS span, \
                      n.max_nesting AS nesting \
               ORDER BY code_lines DESC \
-              LIMIT 50",
+              LIMIT 200",
         headline: None,
     },
     Preset {
@@ -249,7 +254,7 @@ pub static BUILTIN: &[Preset] = &[
               WHERE n.node_type IN ['Class', 'Interface'] AND n.members IS NOT NULL \
               RETURN elementKey(n) AS id, n.members AS members, n.loc AS loc \
               ORDER BY members DESC \
-              LIMIT 30",
+              LIMIT 200",
         headline: None,
     },
     Preset {
@@ -265,7 +270,7 @@ pub static BUILTIN: &[Preset] = &[
               WHERE n.params > $min_params \
               RETURN elementKey(n) AS id, n.params AS params, n.loc AS loc \
               ORDER BY params DESC \
-              LIMIT 30",
+              LIMIT 200",
         headline: None,
     },
     Preset {
@@ -281,7 +286,7 @@ pub static BUILTIN: &[Preset] = &[
               WHERE n.max_nesting >= $min_depth \
               RETURN elementKey(n) AS id, n.max_nesting AS nesting, n.loc AS loc \
               ORDER BY nesting DESC \
-              LIMIT 30",
+              LIMIT 200",
         headline: None,
     },
     // ── documentation ─────────────────────────────────────────────────
@@ -321,7 +326,7 @@ pub static BUILTIN: &[Preset] = &[
               WHERE code_lines > 50 \
               RETURN folder, code_lines, comment_lines, doc_lines \
               ORDER BY code_lines DESC \
-              LIMIT 30",
+              LIMIT 200",
         headline: None,
     },
     Preset {
@@ -335,7 +340,7 @@ pub static BUILTIN: &[Preset] = &[
               RETURN elementKey(n) AS id, n.code_lines AS code_lines, \
                      n.in_degree AS depended_on_by \
               ORDER BY code_lines DESC \
-              LIMIT 30",
+              LIMIT 200",
         headline: None,
     },
     Preset {
@@ -349,7 +354,7 @@ pub static BUILTIN: &[Preset] = &[
               RETURN elementKey(n) AS id, n.code_lines AS code_lines, \
                      n.max_nesting AS nesting \
               ORDER BY code_lines DESC \
-              LIMIT 30",
+              LIMIT 200",
         headline: None,
     },
     Preset {
@@ -374,7 +379,7 @@ pub static BUILTIN: &[Preset] = &[
               WHERE total >= 5 \
               RETURN folder, total, documented \
               ORDER BY documented ASC, total DESC \
-              LIMIT 30",
+              LIMIT 200",
         headline: None,
     },
     Preset {
@@ -387,7 +392,7 @@ pub static BUILTIN: &[Preset] = &[
                 AND n.node_type IN ['Function', 'Class', 'Interface'] \
               RETURN elementKey(n) AS id, n.in_degree AS depended_on_by, n.loc AS loc \
               ORDER BY depended_on_by DESC \
-              LIMIT 30",
+              LIMIT 200",
         headline: None,
     },
     // ── dead code ─────────────────────────────────────────────────────
@@ -405,7 +410,7 @@ pub static BUILTIN: &[Preset] = &[
                 AND n.node_type IN ['Function', 'Class', 'Interface'] \
               RETURN elementKey(n) AS id, n.loc AS loc \
               ORDER BY loc DESC \
-              LIMIT 50",
+              LIMIT 200",
         headline: None,
     },
     Preset {
@@ -416,7 +421,7 @@ pub static BUILTIN: &[Preset] = &[
         gql: "MATCH (n:File) \
               WHERE n.in_degree = 0 \
               RETURN elementKey(n) AS id \
-              LIMIT 50",
+              LIMIT 200",
         headline: None,
     },
     Preset {
@@ -429,7 +434,7 @@ pub static BUILTIN: &[Preset] = &[
               WHERE definitions > 3 \
               RETURN name, definitions \
               ORDER BY definitions DESC \
-              LIMIT 30",
+              LIMIT 200",
         headline: None,
     },
     // ── architecture ──────────────────────────────────────────────────
@@ -442,7 +447,7 @@ pub static BUILTIN: &[Preset] = &[
               WHERE n.node_type IN ['Function', 'Class', 'Interface'] \
               RETURN elementKey(n) AS id, n.in_degree AS depended_on_by, n.loc AS loc \
               ORDER BY depended_on_by DESC \
-              LIMIT 30",
+              LIMIT 200",
         headline: None,
     },
     Preset {
@@ -458,7 +463,7 @@ pub static BUILTIN: &[Preset] = &[
               WHERE n.out_degree > $min_fanout AND n.node_type <> 'File' AND n.node_type <> 'Folder' \
               RETURN elementKey(n) AS id, n.out_degree AS depends_on, n.loc AS loc \
               ORDER BY depends_on DESC \
-              LIMIT 30",
+              LIMIT 200",
         headline: None,
     },
     Preset {
@@ -470,7 +475,7 @@ pub static BUILTIN: &[Preset] = &[
               WHERE a.folder <> b.folder \
               RETURN a.folder AS from_folder, b.folder AS to_folder, count(*) AS edges \
               ORDER BY edges DESC \
-              LIMIT 40",
+              LIMIT 200",
         headline: None,
     },
     Preset {
@@ -493,7 +498,7 @@ pub static BUILTIN: &[Preset] = &[
               WHERE a.folder STARTS WITH $from_prefix AND b.folder STARTS WITH $to_prefix \
               RETURN a.file AS from_file, b.file AS to_file, count(*) AS edges \
               ORDER BY edges DESC \
-              LIMIT 40",
+              LIMIT 200",
         headline: None,
     },
     // ── tests ─────────────────────────────────────────────────────────
@@ -507,7 +512,7 @@ pub static BUILTIN: &[Preset] = &[
               WHERE functions >= 5 \
               RETURN folder, functions, tests \
               ORDER BY functions DESC \
-              LIMIT 30",
+              LIMIT 200",
         headline: None,
     },
     Preset {
@@ -533,7 +538,7 @@ pub static BUILTIN: &[Preset] = &[
                     } \
               RETURN elementKey(n) AS id, n.in_degree AS depended_on_by, n.loc AS loc \
               ORDER BY depended_on_by DESC \
-              LIMIT 50",
+              LIMIT 200",
         headline: None,
     },
     Preset {
@@ -545,7 +550,7 @@ pub static BUILTIN: &[Preset] = &[
               WHERE t.file = $target AND dep.is_test = 1 \
               RETURN dep.file AS test_file, count(DISTINCT elementKey(dep)) AS test_symbols \
               ORDER BY test_symbols DESC \
-              LIMIT 40",
+              LIMIT 200",
         headline: None,
     },
     // ── risk ──────────────────────────────────────────────────────────
@@ -565,7 +570,7 @@ pub static BUILTIN: &[Preset] = &[
                      count(DISTINCT elementKey(dep)) AS dependents, \
                      sum(dep.is_test) AS test_paths \
               ORDER BY dependents DESC \
-              LIMIT 40",
+              LIMIT 200",
         headline: None,
     },
     Preset {
@@ -589,7 +594,7 @@ pub static BUILTIN: &[Preset] = &[
                 AND n.node_type IN ['Function', 'Class', 'Interface'] \
               RETURN elementKey(n) AS id, n.in_degree AS depended_on_by, n.loc AS loc \
               ORDER BY depended_on_by DESC \
-              LIMIT 30",
+              LIMIT 200",
         headline: None,
     },
 ];

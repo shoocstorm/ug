@@ -226,6 +226,7 @@ fn parse_code_query_args(args: &Value) -> ultragraph::code_query::CodeQueryParam
         preset: str_field("preset"),
         gql: str_field("gql"),
         limit: args.get("limit").and_then(|v| v.as_u64()).map(|n| n as usize),
+        range: str_field("range"),
         ..Default::default()
     };
 

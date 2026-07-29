@@ -1740,6 +1740,7 @@ fn code_query_params_from_args(
             args,
             &[
                 "-p", "--preset", "-g", "--gql", "-a", "--arg", "-n", "--name", "-k", "--limit",
+                "-r", "--range",
                 // `-o` carries the store path on this command, as it does
                 // on every other store-backed one. Leaving it out made
                 // `ug query <preset> -o <path>` read the path as a second
@@ -1763,6 +1764,7 @@ fn code_query_params_from_args(
         gql,
         args: query_args,
         limit: flag_value(args, &["-k", "--limit"]).and_then(|s| s.parse().ok()),
+        range: flag_value(args, &["-r", "--range"]),
     })
 }
 
@@ -1812,7 +1814,9 @@ fn print_code_query_help() {
     println!("  {C_CYAN}-p, --preset <name>{C_RESET}    Built-in question to run (also accepted as a positional)");
     println!("  {C_CYAN}-a, --arg <k=v>{C_RESET}        Preset argument, repeatable (e.g. --arg target=src/a.ts)");
     println!("  {C_CYAN}-g, --gql <query>{C_RESET}      Raw OverGraph GQL, when no preset fits");
-    println!("  {C_CYAN}-k, --limit <n>{C_RESET}        Rows to display (default 20)");
+    println!("  {C_CYAN}-k, --limit <n>{C_RESET}        Rows to display (default 20) — shorthand for --range 1-N");
+    println!("  {C_CYAN}-r, --range <window>{C_RESET}   Which rows to show, 1-based and inclusive:");
+    println!("                         {C_DIM}20 · 11-35 · 34-end{C_RESET} — page a result without re-reading it");
     println!("  {C_CYAN}-n, --name <project>{C_RESET}   Project to query (default: the active one)");
     println!("      {C_CYAN}--list{C_RESET}             List every preset and exit");
     println!();
@@ -1825,6 +1829,9 @@ fn print_code_query_help() {
     println!();
     println!("  {C_DIM}# what breaks if I change this file{C_RESET}");
     println!("  ug query impact --arg target=native/src/storage/store.rs");
+    println!();
+    println!("  {C_DIM}# page through a long result without re-reading what you saw{C_RESET}");
+    println!("  ug query dead_code --range 21-40");
     println!();
     println!("  {C_DIM}# anything the presets don't cover{C_RESET}");
     println!("  ug query --gql \"MATCH (n:Function) WHERE n.params > 6 RETURN count(*) AS c\"");
@@ -5820,6 +5827,18 @@ mod tests {
         let p = code_query_params_from_args(&args).unwrap();
         assert!(p.preset.is_none(), "got preset {:?}", p.preset);
         assert!(p.gql.is_some());
+    }
+
+    /// Same failure as the `-o` bug: a flag whose value looks like a bare
+    /// word gets read as the positional preset, and the error that surfaces
+    /// points nowhere near the cause.
+    #[test]
+    fn a_range_value_is_not_mistaken_for_the_positional_preset() {
+        for line in ["dead_code -r 11-35", "dead_code --range 34-end"] {
+            let p = code_query_params_from_args(&argv(line)).unwrap();
+            assert_eq!(p.preset.as_deref(), Some("dead_code"), "from `{line}`");
+            assert!(p.range.is_some(), "from `{line}`");
+        }
     }
 
     #[test]

@@ -58,7 +58,7 @@ These accept the same params as their MCP counterparts and can output `--json`.
 | `ug search` | `hybrid_search` | **GraphRAG**: semantic search → graph expansion → PPR-ranked context with snippets. | `<query>` positional, `-k <limit>` (default 8), `--filter <sql>`, `--direction`, `-t <edge-type>`, `--max-chars`, `--no-snippets`, `-n <name>`, `--repo-root`, embedding overrides |
 | `ug semantic_search` | — | Pure vector search over embeddings (no graph context). | `<query>` positional, `-k <limit>` (default 10), `--filter <sql>`, `-n <name>`, embedding overrides |
 | `ug traverse` | — | K-hop BFS over the OverGraph edges table. | `<node-id>`... positionals, `-k <hops>` (default 2), `-n <name>` |
-| `ug query` | `code_query` | **Whole-repo statistics**: counts, groups, distributions, blast radius. Read-only GQL over the stored facts. Needs the db but **no embedder**. | `<preset>` positional or `-p <preset>`, `-a k=v` (repeatable), `-g/--gql <query>`, `-k <limit>` (default 20), `--list`, `-n <name>` |
+| `ug query` | `code_query` | **Whole-repo statistics**: counts, groups, distributions, blast radius. Read-only GQL over the stored facts. Needs the db but **no embedder**. | `<preset>` positional or `-p <preset>`, `-a k=v` (repeatable), `-g/--gql <query>`, `-k <limit>` (default 20), `-r/--range <window>` (`20` · `11-35` · `34-end`), `--list`, `-n <name>` |
 
 ### 1.5 Chat & Tour Commands
 
@@ -146,7 +146,8 @@ The HTTP server (`ug serve`) is built on **axum**. All routes listed below.
 | GET | `/api/tools` | List available agent tools with descriptions | MCP tool registry |
 | GET | `/api/presets` | List `code_query` presets (name, category, description, params, source) | Preset registry |
 | POST | `/api/tools/:tool` | Run one agent tool (same params as MCP). Accepts body JSON with optional `project` field. | graph.json |
-| POST | `/api/tools/code_query` | Run a statistical query. Body: `{preset, args, gql, limit}`. Returns `columns`/`rows` as JSON plus `coverage`, `unindexed`, `warnings`, `truncated` and a rendered `text`. | ugdb (no embedder) |
+| POST | `/api/tools/code_query` | Run a statistical query. Body: `{preset, args, gql, limit, range}`. Returns `columns` plus **only the requested window** of `rows`, with `from`/`to`/`rowsTotal` to page by, `rowsMatched`, `coverage`, `unindexed`, `warnings`, `truncated` and a rendered `text`. | ugdb (no embedder) |
+| GET | `/api/presets` | Preset registry **plus** `properties` — the queryable property vocabulary, so the UI and the MCP capability manifest read the same list rather than each hardcoding one. | Preset registry |
 
 ### 2.7 File Content
 

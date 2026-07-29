@@ -15,9 +15,9 @@ Reference for the storage engine's API: see `Agents.md` §8 (never read the
 |-------|-------|-------|
 | **P0a** — overgraph 0.6 → 0.17 migration | ✅ done, committed `ca7b9ac` | 473 tests pass; full `ug gen` + search/traverse verified |
 | **P0b** — widen `node_props`, survive embed failure | ✅ done, committed `5e182a6` | 492 tests pass; degraded + recovery paths exercised for real |
-| **P0c** — `code_query` tool, presets, envelope | ✅ done, verified, **uncommitted** | 529 tests pass; 25 presets run against the live index and all three transports driven end to end |
-| **P1** — comment/class metrics, file facts (reindex) | ✅ done, verified, **uncommitted** | 554 tests pass; full `ug gen` reindex, then all 33 presets run against it |
-| **P2** — preset files, Insights viz pane | ⬜ not started | |
+| **P0c** — `code_query` tool, presets, envelope | ✅ done, committed `f2d5a6a` | 529 tests pass; 25 presets run against the live index and all three transports driven end to end |
+| **P1** — comment/class metrics, file facts (reindex) | ✅ done, committed `ff53d23` | 554 tests pass; full `ug gen` reindex, then all 33 presets run against it |
+| **P2** — row ranges, Insights viz pane | ✅ done, verified, **uncommitted** | 569 tests pass; Insights pane driven headlessly, 25/25 UI checks |
 | **P3** — CSV/Parquet export | ⬜ not started | |
 
 ---
@@ -302,6 +302,82 @@ data on this repo.
 
 ---
 
+## P2 — row ranges + the Insights pane ✅
+
+### Row ranges (`code_query/range.rs`)
+
+An agent that saw 20 of 122 rows and wants the next 20 previously had one
+option: re-run with a bigger limit and re-read everything it had already
+seen. A `range` is a **window over rows the query already produced** — the
+engine computes the same thing either way, which is what keeps the totals
+honest across pages.
+
+- [x] Liberal parsing: `20` · `top 10` · `11-35` · `11..35` · `rows 11 to
+      35` · `34-end` · `34-`. Every rejected spelling is a round-trip to a
+      caller who was already unambiguous.
+- [x] 1-based, inclusive at both ends, capped at 200 rows per window.
+- [x] Output always states the window and names the next one:
+      `rows 11–35 of 122` / `next: rerun with range "36-55"`.
+- [x] A window past the end reports how many rows exist rather than "no
+      rows" — those are different situations, and confusing them sends the
+      caller off to debug a query that works.
+- [x] Preset `LIMIT`s raised 30/40/50 → 200, or a range could never reach
+      row 31. Only the visible window is formatted, so this costs memory,
+      not tokens.
+- [x] The `also: <ids>` sample line was **removed** — the range hint says
+      the same thing precisely, in one line instead of five ids.
+
+### Insights pane (`vis/visualization.html`)
+
+Fourth Discover subtab, reusing the existing subtab/glider/section idioms.
+
+- [x] 33 presets, filterable by text **and** category chip. Presets that
+      need an argument are labelled before you click one.
+- [x] A no-arg preset runs on click; an arg-taking one opens a form and
+      waits, rather than firing a query that is going to fail.
+- [x] Result table with a pager, coverage line, and loud `NOT INDEXED` /
+      truncation warnings — the same contract the text renderer has.
+- [x] GQL console with **8 worked examples**, each demonstrating a distinct
+      capability (grouping+HAVING, `CASE` buckets, ratio via `sum`,
+      bounded variable-length paths with `count(DISTINCT …)`, `NOT EXISTS`,
+      edge endpoints, `STARTS WITH`, `collect()`), plus a "what can I
+      query?" box showing live property coverage.
+- [x] **Clicking a row focuses that node; "light up N in graph" focuses the
+      whole result set.** This is the one thing neither the CLI nor an
+      agent can do — a statistic becomes a region, and you can see that most
+      of the long functions sit in one folder.
+
+### The bug the UI test caught
+
+`/api/tools/code_query` returned **every** row regardless of `range` — the
+window was only applied to the *text* rendering, never to the JSON `rows`.
+The pager therefore did nothing: page 2 re-rendered the same 21 rows. Fixed
+by slicing server-side and returning `from` / `to` / `rowsTotal`, which is
+also the point of a range — the expensive part of paging is shipping rows
+the caller already has.
+
+Nothing in the Rust test suite could have caught this; it only shows up when
+something actually pages.
+
+### Verifying a UI in this environment
+
+Headless Chrome **cannot boot the full viz** — `initialize()` never runs and
+no `<canvas>` appears, because there is no WebGL. Confirmed against the
+committed HTML, so it is environmental, not a regression. An earlier
+attempt to "fix" a temporal-dead-zone hazard was chasing this ghost; the
+declarations were moved above `initialize()` anyway (defensive, and the
+comment now says so honestly rather than claiming a bug that was never
+observed).
+
+What works instead: `scratch/harness.html` is **generated from
+`visualization.html` by marker**, so it always tests the shipped CSS/HTML/JS
+rather than a copy, with only the graph integration stubbed (calls
+recorded, then asserted). Served through a proxy on the API origin so
+`fetch('/api/...')` resolves. 25 checks, all passing. Regenerate with the
+python snippet in this session's history if the pane changes.
+
+---
+
 ## Decisions already settled (do not relitigate)
 
 - **No bespoke JSON query DSL.** Use OverGraph GQL — it ships aggregation,
@@ -374,3 +450,14 @@ data on this repo.
   would be computed over an arbitrary subset.
   Test project `~/.ug/UGTEST` was created for verification and can be
   deleted (`ug rm UGTEST`).
+- **2026-07-29** — P0c committed as `f2d5a6a`, P1 as `ff53d23`.
+  **P2 implemented and verified; uncommitted.** 569 tests pass, 15 new. New file:
+  `native/src/code_query/range.rs`. Modified:
+  `code_query/{mod,presets,render}.rs`, `src/main.rs`, `src/serve.rs`,
+  `src/mcp/{mod,tools}.rs`, `src/vis/visualization.html` (+~700 lines:
+  CSS, the Insights subpane, and its wiring), `docs/mcp.md`,
+  `docs/api-reference.md`, and the `ug-mcp` skill (source + installed copy).
+  **Still to do before release:** the website slide deck, and E1 —
+  repo-supplied `.ug/presets.toml`. The `/api/presets` payload already
+  carries a `source` field (`builtin`) for exactly that, and the pane is
+  ready to badge non-builtin cards; only the loader is missing.

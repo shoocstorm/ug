@@ -23,6 +23,7 @@
 //! call [`run`] and render the same [`QueryAnswer`].
 
 pub mod presets;
+pub mod range;
 pub mod render;
 
 use crate::storage::store::{KnowledgeStore, QueryLimits, QueryPage, QueryParams, QueryValue};
@@ -41,6 +42,9 @@ pub struct CodeQueryParams {
     /// Rows to render. Does not change what the engine computes, so the
     /// reported totals stay honest when this truncates the table.
     pub limit: Option<usize>,
+    /// Which window of rows to render — `"11-35"`, `"34-end"`, `"top 10"`.
+    /// Overrides [`Self::limit`] when both are given. See [`range`].
+    pub range: Option<String>,
 }
 
 /// Population of one property across the store.
@@ -71,7 +75,9 @@ pub struct QueryAnswer {
     pub coverage: Vec<Coverage>,
     /// Properties the query referenced that no node carries.
     pub unindexed: Vec<String>,
-    pub limit: usize,
+    /// The window of rows to render. Every count reported alongside the
+    /// table is over the *whole* result, not this window.
+    pub window: range::RowRange,
     /// The GQL that ran, echoed for a preset so the caller can adapt it.
     pub gql: String,
     /// Whether the query came from the preset registry rather than the
@@ -125,6 +131,23 @@ pub async fn run(
     params: &CodeQueryParams,
 ) -> Result<QueryAnswer, String> {
     let (title, description, gql, bound) = resolve(params)?;
+
+    // Resolve the window before touching the store: a malformed range is
+    // the caller's mistake and should not cost a query to discover.
+    let window = match params.range.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(raw) => range::parse(raw).ok_or_else(|| {
+            format!(
+                "Could not read {:?} as a row range. Use a count (`20`), a closed \
+                 window (`11-35`), or an open one (`34-end`). Rows are 1-based and \
+                 both ends are inclusive.",
+                raw
+            )
+        })?,
+        None => range::RowRange::first(
+            params.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, range::MAX_WINDOW),
+        ),
+    };
+
     let limits = QueryLimits::default();
 
     let page = store
@@ -145,7 +168,7 @@ pub async fn run(
         page,
         coverage,
         unindexed,
-        limit: params.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, 200),
+        window,
         gql,
         from_preset: params.preset.is_some(),
     })

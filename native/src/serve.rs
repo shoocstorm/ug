@@ -1154,6 +1154,11 @@ async fn api_presets() -> Response {
     ok_json(
         serde_json::json!({
             "presets": presets,
+            // Shipped alongside so the UI's "what can I query?" and the MCP
+            // capability manifest cannot drift apart — both read the same
+            // constant, and neither hardcodes a list that quietly goes stale
+            // when a fact is added.
+            "properties": ultragraph::code_query::QUERYABLE_PROPERTIES,
             "run": "POST /api/tools/code_query with {\"preset\": \"<name>\", \"args\": {…}}",
         })
         .to_string(),
@@ -1179,15 +1184,28 @@ async fn api_code_query(state: &ServeState, params: serde_json::Value) -> Respon
     let request = parse_code_query_body(&params);
 
     match ultragraph::code_query::run(store.as_ref(), &request).await {
-        Ok(answer) => ok_json(
+        Ok(answer) => {
+            // Ship only the requested window, not the whole result.
+            // Returning every row and leaving the client to slice would
+            // defeat the point of a range — the expensive part of paging
+            // is transferring rows the caller already has.
+            let total = answer.page.rows.len();
+            let (from, to) = answer.window.slice(total);
+            ok_json(
             serde_json::json!({
                 "title": answer.title,
                 "description": answer.description,
                 "gql": answer.gql,
                 "columns": answer.page.columns,
-                "rows": answer.page.rows.iter().map(|r| {
+                "rows": answer.page.rows[from..to].iter().map(|r| {
                     r.iter().map(query_value_to_json).collect::<Vec<_>>()
                 }).collect::<Vec<_>>(),
+                // Three different denominators, all needed to page honestly:
+                // how many rows exist, which ones these are, and how many
+                // graph elements matched before grouping collapsed them.
+                "rowsTotal": total,
+                "from": from + 1,
+                "to": to,
                 "rowsMatched": answer.page.rows_matched,
                 "truncated": answer.page.truncated,
                 "warnings": answer.page.warnings,
@@ -1206,7 +1224,8 @@ async fn api_code_query(state: &ServeState, params: serde_json::Value) -> Respon
                 ),
             })
             .to_string(),
-        ),
+            )
+        }
         Err(e) => err_json(StatusCode::BAD_REQUEST, &e),
     }
 }
@@ -1234,6 +1253,7 @@ fn parse_code_query_body(body: &serde_json::Value) -> ultragraph::code_query::Co
         preset: text("preset"),
         gql: text("gql"),
         limit: body.get("limit").and_then(|v| v.as_u64()).map(|n| n as usize),
+        range: text("range"),
         ..Default::default()
     };
     if let Some(obj) = body.get("args").and_then(|v| v.as_object()) {

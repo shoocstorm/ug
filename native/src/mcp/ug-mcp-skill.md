@@ -55,6 +55,11 @@ code_query {"preset": "impact", "args": {"target": "src/auth.ts"}}
 code_query {"gql": "MATCH (n:Function) WHERE n.params > 6 RETURN n.folder AS f, count(*) AS c ORDER BY c DESC"}
 ```
 
+To page a long result, pass `range` — `"11-35"`, `"34-end"` — instead of
+re-running with a bigger `limit`. The window applies to rows the query
+already produced, so totals never move and you never re-read rows you have
+seen; each answer names the exact range to ask for next.
+
 Call `graph_schema` first — it lists the presets and, more importantly, how
 many nodes actually carry each queryable property. Aggregating over a
 property nothing carries **returns 0, not an error**. Every `code_query`
