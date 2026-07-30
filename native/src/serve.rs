@@ -1105,12 +1105,12 @@ async fn resolve_ctx(
 /// GET /api/tools — discovery for the graph-backed agent tools, so an agent
 /// speaking HTTP can enumerate them the way an MCP client reads `tools/list`.
 async fn api_tools() -> Response {
-    let tools: Vec<serde_json::Value> = ultragraph::agent_tools::AGENT_TOOL_NAMES
+    let tools: Vec<serde_json::Value> = ultragraph::agent_tools::AGENT_TOOLS
         .iter()
-        .map(|name| {
+        .map(|(name, summary)| {
             serde_json::json!({
                 "name": name,
-                "summary": ultragraph::agent_tools::tool_summary(name),
+                "summary": summary,
                 "path": format!("/api/tools/{}", name),
                 "method": "POST",
             })
@@ -3554,47 +3554,8 @@ async fn run_chat_tool(
 
     match name.as_str() {
         "search" | "semantic_search" => {
-            let embedder = embedder.ok_or("no embedder configured — semantic tools are offline")?;
-            let query = args
-                .get("query")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string();
-            if query.trim().is_empty() {
-                return Err("query is required".into());
-            }
-            let k = args.get("k").and_then(|v| v.as_u64()).unwrap_or(8).clamp(1, 25) as usize;
-            let repo_root = state.repo_root();
-
-            if name == "semantic_search" {
-                let hits = storage_semantic_search(&*db, &embedder, &query, k)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                let mut out = String::new();
-                for (i, h) in hits.iter().enumerate() {
-                    out.push_str(&format!(
-                        "{}. {} ({}) — {}:{} · distance {:.3}\n",
-                        i + 1,
-                        h.node.name,
-                        h.node.node_type,
-                        h.node.file,
-                        h.node.start_line,
-                        h.distance
-                    ));
-                }
-                return Ok(if out.is_empty() { "No matches.".into() } else { out });
-            }
-
-            let hops = args.get("hops").and_then(|v| v.as_u64()).unwrap_or(2).min(4) as u32;
-            let mut opts = SearchKbOptions::new(&query, repo_root.as_path());
-            opts.k = k;
-            opts.hops = hops;
-            opts.include_snippets = true;
-            opts.max_chars = 6_000;
-            let ctx = storage_search_kb(&*db, &embedder, opts)
+            chat::run_search_tool(&name, &args, &*db, embedder.as_deref(), state.repo_root().as_path())
                 .await
-                .map_err(|e| e.to_string())?;
-            Ok(chat::render_context(&ctx.items, 6_000))
         }
         // Statistics come from the store's indexed properties, not the graph —
         // the one advertised tool `agent_tools::run_tool` cannot answer.

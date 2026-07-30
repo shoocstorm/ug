@@ -36,7 +36,7 @@ ug graph_schema    # node/edge types actually in THIS graph, + the full vocabula
 The last two change per repo — re-read them rather than remembering them.
 
 Not indexed yet → `ug gen` at the repo root. Stale (line numbers don't match the
-file) → `ug regen`; it's incremental, so cheap. `ug list_projects` shows what
+file) → `ug regen`; it's incremental, so cheap. `ug list` shows what
 exists. Graph-backed commands default to the **cwd basename**, db-backed ones to
 the **active project** — away from the repo root, pass `-n <project>`.
 

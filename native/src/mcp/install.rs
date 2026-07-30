@@ -634,16 +634,14 @@ fn install_config(target: &Target, scope: Scope) -> Result<PathBuf, String> {
             write_json(&path, &cfg)?;
         }
     }
-    if let Some(skill_path) = install_skill_file(target.key, scope) {
-        println!(
-            "{C_GREEN}✓{C_RESET} Installed agent skill to {}",
-            skill_path.display()
-        );
-    }
-
     Ok(path)
 }
 
+/// Strip the `ultragraph` server entry, leaving the rest of the config alone.
+///
+/// Does **not** touch the skill: `do_uninstall` owns that, and a `--cli`
+/// install calls this to remove a stale server entry *after* writing the
+/// skill — a skill deletion hidden in here would erase what it just wrote.
 fn uninstall_config(target: &Target, scope: Scope) -> Result<(PathBuf, bool), String> {
     let path = target.path_for(scope).ok_or_else(|| {
         format!("Target '{}' has no {} config", target.key, scope.name())
@@ -683,7 +681,6 @@ fn uninstall_config(target: &Target, scope: Scope) -> Result<(PathBuf, bool), St
             let changed = remove_json(&mut cfg, json_format);
             if changed {
                 write_json(&path, &cfg)?;
-                uninstall_skill_file(target.key, scope);
             }
             changed
         }
@@ -725,6 +722,50 @@ fn prompt_choice(
             "{C_YELLOW}Enter a number between 1 and {} (Ctrl+C to abort).{C_RESET}",
             choices.len()
         );
+    }
+}
+
+/// Which of the two ways to reach `ug` this install wires up.
+///
+/// They are alternatives, not layers. Both work, and installing both means
+/// the agent picks — and it tends to pick the MCP tools, because a connected
+/// tool is more visible to it than a CLI it has to be told about. The skill
+/// says to prefer the CLI, but the cleanest way to get the CLI is to not
+/// install the competing path at all.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Mode {
+    /// The agent skill only: the agent runs `ug` as a shell command.
+    Cli,
+    /// The MCP server entry only: the agent calls tools over the protocol.
+    Mcp,
+    /// Both — the agent decides per question.
+    Both,
+}
+
+impl Mode {
+    fn installs_skill(self) -> bool {
+        self != Mode::Mcp
+    }
+    fn installs_server(self) -> bool {
+        self != Mode::Cli
+    }
+}
+
+/// Parse `--cli` / `--mcp` / `--both`, erroring if more than one is given.
+fn mode_flag(args: &[String]) -> Result<Option<Mode>, String> {
+    let picked: Vec<Mode> = args
+        .iter()
+        .filter_map(|a| match a.as_str() {
+            "--cli" | "--skill-only" => Some(Mode::Cli),
+            "--mcp" | "--mcp-only" => Some(Mode::Mcp),
+            "--both" => Some(Mode::Both),
+            _ => None,
+        })
+        .collect();
+    match picked.as_slice() {
+        [] => Ok(None),
+        [one] => Ok(Some(*one)),
+        _ => Err("Pass at most one of --cli / --mcp / --both.".to_string()),
     }
 }
 
@@ -780,6 +821,7 @@ pub fn run_mcp_install(args: &[String]) {
 
 fn do_install(args: &[String]) -> Result<(), String> {
     let flag_scope = scope_flag(args)?;
+    let mode = resolve_mode(args)?;
     let target = resolve_target_arg(args, "install")?;
     let scopes = target.scopes();
 
@@ -811,8 +853,9 @@ fn do_install(args: &[String]) -> Result<(), String> {
                 "'{}' supports both a project and a global config — re-run with --project or --global.",
                 target.key
             );
+            let subject = if mode.installs_server() { "the MCP server" } else { "the skill" };
             let picked = prompt_choice(
-                &format!("Where should {} pick up the MCP server?", target.label),
+                &format!("Where should {} pick up {}?", target.label, subject),
                 &choices,
                 &hint,
             )?;
@@ -824,25 +867,107 @@ fn do_install(args: &[String]) -> Result<(), String> {
         }
     };
 
-    let path = install_config(&target, scope)?;
-    println!("{C_GREEN}✓{C_RESET} Wrote MCP config to {}", path.display());
+    if mode.installs_skill() {
+        match install_skill_file(target.key, scope) {
+            Some(skill_path) => println!(
+                "{C_GREEN}✓{C_RESET} Installed agent skill to {}",
+                skill_path.display()
+            ),
+            // Only reachable for a target with no skill/rule location, and
+            // then `--cli` has written nothing at all — say so rather than
+            // reporting a success that did not happen.
+            None if !mode.installs_server() => {
+                return Err(format!(
+                    "{} has no agent-skill location, so there is nothing for --cli to install. \
+                     Re-run with --mcp to wire up the MCP server instead.",
+                    target.label
+                ))
+            }
+            None => {}
+        }
+    } else {
+        // A stale skill would keep teaching the CLI path the user just opted
+        // out of, and would be the thing the agent reads first.
+        uninstall_skill_file(target.key, scope);
+    }
 
-    // The server will answer questions about *this* project; that's baked
-    // into the config as UG_PROJECT, so make it visible now rather than
-    // leaving the user to wonder which graph they're querying.
+    if mode.installs_server() {
+        let path = install_config(&target, scope)?;
+        println!("{C_GREEN}✓{C_RESET} Wrote MCP config to {}", path.display());
+    } else {
+        // Same reasoning in reverse: leaving the server entry behind is what
+        // makes the agent choose MCP over the CLI the user asked for.
+        let (path, removed) = uninstall_config(&target, scope)?;
+        if removed {
+            println!(
+                "{C_GREEN}✓{C_RESET} Removed the MCP server entry from {} {}(--cli){C_RESET}",
+                path.display(),
+                C_DIM
+            );
+        }
+    }
+
+    // Whichever path was wired, it answers about *this* project — baked into
+    // the MCP config as UG_PROJECT, and the CLI's active project otherwise.
     let (project, why) = resolve_ug_project();
     println!(
         "{C_CYAN}▸{C_RESET} It will serve project {C_BOLD}{}{C_RESET} {}({}){C_RESET}",
         project, C_DIM, why
     );
     println!(
-        "{C_DIM}  Change it with `ug active <name>` then re-run this, or edit UG_PROJECT in the config.{C_RESET}"
+        "{C_DIM}  Change it with `ug active <name>`{}.{C_RESET}",
+        if mode.installs_server() { " then re-run this, or edit UG_PROJECT in the config" } else { "" }
     );
     println!("{C_CYAN}Restart {} to pick it up.{C_RESET}", target.label);
-    println!(
-        "{C_DIM}  A `ug` agent skill is bundled — it teaches your agent to answer codebase questions with the ug CLI.{C_RESET}"
-    );
+    match mode {
+        Mode::Cli => println!(
+            "{C_DIM}  The skill teaches your agent to answer codebase questions by running the ug CLI.{C_RESET}"
+        ),
+        Mode::Mcp => println!(
+            "{C_DIM}  Your agent will call ug over MCP. Add the CLI guide too with `ug connect {} --both`.{C_RESET}",
+            target.key
+        ),
+        Mode::Both => println!(
+            "{C_DIM}  Both paths are wired. The skill tells your agent to prefer the CLI, but a\n  \
+             connected tool is the more visible option — use --cli if you want only that.{C_RESET}"
+        ),
+    }
     Ok(())
+}
+
+/// Which paths to wire: the flag if given, otherwise ask.
+///
+/// Non-interactive with no flag keeps installing both, because that is what
+/// existing scripted installs expect; the hint names the flags so the choice
+/// can be made explicit.
+fn resolve_mode(args: &[String]) -> Result<Mode, String> {
+    if let Some(m) = mode_flag(args)? {
+        return Ok(m);
+    }
+    if !std::io::stdin().is_terminal() {
+        println!(
+            "{C_DIM}▸ Installing both the CLI skill and the MCP server (no --cli / --mcp / --both given).{C_RESET}"
+        );
+        return Ok(Mode::Both);
+    }
+    let choices = vec![
+        (
+            "cli".to_string(),
+            format!("{}the agent runs `ug` directly — recommended{}", C_BOLD, C_RESET),
+        ),
+        ("mcp".to_string(), "MCP server only — the agent calls ug over the protocol".to_string()),
+        ("both".to_string(), "both, and let the agent choose".to_string()),
+    ];
+    let picked = prompt_choice(
+        "How should your agent reach ug?",
+        &choices,
+        "Pass one of --cli / --mcp / --both.",
+    )?;
+    Ok(match picked.as_str() {
+        "mcp" => Mode::Mcp,
+        "both" => Mode::Both,
+        _ => Mode::Cli,
+    })
 }
 
 pub fn run_mcp_uninstall(args: &[String]) {
@@ -869,12 +994,22 @@ fn do_uninstall(args: &[String]) -> Result<(), String> {
             removed_any = true;
             println!("{C_GREEN}✓{C_RESET} Removed ultragraph from {}", path.display());
         }
+        // Always, and regardless of whether a server entry was there: a
+        // `--cli` install writes only the skill, so keying skill removal off
+        // the config left that install with no way to undo itself.
+        if let Some((skill, _)) = skill_target(target.key, scope) {
+            if skill.exists() {
+                removed_any = true;
+                println!("{C_GREEN}✓{C_RESET} Removed agent skill {}", skill.display());
+            }
+        }
+        uninstall_skill_file(target.key, scope);
     }
     if removed_any {
         println!("{C_CYAN}Restart {} to pick it up.{C_RESET}", target.label);
     } else {
         println!(
-            "{C_YELLOW}•{C_RESET} No ultragraph entry found for {} — nothing to do.",
+            "{C_YELLOW}•{C_RESET} No ultragraph entry or skill found for {} — nothing to do.",
             target.label
         );
     }
@@ -972,6 +1107,29 @@ mod tests {
             }
             _ => panic!("cursor should get a rule file"),
         }
+    }
+
+    fn argv(line: &str) -> Vec<String> {
+        line.split_whitespace().map(String::from).collect()
+    }
+
+    #[test]
+    fn install_mode_comes_from_one_flag() {
+        assert_eq!(mode_flag(&argv("claude --cli")).unwrap(), Some(Mode::Cli));
+        assert_eq!(mode_flag(&argv("claude --skill-only")).unwrap(), Some(Mode::Cli));
+        assert_eq!(mode_flag(&argv("claude --mcp")).unwrap(), Some(Mode::Mcp));
+        assert_eq!(mode_flag(&argv("claude --both")).unwrap(), Some(Mode::Both));
+        // No flag means "ask", which is the caller's job, not this function's.
+        assert_eq!(mode_flag(&argv("claude --global")).unwrap(), None);
+        assert!(mode_flag(&argv("claude --cli --mcp")).is_err());
+    }
+
+    /// The point of the modes: each installs its own path and only its own.
+    #[test]
+    fn each_mode_wires_exactly_one_pair_of_paths() {
+        assert!(Mode::Cli.installs_skill() && !Mode::Cli.installs_server());
+        assert!(!Mode::Mcp.installs_skill() && Mode::Mcp.installs_server());
+        assert!(Mode::Both.installs_skill() && Mode::Both.installs_server());
     }
 
     #[test]

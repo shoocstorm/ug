@@ -79,7 +79,7 @@ These accept the same params as their MCP counterparts and can output `--json`.
 | `ug serve` | (default) | Serve the visualization + REST API at `http://localhost:8080`. Runs by default with no args. | `-p <port>` (default 8080), `--host <ip>` (default 127.0.0.1), `--watch`, `--no-db`, `-i <graph.json>`, `-d <db>`, `--project <name>`, `--repo-root` |
 | `ug app` | — | Open the native desktop shell (starts the server + a window). | Same as `ug serve` |
 | `ug api` | — | List every HTTP endpoint `ug serve` exposes. | `--json` |
-| `ug list_projects` | `list` | List generated projects under `~/.ug` with stats. | — |
+| `ug list` | `ls`, `list_projects` | List generated projects under `~/.ug` with stats. | — |
 | `ug active` | — | View or set the active project (default for `ug mcp`). | Sets with `<name>` positional |
 | `ug rm` | — | Delete a project's data directory. | `<name>` positional |
 | `ug regen` | — | Re-run the pipeline for an existing project: reads `repoRoot` from its `project.json`, so no `-i` needed. Incremental. | `-n <name>`, plus every `ug gen` flag |
@@ -94,8 +94,8 @@ These accept the same params as their MCP counterparts and can output `--json`.
 | Command | What it does | Key flags |
 |---------|-------------|-----------|
 | `ug mcp` | Run the stdio JSON-RPC MCP server (meant to be launched by an AI agent). | — |
-| `ug mcp install <agent>` | Register the MCP server in an agent's config and drop in the tool guide. Agents: `claude`, `claude-desk`, `cursor`, `windsurf`, `vscode`, `gemini`, `codex`, `opencode`, `zed`, ... | `--project` (scope to this repo), `--global` (everywhere) |
-| `ug mcp uninstall <agent>` | Remove the MCP server registration. | `--project`, `--global` |
+| `ug connect <agent>` (alias `ug mcp install`) | Connect an AI agent: the CLI skill (`--cli`, recommended), the MCP server (`--mcp`), or both (`--both`); asks when not given. Agents: `claude`, `claude-desk`, `cursor`, `windsurf`, `vscode`, `gemini`, `codex`, `opencode`, `zed`, ... | `--project` (scope to this repo), `--global` (everywhere) |
+| `ug disconnect <agent>` (alias `ug mcp uninstall`) | Remove the agent skill and the MCP server registration. | `--project`, `--global` |
 | `ug mcp list` / `ls` | Print the tools this server advertises. | — |
 | `ug mcp call <tool> <json>` | Invoke one tool directly from the command line. | `<tool>` name, `<json>` arguments |
 

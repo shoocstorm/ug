@@ -83,18 +83,36 @@ with which env var (if any) drove each value.
 
 ### The easy way
 
+An agent can reach ug through the **`ug` CLI** (an agent skill teaches it; this
+is the recommended path) or through the **MCP server** (tool calls over the
+protocol). `ug connect` asks which you want, or takes the choice up front:
+
 ```bash
-ug mcp install                # No target: pick the client from an interactive list
-ug mcp install claude         # Claude Code (project .mcp.json or global ~/.claude.json)
-ug mcp install claude-desk    # Claude Desktop (global only)
-ug mcp install cursor         # Cursor (.cursor/mcp.json — project or ~/.cursor/mcp.json)
-ug mcp install windsurf       # Windsurf (global: ~/.codeium/windsurf/mcp_config.json)
-ug mcp install vscode         # VS Code (.vscode/mcp.json — project or user-profile mcp.json)
-ug mcp install gemini         # Gemini CLI (.gemini/settings.json — project or global)
-ug mcp install codex          # Codex CLI (global: ~/.codex/config.toml)
-ug mcp install hermes         # Hermes Agent (global: ~/.hermes/config.yaml)
-ug mcp install opencode       # opencode (opencode.json — project or ~/.config/opencode/)
+ug connect claude --cli   # skill only — the agent runs `ug` itself (recommended)
+ug connect claude --mcp   # MCP server entry only
+ug connect claude --both  # both, and the agent picks per question
 ```
+
+Installing both leaves the choice to the agent, which usually reaches for the
+connected tools; picking one removes the other, so the agent has a single door
+into the graph. In a non-interactive shell with no flag, both are installed —
+what scripted installs have always done.
+
+```bash
+ug connect                # No agent named: pick from an interactive list
+ug connect claude         # Claude Code (project .mcp.json or global ~/.claude.json)
+ug connect claude-desk    # Claude Desktop (global only)
+ug connect cursor         # Cursor (.cursor/mcp.json — project or ~/.cursor/mcp.json)
+ug connect windsurf       # Windsurf (global: ~/.codeium/windsurf/mcp_config.json)
+ug connect vscode         # VS Code (.vscode/mcp.json — project or user-profile mcp.json)
+ug connect gemini         # Gemini CLI (.gemini/settings.json — project or global)
+ug connect codex          # Codex CLI (global: ~/.codex/config.toml)
+ug connect hermes         # Hermes Agent (global: ~/.hermes/config.yaml)
+ug connect opencode       # opencode (opencode.json — project or ~/.config/opencode/)
+```
+
+(`ug mcp install` is the same command under its original name, and still works.
+The config paths above are where `--mcp`/`--both` write the server entry.)
 
 For targets that support both a **project** config (in the current directory,
 this repo only) and a **global** config (in your home dir, all projects),
@@ -108,11 +126,11 @@ server is a self-contained native binary — no Node.js runtime required.
 Restart the app afterward. For any other MCP client, or to configure things
 manually, see below.
 
-To remove it again, swap `install` for `uninstall` (e.g. `ug mcp uninstall
-cursor`) — this strips just the `ultragraph` entry from every scope the
-target supports (narrow it with `--project`/`--global`) and leaves any other
-servers, comments, and formatting untouched. If there's nothing to remove,
-it's a no-op.
+To remove it again, `ug disconnect <agent>` (e.g. `ug disconnect cursor`; also
+spelled `ug mcp uninstall`) — this removes the agent skill and strips just the
+`ultragraph` entry from every scope the target supports (narrow it with
+`--project`/`--global`), leaving any other servers, comments, and formatting
+untouched. If there's nothing to remove, it's a no-op.
 
 ### Claude Desktop (manual)
 

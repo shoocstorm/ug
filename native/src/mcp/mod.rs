@@ -16,7 +16,9 @@
 //!       UG_NEO4J_DATABASE                        — destination backend
 
 pub(crate) mod format;
-mod install;
+// `pub` for `ug connect` / `ug disconnect`, which are the promoted spelling of
+// `ug mcp install` / `ug mcp uninstall` and call straight into it.
+pub mod install;
 pub mod tools;
 
 use std::collections::HashMap;
@@ -35,7 +37,7 @@ use ultragraph::storage::{
     Embedder, EmbedderConfig, KnowledgeStore, RankStrategy, SearchKbOptions, StoreSpec,
 };
 use ultragraph::types::{GraphData, GraphNodeType};
-use ultragraph::{build_graph, index_with_cache, C_BOLD, C_CYAN, C_RESET, C_YELLOW};
+use ultragraph::{build_graph, index_with_cache, C_BOLD, C_CYAN, C_GREEN, C_RESET, C_YELLOW};
 
 use crate::project;
 
@@ -79,21 +81,23 @@ fn print_mcp_help() {
     println!("  you rarely type it yourself.");
     println!();
     println!("{C_BOLD}Subcommands:{C_RESET}");
-    println!("  {C_CYAN}install{C_RESET} <agent>     Register the server in an agent's config, and drop in");
-    println!("                      the tool guide. Agents: claude, claude-desk, cursor,");
-    println!("                      windsurf, vscode, gemini, codex, opencode, zed, …");
-    println!("                      Scope: {C_CYAN}--project{C_RESET} (this repo) or {C_CYAN}--global{C_RESET} (everywhere).");
-    println!("  {C_CYAN}uninstall{C_RESET} <agent>   Remove it again, same scope flags.");
     println!("  {C_CYAN}list{C_RESET}, {C_CYAN}ls{C_RESET}            Print the tools this server advertises.");
     println!("  {C_CYAN}call{C_RESET} <tool> [json]  Invoke one tool directly — the fastest way to see what");
     println!("                      an agent would get back.");
+    println!("  {C_CYAN}install{C_RESET} <agent>     Older spelling of {C_BOLD}{C_GREEN}ug connect{C_RESET} — still works, and still");
+    println!("                      installs either path. {C_CYAN}uninstall{C_RESET} is {C_BOLD}{C_GREEN}ug disconnect{C_RESET}.");
+    println!();
+    println!("{C_BOLD}Connecting an agent is {C_GREEN}ug connect{C_RESET}{C_BOLD}:{C_RESET}");
+    println!("  It offers two ways to reach ug — the {C_CYAN}ug{C_RESET} CLI (via an agent skill, the");
+    println!("  recommended path) or this MCP server — and wires up the one you pick.");
+    println!("  See {C_CYAN}ug connect -h{C_RESET} for the flags and scopes.");
     println!();
     println!("{C_BOLD}Which project does it serve?{C_RESET}");
     println!("  {C_CYAN}UG_PROJECT{C_RESET} (baked into the config by {C_CYAN}install{C_RESET}) → the ~/.ug project matching");
     println!("  the cwd → the active project ({C_CYAN}ug active{C_RESET}) → a local ./ugdb.");
     println!();
     println!("{C_BOLD}Examples:{C_RESET}");
-    println!("  {C_CYAN}ug mcp{C_RESET} install claude --global");
+    println!("  {C_CYAN}ug connect{C_RESET} claude --mcp --global");
     println!("  {C_CYAN}ug mcp{C_RESET} list");
     println!("  {C_CYAN}ug mcp{C_RESET} call find_symbols '{{\"name\":\"normalize_path\"}}'");
     println!("  {C_CYAN}ug mcp{C_RESET} uninstall cursor --project");
@@ -430,7 +434,10 @@ impl Mcp {
             .map(|days| format!(" (index built {} day(s) ago)", days))
             .unwrap_or_default();
         format!(
-            "\n\n⚠ Index may be stale: {} of {} indexed files since the last index{}. Call the reindex tool to refresh.",
+            // Names the `regen` tool, not the `reindex` it was called before
+            // the rename: this line tells an agent what to call next, and a
+            // name that is no longer dispatched sends it into an error.
+            "\n\n⚠ Index may be stale: {} of {} indexed files since the last index{}. Call the regen tool to refresh.",
             bits.join(", "),
             files.len(),
             age

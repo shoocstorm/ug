@@ -30,6 +30,15 @@ use crate::storage::store::{KnowledgeStore, QueryLimits, QueryPage, QueryParams,
 use presets::{ParamValue, Preset};
 use std::collections::BTreeMap;
 
+/// The names [`CodeQueryParams`] owns, which no preset argument may shadow.
+///
+/// Callers — models especially — file these under `args` beside the preset's
+/// own arguments, because that is where "the parameters for this call" look
+/// like they live. Transports lift them back out and [`bind`] explains the
+/// mistake when they don't; both need to agree on the list, and a preset that
+/// declared one of these names would break the lift silently.
+pub const OWN_PARAMS: &[&str] = &["preset", "gql", "limit", "range", "project"];
+
 /// What the caller asked for: a preset by name, or raw GQL.
 #[derive(Debug, Clone, Default)]
 pub struct CodeQueryParams {
@@ -260,6 +269,18 @@ fn bind(preset: &Preset, args: &BTreeMap<String, String>) -> Result<QueryParams,
     // question than the one asked.
     for key in args.keys() {
         if !preset.params.iter().any(|p| p.name == key.as_str()) {
+            // The commonest miss is not a typo but a level confusion: the
+            // query's own parameters filed under `args` alongside the
+            // preset's. Say where it belongs, or the reader's only option is
+            // to drop it and answer a narrower question than was asked.
+            if OWN_PARAMS.contains(&key.as_str()) {
+                return Err(format!(
+                    "`{}` is a parameter of the query itself, not of the `{}` preset — \
+                     pass it alongside the preset, not inside `args`: \
+                     `--{} <value>` on the CLI, or {{\"preset\": \"{}\", \"{}\": …}} as a tool argument.",
+                    key, preset.name, key, preset.name, key
+                ));
+            }
             let accepted: Vec<&str> = preset.params.iter().map(|p| p.name).collect();
             return Err(format!(
                 "`{}` does not take a `{}` parameter. Accepted: {}",
@@ -474,6 +495,18 @@ mod tests {
     fn a_required_parameter_cannot_be_defaulted() {
         let err = resolve(&params("impact")).unwrap_err();
         assert!(err.contains("requires the `target` parameter"), "{err}");
+    }
+
+    /// A misfiled `limit` must be told where it belongs. Answering only
+    /// "long_functions does not take a limit" leaves dropping it as the
+    /// reader's best move, which silently narrows the question.
+    #[test]
+    fn a_misfiled_query_parameter_says_where_it_goes() {
+        let mut p = params("long_functions");
+        p.args.insert("limit".into(), "20".into());
+        let err = resolve(&p).unwrap_err();
+        assert!(err.contains("parameter of the query itself"), "{err}");
+        assert!(err.contains("not inside `args`"), "{err}");
     }
 
     #[test]

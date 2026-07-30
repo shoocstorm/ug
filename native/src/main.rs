@@ -111,13 +111,18 @@ fn main() {
         "chat" => run_chat(cmd_args),
         "tour" => run_tour(cmd_args),
         // Project management.
-        "list_projects" => run_list(cmd_args),
+        // `list` is the command; `list_projects` stays because it is the MCP
+        // tool's name, and the agent-tool commands are documented as taking
+        // the same names as the tools.
+        "list" | "ls" | "list_projects" => run_list(cmd_args),
         "active" => run_active(cmd_args),
         "rm" => run_rm(cmd_args),
         "uninstall" => run_uninstall(cmd_args),
         "upgrade" => run_upgrade(cmd_args),
         "config" => run_config(cmd_args),
         "doctor" => run_doctor(cmd_args),
+        "connect" => run_connect(cmd_args),
+        "disconnect" => run_disconnect(cmd_args),
         "mcp" => run_mcp(cmd_args),
         "help" | "-h" | "--help" => {
             print_help();
@@ -3026,6 +3031,28 @@ fn run_mcp(args: &[String]) {
     mcp::run(args);
 }
 
+/// `ug connect` — the front door for wiring ug into an AI agent.
+///
+/// The same code as `ug mcp install`, under the name that describes what it
+/// now does: since the choice is CLI skill *or* MCP server, filing it under
+/// `mcp` named one of the two answers. That spelling still works.
+fn run_connect(args: &[String]) {
+    if has_flag(args, "-h") || has_flag(args, "--help") {
+        print_connect_help();
+        return;
+    }
+    mcp::install::run_mcp_install(args);
+}
+
+/// `ug disconnect` — undo `ug connect`, whichever way it wired things.
+fn run_disconnect(args: &[String]) {
+    if has_flag(args, "-h") || has_flag(args, "--help") {
+        print_connect_help();
+        return;
+    }
+    mcp::install::run_mcp_uninstall(args);
+}
+
 /// `ug app` — launches the native desktop shell (Tauri) for the vis
 /// layer. The webview just points at a `ug serve` URL, so this starts a
 /// server first (in a background thread, in-process — no extra child
@@ -3466,6 +3493,7 @@ const API_ENDPOINTS: &[(&str, &[ApiEntry])] = &[
             ApiEntry { method: "POST", path: "/api/tools/find_usages", desc: "inbound callers/importers, with call sites", availability: "always (empty if no project active)", cli_equivalent: Some("ug find_usages --json") },
             ApiEntry { method: "POST", path: "/api/tools/shortest_path", desc: "shortest directed edge path between two node ids", availability: "always (empty if no project active)", cli_equivalent: Some("ug shortest_path --json") },
             ApiEntry { method: "POST", path: "/api/tools/graph_schema", desc: "node & edge types present, with counts", availability: "always (empty if no project active)", cli_equivalent: Some("ug graph_schema --json") },
+            ApiEntry { method: "POST", path: "/api/tools/code_query", desc: "run a GQL (Cypher-like) query or built-in preset against the OverGraph store", availability: "503 if no DB backend configured", cli_equivalent: Some("ug query") },
         ],
     ),
     (
@@ -4426,38 +4454,8 @@ fn cli_tool_runner(
                 // The two search tools need the vector store; everything
                 // else answers from the loaded graph.
                 "search" | "semantic_search" => {
-                    let query = args
-                        .get("query")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .to_string();
-                    if query.trim().is_empty() {
-                        return Err("query is required".into());
-                    }
-                    let k = args.get("k").and_then(|v| v.as_u64()).unwrap_or(8).clamp(1, 25) as usize;
-                    if name == "semantic_search" {
-                        let hits = ultragraph::storage::semantic_search(&*store, &embedder, &query, k)
-                            .await
-                            .map_err(|e| e.to_string())?;
-                        let mut out = String::new();
-                        for (i, h) in hits.iter().enumerate() {
-                            out.push_str(&format!(
-                                "{}. {} ({}) — {}:{} · distance {:.3}\n",
-                                i + 1, h.node.name, h.node.node_type, h.node.file,
-                                h.node.start_line, h.distance
-                            ));
-                        }
-                        return Ok(if out.is_empty() { "No matches.".into() } else { out });
-                    }
-                    let mut opts = SearchKbOptions::new(&query, repo_root.as_path());
-                    opts.k = k;
-                    opts.hops = args.get("hops").and_then(|v| v.as_u64()).unwrap_or(2).min(4) as u32;
-                    opts.include_snippets = true;
-                    opts.max_chars = 6_000;
-                    let ctx = ultragraph::storage::search_kb(&*store, &embedder, opts)
+                    chat::run_search_tool(&name, &args, &*store, Some(&embedder), repo_root.as_path())
                         .await
-                        .map_err(|e| e.to_string())?;
-                    Ok(chat::render_context(&ctx.items, 6_000))
                 }
                 // Statistics come from the store's indexed properties, not the
                 // graph — the one advertised tool `run_tool` cannot answer.
@@ -5300,10 +5298,54 @@ fn print_list_help() {
     println!("  {C_BOLD}{C_GREEN}★ ug list{C_RESET}  {C_YELLOW}— list generated projects{C_RESET}");
     println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
     println!();
-    println!("{C_BOLD}Usage:{C_RESET}  ug list");
+    println!("{C_BOLD}Usage:{C_RESET}  ug list   {C_DIM}(aliases: ls, list_projects — the MCP tool's name){C_RESET}");
     println!();
     println!("  Lists every project under ~/.ug (or $UG_HOME), with node/edge counts");
     println!("  and last-updated time. The current directory's project is marked with {C_BOLD}*{C_RESET}.");
+}
+
+fn print_connect_help() {
+    println!("{}", connect_help_text());
+}
+
+/// Built as a string rather than printed line by line, so a test can read it:
+/// this is the page that has to keep both spellings discoverable.
+fn connect_help_text() -> String {
+    let mut o = String::new();
+    macro_rules! line {
+        ($($arg:tt)*) => { o.push_str(&format!("{}\n", format_args!($($arg)*))) };
+    }
+    line!("  {C_BOLD}{C_GREEN}★ ug connect{C_RESET}  {C_YELLOW}— wire ug into an AI coding agent{C_RESET}");
+    line!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
+    line!("");
+    line!("{C_BOLD}Usage:{C_RESET}  ug connect [<agent>] [--cli|--mcp|--both] [--project|--global]");
+    line!("        ug disconnect [<agent>]        {C_DIM}remove it again{C_RESET}");
+    line!("        {C_DIM}(`ug mcp install` / `ug mcp uninstall` are the same commands){C_RESET}");
+    line!("");
+    line!("  No agent named? You get an interactive picker. Agents: {C_CYAN}claude{C_RESET},");
+    line!("  {C_CYAN}claude-desk{C_RESET}, {C_CYAN}cursor{C_RESET}, {C_CYAN}windsurf{C_RESET}, {C_CYAN}vscode{C_RESET}, {C_CYAN}gemini{C_RESET}, {C_CYAN}codex{C_RESET}, {C_CYAN}hermes{C_RESET}, {C_CYAN}opencode{C_RESET}.");
+    line!("");
+    line!("{C_BOLD}Two ways to reach ug — connect asks, or pass one:{C_RESET}");
+    line!("  {C_CYAN}--cli{C_RESET}      {C_BOLD}Recommended.{C_RESET} Installs the agent skill only; the agent runs");
+    line!("             {C_CYAN}ug{C_RESET} itself. {C_CYAN}ug --help{C_RESET} and {C_CYAN}ug query --list{C_RESET} teach it the rest,");
+    line!("             so it stays current with the binary and costs no idle context.");
+    line!("  {C_CYAN}--mcp{C_RESET}      MCP server entry only — the agent calls tools over the protocol.");
+    line!("  {C_CYAN}--both{C_RESET}     Both, and the agent chooses. It usually reaches for the");
+    line!("             connected tools, so pick this only if you want that path.");
+    line!("");
+    line!("  {C_DIM}Whichever you pick, the other is removed — the point of choosing is not");
+    line!("  to leave the agent two doors into the same graph.{C_RESET}");
+    line!("");
+    line!("{C_BOLD}Scope:{C_RESET}");
+    line!("  {C_CYAN}--project{C_RESET}  this repo only    {C_CYAN}--global{C_RESET}  every project");
+    line!("  {C_DIM}Asked when the agent supports both and neither flag is given.{C_RESET}");
+    line!("");
+    line!("{C_BOLD}Examples:{C_RESET}");
+    line!("  {C_CYAN}ug connect{C_RESET}                        {C_DIM}# pick the agent and the way, interactively{C_RESET}");
+    line!("  {C_CYAN}ug connect claude --cli --global{C_RESET}  {C_DIM}# the CLI skill, everywhere{C_RESET}");
+    line!("  {C_CYAN}ug connect cursor --mcp --project{C_RESET} {C_DIM}# MCP server, this repo only{C_RESET}");
+    line!("  {C_CYAN}ug disconnect claude{C_RESET}             {C_DIM}# remove skill and server entry{C_RESET}");
+    o
 }
 
 fn print_api_help() {
@@ -5513,8 +5555,9 @@ fn print_help() {
     println!("  {C_CYAN}ug gen{C_RESET}     Index this directory, build the graph, and ingest it (→ ~/.ug/<name>/)");
     println!("  {C_CYAN}ug app{C_RESET}     Explore the graph in a native desktop window (starts the server for you)");
     println!("  {C_CYAN}ug{C_RESET}         Bare `ug` starts the server (visualization + REST API at http://localhost:8080)");
-    println!("{C_BOLD}MCP (Claude Code / Claude Desktop / Cursor / Windsurf / VS Code / Gemini CLI / Codex CLI / Hermes Agent / opencode):{C_RESET}");
-    println!("  {C_CYAN}ug mcp install{C_RESET}            Wire the MCP server into a client config (interactive picker; or name a target, e.g. `ug mcp install claude`)");
+    println!("{C_BOLD}Connect an AI agent (Claude Code / Claude Desktop / Cursor / Windsurf / VS Code / Gemini CLI / Codex CLI / Hermes Agent / opencode):{C_RESET}");
+    println!("  {C_CYAN}ug connect{C_RESET}                Wire ug into an agent (interactive picker; or name one, e.g. `ug connect claude`)");
+    println!("  {C_DIM}                          Asks how: {C_RESET}{C_CYAN}--cli{C_RESET}{C_DIM} teaches the agent this CLI (recommended), {C_RESET}{C_CYAN}--mcp{C_RESET}{C_DIM} wires the MCP server, {C_RESET}{C_CYAN}--both{C_RESET}{C_DIM} does both.{C_RESET}");
 
     println!();
     println!("{C_BOLD}Commands:{C_RESET}");
@@ -5525,6 +5568,8 @@ fn print_help() {
     println!("  {C_CYAN}serve{C_RESET}            Serve the visualization + graph API");
     println!("  {C_CYAN}app{C_RESET}              Open the native desktop shell (starts serve + a window)");
     println!("  {C_CYAN}api{C_RESET}              List every HTTP endpoint `ug serve` exposes");
+    println!("  {C_CYAN}connect{C_RESET}          Wire ug into an AI agent — CLI skill and/or MCP server");
+    println!("                   {C_DIM}(also spelled `ug mcp install`; undo with `ug disconnect`){C_RESET}");
     println!();
     println!("  {C_DIM}Retrieval & analysis (OverGraph-backed){C_RESET}");
     println!(
@@ -5564,7 +5609,7 @@ fn print_help() {
     println!();
 
     println!("  {C_DIM}Project management{C_RESET}");
-    println!("  {C_BOLD}{C_GREEN}list_projects{C_RESET}  {C_GREEN}List generated projects under ~/.ug (or $UG_HOME){C_RESET}");
+    println!("  {C_BOLD}{C_GREEN}list{C_RESET}             {C_GREEN}List generated projects under ~/.ug (or $UG_HOME){C_RESET}");
     println!("  {C_CYAN}active{C_RESET}           View/set the active project (default for `ug mcp` when no UG_PROJECT)");
     println!("  {C_CYAN}rm{C_RESET}               Delete a project's data directory");
     println!("  {C_CYAN}upgrade{C_RESET}          Check GitHub for a new release and self-update (`--check` to only report)");
@@ -5674,15 +5719,37 @@ mod tests {
     fn the_stdio_server_mode_never_prints_a_banner() {
         assert!(suppress_logo(&argv("ug mcp"), false));
         assert!(suppress_logo(&argv("ug mcp call find_symbols"), false));
-        // These two are interactive; only a non-terminal stdout should
-        // silence them, which is the condition this test cannot control.
-        for line in ["ug mcp install claude", "ug mcp uninstall cursor"] {
+        // These are interactive; only a non-terminal stdout should silence
+        // them, which is the condition this test cannot control.
+        for line in [
+            "ug mcp install claude",
+            "ug mcp uninstall cursor",
+            "ug connect claude",
+            "ug disconnect cursor",
+        ] {
             let args = argv(line);
             assert_eq!(
                 suppress_logo(&args, false),
                 !std::io::IsTerminal::is_terminal(&std::io::stdout()),
                 "`{line}` should only be silenced by a non-terminal stdout"
             );
+        }
+    }
+
+    /// `ug connect` is the promoted spelling of `ug mcp install`, not a second
+    /// implementation — so its help has to teach the modes *and* keep the old
+    /// spelling discoverable for anyone whose muscle memory or scripts have it.
+    #[test]
+    fn connect_help_teaches_the_modes_and_keeps_the_old_spelling() {
+        let help = connect_help_text();
+        for expected in [
+            "--cli", "--mcp", "--both",
+            "Recommended",
+            "ug disconnect",
+            "ug mcp install",
+            "--project", "--global",
+        ] {
+            assert!(help.contains(expected), "`ug connect -h` is missing {expected}");
         }
     }
 

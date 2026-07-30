@@ -106,6 +106,44 @@ pub fn openai_tool_schemas() -> Vec<serde_json::Value> {
         .unwrap_or_default()
 }
 
+/// Preset list for the tool description, each with the arguments it takes —
+/// `long_functions(min_loc)`. Naming the arguments is what stops a model
+/// inventing them, or borrowing `limit` from the wrong level.
+fn preset_signatures() -> String {
+    ultragraph::code_query::presets::all()
+        .iter()
+        .map(|p| {
+            if p.params.is_empty() {
+                p.name.to_string()
+            } else {
+                let params: Vec<&str> = p.params.iter().map(|q| q.name).collect();
+                format!("{}({})", p.name, params.join(", "))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Lift `code_query`'s own parameters out of `args`, where models keep
+/// putting them. A misfiled `limit` is a well-formed intention expressed in
+/// the wrong shape; rejecting it costs a round trip and teaches nothing.
+/// An explicit top-level value always wins — that one was deliberate.
+fn hoist_own_params(args: &mut Value) {
+    let Some(obj) = args.as_object_mut() else { return };
+    let Some(nested) = obj.get_mut("args").and_then(|v| v.as_object_mut()) else {
+        return;
+    };
+    let mut lifted: Vec<(String, Value)> = Vec::new();
+    for name in ultragraph::code_query::OWN_PARAMS {
+        if let Some(v) = nested.remove(*name) {
+            lifted.push(((*name).to_string(), v));
+        }
+    }
+    for (name, value) in lifted {
+        obj.entry(name).or_insert(value);
+    }
+}
+
 /// Coerce arguments that a model stringified back into real JSON.
 ///
 /// Models routinely send `"nodeId": "[\"function:…\"]"` — a JSON array
@@ -119,6 +157,9 @@ pub fn openai_tool_schemas() -> Vec<serde_json::Value> {
 /// the model nothing and costs the user a round-trip.
 pub fn normalize_args(tool: &str, args: &mut Value) {
     let canonical = tool;
+    if canonical == "code_query" {
+        hoist_own_params(args);
+    }
     let schema = raw_tools();
     let Some(props) = schema
         .as_array()
@@ -320,18 +361,14 @@ fn raw_tools() -> Value {
             "name": "code_query",
             "description": format!(
                 "WHOLE-REPO STATISTICS over the indexed graph — counts, groups, distributions and blast radius. Use this for ANY question of the form 'how many', 'which are the biggest / longest / most depended-upon', 'what fraction', 'where is the worst X', 'what breaks if I change Y'. NEVER grep for a count and NEVER loop a per-file tool to build one: this answers in one call and ~100 tokens what reading the repo costs hundreds of thousands. Two ways to call it. (1) `preset` — a named question, the cheap path, e.g. {{\"preset\": \"long_functions\"}} or {{\"preset\": \"impact\", \"args\": {{\"target\": \"src/auth.ts\"}}}}. Available: {presets}. (2) `gql` — a raw OverGraph GQL (Cypher-shaped) query when no preset fits, e.g. \"MATCH (n:Function) WHERE n.loc > 50 AND n.is_test = 0 RETURN n.folder AS folder, count(*) AS c ORDER BY c DESC\". Queryable properties: node_type, name, file, folder, loc, params, max_nesting, has_doc, is_test, in_degree, out_degree, qualified_name, route, annotations, start_line, end_line — call graph_schema for their live population counts before relying on one. Booleans are stored as 0/1 so they can be summed: documented fraction is sum(n.has_doc)/count(*). Read-only; it cannot modify the index. Every answer states its coverage denominators — treat a 'NOT INDEXED' warning as meaning the number is about nothing.",
-                presets = ultragraph::code_query::presets::all()
-                    .iter()
-                    .map(|p| p.name)
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                presets = preset_signatures()
             ),
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "preset": { "type": "string", "description": "Name of a built-in question to run. Cheapest path — prefer this over writing GQL. See the description for the list, or call graph_schema." },
                     "gql": { "type": "string", "description": "Raw OverGraph GQL, when no preset fits. Aggregates: count, sum, avg, min, max, collect (no percentile — a collect() column is summarised as p50/p90/p99 in the output). Supports CASE, WITH … WHERE as HAVING, EXISTS { … } (needs its own RETURN clause inside), UNION, STARTS WITH / ENDS WITH / CONTAINS, and bounded variable-length paths. Every variable-length path needs a finite bound (*1..3, never *) and unanchored walks past 2 hops can exceed the traversal cap. Parenthesise negated membership: NOT (x IN [...])." },
-                    "args": { "type": "object", "description": "Arguments for a preset, e.g. {\"target\": \"src/auth.ts\"} or {\"min_loc\": 100}. An argument the preset does not declare is an error, not an ignored key." },
+                    "args": { "type": "object", "description": "Arguments for the chosen preset ONLY — the names in its signature above, e.g. {\"target\": \"src/auth.ts\"} or {\"min_loc\": 100}. Paging is not a preset argument: `limit` and `range` are top-level parameters, siblings of `preset`, never keys in here. An argument the preset does not declare is an error, not an ignored key." },
                     "limit": { "type": "integer", "minimum": 1, "maximum": 200, "description": "How many rows to display (default 20). Shorthand for range \"1-N\"." },
                     "range": { "type": "string", "description": "Which window of rows to show, 1-based and inclusive at both ends: \"20\" (top 20), \"11-35\", \"34-end\". Use this to page through a result you already ran instead of re-running with a bigger limit and re-reading rows you have seen — the window is applied to rows the query already produced, so every reported total stays the same. The output states which rows it is showing and names the exact range to ask for next." }
                 }
@@ -370,7 +407,7 @@ mod tests {
             }
             assert!(
                 STORE_BACKED_CHAT_TOOLS.contains(name)
-                    || ultragraph::agent_tools::AGENT_TOOL_NAMES.contains(name),
+                    || ultragraph::agent_tools::is_agent_tool(name),
                 "'{}' is advertised to the chat model but no dispatcher answers it: \
                  add it to a store-backed match arm (and to STORE_BACKED_CHAT_TOOLS), \
                  to agent_tools::run_tool, or to CHAT_TOOL_DENYLIST",
@@ -396,6 +433,61 @@ mod tests {
             assert!(TOOL_NAMES.contains(denied), "'{}' is not a tool", denied);
             assert!(!offered.iter().any(|n| n == denied), "'{}' leaked into chat", denied);
         }
+    }
+
+    /// The reported failure: "`long_functions` does not take a `limit`
+    /// parameter" — the model filed paging under `args`.
+    #[test]
+    fn lifts_paging_out_of_preset_args() {
+        let mut args = json!({
+            "preset": "long_functions",
+            "args": { "min_loc": 100, "limit": 20, "range": "1-20" }
+        });
+        normalize_args("code_query", &mut args);
+        assert_eq!(args["limit"], json!(20));
+        assert_eq!(args["range"], json!("1-20"));
+        assert_eq!(args["args"], json!({ "min_loc": 100 }));
+    }
+
+    /// A deliberate top-level value is not overwritten by a stray nested one.
+    #[test]
+    fn an_explicit_top_level_param_wins() {
+        let mut args = json!({
+            "preset": "dead_code",
+            "limit": 50,
+            "args": { "limit": 5 }
+        });
+        normalize_args("code_query", &mut args);
+        assert_eq!(args["limit"], json!(50));
+        assert_eq!(args["args"], json!({}));
+    }
+
+    /// Hoisting is only safe while no preset declares one of these names —
+    /// if one ever did, its argument would be silently relocated.
+    #[test]
+    fn no_preset_shadows_a_query_parameter() {
+        for p in ultragraph::code_query::presets::all() {
+            for param in p.params {
+                assert!(
+                    !ultragraph::code_query::OWN_PARAMS.contains(&param.name),
+                    "preset '{}' declares '{}', which hoist_own_params would steal",
+                    p.name,
+                    param.name
+                );
+            }
+        }
+    }
+
+    /// Models invent argument names when the description only lists presets,
+    /// so every preset that takes arguments must advertise them.
+    #[test]
+    fn preset_signatures_name_their_arguments() {
+        let sigs = preset_signatures();
+        assert!(sigs.contains("long_functions(min_loc)"), "{sigs}");
+        assert!(sigs.contains("impact(target)"), "{sigs}");
+        // A preset without parameters stays bare — no empty parens.
+        assert!(sigs.contains("repo_census,") || sigs.ends_with("repo_census"), "{sigs}");
+        assert!(!sigs.contains("()"), "{sigs}");
     }
 
     #[test]

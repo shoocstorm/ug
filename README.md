@@ -88,7 +88,7 @@ root with `UG_HOME`):
 └── README.md
 ```
 
-`ug list_projects` shows every project with counts and last-generated times; `ug rm
+`ug list` shows every project with counts and last-generated times; `ug rm
 <project>` deletes one (prompts unless `-f/--force`/`-y/--yes`). The repo-local
 `.ug/` folder only holds the `ug` binary, not data.
 
@@ -109,9 +109,9 @@ The native `ug` binary is the primary CLI. `ug -h` lists every command;
 | `ug chat "<question>"` | RAG-grounded chat against an LLM — see [docs/CHAT.md](docs/CHAT.md) |
 | `ug project_overview` / `find_symbols` / `file_outline` / `get_code` / `find_usages` / `shortest_path` / `graph_schema` | Agent tools — same names, params and output as the MCP tools and `POST /api/tools/<name>`. Add `--json` for the machine-readable envelope. |
 | `ug query <preset>` | Whole-repo statistics: "how many functions over 50 lines", "what breaks if I change this file", "which folders are worst documented". `ug query --list` shows every preset; `--gql` runs a raw query. |
-| `ug list_projects` / `ug rm <project>` | List projects under `~/.ug`, or delete one |
+| `ug list` / `ug rm <project>` | List projects under `~/.ug`, or delete one |
 | `ug doctor` | Print resolved project/db/embedder/chat config and where each value came from |
-| `ug mcp install [target]` | Wire the MCP server into a client's config — see [MCP Server](#mcp-server) |
+| `ug connect [agent]` | Connect an AI agent — CLI skill, MCP server, or both. See [Connecting an AI agent](#connecting-an-ai-agent) |
 | `ug config ...` | Persist defaults — see [Configuration](#configuration) |
 | `ug upgrade` / `ug uninstall` | Self-update from GitHub, or remove all projects + the install (prebuilt only) |
 
@@ -190,13 +190,23 @@ ug chat "how does graph ingest work?" \
 Flags, the REPL commands, `--json` output, and the HTTP API are documented in
 [docs/CHAT.md](docs/CHAT.md).
 
-## MCP Server
+## Connecting an AI agent
 
-Integrate UltraGraph into your AI agent (Cursor, Claude Desktop, etc). Install
-with `ug mcp install [target]` — an interactive picker when no target, else one
-of: `claude`, `claude-desk`, `cursor`, `windsurf`, `vscode`, `gemini`, `codex`,
-`hermes`, `opencode`. It writes/merges the `ultragraph` entry into the target's
-own MCP config; `--project`/`--global` picks the scope.
+An agent can reach UltraGraph two ways, and they are alternatives:
+
+- **The `ug` CLI (recommended)** — install the agent skill and the agent runs
+  `ug` itself. `ug --help` and `ug query --list` teach it the rest, so its
+  knowledge stays current with the binary and costs no idle context.
+- **The MCP server** — the agent calls tools over the protocol.
+
+`ug connect [agent]` sets up either (or both) — an interactive picker when
+no target, else one of: `claude`, `claude-desk`, `cursor`, `windsurf`, `vscode`,
+`gemini`, `codex`, `hermes`, `opencode`. It asks which way you want, or take
+`--cli` / `--mcp` / `--both`; `--project`/`--global` picks the scope.
+
+Installing both leaves the agent to choose, and it tends to reach for the
+connected tools — so if you want the CLI path, `--cli` is the way to get it.
+Whichever you pick, the other is removed.
 
 **Tools exposed:** `search`, `semantic_search`, `traverse`, `find_usages`,
 `find_symbols`, `file_outline`, `get_code`, `project_overview`, `shortest_path`,
@@ -207,10 +217,11 @@ counting, distribution and blast-radius questions over the whole repo in one
 call — the questions an agent would otherwise answer by grepping every file
 and reading the results, at roughly a thousandth of the tokens.
 
-The easiest way to wire this up is `ug mcp install` (interactive picker, or name
-a client: `claude`, `claude-desk`, `cursor`, `windsurf`, `vscode`, `gemini`,
-`codex`, `hermes`, `opencode`). It writes the config below into the client's
-config file and drops an agent rule file next to it.
+The easiest way to wire this up is `ug connect --mcp` (interactive picker,
+or name a client: `claude`, `claude-desk`, `cursor`, `windsurf`, `vscode`,
+`gemini`, `codex`, `hermes`, `opencode`). It writes the config below into the
+client's config file. Without `--mcp` it first asks whether you want the MCP
+server, the CLI skill, or both.
 
 Point the server at a project with `UG_PROJECT` (a name under `~/.ug`); with no
 env set it falls back to `~/.ug/<cwd-basename>/ugdb` if it exists. Set

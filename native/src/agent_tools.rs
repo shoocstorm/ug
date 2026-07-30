@@ -2265,31 +2265,35 @@ pub fn render_shortest_path(r: &ShortestPathResult, style: Render, strict: bool)
 // Dispatch
 // ---------------------------------------------------------------------------
 
-/// Canonical tool names, in the order they're most useful to an agent.
-pub const AGENT_TOOL_NAMES: &[&str] = &[
-    "project_overview",
-    "find_symbols",
-    "file_outline",
-    "get_code",
-    "find_usages",
-    "traverse",
-    "shortest_path",
-    "graph_schema",
+/// The graph-backed tools [`run_tool`] dispatches: canonical name and its
+/// one-line summary, in the order they're most useful to an agent.
+///
+/// One table rather than a name list beside a summary `match`, so a tool
+/// cannot be advertised without a description or described without being
+/// advertised — the two drifted apart in exactly that way before.
+pub const AGENT_TOOLS: &[(&str, &str)] = &[
+    ("project_overview", "Orient in the codebase: stats, biggest files, most depended-upon symbols."),
+    ("find_symbols", "Exact-name symbol lookup — returns node ids for the other tools."),
+    ("file_outline", "Every indexed symbol in one file, in line order."),
+    ("get_code", "Read source for a node id, or a file/line range."),
+    ("find_usages", "Who uses this symbol — inbound callers/importers, with call sites."),
+    ("traverse", "N-hop walk from seed node ids, filtered by edge type and direction."),
+    ("shortest_path", "Shortest directed edge path between two node ids."),
+    ("graph_schema", "Node & edge types present in this graph, with counts."),
 ];
 
-/// One-line summaries, for `ug api` / `GET /api/tools` discovery.
+/// Does `run_tool` answer this name?
+pub fn is_agent_tool(tool: &str) -> bool {
+    AGENT_TOOLS.iter().any(|(name, _)| *name == tool)
+}
+
+/// One-line summary, for `ug api` / `GET /api/tools` discovery.
 pub fn tool_summary(tool: &str) -> &'static str {
-    match tool {
-        "project_overview" => "Orient in the codebase: stats, biggest files, most depended-upon symbols.",
-        "find_symbols" => "Exact-name symbol lookup — returns node ids for the other tools.",
-        "file_outline" => "Every indexed symbol in one file, in line order.",
-        "get_code" => "Read source for a node id, or a file/line range.",
-        "find_usages" => "Who uses this symbol — inbound callers/importers, with call sites.",
-        "traverse" => "N-hop walk from seed node ids, filtered by edge type and direction.",
-        "shortest_path" => "Shortest directed edge path between two node ids.",
-        "graph_schema" => "Node & edge types present in this graph, with counts.",
-        _ => "",
-    }
+    AGENT_TOOLS
+        .iter()
+        .find(|(name, _)| *name == tool)
+        .map(|(_, summary)| *summary)
+        .unwrap_or("")
 }
 
 /// What a tool call produced.
@@ -2365,7 +2369,7 @@ pub fn run_tool(
         other => Err(format!(
             "Unknown agent tool '{}'. Expected one of: {}.",
             other,
-            AGENT_TOOL_NAMES.join(", ")
+            AGENT_TOOLS.iter().map(|(name, _)| *name).collect::<Vec<_>>().join(", ")
         )),
     }
 }

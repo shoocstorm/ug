@@ -17,8 +17,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use ultragraph::storage::{
-    search_kb as storage_search_kb, ContextItem, DEFAULT_CONTEXT_CHARS, Direction, Embedder,
-    KnowledgeStore, RankStrategy, RankedContext, SearchKbOptions,
+    search_kb as storage_search_kb, semantic_search as storage_semantic_search, ContextItem,
+    DEFAULT_CONTEXT_CHARS, Direction, Embedder, KnowledgeStore, RankStrategy, RankedContext,
+    SearchKbOptions,
 };
 
 /// Default chat model. Picked so the CLI works as soon as the user
@@ -747,6 +748,60 @@ pub struct ToolBox<'a> {
     pub max_rounds: usize,
     /// Cap on how much one tool's output may add to the prompt.
     pub max_result_chars: usize,
+}
+
+/// Run `search` / `semantic_search` for a chat toolbox.
+///
+/// The two embedding-backed tools, once, for every transport: `ug chat` and
+/// `/api/chat` both offer the model the same schemas and both hold an open
+/// store, so both were carrying their own copy of this — the arrangement that
+/// let `code_query` work over MCP and fail in chat. Graph-backed tools stay
+/// with their caller, which is where the graph lives.
+pub async fn run_search_tool(
+    name: &str,
+    args: &Value,
+    store: &dyn KnowledgeStore,
+    embedder: Option<&Embedder>,
+    repo_root: &std::path::Path,
+) -> Result<String, String> {
+    let embedder = embedder.ok_or("no embedder configured — semantic tools are offline")?;
+    let query = args.get("query").and_then(|v| v.as_str()).unwrap_or_default().trim();
+    if query.is_empty() {
+        return Err("query is required".into());
+    }
+    let k = args.get("k").and_then(|v| v.as_u64()).unwrap_or(8).clamp(1, 25) as usize;
+
+    if name == "semantic_search" {
+        let hits = storage_semantic_search(store, embedder, query, k)
+            .await
+            .map_err(|e| e.to_string())?;
+        if hits.is_empty() {
+            return Ok("No matches.".into());
+        }
+        let mut out = String::new();
+        for (i, h) in hits.iter().enumerate() {
+            out.push_str(&format!(
+                "{}. {} ({}) — {}:{} · distance {:.3}\n",
+                i + 1,
+                h.node.name,
+                h.node.node_type,
+                h.node.file,
+                h.node.start_line,
+                h.distance
+            ));
+        }
+        return Ok(out);
+    }
+
+    let mut opts = SearchKbOptions::new(query, repo_root);
+    opts.k = k;
+    opts.hops = args.get("hops").and_then(|v| v.as_u64()).unwrap_or(2).min(4) as u32;
+    opts.include_snippets = true;
+    opts.max_chars = 6_000;
+    let ctx = storage_search_kb(store, embedder, opts)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(render_context(&ctx.items, 6_000))
 }
 
 /// What happened during a tool-calling exchange, for progress reporting.
