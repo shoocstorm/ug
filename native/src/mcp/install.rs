@@ -17,7 +17,7 @@ use serde_json::{json, Map, Value};
 use crate::project::derive_project_name;
 use ultragraph::{C_BOLD, C_CYAN, C_DIM, C_GREEN, C_RESET, C_YELLOW};
 
-const SKILL_MD: &str = include_str!("ug-mcp-skill.md");
+const SKILL_MD: &str = include_str!("ug-skill.md");
 
 /// Config file layout for a target — how a `{ command, args, env }` server
 /// entry is grafted into that client's own JSON/TOML/YAML shape.
@@ -478,6 +478,10 @@ fn skill_body() -> String {
     text.trim().to_string()
 }
 
+/// One-line description for targets whose format carries its own
+/// frontmatter (Cursor, Windsurf) rather than the skill's. Quoted for YAML.
+const GUIDE_BLURB: &str = "\"UltraGraph guide — answer codebase questions (where is X, who calls X, blast radius, repo statistics) with the ug CLI instead of grepping\"";
+
 /// How a target wants the guide written.
 enum SkillKind {
     /// An agent *skill*: a directory holding `SKILL.md`, whose own
@@ -498,29 +502,17 @@ fn skill_target(target: &str, scope: Scope) -> Option<(PathBuf, SkillKind)> {
     match target {
         // Claude Code discovers skills as `<root>/.claude/skills/<name>/SKILL.md`
         // — global under $HOME, or per-project next to the repo.
-        "claude" => Some((
-            root.join(".claude/skills/ug-mcp/SKILL.md"),
-            SkillKind::Skill,
-        )),
+        "claude" => Some((root.join(".claude/skills/ug/SKILL.md"), SkillKind::Skill)),
         "cursor" => {
-            let fm = "description: \"UltraGraph MCP tools guide — efficient codebase and knowledge-base search via a semantic knowledge graph\"\nalwaysApply: false";
-            Some((
-                root.join(".cursor/rules/ug-mcp.mdc"),
-                SkillKind::Rule(fm.to_string()),
-            ))
+            let fm = format!("description: {}\nalwaysApply: false", GUIDE_BLURB);
+            Some((root.join(".cursor/rules/ug.mdc"), SkillKind::Rule(fm)))
         }
         "windsurf" => {
             // Windsurf rules always live in the project dir.
-            let fm = "trigger: model_decision\ndescription: \"UltraGraph MCP tools guide — efficient codebase and knowledge-base search via a semantic knowledge graph\"";
-            Some((
-                cwd().join(".windsurf/rules/ug-mcp.md"),
-                SkillKind::Rule(fm.to_string()),
-            ))
+            let fm = format!("trigger: model_decision\ndescription: {}", GUIDE_BLURB);
+            Some((cwd().join(".windsurf/rules/ug.md"), SkillKind::Rule(fm)))
         }
-        "opencode" => Some((
-            root.join(".agents/skills/ug-mcp/SKILL.md"),
-            SkillKind::Skill,
-        )),
+        "opencode" => Some((root.join(".agents/skills/ug/SKILL.md"), SkillKind::Skill)),
         _ => None,
     }
 }
@@ -529,9 +521,37 @@ fn skill_target(target: &str, scope: Scope) -> Option<(PathBuf, SkillKind)> {
 /// uninstall so a stale copy can't shadow or duplicate the real one.
 fn legacy_skill_paths(target: &str, scope: Scope) -> Vec<PathBuf> {
     let root = if scope == Scope::Global { home() } else { cwd() };
+    // The guide was named `ug-mcp` while it documented the MCP tools; it now
+    // teaches the CLI and is named `ug`. Both spellings are removed, or the
+    // old one keeps loading alongside the new.
     match target {
-        "claude" => vec![root.join(".claude/rules/ug-mcp.md")],
+        "claude" => vec![
+            root.join(".claude/rules/ug-mcp.md"),
+            root.join(".claude/skills/ug-mcp/SKILL.md"),
+        ],
+        "cursor" => vec![root.join(".cursor/rules/ug-mcp.mdc")],
+        "windsurf" => vec![cwd().join(".windsurf/rules/ug-mcp.md")],
+        "opencode" => vec![root.join(".agents/skills/ug-mcp/SKILL.md")],
         _ => Vec::new(),
+    }
+}
+
+/// Delete one guide file, and the skill directory holding it if that leaves
+/// it empty — a bare `ug-mcp/` or `ug/` shell looks like an installed skill.
+fn remove_guide_file(path: &PathBuf) {
+    if !path.exists() {
+        return;
+    }
+    let _ = std::fs::remove_file(path);
+    if let Some(dir) = path.parent() {
+        let is_skill_dir = dir
+            .file_name()
+            .map(|n| n == "ug" || n == "ug-mcp")
+            .unwrap_or(false);
+        if is_skill_dir {
+            // Fails harmlessly when the directory still has contents.
+            let _ = std::fs::remove_dir(dir);
+        }
     }
 }
 
@@ -555,9 +575,7 @@ fn install_skill_file(target: &str, scope: Scope) -> Option<PathBuf> {
     match std::fs::write(&path, content) {
         Ok(()) => {
             for old in legacy_skill_paths(target, scope) {
-                if old.exists() {
-                    let _ = std::fs::remove_file(&old);
-                }
+                remove_guide_file(&old);
             }
             Some(path)
         }
@@ -574,16 +592,7 @@ fn uninstall_skill_file(target: &str, scope: Scope) {
         paths.push(path);
     }
     for path in paths {
-        if !path.exists() {
-            continue;
-        }
-        let _ = std::fs::remove_file(&path);
-        // A skill lives in its own directory; leave no empty shell behind.
-        if let Some(dir) = path.parent() {
-            if dir.file_name().map(|n| n == "ug-mcp").unwrap_or(false) {
-                let _ = std::fs::remove_dir(dir);
-            }
-        }
+        remove_guide_file(&path);
     }
 }
 
@@ -831,7 +840,7 @@ fn do_install(args: &[String]) -> Result<(), String> {
     );
     println!("{C_CYAN}Restart {} to pick it up.{C_RESET}", target.label);
     println!(
-        "{C_DIM}  A ug-mcp agent skill is bundled — it teaches your agent efficient tool selection and calling.{C_RESET}"
+        "{C_DIM}  A `ug` agent skill is bundled — it teaches your agent to answer codebase questions with the ug CLI.{C_RESET}"
     );
     Ok(())
 }
@@ -943,37 +952,57 @@ mod tests {
         // with the frontmatter stripped is invisible to it.
         let (path, kind) = skill_target("claude", Scope::Global).expect("claude skill target");
         assert!(
-            path.ends_with(".claude/skills/ug-mcp/SKILL.md"),
+            path.ends_with(".claude/skills/ug/SKILL.md"),
             "unexpected path: {}",
             path.display()
         );
         assert!(matches!(kind, SkillKind::Skill));
-        assert!(SKILL_MD.starts_with("---\nname: ug-mcp"), "skill needs its frontmatter");
+        assert!(SKILL_MD.starts_with("---\nname: ug\n"), "skill needs its frontmatter");
     }
 
     #[test]
     fn rule_targets_still_get_their_own_frontmatter() {
         let (path, kind) = skill_target("cursor", Scope::Project).expect("cursor target");
-        assert!(path.ends_with(".cursor/rules/ug-mcp.mdc"));
+        assert!(path.ends_with(".cursor/rules/ug.mdc"));
         match kind {
-            SkillKind::Rule(fm) => assert!(fm.contains("alwaysApply")),
+            SkillKind::Rule(fm) => {
+                assert!(fm.contains("alwaysApply"));
+                // Unquoted, the em dash and parentheses would break YAML.
+                assert!(fm.contains("description: \""), "blurb must stay quoted");
+            }
             _ => panic!("cursor should get a rule file"),
         }
     }
 
     #[test]
-    fn legacy_claude_rule_path_is_cleaned_up() {
+    fn the_pre_rename_ug_mcp_guide_is_cleaned_up() {
+        // Every target that ever wrote a `ug-mcp` guide must remove it, or
+        // the stale MCP-era copy loads alongside the CLI one.
+        for (target, stale) in [
+            ("claude", ".claude/skills/ug-mcp/SKILL.md"),
+            ("cursor", ".cursor/rules/ug-mcp.mdc"),
+            ("windsurf", ".windsurf/rules/ug-mcp.md"),
+            ("opencode", ".agents/skills/ug-mcp/SKILL.md"),
+        ] {
+            assert!(
+                legacy_skill_paths(target, Scope::Global)
+                    .iter()
+                    .any(|p| p.ends_with(stale)),
+                "{} should clean up {}",
+                target,
+                stale
+            );
+        }
         assert!(legacy_skill_paths("claude", Scope::Global)
             .iter()
             .any(|p| p.ends_with(".claude/rules/ug-mcp.md")));
-        assert!(legacy_skill_paths("cursor", Scope::Global).is_empty());
     }
 
     #[test]
     fn skill_body_strips_frontmatter() {
         let body = skill_body();
         assert!(!body.starts_with("---"));
-        assert!(body.contains("UltraGraph MCP Tool Guide"));
+        assert!(body.contains("ug query"));
     }
 
     #[test]

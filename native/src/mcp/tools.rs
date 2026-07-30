@@ -42,6 +42,28 @@ pub fn is_known_tool(canonical: &str) -> bool {
 
 pub const CHAT_TOOL_DENYLIST: &[&str] = &["regen", "list_projects"];
 
+/// Tools the chat and tour dispatchers answer from the open store, in their
+/// own match arms. Everything else advertised falls through to
+/// `agent_tools::run_tool`, which reads graph.json — so a tool that is in
+/// neither place is one the model can call and nothing can run.
+pub const STORE_BACKED_CHAT_TOOLS: &[&str] = &["search", "semantic_search", "code_query"];
+
+/// Guard for the chat dispatchers' graph.json fall-through.
+///
+/// Reaching `agent_tools::run_tool` with a store-backed name means the tool is
+/// advertised but has no arm to run it. Saying so beats that function's
+/// "Unknown agent tool", which sends the reader looking for a missing *graph*
+/// tool — the wrong hunt, and how `code_query` stayed broken in chat.
+pub fn reject_if_store_backed(name: &str) -> Result<(), String> {
+    if STORE_BACKED_CHAT_TOOLS.contains(&name) {
+        return Err(format!(
+            "{} needs the indexed store, but this dispatcher has no arm for it.",
+            name
+        ));
+    }
+    Ok(())
+}
+
 pub fn openai_tool_schemas() -> Vec<serde_json::Value> {
     let listed = tool_list();
     listed
@@ -336,6 +358,45 @@ fn raw_tools() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The bug this guards: `code_query` was advertised to the chat model but
+    /// only the MCP dispatcher could run it, so the tab answered "Unknown
+    /// agent tool 'code_query'" — a tool the model was told to call.
+    #[test]
+    fn every_tool_offered_to_chat_can_be_dispatched() {
+        for name in TOOL_NAMES {
+            if CHAT_TOOL_DENYLIST.contains(name) {
+                continue;
+            }
+            assert!(
+                STORE_BACKED_CHAT_TOOLS.contains(name)
+                    || ultragraph::agent_tools::AGENT_TOOL_NAMES.contains(name),
+                "'{}' is advertised to the chat model but no dispatcher answers it: \
+                 add it to a store-backed match arm (and to STORE_BACKED_CHAT_TOOLS), \
+                 to agent_tools::run_tool, or to CHAT_TOOL_DENYLIST",
+                name
+            );
+        }
+    }
+
+    /// The denylist filters what is offered; it can only name real tools.
+    #[test]
+    fn advertised_schemas_match_the_canonical_list() {
+        let offered: Vec<String> = openai_tool_schemas()
+            .iter()
+            .filter_map(|t| {
+                t.get("function")
+                    .and_then(|f| f.get("name"))
+                    .and_then(|n| n.as_str())
+                    .map(|s| s.to_string())
+            })
+            .collect();
+        assert!(offered.iter().any(|n| n == "code_query"), "offered: {:?}", offered);
+        for denied in CHAT_TOOL_DENYLIST {
+            assert!(TOOL_NAMES.contains(denied), "'{}' is not a tool", denied);
+            assert!(!offered.iter().any(|n| n == denied), "'{}' leaked into chat", denied);
+        }
+    }
 
     #[test]
     fn unwraps_a_stringified_id_array() {

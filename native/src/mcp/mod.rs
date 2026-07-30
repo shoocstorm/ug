@@ -243,6 +243,24 @@ fn parse_code_query_args(args: &Value) -> ultragraph::code_query::CodeQueryParam
     parsed
 }
 
+/// Answer a `code_query` tool call from JSON args against an already-open store.
+///
+/// Shared with the chat and tour toolboxes in `serve` and `ug chat`. All three
+/// hand the model the same MCP schemas, so all three have to answer every tool
+/// those schemas advertise — and unlike [`Mcp::tool_code_query`], the chat
+/// paths already hold a store and must not open a second one.
+pub(crate) async fn run_code_query_json(
+    store: &dyn KnowledgeStore,
+    args: &Value,
+) -> Result<String, String> {
+    let params = parse_code_query_args(args);
+    let answer = ultragraph::code_query::run(store, &params).await?;
+    Ok(ultragraph::code_query::render::render(
+        &answer,
+        Render::Markdown,
+    ))
+}
+
 fn store_spec(db_path: &Path, dim: u32) -> Result<StoreSpec, String> {
     let dest = std::env::var("UG_DEST")
         .ok()
@@ -551,13 +569,8 @@ impl Mcp {
     }
 
     async fn tool_code_query(&self, ctx: &ProjectCtx, args: Value) -> Result<String, String> {
-        let params = parse_code_query_args(&args);
         let store = self.open_query_store(ctx).await?;
-        let answer = ultragraph::code_query::run(store.as_ref(), &params).await?;
-        Ok(ultragraph::code_query::render::render(
-            &answer,
-            Render::Markdown,
-        ))
+        run_code_query_json(store.as_ref(), &args).await
     }
 
     /// The half of `graph_schema` that only the store can answer: which

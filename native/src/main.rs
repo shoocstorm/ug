@@ -4457,7 +4457,11 @@ fn cli_tool_runner(
                         .map_err(|e| e.to_string())?;
                     Ok(chat::render_context(&ctx.items, 6_000))
                 }
+                // Statistics come from the store's indexed properties, not the
+                // graph — the one advertised tool `run_tool` cannot answer.
+                "code_query" => crate::mcp::run_code_query_json(&*store, &args).await,
                 _ => {
+                    crate::mcp::tools::reject_if_store_backed(&name)?;
                     let out = ultragraph::agent_tools::run_tool(
                         &name,
                         &graph,
