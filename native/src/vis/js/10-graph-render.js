@@ -37,8 +37,19 @@
         // Visibility accessors handed to the graph. Filters own the base
         // answer; a tour in "solo" mode narrows it further to the route,
         // which turns the walk into a standalone diagram of the answer.
+        // Is focus solo mode actually in force? Guarded rather than read raw:
+        // an empty focus set would hide every node and leave a blank canvas,
+        // and a tour owns isolation while it runs.
+        function focusIsolateOn() {
+            return state.focusIsolate
+                && !!state.focusNode
+                && state.focusSet.size > 0
+                && !tourState.active;
+        }
+
         function nodeVisibleFor(n) {
             if (tourState.active && tourState.isolate && !tourState.routeIds.has(n.id)) return false;
+            if (focusIsolateOn() && !state.focusSet.has(n.id)) return false;
             return !(state.nodeHidden && state.nodeHidden(n));
         }
 
@@ -47,6 +58,11 @@
                 const sId = e.source.id || e.source;
                 const tId = e.target.id || e.target;
                 if (!(tourState.routeIds.has(sId) && tourState.routeIds.has(tId))) return false;
+            }
+            if (focusIsolateOn()) {
+                const sId = e.source.id || e.source;
+                const tId = e.target.id || e.target;
+                if (!(state.focusSet.has(sId) && state.focusSet.has(tId))) return false;
             }
             return !(state.linkHidden && state.linkHidden(e));
         }
@@ -438,6 +454,36 @@
 
         // Frame the graph at the default 3D isometric view.
         function frameGraph(ms = 600) { setView('3d', ms); }
+
+        // Fit the camera around an arbitrary set of node ids — used when solo
+        // mode leaves only a neighbourhood on screen. (`frameTourRoute` does the
+        // same for a tour route, with its own route-specific guards.)
+        function frameNodeSet(ids, ms = 700) {
+            if (!Graph) return;
+            const pts = [];
+            ids.forEach(id => {
+                const n = state.nodeById && state.nodeById.get(id);
+                if (n) pts.push({ x: +n.x || 0, y: +n.y || 0, z: +n.z || 0 });
+            });
+            if (!pts.length) return;
+            const centre = pts.reduce(
+                (a, p) => ({ x: a.x + p.x / pts.length, y: a.y + p.y / pts.length, z: a.z + p.z / pts.length }),
+                { x: 0, y: 0, z: 0 }
+            );
+            let radius = 0;
+            pts.forEach(p => {
+                const dx = p.x - centre.x, dy = p.y - centre.y, dz = p.z - centre.z;
+                radius = Math.max(radius, Math.sqrt(dx * dx + dy * dy + dz * dz));
+            });
+            // Clamped so a lone node isn't framed from inside it, and a sprawling
+            // neighbourhood doesn't push the camera out past the whole graph.
+            const d = Math.max(300, Math.min(1500, radius * 2 + 200)) / Math.sqrt(3);
+            Graph.cameraPosition(
+                { x: centre.x + d, y: centre.y + d * 0.8, z: centre.z + d },
+                centre,
+                ms
+            );
+        }
 
         // Scale the camera's orbit radius by `factor` (mirrors the mouse-wheel
         // dolly: <1 zooms in, >1 zooms out). Keeps the same look-at target so the

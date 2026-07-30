@@ -411,14 +411,38 @@
         }
 
         /* ─── Bottom view bar (projection + toggles) ─────────── */
+        /* Centred on the canvas the user can actually see, not on the window.
+           The sidebar and the details panel both *overlay* the canvas, so a
+           window-centred bar slides underneath them — which cost the first
+           face button its clicks whenever the sidebar was open, and would cost
+           the last toggle its clicks whenever a node was selected. Both
+           gutters are resizable, hence the vars rather than constants. */
         #viewbar {
+            --vb-gutter-left: var(--sidebar-width);
+            --vb-gutter-right: 0px;
             left: 50%;
             bottom: 16px;
-            transform: translateX(-50%);
+            transform: translateX(calc(-50% + (var(--vb-gutter-left) - var(--vb-gutter-right)) / 2));
             display: flex;
             align-items: stretch;
             gap: 5px;
             padding: 6px;
+            /* Twelve controls are wider than the canvas gap once both panels
+               are open, so the row wraps upward instead of running underneath
+               them. `max()` keeps a floor: overflowing is bad, but a bar
+               calc'd down to nothing would be worse. */
+            max-width: max(320px, calc(100vw - var(--vb-gutter-left) - var(--vb-gutter-right) - 24px));
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        /* A collapsed sidebar occupies nothing, so it claims no gutter. */
+        body:has(#sidebar.collapsed) #viewbar {
+            --vb-gutter-left: 0px;
+        }
+
+        body:has(#info.visible) #viewbar {
+            --vb-gutter-right: var(--info-width, 420px);
         }
 
         #viewbar .vbtn {
@@ -507,9 +531,15 @@
             text-transform: uppercase;
         }
 
-        #viewbar .vtoggle:hover {
+        #viewbar .vtoggle:hover:not(:disabled) {
             background: var(--bg-hover);
             color: var(--text);
+        }
+
+        /* Solo has nothing to isolate until a node is selected. */
+        #viewbar .vtoggle:disabled {
+            opacity: 0.35;
+            cursor: default;
         }
 
         #viewbar .vtoggle.active {

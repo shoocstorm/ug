@@ -243,6 +243,9 @@
             set.add(d.id);
             state.focusSet = set;
             document.body.classList.add('focus-active');
+            // Solo, if on, follows the new anchor rather than stranding the
+            // view on the previous node's neighbourhood.
+            syncSoloButton();
         }
 
         // Drop the focus dimming. Does not touch the selection or history.
@@ -250,6 +253,40 @@
             state.focusNode = null;
             state.focusSet = new Set();
             document.body.classList.remove('focus-active');
+            // Solo has nothing left to show — leaving it armed would blank the
+            // canvas on the next focus.
+            state.focusIsolate = false;
+            syncSoloButton();
+        }
+
+        // Solo mode: show *only* the focused node and what it connects to.
+        // The sibling of the tour's solo toggle, for ordinary selection.
+        function toggleFocusSolo() {
+            // Falls back to the selection: clicking the button is a reasonable
+            // way to focus a node you picked from search or the sidebar.
+            if (!state.focusNode && state.selectedNode) enterFocus(state.selectedNode);
+            if (!state.focusNode) return;
+            state.focusIsolate = !state.focusIsolate;
+            syncSoloButton();
+            bumpGraphStyles();
+            // Re-frame so the neighbourhood fills the view, and so the way back
+            // out doesn't leave the camera buried inside the restored graph.
+            if (state.focusIsolate) {
+                frameNodeSet(state.focusSet, 700);
+            } else if (state.selectedNode) {
+                focusNode(state.selectedNode);
+            }
+        }
+
+        // Enabled only when there is something to solo; pressed state mirrors
+        // `state.focusIsolate`.
+        function syncSoloButton() {
+            const btn = document.getElementById('toggle-solo');
+            if (!btn) return;
+            const armed = !!state.focusNode;
+            btn.disabled = !armed;
+            btn.classList.toggle('active', armed && state.focusIsolate);
+            btn.setAttribute('aria-pressed', String(armed && state.focusIsolate));
         }
 
         // ─── Navigation history (back / forward / breadcrumb) ─
@@ -384,6 +421,11 @@
                 spinBtn.classList.toggle('spinning', state.autoSpin);
                 applyAutoSpin();
             });
+
+            const soloBtn = document.getElementById('toggle-solo');
+            if (soloBtn) soloBtn.addEventListener('click', toggleFocusSolo);
+            // Starts inert: nothing is selected yet, so there is nothing to solo.
+            syncSoloButton();
 
             const zIn = document.getElementById('zoom-in');
             const zOut = document.getElementById('zoom-out');

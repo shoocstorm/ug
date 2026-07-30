@@ -59,6 +59,7 @@
             // Focus mode: isolate a node + its neighbourhood, dim the rest.
             focusNode: null,        // id of the focused node (null = off)
             focusSet: new Set(),    // node ids kept bright while focused
+            focusIsolate: false,    // solo mode: hide the rest instead of dimming it
             // Navigation history (visited node ids) + cursor for back/forward.
             history: [],
             historyIndex: -1,

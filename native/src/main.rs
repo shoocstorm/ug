@@ -4133,6 +4133,7 @@ fn run_chat(args: &[String]) {
                         &q,
                         &[],
                         opts_factory(&q),
+                        toolbox.as_ref(),
                     )
                     .await
                     {
@@ -4191,6 +4192,7 @@ fn run_chat(args: &[String]) {
                     &chat_client,
                     repo_root.as_path(),
                     opts_factory,
+                    toolbox.as_ref(),
                     show_context,
                     no_stream,
                 )
@@ -4950,6 +4952,7 @@ async fn run_chat_repl<'a, F>(
     chat_client: &chat::ChatClient,
     repo_root: &std::path::Path,
     mut opts_factory: F,
+    toolbox: Option<&chat::ToolBox<'_>>,
     show_context: bool,
     no_stream: bool,
 ) where
@@ -5011,8 +5014,10 @@ async fn run_chat_repl<'a, F>(
 
         let opts = opts_factory(q);
         let outcome = if no_stream {
-            match chat::run_chat_rag(store, embedder, chat_client, repo_root, q, &history, opts)
-                .await
+            match chat::run_chat_rag(
+                store, embedder, chat_client, repo_root, q, &history, opts, toolbox,
+            )
+            .await
             {
                 Ok(o) => {
                     print_chat_outcome(q, &o, show_ctx);
@@ -5032,7 +5037,7 @@ async fn run_chat_repl<'a, F>(
                 q,
                 &history,
                 opts,
-                None,
+                toolbox,
                 show_ctx,
             )
             .await

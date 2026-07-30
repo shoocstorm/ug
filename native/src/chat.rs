@@ -1396,6 +1396,10 @@ pub async fn retrieve_context(
 /// Single-turn RAG: retrieve from `store`, then ask `chat` to answer
 /// `query`. `repo_root` is forwarded to the retrieval pipeline so it
 /// can resolve relative source paths when building snippets.
+///
+/// `toolbox` is threaded through exactly as in [`run_chat_rag_stream`]:
+/// whether the caller wants the answer streamed is a transport choice and
+/// must not decide whether the model may consult the graph.
 pub async fn run_chat_rag(
     store: &dyn KnowledgeStore,
     embedder: &Embedder,
@@ -1404,12 +1408,13 @@ pub async fn run_chat_rag(
     query: &str,
     history: &[ChatMessage],
     opts: ChatRagOptions<'_>,
+    toolbox: Option<&ToolBox<'_>>,
 ) -> Result<ChatRagOutcome, Box<dyn std::error::Error + Send + Sync>> {
     let t_ret = std::time::Instant::now();
     let context = retrieve_context(store, embedder, repo_root, query, &opts).await?;
     let retrieval_ms = t_ret.elapsed().as_millis();
 
-    let messages = build_rag_messages(
+    let mut messages = build_rag_messages(
         query,
         &context,
         history,
@@ -1421,6 +1426,19 @@ pub async fn run_chat_rag(
     let chat = fast.as_ref().unwrap_or(chat);
 
     let t_cmp = std::time::Instant::now();
+    let mut tool_usage = None;
+    let mut tool_calls = 0;
+    if let Some(tb) = toolbox {
+        if let Some(sys) = messages.first_mut().filter(|m| m.role == "system") {
+            sys.content.push_str(TOOL_SYSTEM_SUFFIX);
+        }
+        // No progress feed here: nothing is watching a non-streamed turn.
+        let (msgs, usage, calls) = run_tool_rounds(chat, tb, messages, |_| {}).await?;
+        messages = msgs;
+        tool_usage = usage;
+        tool_calls = calls;
+    }
+
     let (answer, usage) = chat.complete(&messages).await?;
     let completion_ms = t_cmp.elapsed().as_millis();
 
@@ -1430,8 +1448,8 @@ pub async fn run_chat_rag(
         context,
         retrieval_ms,
         completion_ms,
-        usage,
-        tool_calls: 0,
+        usage: merge_usage(tool_usage, usage),
+        tool_calls,
     })
 }
 

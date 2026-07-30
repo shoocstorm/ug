@@ -3167,6 +3167,27 @@ async fn api_chat(State(state): State<ServeState>, Json(body): Json<ChatBody>) -
 
     let dest_name = db.backend_name();
     let repo_root = state.repo_root();
+
+    // The same toolbox the streaming path builds: `stream` picks how the
+    // answer is delivered, not whether the model may consult the graph.
+    let tool_state = state.clone();
+    let tool_db = db.clone();
+    let tool_embedder = Some(embedder.clone());
+    let runner = move |name: &str, args: serde_json::Value| {
+        let state = tool_state.clone();
+        let db = tool_db.clone();
+        let embedder = tool_embedder.clone();
+        let name = name.to_string();
+        Box::pin(async move { run_chat_tool(state, db, embedder, name, args).await })
+            as futures::future::BoxFuture<'static, Result<String, String>>
+    };
+    let toolbox = body.tools.unwrap_or(true).then(|| chat::ToolBox {
+        schemas: crate::mcp::tools::openai_tool_schemas(),
+        run: &runner,
+        max_rounds: body.max_tool_rounds.unwrap_or(4).min(8),
+        max_result_chars: 6_000,
+    });
+
     let outcome = chat::run_chat_rag(
         &*db,
         &embedder,
@@ -3175,6 +3196,7 @@ async fn api_chat(State(state): State<ServeState>, Json(body): Json<ChatBody>) -
         &body.query,
         &history_owned,
         opts,
+        toolbox.as_ref(),
     )
     .await;
     drop(_permit);
