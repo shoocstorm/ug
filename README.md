@@ -88,7 +88,7 @@ root with `UG_HOME`):
 └── README.md
 ```
 
-`ug list` shows every project with counts and last-generated times; `ug rm
+`ug list_projects` shows every project with counts and last-generated times; `ug rm
 <project>` deletes one (prompts unless `-f/--force`/`-y/--yes`). The repo-local
 `.ug/` folder only holds the `ug` binary, not data.
 
@@ -100,9 +100,9 @@ The native `ug` binary is the primary CLI. `ug -h` lists every command;
 | Command | Description |
 | :--- | :--- |
 | `ug gen` | Full pipeline: index → graph → visualization → OverGraph ingest |
-| `ug regen` | The same pipeline again for an already-generated project — reads the repo path from its metadata, so no `-i`. Incremental. (`ug reindex` is an accepted alias.) |
+| `ug regen` | The same pipeline again for an already-generated project — reads the repo path from its metadata, so no `-i`. Incremental. |
 | `ug serve` / `ug app` | Serve the viz + REST API (multi-project); `app` wraps it in a native Tauri window |
-| `ug index` / `graph` / `ingest` | The individual pipeline stages `gen` runs for you |
+| `ug index` / `graph` / `ingest` | The individual pipeline stages `gen` runs for you. Unlisted in `ug -h` — `gen --no-ingest` covers the usual reason to want one. |
 | `ug search "<query>"` | GraphRAG: semantic search → graph expansion → ranked context |
 | `ug semantic_search "<query>"` | Plain vector search, no graph expansion |
 | `ug traverse <node-id>` | K-hop BFS over the stored OverGraph edges |

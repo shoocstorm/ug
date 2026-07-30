@@ -31,9 +31,7 @@ All accept: `-n <name>` (project), `-i <file>` (explicit graph.json), `--json` (
 
 | Command | Aliases | What it does | Key flags |
 |---------|---------|-------------|-----------|
-| `ug graph_bfs` | `bfs` | K-hop BFS from a node id/name/file path. | `<node-id-or-name>` positional, `-k <hops>` (default 1), `-d <dir>` out\|in\|both, `--edge-type` (repeatable), `-t <type>` node type filter, `-f <prefix>` file prefix, `-l <limit>` (default 50) |
-| `ug graph_filter` | `filter` | List edges by type/endpoint. No args: shows all edge types with counts. | `-t <edge-type>` (repeatable), `--from <node>`, `--to <node>`, `-f <prefix>`, `-l <limit>` |
-| `ug graph_path` | `path`, `shortest_path` | Find shortest directed path between two symbols. | `<source>` `<target>` positionals, `--strict` (don't retry reverse direction) |
+| `ug shortest_path` | — | Find shortest directed path between two symbols. | `<source>` `<target>` positionals, `--strict` (don't retry reverse direction) |
 | `ug graph_centrality` | `centrality` | Rank nodes by degree & betweenness centrality. | `--top <n>` (default 20), `-t <type>` (repeatable), `-f <prefix>` |
 | `ug graph_cycles` | `cycles` | Detect dependency cycles. | `-l <limit>` (default 20), `--min-len <n>`, `--max-len <n>`, `-f <prefix>`, `--fail-on-cycle` |
 
@@ -44,21 +42,28 @@ These accept the same params as their MCP counterparts and can output `--json`.
 | Command | Aliases | What it does | Key flags |
 |---------|---------|-------------|-----------|
 | `ug find_symbols` | — | Exact-name lookup (case-insensitive, ranked exact > prefix > substring). | `-n <name>`, `-t <type>` filter, `-f <file-prefix>`, `-l <limit>`, `--include-docs`, `--json`, `-o <file>` |
-| `ug graph_search` | — | Same as find_symbols but with docstring matching on by default (`includeDocs: true`). | Same as find_symbols |
 | `ug file_outline` | — | List indexed symbols in a file, in line order. | `<file>` positional, `-n <name>`, `--json` |
 | `ug get_code` | — | Read source for a node id or file/line range. | `<node-id>` or `-f <file>`, `--start-line`, `--end-line`, `--max-chars`, `-n <name>` |
 | `ug find_usages` | — | Find inbound references (callers/importers) to a symbol. | `<node-id>` positional(s), `--hops`, `--edge-type`, `-n <name>`, `--json` |
 | `ug project_overview` | — | Orient in the codebase: stats, biggest files, most depended-upon symbols. | `-n <name>`, `--json` |
 | `ug graph_schema` | — | Node & edge types with counts and connection info. | `-n <name>`, `--json` |
 
+**Removed.** `graph_bfs`/`bfs`, `graph_filter`/`filter` and `graph_search` are gone, along with every pre-rename alias (`hybrid_search`, `search_kb`, `graph_path`, `path`, `list`, `find_symbol`, `reindex`, `update`, `centrality`, `cycles`, `code_query`). Each duplicated something else exactly, and duplicates drift — the two BFS commands had already diverged on whether a bare symbol name was accepted. Every command and tool now has exactly one name:
+
+| Retired | Use instead |
+|---------|-------------|
+| `ug graph_bfs <name>` | `ug traverse <node-or-name>` — same graph.json walk, and it now resolves a bare name or file path too |
+| `ug graph_filter` | `ug graph_schema` for the edge-type census (no database needed), or `ug query` for anything more |
+| `ug graph_search <name>` | `ug find_symbols <name> --include-docs` — the flag was all `graph_search` set |
+
 ### 1.4 Retrieval Commands (ugdb/Neo4j-backed)
 
 | Command | Aliases | What it does | Key flags |
 |---------|---------|-------------|-----------|
-| `ug search` | `hybrid_search` | **GraphRAG**: semantic search → graph expansion → PPR-ranked context with snippets. | `<query>` positional, `-k <limit>` (default 8), `--filter <sql>`, `--direction`, `-t <edge-type>`, `--max-chars`, `--no-snippets`, `-n <name>`, `--repo-root`, embedding overrides |
+| `ug search` | — | **GraphRAG**: semantic search → graph expansion → PPR-ranked context with snippets. | `<query>` positional, `-k <limit>` (default 8), `--filter <sql>`, `--direction`, `-t <edge-type>`, `--max-chars`, `--no-snippets`, `-n <name>`, `--repo-root`, embedding overrides |
 | `ug semantic_search` | — | Pure vector search over embeddings (no graph context). | `<query>` positional, `-k <limit>` (default 10), `--filter <sql>`, `-n <name>`, embedding overrides |
 | `ug traverse` | — | K-hop BFS over the OverGraph edges table. | `<node-id>`... positionals, `-k <hops>` (default 2), `-n <name>` |
-| `ug query` | `code_query` | **Whole-repo statistics**: counts, groups, distributions, blast radius. Read-only GQL over the stored facts. Needs the db but **no embedder**. | `<preset>` positional or `-p <preset>`, `-a k=v` (repeatable), `-g/--gql <query>`, `-k <limit>` (default 20), `-r/--range <window>` (`20` · `11-35` · `34-end`), `--list`, `-n <name>` |
+| `ug query` | — | **Whole-repo statistics**: counts, groups, distributions, blast radius. Read-only GQL over the stored facts. Needs the db but **no embedder**. | `<preset>` positional or `-p <preset>`, `-a k=v` (repeatable), `-g/--gql <query>`, `-k <limit>` (default 20), `-r/--range <window>` (`20` · `11-35` · `34-end`), `--list`, `-n <name>` |
 
 ### 1.5 Chat & Tour Commands
 
@@ -77,7 +82,7 @@ These accept the same params as their MCP counterparts and can output `--json`.
 | `ug list_projects` | `list` | List generated projects under `~/.ug` with stats. | — |
 | `ug active` | — | View or set the active project (default for `ug mcp`). | Sets with `<name>` positional |
 | `ug rm` | — | Delete a project's data directory. | `<name>` positional |
-| `ug regen` | `reindex` | Re-run the pipeline for an existing project: reads `repoRoot` from its `project.json`, so no `-i` needed. Incremental. | `-n <name>`, plus every `ug gen` flag |
+| `ug regen` | — | Re-run the pipeline for an existing project: reads `repoRoot` from its `project.json`, so no `-i` needed. Incremental. | `-n <name>`, plus every `ug gen` flag |
 | `ug upgrade` | `update` | Check GitHub for a new release and self-update. | `--check` (report only, no update) |
 | `ug uninstall` | — | Delete ALL indexed projects and uninstall ug itself. | — |
 | `ug config` | — | View/persist defaults (chat model, endpoints, etc.) in `~/.ug/config.json`. | `set <key> <value>`, `get <key>`, `list` |
@@ -197,25 +202,13 @@ These 13 tools are advertised over MCP `tools/list` and also available via the C
 | `code_query` | **Whole-repo statistics**: counts, groups, distributions, blast radius. Takes a named `preset` or raw GQL. Read-only — mutations are rejected before write staging. Every answer reports property coverage, because aggregating over an unstored property returns `0` rather than an error. | ugdb (**no embedder**) | db missing or written by an older ug |
 | `graph_schema` | **Capability manifest**: node & edge types with counts and connection shapes (from graph.json), plus queryable properties with live coverage and the `code_query` preset list (from the db). | graph.json + ugdb | graph.json missing/invalid (the db half degrades to a note) |
 | `list_projects` | List every indexed project on this machine (name, repo path, graph size). | `~/.ug/` directory scan | — |
-| `regen` | Re-run index → graph → embed pipeline — the whole of `ug gen`, which is why it is not called `reindex` (that names only the first stage; the old name is still accepted). Incremental (content-hash cache). Graph tools refresh even if embedding fails. | Repo source → index.json → graph.json → ugdb/Neo4j | Repo root missing |
+| `regen` | Re-run index → graph → embed pipeline — the whole of `ug gen`, which is why it is not called `reindex` (that names only the first stage). Incremental (content-hash cache). Graph tools refresh even if embedding fails. | Repo source → index.json → graph.json → ugdb/Neo4j | Repo root missing |
 
 ### 3.2 Unlisted Tools (hidden from agents, available via `ug mcp call`)
 
 | Tool | What it does | Data source |
 |------|-------------|-------------|
 | `ping_embedder` | Ping the embedding endpoint to check connectivity | Embedder endpoint |
-
-### 3.3 Tool Aliases
-
-| Alias | Resolves to | Notes |
-|-------|-------------|-------|
-| `search_kb` | `search` | Pre-rename name |
-| `hybrid_search` | `search` | Pre-rename name |
-| `graph_path` | `shortest_path` | Pre-rename name |
-| `path` | `shortest_path` | Pre-rename name |
-| `list` | `list_projects` | Pre-rename name |
-| `find_symbol` | `find_symbols` | Singular → plural |
-| `graph_search` | `find_symbols` | Sets `includeDocs: true` by default |
 
 ### 3.4 Chat Tool Denylist
 

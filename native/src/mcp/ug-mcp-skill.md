@@ -24,7 +24,7 @@ description: |
 | `semantic_search` | medium | — | Pure vector lookup → candidate nodeIds (no code snippets) |
 | `traverse` | cheap | ✅ `nodeId[]` | N-hop graph walk from nodeId(s) — deps or dependents |
 | `search` | expensive | — | Full GraphRAG: PPR-ranked snippets with code context |
-| `regen` | expensive | — | Re-run the whole index→graph→embed pipeline (the old name `reindex` still works) |
+| `regen` | expensive | — | Re-run the whole index→graph→embed pipeline |
 
 **Storage**: only `search` and `semantic_search` need a reachable embedding
 backend. `code_query` needs the OverGraph db but **no embedder**. Every other

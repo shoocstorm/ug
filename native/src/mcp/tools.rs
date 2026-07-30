@@ -1,6 +1,10 @@
-//! MCP tool registry: the JSON Schema advertised over `tools/list`, plus the
-//! name aliases and hidden tools the dispatcher honours. Ported from the
-//! `MCP_TOOLS` / `TOOL_ALIASES` tables that used to live in `node/cli.mjs`.
+//! MCP tool registry: the JSON Schema advertised over `tools/list`, plus
+//! the hidden tools the dispatcher honours.
+//!
+//! Every tool has exactly one name. Alternate spellings used to be
+//! accepted so an agent holding a cached tool list would not break; with
+//! nothing published yet they only bought a second name to document, test
+//! and keep behaving identically, so they are gone.
 //!
 //! The schemas are hand-written (rather than derived from the param structs)
 //! because the descriptions are load-bearing prompt text tuned for agents —
@@ -24,36 +28,6 @@ pub const TOOL_NAMES: &[&str] = &[
     "list_projects",
     "regen",
 ];
-
-/// Pre-rename spellings. `tools/list` advertises only the canonical set, but an
-/// agent may have an old name cached from an earlier session, so keep accepting
-/// them — same aliases the CLI honours for its subcommands.
-pub fn canonical_tool_name(name: &str) -> &str {
-    match name {
-        "search_kb" | "hybrid_search" => "search",
-        "graph_path" | "path" => "shortest_path",
-        "list" => "list_projects",
-        "find_symbol" => "find_symbols",
-        // graph_search was find_symbols over names *and* docstrings; the
-        // docstring half comes back via `alias_defaults`.
-        "graph_search" => "find_symbols",
-        // `reindex` named only the first of the three stages it runs
-        // (index → graph → embed). `regen` says what it does and pairs
-        // with the `ug gen` it repeats; the old name keeps working because
-        // agents cache tool lists between sessions.
-        "reindex" => "regen",
-        other => other,
-    }
-}
-
-/// Legacy names that implied a non-default param value. Merged under the
-/// caller's args (caller wins).
-pub fn alias_defaults(raw_name: &str) -> Option<Value> {
-    match raw_name {
-        "graph_search" => Some(json!({ "includeDocs": true })),
-        _ => None,
-    }
-}
 
 /// Handled by the dispatcher but deliberately absent from `tools/list` —
 /// operator diagnostics that would only waste an agent's tool call. Still
@@ -122,7 +96,7 @@ pub fn openai_tool_schemas() -> Vec<serde_json::Value> {
 /// says it should be. Rejecting a well-meant call over quoting teaches
 /// the model nothing and costs the user a round-trip.
 pub fn normalize_args(tool: &str, args: &mut Value) {
-    let canonical = canonical_tool_name(tool);
+    let canonical = tool;
     let schema = raw_tools();
     let Some(props) = schema
         .as_array()
@@ -353,7 +327,7 @@ fn raw_tools() -> Value {
         },
         {
             "name": "regen",
-            "description": "Re-run the whole pipeline (index → graph → embed) for the current (or named) project — the same thing `ug gen` does, which is why it is `regen`. Call it when tool outputs carry an \"Index may be stale\" warning, when the user says results look outdated, or after you (or they) changed many files. Incremental — unchanged files are skipped via content hashes — but embedding changed nodes needs the embedding backend, so it can take a while on big diffs; the structural tools are refreshed even if embedding fails. Accepts its former name `reindex` too.",
+            "description": "Re-run the whole pipeline (index → graph → embed) for the current (or named) project — the same thing `ug gen` does, which is why it is `regen`. Call it when tool outputs carry an \"Index may be stale\" warning, when the user says results look outdated, or after you (or they) changed many files. Incremental — unchanged files are skipped via content hashes — but embedding changed nodes needs the embedding backend, so it can take a while on big diffs; the structural tools are refreshed even if embedding fails.",
             "inputSchema": { "type": "object", "properties": {} }
         }
     ])
@@ -404,11 +378,19 @@ mod tests {
         assert_eq!(args2["mystery"], json!("[1,2]"), "no schema, no rewrite");
     }
 
+    /// Coercion is driven by the tool's schema, so it only fires for a
+    /// name that is actually advertised. `find_symbol` used to be an alias
+    /// and is now nothing — its args come through untouched, which is the
+    /// correct behaviour for an unknown tool.
     #[test]
-    fn aliased_tool_names_resolve_to_the_same_schema() {
+    fn only_an_advertised_name_gets_its_args_coerced() {
         let mut args = json!({ "nodeId": "[\"a\",\"b\"]" });
-        normalize_args("find_symbol", &mut args);   // alias of find_symbols
+        normalize_args("find_symbols", &mut args);
         assert_eq!(args["nodeId"], json!(["a", "b"]));
+
+        let mut args = json!({ "nodeId": "[\"a\",\"b\"]" });
+        normalize_args("find_symbol", &mut args);
+        assert_eq!(args["nodeId"], json!("[\"a\",\"b\"]"), "no such tool, no schema, no rewrite");
     }
 
     #[test]
@@ -433,16 +415,6 @@ mod tests {
         }
     }
 
-    /// Renaming an advertised tool breaks any agent holding a cached tool
-    /// list, so the old name has to keep resolving. This is the check that
-    /// the alias was not forgotten when the rename happened.
-    #[test]
-    fn reindex_still_resolves_after_the_rename_to_regen() {
-        assert_eq!(canonical_tool_name("reindex"), "regen");
-        assert!(is_known_tool("regen"));
-        assert!(TOOL_NAMES.contains(&"regen"));
-        assert!(!TOOL_NAMES.contains(&"reindex"), "only the new name is advertised");
-    }
 
     /// The denylist is matched against *canonical* names, so it had to be
     /// renamed alongside the tool — otherwise the chat model regains the
@@ -457,20 +429,18 @@ mod tests {
         assert!(!exposed.contains(&"regen".to_string()), "{exposed:?}");
     }
 
-    #[test]
-    fn aliases_map_to_canonical_names() {
-        assert_eq!(canonical_tool_name("search_kb"), "search");
-        assert_eq!(canonical_tool_name("hybrid_search"), "search");
-        assert_eq!(canonical_tool_name("graph_path"), "shortest_path");
-        assert_eq!(canonical_tool_name("list"), "list_projects");
-        assert_eq!(canonical_tool_name("graph_search"), "find_symbols");
-        assert_eq!(canonical_tool_name("get_code"), "get_code");
-    }
 
+
+    /// With aliases gone, the only names that work are the advertised
+    /// ones. A near-miss must fail rather than quietly resolving.
     #[test]
-    fn graph_search_alias_defaults_include_docs() {
-        assert_eq!(alias_defaults("graph_search"), Some(json!({ "includeDocs": true })));
-        assert_eq!(alias_defaults("find_symbols"), None);
+    fn an_unadvertised_name_is_not_a_tool() {
+        for gone in ["reindex", "search_kb", "hybrid_search", "graph_path", "graph_search", "list"] {
+            assert!(!is_known_tool(gone), "`{gone}` should no longer resolve");
+        }
+        for real in TOOL_NAMES {
+            assert!(is_known_tool(real), "{real}");
+        }
     }
 
     #[test]

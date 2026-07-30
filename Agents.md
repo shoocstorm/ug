@@ -36,6 +36,33 @@ When your changes create orphans:
 
 The test: Every changed line should trace directly to the user's request.
 
+### 3a. Breaking changes are cheap right now
+
+**`ug` has no users yet. Do not carry compatibility for people who don't
+exist.**
+
+When something is renamed or superseded, delete the old thing outright:
+
+- No aliases for the old spelling. No deprecation shims that print "use X
+  instead". No `#[deprecated]`, no re-exports, no "kept for back-compat".
+- No parameter kept accepting an old shape "just in case".
+- Rename freely: CLI subcommands, MCP tool names, JSON fields, stored
+  property names, on-disk formats.
+
+Each alias is a second name to document, test, and keep behaving
+identically — and duplicates drift. `graph_bfs` and `traverse` did the same
+graph walk and had already diverged on whether a bare symbol name was
+accepted; that divergence is what a compatibility alias buys you.
+
+Store formats are the one place to still be deliberate: bump
+`STORE_FORMAT_VERSION` / `GRAPH_SCHEMA_VERSION` so an existing index is
+*rejected with a "run `ug regen`" message* rather than read as garbage. That
+is not backward compatibility — it is refusing to answer from data this
+build cannot read, which stays correct however old the index is.
+
+Revisit this section at the first real release. Until then, prefer one name
+per thing and a clean deletion over a graceful migration path.
+
 ## 4. Goal-Driven Execution
 
 **Define success criteria. Loop until verified.**

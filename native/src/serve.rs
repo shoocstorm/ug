@@ -3508,7 +3508,7 @@ async fn api_chat_config(State(state): State<ServeState>) -> Response {
 /// The schemas come straight from the MCP registry, so the model behind
 /// `/api/chat` sees exactly the toolbox an MCP client sees — one
 /// description to maintain, not two. Tools that mutate or that only make
-/// sense to an operator (`reindex`, `list_projects`) are left out: a chat
+/// sense to an operator (`regen`, `list_projects`) are left out: a chat
 /// turn should read the graph, not reshape it.
 /// Run one tool against the server's live state.
 ///
@@ -3523,7 +3523,6 @@ async fn run_chat_tool(
     name: String,
     args: serde_json::Value,
 ) -> Result<String, String> {
-    let name = crate::mcp::tools::canonical_tool_name(&name).to_string();
     // Undo the model's stringified arrays/numbers before anything reads them.
     let mut args = args;
     crate::mcp::tools::normalize_args(&name, &mut args);

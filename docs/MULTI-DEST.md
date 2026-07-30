@@ -39,7 +39,7 @@ ug semantic_search "how does authentication work?" \
   --neo4j-user neo4j --neo4j-password $NEO4J_PASSWORD
 
 # Same for hybrid_search and traverse
-ug hybrid_search "loadConfig" --dest neo4j --neo4j-uri … --strategy ppr
+ug search "loadConfig" --dest neo4j --neo4j-uri … --strategy ppr
 ug traverse file:src/main.ts --dest neo4j --neo4j-uri …
 ```
 

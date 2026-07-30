@@ -9,11 +9,11 @@ use ultragraph::storage::{
     DEFAULT_BASE_URL as DEFAULT_EMBED_BASE_URL, DEFAULT_MODEL as DEFAULT_EMBED_MODEL,
 };
 use ultragraph::agent_tools::{
-    self, by_id_map, edge_type_str, looks_like_node_id, node_loc, node_type_str,
+    self, by_id_map, looks_like_node_id, node_loc, node_type_str,
     strip_file_id_prefix, Render,
 };
 use ultragraph::limits::{BudgetSource, EmbedBudget};
-use ultragraph::types::{GraphData, GraphEdge, GraphNode, GraphNodeType};
+use ultragraph::types::{GraphData, GraphNode, GraphNodeType};
 use ultragraph::{
     build_graph, calculate_centrality, detect_cycles, index, index_with_cache, C_BLUE, C_BOLD,
     C_CYAN, C_DIM, C_GREEN, C_MAGENTA, C_RESET, C_YELLOW,
@@ -80,9 +80,7 @@ fn main() {
     match cmd.as_str() {
         // Primary entry points.
         "gen" => run_gen(cmd_args),
-        // `reindex` is the name the MCP tool shipped under first; it stays
-        // accepted so anything scripted against it keeps working.
-        "regen" | "reindex" => run_regen(cmd_args),
+        "regen" => run_regen(cmd_args),
         "serve" => serve::run_serve(cmd_args),
         "app" => run_app(cmd_args),
         "api" => run_api(cmd_args),
@@ -90,37 +88,34 @@ fn main() {
         "index" => run_index(cmd_args),
         "graph" => run_graph(cmd_args),
         "ingest" => run_ingest(cmd_args),
-        // Graph analysis (offline, in-memory). Project-scoped via
-        // -n/--name; the pre-rename names stay as aliases.
-        "graph_bfs" | "bfs" => run_graph_bfs(cmd_args),
-        "graph_filter" | "filter" => run_graph_filter(cmd_args),
-        "graph_centrality" | "centrality" => run_graph_centrality(cmd_args),
-        "graph_cycles" | "cycles" => run_graph_cycles(cmd_args),
+        // Structural analysis. What is left here is what nothing else
+        // can do: betweenness centrality needs all-pairs shortest paths,
+        // and cycle detection needs an unbounded DFS — neither is
+        // expressible as a query.
+        "graph_centrality" => run_graph_centrality(cmd_args),
+        "graph_cycles" => run_graph_cycles(cmd_args),
         // Agent tools (graph.json-backed, for AI coding agents). Names match
         // the MCP tools one-for-one.
         "find_symbols" => run_find_symbols(cmd_args),
-        // Same scan as find_symbols, with docstring matching on by default.
-        "graph_search" => run_graph_search(cmd_args),
         "file_outline" => run_file_outline(cmd_args),
         "get_code" => run_get_code(cmd_args),
         "find_usages" => run_find_usages(cmd_args),
         "project_overview" => run_project_overview(cmd_args),
-        "shortest_path" | "graph_path" | "path" => run_graph_path(cmd_args),
+        "shortest_path" => run_graph_path(cmd_args),
         "graph_schema" => run_graph_schema(cmd_args),
-        "query" | "code_query" => run_code_query(cmd_args),
-        // Retrieval (OverGraph-backed). `search` is the canonical name the
-        // MCP tool uses; `hybrid_search` is the pre-rename alias.
+        "query" => run_code_query(cmd_args),
+        // Retrieval (OverGraph-backed).
         "semantic_search" => run_semantic_search(cmd_args),
-        "search" | "hybrid_search" => run_hybrid_search(cmd_args),
+        "search" => run_hybrid_search(cmd_args),
         "traverse" => run_traverse(cmd_args),
         "chat" => run_chat(cmd_args),
         "tour" => run_tour(cmd_args),
         // Project management.
-        "list_projects" | "list" => run_list(cmd_args),
+        "list_projects" => run_list(cmd_args),
         "active" => run_active(cmd_args),
         "rm" => run_rm(cmd_args),
         "uninstall" => run_uninstall(cmd_args),
-        "upgrade" | "update" => run_upgrade(cmd_args),
+        "upgrade" => run_upgrade(cmd_args),
         "config" => run_config(cmd_args),
         "doctor" => run_doctor(cmd_args),
         "mcp" => run_mcp(cmd_args),
@@ -474,7 +469,7 @@ pub(crate) struct IngestOutcome {
 ///
 /// A store written by an older ug is an expected, actionable state after
 /// an upgrade — not a bug. Reporting it through `panic!` buries a
-/// perfectly good "run `ug reindex`" message under a backtrace notice and
+/// perfectly good "run `ug regen`" message under a backtrace notice and
 /// makes a routine migration look like a crash. Every other failure keeps
 /// panicking, because it is one.
 async fn open_store_or_exit(spec: &StoreSpec) -> Box<dyn KnowledgeStore> {
@@ -793,304 +788,6 @@ fn node_passes(n: &GraphNode, types: &[String], file_prefix: Option<&str>) -> bo
     true
 }
 
-/// Which way edges are followed by `graph_bfs`.
-#[derive(Clone, Copy, PartialEq)]
-enum BfsDir {
-    Out,
-    In,
-    Both,
-}
-
-fn bfs_dir_from_args(args: &[String]) -> BfsDir {
-    match flag_value_or(args, &["-d", "--direction"], "out").to_lowercase().as_str() {
-        "out" | "outbound" | "forward" => BfsDir::Out,
-        "in" | "inbound" | "reverse" => BfsDir::In,
-        "both" | "any" | "undirected" => BfsDir::Both,
-        other => {
-            eprintln!("Error: unknown --direction '{}' (expected: out, in, both)", other);
-            std::process::exit(2);
-        }
-    }
-}
-
-fn bfs_dir_str(d: BfsDir) -> &'static str {
-    match d {
-        BfsDir::Out => "out",
-        BfsDir::In => "in",
-        BfsDir::Both => "both",
-    }
-}
-
-/// K-hop BFS over the in-memory graph, honouring direction and an
-/// optional edge-type allowlist. Returns hop distances per node id plus
-/// the edges walked.
-fn k_hop(
-    graph: &GraphData,
-    start: &str,
-    k: u32,
-    dir: BfsDir,
-    edge_types: &[String],
-) -> (std::collections::HashMap<String, u32>, Vec<GraphEdge>) {
-    use std::collections::HashMap;
-
-    let mut adj: HashMap<&str, Vec<(&str, &GraphEdge)>> = HashMap::new();
-    for e in &graph.edges {
-        if !edge_types.is_empty()
-            && !edge_types.contains(&edge_type_str(&e.edge_type).to_lowercase())
-        {
-            continue;
-        }
-        if matches!(dir, BfsDir::Out | BfsDir::Both) {
-            adj.entry(e.source.as_str()).or_default().push((e.target.as_str(), e));
-        }
-        if matches!(dir, BfsDir::In | BfsDir::Both) {
-            adj.entry(e.target.as_str()).or_default().push((e.source.as_str(), e));
-        }
-    }
-
-    let mut dist: HashMap<String, u32> = HashMap::new();
-    let mut walked: Vec<GraphEdge> = Vec::new();
-    dist.insert(start.to_string(), 0);
-    let mut frontier: Vec<String> = vec![start.to_string()];
-
-    for d in 1..=k {
-        let mut next: Vec<String> = Vec::new();
-        for id in &frontier {
-            let Some(neighbors) = adj.get(id.as_str()) else {
-                continue;
-            };
-            for (nbr, e) in neighbors {
-                walked.push((*e).clone());
-                if !dist.contains_key(*nbr) {
-                    dist.insert((*nbr).to_string(), d);
-                    next.push((*nbr).to_string());
-                }
-            }
-        }
-        if next.is_empty() {
-            break;
-        }
-        frontier = next;
-    }
-
-    walked.sort_by(|a, b| {
-        (a.source.as_str(), a.target.as_str(), edge_type_str(&a.edge_type)).cmp(&(
-            b.source.as_str(),
-            b.target.as_str(),
-            edge_type_str(&b.edge_type),
-        ))
-    });
-    walked.dedup_by(|a, b| {
-        a.source == b.source && a.target == b.target && edge_type_str(&a.edge_type) == edge_type_str(&b.edge_type)
-    });
-    (dist, walked)
-}
-
-fn run_graph_bfs(args: &[String]) {
-    if has_flag(args, "-h") || has_flag(args, "--help") {
-        print_graph_bfs_help();
-        return;
-    }
-    let (load_args, pos) = analysis_input(args);
-    if pos.is_empty() {
-        eprintln!("Usage: ug graph_bfs <node-id-or-name> [k] [-k|--hops <n>] [-d|--direction out|in|both] [-t|--type <node-type>]... [--edge-type <type>]... [-l|--limit <n>] [-n|--name <project>]");
-        std::process::exit(1);
-    }
-    // `k` is a flag, but the old positional form (`... <start> 2`) still works.
-    let k: u32 = flag_value(args, &["-k", "--hops"])
-        .or_else(|| pos.get(1).cloned())
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(1);
-    let dir = bfs_dir_from_args(args);
-    let edge_types = type_filter(args, &["--edge-type"]);
-    let types = type_filter(args, &["-t", "--type"]);
-    let file_prefix = flag_value(args, &["-f", "--file"]);
-    let limit = limit_or(args, &["-l", "--limit"], 50);
-
-    let (graph, _raw, _path) = load_agent_graph(&load_args);
-    let start = resolve_node_ref(&graph, &pos[0]);
-    let (dist, edges) = k_hop(&graph, &start, k, dir, &edge_types);
-
-    // Hop order first, then type, then name — reads like an expanding ring.
-    let mut reached: Vec<(u32, &GraphNode)> = graph
-        .nodes
-        .iter()
-        .filter_map(|n| dist.get(&n.id).map(|d| (*d, n)))
-        .filter(|(d, n)| *d == 0 || node_passes(n, &types, file_prefix.as_deref()))
-        .collect();
-    reached.sort_by(|a, b| {
-        a.0.cmp(&b.0)
-            .then(node_type_str(&a.1.node_type).cmp(node_type_str(&b.1.node_type)))
-            .then(a.1.name.cmp(&b.1.name))
-    });
-
-    let json = {
-        let nodes: Vec<serde_json::Value> = reached
-            .iter()
-            .map(|(d, n)| {
-                let mut v = serde_json::to_value(n).unwrap_or_else(|_| serde_json::json!({}));
-                if let Some(o) = v.as_object_mut() {
-                    o.insert("distance".to_string(), serde_json::json!(d));
-                }
-                v
-            })
-            .collect();
-        serde_json::json!({
-            "start": start,
-            "hops": k,
-            "direction": bfs_dir_str(dir),
-            "count": nodes.len(),
-            "nodes": nodes,
-            "edges": edges,
-        })
-        .to_string()
-    };
-    if emit_raw(args, &json, "BFS result") {
-        return;
-    }
-
-    let start_node = graph.nodes.iter().find(|n| n.id == start);
-    println!(
-        "{C_BOLD}{}-hop BFS ({}bound){C_RESET} from {}",
-        k,
-        bfs_dir_str(dir),
-        start_node.map(node_line).unwrap_or_else(|| start.clone())
-    );
-    println!(
-        "{C_DIM}{} node(s) reached, {} edge(s) walked{}{C_RESET}",
-        reached.len().saturating_sub(1),
-        edges.len(),
-        if edge_types.is_empty() {
-            String::new()
-        } else {
-            format!(" · edge types: {}", edge_types.join(", "))
-        }
-    );
-    println!();
-
-    let mut shown = 0usize;
-    let mut current_hop = u32::MAX;
-    for (d, n) in reached.iter().filter(|(d, _)| *d > 0) {
-        if shown >= limit {
-            println!();
-            println!(
-                "{C_DIM}(+{} more — raise -l/--limit or narrow with -t/--type){C_RESET}",
-                reached.len().saturating_sub(1) - shown
-            );
-            break;
-        }
-        if *d != current_hop {
-            if current_hop != u32::MAX {
-                println!();
-            }
-            println!("{C_BOLD}hop {}{C_RESET}", d);
-            current_hop = *d;
-        }
-        println!("  {}", node_line(n));
-        shown += 1;
-    }
-    if shown == 0 {
-        println!("No neighbors within {} hop(s). Try -d both, a larger -k, or drop the filters.", k);
-    }
-    println!();
-    println!("{C_DIM}Next:{C_RESET} {C_CYAN}ug get_code <id>{C_RESET} to read one · {C_CYAN}ug graph_path <a> <b>{C_RESET} to see how two connect");
-}
-
-fn run_graph_filter(args: &[String]) {
-    if has_flag(args, "-h") || has_flag(args, "--help") {
-        print_graph_filter_help();
-        return;
-    }
-    let (load_args, pos) = analysis_input(args);
-    let mut edge_types: Vec<String> = pos.iter().map(|s| s.to_lowercase()).collect();
-    edge_types.extend(type_filter(args, &["-t", "--type", "--edge-type"]));
-    let limit = limit_or(args, &["-l", "--limit"], 50);
-    let file_prefix = flag_value(args, &["-f", "--file"]);
-    let from_ref = flag_value(args, &["--from"]);
-    let to_ref = flag_value(args, &["--to"]);
-
-    let (graph, _raw, _path) = load_agent_graph(&load_args);
-    let by_id = by_id_map(&graph);
-
-    // No edge type given: report what's available instead of erroring —
-    // that's the question a user without the type list is really asking.
-    if edge_types.is_empty() && from_ref.is_none() && to_ref.is_none() {
-        use std::collections::HashMap;
-        let mut counts: HashMap<&'static str, usize> = HashMap::new();
-        for e in &graph.edges {
-            *counts.entry(edge_type_str(&e.edge_type)).or_insert(0) += 1;
-        }
-        let mut rows: Vec<(&str, usize)> = counts.into_iter().collect();
-        rows.sort_by(|a, b| b.1.cmp(&a.1));
-        println!("{C_BOLD}Edge types in this graph{C_RESET} — {} edge(s) total", graph.edges.len());
-        println!();
-        for (t, c) in rows {
-            println!("- {C_CYAN}{}{C_RESET}  {}", t, c);
-        }
-        println!();
-        println!("Pass one or more to filter, e.g. {C_CYAN}ug graph_filter Calls Imports{C_RESET}");
-        return;
-    }
-
-    let from_id = from_ref.map(|r| resolve_node_ref(&graph, &r));
-    let to_id = to_ref.map(|r| resolve_node_ref(&graph, &r));
-
-    let matched: Vec<&GraphEdge> = graph
-        .edges
-        .iter()
-        .filter(|e| {
-            edge_types.is_empty()
-                || edge_types.contains(&edge_type_str(&e.edge_type).to_lowercase())
-        })
-        .filter(|e| from_id.as_deref().map(|id| e.source == id).unwrap_or(true))
-        .filter(|e| to_id.as_deref().map(|id| e.target == id).unwrap_or(true))
-        .filter(|e| match &file_prefix {
-            None => true,
-            Some(p) => [&e.source, &e.target].iter().any(|id| {
-                by_id
-                    .get(id.as_str())
-                    .and_then(|n| n.file.as_deref())
-                    .map(|f| f.starts_with(p.as_str()))
-                    .unwrap_or(false)
-            }),
-        })
-        .collect();
-
-    let json = serde_json::json!({ "count": matched.len(), "edges": matched }).to_string();
-    if emit_raw(args, &json, "filtered edges") {
-        return;
-    }
-
-    println!(
-        "{C_BOLD}Edges{C_RESET} — {} match(es) of {}{}",
-        matched.len(),
-        graph.edges.len(),
-        if matched.len() > limit {
-            format!(", showing {}", limit)
-        } else {
-            String::new()
-        }
-    );
-    println!();
-    let label = |id: &str| -> String {
-        match by_id.get(id) {
-            Some(n) => format!("{} {C_BOLD}{}{C_RESET} {C_DIM}{}{C_RESET}", node_type_str(&n.node_type), n.name, node_loc(n)),
-            None => format!("{C_DIM}{}{C_RESET}", id),
-        }
-    };
-    for e in matched.iter().take(limit) {
-        println!(
-            "- {C_CYAN}{}{C_RESET}  {}  {C_DIM}→{C_RESET}  {}",
-            edge_type_str(&e.edge_type),
-            label(&e.source),
-            label(&e.target)
-        );
-    }
-    if matched.is_empty() {
-        println!("No edges matched. Run {C_CYAN}ug graph_filter{C_RESET} with no arguments to see the available edge types.");
-    }
-}
-
 fn run_graph_path(args: &[String]) {
     if has_flag(args, "-h") || has_flag(args, "--help") {
         print_graph_path_help();
@@ -1403,10 +1100,8 @@ fn print_find_symbols_help() {
     println!("  {C_CYAN}ug find_symbols{C_RESET} loadConfig --node-type Function --file-prefix src/auth/");
     println!("  {C_CYAN}ug find_symbols{C_RESET} run_serve run_app run_gen   {C_YELLOW}# batch: three lookups, one call{C_RESET}");
     println!("  {C_CYAN}ug find_symbols{C_RESET} 'function:src/auth.rs:42:login'  {C_YELLOW}# direct nodeId lookup (O(1)){C_RESET}");
-    println!("  {C_CYAN}ug find_symbols{C_RESET} embedder --include-docs   {C_YELLOW}# what `ug graph_search` does{C_RESET}");
-    println!();
-    println!("  {C_DIM}`ug graph_search` is an alias for {C_RESET}{C_CYAN}find_symbols --include-docs{C_RESET}{C_DIM} — it was the same");
-    println!("  scan, minus the ranking and batching.{C_RESET}");
+    println!("  {C_CYAN}ug find_symbols{C_RESET} embedder --include-docs   {C_YELLOW}# also scan docstrings{C_RESET}");
+
 }
 
 fn print_file_outline_help() {
@@ -1499,15 +1194,6 @@ fn split_ids_and_names(pos: &[String]) -> (Vec<String>, Vec<String>) {
 
 fn run_find_symbols(args: &[String]) {
     run_find_symbols_with(args, false)
-}
-
-/// `ug graph_search` is `find_symbols` with docstring matching on — that was
-/// the only behavioural difference between the two commands. It stays as a
-/// separate entry point so the old invocation keeps its old default.
-fn run_graph_search(args: &[String]) {
-    // `--names-only` was graph_search's way of asking for name-only matching,
-    // i.e. exactly what plain find_symbols does.
-    run_find_symbols_with(args, !has_flag(args, "--names-only"))
 }
 
 fn run_find_symbols_with(args: &[String], include_docs: bool) {
@@ -1872,7 +1558,7 @@ fn print_graph_schema_help() {
     println!("  Lists the node types and edge types actually present in the project's");
     println!("  graph (with counts and what each edge type connects), plus the full");
     println!("  vocabulary indexers can emit. Check this before passing edge-type");
-    println!("  filters to {C_CYAN}ug find_usages{C_RESET} / {C_CYAN}ug filter{C_RESET} — filtering on a type the graph");
+    println!("  filters to {C_CYAN}ug find_usages{C_RESET} / {C_CYAN}ug traverse{C_RESET} — filtering on a type the graph");
     println!("  doesn't contain silently returns nothing.");
     println!();
     println!("{C_BOLD}Usage:{C_RESET}  ug graph_schema [options]");
@@ -1922,10 +1608,10 @@ fn resolve_gen_cache(args: &[String], output_dir: &str) -> Option<String> {
 /// degraded-embedder path — is `gen`'s, because re-running the pipeline
 /// and running it the first time are the same operation.
 ///
-/// **On the name.** The MCP tool shipped as `reindex`, which names only
-/// the first of three stages: this indexes, rebuilds the graph, *and*
-/// re-embeds into the store. `regen` says what it does and pairs with the
-/// `gen` it repeats. `reindex` remains an accepted alias.
+/// **On the name.** This indexes, rebuilds the graph *and* re-embeds into
+/// the store, so `reindex` — which names only the first of the three —
+/// would be a lie. `regen` says what it does and pairs with the `gen` it
+/// repeats.
 fn run_regen(args: &[String]) {
     if has_flag(args, "-h") || has_flag(args, "--help") {
         print_regen_help();
@@ -4188,6 +3874,16 @@ fn run_traverse(args: &[String]) {
     // landed in a destination (see docs/MULTI-DEST.md).
     if flag_value(args, &["--dest"]).is_none() {
         let (graph, _raw, _path) = load_agent_graph(args);
+        // Accept a bare name or file path, not just an exact node id. The
+        // retired `graph_bfs` did this and `traverse` did not, which was
+        // the only reason to reach for the older command — typing
+        // `ug traverse run_serve` is what people try first, and being told
+        // "no node with id 'run_serve'" when the symbol plainly exists is
+        // a bad way to learn that ids come from somewhere else.
+        let starts: Vec<String> = starts
+            .iter()
+            .map(|s| resolve_node_ref(&graph, s))
+            .collect();
         let params = agent_tools::TraverseParams {
             node_id: starts,
             hops: Some(hops),
@@ -4714,7 +4410,7 @@ fn cli_tool_runner(
     let raw = std::sync::Arc::new(raw);
 
     move |name: &str, args: serde_json::Value| {
-        let name = crate::mcp::tools::canonical_tool_name(name).to_string();
+        let name = name.to_string();
         let graph = graph.clone();
         let raw = raw.clone();
         let repo_root = repo_root.clone();
@@ -5399,54 +5095,6 @@ fn print_graph_common_options() {
     println!("  {C_CYAN}-o, --output{C_RESET} <file>   Write the raw JSON to a file");
 }
 
-fn print_graph_bfs_help() {
-    println!("  {C_CYAN}ug graph_bfs{C_RESET}  {C_YELLOW}— K-hop breadth-first traversal from a node{C_RESET}");
-    println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
-    println!();
-    println!("{C_BOLD}Usage:{C_RESET}  ug graph_bfs <node-id-or-name> [options]   {C_DIM}(alias: bfs){C_RESET}");
-    println!();
-    println!("  The start node takes a node id, a file path, or a symbol name —");
-    println!("  ambiguous names list the candidate ids instead of guessing.");
-    println!();
-    println!("{C_BOLD}Options:{C_RESET}");
-    println!("  {C_CYAN}-k, --hops{C_RESET} <n>        Hop radius (default 1)");
-    println!("  {C_CYAN}-d, --direction{C_RESET} <dir> out (callees/imports, default) | in (callers) | both");
-    println!("  {C_CYAN}--edge-type{C_RESET} <type>    Only follow these edges (repeatable; see graph_schema)");
-    println!("  {C_CYAN}-t, --type{C_RESET} <type>     Only show these node types (repeatable)");
-    println!("  {C_CYAN}-f, --file{C_RESET} <prefix>   Only show nodes under this path prefix");
-    println!("  {C_CYAN}-l, --limit{C_RESET} <n>       Max nodes printed (default 50)");
-    print_graph_common_options();
-    println!();
-    println!("{C_BOLD}Examples:{C_RESET}");
-    println!("  {C_CYAN}ug graph_bfs{C_RESET} run_serve -k 2");
-    println!("  {C_CYAN}ug graph_bfs{C_RESET} src/index.ts -k 2 --edge-type imports");
-    println!("  {C_CYAN}ug graph_bfs{C_RESET} loadConfig -d in   {C_YELLOW}# what reaches this symbol{C_RESET}");
-    println!("  {C_CYAN}ug graph_bfs{C_RESET} run_gen -n other-project -t Function");
-}
-
-fn print_graph_filter_help() {
-    println!("  {C_CYAN}ug graph_filter{C_RESET}  {C_YELLOW}— list graph edges by type/endpoint{C_RESET}");
-    println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
-    println!();
-    println!("{C_BOLD}Usage:{C_RESET}  ug graph_filter [<edge-type>...] [options]   {C_DIM}(alias: filter){C_RESET}");
-    println!();
-    println!("  With no arguments it prints every edge type in the graph with counts.");
-    println!();
-    println!("{C_BOLD}Options:{C_RESET}");
-    println!("  {C_CYAN}-t, --edge-type{C_RESET} <t>   Edge type (repeatable; same as a positional)");
-    println!("  {C_CYAN}--from{C_RESET} <node>         Only edges out of this node (id/name/file)");
-    println!("  {C_CYAN}--to{C_RESET} <node>           Only edges into this node (id/name/file)");
-    println!("  {C_CYAN}-f, --file{C_RESET} <prefix>   Only edges touching this path prefix");
-    println!("  {C_CYAN}-l, --limit{C_RESET} <n>       Max edges printed (default 50)");
-    print_graph_common_options();
-    println!();
-    println!("{C_BOLD}Examples:{C_RESET}");
-    println!("  {C_CYAN}ug graph_filter{C_RESET}                     {C_YELLOW}# what edge types exist?{C_RESET}");
-    println!("  {C_CYAN}ug graph_filter{C_RESET} Calls Imports");
-    println!("  {C_CYAN}ug graph_filter{C_RESET} Calls --from run_gen");
-    println!("  {C_CYAN}ug graph_filter{C_RESET} Imports -f node/ -l 100");
-}
-
 fn print_graph_path_help() {
     println!("  {C_CYAN}ug graph_path{C_RESET}  {C_YELLOW}— how are two nodes connected?{C_RESET}");
     println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
@@ -5886,19 +5534,14 @@ fn print_help() {
         "  {C_BOLD}{C_MAGENTA}tour{C_RESET}             {C_BOLD}{C_MAGENTA}🎬 guided, narrated walkthrough — flies the camera in the web UI{C_RESET}"
     );
     println!();
-    println!("  {C_DIM}Pipeline steps (gen runs these for you){C_RESET}");
-    println!("  {C_CYAN}index{C_RESET}            Index a directory");
-    println!("  {C_CYAN}graph{C_RESET}            Build graph from index result");
-    println!("  {C_CYAN}ingest{C_RESET}           Embed graph nodes and write to OverGraph");
-    println!();
-    println!("  {C_DIM}Graph analysis (graph.json only — no database needed) — all take {C_RESET}{C_CYAN}-n <project>{C_RESET}{C_DIM}, {C_RESET}{C_CYAN}--json{C_RESET}{C_DIM}, {C_RESET}{C_CYAN}-o <file>{C_RESET}");
-    println!("  {C_CYAN}graph_bfs{C_RESET}        K-hop BFS from a node/name (--hops, -d in|out|both)");
-    println!("  {C_CYAN}graph_filter{C_RESET}     List edges by type/endpoint (no args: edge types + counts)");
-    println!("                   {C_DIM}with a database, {C_RESET}{C_CYAN}ug graph_schema{C_RESET}{C_DIM} and {C_RESET}{C_CYAN}ug query{C_RESET}{C_DIM} say more{C_RESET}");
+    // `index` / `graph` / `ingest` are the stages `gen` runs and are still
+    // dispatched, but they are not listed: they are internal seams, and
+    // `gen --no-ingest` already covers the one reason an end user reached
+    // for them. `ug api` and the docs still name them.
+    println!("  {C_DIM}Structural analysis (graph.json only — no database needed){C_RESET}");
     println!("  {C_CYAN}graph_centrality{C_RESET} Rank nodes by degree/betweenness (--top, -t, -f)");
-    println!("                   {C_DIM}degree ranking is {C_RESET}{C_CYAN}ug query dependency_fanin{C_RESET}{C_DIM}; only betweenness needs this{C_RESET}");
-    println!("  {C_CYAN}graph_cycles{C_RESET}     Detect cycles (--min-len, --fail-on-cycle for CI)");
-    println!("  {C_CYAN}graph_search{C_RESET}     Substring scan over names + docstrings (prefer find_symbols)");
+    println!("                   {C_DIM}degree ranking is also {C_RESET}{C_CYAN}ug query dependency_fanin{C_RESET}{C_DIM}; betweenness is only here{C_RESET}");
+    println!("  {C_CYAN}graph_cycles{C_RESET}     Detect dependency cycles (--min-len, --fail-on-cycle for CI)");
     println!();
     println!("  {C_DIM}Agent tools — what AI coding agents use (via MCP) to understand a repo; run by hand to explore or verify{C_RESET}");
     println!("  {C_CYAN}project_overview{C_RESET} Orient in the codebase: stats, biggest files, most depended-upon symbols");

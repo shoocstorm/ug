@@ -199,7 +199,7 @@ ingest, and any later open with a mismatched dim returns
 | `ug ingest` / `ug gen`   | `--base-url` present → remote, else local                       |
 | `ug serve`               | Same rule, applied during `embedder_from_args`                  |
 | `ug semantic_search`     | Same                                                            |
-| `ug hybrid_search`       | Same                                                            |
+| `ug search`              | Same                                                            |
 | NAPI `db_ingest`         | `embedderOptions.baseUrl` non-empty → remote, else local        |
 | NAPI `db_*_search`       | Same                                                            |
 | NAPI `pingEmbedder`      | Same                                                            |

@@ -422,23 +422,11 @@ impl Mcp {
     // ── dispatch ───────────────────────────────────────────────────────────
 
     async fn call_tool(&self, raw_name: &str, raw_args: &Value) -> Result<String, String> {
-        let name = tools::canonical_tool_name(raw_name);
+        let name = raw_name;
         let project = raw_args.get("project").and_then(|v| v.as_str());
         let ctx = self.resolve_ctx(project)?;
 
-        // Merge alias defaults under the caller's args, then drop `project`.
-        let mut args = match tools::alias_defaults(raw_name) {
-            Some(Value::Object(defaults)) => {
-                let mut m = defaults;
-                if let Some(obj) = raw_args.as_object() {
-                    for (k, v) in obj {
-                        m.insert(k.clone(), v.clone());
-                    }
-                }
-                Value::Object(m)
-            }
-            _ => raw_args.clone(),
-        };
+        let mut args = raw_args.clone();
         if let Some(obj) = args.as_object_mut() {
             obj.remove("project");
         }
@@ -1032,7 +1020,7 @@ fn run_call(args: &[String]) {
             std::process::exit(1);
         }
     };
-    let canonical = tools::canonical_tool_name(tool);
+    let canonical = tool;
     if !tools::is_known_tool(canonical) {
         eprintln!(
             "Unknown tool '{}' — see `ug mcp list` for available tools.",

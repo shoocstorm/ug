@@ -248,5 +248,5 @@ let engine = DatabaseEngine::open(path, &opts)?;
 ## Deliverables
 
 - Rust crate `ultragraph` with `storage` module.
-- Existing `ug` binary commands (`ug ingest`, `ug semantic_search`, `ug hybrid_search`, `ug traverse`) — unchanged signatures.
+- Existing `ug` binary commands (`ug ingest`, `ug semantic_search`, `ug search`, `ug traverse`) — unchanged signatures.
 - NAPI surface (`db_ingest`, `db_semantic_search`, `db_hybrid_search`, `db_traverse`, `ping_embedder`) — unchanged JSON wire format.
