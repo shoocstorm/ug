@@ -343,6 +343,7 @@ fn build_placeholder_context(registry: &Arc<ProjectRegistry>) -> Arc<ProjectCont
         nodes: Vec::new(),
         edges: Vec::new(),
         stats: None,
+        resolution: None,
     };
     let raw_json =
         serde_json::to_string(&empty_graph).unwrap_or_else(|_| "{\"nodes\":[],\"edges\":[]}".to_string());

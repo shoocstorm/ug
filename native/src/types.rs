@@ -54,6 +54,15 @@ pub struct Symbol {
     #[serde(rename = "callRefs", default, skip_serializing_if = "Vec::is_empty")]
     pub call_refs: Vec<CallRef>,
 
+    /// Qualified names of the module-level constants this symbol reads.
+    ///
+    /// Constants are where a codebase keeps its thresholds, limits and magic
+    /// strings, and "what breaks if I change this cap" is a question the
+    /// graph could not answer at all: a constant node had inbound `Contains`
+    /// from its file and nothing else, so every constant looked dead.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub uses: Vec<String>,
+
     /// Effective HTTP route this symbol serves, e.g. `GET /api/orders/{id}`,
     /// composed from type-level and member-level mapping annotations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -89,6 +98,42 @@ pub struct CallRef {
     /// Argument count, used to pick between overloads.
     #[serde(default)]
     pub argc: u32,
+
+    /// Fully-qualified callee, when the indexer resolved the whole path
+    /// outright rather than only its receiver.
+    ///
+    /// This is the case a *module*-structured language has and Java does not:
+    /// `crate::project::read_meta(..)` names its target completely at the
+    /// call site, with no dispatch to reason about. The graph builder tries
+    /// this before [`Self::owner_type`] because an exact path needs no
+    /// supertype walk and cannot be ambiguous.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qualified: Option<String>,
+
+    /// Whether this call site constructs a value of [`Self::owner_type`]
+    /// rather than invoking a member on one. Drives `Instantiates` instead
+    /// of `Calls`.
+    #[serde(rename = "isCtor", default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_ctor: bool,
+
+    /// Whether the call site qualified its callee — with a receiver
+    /// (`x.foo()`, `this.foo()`) or an explicit type (`Foo::bar()`) — as
+    /// opposed to naming a free function directly (`foo()`, `a::b::foo()`).
+    ///
+    /// This gates the graph builder's bare-name fallback. When a receiver is
+    /// present but [`Self::owner_type`] is `None`, the receiver is an
+    /// expression we could not type — and matching the bare member name
+    /// against every symbol in the repo is exactly the guess that turned
+    /// every `.collect()` in a Rust codebase into an edge pointing at
+    /// whatever local function happened to be called `collect`. A callee
+    /// named without a receiver has no such problem: it is a free function
+    /// in the file's own scope, and its bare name is what identifies it.
+    #[serde(
+        rename = "hasReceiver",
+        default,
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub has_receiver: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -283,7 +328,14 @@ pub struct Dependency {
 /// - **1** (or absent): pre-comment-metrics.
 /// - **2**: comment/doc/code line counts, class metrics, file language and
 ///   classification on every node.
-pub const GRAPH_SCHEMA_VERSION: u32 = 2;
+/// - **3**: cross-file call resolution for Rust, TypeScript and Python.
+///   Version 2 and earlier resolved a callee by bare name and, failing that,
+///   by the substring after its last dot — so a `Calls` edge could point at
+///   any symbol sharing the callee's name, and a `::` path produced no edge
+///   at all. A reader seeing version < 3 should treat call-graph answers
+///   (`find_usages`, `impact`, `dead_code`) as indicative rather than
+///   accurate, and say so, rather than reporting a confident wrong number.
+pub const GRAPH_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexStats {
@@ -346,6 +398,14 @@ pub enum GraphEdgeType {
     /// (which is type-level) so "who overrides this" and "what does this
     /// class inherit from" stay different questions.
     Overrides,
+    /// Caller → a type it constructs (`new Foo()`, `Foo { .. }`).
+    ///
+    /// Separate from `Calls` because constructing a value and invoking a
+    /// method are different relationships, and conflating them made
+    /// "who calls this class" a question with no meaningful answer. It is
+    /// also the honest edge for a language where construction reaches no
+    /// function at all — a Rust struct literal runs no code.
+    Instantiates,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -493,6 +553,34 @@ pub struct GraphData {
     pub edges: Vec<GraphEdge>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stats: Option<IndexStats>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution: Option<ResolutionStats>,
+}
+
+/// How every call site in the repo was resolved, or why it wasn't.
+///
+/// Call-graph quality was previously unmeasurable: a wrong edge and a right
+/// edge look identical in a total, and the failure this whole area is prone
+/// to is the confident wrong answer. These counts make a regression visible
+/// between two runs — a jump in `dropped_unresolved` means resolution got
+/// worse, and a jump in `resolved_by_name` means it got less certain.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ResolutionStats {
+    /// Callee named outright by a module path — the strongest evidence.
+    #[serde(rename = "resolvedQualified")]
+    pub resolved_qualified: u32,
+    /// Resolved through a receiver whose type this file could infer.
+    #[serde(rename = "resolvedTyped")]
+    pub resolved_typed: u32,
+    /// Fell through to bare-name matching, which requires the name to be
+    /// unique repo-wide or declared in the caller's own file.
+    #[serde(rename = "resolvedByName")]
+    pub resolved_by_name: u32,
+    /// No edge drawn. Mostly correct — a call into the standard library or a
+    /// third-party package *should* land here — but it is also where an
+    /// ambiguous name ends up.
+    #[serde(rename = "droppedUnresolved")]
+    pub dropped_unresolved: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

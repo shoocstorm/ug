@@ -25,6 +25,12 @@ pub fn default_edge_type_weights() -> HashMap<String, f32> {
     m.insert("calls".to_string(), 1.0);
     m.insert("extends".to_string(), 0.9);
     m.insert("implements".to_string(), 0.9);
+    // An override is the implementing code for the declaration it replaces,
+    // so it carries the same weight as the hierarchy edges it follows from.
+    m.insert("overrides".to_string(), 0.9);
+    // Constructing a type is a behavioural dependency on it — weaker than a
+    // call into its logic, stronger than merely naming it.
+    m.insert("instantiates".to_string(), 0.8);
     m.insert("imports".to_string(), 0.7);
     m.insert("requires".to_string(), 0.7);
     m.insert("exports".to_string(), 0.6);

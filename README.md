@@ -68,6 +68,7 @@ A four-phase pipeline (click the diagram for an
 | **Indexing** | Parallel `.gitignore`-aware crawling; incremental `blake3` hashing |
 | | Languages: **TypeScript, JavaScript, Python, Java, Rust, Markdown, PDF** |
 | **Graph** | Folder hierarchy + symbol extraction (Functions, Classes, Interfaces, Imports, Calls) |
+| | **Cross-file call resolution** for Rust, TypeScript, Python and Java — module paths and receiver types, not name matching. Ambiguous call sites are dropped rather than guessed at ([how](docs/INDEXING-AND-CHUNKING.md#31a-cross-file-call-resolution)) |
 | | K-hop BFS, Shortest Path, Centrality, Cycle Detection |
 | **Storage** | **OverGraph**: hybrid Vector + FTS store; local ONNX or remote OpenAI-compatible embedding |
 | **Retrieval** | **GraphRAG**: PPR ranking over the edge graph; RRF hybrid fusion |

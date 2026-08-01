@@ -22,6 +22,7 @@ mod folder;
 pub(crate) mod languages;
 pub(crate) mod line_metrics;
 mod package_json;
+pub(crate) mod scope;
 
 use crate::types::{FileNode, IndexResult, IndexStats, Symbol, SymbolMetrics};
 use std::collections::HashMap;
@@ -45,7 +46,13 @@ use tree_sitter::Parser;
 /// existing install would keep every unchanged file's cached symbols and
 /// the new metrics would appear only on files someone happened to edit —
 /// producing a repo-wide statistic computed over an arbitrary subset.
-const INDEXER_VERSION: &str = "3";
+///
+/// 4: qualified names, owners and typed call sites for Rust, TypeScript and
+/// Python — the facts cross-file call resolution is built on. A cached
+/// symbol from version 3 has none of them, and the graph builder reads their
+/// absence as "this language reports bare names only", so a stale cache
+/// would silently keep a repo on the old name-matching path.
+const INDEXER_VERSION: &str = "4";
 
 /// Reserved key in `cache.json`. Prefixed and suffixed so it cannot collide
 /// with a repo-relative path.
@@ -83,19 +90,25 @@ pub fn process_file(path: &Path, repo_root: Option<&str>) -> Option<FileNode> {
     let root = tree.root_node();
     let source = content.as_bytes();
 
-    let imports = indexer.extract_imports(source, root);
-    let exports = indexer.extract_exports(source, root);
-    let mut symbols = indexer.extract_symbols(source, root);
-
-    // Stamp the file path onto every symbol now that it's known. Doing this
-    // here keeps each language indexer focused on AST extraction and unaware
-    // of where the file lives on disk. The path is normalized and optionally
-    // made relative to the repo root.
+    // The repo-relative path is computed *before* extraction because
+    // qualified names are derived from it: `crate::storage::db::Db#open` is
+    // only knowable to an extractor that can see where its file sits. It is
+    // still stamped onto each symbol afterwards, so extractors that don't
+    // care (Java, Markdown) stay unaware of the filesystem.
     let path_str = normalize_path(&path.to_string_lossy());
     let path_str = match repo_root {
         Some(root) => common::strip_repo_root(&path_str, root),
         None => path_str,
     };
+
+    let imports = indexer.extract_imports(source, root);
+    let exports = indexer.extract_exports(source, root);
+    let ctx = languages::FileContext {
+        path: &path_str,
+        imports: &imports,
+    };
+    let mut symbols = indexer.extract_symbols(source, root, &ctx);
+
     for sym in symbols.iter_mut() {
         sym.file = path_str.clone();
     }
@@ -161,7 +174,14 @@ pub fn index(path: String) -> String {
     let canonical_root = Path::new(&path).canonicalize().unwrap_or_else(|_| PathBuf::from(&path));
     let repo_root = canonical_root.to_string_lossy().to_string();
 
-    let files_paths = scan_files(&path);
+    // Walk the *canonical* root, not the path as given. `repo_root` above is
+    // canonicalized and `strip_repo_root` is a prefix match: handed
+    // `/var/folders/…` against a root of `/private/var/folders/…` — which is
+    // what macOS produces for any symlinked parent — nothing strips and every
+    // path in the graph stays absolute. Harmless when paths were only
+    // display strings; not harmless now that qualified names are derived
+    // from them.
+    let files_paths = scan_files(&repo_root);
     let dependencies = extract_package_json_dependencies(&path);
 
     let mut files: Vec<FileNode> = Vec::new();
@@ -270,7 +290,14 @@ pub fn index_with_cache(path: String, cache_path: String) -> String {
         }
     }
 
-    let files_paths = scan_files(&path);
+    // Walk the *canonical* root, not the path as given. `repo_root` above is
+    // canonicalized and `strip_repo_root` is a prefix match: handed
+    // `/var/folders/…` against a root of `/private/var/folders/…` — which is
+    // what macOS produces for any symlinked parent — nothing strips and every
+    // path in the graph stays absolute. Harmless when paths were only
+    // display strings; not harmless now that qualified names are derived
+    // from them.
+    let files_paths = scan_files(&repo_root);
     let dependencies = extract_package_json_dependencies(&path);
     let mut files: Vec<FileNode> = Vec::new();
     let mut total_symbols = 0;

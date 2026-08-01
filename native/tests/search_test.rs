@@ -99,6 +99,7 @@ fn synthetic_graph_json() -> String {
         nodes,
         edges,
         stats: None,
+        resolution: None,
     };
     serde_json::to_string(&graph).unwrap()
 }

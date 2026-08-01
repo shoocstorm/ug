@@ -209,7 +209,7 @@ Returns ranked code snippets with file:line locations, descriptions, and node ID
 |-----------|------|----------|-------------|
 | `query` | string | ✅ | Natural-language query. Be specific — name the concept, function, or behavior you're after. |
 | `k` | integer (1-50) | ❌ | How many context items to return (default 8). Bump to 15-20 when surveying a subsystem. |
-| `edgeTypes` | string[] | ❌ | Restrict the walk to these edge types (case-insensitive). Common: imports, calls, extends, implements, contains, references. |
+| `edgeTypes` | string[] | ❌ | Restrict the walk to these edge types (case-insensitive). Common: imports, calls, extends, implements, contains, references, instantiates, uses, overrides. |
 | `direction` | string | ❌ | Edge direction during the walk (default 'both'). Use 'inbound' for who depends on the seed; 'outbound' for what the seed depends on. |
 | `maxChars` | integer (100-200000) | ❌ | Approximate character budget for assembled context (default ~16k). |
 | `whereClause` | string | ❌ | Optional SQL WHERE applied during seed search. Examples: `node_type = 'Function'`, `file LIKE 'src/auth/%'`. |
@@ -280,7 +280,7 @@ Use `'outbound'` to see what the seed depends on; `'inbound'` to see who depends
 |-----------|------|----------|-------------|
 | `nodeId` | string \| string[] | ✅ | Seed node id(s) — one id or an array of up to 10, typically copied from a prior search result. (`startNodeIds` is the deprecated legacy name, still accepted.) |
 | `hops` | integer (1-5) | ❌ | Hop radius (default 2). Use 1 for direct neighbors only. |
-| `edgeTypes` | string[] | ❌ | Restrict to these edge types (case-insensitive). Common: imports, calls, extends, implements, contains, references. See `graph_schema` for what this graph has. |
+| `edgeTypes` | string[] | ❌ | Restrict to these edge types (case-insensitive). Common: imports, calls, extends, implements, contains, references, instantiates, uses, overrides. See `graph_schema` for what this graph has. |
 | `direction` | string | ❌ | Edge direction (default 'outbound'). 'inbound' = who depends on me; 'outbound' = what I depend on. |
 
 **Example usage:**
@@ -300,7 +300,7 @@ traverse: { nodeId: "file-202", hops: 3, edgeTypes: ["contains", "imports"] }
 
 **Find inbound references** to a node — i.e. callers of a function, importers of a module, subclasses of a class, or anything else pointing at the node.
 
-Convenience wrapper over `traverse` with `direction='inbound'` and a sensible default edge-type set: `['calls', 'references', 'imports', 'extends', 'implements']`.
+Convenience wrapper over `traverse` with `direction='inbound'` and a sensible default edge-type set: `['calls', 'references', 'imports', 'extends', 'implements', 'overrides', 'instantiates', 'uses']`.
 
 Use this when the user asks "who uses X", "what calls X", "where is X imported", "what would break if I change X", or before a refactor.
 

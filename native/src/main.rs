@@ -1806,6 +1806,32 @@ fn run_gen(args: &[String]) {
     println!("  nodes: {}", nodes_count);
     println!("  edges: {}", edges_count);
 
+    // How every call site was resolved, or why it wasn't. Printed because a
+    // call graph's quality is otherwise unmeasurable: a wrong edge and a
+    // right edge look the same in a total, and the way this fails is the
+    // confident wrong answer. `dropped` is mostly healthy — a call into the
+    // standard library belongs there — but a jump in it between two runs of
+    // the same repo means resolution regressed.
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&graph) {
+        if let Some(r) = v.get("resolution") {
+            let n = |k: &str| r.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
+            let (q, t, b, d) = (
+                n("resolvedQualified"),
+                n("resolvedTyped"),
+                n("resolvedByName"),
+                n("droppedUnresolved"),
+            );
+            println!(
+                "  calls: {} resolved ({} by path, {} by receiver type, {} by name), {} unresolved",
+                q + t + b,
+                q,
+                t,
+                b,
+                d
+            );
+        }
+    }
+
     let graph_path = format!("{}/graph.json", output_dir);
     fs::write(&graph_path, &graph).expect("Failed to write graph.json");
     fs::write(format!("{}/indexed-tree.json", output_dir), &index_result)

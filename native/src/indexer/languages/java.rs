@@ -52,7 +52,8 @@
 use crate::indexer::common::{
     calculate_nesting, extract_params_from_signature, get_node_text, truncate_chars,
 };
-use crate::indexer::languages::LanguageIndexer;
+use crate::indexer::languages::{FileContext, LanguageIndexer};
+use crate::indexer::scope::CTOR;
 use crate::types::{
     Annotation, CallRef, ExportInfo, ImportInfo, ImportedItem, Param, Signature, Symbol,
     SymbolMetrics,
@@ -106,7 +107,9 @@ impl LanguageIndexer for JavaIndexer {
         Vec::new()
     }
 
-    fn extract_symbols(&self, source: &[u8], root: Node) -> Vec<Symbol> {
+    /// Java's identity comes from the `package` declaration in the source,
+    /// not from the path, so it has no use for [`FileContext`].
+    fn extract_symbols(&self, source: &[u8], root: Node, _ctx: &FileContext) -> Vec<Symbol> {
         let ctx = FileCtx::build(source, root);
         let mut symbols = Vec::new();
         let mut stack: Vec<TypeCtx> = Vec::new();
@@ -801,6 +804,18 @@ fn collect_calls(
                         owner_type: invocation_owner(&child, source, ctx, owner, env, &name),
                         argc: argument_count(&child),
                         name,
+                        // Java names its callee by receiver, never by a
+                        // module path, so there is nothing to resolve
+                        // outright here.
+                        qualified: None,
+                        is_ctor: false,
+                        // An *unqualified* call is a method on `this` or a
+                        // static import, and `invocation_owner` resolves both
+                        // — so a bare name reaching the fallback means the
+                        // receiver was an expression we could not type, and
+                        // matching `save` or `execute` against the whole repo
+                        // is the coin flip this indexer exists to avoid.
+                        has_receiver: child.child_by_field_name("object").is_some(),
                     });
                 }
             }
@@ -808,9 +823,13 @@ fn collect_calls(
                 if let Some(ty) = get_node_text(child.child_by_field_name("type"), source) {
                     push_call(calls, &base_type_name(&ty));
                     refs.push(CallRef {
-                        name: "<init>".to_string(),
+                        name: CTOR.to_string(),
                         owner_type: ctx.resolve_type(&ty),
                         argc: argument_count(&child),
+                        qualified: None,
+                        is_ctor: true,
+                        // `<init>` is a sentinel, not a declared name.
+                        has_receiver: true,
                     });
                 }
             }
@@ -1329,10 +1348,12 @@ mod tests {
         let tree = parser.parse(src, None).unwrap();
         let root = tree.root_node();
         let idx = JavaIndexer;
-        (
-            idx.extract_symbols(src.as_bytes(), root),
-            idx.extract_imports(src.as_bytes(), root),
-        )
+        let imports = idx.extract_imports(src.as_bytes(), root);
+        let ctx = FileContext {
+            path: "Sample.java",
+            imports: &imports,
+        };
+        (idx.extract_symbols(src.as_bytes(), root, &ctx), imports)
     }
 
     fn find<'a>(symbols: &'a [Symbol], name: &str) -> &'a Symbol {

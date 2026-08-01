@@ -4,12 +4,16 @@
 //! tree-sitter parser is reused for all four extensions.
 
 use crate::indexer::common::{
-    calculate_nesting, extract_docstring, extract_function_calls, extract_params_from_signature,
-    extract_return_type, get_node_text,
+    calculate_nesting, extract_docstring, extract_params_from_signature, extract_return_type,
+    get_node_text,
 };
-use crate::indexer::languages::LanguageIndexer;
+use crate::indexer::languages::{FileContext, LanguageIndexer};
+use crate::indexer::scope::{
+    base_type_name, looks_like_constant, looks_like_type, module_path, ImportScope, TypeEnv,
+    CTOR, MEMBER_SEP,
+};
 use crate::types::{
-    ExportInfo, ImportInfo, ImportedItem, Param, Signature, Symbol, SymbolMetrics, TypeRef,
+    CallRef, ExportInfo, ImportInfo, ImportedItem, Param, Signature, Symbol, SymbolMetrics, TypeRef,
 };
 use std::collections::HashMap;
 use tree_sitter::Node;
@@ -39,22 +43,179 @@ impl LanguageIndexer for TypeScriptIndexer {
         extract_exports_from_ast(&root, source)
     }
 
-    fn extract_symbols(&self, source: &[u8], root: Node) -> Vec<Symbol> {
+    fn extract_symbols(&self, source: &[u8], root: Node, ctx: &FileContext) -> Vec<Symbol> {
+        let scope = ImportScope::new(
+            "typescript",
+            module_path(ctx.path, "typescript"),
+            ctx.imports,
+        );
+        let walk = Ctx {
+            fields: collect_class_fields(root, source),
+            scope: &scope,
+        };
         let mut symbols = Vec::new();
-        visit(root, source, &mut symbols);
+        visit(root, source, &walk, None, &mut symbols);
         symbols
     }
+}
+
+/// Everything the walk needs that the AST node itself doesn't carry.
+struct Ctx<'a> {
+    scope: &'a ImportScope,
+    /// Written class name -> (property name -> written property type), so
+    /// `this.store.save(..)` can be typed.
+    fields: HashMap<String, HashMap<String, String>>,
+}
+
+/// The class or interface currently being walked.
+struct OwnerCtx {
+    /// Written name, e.g. `OrderService`.
+    name: String,
+    /// Qualified name, e.g. `src/svc/order.OrderService`.
+    fqn: String,
 }
 
 /// Recursive AST walk. Each node is offered to `extract_symbol_from_node`,
 /// then we descend into every child unconditionally - nested classes /
 /// functions all surface as their own symbols.
-fn visit(node: Node, source: &[u8], symbols: &mut Vec<Symbol>) {
-    extract_symbol_from_node(&node, source, symbols);
+///
+/// `owner` is the class or interface whose body we are inside. The walk used
+/// to carry nothing at all, so a `method_definition` became a symbol named
+/// just `save`, with no link to the type declaring it. That is why a
+/// TypeScript class had no members in the graph and why `obj.save()` had
+/// nothing to resolve against but every other `save` in the repo.
+fn visit(
+    node: Node,
+    source: &[u8],
+    ctx: &Ctx,
+    owner: Option<&OwnerCtx>,
+    symbols: &mut Vec<Symbol>,
+) {
+    extract_symbol_from_node(&node, source, ctx, owner, symbols);
+
+    let inner = match node.kind() {
+        "class_declaration" | "interface_declaration" => {
+            get_node_text(node.child_by_field_name("name"), source).map(|name| OwnerCtx {
+                fqn: ctx.scope.qualify(&name),
+                name,
+            })
+        }
+        _ => None,
+    };
+    let owner = inner.as_ref().or(owner);
+
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        visit(child, source, symbols);
+        visit(child, source, ctx, owner, symbols);
     }
+}
+
+/// Property name -> written type, per class in this file.
+///
+/// Covers both `private store: Store;` field declarations and the
+/// constructor-parameter-property shorthand (`constructor(private store:
+/// Store)`), which is how most dependency-injected TypeScript declares its
+/// collaborators.
+fn collect_class_fields(root: Node, source: &[u8]) -> HashMap<String, HashMap<String, String>> {
+    let mut out: HashMap<String, HashMap<String, String>> = HashMap::new();
+    walk_class_fields(root, source, &mut out);
+    out
+}
+
+fn walk_class_fields(
+    node: Node,
+    source: &[u8],
+    out: &mut HashMap<String, HashMap<String, String>>,
+) {
+    if node.kind() == "class_declaration" {
+        if let Some(name) = get_node_text(node.child_by_field_name("name"), source) {
+            let mut fields: HashMap<String, String> = HashMap::new();
+            if let Some(body) = node.child_by_field_name("body") {
+                let mut cursor = body.walk();
+                for member in body.named_children(&mut cursor) {
+                    match member.kind() {
+                        "public_field_definition" => {
+                            let (Some(fname), Some(ftype)) = (
+                                get_node_text(member.child_by_field_name("name"), source),
+                                annotated_type(&member, source),
+                            ) else {
+                                continue;
+                            };
+                            fields.insert(fname, ftype);
+                        }
+                        // `constructor(private store: Store)` declares a
+                        // field and a parameter in one breath.
+                        "method_definition" => {
+                            if get_node_text(member.child_by_field_name("name"), source).as_deref()
+                                != Some("constructor")
+                            {
+                                continue;
+                            }
+                            let Some(params) = member.child_by_field_name("parameters") else {
+                                continue;
+                            };
+                            let mut pc = params.walk();
+                            for p in params.named_children(&mut pc) {
+                                let inner = if p.kind() == "required_parameter" {
+                                    p
+                                } else {
+                                    continue;
+                                };
+                                let (Some(pname), Some(ptype)) = (
+                                    parameter_binding(&inner, source),
+                                    annotated_type(&inner, source),
+                                ) else {
+                                    continue;
+                                };
+                                fields.insert(pname, ptype);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            out.insert(name, fields);
+        }
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        walk_class_fields(child, source, out);
+    }
+}
+
+/// The name a parameter binds, skipping any modifiers in front of it.
+///
+/// `constructor(private store: Store)` puts an `accessibility_modifier`
+/// first, so reading "the first named child" yields `private` — which then
+/// becomes both the recorded parameter name and, for the field shorthand,
+/// the key nothing can ever look up.
+fn parameter_binding(param: &Node, source: &[u8]) -> Option<String> {
+    let mut cursor = param.walk();
+    for child in param.named_children(&mut cursor) {
+        if matches!(
+            child.kind(),
+            "accessibility_modifier" | "override_modifier" | "readonly" | "type_annotation"
+        ) {
+            continue;
+        }
+        if let Some(text) = get_node_text(Some(child), source) {
+            let text = text.trim().to_string();
+            if !text.is_empty() {
+                return Some(text);
+            }
+        }
+    }
+    None
+}
+
+/// The bare type name from a `type` annotation, whose text carries a leading
+/// colon on this grammar.
+fn annotated_type(node: &Node, source: &[u8]) -> Option<String> {
+    let raw = get_node_text(node.child_by_field_name("type"), source)?;
+    let cleaned = raw.trim_start_matches(':').trim();
+    let bare = base_type_name(cleaned);
+    (!bare.is_empty()).then(|| bare.to_string())
 }
 
 /// Aggregate every `import` / `import type` statement in the file by source
@@ -233,19 +394,43 @@ fn collect_export_specifiers(node: &Node, source: &[u8], exports: &mut Vec<Expor
 
 /// If `node` is a TS/JS top-level construct we care about (function, class,
 /// interface, variable, type alias), append the matching `Symbol` to `out`.
-fn extract_symbol_from_node(node: &Node, source: &[u8], out: &mut Vec<Symbol>) {
+fn extract_symbol_from_node(
+    node: &Node,
+    source: &[u8],
+    ctx: &Ctx,
+    owner: Option<&OwnerCtx>,
+    out: &mut Vec<Symbol>,
+) {
     let kind = node.kind();
     let start = (node.start_position().row + 1) as u32;
     let end = (node.end_position().row + 1) as u32;
 
     match kind {
-        "function_declaration" | "method_definition" => {
-            let Some(name) = get_node_text(node.child_by_field_name("name"), source) else {
+        // `method_signature` is an interface member. Extracting it makes an
+        // interface a node with contents rather than an empty one, and gives
+        // an implementing class's method something to `Overrides`.
+        "function_declaration" | "method_definition" | "method_signature" => {
+            let Some(raw_name) = get_node_text(node.child_by_field_name("name"), source) else {
                 return;
             };
+            // A free function is not a member, however deeply it nests.
+            let owner = (kind != "function_declaration").then_some(owner).flatten();
+
+            // Members display as `Type.member`, matching Java. That reads
+            // better and, more importantly, splits into searchable words:
+            // `OrderService.cancel` gives four where `cancel` gives one.
+            let name = match owner {
+                Some(o) => format!("{}.{}", o.name, raw_name),
+                None => raw_name.clone(),
+            };
+            let qualified_name = Some(match owner {
+                Some(o) => format!("{}{}{}", o.fqn, MEMBER_SEP, raw_name),
+                None => ctx.scope.qualify(&raw_name),
+            });
+
             let params = extract_params(node, source);
             let return_type = extract_return_type(node, source);
-            let calls = extract_function_calls(node, source);
+            let (calls, call_refs, uses) = extract_calls(node, source, ctx, owner, &params);
             let extends = extract_extends(node, source);
             let implements = extract_implements(node, source);
             let docstring = extract_docstring(node, source);
@@ -279,6 +464,10 @@ fn extract_symbol_from_node(node: &Node, source: &[u8], out: &mut Vec<Symbol>) {
                 extends,
                 implements,
                 calls,
+                call_refs,
+                uses,
+                qualified_name,
+                owner: owner.map(|o| o.fqn.clone()),
                 metrics: Some(metrics),
                 ..Default::default()
             });
@@ -287,8 +476,14 @@ fn extract_symbol_from_node(node: &Node, source: &[u8], out: &mut Vec<Symbol>) {
             let Some(name) = get_node_text(node.child_by_field_name("name"), source) else {
                 return;
             };
+            // Heritage names are qualified through this file's imports: the
+            // graph builder keys its supertype walk on qualified names, and a
+            // written `Store` means whichever `Store` this file imported.
+            let extends = qualify_heritage(extract_extends(node, source), ctx);
+            let implements = qualify_heritage(extract_implements(node, source), ctx);
             out.push(Symbol {
                 id: format!("class:{}:{}", start, name),
+                qualified_name: Some(ctx.scope.qualify(&name)),
                 name,
                 kind: "class".to_string(),
                 file: String::new(),
@@ -298,8 +493,8 @@ fn extract_symbol_from_node(node: &Node, source: &[u8], out: &mut Vec<Symbol>) {
                 signature: None,
                 imports: Vec::new(),
                 exports: Vec::new(),
-                extends: extract_extends(node, source),
-                implements: extract_implements(node, source),
+                extends,
+                implements,
                 calls: Vec::new(),
                 metrics: None,
                 ..Default::default()
@@ -309,11 +504,10 @@ fn extract_symbol_from_node(node: &Node, source: &[u8], out: &mut Vec<Symbol>) {
             let Some(name) = get_node_text(node.child_by_field_name("name"), source) else {
                 return;
             };
-            // Members are computed but not yet surfaced on `Symbol` - kept
-            // behind `_members` to make future wiring obvious.
-            let _members = extract_interface_members(node, source);
+            let extends = qualify_heritage(extract_extends(node, source), ctx);
             out.push(Symbol {
                 id: format!("interface:{}:{}", start, name),
+                qualified_name: Some(ctx.scope.qualify(&name)),
                 name,
                 kind: "interface".to_string(),
                 file: String::new(),
@@ -323,7 +517,7 @@ fn extract_symbol_from_node(node: &Node, source: &[u8], out: &mut Vec<Symbol>) {
                 signature: None,
                 imports: Vec::new(),
                 exports: Vec::new(),
-                extends: extract_extends(node, source),
+                extends,
                 implements: Vec::new(),
                 calls: Vec::new(),
                 metrics: None,
@@ -351,8 +545,13 @@ fn extract_symbol_from_node(node: &Node, source: &[u8], out: &mut Vec<Symbol>) {
                 let Some(name) = get_node_text(decl.child_by_field_name("name"), source) else {
                     continue;
                 };
+                // `const handler = () => …` is the common shape of a function
+                // in this language, so its body's call sites matter as much
+                // as a `function` declaration's.
+                let (calls, call_refs, uses) = extract_calls(&decl, source, ctx, owner, &[]);
                 out.push(Symbol {
                     id: format!("var:{}:{}", start, name),
+                    qualified_name: Some(ctx.scope.qualify(&name)),
                     name,
                     kind: "variable".to_string(),
                     file: String::new(),
@@ -364,7 +563,9 @@ fn extract_symbol_from_node(node: &Node, source: &[u8], out: &mut Vec<Symbol>) {
                     exports: Vec::new(),
                     extends: Vec::new(),
                     implements: Vec::new(),
-                    calls: extract_function_calls(&decl, source),
+                    calls,
+                    call_refs,
+                    uses,
                     metrics: None,
                     ..Default::default()
                 });
@@ -376,6 +577,7 @@ fn extract_symbol_from_node(node: &Node, source: &[u8], out: &mut Vec<Symbol>) {
             };
             out.push(Symbol {
                 id: format!("type:{}:{}", start, name),
+                qualified_name: Some(ctx.scope.qualify(&name)),
                 name,
                 kind: "type".to_string(),
                 file: String::new(),
@@ -396,6 +598,241 @@ fn extract_symbol_from_node(node: &Node, source: &[u8], out: &mut Vec<Symbol>) {
     }
 }
 
+/// Qualify written heritage names (`extends Base`, `implements Store`)
+/// through this file's imports, so they key the same way declarations do.
+fn qualify_heritage(written: Vec<String>, ctx: &Ctx) -> Vec<String> {
+    written
+        .iter()
+        .filter_map(|w| ctx.scope.resolve_type_ref(w))
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Call sites
+// ---------------------------------------------------------------------------
+
+/// Call sites inside one function body, with whatever receiver type this file
+/// can supply. See the Rust indexer's equivalent for why the display list now
+/// holds bare names rather than callee source text.
+fn extract_calls(
+    node: &Node,
+    source: &[u8],
+    ctx: &Ctx,
+    owner: Option<&OwnerCtx>,
+    params: &[Param],
+) -> (Vec<String>, Vec<CallRef>, Vec<String>) {
+    let mut env = TypeEnv::new();
+
+    if let Some(o) = owner {
+        env.insert("this", o.fqn.clone());
+        if let Some(fields) = ctx.fields.get(&o.name) {
+            for (fname, ftype) in fields {
+                if let Some(fqn) = ctx.scope.lookup(ftype) {
+                    env.insert(format!("this.{}", fname), fqn);
+                }
+            }
+        }
+    }
+    for p in params {
+        if let Some(t) = &p.param_type {
+            if let Some(fqn) = ctx.scope.lookup(base_type_name(t)) {
+                env.insert(p.name.clone(), fqn);
+            }
+        }
+    }
+
+    let mut calls = Vec::new();
+    let mut refs = Vec::new();
+    let mut uses = Vec::new();
+    collect_calls(
+        node, source, ctx, owner, &mut env, &mut calls, &mut refs, &mut uses,
+    );
+    (calls, refs, uses)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_calls(
+    node: &Node,
+    source: &[u8],
+    ctx: &Ctx,
+    owner: Option<&OwnerCtx>,
+    env: &mut TypeEnv,
+    calls: &mut Vec<String>,
+    refs: &mut Vec<CallRef>,
+    uses: &mut Vec<String>,
+) {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        record_constant_use(&child, source, ctx, uses);
+        match child.kind() {
+            "variable_declarator" => record_local(&child, source, ctx, env),
+            "call_expression" => {
+                if let Some(r) = call_ref_for(&child, source, ctx, owner, env) {
+                    push_call(calls, &r.name);
+                    refs.push(r);
+                }
+            }
+            "new_expression" => {
+                if let Some(ty) = get_node_text(child.child_by_field_name("constructor"), source) {
+                    let bare = base_type_name(&ty);
+                    push_call(calls, bare);
+                    refs.push(CallRef {
+                        name: CTOR.to_string(),
+                        owner_type: ctx.scope.lookup(bare),
+                        argc: argument_count(&child),
+                        qualified: None,
+                        is_ctor: true,
+                        has_receiver: true,
+                    });
+                }
+            }
+            _ => {}
+        }
+        collect_calls(&child, source, ctx, owner, env, calls, refs, uses);
+    }
+}
+
+/// Note a reference to a module-level constant, resolved through this file's
+/// imports. See `scope::looks_like_constant` for why the naming convention is
+/// the filter.
+fn record_constant_use(node: &Node, source: &[u8], ctx: &Ctx, uses: &mut Vec<String>) {
+    if node.kind() != "identifier" {
+        return;
+    }
+    let Some(text) = get_node_text(Some(*node), source) else {
+        return;
+    };
+    if !looks_like_constant(&text) {
+        return;
+    }
+    if let Some(fqn) = ctx.scope.lookup(&text) {
+        if !uses.contains(&fqn) {
+            uses.push(fqn);
+        }
+    }
+}
+
+fn push_call(calls: &mut Vec<String>, name: &str) {
+    if !name.is_empty() && !calls.iter().any(|c| c == name) {
+        calls.push(name.to_string());
+    }
+}
+
+fn argument_count(call: &Node) -> u32 {
+    call.child_by_field_name("arguments")
+        .map(|a| a.named_child_count() as u32)
+        .unwrap_or(0)
+}
+
+fn call_ref_for(
+    call: &Node,
+    source: &[u8],
+    ctx: &Ctx,
+    owner: Option<&OwnerCtx>,
+    env: &TypeEnv,
+) -> Option<CallRef> {
+    let func = call.child_by_field_name("function")?;
+    let argc = argument_count(call);
+
+    match func.kind() {
+        "identifier" => {
+            let name = get_node_text(Some(func), source)?;
+            Some(CallRef {
+                qualified: ctx.scope.lookup(&name),
+                name,
+                owner_type: None,
+                argc,
+                is_ctor: false,
+                has_receiver: false,
+            })
+        }
+        // `receiver.method(..)`
+        "member_expression" => {
+            let name = get_node_text(func.child_by_field_name("property"), source)?;
+            let recv = func.child_by_field_name("object")?;
+            Some(CallRef {
+                owner_type: type_of_expr(&recv, source, ctx, owner, env),
+                name,
+                argc,
+                qualified: None,
+                is_ctor: false,
+                has_receiver: true,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// The qualified type an expression evaluates to, or `None` when typing it
+/// would mean following an arbitrary expression.
+fn type_of_expr(
+    node: &Node,
+    source: &[u8],
+    ctx: &Ctx,
+    owner: Option<&OwnerCtx>,
+    env: &TypeEnv,
+) -> Option<String> {
+    match node.kind() {
+        "this" => owner.map(|o| o.fqn.clone()),
+        "identifier" => {
+            let text = get_node_text(Some(*node), source)?;
+            if let Some(t) = env.get(&text) {
+                return Some(t.to_string());
+            }
+            // A capitalised bare identifier in receiver position is a class
+            // or namespace, i.e. a static call.
+            if looks_like_type(&text) {
+                return ctx.scope.lookup(&text);
+            }
+            None
+        }
+        // Only `this.field`. Anything deeper is an expression we would be
+        // inventing a type for.
+        "member_expression" => {
+            let object = node.child_by_field_name("object")?;
+            if object.kind() != "this" {
+                return None;
+            }
+            let field = get_node_text(node.child_by_field_name("property"), source)?;
+            env.get(&format!("this.{}", field)).map(str::to_string)
+        }
+        _ => None,
+    }
+}
+
+/// Record `const x: Foo = …` and `const x = new Foo()`.
+fn record_local(decl: &Node, source: &[u8], ctx: &Ctx, env: &mut TypeEnv) {
+    let Some(name_node) = decl.child_by_field_name("name") else {
+        return;
+    };
+    if name_node.kind() != "identifier" {
+        return;
+    }
+    let Some(name) = get_node_text(Some(name_node), source) else {
+        return;
+    };
+
+    if let Some(ty) = annotated_type(decl, source) {
+        if let Some(fqn) = ctx.scope.lookup(&ty) {
+            env.insert(name, fqn);
+            return;
+        }
+    }
+
+    let Some(value) = decl.child_by_field_name("value") else {
+        return;
+    };
+    if value.kind() != "new_expression" {
+        return;
+    }
+    let Some(ty) = get_node_text(value.child_by_field_name("constructor"), source) else {
+        return;
+    };
+    if let Some(fqn) = ctx.scope.lookup(base_type_name(&ty)) {
+        env.insert(name, fqn);
+    }
+}
+
 /// Collect parameters from a function-like node. Walks the `parameters`
 /// field for each TS-specific parameter node kind, then falls back to a
 /// regex over the source if the AST yielded nothing.
@@ -412,18 +849,14 @@ fn extract_params(node: &Node, source: &[u8]) -> Vec<Param> {
                 continue;
             }
             // The parameter's binding has no `name` field on this grammar —
-            // it is simply the first named child. Reading a `name` field
-            // always came back empty, which emptied the whole AST branch and
-            // sent every function to the regex fallback below; that regex
-            // reads any word inside the first `(...)`, so `f(a, b = 1)` came
-            // out with three parameters: `a`, `b` and `1`.
-            let Some(name) = get_node_text(child.named_child(0), source) else {
+            // it is the first named child that isn't a modifier. Reading a
+            // `name` field always came back empty, which emptied the whole
+            // AST branch and sent every function to the regex fallback below;
+            // that regex reads any word inside the first `(...)`, so
+            // `f(a, b = 1)` came out with three parameters: `a`, `b` and `1`.
+            let Some(name) = parameter_binding(&child, source) else {
                 continue;
             };
-            let name = name.trim().to_string();
-            if name.is_empty() {
-                continue;
-            }
             // `type_annotation` text carries its leading colon.
             let param_type = get_node_text(child.child_by_field_name("type"), source)
                 .map(|t| t.trim_start_matches(':').trim().to_string())
@@ -651,9 +1084,14 @@ mod tests {
         let tree = parser.parse(src, None).unwrap();
         let root = tree.root_node();
         let idx = TypeScriptIndexer;
+        let imports = idx.extract_imports(src.as_bytes(), root);
+        let ctx = FileContext {
+            path: "src/sample.ts",
+            imports: &imports,
+        };
         (
-            idx.extract_symbols(src.as_bytes(), root),
-            idx.extract_imports(src.as_bytes(), root),
+            idx.extract_symbols(src.as_bytes(), root, &ctx),
+            imports,
             idx.extract_exports(src.as_bytes(), root),
         )
     }
@@ -734,11 +1172,14 @@ function greet(name: string, times = 1): string {
         // Regression: `extends` read a `superclass` field that no version of
         // the grammar emits, so no TypeScript class ever produced an
         // `Extends` edge. The heritage is an unnamed `class_heritage` child.
+        // Heritage names are qualified through the file's imports, because
+        // that is what the graph builder's supertype walk is keyed on. With
+        // no import in scope they resolve against this module.
         let (symbols, _, _) = parse("class Svc extends Base implements Api, Closeable {}\n");
         let c = find(&symbols, "Svc");
         assert_eq!(c.kind, "class");
-        assert_eq!(c.extends, vec!["Base"]);
-        assert_eq!(c.implements, vec!["Api", "Closeable"]);
+        assert_eq!(c.extends, vec!["src/sample.Base"]);
+        assert_eq!(c.implements, vec!["src/sample.Api", "src/sample.Closeable"]);
     }
 
     #[test]
@@ -747,8 +1188,8 @@ function greet(name: string, times = 1): string {
         // to come off or the edge is dropped.
         let (symbols, _, _) = parse("class A extends Base<Order> implements Api<string> {}\n");
         let c = find(&symbols, "A");
-        assert_eq!(c.extends, vec!["Base"]);
-        assert_eq!(c.implements, vec!["Api"]);
+        assert_eq!(c.extends, vec!["src/sample.Base"]);
+        assert_eq!(c.implements, vec!["src/sample.Api"]);
     }
 
     #[test]
@@ -756,7 +1197,7 @@ function greet(name: string, times = 1): string {
         let (symbols, _, _) = parse("interface Api extends Base, Other { go(): void }\n");
         let i = find(&symbols, "Api");
         assert_eq!(i.kind, "interface");
-        assert_eq!(i.extends, vec!["Base", "Other"]);
+        assert_eq!(i.extends, vec!["src/sample.Base", "src/sample.Other"]);
     }
 
     #[test]
@@ -821,10 +1262,15 @@ type Alias = string;
 "#,
         );
         assert_eq!(find(&symbols, "Svc").kind, "class");
-        assert_eq!(find(&symbols, "run").kind, "method_definition");
+        // A method displays as `Type.member` now, so that its name says which
+        // type it is on and so that it splits into more than one search term.
+        assert_eq!(find(&symbols, "Svc.run").kind, "method_definition");
         assert_eq!(find(&symbols, "Api").kind, "interface");
         assert_eq!(find(&symbols, "Alias").kind, "type");
-        assert_eq!(find(&symbols, "run").calls, vec!["helper"]);
+        assert_eq!(find(&symbols, "Svc.run").calls, vec!["helper"]);
+        // An interface's members are symbols too, so the interface is a node
+        // with contents rather than an empty one.
+        assert_eq!(find(&symbols, "Api.go").kind, "method_signature");
     }
 
     #[test]
@@ -841,15 +1287,26 @@ function greet() {}
         );
     }
 
+    /// TypeScript now takes the same precise-resolution path Java does, so
+    /// its symbols must carry qualified names and typed call sites. This
+    /// test used to assert the exact opposite — that all three stayed empty —
+    /// which is a fair summary of why `obj.save()` had nothing to resolve
+    /// against but every other `save` in the repo.
     #[test]
-    fn typescript_symbols_carry_no_java_only_metadata() {
-        // The precise-resolution path in `graph.rs` keys off the presence of
-        // a qualified name; a stray one here would route TS through it.
+    fn typescript_symbols_carry_qualified_names_and_owners() {
         let (symbols, _, _) = parse("class C { m() {} }\nexport const x = 1;\n");
+
+        let class = find(&symbols, "C");
+        assert_eq!(class.qualified_name.as_deref(), Some("src/sample.C"));
+        assert!(class.owner.is_none(), "a class is not a member");
+
+        let method = find(&symbols, "C.m");
+        assert_eq!(method.qualified_name.as_deref(), Some("src/sample.C#m"));
+        assert_eq!(method.owner.as_deref(), Some("src/sample.C"));
+
+        // Annotations and routes stay Java-only.
         for s in &symbols {
-            assert!(s.qualified_name.is_none(), "{}", s.name);
             assert!(s.annotations.is_empty(), "{}", s.name);
-            assert!(s.call_refs.is_empty(), "{}", s.name);
             assert!(s.route.is_none(), "{}", s.name);
         }
     }

@@ -29,6 +29,22 @@ mod typescript;
 use crate::types::{ExportInfo, ImportInfo, Symbol};
 use tree_sitter::Node;
 
+/// Where a file sits and what it pulled in — everything an extractor needs to
+/// give its symbols names that are unique across the whole repo.
+///
+/// Java derives identity from a `package` declaration inside the source and
+/// so ignores this entirely; Rust, TypeScript and Python derive it from the
+/// path, which extraction previously could not see (the path was stamped onto
+/// symbols *after* `extract_symbols` returned). That ordering is why those
+/// three languages had no qualified names.
+pub struct FileContext<'a> {
+    /// Repo-relative, normalized path — e.g. `native/src/graph.rs`.
+    pub path: &'a str,
+    /// The file's top-level imports, already extracted by
+    /// [`LanguageIndexer::extract_imports`].
+    pub imports: &'a [ImportInfo],
+}
+
 /// Per-language extraction strategy. Implementations are stateless singletons
 /// reachable via [`for_extension`].
 pub trait LanguageIndexer: Send + Sync {
@@ -49,7 +65,7 @@ pub trait LanguageIndexer: Send + Sync {
 
     /// Walk the AST and extract every symbol the language exposes
     /// (functions, classes, variables, type aliases, etc.).
-    fn extract_symbols(&self, source: &[u8], root: Node) -> Vec<Symbol>;
+    fn extract_symbols(&self, source: &[u8], root: Node, ctx: &FileContext) -> Vec<Symbol>;
 }
 
 /// Look up the indexer responsible for a given file extension. Returns

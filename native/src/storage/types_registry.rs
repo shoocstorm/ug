@@ -47,6 +47,7 @@ pub const ALL_EDGE_LABELS: &[&str] = &[
     "Requires",
     "Uses",
     "Overrides",
+    "Instantiates",
     "Unknown",
 ];
 
@@ -85,6 +86,7 @@ pub fn edge_label(s: &str) -> &'static str {
         "requires" => "Requires",
         "uses" => "Uses",
         "overrides" => "Overrides",
+        "instantiates" => "Instantiates",
         _ => "Unknown",
     }
 }

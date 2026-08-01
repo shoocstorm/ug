@@ -91,26 +91,86 @@ on symbol density), repeated banners and licence headers (deduped graph-wide),
 and machine directives (`eslint-disable`, shebangs, `#[allow(...)]`). Capped
 at 600 chars per node.
 
-### 3.1a Java: names, receivers and annotations
+### 3.1a Cross-file call resolution
 
-Java is the one code pipeline that extracts more than names, docs and
-signatures, because in Java those three carry less of the meaning.
+A `Calls` edge is a claim that *this* function calls *that* one. Making the
+claim true takes more than a callee's name, and until schema version 3 only
+the Java pipeline tried. Rust, TypeScript and Python recorded the raw source
+text of each callee expression and resolved it by matching that text — or, on
+a miss, the substring after its last dot — against every symbol in the repo,
+taking the first registered candidate.
 
-**Names are qualified.** A type is `pkg.Outer.Inner`, a member
-`pkg.Type#member`, and the *display* name of a member is `Type.member`. The
-graph builder resolves imports and calls against the qualified form and
-embeds the display form. Both matter: `execute`, `handle` and `save` recur in
-every layer of a Java codebase, so an unqualified name identifies nothing —
-and `OrderService.cancel` splits into four searchable words where `cancel`
-gives one.
+Three things followed, all of them measured on this repo's own graph:
 
-**Calls carry their receiver's type.** The indexer keeps a per-method
-environment of declared types (fields, parameters, locals) and tags each call
-site with the type it dispatches on. `orderRepo.save(x)` and
-`auditLog.save(x)` become different edges. When the receiver's type is an
-interface, the graph builder also draws the call to the implementations
-(capped at 8) — which is the only path from a caller to running code in a
-codebase wired by dependency injection.
+- **Fabricated edges.** `.collect()` matched a local function named `collect`
+  and produced 246 edges into it; `.get()` produced 138 and `.find()` 99.
+  Roughly 18% of the call graph pointed somewhere its call site did not.
+- **Missing edges.** The callee text was split on `.` and never on `::`, so
+  all 1,619 Rust module-path calls resolved to nothing — including 247 that
+  named a function in the repo (`crate::project::read_meta`,
+  `agent_tools::find_usages`).
+- **Blobs.** The "callee text" of a chained call included the whole
+  expression, closure bodies and all: 2,030 entries spanning multiple lines,
+  the longest 2,948 characters.
+
+Resolution now runs in three tiers, strongest first, and **stops rather than
+guesses**.
+
+**1. The qualified path.** Every symbol gets a repo-unique name derived from
+its file's module path — `crate::storage::db::Db#open`, `src/svc/order.OrderService#cancel`,
+`pkg.svc.OrderService#cancel`. A call that names its target completely
+(`crate::project::read_meta(..)`, or `agent_tools::find_usages(..)` via a
+`use` binding) is one exact lookup with nothing to disambiguate.
+
+**2. The receiver's type.** Each indexer keeps a per-function environment of
+declared types — fields, parameters, locals, `self`/`this` — and tags each
+call site with the type it dispatches on. `orderRepo.save(x)` and
+`auditLog.save(x)` become different edges. Where the receiver is an interface
+or trait, the edge is drawn to the implementations too (capped at 8), which
+in a dependency-injected codebase is the only path from a caller to running
+code. TypeScript's constructor-parameter-property shorthand
+(`constructor(private store: Store)`) and Python's annotated `self.store: Store`
+both count as declarations.
+
+**3. The bare name — but only sometimes.** A callee written *without* a
+receiver is a free function in the file's own scope, so matching its name is
+sound. A callee written *with* one (`x.save()`, `String::new()`) has already
+had its honest chance: if the receiver could not be typed, the name is not
+tried, because that is precisely how `.collect()` became an edge.
+
+At every tier an ambiguous name resolves to **nothing**. A name declared in
+one place resolves; a name the caller's own file declares resolves; a name
+three modules declare does not. `find_usages` returning an empty result has
+to mean "no known caller" rather than "possibly the wrong one", or nothing
+built on it can be trusted.
+
+`ug graph` prints the tally, so the quality is measurable between runs rather
+than by eyeball:
+
+```
+calls: 4496 resolved (3033 by path, 733 by receiver type, 730 by name), 20140 unresolved
+```
+
+A large `unresolved` count is healthy — every call into the standard library
+or a third-party package belongs there. What matters is the *movement*
+between two runs of the same repo.
+
+Two consequences worth knowing:
+
+- **Member nodes are named `Type.member`.** Java always did this; TypeScript
+  and Python now do too, which changes their node ids and costs a one-time
+  re-embed on the first `ug regen`. It buys correct `Contains` edges from a
+  type to its members, and it splits into searchable words —
+  `OrderService.cancel` gives four where `cancel` gives one. Rust keeps its
+  existing `Type::method` spelling, so Rust ids are unchanged.
+- **Construction is not a call.** `new Foo()`, `Foo { .. }` and Python's
+  `Foo()` emit `Instantiates`, pointing at the constructor where one is
+  declared and at the type itself where none is.
+
+### 3.1b Java: annotations
+
+Java extracts one more thing than the other pipelines, because in Java the
+annotation *is* the semantics.
 
 **Annotations become prose.** `@Repository`, `@Entity`, `@Table(name =
 "orders")`, `@Transactional`, `@Query`, `@KafkaListener` and the mapping
@@ -121,10 +181,12 @@ becomes both a field on the handler and a `Route` node of its own. That
 string appears in no identifier, no path and no Javadoc, and it is exactly
 what a question about an endpoint contains.
 
-Resolution is local to one file: its imports, its own declarations, and its
-package. There is no classpath. Where that guesses wrong it guesses outward —
-a JDK type resolving to a package-local name that matches nothing — and the
-builder falls back to bare-name matching.
+Java's qualified names come from the `package` declaration in the source
+rather than from the file's path, which is why it needs none of the module-path
+machinery in §3.1a — it is also why Java had all of this first. Resolution is
+still local to one file: its imports, its own declarations, and its package.
+There is no classpath, and a JDK type that resolves outward to a
+package-local name simply matches nothing.
 
 ### 3.2 Markdown
 

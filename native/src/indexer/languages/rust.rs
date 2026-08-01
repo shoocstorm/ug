@@ -20,11 +20,15 @@
 //! `use` declarations become `ImportInfo` entries keyed by the first
 //! crate / module segment.
 
-use crate::indexer::common::{
-    calculate_nesting, extract_function_calls, extract_return_type, get_node_text,
+use crate::indexer::common::{calculate_nesting, extract_return_type, get_node_text};
+use crate::indexer::languages::{FileContext, LanguageIndexer};
+use crate::indexer::scope::{
+    base_type_name, looks_like_constant, looks_like_type, module_path, ImportScope, TypeEnv,
+    CTOR, MEMBER_SEP,
 };
-use crate::indexer::languages::LanguageIndexer;
-use crate::types::{ExportInfo, ImportInfo, ImportedItem, Param, Signature, Symbol, SymbolMetrics};
+use crate::types::{
+    CallRef, ExportInfo, ImportInfo, ImportedItem, Param, Signature, Symbol, SymbolMetrics,
+};
 use std::collections::HashMap;
 use tree_sitter::Node;
 
@@ -57,23 +61,52 @@ impl LanguageIndexer for RustIndexer {
         Vec::new()
     }
 
-    fn extract_symbols(&self, source: &[u8], root: Node) -> Vec<Symbol> {
+    fn extract_symbols(&self, source: &[u8], root: Node, ctx: &FileContext) -> Vec<Symbol> {
+        let scope = ImportScope::new("rust", module_path(ctx.path, "rust"), ctx.imports);
+        let walk = Ctx {
+            fields: collect_struct_fields(root, source),
+            scope: &scope,
+        };
+
         let mut symbols = Vec::new();
-        visit(root, source, /* impl_owner */ None, /* impl_trait */ None, &mut symbols);
+        let mut impl_traits: Vec<(String, String)> = Vec::new();
+        visit(root, source, &walk, None, &mut impl_traits, &mut symbols);
+        attach_impl_traits(&mut symbols, &impl_traits);
         symbols
     }
 }
 
-/// AST walk. `impl_owner` is `Some(type_name)` when we're inside the
-/// body of an `impl …` block — methods extracted in that scope are
-/// renamed to `Type::method` so the graph can disambiguate them from
-/// free functions or methods on other types. `impl_trait` is the trait
-/// being implemented for `impl Trait for Type` blocks.
+/// Everything the walk needs that the AST node itself doesn't carry.
+struct Ctx<'a> {
+    scope: &'a ImportScope,
+    /// Written type name -> (field name -> written field type). Lets
+    /// `self.store.upsert(..)` be typed without chasing the field back to its
+    /// declaration at every call site.
+    fields: HashMap<String, HashMap<String, String>>,
+}
+
+/// The `impl` block currently being walked.
+struct ImplCtx {
+    /// Written type name, e.g. `Db`.
+    name: String,
+    /// Qualified type name, e.g. `crate::storage::db::Db`.
+    fqn: String,
+}
+
+/// AST walk. `imp` is `Some` when we're inside the body of an `impl …` block —
+/// methods extracted there are renamed to `Type::method` so the graph can
+/// disambiguate them from free functions or methods on other types, and they
+/// carry `owner` so a call through a typed receiver can find them.
+///
+/// `impl_traits` collects `(type fqn, trait fqn)` pairs for
+/// `impl Trait for Type`. Those land on the *type* rather than on each
+/// method — see [`attach_impl_traits`].
 fn visit(
     node: Node,
     source: &[u8],
-    impl_owner: Option<&str>,
-    impl_trait: Option<&str>,
+    ctx: &Ctx,
+    imp: Option<&ImplCtx>,
+    impl_traits: &mut Vec<(String, String)>,
     out: &mut Vec<Symbol>,
 ) {
     let kind = node.kind();
@@ -83,13 +116,27 @@ fn visit(
             // Resolve the type this impl is for, and (optionally) the
             // trait being implemented. Both become qualifiers on the
             // contained methods rather than top-level symbols.
-            let type_name =
-                get_node_text(node.child_by_field_name("type"), source).unwrap_or_default();
-            let trait_name = get_node_text(node.child_by_field_name("trait"), source);
+            let type_name = get_node_text(node.child_by_field_name("type"), source)
+                .map(|t| base_type_name(&t).to_string())
+                .unwrap_or_default();
+            if type_name.is_empty() {
+                return;
+            }
+            let inner = ImplCtx {
+                fqn: ctx.scope.qualify(&type_name),
+                name: type_name,
+            };
+
+            if let Some(trait_name) = get_node_text(node.child_by_field_name("trait"), source) {
+                if let Some(trait_fqn) = ctx.scope.resolve_type_ref(&trait_name) {
+                    impl_traits.push((inner.fqn.clone(), trait_fqn));
+                }
+            }
+
             if let Some(body) = node.child_by_field_name("body") {
                 let mut cursor = body.walk();
                 for child in body.children(&mut cursor) {
-                    visit(child, source, Some(&type_name), trait_name.as_deref(), out);
+                    visit(child, source, ctx, Some(&inner), impl_traits, out);
                 }
             }
             return;
@@ -101,7 +148,7 @@ fn visit(
             if let Some(body) = node.child_by_field_name("body") {
                 let mut cursor = body.walk();
                 for child in body.children(&mut cursor) {
-                    visit(child, source, impl_owner, impl_trait, out);
+                    visit(child, source, ctx, imp, impl_traits, out);
                 }
             }
             return;
@@ -109,7 +156,27 @@ fn visit(
         _ => {}
     }
 
-    extract_symbol_from_node(&node, source, impl_owner, impl_trait, out);
+    extract_symbol_from_node(&node, source, ctx, imp, out);
+
+    // A trait's members are symbols in their own right. Without them the
+    // trait is an empty node: `Overrides` has no declaration to point at, and
+    // "who implements this method" — the question an interface exists to
+    // pose — has no answer. Both required and defaulted members are taken,
+    // owned by the trait exactly as an inherent method is owned by its type.
+    if kind == "trait_item" {
+        let trait_name = get_node_text(node.child_by_field_name("name"), source);
+        if let (Some(name), Some(body)) = (trait_name, node.child_by_field_name("body")) {
+            let owner = ImplCtx {
+                fqn: ctx.scope.qualify(&name),
+                name,
+            };
+            let mut cursor = body.walk();
+            for child in body.children(&mut cursor) {
+                extract_symbol_from_node(&child, source, ctx, Some(&owner), out);
+            }
+        }
+        return;
+    }
 
     // Descend into other nodes so e.g. functions inside a top-level
     // `mod foo { … }` block are found. Stop recursing into bodies that
@@ -120,7 +187,6 @@ fn visit(
         "function_item"
             | "struct_item"
             | "enum_item"
-            | "trait_item"
             | "type_item"
             | "const_item"
             | "static_item"
@@ -131,15 +197,15 @@ fn visit(
 
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        visit(child, source, impl_owner, impl_trait, out);
+        visit(child, source, ctx, imp, impl_traits, out);
     }
 }
 
 fn extract_symbol_from_node(
     node: &Node,
     source: &[u8],
-    impl_owner: Option<&str>,
-    impl_trait: Option<&str>,
+    ctx: &Ctx,
+    imp: Option<&ImplCtx>,
     out: &mut Vec<Symbol>,
 ) {
     let kind = node.kind();
@@ -148,21 +214,34 @@ fn extract_symbol_from_node(
     let docstring = extract_rust_docstring(node, source);
 
     match kind {
-        "function_item" => {
+        // `function_signature_item` is a trait member with no body
+        // (`fn put(&self) -> u32;`). It carries everything that matters here
+        // — name, signature, docs — and only `extract_calls` finds nothing,
+        // which is correct: a declaration calls nothing.
+        "function_item" | "function_signature_item" => {
             let Some(raw_name) = get_node_text(node.child_by_field_name("name"), source) else {
                 return;
             };
             // Methods inside an `impl Foo` block get qualified — the
             // graph layer keys IDs on `<file>:<line>:<name>` so this
             // also keeps `Foo::new` distinct from `Bar::new`.
-            let name = match impl_owner {
-                Some(owner) if !owner.is_empty() => format!("{}::{}", owner, raw_name),
-                _ => raw_name,
+            //
+            // The *display* name keeps the `Type::method` spelling it has
+            // always had, which is why Rust node ids survive this change
+            // unaltered. What is new is `qualified_name` / `owner`, which
+            // carry the module path the display name never could.
+            let name = match imp {
+                Some(i) => format!("{}::{}", i.name, raw_name),
+                None => raw_name.clone(),
             };
+            let qualified_name = Some(match imp {
+                Some(i) => format!("{}{}{}", i.fqn, MEMBER_SEP, raw_name),
+                None => ctx.scope.qualify(&raw_name),
+            });
 
             let params = extract_params(node, source);
             let return_type = extract_return_type(node, source);
-            let calls = extract_function_calls(node, source);
+            let (calls, call_refs, uses) = extract_calls(node, source, ctx, imp, &params);
             let metrics = SymbolMetrics {
                 // Inclusive of both the first and last line, matching the
                 // span fallback used for symbols that carry no metrics.
@@ -175,10 +254,6 @@ fn extract_symbol_from_node(
                 // over the file — see `indexer::annotate_line_metrics`.
                 ..Default::default()
             };
-
-            let implements = impl_trait
-                .map(|t| vec![t.to_string()])
-                .unwrap_or_default();
 
             out.push(Symbol {
                 id: format!("fn:{}:{}", start, name),
@@ -195,8 +270,12 @@ fn extract_symbol_from_node(
                 imports: Vec::new(),
                 exports: Vec::new(),
                 extends: Vec::new(),
-                implements,
+                implements: Vec::new(),
                 calls,
+                call_refs,
+                uses,
+                qualified_name,
+                owner: imp.map(|i| i.fqn.clone()),
                 metrics: Some(metrics),
                 ..Default::default()
             });
@@ -208,6 +287,7 @@ fn extract_symbol_from_node(
             let item_kind = if kind == "struct_item" { "struct" } else { "enum" };
             out.push(Symbol {
                 id: format!("{}:{}:{}", item_kind, start, name),
+                qualified_name: Some(ctx.scope.qualify(&name)),
                 name,
                 kind: item_kind.to_string(),
                 file: String::new(),
@@ -229,10 +309,16 @@ fn extract_symbol_from_node(
                 return;
             };
             // `trait Foo: Bar + Baz { … }` — super-traits land in
-            // `extends` so the graph captures the trait hierarchy.
-            let extends = extract_trait_bounds(node, source);
+            // `extends` so the graph captures the trait hierarchy. They are
+            // qualified here rather than left as written names because the
+            // graph builder keys its supertype walk on qualified names.
+            let extends = extract_trait_bounds(node, source)
+                .iter()
+                .filter_map(|b| ctx.scope.resolve_type_ref(b))
+                .collect();
             out.push(Symbol {
                 id: format!("trait:{}:{}", start, name),
+                qualified_name: Some(ctx.scope.qualify(&name)),
                 name,
                 kind: "trait".to_string(),
                 file: String::new(),
@@ -255,6 +341,7 @@ fn extract_symbol_from_node(
             };
             out.push(Symbol {
                 id: format!("type:{}:{}", start, name),
+                qualified_name: Some(ctx.scope.qualify(&name)),
                 name,
                 kind: "type_alias".to_string(),
                 file: String::new(),
@@ -277,6 +364,7 @@ fn extract_symbol_from_node(
             };
             out.push(Symbol {
                 id: format!("const:{}:{}", start, name),
+                qualified_name: Some(ctx.scope.qualify(&name)),
                 name,
                 kind: "constant".to_string(),
                 file: String::new(),
@@ -299,6 +387,7 @@ fn extract_symbol_from_node(
             };
             out.push(Symbol {
                 id: format!("macro:{}:{}", start, name),
+                qualified_name: Some(ctx.scope.qualify(&name)),
                 name,
                 kind: "macro".to_string(),
                 file: String::new(),
@@ -316,6 +405,411 @@ fn extract_symbol_from_node(
             });
         }
         _ => {}
+    }
+}
+
+/// Move each `impl Trait for Type` onto the *type* it names.
+///
+/// The trait used to be recorded on every method in the block, which put a
+/// type-level fact on a member: it made `Implements` edges point from a
+/// function to a trait, and left the type — the thing that actually
+/// implements the trait — with no hierarchy at all. Recording it here instead
+/// gives the graph builder both edges for free: `Implements` from the type,
+/// and `Overrides` from each method that redeclares a trait member, because
+/// its owner's supertypes now include the trait.
+fn attach_impl_traits(symbols: &mut [Symbol], impl_traits: &[(String, String)]) {
+    if impl_traits.is_empty() {
+        return;
+    }
+    for sym in symbols.iter_mut() {
+        // Members carry `owner`; only the type declaration itself should
+        // collect the traits.
+        if sym.owner.is_some() {
+            continue;
+        }
+        let Some(fqn) = sym.qualified_name.as_ref() else {
+            continue;
+        };
+        for (type_fqn, trait_fqn) in impl_traits {
+            if type_fqn == fqn && !sym.implements.contains(trait_fqn) {
+                sym.implements.push(trait_fqn.clone());
+            }
+        }
+    }
+}
+
+/// Field name -> written field type, per struct in this file.
+///
+/// Collected in one pre-pass because a method body typing `self.store` needs
+/// the declaration of `store`, which sits in a `struct_item` the walk may not
+/// have reached yet.
+fn collect_struct_fields(
+    root: Node,
+    source: &[u8],
+) -> HashMap<String, HashMap<String, String>> {
+    let mut out: HashMap<String, HashMap<String, String>> = HashMap::new();
+    walk_struct_fields(root, source, &mut out);
+    out
+}
+
+fn walk_struct_fields(
+    node: Node,
+    source: &[u8],
+    out: &mut HashMap<String, HashMap<String, String>>,
+) {
+    if node.kind() == "struct_item" {
+        if let Some(name) = get_node_text(node.child_by_field_name("name"), source) {
+            let mut fields = HashMap::new();
+            if let Some(body) = node.child_by_field_name("body") {
+                let mut cursor = body.walk();
+                for child in body.children(&mut cursor) {
+                    if child.kind() != "field_declaration" {
+                        continue;
+                    }
+                    let (Some(fname), Some(ftype)) = (
+                        get_node_text(child.child_by_field_name("name"), source),
+                        get_node_text(child.child_by_field_name("type"), source),
+                    ) else {
+                        continue;
+                    };
+                    fields.insert(fname, base_type_name(&ftype).to_string());
+                }
+            }
+            out.insert(name, fields);
+        }
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        walk_struct_fields(child, source, out);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Call sites
+// ---------------------------------------------------------------------------
+
+/// Call sites inside one function body, resolved as far as one file's worth
+/// of context allows.
+///
+/// Returns both the deduped display list (`Symbol::calls`) and the structured
+/// sites (`Symbol::call_refs`). The display list now holds *bare callee
+/// names*. It used to hold the raw source text of the callee expression, so
+/// `a.iter().map(|x| { … }).collect()` contributed four entries, one of them
+/// the entire closure body — and the graph builder then tried to resolve
+/// those blobs by taking the substring after their last dot, which is how
+/// `.collect()` came to be recorded as a call to whatever local function
+/// happened to be named `collect`.
+fn extract_calls(
+    node: &Node,
+    source: &[u8],
+    ctx: &Ctx,
+    imp: Option<&ImplCtx>,
+    params: &[Param],
+) -> (Vec<String>, Vec<CallRef>, Vec<String>) {
+    let mut env = TypeEnv::new();
+
+    if let Some(i) = imp {
+        env.insert("self", i.fqn.clone());
+        // Fields of the type this method hangs off, so `self.store.get(..)`
+        // knows what it dispatches on.
+        if let Some(fields) = ctx.fields.get(&i.name) {
+            for (fname, ftype) in fields {
+                if let Some(fqn) = ctx.scope.lookup(ftype) {
+                    env.insert(format!("self.{}", fname), fqn);
+                }
+            }
+        }
+    }
+    for p in params {
+        if let Some(t) = &p.param_type {
+            if let Some(fqn) = ctx.scope.lookup(base_type_name(t)) {
+                env.insert(p.name.clone(), fqn);
+            }
+        }
+    }
+
+    let mut calls = Vec::new();
+    let mut refs = Vec::new();
+    let mut uses = Vec::new();
+    if let Some(body) = node.child_by_field_name("body") {
+        collect_calls(
+            &body, source, ctx, imp, &mut env, &mut calls, &mut refs, &mut uses,
+        );
+    }
+    (calls, refs, uses)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_calls(
+    node: &Node,
+    source: &[u8],
+    ctx: &Ctx,
+    imp: Option<&ImplCtx>,
+    env: &mut TypeEnv,
+    calls: &mut Vec<String>,
+    refs: &mut Vec<CallRef>,
+    uses: &mut Vec<String>,
+) {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        record_constant_use(&child, source, ctx, uses);
+        match child.kind() {
+            // Locals are recorded as they are met, so a binding halfway down
+            // a body types the calls below it. No block scoping — see
+            // `TypeEnv`.
+            "let_declaration" => record_local(&child, source, ctx, env),
+            "call_expression" => {
+                if let Some(r) = call_ref_for(&child, source, ctx, imp, env) {
+                    push_call(calls, &r.name);
+                    refs.push(r);
+                }
+            }
+            // `Foo { .. }` is the one construction form Rust spells
+            // unambiguously. `Foo::new(..)` is a convention, not a language
+            // feature, and is left as an ordinary call — which points at the
+            // real `Foo::new` body and is the more useful edge anyway.
+            "struct_expression" => {
+                if let Some(ty) = get_node_text(child.child_by_field_name("name"), source) {
+                    let bare = base_type_name(&ty);
+                    push_call(calls, bare);
+                    refs.push(CallRef {
+                        name: CTOR.to_string(),
+                        owner_type: ctx.scope.lookup(bare),
+                        argc: 0,
+                        qualified: None,
+                        is_ctor: true,
+                        // `<init>` is a sentinel, not a name anything is
+                        // declared under, so the bare-name fallback has
+                        // nothing to match and must not be tried.
+                        has_receiver: true,
+                    });
+                }
+            }
+            "macro_invocation" => {
+                if let Some(name) = get_node_text(child.child_by_field_name("macro"), source) {
+                    let bare = name.rsplit("::").next().unwrap_or(&name).to_string();
+                    push_call(calls, &bare);
+                    refs.push(CallRef {
+                        qualified: ctx.scope.resolve_path(&name),
+                        name: bare,
+                        owner_type: None,
+                        argc: 0,
+                        is_ctor: false,
+                        has_receiver: false,
+                    });
+                }
+            }
+            _ => {}
+        }
+        collect_calls(&child, source, ctx, imp, env, calls, refs, uses);
+    }
+}
+
+/// Note a reference to a module-level constant, resolved through this file's
+/// imports. Covers both `MAX_FOO` and `limits::MAX_FOO`.
+fn record_constant_use(node: &Node, source: &[u8], ctx: &Ctx, uses: &mut Vec<String>) {
+    let text = match node.kind() {
+        "identifier" | "scoped_identifier" => match get_node_text(Some(*node), source) {
+            Some(t) => t,
+            None => return,
+        },
+        _ => return,
+    };
+    let tail = text.rsplit("::").next().unwrap_or(&text);
+    if !looks_like_constant(tail) {
+        return;
+    }
+    if let Some(fqn) = ctx.scope.resolve_path(&text) {
+        if !uses.contains(&fqn) {
+            uses.push(fqn);
+        }
+    }
+}
+
+fn push_call(calls: &mut Vec<String>, name: &str) {
+    if !name.is_empty() && !calls.iter().any(|c| c == name) {
+        calls.push(name.to_string());
+    }
+}
+
+fn argument_count(call: &Node) -> u32 {
+    call.child_by_field_name("arguments")
+        .map(|a| a.named_child_count() as u32)
+        .unwrap_or(0)
+}
+
+/// One `call_expression`, with whatever the file can tell us about where it
+/// lands. `None` for a callee shape we can't name (a call through a closure
+/// binding, an index expression).
+fn call_ref_for(
+    call: &Node,
+    source: &[u8],
+    ctx: &Ctx,
+    imp: Option<&ImplCtx>,
+    env: &TypeEnv,
+) -> Option<CallRef> {
+    let mut func = call.child_by_field_name("function")?;
+    // `foo::<T>(..)` wraps the callee in a `generic_function`.
+    if func.kind() == "generic_function" {
+        func = func.child_by_field_name("function")?;
+    }
+    let argc = argument_count(call);
+
+    match func.kind() {
+        "identifier" => {
+            let name = get_node_text(Some(func), source)?;
+            Some(CallRef {
+                qualified: ctx.scope.lookup(&name),
+                name,
+                owner_type: None,
+                argc,
+                is_ctor: false,
+                has_receiver: false,
+            })
+        }
+        // `receiver.method(..)`
+        "field_expression" => {
+            let name = get_node_text(func.child_by_field_name("field"), source)?;
+            let recv = func.child_by_field_name("value")?;
+            Some(CallRef {
+                owner_type: type_of_expr(&recv, source, ctx, imp, env),
+                name,
+                argc,
+                qualified: None,
+                is_ctor: false,
+                has_receiver: true,
+            })
+        }
+        // `Type::assoc(..)` dispatches on a type; `module::free_fn(..)` names
+        // its target outright. Rust spells types UpperCamelCase, which is
+        // what tells the two apart — the same call Java's indexer makes for
+        // a bare identifier in receiver position.
+        "scoped_identifier" => {
+            let text = get_node_text(Some(func), source)?;
+            let (prefix, name) = text.rsplit_once("::")?;
+            let head = prefix.rsplit("::").next().unwrap_or(prefix);
+            if looks_like_type(head) {
+                Some(CallRef {
+                    owner_type: ctx.scope.resolve_path(prefix),
+                    name: name.to_string(),
+                    argc,
+                    qualified: None,
+                    is_ctor: false,
+                    // The type qualifier is the whole identity of the
+                    // callee. When it names something outside the repo
+                    // (`String::new`), falling back to the bare `new` would
+                    // reach for any local function of that name.
+                    has_receiver: true,
+                })
+            } else {
+                Some(CallRef {
+                    qualified: ctx.scope.resolve_path(&text),
+                    name: name.to_string(),
+                    owner_type: None,
+                    argc,
+                    is_ctor: false,
+                    has_receiver: false,
+                })
+            }
+        }
+        _ => None,
+    }
+}
+
+/// The qualified type an expression evaluates to, or `None` when typing it
+/// would mean following an arbitrary expression — which is the point at which
+/// a receiver type stops being a fact and starts being a guess.
+fn type_of_expr(
+    node: &Node,
+    source: &[u8],
+    ctx: &Ctx,
+    imp: Option<&ImplCtx>,
+    env: &TypeEnv,
+) -> Option<String> {
+    match node.kind() {
+        "self" => imp.map(|i| i.fqn.clone()),
+        "identifier" => {
+            let text = get_node_text(Some(*node), source)?;
+            if let Some(t) = env.get(&text) {
+                return Some(t.to_string());
+            }
+            if looks_like_type(&text) {
+                return ctx.scope.lookup(&text);
+            }
+            None
+        }
+        // Only `self.field`. Anything deeper is an expression we'd be
+        // inventing a type for.
+        "field_expression" => {
+            let value = node.child_by_field_name("value")?;
+            if value.kind() != "self" {
+                return None;
+            }
+            let field = get_node_text(node.child_by_field_name("field"), source)?;
+            env.get(&format!("self.{}", field)).map(str::to_string)
+        }
+        "scoped_identifier" => ctx.scope.resolve_path(&get_node_text(Some(*node), source)?),
+        _ => None,
+    }
+}
+
+/// Record `let x: Foo = …` / `let x = Foo { .. }` / `let x = Foo::new(..)`.
+fn record_local(decl: &Node, source: &[u8], ctx: &Ctx, env: &mut TypeEnv) {
+    let Some(pattern) = decl.child_by_field_name("pattern") else {
+        return;
+    };
+    // Destructuring binds several names to parts of a value; typing any of
+    // them would take inference we don't have.
+    if pattern.kind() != "identifier" {
+        return;
+    }
+    let Some(name) = get_node_text(Some(pattern), source) else {
+        return;
+    };
+
+    // An annotation is authoritative.
+    if let Some(ty) = get_node_text(decl.child_by_field_name("type"), source) {
+        if let Some(fqn) = ctx.scope.lookup(base_type_name(&ty)) {
+            env.insert(name, fqn);
+            return;
+        }
+    }
+
+    let Some(value) = decl.child_by_field_name("value") else {
+        return;
+    };
+    if let Some(fqn) = constructed_type(&value, source, ctx) {
+        env.insert(name, fqn);
+    }
+}
+
+/// The type a construction expression produces.
+///
+/// `Foo::new(..)` is read as producing a `Foo`. That is a convention rather
+/// than a guarantee — the real return may be `Result<Foo>` — but the failure
+/// is self-limiting: a wrongly typed receiver looks for a member the type
+/// doesn't have, finds nothing, and the call site is dropped.
+fn constructed_type(value: &Node, source: &[u8], ctx: &Ctx) -> Option<String> {
+    match value.kind() {
+        "struct_expression" => {
+            let ty = get_node_text(value.child_by_field_name("name"), source)?;
+            ctx.scope.lookup(base_type_name(&ty))
+        }
+        "call_expression" => {
+            let func = value.child_by_field_name("function")?;
+            if func.kind() != "scoped_identifier" {
+                return None;
+            }
+            let text = get_node_text(Some(func), source)?;
+            let (prefix, _) = text.rsplit_once("::")?;
+            let head = prefix.rsplit("::").next().unwrap_or(prefix);
+            if !looks_like_type(head) {
+                return None;
+            }
+            ctx.scope.resolve_path(prefix)
+        }
+        _ => None,
     }
 }
 

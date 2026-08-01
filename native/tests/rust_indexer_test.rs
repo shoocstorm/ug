@@ -156,8 +156,13 @@ impl Counter {
     assert!(method_names.contains(&"Counter::inc"));
 }
 
+/// `impl Trait for Type` is a fact about the *type*, and used to be recorded
+/// on every method in the block instead. That put a type-level relation on a
+/// member: `Implements` edges ran from a function to a trait, and the type
+/// that actually implements it had no hierarchy at all — which is why a
+/// Rust graph could show `Implements` edges and zero `Extends`.
 #[test]
-fn trait_impl_records_implements_relation() {
+fn trait_impl_records_implements_on_the_type_not_its_methods() {
     let src = r#"
 pub trait Greet {
     fn hello(&self) -> &str;
@@ -169,11 +174,28 @@ impl Greet for Robot {
 "#;
     let (dir, _) = stage_rs(src, "robot.rs");
     let symbols = run_index(&dir).files.remove(0).symbols;
+
+    let robot = symbols
+        .iter()
+        .find(|s| s.name == "Robot")
+        .expect("Robot struct should be extracted");
+    assert_eq!(robot.implements, vec!["crate::robot::Greet".to_string()]);
+
     let hello = symbols
         .iter()
         .find(|s| s.name == "Robot::hello")
         .expect("Robot::hello should be extracted");
-    assert_eq!(hello.implements, vec!["Greet".to_string()]);
+    assert!(
+        hello.implements.is_empty(),
+        "the trait belongs to the type, not to each method"
+    );
+    // The method instead carries the owner that lets a call through a
+    // `Robot`-typed receiver reach it.
+    assert_eq!(hello.owner.as_deref(), Some("crate::robot::Robot"));
+    assert_eq!(
+        hello.qualified_name.as_deref(),
+        Some("crate::robot::Robot#hello")
+    );
 }
 
 #[test]

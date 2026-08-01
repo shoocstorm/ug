@@ -113,6 +113,7 @@ pub fn edge_type_str(t: &GraphEdgeType) -> &'static str {
         GraphEdgeType::Requires => "Requires",
         GraphEdgeType::Uses => "Uses",
         GraphEdgeType::Overrides => "Overrides",
+        GraphEdgeType::Instantiates => "Instantiates",
     }
 }
 
@@ -130,6 +131,7 @@ pub const EDGE_TYPE_VOCABULARY: &[&str] = &[
     "Requires",
     "Uses",
     "Overrides",
+    "Instantiates",
 ];
 
 /// Default edge types for `find_usages` — dependency-ish edges only, no
@@ -139,6 +141,11 @@ pub const EDGE_TYPE_VOCABULARY: &[&str] = &[
 /// `overrides` is included because an override is the most useful answer
 /// there is to "what depends on this method": for an interface or abstract
 /// declaration it is the entirety of the implementing code.
+///
+/// `instantiates` and `uses` are here for the same reason. Constructing a
+/// type is how most code depends on a type, and reading a constant is the
+/// *only* way anything depends on one — leave them out and every constant in
+/// the repo answers "who uses this" with silence.
 pub const USAGE_EDGE_TYPES: &[&str] = &[
     "calls",
     "references",
@@ -146,6 +153,8 @@ pub const USAGE_EDGE_TYPES: &[&str] = &[
     "extends",
     "implements",
     "overrides",
+    "instantiates",
+    "uses",
 ];
 
 /// `file:<path>` is how File node ids print, and users copy that straight
@@ -1984,6 +1993,15 @@ pub struct GraphSchemaResult {
     pub node_types: Vec<TypeCount>,
     pub edge_types: Vec<EdgeTypeInfo>,
     pub vocabulary: Vec<String>,
+    /// Whether this graph predates cross-file call resolution
+    /// (`GRAPH_SCHEMA_VERSION` 3).
+    ///
+    /// A stale graph does not fail — it answers. It answers `find_usages`
+    /// with callers a name-match invented and `dead_code` with symbols whose
+    /// only caller was dropped, and both look exactly like correct answers.
+    /// This is the manifest tool, so saying so here is the cheapest place to
+    /// stop a wrong number being quoted as a right one.
+    pub stale_call_graph: bool,
 }
 
 pub fn graph_schema(graph: &GraphData, graph_path: &Path) -> GraphSchemaResult {
@@ -2038,6 +2056,11 @@ pub fn graph_schema(graph: &GraphData, graph_path: &Path) -> GraphSchemaResult {
         node_types: top_counts(&node_counts, usize::MAX),
         edge_types,
         vocabulary: EDGE_TYPE_VOCABULARY.iter().map(|s| s.to_string()).collect(),
+        stale_call_graph: graph
+            .stats
+            .as_ref()
+            .map(|s| s.graph_schema_version < 3)
+            .unwrap_or(true),
     }
 }
 
@@ -2101,6 +2124,21 @@ pub fn render_graph_schema(r: &GraphSchemaResult, style: Render) -> String {
         &mut out,
         "  • Contains is structure (Folder→File→Symbol) — exclude it when you mean \"depends on\".",
     );
+    if r.stale_call_graph {
+        line(
+            &mut out,
+            "  • This graph predates cross-file call resolution, so Calls edges were matched by",
+        );
+        line(
+            &mut out,
+            "    name: some point at a same-named symbol the call site never meant, and module-path",
+        );
+        line(
+            &mut out,
+            "    calls are missing entirely. Treat find_usages, impact and dead_code as indicative,",
+        );
+        line(&mut out, "    and run \"ug regen\" before relying on them.");
+    }
     out
 }
 
@@ -2449,6 +2487,7 @@ mod tests {
                 ),
             ],
             stats: None,
+            resolution: None,
         }
     }
 
@@ -2463,6 +2502,7 @@ mod tests {
             ],
             edges: vec![],
             stats: None,
+            resolution: None,
         };
         let r = find_symbols(
             &g,
@@ -2487,6 +2527,7 @@ mod tests {
             ],
             edges: vec![],
             stats: None,
+            resolution: None,
         };
         g.nodes[1].docstring = Some("Evicts entries from the cache.".into());
 

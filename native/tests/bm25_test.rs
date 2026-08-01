@@ -94,6 +94,7 @@ async fn ingest_writes_stats_that_a_reopened_store_picks_up() {
         ],
         edges: vec![],
         stats: None,
+        resolution: None,
     };
     let texts: Vec<String> = graph
         .nodes
@@ -157,6 +158,7 @@ async fn stats_are_computed_over_the_whole_graph_not_the_changed_subset() {
             .collect(),
         edges: vec![],
         stats: None,
+        resolution: None,
     };
     let texts: Vec<String> = graph
         .nodes
@@ -403,6 +405,7 @@ async fn hybrid_search_returns_the_row_carrying_the_query_terms() {
         nodes: rows.iter().map(|r| node(&r.id, &r.node_text)).collect(),
         edges: vec![],
         stats: None,
+        resolution: None,
     };
     ultragraph::storage::refresh_sparse_stats(
         &[&db as &dyn KnowledgeStore],

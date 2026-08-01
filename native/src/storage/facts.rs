@@ -292,6 +292,7 @@ mod tests {
             nodes: vec![],
             edges,
             stats: None,
+            resolution: None,
         })
     }
 
@@ -311,6 +312,7 @@ mod tests {
                 last_indexed_at: 0,
                 repo_root: String::new(),
             }),
+            resolution: None,
         })
     }
 

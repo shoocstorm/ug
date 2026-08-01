@@ -423,6 +423,10 @@ fn an_inherited_method_resolves_up_the_superclass_chain() {
     assert!(called.contains("Base.log"), "got {called:?}");
 }
 
+/// `new Order(..)` still resolves to the declared constructor, but it is an
+/// `Instantiates` edge rather than a `Calls` one: constructing a value and
+/// invoking a method are different relationships, and conflating them left
+/// "who calls this class" with no meaningful answer.
 #[test]
 fn a_constructor_call_lands_on_the_constructor() {
     let (_, graph) = run(&[
@@ -440,8 +444,14 @@ fn a_constructor_call_lands_on_the_constructor() {
         ),
     ]);
 
+    let built = targets(&graph, "Maker.make", GraphEdgeType::Instantiates);
+    assert!(built.contains("Order.Order"), "got {built:?}");
+
     let called = targets(&graph, "Maker.make", GraphEdgeType::Calls);
-    assert!(called.contains("Order.Order"), "got {called:?}");
+    assert!(
+        !called.contains("Order.Order"),
+        "construction must not also be reported as a call: {called:?}"
+    );
 }
 
 #[test]

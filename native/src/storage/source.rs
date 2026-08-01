@@ -170,6 +170,7 @@ mod tests {
             ],
             edges: vec![],
             stats: None,
+            resolution: None,
         };
         let got = capture_graph_code(&graph, dir.path());
 
@@ -191,6 +192,7 @@ mod tests {
             nodes: vec![node("past_eof", "a.rs", Some(2), Some(999))],
             edges: vec![],
             stats: None,
+            resolution: None,
         };
         let got = capture_graph_code(&graph, dir.path());
         assert_eq!(got["past_eof"].code, "two\n");
@@ -203,6 +205,7 @@ mod tests {
             nodes: vec![node("gone", "nope.rs", Some(1), Some(2))],
             edges: vec![],
             stats: None,
+            resolution: None,
         };
         assert!(capture_graph_code(&graph, dir.path()).is_empty());
     }
@@ -215,6 +218,7 @@ mod tests {
             nodes: vec![node("n", "a.rs", Some(1), Some(1))],
             edges: vec![],
             stats: None,
+            resolution: None,
         };
         let hash = capture_graph_code(&graph, dir.path())["n"].file_hash.clone();
 

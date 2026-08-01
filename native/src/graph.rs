@@ -54,6 +54,16 @@ const MAX_WILDCARD_FANOUT: usize = 64;
 /// one method, and only fall back to name matching when it doesn't.
 #[derive(Default)]
 struct QualifiedIndex {
+    /// Every qualified name in the repo -> its node id, whatever kind of
+    /// symbol it names.
+    ///
+    /// This is the map a *module*-structured language resolves against.
+    /// `crate::project::read_meta(..)` names its target completely at the
+    /// call site — there is no receiver, no dispatch and nothing to
+    /// disambiguate, so one exact lookup is the whole job. Java never needs
+    /// it (a Java call site names a member and a receiver, never a path),
+    /// which is why the tables below came first.
+    by_qualified: HashMap<String, String>,
     /// `pkg.Type#member` -> candidate node ids, each with its parameter
     /// count so overloads can be told apart.
     members: HashMap<String, Vec<(String, u32)>>,
@@ -157,8 +167,28 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
     // mapped to the same route are a real thing (different HTTP verbs share
     // a path) and should meet at one node.
     let mut route_ids: HashSet<String> = HashSet::new();
+    // Node ids that hold a value rather than behaviour, so a `Uses` edge can
+    // be restricted to the references that mean something.
+    let mut constant_ids: HashSet<String> = HashSet::new();
+    let mut resolution = crate::types::ResolutionStats::default();
 
     let (path_index, basename_index) = build_file_indexes(&index_result.files);
+
+    // Pass -1: declared third-party dependencies. `GraphNodeType::Dependency`
+    // has existed since the beginning and nothing ever created one, so the
+    // manifest the indexer parses had no representation in the graph at all.
+    let mut dependency_ids: HashMap<&str, String> = HashMap::new();
+    for dep in &index_result.dependencies {
+        let id = format!("dep:{}", dep.name);
+        dependency_ids.insert(dep.name.as_str(), id.clone());
+        nodes.push(GraphNode {
+            id,
+            name: dep.name.clone(),
+            node_type: GraphNodeType::Dependency,
+            docstring: dep.version.clone().map(|v| format!("version {}", v)),
+            ..Default::default()
+        });
+    }
 
     // Pass 0: folder forest. Folder nodes carry filesystem hierarchy that no
     // single FileNode captures (`src/components/` vs `tests/components/`), so
@@ -299,11 +329,21 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
                     "struct" | "enum" => GraphNodeType::Class,
                     "trait" | "type_alias" => GraphNodeType::Interface,
                     "constant" => GraphNodeType::Constant,
+                    // A Python module-level binding is whatever its name
+                    // says it is. `MAX_RETRIES = 3` is a constant; `app =
+                    // Flask(__name__)` is not, and the catch-all below keeps
+                    // treating it as callable.
+                    "assignment" if crate::indexer::scope::looks_like_constant(&sym.name) => {
+                        GraphNodeType::Constant
+                    }
                     _ => GraphNodeType::Function,
                 }
             };
 
             let sym_node_id = sym_ids[sym_idx].clone();
+            if node_type == GraphNodeType::Constant {
+                constant_ids.insert(sym_node_id.clone());
+            }
 
             let signature = sym.signature.as_ref().map(|s| crate::types::GraphNodeSignature {
                 params: s.params.iter().map(|p| crate::types::Param {
@@ -361,6 +401,14 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
                 qualified
                     .file_of
                     .insert(sym_node_id.clone(), file_node_id.clone());
+                // Every qualified symbol, member or not. Two symbols cannot
+                // share a qualified name without one shadowing the other, so
+                // first-wins here is a tie-break between duplicates rather
+                // than a choice between candidates.
+                qualified
+                    .by_qualified
+                    .entry(fqn.clone())
+                    .or_insert_with(|| sym_node_id.clone());
 
                 match &sym.owner {
                     // A member: `pkg.Type#name`, keyed with its arity.
@@ -573,6 +621,24 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
                 }
             }
 
+            // Constants a body reads. Only edges into an actual Constant or
+            // Config node are drawn: a `SCREAMING_CASE` name that resolves to
+            // something else is an enum variant or an external, and neither
+            // is what "who uses this setting" means.
+            for used in &sym.uses {
+                let Some(target_id) = qualified.by_qualified.get(used) else {
+                    continue;
+                };
+                if !constant_ids.contains(target_id) {
+                    continue;
+                }
+                edges.push(GraphEdge {
+                    source: sym_node_id.clone(),
+                    target: target_id.clone(),
+                    edge_type: GraphEdgeType::Uses,
+                });
+            }
+
             if sym.call_refs.is_empty() {
                 // Languages that report only bare callee names.
                 for called in &sym.calls {
@@ -584,6 +650,9 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
                             target: target_id,
                             edge_type: GraphEdgeType::Calls,
                         });
+                        resolution.resolved_by_name += 1;
+                    } else {
+                        resolution.dropped_unresolved += 1;
                     }
                 }
             } else {
@@ -594,43 +663,92 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
                 for call in &sym.call_refs {
                     let mut resolved = false;
 
+                    // An exact path needs no dispatch and cannot be
+                    // ambiguous, so it is tried first. This is the case that
+                    // used to be dropped outright: `resolve_symbol` split
+                    // only on `.`, so every `a::b::c(..)` in a Rust file
+                    // failed both its lookups and produced no edge at all.
+                    if let Some(fqn) = &call.qualified {
+                        if let Some(target_id) = qualified.by_qualified.get(fqn) {
+                            edges.push(GraphEdge {
+                                source: sym_node_id.clone(),
+                                target: target_id.clone(),
+                                edge_type: edge_for_call(call),
+                            });
+                            resolution.resolved_qualified += 1;
+                            resolved = true;
+                        }
+                    }
+
                     if let Some(owner) = &call.owner_type {
                         if let Some(target_id) = qualified.method(owner, &call.name, call.argc) {
                             edges.push(GraphEdge {
                                 source: sym_node_id.clone(),
                                 target: target_id,
-                                edge_type: GraphEdgeType::Calls,
+                                edge_type: edge_for_call(call),
                             });
+                            resolution.resolved_typed += 1;
                             resolved = true;
+                        }
+
+                        // A construction whose type declares no constructor
+                        // symbol — a Rust struct literal, a Python class with
+                        // no `__init__` — still instantiates the type, so the
+                        // edge lands on the type node itself.
+                        if !resolved && call.is_ctor {
+                            if let Some(target_id) = qualified.types.get(owner) {
+                                edges.push(GraphEdge {
+                                    source: sym_node_id.clone(),
+                                    target: target_id.clone(),
+                                    edge_type: GraphEdgeType::Instantiates,
+                                });
+                                resolution.resolved_typed += 1;
+                                resolved = true;
+                            }
                         }
 
                         // Dispatch: a call typed against an interface or an
                         // abstract base runs in the implementations, so the
-                        // edge is drawn to them too.
-                        for impl_fqn in qualified.implementors(owner, MAX_DISPATCH_FANOUT) {
-                            if let Some(target_id) =
-                                qualified.method(&impl_fqn, &call.name, call.argc)
-                            {
-                                edges.push(GraphEdge {
-                                    source: sym_node_id.clone(),
-                                    target: target_id,
-                                    edge_type: GraphEdgeType::Calls,
-                                });
-                                resolved = true;
+                        // edge is drawn to them too. Construction is not
+                        // dispatched — `new Foo()` runs `Foo`'s constructor,
+                        // never a subtype's.
+                        if !call.is_ctor {
+                            for impl_fqn in qualified.implementors(owner, MAX_DISPATCH_FANOUT) {
+                                if let Some(target_id) =
+                                    qualified.method(&impl_fqn, &call.name, call.argc)
+                                {
+                                    edges.push(GraphEdge {
+                                        source: sym_node_id.clone(),
+                                        target: target_id,
+                                        edge_type: GraphEdgeType::Calls,
+                                    });
+                                    resolution.resolved_typed += 1;
+                                    resolved = true;
+                                }
                             }
                         }
                     }
 
-                    if !resolved {
+                    // Last resort: match the bare callee name — but only for
+                    // a callee named without a receiver. A member call whose
+                    // receiver we could not type has already had its one
+                    // honest chance; see `CallRef::has_receiver`.
+                    if !resolved && !call.has_receiver {
                         if let Some(target_id) =
                             resolve_symbol(&symbol_id_map, &call.name, &normalized_file_path)
                         {
                             edges.push(GraphEdge {
                                 source: sym_node_id.clone(),
                                 target: target_id,
-                                edge_type: GraphEdgeType::Calls,
+                                edge_type: edge_for_call(call),
                             });
+                            resolution.resolved_by_name += 1;
+                            resolved = true;
                         }
+                    }
+
+                    if !resolved {
+                        resolution.dropped_unresolved += 1;
                     }
                 }
             }
@@ -655,7 +773,7 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
             // fallback would go looking for a file called `com`. Resolving
             // against declared qualified names is the only thing that works,
             // and it is also exact — no basename near-miss.
-            let targets = resolve_qualified_import(&qualified, import);
+            let targets = resolve_qualified_import(&qualified, import, &file.language);
             for target_id in &targets {
                 edges.push(GraphEdge {
                     source: file_node_id.clone(),
@@ -690,7 +808,20 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
                             edge_type: GraphEdgeType::Imports,
                         });
                     }
+                    continue;
                 }
+            }
+
+            // Nothing in the repo answers to this specifier, so it may name a
+            // third-party package. `IndexResult.dependencies` has always been
+            // parsed and never used; this is what makes "which files pull in
+            // axum" answerable.
+            if let Some(dep_id) = dependency_ids.get(dependency_root(&import.path)) {
+                edges.push(GraphEdge {
+                    source: file_node_id.clone(),
+                    target: dep_id.clone(),
+                    edge_type: GraphEdgeType::DependsOn,
+                });
             }
 
             for imp in &import.imported {
@@ -725,6 +856,7 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
         nodes,
         edges,
         stats: Some(index_result.stats.clone()),
+        resolution: Some(resolution),
     }
 }
 
@@ -736,10 +868,19 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
 fn resolve_qualified_import(
     qualified: &QualifiedIndex,
     import: &crate::types::ImportInfo,
+    language: &str,
 ) -> Vec<String> {
-    if qualified.types.is_empty() || import.path.is_empty() {
+    if qualified.by_qualified.is_empty() || import.path.is_empty() {
         return Vec::new();
     }
+
+    // An import path is written in the importing language's own vocabulary,
+    // and so is the qualified name it has to match. Hardcoding Java's `.`
+    // here meant `use crate::storage::db::Db` composed the fqn
+    // `crate::storage::db.Db`, matched nothing, and fell through to the
+    // filesystem resolver — which then looked for a directory called
+    // `crate::storage`.
+    let sep = crate::indexer::scope::module_sep(language);
 
     let mut out = Vec::new();
     for imp in &import.imported {
@@ -752,8 +893,8 @@ fn resolve_qualified_import(
             }
             continue;
         }
-        let fqn = format!("{}.{}", import.path, imp.name);
-        if let Some(id) = qualified.types.get(&fqn) {
+        let fqn = format!("{}{}{}", import.path, sep, imp.name);
+        if let Some(id) = qualified.by_qualified.get(&fqn) {
             out.push(id.clone());
             continue;
         }
@@ -982,14 +1123,52 @@ fn parse_heading_level(kind: &str) -> Option<usize> {
     }
 }
 
-/// Look up a symbol by name, preferring matches in the caller's own file.
+/// The package a bare import specifier belongs to.
 ///
-/// Names like `this.foo` or `obj.bar.baz` fall back to the trailing
-/// identifier so member-access call expressions resolve to the method node
-/// when only the bare method name is in the map. When several files declare
-/// the same name (a `parse` helper in three modules), we pick the match in
-/// `caller_file` if there is one — otherwise the first registered ID, which
-/// keeps the graph deterministic for the same input.
+/// `@scope/pkg/sub` -> `@scope/pkg`, `lodash/merge` -> `lodash`,
+/// `os.path` -> `os`, `serde::de` -> `serde`. Anything relative is not a
+/// package and returns something no manifest will list.
+fn dependency_root(spec: &str) -> &str {
+    if spec.starts_with('.') || spec.starts_with('/') {
+        return spec;
+    }
+    if let Some(rest) = spec.strip_prefix('@') {
+        // A scoped npm package is two segments, not one.
+        let mut it = rest.splitn(3, '/');
+        return match (it.next(), it.next()) {
+            (Some(scope), Some(pkg)) => &spec[..1 + scope.len() + 1 + pkg.len()],
+            _ => spec,
+        };
+    }
+    let end = spec
+        .find("::")
+        .into_iter()
+        .chain(spec.find('/'))
+        .chain(spec.find('.'))
+        .min()
+        .unwrap_or(spec.len());
+    &spec[..end]
+}
+
+/// Which edge a resolved call site produces.
+///
+/// Construction and invocation are different relationships, so they get
+/// different edges — see [`GraphEdgeType::Instantiates`].
+fn edge_for_call(call: &crate::types::CallRef) -> GraphEdgeType {
+    if call.is_ctor {
+        GraphEdgeType::Instantiates
+    } else {
+        GraphEdgeType::Calls
+    }
+}
+
+/// Look up a symbol by name, preferring a match in the caller's own file.
+///
+/// This is the fallback resolver: it runs for call sites no qualified name or
+/// receiver type could place. Dotted or scoped names (`this.foo`,
+/// `obj.bar.baz`, `a::b::c`) fall back to their trailing identifier so a
+/// member access still reaches the method node when only the bare name is in
+/// the map.
 fn resolve_symbol(
     map: &HashMap<String, Vec<String>>,
     name: &str,
@@ -998,29 +1177,49 @@ fn resolve_symbol(
     if let Some(id) = pick_best(map.get(name), caller_file) {
         return Some(id);
     }
-    let tail = name.rsplit('.').next()?;
+    // `::` as well as `.`: Rust spells every associated call and module path
+    // with it, and splitting on `.` alone meant `Db::open` matched nothing
+    // and was silently dropped.
+    let tail = name.rsplit(['.', ':']).next()?;
     if tail == name {
         return None;
     }
     pick_best(map.get(tail), caller_file)
 }
 
+/// One node id for a name, or `None` when the name does not identify one.
+///
+/// # Why an ambiguous name resolves to nothing
+///
+/// This used to return `candidates[0]` — the first id registered under the
+/// name — whenever the caller's own file declared no match. The comment
+/// called that "deterministic", and it was: deterministically arbitrary. A
+/// repo with a `parse` helper in three modules got an edge to whichever one
+/// happened to be indexed first, for every cross-file caller.
+///
+/// The cost was not confined to genuinely ambiguous names. Because the
+/// caller above falls back to a dotted name's trailing segment, every
+/// `.collect()` in a Rust file looked up `collect`, and any repo that
+/// happened to declare a function by that name collected an inbound edge
+/// from every iterator chain in the codebase.
+///
+/// So: a unique name resolves, a name the caller's own file declares
+/// resolves, and anything else resolves to nothing. `find_usages` returning
+/// an empty result has to mean "no known caller" rather than "possibly the
+/// wrong one", or none of the answers built on it can be trusted.
 fn pick_best(candidates: Option<&Vec<String>>, caller_file: &str) -> Option<String> {
     let candidates = candidates?;
-    if candidates.is_empty() {
-        return None;
-    }
-    // Symbol IDs encode `<kind>:<file>:<line>:<name>` - prefer an ID whose
-    // `<file>` segment matches the caller. Falls through to the first
-    // registered entry so behaviour is stable when there's no same-file
-    // match (cross-file calls, externals).
-    let needle = format!(":{}:", caller_file);
-    for id in candidates {
-        if id.contains(&needle) {
-            return Some(id.clone());
+    match candidates.len() {
+        0 => None,
+        1 => Some(candidates[0].clone()),
+        _ => {
+            // Symbol ids encode `<kind>:<file>:<name>`, so a caller-local
+            // declaration is recognisable by its file segment. Shadowing
+            // makes this the right answer rather than merely a tie-break.
+            let needle = format!(":{}:", caller_file);
+            candidates.iter().find(|id| id.contains(&needle)).cloned()
         }
     }
-    Some(candidates[0].clone())
 }
 
 fn dedupe_edges(edges: &mut Vec<GraphEdge>) {

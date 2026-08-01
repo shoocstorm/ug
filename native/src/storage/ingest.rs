@@ -712,6 +712,7 @@ mod tests {
             nodes,
             edges,
             stats: None,
+            resolution: None,
         }
     }
 

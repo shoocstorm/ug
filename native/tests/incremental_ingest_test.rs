@@ -48,6 +48,7 @@ fn graph(nodes: Vec<GraphNode>, edges: Vec<GraphEdge>) -> GraphData {
         nodes,
         edges,
         stats: None,
+        resolution: None,
     }
 }
 

@@ -20,7 +20,7 @@
 //! the structure, so a hand-rolled scan is simpler and good enough.
 
 use crate::indexer::common::truncate_chars;
-use crate::indexer::languages::LanguageIndexer;
+use crate::indexer::languages::{FileContext, LanguageIndexer};
 use crate::types::{ExportInfo, ImportInfo, ImportedItem, Symbol};
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -66,7 +66,7 @@ impl LanguageIndexer for MarkdownIndexer {
         Vec::new()
     }
 
-    fn extract_symbols(&self, source: &[u8], _root: Node) -> Vec<Symbol> {
+    fn extract_symbols(&self, source: &[u8], _root: Node, _ctx: &FileContext) -> Vec<Symbol> {
         extract_headings(source)
     }
 }

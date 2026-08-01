@@ -1258,6 +1258,7 @@ mod sparse_tests {
             nodes,
             edges,
             stats: None,
+            resolution: None,
         };
         let related = collect_related_names(&graph);
         let hub = &related["hub"];
@@ -1288,6 +1289,7 @@ mod sparse_tests {
                 edge_type: crate::types::GraphEdgeType::Calls,
             }],
             stats: None,
+            resolution: None,
         };
         let related = collect_related_names(&graph);
         assert_eq!(related["a"], vec!["beta".to_string()]);
@@ -1310,6 +1312,7 @@ mod sparse_tests {
                 edge_type: crate::types::GraphEdgeType::Calls,
             }],
             stats: None,
+            resolution: None,
         };
         let related = collect_related_names(&graph);
         assert!(related.get("a").is_none_or(|v| v.is_empty()));

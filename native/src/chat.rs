@@ -1013,6 +1013,7 @@ mod tests {
             distance: 0.1 * idx as f32,
             hop: idx as u32,
             snippet: snippet.map(|s| s.to_string()),
+            matched_by: "semantic".into(),
         }
     }
 

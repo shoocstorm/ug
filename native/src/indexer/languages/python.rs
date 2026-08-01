@@ -1,11 +1,17 @@
 //! Python indexer. Handles `.py`.
 
 use crate::indexer::common::{
-    calculate_nesting, extract_docstring, extract_function_calls, extract_params_from_signature,
-    extract_return_type, get_node_text,
+    calculate_nesting, extract_docstring, extract_params_from_signature, extract_return_type,
+    get_node_text,
 };
-use crate::indexer::languages::LanguageIndexer;
-use crate::types::{ExportInfo, ImportInfo, ImportedItem, Param, Signature, Symbol, SymbolMetrics};
+use crate::indexer::languages::{FileContext, LanguageIndexer};
+use crate::indexer::scope::{
+    base_type_name, looks_like_constant, looks_like_type, module_path, ImportScope, TypeEnv,
+    CTOR, MEMBER_SEP,
+};
+use crate::types::{
+    CallRef, ExportInfo, ImportInfo, ImportedItem, Param, Signature, Symbol, SymbolMetrics,
+};
 use std::collections::HashMap;
 use tree_sitter::Node;
 
@@ -36,18 +42,118 @@ impl LanguageIndexer for PythonIndexer {
         Vec::new()
     }
 
-    fn extract_symbols(&self, source: &[u8], root: Node) -> Vec<Symbol> {
+    fn extract_symbols(&self, source: &[u8], root: Node, ctx: &FileContext) -> Vec<Symbol> {
+        let scope = ImportScope::new("python", module_path(ctx.path, "python"), ctx.imports);
+        let walk = Ctx {
+            fields: collect_class_fields(root, source),
+            scope: &scope,
+        };
         let mut symbols = Vec::new();
-        visit(root, source, &mut symbols);
+        visit(root, source, &walk, None, &mut symbols);
         symbols
     }
 }
 
-fn visit(node: Node, source: &[u8], symbols: &mut Vec<Symbol>) {
-    extract_symbol_from_node(&node, source, symbols);
+/// Everything the walk needs that the AST node itself doesn't carry.
+struct Ctx<'a> {
+    scope: &'a ImportScope,
+    /// Written class name -> (attribute name -> written type), from
+    /// `self.store: Store = …` annotations and annotated class-level
+    /// attributes. Lets `self.store.save(..)` be typed.
+    fields: HashMap<String, HashMap<String, String>>,
+}
+
+/// The class currently being walked.
+struct OwnerCtx {
+    /// Written name, e.g. `OrderService`.
+    name: String,
+    /// Qualified name, e.g. `pkg.svc.OrderService`.
+    fqn: String,
+}
+
+/// Recursive AST walk.
+///
+/// `owner` is the class whose body we are inside. The walk used to carry
+/// nothing, so a method became a symbol named just `save` with no link to its
+/// class — which left `obj.save()` nothing to resolve against but every other
+/// `save` in the repo.
+fn visit(
+    node: Node,
+    source: &[u8],
+    ctx: &Ctx,
+    owner: Option<&OwnerCtx>,
+    symbols: &mut Vec<Symbol>,
+) {
+    extract_symbol_from_node(&node, source, ctx, owner, symbols);
+
+    let inner = match node.kind() {
+        "class_definition" => {
+            get_node_text(node.child_by_field_name("name"), source).map(|name| OwnerCtx {
+                fqn: ctx.scope.qualify(&name),
+                name,
+            })
+        }
+        _ => None,
+    };
+    let owner = inner.as_ref().or(owner);
+
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        visit(child, source, symbols);
+        visit(child, source, ctx, owner, symbols);
+    }
+}
+
+/// Attribute name -> written type, per class in this file.
+///
+/// Python declares attribute types in two places, and both are common:
+/// annotated class-level attributes (`store: Store`) and annotated
+/// assignments to `self` inside `__init__` (`self.store: Store = store`).
+fn collect_class_fields(root: Node, source: &[u8]) -> HashMap<String, HashMap<String, String>> {
+    let mut out: HashMap<String, HashMap<String, String>> = HashMap::new();
+    walk_class_fields(root, source, &mut out);
+    out
+}
+
+fn walk_class_fields(
+    node: Node,
+    source: &[u8],
+    out: &mut HashMap<String, HashMap<String, String>>,
+) {
+    if node.kind() == "class_definition" {
+        if let Some(name) = get_node_text(node.child_by_field_name("name"), source) {
+            let mut fields = HashMap::new();
+            if let Some(body) = node.child_by_field_name("body") {
+                collect_annotated_attrs(body, source, &mut fields);
+            }
+            out.insert(name, fields);
+        }
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        walk_class_fields(child, source, out);
+    }
+}
+
+/// Gather `name: Type` and `self.name: Type` bindings anywhere under `node`.
+fn collect_annotated_attrs(node: Node, source: &[u8], out: &mut HashMap<String, String>) {
+    if node.kind() == "assignment" {
+        if let (Some(left), Some(ty)) = (
+            node.child_by_field_name("left"),
+            get_node_text(node.child_by_field_name("type"), source),
+        ) {
+            if let Some(text) = get_node_text(Some(left), source) {
+                let attr = text.strip_prefix("self.").unwrap_or(&text).trim();
+                if !attr.is_empty() && !attr.contains('.') {
+                    out.insert(attr.to_string(), base_type_name(&ty).to_string());
+                }
+            }
+        }
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_annotated_attrs(child, source, out);
     }
 }
 
@@ -62,8 +168,15 @@ fn extract_imports_via_regex(source: &[u8]) -> Vec<ImportInfo> {
     // `from foo.bar import (a, b)` / `from foo import a, b as c`. Two
     // capture groups for the imported names cover the parenthesised and
     // unparenthesised forms.
+    //
+    // Anchored to the start of a line, and the unparenthesised name list
+    // deliberately excludes newlines: `[\s]` there swallowed everything after
+    // the import, so `from pkg.store import Store` two blank lines above a
+    // `def run` recorded an imported name of `"Store\n\n\ndef run"`. That was
+    // invisible while imports only drew file-to-file edges; it is not
+    // invisible now that they decide which `save` a call means.
     if let Ok(re) = regex::Regex::new(
-        r#"from\s+(\.[^ ]+|[a-zA-Z_][a-zA-Z0-9_.]*)\s+import\s+(?:\(([^)]+)\)|([a-zA-Z_][a-zA-Z0-9_,\s]*))"#,
+        r#"(?m)^[ \t]*from\s+(\.[^ ]+|[a-zA-Z_][a-zA-Z0-9_.]*)\s+import\s+(?:\(([^)]+)\)|([a-zA-Z_][a-zA-Z0-9_, \t]*))"#,
     ) {
         for cap in re.captures_iter(source_str) {
             let path = cap
@@ -96,16 +209,20 @@ fn extract_imports_via_regex(source: &[u8]) -> Vec<ImportInfo> {
         }
     }
 
-    // `import foo` / `import foo.bar`. The `from`-filter is a defensive
-    // guard against the regex matching the tail of `from foo import ...`
-    // lines that the previous regex already handled.
-    if let Ok(re) = regex::Regex::new(r#"import\s+([a-zA-Z_][a-zA-Z0-9_.]*)"#) {
+    // `import foo` / `import foo.bar`, anchored to the start of a line so it
+    // cannot re-match the tail of a `from foo import Bar` line the previous
+    // regex already handled. It did exactly that, recording a second import
+    // whose *path* was the imported name — so `from pkg.store import Store`
+    // also produced `path: "Store"`, and the alias table then resolved
+    // `Store` to `Store.Store`. The old `!path.contains("from")` guard could
+    // never have caught it: it inspects the captured path, not the line.
+    if let Ok(re) = regex::Regex::new(r#"(?m)^[ \t]*import\s+([a-zA-Z_][a-zA-Z0-9_.]*)"#) {
         for cap in re.captures_iter(source_str) {
             let path = cap
                 .get(1)
                 .map(|m| m.as_str().to_string())
                 .unwrap_or_default();
-            if !path.is_empty() && !path.contains("from") {
+            if !path.is_empty() {
                 import_lookup.entry(path.clone()).or_insert_with(|| ImportInfo {
                     path: path.clone(),
                     imported: vec![ImportedItem {
@@ -120,19 +237,37 @@ fn extract_imports_via_regex(source: &[u8]) -> Vec<ImportInfo> {
     import_lookup.into_values().collect()
 }
 
-fn extract_symbol_from_node(node: &Node, source: &[u8], out: &mut Vec<Symbol>) {
+fn extract_symbol_from_node(
+    node: &Node,
+    source: &[u8],
+    ctx: &Ctx,
+    owner: Option<&OwnerCtx>,
+    out: &mut Vec<Symbol>,
+) {
     let kind = node.kind();
     let start = (node.start_position().row + 1) as u32;
     let end = (node.end_position().row + 1) as u32;
 
     match kind {
         "function_definition" => {
-            let Some(name) = get_node_text(node.child_by_field_name("name"), source) else {
+            let Some(raw_name) = get_node_text(node.child_by_field_name("name"), source) else {
                 return;
             };
+            // Members display as `Type.member`, matching Java and
+            // TypeScript — and matching how Python itself spells the
+            // reference.
+            let name = match owner {
+                Some(o) => format!("{}.{}", o.name, raw_name),
+                None => raw_name.clone(),
+            };
+            let qualified_name = Some(match owner {
+                Some(o) => format!("{}{}{}", o.fqn, MEMBER_SEP, raw_name),
+                None => ctx.scope.qualify(&raw_name),
+            });
+
             let params = extract_params(node, source);
             let return_type = extract_return_type(node, source);
-            let calls = extract_function_calls(node, source);
+            let (calls, call_refs, uses) = extract_calls(node, source, ctx, owner, &params);
             let docstring = extract_docstring(node, source);
             let metrics = SymbolMetrics {
                 // Inclusive of both the first and last line, matching the
@@ -164,6 +299,10 @@ fn extract_symbol_from_node(node: &Node, source: &[u8], out: &mut Vec<Symbol>) {
                 extends: Vec::new(),
                 implements: Vec::new(),
                 calls,
+                call_refs,
+                uses,
+                qualified_name,
+                owner: owner.map(|o| o.fqn.clone()),
                 metrics: Some(metrics),
                 ..Default::default()
             });
@@ -172,8 +311,15 @@ fn extract_symbol_from_node(node: &Node, source: &[u8], out: &mut Vec<Symbol>) {
             let Some(name) = get_node_text(node.child_by_field_name("name"), source) else {
                 return;
             };
+            // Base classes are qualified through this file's imports, since
+            // the graph builder's supertype walk keys on qualified names.
+            let extends = extract_extends(node, source)
+                .iter()
+                .filter_map(|b| ctx.scope.resolve_type_ref(b))
+                .collect();
             out.push(Symbol {
                 id: format!("class:{}:{}", start, name),
+                qualified_name: Some(ctx.scope.qualify(&name)),
                 name,
                 kind: "class".to_string(),
                 file: String::new(),
@@ -183,7 +329,7 @@ fn extract_symbol_from_node(node: &Node, source: &[u8], out: &mut Vec<Symbol>) {
                 signature: None,
                 imports: Vec::new(),
                 exports: Vec::new(),
-                extends: extract_extends(node, source),
+                extends,
                 implements: Vec::new(),
                 calls: Vec::new(),
                 metrics: None,
@@ -213,6 +359,7 @@ fn extract_symbol_from_node(node: &Node, source: &[u8], out: &mut Vec<Symbol>) {
             };
             out.push(Symbol {
                 id: format!("assign:{}:{}", start, name),
+                qualified_name: Some(ctx.scope.qualify(&name)),
                 name,
                 kind: "assignment".to_string(),
                 file: String::new(),
@@ -230,6 +377,245 @@ fn extract_symbol_from_node(node: &Node, source: &[u8], out: &mut Vec<Symbol>) {
             });
         }
         _ => {}
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Call sites
+// ---------------------------------------------------------------------------
+
+/// Call sites inside one function body, with whatever receiver type this file
+/// can supply. See the Rust indexer's equivalent for why the display list now
+/// holds bare names rather than callee source text.
+fn extract_calls(
+    node: &Node,
+    source: &[u8],
+    ctx: &Ctx,
+    owner: Option<&OwnerCtx>,
+    params: &[Param],
+) -> (Vec<String>, Vec<CallRef>, Vec<String>) {
+    let mut env = TypeEnv::new();
+
+    if let Some(o) = owner {
+        env.insert("self", o.fqn.clone());
+        if let Some(fields) = ctx.fields.get(&o.name) {
+            for (fname, ftype) in fields {
+                if let Some(fqn) = ctx.scope.lookup(ftype) {
+                    env.insert(format!("self.{}", fname), fqn);
+                }
+            }
+        }
+    }
+    for p in params {
+        if let Some(t) = &p.param_type {
+            if let Some(fqn) = ctx.scope.lookup(base_type_name(t)) {
+                env.insert(p.name.clone(), fqn);
+            }
+        }
+    }
+
+    let mut calls = Vec::new();
+    let mut refs = Vec::new();
+    let mut uses = Vec::new();
+    if let Some(body) = node.child_by_field_name("body") {
+        collect_calls(
+            &body, source, ctx, owner, &mut env, &mut calls, &mut refs, &mut uses,
+        );
+    }
+    (calls, refs, uses)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_calls(
+    node: &Node,
+    source: &[u8],
+    ctx: &Ctx,
+    owner: Option<&OwnerCtx>,
+    env: &mut TypeEnv,
+    calls: &mut Vec<String>,
+    refs: &mut Vec<CallRef>,
+    uses: &mut Vec<String>,
+) {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        record_constant_use(&child, source, ctx, uses);
+        match child.kind() {
+            "assignment" => record_local(&child, source, ctx, env),
+            "call" => {
+                if let Some(r) = call_ref_for(&child, source, ctx, owner, env) {
+                    push_call(calls, &r.name);
+                    refs.push(r);
+                }
+            }
+            _ => {}
+        }
+        collect_calls(&child, source, ctx, owner, env, calls, refs, uses);
+    }
+}
+
+/// Note a reference to a module-level constant, resolved through this file's
+/// imports. See `scope::looks_like_constant` for why the naming convention is
+/// the filter.
+fn record_constant_use(node: &Node, source: &[u8], ctx: &Ctx, uses: &mut Vec<String>) {
+    if node.kind() != "identifier" {
+        return;
+    }
+    let Some(text) = get_node_text(Some(*node), source) else {
+        return;
+    };
+    if !looks_like_constant(&text) {
+        return;
+    }
+    if let Some(fqn) = ctx.scope.lookup(&text) {
+        if !uses.contains(&fqn) {
+            uses.push(fqn);
+        }
+    }
+}
+
+fn push_call(calls: &mut Vec<String>, name: &str) {
+    if !name.is_empty() && !calls.iter().any(|c| c == name) {
+        calls.push(name.to_string());
+    }
+}
+
+fn argument_count(call: &Node) -> u32 {
+    call.child_by_field_name("arguments")
+        .map(|a| a.named_child_count() as u32)
+        .unwrap_or(0)
+}
+
+/// One `call`, with whatever the file can tell us about where it lands.
+///
+/// Python spells construction exactly like invocation — `Foo()` is both — so
+/// the capitalisation convention is what separates them, the same rule used
+/// to tell a type from a module elsewhere.
+fn call_ref_for(
+    call: &Node,
+    source: &[u8],
+    ctx: &Ctx,
+    owner: Option<&OwnerCtx>,
+    env: &TypeEnv,
+) -> Option<CallRef> {
+    let func = call.child_by_field_name("function")?;
+    let argc = argument_count(call);
+
+    match func.kind() {
+        "identifier" => {
+            let name = get_node_text(Some(func), source)?;
+            if looks_like_type(&name) {
+                return Some(CallRef {
+                    name: CTOR.to_string(),
+                    owner_type: ctx.scope.lookup(&name),
+                    argc,
+                    qualified: None,
+                    is_ctor: true,
+                    has_receiver: true,
+                });
+            }
+            Some(CallRef {
+                qualified: ctx.scope.lookup(&name),
+                name,
+                owner_type: None,
+                argc,
+                is_ctor: false,
+                has_receiver: false,
+            })
+        }
+        // `receiver.method(..)`
+        "attribute" => {
+            let name = get_node_text(func.child_by_field_name("attribute"), source)?;
+            let recv = func.child_by_field_name("object")?;
+            Some(CallRef {
+                owner_type: type_of_expr(&recv, source, ctx, owner, env),
+                name,
+                argc,
+                qualified: None,
+                is_ctor: false,
+                has_receiver: true,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// The qualified type an expression evaluates to, or `None` when typing it
+/// would mean following an arbitrary expression.
+fn type_of_expr(
+    node: &Node,
+    source: &[u8],
+    ctx: &Ctx,
+    owner: Option<&OwnerCtx>,
+    env: &TypeEnv,
+) -> Option<String> {
+    match node.kind() {
+        "identifier" => {
+            let text = get_node_text(Some(*node), source)?;
+            if text == "self" {
+                return owner.map(|o| o.fqn.clone());
+            }
+            if let Some(t) = env.get(&text) {
+                return Some(t.to_string());
+            }
+            // A capitalised bare identifier in receiver position is a class,
+            // i.e. a call on the class rather than an instance.
+            if looks_like_type(&text) {
+                return ctx.scope.lookup(&text);
+            }
+            None
+        }
+        // Only `self.attr`. Anything deeper is an expression we would be
+        // inventing a type for.
+        "attribute" => {
+            let object = node.child_by_field_name("object")?;
+            if get_node_text(Some(object), source).as_deref() != Some("self") {
+                return None;
+            }
+            let attr = get_node_text(node.child_by_field_name("attribute"), source)?;
+            env.get(&format!("self.{}", attr)).map(str::to_string)
+        }
+        _ => None,
+    }
+}
+
+/// Record `x: Foo = …` and `x = Foo(..)`.
+fn record_local(assign: &Node, source: &[u8], ctx: &Ctx, env: &mut TypeEnv) {
+    let Some(left) = assign.child_by_field_name("left") else {
+        return;
+    };
+    if left.kind() != "identifier" {
+        return;
+    }
+    let Some(name) = get_node_text(Some(left), source) else {
+        return;
+    };
+
+    // An annotation is authoritative.
+    if let Some(ty) = get_node_text(assign.child_by_field_name("type"), source) {
+        if let Some(fqn) = ctx.scope.lookup(base_type_name(&ty)) {
+            env.insert(name, fqn);
+            return;
+        }
+    }
+
+    let Some(value) = assign.child_by_field_name("right") else {
+        return;
+    };
+    if value.kind() != "call" {
+        return;
+    }
+    let Some(func) = value.child_by_field_name("function") else {
+        return;
+    };
+    let Some(text) = get_node_text(Some(func), source) else {
+        return;
+    };
+    let bare = text.rsplit('.').next().unwrap_or(&text);
+    if !looks_like_type(bare) {
+        return;
+    }
+    if let Some(fqn) = ctx.scope.lookup(bare) {
+        env.insert(name, fqn);
     }
 }
 
@@ -365,9 +751,14 @@ mod tests {
         parser.set_language(tree_sitter_python::language()).unwrap();
         let tree = parser.parse(src, None).unwrap();
         let root = tree.root_node();
+        let imports = PythonIndexer.extract_imports(src.as_bytes(), root);
+        let ctx = FileContext {
+            path: "pkg/sample.py",
+            imports: &imports,
+        };
         (
-            PythonIndexer.extract_symbols(src.as_bytes(), root),
-            PythonIndexer.extract_imports(src.as_bytes(), root),
+            PythonIndexer.extract_symbols(src.as_bytes(), root, &ctx),
+            imports,
         )
     }
 
@@ -488,7 +879,9 @@ class Client:
 "#,
         );
         assert_eq!(find(&symbols, "Client").kind, "class");
-        assert_eq!(find(&symbols, "send").kind, "function");
+        // A method displays as `Type.member`, so its name says which class it
+        // is on and splits into more than one search term.
+        assert_eq!(find(&symbols, "Client.send").kind, "function");
     }
 
     #[test]
@@ -514,8 +907,14 @@ def run(x):
         // Regression: the extractor read a field called `bases`, which the
         // grammar does not emit — so every Python class came out with no
         // supertypes and the graph had no Extends edges at all.
+        // Base names are qualified through the file's imports, because the
+        // graph builder's supertype walk is keyed on qualified names. With no
+        // import in scope they resolve against this module.
         let (symbols, _) = parse("class Sub(Base, Mixin):\n    pass\n");
-        assert_eq!(find(&symbols, "Sub").extends, vec!["Base", "Mixin"]);
+        assert_eq!(
+            find(&symbols, "Sub").extends,
+            vec!["pkg.sample.Base", "pkg.sample.Mixin"]
+        );
     }
 
     #[test]
@@ -533,10 +932,11 @@ class D:
 "#,
         );
         // `Generic[T]` has to reduce to `Generic` or it matches no class.
-        assert_eq!(find(&symbols, "A").extends, vec!["Generic"]);
+        assert_eq!(find(&symbols, "A").extends, vec!["pkg.sample.Generic"]);
         // A metaclass configures the class; it is not a supertype.
-        assert_eq!(find(&symbols, "B").extends, vec!["Base"]);
-        // A dotted base keeps its qualifier for the resolver to split.
+        assert_eq!(find(&symbols, "B").extends, vec!["pkg.sample.Base"]);
+        // A base that is already an absolute module path stays as written,
+        // rather than being re-rooted under the current module.
         assert_eq!(find(&symbols, "C").extends, vec!["pkg.mod.Base"]);
         assert!(find(&symbols, "D").extends.is_empty());
     }
@@ -590,17 +990,26 @@ class C:
         assert!(f.end_line >= 4);
     }
 
+    /// Python now takes the same precise-resolution path Java does. This
+    /// test used to assert the exact opposite — that qualified names, owners
+    /// and typed call sites all stayed empty — which is a fair summary of why
+    /// `obj.save()` had nothing to resolve against but every other `save` in
+    /// the repo.
     #[test]
-    fn python_symbols_carry_no_java_only_metadata() {
-        // The shared `Symbol` gained qualified names, annotations and typed
-        // call refs for Java. Python must leave them empty, because the
-        // graph builder's precise-resolution path keys off their presence.
+    fn python_symbols_carry_qualified_names_and_owners() {
         let (symbols, _) = parse("class C:\n    def m(self):\n        pass\n");
+
+        let class = find(&symbols, "C");
+        assert_eq!(class.qualified_name.as_deref(), Some("pkg.sample.C"));
+        assert!(class.owner.is_none(), "a class is not a member");
+
+        let method = find(&symbols, "C.m");
+        assert_eq!(method.qualified_name.as_deref(), Some("pkg.sample.C#m"));
+        assert_eq!(method.owner.as_deref(), Some("pkg.sample.C"));
+
+        // Annotations and routes stay Java-only.
         for s in &symbols {
-            assert!(s.qualified_name.is_none(), "{}", s.name);
-            assert!(s.owner.is_none(), "{}", s.name);
             assert!(s.annotations.is_empty(), "{}", s.name);
-            assert!(s.call_refs.is_empty(), "{}", s.name);
             assert!(s.route.is_none(), "{}", s.name);
         }
     }

@@ -260,55 +260,13 @@ pub fn extract_return_type(node: &Node, source: &[u8]) -> Option<String> {
     }
 }
 
-/// Collect every callee name reachable anywhere beneath `node`. Recurses into
-/// nested blocks so calls inside `if`/loops/closures are captured. Looks for
-/// `call_expression` (TypeScript/JavaScript), `call` (Python),
-/// `method_invocation` and `object_creation_expression` (Java).
-pub fn extract_function_calls(node: &Node, source: &[u8]) -> Vec<String> {
-    let mut calls = Vec::new();
-    collect_calls(node, source, &mut calls);
-    calls
-}
-
-fn collect_calls(node: &Node, source: &[u8], calls: &mut Vec<String>) {
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        match child.kind() {
-            "call_expression" | "call" => {
-                let func_node = child
-                    .child_by_field_name("function")
-                    .or_else(|| child.child_by_field_name("callee"));
-                if let Some(func) = func_node {
-                    if let Some(name) = get_node_text(Some(func), source) {
-                        if !calls.contains(&name) {
-                            calls.push(name);
-                        }
-                    }
-                }
-            }
-            "method_invocation" => {
-                if let Some(name_node) = child.child_by_field_name("name") {
-                    if let Some(name) = get_node_text(Some(name_node), source) {
-                        if !calls.contains(&name) {
-                            calls.push(name);
-                        }
-                    }
-                }
-            }
-            "object_creation_expression" => {
-                if let Some(type_node) = child.child_by_field_name("type") {
-                    if let Some(name) = get_node_text(Some(type_node), source) {
-                        if !calls.contains(&name) {
-                            calls.push(name);
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-        collect_calls(&child, source, calls);
-    }
-}
+// The shared `extract_function_calls` that used to live here is gone. It
+// recorded the *source text* of each callee expression, which for a chained
+// call meant the whole expression — closure bodies included — and left the
+// graph builder to recover a name from it by taking the substring after the
+// last dot. Every language now emits `CallRef`s naming the callee and, where
+// it can, the type the call dispatches on; see `indexer/scope.rs` and each
+// language module's `collect_calls`.
 
 /// Regex-based parameter extraction used as a fallback when the AST didn't
 /// yield any parameters (e.g. a malformed file or a grammar quirk). Reads the

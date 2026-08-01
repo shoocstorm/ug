@@ -1658,6 +1658,7 @@ mod tests {
             distance: 0.1 * idx as f32,
             hop: 0,
             snippet: Some(format!("fn fn_{}() {{}}", idx)),
+            matched_by: "semantic".into(),
         }
     }
 

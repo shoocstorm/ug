@@ -117,6 +117,44 @@ pub async fn rrf_search(
         .collect())
 }
 
+/// Like [`rrf_search`] but also returns the set of ids the **dense** channel
+/// surfaced on its own, so each seed can be labelled `"semantic"` (in the
+/// dense results) vs `"keyword"` (only in the fused/sparse side). The query
+/// is embedded once and reused for both the fused hybrid search and the
+/// dense-only search — no second embedding pass.
+async fn seeds_and_dense_ids(
+    store: &dyn KnowledgeStore,
+    embedder: &Embedder,
+    query: &str,
+    k: usize,
+    where_clause: Option<&str>,
+) -> Result<(Vec<SearchHit>, HashSet<String>), Box<dyn std::error::Error + Send + Sync>> {
+    let vectors = embedder.embed(&[query.to_string()]).await?;
+    let query_vec = vectors
+        .into_iter()
+        .next()
+        .ok_or("embedder returned no vectors")?;
+    let sparse = build_sparse_query_vector(query, store.sparse_stats().as_deref());
+    let pool = (k * 4).max(20);
+    let filter = where_clause.and_then(NodeFilter::from_legacy_where);
+    let fused = store
+        .hybrid_search(query_vec.clone(), sparse, query, pool, filter.as_ref())
+        .await?;
+    let seeds: Vec<SearchHit> = fused
+        .into_iter()
+        .take(k)
+        .map(|(node, score)| SearchHit {
+            node,
+            distance: -score,
+        })
+        .collect();
+    // Dense-only top-pool: ids the semantic channel reached without the
+    // sparse/keyword side. Membership here is the provenance signal.
+    let dense = store.vector_search(query_vec, pool, filter.as_ref()).await?;
+    let dense_ids: HashSet<String> = dense.into_iter().map(|(n, _)| n.id).collect();
+    Ok((seeds, dense_ids))
+}
+
 /// Maximal Marginal Relevance rerank. `lambda` in [0, 1] balances
 /// relevance (vs. query) against diversity (vs. already-picked items).
 /// Uses the stored row vectors so no extra embedding calls are needed.
@@ -253,6 +291,13 @@ pub struct ContextItem {
     pub distance: f32,
     pub hop: u32,
     pub snippet: Option<String>,
+    /// How this node was reached by the hybrid search: `"semantic"` (dense
+    /// vector seed), `"keyword"` (sparse/FTS seed — in the fused seed set but
+    /// not the dense-only results), or `"graph"` (walked to via PPR/BFS, i.e.
+    /// `hop >= 1`). A seed present in both channels is labelled `"semantic"`:
+    /// the dense match is the stronger signal and the one worth surfacing.
+    #[serde(default)]
+    pub matched_by: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -439,9 +484,11 @@ async fn search_kb_ppr(
     opts: SearchKbOptions<'_>,
 ) -> Result<RankedContext, Box<dyn std::error::Error + Send + Sync>> {
     // 1. RRF seeds. Wider pool than `k` so a noisy top-1 doesn't
-    //    dominate the personalization vector.
+    //    dominate the personalization vector. `dense_ids` lets each seed
+    //    be labelled semantic vs keyword (see [`ContextItem::matched_by`]).
     let seed_pool = opts.ppr_seed_pool.max(opts.k.max(1));
-    let seeds = rrf_search(store, embedder, opts.query, seed_pool, opts.where_clause).await?;
+    let (seeds, dense_ids) =
+        seeds_and_dense_ids(store, embedder, opts.query, seed_pool, opts.where_clause).await?;
     let seed_id = seeds.first().map(|h| h.node.id.clone());
 
     // 2. Personalization vector: RRF score (stored as -score in
@@ -508,7 +555,15 @@ async fn search_kb_ppr(
         // `hop` field kept for backwards compatibility: 0 if seed,
         // else 1 (PPR has no hop concept; seed/non-seed is the most
         // useful signal we can preserve here).
-        let hop: u32 = if seed_mass.contains_key(id) { 0 } else { 1 };
+        let is_seed = seed_mass.contains_key(id);
+        let hop: u32 = if is_seed { 0 } else { 1 };
+        let matched_by = if !is_seed {
+            "graph"
+        } else if dense_ids.contains(id) {
+            "semantic"
+        } else {
+            "keyword"
+        };
         let item = ContextItem {
             id: n.id.clone(),
             name: n.name.clone(),
@@ -522,6 +577,7 @@ async fn search_kb_ppr(
             distance: -score,
             hop,
             snippet,
+            matched_by: matched_by.to_string(),
         };
         let item_chars = item.snippet.as_ref().map(|s| s.len()).unwrap_or(0)
             + item.description.len()
@@ -551,8 +607,10 @@ async fn search_kb_mmr(
     embedder: &Embedder,
     opts: SearchKbOptions<'_>,
 ) -> Result<RankedContext, Box<dyn std::error::Error + Send + Sync>> {
-    // 1. Seed: RRF over vector + FTS, optionally filtered.
-    let seeds = rrf_search(store, embedder, opts.query, opts.k.max(1), opts.where_clause).await?;
+    // 1. Seed: RRF over vector + FTS, optionally filtered. `dense_ids`
+    //    carries the semantic-channel membership used to label each seed.
+    let (seeds, dense_ids) =
+        seeds_and_dense_ids(store, embedder, opts.query, opts.k.max(1), opts.where_clause).await?;
     let seed_id = seeds.first().map(|h| h.node.id.clone());
 
     // 2. Expand: walk the graph from each seed.
@@ -601,11 +659,19 @@ async fn search_kb_mmr(
     let mut items: Vec<ContextItem> = Vec::new();
     let mut total_chars: usize = 0;
     for hit in reranked {
+        let is_seed = seed_dist.contains_key(&hit.node.id);
         let hop = traversal.distances.get(&hit.node.id).copied().unwrap_or(0);
         let snippet = if opts.include_snippets {
             snippet_for(&hit.node, opts.repo_root)
         } else {
             None
+        };
+        let matched_by = if !is_seed {
+            "graph"
+        } else if dense_ids.contains(&hit.node.id) {
+            "semantic"
+        } else {
+            "keyword"
         };
 
         let item = ContextItem {
@@ -619,6 +685,7 @@ async fn search_kb_mmr(
             distance: hit.distance,
             hop,
             snippet,
+            matched_by: matched_by.to_string(),
         };
 
         let item_chars = item.snippet.as_ref().map(|s| s.len()).unwrap_or(0)
