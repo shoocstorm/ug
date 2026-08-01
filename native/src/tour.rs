@@ -402,8 +402,10 @@ concrete symbols involved, and how it connects to the next stop>\" }}\n\
 }}\n\n\
 Rules:\n\
 - Use only `ref` numbers that appear in the provided items; each item at most once.\n\
-- Plan {count}. Skip items that don't advance the narrative — a shorter, coherent tour beats a \
-complete one.\n\
+- Aim for {count} as a TARGET, but RELEVANCE outranks the count. The candidate list is deliberately wider \
+than your stop budget because not every retrieved item actually matches the question. Visit only items that \
+genuinely help answer it — drop any that are tangential or irrelevant, even if that leaves you with fewer \
+stops. A short, on-target tour beats a long one padded with noise.\n\
 - Order the stops as a story (entry → detail → payoff), NOT by relevance score.\n\
 - Prefer consecutive stops that are connected in LINKS, and when they are, say so in the narration \
 (\"…which calls…\", \"…imported by…\").\n\
@@ -768,9 +770,11 @@ fn default_title(query: &str) -> String {
 /// afterwards — see `bounded_snippet`.
 fn retrieval_opts<'a>(opts: &TourOptions<'a>) -> ChatRagOptions<'a> {
     let mut rag = ChatRagOptions::new();
-    // Never retrieve fewer candidates than the itinerary could hold — a
-    // 20-stop tour drawn from 14 candidates is not a tour, it's the list.
-    rag.k = opts.k.max(opts.max_stops + 4);
+    // Pull roughly twice the itinerary as candidates: not every retrieved
+    // node actually matches the question, and the guide needs a real menu to
+    // filter down to the best stops (10 stops ← ~20 candidates). `opts.k`
+    // is still the floor, so an explicit `--k` always wins.
+    rag.k = opts.k.max(2 * opts.max_stops);
     rag.hops = opts.hops;
     rag.strategy = opts.strategy;
     rag.direction = opts.direction;
@@ -1861,6 +1865,22 @@ mod tests {
         assert!(tour_system_prompt(6).contains("between 4 and 6 stops"));
         assert!(tour_system_prompt(3).contains("exactly 3 stops"));
         assert!(tour_system_prompt(1).contains("exactly 1 stops"));
+    }
+
+    #[test]
+    fn system_prompt_tells_the_guide_to_drop_irrelevant_items() {
+        // The candidate pool is wider than the stop budget; the guide must
+        // know it is allowed (and expected) to drop items that don't match.
+        let p = tour_system_prompt(10);
+        assert!(p.contains("RELEVANCE outranks the count"), "missing relevance rule");
+        assert!(
+            p.contains("drop any that are tangential or irrelevant"),
+            "missing drop-irrelevant instruction"
+        );
+        assert!(
+            p.contains("even if that leaves you with fewer stops"),
+            "guide must be free to plan fewer stops"
+        );
     }
 
     #[test]
