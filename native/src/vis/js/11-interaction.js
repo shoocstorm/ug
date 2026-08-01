@@ -76,9 +76,10 @@
                 return `<span class="info-label has-tip" title="${escapeHtml(tip)}">${escapeHtml(label)}</span>`;
             };
 
-            // A short, single-value field.
-            const fieldRow = (key, valueHtml) =>
-                `<div class="info-row">${fieldLabel(key)}<span class="info-value">${valueHtml}</span></div>`;
+            // A short, single-value field. `valueCls` adds a modifier to the
+            // value span (used by the node-id row to lay out its copy button).
+            const fieldRow = (key, valueHtml, valueCls) =>
+                `<div class="info-row">${fieldLabel(key)}<span class="info-value${valueCls ? ' ' + valueCls : ''}">${valueHtml}</span></div>`;
 
             // A field whose value may be a paragraph rather than a token.
             // Markdown sections and PDF pages carry their whole prose as a
@@ -152,8 +153,22 @@
                 else if (tId === d.id) related.push({ node: e.source, rel: e.rel, dir: 'in' });
             });
 
+            // Related-tab filters. Edge chips count this node's neighbours
+            // per edge type; the keyword box narrows by name. Both persist
+            // across selections so tracing "save" callers keeps the filter,
+            // but edge types are pruned to what this node has — a stale type
+            // selection can't hide every row.
+            const relCounts = {};
+            related.forEach(({ rel }) => {
+                const r = rel || 'other';
+                relCounts[r] = (relCounts[r] || 0) + 1;
+            });
+            if (!state.relEdgeFilters) state.relEdgeFilters = new Set();
+            [...state.relEdgeFilters].forEach(t => { if (!relCounts[t]) state.relEdgeFilters.delete(t); });
+
             let html = `
                 ${sourceNote('fields', d)}
+                ${fieldRow('id', `<span class="info-id" title="${escapeHtml(d.id)}">${escapeHtml(d.id)}</span><button class="info-copy-btn" data-copy="${escapeHtml(d.id)}" title="Copy node id" aria-label="Copy node id"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/></svg></button>`, 'info-id-value')}
                 ${fieldRow('name', escapeHtml(d.name))}
                 <div class="info-row">${fieldLabel('type')}<span class="info-type-badge" style="background:${typeColor}20;color:${typeColor}">${nodeIconSvg(d.group, 'badge-icon')}${d.group}</span></div>
             `;
@@ -215,23 +230,25 @@
                 <div class="info-view${activeTab === 'related' ? ' active' : ''}" data-view="related">
                     ${sourceNote('related', d)}`;
             if (related.length > 0) {
-                html += `<div class="related-list">`;
-                related.forEach(({ node, rel, dir }) => {
-                    const arrow = dir === 'out' ? '→' : '←';
-                    // The arrow alone is ambiguous — spell the direction out,
-                    // and say what the edge type means, since edge type is
-                    // also what weights graph-aware ranking.
-                    const phrase = dir === 'out'
-                        ? `This node ${edgeVerb(rel)} ${node.name}`
-                        : `${node.name} ${edgeVerb(rel)} this node`;
-                    const tip = `${phrase}. ${EDGE_DOCS[rel] || ''} Click to select it.`;
-                    html += `<div class="related-item" data-id="${node.id}" title="${escapeHtml(tip.trim())}">
-                        ${nodeIconSvg(node.group)}
-                        <span class="name">${escapeHtml(truncateName(node.name))}</span>
-                        <span class="rel">${arrow} ${rel || ''}</span>
-                    </div>`;
-                });
-                html += `</div>`;
+                // One chip per edge type, sorted heaviest first, each carrying
+                // its count. Toggling narrows the list to the active types
+                // (none active = all).
+                const relEdgeChips = Object.keys(relCounts)
+                    .sort((a, b) => relCounts[b] - relCounts[a])
+                    .map(t => {
+                        const color = config.getRelColor(t);
+                        return `<button class="filter-chip${state.relEdgeFilters.has(t) ? ' active' : ''}" data-rel="${escapeHtml(t)}" title="${escapeHtml(EDGE_DOCS[t] || ('Edge type: ' + t))}">
+                            <span class="chip-dot" style="background:${color};color:${color}"></span>
+                            <span>${escapeHtml(t)}</span>
+                            <span class="chip-count">${relCounts[t]}</span>
+                        </button>`;
+                    }).join('');
+                html += `<div class="rel-filters">
+                        <input class="rel-search" type="search" placeholder="Filter by name…" value="${escapeHtml(state.relKeyword || '')}" autocomplete="off">
+                        <div class="filter-chips rel-edge-chips">${relEdgeChips}</div>
+                    </div>
+                    <div class="related-list" id="related-list"></div>
+                    <div class="hier-empty" id="related-empty" style="display:none">No related nodes match the filters.</div>`;
             } else {
                 html += `<div class="hier-empty">No edges touch this node — it is isolated in the graph.</div>`;
             }
@@ -239,12 +256,25 @@
             </div>`;
 
             body.innerHTML = html;
+            // The node id is command fuel (ug get_code <id> …), so a one-click
+            // copy beats drag-selecting a path-laden string.
+            body.querySelectorAll('.info-copy-btn').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    try {
+                        await navigator.clipboard.writeText(btn.dataset.copy);
+                        btn.classList.add('copied');
+                    } catch { /* clipboard blocked — select the id text as a fallback */ }
+                    setTimeout(() => btn.classList.remove('copied'), 1500);
+                });
+            });
             // Related entries, hierarchy rows and resolvable chips all
-            // navigate to their node.
-            body.querySelectorAll('.related-item, .hier-row, .info-chip.linked').forEach(item => {
-                item.addEventListener('click', () => {
-                    const t = state.graph.nodes.find(n => n.id === item.dataset.id);
-                    if (t) {
+            // navigate to their node. Factored out so the related list —
+            // re-rendered by the filters below — can re-bind its rows.
+            const wireNavTargets = scope => {
+                scope.querySelectorAll('.related-item, .hier-row, .info-chip.linked').forEach(item => {
+                    item.addEventListener('click', () => {
+                        const t = state.graph.nodes.find(n => n.id === item.dataset.id);
+                        if (!t) return;
                         if (state.pathMode) {
                             state.pathSource = t.id;
                             const hint = info.querySelector('.path-hint');
@@ -254,9 +284,58 @@
                             handleClick(null, t);
                             focusNode(t);
                         }
-                    }
+                    });
                 });
-            });
+            };
+            wireNavTargets(body);
+
+            // Related-tab filtering: keyword + per-edge chips. Both re-render
+            // the list only, not the whole panel.
+            const relList = body.querySelector('#related-list');
+            if (relList) {
+                const relItemHtml = ({ node, rel, dir }) => {
+                    const arrow = dir === 'out' ? '→' : '←';
+                    // The label carries the verb in the right voice for the
+                    // direction ("contains" vs "contained by"), so a Contains
+                    // edge is unambiguous without reading the tooltip. The
+                    // tooltip still spells the full sentence + edge meaning.
+                    const phrase = dir === 'out'
+                        ? `This node ${edgeVerb(rel)} ${node.name}`
+                        : `${node.name} ${edgeVerb(rel)} this node`;
+                    const tip = `${phrase}. ${EDGE_DOCS[rel] || ''} Click to select it.`;
+                    return `<div class="related-item" data-id="${node.id}" title="${escapeHtml(tip.trim())}">
+                        ${nodeIconSvg(node.group)}
+                        <span class="name">${escapeHtml(truncateName(node.name))}</span>
+                        <span class="rel">${arrow} ${escapeHtml(edgeDirLabel(rel, dir))}</span>
+                    </div>`;
+                };
+                const renderRelList = () => {
+                    const q = (state.relKeyword || '').trim().toLowerCase();
+                    const shown = related.filter(({ node, rel }) => {
+                        if (state.relEdgeFilters.size && !state.relEdgeFilters.has(rel || 'other')) return false;
+                        if (q && !((node.name || '').toLowerCase().includes(q) || (node.id || '').toLowerCase().includes(q))) return false;
+                        return true;
+                    });
+                    relList.innerHTML = shown.map(relItemHtml).join('');
+                    const empty = body.querySelector('#related-empty');
+                    if (empty) empty.style.display = shown.length ? 'none' : 'block';
+                    wireNavTargets(relList);
+                };
+                const searchInput = body.querySelector('.rel-search');
+                if (searchInput) searchInput.addEventListener('input', () => {
+                    state.relKeyword = searchInput.value;
+                    renderRelList();
+                });
+                body.querySelectorAll('.rel-edge-chips .filter-chip').forEach(chip => {
+                    chip.addEventListener('click', () => {
+                        const t = chip.dataset.rel;
+                        if (state.relEdgeFilters.has(t)) { state.relEdgeFilters.delete(t); chip.classList.remove('active'); }
+                        else { state.relEdgeFilters.add(t); chip.classList.add('active'); }
+                        renderRelList();
+                    });
+                });
+                renderRelList();
+            }
 
             // Preview tab: show the selected item's chunk content. The full text
             // (node_text) only arrives via the async DB enrichment, so render

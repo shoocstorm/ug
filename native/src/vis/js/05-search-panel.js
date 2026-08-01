@@ -1,12 +1,29 @@
-        // ─── Semantic / Hybrid panel ────────────────────────
+        // ─── Search panel: Keyword / Semantic / Hybrid ──────
+        //
+        // Keyword is client-side over the loaded graph.json and always
+        // available; Semantic and Hybrid are DB-backed and get disabled by
+        // the capabilities probe when the store isn't queryable. The three
+        // share one tab strip; the body swaps between the keyword UI and
+        // the vector UI.
+
+        function selectSemMode(mode) {
+            state.semMode = mode;
+            document.querySelectorAll('.sem-mode').forEach(b => {
+                b.classList.toggle('active', b.dataset.mode === mode);
+            });
+            const isKeyword = mode === 'keyword';
+            const kw = document.querySelector('.sem-ui[data-ui="keyword"]');
+            const vec = document.querySelector('.sem-ui[data-ui="vector"]');
+            if (kw) kw.hidden = !isKeyword;
+            if (vec) vec.hidden = isKeyword;
+        }
 
         function wireSemanticPanel() {
-            const modeTabs = document.querySelectorAll('.sem-mode');
-            modeTabs.forEach(btn => {
+            state.semMode = 'keyword';
+            document.querySelectorAll('.sem-mode').forEach(btn => {
                 btn.addEventListener('click', () => {
-                    modeTabs.forEach(b => b.classList.remove('active'));
-                    btn.classList.add('active');
-                    state.semMode = btn.dataset.mode;
+                    if (btn.disabled) return;
+                    selectSemMode(btn.dataset.mode);
                 });
             });
 

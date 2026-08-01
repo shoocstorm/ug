@@ -9,6 +9,11 @@
         .legend-row .node-icon { width: 14px; height: 14px; }
         .filter-chip .node-icon { width: 11px; height: 11px; }
         .hier-row .node-icon, .related-item .node-icon { width: 12px; height: 12px; }
+        .suggestion-item .node-icon { width: 12px; height: 12px; }
+        .sem-hit .node-icon { width: 12px; height: 12px; }
+        .crumb .node-icon { width: 11px; height: 11px; }
+        .chat-cite .cite-icon { width: 11px; height: 11px; vertical-align: -1px; margin-right: 4px; }
+        .tour-o-stop-meta .type .tour-type-icon { width: 11px; height: 11px; vertical-align: -1px; margin-right: 3px; }
 
         .info-type-badge .badge-icon {
             width: 11px;

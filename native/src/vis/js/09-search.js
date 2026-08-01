@@ -61,9 +61,8 @@
                         const item = document.createElement('div');
                         item.className = 'suggestion-item';
                         item.dataset.index = i;
-                        const color = config.getColor(n.group);
                         item.innerHTML = `
-                            <span class="suggestion-dot" style="background:${color};color:${color}"></span>
+                            ${nodeIconSvg(n.group)}
                             <span class="suggestion-name">${escapeHtml(truncateName(n.name))}</span>
                             <span class="suggestion-type">${n.group}</span>
                         `;

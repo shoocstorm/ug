@@ -460,6 +460,11 @@
         // Keyed rather than inlined so the label and its explanation cannot
         // drift apart, and so renaming a field is a one-line change.
         const FIELD_DOCS = {
+            id: ['Node id', 'The canonical key for this node, shaped <kind>:<file>:<name> '
+                + '(with a #N suffix when a file declares the same name more than once). This one '
+                + 'value is also the chunk id — the storage key of the embedded row — because ug '
+                + 'has no separate chunk id: a node is a chunk. Pass it to ug get_code, find_usages '
+                + 'or traverse.'],
             name: ['Name', 'The symbol or file name the indexer extracted. Names arrive already '
                 + 'qualified where the language allows it (Db::upsert_nodes, not upsert_nodes). '
                 + 'This is also the first thing in the embedded text, so it is searchable both '
@@ -522,6 +527,27 @@
                 case 'DependsOn': return 'depends on';
                 default: return 'links to';
             }
+        }
+
+        // Passive voice for an inbound edge — the inverse of [`edgeVerb`].
+        // Used by the Related tab so the chip reads "contained by" vs
+        // "contains" rather than a bare "Contains" + arrow, which leaves the
+        // direction of a symmetric-looking label ambiguous.
+        const EDGE_PASSIVE = {
+            Calls: 'called by',
+            Imports: 'imported by',
+            Contains: 'contained by',
+            Extends: 'extended by',
+            Implements: 'implemented by',
+            References: 'referenced by',
+            Exports: 'exported by',
+            DependsOn: 'depended on by',
+        };
+        function edgeDirLabel(rel, dir) {
+            const r = rel || '';
+            return dir === 'in'
+                ? (EDGE_PASSIVE[r] || r.toLowerCase())
+                : edgeVerb(rel);
         }
 
         // What a cap's stage means in practice: the cost of changing it.

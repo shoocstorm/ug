@@ -29,6 +29,7 @@
                 item.className = 'centrality-item';
                 const pct = (value / max) * 100;
                 item.innerHTML = `
+                    ${nodeIconSvg(n.group)}
                     <span class="name">${escapeHtml(truncateName(n.name))}</span>
                     <div class="bar" style="width:${pct}%;background:${color}"></div>
                     <span class="value">${value.toFixed(2)}</span>

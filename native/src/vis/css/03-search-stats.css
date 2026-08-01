@@ -103,14 +103,6 @@
             background: var(--bg-hover);
         }
 
-        .suggestion-dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            flex-shrink: 0;
-            box-shadow: 0 0 6px currentColor;
-        }
-
         .suggestion-name {
             flex: 1;
             color: var(--text);

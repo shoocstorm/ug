@@ -32,19 +32,28 @@
         // ─── Capabilities probe ─────────────────────────────
 
         async function probeCapabilities() {
-            const semSection = document.getElementById('section-semantic');
             const chatSection = document.getElementById('section-chat');
             const tourSection = document.getElementById('section-tour');
             const tourDisabled = document.getElementById('section-tour-disabled');
             const chatDisabled = document.getElementById('section-chat-disabled');
-            const disabledSection = document.getElementById('section-cap-disabled');
-            const disabledMsg = document.getElementById('cap-disabled-msg');
             const chatBadgeRow = document.getElementById('chat-model-badge');
             const chatBadgePill = document.getElementById('chat-model-pill');
             const dot = document.querySelector('.sidebar-header .brand-dot');
 
             const showSection = (el) => el && el.classList.remove('cap-hidden');
             const hideSection = (el) => el && el.classList.add('cap-hidden');
+
+            // The Search pane stays open — Keyword works off graph.json. Only
+            // the DB-backed Semantic/Hybrid tabs gate on search readiness:
+            // when off they're disabled with an inline note, and an active
+            // vector tab falls back to Keyword.
+            const semVectorTabs = document.querySelectorAll('.sem-mode[data-mode="semantic"], .sem-mode[data-mode="hybrid"]');
+            const semCapNote = document.getElementById('sem-cap-note');
+            const setVectorSearch = (ok, reason) => {
+                semVectorTabs.forEach(b => { b.disabled = !ok; b.title = ok ? '' : reason; });
+                if (semCapNote) { semCapNote.hidden = ok; if (!ok) semCapNote.textContent = reason; }
+                if (!ok && state.semMode && state.semMode !== 'keyword') selectSemMode('keyword');
+            };
 
             try {
                 const res = await fetch('/api/capabilities');
@@ -53,18 +62,15 @@
                 state.capabilities = caps;
 
                 if (caps.search_ready) {
-                    showSection(semSection);
-                    hideSection(disabledSection);
+                    setVectorSearch(true, '');
                     if (dot) {
                         dot.classList.remove('cap-warn', 'cap-off');
                         dot.title = `DB ready · ${caps.db_node_count ?? '?'} nodes`;
                     }
                     renderDestSelector(caps);
                 } else {
-                    hideSection(semSection);
-                    showSection(disabledSection);
                     const reason = caps.reason || 'DB-backed search unavailable.';
-                    disabledMsg.textContent = reason;
+                    setVectorSearch(false, reason);
                     if (dot) {
                         const partial = caps.db_ready && caps.embedder_ready;
                         dot.classList.toggle('cap-warn', partial);
@@ -116,13 +122,11 @@
                 }
             } catch (err) {
                 state.capabilities = { db_ready: false, embedder_ready: false, search_ready: false, chat_ready: false };
-                hideSection(semSection);
+                setVectorSearch(false, 'Capabilities probe failed — server unreachable?');
                 hideSection(chatSection);
                 hideSection(tourSection);
                 showSection(tourDisabled);
                 markSubtabAvailability(state.capabilities);
-                showSection(disabledSection);
-                disabledMsg.textContent = 'Capabilities probe failed — server unreachable?';
                 if (dot) {
                     dot.classList.add('cap-off');
                     dot.title = 'Capabilities probe failed';
@@ -141,7 +145,10 @@
                 el.classList.toggle('unavailable', !ok);
                 el.title = ok ? '' : 'Not available with the current server setup';
             };
-            set('search', !!(caps && caps.search_ready));
+            // Keyword search (part of the Search subtab) works off graph.json
+            // with no DB, so the subtab is never marked unavailable; the
+            // Semantic/Hybrid tabs within it carry their own disabled state.
+            set('search', true);
             set('tour', !!(caps && caps.search_ready));
             set('chat', !!(caps && caps.chat_ready));
         }

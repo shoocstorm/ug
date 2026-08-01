@@ -124,7 +124,6 @@
             background: rgba(15, 15, 17, 0.97);
         }
 
-        body.perf-mode .suggestion-dot,
         body.perf-mode .filter-chip .chip-dot,
         body.perf-mode .sidebar-header .brand-dot,
         body.perf-mode .edge-breakdown-row .dot,
@@ -360,13 +359,6 @@
             color: var(--accent);
         }
 
-        .crumb .swatch {
-            width: 7px;
-            height: 7px;
-            border-radius: 50%;
-            flex-shrink: 0;
-        }
-
         .crumb-sep {
             color: var(--text-dim);
             flex-shrink: 0;
@@ -405,8 +397,7 @@
         }
 
         body.perf-mode #axis-gizmo,
-        body.perf-mode #legend .legend-row .swatch,
-        body.perf-mode .crumb .swatch {
+        body.perf-mode #legend .legend-row .swatch {
             box-shadow: none;
         }
 

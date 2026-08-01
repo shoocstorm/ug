@@ -80,10 +80,15 @@
 
         .centrality-item {
             display: grid;
-            grid-template-columns: 1fr 60px 36px;
+            grid-template-columns: 14px 1fr 60px 36px;
             gap: 6px;
             align-items: center;
             font-size: 11px;
+        }
+
+        .centrality-item .node-icon {
+            width: 12px;
+            height: 12px;
         }
 
         .centrality-item .name {

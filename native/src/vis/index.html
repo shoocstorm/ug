@@ -793,81 +793,66 @@
                 <!-- ── Search sub-pane ── -->
                 <div class="subpane active" data-sub="search">
 
-                <!-- Semantic / Hybrid search (DB-backed) - Featured -->
-                <div class="section featured cap-hidden" data-section="semantic" id="section-semantic">
+                <!-- Search: Keyword (loaded graph, always on) + Semantic/Hybrid (DB) -->
+                <div class="section featured" data-section="semantic" id="section-semantic">
                     <div class="section-header">
-                        <span class="label">Semantic Search</span>
+                        <span class="label">Search</span>
                         <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <polyline points="6 9 12 15 18 9" />
                         </svg>
                     </div>
                     <div class="section-body">
                         <div class="sem-mode-tabs">
-                            <button class="sem-mode active" data-mode="semantic" type="button">Semantic</button>
-                            <button class="sem-mode" data-mode="hybrid" type="button">Hybrid + Snippets</button>
+                            <button class="sem-mode active" data-mode="keyword" type="button">Keyword</button>
+                            <button class="sem-mode" data-mode="semantic" type="button">Semantic</button>
+                            <button class="sem-mode" data-mode="hybrid" type="button">Hybrid</button>
                         </div>
-                        <!-- Backend selector. Populated from /api/capabilities.
-                             Single backend → static badge; multiple → select. -->
-                        <div class="sem-dest-row" id="sem-dest-row" hidden>
-                            <span class="sem-dest-label">Searching:</span>
-                            <select id="sem-dest" hidden></select>
-                            <span class="sem-dest-badge" id="sem-dest-badge" hidden></span>
-                        </div>
-                        <textarea id="sem-input" rows="2" placeholder="Describe what you're looking for…"></textarea>
-                        <div class="sem-controls">
-                            <input type="number" id="sem-k" value="10" min="1" max="50" title="Number of results">
-                            <button id="sem-exec" type="button">Search</button>
-                        </div>
-                        <div id="sem-status"></div>
-                        <div id="sem-results"></div>
-                    </div>
-                </div>
 
-                <!-- Search -->
-                <div class="section" data-section="search">
-                    <div class="section-header">
-                        <span class="label">Keyword Search</span>
-                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <polyline points="6 9 12 15 18 9" />
-                        </svg>
-                    </div>
-                    <div class="section-body">
-                        <div class="search-wrapper">
-                            <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                stroke-width="2">
-                                <circle cx="11" cy="11" r="8" />
-                                <line x1="21" y1="21" x2="16.65" y2="16.65" />
-                            </svg>
-                            <input type="text" id="search" class="search-input" placeholder="Search nodes by name…"
-                                autocomplete="off">
-                            <button class="search-clear" id="search-clear" title="Clear">
-                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        <!-- Keyword: client-side over the loaded graph.json. Always available. -->
+                        <div class="sem-ui" data-ui="keyword">
+                            <div class="search-wrapper">
+                                <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                                     stroke-width="2">
-                                    <line x1="18" y1="6" x2="6" y2="18" />
-                                    <line x1="6" y1="6" x2="18" y2="18" />
+                                    <circle cx="11" cy="11" r="8" />
+                                    <line x1="21" y1="21" x2="16.65" y2="16.65" />
                                 </svg>
-                            </button>
+                                <input type="text" id="search" class="search-input" placeholder="Search nodes by name…"
+                                    autocomplete="off">
+                                <button class="search-clear" id="search-clear" title="Clear">
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                        stroke-width="2">
+                                        <line x1="18" y1="6" x2="6" y2="18" />
+                                        <line x1="6" y1="6" x2="18" y2="18" />
+                                    </svg>
+                                </button>
+                            </div>
+                            <div id="search-suggestions"></div>
+                            <div class="search-meta">
+                                <span id="search-meta-count"></span>
+                                <span id="search-meta-hint">↑↓ to navigate · ⏎ to select</span>
+                            </div>
                         </div>
-                        <div id="search-suggestions"></div>
-                        <div class="search-meta">
-                            <span id="search-meta-count"></span>
-                            <span id="search-meta-hint">↑↓ to navigate · ⏎ to select</span>
-                        </div>
-                    </div>
-                </div>
 
-                <!-- Banner shown when capabilities probe says DB isn't queryable -->
-                <div class="section cap-disabled-section cap-hidden" data-section="cap-disabled"
-                    id="section-cap-disabled">
-                    <div class="section-header">
-                        <span class="label">Semantic Search</span>
-                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <polyline points="6 9 12 15 18 9" />
-                        </svg>
-                    </div>
-                    <div class="section-body">
-                        <div class="cap-banner warn" id="cap-disabled-msg">
-                            DB-backed search unavailable.
+                        <!-- Semantic / Hybrid: DB-backed. Hidden under the Keyword tab. -->
+                        <div class="sem-ui" data-ui="vector" hidden>
+                            <!-- Backend selector. Populated from /api/capabilities.
+                                 Single backend → static badge; multiple → select. -->
+                            <div class="sem-dest-row" id="sem-dest-row" hidden>
+                                <span class="sem-dest-label">Searching:</span>
+                                <select id="sem-dest" hidden></select>
+                                <span class="sem-dest-badge" id="sem-dest-badge" hidden></span>
+                            </div>
+                            <textarea id="sem-input" rows="2" placeholder="Describe what you're looking for…"></textarea>
+                            <div class="sem-controls">
+                                <input type="number" id="sem-k" value="10" min="1" max="50" title="Number of results">
+                                <button id="sem-exec" type="button">Search</button>
+                            </div>
+                            <div id="sem-status"></div>
+                            <div id="sem-results"></div>
+                            <!-- Replaces the old standalone cap-disabled section: the Search
+                                 pane stays open (Keyword always works) and this note explains
+                                 why the Semantic/Hybrid tabs are disabled. -->
+                            <div class="cap-banner warn" id="sem-cap-note" hidden></div>
                         </div>
                     </div>
                 </div>

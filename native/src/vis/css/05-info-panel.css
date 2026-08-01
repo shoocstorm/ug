@@ -96,6 +96,37 @@
             max-width: 70%;
         }
 
+        /* Node id row: the id wraps onto its own lines and a small copy
+           button sits at the end, since the id is what CLI commands take. */
+        #info .info-value.info-id-value {
+            display: flex;
+            align-items: flex-start;
+            gap: 6px;
+            justify-content: flex-end;
+        }
+        #info .info-id {
+            flex: 1;
+            color: var(--text-dim);
+            user-select: all;
+        }
+        #info .info-copy-btn {
+            flex-shrink: 0;
+            margin-top: 1px;
+            padding: 2px;
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            border-radius: 4px;
+            display: inline-flex;
+            opacity: 0.6;
+            transition: opacity 0.12s, color 0.12s, background 0.12s;
+        }
+        #info .info-copy-btn svg { width: 13px; height: 13px; }
+        #info .info-row:hover .info-copy-btn { opacity: 1; }
+        #info .info-copy-btn:hover { color: var(--text); background: var(--bg-hover); }
+        #info .info-copy-btn.copied { color: var(--accent); opacity: 1; }
+
         /* A long field (a doc comment, now that document sections carry
            their whole prose) gets its own full-width row and collapses to a
            one-line preview, so it can't push the rest of the panel off
@@ -293,6 +324,41 @@
             color: var(--text-dim);
             font-size: 10px;
             flex-shrink: 0;
+        }
+
+        /* Related-tab filter bar: keyword search + per-edge chips. */
+        #info .rel-filters {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+
+        #info .rel-search {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 6px 10px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text);
+            font-size: 11px;
+            font-family: 'JetBrains Mono', monospace;
+            outline: none;
+            transition: border-color 0.15s;
+        }
+
+        #info .rel-search:focus {
+            border-color: var(--accent);
+        }
+
+        #info .rel-edge-chips .filter-chip {
+            padding: 3px 8px;
+            font-size: 10px;
+        }
+
+        #info .rel-edge-chips .filter-chip .chip-count {
+            font-size: 9px;
         }
 
         /* ─── Info-panel tabs & hierarchy ───────────────────── */

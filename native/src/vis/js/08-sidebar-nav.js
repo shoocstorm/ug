@@ -357,9 +357,8 @@
                 const n = state.nodeById.get(state.history[i]);
                 if (!n) continue;
                 if (i > start || start > 0) html += '<span class="crumb-sep">›</span>';
-                const c = config.getColor(n.group);
                 html += `<span class="crumb${i === cur ? ' current' : ''}" data-idx="${i}" title="${escapeHtml(n.name)}">
-                    <span class="swatch" style="background:${c}"></span>
+                    ${nodeIconSvg(n.group)}
                     <span class="name">${escapeHtml(truncateName(n.name))}</span>
                 </span>`;
             }

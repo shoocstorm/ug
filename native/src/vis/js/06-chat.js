@@ -45,7 +45,8 @@
                         ? `:${c.start_line}${c.end_line && c.end_line !== c.start_line ? '–' + c.end_line : ''}`
                         : '';
                     const fileLabel = c.file || '<unknown>';
-                    a.textContent = `[#${c.index}] ${c.name || c.id} · ${c.node_type || '?'} · ${fileLabel}${lineLabel}`;
+                    a.innerHTML = nodeIconSvg(c.node_type || 'Default', 'cite-icon')
+                        + escapeHtml(`[#${c.index}] ${c.name || c.id} · ${c.node_type || '?'} · ${fileLabel}${lineLabel}`);
                     a.title = c.description ? c.description.slice(0, 200) : (c.id || c.name || '');
                     a.addEventListener('click', () => focusCitation(c));
                     cites.appendChild(a);
@@ -80,7 +81,8 @@
                 const lineLabel = c.start_line
                     ? `:${c.start_line}${c.end_line && c.end_line !== c.start_line ? '–' + c.end_line : ''}`
                     : '';
-                a.textContent = `[#${c.index}] ${c.name || c.id} · ${c.node_type || '?'} · ${c.file || '<unknown>'}${lineLabel}`;
+                a.innerHTML = nodeIconSvg(c.node_type || 'Default', 'cite-icon')
+                    + escapeHtml(`[#${c.index}] ${c.name || c.id} · ${c.node_type || '?'} · ${c.file || '<unknown>'}${lineLabel}`);
                 a.title = c.description ? c.description.slice(0, 200) : (c.id || c.name || '');
                 a.addEventListener('click', () => focusCitation(c));
                 box.appendChild(a);
@@ -714,7 +716,6 @@
             hits.forEach(h => {
                 const card = document.createElement('div');
                 card.className = 'sem-hit';
-                const color = config.getColor(h.node_type || 'Default');
                 const scoreText = h.score != null && Number.isFinite(h.score)
                     ? h.score.toFixed(3)
                     : '';
@@ -725,7 +726,7 @@
 
                 card.innerHTML = `
                     <div class="sem-hit-head">
-                        <span class="dot" style="background:${color};color:${color}"></span>
+                        ${nodeIconSvg(h.node_type || 'Default')}
                         <span class="name" title="${escapeHtml(h.id || h.name)}">${escapeHtml(truncateName(h.name || h.id))}</span>
                         <span class="score">${escapeHtml(scoreText)}</span>
                     </div>
