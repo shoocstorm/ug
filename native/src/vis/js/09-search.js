@@ -10,9 +10,6 @@
             });
             input.addEventListener('focus', () => refreshSuggestions(input.value));
             input.addEventListener('keydown', handleSearchKey);
-            input.addEventListener('blur', () => setTimeout(() => {
-                document.getElementById('search-suggestions').classList.remove('visible');
-            }, 200));
 
             clear.addEventListener('click', () => {
                 input.value = '';
@@ -25,10 +22,8 @@
         function refreshSuggestions(query) {
             const container = document.getElementById('search-suggestions');
             const meta = document.getElementById('search-meta-count');
-            const searchInput = document.getElementById('search');
             const q = query.trim().toLowerCase();
             const filterActive = state.nodeFilters.size > 0;
-            const searchFocused = document.activeElement === searchInput;
 
             const candidates = state.graph.nodes.filter(n => {
                 if (filterActive && !state.nodeFilters.has(n.group)) return false;
@@ -49,22 +44,30 @@
             state.currentSuggestions = display;
             state.suggestionIndex = -1;
 
-            // Only render/open the dropdown when the user is actively searching.
-            // Filter-chip clicks must not pop the suggestion list — that re-flows
-            // the sidebar and feels like the screen jumping.
-            if (searchFocused) {
-                container.innerHTML = '';
+            // Query-driven, like the Semantic/Hybrid panes: render cards only
+            // when there is something to search for. A bare focus no longer
+            // dumps fifty nodes into the pane — the meta line still reports
+            // the total. Filter-chip clicks call this with the current (often
+            // empty) query, so they update the count without surfacing a list.
+            container.innerHTML = '';
+            if (q) {
                 if (display.length === 0) {
                     container.innerHTML = '<div class="suggestion-empty">No matching nodes</div>';
                 } else {
                     display.forEach((n, i) => {
+                        const lineLabel = n.startLine
+                            ? `L${n.startLine}${n.endLine && n.endLine !== n.startLine ? '–' + n.endLine : ''}`
+                            : '';
+                        const metaParts = [n.file, n.group, lineLabel].filter(Boolean);
                         const item = document.createElement('div');
                         item.className = 'suggestion-item';
                         item.dataset.index = i;
                         item.innerHTML = `
-                            ${nodeIconSvg(n.group)}
-                            <span class="suggestion-name">${escapeHtml(truncateName(n.name))}</span>
-                            <span class="suggestion-type">${n.group}</span>
+                            <div class="suggestion-head">
+                                ${nodeIconSvg(n.group)}
+                                <span class="suggestion-name">${escapeHtml(truncateName(n.name))}</span>
+                            </div>
+                            ${metaParts.length ? `<div class="suggestion-meta">${escapeHtml(metaParts.join(' · '))}</div>` : ''}
                         `;
                         item.addEventListener('mousedown', evt => {
                             evt.preventDefault();
@@ -73,9 +76,6 @@
                         container.appendChild(item);
                     });
                 }
-                container.classList.add('visible');
-            } else {
-                container.classList.remove('visible');
             }
 
             const total = candidates.length;
@@ -104,7 +104,10 @@
                     selectSearchResult(state.currentSuggestions[idx]);
                 }
             } else if (e.key === 'Escape') {
-                document.getElementById('search-suggestions').classList.remove('visible');
+                document.getElementById('search').value = '';
+                document.getElementById('search-clear').classList.remove('visible');
+                refreshSuggestions('');
+                document.getElementById('search').blur();
             }
         }
 
@@ -117,7 +120,6 @@
 
         function selectSearchResult(n) {
             document.getElementById('search').value = n.name;
-            document.getElementById('search-suggestions').classList.remove('visible');
             if (state.pathMode) exitPathMode();
             handleClick(null, n);
             focusNode(n);

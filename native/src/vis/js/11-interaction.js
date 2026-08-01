@@ -559,6 +559,22 @@
             const limits = renderChunkLimits(row, parts, text);
             if (limits) frag.appendChild(limits);
 
+            // The whole stored row, verbatim. Everything above is this object
+            // reshaped for reading; this is the raw answer for "what does the
+            // KB actually hold for this node?" — the same payload
+            // /api/db/node/<id> returns.
+            const rawJson = document.createElement('details');
+            rawJson.className = 'chunk-raw';
+            const rawJsonSum = document.createElement('summary');
+            rawJsonSum.textContent = 'Raw node data (JSON)';
+            rawJsonSum.title = 'The full stored row for this node, as /api/db/node/<id> returns it — '
+                + 'every field the knowledge base holds, before the sections above reshape it.';
+            const rawJsonPre = document.createElement('pre');
+            rawJsonPre.className = 'chunk-json';
+            rawJsonPre.textContent = JSON.stringify(row, null, 2);
+            rawJson.append(rawJsonSum, rawJsonPre);
+            frag.appendChild(rawJson);
+
             container.appendChild(frag);
         }
 

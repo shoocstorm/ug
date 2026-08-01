@@ -723,15 +723,21 @@
                     ? `L${h.start_line}${h.end_line && h.end_line !== h.start_line ? '–' + h.end_line : ''}`
                     : '';
                 const meta = [h.node_type, h.file, lineLabel].filter(Boolean).join(' · ');
+                // Only the hybrid pipeline tags how each item was reached;
+                // pure-semantic hits have no `matched_by`.
+                const mech = (mode === 'hybrid' && h.matched_by) ? h.matched_by : '';
+                const mechBadge = mech
+                    ? `<span class="sem-match sem-match-${mech}" title="How this result was reached: ${mech === 'semantic' ? 'dense vector match' : mech === 'keyword' ? 'sparse/keyword match' : 'graph walk from a seed'}">${mech}</span>`
+                    : '';
 
                 card.innerHTML = `
                     <div class="sem-hit-head">
                         ${nodeIconSvg(h.node_type || 'Default')}
                         <span class="name" title="${escapeHtml(h.id || h.name)}">${escapeHtml(truncateName(h.name || h.id))}</span>
+                        ${mechBadge}
                         <span class="score">${escapeHtml(scoreText)}</span>
                     </div>
                     ${meta ? `<div class="sem-hit-meta" title="${escapeHtml(meta)}">${escapeHtml(meta)}</div>` : ''}
-                    ${h.snippet ? `<pre class="sem-hit-snippet">${escapeHtml(h.snippet)}</pre>` : ''}
                 `;
                 card.querySelector('.sem-hit-head').addEventListener('click', () => {
                     const local = state.nodeById ? state.nodeById.get(h.id) : null;

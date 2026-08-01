@@ -63,18 +63,13 @@
             display: flex;
         }
 
+        /* Keyword results: a card list mirroring the Semantic/Hybrid hits,
+           now that the unified Search pane gives it vertical room. */
         #search-suggestions {
-            margin-top: 6px;
-            background: var(--bg-elevated);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            max-height: 280px;
-            overflow-y: auto;
-            display: none;
-        }
-
-        #search-suggestions.visible {
-            display: block;
+            margin-top: 8px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
         }
 
         .suggestion-empty {
@@ -85,22 +80,31 @@
         }
 
         .suggestion-item {
-            padding: 8px 12px;
+            padding: 8px 10px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-soft);
+            border-radius: 6px;
             cursor: pointer;
-            font-size: 12px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            border-bottom: 1px solid var(--border-soft);
-        }
-
-        .suggestion-item:last-child {
-            border-bottom: none;
+            font-size: 11px;
+            transition: background 0.15s, border-color 0.15s;
         }
 
         .suggestion-item:hover,
         .suggestion-item.active {
             background: var(--bg-hover);
+            border-color: var(--border);
+        }
+
+        .suggestion-head {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .suggestion-head .node-icon {
+            width: 12px;
+            height: 12px;
+            flex-shrink: 0;
         }
 
         .suggestion-name {
@@ -112,12 +116,15 @@
             font-family: 'JetBrains Mono', monospace;
         }
 
-        .suggestion-type {
-            font-size: 10px;
+        .suggestion-meta {
+            margin-top: 4px;
+            margin-left: 20px;
             color: var(--text-dim);
-            text-transform: uppercase;
-            letter-spacing: 0.4px;
-            flex-shrink: 0;
+            font-size: 10px;
+            font-family: 'JetBrains Mono', monospace;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }
 
         .search-meta {

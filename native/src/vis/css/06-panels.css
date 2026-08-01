@@ -353,19 +353,20 @@
             white-space: nowrap;
         }
 
-        .sem-hit-snippet {
-            border-top: 1px solid var(--border-soft);
-            padding: 8px 10px;
-            background: rgba(0, 0, 0, 0.2);
-            color: var(--text-muted);
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 10px;
-            line-height: 1.45;
-            white-space: pre-wrap;
-            word-break: break-word;
-            max-height: 220px;
-            overflow-y: auto;
+        /* Mechanism flag on a hybrid hit: how this result was reached. */
+        .sem-match {
+            flex-shrink: 0;
+            font-size: 9px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            padding: 2px 6px;
+            border-radius: 999px;
+            border: 1px solid currentColor;
         }
+        .sem-match-semantic { color: #60a5fa; }
+        .sem-match-keyword { color: #fbbf24; }
+        .sem-match-graph { color: #4ade80; }
 
         .sem-empty {
             padding: 14px;

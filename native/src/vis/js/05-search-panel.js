@@ -198,7 +198,9 @@
         }
 
         async function fetchHybrid(query, k) {
-            const body = { query, k, include_snippets: true };
+            // Snippets are not shown in the hit cards (each card carries a
+            // mechanism flag instead), so skip the capture + transfer.
+            const body = { query, k, include_snippets: false };
             if (state.semDest) body.dest = state.semDest;
             const res = await fetch('/api/search/hybrid', {
                 method: 'POST',
@@ -207,9 +209,8 @@
             });
             if (!res.ok) throw new Error(await readErr(res));
             const data = await res.json();
-            // search_kb returns RankedContext { items: [ContextItem { id, name,
-            // node_type, file, start_line, end_line, description, distance,
-            // hop, snippet }] } — flat, no nested node wrapper.
+            // search_kb returns RankedContext { items: [ContextItem { …,
+            // matched_by: "semantic" | "keyword" | "graph" }] } — flat.
             const items = data.items || [];
             const hits = items.map(it => ({
                 id: it.id,
@@ -220,6 +221,7 @@
                 end_line: it.end_line,
                 description: it.description,
                 score: it.distance,
+                matched_by: it.matched_by || '',
                 snippet: it.snippet || null
             }));
             hits.dest = data.dest || state.semDest;
