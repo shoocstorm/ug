@@ -128,7 +128,10 @@
         }
 
         function nodeRadiusFor(n) {
-            return (config.nodeRadius[n.group] || 6) * 0.8;
+            // Nodes are deliberately large — the sticker discs are the primary
+            // visual, and a 5-unit disc drowns against edges that span hundreds
+            // of units.
+            return (config.nodeRadius[n.group] || 6) * 1.6;
         }
 
         // A soft circular glow texture (white radial gradient → transparent),
@@ -205,25 +208,65 @@
             return t;
         }
 
-        // Custom node object: an unlit (self-illuminated) sphere so nodes stay
-        // saturated from any camera angle, plus a soft tinted halo (a normal-
-        // blend colour wash — additive glow would vanish against the white
-        // paper), a translucent "membrane" shell on the larger cell-like
-        // nodes, and an optional text label.
+        // One glyph texture per node type, drawn on a transparent 256px canvas
+        // and tinted per node by the sprite's colour. Cached because the graph
+        // can hold tens of thousands of nodes of a single type.
+        //
+        // The disc body is painted *bright* (near-white) so that after the
+        // sprite's colour multiply it reads as a vivid saturated sticker that
+        // pops off the dark background; the glyph is drawn dark so it stays a
+        // crisp dark cutout against that bright disc. (White glyph on a white
+        // disc would vanish; a grey disc would sink into the dark scene.)
+        const _nodeIconTex = new Map();
+        function nodeIconTexture(group) {
+            if (_nodeIconTex.has(group)) return _nodeIconTex.get(group);
+            const c = document.createElement('canvas');
+            c.width = c.height = 256;
+            const ctx = c.getContext('2d');
+            ctx.translate(128, 128);
+            ctx.scale(8, 8);
+            // Crisp sticker disc — a solid body with a thin brighter rim.
+            ctx.beginPath();
+            ctx.arc(0, 0, 11.5, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(240,240,244,0.97)';
+            ctx.fill();
+            ctx.lineWidth = 0.7;
+            ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+            ctx.stroke();
+            // The glyph, drawn dark so it reads as a punch-through on the
+            // bright disc after tinting.
+            const body = NODE_ICONS[group] || '<circle cx="12" cy="12" r="6.5"/>';
+            ctx.strokeStyle = 'rgba(24,24,30,0.95)';
+            ctx.lineWidth = 2.6;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            // The Interface glyph is a dashed diamond; Path2D doesn't carry
+            // the dasharray attribute, so re-apply it here.
+            if (body.includes('stroke-dasharray="3.2 2.6"')) ctx.setLineDash([3.2, 2.6]);
+            ctx.stroke(new Path2D(body));
+            const tex = new THREE.CanvasTexture(c);
+            tex.colorSpace = THREE.SRGBColorSpace;
+            tex.minFilter = THREE.LinearFilter;
+            tex.generateMipmaps = false;
+            _nodeIconTex.set(group, tex);
+            return tex;
+        }
+
+        // Custom node object: a camera-facing "sticker" disc — the node type's
+        // glyph (ƒ, braces, folder…) tinted with the node's colour — so every
+        // node is recognisable at a glance rather than reading as a bare
+        // sphere. A soft tinted halo sits behind it (a normal-blend colour
+        // wash — additive glow would vanish against the white paper), a
+        // translucent "membrane" shell still wraps the larger cell-like nodes,
+        // and an optional text label floats above.
         function makeNodeObject(n) {
             const radius = nodeRadiusFor(n);
-            const seg = 16;   // sphere tesselation, shared by the core and the shell
+            const seg = 16;   // sphere tesselation for the larger nodes' shell
             const group = new THREE.Group();
 
-            const mat = new THREE.MeshBasicMaterial({ color: nodeColorFor(n), transparent: true, opacity: 0.95 });
-            const core = new THREE.Mesh(new THREE.SphereGeometry(radius, seg, seg), mat);
-            n.__nodeMat = mat;
-            n.__nodeCore = core;
-            n.__nodeRadius = radius;
-            group.add(core);
-
             // Soft tinted radial-gradient halo — reads as the out-of-focus
-            // ink bleed around every node in the reference art.
+            // ink bleed around every node in the reference art. Rendered below
+            // the sticker (renderOrder) so the glow never washes over the glyph.
             const halo = new THREE.Sprite(new THREE.SpriteMaterial({
                 map: glowTexture(),
                 color: config.getColor(n.group),
@@ -231,10 +274,32 @@
                 opacity: 0.3,
                 depthWrite: false,
             }));
-            n.__haloBase = radius * 4.5;
+            halo.renderOrder = 0;
+            // A modest glow now — the sticker carries the visual weight, so the
+            // halo should read as a soft rim, not a big fuzzy disc around it.
+            n.__haloBase = radius * 2.6;
             halo.scale.setScalar(n.__haloBase);
             n.__nodeHalo = halo;
             group.add(halo);
+
+            const mat = new THREE.SpriteMaterial({
+                map: nodeIconTexture(n.group),
+                color: nodeColorFor(n),
+                transparent: true,
+                opacity: 0.95,
+                depthWrite: false,
+            });
+            const core = new THREE.Sprite(mat);
+            core.renderOrder = 2;
+            // Sprite scale is full width, so double the radius for a disc that
+            // sits where the sphere used to. Kept as a base so the selection
+            // pulse can breathe around it without losing the size.
+            n.__coreScale = radius * 2;
+            core.scale.setScalar(n.__coreScale);
+            n.__nodeMat = mat;
+            n.__nodeCore = core;
+            n.__nodeRadius = radius;
+            group.add(core);
 
             // Larger nodes get a translucent outer shell — the nucleus-
             // inside-a-membrane look the big cells in the reference have.
@@ -247,6 +312,7 @@
                         opacity: 0.14,
                         depthWrite: false,
                     }));
+                shell.renderOrder = 1;
                 // Kept on the node so dimming (focus / tour) can fade the
                 // shell too — otherwise big nodes stay visible through it.
                 n.__nodeShell = shell;
@@ -946,7 +1012,7 @@
                     n.__nodeHalo.scale.setScalar((n.__haloBase || base) * (1 + 0.2 * wave));
                 }
                 if (n.__nodeCore) {
-                    n.__nodeCore.scale.setScalar(1.3 + 0.18 * wave);
+                    n.__nodeCore.scale.setScalar((n.__coreScale || 1) * (1.3 + 0.18 * wave));
                 }
             };
             requestAnimationFrame(tick);
@@ -1011,7 +1077,7 @@
                     if (!sel && n.__haloBase) n.__nodeHalo.scale.setScalar(n.__haloBase);
                 }
                 // Non-selected cores return to normal scale.
-                if (!sel && n.__nodeCore) n.__nodeCore.scale.setScalar(1);
+                if (!sel && n.__nodeCore) n.__nodeCore.scale.setScalar(n.__coreScale || 1);
             });
             Graph.nodeVisibility(nodeVisibleFor)
                 .linkColor(linkColorFor)
