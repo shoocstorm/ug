@@ -75,6 +75,21 @@
             display: none;
         }
 
+        /* Key for the two hover-highlight link colours. The swatch colours are
+           set inline from CANVAS — see handleNodeHover. */
+        .tooltip-dirs {
+            display: flex;
+            gap: 10px;
+            margin-top: 4px;
+            font-size: 10px;
+            font-weight: 600;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .tooltip-dirs:empty {
+            display: none;
+        }
+
         /* ─── Canvas overlays: legend, gizmo, nav/breadcrumb ─── */
 
         .canvas-overlay {

@@ -614,6 +614,16 @@
                         </svg>
                         <span>Search</span>
                     </button>
+                    <button class="subtab" data-sub="walk" type="button" role="tab" title="Watch a graph walk light up hop by hop">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="5" cy="6" r="1.9" /><circle cx="19" cy="5" r="1.9" />
+                            <circle cx="12" cy="13" r="1.9" /><circle cx="6" cy="19" r="1.9" />
+                            <circle cx="18" cy="18" r="1.9" />
+                            <path d="M6.6 7.1 10.7 11.6M17.4 6.1 13.3 11.6M11 14.6 7.2 18M13 14.6 16.8 17" />
+                        </svg>
+                        <span>Walk</span>
+                    </button>
                     <button class="subtab" data-sub="tour" type="button" role="tab">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                             stroke-linecap="round" stroke-linejoin="round">
@@ -867,6 +877,194 @@
                 </div>
 
                 </div><!-- /search sub-pane -->
+
+                <!-- ── Walk sub-pane ──
+                     An animated BFS frontier: pick a seed, watch the walk
+                     light up hop by hop on the canvas, and see how that same
+                     walk is the graph stage of hybrid search that feeds AI
+                     agents. -->
+                <div class="subpane" data-sub="walk" id="pane-walk">
+
+                <div class="section featured" data-section="walk">
+                    <div class="section-header">
+                        <span class="label">Graph Walk</span>
+                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="6 9 12 15 18 9" />
+                        </svg>
+                    </div>
+                    <div class="section-body">
+                        <p class="walk-blurb"><strong>Watch the graph walk.</strong> Pick a seed node, choose a
+                            hop radius and direction, and the canvas isolates to the BFS frontier
+                            <span class="kw">one hop at a time</span> — edges stream outward first, then each
+                            frontier ignites in its own colour with a ripple from the seed. Everything off the
+                            walk is hidden, so the expansion is all you see. Slow it down with the speed
+                            control. This is the same N-hop walk behind the <code>graph</code> channel of
+                            hybrid search.</p>
+
+                        <!-- Seed picker -->
+                        <div class="walk-seed-wrap">
+                            <svg class="walk-seed-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <circle cx="12" cy="12" r="2.4" />
+                                <path d="M12 4v3M12 17v3M4 12h3M17 12h3M6.3 6.3l2.1 2.1M15.6 15.6l2.1 2.1M17.7 6.3l-2.1 2.1M8.4 15.6l-2.1 2.1" />
+                            </svg>
+                            <input type="text" id="walk-seed-input" class="walk-seed-input"
+                                placeholder="Type a function, class, file…" autocomplete="off">
+                            <div class="walk-seed-suggestions" id="walk-seed-suggestions"></div>
+                        </div>
+                        <div id="walk-seed-chip" style="margin-bottom:6px"></div>
+                        <div class="walk-seed-hint">Tip: select any node anywhere in the graph — it becomes the seed.</div>
+
+                        <!-- Hops + direction -->
+                        <div class="walk-row">
+                            <span class="walk-field-label">Hops</span>
+                            <div class="walk-hops">
+                                <button class="walk-hop-btn" data-hops="1" type="button">1</button>
+                                <button class="walk-hop-btn" data-hops="2" type="button">2</button>
+                                <button class="walk-hop-btn active" data-hops="3" type="button">3</button>
+                                <button class="walk-hop-btn" data-hops="4" type="button">4</button>
+                            </div>
+                            <div class="walk-dir">
+                                <button class="walk-dir-btn active" data-dir="outbound" type="button" title="What the seed depends on">Out</button>
+                                <button class="walk-dir-btn" data-dir="inbound" type="button" title="Who depends on the seed">In</button>
+                                <button class="walk-dir-btn" data-dir="both" type="button" title="Either direction">Both</button>
+                            </div>
+                        </div>
+
+                        <!-- Speed -->
+                        <div class="walk-row">
+                            <span class="walk-field-label">Speed</span>
+                            <div class="walk-speed">
+                                <button class="walk-speed-btn" data-speed="0.5" type="button" title="Slow — watch every edge stream">0.5×</button>
+                                <button class="walk-speed-btn active" data-speed="1" type="button" title="Normal">1×</button>
+                                <button class="walk-speed-btn" data-speed="2" type="button" title="Fast">2×</button>
+                            </div>
+                            <span class="walk-reveal-note">edges stream → frontier ignites, one beat per hop</span>
+                        </div>
+
+                        <!-- Edge-type filters -->
+                        <div class="walk-field-label" style="margin-bottom:5px">Edge types</div>
+                        <div class="walk-edge-types" id="walk-edge-types"></div>
+
+                        <div class="walk-actions">
+                            <button id="walk-run" type="button" class="walk-run">
+                                <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                    <path d="M8 5.2c0-.9 1-1.4 1.7-.9l9 6.8c.6.4.6 1.4 0 1.8l-9 6.8c-.7.5-1.7 0-1.7-.9z" />
+                                </svg>
+                                Walk the graph
+                            </button>
+                            <button id="walk-exit" type="button" class="walk-exit">Exit</button>
+                        </div>
+                        <div class="walk-status" id="walk-status"></div>
+
+                        <!-- Hop progress -->
+                        <div class="walk-progress" id="walk-progress" hidden>
+                            <div class="walk-progress-track">
+                                <div class="walk-progress-bar" id="walk-progress-bar"></div>
+                            </div>
+                            <span class="walk-progress-label" id="walk-progress-label"></span>
+                        </div>
+
+                        <!-- Live readout -->
+                        <div class="walk-readout" id="walk-readout">
+                            <div class="walk-legend" id="walk-legend"></div>
+                            <div class="walk-layers" id="walk-layers"></div>
+                            <div class="walk-totals" id="walk-totals"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- How this powers hybrid search & AI agents -->
+                <div class="section" data-section="walk-pipeline">
+                    <div class="section-header">
+                        <span class="label">How this powers hybrid search</span>
+                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="6 9 12 15 18 9" />
+                        </svg>
+                    </div>
+                    <div class="section-body">
+                        <div class="walk-pipeline">
+                            <div class="walk-pipeline-title">The hybrid retrieval pipeline</div>
+                            <p class="walk-pipeline-sub">
+                                An AI agent's <span class="kw">search</span> call doesn't just keyword-match.
+                                Semantic + keyword hits fuse into <em>seeds</em>, which are then
+                                <span class="kw">expanded through this exact graph walk</span> (or Personalized
+                                PageRank) so the model sees structurally-related code too. Run the walk above
+                                and the <code>graph</code> stage below pulses in sync with each frontier.
+                            </p>
+
+                            <div class="walk-pipe-flow">
+                                <div class="walk-pipe-row">
+                                    <div class="walk-pipe-box seeds">
+                                        <div class="t">Semantic search</div>
+                                        <div class="d">dense vector match</div>
+                                        <span class="walk-pipe-tag sem">semantic</span>
+                                    </div>
+                                    <div class="walk-pipe-box seeds">
+                                        <div class="t">Keyword search</div>
+                                        <div class="d">sparse / FTS match</div>
+                                        <span class="walk-pipe-tag kw">keyword</span>
+                                    </div>
+                                </div>
+                                <div class="walk-pipe-arrow">▼ &nbsp; RRF fuse → seeds</div>
+                                <div class="walk-pipe-box graph" id="walk-pipe-graph">
+                                    <div class="t">Graph walk</div>
+                                    <div class="d">N-hop BFS / PPR over the edge graph — the stage you're watching</div>
+                                    <span class="walk-pipe-tag gph">graph</span>
+                                </div>
+                                <div class="walk-pipe-arrow">▼ &nbsp; rank + char budget</div>
+                                <div class="walk-pipe-box agent">
+                                    <div class="t">Expanded context → AI agent</div>
+                                    <div class="d">ranked snippets, each tagged how it was reached</div>
+                                </div>
+                            </div>
+
+                            <div class="walk-mcp-list">
+                                <div class="walk-mcp">
+                                    <div class="walk-mcp-head">
+                                        <span class="walk-mcp-name">search</span>
+                                        <span class="walk-mcp-pill">MCP tool · the whole pipeline</span>
+                                    </div>
+                                    <div class="walk-mcp-body">
+                                        <p class="walk-mcp-desc">The <b>primary knowledge-base search</b> an
+                                            AI agent calls (Claude, Cursor, Windsurf…). Runs the entire
+                                            pipeline above — RRF seeds → <b>graph walk / PPR</b> → ranked
+                                            context — in one call. Trigger phrases include "how does X work"
+                                            or "before I change X look up…".</p>
+                                        <pre class="walk-mcp-code"><span class="c">// what the agent sends</span>
+search({
+  <span class="k">query</span>: <span class="s">"how does the embedder probe its dim"</span>,
+  <span class="k">k</span>: 8,
+  <span class="k">direction</span>: <span class="s">"both"</span>,
+  <span class="k">edgeTypes</span>: [<span class="s">"calls"</span>, <span class="s">"imports"</span>]
+})</pre>
+                                    </div>
+                                </div>
+                                <div class="walk-mcp">
+                                    <div class="walk-mcp-head">
+                                        <span class="walk-mcp-name">traverse</span>
+                                        <span class="walk-mcp-pill secondary">MCP tool · the raw walk</span>
+                                    </div>
+                                    <div class="walk-mcp-body">
+                                        <p class="walk-mcp-desc">A direct N-hop walk — <b>the same BFS you're
+                                            watching here</b> — for drilling out from a node <code>search</code>
+                                            returned. Output is grouped by hop with an edge-type tally. Reads
+                                            the structural graph directly, so it works even without an embedding
+                                            backend.</p>
+                                        <pre class="walk-mcp-code"><span class="c">// the walk above, as an agent calls it</span>
+traverse({
+  <span class="k">nodeId</span>: <span class="s">"fn:native/src/storage/query.rs::search_kb"</span>,
+  <span class="k">hops</span>: 3,
+  <span class="k">direction</span>: <span class="s">"outbound"</span>
+})</pre>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                </div><!-- /walk sub-pane -->
 
                 <!-- ── Insights sub-pane ──
                      The same `code_query` engine the CLI and MCP tool use,
@@ -1122,6 +1320,7 @@
             <div class="tooltip-title"></div>
             <div class="tooltip-type"></div>
             <div class="tooltip-stats"></div>
+            <div class="tooltip-dirs"></div>
         </div>
     </div>
 

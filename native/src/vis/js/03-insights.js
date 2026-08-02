@@ -489,6 +489,7 @@
             wireTourPanel();
             wireFindPathBtn();
             wireInsights();
+            wireWalk();
             wireDiscoverSubtabs();
             wirePanelTabs();
             wireCatalog();

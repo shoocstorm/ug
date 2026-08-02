@@ -97,6 +97,9 @@
             };
 
             const activate = (name) => {
+                // Leaving the Walk demo tears down its canvas state so the
+                // next pane starts from a clean graph.
+                if (state.discoverSub === 'walk' && name !== 'walk') exitWalk();
                 tabs.forEach(t => t.classList.toggle('active', t.dataset.sub === name));
                 panes.forEach(p => p.classList.toggle('active', p.dataset.sub === name));
                 state.discoverSub = name;

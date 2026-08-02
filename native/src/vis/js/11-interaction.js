@@ -32,13 +32,24 @@
             // the renderer holds, and off-screen edges have nothing to light up.
             state.highlightNodes.clear();
             state.highlightLinks.clear();
+            state.highlightLinkDir.clear();
+            let outCount = 0, inCount = 0;
             if (d) {
                 state.highlightNodes.add(d.id);
                 state.view.edges.forEach(e => {
                     const sId = e.source.id || e.source;
                     const tId = e.target.id || e.target;
-                    if (sId === d.id) { state.highlightNodes.add(tId); state.highlightLinks.add(e); }
-                    else if (tId === d.id) { state.highlightNodes.add(sId); state.highlightLinks.add(e); }
+                    if (sId === d.id) {
+                        state.highlightNodes.add(tId);
+                        state.highlightLinks.add(e);
+                        state.highlightLinkDir.set(e, 'out');
+                        outCount++;
+                    } else if (tId === d.id) {
+                        state.highlightNodes.add(sId);
+                        state.highlightLinks.add(e);
+                        state.highlightLinkDir.set(e, 'in');
+                        inCount++;
+                    }
                 });
             }
             bumpGraphStyles();
@@ -57,6 +68,17 @@
             if (directChildren) statParts.push(`↳ ${directChildren} child${directChildren === 1 ? '' : 'ren'}`);
             if (siblings) statParts.push(`• ${siblings} sibling${siblings === 1 ? '' : 's'}`);
             tooltip.querySelector('.tooltip-stats').textContent = statParts.join('  ·  ');
+
+            // The key for the two link colours now lit on the canvas. Without
+            // it the split is decorative — you can see there are two families
+            // of strand but not which way either one points. Colours come from
+            // CANVAS so the swatch and the strand can never drift apart, and
+            // an empty side is dropped rather than shown as a zero.
+            const dirEl = tooltip.querySelector('.tooltip-dirs');
+            const dirParts = [];
+            if (outCount) dirParts.push(`<span style="color:${CANVAS.linkOut}">→ ${outCount} out</span>`);
+            if (inCount) dirParts.push(`<span style="color:${CANVAS.linkIn}">← ${inCount} in</span>`);
+            dirEl.innerHTML = dirParts.join('');
 
             const m = state._mouse || { x: width / 2, y: height / 2 };
             tooltip.style.left = (m.x + 15) + 'px';
@@ -418,6 +440,11 @@
             if (!state.suppressHistory) recordHistory(d.id);
 
             state.selectedNode = d;
+            // Keep the Walk pane's seed in sync with whatever the user just
+            // selected, anywhere — so opening Walk always starts from the
+            // node they were just looking at. No-op mid-walk (the running
+            // walk owns its seed) and doesn't switch tabs.
+            syncWalkSeed(d);
             bumpGraphStyles();
             updateNavbar();
 

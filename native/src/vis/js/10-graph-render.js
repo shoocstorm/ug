@@ -5,6 +5,10 @@
         function nodeColorFor(n) {
             if (state.selectedNode && n.id === state.selectedNode.id) return '#ff3d00';
             if (state.highlightNodes.has(n.id)) return '#f96716';
+            // Graph Walk: reached nodes take their hop's colour on a
+            // hot→cool gradient; unreached nodes keep their type colour and
+            // are dimmed to near-invisible by bumpGraphStyles.
+            if (state.walkActive && state.walkColors.has(n.id)) return state.walkColors.get(n.id);
             // On a tour the other stops burn amber so the route reads as one
             // chain; everything else keeps its type colour and gets lowlit
             // by opacity instead (see bumpGraphStyles).
@@ -12,7 +16,25 @@
             return config.getColor(n.group);
         }
         function linkColorFor(e) {
-            if (state.highlightLinks.has(e)) return '#f96716';
+            if (state.highlightLinks.has(e)) {
+                return state.highlightLinkDir.get(e) === 'in' ? CANVAS.linkIn : CANVAS.linkOut;
+            }
+            // Graph Walk: walked edges glow in the frontier colour, everything
+            // else recedes into the background so the expanding frontier is
+            // the only thing the eye tracks.
+            if (state.walkActive) {
+                const sId = e.source.id || e.source;
+                const tId = e.target.id || e.target;
+                const key = sId < tId ? sId + '|' + tId : tId + '|' + sId;
+                if (state.walkEdgeKeys.has(key)) {
+                    return state.walkColors.get(tId) || state.walkColors.get(sId) || '#f97316';
+                }
+                // Both endpoints reached but the BFS didn't walk this edge —
+                // dim structural context between frontier nodes, rather than
+                // the bright background tone used for everything unreached.
+                if (state.walkReached.has(sId) && state.walkReached.has(tId)) return CANVAS.linkRecede;
+                return CANVAS.linkFar;
+            }
             // On a tour the route glows and everything else fades out, so the
             // path through the graph is the only thing the eye can follow.
             if (tourTier(e.source.id || e.source)) {
@@ -53,12 +75,22 @@
         }
 
         function nodeVisibleFor(n) {
+            // Graph Walk isolates the canvas to the reached set so each new
+            // frontier is the only thing on screen — the same "forced solo"
+            // feel as the tour's isolate toggle, applied automatically for
+            // every walk regardless of graph size.
+            if (state.walkActive && !state.walkReached.has(n.id)) return false;
             if (tourState.active && tourState.isolate && !tourState.routeIds.has(n.id)) return false;
             if (focusIsolateOn() && !state.focusSet.has(n.id)) return false;
             return !(state.nodeHidden && state.nodeHidden(n));
         }
 
         function linkVisibleFor(e) {
+            if (state.walkActive) {
+                const sId = e.source.id || e.source;
+                const tId = e.target.id || e.target;
+                if (!state.walkReached.has(sId) || !state.walkReached.has(tId)) return false;
+            }
             if (tourState.active && tourState.isolate) {
                 const sId = e.source.id || e.source;
                 const tId = e.target.id || e.target;
@@ -76,8 +108,23 @@
         // the walk has visible direction of travel.
         function linkParticlesFor(e) {
             if (state.highlightLinks.has(e)) return 4;
+            if (state.walkActive) {
+                const sId = e.source.id || e.source;
+                const tId = e.target.id || e.target;
+                const key = sId < tId ? sId + '|' + tId : tId + '|' + sId;
+                return state.walkEdgeKeys.has(key) ? 3 : 0;
+            }
             if (tourState.active && isTourRouteEdge(e)) return 2;
             return 0;
+        }
+
+        // Particles inherit their link's direction colour on hover. Elsewhere
+        // (tour route, graph walk) there is only one flow to read, so the hot
+        // orange stands.
+        function linkParticleColorFor(e) {
+            const dir = state.highlightLinkDir.get(e);
+            if (!dir) return CANVAS.particleOut;
+            return dir === 'in' ? CANVAS.particleIn : CANVAS.particleOut;
         }
 
         function nodeRadiusFor(n) {
@@ -299,7 +346,7 @@
                 .linkDirectionalParticles(linkParticlesFor)
                 .linkDirectionalParticleWidth(1.6)
                 .linkDirectionalParticleSpeed(0.012)
-                .linkDirectionalParticleColor(() => '#ff3d00')
+                .linkDirectionalParticleColor(linkParticleColorFor)
                 .enableNodeDrag(true)
                 .onNodeHover(handleNodeHover)
                 .onNodeClick((n, evt) => handleNodeClick(evt, n))
@@ -918,12 +965,25 @@
                 const sel = state.selectedNode && n.id === state.selectedNode.id;
                 // On a tour, brightness is a four-ring gradient (this stop →
                 // the rest of the route → its neighbours → everything else).
-                // Otherwise focus mode's binary dim applies.
-                const tier = tourTier(n.id);
-                const dim = tier ? tier === 'far' : (focusOn && !state.focusSet.has(n.id));
-                if (n.__nodeMat) {
-                    n.__nodeMat.opacity = tier ? TOUR_TIER_OPACITY[tier] : (dim ? 0.06 : 0.95);
+                // Otherwise focus mode's binary dim applies. Graph Walk has
+                // its own three-state version (seed / reached / far).
+                const tier = state.walkActive ? null : tourTier(n.id);
+                let dim, op;
+                if (state.walkActive) {
+                    const w = walkTier(n.id);
+                    // 'pending' = in the reached set but not yet ignited (its
+                    // edges are streaming toward it). Kept as a faint ghost so
+                    // the eye has a target to watch the particles flow into.
+                    dim = w === 'far' || w === 'pending';
+                    op = w === 'seed' ? 1.0
+                        : w === 'reached' ? 0.96
+                        : w === 'pending' ? 0.14
+                        : 0.05;
+                } else {
+                    dim = tier ? tier === 'far' : (focusOn && !state.focusSet.has(n.id));
+                    op = tier ? TOUR_TIER_OPACITY[tier] : (dim ? 0.06 : 0.95);
                 }
+                if (n.__nodeMat) n.__nodeMat.opacity = op;
                 // Dimmed labels hide immediately; otherwise distance owns it (see
                 // updateAdaptiveLabels), so we only force-hide here.
                 if (dim && n.__nodeLabel) n.__nodeLabel.visible = false;
@@ -956,6 +1016,11 @@
             Graph.nodeVisibility(nodeVisibleFor)
                 .linkColor(linkColorFor)
                 .linkVisibility(linkVisibleFor)
+                // Re-set alongside the particle count: the colour accessor is
+                // read when a link's particles are (re)initialised, so a hover
+                // that only changed direction would otherwise keep the last
+                // hover's tint.
+                .linkDirectionalParticleColor(linkParticleColorFor)
                 .linkDirectionalParticles(linkParticlesFor);
         }
 

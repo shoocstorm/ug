@@ -90,7 +90,20 @@
             // furniture, and they cut across the graph on every first look.
             // The viewbar's Box button brings them back.
             showBoundary: false,    // dashed boundary box + corners + face labels
-            autoSpin: false         // camera auto-rotation
+            autoSpin: false,        // camera auto-rotation
+            // Graph Walk demo (Discover → Walk). A BFS frontier that lights
+            // up hop by hop on the canvas. Mutually exclusive with tour/focus
+            // styling — `walkActive` gates every render accessor it touches.
+            walkActive: false,
+            walkRunning: false,     // true while the hop-by-hop reveal is in flight
+            walkSeed: null,         // seed node id
+            walkHops: 3,            // hop radius
+            walkDir: 'outbound',    // 'outbound' | 'inbound' | 'both'
+            walkSpeed: 1,           // 0.5 | 1 | 2 — scales the per-hop reveal pace
+            walkEdgeTypes: null,    // Set of edge rels to follow, or null = all
+            walkReached: new Set(), // node ids reached so far (progressive reveal)
+            walkColors: new Map(),  // id → hop hex colour (drives nodeColorFor)
+            walkEdgeKeys: new Set() // unordered "src|tgt" keys of walked edges
         };
 
         // Canvas palette. Everything that has to sit *against* the 3D
@@ -104,6 +117,18 @@
             linkRecede: '#26262e',    // focus mode: outside the neighbourhood
             linkFar: '#1b1b21',       // tour: off the route entirely
             linkRouteDim: '#9c5f2c',  // tour: on the route, away from this stop
+            // Hover highlight, split by direction. Which end of an edge you
+            // are on is the whole question when reading a call graph, and the
+            // particles alone can't answer it — they crawl source→target
+            // either way, and from most camera angles that reads as motion,
+            // not as direction. So outgoing keeps the warm highlight the rest
+            // of the app uses for "this node", and incoming takes a cyan that
+            // no other ink on the canvas occupies (the code family is a much
+            // duller steel blue, the structural family is orange).
+            linkOut: '#f96716',
+            linkIn: '#22d3ee',
+            particleOut: '#ff3d00',
+            particleIn: '#67e8f9',
         };
 
         // The 3d-force-graph instance and its scene-decor handles.
@@ -112,6 +137,10 @@
         // Highlight sets re-evaluated by the node/link style accessors.
         state.highlightNodes = new Set();
         state.highlightLinks = new Set();
+        // edge object → 'in' | 'out', relative to the hovered node. Kept
+        // alongside the set rather than replacing it so the plain "is this
+        // link hot?" question stays a single lookup.
+        state.highlightLinkDir = new Map();
 
         let rawData = null;
 

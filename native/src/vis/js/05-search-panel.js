@@ -62,6 +62,9 @@
         }
 
         function handleNodeClick(event, d) {
+            // A walk in progress owns the canvas — clicking through would
+            // rebuild the solo view and tear down the animation, so wait.
+            if (state.walkActive) { if (event) event.stopPropagation(); return; }
             if (state.pathMode && state.pathSource) {
                 event.stopPropagation();
                 runFindPathTo(d.id);
