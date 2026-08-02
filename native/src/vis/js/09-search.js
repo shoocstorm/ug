@@ -52,7 +52,7 @@
 
             const display = sorted.slice(0, 50);
             state.currentSuggestions = display;
-            // The full match set, not just the fifty shown: "Plot all results"
+            // The full match set, not just the fifty shown: "light up … in graph"
             // draws from this.
             state.searchMatches = q ? sorted : [];
             state.suggestionIndex = -1;

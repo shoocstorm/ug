@@ -179,7 +179,7 @@
             }
             insState.from = 1;
             insState.lastRun = { preset: p.name, args, label: p.name };
-            executeInsQuery();
+            executeInsQuery(true);
         }
 
         function runInsGql() {
@@ -190,14 +190,21 @@
             insEl('ins-args-section').hidden = true;
             insState.from = 1;
             insState.lastRun = { gql, label: 'Custom query' };
-            executeInsQuery();
+            executeInsQuery(true);
         }
 
-        async function executeInsQuery() {
+        async function executeInsQuery(scroll) {
             const run = insState.lastRun;
             if (!run) return;
             const section = insEl('ins-result-section');
             section.hidden = false;
+            // A fresh run (not a page change) brings the result to the top so
+            // the answer is visible without scrolling — the preset list above
+            // can be long, and a first-time user shouldn't have to hunt.
+            if (scroll) {
+                section.classList.remove('collapsed');
+                section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
             insEl('ins-result-label').textContent = run.label;
             insEl('ins-result').innerHTML = '<div class="ins-empty">Running…</div>';
 
@@ -417,6 +424,20 @@
             const filter = insEl('ins-filter');
             if (!filter) return;
             filter.addEventListener('input', renderInsPresets);
+
+            // The GQL console lives at the bottom of the pane; this surfaces it
+            // from the opening blurb so writing a custom query is one click,
+            // not a scroll-and-hunt.
+            const jump = insEl('ins-jump-gql');
+            if (jump) jump.addEventListener('click', () => {
+                const gqlSection = insEl('ins-gql-section');
+                if (gqlSection) {
+                    gqlSection.classList.remove('collapsed');
+                    gqlSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+                const gql = insEl('ins-gql');
+                if (gql) gql.focus();
+            });
 
             const ex = insEl('ins-examples');
             INS_EXAMPLES.forEach(e => {

@@ -18,7 +18,7 @@
         //   state.viewExpanded  the subset of those whose neighbours come too
         //
         // Every interaction just changes those two sets and rebuilds, which
-        // is what makes the filters, the tour and "Plot all results" fall out
+        // is what makes the filters, the tour and "light up … in graph" fall out
         // of the same code path.
 
         const SOLO_THRESHOLD = 10000;     // max(nodes, edges) above this → solo mode
@@ -168,7 +168,7 @@
             rebuildSoloView();
         }
 
-        // "Plot all results": draw a whole set at once, with only the edges
+        // "light up … in graph": draw a whole set at once, with only the edges
         // *between* them. No 1-hop expansion — fifty hits each pulling in a
         // neighbourhood is the hairball this mode exists to avoid. Clicking
         // any of them afterwards expands that one.
@@ -277,7 +277,7 @@
             if (input) { input.focus(); input.select(); }
         }
 
-        // Shared by the two "Plot all results" buttons (keyword + semantic).
+        // Shared by the two "light up … in graph" buttons (keyword + semantic).
         // Hidden entirely outside solo mode: with the whole graph on screen
         // there is nothing to plot.
         function syncPlotAllButton(btn, ids) {
@@ -288,8 +288,8 @@
             }
             const capped = Math.min(ids.length, SOLO_MAX_NODES);
             btn.hidden = false;
-            btn.textContent = `⊞ Plot all results (${formatNumber(capped)})`;
+            btn.textContent = `⊞ light up ${formatNumber(capped)} in graph`;
             btn.title = capped < ids.length
-                ? `Draw the first ${formatNumber(capped)} of ${formatNumber(ids.length)} matches (render budget)`
-                : 'Draw every match on the canvas, with the links between them';
+                ? `Light up the first ${formatNumber(capped)} of ${formatNumber(ids.length)} matches (render budget)`
+                : 'Light up every match on the canvas, with the links between them';
         }
