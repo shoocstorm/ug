@@ -308,7 +308,7 @@ fn raw_tools() -> Value {
                 "properties": {
                     "nodeId": { "oneOf": [ { "type": "string" }, { "type": "array", "items": { "type": "string" }, "minItems": 1, "maxItems": 10 } ], "description": "Direct node id lookup — O(1) access when you already have the id from a prior search. Use instead of 'name' to skip the search step." },
                     "name": { "oneOf": [ { "type": "string" }, { "type": "array", "items": { "type": "string" }, "minItems": 1, "maxItems": 10 } ], "description": "Identifier to look up, e.g. 'resolveDbAndRoot' or a fragment like 'resolve'. Pass an array of up to 10 names to resolve several symbols in ONE call (e.g. every function you're about to edit)." },
-                    "nodeTypes": { "type": "array", "items": { "type": "string" }, "description": "Restrict to node types (case-insensitive). Common: Function, Class, Interface, File, Concept." },
+                    "nodeTypes": { "type": "array", "items": { "type": "string" }, "description": "Restrict to node types (case-insensitive). Common: Function, Class, Interface, Variable, File, Concept." },
                     "filePrefix": { "type": "string", "description": "Only symbols whose file path starts with this repo-relative prefix, e.g. 'src/auth/'." },
                     "limit": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Max hits to return (default 20)." },
                     "includeDocs": { "type": "boolean", "description": "Also match docstrings, not just names (default false). Use when the concept may be described in prose rather than named — e.g. \"cache invalidation\" when the function is called `drop_stale`. Docstring hits rank below all name hits." }

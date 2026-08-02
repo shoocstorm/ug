@@ -34,7 +34,7 @@ pub const IMPACT_EDGES: &str = "Calls|References|Imports|Extends|Implements|Over
 /// Markdown headings are indexed as `Concept` nodes — 362 of 2280 in this
 /// repo — so a statistic that forgets to exclude them is wrong on any
 /// project with docs. `File` and `Folder` are containers, not symbols.
-pub const CODE_TYPES: &str = "['Function', 'Class', 'Interface', 'Constant']";
+pub const CODE_TYPES: &str = "['Function', 'Class', 'Interface', 'Constant', 'Variable']";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Category {

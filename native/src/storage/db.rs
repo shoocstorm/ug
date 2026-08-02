@@ -48,9 +48,15 @@ const META_FILE: &str = "ug-meta.json";
 /// nothing for every typed lookup. Rejecting it outright and asking for
 /// a reindex is the only honest option.
 ///
+/// Bumped to 3 for the `Variable` node label. A v2 store filed every data
+/// binding — Java fields, module-level assignments — under `Function`, so
+/// the same `MATCH (n:Function)` returns a different answer depending on
+/// when the store was written. That is the quiet-wrongness case below, not
+/// an unreadability one, and a reindex is what resolves it.
+///
 /// Bump this whenever the stored encoding changes in a way that makes an
 /// older directory unreadable or, worse, quietly wrong.
-const STORE_FORMAT_VERSION: u32 = 2;
+const STORE_FORMAT_VERSION: u32 = 3;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(default)]

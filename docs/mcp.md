@@ -16,7 +16,7 @@ UltraGraph supports indexing two types of knowledge bases (or a mixed combinatio
 
 The type is automatically detected during indexing based on the content composition:
 - **Docs:** Mostly `Document` and `Concept` nodes from markdown/PDF/documentation files
-- **Code:** Mostly `Function`, `Class`, `Interface`, and other code structure nodes
+- **Code:** Mostly `Function`, `Class`, `Interface`, `Variable`, and other code structure nodes
 - **Mixed:** Significant presence of both documentation and code nodes
 
 The UI displays the detected KB type on each project card in the Knowledge Base Manager.
@@ -333,7 +333,7 @@ find_usages: { nodeId: "file-101", hops: 1, edgeTypes: ["imports"] }
 |-----------|------|----------|-------------|
 | `nodeId` | string \| string[] | ❌* | Direct node id lookup — O(1) when you already have the id from a prior search. |
 | `name` | string \| string[] | ❌* | Identifier or fragment, e.g. `resolveDbAndRoot` or `resolve`. Array of up to 10 resolves several in one call. |
-| `nodeTypes` | string[] | ❌ | Restrict to node types: Function, Class, Interface, File, Concept. |
+| `nodeTypes` | string[] | ❌ | Restrict to node types: Function, Class, Interface, Variable, File, Concept. |
 | `filePrefix` | string | ❌ | Only symbols under this repo-relative path prefix, e.g. `src/auth/`. |
 | `limit` | integer (1-100) | ❌ | Max hits (default 20). |
 

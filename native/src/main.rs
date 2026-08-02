@@ -1091,7 +1091,7 @@ fn print_find_symbols_help() {
     println!("  {C_CYAN}Direct nodeId lookup{C_RESET} (O(1)): if input contains ':' it's treated as a nodeId.");
     println!();
     println!("{C_BOLD}Options:{C_RESET}");
-    println!("  {C_CYAN}--node-type <type>{C_RESET}   Restrict to node type (repeatable; e.g. Function, Class, Interface)");
+    println!("  {C_CYAN}--node-type <type>{C_RESET}   Restrict to node type (repeatable; e.g. Function, Class, Interface, Variable)");
     println!("  {C_CYAN}--file-prefix <p>{C_RESET}    Only symbols under this file path prefix");
     println!("  {C_CYAN}-k, --limit <n>{C_RESET}      Max hits per query (default 20)");
     println!("  {C_CYAN}--include-docs{C_RESET}       Also match docstrings, not just names");

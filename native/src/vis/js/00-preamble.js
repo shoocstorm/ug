@@ -2,7 +2,7 @@
             from './ug-vis.bundle.js';
 
         const config = {
-            nodeRadius: { File: 10, Interface: 7, Function: 6, Class: 8, Dependency: 5, Config: 8, Route: 7, Default: 6 },
+            nodeRadius: { File: 10, Interface: 7, Function: 6, Class: 8, Dependency: 5, Config: 8, Route: 7, Constant: 5, Variable: 5, Default: 6 },
             // Two-family "ink" palette: warm oranges carry the structural
             // spine (folders, files, deps), steel blues carry code symbols —
             // mirroring the orange-trunk / blue-scatter reading of the
@@ -15,6 +15,11 @@
                 Class: '#2f5f96',
                 Dependency: '#fb923c',
                 Config: '#f59e0b',
+                // Data, not behaviour — the palest blues in the code family,
+                // so a wall of fields never out-shouts the functions on top
+                // of them.
+                Constant: '#a7c6e3',
+                Variable: '#b8cfe6',
                 // Routes are entry points, not internals — they take the
                 // warm structural family rather than the code blues.
                 Route: '#fbbf24',

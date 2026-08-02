@@ -385,7 +385,7 @@ Source files
 2. **Graph** (`graph.rs`):
    - Reads `IndexResult` (parsed in memory)
    - Pass 0: Creates folder nodes + folder hierarchy edges (`Contains`)
-   - Pass 1: Creates file nodes + symbol nodes (Function, Class, Interface, Concept, Constant, Config, Dependency)
+   - Pass 1: Creates file nodes + symbol nodes (Function, Class, Interface, Variable, Concept, Constant, Config, Dependency)
    - Resolves cross-file imports: joins the import path against source file's directory, tries extension permutations, falls back to basename matching
    - Creates edges: `Calls`, `Extends`, `Implements`, `References`, `Contains`, `Imports`, `Exports`, `Requires`, `Uses`, `DependsOn`
    - Output: `graph.json` (write-once, overwritten on re-graph)

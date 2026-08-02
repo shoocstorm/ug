@@ -529,8 +529,13 @@ fn extract_symbol_from_node(
         // `lexical_declaration` was absent here, and `variable_declaration`
         // has no `name` field to read — so no `const`/`let`/`var` binding
         // ever became a symbol. That is the *common* shape of a function in
-        // this language: `graph.rs` maps the `variable` kind onto a Function
-        // node precisely because of it, and had nothing to map.
+        // this language, so it has to be one.
+        //
+        // Which of the two a binding is gets decided *here*, off the
+        // initializer, rather than downstream off the kind string. `graph.rs`
+        // used to call every `variable` a Function to cover the arrow case,
+        // which made a Java field a Function too; it can only stop doing that
+        // if this indexer says which bindings are actually callable.
         //
         // Restricted to top level on purpose. The walk descends into every
         // body, so emitting a symbol per declaration anywhere would turn
@@ -545,15 +550,16 @@ fn extract_symbol_from_node(
                 let Some(name) = get_node_text(decl.child_by_field_name("name"), source) else {
                     continue;
                 };
+                let is_fn = binds_a_function(&decl);
                 // `const handler = () => …` is the common shape of a function
                 // in this language, so its body's call sites matter as much
                 // as a `function` declaration's.
                 let (calls, call_refs, uses) = extract_calls(&decl, source, ctx, owner, &[]);
                 out.push(Symbol {
-                    id: format!("var:{}:{}", start, name),
+                    id: format!("{}:{}:{}", if is_fn { "fn" } else { "var" }, start, name),
                     qualified_name: Some(ctx.scope.qualify(&name)),
                     name,
-                    kind: "variable".to_string(),
+                    kind: if is_fn { "function" } else { "variable" }.to_string(),
                     file: String::new(),
                     start_line: start,
                     end_line: end,
@@ -897,6 +903,35 @@ fn is_top_level(node: &Node) -> bool {
     }
 }
 
+/// Does this `variable_declarator` bind a callable rather than data?
+///
+/// `const handler = () => …` and `const run = async function () {…}` are
+/// functions that happen to be spelled as bindings; `const MAX = 3` and
+/// `let client = new Client()` are not. The distinction is the whole reason
+/// the graph can stop treating every binding as callable — see the caller.
+///
+/// Type assertions are unwrapped (`const f = (() => …) as Handler`), since
+/// the assertion changes the declared type, not what the value is.
+fn binds_a_function(decl: &Node) -> bool {
+    let Some(mut value) = decl.child_by_field_name("value") else {
+        return false;
+    };
+    loop {
+        match value.kind() {
+            "arrow_function" | "function_expression" | "function" | "generator_function" => {
+                return true
+            }
+            "as_expression" | "satisfies_expression" | "parenthesized_expression" => {
+                let Some(inner) = value.named_child(0) else {
+                    return false;
+                };
+                value = inner;
+            }
+            _ => return false,
+        }
+    }
+}
+
 /// The initialiser of a defaulted parameter, i.e. whatever follows the `=`.
 ///
 /// There is no `default` field to read: the grammar labels the `=` token
@@ -1209,12 +1244,28 @@ function greet(name: string, times = 1): string {
 
     #[test]
     fn a_top_level_arrow_const_becomes_a_symbol() {
-        // The common shape of a function in this language. `graph.rs` maps
-        // the `variable` kind onto a Function node precisely for it, and
-        // until now had nothing to map: no const binding was ever emitted.
+        // The common shape of a function in this language, so it is emitted
+        // as one — the graph no longer has to guess from the `variable` kind.
         let (symbols, _, _) = parse("export const handler = (n: number) => n + 1;\n");
         let v = find(&symbols, "handler");
-        assert_eq!(v.kind, "variable");
+        assert_eq!(v.kind, "function");
+    }
+
+    #[test]
+    fn a_top_level_data_const_is_not_a_function() {
+        let (symbols, _, _) = parse("export const client = new Client();\nlet count = 0;\n");
+        assert_eq!(find(&symbols, "client").kind, "variable");
+        assert_eq!(find(&symbols, "count").kind, "variable");
+    }
+
+    #[test]
+    fn a_function_expression_and_an_asserted_arrow_are_both_functions() {
+        let (symbols, _, _) = parse(
+            "const run = async function () { return 1; };\n\
+             const typed = ((n: number) => n) as Handler;\n",
+        );
+        assert_eq!(find(&symbols, "run").kind, "function");
+        assert_eq!(find(&symbols, "typed").kind, "function");
     }
 
     #[test]

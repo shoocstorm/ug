@@ -318,10 +318,24 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
                     "function" | "function_declaration" | "method_definition" => GraphNodeType::Function,
                     "class" | "class_declaration" => GraphNodeType::Class,
                     "interface" | "interface_declaration" => GraphNodeType::Interface,
-                    // `variable` stays Function on purpose: in JS/TS the
-                    // common case is `const foo = () => ...` — a function
-                    // bound to a variable.
-                    "variable" | "variable_declaration" => GraphNodeType::Function,
+                    // A data binding is not callable. `private final Bot
+                    // bot;` is a field, and calling it a Function made every
+                    // "how many functions" statistic and every function-typed
+                    // filter wrong. The one shape that genuinely *is* a
+                    // function — JS/TS `const foo = () => ...` — is settled
+                    // upstream: the TypeScript indexer emits kind `function`
+                    // for a declarator with a function initializer, so it
+                    // never reaches this arm.
+                    //
+                    // `MAX_RETRIES` still reads as a constant by name, the
+                    // same rule Python's module-level bindings get below.
+                    "variable" | "variable_declaration" => {
+                        if crate::indexer::scope::looks_like_constant(simple_name(&sym.name)) {
+                            GraphNodeType::Constant
+                        } else {
+                            GraphNodeType::Variable
+                        }
+                    }
                     "type" | "type_alias_declaration" => GraphNodeType::Interface,
                     // Rust kinds — structs/enums map to Class, traits and
                     // type aliases map to Interface; macros fall through to
@@ -331,10 +345,13 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
                     "constant" => GraphNodeType::Constant,
                     // A Python module-level binding is whatever its name
                     // says it is. `MAX_RETRIES = 3` is a constant; `app =
-                    // Flask(__name__)` is not, and the catch-all below keeps
-                    // treating it as callable.
-                    "assignment" if crate::indexer::scope::looks_like_constant(&sym.name) => {
-                        GraphNodeType::Constant
+                    // Flask(__name__)` is a variable. Neither is a function.
+                    "assignment" => {
+                        if crate::indexer::scope::looks_like_constant(simple_name(&sym.name)) {
+                            GraphNodeType::Constant
+                        } else {
+                            GraphNodeType::Variable
+                        }
                     }
                     _ => GraphNodeType::Function,
                 }
@@ -1109,6 +1126,16 @@ fn symbol_node_ids(file: &crate::types::FileNode, normalized_file_path: &str) ->
         });
     }
     out
+}
+
+/// The last segment of a display name: `PlaylistCmd.bot` -> `bot`.
+///
+/// Members carry their owning type as a prefix so five different `execute`
+/// methods stay distinguishable, but a naming-convention test has to run on
+/// the identifier alone — `Config.MAX_RETRIES` is not screaming-case, and
+/// `MAX_RETRIES` is.
+fn simple_name(display: &str) -> &str {
+    display.rsplit('.').next().unwrap_or(display)
 }
 
 /// Parse a markdown heading kind like `heading_3` into its level (1-6).

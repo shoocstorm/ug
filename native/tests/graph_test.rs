@@ -528,3 +528,97 @@ fn test_detect_cycles_empty_graph() {
     assert!(!result.has_cycles);
     assert!(result.cycles.is_empty());
 }
+// ── Data bindings are not functions ────────────────────────────────────
+//
+// `private final Bot bot;` was landing in the graph as a Function, which
+// made every function-typed filter and every "how many functions" count
+// wrong on any Java project. These pin the classification for each shape a
+// binding takes, in both directions.
+
+#[test]
+fn a_java_field_is_a_variable_not_a_function() {
+    let dir = TempDir::new().unwrap();
+    let dir_path = dir.path().to_string_lossy().to_string();
+    fs::write(
+        dir.path().join("PlaylistCmd.java"),
+        "public class PlaylistCmd {\n\
+         \x20   private final Bot bot;\n\
+         \x20   public static final int MAX_ITEMS = 20;\n\
+         \x20   public void execute() { }\n\
+         }\n",
+    )
+    .unwrap();
+
+    let graph: GraphData =
+        serde_json::from_str(&build_graph(index(dir_path))).unwrap();
+    let ty = |name: &str| {
+        graph
+            .nodes
+            .iter()
+            .find(|n| n.name == name)
+            .unwrap_or_else(|| panic!("no node named {name}"))
+            .node_type
+            .clone()
+    };
+
+    assert_eq!(ty("PlaylistCmd.bot"), GraphNodeType::Variable);
+    // A screaming-case field is still a constant, judged on the identifier
+    // alone rather than the `Owner.NAME` display form.
+    assert_eq!(ty("PlaylistCmd.MAX_ITEMS"), GraphNodeType::Constant);
+    assert_eq!(ty("PlaylistCmd.execute"), GraphNodeType::Function);
+}
+
+#[test]
+fn a_ts_arrow_const_stays_a_function_but_a_data_const_does_not() {
+    let dir = TempDir::new().unwrap();
+    let dir_path = dir.path().to_string_lossy().to_string();
+    fs::write(
+        dir.path().join("mod.ts"),
+        "export const handler = (n: number) => n + 1;\n\
+         export const client = new Client();\n\
+         export const MAX_RETRIES = 3;\n",
+    )
+    .unwrap();
+
+    let graph: GraphData =
+        serde_json::from_str(&build_graph(index(dir_path))).unwrap();
+    let ty = |name: &str| {
+        graph
+            .nodes
+            .iter()
+            .find(|n| n.name == name)
+            .unwrap_or_else(|| panic!("no node named {name}"))
+            .node_type
+            .clone()
+    };
+
+    assert_eq!(ty("handler"), GraphNodeType::Function);
+    assert_eq!(ty("client"), GraphNodeType::Variable);
+    assert_eq!(ty("MAX_RETRIES"), GraphNodeType::Constant);
+}
+
+#[test]
+fn a_python_module_binding_is_a_variable_unless_it_reads_as_a_constant() {
+    let dir = TempDir::new().unwrap();
+    let dir_path = dir.path().to_string_lossy().to_string();
+    fs::write(
+        dir.path().join("app.py"),
+        "MAX_RETRIES = 3\napp = Flask(__name__)\n",
+    )
+    .unwrap();
+
+    let graph: GraphData =
+        serde_json::from_str(&build_graph(index(dir_path))).unwrap();
+    let ty = |name: &str| {
+        graph
+            .nodes
+            .iter()
+            .find(|n| n.name == name)
+            .unwrap_or_else(|| panic!("no node named {name}"))
+            .node_type
+            .clone()
+    };
+
+    assert_eq!(ty("MAX_RETRIES"), GraphNodeType::Constant);
+    assert_eq!(ty("app"), GraphNodeType::Variable);
+}

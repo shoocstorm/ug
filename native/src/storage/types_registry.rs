@@ -30,6 +30,7 @@ pub const ALL_NODE_LABELS: &[&str] = &[
     "Dependency",
     "Config",
     "Constant",
+    "Variable",
     "Route",
     "Unknown",
 ];
@@ -66,6 +67,7 @@ pub fn node_label(s: &str) -> &'static str {
         "dependency" => "Dependency",
         "config" => "Config",
         "constant" => "Constant",
+        "variable" => "Variable",
         "route" => "Route",
         _ => "Unknown",
     }

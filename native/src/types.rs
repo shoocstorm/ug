@@ -375,6 +375,12 @@ pub enum GraphNodeType {
     Dependency,
     Config,
     Constant,
+    /// A named data binding that is not callable — a Java field, a
+    /// module-level `let x = 1`. Distinct from `Function` because "how many
+    /// functions does this class have" and "what does this call" are both
+    /// wrong answers when a field is counted as code you can invoke, and
+    /// distinct from `Constant` because a mutable field is not a constant.
+    Variable,
     /// A network entry point — an HTTP endpoint declared by mapping
     /// annotations. Distinct from the handler `Function` it points at: the
     /// route is what callers of the *system* know, and it is what people

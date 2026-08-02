@@ -96,6 +96,7 @@ pub fn node_type_str(t: &GraphNodeType) -> &'static str {
         GraphNodeType::Dependency => "Dependency",
         GraphNodeType::Config => "Config",
         GraphNodeType::Constant => "Constant",
+        GraphNodeType::Variable => "Variable",
         GraphNodeType::Route => "Route",
     }
 }

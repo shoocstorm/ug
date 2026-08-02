@@ -428,6 +428,8 @@
             Interface: '<path d="M12 3.2 20.8 12 12 20.8 3.2 12z" stroke-dasharray="3.2 2.6"/>',
             // locked value
             Constant: '<rect x="5" y="10.5" width="14" height="9" rx="2"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5"/>',
+            // an open box — a value slot that can be refilled
+            Variable: '<rect x="4.5" y="9.5" width="15" height="10" rx="2"/><path d="M8.5 9.5V7.5a3.5 3.5 0 0 1 7 0"/>',
             // page with a folded corner
             File: '<path d="M14 3.5H7.5A1.5 1.5 0 0 0 6 5v14a1.5 1.5 0 0 0 1.5 1.5h9A1.5 1.5 0 0 0 18 19V7.5z"/><path d="M14 3.5V7a.5.5 0 0 0 .5.5H18"/>',
             Folder: '<path d="M3.5 7.5A1.5 1.5 0 0 1 5 6h4l2 2.5h8a1.5 1.5 0 0 1 1.5 1.5v7.5A1.5 1.5 0 0 1 19 19H5a1.5 1.5 0 0 1-1.5-1.5z"/>',
