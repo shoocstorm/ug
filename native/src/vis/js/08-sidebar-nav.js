@@ -494,6 +494,54 @@
             });
         }
 
+        // Reflect what is actually on screen during an immersive mode. In a
+        // walk the visible set is the reached frontier; on a tour it is the
+        // route + its neighbourhood. Otherwise the counts revert to the whole
+        // graph. Called throttled from the overlay loop so it tracks both
+        // modes without each one having to hook in.
+        function refreshModeLegend() {
+            const body = document.getElementById('legend-body');
+            if (!body) return;
+            let ids = null, modeLabel = null;
+            if (state.walkActive) { ids = state.walkReached; modeLabel = 'walk'; }
+            else if (typeof tourState !== 'undefined' && tourState.active && tourState.routeIds.size) {
+                ids = new Set([...tourState.routeIds, ...(tourState.nearIds || [])]);
+                modeLabel = 'tour';
+            }
+            const rows = body.querySelectorAll('.legend-row');
+            if (!ids) {
+                const counts = new Map();
+                state.graph.nodes.forEach(n => counts.set(n.group, (counts.get(n.group) || 0) + 1));
+                rows.forEach(row => {
+                    row.querySelector('.count').textContent = counts.get(row.dataset.type) || 0;
+                    row.classList.remove('zero');
+                });
+                setLegendModeNote(null);
+                return;
+            }
+            const counts = new Map();
+            let total = 0;
+            ids.forEach(id => {
+                const n = state.nodeById && state.nodeById.get(id);
+                if (!n) return;
+                counts.set(n.group, (counts.get(n.group) || 0) + 1);
+                total++;
+            });
+            rows.forEach(row => {
+                const c = counts.get(row.dataset.type) || 0;
+                row.querySelector('.count').textContent = c;
+                row.classList.toggle('zero', c === 0);
+            });
+            setLegendModeNote(`${modeLabel} · ${total} node${total === 1 ? '' : 's'} on screen`);
+        }
+
+        function setLegendModeNote(text) {
+            const el = document.getElementById('legend-mode-note');
+            if (!el) return;
+            el.textContent = text || '';
+            el.style.display = text ? '' : 'none';
+        }
+
         // ─── Orientation gizmo + distance-adaptive labels ────
 
         const GIZMO_AXES = [
@@ -537,6 +585,8 @@
                 // camera so a zoomed-out view stays clean and they reappear as you
                 // move in. Throttled.
                 if (frame % 8 === 0) updateAdaptiveLabels(cam);
+                // Legend counts track the on-screen set during a walk or tour.
+                if (frame % 12 === 0) refreshModeLegend();
             };
             requestAnimationFrame(tick);
         }

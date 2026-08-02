@@ -280,6 +280,11 @@
         .walk-icon svg { width: 15px; height: 15px; }
         .walk-icon:hover { color: #fff; background: rgba(255, 255, 255, .09); }
         .walk-icon.danger:hover { color: #fca5a5; background: rgba(248, 113, 113, .12); }
+        .walk-icon.active { color: var(--accent); background: rgba(232, 196, 140, .12); }
+        .walk-icon.spinning svg { animation: walk-spin-svg 1.2s linear infinite; }
+        @keyframes walk-spin-svg {
+            to { transform: rotate(360deg); }
+        }
 
         /* One segment per hop, like the tour deck. */
         .walk-o-progress { display: flex; gap: 5px; margin-bottom: 10px; flex-shrink: 0; }
@@ -423,6 +428,22 @@
             opacity: 0 !important;
             pointer-events: none !important;
         }
+
+        /* Legend mode note + zero-count rows: during a walk/tour the legend
+           reflects what's on screen, so a header line names the mode + total
+           and types with nothing on screen recede. */
+        .legend-mode-note {
+            margin: 4px 2px 0;
+            padding-top: 5px;
+            border-top: 1px solid rgba(255, 255, 255, 0.07);
+            font-size: 9px;
+            font-weight: 600;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            color: var(--accent);
+        }
+        .legend-row.zero { opacity: 0.32; }
+        .legend-row.zero .count { color: var(--text-dim); }
 
         .walk-edge-types {
             display: flex;

@@ -161,6 +161,8 @@
             bind('walk-o-exit', () => exitWalk());
             bind('walk-o-close', () => exitWalk());
             bind('walk-o-speed', () => cycleWalkSpeed());
+            bind('walk-o-spin', toggleWalkSpin);
+            bind('walk-o-info', toggleWalkInfo);
 
             wireWalkDrag();
 
@@ -175,6 +177,8 @@
                 else if (e.key === 'ArrowRight') { e.preventDefault(); nextHop(); }
                 else if (e.key === ' ' || e.key === 'Spacebar') { e.preventDefault(); togglePlayWalk(); }
                 else if (e.key === 's' || e.key === 'S') { e.preventDefault(); cycleWalkSpeed(); }
+                else if (e.key === 'r' || e.key === 'R') { e.preventDefault(); toggleWalkSpin(); }
+                else if (e.key === 'd' || e.key === 'D') { e.preventDefault(); toggleWalkInfo(); }
             });
 
             // Seed follows the current selection (see syncWalkSeed, wired
@@ -380,6 +384,17 @@
             document.body.classList.add('walk-active');
 
             enterWalkImmersive();
+            // Pre-fill the details panel with the seed now, so the info
+            // button on the card has content to toggle. Suppress history
+            // (a walk start isn't a navigation) and focus re-anchoring (the
+            // walk owns the camera); the immersive entry then hides it again.
+            state.suppressHistory = true;
+            state.suppressFocusReanchor = true;
+            handleClick(null, seedNode);
+            state.suppressFocusReanchor = false;
+            state.suppressHistory = false;
+            const walkInfoEl = document.getElementById('info');
+            if (walkInfoEl) walkInfoEl.classList.remove('visible');
             buildWalkSegments(layers.length);
             restoreWalkPosition();
             showWalkOverlay();
@@ -468,6 +483,9 @@
             walkPlay.index = h;
             setOverlayPhase('ignite', h);
             updateWalkOverlay();
+            // Last hop reached — celebrate by turning the auto-rotate on, so
+            // the finished walk keeps turning while the user looks at it.
+            if (h >= walkPlay.layers.length - 1) setWalkSpin(true);
             scheduleAutoAdvance();
         }
 
@@ -541,6 +559,34 @@
                     : '<path d="M8 5.2c0-.9 1-1.4 1.7-.9l9 6.8c.6.4.6 1.4 0 1.8l-9 6.8c-.7.5-1.7 0-1.7-.9z"/>'; // ▶
             }
             if (btn) btn.setAttribute('aria-label', p ? 'Pause' : 'Play');
+        }
+
+        // Auto-rotate on/off during a walk, keeping the viewbar toggle and the
+        // walk card's spin button in step.
+        function syncWalkSpinButton() {
+            const btn = walkEl('walk-o-spin');
+            if (!btn) return;
+            btn.classList.toggle('active', state.autoSpin);
+            btn.classList.toggle('spinning', state.autoSpin);
+        }
+        function setWalkSpin(on) {
+            state.autoSpin = on;
+            if (typeof applyAutoSpin === 'function') applyAutoSpin();
+            if (typeof syncSpinButton === 'function') syncSpinButton();
+            syncWalkSpinButton();
+        }
+        function toggleWalkSpin() {
+            setWalkSpin(!state.autoSpin);
+        }
+
+        // Show/hide the (already populated) details panel while a walk is live.
+        function toggleWalkInfo() {
+            const info = document.getElementById('info');
+            if (!info) return;
+            const show = !info.classList.contains('visible');
+            info.classList.toggle('visible', show);
+            const btn = walkEl('walk-o-info');
+            if (btn) btn.classList.toggle('active', show);
         }
 
         function exitWalk(quiet) {
@@ -708,6 +754,7 @@
                 if (typeof applyAutoSpin === 'function') applyAutoSpin();
                 if (typeof syncSpinButton === 'function') syncSpinButton();
             }
+            syncWalkSpinButton();
             if (state.showBoundary) {
                 state.showBoundary = false;
                 if (typeof applyBoundaryVisibility === 'function') applyBoundaryVisibility();
@@ -723,11 +770,12 @@
             const info = document.getElementById('info');
             if (sidebar && r.sidebarCollapsed === false) sidebar.classList.remove('collapsed');
             if (info && r.infoVisible === false) info.classList.remove('visible');
-            if (r.autoSpin) {
-                state.autoSpin = true;
-                if (typeof applyAutoSpin === 'function') applyAutoSpin();
-                if (typeof syncSpinButton === 'function') syncSpinButton();
-            }
+            // Restore the pre-walk spin state exactly — a walk may have turned
+            // auto-rotate on at the end, and it must not leak out of the walk.
+            state.autoSpin = !!r.autoSpin;
+            if (typeof applyAutoSpin === 'function') applyAutoSpin();
+            if (typeof syncSpinButton === 'function') syncSpinButton();
+            syncWalkSpinButton();
             if (r.showBoundary) {
                 state.showBoundary = true;
                 if (typeof applyBoundaryVisibility === 'function') applyBoundaryVisibility();
