@@ -86,7 +86,10 @@
             neighborCursor: -1,     // index used by Tab/Shift+Tab neighbour stepping
             neighborOf: null,       // node id the cursor belongs to
             _labelDist: 340,        // world distance beyond which labels auto-hide
-            showBoundary: true,     // dashed boundary box + corners + face labels
+            // Off by default: the cube and its face digits are orientation
+            // furniture, and they cut across the graph on every first look.
+            // The viewbar's Box button brings them back.
+            showBoundary: false,    // dashed boundary box + corners + face labels
             autoSpin: false         // camera auto-rotation
         };
 

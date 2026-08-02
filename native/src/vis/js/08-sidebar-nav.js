@@ -398,8 +398,13 @@
                 b.classList.toggle('active', b.dataset.view === id));
         }
 
+        // The single door the box goes in and out of — the viewbar toggle and
+        // the tour's save/restore both come through here. Switching it on
+        // rebuilds from the current layout rather than revealing whatever
+        // cube was last built, which would enclose the wrong region.
         function applyBoundaryVisibility() {
-            if (boundaryCube) boundaryCube.visible = state.showBoundary;
+            if (state.showBoundary) updateBoundaryCube();
+            else disposeBoundaryCube();
         }
 
         function applyAutoSpin() {

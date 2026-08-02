@@ -625,8 +625,28 @@
             return sprite;
         }
 
+        // Drops the cube and frees its GPU resources. It is ~30 meshes plus
+        // six label textures, and it is hidden by default, so it is built on
+        // demand rather than kept around invisible.
+        function disposeBoundaryCube() {
+            if (!boundaryCube || !Graph) return;
+            Graph.scene().remove(boundaryCube);
+            boundaryCube.traverse(o => {
+                if (o.geometry) o.geometry.dispose();
+                if (o.material) {
+                    if (o.material.map) o.material.map.dispose();
+                    o.material.dispose();
+                }
+            });
+            boundaryCube = null;
+        }
+
         function updateBoundaryCube() {
             if (!Graph) return;
+            // Nothing keeps the box in sync while it is off, so there is no
+            // point building it — applyBoundaryVisibility() rebuilds from the
+            // current layout at the moment it is switched on.
+            if (!state.showBoundary) { disposeBoundaryCube(); return; }
             const nodes = state.view.nodes.filter(n => Number.isFinite(n.x));
             if (!nodes.length) return;
             let minX = Infinity, maxX = -Infinity;
@@ -653,17 +673,7 @@
             const cz = (minZ + maxZ) / 2;
             // Dispose the previous cube's GPU resources before discarding it —
             // this function now rebuilds repeatedly while the layout settles.
-            if (boundaryCube) {
-                Graph.scene().remove(boundaryCube);
-                boundaryCube.traverse(o => {
-                    if (o.geometry) o.geometry.dispose();
-                    if (o.material) {
-                        if (o.material.map) o.material.map.dispose();
-                        o.material.dispose();
-                    }
-                });
-                boundaryCube = null;
-            }
+            disposeBoundaryCube();
 
             const group = new THREE.Group();
 
