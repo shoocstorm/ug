@@ -441,6 +441,65 @@
             </div>
         </div>
 
+        <!-- Graph Walk: floating playback card (shown while a walk runs).
+             Mirrors the Guided Tour overlay — draggable by its header,
+             transport deck with prev / play / next + speed + exit. -->
+        <div id="walk-overlay" aria-live="polite">
+            <div class="walk-card">
+                <div class="walk-top" id="walk-o-drag">
+                    <span class="walk-grip" aria-hidden="true"><i></i><i></i><i></i></span>
+                    <span class="walk-badge">Graph Walk</span>
+                    <span class="walk-o-seed" id="walk-o-seed"></span>
+                    <span class="walk-counter" id="walk-o-counter"></span>
+                    <div class="walk-tools">
+                        <button class="walk-icon danger" id="walk-o-close" title="Exit walk (Esc)" type="button">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1"
+                                stroke-linecap="round">
+                                <path d="M6 6l12 12M18 6 6 18" />
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+                <div class="walk-o-progress" id="walk-o-progress"></div>
+                <div id="walk-o-stage">
+                    <div class="walk-o-hop-line">
+                        <span class="walk-o-hop" id="walk-o-hop"></span>
+                        <span class="walk-o-phase" id="walk-o-phase"></span>
+                    </div>
+                    <div class="walk-o-edges" id="walk-o-edges"></div>
+                    <div class="walk-o-legend" id="walk-o-legend"></div>
+                    <div class="walk-o-totals" id="walk-o-totals"></div>
+                </div>
+                <div class="walk-controls">
+                    <div class="walk-controls-side left">
+                        <button class="walk-speed" id="walk-o-speed" title="Playback speed (S)" type="button">1×</button>
+                    </div>
+                    <div class="walk-transport">
+                        <button class="walk-tbtn" id="walk-o-prev" title="Previous hop (←)" aria-label="Previous hop" type="button">
+                            <svg viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M7 5.5a1 1 0 0 1 2 0v13a1 1 0 0 1-2 0z"/>
+                                <path d="M18.4 5.9v12.2c0 .8-.9 1.3-1.6.9l-8.5-6.1a1.1 1.1 0 0 1 0-1.8l8.5-6.1c.7-.4 1.6 0 1.6.9z"/>
+                            </svg>
+                        </button>
+                        <button class="walk-tbtn play" id="walk-o-play" title="Play / pause (space)" aria-label="Play" type="button">
+                            <svg viewBox="0 0 24 24" fill="currentColor" id="walk-o-play-icon">
+                                <path d="M8 5.2c0-.9 1-1.4 1.7-.9l9 6.8c.6.4.6 1.4 0 1.8l-9 6.8c-.7.5-1.7 0-1.7-.9z"/>
+                            </svg>
+                        </button>
+                        <button class="walk-tbtn" id="walk-o-next" title="Next hop (→)" aria-label="Next hop" type="button">
+                            <svg viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M15 5.5a1 1 0 0 1 2 0v13a1 1 0 0 1-2 0z"/>
+                                <path d="M5.6 5.9v12.2c0 .8.9 1.3 1.6.9l8.5-6.1a1.1 1.1 0 0 0 0-1.8L7.2 5c-.7-.4-1.6 0-1.6.9z"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="walk-controls-side right">
+                        <button class="walk-exit" id="walk-o-exit" type="button">Exit</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Navigation / breadcrumb bar (visible while exploring a node) -->
         <div id="navbar" class="canvas-overlay">
             <button class="nav-btn" id="nav-back" title="Back (Backspace)" disabled>
@@ -917,12 +976,13 @@
 
                         <!-- Hops + direction -->
                         <div class="walk-row">
-                            <span class="walk-field-label">Hops</span>
+                            <span class="walk-field-label">Max Hop</span>
                             <div class="walk-hops">
                                 <button class="walk-hop-btn" data-hops="1" type="button">1</button>
                                 <button class="walk-hop-btn" data-hops="2" type="button">2</button>
                                 <button class="walk-hop-btn active" data-hops="3" type="button">3</button>
                                 <button class="walk-hop-btn" data-hops="4" type="button">4</button>
+                                <button class="walk-hop-btn" data-hops="5" type="button">5</button>
                             </div>
                             <div class="walk-dir">
                                 <button class="walk-dir-btn active" data-dir="outbound" type="button" title="What the seed depends on">Out</button>
@@ -953,23 +1013,26 @@
                                 </svg>
                                 Walk the graph
                             </button>
-                            <button id="walk-exit" type="button" class="walk-exit">Exit</button>
                         </div>
                         <div class="walk-status" id="walk-status"></div>
+                    </div>
+                </div>
 
-                        <!-- Hop progress -->
-                        <div class="walk-progress" id="walk-progress" hidden>
-                            <div class="walk-progress-track">
-                                <div class="walk-progress-bar" id="walk-progress-bar"></div>
-                            </div>
-                            <span class="walk-progress-label" id="walk-progress-label"></span>
-                        </div>
-
-                        <!-- Live readout -->
-                        <div class="walk-readout" id="walk-readout">
-                            <div class="walk-legend" id="walk-legend"></div>
-                            <div class="walk-layers" id="walk-layers"></div>
-                            <div class="walk-totals" id="walk-totals"></div>
+                <!-- Recent Walks: replay without re-walking. Mirrors the
+                     Tour history — the whole computed walk (seed + layers)
+                     is kept verbatim so a replay just re-runs the animation. -->
+                <div class="section" id="walk-history" hidden>
+                    <div class="section-header">
+                        <span class="label">Recent Walks</span>
+                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="6 9 12 15 18 9" />
+                        </svg>
+                    </div>
+                    <div class="section-body">
+                        <div class="whist-list" id="walk-history-list"></div>
+                        <div class="whist-foot">
+                            <span class="whist-hint">Click a walk to replay it — no recompute.</span>
+                            <button class="whist-clear" id="walk-history-clear" type="button">Clear all</button>
                         </div>
                     </div>
                 </div>

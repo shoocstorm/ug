@@ -105,6 +105,7 @@
                 state.discoverSub = name;
                 moveGlider();
                 if (name === 'tour') renderTourHistory();
+                if (name === 'walk') renderWalkHistory();
                 // Presets load on first reveal, not at boot — the pane is one
                 // of four and most sessions never open it.
                 if (name === 'insights') loadInsights();
@@ -138,6 +139,7 @@
                 if (name === 'discover' && state.syncDiscoverGlider) {
                     requestAnimationFrame(state.syncDiscoverGlider);
                     renderTourHistory();
+                    renderWalkHistory();
                 }
             };
             tabs.forEach(tab => tab.addEventListener('click', () => activate(tab.dataset.tab)));

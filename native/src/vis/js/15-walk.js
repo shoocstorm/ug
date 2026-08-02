@@ -1,12 +1,12 @@
         // ─── Graph Walk (Discover → Walk) ────────────────────
         //
-        // An animated BFS frontier. Pick a seed, choose a hop radius and a
-        // direction, and watch the walk light up on the canvas one hop at a
-        // time — each frontier a different colour, wavefronts rippling out
-        // from the seed, edges carrying flowing particles in the direction
-        // of travel. This is the same N-hop walk that powers the `graph`
-        // channel of hybrid search and the `traverse` MCP tool (see the
-        // pipeline card rendered in the markup).
+        // An animated, step-able BFS frontier. Pick a seed and the walk takes
+        // over the canvas in a floating playback card (like a Guided Tour):
+        // the sidebar collapses, chrome dims, and transport controls
+        // (prev / play / next + speed) drive the reveal hop by hop. Each hop
+        // is a two-phase beat — edges stream toward the new frontier, then
+        // the frontier ignites — and a wavefront sphere grows from the seed
+        // to enclose the reached set. Recent walks are kept for replay.
         //
         // Mutually exclusive with tour/focus styling: every render accessor
         // it touches is gated on `state.walkActive`, and exiting returns the
@@ -18,9 +18,12 @@
         // Base (1×) beat timing, in ms. Each hop is a two-phase beat: edges
         // ignite and stream toward the new frontier, then the frontier nodes
         // ignite. Both phases scale by 1/walkSpeed.
-        const WALK_EDGE_IGNITE_MS = 440;   // phase 1 (stream) → phase 2 (ignite)
-        const WALK_HOP_DWELL_MS = 1000;    // after ignition, before the next hop
-        const WALK_MAX_HOPS = 4;
+        const WALK_EDGE_IGNITE_MS = 440;
+        const WALK_HOP_DWELL_MS = 1000;
+        const WALK_SPEEDS = [0.5, 1, 2];
+        const WALK_POS_KEY = 'ug-walk-pos';
+        const WALK_HISTORY_MAX = 6;
+        const walkEl = (id) => document.getElementById(id);
 
         function walkColorForHop(h) {
             return WALK_HOP_COLORS[Math.min(h, WALK_HOP_COLORS.length - 1)];
@@ -50,7 +53,23 @@
             return sId < tId ? sId + '|' + tId : tId + '|' + sId;
         }
 
-        function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+        const delay = (ms) => new Promise(r => setTimeout(r, ms));
+
+        // ── Playback state ───────────────────────────────────
+        // Render-relevant sets live on `state` (read by the graph accessors);
+        // this object holds the control state the overlay drives.
+        const walkPlay = {
+            active: false, playing: false, index: -1, streaming: -1,
+            layers: null, totalEdges: 0, seedNode: null,
+            token: 0, phaseTimer: null, stepTimer: null, restore: null,
+        };
+
+        function cancelWalkTimers() {
+            walkPlay.token++;   // any pending scheduled callback now bails
+            if (walkPlay.phaseTimer) { clearTimeout(walkPlay.phaseTimer); walkPlay.phaseTimer = null; }
+            if (walkPlay.stepTimer) { clearTimeout(walkPlay.stepTimer); walkPlay.stepTimer = null; }
+            walkPlay.streaming = -1;
+        }
 
         function wireWalk() {
             const root = document.getElementById('pane-walk');
@@ -95,104 +114,85 @@
                 });
                 sugBox.classList.add('open');
             };
+            const updateSugHighlight = () => {
+                sugBox.querySelectorAll('.walk-seed-sug').forEach((it, i) =>
+                    it.classList.toggle('active', i === sugIndex));
+            };
 
             input.addEventListener('input', refreshSeedSuggestions);
             input.addEventListener('focus', refreshSeedSuggestions);
             input.addEventListener('blur', () => setTimeout(() => sugBox.classList.remove('open'), 140));
             input.addEventListener('keydown', e => {
                 const items = sugBox.querySelectorAll('.walk-seed-sug[data-index]');
-                if (e.key === 'ArrowDown') {
-                    e.preventDefault();
-                    sugIndex = Math.min(sugIndex + 1, items.length - 1);
-                    updateSugHighlight();
-                } else if (e.key === 'ArrowUp') {
-                    e.preventDefault();
-                    sugIndex = Math.max(sugIndex - 1, 0);
-                    updateSugHighlight();
-                } else if (e.key === 'Enter') {
-                    e.preventDefault();
-                    const pick = items[sugIndex] || items[0];
-                    if (pick) pick.dispatchEvent(new Event('mousedown'));
-                } else if (e.key === 'Escape') {
-                    sugBox.classList.remove('open');
-                    input.blur();
-                }
-            });
-            const updateSugHighlight = () => {
-                sugBox.querySelectorAll('.walk-seed-sug').forEach((it, i) =>
-                    it.classList.toggle('active', i === sugIndex));
-            };
-
-            // Hops stepper.
-            root.querySelectorAll('.walk-hop-btn').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    if (state.walkRunning) return;
-                    state.walkHops = parseInt(btn.dataset.hops, 10);
-                    root.querySelectorAll('.walk-hop-btn').forEach(b =>
-                        b.classList.toggle('active', b === btn));
-                });
+                if (e.key === 'ArrowDown') { e.preventDefault(); sugIndex = Math.min(sugIndex + 1, items.length - 1); updateSugHighlight(); }
+                else if (e.key === 'ArrowUp') { e.preventDefault(); sugIndex = Math.max(sugIndex - 1, 0); updateSugHighlight(); }
+                else if (e.key === 'Enter') { e.preventDefault(); const pick = items[sugIndex] || items[0]; if (pick) pick.dispatchEvent(new Event('mousedown')); }
+                else if (e.key === 'Escape') { sugBox.classList.remove('open'); input.blur(); }
             });
 
-            // Direction segmented control.
-            root.querySelectorAll('.walk-dir-btn').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    if (state.walkRunning) return;
-                    state.walkDir = btn.dataset.dir;
-                    root.querySelectorAll('.walk-dir-btn').forEach(b =>
-                        b.classList.toggle('active', b === btn));
-                });
-            });
+            // Hops / direction (sidebar launcher controls).
+            root.querySelectorAll('.walk-hop-btn').forEach(btn => btn.addEventListener('click', () => {
+                if (state.walkRunning) return;
+                state.walkHops = parseInt(btn.dataset.hops, 10);
+                root.querySelectorAll('.walk-hop-btn').forEach(b => b.classList.toggle('active', b === btn));
+            }));
+            root.querySelectorAll('.walk-dir-btn').forEach(btn => btn.addEventListener('click', () => {
+                if (state.walkRunning) return;
+                state.walkDir = btn.dataset.dir;
+                root.querySelectorAll('.walk-dir-btn').forEach(b => b.classList.toggle('active', b === btn));
+            }));
+            // Sidebar speed buttons set the default for the next walk.
+            root.querySelectorAll('.walk-speed-btn').forEach(btn => btn.addEventListener('click', () => {
+                setWalkSpeed(parseFloat(btn.dataset.speed) || 1);
+            }));
 
-            // Speed control — scales the two-phase beat so a fast reader
-            // can race through and someone watching the structure can
-            // slow it to half speed.
-            root.querySelectorAll('.walk-speed-btn').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    state.walkSpeed = parseFloat(btn.dataset.speed) || 1;
-                    root.querySelectorAll('.walk-speed-btn').forEach(b =>
-                        b.classList.toggle('active', b === btn));
-                });
-            });
-
-            // Edge-type chips toggle (built once the graph is in hand).
             renderWalkEdgeTypes();
 
-            // Run / exit.
+            // Launcher + history actions.
             document.getElementById('walk-run').addEventListener('click', runWalk);
-            document.getElementById('walk-exit').addEventListener('click', () => exitWalk());
+            const clearHist = document.getElementById('walk-history-clear');
+            if (clearHist) clearHist.addEventListener('click', () => { clearWalkHistory(); });
 
-            // Esc exits a running walk, like path mode.
+            // Overlay transport.
+            const bind = (id, fn) => { const el = walkEl(id); if (el) el.addEventListener('click', fn); };
+            bind('walk-o-prev', prevHop);
+            bind('walk-o-next', nextHop);
+            bind('walk-o-play', togglePlayWalk);
+            bind('walk-o-exit', () => exitWalk());
+            bind('walk-o-close', () => exitWalk());
+            bind('walk-o-speed', () => cycleWalkSpeed());
+
+            wireWalkDrag();
+
+            // Keyboard transport — only when a walk is live and the user
+            // isn't typing in an input.
             document.addEventListener('keydown', e => {
-                if (e.key === 'Escape' && state.walkActive) exitWalk();
+                if (!walkPlay.active) return;
+                const t = e.target;
+                if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+                if (e.key === 'Escape') { exitWalk(); return; }
+                if (e.key === 'ArrowLeft') { e.preventDefault(); prevHop(); }
+                else if (e.key === 'ArrowRight') { e.preventDefault(); nextHop(); }
+                else if (e.key === ' ' || e.key === 'Spacebar') { e.preventDefault(); togglePlayWalk(); }
+                else if (e.key === 's' || e.key === 'S') { e.preventDefault(); cycleWalkSpeed(); }
             });
 
             // Seed follows the current selection (see syncWalkSeed, wired
             // into handleClick). At init, adopt whatever is already selected.
             if (state.selectedNode) syncWalkSeed(state.selectedNode);
+            renderWalkHistory();
         }
 
-        // Called from handleClick on every node selection. Mirrors the
-        // selection into the Walk pane's seed and chip so that opening Walk
-        // always starts from the node the user was just looking at. Skipped
-        // while a walk is running (the walk owns its seed) and deliberately
-        // does NOT switch tabs or touch the seed input's in-progress typing.
-        function syncWalkSeed(node) {
-            if (!node || state.walkRunning) return;
-            state.walkSeed = node.id;
-            const chipHost = document.getElementById('walk-seed-chip');
-            if (chipHost) {
-                chipHost.innerHTML = `<span class="walk-seed-chip">`
-                    + nodeIconSvg(node.group)
-                    + `<span class="nm" title="${escapeHtml(node.id)}">${escapeHtml(truncateName(node.name))}</span>`
-                    + `<button type="button" class="x" title="Clear seed" aria-label="Clear seed">✕</button>`
-                    + `</span>`;
-                chipHost.querySelector('.x').addEventListener('click', clearWalkSeed);
-            }
-            // Only narrate when the user is actually looking at Walk.
-            if (state.discoverSub === 'walk' && !state.walkActive) {
-                const status = document.getElementById('walk-status');
-                if (status) { status.classList.remove('error'); status.textContent = `Seed: ${node.id}`; }
-            }
+        function setWalkSpeed(s) {
+            state.walkSpeed = s;
+            const ovl = walkEl('walk-o-speed');
+            if (ovl) ovl.textContent = s + '×';
+            document.querySelectorAll('.walk-speed-btn').forEach(b =>
+                b.classList.toggle('active', parseFloat(b.dataset.speed) === s));
+        }
+        function cycleWalkSpeed() {
+            const idx = WALK_SPEEDS.indexOf(state.walkSpeed);
+            setWalkSpeed(WALK_SPEEDS[(idx + 1) % WALK_SPEEDS.length]);
         }
 
         function renderWalkEdgeTypes() {
@@ -205,7 +205,6 @@
             });
             const types = [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([t]) => t);
             box.innerHTML = '';
-            // "All" toggle — default on, clears the explicit selection.
             const all = document.createElement('button');
             all.type = 'button';
             all.className = 'walk-et active';
@@ -224,17 +223,10 @@
                 chip.title = `${counts.get(t)} edge${counts.get(t) === 1 ? '' : 's'} of this type`;
                 chip.addEventListener('click', () => {
                     if (!state.walkEdgeTypes) state.walkEdgeTypes = new Set();
-                    if (state.walkEdgeTypes.has(t)) {
-                        state.walkEdgeTypes.delete(t);
-                        chip.classList.remove('active');
-                    } else {
-                        state.walkEdgeTypes.add(t);
-                        chip.classList.add('active');
-                    }
+                    if (state.walkEdgeTypes.has(t)) { state.walkEdgeTypes.delete(t); chip.classList.remove('active'); }
+                    else { state.walkEdgeTypes.add(t); chip.classList.add('active'); }
                     const anyExplicit = state.walkEdgeTypes.size > 0;
                     all.classList.toggle('active', !anyExplicit);
-                    // Choosing specifics means "only these"; clearing all of
-                    // them returns to the default mix.
                     if (!anyExplicit) state.walkEdgeTypes = null;
                 });
                 box.appendChild(chip);
@@ -246,19 +238,36 @@
             state.walkSeed = n.id;
             const input = document.getElementById('walk-seed-input');
             const sugBox = document.getElementById('walk-seed-suggestions');
-            const chipHost = document.getElementById('walk-seed-chip');
             if (input) { input.value = ''; input.placeholder = 'Seed selected — change it any time'; }
             if (sugBox) sugBox.classList.remove('open');
-            if (chipHost) {
-                chipHost.innerHTML = `<span class="walk-seed-chip">`
-                    + nodeIconSvg(n.group)
-                    + `<span class="nm" title="${escapeHtml(n.id)}">${escapeHtml(truncateName(n.name))}</span>`
-                    + `<button type="button" class="x" title="Clear seed" aria-label="Clear seed">✕</button>`
-                    + `</span>`;
-                chipHost.querySelector('.x').addEventListener('click', clearWalkSeed);
-            }
+            renderWalkSeedChip(n);
             const status = document.getElementById('walk-status');
             if (status) { status.classList.remove('error'); status.textContent = `Seed: ${n.id}`; }
+        }
+
+        function renderWalkSeedChip(n) {
+            const chipHost = document.getElementById('walk-seed-chip');
+            if (!chipHost) return;
+            chipHost.innerHTML = `<span class="walk-seed-chip">`
+                + nodeIconSvg(n.group)
+                + `<span class="nm" title="${escapeHtml(n.id)}">${escapeHtml(truncateName(n.name))}</span>`
+                + `<button type="button" class="x" title="Clear seed" aria-label="Clear seed">✕</button>`
+                + `</span>`;
+            chipHost.querySelector('.x').addEventListener('click', clearWalkSeed);
+        }
+
+        // Called from handleClick on every node selection. Mirrors the
+        // selection into the Walk pane's seed so opening Walk always starts
+        // from the node the user was just looking at. Skipped while a walk is
+        // running and does NOT switch tabs or touch the seed input's typing.
+        function syncWalkSeed(node) {
+            if (!node || state.walkRunning) return;
+            state.walkSeed = node.id;
+            renderWalkSeedChip(node);
+            if (state.discoverSub === 'walk' && !state.walkActive) {
+                const status = document.getElementById('walk-status');
+                if (status) { status.classList.remove('error'); status.textContent = `Seed: ${node.id}`; }
+            }
         }
 
         function clearWalkSeed() {
@@ -270,13 +279,10 @@
             if (input) input.focus();
         }
 
-        // ── The walk itself ──────────────────────────────────
-        //
-        // BFS over the loaded graph (`state.graph` via the adjacency index
-        // built in 13-solo-view.js), respecting direction and an optional
-        // edge-type set — the same semantics as the `traverse` MCP tool and
-        // the `/api/db/traverse` route. Returns one layer per hop so the
-        // animation can reveal them sequentially.
+        // ── The walk itself (BFS over the loaded graph) ──────
+        // Same semantics as the `traverse` MCP tool and /api/db/traverse:
+        // respects direction and an optional edge-type set, returns one
+        // layer per hop so the player can reveal them sequentially.
         function computeWalk(seedId, maxHops, dir, edgeTypes) {
             const layers = [{ hop: 0, ids: [seedId], edges: [], tally: {} }];
             const dist = new Map([[seedId, 0]]);
@@ -301,7 +307,6 @@
                         else if (dir === 'both') neighbour = s === cur ? t : (t === cur ? s : null);
                         if (neighbour == null || neighbour === cur) continue;
                         if (reached.has(neighbour)) continue;
-
                         const ek = walkEdgeKey(s, t);
                         if (!seenEdgeKeys.has(ek)) {
                             seenEdgeKeys.add(ek);
@@ -309,10 +314,7 @@
                             const r = e.rel || 'other';
                             tally[r] = (tally[r] || 0) + 1;
                         }
-                        if (!seenThisLayer.has(neighbour)) {
-                            seenThisLayer.add(neighbour);
-                            next.push(neighbour);
-                        }
+                        if (!seenThisLayer.has(neighbour)) { seenThisLayer.add(neighbour); next.push(neighbour); }
                     }
                 }
                 if (!next.length) break;
@@ -323,11 +325,10 @@
             return { layers, dist, reached };
         }
 
-        async function runWalk() {
+        // Launch from the sidebar: validate, compute, record, play.
+        function runWalk() {
             const status = document.getElementById('walk-status');
-            const runBtn = document.getElementById('walk-run');
             const seedId = state.walkSeed;
-
             if (!seedId) {
                 if (status) { status.classList.add('error'); status.textContent = 'Pick a seed node first.'; }
                 return;
@@ -337,279 +338,763 @@
                 if (status) { status.classList.add('error'); status.textContent = 'Seed node not in loaded graph.'; }
                 return;
             }
-            if (state.walkRunning) return;
-
-            // Cancel any prior walk and reset its visuals.
             exitWalk(true);
+            const { layers, reached } = computeWalk(seedId, state.walkHops, state.walkDir, state.walkEdgeTypes);
+            const totalEdges = layers.reduce((a, l) => a + l.edges.length, 0);
+            if (layers.length <= 1) {
+                if (status) {
+                    status.classList.remove('error');
+                    const dirHint = state.walkDir === 'inbound' ? 'inbound references' : `${state.walkDir} edges`;
+                    status.textContent = `No ${dirHint} from this node — try a different direction.`;
+                }
+                return;
+            }
+            recordWalkInHistory({
+                seedId, seedName: seedNode.name, seedGroup: seedNode.group,
+                hops: state.walkHops, dir: state.walkDir,
+                edgeTypes: state.walkEdgeTypes ? [...state.walkEdgeTypes] : null,
+                layers, totalEdges, nodeCount: reached.size,
+            });
+            playWalk(seedNode, layers, totalEdges);
+        }
 
-            state.walkRunning = true;
+        // ── Playback state machine ──────────────────────────
+        //
+        // The walk is a media-player: auto-play with a play/pause, plus prev
+        // / next to step hop by hop. Forward steps are the two-phase animated
+        // beat; backward steps rewind instantly. A token invalidates stale
+        // scheduled callbacks whenever the user intervenes or the walk exits.
+
+        function playWalk(seedNode, layers, totalEdges) {
+            cancelWalkTimers();
+            walkPlay.layers = layers;
+            walkPlay.totalEdges = totalEdges;
+            walkPlay.seedNode = seedNode;
+            walkPlay.index = -1;
+            walkPlay.streaming = -1;
+
             state.walkActive = true;
-            if (runBtn) runBtn.disabled = true;
+            state.walkRunning = true;
+            state.walkSeed = seedNode.id;
+            state.selectedNode = seedNode;
             document.body.classList.add('walk-active');
 
-            // Preflight the full walk up front so the readout can show what's
-            // coming; the animation reveals it layer by layer.
-            const { layers, reached } = computeWalk(
-                seedId, state.walkHops, state.walkDir, state.walkEdgeTypes);
-            const totalEdges = layers.reduce((a, l) => a + l.edges.length, 0);
+            enterWalkImmersive();
+            buildWalkSegments(layers.length);
+            restoreWalkPosition();
+            showWalkOverlay();
 
-            // Seed = hop 0. Seed is also the selection so the ring marker
-            // lands on it.
-            state.walkReached = new Set([seedId]);
-            state.walkColors = new Map([[seedId, walkColorForHop(0)]]);
-            state.walkEdgeKeys = new Set();
-            state.selectedNode = seedNode;
+            // Hop 0 — the seed, ignited immediately. A small establishing
+            // pulse marks the origin the rest of the walk radiates from.
+            setWalkStateToHop(0);
+            walkPlay.index = 0;
+            emitWalkPulse(seedNode, walkColorForHop(0), 4, 44, 320);
+            setOverlayPhase('ignite', 0);
+            updateWalkOverlay();
+            setWalkPlaying(true);
+            // Kick off auto-play onto hop 1.
+            scheduleAutoAdvance();
+        }
 
-            if (status) {
-                status.classList.remove('error');
-                status.textContent = `Walking ${state.walkHops} hop${state.walkHops === 1 ? '' : 's'} ${state.walkDir} from ${truncateName(seedId)}…`;
+        // Rebuild render state to "everything up to hop `target` ignited",
+        // with nothing beyond. Used for hop 0 setup, rewinds, and jumps.
+        function setWalkStateToHop(target) {
+            const layers = walkPlay.layers;
+            const reached = new Set([state.walkSeed]);
+            const colors = new Map([[state.walkSeed, walkColorForHop(0)]]);
+            const edgeKeys = new Set();
+            for (let h = 1; h <= target; h++) {
+                const colour = walkColorForHop(h);
+                layers[h].ids.forEach(id => { reached.add(id); colors.set(id, colour); });
+                layers[h].edges.forEach(e => edgeKeys.add(walkEdgeKey(e.source, e.target)));
             }
-            setWalkProgress(0, Math.max(1, layers.length - 1), 'seed');
-
-            // Solo: draw the seed alone first, then let each frontier add to
-            // the canvas as it's reached. Below the threshold the whole graph
-            // is already drawn and the walk just recolours it (unreached nodes
-            // are hidden by nodeVisibleFor — the canvas is force-isolated to
-            // the reached set for the duration of the walk).
+            state.walkReached = reached;
+            state.walkColors = colors;
+            state.walkEdgeKeys = edgeKeys;
             if (state.soloOnly) {
-                plotNodes([seedId]);
-                // Suppress the settle handler's own reframe so focusNode /
-                // frameNodeSet own the camera for every step.
+                plotNodes(Array.from(reached));
                 state._didFit = true;
                 state._boxSettled = true;
             }
             bumpGraphStyles();
-            focusNode(seedNode);
-            emitWalkPulse(seedNode, walkColorForHop(0));
-            updateWalkReadout(layers, 0, totalEdges);
-
-            const myToken = (state._walkToken = (state._walkToken || 0) + 1);
-            const totalHops = layers.length - 1;
-
-            for (let h = 1; h < layers.length; h++) {
-                const layer = layers[h];
-                const colour = walkColorForHop(h);
-
-                // ── Phase 1 — edge ignite ────────────────────────────
-                // Add the frontier to the reached set (so it is drawn, not
-                // hidden by isolation) but NOT yet to walkColors — it renders
-                // as a faint "pending" ghost. Light the connecting edges so
-                // particles stream outward from the previous frontier toward
-                // those ghosts. This beat is what makes the walk legible: the
-                // eye follows the flow before the nodes ignite.
-                layer.ids.forEach(id => state.walkReached.add(id));
-                layer.edges.forEach(e => state.walkEdgeKeys.add(walkEdgeKey(e.source, e.target)));
-                if (state.soloOnly) {
-                    plotNodes(Array.from(state.walkReached));
-                    state._didFit = true;
-                    state._boxSettled = true;
-                }
-                bumpGraphStyles();
-                setWalkProgress(h - 1, totalHops, 'stream');
-                if (status) status.textContent = `Hop ${h}/${totalHops}: streaming outward…`;
-
-                await delay(walkIgniteMs());
-                if (myToken !== state._walkToken) return; // cancelled
-
-                // ── Phase 2 — frontier ignite ────────────────────────
-                layer.ids.forEach(id => state.walkColors.set(id, colour));
-                bumpGraphStyles();
-                frameNodeSet(state.walkReached, walkFrameMs());
-                emitWalkPulse(seedNode, colour);
-                pingPipelineBox();
-                updateWalkReadout(layers, h, totalEdges);
-                setWalkProgress(h, totalHops, 'ignite');
-                if (status) status.textContent =
-                    `Hop ${h}/${totalHops}: +${layer.ids.length} node${layer.ids.length === 1 ? '' : 's'} reached`;
-
-                // Dwell on the ignited frontier before the next beat starts.
-                await delay(walkDwellMs());
-                if (myToken !== state._walkToken) return; // cancelled
-            }
-
-            state.walkRunning = false;
-            if (runBtn) runBtn.disabled = false;
-            setWalkProgress(totalHops, totalHops, 'done');
-            if (status) {
-                status.textContent = `Reached ${reached.size} node${reached.size === 1 ? '' : 's'} · ${totalEdges} edge${totalEdges === 1 ? '' : 's'} across ${totalHops} hop${totalHops === 1 ? '' : 's'}`;
-            }
+            frameNodeSet(reached, walkFrameMs());
         }
 
-        // Progress bar above the readout: fills hop by hop, and its colour
-        // hints which phase is live (streaming vs ignited).
-        function setWalkProgress(done, total, phase) {
-            const wrap = document.getElementById('walk-progress');
-            const bar = document.getElementById('walk-progress-bar');
-            const label = document.getElementById('walk-progress-label');
-            if (!wrap || !bar) return;
-            wrap.hidden = false;
-            const pct = total ? Math.round((done / total) * 100) : 0;
-            bar.style.width = pct + '%';
-            bar.dataset.phase = phase || '';
-            if (label) label.textContent = total ? `${done}/${total}` : '';
+        // Forward, animated: phase 1 streams edges toward ghost frontier
+        // nodes, phase 2 (after walkIgniteMs) ignites them.
+        function advanceToHop(h) {
+            const layers = walkPlay.layers;
+            if (!layers || h < 1 || h >= layers.length) return;
+            cancelWalkTimers();
+            const myTok = walkPlay.token;
+            const layer = layers[h];
+            const colour = walkColorForHop(h);
+            walkPlay.streaming = h;
+
+            // Phase 1 — ghosts + streaming edges, and the wavefront sets off.
+            // The sphere grows from the previous frontier to this one over
+            // exactly the stream window, so it arrives as the nodes ignite.
+            layer.ids.forEach(id => state.walkReached.add(id));
+            layer.edges.forEach(e => state.walkEdgeKeys.add(walkEdgeKey(e.source, e.target)));
+            if (state.soloOnly) {
+                plotNodes(Array.from(state.walkReached));
+                state._didFit = true;
+                state._boxSettled = true;
+            }
+            bumpGraphStyles();
+            const fromR = layerReachRadius(walkPlay.seedNode, h - 1);
+            const toR = layerReachRadius(walkPlay.seedNode, h);
+            emitWalkPulse(walkPlay.seedNode, colour, fromR, toR, walkIgniteMs());
+            setOverlayPhase('stream', h);
+            updateWalkOverlay();
+
+            walkPlay.phaseTimer = setTimeout(() => {
+                if (walkPlay.token !== myTok) return;
+                igniteHop(h, colour);
+            }, walkIgniteMs());
+        }
+
+        function igniteHop(h, colour) {
+            if (walkPlay.phaseTimer) { clearTimeout(walkPlay.phaseTimer); walkPlay.phaseTimer = null; }
+            walkPlay.streaming = -1;
+            const layer = walkPlay.layers[h];
+            colour = colour || walkColorForHop(h);
+            // The wavefront (started in advanceToHop) arrives here as these
+            // nodes light up — no new pulse; the synchronisation is the point.
+            layer.ids.forEach(id => state.walkColors.set(id, colour));
+            bumpGraphStyles();
+            frameNodeSet(state.walkReached, walkFrameMs());
+            pingPipelineBox();
+            walkPlay.index = h;
+            setOverlayPhase('ignite', h);
+            updateWalkOverlay();
+            scheduleAutoAdvance();
+        }
+
+        function scheduleAutoAdvance() {
+            if (walkPlay.stepTimer) { clearTimeout(walkPlay.stepTimer); walkPlay.stepTimer = null; }
+            if (!walkPlay.playing) return;
+            const last = walkPlay.layers.length - 1;
+            if (walkPlay.index >= last) { setWalkPlaying(false); return; }
+            const myTok = walkPlay.token;
+            const nextH = walkPlay.index + 1;
+            walkPlay.stepTimer = setTimeout(() => {
+                if (walkPlay.token !== myTok) return;
+                advanceToHop(nextH);
+            }, walkDwellMs());
+        }
+
+        function nextHop() {
+            if (!walkPlay.active) return;
+            // Manual nav pauses auto-advance (matches the tour).
+            setWalkPlaying(false);
+            // If a stream is mid-flight, pressing next completes it now.
+            if (walkPlay.streaming > 0) { igniteHop(walkPlay.streaming); return; }
+            if (walkPlay.index < walkPlay.layers.length - 1) advanceToHop(walkPlay.index + 1);
+        }
+
+        function prevHop() {
+            if (!walkPlay.active) return;
+            setWalkPlaying(false);
+            const cur = walkPlay.streaming > 0 ? walkPlay.streaming : walkPlay.index;
+            if (cur <= 0) return;
+            cancelWalkTimers();
+            setWalkStateToHop(cur - 1);
+            walkPlay.index = cur - 1;
+            setOverlayPhase('ignite', walkPlay.index);
+            updateWalkOverlay();
+        }
+
+        function jumpToHop(h) {
+            if (!walkPlay.active) return;
+            setWalkPlaying(false);
+            cancelWalkTimers();
+            h = Math.max(0, Math.min(h, walkPlay.layers.length - 1));
+            setWalkStateToHop(h);
+            walkPlay.index = h;
+            setOverlayPhase('ignite', h);
+            updateWalkOverlay();
+        }
+
+        function togglePlayWalk() {
+            if (!walkPlay.active) return;
+            if (walkPlay.playing) { setWalkPlaying(false); return; }   // pause; let current phase finish
+            setWalkPlaying(true);
+            if (walkPlay.streaming >= 0) return;                        // a stream is in flight — it'll carry on
+            const last = walkPlay.layers.length - 1;
+            if (walkPlay.index < last) { advanceToHop(walkPlay.index + 1); return; }
+            // At the end — replay from the top.
+            cancelWalkTimers();
+            setWalkStateToHop(0);
+            walkPlay.index = 0;
+            updateWalkOverlay();
+            advanceToHop(1);
+        }
+
+        function setWalkPlaying(p) {
+            walkPlay.playing = p;
+            const btn = walkEl('walk-o-play');
+            const icon = walkEl('walk-o-play-icon');
+            if (icon) {
+                icon.innerHTML = p
+                    ? '<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>'        // ❚❚
+                    : '<path d="M8 5.2c0-.9 1-1.4 1.7-.9l9 6.8c.6.4.6 1.4 0 1.8l-9 6.8c-.7.5-1.7 0-1.7-.9z"/>'; // ▶
+            }
+            if (btn) btn.setAttribute('aria-label', p ? 'Pause' : 'Play');
         }
 
         function exitWalk(quiet) {
-            // Invalidate any in-flight reveal loop.
-            state._walkToken = (state._walkToken || 0) + 1;
-            const wasActive = state.walkActive;
+            const wasActive = walkPlay.active;
+            cancelWalkTimers();
+            walkPlay.active = false;
+            walkPlay.playing = false;
+            walkPlay.layers = null;
+            walkPlay.index = -1;
+            walkPlay.seedNode = null;
             state.walkActive = false;
             state.walkRunning = false;
-            const runBtn = document.getElementById('walk-run');
-            if (runBtn) runBtn.disabled = false;
-            document.body.classList.remove('walk-active');
-
             const reached = state.walkReached;
             state.walkReached = new Set();
             state.walkColors = new Map();
             state.walkEdgeKeys = new Set();
-
-            // Hand the result back to a normal solo view: keep the reached
-            // set on the canvas as an ordinary neighbourhood the user can
-            // keep poking at, rather than clearing it.
-            if (wasActive && state.soloOnly && reached.size) {
-                plotNodes(Array.from(reached));
+            const runBtn = document.getElementById('walk-run');
+            if (runBtn) runBtn.disabled = false;
+            document.body.classList.remove('walk-active');
+            hideWalkOverlay();
+            if (wasActive) {
+                exitWalkImmersive();
+                // Keep the walked neighbourhood on the canvas as an ordinary
+                // selection the user can keep exploring.
+                if (state.soloOnly && reached.size) plotNodes(Array.from(reached));
+                bumpGraphStyles();
             }
-            if (wasActive) bumpGraphStyles();
-
             if (!quiet) {
                 const status = document.getElementById('walk-status');
                 if (status) status.textContent = '';
-                const readout = document.getElementById('walk-readout');
-                if (readout) readout.classList.remove('open');
             }
-            const progress = document.getElementById('walk-progress');
-            if (progress) progress.hidden = true;
         }
 
-        // Farthest reached node from the seed, in world units — read live off
-        // the rendered positions so the wavefront always tracks what is on
-        // screen (in solo mode the force sim may still be settling a frontier
-        // when a pulse fires; the next hop's pulse catches up as it spreads).
-        function walkReachRadius(seedNode) {
-            let max = 0;
-            state.walkReached.forEach(id => {
-                const n = state.nodeById && state.nodeById.get(id);
-                if (!n || !Number.isFinite(n.x)) return;
-                const dx = (n.x || 0) - (seedNode.x || 0);
-                const dy = (n.y || 0) - (seedNode.y || 0);
-                const dz = (n.z || 0) - (seedNode.z || 0);
-                const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
-                if (d > max) max = d;
+        // ── Overlay UI ───────────────────────────────────────
+
+        function showWalkOverlay() {
+            walkPlay.active = true;
+            const ovl = walkEl('walk-overlay');
+            if (ovl) ovl.classList.add('visible');
+            const seedEl = walkEl('walk-o-seed');
+            if (seedEl && walkPlay.seedNode) {
+                seedEl.textContent = truncateName(walkPlay.seedNode.name);
+                seedEl.title = walkPlay.seedNode.id;
+            }
+            buildWalkSegments(walkPlay.layers.length);
+        }
+        function hideWalkOverlay() {
+            const ovl = walkEl('walk-overlay');
+            if (ovl) ovl.classList.remove('visible');
+        }
+
+        function buildWalkSegments(count) {
+            const bar = walkEl('walk-o-progress');
+            if (!bar) return;
+            bar.innerHTML = '';
+            for (let h = 0; h < count; h++) {
+                const seg = document.createElement('div');
+                seg.className = 'walk-seg';
+                seg.dataset.hop = h;
+                seg.title = h === 0 ? 'Seed' : `Hop ${h}`;
+                seg.addEventListener('click', () => jumpToHop(h));
+                bar.appendChild(seg);
+            }
+        }
+
+        function setOverlayPhase(phase, hop) {
+            const el = walkEl('walk-o-phase');
+            if (!el) return;
+            el.dataset.phase = phase;
+            el.textContent = phase === 'stream' ? 'streaming'
+                : phase === 'ignite' ? (hop === 0 ? 'seed' : 'ignited')
+                : 'done';
+        }
+
+        function updateWalkOverlay() {
+            const layers = walkPlay.layers;
+            if (!layers) return;
+            const idx = walkPlay.index;
+            const last = layers.length - 1;
+
+            // Counter.
+            const counter = walkEl('walk-o-counter');
+            if (counter) counter.textContent = last > 0 ? `${idx}/${last}` : '';
+
+            // Segments — done up to index, active for streaming/index.
+            const bar = walkEl('walk-o-progress');
+            if (bar) {
+                const focus = walkPlay.streaming > 0 ? walkPlay.streaming : idx;
+                bar.querySelectorAll('.walk-seg').forEach(seg => {
+                    const h = parseInt(seg.dataset.hop, 10);
+                    seg.classList.toggle('done', h < focus || (h === focus && walkPlay.streaming < 0));
+                    seg.classList.toggle('active', h === focus);
+                    seg.style.setProperty('--seg',
+                        (h === focus && walkPlay.streaming > 0) ? '50%' : (h < focus ? '100%' : '0%'));
+                });
+            }
+
+            // Hop title + phase tag handled by setOverlayPhase; edges for current layer.
+            const hopEl = walkEl('walk-o-hop');
+            if (hopEl) {
+                hopEl.textContent = idx === 0 ? 'Seed' : `Hop ${idx}`;
+            }
+            const edgesEl = walkEl('walk-o-edges');
+            if (edgesEl) {
+                const tally = idx === 0 ? {} : (layers[idx].tally || {});
+                const entries = Object.entries(tally).sort((a, b) => b[1] - a[1]);
+                edgesEl.innerHTML = idx === 0
+                    ? `<span class="walk-o-empty">the starting node</span>`
+                    : entries.length
+                        ? entries.map(([r, c]) => `<span class="walk-o-edge">${escapeHtml(r)} ×${c}</span>`).join('')
+                        : `<span class="walk-o-empty">no edges</span>`;
+            }
+
+            // Legend — one dot per hop that exists.
+            const legend = walkEl('walk-o-legend');
+            if (legend) {
+                legend.innerHTML = '';
+                for (let h = 0; h < layers.length; h++) {
+                    const c = layers[h].ids.length;
+                    const el = document.createElement('span');
+                    el.className = 'walk-o-leg';
+                    el.innerHTML = `<span class="d" style="background:${walkColorForHop(h)};color:${walkColorForHop(h)}"></span>`
+                        + `<span>${h === 0 ? 'seed' : 'hop ' + h}</span>`
+                        + `<span class="n">${c}</span>`;
+                    legend.appendChild(el);
+                }
+            }
+
+            // Totals up to the current index.
+            const totals = walkEl('walk-o-totals');
+            if (totals) {
+                const reachedSoFar = layers.reduce((a, l, i) => i <= idx ? a + l.ids.length : a, 0);
+                const edgesSoFar = layers.reduce((a, l, i) => i <= idx ? a + l.edges.length : a, 0);
+                totals.innerHTML =
+                    `<span><b>${reachedSoFar}</b> nodes</span>`
+                    + `<span><b>${edgesSoFar}</b> edges</span>`
+                    + `<span><b>${idx}</b> of <b>${last}</b> hops</span>`;
+            }
+
+            // Transport disabled state at the ends.
+            const prev = walkEl('walk-o-prev');
+            const next = walkEl('walk-o-next');
+            if (prev) prev.disabled = idx <= 0 && walkPlay.streaming < 0;
+            if (next) next.disabled = idx >= last && walkPlay.streaming < 0;
+        }
+
+        // ── Immersive: collapse sidebar / details, restore on exit ──
+        // Mirrors the tour's enterImmersive / exitImmersive so the canvas
+        // owns the screen while a walk plays.
+
+        function enterWalkImmersive() {
+            if (walkPlay.restore) return;
+            const sidebar = document.getElementById('sidebar');
+            const info = document.getElementById('info');
+            walkPlay.restore = {
+                sidebarCollapsed: sidebar ? sidebar.classList.contains('collapsed') : null,
+                infoVisible: info ? info.classList.contains('visible') : null,
+                autoSpin: state.autoSpin,
+                showBoundary: state.showBoundary,
+            };
+            if (sidebar) sidebar.classList.add('collapsed');
+            if (info) info.classList.remove('visible');
+            if (state.autoSpin) {
+                state.autoSpin = false;
+                if (typeof applyAutoSpin === 'function') applyAutoSpin();
+                if (typeof syncSpinButton === 'function') syncSpinButton();
+            }
+            if (state.showBoundary) {
+                state.showBoundary = false;
+                if (typeof applyBoundaryVisibility === 'function') applyBoundaryVisibility();
+            }
+            if (typeof handleNodeHover === 'function') handleNodeHover(null);
+        }
+
+        function exitWalkImmersive() {
+            const r = walkPlay.restore;
+            walkPlay.restore = null;
+            if (!r) return;
+            const sidebar = document.getElementById('sidebar');
+            const info = document.getElementById('info');
+            if (sidebar && r.sidebarCollapsed === false) sidebar.classList.remove('collapsed');
+            if (info && r.infoVisible === false) info.classList.remove('visible');
+            if (r.autoSpin) {
+                state.autoSpin = true;
+                if (typeof applyAutoSpin === 'function') applyAutoSpin();
+                if (typeof syncSpinButton === 'function') syncSpinButton();
+            }
+            if (r.showBoundary) {
+                state.showBoundary = true;
+                if (typeof applyBoundaryVisibility === 'function') applyBoundaryVisibility();
+            }
+        }
+
+        // ── Dragging the playback card ───────────────────────
+
+        function clampWalkPosition(left, top) {
+            const overlay = walkEl('walk-overlay');
+            const rect = overlay.getBoundingClientRect();
+            const margin = 8;
+            return {
+                left: Math.min(Math.max(margin, left), Math.max(margin, window.innerWidth - rect.width - margin)),
+                top: Math.min(Math.max(margin, top), Math.max(margin, window.innerHeight - rect.height - margin)),
+            };
+        }
+        function placeWalkCard(left, top) {
+            const overlay = walkEl('walk-overlay');
+            if (!overlay) return;
+            const p = clampWalkPosition(left, top);
+            overlay.classList.add('dragged');
+            overlay.style.left = p.left + 'px';
+            overlay.style.top = p.top + 'px';
+        }
+        function restoreWalkPosition() {
+            const overlay = walkEl('walk-overlay');
+            if (!overlay) return;
+            let saved = null;
+            try { saved = JSON.parse(localStorage.getItem(WALK_POS_KEY) || 'null'); } catch (e) { saved = null; }
+            if (!saved || typeof saved.left !== 'number') return;
+            overlay.classList.add('dragged');
+            placeWalkCard(saved.left, saved.top);
+        }
+        function wireWalkDrag() {
+            const overlay = walkEl('walk-overlay');
+            const handle = walkEl('walk-o-drag');
+            if (!overlay || !handle) return;
+            let dx = 0, dy = 0, moved = false;
+            const onMove = (e) => { moved = true; placeWalkCard(e.clientX - dx, e.clientY - dy); };
+            const onUp = () => {
+                overlay.classList.remove('dragging');
+                window.removeEventListener('pointermove', onMove);
+                window.removeEventListener('pointerup', onUp);
+                if (!moved) return;
+                try {
+                    localStorage.setItem(WALK_POS_KEY, JSON.stringify({
+                        left: parseFloat(overlay.style.left) || 0,
+                        top: parseFloat(overlay.style.top) || 0,
+                    }));
+                } catch (e) { /* private mode */ }
+            };
+            handle.addEventListener('pointerdown', (e) => {
+                if (e.target.closest('button')) return;
+                e.preventDefault();
+                const rect = overlay.getBoundingClientRect();
+                dx = e.clientX - rect.left;
+                dy = e.clientY - rect.top;
+                moved = false;
+                placeWalkCard(rect.left, rect.top);
+                overlay.classList.add('dragging');
+                window.addEventListener('pointermove', onMove);
+                window.addEventListener('pointerup', onUp);
             });
+        }
+
+        // ── History ──────────────────────────────────────────
+        // The last few walks are kept verbatim (seed + computed layers) so a
+        // walk can be replayed later without re-running the BFS. Scoped per
+        // project, since node ids only mean something inside one graph.
+
+        function walkHistoryKey() {
+            const p = state.capabilities && state.capabilities.project;
+            return 'ug-walk-history:' + ((p && p.name) || 'default');
+        }
+        function loadWalkHistory() {
+            try {
+                const raw = localStorage.getItem(walkHistoryKey());
+                const list = raw ? JSON.parse(raw) : [];
+                return Array.isArray(list) ? list : [];
+            } catch (e) { return []; }
+        }
+        function saveWalkHistory(list) {
+            try { localStorage.setItem(walkHistoryKey(), JSON.stringify(list.slice(0, WALK_HISTORY_MAX))); }
+            catch (e) {
+                // Layers are the bulk; if quota bites, shed them (replay then
+                // falls back to recompute) before dropping entries outright.
+                const lite = list.map(e => ({ ...e, layers: null }));
+                try { localStorage.setItem(walkHistoryKey(), JSON.stringify(lite.slice(0, WALK_HISTORY_MAX))); }
+                catch (e2) { try { localStorage.removeItem(walkHistoryKey()); } catch (e3) { /* private mode */ } }
+            }
+            return list.slice(0, WALK_HISTORY_MAX);
+        }
+        function recordWalkInHistory(rec) {
+            const entry = {
+                id: 'walk-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7),
+                ts: Date.now(),
+                ...rec,
+            };
+            // Same seed + params replaces the older run rather than stacking.
+            const rest = loadWalkHistory().filter(e =>
+                !(e.seedId === entry.seedId && e.hops === entry.hops && e.dir === entry.dir));
+            const saved = saveWalkHistory([entry, ...rest]);
+            renderWalkHistory(saved);
+        }
+        function removeWalkFromHistory(id) {
+            renderWalkHistory(saveWalkHistory(loadWalkHistory().filter(e => e.id !== id)));
+        }
+        function clearWalkHistory() {
+            renderWalkHistory(saveWalkHistory([]));
+        }
+        function renderWalkHistory(list) {
+            const box = walkEl('walk-history-list');
+            const wrap = walkEl('walk-history');
+            if (!box || !wrap) return;
+            const items = list || loadWalkHistory();
+            wrap.hidden = items.length === 0;
+            box.innerHTML = '';
+            items.forEach(entry => {
+                const row = document.createElement('div');
+                row.className = 'whist-row';
+
+                const main = document.createElement('button');
+                main.type = 'button';
+                main.className = 'whist-main';
+                main.title = `Replay walk from ${entry.seedName || entry.seedId}`;
+                main.innerHTML =
+                    `<span class="whist-title"></span>
+                     <span class="whist-meta">
+                        <span class="whist-stops">${entry.nodeCount || 0} nodes</span>
+                        <span class="whist-dot">·</span>
+                        <span class="whist-dir">${escapeHtml(entry.dir || 'out')}</span>
+                        <span class="whist-dot">·</span>
+                        <span>${entry.hops}h</span>
+                        <span class="whist-dot">·</span>
+                        <span>${escapeHtml(relativeTime(entry.ts))}</span>
+                     </span>`;
+                main.querySelector('.whist-title').textContent = entry.seedName || entry.seedId;
+                main.addEventListener('click', () => replayWalkFromHistory(entry.id));
+
+                const del = document.createElement('button');
+                del.type = 'button';
+                del.className = 'whist-icon danger';
+                del.title = 'Remove from history';
+                del.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+                    + 'stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>';
+                del.addEventListener('click', () => removeWalkFromHistory(entry.id));
+
+                row.append(main, del);
+                box.appendChild(row);
+            });
+        }
+        // Re-run a saved walk. If the stored layers survived, play them
+        // verbatim; otherwise recompute from the seed (graph may have grown).
+        function replayWalkFromHistory(id) {
+            const entry = loadWalkHistory().find(e => e.id === id);
+            if (!entry) return;
+            const seedNode = state.nodeById && state.nodeById.get(entry.seedId);
+            const status = document.getElementById('walk-status');
+            if (!seedNode) {
+                if (status) { status.classList.add('error'); status.textContent = `“${entry.seedName || entry.seedId}” is no longer in this graph.`; }
+                return;
+            }
+            exitWalk(true);
+            applyWalkParams(entry);
+            let layers = entry.layers, totalEdges = entry.totalEdges || 0;
+            if (!layers || !layers.length) {
+                const r = computeWalk(entry.seedId, entry.hops, entry.dir,
+                    entry.edgeTypes ? new Set(entry.edgeTypes) : null);
+                layers = r.layers;
+                totalEdges = layers.reduce((a, l) => a + l.edges.length, 0);
+            }
+            if (status) { status.classList.remove('error'); status.textContent = `Replaying walk · ${entry.nodeCount || layers.reduce((a, l) => a + l.ids.length, 0)} nodes`; }
+            playWalk(seedNode, layers, totalEdges);
+        }
+        // Reflect a replayed walk's params back into the launcher controls.
+        function applyWalkParams(entry) {
+            state.walkHops = entry.hops;
+            state.walkDir = entry.dir;
+            state.walkEdgeTypes = entry.edgeTypes && entry.edgeTypes.length ? new Set(entry.edgeTypes) : null;
+            document.querySelectorAll('.walk-hop-btn').forEach(b =>
+                b.classList.toggle('active', parseInt(b.dataset.hops, 10) === entry.hops));
+            document.querySelectorAll('.walk-dir-btn').forEach(b =>
+                b.classList.toggle('active', b.dataset.dir === entry.dir));
+            document.querySelectorAll('.walk-et').forEach(b => b.classList.remove('active'));
+            // Edge-type chips can't be perfectly restored for a graph whose
+            // types changed; "all" stays selected when no specifics were stored.
+            if (!state.walkEdgeTypes) {
+                const all = document.querySelector('.walk-et');
+                if (all) all.classList.add('active');
+            }
+        }
+
+        // ── Canvas effects ───────────────────────────────────
+
+        // Farthest node of hops 0..`uptoHop` from the seed, in world units.
+        // Read off the layer ids directly (not state.walkReached) so the
+        // radius reflects the *intended* frontier regardless of render state.
+        function layerReachRadius(seedNode, uptoHop) {
+            const layers = walkPlay.layers;
+            if (!layers || !seedNode) return 0;
+            let max = 0;
+            for (let h = 0; h <= uptoHop && h < layers.length; h++) {
+                for (const id of layers[h].ids) {
+                    const n = state.nodeById && state.nodeById.get(id);
+                    if (!n || !Number.isFinite(n.x)) continue;
+                    const dx = (n.x || 0) - (seedNode.x || 0);
+                    const dy = (n.y || 0) - (seedNode.y || 0);
+                    const dz = (n.z || 0) - (seedNode.z || 0);
+                    const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                    if (d > max) max = d;
+                }
+            }
             return max;
         }
 
-        // A "wavefront" sphere centred on the seed. Its final radius encloses
-        // every node reached so far — so each hop the ring grows outward to
-        // cover the new frontier, which is exactly the hop/walk concept made
-        // visible. It grows to that boundary, holds it briefly so the reach
-        // reads as a shell (not a flash), then fades. Self-disposing.
-        function emitWalkPulse(seedNode, colour) {
-            if (!Graph || !seedNode || !Number.isFinite(seedNode.x)) return;
-            const baseR = 8;
-            const finalR = Math.max(walkReachRadius(seedNode) + 22, 50);
-            const targetScale = finalR / baseR;
-            const geo = new THREE.IcosahedronGeometry(baseR, 1);
-            const mat = new THREE.MeshBasicMaterial({
-                color: colour, wireframe: true, transparent: true,
-                opacity: 0.85, depthWrite: false,
-            });
-            const mesh = new THREE.Mesh(geo, mat);
-            mesh.position.set(seedNode.x || 0, seedNode.y || 0, seedNode.z || 0);
-            mesh.renderOrder = 500;
-            Graph.scene().add(mesh);
+        // The wavefront burst — a composite "energy explosion" that radiates
+        // from the seed to the new frontier. Timed to the two-phase beat: it
+        // starts at the previous frontier's radius when the stream phase
+        // opens and arrives at the new nodes exactly as they ignite.
+        //
+        // Four additive-blended layers bloom against the dark canvas:
+        //   • a fresnel-rim glow shell — bright silhouette, hot core (the
+        //     "energy bubble"; the part that reads as a real blast),
+        //   • a wireframe cage slightly larger — geometric structure / edge,
+        //   • a soft plasma core — a luminous centre,
+        //   • a radial particle burst — the explosion of debris outward.
+        // All self-disposing (geometry + materials freed once the burst ends).
+        const _fresnelShell = () => `
+            varying vec3 vNormal; varying vec3 vView;
+            void main() {
+                vec4 mv = modelViewMatrix * vec4(position, 1.0);
+                vNormal = normalize(normalMatrix * normal);
+                vView = normalize(-mv.xyz);
+                gl_Position = projectionMatrix * mv;
+            }`;
+        const _fresnelFrag = () => `
+            varying vec3 vNormal; varying vec3 vView;
+            uniform vec3 uColor; uniform vec3 uCore; uniform float uPower; uniform float uOpacity;
+            void main() {
+                float rim = 1.0 - max(0.0, dot(normalize(vNormal), normalize(vView)));
+                rim = pow(rim, uPower);
+                vec3 c = mix(uCore, uColor, rim);
+                gl_FragColor = vec4(c, rim * uOpacity);
+            }`;
 
-            const start = performance.now();
-            const dur = Math.min(1050, Math.max(520, walkDwellMs()));
-            const growFrac = 0.6;   // expand over 60%, fade over the rest
+        function emitWalkPulse(seedNode, colour, fromR, toR, growMs) {
+            if (!Graph || !seedNode || !Number.isFinite(seedNode.x)) return;
+            const scene = Graph.scene();
+            const fromRr = Math.max(fromR || 0, 6);
+            const toRr = Math.max((toR || 0) + 18, fromRr + 24);
+            const grow = Math.max(160, growMs || 420);
+            const fade = Math.min(640, Math.max(240, grow * 0.9));
+            const total = grow + fade;
+            const t0 = performance.now();
+
+            const group = new THREE.Group();
+            group.position.set(seedNode.x || 0, seedNode.y || 0, seedNode.z || 0);
+            scene.add(group);
+            const disposables = [];
+            const addDispose = (o) => { if (o.geometry) disposables.push(o.geometry); if (o.material) disposables.push(o.material); };
+
+            // Fresnel rim shell — the energy bubble.
+            const shellMat = new THREE.ShaderMaterial({
+                transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
+                uniforms: {
+                    uColor: { value: new THREE.Color(colour) },
+                    uCore: { value: new THREE.Color('#fff3e8') },
+                    uPower: { value: 2.6 },
+                    uOpacity: { value: 0 },
+                },
+                vertexShader: _fresnelShell(),
+                fragmentShader: _fresnelFrag(),
+            });
+            const shell = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 4), shellMat);
+            shell.renderOrder = 500;
+            group.add(shell); addDispose(shell);
+
+            // Wireframe cage — structure / edge shimmer.
+            const cageMat = new THREE.MeshBasicMaterial({
+                color: new THREE.Color(colour), wireframe: true, transparent: true,
+                opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
+            });
+            const cage = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 1), cageMat);
+            cage.renderOrder = 501;
+            group.add(cage); addDispose(cage);
+
+            // Plasma core — luminous centre (kept faint so it doesn't white out).
+            const coreMat = new THREE.MeshBasicMaterial({
+                color: new THREE.Color(colour), transparent: true, opacity: 0,
+                depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
+            });
+            const core = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 3), coreMat);
+            core.renderOrder = 499;
+            group.add(core); addDispose(core);
+
+            // Radial particle burst — debris exploding outward to the frontier.
+            const N = 96;
+            const positions = new Float32Array(N * 3);
+            const dirs = [];
+            for (let i = 0; i < N; i++) {
+                const u = Math.random(), v = Math.random();
+                const theta = 2 * Math.PI * u, phi = Math.acos(2 * v - 1);
+                dirs.push({
+                    dx: Math.sin(phi) * Math.cos(theta),
+                    dy: Math.sin(phi) * Math.sin(theta),
+                    dz: Math.cos(phi),
+                    spd: 0.55 + Math.random() * 0.7,   // some reach past the shell
+                });
+            }
+            const pGeo = new THREE.BufferGeometry();
+            pGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            const pMat = new THREE.PointsMaterial({
+                color: new THREE.Color(colour), size: 3.4, transparent: true, opacity: 0,
+                depthWrite: false, blending: THREE.AdditiveBlending, sizeAttenuation: true, fog: false,
+            });
+            const points = new THREE.Points(pGeo, pMat);
+            points.renderOrder = 502;
+            group.add(points); addDispose({ geometry: pGeo, material: pMat });
+
             const step = () => {
-                const t = (performance.now() - start) / dur;
-                if (t >= 1 || !state.walkActive) {
-                    Graph.scene().remove(mesh);
-                    geo.dispose(); mat.dispose();
+                const t = performance.now() - t0;
+                if (t >= total || !state.walkActive) {
+                    scene.remove(group);
+                    disposables.forEach(d => d.dispose());
                     return;
                 }
-                const g = t < growFrac ? t / growFrac : 1;
-                const e = 1 - Math.pow(1 - g, 3);             // ease-out grow
-                mesh.scale.setScalar(1 + (targetScale - 1) * e);
-                mat.opacity = t < growFrac
-                    ? 0.85
-                    : 0.85 * (1 - (t - growFrac) / (1 - growFrac));
+                const p = Math.min(1, t / grow);           // grow progress
+                const e = 1 - Math.pow(1 - p, 3);           // ease-out: decelerate at the frontier
+                const r = fromRr + (toRr - fromRr) * e;
+                const rs = Math.max(0.1, r);
+                shell.scale.setScalar(rs);
+                cage.scale.setScalar(Math.max(0.1, r * 1.07));
+                core.scale.setScalar(Math.max(0.1, r * 0.62));
+                // Envelope: quick ramp-in over the first 25% of the grow, hold,
+                // then fade out across `fade`. The burst flashes to life, sweeps
+                // outward, and dissolves — reads as an explosion, not a fade.
+                const fadeIn = Math.min(1, p / 0.25);
+                const env = t <= grow ? fadeIn : Math.max(0, 1 - (t - grow) / fade);
+                shellMat.uniforms.uOpacity.value = 0.95 * env;
+                cageMat.opacity = 0.5 * env;
+                coreMat.opacity = 0.14 * env;
+                pMat.opacity = 0.95 * env;
+                // Particles fly outward, each on its own speed curve.
+                const arr = pGeo.attributes.position.array;
+                for (let i = 0; i < N; i++) {
+                    const d = dirs[i];
+                    const dist = r * d.spd;
+                    arr[i * 3] = d.dx * dist;
+                    arr[i * 3 + 1] = d.dy * dist;
+                    arr[i * 3 + 2] = d.dz * dist;
+                }
+                pGeo.attributes.position.needsUpdate = true;
+                // Slow counter-rotation for shimmer on the structural layers.
+                cage.rotation.y += 0.012; cage.rotation.x += 0.007;
+                shell.rotation.y -= 0.005;
                 requestAnimationFrame(step);
             };
             requestAnimationFrame(step);
         }
 
-        // ── Readout: hop legend + per-hop breakdown + running totals ──
-        function updateWalkReadout(layers, upto, totalEdges) {
-            const readout = document.getElementById('walk-readout');
-            if (!readout) return;
-            readout.classList.add('open');
-
-            // Legend — one dot per hop that will fire.
-            const legend = document.getElementById('walk-legend');
-            if (legend) {
-                legend.innerHTML = '';
-                for (let h = 0; h < layers.length; h++) {
-                    const count = layers[h].ids.length;
-                    const el = document.createElement('span');
-                    el.className = 'walk-leg';
-                    el.innerHTML = `<span class="dot" style="background:${walkColorForHop(h)};color:${walkColorForHop(h)}"></span>`
-                        + `<span>Hop ${h}</span>`
-                        + `<span class="n">${count}</span>`;
-                    legend.appendChild(el);
-                }
-            }
-
-            // Per-hop layers.
-            const box = document.getElementById('walk-layers');
-            if (box) {
-                box.innerHTML = '';
-                layers.forEach(layer => {
-                    const row = document.createElement('div');
-                    row.className = 'walk-layer'
-                        + (layer.hop <= upto ? ' revealed' : '')
-                        + (layer.hop === upto ? ' current' : '');
-                    const colour = walkColorForHop(layer.hop);
-                    const tally = Object.entries(layer.tally)
-                        .sort((a, b) => b[1] - a[1]);
-                    const tags = layer.hop === 0
-                        ? `<div class="walk-layer-empty">starting point</div>`
-                        : tally.length
-                            ? `<div class="walk-layer-edges">${
-                                tally.map(([r, c]) => `<span class="walk-et-tag">${escapeHtml(r)} ×${c}</span>`).join('')
-                              }</div>`
-                            : `<div class="walk-layer-empty">no edges</div>`;
-                    row.innerHTML = `<div class="walk-layer-bar" style="background:${colour}"></div>`
-                        + `<div class="walk-layer-body">`
-                        + `<div class="walk-layer-head">`
-                        + `<span class="walk-layer-hop">Hop ${layer.hop}</span>`
-                        + `<span class="walk-layer-count">+${layer.ids.length}</span>`
-                        + `</div>${tags}</div>`;
-                    box.appendChild(row);
-                });
-            }
-
-            // Totals.
-            const totals = document.getElementById('walk-totals');
-            if (totals) {
-                const reachedSoFar = layers.reduce((a, l, i) => i <= upto ? a + l.ids.length : a, 0);
-                const edgesSoFar = layers.reduce((a, l, i) => i <= upto ? a + l.edges.length : a, 0);
-                totals.innerHTML =
-                    `<span><b>${reachedSoFar}</b> nodes</span>`
-                    + `<span><b>${edgesSoFar}</b> edges</span>`
-                    + `<span><b>${upto}</b> of <b>${layers.length - 1}</b> hops</span>`;
-            }
-        }
-
         // Pulse the pipeline diagram's GRAPH WALK box in sync with each
-        // frontier reveal — ties the canvas animation to the explainer.
+        // ignited frontier — ties the canvas animation to the explainer.
         function pingPipelineBox() {
             const box = document.getElementById('walk-pipe-graph');
             if (!box) return;
             box.classList.remove('pulse');
-            // Force a reflow so the animation restarts on every hop.
             void box.offsetWidth;
             box.classList.add('pulse');
             setTimeout(() => box.classList.remove('pulse'), walkDwellMs());
