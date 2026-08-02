@@ -18,14 +18,14 @@
                 input.focus();
             });
 
-            // Solo mode only: draw the whole match set at once, rather than
-            // one node at a time. Hidden below the threshold, where the graph
-            // is already fully on screen.
+            // Light up the whole match set at once: solo mode draws them fresh,
+            // normal mode dims the rest and frames the set. Capped so thousands
+            // of matches stay legible.
             const plotAll = document.getElementById('search-plot-all');
             if (plotAll) plotAll.addEventListener('click', () => {
                 const matches = state.searchMatches || [];
                 if (!matches.length) return;
-                plotNodes(matches.slice(0, SOLO_MAX_NODES).map(n => n.id));
+                lightUpNodes(matches.slice(0, SOLO_MAX_NODES).map(n => n.id));
             });
         }
 

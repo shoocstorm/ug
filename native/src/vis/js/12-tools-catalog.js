@@ -113,6 +113,10 @@
             // The bar is hidden until the Discover tab is shown, so its
             // widths only settle once it's on screen.
             window.addEventListener('resize', moveGlider);
+            // Dragging the sidebar's edge resizes the bar without a window
+            // resize event, so the pill would keep the width it was measured
+            // at. Watch the bar itself instead of guessing when it changed.
+            if (window.ResizeObserver) new ResizeObserver(moveGlider).observe(bar);
             state.syncDiscoverGlider = moveGlider;
             state.showDiscoverSub = activate;
         }

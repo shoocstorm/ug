@@ -320,7 +320,7 @@
                 const all = document.createElement('button');
                 all.type = 'button';
                 all.textContent = `light up ${ids.length} in graph`;
-                all.addEventListener('click', () => insFocusMany(ids));
+                all.addEventListener('click', () => lightUpNodes(ids));
                 pager.appendChild(all);
             }
             box.appendChild(pager);
@@ -363,27 +363,6 @@
             exitFocus();
             handleClick(null, node);
             focusNode(node);
-        }
-
-        // A whole result set → a region of the graph. This is the thing
-        // neither the CLI nor an agent can do: "143 functions over 50 lines"
-        // stops being a list and becomes a shape, and you can see at a glance
-        // that most of them sit in one folder.
-        function insFocusMany(ids) {
-            if (!state.nodeById) return;
-            const found = ids.map(i => state.nodeById.get(i)).filter(Boolean);
-            if (!found.length) return;
-            // In solo mode the region has to be drawn before it can be focused —
-            // none of these nodes is on the canvas yet.
-            if (state.soloOnly) plotNodes(found.map(n => n.id));
-            state.focusNode = found[0].id;
-            state.focusSet = new Set(found.map(n => n.id));
-            document.body.classList.add('focus-active');
-            // Without this the Solo button stays greyed out even though there
-            // is now a focus to solo.
-            syncSoloButton();
-            bumpGraphStyles();
-            focusNode(found[0]);
         }
 
         // "What can I query?" — the properties, with how many nodes actually

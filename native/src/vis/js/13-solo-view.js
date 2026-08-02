@@ -181,6 +181,27 @@
             rebuildSoloView();
         }
 
+        // "light up … in graph" — focus a whole result set at once. In solo
+        // mode the nodes must be drawn first (none is on the canvas yet); below
+        // the threshold they are all already drawn, so we just dim the rest and
+        // frame the set. Capped because lighting thousands at once is noise,
+        // not signal — the button label shows the capped count.
+        function lightUpNodes(ids) {
+            if (!state.nodeById) return;
+            const found = Array.from(ids).map(id => state.nodeById.get(id)).filter(Boolean);
+            if (!found.length) return;
+            const capped = found.slice(0, SOLO_MAX_NODES);
+            if (state.soloOnly) plotNodes(capped.map(n => n.id));
+            state.focusNode = capped[0].id;
+            state.focusSet = new Set(capped.map(n => n.id));
+            document.body.classList.add('focus-active');
+            // Without this the Solo button stays greyed out even though there
+            // is now a focus to solo.
+            syncSoloButton();
+            bumpGraphStyles();
+            focusNode(capped[0]);
+        }
+
         // ─── Chrome: the empty state and the "what's on screen" chip ───
 
         function updateSoloHud() {
@@ -278,11 +299,11 @@
         }
 
         // Shared by the two "light up … in graph" buttons (keyword + semantic).
-        // Hidden entirely outside solo mode: with the whole graph on screen
-        // there is nothing to plot.
+        // Works in both modes: solo draws the set fresh; normal mode dims the
+        // rest and frames it. Capped because thousands of lit nodes is noise.
         function syncPlotAllButton(btn, ids) {
             if (!btn) return;
-            if (!state.soloOnly || !ids.length) {
+            if (!ids.length) {
                 btn.hidden = true;
                 return;
             }
@@ -290,6 +311,6 @@
             btn.hidden = false;
             btn.textContent = `⊞ light up ${formatNumber(capped)} in graph`;
             btn.title = capped < ids.length
-                ? `Light up the first ${formatNumber(capped)} of ${formatNumber(ids.length)} matches (render budget)`
-                : 'Light up every match on the canvas, with the links between them';
+                ? `Light up the first ${formatNumber(capped)} of ${formatNumber(ids.length)} matches`
+                : 'Light up every match, dimming the rest of the graph';
         }

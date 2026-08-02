@@ -31,7 +31,7 @@
             const exec = document.getElementById('sem-exec');
             exec.addEventListener('click', runSemanticSearch);
             const plotAll = document.getElementById('sem-plot-all');
-            if (plotAll) plotAll.addEventListener('click', () => plotNodes(state.semMatches || []));
+            if (plotAll) plotAll.addEventListener('click', () => lightUpNodes(state.semMatches || []));
             input.addEventListener('keydown', e => {
                 if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
                     e.preventDefault();

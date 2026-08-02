@@ -756,9 +756,9 @@
                 container.appendChild(card);
             });
 
-            // In solo mode the hits are just names until something draws them;
-            // offer the whole set in one go, same as the keyword pane. Hits the
-            // loaded graph doesn't contain can't be drawn, so they don't count.
+            // Offer the whole hit set in one go: solo mode draws them fresh,
+            // normal mode dims the rest and frames them. Hits the loaded graph
+            // doesn't contain can't be drawn, so they don't count.
             state.semMatches = hits
                 .map(h => h.id)
                 .filter(id => state.nodeById && state.nodeById.has(id));

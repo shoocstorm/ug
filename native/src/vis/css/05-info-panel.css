@@ -352,6 +352,60 @@
             border-color: var(--accent);
         }
 
+        /* Three-state direction switcher (All / In / Out). One track, three
+           equal segments, so the choice reads as exclusive — unlike the edge
+           chips below it, which are additive. */
+        #info .rel-dir-switch {
+            display: flex;
+            gap: 2px;
+            padding: 2px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            border-radius: 7px;
+        }
+
+        #info .rel-dir {
+            flex: 1;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+            padding: 4px 6px;
+            background: none;
+            border: none;
+            border-radius: 5px;
+            color: var(--text-muted);
+            font-family: inherit;
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s;
+        }
+
+        #info .rel-dir:hover { color: var(--text); }
+
+        /* Same lit-pill treatment as the Discover sub-tabs, so "selected"
+           looks the same everywhere in the app. */
+        #info .rel-dir.active {
+            background: rgba(249, 115, 22, 0.18);
+            box-shadow: inset 0 0 0 1px var(--accent-dim);
+            color: var(--accent);
+        }
+
+        #info .rel-dir-arrow {
+            font-size: 11px;
+            line-height: 1;
+            opacity: 0.85;
+        }
+
+        #info .rel-dir .chip-count {
+            font-size: 9px;
+            font-weight: 500;
+            opacity: 0.7;
+        }
+
         #info .rel-edge-chips .filter-chip {
             padding: 3px 8px;
             font-size: 10px;

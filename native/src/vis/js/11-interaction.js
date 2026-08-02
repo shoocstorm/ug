@@ -179,6 +179,13 @@
             if (!state.relEdgeFilters) state.relEdgeFilters = new Set();
             [...state.relEdgeFilters].forEach(t => { if (!relCounts[t]) state.relEdgeFilters.delete(t); });
 
+            // Direction filter, same persistence contract as the edge chips —
+            // but it is never pruned: "in" staying selected on a node with no
+            // incoming edges reads as an answer, not a stuck filter.
+            const dirCounts = { all: related.length, in: 0, out: 0 };
+            related.forEach(({ dir }) => { dirCounts[dir]++; });
+            if (state.relDir !== 'in' && state.relDir !== 'out') state.relDir = 'all';
+
             let html = `
                 ${sourceNote('fields', d)}
                 ${fieldRow('id', `<span class="info-id" title="${escapeHtml(d.id)}">${escapeHtml(d.id)}</span><button class="info-copy-btn" data-copy="${escapeHtml(d.id)}" title="Copy node id" aria-label="Copy node id"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/></svg></button>`, 'info-id-value')}
@@ -256,8 +263,20 @@
                             <span class="chip-count">${relCounts[t]}</span>
                         </button>`;
                     }).join('');
+                // Direction segmented control. The arrows match the ones on
+                // the rows themselves, so "→ Out" and a row's "→ calls" are
+                // visibly the same claim.
+                const dirBtn = (key, arrow, label, tip) =>
+                    `<button class="rel-dir${state.relDir === key ? ' active' : ''}" data-dir="${key}" title="${escapeHtml(tip)}">
+                        <span class="rel-dir-arrow">${arrow}</span>${label}<span class="chip-count">${dirCounts[key]}</span>
+                    </button>`;
                 html += `<div class="rel-filters">
                         <input class="rel-search" type="search" placeholder="Filter by name…" value="${escapeHtml(state.relKeyword || '')}" autocomplete="off">
+                        <div class="rel-dir-switch" role="group" aria-label="Edge direction">
+                            ${dirBtn('all', '↔', 'All', 'Every edge touching this node, in either direction')}
+                            ${dirBtn('in', '←', 'In', 'Only edges pointing at this node — its callers, importers, containers')}
+                            ${dirBtn('out', '→', 'Out', 'Only edges leaving this node — what it calls, imports, contains')}
+                        </div>
                         <div class="filter-chips rel-edge-chips">${relEdgeChips}</div>
                     </div>
                     <div class="related-list" id="related-list"></div>
@@ -327,7 +346,8 @@
                 };
                 const renderRelList = () => {
                     const q = (state.relKeyword || '').trim().toLowerCase();
-                    const shown = related.filter(({ node, rel }) => {
+                    const shown = related.filter(({ node, rel, dir }) => {
+                        if (state.relDir !== 'all' && dir !== state.relDir) return false;
                         if (state.relEdgeFilters.size && !state.relEdgeFilters.has(rel || 'other')) return false;
                         if (q && !((node.name || '').toLowerCase().includes(q) || (node.id || '').toLowerCase().includes(q))) return false;
                         return true;
@@ -341,6 +361,14 @@
                 if (searchInput) searchInput.addEventListener('input', () => {
                     state.relKeyword = searchInput.value;
                     renderRelList();
+                });
+                body.querySelectorAll('.rel-dir-switch .rel-dir').forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        state.relDir = btn.dataset.dir;
+                        body.querySelectorAll('.rel-dir-switch .rel-dir')
+                            .forEach(b => b.classList.toggle('active', b === btn));
+                        renderRelList();
+                    });
                 });
                 body.querySelectorAll('.rel-edge-chips .filter-chip').forEach(chip => {
                     chip.addEventListener('click', () => {
