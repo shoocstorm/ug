@@ -75,73 +75,6 @@
             display: none;
         }
 
-        /* ─── Perf mode (>20000 nodes/edges) ─────────────────── */
-
-        body.perf-mode .node circle,
-        body.perf-mode .node circle:hover,
-        body.perf-mode .node.selected circle {
-            filter: none;
-            transition: none;
-        }
-
-        body.perf-mode .node circle:hover {
-            stroke-width: 2px;
-        }
-
-        body.perf-mode .edge {
-            transition: none;
-            pointer-events: none;
-        }
-
-        body.perf-mode .node.selected .ripple,
-        body.perf-mode .cycle-status.has-cycles .status-dot {
-            animation: none;
-        }
-
-        body.perf-mode #info.visible,
-        body.perf-mode .tooltip,
-        body.perf-mode .suggestion-item,
-        body.perf-mode .filter-chip,
-        body.perf-mode .section-header,
-        body.perf-mode .tool-tab,
-        body.perf-mode .info-tab,
-        body.perf-mode .icon-btn,
-        body.perf-mode .sidebar-footer button {
-            animation: none;
-            transition: none;
-        }
-
-        body.perf-mode #container {
-            background: var(--bg-deep);
-        }
-
-        body.perf-mode #sidebar,
-        body.perf-mode #sidebar-launcher,
-        body.perf-mode #info,
-        body.perf-mode .tooltip {
-            backdrop-filter: none;
-            -webkit-backdrop-filter: none;
-            background: rgba(15, 15, 17, 0.97);
-        }
-
-        body.perf-mode .filter-chip .chip-dot,
-        body.perf-mode .sidebar-header .brand-dot,
-        body.perf-mode .edge-breakdown-row .dot,
-        body.perf-mode #info .related-item .dot,
-        body.perf-mode .hier-row .dot,
-        body.perf-mode .header h1 {
-            box-shadow: none;
-            text-shadow: none;
-        }
-
-        body.perf-mode .header h1 {
-            background: none;
-            -webkit-background-clip: initial;
-            -webkit-text-fill-color: var(--text);
-            background-clip: initial;
-            color: var(--text);
-        }
-
         /* ─── Canvas overlays: legend, gizmo, nav/breadcrumb ─── */
 
         .canvas-overlay {
@@ -396,11 +329,6 @@
             box-shadow: inset 0 0 160px rgba(249, 115, 22, 0.07);
         }
 
-        body.perf-mode #axis-gizmo,
-        body.perf-mode #legend .legend-row .swatch {
-            box-shadow: none;
-        }
-
         /* ─── Bottom view bar (projection + toggles) ─────────── */
         /* Centred on the canvas the user can actually see, not on the window.
            The sidebar and the details panel both *overlay* the canvas, so a
@@ -533,6 +461,13 @@
             cursor: default;
         }
 
+        /* Except in solo mode, where it is disabled because it is permanently
+           on — greying it out there would read as "unavailable". */
+        #viewbar .vtoggle.locked:disabled {
+            opacity: 1;
+            cursor: default;
+        }
+
         #viewbar .vtoggle.active {
             border-color: var(--accent);
             background: rgba(249, 115, 22, 0.12);
@@ -546,9 +481,4 @@
 
         @keyframes vt-spin {
             to { transform: rotate(360deg); }
-        }
-
-        body.perf-mode #viewbar .vbtn.active,
-        body.perf-mode #viewbar .vtoggle.active {
-            box-shadow: none;
         }

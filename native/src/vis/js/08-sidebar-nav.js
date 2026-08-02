@@ -207,8 +207,8 @@
 
             const byId = state.nodeById || new Map(state.graph.nodes.map(n => [n.id, n]));
             // Predicates consumed by the graph's nodeVisibility / linkVisibility
-            // accessors. Filtered-out elements are hidden entirely (WebGL skips
-            // them), matching the old perf-mode behaviour for all sizes.
+            // accessors, and by the solo view builder. Filtered-out elements
+            // are hidden entirely rather than dimmed — WebGL skips them.
             state.nodeHidden = n => !nodeMatches(n);
             state.linkHidden = e => {
                 const sourceNode = byId.get(e.source.id || e.source);
@@ -217,20 +217,24 @@
                 if (targetNode && !nodeMatches(targetNode)) return true;
                 return !edgeMatches(e);
             };
+            // In solo mode the filters decide what gets *pulled onto* the
+            // canvas, not just what is hidden once there — otherwise a
+            // filtered-out neighbour still spends render budget.
+            if (state.soloOnly) rebuildSoloView();
             bumpGraphStyles();
             syncLegend();
         }
 
         // ─── Focus mode (isolate a node's neighbourhood) ─────
 
-        // Set of node ids directly connected to `id` (1-hop).
+        // Set of node ids directly connected to `id` (1-hop). Reads the
+        // adjacency index rather than scanning every edge — this runs on every
+        // selection and every Tab step.
         function neighborIdsOf(id) {
             const ids = new Set();
-            state.graph.edges.forEach(e => {
-                const sId = e.source.id || e.source;
-                const tId = e.target.id || e.target;
-                if (sId === id) ids.add(tId);
-                else if (tId === id) ids.add(sId);
+            edgesOf(id).forEach(e => {
+                const other = otherEnd(e, id);
+                if (other !== id) ids.add(other);
             });
             return ids;
         }
@@ -279,10 +283,20 @@
         }
 
         // Enabled only when there is something to solo; pressed state mirrors
-        // `state.focusIsolate`.
+        // `state.focusIsolate`. On a graph too large to draw whole the button
+        // is locked on: solo isn't a mode you can leave there, and a control
+        // that looks live but refuses to move is worse than one that reads as
+        // fixed.
         function syncSoloButton() {
             const btn = document.getElementById('toggle-solo');
             if (!btn) return;
+            if (state.soloOnly) {
+                btn.disabled = true;
+                btn.classList.add('active', 'locked');
+                btn.setAttribute('aria-pressed', 'true');
+                btn.title = 'This graph is too large to draw at once — solo mode is always on';
+                return;
+            }
             const armed = !!state.focusNode;
             btn.disabled = !armed;
             btn.classList.toggle('active', armed && state.focusIsolate);
@@ -404,9 +418,6 @@
             });
 
             const boxBtn = document.getElementById('toggle-box');
-            // The boundary box only exists in non-perf mode; hide the toggle when
-            // it can't do anything.
-            if (state.perfMode && boxBtn) boxBtn.style.display = 'none';
             if (boxBtn) boxBtn.addEventListener('click', () => {
                 state.showBoundary = !state.showBoundary;
                 boxBtn.classList.toggle('active', state.showBoundary);
@@ -519,8 +530,8 @@
                 }
                 // Distance-adaptive labels: hide labels for nodes far from the
                 // camera so a zoomed-out view stays clean and they reappear as you
-                // move in. Throttled; skipped when labels are globally disabled.
-                if (!state.skipLabels && frame % 8 === 0) updateAdaptiveLabels(cam);
+                // move in. Throttled.
+                if (frame % 8 === 0) updateAdaptiveLabels(cam);
             };
             requestAnimationFrame(tick);
         }
@@ -531,7 +542,7 @@
             const D2 = D * D;
             const focusOn = !!state.focusNode;
             const tourOn = tourState.active && tourState.routeIds.size > 0;
-            state.graph.nodes.forEach(n => {
+            state.view.nodes.forEach(n => {
                 const s = n.__nodeLabel;
                 if (!s) return;
                 // On a tour only the stops are named — the surrounding

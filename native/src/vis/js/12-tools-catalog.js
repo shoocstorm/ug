@@ -510,15 +510,20 @@
                 if (cur === targetId) { found = path; break; }
                 if (visited.has(cur)) continue;
                 visited.add(cur);
-                const outgoing = state.graph.edges.filter(e => (e.source.id || e.source) === cur);
-                for (const edge of outgoing) {
+                // Outgoing edges only — the walk follows direction. Taken from
+                // the adjacency index rather than re-scanning every edge per
+                // BFS step, which is the difference between instant and
+                // hopeless on a large graph.
+                for (const edge of edgesOf(cur)) {
+                    if ((edge.source.id || edge.source) !== cur) continue;
                     const next = edge.target.id || edge.target;
                     if (!visited.has(next)) queue.push([next, [...path, next]]);
                 }
             }
 
             if (found) {
-                return { found: true, path: found.map(id => truncateName(id)), hops: found.length - 1 };
+                // `path` is for display; `ids` is what can be drawn.
+                return { found: true, ids: found, path: found.map(id => truncateName(id)), hops: found.length - 1 };
             } else {
                 return { found: false };
             }

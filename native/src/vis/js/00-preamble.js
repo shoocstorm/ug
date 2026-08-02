@@ -60,6 +60,19 @@
             focusNode: null,        // id of the focused node (null = off)
             focusSet: new Set(),    // node ids kept bright while focused
             focusIsolate: false,    // solo mode: hide the rest instead of dimming it
+            // Solo mode (large graphs). Past SOLO_THRESHOLD elements the whole
+            // graph is never drawn: `state.graph` stays complete for search,
+            // filters and stats, while `state.view` holds the handful of nodes
+            // actually handed to the renderer. Below the threshold the two are
+            // the same object and nothing changes.
+            soloOnly: false,        // forced solo: the canvas only ever shows a neighbourhood
+            view: null,             // { nodes, edges } passed to Graph.graphData()
+            viewIds: new Set(),     // ids currently in the view
+            viewSeeds: new Set(),   // ids explicitly placed on the canvas
+            viewExpanded: new Set(),// seeds whose neighbours are drawn too
+            viewTruncated: 0,       // neighbours the render budget left out
+            adj: null,              // Map<id, edge[]> over the full graph, built once
+            _viewMerge: false,      // one-shot: next selection merges instead of replacing
             // Navigation history (visited node ids) + cursor for back/forward.
             history: [],
             historyIndex: -1,

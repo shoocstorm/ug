@@ -902,13 +902,3 @@
             color: var(--text-dim);
         }
 
-        body.perf-mode .catalog-modal,
-        body.perf-mode .catalog-dialog {
-            animation: none;
-        }
-
-        body.perf-mode .catalog-backdrop {
-            backdrop-filter: none;
-            -webkit-backdrop-filter: none;
-        }
-

@@ -1,0 +1,207 @@
+        /* ─── Solo mode (large graphs) ───────────────────────── */
+        /* The canvas starts empty here, so this file is mostly about the two
+           things that have to explain that: the guidance card that stands in
+           for the missing graph, and the counter that says how much of it is
+           on screen. See js/13-solo-view.js. */
+
+        #canvas-empty {
+            position: absolute;
+            inset: 0;
+            z-index: 6;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+            /* Clicks fall through to the canvas everywhere except the card, so
+               an empty overlay can never swallow an orbit drag. */
+            pointer-events: none;
+        }
+
+        #canvas-empty[hidden] {
+            display: none;
+        }
+
+        .ce-card {
+            pointer-events: auto;
+            width: min(520px, 100%);
+            padding: 28px 30px 24px;
+            text-align: center;
+            background: rgba(15, 15, 17, 0.72);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid var(--border-soft);
+            border-radius: 14px;
+            box-shadow: 0 8px 40px rgba(0, 0, 0, 0.45);
+        }
+
+        .ce-mark {
+            font-size: 26px;
+            line-height: 1;
+            color: var(--accent);
+            text-shadow: 0 0 18px rgba(249, 115, 22, 0.35);
+        }
+
+        .ce-card h2 {
+            margin: 10px 0 8px;
+            font-size: 17px;
+            font-weight: 600;
+            letter-spacing: 0.01em;
+            color: var(--text);
+        }
+
+        .ce-lede {
+            margin: 0 auto 18px;
+            max-width: 42ch;
+            font-size: 12.5px;
+            line-height: 1.65;
+            color: var(--text-muted);
+        }
+
+        .ce-count {
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--accent);
+        }
+
+        .ce-search-btn {
+            padding: 8px 18px;
+            font: inherit;
+            font-size: 12.5px;
+            font-weight: 500;
+            color: var(--bg-deep);
+            background: var(--accent);
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+
+        .ce-search-btn:hover {
+            background: #fb8c3c;
+        }
+
+        .ce-hubs-label {
+            margin: 18px 0 8px;
+            font-size: 11px;
+            color: var(--text-dim);
+        }
+
+        .ce-hubs {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            justify-content: center;
+        }
+
+        .ce-hubs[hidden],
+        .ce-hubs-label[hidden] {
+            display: none;
+        }
+
+        .ce-hub {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            max-width: 200px;
+            padding: 5px 10px;
+            font: inherit;
+            font-size: 11.5px;
+            color: var(--text-muted);
+            background: var(--bg-surface);
+            border: 1px solid var(--border-soft);
+            border-radius: 999px;
+            cursor: pointer;
+            transition: border-color 0.15s, color 0.15s;
+        }
+
+        .ce-hub:hover {
+            color: var(--text);
+            border-color: var(--accent-dim);
+        }
+
+        .ce-hub span {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .ce-hub svg {
+            width: 12px;
+            height: 12px;
+            flex-shrink: 0;
+        }
+
+        .ce-tips {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+            margin-top: 20px;
+            padding-top: 16px;
+            border-top: 1px solid var(--border-soft);
+            font-size: 11px;
+            line-height: 1.5;
+            color: var(--text-dim);
+        }
+
+        .ce-tips kbd {
+            padding: 1px 4px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            color: var(--text-muted);
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-soft);
+            border-radius: 3px;
+        }
+
+        /* ─── "n of N nodes" counter, under the header title ─── */
+
+        #view-count {
+            margin-top: 6px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10.5px;
+            line-height: 1.5;
+            color: var(--text-dim);
+        }
+
+        #view-count[hidden] {
+            display: none;
+        }
+
+        .vc-count {
+            color: var(--accent);
+        }
+
+        /* The budget notice only appears when something was left out, so it is
+           allowed to be louder than the count it follows. */
+        .vc-note {
+            display: block;
+            max-width: 34ch;
+            color: var(--warning);
+            opacity: 0.85;
+        }
+
+        /* ─── "Plot all results" (keyword + semantic panes) ──── */
+
+        .plot-all-btn {
+            display: block;
+            width: 100%;
+            margin: 8px 0 0;
+            padding: 7px 10px;
+            font: inherit;
+            font-size: 11.5px;
+            font-weight: 500;
+            color: var(--accent);
+            background: rgba(249, 115, 22, 0.08);
+            border: 1px solid var(--accent-dim);
+            border-radius: 7px;
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s;
+        }
+
+        .plot-all-btn:hover {
+            color: var(--text);
+            background: rgba(249, 115, 22, 0.18);
+        }
+
+        .plot-all-btn[hidden] {
+            display: none;
+        }

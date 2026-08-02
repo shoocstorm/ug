@@ -30,6 +30,8 @@
             const input = document.getElementById('sem-input');
             const exec = document.getElementById('sem-exec');
             exec.addEventListener('click', runSemanticSearch);
+            const plotAll = document.getElementById('sem-plot-all');
+            if (plotAll) plotAll.addEventListener('click', () => plotNodes(state.semMatches || []));
             input.addEventListener('keydown', e => {
                 if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
                     e.preventDefault();
@@ -117,6 +119,9 @@
             if (result.found) {
                 showPathResult(`${result.hops} hop(s): ${result.path.join(' → ')}`, true);
                 if (hint) hint.textContent = 'Path found! Click "Find Path" to find another.';
+                // A path nobody can see is only half an answer: in solo mode
+                // most of its hops are not on the canvas yet.
+                if (state.soloOnly) plotNodes(result.ids);
             } else {
                 showPathResult('No path found from ' + truncateName(state.pathSource) + ' to ' + truncateName(targetId), false);
             }
@@ -143,6 +148,8 @@
                 ? 'Running hybrid search…'
                 : 'Running semantic search…';
             resultsEl.innerHTML = '';
+            state.semMatches = [];
+            syncPlotAllButton(document.getElementById('sem-plot-all'), []);
 
             const t0 = performance.now();
             try {

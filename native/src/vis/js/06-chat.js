@@ -739,9 +739,11 @@
                     </div>
                     ${meta ? `<div class="sem-hit-meta" title="${escapeHtml(meta)}">${escapeHtml(meta)}</div>` : ''}
                 `;
-                card.querySelector('.sem-hit-head').addEventListener('click', () => {
+                card.querySelector('.sem-hit-head').addEventListener('click', (ev) => {
                     const local = state.nodeById ? state.nodeById.get(h.id) : null;
                     if (local) {
+                        // ⌘/Ctrl adds to the canvas instead of replacing it.
+                        if (ev.metaKey || ev.ctrlKey) state._viewMerge = true;
                         handleClick(null, local);
                         focusNode(local);
                     } else {
@@ -753,5 +755,13 @@
                 });
                 container.appendChild(card);
             });
+
+            // In solo mode the hits are just names until something draws them;
+            // offer the whole set in one go, same as the keyword pane. Hits the
+            // loaded graph doesn't contain can't be drawn, so they don't count.
+            state.semMatches = hits
+                .map(h => h.id)
+                .filter(id => state.nodeById && state.nodeById.has(id));
+            syncPlotAllButton(document.getElementById('sem-plot-all'), state.semMatches);
         }
 

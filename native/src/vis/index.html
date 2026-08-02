@@ -500,6 +500,9 @@
             <div class="header-kicker">UltraGraph</div>
             <h1>Knowledge Graph</h1>
             <p id="graph-title">AI-ready knowledge graph with enhanced MCP tools</p>
+            <!-- Solo mode: how much of the graph is actually on screen, and
+                 whether the render budget cut anything off. -->
+            <div id="view-count" hidden></div>
             <div class="header-badges">
                 <span class="header-badge" title="MCP tools for AI agents (Claude, Cursor, Windsurf, etc.)">
                     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -826,6 +829,9 @@
                                     </svg>
                                 </button>
                             </div>
+                            <!-- Solo mode only (hidden otherwise): draw every
+                                 match at once instead of one at a time. -->
+                            <button type="button" class="plot-all-btn" id="search-plot-all" hidden></button>
                             <div id="search-suggestions"></div>
                             <div class="search-meta">
                                 <span id="search-meta-count"></span>
@@ -848,6 +854,9 @@
                                 <button id="sem-exec" type="button">Search</button>
                             </div>
                             <div id="sem-status"></div>
+                            <!-- Solo mode only: same "draw the whole set" affordance
+                                 the keyword pane has. -->
+                            <button type="button" class="plot-all-btn" id="sem-plot-all" hidden></button>
                             <div id="sem-results"></div>
                             <!-- Replaces the old standalone cap-disabled section: the Search
                                  pane stays open (Keyword always works) and this note explains
@@ -1083,6 +1092,29 @@
         <div id="loading">
             <div class="loader"></div>
             <p>Loading graph...</p>
+        </div>
+
+        <!-- Solo mode only: what the canvas says before anything is on it.
+             A blank 3D scene with no explanation reads as a broken page, so
+             this states why nothing is drawn and hands over the first move. -->
+        <div id="canvas-empty" hidden>
+            <div class="ce-card">
+                <div class="ce-mark">◎</div>
+                <h2>Solo mode</h2>
+                <p class="ce-lede">
+                    This graph has <span class="ce-count">—</span> nodes — too many to draw at
+                    once, and unreadable if we did. Pick a node and you'll see it with
+                    everything it connects to.
+                </p>
+                <button type="button" class="ce-search-btn">Search for a node</button>
+                <div class="ce-hubs-label">or start from one of the most connected:</div>
+                <div class="ce-hubs"></div>
+                <div class="ce-tips">
+                    <span><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + click a result to add it without clearing the canvas</span>
+                    <span>Click any node on the canvas to pull in its neighbours</span>
+                    <span>Node and edge type filters decide what gets drawn</span>
+                </div>
+            </div>
         </div>
 
         <div class="tooltip" id="tooltip">

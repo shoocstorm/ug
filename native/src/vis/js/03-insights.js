@@ -366,9 +366,15 @@
             if (!state.nodeById) return;
             const found = ids.map(i => state.nodeById.get(i)).filter(Boolean);
             if (!found.length) return;
+            // In solo mode the region has to be drawn before it can be focused —
+            // none of these nodes is on the canvas yet.
+            if (state.soloOnly) plotNodes(found.map(n => n.id));
             state.focusNode = found[0].id;
             state.focusSet = new Set(found.map(n => n.id));
             document.body.classList.add('focus-active');
+            // Without this the Solo button stays greyed out even though there
+            // is now a focus to solo.
+            syncSoloButton();
             bumpGraphStyles();
             focusNode(found[0]);
         }
@@ -443,14 +449,21 @@
             const nodeCount = state.graph.nodes.length;
             const edgeCount = state.graph.edges.length;
             const totalElements = Math.max(nodeCount, edgeCount);
-            state.skipLabels = totalElements > 20000;
-            state.perfMode = totalElements > 20000;
             state.nodeById = new Map(state.graph.nodes.map(n => [n.id, n]));
-            document.body.classList.toggle('perf-mode', state.perfMode);
+            buildAdjacency();
+
+            // Past the threshold the whole graph is never drawn. `state.graph`
+            // still holds all of it — search, filters, stats and path-finding
+            // read it — but the renderer is handed `state.view`, which starts
+            // empty and only ever holds one neighbourhood at a time. Below the
+            // threshold the two are the same object, so nothing changes.
+            state.soloOnly = totalElements > SOLO_THRESHOLD;
+            state.view = state.soloOnly ? { nodes: [], edges: [] } : state.graph;
+            document.body.classList.toggle('solo-only', state.soloOnly);
 
             document.getElementById('graph-title').textContent =
                 `${nodeCount} nodes, ${edgeCount} edges` +
-                (state.perfMode ? ' · perf mode' : '');
+                (state.soloOnly ? ' · solo mode' : '');
 
             buildNodeFilterChips();
             buildEdgeFilterChips();
@@ -481,6 +494,9 @@
             wireCatalog();
             probeCapabilities();
             startHealthPolling();
+            // Solo mode opens on an empty canvas, so it needs something there
+            // to explain itself and to give the user a first move.
+            if (state.soloOnly) { setupSoloEmptyState(); updateSoloHud(); }
 
             document.getElementById('info-close').addEventListener('click', () => {
                 document.getElementById('info').classList.remove('visible');

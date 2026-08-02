@@ -17,6 +17,16 @@
                 refreshSuggestions('');
                 input.focus();
             });
+
+            // Solo mode only: draw the whole match set at once, rather than
+            // one node at a time. Hidden below the threshold, where the graph
+            // is already fully on screen.
+            const plotAll = document.getElementById('search-plot-all');
+            if (plotAll) plotAll.addEventListener('click', () => {
+                const matches = state.searchMatches || [];
+                if (!matches.length) return;
+                plotNodes(matches.slice(0, SOLO_MAX_NODES).map(n => n.id));
+            });
         }
 
         function refreshSuggestions(query) {
@@ -42,6 +52,9 @@
 
             const display = sorted.slice(0, 50);
             state.currentSuggestions = display;
+            // The full match set, not just the fifty shown: "Plot all results"
+            // draws from this.
+            state.searchMatches = q ? sorted : [];
             state.suggestionIndex = -1;
 
             // Query-driven, like the Semantic/Hybrid panes: render cards only
@@ -71,7 +84,7 @@
                         `;
                         item.addEventListener('mousedown', evt => {
                             evt.preventDefault();
-                            selectSearchResult(n);
+                            selectSearchResult(n, evt);
                         });
                         container.appendChild(item);
                     });
@@ -85,6 +98,8 @@
             } else {
                 meta.textContent = `${state.graph.nodes.length} nodes`;
             }
+
+            syncPlotAllButton(document.getElementById('search-plot-all'), state.searchMatches);
         }
 
         function handleSearchKey(e) {
@@ -101,7 +116,7 @@
                 e.preventDefault();
                 const idx = state.suggestionIndex >= 0 ? state.suggestionIndex : 0;
                 if (state.currentSuggestions[idx]) {
-                    selectSearchResult(state.currentSuggestions[idx]);
+                    selectSearchResult(state.currentSuggestions[idx], e);
                 }
             } else if (e.key === 'Escape') {
                 document.getElementById('search').value = '';
@@ -118,9 +133,13 @@
             if (el) el.scrollIntoView({ block: 'nearest' });
         }
 
-        function selectSearchResult(n) {
+        // `evt` is optional: with ⌘/Ctrl held the pick is added to whatever is
+        // already on the canvas instead of replacing it (solo mode only —
+        // below the threshold everything is drawn anyway).
+        function selectSearchResult(n, evt) {
             document.getElementById('search').value = n.name;
             if (state.pathMode) exitPathMode();
+            if (evt && (evt.metaKey || evt.ctrlKey)) state._viewMerge = true;
             handleClick(null, n);
             focusNode(n);
         }

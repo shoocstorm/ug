@@ -27,21 +27,21 @@
             if (el) el.style.cursor = d ? 'pointer' : null;
             const tooltip = document.getElementById('tooltip');
 
-            // Recompute connected-node / link highlight sets (skipped in perf mode).
-            if (!state.perfMode) {
-                state.highlightNodes.clear();
-                state.highlightLinks.clear();
-                if (d) {
-                    state.highlightNodes.add(d.id);
-                    state.graph.edges.forEach(e => {
-                        const sId = e.source.id || e.source;
-                        const tId = e.target.id || e.target;
-                        if (sId === d.id) { state.highlightNodes.add(tId); state.highlightLinks.add(e); }
-                        else if (tId === d.id) { state.highlightNodes.add(sId); state.highlightLinks.add(e); }
-                    });
-                }
-                bumpGraphStyles();
+            // Recompute connected-node / link highlight sets. Scoped to the
+            // view: the highlight sets are compared against the edge objects
+            // the renderer holds, and off-screen edges have nothing to light up.
+            state.highlightNodes.clear();
+            state.highlightLinks.clear();
+            if (d) {
+                state.highlightNodes.add(d.id);
+                state.view.edges.forEach(e => {
+                    const sId = e.source.id || e.source;
+                    const tId = e.target.id || e.target;
+                    if (sId === d.id) { state.highlightNodes.add(tId); state.highlightLinks.add(e); }
+                    else if (tId === d.id) { state.highlightNodes.add(sId); state.highlightLinks.add(e); }
+                });
             }
+            bumpGraphStyles();
 
             if (!d) {
                 tooltip.classList.remove('visible');
@@ -65,6 +65,12 @@
         }
 
         function handleClick(event, d) {
+            // Every way of picking a node — the canvas, search, semantic hits,
+            // chat citations, the catalog, insights, the breadcrumb, Tab
+            // stepping, a tour stop — lands here, so solo mode only has to
+            // hook this one place to keep the canvas in step with the selection.
+            if (state.soloOnly) showInView(d);
+
             const info = document.getElementById('info');
             const body = document.getElementById('info-body');
             const jumpBtn = document.getElementById('jump-btn');
@@ -145,12 +151,19 @@
             }
             document.getElementById('info-title').textContent = truncateName(d.name);
 
+            // This node's neighbours, straight off the adjacency index. The
+            // endpoints are resolved through nodeById rather than read off the
+            // edge: force-graph rewrites source/target into node objects on
+            // the arrays it is handed, and in solo mode the graph's own edges
+            // are never handed to it, so they still carry plain ids.
             const related = [];
-            state.graph.edges.forEach(e => {
+            edgesOf(d.id).forEach(e => {
                 const sId = e.source.id || e.source;
                 const tId = e.target.id || e.target;
-                if (sId === d.id) related.push({ node: e.target, rel: e.rel, dir: 'out' });
-                else if (tId === d.id) related.push({ node: e.source, rel: e.rel, dir: 'in' });
+                const otherId = sId === d.id ? tId : sId;
+                const node = state.nodeById.get(otherId);
+                if (!node) return;
+                related.push({ node, rel: e.rel, dir: sId === d.id ? 'out' : 'in' });
             });
 
             // Related-tab filters. Edge chips count this node's neighbours
@@ -272,9 +285,12 @@
             // re-rendered by the filters below — can re-bind its rows.
             const wireNavTargets = scope => {
                 scope.querySelectorAll('.related-item, .hier-row, .info-chip.linked').forEach(item => {
-                    item.addEventListener('click', () => {
-                        const t = state.graph.nodes.find(n => n.id === item.dataset.id);
+                    item.addEventListener('click', (ev) => {
+                        const t = state.nodeById.get(item.dataset.id);
                         if (!t) return;
+                        // Same modifier as the search results: keep what is on
+                        // the canvas and add this neighbour to it.
+                        if (ev.metaKey || ev.ctrlKey) state._viewMerge = true;
                         if (state.pathMode) {
                             state.pathSource = t.id;
                             const hint = info.querySelector('.path-hint');
@@ -1043,6 +1059,10 @@
             state.nodeFilters.clear();
             state.edgeFilters.clear();
             document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
+            // Reset means "back to how the page opened", and in solo mode that
+            // is a bare canvas with the guidance overlay. Done before
+            // applyFilters so the view is only rebuilt once.
+            if (state.soloOnly) { state.viewSeeds = new Set(); state.viewExpanded = new Set(); }
             applyFilters();
             setActiveViewBtn('3d');
             frameGraph(600);

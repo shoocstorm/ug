@@ -41,6 +41,11 @@
         // an empty focus set would hide every node and leave a blank canvas,
         // and a tour owns isolation while it runs.
         function focusIsolateOn() {
+            // In solo mode the *view* already holds nothing but the chosen
+            // neighbourhood, so a second isolation layer has nothing to add and
+            // plenty to break: it would hide everything outside the last
+            // anchor's focus set, blanking a plotted result set.
+            if (state.soloOnly) return false;
             return state.focusIsolate
                 && !!state.focusNode
                 && state.focusSet.size > 0
@@ -160,7 +165,7 @@
         // nodes, and an optional text label.
         function makeNodeObject(n) {
             const radius = nodeRadiusFor(n);
-            const seg = state.perfMode ? 6 : 16;
+            const seg = 16;   // sphere tesselation, shared by the core and the shell
             const group = new THREE.Group();
 
             const mat = new THREE.MeshBasicMaterial({ color: nodeColorFor(n), transparent: true, opacity: 0.95 });
@@ -170,59 +175,55 @@
             n.__nodeRadius = radius;
             group.add(core);
 
-            if (!state.perfMode) {
-                // Soft tinted radial-gradient halo — reads as the out-of-focus
-                // ink bleed around every node in the reference art.
-                const halo = new THREE.Sprite(new THREE.SpriteMaterial({
-                    map: glowTexture(),
-                    color: config.getColor(n.group),
-                    transparent: true,
-                    opacity: 0.3,
-                    depthWrite: false,
-                }));
-                n.__haloBase = radius * 4.5;
-                halo.scale.setScalar(n.__haloBase);
-                n.__nodeHalo = halo;
-                group.add(halo);
+            // Soft tinted radial-gradient halo — reads as the out-of-focus
+            // ink bleed around every node in the reference art.
+            const halo = new THREE.Sprite(new THREE.SpriteMaterial({
+                map: glowTexture(),
+                color: config.getColor(n.group),
+                transparent: true,
+                opacity: 0.3,
+                depthWrite: false,
+            }));
+            n.__haloBase = radius * 4.5;
+            halo.scale.setScalar(n.__haloBase);
+            n.__nodeHalo = halo;
+            group.add(halo);
 
-                // Larger nodes get a translucent outer shell — the nucleus-
-                // inside-a-membrane look the big cells in the reference have.
-                if (radius >= 6) {
-                    const shell = new THREE.Mesh(
-                        new THREE.SphereGeometry(radius * 1.65, seg, seg),
-                        new THREE.MeshBasicMaterial({
-                            color: config.getColor(n.group),
-                            transparent: true,
-                            opacity: 0.14,
-                            depthWrite: false,
-                        }));
-                    // Kept on the node so dimming (focus / tour) can fade the
-                    // shell too — otherwise big nodes stay visible through it.
-                    n.__nodeShell = shell;
-                    n.__shellBase = 0.14;
-                    group.add(shell);
-                }
+            // Larger nodes get a translucent outer shell — the nucleus-
+            // inside-a-membrane look the big cells in the reference have.
+            if (radius >= 6) {
+                const shell = new THREE.Mesh(
+                    new THREE.SphereGeometry(radius * 1.65, seg, seg),
+                    new THREE.MeshBasicMaterial({
+                        color: config.getColor(n.group),
+                        transparent: true,
+                        opacity: 0.14,
+                        depthWrite: false,
+                    }));
+                // Kept on the node so dimming (focus / tour) can fade the
+                // shell too — otherwise big nodes stay visible through it.
+                n.__nodeShell = shell;
+                n.__shellBase = 0.14;
+                group.add(shell);
             }
 
-            if (!state.skipLabels) {
-                const label = truncateName(n.name);
-                if (label) {
-                    const s = new SpriteText(label);
-                    s.color = CANVAS.label;
-                    s.fontFace = 'JetBrains Mono, monospace';
-                    s.textHeight = 3.5;
-                    s.material.depthWrite = false;
-                    // Sprite-text labels are NPOT canvas textures; skip mipmaps to
-                    // avoid blurry text and unsupported-mipmap paths on some GPUs.
-                    if (s.material.map) {
-                        s.material.map.generateMipmaps = false;
-                        s.material.map.minFilter = THREE.LinearFilter;
-                        s.material.map.needsUpdate = true;
-                    }
-                    s.position.set(0, radius + 6, 0);
-                    n.__nodeLabel = s;
-                    group.add(s);
+            const label = truncateName(n.name);
+            if (label) {
+                const s = new SpriteText(label);
+                s.color = CANVAS.label;
+                s.fontFace = 'JetBrains Mono, monospace';
+                s.textHeight = 3.5;
+                s.material.depthWrite = false;
+                // Sprite-text labels are NPOT canvas textures; skip mipmaps to
+                // avoid blurry text and unsupported-mipmap paths on some GPUs.
+                if (s.material.map) {
+                    s.material.map.generateMipmaps = false;
+                    s.material.map.minFilter = THREE.LinearFilter;
+                    s.material.map.needsUpdate = true;
                 }
+                s.position.set(0, radius + 6, 0);
+                n.__nodeLabel = s;
+                group.add(s);
             }
             return group;
         }
@@ -270,7 +271,10 @@
 
             Graph = ForceGraph3D({ controlType: 'orbit' })(el)
                 .backgroundColor(CANVAS.bg)
-                .graphData({ nodes: state.graph.nodes, links: state.graph.edges })
+                // The *view*, not the graph: in solo mode this starts empty and
+                // only ever holds a neighbourhood (see 13-solo-view.js). Below
+                // the threshold `state.view` is `state.graph` itself.
+                .graphData({ nodes: state.view.nodes, links: state.view.edges })
                 .nodeId('id')
                 // Suppress the library's own hover tooltip. Its `nodeLabel`
                 // accessor defaults to the `name` field, so leaving it unset
@@ -290,7 +294,7 @@
                 // reference art; everything else stays a fine strand.
                 .linkWidth(e => e.rel === 'Contains' ? 1.1 : 0.45)
                 .linkVisibility(linkVisibleFor)
-                .linkDirectionalArrowLength(state.perfMode ? 0 : 3)
+                .linkDirectionalArrowLength(3)
                 .linkDirectionalArrowRelPos(1)
                 .linkDirectionalParticles(linkParticlesFor)
                 .linkDirectionalParticleWidth(1.6)
@@ -304,20 +308,19 @@
                 .height(height);
 
             const charge = Graph.d3Force('charge');
-            // smaller charge in perf mode so the layout doesn't explode outward and the camera doesn't have to fly miles away to fit it all.
-            if (charge) charge.strength(state.perfMode ? -50 : -70);
+            if (charge) charge.strength(-70);
             // shorter Link distance, means closer connected nodes
             const linkForce = Graph.d3Force('link');
-            if (linkForce) linkForce.distance(state.perfMode ? 35 : 50);
+            if (linkForce) linkForce.distance(50);
             Graph.d3Force('zBound', makeZBoundForce());
 
             // Converge fast so the user isn't waiting for the layout to settle:
             // steeper alpha decay + extra velocity friction stop the slow outward
             // drift much sooner, and the cooldown cap guarantees the engine quits
             // within a bounded number of ticks regardless of graph size.
-            Graph.d3AlphaDecay(state.perfMode ? 0.05 : 0.07);
+            Graph.d3AlphaDecay(0.07);
             Graph.d3VelocityDecay(0.6);
-            Graph.cooldownTicks(state.perfMode ? 80 : 100);
+            Graph.cooldownTicks(100);
 
             // Subtle gradient backdrop (in-scene, so it sits behind the graph and
             // reads as blurred ambient washes instead of a flat white void).
@@ -329,20 +332,18 @@
 
             // Animated selection marker: a spinning, pulsing ring that sits on the
             // currently selected node (added to the scene, repositioned each frame).
-            if (!state.perfMode) {
-                selectionRing = new THREE.Sprite(new THREE.SpriteMaterial({
-                    map: ringTexture(),
-                    color: 0xff3d00,
-                    transparent: true,
-                    opacity: 0,
-                    depthWrite: false,
-                    depthTest: false,
-                }));
-                selectionRing.visible = false;
-                selectionRing.renderOrder = 999;
-                Graph.scene().add(selectionRing);
-                startSelectionAnimation();
-            }
+            selectionRing = new THREE.Sprite(new THREE.SpriteMaterial({
+                map: ringTexture(),
+                color: 0xff3d00,
+                transparent: true,
+                opacity: 0,
+                depthWrite: false,
+                depthTest: false,
+            }));
+            selectionRing.visible = false;
+            selectionRing.renderOrder = 999;
+            Graph.scene().add(selectionRing);
+            startSelectionAnimation();
 
             // Frame the bulk of the graph once the layout settles. Use frameGraph
             // (percentile-based) rather than zoomToFit so a few far-flung outlier
@@ -352,8 +353,10 @@
                 // box must be rebuilt on every settle too — sizing it once from an
                 // early snapshot leaves nodes outside it as the layout expands.
                 applyDepthCues();
-                if (!state.perfMode) { updateBoundaryCube(); updateParticleField(); }
-                // Only fly the camera the first time.
+                updateBoundaryCube();
+                updateParticleField();
+                // Only fly the camera the first time — or the first time after
+                // solo mode swapped the view out from under it.
                 if (state._didFit) return;
                 state._didFit = true;
                 frameGraph(900);
@@ -369,15 +372,13 @@
             // the cloud — nodes drift outward before the sim settles, so a box from
             // an early snapshot would leave them poking out. Throttled, and only
             // until the first real settle.
-            if (!state.perfMode) {
-                Graph.onEngineTick(() => {
-                    if (state._boxSettled || !state.showBoundary) return;
-                    const now = performance.now();
-                    if (now - (state._lastBoxFit || 0) < 150) return;
-                    state._lastBoxFit = now;
-                    updateBoundaryCube();
-                });
-            }
+            Graph.onEngineTick(() => {
+                if (state._boxSettled || !state.showBoundary) return;
+                const now = performance.now();
+                if (now - (state._lastBoxFit || 0) < 150) return;
+                state._lastBoxFit = now;
+                updateBoundaryCube();
+            });
 
             // Drives the orientation gizmo + distance-adaptive labels.
             startOverlayLoop();
@@ -386,7 +387,7 @@
         // Centroid + a robust (90th-percentile) radius of the laid-out graph,
         // ignoring far-flung outliers. Shared by camera framing and depth cues.
         function computeExtent() {
-            const nodes = state.graph.nodes.filter(n => Number.isFinite(n.x));
+            const nodes = state.view.nodes.filter(n => Number.isFinite(n.x));
             if (!nodes.length) return null;
             let cx = 0, cy = 0, cz = 0;
             nodes.forEach(n => { cx += n.x; cy += n.y; cz += n.z || 0; });
@@ -626,7 +627,7 @@
 
         function updateBoundaryCube() {
             if (!Graph) return;
-            const nodes = state.graph.nodes.filter(n => Number.isFinite(n.x));
+            const nodes = state.view.nodes.filter(n => Number.isFinite(n.x));
             if (!nodes.length) return;
             let minX = Infinity, maxX = -Infinity;
             let minY = Infinity, maxY = -Infinity;
@@ -810,8 +811,8 @@
         }
 
         function updateParticleField() {
-            if (!Graph || state.perfMode) return;
-            const nodes = state.graph.nodes.filter(n => Number.isFinite(n.x));
+            if (!Graph) return;
+            const nodes = state.view.nodes.filter(n => Number.isFinite(n.x));
             if (!nodes.length) return;
             // Rebuilt on every settle; dispose the old field's GPU resources.
             if (particleField) {
@@ -900,7 +901,9 @@
             if (!Graph) return;
             const focusOn = !!state.focusNode;
             // Custom node objects own their material, so recolour them directly.
-            state.graph.nodes.forEach(n => {
+            // Only what is on screen: in solo mode that is the difference
+            // between a few hundred nodes per hover and a hundred thousand.
+            state.view.nodes.forEach(n => {
                 if (n.__nodeMat) n.__nodeMat.color.set(nodeColorFor(n));
                 const sel = state.selectedNode && n.id === state.selectedNode.id;
                 // On a tour, brightness is a four-ring gradient (this stop →
