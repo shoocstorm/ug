@@ -469,11 +469,22 @@
             buildEdgeFilterChips();
             buildLegend();
             renderIndexStats();
+            renderStartHere();
             createGraph();
             wireNav();
             wireViewbar();
 
-            document.getElementById('loading').style.display = 'none';
+            // The data is loaded but the diagram isn't drawn yet: the force
+            // layout + first WebGL paint happen over the next frames. Keep the
+            // loading overlay up (it's released by the renderer on its first
+            // painted frame) so there's no blank canvas with no feedback.
+            const lp = document.getElementById('load-phase');
+            if (lp) lp.textContent = 'Rendering graph…';
+            const prog = document.getElementById('load-progress');
+            if (prog) prog.classList.add('indeterminate');
+            const fill = document.getElementById('load-progress-bar');
+            if (fill) fill.style.width = '';
+
             document.getElementById('sidebar').classList.remove('pending');
             document.getElementById('sidebar-launcher').classList.remove('pending');
             wireSidebarSections();

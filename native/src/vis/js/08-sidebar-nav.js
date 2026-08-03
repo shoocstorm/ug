@@ -223,6 +223,7 @@
             if (state.soloOnly) rebuildSoloView();
             bumpGraphStyles();
             syncLegend();
+            writeUrlState();
         }
 
         // ─── Focus mode (isolate a node's neighbourhood) ─────
@@ -250,6 +251,7 @@
             // Solo, if on, follows the new anchor rather than stranding the
             // view on the previous node's neighbourhood.
             syncSoloButton();
+            writeUrlState();
         }
 
         // Drop the focus dimming. Does not touch the selection or history.
@@ -261,6 +263,7 @@
             // canvas on the next focus.
             state.focusIsolate = false;
             syncSoloButton();
+            writeUrlState();
         }
 
         // Solo mode: show *only* the focused node and what it connects to.
@@ -280,6 +283,7 @@
             } else if (state.selectedNode) {
                 focusNode(state.selectedNode);
             }
+            writeUrlState();
         }
 
         // Enabled only when there is something to solo; pressed state mirrors

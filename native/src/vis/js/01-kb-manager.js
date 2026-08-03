@@ -83,6 +83,28 @@
             // straight to the project the user just picked instead of
             // making them pick it again from the manager.
             const params = new URLSearchParams(window.location.search);
+            // A deep link (`?p=<project>`) opens that project straight away
+            // instead of the manager. If it isn't the server's active one,
+            // switch the server over first so the graph that comes back is
+            // the one the link pointed at.
+            const p = params.get('p');
+            if (p) {
+                state.activeProject = p;
+                if (caps.active !== p) {
+                    try {
+                        await fetch('/api/projects/select', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ name: p }),
+                        });
+                    } catch (e) {
+                        // Deep link to a project we can't reach — fall back to
+                        // whatever the server has active.
+                    }
+                }
+                loadGraph();
+                return;
+            }
             if (params.get('kbOpen') === '1') {
                 params.delete('kbOpen');
                 const rest = params.toString();
@@ -320,7 +342,12 @@
         // actually open the project the user just switched to.
         function reloadOntoActiveProject() {
             const url = new URL(window.location.href);
-            url.searchParams.set('kbOpen', '1');
+            // `p` is the deep-link project key — the reloaded page opens that
+            // project directly (see `bootstrap`). Fall back to the old
+            // `kbOpen` marker when no project is known so the reload still
+            // skips the manager.
+            if (state.activeProject) url.searchParams.set('p', state.activeProject);
+            else url.searchParams.set('kbOpen', '1');
             window.location.href = url.toString();
         }
 
@@ -331,6 +358,7 @@
         // ever runs once per load — see the `graphInitialized` comment.
         async function openProject(name, activeName) {
             hideKbManager();
+            state.activeProject = name;
             if (name === activeName) {
                 if (!graphInitialized) loadGraph();
                 return;

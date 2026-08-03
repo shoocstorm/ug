@@ -371,6 +371,10 @@
 
         function createGraph() {
             const el = document.getElementById('graph-3d');
+            // A fresh graph (first load, retry, project switch) means a fresh
+            // render: the loading overlay must stay up until this engine's
+            // first painted frame.
+            state._graphRevealed = false;
             window.addEventListener('mousemove', e => {
                 // page coords position the tooltip; client coords feed the
                 // pointerOverCanvas hit-test (elementFromPoint wants viewport
@@ -480,12 +484,22 @@
             // Fallbacks: settle may take a moment, so frame early too.
             setTimeout(autoFrame, 2500);
             setTimeout(autoFrame, 5000);
+            // If the engine somehow never ticks (e.g. an empty solo view), don't
+            // leave the loading overlay up forever — release it regardless.
+            setTimeout(graphReveal, 4000);
 
             // While the layout is still expanding, keep the boundary box enclosing
             // the cloud — nodes drift outward before the sim settles, so a box from
             // an early snapshot would leave them poking out. Throttled, and only
             // until the first real settle.
             Graph.onEngineTick(() => {
+                // First tick → the layout is spinning up and a frame is about
+                // to be painted. Release the loading overlay on the frame
+                // *after* the first paint (double rAF) so it never hides into
+                // a blank canvas mid-shader-compile.
+                if (!state._graphRevealed) {
+                    requestAnimationFrame(() => requestAnimationFrame(graphReveal));
+                }
                 if (state._boxSettled || !state.showBoundary) return;
                 const now = performance.now();
                 if (now - (state._lastBoxFit || 0) < 150) return;
@@ -495,6 +509,17 @@
 
             // Drives the orientation gizmo + distance-adaptive labels.
             startOverlayLoop();
+        }
+
+        // The loading overlay is owned by the render lifecycle now: data is
+        // loaded before the diagram exists, so the overlay stays up through
+        // the force-layout + first WebGL paint and only comes down once a
+        // frame has actually been drawn.
+        function graphReveal() {
+            if (state._graphRevealed) return;
+            state._graphRevealed = true;
+            const loading = document.getElementById('loading');
+            if (loading) loading.style.display = 'none';
         }
 
         // Centroid + a robust (90th-percentile) radius of the laid-out graph,

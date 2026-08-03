@@ -33,6 +33,7 @@
             const container = document.getElementById('search-suggestions');
             const meta = document.getElementById('search-meta-count');
             const q = query.trim().toLowerCase();
+            state.searchQuery = q;
             const filterActive = state.nodeFilters.size > 0;
 
             const candidates = state.graph.nodes.filter(n => {
@@ -100,6 +101,7 @@
             }
 
             syncPlotAllButton(document.getElementById('search-plot-all'), state.searchMatches);
+            writeUrlState();
         }
 
         function handleSearchKey(e) {

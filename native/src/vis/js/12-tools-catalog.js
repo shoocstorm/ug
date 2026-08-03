@@ -1,5 +1,46 @@
         // ─── Tools ──────────────────────────────────────────
 
+        // "Start here" strip: the most connected nodes, so the first view of
+        // a project has a concrete place to look (and clicking one drops
+        // straight into the focus/neighbour-stepping flow). Degree is read
+        // off the edge list, not the centrality metrics, so the strip works
+        // even on graphs that were never enriched.
+        function renderStartHere() {
+            const box = document.getElementById('start-here');
+            if (!box) return;
+            const degree = new Map();
+            state.graph.edges.forEach(e => {
+                const s = e.source.id || e.source;
+                const t = e.target.id || e.target;
+                degree.set(s, (degree.get(s) || 0) + 1);
+                degree.set(t, (degree.get(t) || 0) + 1);
+            });
+            const top = [...degree.entries()]
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 5)
+                .map(([id]) => state.nodeById.get(id))
+                .filter(Boolean);
+            if (top.length < 2) {
+                box.closest('.section').style.display = 'none';
+                return;
+            }
+            box.closest('.section').style.display = '';
+            box.innerHTML = '';
+            top.forEach(n => {
+                const item = document.createElement('button');
+                item.type = 'button';
+                item.className = 'start-here-item';
+                item.title = `Focus ${escapeHtml(n.name)} (${degree.get(n.id)} edges)`;
+                item.innerHTML = `
+                    ${nodeIconSvg(n.group)}
+                    <span class="name">${escapeHtml(truncateName(n.name))}</span>
+                    <span class="deg">${degree.get(n.id)}</span>
+                `;
+                item.addEventListener('click', () => { handleClick(null, n); focusNode(n); });
+                box.appendChild(item);
+            });
+        }
+
         function showCentrality() {
             const degEl = document.getElementById('degree-centrality');
             const betEl = document.getElementById('betweenness-centrality');
@@ -109,6 +150,7 @@
                 // Presets load on first reveal, not at boot — the pane is one
                 // of four and most sessions never open it.
                 if (name === 'insights') loadInsights();
+                writeUrlState();
             };
 
             tabs.forEach(t => t.addEventListener('click', () => activate(t.dataset.sub)));
@@ -141,8 +183,11 @@
                     renderTourHistory();
                     renderWalkHistory();
                 }
+                writeUrlState();
             };
             tabs.forEach(tab => tab.addEventListener('click', () => activate(tab.dataset.tab)));
+            // Exposed so the URL-state layer can switch panels on a deep link.
+            state.showPanelTab = activate;
         }
 
         function wireCatalog() {

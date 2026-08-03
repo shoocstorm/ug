@@ -2856,11 +2856,6 @@ fn run_upgrade(args: &[String]) {
         .filter(|v| !v.trim().is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| home.join(".local").join("share").join("ultragraph"));
-    let bin_dir = std::env::var("UG_BIN_DIR")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".local").join("bin"));
     let dot_ug = install_root.join(".ug");
 
     // Refuse to "upgrade" a from-source checkout: replacing
@@ -3007,6 +3002,11 @@ fn run_upgrade(args: &[String]) {
     // file at that path is the user's own — warn, never clobber it.
     #[cfg(unix)]
     {
+        let bin_dir = std::env::var("UG_BIN_DIR")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".local").join("bin"));
         let link = bin_dir.join("ug");
         let link_is_file = link
             .symlink_metadata()

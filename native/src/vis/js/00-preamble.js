@@ -170,18 +170,94 @@
         async function loadGraph() {
             const params = new URLSearchParams(window.location.search);
             const file = params.get('file') || 'graph.json';
-            document.getElementById('loading').style.display = 'block';
+            state.graphFile = file;
+            const loading = document.getElementById('loading');
+            loading.style.display = 'block';
+            loading.innerHTML = `
+                <div class="loader"></div>
+                <p class="load-phase" id="load-phase">Connecting…</p>
+                <div class="load-progress" id="load-progress" hidden><div class="load-progress-bar" id="load-progress-bar"></div></div>
+            `;
+            const setPhase = (text, pct) => {
+                const phase = document.getElementById('load-phase');
+                if (phase) phase.textContent = text;
+                const bar = document.getElementById('load-progress');
+                if (bar) bar.hidden = false;
+                const fill = document.getElementById('load-progress-bar');
+                if (fill) fill.style.width = (pct == null ? 24 : pct) + '%';
+            };
+            // A dead graph load used to be a terminal wall of text no one
+            // could act on. Turn the two dead ends into live paths: retry the
+            // same graph, or drop back to the knowledge-base manager.
+            const showFailure = (message) => {
+                loading.innerHTML = `
+                    <div class="load-error-card">
+                        <div class="load-error-title">Could not load the graph</div>
+                        <div class="load-error-msg">${escapeHtml(message)}</div>
+                        <div class="load-error-file">${escapeHtml(file)}</div>
+                        <div class="load-error-actions">
+                            <button type="button" class="load-error-btn" id="load-retry">Retry</button>
+                            ${isMultiMode ? '<button type="button" class="load-error-btn" id="load-back-kb">Back to knowledge bases</button>' : ''}
+                        </div>
+                    </div>`;
+                document.getElementById('load-retry').addEventListener('click', loadGraph);
+                const back = document.getElementById('load-back-kb');
+                if (back) back.addEventListener('click', () => {
+                    loading.style.display = 'none';
+                    hideKbManager();
+                    showKbManager(kbCapsCache || { mode: 'multi', projects: [], active: null });
+                });
+            };
+
             try {
-                const response = await fetch(file);
-                const data = await response.json();
+                const response = await fetch(file, { headers: { 'Accept-Encoding': 'identity' } });
+                if (!response.ok) throw new Error(`Server answered ${response.status} ${response.statusText}`);
+
+                // Drive the label through the phases with a real byte count
+                // where we know how big the file is. Identity encoding keeps
+                // `Content-Length` exact, so the bar is honest, not decorative.
+                const length = parseInt(response.headers.get('Content-Length') || '0', 10);
+                let data;
+                if (response.body && length > 0) {
+                    const reader = response.body.getReader();
+                    const chunks = [];
+                    let received = 0;
+                    setPhase('Downloading…', 0);
+                    for (;;) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        if (value) { chunks.push(value); received += value.length; }
+                        const pct = Math.min(100, Math.round((received / length) * 100));
+                        setPhase(`Downloading (${formatBytes(received)} of ${formatBytes(length)})…`, pct);
+                    }
+                    const all = new Uint8Array(received);
+                    let off = 0;
+                    for (const c of chunks) { all.set(c, off); off += c.length; }
+                    data = JSON.parse(new TextDecoder('utf-8').decode(all));
+                } else {
+                    data = await response.json();
+                }
+
+                setPhase('Building graph…', 100);
                 rawData = data;
                 transformData(data);
                 initialize();
                 graphInitialized = true;
+                // The URL may carry a view worth restoring (a shared link, or
+                // a refreshed deep link): apply it now that the graph exists.
+                // The loading overlay stays up until the renderer's first
+                // painted frame (graphReveal in 10-graph-render.js) — hiding
+                // it here would leave a blank canvas while the layout spins up.
+                applyUrlState(readUrlState());
             } catch (err) {
                 console.error('Failed to load graph:', err);
-                document.getElementById('loading').innerHTML =
-                    '<p style="color:#f87171">Failed to load graph.</p>';
+                showFailure(err.message || String(err));
             }
+        }
+
+        function formatBytes(n) {
+            if (n < 1024) return `${n} B`;
+            if (n < 1048576) return `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB`;
+            return `${(n / 1048576).toFixed(n < 10485760 ? 1 : 0)} MB`;
         }
 

@@ -57,6 +57,14 @@
                 }
                 closeDeleteConfirm();
                 if (wasActive && graphInitialized) {
+                    // The server already switched active away from the deleted
+                    // project, so point any post-reload deep link at the new
+                    // active one rather than the one that just vanished.
+                    try {
+                        const listRes = await fetch('/api/projects', { cache: 'no-store' });
+                        kbCapsCache = await listRes.json();
+                        state.activeProject = kbCapsCache && kbCapsCache.active ? kbCapsCache.active : null;
+                    } catch (e) { /* keep whatever activeProject already was */ }
                     reloadOntoActiveProject();
                     return;
                 }

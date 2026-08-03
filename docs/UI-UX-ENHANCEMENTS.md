@@ -8,6 +8,18 @@ placeholders are filled at build time; `serve.rs` only routes `/index.html` and
 These are the three changes with the highest ratio of user-visible payoff to
 implementation cost, ranked. Each is grounded in what the code does today.
 
+## Status: all three implemented
+
+| # | Item | Landed in |
+|---|------|-----------|
+| 1 | Deep-linkable URL state | `js/16-url-state.js` (new), plus `writeUrlState()`/`pushUrlState()` hooks in `08-sidebar-nav.js`, `09-search.js`, `11-interaction.js`, `12-tools-catalog.js`; `p=` deep link in `01-kb-manager.js` bootstrap; Copy link button beside `#jump-btn` in `index.html` |
+| 2 | ⌘K palette + `?` shortcut sheet | `js/17-palette.js` (new) — `KEYMAP` registry, palette overlays, capture-phase key bindings (`⌘K`, `?`, `r`, `t`); overlays + `<kbd class="btn-kbd">` hints in `index.html`; `css/15-enhance.css` (new) |
+| 3 | Honest loading + start-here | `loadGraph()` rewrite in `js/00-preamble.js` (streaming progress via `Content-Length` reader, `response.ok`, failure card with Retry / Back-to-KBs); `renderStartHere()` in `12-tools-catalog.js` rendered by `initialize()` into the Graph tab. The overlay now stays up *through* the render phase too: `initialize()` switches it to an indeterminate "Rendering graph…" sweep, and `graphReveal()` in `js/10-graph-render.js` releases it on the engine's first painted frame (plus a 4 s fallback), so the force-layout + first WebGL paint is never a blank canvas. |
+
+The prose below is the original design record. Where it cites a line number,
+treat it as approximate — the implementation shifted them; the files named in
+the status table above are the current truth.
+
 ---
 
 ## 1. Deep-linkable URL state (share a view, survive a reload)
@@ -67,7 +79,7 @@ Suggested keys — keep it short and stable, ignore unknown keys:
 
 Implementation sketch:
 
-1. Add `js/14-url-state.js` with `readUrlState()` / `writeUrlState()` and a
+1. Add `js/16-url-state.js` with `readUrlState()` / `writeUrlState()` and a
    `SYNC_KEYS` list. One module owns the encoding; nothing else touches
    `location`.
 2. Call `writeUrlState()` (debounced ~250 ms, `history.replaceState`) from the
@@ -278,9 +290,19 @@ broken graph rather than an error message.
 
 ## Suggested order of work
 
-1. **#1 URL state** — smallest diff, unblocks sharing, fixes the back button.
-2. **#3a fetch correctness + retry** — it is a bug, and it is ~20 lines.
-3. **#2 command palette** — the largest piece; do it once the keymap has a
-   single owner.
-4. **#3b/c progress + start-here** — polish that lands well after the palette
-   makes centrality reachable anyway.
+All three have landed (see status table at top). Backlog for the next pass,
+from the runners-up above:
+
+1. **Responsive / small-screen layout** — the only `@media` query is
+   `prefers-reduced-motion` in `css/07-kb-manager.css`; collapse the sidebar to
+   an overlay below ~1100 px.
+2. **Accessibility pass** — apply the KB-manager card `role`/`tabIndex`/`keydown`
+   pattern (`js/01-kb-manager.js`) to search results, catalog rows and insight
+   results; add focus management to the new palette.
+3. **Empty / zero-result states** — copy for search, insights and catalog
+   filters that match nothing.
+4. **Light theme** — CSS-variable pass over `config.colorMap` /
+   `config.relColorMap` (`js/00-preamble.js`).
+
+Per AGENTS.md §3a there are no users yet — a superseded idea in this doc should
+be deleted outright, not kept as an alias.

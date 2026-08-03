@@ -447,6 +447,10 @@
             syncWalkSeed(d);
             bumpGraphStyles();
             updateNavbar();
+            // A real selection is a navigation: push a history entry so the
+            // browser Back button retraces it. Suppressed replays (breadcrumb,
+            // popstate) skip this so they don't re-record.
+            if (!state.suppressHistory) pushUrlState();
 
             enrichFromDb(d.id);
         }
@@ -1110,6 +1114,7 @@
             document.getElementById('search').value = '';
             document.getElementById('search-clear').classList.remove('visible');
             document.getElementById('search-suggestions').classList.remove('visible');
+            state.searchQuery = '';
             document.getElementById('info').classList.remove('visible');
             state.nodeFilters.clear();
             state.edgeFilters.clear();

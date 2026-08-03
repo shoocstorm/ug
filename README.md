@@ -4,7 +4,9 @@ A local-first engine that turns codebases and documents into an interactive,
 queryable **Semantic Knowledge Graph**. Built with Rust and Node.js for speed.
 
 - **Intro**: [ultra-graph.web.app](https://ultra-graph.web.app)
-- **Demo**: [![UltraGraph demo](https://img.youtube.com/vi/3K-L7NSw9vs/maxresdefault.jpg)](https://youtu.be/3K-L7NSw9vs)
+- **Demo**: [Click to watch demo video](https://youtu.be/9Je4T8h1YX8)
+
+[![UltraGraph demo](docs/UG-Hybrid-Search.png)](https://youtu.be/9Je4T8h1YX8)
 
 ## Install
 

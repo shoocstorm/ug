@@ -529,7 +529,7 @@
                 </svg>
             </button>
             <div class="crumbs" id="nav-crumbs"></div>
-            <button class="nav-exit" id="nav-exit" title="Exit focus (Esc)">Exit focus</button>
+            <button class="nav-exit" id="nav-exit" title="Exit focus (Esc)">Exit focus <kbd class="btn-kbd">Esc</kbd></button>
         </div>
 
         <!-- Colour legend / quick type filter -->
@@ -748,6 +748,7 @@
                                     <path d="M8 5.2c0-.9 1-1.4 1.7-.9l9 6.8c.6.4.6 1.4 0 1.8l-9 6.8c-.7.5-1.7 0-1.7-.9z"/>
                                 </svg>
                                 Start tour
+                                <kbd class="btn-kbd">t</kbd>
                             </button>
                         </div>
                         <div class="tour-examples" id="tour-examples"></div>
@@ -1236,6 +1237,21 @@ traverse({
                 <!-- ─── Graph tab: repo meta + filters + analysis tools ─── -->
                 <div class="tab-pane active" data-tab="graph" id="pane-graph">
 
+                <!-- Start here: the most connected nodes, so the first view
+                     has a place to look before the graph is understood. -->
+                <div class="section" data-section="start-here">
+                    <div class="section-header">
+                        <span class="label">Start here</span>
+                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="6 9 12 15 18 9" />
+                        </svg>
+                    </div>
+                    <div class="section-body">
+                        <div class="start-here-list" id="start-here"></div>
+                        <p class="start-here-hint">The most connected nodes — click one to focus it and walk its neighbourhood.</p>
+                    </div>
+                </div>
+
                 <!-- Index stats -->
                 <div class="section" data-section="index-stats">
                     <div class="section-header">
@@ -1323,7 +1339,7 @@ traverse({
             </div>
 
             <div class="sidebar-footer">
-                <button id="reset">Reset View</button>
+                <button id="reset">Reset View <kbd class="btn-kbd">r</kbd></button>
             </div>
         </aside>
 
@@ -1352,6 +1368,13 @@ traverse({
                             stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
                             <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                        </svg>
+                    </button>
+                    <button class="icon-btn" id="copy-link-btn" title="Copy link to this view">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+                            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
                         </svg>
                     </button>
                     <button class="icon-btn" id="info-close" title="Close">
@@ -1391,6 +1414,32 @@ traverse({
                     <span>Click any node on the canvas to pull in its neighbours</span>
                     <span>Node and edge type filters decide what gets drawn</span>
                 </div>
+            </div>
+        </div>
+
+        <!-- Command palette (⌘K) and the keyboard shortcut sheet (?). -->
+        <div id="palette-overlay" class="palette-overlay">
+            <div class="palette-panel" role="dialog" aria-label="Command palette">
+                <div class="palette-input-row">
+                    <svg class="palette-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <circle cx="11" cy="11" r="8" /><path d="M21 21l-4.3-4.3" />
+                    </svg>
+                    <input type="text" id="palette-input" placeholder="Type a command, node, or insight…" autocomplete="off">
+                    <span class="palette-prefixes"><kbd>#</kbd> node&nbsp;<kbd>&gt;</kbd> action&nbsp;<kbd>?</kbd> insight</span>
+                </div>
+                <div class="palette-results" id="palette-results"></div>
+                <div class="palette-empty" id="palette-empty" hidden>No matches — try <kbd>#</kbd>, <kbd>&gt;</kbd> or <kbd>?</kbd>.</div>
+            </div>
+        </div>
+
+        <div id="shortcuts-overlay" class="palette-overlay">
+            <div class="shortcuts-panel" role="dialog" aria-label="Keyboard shortcuts">
+                <div class="shortcuts-head">
+                    <span class="title">Keyboard shortcuts</span>
+                    <button class="shortcuts-close" id="shortcuts-close" title="Close (Esc)">✕</button>
+                </div>
+                <div class="shortcuts-body" id="shortcuts-body"></div>
             </div>
         </div>
 
