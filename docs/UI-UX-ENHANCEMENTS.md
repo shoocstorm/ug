@@ -12,8 +12,8 @@ implementation cost, ranked. Each is grounded in what the code does today.
 
 | # | Item | Landed in |
 |---|------|-----------|
-| 1 | Deep-linkable URL state | `js/16-url-state.js` (new), plus `writeUrlState()`/`pushUrlState()` hooks in `08-sidebar-nav.js`, `09-search.js`, `11-interaction.js`, `12-tools-catalog.js`; `p=` deep link in `01-kb-manager.js` bootstrap; Copy link button beside `#jump-btn` in `index.html` |
-| 2 | ⌘K palette + `?` shortcut sheet | `js/17-palette.js` (new) — `KEYMAP` registry, palette overlays, capture-phase key bindings (`⌘K`, `?`, `r`, `t`); overlays + `<kbd class="btn-kbd">` hints in `index.html`; `css/15-enhance.css` (new) |
+| 1 | Deep-linkable URL state | `js/16-url-state.js` (new), plus `writeUrlState()`/`pushUrlState()` hooks in `08-sidebar-nav.js`, `09-search.js`, `11-interaction.js`, `12-tools-catalog.js`; `p=` deep link in `01-kb-manager.js` bootstrap; Copy link button beside `#jump-btn` in `index.html`, a palette "Copy link to this view" action, and a Try-this start-here button |
+| 2 | ⌘K palette + `?` shortcut sheet | `js/17-palette.js` (new) — `KEYMAP` registry, palette overlays, capture-phase key bindings (`⌘K`, `?`, `r`, `t`); overlays + `<kbd class="btn-kbd">` hints in `index.html`; always-visible `#palette-open-btn` / `#shortcuts-open-btn` in the sidebar header; `css/15-enhance.css` (new) |
 | 3 | Honest loading + start-here | `loadGraph()` rewrite in `js/00-preamble.js` (streaming progress via `Content-Length` reader, `response.ok`, failure card with Retry / Back-to-KBs); `renderStartHere()` in `12-tools-catalog.js` rendered by `initialize()` into the Graph tab. The overlay now stays up *through* the render phase too: `initialize()` switches it to an indeterminate "Rendering graph…" sweep, and `graphReveal()` in `js/10-graph-render.js` releases it on the engine's first painted frame (plus a 4 s fallback), so the force-layout + first WebGL paint is never a blank canvas. |
 
 The prose below is the original design record. Where it cites a line number,

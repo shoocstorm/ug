@@ -76,6 +76,7 @@
             { name: 'Download graph JSON', run: downloadGraph },
             { name: 'Download index JSON', run: downloadIndex },
             { name: 'Open settings', run: openSettings },
+            { name: 'Copy link to this view', run: copyCurrentLink },
             { name: 'Switch project', run: reopenKbManager },
             { name: 'Collapse sidebar', run: () => { const b = document.getElementById('sidebar-collapse'); if (b) b.click(); } },
         ];
@@ -230,6 +231,15 @@
             document.getElementById('shortcuts-overlay').addEventListener('click', (e) => {
                 if (e.target === document.getElementById('shortcuts-overlay')) closeShortcuts();
             });
+
+            // Always-visible triggers (sidebar header) + the Start-here "Try"
+            // buttons all point at the same three features, so the palette,
+            // the shortcut sheet and the share link each have a click path.
+            document.getElementById('palette-open-btn').addEventListener('click', openPalette);
+            document.getElementById('shortcuts-open-btn').addEventListener('click', openShortcuts);
+            document.getElementById('try-palette').addEventListener('click', openPalette);
+            document.getElementById('try-shortcuts').addEventListener('click', openShortcuts);
+            document.getElementById('try-copy-link').addEventListener('click', copyCurrentLink);
         }
 
         // Global bindings, capture phase so they beat the older bubble-phase

@@ -609,6 +609,21 @@
                     <h2 id="brand-title">UltraGraph</h2>
                 </div>
                 <div class="header-actions">
+                    <button id="palette-open-btn" title="Command palette (⌘K / Ctrl+K)" type="button">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="4 17 10 11 4 5" />
+                            <line x1="12" y1="19" x2="20" y2="19" />
+                        </svg>
+                    </button>
+                    <button id="shortcuts-open-btn" title="Keyboard shortcuts (?)" type="button">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="10" />
+                            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+                            <line x1="12" y1="17" x2="12.01" y2="17" />
+                        </svg>
+                    </button>
                     <button id="settings-open-btn" title="Settings (model, endpoints)" type="button">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                             stroke-linecap="round" stroke-linejoin="round">
@@ -1249,6 +1264,12 @@ traverse({
                     <div class="section-body">
                         <div class="start-here-list" id="start-here"></div>
                         <p class="start-here-hint">The most connected nodes — click one to focus it and walk its neighbourhood.</p>
+                        <div class="start-here-tools">
+                            <span class="sht-label">Try:</span>
+                            <button type="button" class="sht-btn" id="try-palette">Command palette <kbd class="btn-kbd">⌘K</kbd></button>
+                            <button type="button" class="sht-btn" id="try-shortcuts">Shortcuts <kbd class="btn-kbd">?</kbd></button>
+                            <button type="button" class="sht-btn" id="try-copy-link">Copy link</button>
+                        </div>
                     </div>
                 </div>
 

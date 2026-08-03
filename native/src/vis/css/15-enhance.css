@@ -156,6 +156,75 @@
             color: var(--text-dim);
         }
 
+        /* ─── "Try these" new-feature card ──────────────── */
+
+        .start-here-tools {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 12px;
+            padding-top: 10px;
+            border-top: 1px solid var(--border-soft);
+        }
+
+        .start-here-tools .sht-label {
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            color: var(--text-dim);
+        }
+
+        .start-here-tools .sht-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 5px 10px;
+            border: 1px solid var(--border);
+            border-radius: 7px;
+            background: var(--bg-elevated);
+            color: var(--text);
+            font-size: 12px;
+            cursor: pointer;
+            transition: background 0.15s, border-color 0.15s, color 0.15s;
+        }
+
+        .start-here-tools .sht-btn:hover {
+            background: var(--bg-hover);
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        /* ─── Sidebar-header command (:⌘K) + shortcuts (?) buttons ─ */
+
+        #palette-open-btn,
+        #shortcuts-open-btn {
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: transparent;
+            border: none;
+            border-radius: 6px;
+            color: var(--text-muted);
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s;
+        }
+
+        #palette-open-btn:hover,
+        #shortcuts-open-btn:hover {
+            background: var(--bg-hover);
+            color: var(--accent);
+        }
+
+        #palette-open-btn svg,
+        #shortcuts-open-btn svg {
+            width: 15px;
+            height: 15px;
+        }
+
         /* ─── Command palette & shortcut sheet ─────────────── */
 
         .palette-overlay {
