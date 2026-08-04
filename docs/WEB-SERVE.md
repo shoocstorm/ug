@@ -318,9 +318,19 @@ Sample output:
 
 ## Security / scope
 
-- Default bind `127.0.0.1`. Document `--host 0.0.0.0` as opt-in only.
-- No CORS layer (same-origin). Add `tower_http::cors` only if/when we expose API endpoints meant to be hit from other origins.
-- All endpoints read-only across all phases. If we ever add a write surface (e.g. annotation), it goes behind an explicit `--rw` flag and a token check, not a default-on route.
+> **Do not run `ug serve` on a production server, or expose it to any
+> network, without protection.** The HTTP API has **no authentication** and
+> includes mutating routes (`POST /api/projects/delete`,
+> `/api/projects/select`, `/api/config`, `/api/generate`). The default bind
+> is loopback (`127.0.0.1`); keep it there for local use. If you must expose
+> it, put it behind a properly secured reverse proxy that enforces
+> authentication, TLS, and network policy — `ug serve` is not hardened to be
+> internet-facing.
+
+- Default bind `127.0.0.1`. `--host 0.0.0.0` is opt-in and **must** be paired with an external secured proxy.
+- A default-deny CORS layer (`tower_http::cors::CorsLayer::new()`) blocks cross-origin browser requests; the same-origin web UI / Tauri shell are unaffected. This is defense against drive-by / DNS-rebinding scripts reaching a loopback port — **not** a substitute for authentication.
+- Request bodies are capped (4 MiB via `RequestBodyLimitLayer`) to bound abuse / OOM.
+- These are local-loopback mitigations only. `ug` has no built-in auth, rate limiting, or TLS. For anything beyond a single developer's machine, front the server with a reverse proxy that adds all three.
 
 ---
 

@@ -16,7 +16,7 @@ use ultragraph::limits::{BudgetSource, EmbedBudget};
 use ultragraph::types::{GraphData, GraphNode, GraphNodeType};
 use ultragraph::{
     build_graph, calculate_centrality, detect_cycles, index, index_with_cache, C_BLUE, C_BOLD,
-    C_CYAN, C_DIM, C_GREEN, C_MAGENTA, C_RESET, C_YELLOW,
+    C_CYAN, C_DIM, C_GREEN, C_MAGENTA, C_RED, C_RESET, C_YELLOW,
 };
 
 mod chat;
@@ -198,7 +198,18 @@ fn write_file(path: &str, data: &str) {
     if let Some(parent) = Path::new(path).parent() {
         let _ = fs::create_dir_all(parent);
     }
-    fs::write(path, data).expect("Failed to write output");
+    fs::write(path, data).unwrap_or_else(|e| die(1, format!("failed to write {path}: {e}")));
+}
+
+/// Print a user-facing error to stderr and exit with `code`. Used in place
+/// of `panic!`/`expect` on paths a user reaches through normal operation
+/// (missing file, corrupt graph, bad flag, store error) so the failure is a
+/// one-line message + exit code. The release profile sets `panic = "abort"`,
+/// so a `panic!` on these paths is a bare `SIGABRT` with no message — this
+/// replaces that with something diagnosable.
+fn die(code: i32, msg: impl std::fmt::Display) -> ! {
+    eprintln!("{C_RED}error:{C_RESET} {msg}");
+    std::process::exit(code);
 }
 
 /// If `output_path` is set, write to it and print a confirmation;
@@ -361,7 +372,7 @@ pub(crate) fn tokio_runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
-        .expect("failed to build tokio runtime")
+        .unwrap_or_else(|e| die(1, format!("failed to build tokio runtime: {e}")))
 }
 
 // ---------- Destination / store helpers ----------
@@ -484,7 +495,7 @@ async fn open_store_or_exit(spec: &StoreSpec) -> Box<dyn KnowledgeStore> {
             eprintln!("\n{C_BOLD}Index out of date{C_RESET}\n\n{}", e);
             std::process::exit(1);
         }
-        Err(e) => panic!("failed to open {} store: {}", spec.name(), e),
+        Err(e) => die(1, format!("failed to open {} store: {}", spec.name(), e)),
     }
 }
 
@@ -563,7 +574,8 @@ fn run_graph(args: &[String]) {
     let output = flag_value(args, &["-o", "--output"])
         .unwrap_or_else(|| project_dir.join("graph.json").to_string_lossy().into_owned());
 
-    let index_json = fs::read_to_string(&input).expect("Failed to read input");
+    let index_json = fs::read_to_string(&input)
+        .unwrap_or_else(|e| die(1, format!("failed to read {input}: {e}")));
     let result = build_graph(index_json);
     write_file(&output, &result);
     println!(
@@ -1833,15 +1845,17 @@ fn run_gen(args: &[String]) {
     }
 
     let graph_path = format!("{}/graph.json", output_dir);
-    fs::write(&graph_path, &graph).expect("Failed to write graph.json");
+    fs::write(&graph_path, &graph)
+        .unwrap_or_else(|e| die(1, format!("failed to write {graph_path}: {e}")));
     fs::write(format!("{}/indexed-tree.json", output_dir), &index_result)
-        .expect("Failed to write indexed-tree.json");
+        .unwrap_or_else(|e| die(1, format!("failed to write {output_dir}/indexed-tree.json: {e}")));
 
     let t2 = std::time::Instant::now();
     // index.html and ug-vis.bundle.js are embedded in `ug serve` (VIS_HTML /
     // VIS_BUNDLE) and served directly, so there's no need to write them here.
     println!("{C_CYAN}▸{C_RESET} Writing visualization README");
-    fs::write(format!("{}/README.md", output_dir), VIS_MD).expect("Failed to write README.md");
+    fs::write(format!("{}/README.md", output_dir), VIS_MD)
+        .unwrap_or_else(|e| die(1, format!("failed to write {output_dir}/README.md: {e}")));
     println!(
         "  {C_GREEN}✓ done{C_RESET} in {C_BOLD}{:?}{C_RESET}",
         t2.elapsed()
@@ -3646,8 +3660,10 @@ fn run_ingest(args: &[String]) {
             .into_owned()
     });
 
-    let graph_json = fs::read_to_string(&graph_file).expect("Failed to read graph file");
-    let graph: GraphData = serde_json::from_str(&graph_json).expect("Failed to parse graph JSON");
+    let graph_json = fs::read_to_string(&graph_file)
+        .unwrap_or_else(|e| die(1, format!("failed to read {graph_file}: {e}")));
+    let graph: GraphData = serde_json::from_str(&graph_json)
+        .unwrap_or_else(|e| die(1, format!("failed to parse {graph_file}: {e}")));
     let mut embedder = embedder_from_args(args);
     let budget = budget_from_args(&embedder, args);
     let dim_was_explicit = flag_value(args, &["--embedding-dim"]).is_some();
@@ -3740,7 +3756,7 @@ fn run_semantic_search(args: &[String]) {
             "--neo4j-database",
         ],
     )
-    .expect("missing query");
+    .unwrap_or_else(|| die(2, "missing query argument"));
     let limit: usize = flag_value(args, &["-k", "--limit"])
         .and_then(|s| s.parse().ok())
         .unwrap_or(10);
@@ -3756,10 +3772,10 @@ fn run_semantic_search(args: &[String]) {
         let hits = match filter.as_deref() {
             Some(f) => storage::semantic_search_w_where(store.as_ref(), &embedder, &query, limit, f)
                 .await
-                .expect("semantic_search_w_where failed"),
+                .unwrap_or_else(|e| die(1, format!("semantic search failed: {e}"))),
             None => storage_semantic_search(store.as_ref(), &embedder, &query, limit)
                 .await
-                .expect("semantic_search failed"),
+                .unwrap_or_else(|e| die(1, format!("semantic search failed: {e}"))),
         };
 
         let json: Vec<serde_json::Value> = hits
@@ -3827,7 +3843,7 @@ fn run_hybrid_search(args: &[String]) {
         "--neo4j-password",
         "--neo4j-database",
     ];
-    let query = first_positional(args, &value_flags).expect("missing query");
+    let query = first_positional(args, &value_flags).unwrap_or_else(|| die(2, "missing query argument"));
     let k: usize = flag_value(args, &["-k", "--limit"])
         .and_then(|s| s.parse().ok())
         .unwrap_or(8);
@@ -3878,7 +3894,7 @@ fn run_hybrid_search(args: &[String]) {
 
         let result = storage_search_kb(store.as_ref(), &embedder, opts)
             .await
-            .expect("hybrid_search failed");
+            .unwrap_or_else(|e| die(1, format!("hybrid search failed: {e}")));
         serde_json::to_string_pretty(&result).unwrap_or_default()
     });
 
@@ -3967,7 +3983,7 @@ fn run_traverse(args: &[String]) {
         let store = open_store_or_exit(&spec).await;
         let result = storage::traverse_filtered(store.as_ref(), &starts, hops, None, Direction::Outbound)
             .await
-            .expect("traverse failed");
+            .unwrap_or_else(|e| die(1, format!("traverse failed: {e}")));
         let nodes_json: Vec<serde_json::Value> = result
             .nodes
             .iter()

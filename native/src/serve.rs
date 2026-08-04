@@ -18,6 +18,8 @@ use axum::routing::{get, post};
 use axum::Router;
 use tokio::sync::Semaphore;
 use tower_http::compression::CompressionLayer;
+use tower_http::cors::CorsLayer;
+use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::trace::{DefaultMakeSpan, DefaultOnRequest, DefaultOnResponse, TraceLayer};
 use tracing::Level;
 
@@ -81,6 +83,12 @@ fn build_serve_store_specs(db_path: &PathBuf) -> Vec<StoreSpec> {
     specs
 }
 use ultragraph::types::{GraphData, GraphEdge, GraphNode};
+
+/// Cap on inbound HTTP request bodies. Every route the UI/agent uses takes a
+/// small JSON payload (search query, chat message, config patch, a generate
+/// path) — all KB-scale — so 4 MiB is generous headroom while stopping the
+/// previous unbounded-read behaviour from being an OOM / abuse vector.
+const MAX_REQUEST_BODY_BYTES: usize = 4 * 1024 * 1024;
 
 // ---------- Encoded asset (identity + gzip + br, all pre-built) ----------
 
@@ -935,6 +943,16 @@ pub fn run_serve(args: &[String]) {
             // CompressionLayer skips responses that already have Content-Encoding,
             // so it only kicks in for the dynamic /api/* JSON.
             .layer(CompressionLayer::new().br(true))
+            // Reject oversized request bodies before they reach a handler —
+            // every legitimate payload is KB-scale, so 4 MiB is pure abuse
+            // protection and never bites the app.
+            .layer(RequestBodyLimitLayer::new(MAX_REQUEST_BODY_BYTES))
+            // Default CORS policy denies cross-origin requests: same-origin
+            // clients (the web UI and the Tauri shell at 127.0.0.1:8080) are
+            // never subject to CORS and pass through untouched, while a
+            // cross-origin browser fetch hits an empty preflight response and
+            // is blocked — the CSRF / drive-by / DNS-rebinding defense.
+            .layer(CorsLayer::new())
             // One INFO span per request: method+uri on entry, status+latency on exit.
             // Matches the structured-log pattern the rest of the server uses.
             .layer(
@@ -982,6 +1000,12 @@ pub fn run_serve(args: &[String]) {
         }
 
         tracing::info!("Open http://{}\n", addr);
+        tracing::warn!(
+            "ug serve is for local use: it binds to loopback by default and has \
+             no authentication. Do not expose it to a network or run it on a \
+             production server without a secured reverse proxy (auth + TLS + \
+             network policy) in front."
+        );
 
         if let Err(e) = axum::serve(listener, app).await {
             tracing::error!(error = %e, "server crashed");
@@ -4101,6 +4125,12 @@ pub fn print_serve_help() {
     println!("  {C_CYAN}--base-url{C_RESET} <url>      Embedding/chat base URL (OpenAI-compatible)");
     println!("  {C_CYAN}--api-key{C_RESET} <key>       Embedding/chat API key");
     println!("  {C_CYAN}--model{C_RESET} <name>        Embedding model (fastembed alias for local)");
+    println!();
+    println!("{C_BOLD}Security:{C_RESET}");
+    println!("  {C_YELLOW}ug serve{C_RESET} is intended for {C_BOLD}local{C_RESET} use: it binds to 127.0.0.1 by default");
+    println!("  and the HTTP API has {C_BOLD}no authentication{C_RESET}. Do not run it on a production");
+    println!("  server or expose it to a network without a properly secured reverse proxy");
+    println!("  (authentication + TLS + network policy) in front of it.");
     println!();
     println!("{C_BOLD}Chat (POST /api/chat):{C_RESET}");
     println!("  {C_CYAN}--chat-model{C_RESET} <name>     Chat completion model — required to enable /api/chat");

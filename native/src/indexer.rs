@@ -25,9 +25,12 @@ mod package_json;
 pub(crate) mod scope;
 
 use crate::types::{FileNode, IndexResult, IndexStats, Symbol, SymbolMetrics};
+use rayon::prelude::*;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 use tree_sitter::Parser;
 
 /// Extraction-format version, stored in the cache under
@@ -165,6 +168,28 @@ fn annotate_line_metrics(symbols: &mut [Symbol], content: &str, language: &str) 
     }
 }
 
+/// Live single-line progress meter for the index stage. Callers wrap the
+/// call in a `Mutex` guard so parallel workers never interleave the cursor
+/// line — the print itself is not thread-safe across `\r` overwrites.
+fn print_index_progress(done: usize, total: usize) {
+    let pct = if total == 0 {
+        100.0
+    } else {
+        done as f32 / total as f32 * 100.0
+    };
+    print!(
+        "\r{}▸{} Indexing: {}{:>6.1}%{} ({}/{})",
+        crate::C_CYAN,
+        crate::C_RESET,
+        crate::C_YELLOW,
+        pct,
+        crate::C_RESET,
+        done,
+        total
+    );
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+}
+
 /// Index every supported source file under `path`. Returns a JSON-encoded
 /// [`IndexResult`].
 pub fn index(path: String) -> String {
@@ -189,25 +214,33 @@ pub fn index(path: String) -> String {
     let mut total_lines = 0u64;
 
     let total_files = files_paths.len();
-    for (i, file_path) in files_paths.into_iter().enumerate() {
-        let pct = (i + 1) as f32 / total_files as f32 * 100.0;
-        print!(
-            "\r{}▸{} Indexing: {}{:>6.1}%{} ({}/{})",
-            crate::C_CYAN,
-            crate::C_RESET,
-            crate::C_YELLOW,
-            pct,
-            crate::C_RESET,
-            i + 1,
-            total_files
-        );
-        let _ = std::io::Write::flush(&mut std::io::stdout());
+    let done = AtomicUsize::new(0);
+    let print_mu = Mutex::new(());
 
-        if let Some(file_node) = process_file(&file_path, Some(&repo_root)) {
-            total_symbols += file_node.symbols.len();
-            total_lines += file_node.lines as u64;
-            files.push(file_node);
-        }
+    // Parse every file in parallel. The tree-sitter parse + symbol extraction
+    // is pure CPU work per file with no shared mutable state, so this scales
+    // near-linearly with core count. Results are tagged with their scan index
+    // and sorted back into order afterwards — downstream consumers are
+    // order-stable, but preserving scan order avoids node-id drift.
+    let mut parsed: Vec<(usize, FileNode)> = files_paths
+        .par_iter()
+        .enumerate()
+        .filter_map(|(i, file_path)| {
+            let node = process_file(file_path, Some(&repo_root));
+            let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+            {
+                let _g = print_mu.lock().unwrap();
+                print_index_progress(n, total_files);
+            }
+            node.map(|fnode| (i, fnode))
+        })
+        .collect();
+    parsed.sort_by_key(|(i, _)| *i);
+
+    for (_, fnode) in parsed {
+        total_symbols += fnode.symbols.len();
+        total_lines += fnode.lines as u64;
+        files.push(fnode);
     }
     println!(
         "\r{}▸{} Indexing: {}100.0% ({}/{}){} {}✓ done{}",
@@ -299,64 +332,80 @@ pub fn index_with_cache(path: String, cache_path: String) -> String {
     // from them.
     let files_paths = scan_files(&repo_root);
     let dependencies = extract_package_json_dependencies(&path);
-    let mut files: Vec<FileNode> = Vec::new();
     let mut total_symbols = 0;
     let mut total_lines = 0u64;
     let mut cached = 0;
     // Rebuilt from scratch each run so hashes of deleted files get pruned.
     let mut new_hashes: HashMap<String, String> = HashMap::new();
 
-    // Folder hierarchy is derived from the full scanned set, not just the
-    // re-parsed slice. This keeps the forest stable across cached runs
-    let mut file_paths_relative: Vec<String> = Vec::new();
-
     let total_files = files_paths.len();
-    for (i, file_path) in files_paths.into_iter().enumerate() {
-        let pct = (i + 1) as f32 / total_files as f32 * 100.0;
-        print!(
-            "\r{}▸{} Indexing: {}{:>6.1}%{} ({}/{})",
-            crate::C_CYAN,
-            crate::C_RESET,
-            crate::C_YELLOW,
-            pct,
-            crate::C_RESET,
-            i + 1,
-            total_files
-        );
-        let _ = std::io::Write::flush(&mut std::io::stdout());
+    let print_mu = Mutex::new(());
 
-        let normalized = normalize_path(&file_path.to_string_lossy());
-        let relative = common::strip_repo_root(&normalized, &repo_root);
-        file_paths_relative.push(relative.clone());
+    // Phase 1 — hash every file in parallel. `compute_hash` reads the file
+    // and runs blake3; cheap per file but independent, and the reads add up
+    // across a large repo. Scan index is carried through so the final order
+    // matches the single-threaded path.
+    let mut hashed: Vec<(usize, PathBuf, String, String)> = files_paths
+        .par_iter()
+        .enumerate()
+        .filter_map(|(i, file_path)| {
+            let normalized = normalize_path(&file_path.to_string_lossy());
+            let relative = common::strip_repo_root(&normalized, &repo_root);
+            let hash = compute_hash(file_path)?;
+            Some((i, file_path.clone(), relative, hash))
+        })
+        .collect();
 
-        let hash = match compute_hash(&file_path) {
-            Some(h) => h,
-            None => continue,
-        };
+    // Phase 2 — split cache hits from parse misses, sequentially. A hit
+    // reuses the previous run's FileNode verbatim (no parse, no embed);
+    // only misses reach the expensive phase 3. Sequential here keeps the
+    // large `prev_files` map lock-free on the hot path.
+    let mut by_index: Vec<(usize, FileNode)> = Vec::with_capacity(hashed.len());
+    let mut misses: Vec<(usize, PathBuf, String, String)> = Vec::new();
 
-        // Cache hit: reuse the previous run's FileNode instead of re-parsing.
-        // If it can't be recovered (missing/corrupt indexed-tree.json), fall
-        // through and re-parse — skipping the file would drop its nodes from
-        // the rewritten tree and graph.
+    for (i, file_path, relative, hash) in hashed.drain(..) {
         if cached_hashes.get(&relative) == Some(&hash) {
             if let Some(prev) = prev_files.remove(&relative) {
                 cached += 1;
                 total_symbols += prev.symbols.len();
                 total_lines += prev.lines as u64;
-                files.push(prev);
                 new_hashes.insert(relative, hash);
+                by_index.push((i, prev));
                 continue;
             }
         }
-
-        if let Some(mut file_node) = process_file(&file_path, Some(&repo_root)) {
-            total_symbols += file_node.symbols.len();
-            total_lines += file_node.lines as u64;
-            file_node.hash = hash.clone();
-            files.push(file_node);
-            new_hashes.insert(relative, hash);
-        }
+        misses.push((i, file_path, relative, hash));
     }
+
+    // Phase 3 — parse the misses in parallel. This is the tree-sitter work
+    // and the dominant cost on a cold run; on a warm re-run `misses` is
+    // small and this returns quickly. Progress is reported over `misses`
+    // because that is the only phase a user ever waits on.
+    let miss_count = misses.len();
+    let done = AtomicUsize::new(0);
+    let parsed: Vec<(usize, String, String, FileNode)> = misses
+        .par_iter()
+        .filter_map(|(i, file_path, relative, hash)| {
+            let mut fnode = process_file(file_path, Some(&repo_root))?;
+            fnode.hash = hash.clone();
+            let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+            {
+                let _g = print_mu.lock().unwrap();
+                print_index_progress(n, miss_count);
+            }
+            Some((*i, relative.clone(), hash.clone(), fnode))
+        })
+        .collect();
+
+    for (i, relative, hash, fnode) in parsed {
+        total_symbols += fnode.symbols.len();
+        total_lines += fnode.lines as u64;
+        new_hashes.insert(relative, hash);
+        by_index.push((i, fnode));
+    }
+    by_index.sort_by_key(|(i, _)| *i);
+    let files: Vec<FileNode> = by_index.into_iter().map(|(_, f)| f).collect();
+
     println!(
         "\r{}▸{} Indexing: {}100.0% ({}/{}){} {}✓ done{} ({} cached)",
         crate::C_CYAN,

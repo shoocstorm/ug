@@ -18,6 +18,7 @@ pub const C_CYAN: &str = "\x1b[36m";
 pub const C_MAGENTA: &str = "\x1b[35m";
 pub const C_YELLOW: &str = "\x1b[33m";
 pub const C_GREEN: &str = "\x1b[32m";
+pub const C_RED: &str = "\x1b[31m";
 pub const C_BLUE: &str = "\x1b[34m";
 pub const C_RESET: &str = "\x1b[0m";
 pub const C_BOLD: &str = "\x1b[1m";

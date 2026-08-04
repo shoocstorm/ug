@@ -47,7 +47,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 fastembed = { version = "4", default-features = false, features = ["ort-download-binaries", "hf-hub-rustls-tls"] }
 dirs = "5"
 axum = "0.7"
-tower-http = { version = "0.5", features = ["compression-br", "compression-gzip", "trace"] }
+tower-http = { version = "0.5", features = ["compression-br", "compression-gzip", "trace", "cors", "limit"] }
 flate2 = "1"
 brotli = "8"
 tracing = "0.1"
@@ -55,11 +55,12 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tauri = "2"
 url = "2"
 
-# default features pull in tesseract-rs's `build-tesseract`, which compiles
-# Tesseract+Leptonica from source via cmake at `cargo build` time (network +
-# several minutes). We don't need OCR — office/pdf text extraction works
-# without it — so default features stay off.
-liteparse = { version = "2.5.1", default-features = false }
+# Pure-Rust PDF text extraction. Replaces `liteparse`, which pulled in
+# `liteparse-pdfium` and `dlopen`'d `libpdfium.dylib` at runtime — a native
+# dependency the end user had to install and that panicked the process when
+# absent. `pdf-extract` has no native deps and returns text per page via
+# `extract_text_from_mem_by_pages`.
+pdf-extract = "0.12"
 
 [build-dependencies]
 tauri-build = "2"
