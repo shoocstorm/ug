@@ -57,6 +57,6 @@ Headless Chrome **cannot boot this page** (no WebGL — `initialize()` never
 runs and no `<canvas>` appears), so end-to-end browser testing needs a real
 display. What does work headlessly is testing a pane in isolation: generate
 a harness from this directory by marker, stub the graph integration, and
-serve it on the API's origin. See the P2 section of
-`docs/dev/PROGRESS-repo-stats-query.md` for how the Insights pane is
+serve it on the API's origin. See the `code_query` feature doc
+(`docs/CODE-QUERY.md`) — its Status section notes how the Insights pane is
 covered that way.

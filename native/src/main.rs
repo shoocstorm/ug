@@ -3925,7 +3925,7 @@ fn run_traverse(args: &[String]) {
     // graph.json holds the same edges the store does and needs no db, so it
     // is the default — this is the same walk `find_usages` does. `--dest`
     // still routes to the store, which is how you verify what actually
-    // landed in a destination (see docs/MULTI-DEST.md).
+    // landed in a destination (see docs/MULTI-STORAGE-DEST.md).
     if flag_value(args, &["--dest"]).is_none() {
         let (graph, _raw, _path) = load_agent_graph(args);
         // Accept a bare name or file path, not just an exact node id. The
@@ -5214,7 +5214,7 @@ fn print_ingest_help() {
     println!("  {C_CYAN}--neo4j-user{C_RESET} <user>    Default: neo4j (env: UG_NEO4J_USER)");
     println!("  {C_CYAN}--neo4j-password{C_RESET} <pw>  Required for --dest neo4j (env: UG_NEO4J_PASSWORD)");
     println!("  {C_CYAN}--neo4j-database{C_RESET} <db>  Default: neo4j (env: UG_NEO4J_DATABASE)");
-    println!("  See {C_BOLD}docs/MULTI-DEST.md{C_RESET} for the GDS / APOC capability matrix and Neo4j schema.");
+    println!("  See {C_BOLD}docs/MULTI-STORAGE-DEST.md{C_RESET} for the GDS / APOC capability matrix and Neo4j schema.");
     println!();
     println!("{C_BOLD}Embedding (defaults to in-process, no service needed):{C_RESET}");
     println!("  {C_CYAN}--model{C_RESET} <name>      Model. For local: a fastembed alias (see below).");

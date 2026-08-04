@@ -146,11 +146,11 @@ format), stream only the final answer, and show every call to the user as it hap
 | Page | What it presents |
 |------|-----------------|
 | `index.html` | Slide-deck landing page: product intro, demo video, problem/solution, features, MCP integration, install/upgrade instructions |
-| `api-reference.html` | Full multi-tab API reference: CLI commands, HTTP API routes, MCP tools, storage backends, pipeline & schemas (generated from `docs/api-reference.md`) |
+| `api-reference.html` | Full multi-tab API reference: CLI commands, HTTP API routes, MCP tools, storage backends, pipeline & schemas (generated from `docs/API-REFERENCE.md`) |
 | `architecture.html` | Architecture diagram and component overview |
 
 When making significant changes (new commands, new API routes, new MCP tools, storage changes, pipeline changes), update both:
-1. The relevant markdown docs in `docs/` (especially `docs/api-reference.md`)
+1. The relevant markdown docs in `docs/` (especially `docs/API-REFERENCE.md`)
 2. The corresponding `docs/ug-website/*.html` pages
 
 ## 8. OverGraph — the storage engine
@@ -159,7 +159,7 @@ When making significant changes (new commands, new API routes, new MCP tools, st
 database. It is a sibling checkout in this VS Code workspace
 (`ug.code-workspace` → `../overgraph`), so its source is directly readable.
 
-**Full API reference: `/Users/aldrickwan/Documents/project/overgraph/docs/api-reference.md`**
+**Full API reference: `/Users/aldrickwan/Documents/project/overgraph/docs/API-REFERENCE.md`**
 
 It is ~7,700 lines / 314 KB — **never read it whole.** It opens with a
 `## Table of Contents` (line 15) linking every method. Read the ToC, then jump

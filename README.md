@@ -140,7 +140,7 @@ the database.** After `ug gen --no-ingest` — or if your embedding endpoint is
 down — symbol lookup, outlines, source reads, usage analysis, traversal and
 pathfinding all still work. `--dest <name>` (or `/api/db/traverse`) runs
 `traverse` against a destination store, to verify what landed in OverGraph or
-Neo4j — see [MULTI-DEST.md](docs/MULTI-DEST.md).
+Neo4j — see [docs/MULTI-STORAGE-DEST.md](docs/MULTI-STORAGE-DEST.md).
 
 ## Configuration
 
@@ -230,7 +230,7 @@ Point the server at a project with `UG_PROJECT` (a name under `~/.ug`); with no
 env set it falls back to `~/.ug/<cwd-basename>/ugdb` if it exists. Set
 `UG_EMBED_BASE_URL` to opt into the remote embedder. Run `ug doctor` to preview
 what resolves. Full tool reference, client setup, and troubleshooting:
-[docs/mcp.md](docs/mcp.md).
+[docs/MCP-SERVE.md](docs/MCP-SERVE.md).
 
 ```json
 {
@@ -268,8 +268,10 @@ cd native && cargo test     # native Rust tests
 | [`docs/EMBEDDING-BACKENDS.md`](docs/EMBEDDING-BACKENDS.md) | Local ONNX vs. remote embedder, model aliases, failure modes |
 | [`docs/GRAPH-STORAGE.md`](docs/GRAPH-STORAGE.md) | OverGraph data model, query functions, node/edge mapping |
 | [`docs/WEB-SERVE.md`](docs/WEB-SERVE.md) | `ug serve`'s REST API, routes, logging, asset resolution |
-| [`docs/mcp.md`](docs/mcp.md) | Full MCP tool reference, client setup, troubleshooting |
-| [`docs/MULTI-DEST.md`](docs/MULTI-DEST.md) | Neo4j backend: CLI flags, capability matrix, schema |
+| [`docs/MCP-SERVE.md`](docs/MCP-SERVE.md) | Full MCP tool reference, client setup, troubleshooting |
+| [`docs/MULTI-STORAGE-DEST.md`](docs/MULTI-STORAGE-DEST.md) | Neo4j backend: CLI flags, capability matrix, schema |
+| [`docs/CODE-QUERY.md`](docs/CODE-QUERY.md) | `code_query` / `ug query`: whole-repo statistics, impact analysis, the fact layer |
+| [`docs/API-REFERENCE.md`](docs/API-REFERENCE.md) | Complete CLI, HTTP API, MCP tools, storage backends, pipeline & schemas |
 | [`native/README.md`](native/README.md) | Rust crate internals: CLI commands, project structure, extensibility |
 
 ## License

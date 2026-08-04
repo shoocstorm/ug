@@ -2,7 +2,7 @@
 
 High-performance Graph-based knowledge base generator & visualizer built with Rust and tree-sitter.
 
-> Full documentation for all commands, API routes, schemas, and architecture: **[docs/api-reference.md](../docs/api-reference.md)**
+> Full documentation for all commands, API routes, schemas, and architecture: **[docs/API-REFERENCE.md](../docs/API-REFERENCE.md)**
 
 ## Quick Start
 
@@ -14,7 +14,7 @@ target/release/ug help
 
 ## CLI Commands
 
-All commands are documented in full detail in [api-reference.md](../docs/api-reference.md). The most common entry points:
+All commands are documented in full detail in [API-REFERENCE.md](../docs/API-REFERENCE.md). The most common entry points:
 
 ```bash
 ug gen -i ../                     # Full pipeline: index + graph + ingest

@@ -3,7 +3,7 @@
 > **Multi-destination note (2026-05-15):** OverGraph is the default backend
 > but no longer the only one — UltraGraph now supports ingesting into
 > **Neo4j** alongside OverGraph via the new `--dest` flag. See
-> `MULTI-DEST.md` for the user-facing CLI surface, capability matrix,
+> `MULTI-STORAGE-DEST.md` for the user-facing CLI surface, capability matrix,
 > and Neo4j schema. The doc below describes the OverGraph backend
 > specifically.
 >
