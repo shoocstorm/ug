@@ -21,16 +21,12 @@ pub fn classify_file(path: &str, symbols: &[Symbol]) -> Option<FileClassificatio
         .unwrap_or("");
     let file_name = file_stem.to_lowercase();
 
-    // Markdown, PDF and office documents land here before any of the path
-    // heuristics so a `docs/components/intro.md` (or a `.pdf`/`.docx`
-    // shipped under `components/`) doesn't get misclassified as a
-    // component. Kept in sync with `document::is_supported_ext`.
-    const DOCUMENT_EXTS: &[&str] = &[
-        ".md", ".mdx", ".markdown", ".pdf",
-        ".doc", ".docx", ".docm", ".dot", ".dotm", ".dotx", ".odt", ".ott", ".rtf",
-        ".xls", ".xlsx", ".xlsm", ".xlsb", ".ods", ".ots",
-        ".ppt", ".pptx", ".pptm", ".pot", ".potm", ".potx", ".odp", ".otp",
-    ];
+    // Markdown and PDF land here before any of the path heuristics so a
+    // `docs/components/intro.md` (or a `.pdf` shipped under `components/`)
+    // doesn't get misclassified as a component. Kept in sync with
+    // `document::is_supported_ext` (PDFs are the only binary doc format
+    // indexed; Office formats were dropped with the pdfium backend).
+    const DOCUMENT_EXTS: &[&str] = &[".md", ".mdx", ".markdown", ".pdf"];
     if DOCUMENT_EXTS.iter().any(|ext| path_lower.ends_with(ext)) {
         return Some(FileClassification::Documentation);
     }

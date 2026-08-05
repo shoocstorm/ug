@@ -39,7 +39,6 @@ fn run_index(dir: &TempDir) -> IndexResult {
 }
 
 #[test]
-#[ignore]
 fn index_scan_picks_up_pdf_files() {
     let (dir, _) = stage_pdf("hello.pdf", HELLO_PDF);
     let result = run_index(&dir);
@@ -50,7 +49,6 @@ fn index_scan_picks_up_pdf_files() {
 }
 
 #[test]
-#[ignore]
 fn pdf_file_is_classified_as_documentation() {
     let (dir, _) = stage_pdf("manual.pdf", HELLO_PDF);
     let result = run_index(&dir);
@@ -63,7 +61,6 @@ fn pdf_file_is_classified_as_documentation() {
 }
 
 #[test]
-#[ignore]
 fn pdf_extracts_one_symbol_per_page() {
     let (dir, _) = stage_pdf("hello.pdf", HELLO_PDF);
     let result = run_index(&dir);
@@ -80,7 +77,6 @@ fn pdf_extracts_one_symbol_per_page() {
 }
 
 #[test]
-#[ignore]
 fn pdf_page_text_lands_in_docstring() {
     let (dir, _) = stage_pdf("hello.pdf", HELLO_PDF);
     let result = run_index(&dir);
@@ -99,7 +95,6 @@ fn pdf_page_text_lands_in_docstring() {
 }
 
 #[test]
-#[ignore]
 fn pdf_multibyte_text_survives_extraction() {
     let (dir, _) = stage_pdf("latin1.pdf", LATIN1_PDF);
     let result = run_index(&dir);
@@ -121,37 +116,38 @@ fn pdf_multibyte_text_survives_extraction() {
 }
 
 #[test]
-#[ignore]
-fn pdf_without_extractable_text_degrades_gracefully() {
-    // unicode.pdf draws emoji through an embedded font with no usable
-    // Unicode mapping, so the extractor legitimately gets nothing back.
-    // That must still yield a well-formed page symbol rather than a panic
-    // or a dropped file — an unreadable page is normal in the wild
-    // (scans, image-only exports).
+fn pdf_unicode_emoji_survive_extraction() {
+    // unicode.pdf draws emoji through an embedded font. The previous
+    // backend (pdfium) couldn't map it and got nothing back; pdf-extract
+    // decodes it correctly. Either way the file must be indexed and yield
+    // a well-formed page symbol — never a panic, never a dropped file.
     let (dir, _) = stage_pdf("unicode.pdf", UNICODE_PDF);
     let result = run_index(&dir);
     assert_eq!(result.files.len(), 1, "the file must still be indexed");
     let file = &result.files[0];
     assert_eq!(file.language, "pdf");
-    assert_eq!(file.symbols.len(), 1, "one page → one symbol, text or not");
+    assert_eq!(file.symbols.len(), 1, "one page → one symbol");
 
     let sym = &file.symbols[0];
     assert_eq!(sym.id, "doc_page:1");
     assert_eq!(sym.start_line, 1);
+    let docstring = sym.docstring.as_deref().unwrap_or("");
+    // pdf-extract recovers the emoji as multi-byte UTF-8. Pin on the
+    // spanner/spanner rather than exact glyphs so a future extractor
+    // tweak on whitespace doesn't flake it.
     assert!(
-        sym.docstring.as_deref().unwrap_or("").is_empty(),
-        "no extractable text should mean no docstring, got: {:?}",
-        sym.docstring
+        docstring.contains('🔧'),
+        "expected pdf-extract to decode the wrench emoji, got: {:?}",
+        docstring
     );
     assert!(
-        sym.name.contains("no text"),
-        "the name should say the page had no text, got: {:?}",
-        sym.name
+        docstring.chars().any(|c| c.len_utf8() == 4),
+        "emoji should land as 4-byte UTF-8 codepoints, got: {:?}",
+        docstring
     );
 }
 
 #[test]
-#[ignore]
 fn pdf_page_name_includes_page_number_prefix() {
     let (dir, _) = stage_pdf("hello.pdf", HELLO_PDF);
     let result = run_index(&dir);
@@ -166,7 +162,6 @@ fn pdf_page_name_includes_page_number_prefix() {
 }
 
 #[test]
-#[ignore]
 fn pdf_repurposes_lines_as_page_count() {
     let (dir, _) = stage_pdf("hello.pdf", HELLO_PDF);
     let result = run_index(&dir);
@@ -176,7 +171,6 @@ fn pdf_repurposes_lines_as_page_count() {
 }
 
 #[test]
-#[ignore]
 fn pdf_and_markdown_coexist_in_same_scan() {
     let dir = TempDir::new().expect("tempdir");
     fs::write(dir.path().join("doc.pdf"), HELLO_PDF).expect("write pdf");
@@ -200,7 +194,6 @@ fn pdf_and_markdown_coexist_in_same_scan() {
 }
 
 #[test]
-#[ignore]
 fn pdf_pages_become_concept_nodes_with_contains_edge_in_graph() {
     let (dir, _) = stage_pdf("doc.pdf", HELLO_PDF);
     let result = run_index(&dir);
@@ -245,7 +238,6 @@ fn pdf_pages_become_concept_nodes_with_contains_edge_in_graph() {
 }
 
 #[test]
-#[ignore]
 fn pdf_skips_files_pdf_extract_cannot_open() {
     // Drop a "PDF" that's just garbage bytes — pdf-extract returns an
     // error and our process_pdf returns None, so the file is silently
@@ -263,7 +255,6 @@ fn pdf_skips_files_pdf_extract_cannot_open() {
 }
 
 #[test]
-#[ignore]
 fn pdf_uppercase_extension_still_indexed() {
     // Some scanners and document exporters spit out `.PDF` / `.Pdf`.
     // The walker lowercases the extension before checking

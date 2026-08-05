@@ -1,14 +1,13 @@
-//! Document indexer for binary formats: PDF plus Word/Excel/PowerPoint (and
-//! their OpenDocument/legacy variants).
+//! PDF document indexer.
 //!
-//! Unlike the language modules under `indexer/languages/`, these are
-//! **binary** — they don't fit the tree-sitter pipeline (parse UTF-8 source
-//! → walk AST). We use [`liteparse`][1] instead: PDFs are read directly via
-//! its bundled PDFium backend; everything else is first converted to PDF by
-//! shelling out to a local LibreOffice install (`soffice`), then parsed the
-//! same way. Office support is therefore best-effort — hosts without
-//! LibreOffice on `PATH` simply have those files skipped, same as a
-//! corrupt/encrypted PDF.
+//! PDFs are binary and don't fit the tree-sitter pipeline (parse UTF-8
+//! source → walk AST), so this module extracts their text with
+//! [`pdf-extract`][1] — a pure-Rust crate with no native dependencies. The
+//! previous backend was `liteparse`, which loaded `libpdfium.dylib` via
+//! `dlopen` at runtime and panicked the whole process when the library was
+//! missing on the host; `pdf-extract` removes that failure mode entirely.
+//!
+//! [1]: https://crates.io/crates/pdf-extract
 //!
 //! ## Symbol model
 //! - **One symbol per page**, `kind: "heading_1"`. Reusing the markdown
@@ -21,17 +20,13 @@
 //! - `docstring`: the page's full extracted text, capped at
 //!   [`PAGE_TEXT_CAP`] bytes so a 50-page brochure doesn't blow the
 //!   embedder's context window or the JSON payload.
-//! - `start_line` / `end_line`: the page number (these formats are not
+//! - `start_line` / `end_line`: the page number (PDFs are not
 //!   line-oriented; we repurpose the field as a page index).
-//!
-//! [1]: https://github.com/run-llama/liteparse
 
 use crate::indexer::common::{normalize_path, strip_repo_root, truncate_chars};
 use crate::types::{FileNode, Symbol};
-use liteparse::config::ImageMode;
-use liteparse::{LiteParse, LiteParseConfig, OutputFormat};
+use pdf_extract::extract_text_from_mem_by_pages;
 use std::path::Path;
-use std::sync::OnceLock;
 
 /// Per-page byte cap on the extracted text we keep in `docstring`. Set
 /// generously enough for full-page prose, low enough that a 100-page
@@ -45,87 +40,31 @@ pub(crate) const PAGE_TEXT_CAP: usize = 8_192;
 /// first line.
 pub(crate) const NAME_CAP: usize = 100;
 
-/// Word-processor extensions liteparse converts to PDF via LibreOffice
-/// before parsing.
-const WORD_EXTS: &[&str] = &["doc", "docx", "docm", "dot", "dotm", "dotx", "odt", "ott", "rtf"];
-/// Spreadsheet extensions.
-const EXCEL_EXTS: &[&str] = &["xls", "xlsx", "xlsm", "xlsb", "ods", "ots"];
-/// Presentation extensions.
-const POWERPOINT_EXTS: &[&str] = &["ppt", "pptx", "pptm", "pot", "potm", "potx", "odp", "otp"];
-
-/// All extensions this module handles, including `pdf`. Kept in sync with
+/// The single extension this module handles. Kept in sync with
 /// `common::SUPPORTED_EXTS` — see the note there.
 pub fn is_supported_ext(ext: &str) -> bool {
     ext == "pdf"
-        || WORD_EXTS.contains(&ext)
-        || EXCEL_EXTS.contains(&ext)
-        || POWERPOINT_EXTS.contains(&ext)
-}
-
-/// Human-readable language tag for a supported extension, used as
-/// `FileNode.language` and in classification/UI badges.
-fn language_for(ext: &str) -> &'static str {
-    if ext == "pdf" {
-        "pdf"
-    } else if WORD_EXTS.contains(&ext) {
-        "word"
-    } else if EXCEL_EXTS.contains(&ext) {
-        "excel"
-    } else if POWERPOINT_EXTS.contains(&ext) {
-        "powerpoint"
-    } else {
-        "document"
-    }
-}
-
-/// Lazily-built multi-thread tokio runtime shared by every call into
-/// liteparse's async API. `process_file`'s caller loop is plain sync code
-/// (no ambient tokio context), and building a fresh runtime per file would
-/// spawn a new worker pool for every document — so this is built once per
-/// process and reused.
-fn runtime() -> &'static tokio::runtime::Runtime {
-    static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
-    RT.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .expect("failed to build tokio runtime for document indexing")
-    })
 }
 
 /// Extract every page of `path` as a [`Symbol`]. Returns the wrapping
-/// [`FileNode`] with `language` set per [`language_for`].
+/// [`FileNode`] with `language: "pdf"`.
 ///
-/// Errors (parse failure, missing LibreOffice for office formats, encrypted
-/// PDFs, …) short-circuit to `None` rather than propagating — the indexer's
-/// contract is "skip files we can't parse"; the caller logs the path that
-/// was skipped via the usual file-walker counters.
+/// Errors (corrupt file, unsupported encryption, a PDF `pdf-extract` can't
+/// decode, …) short-circuit to `None` rather than propagating — the
+/// indexer's contract is "skip files we can't parse"; the caller logs the
+/// path that was skipped via the usual file-walker counters.
 pub fn process_document(path: &Path, repo_root: Option<&str>) -> Option<FileNode> {
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase())
-        .unwrap_or_default();
-
     let bytes = std::fs::read(path).ok()?;
     let hash = blake3::hash(&bytes).to_hex().to_string();
 
-    let config = LiteParseConfig {
-        output_format: OutputFormat::Text,
-        ocr_enabled: false,
-        image_mode: ImageMode::Off,
-        extract_links: false,
-        quiet: true,
-        ..Default::default()
-    };
-    let parser = LiteParse::new(config);
-
-    let path_str_in = path.to_string_lossy().to_string();
-    let result = runtime().block_on(async { parser.parse(&path_str_in).await });
-    let result = match result {
-        Ok(r) => r,
+    // `extract_text_from_mem_by_pages` returns one `String` per page, in
+    // page order — exactly the shape the symbol loop below consumes. It is
+    // pure-Rust and synchronous, so there's no runtime to spin up and no
+    // native library to locate.
+    let pages = match extract_text_from_mem_by_pages(&bytes) {
+        Ok(pages) => pages,
         Err(e) => {
-            tracing::warn!(path = %path.display(), error = %e, "liteparse failed; skipping");
+            tracing::warn!(path = %path.display(), error = %e, "pdf-extract failed; skipping");
             return None;
         }
     };
@@ -136,11 +75,11 @@ pub fn process_document(path: &Path, repo_root: Option<&str>) -> Option<FileNode
         None => path_str,
     };
 
-    let total_pages = result.pages.len() as u32;
-    let mut symbols: Vec<Symbol> = Vec::with_capacity(result.pages.len());
-    for page in &result.pages {
-        let page_no = page.page_number as u32;
-        let trimmed = page.text.trim();
+    let total_pages = pages.len() as u32;
+    let mut symbols: Vec<Symbol> = Vec::with_capacity(pages.len());
+    for (idx, text) in pages.iter().enumerate() {
+        let page_no = (idx as u32) + 1;
+        let trimmed = text.trim();
         if trimmed.is_empty() {
             // Pure-image pages or scanned documents without OCR show up as
             // empty. Emit a stub symbol so the file's structure stays
@@ -158,6 +97,14 @@ pub fn process_document(path: &Path, repo_root: Option<&str>) -> Option<FileNode
         symbols.push(page_symbol(page_no, name, Some(docstring)));
     }
 
+    // A well-formed PDF always has at least one page; if the extractor
+    // returned none (defensive — some malformed PDFs hit this), emit a
+    // single placeholder so the file still shows up in the index rather
+    // than silently vanishing.
+    if symbols.is_empty() {
+        symbols.push(page_symbol(1, "Page 1 (no text)".to_string(), None));
+    }
+
     // Stamp the file path on every symbol — mirrors what
     // `indexer::process_file` does for tree-sitter languages.
     for sym in symbols.iter_mut() {
@@ -169,12 +116,12 @@ pub fn process_document(path: &Path, repo_root: Option<&str>) -> Option<FileNode
     Some(FileNode {
         path: path_str,
         hash,
-        language: language_for(&ext).to_string(),
+        language: "pdf".to_string(),
         classification,
         symbols,
         // Repurpose `lines` as page count so the UI's per-file "N lines"
-        // badge becomes "N pages" for these formats.
-        lines: total_pages,
+        // badge becomes "N pages" for PDFs.
+        lines: total_pages.max(1),
         imports: Vec::new(),
         exports: Vec::new(),
     })
@@ -252,19 +199,14 @@ mod tests {
     }
 
     #[test]
-    fn language_for_groups_extensions() {
-        assert_eq!(language_for("pdf"), "pdf");
-        assert_eq!(language_for("docx"), "word");
-        assert_eq!(language_for("xlsx"), "excel");
-        assert_eq!(language_for("pptx"), "powerpoint");
-    }
-
-    #[test]
-    fn is_supported_ext_covers_office_formats() {
+    fn is_supported_ext_only_matches_pdf() {
         assert!(is_supported_ext("pdf"));
-        assert!(is_supported_ext("docx"));
-        assert!(is_supported_ext("xlsx"));
-        assert!(is_supported_ext("pptx"));
+        // Office formats were dropped along with the pdfium backend —
+        // they must no longer route into this module, otherwise the
+        // caller would expect a FileNode back and get `None`.
+        assert!(!is_supported_ext("docx"));
+        assert!(!is_supported_ext("xlsx"));
+        assert!(!is_supported_ext("pptx"));
         assert!(!is_supported_ext("exe"));
     }
 
