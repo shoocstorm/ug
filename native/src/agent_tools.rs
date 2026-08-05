@@ -34,18 +34,30 @@ pub enum Render {
 }
 
 impl Render {
+    /// Wrap `s` in an SGR pair when colour is on, return it untouched when off.
+    /// Called only from the `Render::Ansi` arm of each styling method, so the
+    /// runtime gate ([`crate::color`]) covers every agent-tool and `query`
+    /// renderer without each call site branching on it.
+    fn ansi(self, open: &str, s: &str) -> String {
+        if crate::color::enabled() {
+            format!("{}{}{}", open, s, C_RESET)
+        } else {
+            s.to_string()
+        }
+    }
+
     pub(crate) fn bold(self, s: &str) -> String {
         match self {
-            Render::Ansi => format!("{}{}{}", C_BOLD, s, C_RESET),
             Render::Markdown => format!("**{}**", s),
+            Render::Ansi => self.ansi(C_BOLD, s),
         }
     }
 
     pub(crate) fn dim(self, s: &str) -> String {
         match self {
-            Render::Ansi => format!("{}{}{}", C_DIM, s, C_RESET),
             // Markdown has no "dim"; plain text keeps the line readable.
             Render::Markdown => s.to_string(),
+            Render::Ansi => self.ansi(C_DIM, s),
         }
     }
 
@@ -53,25 +65,24 @@ impl Render {
     /// follow-up call.
     pub(crate) fn id(self, s: &str) -> String {
         match self {
-            Render::Ansi => format!("{}{}{}", C_CYAN, s, C_RESET),
             Render::Markdown => format!("`{}`", s),
+            Render::Ansi => self.ansi(C_CYAN, s),
         }
     }
 
     pub(crate) fn heading(self, s: &str) -> String {
         match self {
-            Render::Ansi => format!("{}{}{}", C_BOLD, s, C_RESET),
             Render::Markdown => format!("## {}", s),
+            Render::Ansi => self.ansi(C_BOLD, s),
         }
     }
 }
 
 /// Separator between sections of a batched call (one per node id / file /
-/// name). Skipped before the first section.
-fn section_break(out: &mut String, i: usize, style: Render) {
+/// name). Skipped before the first section. A blank line is enough — a
+/// drawn rule costs ~40 bytes × N sections and carries no information.
+fn section_break(out: &mut String, i: usize, _style: Render) {
     if i > 0 {
-        out.push('\n');
-        out.push_str(&style.dim("────────────────────────────────────────"));
         out.push_str("\n\n");
     }
 }
@@ -538,6 +549,12 @@ pub struct FileOutlineEntry {
 #[derive(Debug, Clone, Serialize)]
 pub struct FileOutlineResult {
     pub files: Vec<FileOutlineEntry>,
+    /// Whether rendered lines append the full node id. Default `true` so
+    /// MCP / HTTP / an interactive terminal keep copy-pasteable ids; the
+    /// CLI flips this to `false` when stdout is piped (an agent can
+    /// reconstruct `kind:file:name`, and `--ids` turns it back on).
+    #[serde(skip)]
+    pub show_ids: bool,
 }
 
 impl FileOutlineResult {
@@ -592,7 +609,7 @@ pub fn file_outline(graph: &GraphData, p: &FileOutlineParams) -> FileOutlineResu
         files.push(outline_by_path(graph, f, strip_file_id_prefix(f)));
     }
 
-    FileOutlineResult { files }
+    FileOutlineResult { files, show_ids: true }
 }
 
 /// Resolve `path` to one indexed file — exact repo-relative match first, then
@@ -689,17 +706,24 @@ pub fn render_file_outline(r: &FileOutlineResult, style: Render) -> String {
         for s in &f.symbols {
             let start = s.start_line.map(|v| v.to_string()).unwrap_or_else(|| "?".into());
             let end = s.end_line.map(|v| v.to_string()).unwrap_or_else(|| "?".into());
-            line(
-                &mut out,
-                &format!(
-                    "- L{}-{}  {}  {}  id: {}",
-                    start,
-                    end,
-                    s.node_type,
-                    style.bold(&s.name),
-                    style.id(&s.id)
-                ),
-            );
+            // The id re-encodes `kind:path:name`, all of which the heading
+            // (path) and this line (kind, name) already show — so it is
+            // noise by default. `show_ids` puts it back for terminals and
+            // for `--ids`.
+            if r.show_ids {
+                line(
+                    &mut out,
+                    &format!(
+                        "- L{}-{}  {}  {}  id: {}",
+                        start, end, s.node_type, style.bold(&s.name), style.id(&s.id)
+                    ),
+                );
+            } else {
+                line(
+                    &mut out,
+                    &format!("- L{}-{}  {}  {}", start, end, s.node_type, style.bold(&s.name)),
+                );
+            }
         }
     }
     next_actions(
@@ -731,6 +755,11 @@ pub struct GetCodeParams {
     pub end_line: Option<usize>,
     #[serde(alias = "maxChars")]
     pub max_chars: Option<usize>,
+    /// Drop the leading doc-comment preview from each slice. Set by the
+    /// CLI's `--no-doc` when the caller already saw it (e.g. via
+    /// `find_symbols --include-docs`) and wants only the body.
+    #[serde(default)]
+    pub no_doc: bool,
 }
 
 const DEFAULT_MAX_CHARS: usize = 20_000;
@@ -869,7 +898,13 @@ pub fn get_code_with_stored(
         });
     }
 
-    GetCodeResult { slices }
+    let mut result = GetCodeResult { slices };
+    if p.no_doc {
+        for s in &mut result.slices {
+            s.doc = None;
+        }
+    }
+    result
 }
 
 /// Build a slice from indexed source, flagging it when the file it came
@@ -991,12 +1026,11 @@ pub fn render_get_code(r: &GetCodeResult, style: Render) -> String {
         line(
             &mut out,
             &format!(
-                "{}  —  {}:{}-{} (of {} lines)",
+                "{}  —  {}:{}-{}",
                 style.bold(&s.title),
                 s.file.as_deref().unwrap_or("?"),
                 s.start_line.unwrap_or(0),
-                s.end_line.unwrap_or(0),
-                s.total_lines.unwrap_or(0)
+                s.end_line.unwrap_or(0)
             ),
         );
         if let Some(d) = &s.doc {
@@ -1919,15 +1953,17 @@ pub fn render_project_overview(r: &ProjectOverviewResult, style: Render) -> Stri
         ),
     );
     for h in &r.hotspots {
+        // No `id:` suffix: it reconstructs `kind:path:name`, all three of
+        // which this line (kind, name) and the loc() span (path) already
+        // show. `find_symbols <name>` gives the exact id if one is needed.
         line(
             &mut out,
             &format!(
-                "- {} {}  ←{}  {}  id: {}",
+                "- {} {}  ←{}  {}",
                 h.symbol.node_type,
                 style.bold(&h.symbol.name),
                 h.in_degree,
-                style.dim(&h.symbol.loc()),
-                style.id(&h.symbol.id)
+                style.dim(&h.symbol.loc())
             ),
         );
     }
@@ -1945,14 +1981,13 @@ pub fn render_project_overview(r: &ProjectOverviewResult, style: Render) -> Stri
             line(
                 &mut out,
                 &format!(
-                    "- {} {}  {} loc · {}p · depth {}  {}  id: {}",
+                    "- {} {}  {} loc · {}p · depth {}  {}",
                     c.symbol.node_type,
                     style.bold(&c.symbol.name),
                     c.loc,
                     c.params,
                     c.max_nesting,
-                    style.dim(&c.symbol.loc()),
-                    style.id(&c.symbol.id)
+                    style.dim(&c.symbol.loc())
                 ),
             );
         }

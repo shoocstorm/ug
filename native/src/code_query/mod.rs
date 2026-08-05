@@ -54,6 +54,12 @@ pub struct CodeQueryParams {
     /// Which window of rows to render — `"11-35"`, `"34-end"`, `"top 10"`.
     /// Overrides [`Self::limit`] when both are given. See [`range`].
     pub range: Option<String>,
+    /// Render a "by file" concentration summary above the table. The summary
+    /// is computed over every matched row (not just the visible window), so
+    /// it shows where the mass is — e.g. `dead_code`'s top rows are usually
+    /// all route handlers in one file, and the summary makes that obvious
+    /// before the reader scrolls the suspects.
+    pub by_folder: bool,
 }
 
 /// Population of one property across the store.
@@ -93,6 +99,9 @@ pub struct QueryAnswer {
     /// caller. Changes which engine warnings are worth repeating — see
     /// `render::is_expected_noise`.
     pub from_preset: bool,
+    /// Whether to render the "by file" concentration summary. Copied from
+    /// [`CodeQueryParams::by_folder`] so the renderer needs no extra arg.
+    pub by_folder: bool,
 }
 
 const DEFAULT_LIMIT: usize = 20;
@@ -180,6 +189,7 @@ pub async fn run(
         window,
         gql,
         from_preset: params.preset.is_some(),
+        by_folder: params.by_folder,
     })
 }
 

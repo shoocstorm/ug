@@ -69,6 +69,16 @@ pub fn render(answer: &QueryAnswer, style: Render) -> String {
 
     let total = page.rows.len();
     let (from, to) = answer.window.slice(total);
+
+    // A "by file" concentration summary, computed over every matched row
+    // (not just the visible window). `dead_code` / `untested_symbols` tend
+    // to surface dozens of route handlers from one file as the "top" rows;
+    // this summary shows that concentration up front so a reader does not
+    // mistake a dynamic-dispatch pile for the real suspects.
+    if answer.by_folder {
+        push_by_file(&mut out, answer, style);
+    }
+
     if from >= to {
         // The window starts past the last row. Saying "no rows" here would
         // be indistinguishable from "the query matched nothing", which is a
@@ -107,16 +117,29 @@ pub fn render(answer: &QueryAnswer, style: Render) -> String {
         out.push_str(&style.dim(&format!("\n{}\n", parts.join(" · "))));
 
         if to < total {
-            out.push_str(&style.dim(&format!(
-                "next: rerun with range \"{}-{}\"{}\n",
-                to + 1,
-                (to + 20).min(total),
-                if answer.window.is_capped(total) {
-                    " (window capped at 200 rows)"
-                } else {
-                    ""
-                }
-            )));
+            // A full, runnable command — `range` is a `ug query` flag, not a
+            // preset argument, and a bare `range "26-45"` left callers
+            // guessing the syntax. For a preset we can name it; for raw GQL
+            // the query is too long to embed, so point at the flag instead.
+            let next_from = to + 1;
+            let next_to = (to + 20).min(total);
+            let cap = if answer.window.is_capped(total) {
+                " (window capped at 200 rows)"
+            } else {
+                ""
+            };
+            let hint = if answer.from_preset {
+                format!(
+                    "next: ug query {} --range {}-{}{}",
+                    answer.title, next_from, next_to, cap
+                )
+            } else {
+                format!(
+                    "next: re-run with --range {}-{}{} (your --gql stays the same)",
+                    next_from, next_to, cap
+                )
+            };
+            out.push_str(&style.dim(&format!("{}\n", hint)));
         }
     }
 
@@ -127,6 +150,46 @@ pub fn render(answer: &QueryAnswer, style: Render) -> String {
         return format!("{}\n… output truncated at {} chars\n", keep, MAX_CHARS);
     }
     out
+}
+
+fn push_by_file(out: &mut String, answer: &QueryAnswer, style: Render) {
+    // Extract the file from the first column. Most list presets return a
+    // node id (`kind:file:name`) there; the file is the `/`-bearing segment.
+    let mut counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for row in &answer.page.rows {
+        if let Some(file) = row.first().and_then(|v| file_of(&cell(v))) {
+            *counts.entry(file).or_insert(0) += 1;
+        }
+    }
+    if counts.is_empty() {
+        return;
+    }
+    let mut ranked: Vec<(String, usize)> = counts.into_iter().collect();
+    ranked.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    out.push_str(&style.dim("by file (all matches):"));
+    out.push('\n');
+    for (file, n) in ranked.into_iter().take(15) {
+        out.push_str(&style.dim(&format!("  {:>4}  {}", n, file)));
+        out.push('\n');
+    }
+    out.push('\n');
+}
+
+/// Pull a repo-relative file path out of a first-column cell. Recognises a
+/// node id (`kind:file:name` — the `/`-bearing segment) and a bare path;
+/// returns `None` for anything that does not look like a file, so a preset
+/// whose first column is a metric or a name is simply left ungrouped.
+fn file_of(cell: &str) -> Option<String> {
+    cell.split(':')
+        .find(|seg| seg.contains('/') && seg.contains('.'))
+        .map(|s| s.to_string())
+        .or_else(|| {
+            if cell.contains('/') && cell.contains('.') {
+                Some(cell.to_string())
+            } else {
+                None
+            }
+        })
 }
 
 fn push_table(out: &mut String, answer: &QueryAnswer, style: Render, from: usize, to: usize) {
@@ -185,9 +248,10 @@ fn push_table(out: &mut String, answer: &QueryAnswer, style: Render, from: usize
 
 // A previous revision also printed a handful of node ids from beyond the
 // visible rows, as a nudge toward the next call. Row ranges replaced it:
-// "next: rerun with range 21-40" says the same thing precisely, costs a
-// line instead of five ids, and unlike a sample it does not leave the
-// reader guessing which rows it skipped.
+// "next: ug query dead_code --range 21-40" says the same thing precisely,
+// costs a line instead of five ids, and unlike a sample it does not leave
+// the reader guessing which rows it skipped — or, crucially, where the
+// `--range` flag goes.
 
 /// Everything that qualifies the number above it.
 fn push_caveats(out: &mut String, answer: &QueryAnswer, style: Render) {
@@ -225,22 +289,14 @@ fn push_caveats(out: &mut String, answer: &QueryAnswer, style: Render) {
 
     let populated: Vec<&Coverage> = answer.coverage.iter().filter(|c| !c.is_absent()).collect();
     if !populated.is_empty() {
+        // Percentages only: the raw `present/total` counts are scale, which
+        // a reader reasons about from the rows above, not from the caveat
+        // line. Spelling the percentage keeps the same trust signal at a
+        // fraction of the width.
         let parts: Vec<String> = populated
             .iter()
             .map(|c| {
-                if c.present == c.total {
-                    format!("{} {}/{}", c.property, c.present, c.total)
-                } else {
-                    // Partial population is the quiet version of the same
-                    // problem, so it gets the percentage spelled out.
-                    format!(
-                        "{} {}/{} ({:.0}%)",
-                        c.property,
-                        c.present,
-                        c.total,
-                        100.0 * c.present as f64 / c.total.max(1) as f64
-                    )
-                }
+                format!("{} {:.0}%", c.property, 100.0 * c.present as f64 / c.total.max(1) as f64)
             })
             .collect();
         out.push_str(&style.dim(&format!("\ncoverage: {}\n", parts.join(" · "))));
@@ -336,6 +392,7 @@ mod tests {
             window: crate::code_query::range::RowRange::first(20),
             gql: "MATCH (n) RETURN count(*) AS c".into(),
             from_preset: false,
+            by_folder: false,
         }
     }
 
@@ -385,11 +442,13 @@ mod tests {
             }],
         );
         let out = render(&a, Render::Markdown);
-        assert!(out.contains("loc 2181/2280 (96%)"), "{out}");
+        assert!(out.contains("loc 96%"), "{out}");
+        // Raw counts are gone — the percentage is what the reader uses.
+        assert!(!out.contains("2181/2280"), "{out}");
     }
 
     #[test]
-    fn full_coverage_omits_the_percentage_as_noise() {
+    fn full_coverage_shows_100_percent() {
         let a = answer(
             page(&["c"], vec![vec![QueryValue::Int(5)]]),
             vec![Coverage {
@@ -399,8 +458,7 @@ mod tests {
             }],
         );
         let out = render(&a, Render::Markdown);
-        assert!(out.contains("loc 2280/2280"), "{out}");
-        assert!(!out.contains("100%"), "{out}");
+        assert!(out.contains("loc 100%"), "{out}");
     }
 
     #[test]
@@ -509,8 +567,22 @@ mod tests {
     fn a_partial_window_names_the_exact_range_to_ask_for_next() {
         let mut a = answer(numbered_rows(122), vec![]);
         a.window = crate::code_query::range::parse("11-35").unwrap();
+        // Default `answer()` is `from_preset: false`, so the hint points at
+        // the `--range` flag rather than embedding a (raw GQL) command.
         let out = render(&a, Render::Markdown);
-        assert!(out.contains(r#"range "36-55""#), "{out}");
+        assert!(out.contains("--range 36-55"), "{out}");
+    }
+
+    #[test]
+    fn a_partial_preset_window_shows_a_runnable_next_command() {
+        let mut a = answer(numbered_rows(122), vec![]);
+        a.title = "dead_code".into();
+        a.from_preset = true;
+        a.window = crate::code_query::range::parse("11-35").unwrap();
+        let out = render(&a, Render::Markdown);
+        // The hint is a full command an agent can copy-paste: the preset
+        // name and the `--range` flag, not a bare `range "36-55"`.
+        assert!(out.contains("next: ug query dead_code --range 36-55"), "{out}");
     }
 
     /// Distinct from "the query matched nothing", which would send the

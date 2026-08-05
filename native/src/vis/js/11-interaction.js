@@ -460,8 +460,11 @@
             const requestedId = id;
             try {
                 const res = await fetch(`/api/db/node/${encodeURIComponent(id)}`);
-                if (!res.ok) return;
-                const row = await res.json();
+                // 404 means the node is in graph.json but never reached the
+                // knowledge store (e.g. an embedder hasn't run on it). Sub an
+                // empty row so renderChunk shows its "no indexed chunk" message
+                // instead of leaving "Loading chunk…" pinned forever.
+                const row = res.ok ? await res.json() : { node_text: '' };
                 if (!state.dbRowCache) state.dbRowCache = new Map();
                 state.dbRowCache.set(requestedId, row);
                 if (!state.selectedNode || state.selectedNode.id !== requestedId) return;

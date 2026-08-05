@@ -40,6 +40,20 @@ const VIS_MD: &str = include_str!("../../README.md");
 
 fn main() {
     install_panic_hook();
+
+    // Colour gate, resolved once before any command runs. `Render::Ansi`
+    // output (the agent-tool commands and `ug query`) consults this so a
+    // non-tty consumer — a pipe, an LLM, a log — gets plain text without
+    // every format string branching. `--no-color` and the `NO_COLOR` env
+    // var (https://no-color.org) force it off; otherwise it follows the
+    // terminal. Human-facing banners in this file keep their colour in a
+    // terminal regardless.
+    let raw_args: Vec<String> = env::args().collect();
+    let color_off = has_flag(&raw_args, "--no-color")
+        || env::var_os("NO_COLOR").is_some()
+        || !std::io::IsTerminal::is_terminal(&std::io::stdout());
+    ultragraph::color::set(!color_off);
+
     // Load environment defaults from `.env` (in CWD or any parent
     // directory). Real env vars still win — `dotenvy::dotenv` does not
     // override values already set in the process environment. Quiet
@@ -48,9 +62,9 @@ fn main() {
 
     // `--no-logo` is consumed here rather than passed through, so no
     // subcommand's argument parser can mistake it for a positional.
-    let mut args: Vec<String> = env::args().collect();
+    let mut args: Vec<String> = raw_args;
     let logo_flagged_off = args.iter().any(|a| a == "--no-logo" || a == "--quiet-logo");
-    args.retain(|a| a != "--no-logo" && a != "--quiet-logo");
+    args.retain(|a| a != "--no-logo" && a != "--quiet-logo" && a != "--no-color");
     let args = args;
 
     if !suppress_logo(&args, logo_flagged_off) {
@@ -1133,10 +1147,13 @@ fn print_file_outline_help() {
     println!();
     println!("{C_BOLD}Options:{C_RESET}");
     println!("  {C_CYAN}-n, --name <project>{C_RESET}  Project name (default: cwd basename)");
+    println!("  {C_CYAN}--ids{C_RESET}                Show the full node id on each line (on by default in a terminal;)");
+    println!("                         off when piped, since an agent can reconstruct kind:file:name)");
     println!();
     println!("{C_BOLD}Examples:{C_RESET}");
     println!("  {C_CYAN}ug file_outline{C_RESET} native/src/main.rs");
     println!("  {C_CYAN}ug file_outline{C_RESET} main.rs  {C_YELLOW}# unique basename works too{C_RESET}");
+    println!("  {C_CYAN}ug file_outline{C_RESET} native/src/main.rs --ids  {C_YELLOW}# force ids on when piped{C_RESET}");
     println!("  {C_CYAN}ug file_outline{C_RESET} file:native/src/main.rs  {C_YELLOW}# File node ids work as-is{C_RESET}");
     println!("  {C_CYAN}ug file_outline{C_RESET} 'file:native/src/main.rs'  {C_YELLOW}# direct nodeId lookup (O(1)){C_RESET}");
     println!("  {C_CYAN}ug file_outline{C_RESET} main.rs serve.rs config.rs   {C_YELLOW}# batch: outline several files at once{C_RESET}");
@@ -1153,6 +1170,7 @@ fn print_get_code_help() {
     println!("  {C_CYAN}-s, --start <n>{C_RESET}      First line (1-based, with --file; default 1)");
     println!("  {C_CYAN}-e, --end <n>{C_RESET}        Last line inclusive (with --file; default EOF)");
     println!("  {C_CYAN}--max-chars <n>{C_RESET}      Character cap on output (default 20000)");
+    println!("  {C_CYAN}--no-doc{C_RESET}             Drop the leading doc-comment preview (the body only)");
     println!("  {C_CYAN}-n, --name <project>{C_RESET}  Project name (default: cwd basename)");
     println!();
     println!("{C_BOLD}Examples:{C_RESET}");
@@ -1264,7 +1282,10 @@ fn run_file_outline(args: &[String]) {
     let (node_id, file) = files
         .into_iter()
         .partition(|s| looks_like_node_id(s) && !s.starts_with("file:"));
-    let result = agent_tools::file_outline(&graph, &agent_tools::FileOutlineParams { node_id, file });
+    let mut result = agent_tools::file_outline(&graph, &agent_tools::FileOutlineParams { node_id, file });
+    // Show ids in a terminal (humans want them); hide them when piped since
+    // an agent can reconstruct `kind:file:name`. `--ids` forces them on.
+    result.show_ids = has_flag(args, "--ids") || ultragraph::color::enabled();
     let ok = result.ok();
     emit_agent_result(
         args,
@@ -1296,6 +1317,7 @@ fn run_get_code(args: &[String]) {
             .and_then(|s| s.parse().ok()),
         end_line: flag_value(args, &["--end-line", "-e", "--end"]).and_then(|s| s.parse().ok()),
         max_chars: flag_value(args, &["--max-chars"]).and_then(|s| s.parse().ok()),
+        no_doc: has_flag(args, "--no-doc"),
     };
 
     let result = agent_tools::get_code(&graph, &repo_root, &params);
@@ -1387,7 +1409,7 @@ fn run_code_query(args: &[String]) {
         return;
     }
     if has_flag(args, "--list") || args.is_empty() {
-        print_presets();
+        print_presets(has_flag(args, "--terse"));
         return;
     }
 
@@ -1474,10 +1496,11 @@ fn code_query_params_from_args(
         args: query_args,
         limit: flag_value(args, &["-k", "--limit"]).and_then(|s| s.parse().ok()),
         range: flag_value(args, &["-r", "--range"]),
+        by_folder: has_flag(args, "--by-folder"),
     })
 }
 
-fn print_presets() {
+fn print_presets(terse: bool) {
     println!("  {C_CYAN}ug query{C_RESET}  {C_YELLOW}— built-in questions{C_RESET}");
     println!();
     let mut category = "";
@@ -1497,9 +1520,20 @@ fn print_presets() {
                 }
             })
             .collect();
-        println!("  {C_CYAN}{:<26}{C_RESET} {}", p.name, p.description);
-        if !args.is_empty() {
-            println!("  {:<26} {C_DIM}args: {}{C_RESET}", "", args.join(", "));
+        if terse {
+            // Names + args only — for an agent that already knows the
+            // catalog and wants to scan it cheaply.
+            let tail = if args.is_empty() {
+                String::new()
+            } else {
+                format!("  {C_DIM}args: {}{C_RESET}", args.join(", "))
+            };
+            println!("  {C_CYAN}{:<26}{C_RESET}{}", p.name, tail);
+        } else {
+            println!("  {C_CYAN}{:<26}{C_RESET} {}", p.name, p.description);
+            if !args.is_empty() {
+                println!("  {:<26} {C_DIM}args: {}{C_RESET}", "", args.join(", "));
+            }
         }
     }
     println!();
@@ -1528,6 +1562,9 @@ fn print_code_query_help() {
     println!("                         {C_DIM}20 · 11-35 · 34-end{C_RESET} — page a result without re-reading it");
     println!("  {C_CYAN}-n, --name <project>{C_RESET}   Project to query (default: the active one)");
     println!("      {C_CYAN}--list{C_RESET}             List every preset and exit");
+    println!("      {C_CYAN}--terse{C_RESET}            With --list: names + args only, no description prose");
+    println!("      {C_CYAN}--by-folder{C_RESET}        Print a \"by file\" concentration summary above the table");
+    println!("                         {C_DIM}(surfaces dynamic-dispatch piles in dead_code / untested_symbols){C_RESET}");
     println!();
     println!("{C_BOLD}Examples:{C_RESET}");
     println!("  {C_DIM}# how many functions are longer than 50 lines, and where{C_RESET}");
@@ -5662,6 +5699,8 @@ fn print_help() {
     println!("{C_BOLD}Global flags:{C_RESET}");
     println!("  {C_CYAN}--no-logo{C_RESET}        Skip the banner. Already skipped automatically whenever stdout");
     println!("                   is not a terminal, so piped and captured output is clean.");
+    println!("  {C_CYAN}--no-color{C_RESET}       Force colour off (agent-tool + query output). Also off automatically");
+    println!("                   when piped or when the NO_COLOR env var is set; this flag makes it explicit.");
     println!("  {C_CYAN}-v, --version{C_RESET}    Print the version");
     println!();
     println!("Run {C_CYAN}ug <command> -h{C_RESET} for that command's options and examples.");
