@@ -304,7 +304,7 @@
         .panel-tab {
             flex: 1;
             background: transparent;
-            border: 1px solid transparent;
+            border: none;
             color: var(--text-muted);
             padding: 7px 6px;
             border-radius: 8px;

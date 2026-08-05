@@ -124,6 +124,7 @@ OverGraph endpoints. Async, need a `Db` handle and an `Embedder`.
 | GET  | `/api/db/traverse/*id?k=&dir=&types=` | `storage::traverse_filtered` — BFS over the DB edge table |
 | POST | `/api/search/semantic` | `storage::semantic_search[_w_where]` — single-shot vector search |
 | POST | `/api/search/hybrid` | `storage::search_kb` — RRF / PPR / MMR + snippet attachment |
+| POST | `/api/ingest` | Spawn `ug ingest` on an already-indexed project (UI "Ingest now" button). Body `{ "name": "<project>" }`, defaults to the active project. Poll via `/api/generate/status?job=<id>`; on success the active project's stores are reopened so the new vectors are live without a restart. A store that can't be opened (stale format or corrupt manifest) is wiped and rebuilt automatically. |
 
 **`ug serve` flags added in Phase 3**
 

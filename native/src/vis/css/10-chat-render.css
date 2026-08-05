@@ -66,13 +66,13 @@
 
         /* A call-to-action inside a capability banner: the thing that's
            missing is configurable at runtime, so offer the fix here. */
-        .cap-banner .cap-cta {
+        .cap-cta {
             display: inline-flex;
             align-items: center;
             gap: 5px;
             margin-top: 8px;
             background: rgba(249, 115, 22, 0.14);
-            border: 1px solid var(--accent-dim);
+            border: none;
             color: var(--accent);
             border-radius: 6px;
             padding: 5px 11px;
@@ -83,8 +83,22 @@
             transition: background 0.15s;
         }
 
-        .cap-banner .cap-cta:hover { background: rgba(249, 115, 22, 0.24); }
+        .cap-cta:hover { background: rgba(249, 115, 22, 0.24); }
         .cap-banner strong { display: block; margin-bottom: 3px; color: var(--text); }
+
+        /* Inline progress slot for the "Ingest now" button — the spinner
+           borrows .tour-spinner so the look matches the rest of the UI. */
+        .cap-ingest-status {
+            margin-top: 6px;
+            font-size: 10px;
+            color: var(--text-dim);
+            line-height: 1.5;
+            min-height: 14px;
+        }
+        .cap-ingest-status.error { color: var(--danger); }
+        .cap-ingest-status .tour-spinner {
+            width: 10px; height: 10px; margin-right: 6px; vertical-align: -1px;
+        }
 
         /* ─── Chat: the setup inspector ─────────────────────── */
 

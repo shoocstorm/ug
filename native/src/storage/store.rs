@@ -242,6 +242,10 @@ pub enum StoreError {
         existing: u32,
         supported: u32,
     },
+    /// The store's on-disk data cannot be parsed at all (corrupt manifest,
+    /// WAL, or record — e.g. from a concurrent writer). The ingest command
+    /// is the one writer entitled to replace it: it wipes and rebuilds.
+    Corrupt(String),
     /// Auth / connection failures (Neo4j specific).
     Auth(String),
 }
@@ -274,6 +278,7 @@ impl std::fmt::Display for StoreError {
                  Run `ug regen` (or `ug gen`) to rebuild it.",
                 existing, supported
             ),
+            StoreError::Corrupt(msg) => write!(f, "corrupt store on disk: {}", msg),
             StoreError::Auth(s) => write!(f, "auth error: {}", s),
         }
     }
@@ -567,7 +572,16 @@ pub async fn open_store(spec: &StoreSpec) -> Result<Box<dyn KnowledgeStore>, Sto
             let path_str = path
                 .to_str()
                 .ok_or_else(|| StoreError::Backend(format!("invalid path: {:?}", path)))?;
-            let db = crate::storage::db::Db::open_or_create(path_str, *embedding_dim).await?;
+            let db = crate::storage::db::Db::open_or_create(path_str, *embedding_dim).await
+                .map_err(|e| match &e {
+                    crate::storage::db::DbError::Engine(
+                        crate::storage::db::EngineError::ManifestError(_)
+                        | crate::storage::db::EngineError::CorruptWal(_)
+                        | crate::storage::db::EngineError::CorruptRecord(_)
+                        | crate::storage::db::EngineError::SerializationError(_),
+                    ) => StoreError::Corrupt(e.to_string()),
+                    _ => e.into(),
+                })?;
             Ok(Box::new(db))
         }
         StoreSpec::Neo4j {

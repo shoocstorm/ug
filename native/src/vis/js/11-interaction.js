@@ -497,8 +497,40 @@
             }
             const text = (row.node_text || '').trim();
             if (!text) {
-                container.innerHTML = '<div class="hier-empty">This node has no indexed chunk '
-                    + '(it exists in graph.json but not in the vector store).</div>';
+                // The node exists in graph.json but no vector was written for
+                // it. The usual cause is project-wide: `ug gen --no-ingest`,
+                // or the embedder was down during ingest. Offer the in-UI
+                // trigger when search_ready is false (i.e. nothing has been
+                // embedded); when search_ready is true this is a per-node
+                // skip (over budget, filtered) and ingest won't change it.
+                const frag = document.createDocumentFragment();
+                const note = document.createElement('div');
+                note.className = 'hier-empty';
+                note.textContent = 'This node has no indexed chunk '
+                    + '(it exists in graph.json but not in the vector store).';
+                frag.appendChild(note);
+                const caps = state.capabilities;
+                if (caps && !caps.search_ready && caps.db_ready !== undefined) {
+                    const cta = document.createElement('button');
+                    cta.type = 'button';
+                    cta.className = 'cap-cta';
+                    cta.id = 'node-ingest-btn';
+                    cta.textContent = 'Ingest now';
+                    const status = document.createElement('div');
+                    status.className = 'cap-ingest-status';
+                    status.id = 'node-ingest-status';
+                    frag.append(cta, status);
+                    // If an ingest is already running (started from another
+                    // banner) this freshly-rendered button joins it: disabled
+                    // and showing the same progress.
+                    ingestStateForFreshButton(cta, status);
+                    cta.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        triggerIngest({ btn: cta, status });
+                    });
+                }
+                container.innerHTML = '';
+                container.appendChild(frag);
                 return;
             }
 

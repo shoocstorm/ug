@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use ultragraph::storage::{
     self, open_store, search_kb as storage_search_kb,
     semantic_search as storage_semantic_search, DEFAULT_CONTEXT_CHARS, Direction, Embedder,
-    EmbedderConfig, KnowledgeStore, RankStrategy, SearchKbOptions, StoreSet, StoreSpec,
+    EmbedderConfig, KnowledgeStore, RankStrategy, SearchKbOptions, StoreError, StoreSet, StoreSpec,
     DEFAULT_BASE_URL as DEFAULT_EMBED_BASE_URL, DEFAULT_MODEL as DEFAULT_EMBED_MODEL,
 };
 use ultragraph::agent_tools::{
@@ -1918,14 +1918,15 @@ fn run_gen(args: &[String]) {
 
     if no_ingest {
         println!("{C_YELLOW}⚠ Skipping db-ingest (--no-ingest){C_RESET}");
+        // Make the path forward explicit before the serve line buries it.
+        // Without this the user gets "Run 'ug serve'" and learns only after
+        // the server starts that chat, tours, and the Indexed tab are dark.
+        print_embeddings_missing_next_steps(&graph_path, &db_path, chain_serve);
         if chain_serve {
             println!("Total time: {C_BOLD}{:?}{C_RESET}", start_total.elapsed());
             chain_to_serve(args, &graph_path, &db_path, true, &repo_root);
             return;
         }
-        println!(
-            "Run '{C_BOLD}ug serve{C_RESET}' and open {C_CYAN}http://127.0.0.1:8080{C_RESET}"
-        );
         println!("Total time: {C_BOLD}{:?}{C_RESET}", start_total.elapsed());
         return;
     }
@@ -1936,7 +1937,7 @@ fn run_gen(args: &[String]) {
         "{C_CYAN}▸{C_RESET} Ingesting graph data into DB {C_YELLOW}{}{C_RESET}",
         db_path
     );
-    match run_gen_ingest(&graph, &db_path, args) {
+    let ingest_outcome = match run_gen_ingest(&graph, &db_path, args) {
         Ok(out) if out.embedding_error.is_some() => {
             // Not a success. The index is real and queryable, but calling
             // it "embedded" would be false, and the user needs to know a
@@ -1947,10 +1948,7 @@ fn run_gen(args: &[String]) {
                 out.edges,
                 t3.elapsed()
             );
-            println!(
-                "    Structure and statistics work now. Re-run once the embedder is up to enable semantic search:"
-            );
-            println!("      ug ingest -i {} -o {}", graph_path, db_path);
+            EmbeddingsOutcome::Missing
         }
         Ok(out) => {
             println!(
@@ -1959,25 +1957,48 @@ fn run_gen(args: &[String]) {
                 out.edges,
                 t3.elapsed()
             );
+            EmbeddingsOutcome::Ready
         }
         Err(e) => {
-            eprintln!("⚠ db-ingest skipped — {}", e);
-            eprintln!("  Re-run later once the embedding endpoint is up:");
-            eprintln!("    ug ingest -i {} -o {}", graph_path, db_path);
+            eprintln!("{C_YELLOW}⚠ db-ingest skipped — {}{C_RESET}", e);
+            EmbeddingsOutcome::Failed
         }
-    }
+    };
 
     println!("────────────────────────────────────────");
 
-    println!(
-        "Run ' ug semantic_search \"hello\" -n {} ' to perform a semantic RAG query.",
-        project_name
-    );
-    println!(
-        "Run ' ug search \"hello\" -n {} ' to perform a hybrid graph + semantic RAG query.",
-        project_name
-    );
-    println!("Total time: {:?}", start_total.elapsed());
+    match ingest_outcome {
+        EmbeddingsOutcome::Ready => {
+            // Only suggest these now that they actually work — suggesting
+            // them after an ingest failure was actively misleading.
+            println!(
+                "Run '{C_BOLD}ug semantic_search \"hello\" -n {}{C_RESET}' for a semantic RAG query.",
+                project_name
+            );
+            println!(
+                "Run '{C_BOLD}ug search \"hello\" -n {}{C_RESET}' for a hybrid graph + semantic RAG query.",
+                project_name
+            );
+        }
+        EmbeddingsOutcome::Missing | EmbeddingsOutcome::Failed => {
+            // Structural-only commands — these work without vectors.
+            println!(
+                "Works now: {C_BOLD}ug find_symbols{C_RESET}, {C_BOLD}ug file_outline{C_RESET}, {C_BOLD}ug traverse{C_RESET}, {C_BOLD}ug query{C_RESET}."
+            );
+            println!(
+                "Disabled until embeddings exist: {C_YELLOW}ug search{C_RESET}, {C_YELLOW}ug semantic_search{C_RESET}, chat, tours, the Indexed tab."
+            );
+            println!();
+            println!("{C_BOLD}Next steps:{C_RESET}");
+            println!(
+                "  1. Start the server and click {C_BOLD}\"Ingest now\"{C_RESET} in any disabled tab:"
+            );
+            println!("       {C_CYAN}ug serve{C_RESET}  →  {C_CYAN}http://127.0.0.1:8080{C_RESET}");
+            println!("  2. Or re-run ingest from another terminal:");
+            println!("       {C_CYAN}ug ingest -i {} -o {}{C_RESET}", graph_path, db_path);
+        }
+    }
+    println!("Total time: {C_BOLD}{:?}{C_RESET}", start_total.elapsed());
 
     if chain_serve {
         chain_to_serve(args, &graph_path, &db_path, false, &repo_root);
@@ -1986,6 +2007,50 @@ fn run_gen(args: &[String]) {
             "Run '{C_BOLD}ug serve{C_RESET}' and open {C_CYAN}http://127.0.0.1:8080{C_RESET} to view the graph."
         );
     }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum EmbeddingsOutcome {
+    /// Vectors written — semantic search, chat, and tours work.
+    Ready,
+    /// `--no-ingest` or no vectors produced. Structure is in place; the
+    /// vector-backed features are dark until a follow-up ingest runs.
+    Missing,
+    /// Ingest itself errored. Same UI impact as `Missing` from the user's
+    /// point of view; tracked separately so the CLI can word the next
+    /// steps honestly (it isn't known yet whether the structural DB is
+    /// usable — depending on where ingest failed).
+    Failed,
+}
+
+/// The "you don't have embeddings — here's how to get them" block,
+/// printed by `ug gen` whenever ingest was skipped or didn't produce
+/// vectors. Mirrored in the disabled tabs of the web UI, so the user
+/// sees the same two paths (button or CLI) whichever surface they hit
+/// first.
+fn print_embeddings_missing_next_steps(graph_path: &str, db_path: &str, chain_serve: bool) {
+    println!();
+    println!(
+        "{C_BOLD}What works now:{C_RESET}  the graph view, catalog, keyword search, {C_CYAN}ug query{C_RESET}, traverse."
+    );
+    println!(
+        "{C_BOLD}Disabled:{C_RESET}       semantic search, chat, guided tours, the Indexed tab — they need vectors."
+    );
+    println!();
+    println!("{C_BOLD}Get embeddings:{C_RESET}");
+    if chain_serve {
+        // Server is starting in-process; no need to suggest `ug serve`.
+        println!(
+            "  • The server is starting — open {C_CYAN}http://127.0.0.1:8080{C_RESET} and click {C_BOLD}\"Ingest now\"{C_RESET} in any disabled tab."
+        );
+    } else {
+        println!(
+            "  • Start the server and click {C_BOLD}\"Ingest now\"{C_RESET} in any disabled tab:"
+        );
+        println!("       {C_CYAN}ug serve{C_RESET}  →  {C_CYAN}http://127.0.0.1:8080{C_RESET}");
+    }
+    println!("  • Or run ingest from this terminal:");
+    println!("       {C_CYAN}ug ingest -i {} -o {}{C_RESET}", graph_path, db_path);
 }
 
 /// Build a synthetic args vec for `serve` from the gen invocation and call
@@ -2301,9 +2366,30 @@ async fn ingest_with_specs(
     }
     let mut stores: Vec<Box<dyn KnowledgeStore>> = Vec::with_capacity(specs.len());
     for spec in specs {
-        let store = open_store(spec)
-            .await
-            .map_err(|e| format!("open {} store: {}", spec.name(), e))?;
+        let store = match open_store(spec).await {
+            Ok(s) => s,
+            Err(StoreError::Corrupt(msg)) => {
+                // The store's on-disk data can't be parsed (corrupt
+                // manifest/WAL/record). This command's whole job is to
+                // rebuild the store, so wipe it and try again — same deal
+                // as `reset_stale_format_stores` above.
+                if let StoreSpec::Overgraph { path, .. } = spec {
+                    eprintln!(
+                        "{C_CYAN}▸{C_RESET} Rebuilding {} — store on disk is corrupt: {}",
+                        path.display(),
+                        msg
+                    );
+                    std::fs::remove_dir_all(path)
+                        .map_err(|e| format!("clearing corrupt store {}: {}", path.display(), e))?;
+                    open_store(spec)
+                        .await
+                        .map_err(|e| format!("open {} store after reset: {}", spec.name(), e))?
+                } else {
+                    return Err(format!("open {} store: {}", spec.name(), msg));
+                }
+            }
+            Err(e) => return Err(format!("open {} store: {}", spec.name(), e)),
+        };
         stores.push(store);
     }
     if stores.len() == 1 {
@@ -3539,6 +3625,7 @@ const API_ENDPOINTS: &[(&str, &[ApiEntry])] = &[
             ApiEntry { method: "POST", path: "/api/projects/delete", desc: "delete a project's data directory", availability: "multi-project mode only", cli_equivalent: Some("ug rm") },
             ApiEntry { method: "POST", path: "/api/generate", desc: "spawn `ug gen` against a folder, returns a job id", availability: "multi-project mode only", cli_equivalent: Some("ug gen") },
             ApiEntry { method: "GET", path: "/api/generate/status", desc: "poll a generation job's progress/log", availability: "multi-project mode only", cli_equivalent: None },
+            ApiEntry { method: "POST", path: "/api/ingest", desc: "re-embed an already-indexed project (UI Ingest now button); poll via /api/generate/status", availability: "always", cli_equivalent: Some("ug ingest") },
             ApiEntry { method: "GET", path: "/api/browse-dir", desc: "list subdirectories of a path (KB wizard folder picker)", availability: "always", cli_equivalent: None },
             ApiEntry { method: "GET", path: "/api/capabilities", desc: "db/embedder/chat readiness, plus the indexing caps that shaped the store", availability: "always", cli_equivalent: Some("ug doctor (similar info)") },
             ApiEntry { method: "GET", path: "/api/config", desc: "persisted + effective settings with per-key source (flag/env/config/default)", availability: "always", cli_equivalent: Some("ug config list") },

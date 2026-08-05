@@ -137,7 +137,7 @@
                     </svg>
                     <h2 class="kb-wizard-title">Generate a Knowledge Base</h2>
                     <p class="kb-wizard-hint">Point at a local folder to index. This runs the same pipeline as
-                        <code>ug gen</code> and streams progress live below. Build artifacts (*.min.js, dist/, etc.) are automatically ignored via <code>UG_IGNORE</code> env var.</p>
+                        <code>ug gen</code> and streams progress live below. Build artifacts (*.min.js, dist/, etc.) and your <code>.gitignore</code> entries are automatically ignored.</p>
                     <form id="kb-wizard-form" class="kb-form">
                         <label class="kb-field">
                             <span>Folder path</span>
@@ -171,9 +171,10 @@
                             </div>
                         </label>
                         <label class="kb-checkbox">
-                            <input type="checkbox" id="kb-no-ingest">
+                            <input type="checkbox" id="kb-no-ingest" checked>
                             <span>Skip embedding ingest (faster; disables semantic/hybrid search &amp; chat)</span>
                         </label>
+                        <p class="kb-checkbox-note">When ticked, generated/indexed data is stored as plain files only — it is <em>not</em> embedded &amp; ingested into the vector/graph OverGraph DB. Semantic search, the guided tour, and chat will be disabled.</p>
                         <div class="kb-form-actions">
                             <button type="submit" id="kb-generate-btn">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
@@ -805,8 +806,13 @@
                     </div>
                     <div class="section-body">
                         <div class="cap-banner warn" id="tour-disabled-msg">
-                            Guided tours need DB-backed retrieval. Index this project and restart
-                            <code>ug serve</code> with an embedder to enable them.
+                            <strong>Guided tours need DB-backed retrieval.</strong>
+                            This project's graph is loaded but no vectors have been
+                            ingested, so the tour has nothing to retrieve against. Run
+                            ingest now — it picks up the embedder from your saved
+                            settings, and works in the background.
+                            <button class="cap-cta" type="button" id="tour-ingest-btn">Ingest now</button>
+                            <div class="cap-ingest-status" id="tour-ingest-status"></div>
                         </div>
                     </div>
                 </div>
@@ -870,7 +876,10 @@
                     </div>
                 </div>
 
-                <!-- Banner shown when chat endpoint isn't configured -->
+                <!-- Banner shown when chat can't run. Two slots inside: one
+                     for "no embeddings" (no vectors ingested), one for "no
+                     language model" (embeddings work but no chat endpoint).
+                     probeCapabilities shows whichever matches the caps. -->
                 <div class="section cap-disabled-section cap-hidden" data-section="chat-disabled"
                     id="section-chat-disabled">
                     <div class="section-header">
@@ -880,7 +889,18 @@
                         </svg>
                     </div>
                     <div class="section-body">
-                        <div class="cap-banner warn" id="chat-disabled-msg">
+                        <!-- search_ready=false: graph is loaded but no vectors -->
+                        <div class="cap-banner warn" id="chat-no-embeddings-msg" hidden>
+                            <strong>Chat needs embeddings.</strong>
+                            This project's graph is loaded but no vectors have been
+                            written, so semantic search and chat have nothing to retrieve
+                            from. Run ingest now — it picks up the embedder from your
+                            saved settings, and works in the background.
+                            <button class="cap-cta" type="button" id="chat-ingest-btn">Ingest now</button>
+                            <div class="cap-ingest-status" id="chat-ingest-status"></div>
+                        </div>
+                        <!-- search_ready=true but no chat model configured -->
+                        <div class="cap-banner warn" id="chat-disabled-msg" hidden>
                             <strong>Chat needs a language model.</strong>
                             Point UltraGraph at any OpenAI-compatible endpoint — a local one
                             (Ollama, LM Studio, llama.cpp) or a hosted API — and chat turns on
@@ -1189,8 +1209,12 @@ traverse({
                         <div class="ins-presets" id="ins-presets"></div>
                         <div class="cap-banner warn cap-hidden" id="ins-nodb-msg">
                             <strong>Statistics need the indexed database.</strong>
-                            Run <code>ug gen</code> for this project — structural views keep working
-                            without it, but counting and blast radius do not.
+                            This project's graph is loaded but no DB has been built, so
+                            preset queries and GQL have nothing to read. Run ingest now —
+                            it builds the structural DB even when the embedder is down, so
+                            Insights works as soon as it finishes.
+                            <button class="cap-cta" type="button" id="ins-ingest-btn">Ingest now</button>
+                            <div class="cap-ingest-status" id="ins-ingest-status"></div>
                         </div>
                     </div>
                 </div>

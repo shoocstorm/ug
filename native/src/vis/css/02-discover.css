@@ -23,7 +23,7 @@
             height: calc(100% - 8px);
             border-radius: 8px;
             background: linear-gradient(135deg, rgba(249, 115, 22, 0.22), rgba(249, 115, 22, 0.1));
-            border: 1px solid var(--accent-dim);
+            border: none;
             box-shadow: 0 2px 10px -3px rgba(249, 115, 22, 0.55);
             transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1), width 0.28s cubic-bezier(0.16, 1, 0.3, 1);
             pointer-events: none;
@@ -202,7 +202,7 @@
         .ins-run {
             padding: 6px 14px;
             border-radius: 8px;
-            border: 1px solid var(--accent-dim);
+            border: none;
             background: rgba(249, 115, 22, 0.16);
             color: var(--accent);
             font-family: inherit;

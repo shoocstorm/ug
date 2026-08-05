@@ -127,6 +127,7 @@ The HTTP server (`ug serve`) is built on **axum**. All routes listed below.
 |--------|------|-------------|--------------|
 | POST | `/api/generate` | Kick off `ug gen` as a background job. Body: `{ "inputDir", "projectName", "model", "baseUrl", "apiKey" }` | Spawns subprocess, streams log lines via SSE |
 | GET | `/api/generate/status` | Check status of a gen job. Query: `?id=<uuid>` | In-memory `GenJobs` map |
+| POST | `/api/ingest` | Re-embed an already-indexed project (the UI's "Ingest now" button). Body: `{ "name": "<project>" }` — defaults to the active project. Spawns `ug ingest`, poll with `/api/generate/status`. Reopens the active project's stores on success so the new vectors are live without a restart. A store that can't be opened (stale format or corrupt on-disk manifest) is wiped and rebuilt automatically. | Spawns subprocess |
 | GET | `/api/browse-dir` | List files/dirs for the KB Manager file picker. Query: `?path=<path>` | Filesystem |
 
 ### 2.5 Graph API (graph.json-backed, read-only)

@@ -95,6 +95,16 @@
                 if (tourNoLlm) {
                     tourNoLlm.classList.toggle('cap-hidden', !(caps.search_ready && !caps.chat_ready));
                 }
+                // ── Insights tab ──
+                // Insights presets run /api/tools/code_query, which is
+                // store-backed: the preset list itself is static, but
+                // running one needs the structural DB. The banner offers
+                // an Ingest button — `ug ingest` writes the structural
+                // nodes even on embedder failure, which is all Insights
+                // needs (vectors are Chat/Tour/Semantic only).
+                const insNoDb = document.getElementById('ins-nodb-msg');
+                if (insNoDb) insNoDb.classList.toggle('cap-hidden', !!caps.db_ready);
+
                 markSubtabAvailability(caps);
                 // History survives page loads, and the key is per project, so
                 // it can only be read once capabilities name the project.
@@ -111,13 +121,21 @@
                     }
                 } else {
                     hideSection(chatSection);
-                    // Only surface the disabled-chat banner when DB+embedder
-                    // are otherwise ready — otherwise the generic search
-                    // banner already covers it.
+                    // Two failure modes, surfaced in the disabled banner:
+                    //   • !search_ready → no vectors. Offer the Ingest button.
+                    //   •  search_ready → vectors exist, just no chat model.
+                    // Without this split, the no-vectors case showed nothing
+                    // at all and the user had no path forward from the UI.
+                    const noEmb = document.getElementById('chat-no-embeddings-msg');
+                    const noLlm = document.getElementById('chat-disabled-msg');
                     if (caps.search_ready) {
+                        if (noEmb) noEmb.hidden = true;
+                        if (noLlm) noLlm.hidden = false;
                         showSection(chatDisabled);
                     } else {
-                        hideSection(chatDisabled);
+                        if (noEmb) noEmb.hidden = false;
+                        if (noLlm) noLlm.hidden = true;
+                        showSection(chatDisabled);
                     }
                 }
             } catch (err) {
@@ -126,6 +144,8 @@
                 hideSection(chatSection);
                 hideSection(tourSection);
                 showSection(tourDisabled);
+                const insNoDb = document.getElementById('ins-nodb-msg');
+                if (insNoDb) insNoDb.classList.remove('cap-hidden');
                 markSubtabAvailability(state.capabilities);
                 if (dot) {
                     dot.classList.add('cap-off');
@@ -151,6 +171,152 @@
             set('search', true);
             set('tour', !!(caps && caps.search_ready));
             set('chat', !!(caps && caps.chat_ready));
+        }
+
+        // ─── Trigger embedding/ingestion from the UI ─────────────
+        //
+        // When `capabilities.search_ready` is false the graph is loaded
+        // but no vectors have been written (`ug gen --no-ingest`, or the
+        // embedder was down last run). The disabled banners in Chat/Tour
+        // plus the indexed-tab empty state each surface an "Ingest now"
+        // button; this is the shared runner.
+        //
+        // Every ingest button drives the *same* underlying job — they all
+        // target the active project's store — so one click runs once and
+        // every button mirrors the shared state: all disable, all show the
+        // same progress, all show the same error.
+        //
+        // Reuses the gen-job tracker (`/api/generate/status`) so the
+        // polling shape matches the KB Manager wizard, and re-probes
+        // capabilities on success so the banner retires itself the
+        // moment the freshly-embedded store is live.
+
+        let ingestRunning = false;
+        let ingestStatusHtml = '';
+
+        // Every "Ingest now" button + its sibling status slot currently
+        // in the DOM. Queried live so a re-rendered indexed tab (which
+        // recreates its button on each node selection) drops the stale
+        // instance automatically instead of leaking it.
+        function ingestPairs() {
+            const pairs = [];
+            document.querySelectorAll('[id$="-ingest-btn"]').forEach(btn => {
+                const status = document.getElementById(btn.id.replace(/-ingest-btn$/, '-ingest-status'));
+                if (status) pairs.push({ btn, status });
+            });
+            return pairs;
+        }
+
+        function setAllIngestDisabled(disabled) {
+            ingestPairs().forEach(({ btn }) => { btn.disabled = disabled; });
+        }
+
+        function setAllIngestStatus(html, isError) {
+            ingestStatusHtml = html;
+            ingestPairs().forEach(({ status }) => {
+                status.classList.toggle('error', !!isError);
+                status.innerHTML = html;
+                status.hidden = false;
+            });
+        }
+
+        // A button rendered while an ingest is already running should show
+        // the shared state immediately instead of waiting for the next
+        // poll tick.
+        function ingestStateForFreshButton(btn, status) {
+            if (!ingestRunning) return;
+            btn.disabled = true;
+            status.classList.remove('error');
+            status.innerHTML = ingestStatusHtml;
+            status.hidden = false;
+        }
+
+        // Drive a single shared ingest. The clicked button only seeds the
+        // run — progress is mirrored to every ingest button on the page.
+        function triggerIngest(opts) {
+            const btn = opts.btn;
+            const status = opts.status;
+            const project = opts.project || (state.capabilities && state.capabilities.project && state.capabilities.project.name);
+            if (!btn || !status) return;
+            if (ingestRunning) return;
+            ingestRunning = true;
+            setAllIngestDisabled(true);
+            setAllIngestStatus('<span class="tour-spinner"></span>Starting ingest…');
+
+            let jobId = null;
+            fetch('/api/ingest', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(project ? { name: project } : {}),
+            }).then(r => {
+                if (!r.ok) return r.json().catch(() => ({})).then(e => { throw new Error(e.error || `HTTP ${r.status}`); });
+                return r.json();
+            }).then(data => {
+                jobId = data.jobId;
+                pollIngestJob(jobId);
+            }).catch(err => {
+                finishIngest(true, `Couldn't start ingest: ${err.message || err}`);
+            });
+        }
+
+        function pollIngestJob(jobId) {
+            const tick = async () => {
+                let job;
+                try {
+                    const res = await fetch(`/api/generate/status?job=${encodeURIComponent(jobId)}`, { cache: 'no-store' });
+                    job = await res.json();
+                } catch (err) {
+                    // Network blip — keep polling rather than failing the
+                    // whole run, which is still going on the server.
+                    setTimeout(tick, 1500);
+                    return;
+                }
+                const lastLine = (job.log || []).slice(-1)[0] || '';
+                if (job.status === 'running') {
+                    setAllIngestStatus('<span class="tour-spinner"></span>'
+                        + escapeHtml(lastLine || 'Ingesting…'));
+                    setTimeout(tick, 1000);
+                } else if (job.status === 'done') {
+                    setAllIngestStatus('<span style="color: var(--success, #4ade80)">✓ Ingest complete — refreshing…</span>');
+                    // Give the server a beat to swap the stores, then
+                    // re-probe; probeCapabilities hides the banner once
+                    // search_ready flips true.
+                    setTimeout(async () => {
+                        await probeCapabilities();
+                        finishIngest(false);
+                    }, 600);
+                } else {
+                    finishIngest(true, job.error || 'Ingest failed.');
+                }
+            };
+            tick();
+        }
+
+        function finishIngest(isError, msg) {
+            ingestRunning = false;
+            setAllIngestDisabled(false);
+            if (isError) {
+                setAllIngestStatus(escapeHtml(msg || 'Ingest failed.'), true);
+            }
+        }
+
+        // Wire every "Ingest now" button on the page to its sibling
+        // status slot. Called once after the DOM is built; the chat/tour/
+        // insights buttons are static in the disabled banners, so a single
+        // pass at init covers them. The indexed-tab button is created
+        // per-node in JS and wires its own click to triggerIngest.
+        function wireIngestButtons() {
+            document.querySelectorAll('[id$="-ingest-btn"]').forEach(btn => {
+                if (btn.dataset.wired === '1') return;
+                btn.dataset.wired = '1';
+                // Sibling status slot: same prefix, `-status` suffix.
+                const prefix = btn.id.replace(/-ingest-btn$/, '');
+                const status = document.getElementById(prefix + '-ingest-status');
+                btn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    triggerIngest({ btn, status });
+                });
+            });
         }
 
         // ─── Settings modal (view + persist ~/.ug/config.json) ─────

@@ -293,6 +293,37 @@ impl ProjectRegistry {
     }
 }
 
+/// Drop a project's open store handles so a `ug ingest` subprocess can be
+/// the sole writer to its OverGraph directory. The engine is embedded and
+/// single-writer: keeping the server's handle open while the subprocess
+/// writes corrupts the manifest, and the post-ingest reopen then fails
+/// with `secondary index references missing node label`, leaving
+/// `search_ready=false` forever.
+///
+/// The loaded context is swapped for one that shares the same graph
+/// snapshot but has `stores: None`, so the active project stays loadable
+/// and DB-backed routes 503 until the ingest lands. The caller must
+/// rebuild the project (with stores) once the subprocess exits.
+async fn close_project_stores(registry: &Arc<ProjectRegistry>, name: &str) {
+    let Some(ctx) = registry.get_loaded(name) else { return };
+    let graph = ctx.graph.read().expect("graph poisoned").clone();
+    let closed = Arc::new(ProjectContext {
+        name: name.to_string(),
+        graph_path: ctx.graph_path.clone(),
+        repo_root: ctx.repo_root.clone(),
+        graph: RwLock::new(graph),
+        stores: None,
+        db_unavailable_reason: Some(
+            "store closed for re-ingest; DB routes unavailable until it finishes".to_string(),
+        ),
+    });
+    registry
+        .loaded
+        .write()
+        .expect("loaded poisoned")
+        .insert(name.to_string(), closed);
+}
+
 /// Build the per-project context: snapshot off the runtime (parse +
 /// recompress is CPU-heavy), stores via the same env-driven specs as
 /// before. `repo_root` comes from the project's project.json when
@@ -914,6 +945,9 @@ pub fn run_serve(args: &[String]) {
             .route("/api/projects/delete", post(api_projects_delete))
             .route("/api/generate", post(api_generate))
             .route("/api/generate/status", get(api_generate_status))
+            // Re-embed an already-indexed project from the UI. Same job
+            // tracker as /api/generate, so its status is polled the same way.
+            .route("/api/ingest", post(api_ingest))
             .route("/api/browse-dir", get(api_browse_dir))
             .route("/api/capabilities", get(api_capabilities))
             .route("/api/config", get(api_config_get).post(api_config_post))
@@ -1754,6 +1788,146 @@ async fn api_generate_status(
         })
         .to_string(),
     )
+}
+
+#[derive(serde::Deserialize)]
+struct IngestBody {
+    /// Project to re-embed. Defaults to the active project, so the
+    /// common case (the user just clicked "Ingest now" on the project
+    /// they're already looking at) needs no parameter.
+    name: Option<String>,
+}
+
+/// POST /api/ingest — kick off `ug ingest` against an already-indexed
+/// project's `graph.json`. Used by the UI's "Ingest now" button when
+/// `/api/capabilities` reports `search_ready=false`: the graph is loaded
+/// but no vectors have been written (or the embedder was down last time).
+///
+/// Reuses the `GenJob` tracker from `/api/generate`, so progress is
+/// polled with the same `/api/generate/status?job=<id>` endpoint. After
+/// the subprocess exits successfully the active project's stores are
+/// reopened in place so the new vectors show up without a server
+/// restart — the UI just re-probes `/api/capabilities`.
+async fn api_ingest(State(state): State<ServeState>, Json(body): Json<IngestBody>) -> Response {
+    let project_name = body
+        .name
+        .as_deref()
+        .map(crate::project::sanitize_name)
+        .unwrap_or_else(|| state.active().name.clone());
+    let dir = crate::project::project_dir(&project_name);
+    let graph_path = dir.join("graph.json");
+    let db_path = dir.join("ugdb");
+    if !graph_path.exists() {
+        return err_json(
+            StatusCode::BAD_REQUEST,
+            &format!(
+                "project '{}' has no graph.json at {} — run `ug gen` first",
+                project_name,
+                graph_path.display()
+            ),
+        );
+    }
+
+    let id = state
+        .gen_jobs
+        .next_id
+        .fetch_add(1, Ordering::SeqCst)
+        .to_string();
+    let job = Arc::new(RwLock::new(GenJob {
+        status: GenJobStatus::Running,
+        log: Vec::new(),
+        project_name: Some(project_name.clone()),
+        error: None,
+    }));
+    state
+        .gen_jobs
+        .jobs
+        .write()
+        .expect("jobs poisoned")
+        .insert(id.clone(), job.clone());
+
+    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("ug"));
+    let mut cmd = tokio::process::Command::new(exe);
+    cmd.arg("ingest").arg("-i").arg(&graph_path).arg("-o").arg(&db_path);
+    // Match the wizard: quiet the ASCII banner so the log viewer leads
+    // with the actual progress, not the banner.
+    cmd.env("UG_QUIET_LOGO", "1");
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+    cmd.kill_on_drop(true);
+
+    let registry = state.registry.clone();
+    let job_project = project_name.clone();
+    tokio::spawn(async move {
+        // Drop this server's handle on the store before the subprocess
+        // writes to it. OverGraph is an embedded single-writer engine:
+        // two live handles on one directory corrupt the manifest, and the
+        // reopen after the subprocess exits then fails with a `secondary
+        // index references missing node label` error — which is exactly
+        // what left `search_ready=false` and made the banner stick.
+        close_project_stores(&registry, &job_project).await;
+
+        let mut child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => {
+                let mut j = job.write().expect("job poisoned");
+                j.status = GenJobStatus::Error;
+                j.error = Some(format!("failed to spawn ug ingest: {}", e));
+                return;
+            }
+        };
+        let stdout = child.stdout.take().expect("piped stdout");
+        let stderr = child.stderr.take().expect("piped stderr");
+
+        let out_task = tokio::spawn(pump_gen_output(stdout, job.clone()));
+        let err_task = tokio::spawn(pump_gen_output(stderr, job.clone()));
+
+        let status = child.wait().await;
+        let _ = out_task.await;
+        let _ = err_task.await;
+
+        // Reopen the project's stores now that the subprocess has exited.
+        // Always rebuild — even if the ingest failed, the store-less
+        // context swapped in above must be replaced or the project stays
+        // permanently DB-less. When the project is still the active one
+        // this also retires the "Ingest now" banner once search_ready
+        // flips true.
+        let rebuild = build_project_context(
+            &job_project,
+            graph_path.clone(),
+            db_path.clone(),
+            None,
+            registry.no_db,
+        )
+        .await;
+        match rebuild {
+            Ok(ctx) => {
+                registry
+                    .loaded
+                    .write()
+                    .expect("loaded poisoned")
+                    .insert(job_project.clone(), ctx.clone());
+                let mut j = job.write().expect("job poisoned");
+                if status.as_ref().map(|s| s.success()).unwrap_or(false) {
+                    j.status = GenJobStatus::Done;
+                } else {
+                    j.status = GenJobStatus::Error;
+                    j.error = Some(match status {
+                        Ok(s) => format!("ug ingest exited with {}", s),
+                        Err(e) => format!("failed to wait on ug ingest: {}", e),
+                    });
+                }
+            }
+            Err(e) => {
+                tracing::warn!(project = %job_project, error = %e, "post-ingest store reopen failed");
+                let mut j = job.write().expect("job poisoned");
+                j.status = GenJobStatus::Error;
+                j.error = Some(format!("ingest finished but reopening the store failed: {}", e));
+            }
+        }
+    });
+
+    ok_json(serde_json::json!({ "jobId": id, "project": project_name }).to_string())
 }
 
 #[derive(serde::Deserialize)]

@@ -191,7 +191,7 @@
             font-weight: 500;
             color: var(--accent);
             background: rgba(249, 115, 22, 0.08);
-            border: 1px solid var(--accent-dim);
+            border: none;
             border-radius: 7px;
             cursor: pointer;
             transition: background 0.15s, color 0.15s;

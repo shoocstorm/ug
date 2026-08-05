@@ -505,7 +505,7 @@
 
         .settings-btn.primary {
             background: var(--accent);
-            border: 1px solid var(--accent);
+            border: none;
             color: #1c1917;
         }
 

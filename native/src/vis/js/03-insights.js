@@ -504,6 +504,7 @@
             wireDiscoverSubtabs();
             wirePanelTabs();
             wireCatalog();
+            wireIngestButtons();
             probeCapabilities();
             startHealthPolling();
             // Solo mode opens on an empty canvas, so it needs something there

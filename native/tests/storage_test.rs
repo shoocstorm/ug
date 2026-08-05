@@ -17,6 +17,7 @@ use ultragraph::storage::db::{
 use ultragraph::storage::embed::DEFAULT_EMBEDDING_DIM;
 use ultragraph::storage::ppr::run_ppr;
 use ultragraph::storage::query::Direction;
+use ultragraph::storage::store::{open_store, StoreError, StoreSpec};
 use ultragraph::storage::text::build_sparse_keyword_vector;
 
 fn unit_vector(seed: f32) -> Vec<f32> {
@@ -209,4 +210,74 @@ fn build_sparse_keyword_vector_is_deterministic() {
     let b = build_sparse_keyword_vector("hello world");
     assert_eq!(a, b);
     assert!(!a.is_empty());
+}
+
+/// A store whose manifest on disk is unreadable must surface as
+/// `StoreError::Corrupt` (not a generic backend error), so `ug ingest`
+/// can recognise it as recoverable and wipe-and-rebuild. This is the
+/// signature of the bug where the server kept the store open while a
+/// subprocess wrote to the same directory, leaving a broken manifest and
+/// `search_ready=false` forever.
+#[tokio::test]
+async fn corrupt_manifest_surfaces_as_corrupt() {
+    use std::path::Path;
+
+    let tmp = TempDir::new().unwrap();
+    let spec = StoreSpec::Overgraph {
+        path: tmp.path().to_path_buf(),
+        embedding_dim: 384,
+    };
+
+    // Create a valid store, then rewrite its manifest so a secondary
+    // index references a node label that doesn't exist — exactly the
+    // corruption the server-vs-subprocess double-writer produced.
+    let db = open_store(&spec).await.unwrap();
+    drop(db);
+
+    let manifest = Path::new(tmp.path()).join("manifest.current");
+    std::fs::write(&manifest, r#"{
+  "version": 1,
+  "label_token_schema_version": 1,
+  "node_label_tokens": {},
+  "edge_label_tokens": {},
+  "next_node_label_id": 1,
+  "next_edge_label_id": 1,
+  "segments": [],
+  "next_node_id": 1,
+  "next_edge_id": 1,
+  "dense_vector": null,
+  "prune_policies": {},
+  "next_engine_seq": 0,
+  "next_wal_generation_id": 1,
+  "active_wal_generation_id": 0,
+  "pending_flush_epochs": [],
+  "secondary_indexes": [
+    {
+      "index_id": 1,
+      "target": { "NodeProperty": { "label_id": 2, "prop_key": "name" } },
+      "kind": "Equality",
+      "state": "Ready"
+    }
+  ],
+  "next_secondary_index_id": 2,
+  "schema_catalog_version": 1,
+  "next_schema_id": 1,
+  "node_schemas": [],
+  "edge_schemas": []
+}"#)
+    .unwrap();
+
+    let err = match open_store(&spec).await {
+        Ok(_) => panic!("corrupt store should not open"),
+        Err(e) => e,
+    };
+    assert!(
+        matches!(err, StoreError::Corrupt(_)),
+        "corrupt manifest should classify as Corrupt, got: {err}"
+    );
+
+    // And the recover path: wipe the dir, reopen succeeds.
+    std::fs::remove_dir_all(tmp.path()).unwrap();
+    let db = open_store(&spec).await.unwrap();
+    drop(db);
 }

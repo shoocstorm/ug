@@ -20,9 +20,10 @@ use crate::storage::store::{
 use crate::storage::facts::{FactValue, Facts};
 use crate::storage::types_registry::{edge_label, node_label, ALL_NODE_LABELS};
 use async_trait::async_trait;
+pub use overgraph::EngineError;
 use overgraph::{
     DatabaseEngine, DbOptions, DenseMetric, DenseVectorConfig, Direction as OgDirection, EdgeInput,
-    EdgeView, EngineError, FusionMode, GqlExecutionMode, GqlExecutionOptions, GqlParamValue,
+    EdgeView, FusionMode, GqlExecutionMode, GqlExecutionOptions, GqlParamValue,
     GqlParams, GqlValue, HnswConfig, NeighborOptions, NodeInput, NodeKeyQuery, NodeView,
     PprAlgorithm, PprOptions as OgPprOptions, PprResult as OgPprResult, PropValue,
     VectorSearchMode, VectorSearchRequest,

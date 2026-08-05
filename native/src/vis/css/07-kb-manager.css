@@ -896,6 +896,19 @@
             cursor: pointer;
         }
 
+        .kb-checkbox-note {
+            margin: -2px 0 0 26px;
+            font-size: 11.5px;
+            line-height: 1.55;
+            color: var(--text-dim);
+        }
+
+        .kb-checkbox-note em {
+            font-style: normal;
+            color: var(--text-muted);
+            font-weight: 600;
+        }
+
         .kb-form-actions {
             display: flex;
             justify-content: flex-end;
