@@ -39,7 +39,7 @@ Before using the MCP server, ensure you have:
    # Or step by step:
    ug index -i ./src
    ug graph -i ~/.ug/src/indexed-tree.json
-   ug ingest -i ~/.ug/src/graph.json -o ~/.ug/src/ugdb
+   ug ingest -n src   # reads ~/.ug/src/graph.json → writes ~/.ug/src/ugdb
    ```
 
 3. **Embedding endpoint** (for `search` / `semantic_search`): not required by

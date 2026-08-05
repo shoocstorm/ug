@@ -978,14 +978,22 @@ fn read_slice(
     let content = match std::fs::read_to_string(repo_root.join(file)) {
         Ok(c) => c,
         Err(_) => {
-            return err_slice(
-                &title,
+            // Distinguish a deleted repo from a deleted file: the fix is
+            // different (restore the path vs re-run ug gen), and "not found
+            // under repo root" reads as a lie when the root itself is gone.
+            let reason = if !repo_root.exists() {
+                format!(
+                    "the repo path {} is no longer available and no indexed copy was captured for this node",
+                    repo_root.display()
+                )
+            } else {
                 format!(
                     "{} not found under repo root {} — the index may be stale (re-run ug gen).",
                     file,
                     repo_root.display()
-                ),
-            )
+                )
+            };
+            return err_slice(&title, reason);
         }
     };
 

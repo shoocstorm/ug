@@ -16,19 +16,18 @@ interface — see `native/src/storage/store.rs`.
 
 ```bash
 # OverGraph only (unchanged default)
-ug ingest -i .ug/graph.json -o .ug/ugdb
+ug ingest -n <project>
 
 # Neo4j only
-ug ingest -i .ug/graph.json \
+ug ingest -n <project> \
   --dest neo4j \
   --neo4j-uri neo4j://localhost:7687 \
   --neo4j-user neo4j \
   --neo4j-password $NEO4J_PASSWORD
 
 # Fan-out: write to both in one pass
-ug ingest -i .ug/graph.json \
+ug ingest -n <project> \
   --dest overgraph,neo4j \
-  -o .ug/ugdb \
   --neo4j-uri neo4j://localhost:7687 \
   --neo4j-user neo4j \
   --neo4j-password $NEO4J_PASSWORD
@@ -88,7 +87,7 @@ Then commands collapse to:
 ug semantic_search "..." --dest neo4j
 ug search          "..." --dest neo4j
 ug traverse <id>          --dest neo4j
-ug ingest -i .ug/graph.json --dest overgraph,neo4j -o .ug/ugdb
+ug ingest -n <project> --dest overgraph,neo4j
 ```
 
 > **Note on `traverse`:** with no `--dest` it walks the local `graph.json`,

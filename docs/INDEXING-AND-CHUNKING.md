@@ -433,8 +433,9 @@ published rather than left to be inferred from a chunk that looks cut off:
 - **A *Captured source* section**, collapsed, showing the `code` column
   verbatim — the snapshot an agent's snippet reads return and the keyword index
   was built from. Deliberately separate from the Source tab, which reads the
-  same span live from disk: when the two disagree the store is stale, and
-  seeing both is the only way to tell that from the UI. Capped at 20,000 chars
+  same span live from disk (falling back to this captured code when the repo
+  path is gone): when the two disagree the store is stale, and seeing both is
+  the only way to tell that from the UI. Capped at 20,000 chars
   for display, with the full length reported.
 - **A *Storage metadata* section**, also collapsed: dense and sparse vector
   sizes, embedded-text length, when the row last changed, and the file hash
@@ -465,7 +466,7 @@ reads it, and how it relates to the other fields:
 | Surface | Source | Reads |
 |---|---|---|
 | field block | `graph.json`, hydrated from `/api/db/node` | the node as it was **indexed** |
-| **Source** tab | working tree, via `/api/file` | the file as it is **now** |
+| **Source** tab | working tree via `/api/file`, falling back to the indexed copy (`NodeRow.code`) when the repo path is gone — the response carries `"source": "filesystem"|"db"` | the file as it is **now** (or as it was **indexed**, when the repo is gone) |
 | **Indexed** tab | vector store, via `/api/db/node` | what search **matches against** |
 | **Hierarchy** tab | `Contains` edges | containment only |
 | **Related** tab | all edges | the neighbourhood ranking expands into |

@@ -136,7 +136,7 @@ OverGraph endpoints. Async, need a `Db` handle and an `Embedder`.
 | `--api-key <key>` | env / default | Embedding API key |
 | `--model <name>` | default | Embedding model |
 | `--embedding-dim <n>` | from `<db>/ug-meta.json` (or 1024 if absent) | Override the embedding dimension. Must match the DB's recorded dim. |
-| `--repo-root <path>` | project.json `repoRoot`, else cwd | Repo root for snippet path resolution in hybrid_search and `/api/file` |
+| `--repo-root <path>` | project.json `repoRoot`, else cwd | Repo root for snippet path resolution in hybrid_search and `/api/file`. It may point at a repo that no longer exists: the server starts anyway (a warning is logged) and source is served from the indexed copy in ugdb. |
 
 **Request / response shape**
 

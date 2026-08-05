@@ -89,11 +89,12 @@ Key points:
 ### Selection
 
 ```bash
-# Default — no flags needed.
-ug ingest -i .ug/graph.json -o .ug/ugdb
+# Default — no flags needed. Re-embeds the project by name
+# (reads ~/.ug/<name>/graph.json, writes ~/.ug/<name>/ugdb).
+ug ingest -n <project>
 
 # Pick a different local model.
-ug ingest --model nomic-embed-text-v1.5
+ug ingest -n <project> --model nomic-embed-text-v1.5
 ```
 
 ### Supported aliases

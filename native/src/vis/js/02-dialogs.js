@@ -570,9 +570,10 @@
         };
 
         const TAB_DOCS = {
-            preview: ['Source', 'The file as it is on disk right now, read live. This is the '
-                + 'only tab that does not come from the index, so it is where you see changes '
-                + 'made since the last ug gen.'],
+            preview: ['Source', 'The file as it is on disk right now, read live — or, when the '
+                + 'repo path is unavailable, the source the index captured at index time. This '
+                + 'is the only tab that does not come from the index when the repo is present, '
+                + 'so it is where you see changes made since the last ug gen.'],
             chunk: ['Indexed', 'What the knowledge base actually stores for this node: the text '
                 + 'that was embedded, the source captured alongside it, and the caps that shaped '
                 + 'both. The honest answer to "why did search return this?".'],
@@ -605,12 +606,14 @@
                           + 'No knowledge base is attached, so store-only fields are unavailable.',
                 },
                 preview: {
-                    label: 'working tree — live',
+                    label: 'working tree — live (index fallback)',
                     detail: loc
-                        ? `Read from ${loc} via /api/file: the file as it is on disk right now. `
-                          + 'This is the only tab not served from the index, so it is where edits '
-                          + 'made since the last ug gen show up.'
-                        : 'Read live from disk via /api/file — the file as it is now, not as indexed.',
+                        ? `Read from ${loc} via /api/file: the file as it is on disk right now, `
+                          + 'or the source the index captured when the repo path is unavailable. '
+                          + 'When the repo is present this is the only tab not served from the '
+                          + 'index, so it is where edits made since the last ug gen show up.'
+                        : 'Read via /api/file — the file as it is now when the repo is available, '
+                          + 'the indexed copy when it is not.',
                 },
                 chunk: {
                     label: 'vector store — as indexed',

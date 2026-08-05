@@ -714,6 +714,20 @@
             background: var(--warning);
         }
 
+        /* Source repo path unavailable — the index still serves, but there is
+           nothing live to preview and nothing to re-index from. */
+        .kb-card-repo-missing {
+            margin-top: 4px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 9px;
+            color: var(--text-dim);
+        }
+
+        .kb-card-repo-missing::before {
+            content: '↗ ';
+            color: var(--text-muted);
+        }
+
         .kb-add-tile {
             display: flex;
             flex-direction: column;

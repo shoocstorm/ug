@@ -400,12 +400,11 @@ fn store_specs_from_args(args: &[String], embedding_dim: u32) -> Vec<StoreSpec> 
         .or_else(|| std::env::var("UG_DEST").ok())
         .unwrap_or_else(|| "overgraph".to_string());
 
-    // The OverGraph dir path. Read commands (semantic_search,
-    // hybrid_search, traverse, chat) select a project by name via
-    // -n/--name, resolved to ~/.ug/<name>/ugdb; ingest uses -o/--output
-    // directly (which is also the JSON output file in some commands,
-    // so -o always wins over the -n-derived path when both are
-    // present).
+    // The OverGraph dir path. Commands select a project by name via
+    // -n/--name, resolved to ~/.ug/<name>/ugdb, which wins over the
+    // direct -o/--output path (in read commands -o is the JSON output
+    // file, so it must never be treated as a db dir). Otherwise fall
+    // back to default_read_db_path, which prefers the active project.
     let og_path = flag_value(args, &["-n", "--name"])
         .map(|n| project::project_dir(&project::sanitize_name(&n)).join("ugdb").to_string_lossy().into_owned())
         .or_else(|| flag_value(args, &["-o", "--output"]))
@@ -1043,13 +1042,14 @@ fn positionals(args: &[String], value_flags: &[&str]) -> Vec<String> {
 }
 
 /// graph.json for the agent-tool commands: `-i/--input` wins, else the
-/// `-n/--name` (or cwd-derived) project dir, else the most recently
+/// `-n/--name`, active, or cwd-derived project dir, else the most recently
 /// updated project under ~/.ug — same fallback spirit as the db reads.
 fn agent_graph_path(args: &[String]) -> PathBuf {
     if let Some(p) = flag_value(args, &["-i", "--input"]) {
         return PathBuf::from(p);
     }
-    let p = project::project_dir(&project::resolve_project_name(args, ".")).join("graph.json");
+    let p =
+        project::project_dir(&project::resolve_active_project_name(args, ".")).join("graph.json");
     if p.exists() || flag_value(args, &["-n", "--name"]).is_some() {
         return p;
     }
@@ -1674,10 +1674,7 @@ fn run_regen(args: &[String]) {
 
     // Same resolution order every project-scoped command uses: -n/--name,
     // then the active project, then the cwd's basename.
-    let name = flag_value(args, &["-n", "--name"])
-        .map(|n| project::sanitize_name(&n))
-        .or_else(project::get_active_project)
-        .unwrap_or_else(|| project::derive_project_name("."));
+    let name = project::resolve_active_project_name(args, ".");
 
     let dir = project::project_dir(&name);
     let Some(meta) = project::read_meta(&dir) else {
@@ -1921,7 +1918,7 @@ fn run_gen(args: &[String]) {
         // Make the path forward explicit before the serve line buries it.
         // Without this the user gets "Run 'ug serve'" and learns only after
         // the server starts that chat, tours, and the Indexed tab are dark.
-        print_embeddings_missing_next_steps(&graph_path, &db_path, chain_serve);
+        print_embeddings_missing_next_steps(&project_name, chain_serve);
         if chain_serve {
             println!("Total time: {C_BOLD}{:?}{C_RESET}", start_total.elapsed());
             chain_to_serve(args, &graph_path, &db_path, true, &repo_root);
@@ -1995,7 +1992,7 @@ fn run_gen(args: &[String]) {
             );
             println!("       {C_CYAN}ug serve{C_RESET}  →  {C_CYAN}http://127.0.0.1:8080{C_RESET}");
             println!("  2. Or re-run ingest from another terminal:");
-            println!("       {C_CYAN}ug ingest -i {} -o {}{C_RESET}", graph_path, db_path);
+            println!("       {C_CYAN}ug ingest -n {}{C_RESET}", project_name);
         }
     }
     println!("Total time: {C_BOLD}{:?}{C_RESET}", start_total.elapsed());
@@ -2028,7 +2025,7 @@ enum EmbeddingsOutcome {
 /// vectors. Mirrored in the disabled tabs of the web UI, so the user
 /// sees the same two paths (button or CLI) whichever surface they hit
 /// first.
-fn print_embeddings_missing_next_steps(graph_path: &str, db_path: &str, chain_serve: bool) {
+fn print_embeddings_missing_next_steps(project_name: &str, chain_serve: bool) {
     println!();
     println!(
         "{C_BOLD}What works now:{C_RESET}  the graph view, catalog, keyword search, {C_CYAN}ug query{C_RESET}, traverse."
@@ -2050,7 +2047,7 @@ fn print_embeddings_missing_next_steps(graph_path: &str, db_path: &str, chain_se
         println!("       {C_CYAN}ug serve{C_RESET}  →  {C_CYAN}http://127.0.0.1:8080{C_RESET}");
     }
     println!("  • Or run ingest from this terminal:");
-    println!("       {C_CYAN}ug ingest -i {} -o {}{C_RESET}", graph_path, db_path);
+    println!("       {C_CYAN}ug ingest -n {}{C_RESET}", project_name);
 }
 
 /// Build a synthetic args vec for `serve` from the gen invocation and call
@@ -3777,12 +3774,31 @@ fn run_ingest(args: &[String]) {
         return;
     }
 
+    // The project this ingest targets: -n/--name, else the active project
+    // (`ug active`), else the cwd basename. Resolved once so the input
+    // graph and the output store land in the same project directory.
+    let project_name = project::resolve_active_project_name(args, ".");
+
     let graph_file = flag_value(args, &["-i", "--input"]).unwrap_or_else(|| {
-        project::project_dir(&project::resolve_project_name(args, "."))
+        project::project_dir(&project_name)
             .join("graph.json")
             .to_string_lossy()
             .into_owned()
     });
+
+    // Pin the OverGraph destination to the same project when no explicit
+    // -o was given, so an ingest never writes into a *different* project's
+    // store than the one it read the graph from (the default_read_db_path
+    // fallback would otherwise do exactly that). store_specs_from_args
+    // prefers -n over -o, so appending it only when -o is absent keeps the
+    // explicit -o override intact.
+    let mut spec_args = args.to_vec();
+    if flag_value(args, &["-o", "--output"]).is_none()
+        && flag_value(args, &["-n", "--name"]).is_none()
+    {
+        spec_args.push("-n".to_string());
+        spec_args.push(project_name.clone());
+    }
 
     let graph_json = fs::read_to_string(&graph_file)
         .unwrap_or_else(|e| die(1, format!("failed to read {graph_file}: {e}")));
@@ -3807,7 +3823,7 @@ fn run_ingest(args: &[String]) {
             }
         }
         let dim = embedder.config().dim as u32;
-        let specs = store_specs_from_args(args, dim);
+        let specs = store_specs_from_args(&spec_args, dim);
         announce_destinations(&specs);
         let dest_label: Vec<String> = specs.iter().map(|s| s.name().to_string()).collect();
         // Opt-in here, unlike `ug gen`. `ug gen` owns a project and its
@@ -5333,12 +5349,15 @@ fn print_ingest_help() {
     println!("  {C_CYAN}ug ingest{C_RESET}  {C_YELLOW}— embed graph nodes and write to one or more knowledge stores{C_RESET}");
     println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
     println!();
-    println!("{C_BOLD}Usage:{C_RESET}  ug ingest [options]");
+    println!("{C_BOLD}Usage:{C_RESET}  ug ingest -n <project> [options]");
+    println!();
+    println!("  Re-embeds an already-indexed project by name — reads");
+    println!("  {C_CYAN}~/.ug/<project>/graph.json{C_RESET} and writes to {C_CYAN}~/.ug/<project>/ugdb{C_RESET}.");
     println!();
     println!("{C_BOLD}Options:{C_RESET}");
+    println!("  {C_CYAN}-n, --name{C_RESET} <name>   Project name (default: cwd basename)");
     println!("  {C_CYAN}-i, --input{C_RESET} <file>  Graph JSON (default: ~/.ug/<name>/graph.json)");
     println!("  {C_CYAN}-o, --output{C_RESET} <dir>  OverGraph directory (default: ~/.ug/<name>/ugdb)");
-    println!("  {C_CYAN}-n, --name{C_RESET} <name>   Project name (default: cwd basename)");
     println!(
         "  {C_YELLOW}--prune{C_RESET}             Delete stored nodes absent from this graph"
     );
@@ -5374,6 +5393,7 @@ fn print_ingest_help() {
     println!("  Cache: $UG_MODEL_CACHE → $XDG_CACHE_HOME/ug/models → ~/Library/Caches/ug/models (macOS)");
     println!();
     println!("{C_BOLD}Examples:{C_RESET}");
+    println!("  {C_CYAN}ug ingest{C_RESET} -n mb2                                     {C_YELLOW}# re-embed project by name{C_RESET}");
     println!("  {C_CYAN}ug ingest{C_RESET}                                      {C_YELLOW}# local, default model, ~/.ug/<cwd>{C_RESET}");
     println!("  {C_CYAN}ug ingest{C_RESET} --model nomic-embed-text-v1.5             {C_YELLOW}# local, larger model{C_RESET}");
     println!("  {C_CYAN}ug ingest{C_RESET} --base-url https://api.openai.com/v1 \\");

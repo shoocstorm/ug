@@ -23,7 +23,7 @@
 | `ug gen` | — | **End-to-end pipeline**: index → graph → visualization → OverGraph ingest. The primary entry point. | Repo source → index.json → graph.json → ugdb/ | `-i <path>` input dir, `-o <dir>` output, `-n <name>` project name, `-c <dir>` cache, `--no-cache`, `--no-ingest`, `--no-prune`, `--serve`, `-d <dir>` db path, `--model`, `--base-url`, `--api-key`, `--embedding-dim` |
 | `ug index` | — | Index a directory: parse source files into `FileNode`s with symbols, imports, exports. Writes `indexed-tree.json`. | Repo source → writes index.json | `-i <path>` input (default `.`), `-o <file>` output, `-n <name>`, `-c <dir>` cache |
 | `ug graph` | — | Build graph from indexed tree: resolve cross-file imports, create `GraphData` with nodes + edges. Writes `graph.json`. | index.json → writes graph.json | `-i <file>` input index.json, `-o <file>` output graph.json, `-n <name>` |
-| `ug ingest` | — | Embed graph nodes and write to one or more knowledge stores (OverGraph/Neo4j). | graph.json → writes to ugdb/ or Neo4j | `-i <file>` input graph.json, `-o <dir>` output, `-n <name>`, `--dest <kind>` (overgraph\|neo4j, comma-separated), `--neo4j-*`, `--prune`, `--model`, `--base-url`, `--api-key`, `--embedding-dim` |
+| `ug ingest` | — | Embed graph nodes and write to one or more knowledge stores (OverGraph/Neo4j). Defaults resolve from `-n <name>`: reads `~/.ug/<name>/graph.json`, writes `~/.ug/<name>/ugdb`. | graph.json → writes to ugdb/ or Neo4j | `-n <name>` project name, `-i <file>` input graph.json, `-o <dir>` output, `--dest <kind>` (overgraph\|neo4j, comma-separated), `--neo4j-*`, `--prune`, `--model`, `--base-url`, `--api-key`, `--embedding-dim` |
 
 ### 1.2 Graph Analysis Commands (graph.json-backed, offline, in-memory)
 
@@ -119,7 +119,7 @@ The HTTP server (`ug serve`) is built on **axum**. All routes listed below.
 | GET | `/api/projects` | List all projects under ~/.ug with stats | `~/.ug/` directory scan |
 | POST | `/api/projects/select` | Switch the active project at runtime | Body: `{ "project": "name" }` |
 | POST | `/api/projects/delete` | Delete a project | Body: `{ "project": "name" }` |
-| GET | `/api/projects/staleness` | Per-project staleness report (changed/deleted files vs graph.json mtime) | graph.json mtime + file mtimes |
+| GET | `/api/projects/staleness` | Per-project staleness report (changed/deleted files vs graph.json mtime). Each entry has `isStale`, `changed`, `missing`, `files`, `kbKind`, `docNodes`, `codeNodes`, and `repoMissing` — when the repo root no longer exists the entry reports `repoMissing: true` with `isStale: false`, `kbKind: "unknown"` and zero counts rather than a misleading "N files deleted" (the index just freezes where it is). | graph.json mtime + file mtimes (skipped when the repo is gone) |
 
 ### 2.4 Generate/KB Manager
 
@@ -160,7 +160,7 @@ The HTTP server (`ug serve`) is built on **axum**. All routes listed below.
 
 | Method | Path | What it does | Data source | Returns 503 when |
 |--------|------|-------------|--------------|------------------|
-| GET | `/api/file` | Read source file content for the right-panel "Preview" tab. Query: `?file=<path>&startLine=&endLine=`. Falls back to the OverGraph stored code when available. | Filesystem (or ugdb stored source) | No project |
+| GET | `/api/file` | Read source file content for the right-panel "Preview" tab. Query: `?file=<path>&startLine=&endLine=`. Reads the live file from disk first; when the repo path is gone (or the file was deleted) it falls back to the **indexed copy** captured in ugdb (`NodeRow.code`), so previews keep working with no repo on disk. The response includes `"source": "filesystem"\|"db"` and `"sliced"` (true when an exact symbol span was served, false when it fell back to the whole-file capture). | Filesystem, falling back to ugdb stored source | No project |
 
 ### 2.8 Database API (OverGraph/Neo4j-backed — Phase 3)
 

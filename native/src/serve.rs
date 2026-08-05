@@ -354,7 +354,7 @@ async fn build_project_context(
         tracing::warn!(
             project = %name,
             repo_root = %repo_root.display(),
-            "repo root does not exist; file preview will 404"
+            "repo root does not exist; serving source from the index"
         );
     }
 
@@ -863,12 +863,16 @@ pub fn run_serve(args: &[String]) {
                         .map(|c| c.join(&db_path_raw))
                         .unwrap_or_else(|_| PathBuf::from(&db_path_raw))
                 });
-                let repo_root_override = flag_value(args, &["--repo-root"]).map(|raw| {
-                    std::fs::canonicalize(&raw).unwrap_or_else(|e| {
-                        tracing::error!(path = %raw, error = %e, "failed to resolve repo root path");
-                        std::process::exit(1);
-                    })
-                });
+                let repo_root_override = flag_value(args, &["--repo-root"])
+                    .map(PathBuf::from)
+                    .map(|raw| {
+                        // A repo root that no longer exists must not stop the
+                        // server — the index serves content on its own, and
+                        // every consumer of repo_root already tolerates a
+                        // missing path. Canonicalize when possible so relative
+                        // roots resolve; otherwise keep the raw path.
+                        std::fs::canonicalize(&raw).unwrap_or(raw)
+                    });
                 let name = graph_path
                     .parent()
                     .and_then(|p| p.file_name())
@@ -1588,6 +1592,26 @@ async fn api_projects_staleness(State(state): State<ServeState>) -> Response {
                 files_count = files.len();
                 let repo_root = PathBuf::from(&meta.repo_root);
 
+                // A repo root that no longer exists is not "N files deleted" —
+                // the whole tree is gone, and the index simply freezes where it
+                // is. Report that distinctly instead of a misleading count.
+                if !repo_root.exists() {
+                    let repo_missing = true;
+                    staleness_info.push(serde_json::json!({
+                        "name": meta.name,
+                        "isStale": false,
+                        "repoMissing": repo_missing,
+                        "builtAt": built_at,
+                        "files": files_count,
+                        "changed": 0,
+                        "missing": 0,
+                        "kbKind": "unknown",
+                        "docNodes": 0,
+                        "codeNodes": 0,
+                    }));
+                    continue;
+                }
+
                 for file in files {
                     let file_path = repo_root.join(&file);
                     match std::fs::metadata(&file_path) {
@@ -1627,6 +1651,7 @@ async fn api_projects_staleness(State(state): State<ServeState>) -> Response {
         staleness_info.push(serde_json::json!({
             "name": meta.name,
             "isStale": is_stale,
+            "repoMissing": false,
             "builtAt": built_at,
             "files": files_count,
             "changed": changed,
@@ -2660,43 +2685,78 @@ struct FileQuery {
     end: Option<usize>,
 }
 
-/// Reads a source file (or a line slice of one) from the indexed repo so the
-/// UI's Preview tab can show real content. The synthetic `node_text` is an
-/// embedding string, not the source — this is the actual file on disk.
+/// Cap on how much source a single preview may return, whichever copy it
+/// comes from. A whole-file node's captured code can be megabytes; the panel
+/// is a transparency view, not a file viewer.
+const FILE_PREVIEW_MAX_BYTES: u64 = 2 * 1024 * 1024;
+
+/// Reads a source file (or a line slice of one) so the UI's Preview tab can
+/// show real content.
+///
+/// Prefers the live file from the repo — that is the tab's promise, "the file
+/// as it is now" — but falls back to the source the store captured at index
+/// time when the repo path is unavailable or the file has moved/deleted since
+/// indexing. `node_text` in the DB is a synthetic embedding string, not the
+/// source, which is why this route exists at all. The response's `source`
+/// field tells the UI which copy it got (`filesystem` vs `db`).
 async fn api_file(State(state): State<ServeState>, Query(params): Query<FileQuery>) -> Response {
-    let rel = params.path.trim();
+    let rel = ultragraph::agent_tools::strip_file_id_prefix(params.path.trim());
     if rel.is_empty() {
         return err_json(StatusCode::BAD_REQUEST, "missing path");
     }
 
-    // Resolve against the repo root and canonicalize, then verify the result is
-    // still inside the root — blocks `../` traversal and absolute-path escapes.
+    if let Some(resp) = file_from_disk(&state, rel, &params).await {
+        return resp;
+    }
+
+    if let Some(resp) = file_from_store(&state, rel, &params).await {
+        return resp;
+    }
+
+    err_json(
+        StatusCode::NOT_FOUND,
+        &format!(
+            "{} not found in the repo ({}) or the index",
+            rel,
+            state.repo_root().display()
+        ),
+    )
+}
+
+/// Read `rel` live from the repo root, if the repo is present and the file
+/// exists and is UTF-8 text.
+///
+/// Returns `None` (not an error) when any of those fails, so the caller can
+/// fall back to the indexed copy. A repo root that no longer exists is the
+/// whole point of that fallback, so it is checked before any resolution.
+async fn file_from_disk(state: &ServeState, rel: &str, params: &FileQuery) -> Option<Response> {
     let repo_root = state.repo_root();
     let root = repo_root.as_path();
-    let canon = match std::fs::canonicalize(root.join(rel)) {
-        Ok(p) => p,
-        Err(_) => return err_json(StatusCode::NOT_FOUND, "file not found"),
-    };
+    if !root.exists() {
+        return None; // repo moved or deleted — nothing to read live
+    }
+
+    // Resolve against the repo root and canonicalize, then verify the result
+    // is still inside the root — blocks `../` traversal and absolute-path
+    // escapes. Only live reads can escape (the store only ever contains
+    // indexed paths), so the check lives here rather than on the fallback.
+    let canon = std::fs::canonicalize(root.join(rel)).ok()?;
     if !canon.starts_with(root) {
-        return err_json(StatusCode::FORBIDDEN, "path escapes repo root");
+        return Some(err_json(StatusCode::FORBIDDEN, "path escapes repo root"));
     }
 
-    const MAX_BYTES: u64 = 2 * 1024 * 1024;
     if let Ok(meta) = std::fs::metadata(&canon) {
-        if meta.len() > MAX_BYTES {
-            return err_json(StatusCode::PAYLOAD_TOO_LARGE, "file too large to preview");
+        if meta.len() > FILE_PREVIEW_MAX_BYTES {
+            return Some(err_json(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "file too large to preview",
+            ));
         }
     }
 
-    let text = match tokio::fs::read_to_string(&canon).await {
-        Ok(t) => t,
-        Err(_) => {
-            return err_json(
-                StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                "file is not UTF-8 text",
-            )
-        }
-    };
+    // Non-UTF-8 files (binaries, PDFs) have no text to preview; fall through
+    // to the store, which may still hold a captured textual span.
+    let text = tokio::fs::read_to_string(&canon).await.ok()?;
 
     let all: Vec<&str> = text.lines().collect();
     let total_lines = all.len();
@@ -2716,15 +2776,106 @@ async fn api_file(State(state): State<ServeState>, Query(params): Query<FileQuer
         _ => (text, false),
     };
 
-    let body = serde_json::json!({
-        "path": rel,
-        "content": content,
-        "start_line": params.start,
-        "end_line": params.end,
-        "total_lines": total_lines,
-        "sliced": sliced,
-    });
-    ok_json(body.to_string())
+    Some(ok_json(
+        serde_json::json!({
+            "path": rel,
+            "content": content,
+            "start_line": params.start,
+            "end_line": params.end,
+            "total_lines": total_lines,
+            "sliced": sliced,
+            "source": "filesystem",
+        })
+        .to_string(),
+    ))
+}
+
+/// Serve the source the store captured for this file at index time.
+///
+/// `None` when the store is unavailable or no matching node has captured
+/// code. The matching itself lives in [`stored_source_for_file`] so the
+/// fallback is testable without a running server.
+async fn file_from_store(state: &ServeState, rel: &str, params: &FileQuery) -> Option<Response> {
+    let store = pick_store(state, None).ok()?;
+    let snap = state.snapshot();
+    let (code, sliced) = stored_source_for_file(
+        &snap.parsed,
+        store.as_ref(),
+        rel,
+        params.start,
+        params.end,
+    )
+    .await?;
+    if code.len() as u64 > FILE_PREVIEW_MAX_BYTES {
+        return Some(err_json(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "indexed file too large to preview",
+        ));
+    }
+    Some(ok_json(
+        serde_json::json!({
+            "path": rel,
+            "content": code,
+            "start_line": params.start,
+            "end_line": params.end,
+            "total_lines": code.lines().count(),
+            "sliced": sliced,
+            "source": "db",
+        })
+        .to_string(),
+    ))
+}
+
+/// Resolve `rel` (+ optional line range) to the source the store captured at
+/// index time, with no filesystem involved.
+///
+/// Uses the in-memory graph to map `rel` + line range to a node id, then
+/// reads that node's stored code. A span request matches the exact node
+/// first, then falls back to the file's whole-capture node; a whole-file
+/// request goes straight to that. Returns `(code, sliced)` — `sliced` is
+/// false when the whole-file node was served, matching what a live read of
+/// the whole file would report. `None` when no matching node has captured
+/// code.
+async fn stored_source_for_file(
+    graph: &GraphData,
+    store: &dyn KnowledgeStore,
+    rel: &str,
+    start: Option<usize>,
+    end: Option<usize>,
+) -> Option<(String, bool)> {
+    // Whole-file nodes (File/Config) carry no line range; symbol nodes carry
+    // their exact span.
+    let whole_file = |n: &GraphNode| n.file.as_deref() == Some(rel) && n.start_line.is_none();
+    let exact_span = |n: &GraphNode| {
+        n.file.as_deref() == Some(rel)
+            && match start {
+                Some(s) => {
+                    n.start_line == Some(s as u32)
+                        && end.map(|e| n.end_line == Some(e as u32)).unwrap_or(true)
+                }
+                None => false,
+            }
+    };
+
+    let mut candidates: Vec<&GraphNode> =
+        graph.nodes.iter().filter(|n| exact_span(n)).collect();
+    candidates.extend(graph.nodes.iter().filter(|n| whole_file(n)));
+
+    for node in candidates {
+        let Ok(Some(row)) = store.fetch_node(&node.id).await else {
+            continue;
+        };
+        if row.code.is_empty() {
+            continue;
+        }
+        // A span request that fell back to the whole-file node reports the
+        // whole file (`sliced: false`), matching what the live read would do
+        // if it had the file.
+        let sliced = node.start_line.is_some() && start.is_some();
+        return Some((row.code, sliced));
+    }
+
+    None
 }
 
 #[derive(serde::Deserialize)]
@@ -4337,7 +4488,11 @@ pub fn print_serve_help() {
 
 #[cfg(test)]
 mod tests {
-    use super::pick_initial_project;
+    use super::{pick_initial_project, stored_source_for_file};
+    use tempfile::TempDir;
+    use ultragraph::storage::db::{Db, NodeRow};
+    use ultragraph::storage::embed::DEFAULT_EMBEDDING_DIM;
+    use ultragraph::types::{GraphData, GraphNode, GraphNodeType};
 
     #[test]
     fn initial_project_prefers_the_active_one() {
@@ -4365,5 +4520,144 @@ mod tests {
         // A stale marker naming an unlisted project falls through.
         let (name, why) = pick_initial_project(&names, Some("deleted".into()), "native".into());
         assert_eq!((name.as_str(), why), ("dlab", "most recently indexed project"));
+    }
+
+    fn graph_node(id: &str, file: &str, start: Option<u32>, end: Option<u32>) -> GraphNode {
+        GraphNode {
+            id: id.into(),
+            name: id.into(),
+            node_type: GraphNodeType::Function,
+            file: Some(file.into()),
+            start_line: start,
+            end_line: end,
+            metrics: None,
+            signature: None,
+            docstring: None,
+            imports: vec![],
+            exports: vec![],
+            extends: vec![],
+            implements: vec![],
+            calls: vec![],
+            folder: None,
+            ..Default::default()
+        }
+    }
+
+    fn file_node(id: &str, file: &str) -> GraphNode {
+        GraphNode {
+            id: id.into(),
+            name: file.into(),
+            node_type: GraphNodeType::File,
+            file: Some(file.into()),
+            start_line: None,
+            end_line: None,
+            metrics: None,
+            signature: None,
+            docstring: None,
+            imports: vec![],
+            exports: vec![],
+            extends: vec![],
+            implements: vec![],
+            calls: vec![],
+            folder: None,
+            ..Default::default()
+        }
+    }
+
+    fn row(id: &str, node_type: &str, file: &str, start: u32, end: u32, code: &str) -> NodeRow {
+        NodeRow {
+            id: id.into(),
+            name: id.into(),
+            node_type: node_type.into(),
+            description: String::new(),
+            file: file.into(),
+            start_line: start,
+            end_line: end,
+            last_update_at: 0,
+            node_text: String::new(),
+            vector: vec![0.0; DEFAULT_EMBEDDING_DIM],
+            code: code.into(),
+            file_hash: String::new(),
+            facts: Default::default(),
+        }
+    }
+
+    /// `/api/file`'s repo-independent fallback: with the repo path gone, the
+    /// store's captured source is what the Preview tab serves. The resolver
+    /// must find the exact span first, fall back to the whole-file capture,
+    /// and skip rows with no captured code.
+    #[tokio::test]
+    async fn stored_file_fallback_resolves_span_then_whole_file() {
+        let tmp = TempDir::new().unwrap();
+        let db = Db::open(tmp.path().to_str().unwrap()).await.unwrap();
+
+        let sym = row(
+            "function:src/a.rs:2:sym",
+            "Function",
+            "src/a.rs",
+            2,
+            3,
+            "two\nthree\n",
+        );
+        let whole = row("file:src/a.rs", "File", "src/a.rs", 0, 0, "one\ntwo\nthree\nfour\n");
+        db.upsert_nodes(&[sym.clone(), whole.clone()]).await.unwrap();
+
+        let graph = GraphData {
+            nodes: vec![
+                graph_node("function:src/a.rs:2:sym", "src/a.rs", Some(2), Some(3)),
+                file_node("file:src/a.rs", "src/a.rs"),
+            ],
+            edges: vec![],
+            stats: None,
+            resolution: None,
+        };
+
+        // Exact span match → the symbol's captured slice, flagged as sliced.
+        let got = stored_source_for_file(&graph, &db, "src/a.rs", Some(2), Some(3))
+            .await
+            .unwrap();
+        assert_eq!((got.0.as_str(), got.1), ("two\nthree\n", true));
+
+        // Whole-file request → the file node's captured content.
+        let got = stored_source_for_file(&graph, &db, "src/a.rs", None, None)
+            .await
+            .unwrap();
+        assert_eq!((got.0.as_str(), got.1), ("one\ntwo\nthree\nfour\n", false));
+
+        // Span with no exact match falls back to the whole-file capture, and
+        // reports it as unsliced.
+        let got = stored_source_for_file(&graph, &db, "src/a.rs", Some(1), Some(1))
+            .await
+            .unwrap();
+        assert_eq!((got.0.as_str(), got.1), ("one\ntwo\nthree\nfour\n", false));
+
+        // Unknown file → None.
+        assert_eq!(
+            stored_source_for_file(&graph, &db, "src/absent.rs", None, None).await,
+            None
+        );
+
+        // A row whose capture is empty (pre-column, or a binary file) is
+        // skipped rather than served as blank.
+        db.upsert_nodes(&[row(
+            "function:src/b.rs:5:empty",
+            "Function",
+            "src/b.rs",
+            5,
+            9,
+            "",
+        )])
+        .await
+        .unwrap();
+        let graph2 = GraphData {
+            nodes: vec![graph_node("function:src/b.rs:5:empty", "src/b.rs", Some(5), Some(9))],
+            edges: vec![],
+            stats: None,
+            resolution: None,
+        };
+        assert_eq!(
+            stored_source_for_file(&graph2, &db, "src/b.rs", Some(5), Some(9)).await,
+            None
+        );
     }
 }

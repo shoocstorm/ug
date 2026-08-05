@@ -397,6 +397,13 @@ impl Mcp {
         let Some(built_at) = mtime_of(&ctx.graph_path) else {
             return String::new();
         };
+        // A repo root that no longer exists is not "N files deleted" — the
+        // whole tree is gone and the index is frozen by definition. Reporting
+        // every file as missing would make each tool answer noise, so skip the
+        // note entirely and let the agent keep working off the index.
+        if !ctx.repo_root.exists() {
+            return String::new();
+        }
         let mut files: Vec<&str> = Vec::new();
         for n in &graph.nodes {
             if matches!(n.node_type, GraphNodeType::Folder) {

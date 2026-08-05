@@ -604,6 +604,19 @@
             white-space: nowrap;
         }
 
+        /* Preview served from the store's captured source rather than a live
+           repo read — shown when the repo path was unavailable. */
+        .preview-meta .preview-from-index {
+            padding: 1px 6px;
+            border: 1px solid var(--border-soft);
+            border-radius: 4px;
+            background: var(--bg-elevated);
+            color: var(--accent);
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+            white-space: nowrap;
+        }
+
         /* Raw (non-markdown) chunk: monospace, preserves whitespace. */
         .preview-code {
             margin: 0;

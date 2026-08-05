@@ -73,6 +73,23 @@ pub(crate) fn resolve_project_name(args: &[String], input: &str) -> String {
     }
 }
 
+/// Resolve the project name for commands that default to a *generated*
+/// project rather than the cwd: `-n/--name` wins, else the persisted
+/// active project (`ug active`), else the cwd's basename.
+///
+/// This is the chain `regen`, `ingest`, and the read commands use so a
+/// `ug active <name>` from outside an indexed repo lands on the project
+/// the user pinned instead of silently picking the most recently
+/// updated one. Generate commands (`gen`, `index`, `graph`) keep using
+/// [`resolve_project_name`] — they create a project from the cwd and
+/// must not be redirected by the active marker.
+pub(crate) fn resolve_active_project_name(args: &[String], input: &str) -> String {
+    match flag_value(args, &["-n", "--name"]) {
+        Some(n) => sanitize_name(&n),
+        None => get_active_project().unwrap_or_else(|| derive_project_name(input)),
+    }
+}
+
 /// Data directory for a (sanitized) project name.
 pub(crate) fn project_dir(name: &str) -> PathBuf {
     ug_home().join(sanitize_name(name))
@@ -186,12 +203,24 @@ pub(crate) fn list_projects() -> Vec<(PathBuf, ProjectMeta)> {
 
 /// Default db path for read commands (chat, semantic_search, …) when
 /// no `-n/--name` flag is given:
+/// the active project's `~/.ug/<active>/ugdb` if set and present →
 /// `~/.ug/<cwd-basename>/ugdb` if it exists → legacy `./.ug/ugdb` if it
 /// exists → the most recently updated project under `~/.ug` (covers
 /// running a read command from outside any indexed repo) →
 /// `~/.ug/<cwd-basename>/ugdb` (so error messages point users at the
 /// new layout).
 pub(crate) fn default_read_db_path() -> String {
+    // The active marker is the same one `serve` and `mcp` honor, so a
+    // read from outside an indexed repo lands where `ug active` pointed
+    // instead of on whatever was touched last. Only used when its db
+    // actually exists — an active project that was never ingested falls
+    // through to the rest of the chain.
+    if let Some(name) = get_active_project() {
+        let active_path = project_dir(&name).join("ugdb");
+        if active_path.exists() {
+            return active_path.to_string_lossy().into_owned();
+        }
+    }
     let new_path = project_dir(&derive_project_name(".")).join("ugdb");
     if new_path.exists() {
         return new_path.to_string_lossy().into_owned();

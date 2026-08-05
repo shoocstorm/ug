@@ -710,8 +710,9 @@
                 : `Captured source — ${chars} chars`;
             summary.title = 'The source this node was indexed from, stored in the knowledge base. '
                 + 'This is what a snippet read returns and what the keyword vector was built from. '
-                + 'The Source tab shows the same span read live from disk — when the two differ, '
-                + 'the index is behind.';
+                + 'The Source tab shows the same span read live from disk when the repo is '
+                + 'available, and the indexed copy otherwise — when the two differ, the index '
+                + 'is behind.';
             details.appendChild(summary);
 
             const note = document.createElement('div');
@@ -720,7 +721,8 @@
                 ? 'What the store holds and what search returns. The file on disk has '
                     + 'changed since indexing, so Preview above will not match this.'
                 : 'What the store holds and what search returns, captured at index time. '
-                    + 'Preview above reads the same span live from disk.';
+                    + 'Preview above shows the same span live from disk when the repo is '
+                    + 'available, and this copy when it is not.';
             details.appendChild(note);
 
             const pre = document.createElement('pre');
@@ -966,9 +968,11 @@
         // Fills the right-panel "Preview" tab with the *actual* source content of
         // the selected item: the whole file for a File node, or the
         // start..end line span for a chunk/symbol. (node_text in the DB is a
-        // synthetic embedding string, not the source, so we read the file from
-        // disk via /api/file instead.) `row` is the DB hydrate that carries the
-        // file path + line range; it may be null on the first synchronous render.
+        // synthetic embedding string, not the source, so we read the file via
+        // /api/file instead — which serves the live repo file, or the indexed
+        // copy when the repo path is unavailable.) `row` is the DB hydrate that
+        // carries the file path + line range; it may be null on the first
+        // synchronous render.
         async function renderPreview(node, row) {
             const container = document.getElementById('preview-content');
             if (!container) return;
@@ -1031,6 +1035,10 @@
             if (state.previewToken !== token) return;
             if (!state.selectedNode || !node || state.selectedNode.id !== node.id) return;
 
+            // Whether the copy shown came from the live repo or the index.
+            // The endpoint reports which so the UI can say so rather than
+            // imply a live read that never happened.
+            const fromIndex = !!(data && data.source === 'db');
             const content = (data && typeof data.content === 'string') ? data.content : '';
             const lineLabel = start
                 ? `L${start}${end && end !== start ? '–' + end : ''}`
@@ -1045,11 +1053,15 @@
             const renderTip = isMd
                 ? 'Rendered as Markdown. Toggle nothing — the raw text is under Captured source in the Indexed tab.'
                 : '';
+            const srcTitle = fromIndex
+                ? 'Served from the index — the repo path for this file was unavailable when requested, so this is the source captured at index time.'
+                : 'Path and line range read from disk for this view.';
 
             const meta = `<div class="preview-meta">
                 <span title="${escapeHtml(kindTip)}">${kindLabel}</span>
                 ${isMd ? `<span title="${escapeHtml(renderTip)}">Markdown</span>` : ''}
-                <span class="src" title="Path and line range read from disk for this view.">${escapeHtml(file)}${lineLabel ? ' · ' + lineLabel : ''}</span>
+                ${fromIndex ? `<span class="preview-from-index" title="The repo was unavailable, so this is what the index captured — not the file as it is now.">Indexed copy</span>` : ''}
+                <span class="src" title="${escapeHtml(srcTitle)}">${escapeHtml(file)}${lineLabel ? ' · ' + lineLabel : ''}</span>
             </div>`;
 
             if (!content) {

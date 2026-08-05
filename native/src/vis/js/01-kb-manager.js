@@ -188,6 +188,7 @@
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></svg>
                         <span>${escapeHtml(p.repoRoot || '')}</span>
                     </div>
+                    ${p.repoMissing ? `<div class="kb-card-repo-missing" title="The source repo path was unavailable on the last staleness check. Everything shown is served from the index; re-indexing needs the repo restored.">repo unavailable — index only</div>` : ''}
                     <div class="kb-card-footer">
                         <span class="kb-card-updated" title="Last indexed ${escapeHtml(updatedExact)}">Updated ${escapeHtml(updated)}</span>
                         ${p.stale ? `<span class="kb-card-stale-note" title="Index is stale — click the re-index button to refresh.">${escapeHtml(staleInfo)}</span>` : ''}
@@ -253,15 +254,20 @@
             for (const p of kbCapsCache.projects) {
                 const s = byName.get(p.name);
                 const stale = !!(s && s.isStale);
+                // A repo root that no longer exists is not "N files deleted" —
+                // the whole tree is gone and the index is serving from itself.
+                const repoMissing = !!(s && s.repoMissing);
                 const info = s && stale
                     ? [s.changed ? `${s.changed} changed` : '', s.missing ? `${s.missing} deleted` : '']
                         .filter(Boolean).join(', ')
                     : '';
                 const kind = (s && s.kbKind) || p.kbKind || '';
-                if (p.stale !== stale || p.staleInfo !== info || p.kbKind !== kind) {
+                if (p.stale !== stale || p.staleInfo !== info || p.kbKind !== kind
+                    || p.repoMissing !== repoMissing) {
                     p.stale = stale;
                     p.staleInfo = info;
                     p.kbKind = kind;
+                    p.repoMissing = repoMissing;
                     changed = true;
                 }
             }
