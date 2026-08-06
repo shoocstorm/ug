@@ -34,11 +34,13 @@ engine, same parameter names, richer `--help`.
 | How many / what fraction / biggest / what breaks? | `ug query <preset>` — catalog below |
 | You only have a concept, not a name or path | `ug search "concept"` or `ug find_symbols <word>`, then feed the id/path into the command you wanted |
 | Where is `foo`? (you know the name) | `ug find_symbols foo` |
+| Every symbol in a family / naming convention | `ug find_symbols 'handle_*'` — see Wildcards |
 | How does <vague concept> work? | `ug search "concept" -k 8` |
 | What's in this file? | `ug file_outline path/to/f.rs` |
-| Read the source | `ug get_code <id>` · `ug get_code -f file -s 10 -e 60` |
-| Who calls / imports / implements this? | `ug find_usages <id>` |
-| What does this depend on? | `ug traverse <id> -k 1` (widen only if needed) |
+| What's in this directory / subtree? | `ug file_outline 'src/**/*.ts'` |
+| Read the source | `ug get_code <symbol>` · `ug get_code -f file --range 10-60` |
+| Who calls / imports / implements this? | `ug find_usages <symbol>` |
+| What does this depend on? | `ug traverse <symbol> -k 1` (widen only if needed) |
 | How are A and B connected? | `ug shortest_path A B` |
 | Where do I start in this repo? | `ug project_overview`, `ug query where_to_start` |
 | Central symbols · dependency cycles | `ug graph_centrality` · `ug graph_cycles` |
@@ -59,15 +61,38 @@ need the db. Everything else reads `graph.json` — so an embedding error is
 never a dead end.
 
 Node ids are `kind:file:name` — **no line number**, e.g.
-`function:path/to/file.rs:symbol_name`. `find_usages` and `get_code` need a
-real id (from `find_symbols`/`file_outline`/`search`); the others also take a
-bare name or path. `find_symbols`, `file_outline`, `get_code`, `find_usages`
-and `traverse` take **several arguments in one call** — batch instead of
-looping:
+`function:path/to/file.rs:symbol_name`. Anywhere an id is expected you may
+instead pass a **bare symbol name** or a **wildcard**, so a `find_symbols`
+round trip is optional, not a prerequisite. `find_symbols`, `file_outline`,
+`get_code`, `find_usages` and `traverse` also take **several arguments in one
+call** — batch instead of looping:
 
 ```bash
 ug find_symbols run_gen run_serve run_ingest
+ug find_usages connect                     # no id lookup needed
 ```
+
+## Wildcards — one call instead of a loop
+
+`* ? [abc] [a-z] [!ab] {a,b}` work wherever a symbol or file is named:
+`find_symbols` (name, `--node-type`, `--file-prefix`), `file_outline`, and the
+symbol arguments of `get_code`, `find_usages`, `traverse`, `shortest_path`.
+**Quote them** — the shell expands `*` otherwise.
+
+```bash
+ug find_symbols 'handle_*'                    # every handler
+ug find_symbols '*Controller' --node-type Class
+ug find_symbols '*' --file-prefix 'src/auth/**' -k 100   # a whole subtree
+ug file_outline 'src/**/*.{ts,tsx}' -k 40     # survey many files at once
+ug find_usages 'validate_*'                   # blast radius of a family
+ug traverse 'handle_*' -d inbound             # one merged walk
+```
+
+A pattern matches the **whole** name (`auth*` finds `authorize`, `*auth*`
+finds `reauth`); in paths `*` stops at `/` and `**/` crosses directories. In
+the id-taking commands a pattern expands to at most 25 symbols and says so
+when it hits that — narrow the pattern rather than trusting a capped answer.
+`shortest_path` needs each endpoint to match exactly one symbol.
 
 ## `ug query`
 
@@ -144,8 +169,12 @@ Graph-backed commands default to the **cwd basename**, db-backed ones to the
 
 ## Traps
 
-- `ug search` for a name you already know → `find_symbols` (exact, no embeddings).
+- `ug search` for a name you already know → `find_symbols` (no embeddings).
   For a file's contents → `file_outline`.
+- Looping a command over a family of symbols or files → one wildcard call.
+- An unquoted `'*'` — the shell expands it before `ug` sees it.
+- A wildcard that matches nothing is usually anchoring: patterns must cover the
+  whole name (`*auth*`, not `auth`), and `*` does not cross `/` in a path.
 - Judging code from a search snippet → `get_code` for the whole symbol.
 - Reporting `dead_code` / `untested_symbols` as fact → candidates only;
   reflection, dynamic dispatch and macros are invisible to the graph.

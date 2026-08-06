@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+use crate::pattern::{self, Mode, Pattern};
 use crate::types::{GraphData, GraphEdgeType, GraphNode, GraphNodeType};
 use crate::{C_BOLD, C_CYAN, C_DIM, C_RESET};
 
@@ -178,8 +179,249 @@ pub fn strip_file_id_prefix(file: &str) -> &str {
 /// Node ids from the indexer are `<kind>:<path>:<name>` (with a `#N` suffix
 /// when a file declares that name more than once). The CLI takes bare
 /// positionals, so it needs a heuristic to tell an id from a name.
+///
+/// A wildcard pattern is never an id, even one containing `:` — `*:*:login`
+/// is a request to search ids, not to look one up.
 pub fn looks_like_node_id(s: &str) -> bool {
-    s.contains(':')
+    s.contains(':') && !pattern::is_pattern(s)
+}
+
+// ---------------------------------------------------------------------------
+// Wildcard matching
+// ---------------------------------------------------------------------------
+
+/// One query string, compiled: a wildcard pattern when it contains
+/// metacharacters, a plain literal otherwise.
+///
+/// The split is what keeps wildcards additive. A name with no `*`/`?`/`[`/`{`
+/// takes exactly the path it always took — exact beats prefix beats substring
+/// — so no existing call changes meaning; a name with one gets anchored glob
+/// matching. Every param that accepts a name, a type or a path goes through
+/// here, so the dialect is the same wherever an agent tries it.
+#[derive(Debug, Clone)]
+pub enum Matcher {
+    /// Lower-cased literal, compared by the caller's own rule (equality for
+    /// types, exact/prefix/substring ranking for names, prefix for paths).
+    Literal(String),
+    Glob(Pattern),
+}
+
+impl Matcher {
+    /// Compile `q`, treating it as a pattern only if it carries an unescaped
+    /// metacharacter.
+    pub fn new(q: &str, mode: Mode) -> Result<Matcher, String> {
+        if pattern::is_pattern(q) {
+            Ok(Matcher::Glob(Pattern::new(q, mode)?))
+        } else {
+            Ok(Matcher::Literal(pattern::unescape(q).to_lowercase()))
+        }
+    }
+
+    pub fn is_glob(&self) -> bool {
+        matches!(self, Matcher::Glob(_))
+    }
+
+    /// Whole-string match: glob semantics for a pattern, case-insensitive
+    /// equality for a literal.
+    pub fn matches(&self, s: &str) -> bool {
+        match self {
+            Matcher::Literal(lit) => s.to_lowercase() == *lit,
+            Matcher::Glob(p) => p.matches(s),
+        }
+    }
+
+    /// Match anywhere in `s` — glob for a pattern, substring for a literal.
+    /// For prose (docstrings), where anchoring would be useless.
+    pub fn matches_within(&self, s: &str) -> bool {
+        match self {
+            Matcher::Literal(lit) => s.to_lowercase().contains(lit.as_str()),
+            Matcher::Glob(p) => Pattern::containing(p.as_str(), Mode::Name)
+                .map(|c| c.matches(s))
+                .unwrap_or(false),
+        }
+    }
+}
+
+/// A file filter: a path glob, or (with no metacharacters) the repo-relative
+/// prefix `file_prefix` has always meant.
+#[derive(Debug, Clone)]
+pub struct PathFilter(Matcher);
+
+impl PathFilter {
+    pub fn new(spec: &str) -> Result<PathFilter, String> {
+        Ok(PathFilter(Matcher::new(spec, Mode::Path)?))
+    }
+
+    pub fn matches(&self, path: &str) -> bool {
+        match &self.0 {
+            // Prefix, not equality: `src/auth/` has to keep selecting
+            // everything beneath it.
+            Matcher::Literal(prefix) => path.to_lowercase().starts_with(prefix.as_str()),
+            Matcher::Glob(p) => p.matches(path),
+        }
+    }
+}
+
+/// Compile a `node_types` filter. An empty list means "any type"; a type
+/// may itself be a pattern (`C*` for Class/Concept/Config/Constant).
+fn type_matchers(specs: &[String]) -> Result<Vec<Matcher>, String> {
+    specs
+        .iter()
+        .map(|t| Matcher::new(t, Mode::Name))
+        .collect()
+}
+
+fn type_allowed(matchers: &[Matcher], n: &GraphNode) -> bool {
+    matchers.is_empty() || matchers.iter().any(|m| m.matches(node_type_str(&n.node_type)))
+}
+
+// ---------------------------------------------------------------------------
+// Node references
+// ---------------------------------------------------------------------------
+
+/// How many nodes one name or pattern may expand to in an id-taking tool.
+///
+/// These tools print a section per node, so an unbounded expansion of `*` is
+/// a context bomb. The overflow is reported rather than dropped — see
+/// [`unresolved_ref_error`].
+pub const MAX_REF_EXPANSION: usize = 25;
+
+/// Turn what the caller *wrote* into node ids.
+///
+/// Every id-taking tool (`get_code`, `find_usages`, `traverse`,
+/// `shortest_path`) runs its `node_id` list through this first, so all three
+/// of these work and mean the same thing everywhere:
+///
+/// - `function:src/auth.rs:42:login` — an id, used as-is (the fast path).
+/// - `login` — a bare name, resolved to every symbol with that exact name.
+/// - `login_*`, `src/auth/*.ts` — a wildcard, resolved to every symbol whose
+///   name matches (or, when the pattern contains `/`, whose file matches).
+///
+/// Before this, anything but an id was an error telling the caller to go run
+/// `find_symbols` and come back — a round trip per lookup for an agent, and a
+/// dead end for a human who knows the function's name perfectly well.
+///
+/// A reference that resolves to nothing is passed through unchanged so the
+/// caller's own "no such node" branch reports it; those branches use
+/// [`unresolved_ref_error`], which explains what actually went wrong. A
+/// reference whose expansion overflows `cap` is *also* passed through, after
+/// its first `cap` ids, so the truncation is reported the same way instead of
+/// silently shortening the answer.
+pub fn expand_node_refs(graph: &GraphData, refs: &[String], cap: usize) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for r in refs {
+        if graph.nodes.iter().any(|n| n.id == *r) {
+            out.push(r.clone());
+            continue;
+        }
+        let matched = match_node_refs(graph, r);
+        if matched.is_empty() {
+            out.push(r.clone());
+            continue;
+        }
+        out.extend(matched.iter().take(cap).cloned());
+        if matched.len() > cap {
+            out.push(r.clone());
+        }
+    }
+    out.dedup();
+    out
+}
+
+/// Node ids a non-id reference names, in a stable order.
+fn match_node_refs(graph: &GraphData, r: &str) -> Vec<String> {
+    let name = match Matcher::new(r, Mode::Name) {
+        Ok(m) => m,
+        Err(_) => return vec![],
+    };
+    // A `/` means the caller is talking about paths, so match files too.
+    let path = if r.contains('/') {
+        PathFilter::new(r).ok()
+    } else {
+        None
+    };
+
+    let mut hits: Vec<&GraphNode> = graph
+        .nodes
+        .iter()
+        .filter(|n| {
+            name.matches(&n.name)
+                || path
+                    .as_ref()
+                    .zip(n.file.as_deref())
+                    .map(|(p, f)| p.matches(f))
+                    .unwrap_or(false)
+        })
+        .collect();
+    hits.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
+    hits.into_iter().map(|n| n.id.clone()).collect()
+}
+
+/// Resolve one reference to exactly one node id, for the tools that take a
+/// single endpoint rather than a list (`shortest_path`).
+///
+/// Ambiguity is an error here, not a silent pick: "is A connected to B" has
+/// a different answer for each candidate B, so choosing one for the caller
+/// would produce a confident answer to a question they did not ask.
+pub fn resolve_single_ref(graph: &GraphData, r: &str) -> Result<String, String> {
+    if graph.nodes.iter().any(|n| n.id == r) {
+        return Ok(r.to_string());
+    }
+    let matched = match_node_refs(graph, r);
+    match matched.len() {
+        0 => Err(unresolved_ref_error(graph, r, MAX_REF_EXPANSION)),
+        1 => Ok(matched.into_iter().next().unwrap()),
+        n => Err(format!(
+            "'{}' matches {} symbols — pass one id: {}{}",
+            r,
+            n,
+            matched
+                .iter()
+                .take(5)
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .join(", "),
+            if n > 5 { ", …" } else { "" }
+        )),
+    }
+}
+
+/// The message every id-taking tool shows for a reference it could not use —
+/// one that named nothing, or one whose expansion hit the cap.
+///
+/// Written against the reference the caller actually passed: an id gets the
+/// "where ids come from" pointer, a name that matches nothing suggests the
+/// tools that find one, and a pattern is told how many symbols it hit and
+/// what to do about it. A single "No node with id X" for all three sent
+/// callers hunting for the wrong problem.
+pub fn unresolved_ref_error(graph: &GraphData, r: &str, cap: usize) -> String {
+    let matched = match_node_refs(graph, r);
+    if matched.len() > cap {
+        return format!(
+            "'{}' matches {} symbols — only the first {} were expanded. Narrow the pattern, or run find_symbols '{}' to pick the ones you want.",
+            r,
+            matched.len(),
+            cap,
+            r
+        );
+    }
+    if pattern::is_pattern(r) {
+        return format!(
+            "No symbol matches pattern '{}'. Patterns match the whole name — wrap it in '*' to match anywhere (e.g. '*{}*'), and use '**/' to cross directories in a path.",
+            r,
+            r.trim_matches('*')
+        );
+    }
+    if looks_like_node_id(r) {
+        return format!(
+            "No node with id '{}' — ids come from find_symbols, search or file_outline. A plain name or a wildcard ('{}*') also works here.",
+            r, r
+        );
+    }
+    format!(
+        "No symbol named '{}'. This parameter takes a node id, an exact name, or a wildcard — try '{}*' or run find_symbols '*{}*' to see what exists.",
+        r, r, r
+    )
 }
 
 pub fn by_id_map(graph: &GraphData) -> HashMap<&str, &GraphNode> {
@@ -341,14 +583,24 @@ pub struct FindSymbolsParams {
     /// Direct node id lookup — O(1), skips the search entirely.
     #[serde(alias = "nodeId", alias = "nodeIds", deserialize_with = "de_one_or_many")]
     pub node_id: Vec<String>,
-    /// Identifier (or fragment) to match against node names.
+    /// Identifier, fragment, or wildcard pattern to match against node
+    /// names. A pattern (`run_*`, `get?`, `[gs]et_code`, `{save,load}_*`)
+    /// must match the whole name; a plain fragment keeps its
+    /// exact > prefix > substring ranking.
     #[serde(deserialize_with = "de_one_or_many")]
     pub name: Vec<String>,
-    /// Restrict to these node types (case-insensitive).
+    /// Restrict to these node types (case-insensitive; wildcards allowed).
     #[serde(alias = "nodeTypes", deserialize_with = "de_one_or_many")]
     pub node_types: Vec<String>,
-    /// Only symbols whose file path starts with this repo-relative prefix.
-    #[serde(alias = "filePrefix")]
+    /// Only symbols under this repo-relative path: a plain prefix
+    /// (`src/auth/`) or a path glob (`src/**/*.ts`).
+    #[serde(
+        alias = "filePrefix",
+        alias = "file",
+        alias = "filePattern",
+        alias = "file_pattern",
+        alias = "path"
+    )]
     pub file_prefix: Option<String>,
     #[serde(alias = "k")]
     pub limit: Option<usize>,
@@ -364,7 +616,8 @@ const DEFAULT_SYMBOL_LIMIT: usize = 20;
 #[derive(Debug, Clone, Serialize)]
 pub struct SymbolQueryResult {
     pub query: String,
-    /// `"id"` for a direct lookup, `"name"` for a ranked name search.
+    /// `"id"` for a direct lookup, `"name"` for a ranked name search,
+    /// `"pattern"` for a wildcard match.
     pub kind: &'static str,
     pub total: usize,
     pub items: Vec<SymbolRef>,
@@ -385,8 +638,36 @@ impl FindSymbolsResult {
 
 pub fn find_symbols(graph: &GraphData, p: &FindSymbolsParams) -> FindSymbolsResult {
     let limit = p.limit.unwrap_or(DEFAULT_SYMBOL_LIMIT);
-    let types: Vec<String> = p.node_types.iter().map(|t| t.to_lowercase()).collect();
     let mut queries = Vec::new();
+
+    // A bad filter is the whole call's problem, not one query's — report it
+    // once, against every query, instead of silently returning matches that
+    // ignored the filter the caller asked for.
+    let filters = type_matchers(&p.node_types).and_then(|types| {
+        let file = match &p.file_prefix {
+            Some(f) => Some(PathFilter::new(f)?),
+            None => None,
+        };
+        Ok::<_, String>((types, file))
+    });
+    let (types, file_filter) = match filters {
+        Ok(f) => f,
+        Err(e) => {
+            let queries = p
+                .node_id
+                .iter()
+                .chain(p.name.iter())
+                .map(|q| SymbolQueryResult {
+                    query: q.clone(),
+                    kind: "name",
+                    total: 0,
+                    items: vec![],
+                    error: Some(e.clone()),
+                })
+                .collect();
+            return FindSymbolsResult { queries };
+        }
+    };
 
     for id in &p.node_id {
         queries.push(match graph.nodes.iter().find(|n| n.id == *id) {
@@ -411,46 +692,68 @@ pub fn find_symbols(graph: &GraphData, p: &FindSymbolsParams) -> FindSymbolsResu
     }
 
     for name in &p.name {
-        let q = name.to_lowercase();
-        let mut hits: Vec<(u8, &GraphNode)> = Vec::new();
-        for n in &graph.nodes {
-            if !types.is_empty() && !types.contains(&node_type_str(&n.node_type).to_lowercase()) {
+        let matcher = match Matcher::new(name, Mode::Name) {
+            Ok(m) => m,
+            Err(e) => {
+                queries.push(SymbolQueryResult {
+                    query: name.clone(),
+                    kind: "pattern",
+                    total: 0,
+                    items: vec![],
+                    error: Some(e),
+                });
                 continue;
             }
-            if let Some(prefix) = &p.file_prefix {
-                if !n.file.as_deref().unwrap_or("").starts_with(prefix.as_str()) {
+        };
+        let glob = matcher.is_glob();
+        let mut hits: Vec<(u8, &GraphNode)> = Vec::new();
+        for n in &graph.nodes {
+            if !type_allowed(&types, n) {
+                continue;
+            }
+            if let Some(f) = &file_filter {
+                if !f.matches(n.file.as_deref().unwrap_or("")) {
                     continue;
                 }
             }
-            let nm = n.name.to_lowercase();
-            // exact > prefix > substring > docstring; ties broken by shorter
-            // (closer) name. Matching the identifier always outranks matching
-            // prose about it.
-            let rank = if nm == q {
-                0
-            } else if nm.starts_with(&q) {
-                1
-            } else if nm.contains(&q) {
-                2
-            } else if p.include_docs
-                && n.docstring
-                    .as_ref()
-                    .map(|d| d.to_lowercase().contains(&q))
-                    .unwrap_or(false)
-            {
-                3
+            // A wildcard is an explicit statement of what the name looks
+            // like, so every hit is equally "exact" — there is no weaker
+            // prefix/substring tier to fall back to. A literal keeps the
+            // exact > prefix > substring ladder. Either way a docstring hit
+            // ranks last: matching the identifier beats matching prose
+            // about it.
+            let rank = if glob {
+                if matcher.matches(&n.name) {
+                    0
+                } else if p.include_docs && doc_hit(n, &matcher) {
+                    3
+                } else {
+                    4
+                }
             } else {
-                4
+                literal_rank(&n.name, &matcher, p.include_docs, n)
             };
             if rank < 4 {
                 hits.push((rank, n));
             }
         }
-        hits.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.name.len().cmp(&b.1.name.len())));
+        // Literal queries tie-break on the shorter (closer) name. Pattern
+        // queries are a listing rather than a ranked search, so they sort
+        // alphabetically by name then file — stable and scannable, and it
+        // does not shuffle `run_gen`/`run_index`/`run_serve` by length.
+        if glob {
+            hits.sort_by(|a, b| {
+                a.0.cmp(&b.0)
+                    .then_with(|| a.1.name.cmp(&b.1.name))
+                    .then_with(|| a.1.file.cmp(&b.1.file))
+            });
+        } else {
+            hits.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.name.len().cmp(&b.1.name.len())));
+        }
         let total = hits.len();
         queries.push(SymbolQueryResult {
             query: name.clone(),
-            kind: "name",
+            kind: if glob { "pattern" } else { "name" },
             total,
             items: hits
                 .iter()
@@ -462,6 +765,33 @@ pub fn find_symbols(graph: &GraphData, p: &FindSymbolsParams) -> FindSymbolsResu
     }
 
     FindSymbolsResult { queries }
+}
+
+fn doc_hit(n: &GraphNode, matcher: &Matcher) -> bool {
+    n.docstring
+        .as_ref()
+        .map(|d| matcher.matches_within(d))
+        .unwrap_or(false)
+}
+
+/// exact > prefix > substring > docstring, for a literal query. `4` means
+/// no match.
+fn literal_rank(name: &str, matcher: &Matcher, include_docs: bool, n: &GraphNode) -> u8 {
+    let Matcher::Literal(q) = matcher else {
+        return 4;
+    };
+    let nm = name.to_lowercase();
+    if nm == *q {
+        0
+    } else if nm.starts_with(q.as_str()) {
+        1
+    } else if nm.contains(q.as_str()) {
+        2
+    } else if include_docs && doc_hit(n, matcher) {
+        3
+    } else {
+        4
+    }
 }
 
 pub fn render_find_symbols(r: &FindSymbolsResult, style: Render) -> String {
@@ -476,16 +806,27 @@ pub fn render_find_symbols(r: &FindSymbolsResult, style: Render) -> String {
             line(&mut out, &style.heading("Node by direct id lookup"));
             out.push('\n');
         } else {
+            // Say when a result was truncated *and* how to see the rest —
+            // a bare "showing 20" leaves the reader to guess the flag.
             let showing = if q.total > q.items.len() {
-                format!(", showing {}", q.items.len())
+                format!(
+                    ", showing {} — raise {} for the rest",
+                    q.items.len(),
+                    style.id("limit")
+                )
             } else {
                 String::new()
+            };
+            let what = if q.kind == "pattern" {
+                "Symbols matching pattern"
+            } else {
+                "Symbols matching"
             };
             line(
                 &mut out,
                 &format!(
                     "{} — {} match(es){}",
-                    style.heading(&format!("Symbols matching '{}'", q.query)),
+                    style.heading(&format!("{} '{}'", what, q.query)),
                     q.total,
                     showing
                 ),
@@ -493,10 +834,26 @@ pub fn render_find_symbols(r: &FindSymbolsResult, style: Render) -> String {
             out.push('\n');
         }
         if q.items.is_empty() {
+            // Each suggestion is a different failure: too specific a string,
+            // too narrow a filter, or the wrong tool entirely.
+            let widen = if q.kind == "pattern" {
+                format!(
+                    "Wildcards match the whole name — wrap the pattern in {} to match anywhere ({}).",
+                    style.id("*"),
+                    style.id("*auth*")
+                )
+            } else {
+                format!(
+                    "Try a shorter fragment, or a wildcard ({} matches the whole name).",
+                    style.id("*auth*")
+                )
+            };
+            line(&mut out, &format!("No matches. {}", widen));
             line(
                 &mut out,
                 &format!(
-                    "No name matches. Try a shorter fragment, drop the type/file filters, or use {} for a concept-level query.",
+                    "Also worth trying: drop the type/file filters, add {} to scan docstrings, or use {} for a concept-level query.",
+                    style.id("include_docs"),
                     style.id("search")
                 ),
             );
@@ -528,9 +885,14 @@ pub struct FileOutlineParams {
     /// Direct File node id lookup.
     #[serde(alias = "nodeId", alias = "nodeIds", deserialize_with = "de_one_or_many")]
     pub node_id: Vec<String>,
-    /// Repo-relative path, unique suffix, or `file:<path>` id.
+    /// Repo-relative path, unique suffix, `file:<path>` id, or a path glob
+    /// (`src/**/*.ts`) that outlines every file it matches.
     #[serde(deserialize_with = "de_one_or_many")]
     pub file: Vec<String>,
+    /// Cap on files outlined per glob (default 20). Ignored by the exact and
+    /// suffix forms, which resolve to one file.
+    #[serde(alias = "maxFiles", alias = "limit", alias = "k")]
+    pub max_files: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -606,10 +968,93 @@ pub fn file_outline(graph: &GraphData, p: &FileOutlineParams) -> FileOutlineResu
     }
 
     for f in &p.file {
-        files.push(outline_by_path(graph, f, strip_file_id_prefix(f)));
+        let path = strip_file_id_prefix(f);
+        if pattern::is_pattern(path) {
+            files.extend(outline_by_glob(graph, f, path, p.max_files.unwrap_or(DEFAULT_OUTLINE_FILES)));
+        } else {
+            files.push(outline_by_path(graph, f, path));
+        }
     }
 
     FileOutlineResult { files, show_ids: true }
+}
+
+/// How many files one glob outlines before the rest are listed by name
+/// instead. A whole-repo glob would otherwise dump every symbol in the
+/// project into an agent's context.
+const DEFAULT_OUTLINE_FILES: usize = 20;
+
+/// Outline every indexed file matching a path glob.
+///
+/// Returns one entry per matched file (so each renders with its own heading
+/// and the caller sees which files answered), plus a final error-shaped entry
+/// naming the overflow when the glob matched more than `max_files`. Nothing
+/// matching is one entry rather than silence — a glob that selects nothing is
+/// almost always a mis-written pattern, and the message says so.
+fn outline_by_glob(
+    graph: &GraphData,
+    query: &str,
+    glob: &str,
+    max_files: usize,
+) -> Vec<FileOutlineEntry> {
+    let pat = match Pattern::new(glob, Mode::Path) {
+        Ok(p) => p,
+        Err(e) => {
+            return vec![FileOutlineEntry {
+                query: query.to_string(),
+                file: None,
+                symbols: vec![],
+                candidates: vec![],
+                error: Some(e),
+            }]
+        }
+    };
+
+    let mut matched: Vec<String> = graph
+        .nodes
+        .iter()
+        .filter_map(|n| n.file.as_ref())
+        .filter(|f| pat.matches(f))
+        .cloned()
+        .collect();
+    matched.sort();
+    matched.dedup();
+
+    if matched.is_empty() {
+        return vec![FileOutlineEntry {
+            query: query.to_string(),
+            file: None,
+            symbols: vec![],
+            candidates: vec![],
+            error: Some(format!(
+                "No indexed file matches pattern '{}'. Paths are repo-relative, and '*' does not cross '/' — use '**/' for that (e.g. 'src/**/*.ts').",
+                glob
+            )),
+        }];
+    }
+
+    let overflow: Vec<String> = matched.split_off(matched.len().min(max_files));
+    let mut entries: Vec<FileOutlineEntry> = matched
+        .iter()
+        .map(|f| outline_by_path(graph, f, f))
+        .collect();
+    if !overflow.is_empty() {
+        entries.push(FileOutlineEntry {
+            query: query.to_string(),
+            file: None,
+            symbols: vec![],
+            // The names are the useful part: the caller can outline exactly
+            // the ones it wants without re-running a broader glob.
+            candidates: overflow.iter().take(50).cloned().collect(),
+            error: Some(format!(
+                "'{}' matches {} more file(s) than the {}-file cap — outline them by name, narrow the pattern, or raise max_files.",
+                glob,
+                overflow.len(),
+                max_files
+            )),
+        });
+    }
+    entries
 }
 
 /// Resolve `path` to one indexed file — exact repo-relative match first, then
@@ -920,14 +1365,11 @@ pub fn get_code(graph: &GraphData, src: SourceCtx, p: &GetCodeParams) -> GetCode
         return GetCodeResult { slices };
     }
 
-    for id in &p.node_id {
+    for id in &expand_node_refs(graph, &p.node_id, MAX_REF_EXPANSION) {
         let Some(n) = graph.nodes.iter().find(|n| n.id == *id) else {
             slices.push(err_slice(
                 id,
-                format!(
-                    "No node with id '{}' — ids come from find_symbols, search or file_outline.",
-                    id
-                ),
+                unresolved_ref_error(graph, id, MAX_REF_EXPANSION),
             ));
             continue;
         };
@@ -1394,16 +1836,13 @@ fn walk_usages(graph: &GraphData, p: &FindUsagesParams) -> FindUsagesResult {
     }
 
     let mut nodes = Vec::new();
-    for node_id in &p.node_id {
+    for node_id in &expand_node_refs(graph, &p.node_id, MAX_REF_EXPANSION) {
         let Some(subject) = by_id.get(node_id.as_str()) else {
             nodes.push(UsagesEntry {
                 query: node_id.clone(),
                 subject: None,
                 users: vec![],
-                error: Some(format!(
-                    "No node with id '{}' — ids come from find_symbols, search or file_outline.",
-                    node_id
-                )),
+                error: Some(unresolved_ref_error(graph, node_id, MAX_REF_EXPANSION)),
             });
             continue;
         };
@@ -1635,8 +2074,15 @@ pub struct TraverseResult {
     pub edge_types: Vec<String>,
     pub nodes: Vec<TraversedNode>,
     pub edges: Vec<TraversedEdge>,
+    /// Seeds that named no node, as the caller wrote them.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub missing: Vec<String>,
+    /// One explanation per entry in `missing`, written where the graph is
+    /// still in hand — a name that matches nothing, a pattern that matches
+    /// nothing, and a pattern that matched too much are three different
+    /// problems, and the renderer cannot tell them apart on its own.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
 }
 
 impl TraverseResult {
@@ -1684,7 +2130,7 @@ pub fn traverse(graph: &GraphData, p: &TraverseParams) -> TraverseResult {
     let mut frontier: Vec<&str> = Vec::new();
     let mut seeds: Vec<String> = Vec::new();
 
-    for id in &p.node_id {
+    for id in &expand_node_refs(graph, &p.node_id, MAX_REF_EXPANSION) {
         match by_id.get(id.as_str()) {
             Some(n) => {
                 seeds.push(id.clone());
@@ -1757,6 +2203,11 @@ pub fn traverse(graph: &GraphData, p: &TraverseParams) -> TraverseResult {
             .then(a.symbol.id.cmp(&b.symbol.id))
     });
 
+    let notes = missing
+        .iter()
+        .map(|id| unresolved_ref_error(graph, id, MAX_REF_EXPANSION))
+        .collect();
+
     TraverseResult {
         seeds,
         hops,
@@ -1765,19 +2216,14 @@ pub fn traverse(graph: &GraphData, p: &TraverseParams) -> TraverseResult {
         nodes,
         edges,
         missing,
+        notes,
     }
 }
 
 pub fn render_traverse(r: &TraverseResult, style: Render) -> String {
     let mut out = String::new();
-    for id in &r.missing {
-        line(
-            &mut out,
-            &format!(
-                "✗ No node with id '{}' — ids come from find_symbols, search or file_outline.",
-                id
-            ),
-        );
+    for note in &r.notes {
+        line(&mut out, &format!("✗ {}", note));
     }
     if r.seeds.is_empty() {
         return out;
@@ -2459,8 +2905,10 @@ pub fn render_shortest_path(r: &ShortestPathResult, style: Render, strict: bool)
         line(
             &mut out,
             &format!(
-                "They may be connected only through shared ancestors — try {} from each id.",
-                style.id("graph_bfs <id> -d both")
+                // `graph_bfs` was retired into `traverse`; pointing at a
+                // command that no longer exists is worse than no hint.
+                "They may be connected only through shared ancestors — try {} from each end.",
+                style.id("traverse <symbol> -d both")
             ),
         );
         return out;
@@ -2526,18 +2974,38 @@ pub fn render_shortest_path(r: &ShortestPathResult, style: Render, strict: bool)
 /// advertised — the two drifted apart in exactly that way before.
 pub const AGENT_TOOLS: &[(&str, &str)] = &[
     ("project_overview", "Orient in the codebase: stats, biggest files, most depended-upon symbols."),
-    ("find_symbols", "Exact-name symbol lookup — returns node ids for the other tools."),
-    ("file_outline", "Every indexed symbol in one file, in line order."),
-    ("get_code", "Read source for a node id, or a file/line range."),
+    ("find_symbols", "Symbol lookup by name or wildcard — returns node ids for the other tools."),
+    ("file_outline", "Every indexed symbol in a file, in line order; takes a path glob."),
+    ("get_code", "Read source for a symbol (id, name or wildcard), or a file/line range."),
     ("find_usages", "Who uses this symbol — inbound callers/importers, with call sites."),
-    ("traverse", "N-hop walk from seed node ids, filtered by edge type and direction."),
-    ("shortest_path", "Shortest directed edge path between two node ids."),
+    ("traverse", "N-hop walk from seed symbols, filtered by edge type and direction."),
+    ("shortest_path", "Shortest directed edge path between two symbols."),
     ("graph_schema", "Node & edge types present in this graph, with counts."),
 ];
 
 /// Does `run_tool` answer this name?
 pub fn is_agent_tool(tool: &str) -> bool {
     AGENT_TOOLS.iter().any(|(name, _)| *name == tool)
+}
+
+/// A worked request body per tool, for `GET /api/tools` and `ug api`.
+///
+/// Discovery that lists parameter names still leaves a caller guessing what a
+/// real call looks like; one copyable example per tool answers that in the
+/// same round trip. Each shows the wildcard form, since that is the part
+/// neither a schema nor a summary conveys.
+pub fn tool_example(tool: &str) -> &'static str {
+    match tool {
+        "project_overview" => r#"{}"#,
+        "find_symbols" => r#"{"name": "handle_*", "node_types": ["Function"], "file_prefix": "src/**"}"#,
+        "file_outline" => r#"{"file": "src/**/*.ts", "max_files": 20}"#,
+        "get_code" => r#"{"node_id": "render_*", "max_chars": 20000}"#,
+        "find_usages" => r#"{"node_id": "validate_*", "hops": 1, "edge_types": ["calls"]}"#,
+        "traverse" => r#"{"node_id": ["handle_*"], "hops": 2, "direction": "inbound"}"#,
+        "shortest_path" => r#"{"source": "run_gen", "target": "run_ingest"}"#,
+        "graph_schema" => r#"{}"#,
+        _ => "{}",
+    }
 }
 
 /// One-line summary, for `ug api` / `GET /api/tools` discovery.
@@ -2583,7 +3051,9 @@ pub fn source_node_ids(tool: &str, graph: &GraphData, params: &serde_json::Value
 
 /// Node ids whose captured source a `get_code` call will read.
 pub fn get_code_source_ids(graph: &GraphData, p: &GetCodeParams) -> Vec<String> {
-    let mut ids = p.node_id.clone();
+    // Expand names/patterns the same way the tool will, or the pre-fetch
+    // would miss exactly the sources a wildcard call is about to read.
+    let mut ids = expand_node_refs(graph, &p.node_id, MAX_REF_EXPANSION);
     if p.node_id.is_empty() {
         // The file/range form reads the file's whole-file capture.
         if let Some(f) = p.file.as_deref() {
@@ -2657,9 +3127,15 @@ pub fn run_tool(
         "shortest_path" => {
             let p: ShortestPathParams = decode(params)?;
             if p.source.is_empty() || p.target.is_empty() {
-                return Err("shortest_path needs both source and target node ids.".into());
+                return Err(
+                    "shortest_path needs both source and target — a node id, an exact symbol name, or a wildcard that matches exactly one symbol.".into(),
+                );
             }
-            let result = shortest_path(graph, raw, &p.source, &p.target, p.strict);
+            // Endpoints may be written as names or patterns, like every
+            // other id parameter; each must land on exactly one node.
+            let source = resolve_single_ref(graph, &p.source)?;
+            let target = resolve_single_ref(graph, &p.target)?;
+            let result = shortest_path(graph, raw, &source, &target, p.strict);
             Ok(match style {
                 Some(s) => ToolOutput::Text(render_shortest_path(&result, s, p.strict)),
                 None => ToolOutput::Json(
@@ -3095,6 +3571,246 @@ mod tests {
         );
         assert!(!r.ok());
         assert_eq!(r.queries[0].total, 0);
+    }
+
+    // -----------------------------------------------------------------
+    // Wildcards
+    // -----------------------------------------------------------------
+
+    /// A graph with names and paths chosen so glob semantics are visible:
+    /// three `run_*` functions across two directories, plus a name that
+    /// only a substring search would reach.
+    fn glob_fixture() -> GraphData {
+        GraphData {
+            nodes: vec![
+                node("file:src/a.rs", "a.rs", GraphNodeType::File, "src/a.rs", None),
+                node("file:src/deep/b.rs", "b.rs", GraphNodeType::File, "src/deep/b.rs", None),
+                node("function:src/a.rs:1:run_gen", "run_gen", GraphNodeType::Function, "src/a.rs", Some((1, 5))),
+                node("function:src/a.rs:7:run_serve", "run_serve", GraphNodeType::Function, "src/a.rs", Some((7, 9))),
+                node("function:src/deep/b.rs:1:run_index", "run_index", GraphNodeType::Function, "src/deep/b.rs", Some((1, 4))),
+                node("function:src/deep/b.rs:6:prerun_gen", "prerun_gen", GraphNodeType::Function, "src/deep/b.rs", Some((6, 8))),
+                node("class:src/a.rs:20:Runner", "Runner", GraphNodeType::Class, "src/a.rs", Some((20, 30))),
+            ],
+            edges: vec![edge(
+                "function:src/a.rs:1:run_gen",
+                "function:src/deep/b.rs:1:run_index",
+                GraphEdgeType::Calls,
+            )],
+            stats: None,
+            resolution: None,
+        }
+    }
+
+    fn names_of(q: &SymbolQueryResult) -> Vec<&str> {
+        q.items.iter().map(|i| i.name.as_str()).collect()
+    }
+
+    /// The headline behaviour: a pattern matches the whole name, so
+    /// `run_*` must not pick up `prerun_gen` the way a substring search
+    /// would.
+    #[test]
+    fn find_symbols_wildcard_is_anchored_to_the_whole_name() {
+        let g = glob_fixture();
+        let r = find_symbols(
+            &g,
+            &FindSymbolsParams {
+                name: vec!["run_*".into()],
+                ..Default::default()
+            },
+        );
+        assert_eq!(r.queries[0].kind, "pattern");
+        assert_eq!(names_of(&r.queries[0]), vec!["run_gen", "run_index", "run_serve"]);
+    }
+
+    /// A plain fragment keeps the ranked substring behaviour it always had —
+    /// wildcards are additive, not a replacement.
+    #[test]
+    fn find_symbols_literal_still_matches_substrings() {
+        let g = glob_fixture();
+        let r = find_symbols(
+            &g,
+            &FindSymbolsParams {
+                name: vec!["run_gen".into()],
+                ..Default::default()
+            },
+        );
+        assert_eq!(r.queries[0].kind, "name");
+        assert_eq!(
+            names_of(&r.queries[0]),
+            vec!["run_gen", "prerun_gen"],
+            "exact first, then the substring hit"
+        );
+    }
+
+    #[test]
+    fn find_symbols_wildcard_honours_type_and_path_filters() {
+        let g = glob_fixture();
+        // `*` + a path glob is the "list this subtree" idiom.
+        let r = find_symbols(
+            &g,
+            &FindSymbolsParams {
+                name: vec!["*".into()],
+                node_types: vec!["Function".into()],
+                file_prefix: Some("src/deep/**".into()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(names_of(&r.queries[0]), vec!["prerun_gen", "run_index"]);
+
+        // A literal file filter keeps meaning "prefix", not "equals".
+        let r = find_symbols(
+            &g,
+            &FindSymbolsParams {
+                name: vec!["run_*".into()],
+                file_prefix: Some("src/a.rs".into()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(names_of(&r.queries[0]), vec!["run_gen", "run_serve"]);
+
+        // A node-type filter may itself be a pattern.
+        let r = find_symbols(
+            &g,
+            &FindSymbolsParams {
+                name: vec!["*".into()],
+                node_types: vec!["Cl*".into()],
+                ..Default::default()
+            },
+        );
+        assert_eq!(names_of(&r.queries[0]), vec!["Runner"]);
+    }
+
+    /// `*` in a path must not cross `/`, or every "this directory" query
+    /// silently becomes a whole-subtree query.
+    #[test]
+    fn file_outline_glob_expands_to_every_matching_file() {
+        let g = glob_fixture();
+        let r = file_outline(
+            &g,
+            &FileOutlineParams {
+                file: vec!["src/*.rs".into()],
+                ..Default::default()
+            },
+        );
+        assert!(r.ok());
+        assert_eq!(r.files.len(), 1);
+        assert_eq!(r.files[0].file.as_deref(), Some("src/a.rs"));
+
+        let deep = file_outline(
+            &g,
+            &FileOutlineParams {
+                file: vec!["src/**/*.rs".into()],
+                ..Default::default()
+            },
+        );
+        let outlined: Vec<&str> = deep.files.iter().filter_map(|f| f.file.as_deref()).collect();
+        assert_eq!(outlined, vec!["src/a.rs", "src/deep/b.rs"]);
+    }
+
+    /// Over the cap, the extra paths are named rather than dropped — a
+    /// truncated answer that does not say so is the failure mode worth
+    /// testing for.
+    #[test]
+    fn file_outline_glob_reports_the_files_it_did_not_expand() {
+        let g = glob_fixture();
+        let r = file_outline(
+            &g,
+            &FileOutlineParams {
+                file: vec!["src/**/*.rs".into()],
+                max_files: Some(1),
+                ..Default::default()
+            },
+        );
+        assert!(!r.ok(), "the overflow entry carries an error");
+        assert_eq!(r.files[0].file.as_deref(), Some("src/a.rs"));
+        let overflow = r.files.last().unwrap();
+        assert_eq!(overflow.candidates, vec!["src/deep/b.rs".to_string()]);
+        assert!(overflow.error.as_ref().unwrap().contains("max_files"));
+    }
+
+    #[test]
+    fn file_outline_glob_matching_nothing_explains_itself() {
+        let g = glob_fixture();
+        let r = file_outline(
+            &g,
+            &FileOutlineParams {
+                file: vec!["src/*.ts".into()],
+                ..Default::default()
+            },
+        );
+        assert!(!r.ok());
+        assert!(r.files[0].error.as_ref().unwrap().contains("**/"));
+    }
+
+    /// The id-taking tools accept a bare name. Before this, `find_usages
+    /// callee` was an error telling the caller to go look the id up.
+    #[test]
+    fn id_taking_tools_accept_a_bare_name() {
+        let g = fixture();
+        let r = find_usages(
+            &g,
+            SourceCtx::repo_only(Path::new(NO_REPO)),
+            &FindUsagesParams {
+                node_id: vec!["callee".into()],
+                ..Default::default()
+            },
+        );
+        assert!(r.ok(), "a name resolves like an id");
+        assert_eq!(r.nodes[0].users[0].symbol.name, "caller");
+    }
+
+    /// One pattern seeds one merged walk over every symbol it names.
+    #[test]
+    fn traverse_expands_a_pattern_into_several_seeds() {
+        let g = glob_fixture();
+        let r = traverse(
+            &g,
+            &TraverseParams {
+                node_id: vec!["run_*".into()],
+                hops: Some(1),
+                ..Default::default()
+            },
+        );
+        assert!(r.ok());
+        assert_eq!(r.seeds.len(), 3, "three run_* functions seeded the walk");
+    }
+
+    /// The cap is reported, not silently applied.
+    #[test]
+    fn expansion_over_the_cap_is_reported() {
+        let g = glob_fixture();
+        let expanded = expand_node_refs(&g, &["run_*".to_string()], 2);
+        assert_eq!(expanded.len(), 3, "two ids plus the pattern itself");
+        assert_eq!(expanded[2], "run_*");
+        let msg = unresolved_ref_error(&g, "run_*", 2);
+        assert!(msg.contains("matches 3 symbols"), "got: {msg}");
+        assert!(msg.contains("first 2"), "got: {msg}");
+    }
+
+    /// An endpoint that names several nodes has to be refused, not guessed:
+    /// "is A connected to B" has a different answer per candidate.
+    #[test]
+    fn single_ref_resolution_refuses_ambiguity() {
+        let g = glob_fixture();
+        assert_eq!(
+            resolve_single_ref(&g, "run_serve").unwrap(),
+            "function:src/a.rs:7:run_serve"
+        );
+        let err = resolve_single_ref(&g, "run_*").unwrap_err();
+        assert!(err.contains("matches 3 symbols"), "got: {err}");
+        let err = resolve_single_ref(&g, "nope").unwrap_err();
+        assert!(err.contains("No symbol named 'nope'"), "got: {err}");
+    }
+
+    /// The error text has to name the actual problem — a missing id, a name
+    /// that matches nothing, and a mis-written pattern send the reader in
+    /// three different directions.
+    #[test]
+    fn unresolved_refs_are_diagnosed_by_shape() {
+        let g = glob_fixture();
+        assert!(unresolved_ref_error(&g, "function:nope", 25).contains("No node with id"));
+        assert!(unresolved_ref_error(&g, "zzz", 25).contains("No symbol named"));
+        assert!(unresolved_ref_error(&g, "zzz_*", 25).contains("No symbol matches pattern"));
     }
 
     #[test]

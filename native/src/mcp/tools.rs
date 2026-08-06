@@ -106,6 +106,18 @@ pub fn openai_tool_schemas() -> Vec<serde_json::Value> {
         .unwrap_or_default()
 }
 
+/// The wildcard dialect, interpolated into every tool description that
+/// accepts one.
+///
+/// Models copy syntax from the description they are reading, so each tool has
+/// to carry it — but it must be the *same* text everywhere, which is why it
+/// comes from the matcher's own crate rather than being retyped here.
+const WILDCARD_SYNTAX: &str = ultragraph::pattern::SYNTAX_SUMMARY;
+
+/// The three shapes an id-taking parameter accepts, for the tools whose
+/// `nodeId` no longer means "id only".
+const NODE_REF_FORMS: &str = "Accepts a node id, a plain symbol name, or a wildcard pattern — a name or pattern expands to every symbol it matches (capped, and the cap is reported when hit), so you can act on a whole family without looking ids up first.";
+
 /// Preset list for the tool description, each with the arguments it takes —
 /// `long_functions(min_loc)`. Naming the arguments is what stops a model
 /// inventing them, or borrowing `limit` from the wrong level.
@@ -275,11 +287,14 @@ fn raw_tools() -> Value {
         },
         {
             "name": "traverse",
-            "description": "Walk the graph N hops from given seed node ids. The natural follow-up to search / semantic_search: take a node id you got back, expand outward to see what it imports, calls, contains, or extends. Filters by edge type and direction. Use 'outbound' to see what the seed depends on; 'inbound' to see who depends on the seed. Output is grouped by hop, with an edge-type tally, so the structure is easy to scan. Reads the structural graph directly — no database or embedding backend needed, so it keeps working when search does not.",
+            "description": format!(
+                "Walk the graph N hops from given seed symbols. The natural follow-up to search / semantic_search: take a node id you got back, expand outward to see what it imports, calls, contains, or extends. {refs} Several seeds make ONE merged walk, so a pattern like 'handle_*' traces everything reachable from a whole family in a single call. Filters by edge type and direction: 'outbound' is what the seed depends on, 'inbound' is who depends on the seed. Output is grouped by hop, with an edge-type tally, so the structure is easy to scan. Reads the structural graph directly — no database or embedding backend needed, so it keeps working when search does not.",
+                refs = NODE_REF_FORMS
+            ),
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "nodeId": { "oneOf": [ { "type": "string" }, { "type": "array", "items": { "type": "string" }, "minItems": 1, "maxItems": 10 } ], "description": "Seed node id(s) — one id or an array of up to 10, typically copied from a prior search / find_symbols result. (`startNodeIds` is the deprecated legacy name for the same parameter.)" },
+                    "nodeId": { "oneOf": [ { "type": "string" }, { "type": "array", "items": { "type": "string" }, "minItems": 1, "maxItems": 10 } ], "description": format!("Seed(s) — one value or an array of up to 10. {refs} Ids typically come from a prior search / find_symbols result. (`startNodeIds` is the deprecated legacy name for the same parameter.)", refs = NODE_REF_FORMS) },
                     "hops": { "type": "integer", "minimum": 1, "maximum": 5, "description": "Hop radius (default 2). Use 1 for direct neighbors only." },
                     "edgeTypes": { "type": "array", "items": { "type": "string" }, "description": "Restrict to these edge types (case-insensitive). Common: imports, calls, extends, implements, contains, references, instantiates, uses, overrides. See graph_schema for what this graph has." },
                     "direction": { "type": "string", "enum": ["outbound", "inbound", "both"], "description": "Edge direction (default 'outbound'). 'inbound' = who depends on me; 'outbound' = what I depend on; 'both' = either." }
@@ -289,11 +304,14 @@ fn raw_tools() -> Value {
         },
         {
             "name": "find_usages",
-            "description": "Find inbound references to a node — i.e. callers of a function, importers of a module, subclasses of a class, or anything else pointing at the node. Convenience wrapper over traverse with direction='inbound' and a sensible default edge-type set ['calls', 'references', 'imports', 'extends', 'implements', 'overrides', 'instantiates', 'uses']. Use this when the user asks 'who uses X', 'what calls X', 'where is X imported', 'what would break if I change X', or before a refactor. Batch-friendly: pass an ARRAY of up to 10 nodeIds to check them all in one call (e.g. every symbol a refactor touches).",
+            "description": format!(
+                "Find inbound references to a symbol — callers of a function, importers of a module, subclasses of a class, or anything else pointing at it, with the call-site lines as evidence. Convenience wrapper over traverse with direction='inbound' and a sensible default edge-type set ['calls', 'references', 'imports', 'extends', 'implements', 'overrides', 'instantiates', 'uses']. Use this when the user asks 'who uses X', 'what calls X', 'where is X imported', 'what would break if I change X', or before a refactor. {refs} So the blast radius of a whole family is one call: {{\"nodeId\": \"validate_*\"}}. Batch-friendly: pass an ARRAY of up to 10 values to check them all in one call (e.g. every symbol a refactor touches).",
+                refs = NODE_REF_FORMS
+            ),
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "nodeId": { "oneOf": [ { "type": "string" }, { "type": "array", "items": { "type": "string" }, "minItems": 1, "maxItems": 10 } ], "description": "The node id (or an array of up to 10 ids — batch related lookups into ONE call instead of several) to look up usages for. Get ids from search or find_symbols." },
+                    "nodeId": { "oneOf": [ { "type": "string" }, { "type": "array", "items": { "type": "string" }, "minItems": 1, "maxItems": 10 } ], "description": format!("What to look up usages for — one value or an array of up to 10 (batch related lookups into ONE call instead of several). {refs}", refs = NODE_REF_FORMS) },
                     "hops": { "type": "integer", "minimum": 1, "maximum": 3, "description": "How many hops out to walk (default 1 = direct callers only). Bump to 2 to catch transitive usages." },
                     "edgeTypes": { "type": "array", "items": { "type": "string" }, "description": "Override the default ['calls', 'references', 'imports', 'extends', 'implements'] set if you only care about a subset (e.g. ['calls'])." }
                 },
@@ -302,37 +320,47 @@ fn raw_tools() -> Value {
         },
         {
             "name": "find_symbols",
-            "description": "EXACT-NAME symbol lookup — no embeddings, no fuzziness beyond substring. Use this instead of search whenever you already know (part of) an identifier: a function, class, interface, or file the user named, an id you saw in a stack trace, a symbol you are about to edit. Direct nodeId lookup is also supported: if you already have a nodeId from a prior search, pass it for O(1) direct access instead of re-searching. Matches case-insensitively against node names, ranked exact > prefix > substring. Returns id/type/file:line for each hit — feed the id straight into get_code (source), find_usages (callers), or traverse (dependencies). Cheaper and more precise than vector search for known names; fall back to search when you only know the concept, not the name. Batch-friendly: pass an ARRAY of up to 10 names/nodeIds to resolve them all in one call. Set includeDocs to also match docstring text — a keyword scan that finds symbols described by a word they do not contain in their name. Docstring hits rank below every name hit.",
+            "description": format!(
+                "NAME-BASED symbol lookup — no embeddings. Use this instead of search whenever you know (part of) an identifier: a function, class, interface or file the user named, a name from a stack trace, a symbol you are about to edit. Three ways to ask, all case-insensitive: (1) a plain fragment — ranked exact > prefix > substring, e.g. 'resolve' finds resolveDbAndRoot; (2) a WILDCARD pattern — {wildcards}, matched against the WHOLE name, e.g. 'handle_*' for every handler, '*Controller' for every controller class, '{{get,set}}_*' for accessors, '*' with filePrefix to list a whole directory; (3) a nodeId you already have, for O(1) lookup with no search at all. Returns id/type/file:line per hit — feed the id straight into get_code (source), find_usages (callers) or traverse (dependencies), all of which also accept the same names and patterns directly. Batch-friendly: pass an ARRAY of up to 10 names/patterns/ids to resolve them in ONE call. Set includeDocs to also scan docstring prose (matched anywhere, not whole-string); docstring hits rank below every name hit. A wildcard here is the cheap way to enumerate a family of symbols — prefer it over repeated calls or a grep.",
+                wildcards = WILDCARD_SYNTAX
+            ),
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "nodeId": { "oneOf": [ { "type": "string" }, { "type": "array", "items": { "type": "string" }, "minItems": 1, "maxItems": 10 } ], "description": "Direct node id lookup — O(1) access when you already have the id from a prior search. Use instead of 'name' to skip the search step." },
-                    "name": { "oneOf": [ { "type": "string" }, { "type": "array", "items": { "type": "string" }, "minItems": 1, "maxItems": 10 } ], "description": "Identifier to look up, e.g. 'resolveDbAndRoot' or a fragment like 'resolve'. Pass an array of up to 10 names to resolve several symbols in ONE call (e.g. every function you're about to edit)." },
-                    "nodeTypes": { "type": "array", "items": { "type": "string" }, "description": "Restrict to node types (case-insensitive). Common: Function, Class, Interface, Variable, File, Concept." },
-                    "filePrefix": { "type": "string", "description": "Only symbols whose file path starts with this repo-relative prefix, e.g. 'src/auth/'." },
-                    "limit": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Max hits to return (default 20)." },
+                    "name": { "oneOf": [ { "type": "string" }, { "type": "array", "items": { "type": "string" }, "minItems": 1, "maxItems": 10 } ], "description": format!("Identifier, fragment, or wildcard pattern. A fragment ('resolve') is ranked exact > prefix > substring; a pattern ({wildcards}) must match the whole name, so use '*auth*' to match anywhere. Pass an array of up to 10 to resolve several in ONE call.", wildcards = WILDCARD_SYNTAX) },
+                    "nodeTypes": { "type": "array", "items": { "type": "string" }, "description": "Restrict to node types (case-insensitive, wildcards allowed). Common: Function, Class, Interface, Variable, File, Concept — call graph_schema for what this graph actually has." },
+                    "filePrefix": { "type": "string", "description": "Only symbols under this repo-relative path. A plain string is a prefix ('src/auth/'); a glob is matched against the whole path ('src/**/*.ts'), where '*' stops at '/' and '**/' crosses directories. Combine with name '*' to list everything in a subtree." },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Max hits per query (default 20). The result states the true total, so raise this rather than re-querying when it says more exist." },
                     "includeDocs": { "type": "boolean", "description": "Also match docstrings, not just names (default false). Use when the concept may be described in prose rather than named — e.g. \"cache invalidation\" when the function is called `drop_stale`. Docstring hits rank below all name hits." }
                 }
             }
         },
         {
             "name": "file_outline",
-            "description": "List every indexed symbol in one file, in line order — a structural table of contents. Use before opening or editing a file to know what's in it, or to map a file the user mentioned. Direct nodeId lookup is also supported: if you already have a File node id from a prior search, pass it for O(1) direct access. Accepts a repo-relative path or a unique suffix (e.g. just the basename), a File node id ('file:native/src/main.rs'), or an ARRAY of up to 10 files/ids to outline them all in one call. Returns name/type/line-range/id per symbol; ids feed get_code / find_usages / traverse.",
+            "description": format!(
+                "List every indexed symbol in a file, in line order — a structural table of contents. Use before opening or editing a file to know what's in it, or to map a file the user mentioned. Accepts a repo-relative path, a unique suffix (just the basename), a File node id ('file:native/src/main.rs'), a PATH GLOB, or an ARRAY of up to 10 of those to outline them all in one call. A glob ({wildcards}) is matched against the whole repo-relative path, where '*' stops at '/' and '**/' crosses directories — 'src/api/*.ts' outlines one directory, 'src/**/*.{{ts,tsx}}' a whole subtree, '**/test_*.py' every file following a naming convention. That is the cheap way to survey unfamiliar code: one call instead of one per file. Globs outline up to maxFiles files and then list the remaining paths by name. Returns name/type/line-range/id per symbol; ids feed get_code / find_usages / traverse.",
+                wildcards = WILDCARD_SYNTAX
+            ),
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "nodeId": { "oneOf": [ { "type": "string" }, { "type": "array", "items": { "type": "string" }, "minItems": 1, "maxItems": 10 } ], "description": "Direct File node id lookup — O(1) access when you already have the File node id from a prior search. Use instead of 'file' to skip the file lookup step." },
-                    "file": { "oneOf": [ { "type": "string" }, { "type": "array", "items": { "type": "string" }, "minItems": 1, "maxItems": 10 } ], "description": "Repo-relative path ('native/src/main.rs'), unique suffix ('main.rs'), or a File node id ('file:native/src/main.rs'). Pass an array of up to 10 files to outline several in ONE call." }
+                    "file": { "oneOf": [ { "type": "string" }, { "type": "array", "items": { "type": "string" }, "minItems": 1, "maxItems": 10 } ], "description": "Repo-relative path ('native/src/main.rs'), unique suffix ('main.rs'), File node id ('file:native/src/main.rs'), or a path glob ('src/**/*.ts'). Pass an array of up to 10 to outline several in ONE call." },
+                    "maxFiles": { "type": "integer", "minimum": 1, "maximum": 200, "description": "How many files a single glob may outline (default 20). Beyond the cap the extra paths are listed by name instead of expanded, so nothing is hidden — raise this or narrow the glob." }
                 }
             }
         },
         {
             "name": "get_code",
-            "description": "Read the full source for a node id or an arbitrary file/line range from the indexed repo. THE follow-up to every other tool: search previews truncate at ~1200 chars and traverse/find_usages return no code at all — call this to see the real implementation before reasoning about it or editing it. Pass a nodeId from any prior result — or an ARRAY of up to 10 ids to read several symbols in one call instead of several calls — or file (+ optional startLine/endLine) for raw ranges. Reads from the indexed repo root, so it works even when you have no direct file access (e.g. Claude Desktop).",
+            "description": format!(
+                "Read the full source for a symbol, or an arbitrary file/line range, from the indexed repo. THE follow-up to every other tool: search previews truncate at ~1200 chars and traverse/find_usages return no code at all — call this to see the real implementation before reasoning about it or editing it. {refs} So 'render_*' reads every renderer in one call. Or pass an ARRAY of up to 10 values, or file (+ optional startLine/endLine) for raw ranges. Reads from the index, so it works even when you have no direct file access (e.g. Claude Desktop) and flags any slice whose file changed since indexing.",
+                refs = NODE_REF_FORMS
+            ),
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "nodeId": { "oneOf": [ { "type": "string" }, { "type": "array", "items": { "type": "string" }, "minItems": 1, "maxItems": 10 } ], "description": "Node id from find_symbols / search / file_outline / traverse — reads exactly that symbol's line range. Pass an array of up to 10 ids to read several symbols in ONE call (per-symbol maxChars still applies)." },
+                    "nodeId": { "oneOf": [ { "type": "string" }, { "type": "array", "items": { "type": "string" }, "minItems": 1, "maxItems": 10 } ], "description": format!("What to read — reads exactly that symbol's line range. {refs} Ids come from find_symbols / search / file_outline / traverse. Pass an array of up to 10 to read several in ONE call (per-symbol maxChars still applies).", refs = NODE_REF_FORMS) },
                     "file": { "type": "string", "description": "Repo-relative file path. Used when nodeId is not given (or to read outside any symbol)." },
                     "startLine": { "type": "integer", "minimum": 1, "description": "1-based first line (with file; default 1)." },
                     "endLine": { "type": "integer", "minimum": 1, "description": "1-based last line, inclusive (with file; default EOF)." },
@@ -347,12 +375,12 @@ fn raw_tools() -> Value {
         },
         {
             "name": "shortest_path",
-            "description": "How are two symbols connected? Finds the shortest directed edge path between two node ids — use it to answer 'does A reach B', 'how does the request get from the route to the db call', or to check whether an edit to A can affect B. Edges are directed (imports/calls/contains flow source→target); if no forward path exists the reverse direction is tried and labeled as such. Get ids from find_symbols or search first.",
+            "description": "How are two symbols connected? Finds the shortest directed edge path between them — use it to answer 'does A reach B', 'how does the request get from the route to the db call', or to check whether an edit to A can affect B. Each endpoint takes a node id, an exact symbol name, or a wildcard, but must resolve to EXACTLY ONE node (the answer differs per candidate); when it doesn't, the error lists the ids to choose from. Edges are directed (imports/calls/contains flow source→target); if no forward path exists the reverse direction is tried and labeled as such.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "sourceId": { "type": "string", "description": "Start node id." },
-                    "targetId": { "type": "string", "description": "End node id." }
+                    "sourceId": { "type": "string", "description": "Start point: a node id, an exact symbol name, or a wildcard matching exactly one symbol." },
+                    "targetId": { "type": "string", "description": "End point: a node id, an exact symbol name, or a wildcard matching exactly one symbol." }
                 },
                 "required": ["sourceId", "targetId"]
             }

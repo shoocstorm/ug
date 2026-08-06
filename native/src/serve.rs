@@ -1202,6 +1202,9 @@ async fn api_tools() -> Response {
                 "summary": summary,
                 "path": format!("/api/tools/{}", name),
                 "method": "POST",
+                // A copyable body beats a parameter list: it shows the shape
+                // and the wildcard form in the same round trip.
+                "example": ultragraph::agent_tools::tool_example(name),
             })
         })
         .collect();
@@ -1210,6 +1213,14 @@ async fn api_tools() -> Response {
             "tools": tools,
             "params": "Canonical snake_case, same as the CLI flags and MCP tool params. Legacy camelCase spellings are accepted.",
             "project": "Optional `project` field targets another indexed project without changing the server's active one.",
+            "wildcards": {
+                "syntax": ultragraph::pattern::SYNTAX_SUMMARY,
+                "where": "Anywhere a symbol or file is named: find_symbols.name / .node_types / .file_prefix, file_outline.file, and the node_id of get_code, find_usages, traverse and shortest_path — which also accept a plain symbol name instead of an id.",
+                "expansion": format!(
+                    "In the id-taking tools a name or pattern expands to at most {} symbols; hitting that cap is reported in the result, never silent.",
+                    ultragraph::agent_tools::MAX_REF_EXPANSION
+                ),
+            },
         })
         .to_string(),
     )

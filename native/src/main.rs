@@ -633,6 +633,12 @@ const GRAPH_VALUE_FLAGS: &[&str] = &[
     "--max-len",
     "--from",
     "--to",
+    // Long spellings of the agent-tool filters. Without them, the value
+    // after the flag (`--node-type Function`) is collected as a positional
+    // and searched for as if it were a symbol name.
+    "--node-type",
+    "--file-prefix",
+    "--max-files",
 ];
 
 /// Split an analysis command's arguments into (args used to locate the
@@ -704,12 +710,24 @@ fn limit_or(args: &[String], names: &[&str], default: usize) -> usize {
 }
 
 /// Resolve a user-supplied node reference to a node id. Accepts an exact
-/// nodeId, a repo-relative (or suffix-unique) file path, or a symbol
-/// name ranked exact > prefix > substring. Ambiguity and misses print
-/// candidates and exit — every downstream algorithm needs one id.
+/// nodeId, a repo-relative (or suffix-unique) file path, a wildcard pattern,
+/// or a symbol name ranked exact > prefix > substring. Ambiguity and misses
+/// print candidates and exit — every downstream algorithm needs one id.
 fn resolve_node_ref(graph: &GraphData, input: &str) -> String {
     if let Some(n) = graph.nodes.iter().find(|n| n.id == input) {
         return n.id.clone();
+    }
+
+    // A pattern has no ranking tiers to fall back through: it either picks
+    // out one node or the user has to say which one they meant.
+    if ultragraph::pattern::is_pattern(input) {
+        match agent_tools::resolve_single_ref(graph, input) {
+            Ok(id) => return id,
+            Err(e) => {
+                eprintln!("✗ {}", e);
+                std::process::exit(1);
+            }
+        }
     }
 
     // File path: exact repo-relative match, else unique path suffix.
@@ -1020,6 +1038,14 @@ const AGENT_VALUE_FLAGS: &[&str] = &[
     "-k",
     "--hops",
     "--max-chars",
+    "--max-files",
+    "--range",
+    "--node-type",
+    "--file-prefix",
+    "--start-line",
+    "--end-line",
+    "--direction",
+    "-d",
 ];
 
 /// Every non-flag positional, skipping flag/value pairs (multi-positional
@@ -1143,78 +1169,137 @@ fn indexed_source(graph_path: &Path, ids: &[String]) -> agent_tools::IndexedSour
     })
 }
 
+/// The wildcard dialect, printed by every command that accepts one.
+///
+/// One block in one place because the matcher is one implementation
+/// (`ultragraph::pattern`): someone who learns `*` on `find_symbols` will try
+/// it on `file_outline` and `find_usages`, and it has to be the same there.
+/// The quoting note leads because an unquoted `*` is expanded by the shell
+/// before `ug` ever sees it — the first thing that bites a new user.
+fn print_wildcard_help() {
+    println!("{C_BOLD}Wildcards:{C_RESET}  {C_YELLOW}quote them — an unquoted * is expanded by your shell{C_RESET}");
+    println!("  {C_CYAN}*{C_RESET}      any run of characters        {C_CYAN}?{C_RESET}      exactly one character");
+    println!("  {C_CYAN}[abc]{C_RESET}  one of these characters      {C_CYAN}[a-z]{C_RESET}  one from the range");
+    println!("  {C_CYAN}[!ab]{C_RESET}  any character except these   {C_CYAN}{{a,b}}{C_RESET} either alternative");
+    println!("  {C_CYAN}\\*{C_RESET}     a literal asterisk");
+    println!("  A pattern must match the {C_BOLD}whole{C_RESET} name: {C_CYAN}auth*{C_RESET} finds authorize, {C_CYAN}*auth*{C_RESET} finds reauth.");
+    println!("  In paths, {C_CYAN}*{C_RESET} stops at {C_CYAN}/{C_RESET} and {C_CYAN}**/{C_RESET} crosses directories: {C_CYAN}src/**/*.ts{C_RESET}.");
+}
+
+/// The three shapes every id-taking command accepts, printed where they
+/// apply. Agents were sending an id-only lookup, failing, and round-tripping
+/// through `find_symbols`; humans just knew the function's name.
+fn print_node_ref_help() {
+    println!("{C_BOLD}Accepts, for each argument:{C_RESET}");
+    println!("  a node {C_CYAN}id{C_RESET} from any tool  ·  an exact symbol {C_CYAN}name{C_RESET}  ·  a {C_CYAN}wildcard{C_RESET} pattern");
+    println!("  A name or pattern expands to every symbol it matches (up to {} of them).", agent_tools::MAX_REF_EXPANSION);
+}
+
 fn print_find_symbols_help() {
-    println!("  {C_CYAN}ug find_symbols{C_RESET}  {C_YELLOW}— exact-name symbol lookup (no embeddings){C_RESET}");
+    println!("  {C_CYAN}ug find_symbols{C_RESET}  {C_YELLOW}— symbol lookup by name or wildcard (no embeddings){C_RESET}");
     println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
     println!();
-    println!("{C_BOLD}Usage:{C_RESET}  ug find_symbols <name-or-id>... [options]");
+    println!("{C_BOLD}Usage:{C_RESET}  ug find_symbols <name-or-pattern-or-id>... [options]");
     println!();
-    println!("  Accepts several names or nodeIds in one call (up to you; sections are separated) —");
-    println!("  agents should batch related lookups instead of running the command repeatedly.");
-    println!("  {C_CYAN}Direct nodeId lookup{C_RESET} (O(1)): if input contains ':' it's treated as a nodeId.");
+    println!("  Takes several arguments in one call (sections are separated) — batch related");
+    println!("  lookups instead of running the command repeatedly.");
+    println!("  {C_CYAN}Direct nodeId lookup{C_RESET} (O(1)): an argument containing ':' is treated as a nodeId.");
     println!();
     println!("{C_BOLD}Options:{C_RESET}");
-    println!("  {C_CYAN}--node-type <type>{C_RESET}   Restrict to node type (repeatable; e.g. Function, Class, Interface, Variable)");
-    println!("  {C_CYAN}--file-prefix <p>{C_RESET}    Only symbols under this file path prefix");
+    println!("  {C_CYAN}--node-type <type>{C_RESET}   Restrict to node type (repeatable, wildcards ok; e.g. Function,");
+    println!("                       Class, Interface, Variable, File — {C_CYAN}ug graph_schema{C_RESET} lists them)");
+    println!("  {C_CYAN}--file-prefix <p>{C_RESET}    Only symbols under this path: a prefix ({C_CYAN}src/auth/{C_RESET}) or a");
+    println!("                       glob ({C_CYAN}src/**/*.ts{C_RESET})");
     println!("  {C_CYAN}-k, --limit <n>{C_RESET}      Max hits per query (default 20)");
     println!("  {C_CYAN}--include-docs{C_RESET}       Also match docstrings, not just names");
     println!("  {C_CYAN}-n, --name <project>{C_RESET} Project name (default: cwd basename)");
+    println!("  {C_CYAN}--json{C_RESET}               Machine-readable output");
     println!("  {C_DIM}(-t/--type and -f/--file still parse as the old spellings){C_RESET}");
     println!();
-    println!("{C_BOLD}Ranking:{C_RESET} exact > prefix > substring > docstring; ties go to the shorter name.");
+    print_wildcard_help();
+    println!();
+    println!("{C_BOLD}Ranking:{C_RESET}");
+    println!("  Plain text:  exact > prefix > substring > docstring; ties go to the shorter name.");
+    println!("  A pattern:   every match is equal (you said what the name looks like), listed A-Z.");
     println!();
     println!("{C_BOLD}Examples:{C_RESET}");
-    println!("  {C_CYAN}ug find_symbols{C_RESET} resolveDb");
-    println!("  {C_CYAN}ug find_symbols{C_RESET} loadConfig --node-type Function --file-prefix src/auth/");
-    println!("  {C_CYAN}ug find_symbols{C_RESET} run_serve run_app run_gen   {C_YELLOW}# batch: three lookups, one call{C_RESET}");
-    println!("  {C_CYAN}ug find_symbols{C_RESET} 'function:src/auth.rs:42:login'  {C_YELLOW}# direct nodeId lookup (O(1)){C_RESET}");
-    println!("  {C_CYAN}ug find_symbols{C_RESET} embedder --include-docs   {C_YELLOW}# also scan docstrings{C_RESET}");
-
+    println!("  {C_CYAN}ug find_symbols{C_RESET} resolveDb                    {C_YELLOW}# a name you know{C_RESET}");
+    println!("  {C_CYAN}ug find_symbols{C_RESET} run_serve run_app run_gen    {C_YELLOW}# batch: three lookups, one call{C_RESET}");
+    println!("  {C_CYAN}ug find_symbols{C_RESET} {C_BOLD}'handle_*'{C_RESET}                  {C_YELLOW}# every handler{C_RESET}");
+    println!("  {C_CYAN}ug find_symbols{C_RESET} {C_BOLD}'*Controller'{C_RESET} --node-type Class");
+    println!("  {C_CYAN}ug find_symbols{C_RESET} {C_BOLD}'test_?'{C_RESET}                    {C_YELLOW}# test_1 … test_9, not test_10{C_RESET}");
+    println!("  {C_CYAN}ug find_symbols{C_RESET} {C_BOLD}'{{get,set}}_*'{C_RESET}               {C_YELLOW}# accessors of both kinds{C_RESET}");
+    println!("  {C_CYAN}ug find_symbols{C_RESET} {C_BOLD}'*'{C_RESET} --file-prefix {C_BOLD}'src/auth/**'{C_RESET} -k 100");
+    println!("                                            {C_YELLOW}# everything in one subtree{C_RESET}");
+    println!("  {C_CYAN}ug find_symbols{C_RESET} 'function:src/auth.rs:42:login'  {C_YELLOW}# direct nodeId lookup{C_RESET}");
+    println!("  {C_CYAN}ug find_symbols{C_RESET} cache --include-docs         {C_YELLOW}# also scan docstrings{C_RESET}");
+    println!();
+    println!("{C_BOLD}Next:{C_RESET} feed an id from the output into {C_CYAN}ug get_code{C_RESET}, {C_CYAN}ug find_usages{C_RESET} or {C_CYAN}ug traverse{C_RESET}");
+    println!("      — those take the same names and patterns directly, too.");
 }
 
 fn print_file_outline_help() {
     println!("  {C_CYAN}ug file_outline{C_RESET}  {C_YELLOW}— list every indexed symbol in one file{C_RESET}");
     println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
     println!();
-    println!("{C_BOLD}Usage:{C_RESET}  ug file_outline <file-or-id>... [options]");
+    println!("{C_BOLD}Usage:{C_RESET}  ug file_outline <file-or-glob-or-id>... [options]");
     println!();
-    println!("  Accepts several file paths or File nodeIds in one call (up to you; sections are separated) —");
-    println!("  agents should batch related lookups instead of running the command repeatedly.");
-    println!("  {C_CYAN}Direct nodeId lookup{C_RESET} (O(1)): if input contains ':' it's treated as a nodeId.");
+    println!("{C_BOLD}Accepts, for each argument:{C_RESET}");
+    println!("  a repo-relative {C_CYAN}path{C_RESET} ({C_CYAN}native/src/main.rs{C_RESET})  ·  a unique {C_CYAN}suffix{C_RESET} ({C_CYAN}main.rs{C_RESET})");
+    println!("  a File node {C_CYAN}id{C_RESET} ({C_CYAN}file:native/src/main.rs{C_RESET})  ·  a path {C_CYAN}glob{C_RESET} ({C_CYAN}src/**/*.ts{C_RESET})");
+    println!("  Batch several in one call rather than running the command repeatedly.");
     println!();
     println!("{C_BOLD}Options:{C_RESET}");
+    println!("  {C_CYAN}-k, --max-files <n>{C_RESET}   Files a single glob may outline (default 20). Over the cap,");
+    println!("                        the extra paths are listed by name instead of expanded.");
     println!("  {C_CYAN}-n, --name <project>{C_RESET}  Project name (default: cwd basename)");
-    println!("  {C_CYAN}--ids{C_RESET}                Show the full node id on each line (on by default in a terminal;)");
-    println!("                         off when piped, since an agent can reconstruct kind:file:name)");
+    println!("  {C_CYAN}--ids{C_RESET}                Show the full node id on each line (on by default in a");
+    println!("                        terminal; off when piped, since kind:file:name reconstructs it)");
+    println!("  {C_CYAN}--json{C_RESET}               Machine-readable output");
+    println!();
+    print_wildcard_help();
     println!();
     println!("{C_BOLD}Examples:{C_RESET}");
     println!("  {C_CYAN}ug file_outline{C_RESET} native/src/main.rs");
-    println!("  {C_CYAN}ug file_outline{C_RESET} main.rs  {C_YELLOW}# unique basename works too{C_RESET}");
-    println!("  {C_CYAN}ug file_outline{C_RESET} native/src/main.rs --ids  {C_YELLOW}# force ids on when piped{C_RESET}");
-    println!("  {C_CYAN}ug file_outline{C_RESET} file:native/src/main.rs  {C_YELLOW}# File node ids work as-is{C_RESET}");
-    println!("  {C_CYAN}ug file_outline{C_RESET} 'file:native/src/main.rs'  {C_YELLOW}# direct nodeId lookup (O(1)){C_RESET}");
-    println!("  {C_CYAN}ug file_outline{C_RESET} main.rs serve.rs config.rs   {C_YELLOW}# batch: outline several files at once{C_RESET}");
+    println!("  {C_CYAN}ug file_outline{C_RESET} main.rs                   {C_YELLOW}# unique basename works too{C_RESET}");
+    println!("  {C_CYAN}ug file_outline{C_RESET} main.rs serve.rs config.rs  {C_YELLOW}# batch: several files at once{C_RESET}");
+    println!("  {C_CYAN}ug file_outline{C_RESET} {C_BOLD}'native/src/storage/*.rs'{C_RESET}  {C_YELLOW}# every file in one directory{C_RESET}");
+    println!("  {C_CYAN}ug file_outline{C_RESET} {C_BOLD}'src/**/*.{{ts,tsx}}'{C_RESET} -k 40  {C_YELLOW}# a whole subtree, recursively{C_RESET}");
+    println!("  {C_CYAN}ug file_outline{C_RESET} {C_BOLD}'**/test_*.py'{C_RESET}            {C_YELLOW}# by naming convention, anywhere{C_RESET}");
+    println!("  {C_CYAN}ug file_outline{C_RESET} native/src/main.rs --ids   {C_YELLOW}# force ids on when piped{C_RESET}");
 }
 
 fn print_get_code_help() {
     println!("  {C_CYAN}ug get_code{C_RESET}  {C_YELLOW}— read full source for a node id or file/line range{C_RESET}");
     println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
     println!();
-    println!("{C_BOLD}Usage:{C_RESET}  ug get_code <node-id>... | -f|--file <file> [options]");
+    println!("{C_BOLD}Usage:{C_RESET}  ug get_code <symbol>... | -f|--file <file> [options]");
+    println!();
+    print_node_ref_help();
+    println!("  Or read raw lines instead, with {C_CYAN}--file{C_RESET} and a line window.");
     println!();
     println!("{C_BOLD}Options:{C_RESET}");
-    println!("  {C_CYAN}-f, --file <file>{C_RESET}     Repo-relative file path (instead of node-id)");
-    println!("  {C_CYAN}-s, --start <n>{C_RESET}      First line (1-based, with --file; default 1)");
-    println!("  {C_CYAN}-e, --end <n>{C_RESET}        Last line inclusive (with --file; default EOF)");
-    println!("  {C_CYAN}--max-chars <n>{C_RESET}      Character cap on output (default 20000)");
-    println!("  {C_CYAN}--no-doc{C_RESET}             Drop the leading doc-comment preview (the body only)");
+    println!("  {C_CYAN}-f, --file <file>{C_RESET}     Repo-relative file path (instead of a symbol)");
+    println!("  {C_CYAN}-s, --start <n>{C_RESET}       First line (1-based, with --file; default 1)");
+    println!("  {C_CYAN}-e, --end <n>{C_RESET}         Last line inclusive (with --file; default EOF)");
+    println!("  {C_CYAN}--range <window>{C_RESET}      Both at once: {C_CYAN}11-35{C_RESET} · {C_CYAN}34-end{C_RESET} · {C_CYAN}-35{C_RESET} (from the top) · {C_CYAN}42{C_RESET} (one line)");
+    println!("  {C_CYAN}--max-chars <n>{C_RESET}       Character cap per symbol (default 20000)");
+    println!("  {C_CYAN}--no-doc{C_RESET}              Drop the leading doc-comment preview (the body only)");
     println!("  {C_CYAN}-n, --name <project>{C_RESET}  Project name (default: cwd basename)");
+    println!("  {C_CYAN}--json{C_RESET}                Machine-readable output");
+    println!();
+    print_wildcard_help();
     println!();
     println!("{C_BOLD}Examples:{C_RESET}");
-    println!("  {C_CYAN}ug get_code{C_RESET} \"function:native/src/main.rs:124:flag_value\"  {C_YELLOW}# id from find_symbols{C_RESET}");
-    println!("  {C_CYAN}ug get_code{C_RESET} <id1> <id2> <id3>   {C_YELLOW}# batch: several symbols in one call (--max-chars applies per symbol){C_RESET}");
-    println!("  {C_CYAN}ug get_code{C_RESET} -f native/src/types.rs -s 180 -e 210");
-    println!("  {C_CYAN}ug get_code{C_RESET} -f README.md  {C_YELLOW}# whole file{C_RESET}");
+    println!("  {C_CYAN}ug get_code{C_RESET} flag_value                    {C_YELLOW}# by name{C_RESET}");
+    println!("  {C_CYAN}ug get_code{C_RESET} \"function:native/src/main.rs:124:flag_value\"  {C_YELLOW}# by id{C_RESET}");
+    println!("  {C_CYAN}ug get_code{C_RESET} <id1> <id2> <id3>            {C_YELLOW}# batch (--max-chars applies per symbol){C_RESET}");
+    println!("  {C_CYAN}ug get_code{C_RESET} {C_BOLD}'render_*'{C_RESET} --no-doc          {C_YELLOW}# every renderer's body{C_RESET}");
+    println!("  {C_CYAN}ug get_code{C_RESET} -f native/src/types.rs --range 180-210");
+    println!("  {C_CYAN}ug get_code{C_RESET} -f README.md                 {C_YELLOW}# whole file{C_RESET}");
+    println!();
+    println!("{C_DIM}Source comes from the index, so this works with the repo absent; a file that");
+    println!("changed since indexing is served with a staleness warning.{C_RESET}");
 }
 
 fn print_project_overview_help() {
@@ -1319,7 +1404,15 @@ fn run_file_outline(args: &[String]) {
     let (node_id, file) = files
         .into_iter()
         .partition(|s| looks_like_node_id(s) && !s.starts_with("file:"));
-    let mut result = agent_tools::file_outline(&graph, &agent_tools::FileOutlineParams { node_id, file });
+    let mut result = agent_tools::file_outline(
+        &graph,
+        &agent_tools::FileOutlineParams {
+            node_id,
+            file,
+            max_files: flag_value(args, &["--max-files", "-k", "--limit"])
+                .and_then(|s| s.parse().ok()),
+        },
+    );
     // Show ids in a terminal (humans want them); hide them when piped since
     // an agent can reconstruct `kind:file:name`. `--ids` forces them on.
     result.show_ids = has_flag(args, "--ids") || ultragraph::color::enabled();
@@ -1333,6 +1426,26 @@ fn run_file_outline(args: &[String]) {
     );
 }
 
+/// Parse a `--range` window into `(start, end)` line numbers, both
+/// inclusive and either open-ended.
+///
+/// `"11-35"` → 11 to 35 · `"34-end"` (or `"34-"`) → 34 to EOF ·
+/// `"-35"` → line 1 to 35 · `"42"` → just line 42. `end` and an empty side
+/// both mean "no bound", which is how the caller's `unwrap_or` defaults
+/// (line 1, EOF) end up applying. An unparseable side is treated as
+/// unbounded rather than as an error: the window is a convenience, and
+/// silently reading a bit more beats refusing to read at all.
+fn parse_line_range(spec: &str) -> (Option<usize>, Option<usize>) {
+    let spec = spec.trim();
+    let num = |s: &str| s.trim().parse::<usize>().ok();
+    match spec.split_once('-') {
+        Some((s, e)) => (num(s), num(e)),
+        // A bare number is a single line, not an open-ended start — the
+        // reading that matches how people cite source ("line 42").
+        None => (num(spec), num(spec)),
+    }
+}
+
 fn run_get_code(args: &[String]) {
     if has_flag(args, "-h") || has_flag(args, "--help") {
         print_get_code_help();
@@ -1341,18 +1454,27 @@ fn run_get_code(args: &[String]) {
     let node_ids = positionals(args, AGENT_VALUE_FLAGS);
     let file_flag = flag_value(args, &["-f", "--file"]);
     if node_ids.is_empty() && file_flag.is_none() {
-        eprintln!("Usage: ug get_code <node-id>... | -f|--file <file> [-s|--start <line>] [-e|--end <line>] [--max-chars <n>] [-n|--name <project>]");
+        eprintln!("Usage: ug get_code <node-id>... | -f|--file <file> [-s|--start <line>] [-e|--end <line>] [--range <window>] [--max-chars <n>] [-n|--name <project>]");
         std::process::exit(1);
     }
     let (graph, _raw, graph_path) = load_agent_graph(args);
     let repo_root = agent_repo_root(&graph, &graph_path);
 
+    // `--range 11-35` is one flag for what `-s 11 -e 35` says in two; an
+    // explicit -s/-e still wins so the two can't contradict each other.
+    let range = flag_value(args, &["--range"]).map(|r| parse_line_range(&r));
+    let start_line: Option<usize> = flag_value(args, &["--start-line", "-s", "--start"])
+        .and_then(|s| s.parse().ok())
+        .or_else(|| range.and_then(|(s, _)| s));
+    let end_line: Option<usize> = flag_value(args, &["--end-line", "-e", "--end"])
+        .and_then(|s| s.parse().ok())
+        .or_else(|| range.and_then(|(_, e)| e));
+
     let params = agent_tools::GetCodeParams {
         node_id: node_ids,
         file: file_flag,
-        start_line: flag_value(args, &["--start-line", "-s", "--start"])
-            .and_then(|s| s.parse().ok()),
-        end_line: flag_value(args, &["--end-line", "-e", "--end"]).and_then(|s| s.parse().ok()),
+        start_line,
+        end_line,
         max_chars: flag_value(args, &["--max-chars"]).and_then(|s| s.parse().ok()),
         no_doc: has_flag(args, "--no-doc"),
     };
@@ -1641,18 +1763,28 @@ fn print_find_usages_help() {
     println!("  extends / implements the given node. The reverse of {C_CYAN}ug traverse{C_RESET}");
     println!("  (which walks outbound dependencies). Same logic as the MCP find_usages tool.");
     println!();
-    println!("{C_BOLD}Usage:{C_RESET}  ug find_usages <node-id>... [options]");
+    println!("{C_BOLD}Usage:{C_RESET}  ug find_usages <symbol>... [options]");
+    println!();
+    print_node_ref_help();
     println!();
     println!("{C_BOLD}Options:{C_RESET}");
     println!("  {C_CYAN}-k, --hops <n>{C_RESET}         Transitive depth 1-3 (default 1 = direct users only)");
     println!("  {C_CYAN}-t, --edge-type <type>{C_RESET}  Restrict to edge type (repeatable; default: calls,");
     println!("                         references, imports, extends, implements — see {C_CYAN}ug graph_schema{C_RESET})");
     println!("  {C_CYAN}-n, --name <project>{C_RESET}    Project name (default: cwd basename)");
+    println!("  {C_CYAN}--json{C_RESET}                 Machine-readable output");
+    println!();
+    print_wildcard_help();
     println!();
     println!("{C_BOLD}Examples:{C_RESET}");
-    println!("  {C_CYAN}ug find_usages{C_RESET} \"function:native/src/main.rs:124:flag_value\"");
+    println!("  {C_CYAN}ug find_usages{C_RESET} connect                   {C_YELLOW}# who calls it, with call sites{C_RESET}");
     println!("  {C_CYAN}ug find_usages{C_RESET} \"function:src/db.ts:42:connect\" -k 2 -t calls");
-    println!("  {C_CYAN}ug find_usages{C_RESET} <id1> <id2>   {C_YELLOW}# batch: check several symbols before a refactor{C_RESET}");
+    println!("  {C_CYAN}ug find_usages{C_RESET} <id1> <id2>               {C_YELLOW}# batch: several symbols at once{C_RESET}");
+    println!("  {C_CYAN}ug find_usages{C_RESET} {C_BOLD}'validate_*'{C_RESET}             {C_YELLOW}# blast radius of a whole family{C_RESET}");
+    println!("  {C_CYAN}ug find_usages{C_RESET} {C_BOLD}'*Repository'{C_RESET} -t implements  {C_YELLOW}# who implements each one{C_RESET}");
+    println!();
+    println!("{C_DIM}Nothing found is a real answer here — it means no indexed edge points at the");
+    println!("symbol. Check {C_RESET}{C_CYAN}ug graph_schema{C_RESET}{C_DIM} for which edge types this graph actually has.{C_RESET}");
 }
 
 fn print_graph_schema_help() {
@@ -3698,11 +3830,11 @@ const API_ENDPOINTS: &[(&str, &[ApiEntry])] = &[
         &[
             ApiEntry { method: "GET", path: "/api/tools", desc: "list the agent tools and their paths (HTTP equivalent of MCP tools/list)", availability: "always", cli_equivalent: Some("ug help") },
             ApiEntry { method: "POST", path: "/api/tools/project_overview", desc: "stats, biggest files, most depended-upon symbols", availability: "always (empty if no project active)", cli_equivalent: Some("ug project_overview --json") },
-            ApiEntry { method: "POST", path: "/api/tools/find_symbols", desc: "exact-name symbol lookup", availability: "always (empty if no project active)", cli_equivalent: Some("ug find_symbols --json") },
-            ApiEntry { method: "POST", path: "/api/tools/file_outline", desc: "every indexed symbol in one file, in line order", availability: "always (empty if no project active)", cli_equivalent: Some("ug file_outline --json") },
-            ApiEntry { method: "POST", path: "/api/tools/get_code", desc: "source for a node id or file/line range", availability: "always (empty if no project active)", cli_equivalent: Some("ug get_code --json") },
+            ApiEntry { method: "POST", path: "/api/tools/find_symbols", desc: "symbol lookup by name or wildcard ('handle_*')", availability: "always (empty if no project active)", cli_equivalent: Some("ug find_symbols --json") },
+            ApiEntry { method: "POST", path: "/api/tools/file_outline", desc: "every indexed symbol in a file, in line order; takes a path glob", availability: "always (empty if no project active)", cli_equivalent: Some("ug file_outline --json") },
+            ApiEntry { method: "POST", path: "/api/tools/get_code", desc: "source for a symbol (id, name or wildcard), or a file/line range", availability: "always (empty if no project active)", cli_equivalent: Some("ug get_code --json") },
             ApiEntry { method: "POST", path: "/api/tools/find_usages", desc: "inbound callers/importers, with call sites", availability: "always (empty if no project active)", cli_equivalent: Some("ug find_usages --json") },
-            ApiEntry { method: "POST", path: "/api/tools/shortest_path", desc: "shortest directed edge path between two node ids", availability: "always (empty if no project active)", cli_equivalent: Some("ug shortest_path --json") },
+            ApiEntry { method: "POST", path: "/api/tools/shortest_path", desc: "shortest directed edge path between two symbols", availability: "always (empty if no project active)", cli_equivalent: Some("ug shortest_path --json") },
             ApiEntry { method: "POST", path: "/api/tools/graph_schema", desc: "node & edge types present, with counts", availability: "always (empty if no project active)", cli_equivalent: Some("ug graph_schema --json") },
             ApiEntry { method: "POST", path: "/api/tools/code_query", desc: "run a GQL (Cypher-like) query or built-in preset against the OverGraph store", availability: "503 if no DB backend configured", cli_equivalent: Some("ug query") },
         ],
@@ -4112,6 +4244,11 @@ fn run_traverse(args: &[String]) {
             "--hops",
             "-o",
             "--output",
+            // Without these, `-t calls` leaves "calls" behind as a seed.
+            "-t",
+            "--edge-type",
+            "-d",
+            "--direction",
             "--dest",
             "--neo4j-uri",
             "--neo4j-user",
@@ -4140,9 +4277,19 @@ fn run_traverse(args: &[String]) {
         // `ug traverse run_serve` is what people try first, and being told
         // "no node with id 'run_serve'" when the symbol plainly exists is
         // a bad way to learn that ids come from somewhere else.
+        //
+        // A wildcard is left for the tool to expand: several seeds are one
+        // merged walk here, so `traverse 'handle_*'` should visit every
+        // handler rather than demand the caller pick one.
         let starts: Vec<String> = starts
             .iter()
-            .map(|s| resolve_node_ref(&graph, s))
+            .map(|s| {
+                if ultragraph::pattern::is_pattern(s) {
+                    s.clone()
+                } else {
+                    resolve_node_ref(&graph, s)
+                }
+            })
             .collect();
         let params = agent_tools::TraverseParams {
             node_id: starts,
@@ -5347,18 +5494,24 @@ fn print_graph_path_help() {
     println!();
     println!("{C_BOLD}Usage:{C_RESET}  ug graph_path <source> <target> [options]   {C_DIM}(aliases: path, shortest_path){C_RESET}");
     println!();
-    println!("  Source/target take a node id, a file path, or a symbol name. Edges are");
-    println!("  directed (imports/calls/contains flow source→target); if no forward path");
-    println!("  exists the reverse direction is tried and labeled as such.");
+    println!("  Source/target take a node id, a file path, a symbol name, or a wildcard —");
+    println!("  but each has to land on {C_BOLD}exactly one{C_RESET} node, since \"is A connected to B\"");
+    println!("  has a different answer for every candidate. Ambiguity lists the ids to pick from.");
+    println!();
+    println!("  Edges are directed (imports/calls/contains flow source→target); if no forward");
+    println!("  path exists the reverse direction is tried and labeled as such.");
     println!();
     println!("{C_BOLD}Options:{C_RESET}");
     println!("  {C_CYAN}--strict{C_RESET}              Don't retry the reverse direction");
     print_graph_common_options();
     println!();
+    print_wildcard_help();
+    println!();
     println!("{C_BOLD}Examples:{C_RESET}");
     println!("  {C_CYAN}ug graph_path{C_RESET} run_gen run_ingest");
     println!("  {C_CYAN}ug graph_path{C_RESET} src/a.ts src/b.ts --strict");
     println!("  {C_CYAN}ug graph_path{C_RESET} file:src/a.ts file:src/b.ts -n my-repo");
+    println!("  {C_CYAN}ug graph_path{C_RESET} {C_BOLD}'*Controller'{C_RESET} save_user   {C_YELLOW}# ok when one class matches{C_RESET}");
 }
 
 fn print_graph_centrality_help() {
@@ -5525,16 +5678,27 @@ fn print_traverse_help() {
     println!("  {C_CYAN}ug traverse{C_RESET}  {C_YELLOW}— K-hop BFS using the OverGraph edges table{C_RESET}");
     println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
     println!();
-    println!("{C_BOLD}Usage:{C_RESET}  ug traverse <node-id>... [options]");
+    println!("{C_BOLD}Usage:{C_RESET}  ug traverse <symbol>... [options]");
+    println!();
+    print_node_ref_help();
+    println!("  Several seeds make {C_BOLD}one{C_RESET} merged walk, not one walk each.");
     println!();
     println!("{C_BOLD}Options:{C_RESET}");
-    println!("  {C_CYAN}-n, --name{C_RESET} <name>    Project name (default: cwd basename, else most recent under ~/.ug)");
-    println!("  {C_CYAN}-k, --hops{C_RESET} <n>       Max hops (default: 2)");
-    println!("  {C_CYAN}-o, --output{C_RESET} <file>  Output file (optional, omit for stdout)");
+    println!("  {C_CYAN}-n, --name{C_RESET} <name>       Project name (default: cwd basename, else most recent under ~/.ug)");
+    println!("  {C_CYAN}-k, --hops{C_RESET} <n>          Max hops 1-5 (default: 2)");
+    println!("  {C_CYAN}-d, --direction{C_RESET} <dir>   {C_CYAN}outbound{C_RESET} what I depend on (default) · {C_CYAN}inbound{C_RESET} who depends");
+    println!("                          on me · {C_CYAN}both{C_RESET}");
+    println!("  {C_CYAN}-t, --edge-type{C_RESET} <type>  Restrict to edge type (repeatable; see {C_CYAN}ug graph_schema{C_RESET})");
+    println!("  {C_CYAN}-o, --output{C_RESET} <file>     Output file (optional, omit for stdout)");
+    println!();
+    print_wildcard_help();
     println!();
     println!("{C_BOLD}Examples:{C_RESET}");
     println!("  {C_CYAN}ug traverse{C_RESET} \"file:src/index.ts\"");
-    println!("  {C_CYAN}ug traverse{C_RESET} <id1> <id2>   {C_YELLOW}# batch: one merged traversal from several seeds{C_RESET}");
+    println!("  {C_CYAN}ug traverse{C_RESET} run_serve -k 1              {C_YELLOW}# direct dependencies only{C_RESET}");
+    println!("  {C_CYAN}ug traverse{C_RESET} <id1> <id2>                 {C_YELLOW}# one merged walk from several seeds{C_RESET}");
+    println!("  {C_CYAN}ug traverse{C_RESET} {C_BOLD}'handle_*'{C_RESET} -d inbound       {C_YELLOW}# what reaches any handler{C_RESET}");
+    println!("  {C_CYAN}ug traverse{C_RESET} {C_BOLD}'src/auth/*.ts'{C_RESET} -t imports   {C_YELLOW}# the import graph of one directory{C_RESET}");
 }
 
 fn print_list_help() {
@@ -5842,13 +6006,20 @@ fn print_help() {
     println!();
     println!("  {C_DIM}Agent tools — what AI coding agents use (via MCP) to understand a repo; run by hand to explore or verify{C_RESET}");
     println!("  {C_CYAN}project_overview{C_RESET} Orient in the codebase: stats, biggest files, most depended-upon symbols");
-    println!("  {C_CYAN}find_symbols{C_RESET}      Exact-name symbol lookup (no embeddings) — returns ids for the tools below");
-    println!("  {C_CYAN}file_outline{C_RESET}     List every indexed symbol in one file, in line order");
-    println!("  {C_CYAN}get_code{C_RESET}         Read the source for a node id or file/line range");
+    println!("  {C_CYAN}find_symbols{C_RESET}     Name lookup, no embeddings — returns the ids the tools below take");
+    println!("  {C_CYAN}file_outline{C_RESET}     List every indexed symbol in a file, in line order");
+    println!("  {C_CYAN}get_code{C_RESET}         Read the source for a symbol, or a file/line range");
     println!("  {C_CYAN}find_usages{C_RESET}      Who uses this symbol? (inbound callers/importers + call sites)");
     println!("  {C_CYAN}shortest_path{C_RESET}    How two symbols are connected (directed edge path)");
     println!("  {C_CYAN}graph_schema{C_RESET}     Node & edge types in this graph — what to pass to --edge-type filters");
     println!("  {C_DIM}  All accept {C_RESET}{C_CYAN}--json{C_RESET}{C_DIM} and take the same names/params as the MCP tools.{C_RESET}");
+    println!();
+    println!("  {C_BOLD}Wildcards{C_RESET} work anywhere a symbol or file is named — quote them:");
+    println!("    {C_CYAN}ug find_symbols{C_RESET} 'handle_*'          {C_DIM}every handler{C_RESET}");
+    println!("    {C_CYAN}ug find_usages{C_RESET}  'validate_*'        {C_DIM}blast radius of a family{C_RESET}");
+    println!("    {C_CYAN}ug file_outline{C_RESET} 'src/**/*.ts'       {C_DIM}outline a whole subtree{C_RESET}");
+    println!("  {C_DIM}  * ? [abc] [a-z] [!ab] {{a,b}} — whole-name match; ** crosses directories.{C_RESET}");
+    println!("  {C_DIM}  These tools also take a plain symbol name, not just an id.{C_RESET}");
     println!();
 
     println!("  {C_DIM}Project management{C_RESET}");

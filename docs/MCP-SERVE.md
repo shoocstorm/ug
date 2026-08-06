@@ -192,6 +192,41 @@ ug mcp
 UG_PROJECT=<project> UG_EMBED_BASE_URL=http://localhost:11434/v1 ug mcp
 ```
 
+## Wildcards
+
+Everywhere a symbol or file is named — `find_symbols` (`name`, `nodeTypes`,
+`filePrefix`), `file_outline` (`file`), and the `nodeId` of `get_code`,
+`find_usages`, `traverse` and `shortest_path` — accepts the same shell-style
+pattern. One matcher serves the MCP tools, the HTTP API and the CLI, so a
+pattern behaves identically wherever you use it.
+
+| Syntax | Matches |
+|--------|---------|
+| `*` | any run of characters (not `/` in a path) |
+| `**` | any run of characters, `/` included (paths) |
+| `?` | exactly one character |
+| `[abc]` `[a-z]` | one character from the set or range |
+| `[!ab]` | one character not in the set |
+| `{a,b}` | either alternative, nestable |
+| `\*` | a literal `*` |
+
+Matching is case-insensitive and covers the **whole** name: `auth*` matches
+`authorize` but not `reauthorize` — use `*auth*` for that. In paths, `*` stops
+at `/` and `**/` crosses directories (matching zero of them too, so
+`src/**/*.rs` finds `src/main.rs`).
+
+**Why it matters for an agent:** one call replaces a loop. `find_usages` with
+`validate_*` gives the blast radius of a whole family; `file_outline` with
+`src/**/*.ts` surveys a subtree; `find_symbols` with `*` plus `filePrefix`
+enumerates a directory. Where a pattern names more symbols than a tool will
+expand (25 for the `nodeId` parameters), the result says so — a truncated
+answer is never silent.
+
+The `nodeId` parameters also accept a plain **symbol name**, so
+`{"nodeId": "connect"}` works without a `find_symbols` round trip first.
+
+---
+
 ## Available Tools
 
 ### 1. `search` - Primary Knowledge-Base Search
@@ -271,14 +306,14 @@ semantic_search: { query: "API handler", k: 5 }
 
 ### 3. `traverse` - Graph Traversal
 
-**Walk the graph N hops** from given seed node ids. The natural follow-up to `search` / `semantic_search`: take a node id you got back, expand outward to see what it imports, calls, contains, or extends.
+**Walk the graph N hops** from given seed symbols. The natural follow-up to `search` / `semantic_search`: take a node id you got back, expand outward to see what it imports, calls, contains, or extends.
 
-Use `'outbound'` to see what the seed depends on; `'inbound'` to see who depends on the seed. Output groups edges by type so the structure is easy to scan.
+Use `'outbound'` to see what the seed depends on; `'inbound'` to see who depends on the seed. Output groups edges by type so the structure is easy to scan. Several seeds make **one merged walk**, so a pattern traces a whole family at once.
 
 **Parameters:**
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `nodeId` | string \| string[] | ✅ | Seed node id(s) — one id or an array of up to 10, typically copied from a prior search result. (`startNodeIds` is the deprecated legacy name, still accepted.) |
+| `nodeId` | string \| string[] | ✅ | Seed(s): a node id, an exact symbol **name**, or a **wildcard** (see [Wildcards](#wildcards)) — one value or an array of up to 10. (`startNodeIds` is the deprecated legacy name, still accepted.) |
 | `hops` | integer (1-5) | ❌ | Hop radius (default 2). Use 1 for direct neighbors only. |
 | `edgeTypes` | string[] | ❌ | Restrict to these edge types (case-insensitive). Common: imports, calls, extends, implements, contains, references, instantiates, uses, overrides. See `graph_schema` for what this graph has. |
 | `direction` | string | ❌ | Edge direction (default 'outbound'). 'inbound' = who depends on me; 'outbound' = what I depend on. |
@@ -290,6 +325,10 @@ traverse: { nodeId: "func-123", hops: 2, edgeTypes: ["calls", "imports"] }
 traverse: { nodeId: "class-456", hops: 1, direction: "outbound" }
 
 traverse: { nodeId: ["func-789", "class-101"], hops: 2, direction: "both" }
+
+traverse: { nodeId: "run_serve", hops: 1 }                 // by name
+
+traverse: { nodeId: "handle_*", direction: "inbound" }     // one merged walk
 
 traverse: { nodeId: "file-202", hops: 3, edgeTypes: ["contains", "imports"] }
 ```
@@ -309,7 +348,7 @@ Each direct caller carries the lines that mention the symbol (`file:line` plus t
 **Parameters:**
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `nodeId` | string \| string[] | ✅ | The node id to look up usages for (or an array of up to 10 — batch related checks into one call). Get ids from search or find_symbols. |
+| `nodeId` | string \| string[] | ✅ | What to look up usages for: a node id, an exact symbol **name**, or a **wildcard** (see [Wildcards](#wildcards)). Array of up to 10 batches related checks into one call. |
 | `hops` | integer (1-3) | ❌ | How many hops out to walk (default 1 = direct callers only). Bump to 2 to catch transitive usages. |
 | `edgeTypes` | string[] | ❌ | Override the default set if you only care about a subset (e.g. ['calls']). |
 
@@ -317,27 +356,34 @@ Each direct caller carries the lines that mention the symbol (`file:line` plus t
 ```
 find_usages: { nodeId: "func-123", hops: 1 }
 
+find_usages: { nodeId: "connect" }                     // by name, no id lookup first
+
+find_usages: { nodeId: "validate_*" }                  // blast radius of a whole family
+
 find_usages: { nodeId: "class-456", hops: 2 }
 
-find_usages: { nodeId: "func-789", edgeTypes: ["calls"] }
-
-find_usages: { nodeId: "file-101", hops: 1, edgeTypes: ["imports"] }
+find_usages: { nodeId: "*Repository", edgeTypes: ["implements"] }
 ```
 
 ---
 
-### 5. `find_symbols` - Exact-Name Symbol Lookup
+### 5. `find_symbols` - Symbol Lookup by Name or Wildcard
 
-**Exact-name lookup, no embeddings.** Use instead of `search` whenever you already know (part of) an identifier: a function/class the user named, a symbol from a stack trace, something you are about to edit. Case-insensitive, ranked exact > prefix > substring. Cheaper and more precise than vector search for known names. **Direct nodeId lookup is also supported** — if you already have a nodeId from a prior search, pass it for O(1) direct access.
+**Name-based lookup, no embeddings.** Use instead of `search` whenever you know (part of) an identifier: a function/class the user named, a symbol from a stack trace, something you are about to edit. Three ways to ask, all case-insensitive:
+
+1. **a fragment** — ranked exact > prefix > substring (`resolve` finds `resolveDbAndRoot`);
+2. **a wildcard pattern** — matched against the whole name (`handle_*`, `*Controller`, `{get,set}_*`); see [Wildcards](#wildcards);
+3. **a nodeId** — O(1), no search at all.
 
 **Parameters:**
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `nodeId` | string \| string[] | ❌* | Direct node id lookup — O(1) when you already have the id from a prior search. |
-| `name` | string \| string[] | ❌* | Identifier or fragment, e.g. `resolveDbAndRoot` or `resolve`. Array of up to 10 resolves several in one call. |
-| `nodeTypes` | string[] | ❌ | Restrict to node types: Function, Class, Interface, Variable, File, Concept. |
-| `filePrefix` | string | ❌ | Only symbols under this repo-relative path prefix, e.g. `src/auth/`. |
-| `limit` | integer (1-100) | ❌ | Max hits (default 20). |
+| `name` | string \| string[] | ❌* | Identifier, fragment or wildcard pattern. Array of up to 10 resolves several in one call. |
+| `nodeTypes` | string[] | ❌ | Restrict to node types (wildcards allowed): Function, Class, Interface, Variable, File, Concept. |
+| `filePrefix` | string | ❌ | Only symbols under this repo-relative path: a prefix (`src/auth/`) or a glob (`src/**/*.ts`). |
+| `limit` | integer (1-100) | ❌ | Max hits per query (default 20). The result states the true total. |
+| `includeDocs` | boolean | ❌ | Also scan docstring prose (matched anywhere, not whole-string). Docstring hits rank below every name hit. |
 
 *One of `nodeId` or `name` is required.
 
@@ -345,45 +391,54 @@ find_usages: { nodeId: "file-101", hops: 1, edgeTypes: ["imports"] }
 find_symbols: { name: "install_config" }
 find_symbols: { nodeId: "function:native/src/mcp/install.rs:412:install_config" }
 find_symbols: { name: "config", nodeTypes: ["Class"], filePrefix: "native/src/" }
+find_symbols: { name: "handle_*" }                              // every handler
+find_symbols: { name: "*Controller", nodeTypes: ["Class"] }
+find_symbols: { name: "*", filePrefix: "src/auth/**", limit: 100 }  // a whole subtree
 ```
 
 ---
 
 ### 6. `file_outline` - File Table of Contents
 
-**Every indexed symbol in one file, in line order.** Call before opening or editing a file. Accepts a repo-relative path or a unique suffix (just the basename works if unambiguous; ambiguous suffixes return the candidate list). **Direct nodeId lookup is also supported** — if you already have a File node id from a prior search, pass it for O(1) direct access.
+**Every indexed symbol in a file, in line order.** Call before opening or editing a file. Accepts a repo-relative path, a unique suffix (just the basename works if unambiguous; ambiguous suffixes return the candidate list), a File node id, or a **path glob** that outlines every file it matches — one call to survey a directory or a subtree instead of one call per file.
 
 **Parameters:**
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `nodeId` | string \| string[] | ❌* | Direct File node id lookup — O(1) when you already have the File node id. |
-| `file` | string \| string[] | ❌* | Repo-relative path (`native/src/main.rs`) or unique suffix (`main.rs`). Array of up to 10 outlines several files in one call. |
+| `file` | string \| string[] | ❌* | Repo-relative path (`native/src/main.rs`), unique suffix (`main.rs`), File node id, or glob (`src/**/*.ts`). Array of up to 10 outlines several in one call. |
+| `maxFiles` | integer (1-200) | ❌ | Files a single glob may outline (default 20). Beyond the cap the remaining paths are listed by name, so nothing is hidden. |
 
 *One of `nodeId` or `file` is required.
 
 ```
 file_outline: { file: "native/src/mcp/install.rs" }
 file_outline: { nodeId: "file:native/src/mcp/install.rs" }
+file_outline: { file: "native/src/storage/*.rs" }          // one directory
+file_outline: { file: "src/**/*.{ts,tsx}", maxFiles: 40 }  // a whole subtree
+file_outline: { file: "**/test_*.py" }                     // by naming convention
 ```
 
 ---
 
 ### 7. `get_code` - Read Full Source
 
-**Read the full source for a node id or a file/line range.** The follow-up to every other tool: search previews truncate at ~1200 chars and traversals return no code — call this to see the real implementation. Works even when the client has no file access (e.g. Claude Desktop), and even when the repo itself is not on the machine: a node id reads its captured span, and a file/line range is cut out of the file's whole-file capture. The working tree is only a fallback for what ingest did not capture.
+**Read the full source for a symbol, or a file/line range.** The follow-up to every other tool: search previews truncate at ~1200 chars and traversals return no code — call this to see the real implementation. Works even when the client has no file access (e.g. Claude Desktop), and even when the repo itself is not on the machine: a symbol reads its captured span, and a file/line range is cut out of the file's whole-file capture. The working tree is only a fallback for what ingest did not capture; a slice whose file changed since indexing comes back flagged.
 
 **Parameters:**
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `nodeId` | string \| string[] | ❌* | Node id from any prior result — reads that symbol's exact range. Array of up to 10 reads several symbols in one call (per-symbol `maxChars`). |
+| `nodeId` | string \| string[] | ❌* | What to read: a node id from any prior result, an exact symbol **name**, or a **wildcard**. Array of up to 10 reads several in one call (per-symbol `maxChars`). |
 | `file` | string | ❌* | Repo-relative path (when no nodeId). |
 | `startLine` / `endLine` | integer | ❌ | 1-based inclusive range (with `file`; defaults to whole file). |
-| `maxChars` | integer | ❌ | Character cap (default 20000). |
+| `maxChars` | integer | ❌ | Character cap per symbol (default 20000). |
 
 *One of `nodeId` or `file` is required.
 
 ```
 get_code: { nodeId: "function:native/src/mcp/install.rs:412:install_config" }
+get_code: { nodeId: "install_config" }        // by name
+get_code: { nodeId: "render_*" }              // every renderer in one call
 get_code: { file: "native/src/serve.rs", startLine: 100, endLine: 180 }
 ```
 
@@ -403,13 +458,15 @@ project_overview: {}
 
 ### 9. `shortest_path` - How Are Two Symbols Connected?
 
-**Shortest directed edge path between two node ids.** Answers "does A reach B", "how does the route reach the db call", "can editing A affect B". If no forward path exists the reverse direction is tried and labeled. Get ids from `find_symbols` or `search` first.
+**Shortest directed edge path between two symbols.** Answers "does A reach B", "how does the route reach the db call", "can editing A affect B". If no forward path exists the reverse direction is tried and labeled.
+
+Each endpoint takes a node id, an exact symbol name, or a wildcard — but must resolve to **exactly one** node, since the answer differs per candidate. When it doesn't, the error lists the ids to choose from.
 
 **Parameters:**
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `sourceId` | string | ✅ | Start node id. |
-| `targetId` | string | ✅ | End node id. |
+| `sourceId` | string | ✅ | Start point: node id, exact name, or a wildcard matching one symbol. |
+| `targetId` | string | ✅ | End point: node id, exact name, or a wildcard matching one symbol. |
 
 ```
 shortest_path: { sourceId: "file:native/src/mcp/install.rs", targetId: "function:native/src/main.rs:2874:run_mcp" }

@@ -3,6 +3,7 @@ pub mod code_query;
 mod graph;
 mod indexer;
 pub mod limits;
+pub mod pattern;
 pub mod storage;
 pub mod types;
 

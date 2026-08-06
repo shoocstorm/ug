@@ -41,12 +41,51 @@ These accept the same params as their MCP counterparts and can output `--json`.
 
 | Command | Aliases | What it does | Key flags |
 |---------|---------|-------------|-----------|
-| `ug find_symbols` | — | Exact-name lookup (case-insensitive, ranked exact > prefix > substring). | `-n <name>`, `-t <type>` filter, `-f <file-prefix>`, `-l <limit>`, `--include-docs`, `--json`, `-o <file>` |
-| `ug file_outline` | — | List indexed symbols in a file, in line order. | `<file>` positional, `-n <name>`, `--json` |
-| `ug get_code` | — | Read source for a node id or file/line range. | `<node-id>` or `-f <file>`, `--start-line`, `--end-line`, `--max-chars`, `-n <name>` |
-| `ug find_usages` | — | Find inbound references (callers/importers) to a symbol. | `<node-id>` positional(s), `--hops`, `--edge-type`, `-n <name>`, `--json` |
+| `ug find_symbols` | — | Symbol lookup by name, fragment (ranked exact > prefix > substring) or **wildcard**. | `--node-type <type>` (repeatable, wildcards ok), `--file-prefix <prefix-or-glob>`, `-k <limit>`, `--include-docs`, `-n <name>`, `--json`, `-o <file>` |
+| `ug file_outline` | — | List indexed symbols in a file, in line order. Takes a path **glob**. | `<file-or-glob>` positional(s), `-k/--max-files <n>` (default 20), `--ids`, `-n <name>`, `--json` |
+| `ug get_code` | — | Read source for a symbol (id, name or wildcard), or a file/line range. | `<symbol>...` or `-f <file>`, `--start-line`, `--end-line`, `--range <window>` (`11-35` · `34-end` · `42`), `--max-chars`, `--no-doc`, `-n <name>` |
+| `ug find_usages` | — | Find inbound references (callers/importers) to a symbol. | `<symbol>...` positional(s), `-k/--hops`, `-t/--edge-type`, `-n <name>`, `--json` |
 | `ug project_overview` | — | Orient in the codebase: stats, biggest files, most depended-upon symbols. | `-n <name>`, `--json` |
 | `ug graph_schema` | — | Node & edge types with counts and connection info. | `-n <name>`, `--json` |
+
+#### Wildcards
+
+Every place a symbol or file is named — `find_symbols` names, node types and
+file filters, `file_outline` paths, and the symbol arguments of `get_code`,
+`find_usages`, `traverse` and `shortest_path` — accepts the same shell-style
+pattern. One matcher (`native/src/pattern.rs`) serves the CLI, HTTP and MCP,
+so the dialect is identical on all three.
+
+| Syntax | Matches |
+|--------|---------|
+| `*` | any run of characters (not `/` in a path) |
+| `**` | any run of characters, `/` included (paths) |
+| `?` | exactly one character |
+| `[abc]` `[a-z]` | one character from the set or range |
+| `[!ab]` | one character not in the set (`[^ab]` too) |
+| `{a,b}` | either alternative, nestable |
+| `\*` | a literal `*` |
+
+Matching is case-insensitive and covers the **whole** name: `auth*` finds
+`authorize`, `*auth*` finds `reauth`. In paths, `*` stops at `/` and `**/`
+crosses directories (and also matches zero directories, so `src/**/*.rs`
+finds `src/main.rs`). Quote patterns in a shell.
+
+```bash
+ug find_symbols 'handle_*'                       # every handler
+ug find_symbols '*Controller' --node-type Class
+ug find_symbols '*' --file-prefix 'src/auth/**' -k 100
+ug file_outline 'src/**/*.{ts,tsx}' -k 40        # survey a subtree
+ug find_usages 'validate_*'                      # blast radius of a family
+ug traverse 'handle_*' -d inbound
+ug get_code 'render_*' --no-doc
+```
+
+The symbol arguments of `get_code`, `find_usages` and `traverse` also take a
+plain **name** — `ug find_usages connect` works without looking the id up
+first. A name or pattern expands to at most 25 symbols there; going over the
+cap is reported in the output, never silent. `shortest_path` endpoints must
+resolve to exactly one node, and list the candidates when they don't.
 
 **Removed.** `graph_bfs`/`bfs`, `graph_filter`/`filter` and `graph_search` are gone, along with every pre-rename alias (`hybrid_search`, `search_kb`, `graph_path`, `path`, `list`, `find_symbol`, `reindex`, `update`, `centrality`, `cycles`, `code_query`). Each duplicated something else exactly, and duplicates drift — the two BFS commands had already diverged on whether a bare symbol name was accepted. Every command and tool now has exactly one name:
 
@@ -227,13 +266,13 @@ These 13 tools are advertised over MCP `tools/list` and also available via the C
 |------|-------------|-------------|----------------|
 | `search` | **Primary KB search.** RRF (vector + FTS) → Personalized PageRank over edge graph → ranked context with snippets. | ugdb/Neo4j + embedder + graph.json | DB/embedder unavailable |
 | `semantic_search` | Lightweight pure-vector lookup — no graph expansion, no snippets. Returns top-k nearest nodes with distance. | ugdb/Neo4j + embedder | DB/embedder unavailable |
-| `traverse` | Walk graph N hops from seed node ids. Filters by edge type and direction. | graph.json (graph-backed, no DB needed) | graph.json missing/invalid |
-| `find_usages` | Inbound references to a node (callers, importers, subclasses, etc.). Wrapper over traverse with direction=inbound + sensible defaults. Call-site lines come from each caller's stored source, with filesystem fallback. | graph.json (+ ugdb for call sites) | graph.json missing/invalid |
-| `find_symbols` | Exact-name symbol lookup (case-insensitive, ranked exact > prefix > substring). Supports batch via array of names/ids. | graph.json | graph.json missing/invalid |
-| `file_outline` | List every indexed symbol in one file, in line order. Accepts path or File node id. Supports batch via array. | graph.json | graph.json missing/invalid |
-| `get_code` | Read source for a node id or file/line range. Works from stored source in DB (consistent with search) with filesystem fallback; a file/line range is cut out of the file's whole-file capture, so it needs no working tree either. | ugdb (preferred) + filesystem fallback | node/file captured in neither ugdb nor the working tree |
+| `traverse` | Walk graph N hops from seed symbols (id, name or wildcard). Filters by edge type and direction; several seeds make one merged walk. | graph.json (graph-backed, no DB needed) | graph.json missing/invalid |
+| `find_usages` | Inbound references to a symbol (callers, importers, subclasses, etc.), by id, name or wildcard. Wrapper over traverse with direction=inbound + sensible defaults. Call-site lines come from each caller's stored source, with filesystem fallback. | graph.json (+ ugdb for call sites) | graph.json missing/invalid |
+| `find_symbols` | Symbol lookup by name (case-insensitive, ranked exact > prefix > substring) or by wildcard pattern (whole-name match). Filters by node type and file path/glob. Supports batch via array of names/patterns/ids. | graph.json | graph.json missing/invalid |
+| `file_outline` | List every indexed symbol in a file, in line order. Accepts a path, unique suffix, File node id, or path glob (up to `maxFiles` files). Supports batch via array. | graph.json | graph.json missing/invalid |
+| `get_code` | Read source for a symbol (id, name or wildcard) or a file/line range. Works from stored source in DB (consistent with search) with filesystem fallback; a file/line range is cut out of the file's whole-file capture, so it needs no working tree either. | ugdb (preferred) + filesystem fallback | node/file captured in neither ugdb nor the working tree |
 | `project_overview` | Orient in the codebase: repo root, node/edge counts, biggest files, most depended-upon symbols. | graph.json | graph.json missing/invalid |
-| `shortest_path` | Find shortest directed edge path between two node ids. | graph.json | graph.json missing/invalid |
+| `shortest_path` | Find shortest directed edge path between two symbols. Each endpoint (id, name or wildcard) must resolve to exactly one node. | graph.json | graph.json missing/invalid |
 | `code_query` | **Whole-repo statistics**: counts, groups, distributions, blast radius. Takes a named `preset` or raw GQL. Read-only — mutations are rejected before write staging. Every answer reports property coverage, because aggregating over an unstored property returns `0` rather than an error. | ugdb (**no embedder**) | db missing or written by an older ug |
 | `graph_schema` | **Capability manifest**: node & edge types with counts and connection shapes (from graph.json), plus queryable properties with live coverage and the `code_query` preset list (from the db). | graph.json + ugdb | graph.json missing/invalid (the db half degrades to a note) |
 | `list_projects` | List every indexed project on this machine (name, repo path, graph size). | `~/.ug/` directory scan | — |
