@@ -41,7 +41,7 @@ ug chat \
 
 | Flag | Description |
 | :--- | :--- |
-| `-n, --name <project>` | Project name (default: cwd basename, else the most recently generated project under `~/.ug`) |
+| `-n, --name <project>` | Project name (default: active project set with `ug active <name>`, else cwd basename, else the most recently generated project under `~/.ug`) |
 | `--chat-model <name>` | Chat completion model (required for remote chat; falls back to `$UG_CHAT_MODEL`) |
 | `--base-url` / `--api-key` | OpenAI-compatible endpoint, shared with embeddings (`--chat-base-url`/`--chat-api-key`/`--embedding-*` override each independently) |
 | `-k/--limit`, `--max-chars`, `--filter` | Retrieval tuning — same as `search` |

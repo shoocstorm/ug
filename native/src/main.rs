@@ -1106,6 +1106,43 @@ fn agent_repo_root(graph: &GraphData, graph_path: &Path) -> PathBuf {
     PathBuf::from(".")
 }
 
+/// Load the source the index captured for `ids`, from the store that sits
+/// beside this project's graph.json.
+///
+/// The reason the agent-tool commands work with the repo gone: `ug gen`
+/// wrote every node's span into `~/.ug/<project>/ugdb`, so the source is
+/// project data, not something to go find on disk. Pinned to the graph's
+/// own sibling `ugdb` rather than resolved from `--dest`/`-o` — the code
+/// must come from the same project as the graph, and a graph loaded via
+/// `-i` from anywhere else simply has no store to read.
+///
+/// Silent on every failure: a project that was never ingested, a store from
+/// an older ug, a `--dest neo4j` run. Each yields an empty result and the
+/// tools fall back to the working tree, which is what they did before the
+/// store captured anything.
+fn indexed_source(graph_path: &Path, ids: &[String]) -> agent_tools::IndexedSource {
+    if ids.is_empty() {
+        return agent_tools::IndexedSource::default();
+    }
+    let Some(db_path) = graph_path.parent().map(|d| d.join("ugdb")) else {
+        return agent_tools::IndexedSource::default();
+    };
+    if !db_path.exists() {
+        return agent_tools::IndexedSource::default();
+    }
+    let spec = StoreSpec::Overgraph {
+        embedding_dim: storage::db::stored_embedding_dim(&db_path)
+            .unwrap_or(storage::embed::DEFAULT_EMBEDDING_DIM as u32),
+        path: db_path,
+    };
+    tokio_runtime().block_on(async {
+        match storage::open_store(&spec).await {
+            Ok(store) => agent_tools::IndexedSource::load(store.as_ref(), ids).await,
+            Err(_) => agent_tools::IndexedSource::default(),
+        }
+    })
+}
+
 fn print_find_symbols_help() {
     println!("  {C_CYAN}ug find_symbols{C_RESET}  {C_YELLOW}— exact-name symbol lookup (no embeddings){C_RESET}");
     println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
@@ -1320,7 +1357,12 @@ fn run_get_code(args: &[String]) {
         no_doc: has_flag(args, "--no-doc"),
     };
 
-    let result = agent_tools::get_code(&graph, &repo_root, &params);
+    let indexed = indexed_source(&graph_path, &agent_tools::get_code_source_ids(&graph, &params));
+    let result = agent_tools::get_code(
+        &graph,
+        agent_tools::SourceCtx::new(&indexed, &repo_root),
+        &params,
+    );
     let ok = result.ok();
     emit_agent_result(
         args,
@@ -1367,7 +1409,15 @@ fn run_find_usages(args: &[String]) {
         hops: flag_value(args, &["--hops", "-k"]).and_then(|s| s.parse().ok()),
         edge_types: multi_flag(args, &["--edge-type", "-t"]),
     };
-    let result = agent_tools::find_usages(&graph, &repo_root, &params);
+    let indexed = indexed_source(
+        &graph_path,
+        &agent_tools::find_usages_source_ids(&graph, &params),
+    );
+    let result = agent_tools::find_usages(
+        &graph,
+        agent_tools::SourceCtx::new(&indexed, &repo_root),
+        &params,
+    );
     let ok = result.ok();
     emit_agent_result(
         args,
@@ -4644,11 +4694,18 @@ fn cli_tool_runner(
                 "code_query" => crate::mcp::run_code_query_json(&*store, &args).await,
                 _ => {
                     crate::mcp::tools::reject_if_store_backed(&name)?;
+                    // Chat already holds this project's store open, so the
+                    // source pre-fetch is one lookup rather than another open.
+                    let indexed = agent_tools::IndexedSource::load(
+                        &*store,
+                        &agent_tools::source_node_ids(&name, &graph, &args),
+                    )
+                    .await;
                     let out = ultragraph::agent_tools::run_tool(
                         &name,
                         &graph,
                         &raw,
-                        repo_root.as_path(),
+                        agent_tools::SourceCtx::new(&indexed, repo_root.as_path()),
                         graph_path.as_path(),
                         args,
                         Some(ultragraph::agent_tools::Render::Markdown),

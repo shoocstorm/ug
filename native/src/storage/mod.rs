@@ -39,7 +39,9 @@ pub use ingest::{
 };
 pub use comments::extract_prose_comments;
 pub use facts::{FactContext, FactValue, Facts};
-pub use source::{capture_graph_code, file_matches_hash, CapturedCode};
+pub use source::{
+    capture_graph_code, file_matches_hash, CapturedCode, IndexedSource, StoredSource,
+};
 pub use ppr::{default_edge_type_weights, run_ppr};
 pub use query::{
     mmr_rerank, read_snippet, rrf_search, snippet_for, search_kb, semantic_search, semantic_search_w_where,

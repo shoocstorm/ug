@@ -318,6 +318,19 @@
             state.graph = { nodes: Array.from(nodeMap.values()), edges };
             state.containsMaps = null;
             state.stats = data.stats || null;
+            // The repo-root folder node (shallowest depth) carries the
+            // per-language file counts the indexer computed — the same fact
+            // the CLI's overview prints as `rust×69, markdown×23, …`.
+            state.languages = null;
+            let rootDepth = Infinity;
+            data.nodes.forEach(n => {
+                const f = n.folder;
+                if (!f || typeof f.depth !== 'number' || f.depth >= rootDepth) return;
+                if (f.languageBreakdown && Object.keys(f.languageBreakdown).length) {
+                    rootDepth = f.depth;
+                    state.languages = f.languageBreakdown;
+                }
+            });
             state.catalogTree = null;
             state.catalogExpanded = null;
             state.catalogAutoExpanded = false;
@@ -387,6 +400,31 @@
                 <div class="edge-breakdown-row">
                     <span class="name">${escapeHtml(r.label)}</span>
                     <span class="count" title="${escapeHtml(String(r.value))}">${escapeHtml(String(r.value))}</span>
+                </div>
+            `).join('');
+
+            renderLanguages();
+        }
+
+        function renderLanguages() {
+            const el = document.getElementById('index-languages');
+            if (!el) return;
+            const label = document.getElementById('languages-label');
+            const langs = state.languages;
+            const entries = langs
+                ? Object.entries(langs).sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(b[0]))
+                : [];
+            if (!entries.length) {
+                el.innerHTML = '<div class="edge-breakdown-row"><span class="name">No language data in graph.json</span></div>';
+                if (label) label.textContent = 'Languages';
+                return;
+            }
+            const total = entries.reduce((s, [, c]) => s + c, 0);
+            if (label) label.textContent = `Languages (${total} files)`;
+            el.innerHTML = entries.map(([name, count]) => `
+                <div class="edge-breakdown-row" title="${escapeHtml(name)}">
+                    <span class="name">${escapeHtml(name)}</span>
+                    <span class="count">${count}</span>
                 </div>
             `).join('');
         }

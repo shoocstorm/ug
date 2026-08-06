@@ -1135,6 +1135,32 @@ async fn activate_project(
     Ok(ctx)
 }
 
+/// The source this project's index captured for whatever `tool` is about to
+/// read, from its primary store.
+///
+/// Empty when the project has no open store (`--no-db`, an index that would
+/// not open), in which case the tool falls back to the working tree — the
+/// server may well be running inside the repo, and if it isn't the tool
+/// reports that rather than serving wrong lines.
+async fn ctx_indexed_source(
+    ctx: &ProjectContext,
+    graph: &GraphData,
+    tool: &str,
+    args: &serde_json::Value,
+) -> ultragraph::agent_tools::IndexedSource {
+    let ids = ultragraph::agent_tools::source_node_ids(tool, graph, args);
+    if ids.is_empty() {
+        return Default::default();
+    }
+    let Some(stores) = ctx.stores.as_ref() else {
+        return Default::default();
+    };
+    let Some(store) = stores.get(&stores.primary) else {
+        return Default::default();
+    };
+    ultragraph::agent_tools::IndexedSource::load(store.as_ref(), &ids).await
+}
+
 /// Resolve which project a request targets: the one it named (loaded on
 /// demand) or the server's active one. Unlike [`activate_project`] this
 /// leaves the active selection alone — see [`ProjectRegistry::insert_loaded`].
@@ -1369,11 +1395,12 @@ async fn api_tool(
     // the same stringified-array mistakes, so normalise in all of them.
     let mut args = serde_json::Value::Object(params);
     crate::mcp::tools::normalize_args(&tool, &mut args);
+    let indexed = ctx_indexed_source(&ctx, &snap.parsed, &tool, &args).await;
     let result = ultragraph::agent_tools::run_tool(
         &tool,
         &snap.parsed,
         &snap.raw_json,
-        ctx.repo_root.as_path(),
+        ultragraph::agent_tools::SourceCtx::new(&indexed, ctx.repo_root.as_path()),
         ctx.graph_path.as_path(),
         args,
         None,
@@ -2758,23 +2785,7 @@ async fn file_from_disk(state: &ServeState, rel: &str, params: &FileQuery) -> Op
     // to the store, which may still hold a captured textual span.
     let text = tokio::fs::read_to_string(&canon).await.ok()?;
 
-    let all: Vec<&str> = text.lines().collect();
-    let total_lines = all.len();
-
-    // Optional 1-based inclusive slice; clamp to the file's bounds.
-    let (content, sliced) = match params.start {
-        Some(s) if s >= 1 => {
-            let lo = s - 1;
-            let hi = params.end.unwrap_or(s).max(s).min(total_lines);
-            let body = if lo >= total_lines {
-                String::new()
-            } else {
-                all[lo..hi].join("\n")
-            };
-            (body, true)
-        }
-        _ => (text, false),
-    };
+    let (content, sliced, total_lines) = slice_file_text(text, params.start, params.end);
 
     Some(ok_json(
         serde_json::json!({
@@ -2788,6 +2799,31 @@ async fn file_from_disk(state: &ServeState, rel: &str, params: &FileQuery) -> Op
         })
         .to_string(),
     ))
+}
+
+/// Cut a 1-based inclusive line range out of a whole file, clamped to its
+/// bounds. Returns `(content, sliced, total_lines)`, where `total_lines` is
+/// always the *file's* length so the UI can place the slice.
+///
+/// Shared by the live read and the indexed fallback: a Preview request must
+/// return the same lines whether or not the repo is on this machine, and
+/// two copies of this arithmetic is how that stops being true.
+fn slice_file_text(text: String, start: Option<usize>, end: Option<usize>) -> (String, bool, usize) {
+    let all: Vec<&str> = text.lines().collect();
+    let total_lines = all.len();
+    match start {
+        Some(s) if s >= 1 => {
+            let lo = s - 1;
+            let hi = end.unwrap_or(s).max(s).min(total_lines);
+            let body = if lo >= total_lines {
+                String::new()
+            } else {
+                all[lo..hi].join("\n")
+            };
+            (body, true, total_lines)
+        }
+        _ => (text, false, total_lines),
+    }
 }
 
 /// Serve the source the store captured for this file at index time.
@@ -2812,13 +2848,22 @@ async fn file_from_store(state: &ServeState, rel: &str, params: &FileQuery) -> O
             "indexed file too large to preview",
         ));
     }
+    // An exact-span match already *is* the requested lines; a whole-file
+    // capture still has to be cut down to them, or a range request would
+    // silently return the entire file whenever the repo is missing.
+    let (content, sliced, total_lines) = if sliced {
+        let n = code.lines().count();
+        (code, true, n)
+    } else {
+        slice_file_text(code, params.start, params.end)
+    };
     Some(ok_json(
         serde_json::json!({
             "path": rel,
-            "content": code,
+            "content": content,
             "start_line": params.start,
             "end_line": params.end,
-            "total_lines": code.lines().count(),
+            "total_lines": total_lines,
             "sliced": sliced,
             "source": "db",
         })
@@ -2832,10 +2877,10 @@ async fn file_from_store(state: &ServeState, rel: &str, params: &FileQuery) -> O
 /// Uses the in-memory graph to map `rel` + line range to a node id, then
 /// reads that node's stored code. A span request matches the exact node
 /// first, then falls back to the file's whole-capture node; a whole-file
-/// request goes straight to that. Returns `(code, sliced)` — `sliced` is
-/// false when the whole-file node was served, matching what a live read of
-/// the whole file would report. `None` when no matching node has captured
-/// code.
+/// request goes straight to that. Returns `(code, sliced)` — `sliced` says
+/// whether `code` is already narrowed to the requested span, which is false
+/// for the whole-file node and tells [`file_from_store`] it still has to cut
+/// the range out. `None` when no matching node has captured code.
 async fn stored_source_for_file(
     graph: &GraphData,
     store: &dyn KnowledgeStore,
@@ -3914,11 +3959,18 @@ async fn run_chat_tool(
             crate::mcp::tools::reject_if_store_backed(&name)?;
             let snap = state.snapshot();
             let ctx = state.active();
+            // The chat path already holds an open store, so the source
+            // pre-fetch costs one lookup rather than another open.
+            let indexed = ultragraph::agent_tools::IndexedSource::load(
+                &*db,
+                &ultragraph::agent_tools::source_node_ids(&name, &snap.parsed, &args),
+            )
+            .await;
             let out = ultragraph::agent_tools::run_tool(
                 &name,
                 &snap.parsed,
                 &snap.raw_json,
-                ctx.repo_root.as_path(),
+                ultragraph::agent_tools::SourceCtx::new(&indexed, ctx.repo_root.as_path()),
                 ctx.graph_path.as_path(),
                 args,
                 Some(ultragraph::agent_tools::Render::Markdown),
@@ -4488,7 +4540,7 @@ pub fn print_serve_help() {
 
 #[cfg(test)]
 mod tests {
-    use super::{pick_initial_project, stored_source_for_file};
+    use super::{pick_initial_project, slice_file_text, stored_source_for_file};
     use tempfile::TempDir;
     use ultragraph::storage::db::{Db, NodeRow};
     use ultragraph::storage::embed::DEFAULT_EMBEDDING_DIM;
@@ -4659,5 +4711,32 @@ mod tests {
             stored_source_for_file(&graph2, &db, "src/b.rs", Some(5), Some(9)).await,
             None
         );
+    }
+
+    /// A range request must return the same lines whether it was answered
+    /// from the repo or from the index — the whole-file capture is cut down
+    /// to the span rather than served entire, and `total_lines` stays the
+    /// file's length either way.
+    #[test]
+    fn a_range_is_cut_out_of_a_whole_file_the_same_way_from_either_source() {
+        let text = "one\ntwo\nthree\nfour\n".to_string();
+
+        let (body, sliced, total) = slice_file_text(text.clone(), Some(2), Some(3));
+        assert_eq!((body.as_str(), sliced, total), ("two\nthree", true, 4));
+
+        // No range → the whole file, untouched.
+        let (body, sliced, total) = slice_file_text(text.clone(), None, None);
+        assert_eq!((body.as_str(), sliced, total), (text.as_str(), false, 4));
+
+        // `end` omitted means the single `start` line.
+        let (body, _, _) = slice_file_text(text.clone(), Some(4), None);
+        assert_eq!(body, "four");
+
+        // Out-of-range bounds clamp rather than panic — an index can lag the
+        // file it describes.
+        let (body, _, total) = slice_file_text(text.clone(), Some(3), Some(99));
+        assert_eq!((body.as_str(), total), ("three\nfour", 4));
+        let (body, _, _) = slice_file_text(text, Some(99), Some(120));
+        assert_eq!(body, "");
     }
 }

@@ -23,7 +23,7 @@
 | `ug gen` | — | **End-to-end pipeline**: index → graph → visualization → OverGraph ingest. The primary entry point. | Repo source → index.json → graph.json → ugdb/ | `-i <path>` input dir, `-o <dir>` output, `-n <name>` project name, `-c <dir>` cache, `--no-cache`, `--no-ingest`, `--no-prune`, `--serve`, `-d <dir>` db path, `--model`, `--base-url`, `--api-key`, `--embedding-dim` |
 | `ug index` | — | Index a directory: parse source files into `FileNode`s with symbols, imports, exports. Writes `indexed-tree.json`. | Repo source → writes index.json | `-i <path>` input (default `.`), `-o <file>` output, `-n <name>`, `-c <dir>` cache |
 | `ug graph` | — | Build graph from indexed tree: resolve cross-file imports, create `GraphData` with nodes + edges. Writes `graph.json`. | index.json → writes graph.json | `-i <file>` input index.json, `-o <file>` output graph.json, `-n <name>` |
-| `ug ingest` | — | Embed graph nodes and write to one or more knowledge stores (OverGraph/Neo4j). Defaults resolve from `-n <name>`: reads `~/.ug/<name>/graph.json`, writes `~/.ug/<name>/ugdb`. | graph.json → writes to ugdb/ or Neo4j | `-n <name>` project name, `-i <file>` input graph.json, `-o <dir>` output, `--dest <kind>` (overgraph\|neo4j, comma-separated), `--neo4j-*`, `--prune`, `--model`, `--base-url`, `--api-key`, `--embedding-dim` |
+| `ug ingest` | — | Embed graph nodes and write to one or more knowledge stores (OverGraph/Neo4j). Defaults resolve from active project (`ug active <name>`), else cwd basename; reads `~/.ug/<name>/graph.json`, writes `~/.ug/<name>/ugdb`. | graph.json → writes to ugdb/ or Neo4j | `-n <name>` project name, `-i <file>` input graph.json, `-o <dir>` output, `--dest <kind>` (overgraph\|neo4j, comma-separated), `--neo4j-*`, `--prune`, `--model`, `--base-url`, `--api-key`, `--embedding-dim` |
 
 ### 1.2 Graph Analysis Commands (graph.json-backed, offline, in-memory)
 
@@ -98,6 +98,40 @@ These accept the same params as their MCP counterparts and can output `--json`.
 | `ug disconnect <agent>` (alias `ug mcp uninstall`) | Remove the agent skill and the MCP server registration. | `--project`, `--global` |
 | `ug mcp list` / `ls` | Print the tools this server advertises. | — |
 | `ug mcp call <tool> <json>` | Invoke one tool directly from the command line. | `<tool>` name, `<json>` arguments |
+
+### 1.8 Project Resolution & Active Project Fallback
+
+Commands need to resolve a project name to read `graph.json` and/or write/load the OverGraph store (`ugdb`). The order varies by command group:
+
+#### Resolution Order by Command Group
+
+| Command Group | Resolution Order | Notes |
+|--------------|------------------|------|
+| `gen`, `index`, `graph` | `-n/--name` → derive from input path | Generate commands must use cwd when no `-n` (they create a new project) |
+| `regen` | `-n` → **active project** → cwd basename | Rebuilds existing project; honors user's pinned active project |
+| `ingest` | `-n` → **active project** → cwd basename | Reads graph.json and writes ugdb from the active project by default |
+| Read commands<br/>(`semantic_search`, `search`, `traverse`, `chat`, `tour`, `query`, `graph_centrality`, `graph_cycles`) | `-n` → **active project** → cwd basename → most-recent | Now consistent with `regen`/`ingest` |
+| `server`, `app`, `mcp` | `-n` → **active project** → cwd | Always opens the active project |
+| Any command with `-i/--input` | `-i` wins | Bypasses all project logic |
+
+#### Helper Functions
+
+- `resolve_project_name(args, input)` → `-n` → `derive_project_name(input)` — for `gen`/`index`/`graph` (no active fallback)
+- `resolve_active_project_name(args, input)` → `-n` → `get_active_project()` → `derive_project_name(input)` — for all other commands |
+
+#### `default_read_db_path()` Fallback Chain
+
+When no `-n/--name` flag is provided, the store/db path resolves through:
+
+```
+1. active project's ~/.ug/<active>/ugdb      ← honored first (UG_HOME/<name>/ugdb)
+2. cwd-basename ugdb (if exists)
+3. legacy ~/.ug/ugdb                          ← deprecated path
+4. most-recently-updated project's ugdb       ← last resort
+5. cwd-basename ugdb (always exists, may be empty)
+```
+
+This chain ensures that commands like `ug search"query"` or `ug chat"what is X"` run from an arbitrary directory will automatically pick the project the user previously pinned with `ug active <name>` rather than silently using the cwd or a random "most-recent" project.
 
 ---
 
@@ -194,10 +228,10 @@ These 13 tools are advertised over MCP `tools/list` and also available via the C
 | `search` | **Primary KB search.** RRF (vector + FTS) → Personalized PageRank over edge graph → ranked context with snippets. | ugdb/Neo4j + embedder + graph.json | DB/embedder unavailable |
 | `semantic_search` | Lightweight pure-vector lookup — no graph expansion, no snippets. Returns top-k nearest nodes with distance. | ugdb/Neo4j + embedder | DB/embedder unavailable |
 | `traverse` | Walk graph N hops from seed node ids. Filters by edge type and direction. | graph.json (graph-backed, no DB needed) | graph.json missing/invalid |
-| `find_usages` | Inbound references to a node (callers, importers, subclasses, etc.). Wrapper over traverse with direction=inbound + sensible defaults. | graph.json | graph.json missing/invalid |
+| `find_usages` | Inbound references to a node (callers, importers, subclasses, etc.). Wrapper over traverse with direction=inbound + sensible defaults. Call-site lines come from each caller's stored source, with filesystem fallback. | graph.json (+ ugdb for call sites) | graph.json missing/invalid |
 | `find_symbols` | Exact-name symbol lookup (case-insensitive, ranked exact > prefix > substring). Supports batch via array of names/ids. | graph.json | graph.json missing/invalid |
 | `file_outline` | List every indexed symbol in one file, in line order. Accepts path or File node id. Supports batch via array. | graph.json | graph.json missing/invalid |
-| `get_code` | Read source for a node id or file/line range. Works from stored source in DB (consistent with search) with filesystem fallback. | ugdb (preferred) + filesystem fallback | graph.json missing + filesystem not readable |
+| `get_code` | Read source for a node id or file/line range. Works from stored source in DB (consistent with search) with filesystem fallback; a file/line range is cut out of the file's whole-file capture, so it needs no working tree either. | ugdb (preferred) + filesystem fallback | node/file captured in neither ugdb nor the working tree |
 | `project_overview` | Orient in the codebase: repo root, node/edge counts, biggest files, most depended-upon symbols. | graph.json | graph.json missing/invalid |
 | `shortest_path` | Find shortest directed edge path between two node ids. | graph.json | graph.json missing/invalid |
 | `code_query` | **Whole-repo statistics**: counts, groups, distributions, blast radius. Takes a named `preset` or raw GQL. Read-only — mutations are rejected before write staging. Every answer reports property coverage, because aggregating over an unstored property returns `0` rather than an error. | ugdb (**no embedder**) | db missing or written by an older ug |

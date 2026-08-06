@@ -110,12 +110,31 @@ never *what it says*, so every read goes back to the working tree — which mean
 the row's description and the code an agent sees can disagree, and a line range
 that has merely drifted still resolves, silently returning the wrong lines.
 
-Retrieval prefers the stored copy (`query::snippet_for`, `agent_tools::
-get_code_with_stored`) and falls back to the filesystem for rows written before
-the column existed. `get_code` marks a slice `stale` when the file no longer
-matches `file_hash`, so out-of-date source is reported rather than served as
-current. Search and `get_code` therefore work with **no working tree present
-at all**.
+Every read path prefers the stored copy and falls back to the filesystem only
+for what the index does not hold — rows written before the column existed,
+files that could not be read at ingest time:
+
+| read path | what it serves from the index |
+| --- | --- |
+| `query::snippet_for` (search, chat, tour) | the row's own `code` |
+| `get_code <id>` | the node's captured span |
+| `get_code --file X --start/--end` | the range, cut out of `X`'s whole-file capture |
+| `find_usages` | each caller's span, scanned for call sites |
+| `/api/file` | the requested lines, cut out of the whole-file capture |
+
+The transports resolve which node ids a call needs
+(`agent_tools::source_node_ids`), load them in one store round-trip
+(`IndexedSource::load`), and hand the result to the tool as a `SourceCtx` —
+so the synchronous tools never have to hold a live store handle. A project
+with no usable store still answers structurally, reading source from the
+working tree if it happens to be there.
+
+`get_code` marks a slice `stale` when the file no longer matches `file_hash`;
+a file it cannot read at all is *not* reported as stale, since a missing repo
+is the expected case here rather than a drift signal. So the read commands —
+`get_code`, `find_usages`, `search`, `chat`, `tour` — work with **no working
+tree present at all**, whether it was moved, deleted, or never cloned on this
+machine.
 
 Cost measured on this repo: captured spans came to 1.04x the raw source, and
 the source is smaller than the dense vectors already in the same database.

@@ -791,11 +791,80 @@ pub struct CodeSlice {
     pub error: Option<String>,
 }
 
-/// Source captured at index time for one node, as held by the store.
-#[derive(Debug, Clone, Default)]
-pub struct StoredSource {
-    pub code: String,
-    pub file_hash: String,
+pub use crate::storage::source::{IndexedSource, StoredSource};
+
+/// Where a read tool gets source text from, in priority order.
+///
+/// `indexed` is the copy ingest captured into the project's store. It is
+/// the answer that needs no repo — the whole point of the type — and it is
+/// also the *consistent* answer, since it is what the node's description
+/// and embedding were built from.
+///
+/// `repo_root` is a fallback for what the index does not hold: graphs
+/// generated before the store existed, nodes whose file could not be read
+/// at ingest time, and arbitrary line ranges in files with no whole-file
+/// capture. It is allowed to point at nothing — a path that no longer
+/// exists simply means the fallback yields nothing, not an error.
+#[derive(Clone, Copy)]
+pub struct SourceCtx<'a> {
+    indexed: Option<&'a IndexedSource>,
+    repo_root: &'a Path,
+}
+
+impl<'a> SourceCtx<'a> {
+    /// The full context: indexed source first, working tree as backup.
+    pub fn new(indexed: &'a IndexedSource, repo_root: &'a Path) -> Self {
+        SourceCtx {
+            indexed: Some(indexed),
+            repo_root,
+        }
+    }
+
+    /// Working tree only, for callers with no store at hand (tests, and
+    /// the legacy path where a project has a graph but was never ingested).
+    pub fn repo_only(repo_root: &'a Path) -> Self {
+        SourceCtx {
+            indexed: None,
+            repo_root,
+        }
+    }
+
+    pub fn repo_root(&self) -> &'a Path {
+        self.repo_root
+    }
+
+    /// Captured source for one node id.
+    pub fn node(&self, id: &str) -> Option<&'a StoredSource> {
+        self.indexed?.node(id)
+    }
+
+    /// Captured source for a whole file, via its File node.
+    ///
+    /// The indexer emits one range-less node per file whose capture is the
+    /// entire file (see [`capture_graph_code`]), which is what makes an
+    /// arbitrary `get_code --file X --start 180 --end 210` answerable from
+    /// the index instead of from disk.
+    ///
+    /// [`capture_graph_code`]: crate::storage::capture_graph_code
+    pub fn file(&self, graph: &GraphData, file: &str) -> Option<&'a StoredSource> {
+        let indexed = self.indexed?;
+        whole_file_node_ids(graph, file)
+            .into_iter()
+            .find_map(|id| indexed.node(id))
+    }
+}
+
+/// Ids of the range-less nodes that carry `file`'s whole-file capture.
+///
+/// Plural because a File node and a Config node can both cover one path;
+/// callers take the first that actually has captured code.
+pub fn whole_file_node_ids<'a>(graph: &'a GraphData, file: &str) -> Vec<&'a str> {
+    graph
+        .nodes
+        .iter()
+        .filter(|n| n.start_line.is_none() && n.file.as_deref() == Some(file))
+        .map(|n| n.id.as_str())
+        .collect()
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -809,25 +878,15 @@ impl GetCodeResult {
     }
 }
 
-/// Read source for nodes, from the working tree only.
+/// Read source for nodes, or for a file/line range.
 ///
-/// Prefer [`get_code_with_stored`] where a store handle is available: the
-/// indexed copy is what the node's description and embedding were built
-/// from, so serving it keeps the two consistent and removes the case where
-/// a drifted line range silently returns the wrong lines.
-pub fn get_code(graph: &GraphData, repo_root: &Path, p: &GetCodeParams) -> GetCodeResult {
-    get_code_with_stored(graph, repo_root, p, &HashMap::new())
-}
-
-/// As [`get_code`], but serving each node's indexed source when the store
-/// has it. `stored` is keyed by node id; ids absent from it fall back to
-/// reading the file.
-pub fn get_code_with_stored(
-    graph: &GraphData,
-    repo_root: &Path,
-    p: &GetCodeParams,
-    stored: &HashMap<String, StoredSource>,
-) -> GetCodeResult {
+/// Serves each node's indexed source when `src` has it, falling back to the
+/// working tree only for what the index does not hold. The indexed copy is
+/// what the node's description and embedding were built from, so serving it
+/// keeps the two consistent, removes the case where a drifted line range
+/// silently returns the wrong lines, and — the reason this is the default —
+/// keeps working when the repo itself is not on this machine.
+pub fn get_code(graph: &GraphData, src: SourceCtx, p: &GetCodeParams) -> GetCodeResult {
     let max_chars = p.max_chars.unwrap_or(DEFAULT_MAX_CHARS);
     let mut slices = Vec::new();
 
@@ -850,7 +909,8 @@ pub fn get_code_with_stored(
         };
         let file = strip_file_id_prefix(file);
         slices.push(read_slice(
-            repo_root,
+            graph,
+            src,
             file,
             p.start_line.unwrap_or(1),
             p.end_line.unwrap_or(usize::MAX),
@@ -892,9 +952,9 @@ pub fn get_code_with_stored(
                 usize::MAX
             }
         });
-        slices.push(match stored.get(id).filter(|s| !s.code.is_empty()) {
-            Some(src) => stored_slice(src, repo_root, f, start, end, n, max_chars),
-            None => read_slice(repo_root, f, start, end, Some(n), max_chars),
+        slices.push(match src.node(id) {
+            Some(stored) => stored_slice(stored, src.repo_root(), f, start, end, n, max_chars),
+            None => read_slice(graph, src, f, start, end, Some(n), max_chars),
         });
     }
 
@@ -925,14 +985,7 @@ fn stored_slice(
     } else {
         (src.code.clone(), 0)
     };
-    let stale = match crate::storage::file_matches_hash(repo_root, file, &src.file_hash) {
-        Some(true) => None,
-        Some(false) => Some(format!(
-            "{} has changed since indexing — this is the indexed copy; re-run `ug gen` to refresh",
-            file
-        )),
-        None => None,
-    };
+    let stale = stale_note(repo_root, file, &src.file_hash);
     CodeSlice {
         title: format!("{} {}", node_type_str(&node.node_type), node.name),
         file: Some(file.to_string()),
@@ -962,8 +1015,16 @@ fn err_slice(title: &str, error: String) -> CodeSlice {
     }
 }
 
+/// Slice `start..=end` out of a whole file, from the index if it captured
+/// the file and from the working tree otherwise.
+///
+/// The index is tried first for the same reason [`get_code`] prefers it for
+/// nodes — it is the copy that exists whether or not the repo does — but
+/// here it also covers arbitrary ranges, since the file's range-less node
+/// holds the entire text rather than one symbol's span.
 fn read_slice(
-    repo_root: &Path,
+    graph: &GraphData,
+    src: SourceCtx,
     file: &str,
     start: usize,
     end: usize,
@@ -975,26 +1036,13 @@ fn read_slice(
         None => file.to_string(),
     };
 
-    let content = match std::fs::read_to_string(repo_root.join(file)) {
-        Ok(c) => c,
-        Err(_) => {
-            // Distinguish a deleted repo from a deleted file: the fix is
-            // different (restore the path vs re-run ug gen), and "not found
-            // under repo root" reads as a lie when the root itself is gone.
-            let reason = if !repo_root.exists() {
-                format!(
-                    "the repo path {} is no longer available and no indexed copy was captured for this node",
-                    repo_root.display()
-                )
-            } else {
-                format!(
-                    "{} not found under repo root {} — the index may be stale (re-run ug gen).",
-                    file,
-                    repo_root.display()
-                )
-            };
-            return err_slice(&title, reason);
-        }
+    let indexed = src.file(graph, file);
+    let content = match indexed {
+        Some(s) => s.code.clone(),
+        None => match std::fs::read_to_string(src.repo_root().join(file)) {
+            Ok(c) => c,
+            Err(_) => return err_slice(&title, unreadable_reason(src.repo_root(), file)),
+        },
     };
 
     let all: Vec<&str> = content.split('\n').collect();
@@ -1017,9 +1065,46 @@ fn read_slice(
         doc: node.and_then(|n| n.docstring.clone()),
         code: Some(text),
         truncated_chars: truncated,
-        // Read live from the working tree, so current by definition.
-        stale: None,
+        // A working-tree read is current by definition; an indexed one is
+        // only current while the file still hashes the same.
+        stale: indexed.and_then(|s| stale_note(src.repo_root(), file, &s.file_hash)),
         error: None,
+    }
+}
+
+/// Why neither the index nor the working tree could produce `file`.
+///
+/// Distinguishes a deleted repo from a deleted file: the fix is different
+/// (restore the path vs re-run `ug gen`), and "not found under repo root"
+/// reads as a lie when the root itself is gone.
+fn unreadable_reason(repo_root: &Path, file: &str) -> String {
+    if !repo_root.exists() {
+        format!(
+            "{} was not captured in the index, and the repo path {} is no longer available — \
+             re-run `ug gen` from a checkout to capture it",
+            file,
+            repo_root.display()
+        )
+    } else {
+        format!(
+            "{} not found under repo root {} — the index may be stale (re-run ug gen).",
+            file,
+            repo_root.display()
+        )
+    }
+}
+
+/// The warning to attach to indexed source whose file has since changed.
+/// `None` when the file still matches, and also when it cannot be read at
+/// all — a missing working tree is the expected case here, not a staleness
+/// signal, so it must not raise a false alarm.
+fn stale_note(repo_root: &Path, file: &str, file_hash: &str) -> Option<String> {
+    match crate::storage::file_matches_hash(repo_root, file, file_hash) {
+        Some(false) => Some(format!(
+            "{} has changed since indexing — this is the indexed copy; re-run `ug gen` to refresh",
+            file
+        )),
+        _ => None,
     }
 }
 
@@ -1141,11 +1226,70 @@ impl FindUsagesResult {
     }
 }
 
+/// Which direct users get their source scanned for call sites: depth-1,
+/// file-bearing, capped.
+///
+/// Returned as indices so the scan and the pre-fetch that feeds it
+/// ([`find_usages_source_ids`]) share one definition — a transport that
+/// fetched a different set than the scan reads would silently produce
+/// call-site-less results with no way to tell why.
+fn call_site_candidates(users: &[Usage]) -> Vec<usize> {
+    users
+        .iter()
+        .enumerate()
+        .filter(|(_, u)| u.depth == 1 && u.symbol.file.is_some())
+        .map(|(i, _)| i)
+        .take(CALL_SITE_CALLER_CAP)
+        .collect()
+}
+
+/// The caller's source, as lines, plus the 1-based file line its first
+/// entry corresponds to.
+///
+/// Three sources, in order: the caller node's own captured span (exact, and
+/// needs nothing on disk), the file's whole-file capture, then the working
+/// tree. `files` caches the latter two so several callers in one file cost
+/// a single lookup.
+fn caller_lines(
+    graph: &GraphData,
+    src: SourceCtx,
+    caller: &SymbolRef,
+    file: &str,
+    files: &mut HashMap<String, Option<Vec<String>>>,
+) -> Option<(Vec<String>, usize)> {
+    // The span capture is already exactly the caller's lines, so its first
+    // line is the caller's start line and no clamping is needed.
+    if let Some(stored) = src.node(&caller.id) {
+        let lines: Vec<String> = stored.code.lines().map(|s| s.to_string()).collect();
+        if !lines.is_empty() {
+            return Some((lines, caller.start_line.unwrap_or(1) as usize));
+        }
+    }
+
+    let whole = files.entry(file.to_string()).or_insert_with(|| {
+        src.file(graph, file)
+            .map(|s| s.code.clone())
+            .or_else(|| std::fs::read_to_string(src.repo_root().join(file)).ok())
+            .map(|c| c.split('\n').map(|s| s.to_string()).collect())
+    });
+    let whole = whole.as_ref()?;
+
+    let from = caller.start_line.unwrap_or(1).saturating_sub(1) as usize;
+    let to = caller
+        .end_line
+        .map(|e| e as usize)
+        .unwrap_or(whole.len())
+        .min(whole.len());
+    if from >= to {
+        return None;
+    }
+    Some((whole[from..to].to_vec(), from + 1))
+}
+
 /// Scan a caller's own source slice for lines mentioning `target_name`.
-/// `files` caches each file's lines, so several callers in one file cost a
-/// single read.
 fn call_sites_for(
-    repo_root: &Path,
+    graph: &GraphData,
+    src: SourceCtx,
     caller: &SymbolRef,
     target_name: &str,
     files: &mut HashMap<String, Option<Vec<String>>>,
@@ -1153,32 +1297,19 @@ fn call_sites_for(
     if target_name.is_empty() {
         return vec![];
     }
-    let Some(file) = &caller.file else {
+    let Some(file) = caller.file.clone() else {
         return vec![];
     };
-
-    let lines = files.entry(file.clone()).or_insert_with(|| {
-        std::fs::read_to_string(repo_root.join(file))
-            .ok()
-            .map(|c| c.split('\n').map(|s| s.to_string()).collect())
-    });
-    let Some(lines) = lines else {
+    let Some((lines, first_line)) = caller_lines(graph, src, caller, &file, files) else {
         return vec![];
     };
-
-    let from = caller.start_line.unwrap_or(1).saturating_sub(1) as usize;
-    let to = caller
-        .end_line
-        .map(|e| e as usize)
-        .unwrap_or(lines.len())
-        .min(lines.len());
 
     let mut out = Vec::new();
-    for i in from..to {
-        if lines[i].contains(target_name) {
+    for (i, line) in lines.iter().enumerate() {
+        if line.contains(target_name) {
             out.push(CallSite {
-                line: i + 1,
-                text: lines[i].trim().chars().take(CALL_SITE_TEXT_CHARS).collect(),
+                line: first_line + i,
+                text: line.trim().chars().take(CALL_SITE_TEXT_CHARS).collect(),
             });
             if out.len() >= CALL_SITE_PER_CALLER {
                 break;
@@ -1188,7 +1319,58 @@ fn call_sites_for(
     out
 }
 
-pub fn find_usages(graph: &GraphData, repo_root: &Path, p: &FindUsagesParams) -> FindUsagesResult {
+/// Node ids whose captured source a `find_usages` call will read.
+///
+/// Transports call this before the tool, fetch the ids from the project's
+/// store, and pass the result back in — which is what lets the call-site
+/// evidence come from the index rather than the working tree. The walk it
+/// repeats is an in-memory pass over `graph.edges`; the alternative, a live
+/// store handle inside the tool, would make a synchronous function block
+/// inside whichever async runtime called it.
+pub fn find_usages_source_ids(graph: &GraphData, p: &FindUsagesParams) -> Vec<String> {
+    let walked = walk_usages(graph, p);
+    let mut ids = Vec::new();
+    for entry in &walked.nodes {
+        for i in call_site_candidates(&entry.users) {
+            let u = &entry.users[i];
+            ids.push(u.symbol.id.clone());
+            // The file's whole-file capture backs up any caller whose own
+            // span was never captured.
+            if let Some(f) = &u.symbol.file {
+                ids.extend(whole_file_node_ids(graph, f).into_iter().map(String::from));
+            }
+        }
+    }
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+pub fn find_usages(
+    graph: &GraphData,
+    src: SourceCtx,
+    p: &FindUsagesParams,
+) -> FindUsagesResult {
+    let mut result = walk_usages(graph, p);
+    for entry in &mut result.nodes {
+        // Evidence for direct users only: transitive ones don't mention the
+        // subject by name, so scanning them would just produce noise.
+        let Some(subject_name) = entry.subject.as_ref().map(|s| s.name.clone()) else {
+            continue;
+        };
+        let mut files: HashMap<String, Option<Vec<String>>> = HashMap::new();
+        for i in call_site_candidates(&entry.users) {
+            let caller = entry.users[i].symbol.clone();
+            entry.users[i].call_sites =
+                call_sites_for(graph, src, &caller, &subject_name, &mut files);
+        }
+    }
+    result
+}
+
+/// The inbound graph walk behind [`find_usages`], with no call sites
+/// attached — the part that needs only `graph.json`.
+fn walk_usages(graph: &GraphData, p: &FindUsagesParams) -> FindUsagesResult {
     let hops = p.hops.unwrap_or(1).clamp(1, 3);
     let edge_types: Vec<String> = if p.edge_types.is_empty() {
         USAGE_EDGE_TYPES.iter().map(|s| s.to_string()).collect()
@@ -1265,17 +1447,6 @@ pub fn find_usages(graph: &GraphData, repo_root: &Path, p: &FindUsagesParams) ->
             if frontier.is_empty() {
                 break;
             }
-        }
-
-        // Evidence for direct users only: transitive ones don't mention the
-        // subject by name, so scanning them would just produce noise.
-        let mut files: HashMap<String, Option<Vec<String>>> = HashMap::new();
-        for u in users
-            .iter_mut()
-            .filter(|u| u.depth == 1 && u.symbol.file.is_some())
-            .take(CALL_SITE_CALLER_CAP)
-        {
-            u.call_sites = call_sites_for(repo_root, &u.symbol, &subject.name, &mut files);
         }
 
         nodes.push(UsagesEntry {
@@ -2390,11 +2561,59 @@ pub enum ToolOutput {
 /// the HTTP `/api/tools/:name` route both call this, so adding a tool or
 /// changing one's shape can't leave a surface behind. `style` of `None`
 /// returns the JSON envelope; `Some(_)` returns rendered text.
+/// Node ids whose captured source `tool` will read, given these params.
+///
+/// The pre-fetch step every transport runs before [`run_tool`]: resolve the
+/// ids here, load them with [`IndexedSource::load`], and the tool answers
+/// from the index instead of the working tree. An empty result — including
+/// for a tool that reads no source, or params that fail to parse — just
+/// means the call has nothing to pre-fetch, and `run_tool` will report any
+/// parameter problem itself.
+pub fn source_node_ids(tool: &str, graph: &GraphData, params: &serde_json::Value) -> Vec<String> {
+    match tool {
+        "get_code" => serde_json::from_value::<GetCodeParams>(params.clone())
+            .map(|p| get_code_source_ids(graph, &p))
+            .unwrap_or_default(),
+        "find_usages" => serde_json::from_value::<FindUsagesParams>(params.clone())
+            .map(|p| find_usages_source_ids(graph, &p))
+            .unwrap_or_default(),
+        _ => vec![],
+    }
+}
+
+/// Node ids whose captured source a `get_code` call will read.
+pub fn get_code_source_ids(graph: &GraphData, p: &GetCodeParams) -> Vec<String> {
+    let mut ids = p.node_id.clone();
+    if p.node_id.is_empty() {
+        // The file/range form reads the file's whole-file capture.
+        if let Some(f) = p.file.as_deref() {
+            let f = strip_file_id_prefix(f);
+            ids.extend(whole_file_node_ids(graph, f).into_iter().map(String::from));
+        }
+    } else {
+        // A node whose own span was never captured falls back to its
+        // file's capture.
+        for id in &p.node_id {
+            if let Some(f) = graph
+                .nodes
+                .iter()
+                .find(|n| n.id == *id)
+                .and_then(|n| n.file.as_deref())
+            {
+                ids.extend(whole_file_node_ids(graph, f).into_iter().map(String::from));
+            }
+        }
+    }
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
 pub fn run_tool(
     tool: &str,
     graph: &GraphData,
     raw: &str,
-    repo_root: &Path,
+    src: SourceCtx,
     graph_path: &Path,
     params: serde_json::Value,
     style: Option<Render>,
@@ -2419,17 +2638,17 @@ pub fn run_tool(
         "find_symbols" => out(find_symbols(graph, &decode(params)?), style, render_find_symbols),
         "file_outline" => out(file_outline(graph, &decode(params)?), style, render_file_outline),
         "get_code" => out(
-            get_code(graph, repo_root, &decode(params)?),
+            get_code(graph, src, &decode(params)?),
             style,
             render_get_code,
         ),
         "find_usages" => out(
-            find_usages(graph, repo_root, &decode(params)?),
+            find_usages(graph, src, &decode(params)?),
             style,
             render_find_usages,
         ),
         "project_overview" => out(
-            project_overview(graph, repo_root, graph_path),
+            project_overview(graph, src.repo_root(), graph_path),
             style,
             render_project_overview,
         ),
@@ -2533,6 +2752,200 @@ mod tests {
             stats: None,
             resolution: None,
         }
+    }
+
+    /// A repo root that is guaranteed not to exist, so a test that passes
+    /// can only have read from the index.
+    const NO_REPO: &str = "/nonexistent-repo-root";
+
+    fn indexed(entries: &[(&str, &str)]) -> IndexedSource {
+        let mut out = IndexedSource::default();
+        for (id, code) in entries {
+            out.insert(
+                *id,
+                StoredSource {
+                    code: (*code).to_string(),
+                    file_hash: "deadbeef".into(),
+                },
+            );
+        }
+        out
+    }
+
+    /// The whole point of the capture: call-site evidence with no working
+    /// tree anywhere. The line numbers must be the caller's real file lines,
+    /// not offsets into its captured span.
+    #[test]
+    fn find_usages_reads_call_sites_from_the_index_with_no_repo() {
+        let g = fixture();
+        // `caller` spans lines 1-5; its capture is exactly those lines.
+        let src = indexed(&[(
+            "function:src/a.rs:1:caller",
+            "fn caller() {\n    let x = 1;\n    callee(x)\n}\n\n",
+        )]);
+        let r = find_usages(
+            &g,
+            SourceCtx::new(&src, Path::new(NO_REPO)),
+            &FindUsagesParams {
+                node_id: vec!["function:src/a.rs:7:callee".into()],
+                ..Default::default()
+            },
+        );
+        let sites = &r.nodes[0].users[0].call_sites;
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].line, 3, "third line of a span starting at line 1");
+        assert_eq!(sites[0].text, "callee(x)");
+    }
+
+    /// A caller whose own span was never captured still gets call sites from
+    /// the file's whole-file node — here the line offset comes from the
+    /// caller's declared range, not from the start of the file.
+    #[test]
+    fn find_usages_falls_back_to_the_whole_file_capture() {
+        let mut g = fixture();
+        // Move `caller` to lines 3-5 so a file-relative scan is visible.
+        g.nodes[1].start_line = Some(3);
+        g.nodes[1].end_line = Some(5);
+        let src = indexed(&[(
+            "file:src/a.rs",
+            "// header\n\nfn caller() {\n    callee()\n}\n\nfn callee() {}\n",
+        )]);
+        let r = find_usages(
+            &g,
+            SourceCtx::new(&src, Path::new(NO_REPO)),
+            &FindUsagesParams {
+                node_id: vec!["function:src/a.rs:7:callee".into()],
+                ..Default::default()
+            },
+        );
+        let sites = &r.nodes[0].users[0].call_sites;
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].line, 4);
+        assert_eq!(sites[0].text, "callee()");
+    }
+
+    /// Without an index and without a repo there is simply no evidence to
+    /// show — but the structural answer still has to come back.
+    #[test]
+    fn find_usages_without_source_still_reports_users() {
+        let g = fixture();
+        let r = find_usages(
+            &g,
+            SourceCtx::repo_only(Path::new(NO_REPO)),
+            &FindUsagesParams {
+                node_id: vec!["function:src/a.rs:7:callee".into()],
+                ..Default::default()
+            },
+        );
+        assert_eq!(r.nodes[0].users.len(), 1);
+        assert!(r.nodes[0].users[0].call_sites.is_empty());
+    }
+
+    /// The pre-fetch and the scan have to agree on which nodes matter,
+    /// otherwise a transport quietly fetches the wrong rows and call sites
+    /// vanish with no error.
+    #[test]
+    fn find_usages_source_ids_cover_what_the_scan_reads() {
+        let g = fixture();
+        let ids = find_usages_source_ids(
+            &g,
+            &FindUsagesParams {
+                node_id: vec!["function:src/a.rs:7:callee".into()],
+                ..Default::default()
+            },
+        );
+        assert!(ids.contains(&"function:src/a.rs:1:caller".to_string()));
+        assert!(
+            ids.contains(&"file:src/a.rs".to_string()),
+            "the file's whole-file node backs up an uncaptured caller"
+        );
+    }
+
+    #[test]
+    fn get_code_serves_a_node_from_the_index_with_no_repo() {
+        let g = fixture();
+        let src = indexed(&[("function:src/a.rs:7:callee", "fn callee() {\n    42\n}\n")]);
+        let r = get_code(
+            &g,
+            SourceCtx::new(&src, Path::new(NO_REPO)),
+            &GetCodeParams {
+                node_id: vec!["function:src/a.rs:7:callee".into()],
+                ..Default::default()
+            },
+        );
+        assert!(r.ok());
+        assert_eq!(r.slices[0].code.as_deref(), Some("fn callee() {\n    42\n}\n"));
+        assert!(
+            r.slices[0].stale.is_none(),
+            "a missing repo is not a staleness signal"
+        );
+    }
+
+    /// The file/line-range form, which has no node of its own to read: it
+    /// slices the file's whole-file capture instead of the working tree.
+    #[test]
+    fn get_code_slices_a_range_out_of_the_whole_file_capture() {
+        let g = fixture();
+        let src = indexed(&[("file:src/a.rs", "one\ntwo\nthree\nfour\nfive\n")]);
+        let r = get_code(
+            &g,
+            SourceCtx::new(&src, Path::new(NO_REPO)),
+            &GetCodeParams {
+                file: Some("src/a.rs".into()),
+                start_line: Some(2),
+                end_line: Some(4),
+                ..Default::default()
+            },
+        );
+        assert!(r.ok(), "{:?}", r.slices[0].error);
+        assert_eq!(r.slices[0].code.as_deref(), Some("two\nthree\nfour"));
+        assert_eq!(r.slices[0].total_lines, Some(6));
+    }
+
+    /// With nothing captured and no repo, `get_code` must say so rather than
+    /// return an empty slice that reads as "this symbol has no code".
+    #[test]
+    fn get_code_reports_when_neither_index_nor_repo_has_the_file() {
+        let g = fixture();
+        let r = get_code(
+            &g,
+            SourceCtx::repo_only(Path::new(NO_REPO)),
+            &GetCodeParams {
+                node_id: vec!["function:src/a.rs:7:callee".into()],
+                ..Default::default()
+            },
+        );
+        assert!(!r.ok());
+        let err = r.slices[0].error.as_ref().unwrap();
+        assert!(err.contains("not captured in the index"), "{}", err);
+        assert!(err.contains(NO_REPO), "{}", err);
+    }
+
+    #[test]
+    fn get_code_source_ids_cover_nodes_and_their_files() {
+        let g = fixture();
+        let ids = get_code_source_ids(
+            &g,
+            &GetCodeParams {
+                node_id: vec!["function:src/a.rs:7:callee".into()],
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            ids,
+            vec!["file:src/a.rs", "function:src/a.rs:7:callee"],
+            "the node's span plus its file's capture as backup"
+        );
+
+        // The file form has no node id of its own to ask for.
+        let ids = get_code_source_ids(
+            &g,
+            &GetCodeParams {
+                file: Some("file:src/a.rs".into()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(ids, vec!["file:src/a.rs"], "the file id prefix is stripped");
     }
 
     #[test]
@@ -2722,7 +3135,7 @@ mod tests {
         let g = fixture();
         let r = find_usages(
             &g,
-            Path::new("/nonexistent"),
+            SourceCtx::repo_only(Path::new("/nonexistent")),
             &FindUsagesParams {
                 node_id: vec!["function:src/a.rs:7:callee".into()],
                 ..Default::default()
@@ -2737,7 +3150,7 @@ mod tests {
         // The Contains edge into `caller` must not count as a usage.
         let r2 = find_usages(
             &g,
-            Path::new("/nonexistent"),
+            SourceCtx::repo_only(Path::new("/nonexistent")),
             &FindUsagesParams {
                 node_id: vec!["function:src/a.rs:1:caller".into()],
                 ..Default::default()
@@ -2816,7 +3229,7 @@ mod tests {
         let callee = "function:src/a.rs:7:callee";
         let usages = find_usages(
             &g,
-            Path::new("/nonexistent"),
+            SourceCtx::repo_only(Path::new("/nonexistent")),
             &FindUsagesParams {
                 node_id: vec![callee.into()],
                 ..Default::default()
@@ -2891,7 +3304,7 @@ mod tests {
         );
         let usages = find_usages(
             &g,
-            Path::new("/nonexistent"),
+            SourceCtx::repo_only(Path::new("/nonexistent")),
             &FindUsagesParams {
                 node_id: vec![
                     "function:src/a.rs:7:callee".into(),

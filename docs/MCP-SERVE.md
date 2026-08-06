@@ -304,6 +304,8 @@ Convenience wrapper over `traverse` with `direction='inbound'` and a sensible de
 
 Use this when the user asks "who uses X", "what calls X", "where is X imported", "what would break if I change X", or before a refactor.
 
+Each direct caller carries the lines that mention the symbol (`file:line` plus the text), read from the source captured at ingest time — so the evidence comes back whether or not the repo is on this machine.
+
 **Parameters:**
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -368,7 +370,7 @@ file_outline: { nodeId: "file:native/src/mcp/install.rs" }
 
 ### 7. `get_code` - Read Full Source
 
-**Read the full source for a node id or a file/line range.** The follow-up to every other tool: search previews truncate at ~1200 chars and traversals return no code — call this to see the real implementation. Works even when the client has no file access (e.g. Claude Desktop), since it reads from the indexed repo root.
+**Read the full source for a node id or a file/line range.** The follow-up to every other tool: search previews truncate at ~1200 chars and traversals return no code — call this to see the real implementation. Works even when the client has no file access (e.g. Claude Desktop), and even when the repo itself is not on the machine: a node id reads its captured span, and a file/line range is cut out of the file's whole-file capture. The working tree is only a fallback for what ingest did not capture.
 
 **Parameters:**
 | Parameter | Type | Required | Description |

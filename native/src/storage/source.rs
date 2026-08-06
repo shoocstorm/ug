@@ -18,6 +18,7 @@
 //! methods is negligible in practice because extractors give class nodes
 //! narrow declaration ranges.
 
+use crate::storage::store::KnowledgeStore;
 use crate::types::GraphData;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -27,6 +28,86 @@ use std::path::{Path, PathBuf};
 pub struct CapturedCode {
     pub code: String,
     pub file_hash: String,
+}
+
+/// Source captured at index time for one node, as read back from a store.
+///
+/// The write-side twin of [`CapturedCode`]; separate because the two travel
+/// in opposite directions — one is produced from the working tree by
+/// [`capture_graph_code`], the other is what a read tool gets back when the
+/// working tree is no longer there.
+#[derive(Debug, Clone, Default)]
+pub struct StoredSource {
+    pub code: String,
+    pub file_hash: String,
+}
+
+/// The captured source a read tool needs, keyed by node id.
+///
+/// This is what lets `get_code`, `find_usages` and friends answer after the
+/// repo has moved, been deleted, or was never on this machine: ingest wrote
+/// each node's span into the store, so the source is project data under
+/// `~/.ug/<project>/` rather than something to go looking for on disk.
+///
+/// Deliberately a plain pre-fetched map rather than a live store handle.
+/// The read tools are synchronous and are called from a blocking CLI, an
+/// async MCP server and an async HTTP handler alike; making them own an
+/// async lookup would force one of those three to block inside a runtime.
+/// Transports resolve the ids they need up front (see
+/// [`crate::agent_tools::source_node_ids`]) and hand over the result.
+#[derive(Debug, Clone, Default)]
+pub struct IndexedSource {
+    by_node: HashMap<String, StoredSource>,
+}
+
+impl IndexedSource {
+    pub fn is_empty(&self) -> bool {
+        self.by_node.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.by_node.len()
+    }
+
+    /// Captured source for a node id, or `None` when the index has none —
+    /// a row written before the column existed, or a file that could not be
+    /// read at ingest time (binary, generated, already deleted).
+    pub fn node(&self, id: &str) -> Option<&StoredSource> {
+        self.by_node.get(id).filter(|s| !s.code.is_empty())
+    }
+
+    pub fn insert(&mut self, id: impl Into<String>, src: StoredSource) {
+        if !src.code.is_empty() {
+            self.by_node.insert(id.into(), src);
+        }
+    }
+
+    /// Fetch the captured source for `ids` from a store.
+    ///
+    /// Best effort by design: a store that cannot be opened, a backend
+    /// without the column, or ids it has never seen all yield an empty (or
+    /// partial) result, and every caller falls back to the working tree for
+    /// what is missing. Reading source must not start failing because the
+    /// database is unavailable — that was the behaviour before the store
+    /// captured anything at all.
+    pub async fn load(store: &dyn KnowledgeStore, ids: &[String]) -> Self {
+        let mut out = Self::default();
+        if ids.is_empty() {
+            return out;
+        }
+        if let Ok(rows) = store.nodes_by_ids(ids).await {
+            for r in rows {
+                out.insert(
+                    r.id,
+                    StoredSource {
+                        code: r.code,
+                        file_hash: r.file_hash,
+                    },
+                );
+            }
+        }
+        out
+    }
 }
 
 /// Read every file the graph references once, and slice out each node's
