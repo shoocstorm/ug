@@ -921,7 +921,7 @@ struct SemanticArgs {
 // ── stdio JSON-RPC server ──────────────────────────────────────────────────
 
 fn run_server() {
-    let rt = crate::tokio_runtime();
+    let rt = crate::cli::embed::tokio_runtime();
     rt.block_on(async {
         let mcp = Mcp::new();
         let stdin = tokio::io::stdin();
@@ -1054,7 +1054,7 @@ fn run_call(args: &[String]) {
         );
         std::process::exit(1);
     }
-    let rt = crate::tokio_runtime();
+    let rt = crate::cli::embed::tokio_runtime();
     let mcp = Mcp::new();
     match rt.block_on(mcp.call_tool(tool, &parsed)) {
         Ok(text) => println!("{}", text),

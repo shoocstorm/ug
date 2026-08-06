@@ -18,7 +18,7 @@ use serde_json::Value;
 use ultragraph::{C_BOLD, C_CYAN, C_DIM, C_RESET, C_YELLOW};
 
 use crate::project::ug_home;
-use crate::PrefSource;
+use crate::cli::embed::PrefSource;
 
 /// Value type a config key accepts. `set` validates against this so a
 /// typo like `ug config set chat.temperature warm` fails at write time,

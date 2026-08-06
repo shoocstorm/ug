@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::flag_value;
+use crate::cli::args::flag_value;
 
 /// Root of all project data dirs: `$UG_HOME` if set, else `~/.ug`.
 pub(crate) fn ug_home() -> PathBuf {

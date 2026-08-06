@@ -24,9 +24,11 @@ use tower_http::trace::{DefaultMakeSpan, DefaultOnRequest, DefaultOnResponse, Tr
 use tracing::Level;
 
 use crate::chat::{self, ChatClient, ChatConfig, ChatMessage, ChatRagOptions};
-use crate::{
-    calculate_centrality as lib_centrality, detect_cycles as lib_cycles, embedder_from_args,
-    flag_value, flag_value_or, has_flag, tokio_runtime, C_BOLD, C_CYAN, C_GREEN, C_RESET, C_YELLOW,
+use crate::cli::args::{flag_value, flag_value_or, has_flag};
+use crate::cli::embed::{embedder_from_args, tokio_runtime};
+use ultragraph::{
+    calculate_centrality as lib_centrality, detect_cycles as lib_cycles, C_BOLD, C_CYAN, C_GREEN,
+    C_RESET, C_YELLOW,
 };
 use ultragraph::storage::{
     self, open_store, search_kb as storage_search_kb,
@@ -792,15 +794,15 @@ pub fn run_serve(args: &[String]) {
     };
 
     let html = Arc::new(EncodedAsset::new(
-        crate::VIS_HTML.as_bytes().to_vec(),
+        crate::assets::VIS_HTML.as_bytes().to_vec(),
         "text/html; charset=utf-8",
     ));
     let bundle = Arc::new(EncodedAsset::new(
-        crate::VIS_BUNDLE.to_vec(),
+        crate::assets::VIS_BUNDLE.to_vec(),
         "application/javascript; charset=utf-8",
     ));
     let favicon = Arc::new(EncodedAsset::new(
-        crate::VIS_FAVICON.to_vec(),
+        crate::assets::VIS_FAVICON.to_vec(),
         "image/svg+xml",
     ));
 
@@ -3305,9 +3307,9 @@ fn config_payload(state: &ServeState) -> serde_json::Value {
             let flag_active = flag_val.is_some();
             let (effective, source) = crate::config::resolve_pref_cfg(flag_val, key.name);
             let source_label = match source {
-                crate::PrefSource::Flag => "flag",
-                crate::PrefSource::Config(_) => "config",
-                crate::PrefSource::Default => "default",
+                crate::cli::embed::PrefSource::Flag => "flag",
+                crate::cli::embed::PrefSource::Config(_) => "config",
+                crate::cli::embed::PrefSource::Default => "default",
             };
             let mask = |v: &String| {
                 if key.secret {
