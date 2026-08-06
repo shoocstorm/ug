@@ -9,8 +9,13 @@ description: >-
   where do I start in this repo. Also use for every count, fraction, ranking
   or distribution over the repo (how many functions are undocumented, which
   files are biggest, what is dead or untested) — one `ug query` replaces a
-  loop of greps. Also triggers on: ug, UltraGraph, `ug query`, blast radius,
-  impact analysis, dead code, repo statistics, "which files depend on".
+  loop of greps. Also use whenever a question spans a FAMILY of symbols or
+  files rather than one — every handler, all the `*Controller` classes, each
+  `test_*`, everything under `src/auth/` — because `ug` takes wildcards
+  (`*` `?` `[abc]` `{a,b}`) wherever a symbol or file is named, so one call
+  replaces a loop. Also triggers on: ug, UltraGraph, `ug query`, blast
+  radius, impact analysis, dead code, repo statistics, "which files depend
+  on", "all the functions named like", "every file matching".
 ---
 
 # ug — codebase knowledge graph from the CLI
@@ -19,10 +24,17 @@ description: >-
 Prefer it over `grep`/`Read` for anything relational or aggregate: those see
 text, `ug` sees the graph.
 
-> **For any count, fraction, ranking, distribution or blast-radius question, run
-> one `ug query`.** Never grep for a count; never loop a per-file command to
+Two rules turn a loop into one call — reach for them before iterating:
+
+> **1. For any count, fraction, ranking, distribution or blast-radius question,
+> run one `ug query`.** Never grep for a count; never loop a per-file command to
 > build one. "How many functions are over 100 lines, and where do they cluster?"
 > is `ug query long_functions_by_folder` — one call.
+>
+> **2. For any question about a *family* of symbols or files, use a wildcard.**
+> Every command that names a symbol or file takes `* ? [abc] {a,b}`. "Who calls
+> any of the validators?" is `ug find_usages 'validate_*'` — one call, not one
+> per validator. See [Wildcards](#wildcards--one-call-instead-of-a-loop).
 
 If the `ultragraph` MCP tools are also connected you don't need them: same
 engine, same parameter names, richer `--help`.

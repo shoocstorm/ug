@@ -45,6 +45,40 @@ const SERVER_NAME: &str = "ultragraph";
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 const PROTOCOL_VERSION: &str = "2024-11-05";
 
+/// Returned from `initialize`, which MCP clients surface to the model once
+/// per session.
+///
+/// It carries the two things no single tool description can: that these tools
+/// answer *families* of questions in one call, and that the parameters are
+/// more forgiving than they look (a name where an id is documented, a
+/// wildcard where a name is). A model that has not been told will call
+/// `find_symbols` in a loop, one symbol at a time, and never try `handle_*` —
+/// the capability exists but goes unused. Kept short: it competes with the
+/// user's own prompt for attention.
+const SERVER_INSTRUCTIONS: &str = "\
+These tools answer questions about ONE indexed codebase by querying its graph. \
+Prefer them over grep/file reads for anything relational (who calls X, what \
+breaks if I change X, how are A and B connected) or aggregate (how many, which \
+are biggest, what fraction).
+
+Two habits make them cheap:
+
+1. WILDCARDS — every parameter that names a symbol or file accepts a shell-style \
+pattern: * (any run of chars), ? (one char), [abc]/[a-z], [!ab], {a,b}. Patterns \
+match the WHOLE name (use *auth* to match anywhere); in paths * stops at / and **/ \
+crosses directories. So one call covers a whole family: find_symbols {name: \
+'handle_*'}, find_usages {nodeId: 'validate_*'}, file_outline {file: 'src/**/*.ts'}, \
+find_symbols {name: '*', filePrefix: 'src/auth/**'}. Reach for this whenever you \
+would otherwise loop.
+
+2. NAMES WORK WHERE IDS ARE DOCUMENTED — the nodeId of get_code, find_usages, \
+traverse and shortest_path also takes a plain symbol name, so find_symbols first \
+is optional, not required.
+
+For counts, rankings, distributions and blast radius, call code_query once rather \
+than assembling the answer yourself. Every truncated or capped result says so — \
+trust the stated totals over what you can see.";
+
 /// `ug mcp [...]` entry point, replacing the old node-spawning `run_mcp`.
 pub fn run(args: &[String]) {
     // `ug mcp` with no subcommand *is* the server — it's what an editor
@@ -100,6 +134,8 @@ fn print_mcp_help() {
     println!("  {C_CYAN}ug connect{C_RESET} claude --mcp --global");
     println!("  {C_CYAN}ug mcp{C_RESET} list");
     println!("  {C_CYAN}ug mcp{C_RESET} call find_symbols '{{\"name\":\"normalize_path\"}}'");
+    println!("  {C_CYAN}ug mcp{C_RESET} call find_symbols '{{\"name\":\"handle_*\"}}'   {C_YELLOW}# wildcards work in every tool{C_RESET}");
+    println!("  {C_CYAN}ug mcp{C_RESET} call find_usages '{{\"nodeId\":\"run_serve\"}}'  {C_YELLOW}# a name works where an id is documented{C_RESET}");
     println!("  {C_CYAN}ug mcp{C_RESET} uninstall cursor --project");
 }
 
@@ -962,6 +998,7 @@ async fn handle_message(mcp: &Mcp, msg: &Value) -> Option<Value> {
                     "protocolVersion": protocol,
                     "capabilities": { "tools": {} },
                     "serverInfo": { "name": SERVER_NAME, "version": SERVER_VERSION },
+                    "instructions": SERVER_INSTRUCTIONS,
                 }),
             ))
         }

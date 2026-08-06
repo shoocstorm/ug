@@ -1198,6 +1198,11 @@ pub struct GetCodeParams {
     pub start_line: Option<usize>,
     #[serde(alias = "endLine", alias = "end")]
     pub end_line: Option<usize>,
+    /// The line window as one value — `"11-35"`, `"34-end"`, `"20"` — in the
+    /// same dialect `code_query` uses for row windows, and parsed by the same
+    /// code. `start_line`/`end_line` win when both are given, so the two
+    /// spellings can never disagree about what was asked for.
+    pub range: Option<String>,
     #[serde(alias = "maxChars")]
     pub max_chars: Option<usize>,
     /// Drop the leading doc-comment preview from each slice. Set by the
@@ -1335,6 +1340,14 @@ pub fn get_code(graph: &GraphData, src: SourceCtx, p: &GetCodeParams) -> GetCode
     let max_chars = p.max_chars.unwrap_or(DEFAULT_MAX_CHARS);
     let mut slices = Vec::new();
 
+    // Resolve the line window before reading anything: a malformed `range`
+    // is the caller's mistake, and reporting it beats silently serving line
+    // 1 to EOF as if that were what they asked for.
+    let (start_line, end_line) = match line_window(p) {
+        Ok(w) => w,
+        Err(e) => return GetCodeResult { slices: vec![err_slice(p.file.as_deref().unwrap_or(""), e)] },
+    };
+
     if p.node_id.is_empty() {
         let Some(file) = p.file.as_deref() else {
             return GetCodeResult {
@@ -1357,8 +1370,8 @@ pub fn get_code(graph: &GraphData, src: SourceCtx, p: &GetCodeParams) -> GetCode
             graph,
             src,
             file,
-            p.start_line.unwrap_or(1),
-            p.end_line.unwrap_or(usize::MAX),
+            start_line.unwrap_or(1),
+            end_line.unwrap_or(usize::MAX),
             None,
             max_chars,
         ));
@@ -1440,6 +1453,35 @@ fn stored_slice(
         stale,
         error: None,
     }
+}
+
+/// The `(start, end)` lines a `get_code` call asks for, from either spelling.
+///
+/// `range` is parsed by [`crate::code_query::range`] — the same parser behind
+/// `code_query`'s row windows — so `--range 11-35` means the same shape of
+/// thing in both commands and every spelling that works in one works in the
+/// other (`11-35`, `11..35`, `34-end`, `34-`, `20`, `top 20`). What it does
+/// *not* borrow is that module's `MAX_WINDOW` row cap: a line window is
+/// bounded by `max_chars` instead, and silently truncating a 300-line
+/// function at line 200 would be a wrong answer that looks right.
+///
+/// Explicit `start_line`/`end_line` win over `range`, so a caller that sets
+/// both gets the more specific one rather than an arbitrary tiebreak.
+fn line_window(p: &GetCodeParams) -> Result<(Option<usize>, Option<usize>), String> {
+    let Some(raw) = p.range.as_deref().map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok((p.start_line, p.end_line));
+    };
+    let w = crate::code_query::range::parse(raw).ok_or_else(|| {
+        format!(
+            "Could not read {:?} as a line range. Use a count (`20` = the first 20 lines), \
+             a closed range (`11-35`), or an open one (`34-end`).",
+            raw
+        )
+    })?;
+    Ok((
+        p.start_line.or(Some(w.start)),
+        p.end_line.or(w.end),
+    ))
 }
 
 fn err_slice(title: &str, error: String) -> CodeSlice {
@@ -3571,6 +3613,100 @@ mod tests {
         );
         assert!(!r.ok());
         assert_eq!(r.queries[0].total, 0);
+    }
+
+    // -----------------------------------------------------------------
+    // get_code line windows
+    // -----------------------------------------------------------------
+
+    fn window(range: Option<&str>, start: Option<usize>, end: Option<usize>) -> (Option<usize>, Option<usize>) {
+        line_window(&GetCodeParams {
+            range: range.map(String::from),
+            start_line: start,
+            end_line: end,
+            ..Default::default()
+        })
+        .unwrap()
+    }
+
+    /// `--range` has to mean on `get_code` what it means on `ug query`, or
+    /// the shared spelling is a trap. Same parser, so every phrasing that
+    /// works there works here.
+    #[test]
+    fn range_accepts_the_same_spellings_as_code_query() {
+        assert_eq!(window(Some("11-35"), None, None), (Some(11), Some(35)));
+        assert_eq!(window(Some("11..35"), None, None), (Some(11), Some(35)));
+        assert_eq!(window(Some("rows 11 to 35"), None, None), (Some(11), Some(35)));
+        // Open-ended: no end bound, which the reader turns into EOF.
+        assert_eq!(window(Some("34-end"), None, None), (Some(34), None));
+        assert_eq!(window(Some("34-"), None, None), (Some(34), None));
+        // A bare count is "the first N" — as in code_query, not "line N".
+        assert_eq!(window(Some("20"), None, None), (Some(1), Some(20)));
+    }
+
+    #[test]
+    fn explicit_start_end_win_over_range() {
+        assert_eq!(window(Some("11-35"), Some(5), None), (Some(5), Some(35)));
+        assert_eq!(window(Some("11-35"), None, Some(99)), (Some(11), Some(99)));
+        assert_eq!(window(None, Some(5), Some(9)), (Some(5), Some(9)));
+    }
+
+    /// A window the parser cannot read is reported, not rounded down to
+    /// "the whole file" — that would be a wrong answer that looks right.
+    #[test]
+    fn an_unreadable_range_is_an_error_with_the_input_in_it() {
+        let e = line_window(&GetCodeParams {
+            range: Some("banana".into()),
+            ..Default::default()
+        })
+        .unwrap_err();
+        assert!(e.contains("banana"), "got: {e}");
+        assert!(e.contains("34-end"), "the message shows the valid forms: {e}");
+
+        // A backwards range is nonsense too, and code_query rejects it.
+        assert!(line_window(&GetCodeParams {
+            range: Some("35-11".into()),
+            ..Default::default()
+        })
+        .is_err());
+    }
+
+    /// End to end through the tool, so the error reaches the caller as a
+    /// slice rather than being swallowed.
+    #[test]
+    fn get_code_surfaces_a_bad_range_instead_of_reading_the_whole_file() {
+        let g = fixture();
+        let src = indexed(&[("file:src/a.rs", "one\ntwo\nthree\nfour\n")]);
+        let r = get_code(
+            &g,
+            SourceCtx::new(&src, Path::new(NO_REPO)),
+            &GetCodeParams {
+                file: Some("src/a.rs".into()),
+                range: Some("nope".into()),
+                ..Default::default()
+            },
+        );
+        assert!(!r.ok());
+        assert!(r.slices[0].error.as_ref().unwrap().contains("nope"));
+    }
+
+    #[test]
+    fn get_code_range_reads_exactly_that_window() {
+        let g = fixture();
+        let src = indexed(&[("file:src/a.rs", "one\ntwo\nthree\nfour\nfive\n")]);
+        let r = get_code(
+            &g,
+            SourceCtx::new(&src, Path::new(NO_REPO)),
+            &GetCodeParams {
+                file: Some("src/a.rs".into()),
+                range: Some("2-3".into()),
+                ..Default::default()
+            },
+        );
+        assert!(r.ok(), "{:?}", r.slices[0].error);
+        assert_eq!(r.slices[0].code.as_deref(), Some("two\nthree"));
+        assert_eq!(r.slices[0].start_line, Some(2));
+        assert_eq!(r.slices[0].end_line, Some(3));
     }
 
     // -----------------------------------------------------------------

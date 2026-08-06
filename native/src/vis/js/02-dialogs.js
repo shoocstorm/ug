@@ -391,14 +391,14 @@
             const total = stats.totalFiles ?? 0;
             const pct = total > 0 ? Math.round((cached / total) * 100) : 0;
             const rows = [
-                { label: 'Cached', value: total > 0 ? `${cached} / ${total} (${pct}%)` : '—' },
+                { label: 'Cached', title: 'Files whose content was unchanged since the last index and were reused from cache instead of re-parsed. Re-runs of a warm index show a high number here.', value: total > 0 ? `${cached} / ${total} (${pct}%)` : '—' },
                 { label: 'Indexed in', value: formatDuration(stats.indexingTimeMs) },
                 { label: 'Last run', value: formatRelativeTime(stats.lastIndexedAt) },
                 { label: 'Repo', value: stats.repoRoot || '—' }
             ];
             metaEl.innerHTML = rows.map(r => `
                 <div class="edge-breakdown-row">
-                    <span class="name">${escapeHtml(r.label)}</span>
+                    <span class="name" title="${escapeHtml(r.title || '')}">${escapeHtml(r.label)}</span>
                     <span class="count" title="${escapeHtml(String(r.value))}">${escapeHtml(String(r.value))}</span>
                 </div>
             `).join('');

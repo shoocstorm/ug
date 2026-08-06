@@ -43,7 +43,7 @@ These accept the same params as their MCP counterparts and can output `--json`.
 |---------|---------|-------------|-----------|
 | `ug find_symbols` | — | Symbol lookup by name, fragment (ranked exact > prefix > substring) or **wildcard**. | `--node-type <type>` (repeatable, wildcards ok), `--file-prefix <prefix-or-glob>`, `-k <limit>`, `--include-docs`, `-n <name>`, `--json`, `-o <file>` |
 | `ug file_outline` | — | List indexed symbols in a file, in line order. Takes a path **glob**. | `<file-or-glob>` positional(s), `-k/--max-files <n>` (default 20), `--ids`, `-n <name>`, `--json` |
-| `ug get_code` | — | Read source for a symbol (id, name or wildcard), or a file/line range. | `<symbol>...` or `-f <file>`, `--start-line`, `--end-line`, `--range <window>` (`11-35` · `34-end` · `42`), `--max-chars`, `--no-doc`, `-n <name>` |
+| `ug get_code` | — | Read source for a symbol (id, name or wildcard), or a file/line range. | `<symbol>...` or `-f <file>`, `-s/--start-line`, `-e/--end-line`, `-r/--range <window>` (`11-35` · `34-end` · `20`, same dialect as `ug query --range`), `--max-chars`, `--no-doc`, `-n <name>` |
 | `ug find_usages` | — | Find inbound references (callers/importers) to a symbol. | `<symbol>...` positional(s), `-k/--hops`, `-t/--edge-type`, `-n <name>`, `--json` |
 | `ug project_overview` | — | Orient in the codebase: stats, biggest files, most depended-upon symbols. | `-n <name>`, `--json` |
 | `ug graph_schema` | — | Node & edge types with counts and connection info. | `-n <name>`, `--json` |

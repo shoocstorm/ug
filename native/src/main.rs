@@ -1040,6 +1040,7 @@ const AGENT_VALUE_FLAGS: &[&str] = &[
     "--max-chars",
     "--max-files",
     "--range",
+    "-r",
     "--node-type",
     "--file-prefix",
     "--start-line",
@@ -1282,7 +1283,9 @@ fn print_get_code_help() {
     println!("  {C_CYAN}-f, --file <file>{C_RESET}     Repo-relative file path (instead of a symbol)");
     println!("  {C_CYAN}-s, --start <n>{C_RESET}       First line (1-based, with --file; default 1)");
     println!("  {C_CYAN}-e, --end <n>{C_RESET}         Last line inclusive (with --file; default EOF)");
-    println!("  {C_CYAN}--range <window>{C_RESET}      Both at once: {C_CYAN}11-35{C_RESET} · {C_CYAN}34-end{C_RESET} · {C_CYAN}-35{C_RESET} (from the top) · {C_CYAN}42{C_RESET} (one line)");
+    println!("  {C_CYAN}-r, --range <window>{C_RESET}  Both at once (with --file), same dialect as {C_CYAN}ug query --range{C_RESET}:");
+    println!("                        {C_CYAN}11-35{C_RESET} · {C_CYAN}34-end{C_RESET} · {C_CYAN}20{C_RESET} (the first 20) · {C_CYAN}11..35{C_RESET} · {C_CYAN}rows 11 to 35{C_RESET}");
+    println!("                        {C_DIM}-s/-e win if you give both spellings{C_RESET}");
     println!("  {C_CYAN}--max-chars <n>{C_RESET}       Character cap per symbol (default 20000)");
     println!("  {C_CYAN}--no-doc{C_RESET}              Drop the leading doc-comment preview (the body only)");
     println!("  {C_CYAN}-n, --name <project>{C_RESET}  Project name (default: cwd basename)");
@@ -1296,6 +1299,7 @@ fn print_get_code_help() {
     println!("  {C_CYAN}ug get_code{C_RESET} <id1> <id2> <id3>            {C_YELLOW}# batch (--max-chars applies per symbol){C_RESET}");
     println!("  {C_CYAN}ug get_code{C_RESET} {C_BOLD}'render_*'{C_RESET} --no-doc          {C_YELLOW}# every renderer's body{C_RESET}");
     println!("  {C_CYAN}ug get_code{C_RESET} -f native/src/types.rs --range 180-210");
+    println!("  {C_CYAN}ug get_code{C_RESET} -f native/src/types.rs -r 400-end   {C_YELLOW}# to EOF{C_RESET}");
     println!("  {C_CYAN}ug get_code{C_RESET} -f README.md                 {C_YELLOW}# whole file{C_RESET}");
     println!();
     println!("{C_DIM}Source comes from the index, so this works with the repo absent; a file that");
@@ -1426,26 +1430,6 @@ fn run_file_outline(args: &[String]) {
     );
 }
 
-/// Parse a `--range` window into `(start, end)` line numbers, both
-/// inclusive and either open-ended.
-///
-/// `"11-35"` → 11 to 35 · `"34-end"` (or `"34-"`) → 34 to EOF ·
-/// `"-35"` → line 1 to 35 · `"42"` → just line 42. `end` and an empty side
-/// both mean "no bound", which is how the caller's `unwrap_or` defaults
-/// (line 1, EOF) end up applying. An unparseable side is treated as
-/// unbounded rather than as an error: the window is a convenience, and
-/// silently reading a bit more beats refusing to read at all.
-fn parse_line_range(spec: &str) -> (Option<usize>, Option<usize>) {
-    let spec = spec.trim();
-    let num = |s: &str| s.trim().parse::<usize>().ok();
-    match spec.split_once('-') {
-        Some((s, e)) => (num(s), num(e)),
-        // A bare number is a single line, not an open-ended start — the
-        // reading that matches how people cite source ("line 42").
-        None => (num(spec), num(spec)),
-    }
-}
-
 fn run_get_code(args: &[String]) {
     if has_flag(args, "-h") || has_flag(args, "--help") {
         print_get_code_help();
@@ -1460,21 +1444,16 @@ fn run_get_code(args: &[String]) {
     let (graph, _raw, graph_path) = load_agent_graph(args);
     let repo_root = agent_repo_root(&graph, &graph_path);
 
-    // `--range 11-35` is one flag for what `-s 11 -e 35` says in two; an
-    // explicit -s/-e still wins so the two can't contradict each other.
-    let range = flag_value(args, &["--range"]).map(|r| parse_line_range(&r));
-    let start_line: Option<usize> = flag_value(args, &["--start-line", "-s", "--start"])
-        .and_then(|s| s.parse().ok())
-        .or_else(|| range.and_then(|(s, _)| s));
-    let end_line: Option<usize> = flag_value(args, &["--end-line", "-e", "--end"])
-        .and_then(|s| s.parse().ok())
-        .or_else(|| range.and_then(|(_, e)| e));
-
+    // `--range 11-35` is one flag for what `-s 11 -e 35` says in two. Both
+    // are handed to the tool as written: resolving the window there is what
+    // gives MCP and HTTP the same flag, in the same dialect `ug query` uses.
     let params = agent_tools::GetCodeParams {
         node_id: node_ids,
         file: file_flag,
-        start_line,
-        end_line,
+        start_line: flag_value(args, &["--start-line", "-s", "--start"])
+            .and_then(|s| s.parse().ok()),
+        end_line: flag_value(args, &["--end-line", "-e", "--end"]).and_then(|s| s.parse().ok()),
+        range: flag_value(args, &["--range", "-r"]),
         max_chars: flag_value(args, &["--max-chars"]).and_then(|s| s.parse().ok()),
         no_doc: has_flag(args, "--no-doc"),
     };

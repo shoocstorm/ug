@@ -431,6 +431,7 @@ file_outline: { file: "**/test_*.py" }                     // by naming conventi
 | `nodeId` | string \| string[] | ❌* | What to read: a node id from any prior result, an exact symbol **name**, or a **wildcard**. Array of up to 10 reads several in one call (per-symbol `maxChars`). |
 | `file` | string | ❌* | Repo-relative path (when no nodeId). |
 | `startLine` / `endLine` | integer | ❌ | 1-based inclusive range (with `file`; defaults to whole file). |
+| `range` | string | ❌ | The window as one value, in the same dialect `code_query` uses for rows: `"11-35"`, `"34-end"`, `"20"` (the first 20 lines). `startLine`/`endLine` win if you send both. |
 | `maxChars` | integer | ❌ | Character cap per symbol (default 20000). |
 
 *One of `nodeId` or `file` is required.
@@ -440,6 +441,8 @@ get_code: { nodeId: "function:native/src/mcp/install.rs:412:install_config" }
 get_code: { nodeId: "install_config" }        // by name
 get_code: { nodeId: "render_*" }              // every renderer in one call
 get_code: { file: "native/src/serve.rs", startLine: 100, endLine: 180 }
+get_code: { file: "native/src/serve.rs", range: "100-180" }   // same thing
+get_code: { file: "native/src/serve.rs", range: "181-260" }   // page on, don't re-read
 ```
 
 ---
