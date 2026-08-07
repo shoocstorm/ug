@@ -183,6 +183,19 @@ impl ProjectMeta {
     }
 }
 
+/// Serializes every test that mutates `UG_HOME`.
+///
+/// The env var is process-global, so `project::tests` and `serve::router_tests`
+/// will clobber each other's temp homes if they each keep a private lock —
+/// which is exactly what happened, as an intermittent failure in whichever
+/// test lost the race. One lock, shared by every module whose tests touch it.
+///
+/// It is a `tokio::sync::Mutex` because the serve tests are `async` and must
+/// hold it across `.await`; synchronous tests take it with `blocking_lock()`,
+/// which is safe there because `#[test]` bodies run outside any runtime.
+#[cfg(test)]
+pub(crate) static UG_HOME_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 pub(crate) fn meta_path(dir: &Path) -> PathBuf {
     dir.join("project.json")
 }
@@ -413,6 +426,31 @@ pub(crate) fn remove_project_dir(dir: &Path) -> std::io::Result<()> {
             format!("{} does not exist", dir.display()),
         ));
     }
+
+    // Containment guard on an irreversible operation. Every caller today
+    // routes the name through `sanitize_name` (which maps `/` to `-` and
+    // strips leading dots), so nothing can currently escape — but this
+    // function takes an arbitrary `&Path` and hands it to `remove_dir_all`,
+    // and "the caller sanitized it" is exactly the assumption that stops
+    // being true when a new caller appears.
+    //
+    // Both sides are canonicalized: comparing a resolved path against an
+    // unresolved `ug_home()` would reject every legitimate delete on macOS,
+    // where `/var` and `/tmp` are symlinks. See Agents.md §9a.
+    let home = ug_home();
+    let canon_home = std::fs::canonicalize(&home).unwrap_or(home);
+    let canon_dir = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    if !canon_dir.starts_with(&canon_home) || canon_dir == canon_home {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "refusing to delete {}: not a project directory under {}",
+                canon_dir.display(),
+                canon_home.display()
+            ),
+        ));
+    }
+
     std::fs::remove_dir_all(dir)
 }
 
@@ -479,13 +517,55 @@ mod tests {
 
     #[test]
     fn remove_project_dir_deletes_existing_dir() {
-        let dir = std::env::temp_dir().join(format!("ug-rm-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let _guard = UG_HOME_LOCK.blocking_lock();
+        let home = std::env::temp_dir().join(format!("ug-rm-home-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        std::env::set_var("UG_HOME", &home);
+
+        // A project dir is always *inside* ug_home — that is the only shape
+        // production ever passes, and the only shape the containment guard
+        // in `remove_project_dir` accepts.
+        let dir = home.join("demo");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("graph.json"), "{}").unwrap();
         assert!(dir.exists());
         remove_project_dir(&dir).unwrap();
         assert!(!dir.exists());
+
+        std::env::remove_var("UG_HOME");
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// The containment guard: `remove_project_dir` hands its argument to
+    /// `remove_dir_all`, so a path outside `ug_home()` — or `ug_home()` itself
+    /// — must be refused rather than deleted.
+    #[test]
+    fn remove_project_dir_refuses_paths_outside_ug_home() {
+        let _guard = UG_HOME_LOCK.blocking_lock();
+        let home = std::env::temp_dir().join(format!("ug-rm-guard-home-{}", std::process::id()));
+        let outside = std::env::temp_dir().join(format!("ug-rm-guard-out-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&outside);
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(outside.join("precious")).unwrap();
+        std::env::set_var("UG_HOME", &home);
+
+        assert!(
+            remove_project_dir(&outside).is_err(),
+            "a directory outside ug_home must not be deleted"
+        );
+        assert!(outside.exists(), "the refused directory must still be there");
+
+        assert!(
+            remove_project_dir(&home).is_err(),
+            "ug_home itself is not a project dir and must not be wiped"
+        );
+        assert!(home.exists());
+
+        std::env::remove_var("UG_HOME");
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&outside);
     }
 
     #[test]
@@ -495,12 +575,13 @@ mod tests {
         assert!(remove_project_dir(&dir).is_err());
     }
 
-    // Serialize the tests that mutate $UG_HOME — the env var is process-wide.
-    static UG_HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    // $UG_HOME is process-wide; the lock lives at module scope so the serve
+    // tests share it. See `super::UG_HOME_LOCK`.
+    use super::UG_HOME_LOCK;
 
     #[test]
     fn rename_moves_data_updates_meta_and_follows_active() {
-        let _guard = UG_HOME_LOCK.lock().unwrap();
+        let _guard = UG_HOME_LOCK.blocking_lock();
         let home = std::env::temp_dir().join(format!("ug-rename-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
         std::env::set_var("UG_HOME", &home);
@@ -543,7 +624,7 @@ mod tests {
 
     #[test]
     fn rename_refuses_missing_same_and_occupied_names() {
-        let _guard = UG_HOME_LOCK.lock().unwrap();
+        let _guard = UG_HOME_LOCK.blocking_lock();
         let home = std::env::temp_dir().join(format!("ug-rename-err-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
         std::env::set_var("UG_HOME", &home);
@@ -577,7 +658,7 @@ mod tests {
 
     #[test]
     fn active_project_roundtrip_and_validation() {
-        let _guard = UG_HOME_LOCK.lock().unwrap();
+        let _guard = UG_HOME_LOCK.blocking_lock();
         let home = std::env::temp_dir().join(format!("ug-active-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
         std::env::set_var("UG_HOME", &home);

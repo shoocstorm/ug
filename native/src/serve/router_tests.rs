@@ -26,7 +26,11 @@ use super::{
 /// `UG_HOME` is process-global, so tests that enumerate projects must not run
 /// concurrently with each other. Tests that only need a router take the guard
 /// too, since `list_projects` can be reached from several routes.
-static ENV_GUARD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+///
+/// This is deliberately the *same* lock `project::tests` uses — a second,
+/// private mutex here would serialize these tests against each other while
+/// still racing the project tests over the same env var.
+use crate::project::UG_HOME_LOCK as ENV_GUARD;
 
 /// A small but structurally real graph: two symbols in one file, plus the
 /// File node the indexer always emits.

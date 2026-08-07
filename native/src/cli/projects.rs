@@ -309,13 +309,21 @@ pub(crate) fn run_uninstall(args: &[String]) {
     let ug_home_dir = project::ug_home();
     let projects = project::list_projects();
     let install_dir_exists = install_dir.as_ref().is_some_and(|d| d.exists());
+    // Resolve both sides before the prefix test. `read_link` returns the
+    // symlink's literal target, which the installer may have written as a
+    // relative path, and `install_dir` is built from `$HOME` without being
+    // resolved — so an unresolved comparison reports "not ours" for a symlink
+    // that is ours and silently leaves it behind on uninstall. See Agents.md §9a.
+    let canon_install_dir = install_dir
+        .as_ref()
+        .map(|d| std::fs::canonicalize(d).unwrap_or_else(|_| d.clone()));
     let bin_symlink_is_ours = bin_symlink.as_ref().is_some_and(|p| {
         p.symlink_metadata()
             .map(|m| m.file_type().is_symlink())
             .unwrap_or(false)
-            && std::fs::read_link(p)
+            && std::fs::canonicalize(p)
                 .ok()
-                .and_then(|target| install_dir.as_ref().map(|d| target.starts_with(d)))
+                .and_then(|target| canon_install_dir.as_ref().map(|d| target.starts_with(d)))
                 .unwrap_or(false)
     });
 

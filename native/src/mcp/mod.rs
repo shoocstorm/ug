@@ -817,35 +817,62 @@ impl Mcp {
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."));
-        std::fs::create_dir_all(&output_dir)
-            .map_err(|e| format!("failed to create {}: {}", output_dir.display(), e))?;
 
-        let index_json = index_with_cache(
-            ctx.repo_root.to_string_lossy().into_owned(),
-            output_dir.to_string_lossy().into_owned(),
-        );
-        let graph_str = build_graph(index_json.clone());
-        std::fs::write(&ctx.graph_path, &graph_str)
-            .map_err(|e| format!("failed to write graph.json: {}", e))?;
-        std::fs::write(output_dir.join("indexed-tree.json"), &index_json)
-            .map_err(|e| format!("failed to write indexed-tree.json: {}", e))?;
+        // The whole index -> graph -> write pipeline is unbounded CPU and IO:
+        // it walks and parses every file in the repo, builds the graph, and
+        // writes two multi-megabyte files. Running it inline would pin a tokio
+        // worker for its entire duration. The stdio request loop is serial
+        // today so nothing else is queued behind it, but that is a property of
+        // the caller, not of this function. See Agents.md §9b.
+        let repo_root = ctx.repo_root.clone();
+        let graph_path = ctx.graph_path.clone();
+        let out_dir = output_dir.clone();
+        let (graph, nodes, edges) = tokio::task::spawn_blocking(
+            move || -> Result<(GraphData, usize, usize), String> {
+                std::fs::create_dir_all(&out_dir)
+                    .map_err(|e| format!("failed to create {}: {}", out_dir.display(), e))?;
 
-        let graph: GraphData =
-            serde_json::from_str(&graph_str).map_err(|e| format!("invalid graph: {}", e))?;
-        let (nodes, edges) = (graph.nodes.len(), graph.edges.len());
-        let name = project::read_meta(&output_dir)
-            .map(|m| m.name)
-            .unwrap_or_else(|| {
-                output_dir
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("default")
-                    .to_string()
-            });
-        let _ = project::write_meta(
-            &output_dir,
-            &project::ProjectMeta::new(&name, &ctx.repo_root.to_string_lossy(), nodes, edges),
-        );
+                let index_json = index_with_cache(
+                    repo_root.to_string_lossy().into_owned(),
+                    out_dir.to_string_lossy().into_owned(),
+                );
+                let graph_str = build_graph(index_json.clone());
+                std::fs::write(&graph_path, &graph_str)
+                    .map_err(|e| format!("failed to write graph.json: {}", e))?;
+                std::fs::write(out_dir.join("indexed-tree.json"), &index_json)
+                    .map_err(|e| format!("failed to write indexed-tree.json: {}", e))?;
+
+                let graph: GraphData = serde_json::from_str(&graph_str)
+                    .map_err(|e| format!("invalid graph: {}", e))?;
+                let (nodes, edges) = (graph.nodes.len(), graph.edges.len());
+
+                let name = project::read_meta(&out_dir).map(|m| m.name).unwrap_or_else(|| {
+                    out_dir
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("default")
+                        .to_string()
+                });
+                // Record the same file index `ug gen` writes. Without this an
+                // MCP-driven regen would leave project.json without a `files`
+                // list, permanently forcing /api/projects/staleness onto its
+                // slow read-and-parse-the-graph fallback for this project.
+                let _ = project::write_meta(
+                    &out_dir,
+                    &project::ProjectMeta::new(
+                        &name,
+                        &repo_root.to_string_lossy(),
+                        nodes,
+                        edges,
+                    )
+                    .with_graph_index(&graph),
+                );
+
+                Ok((graph, nodes, edges))
+            },
+        )
+        .await
+        .map_err(|e| format!("regen task failed: {}", e))??;
 
         let ingest_msg = match self.reindex_ingest(ctx, &graph).await {
             Ok(m) => m,

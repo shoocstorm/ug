@@ -193,6 +193,83 @@ changelog on every bump, and keep engine calls behind the `KnowledgeStore`
 trait (`native/src/storage/store.rs`) so upgrades stay confined to
 `native/src/storage/db.rs`.
 
+## 9. Two bugs this codebase keeps re-introducing
+
+Both are invisible in review, silent at runtime, and have each already shipped
+here more than once. Check for them by reflex.
+
+### 9a. Canonicalize *both* sides of a path comparison
+
+`canonicalize` resolves symlinks. Comparing a resolved path against an
+unresolved one always fails, and the failure looks like a correct security
+denial or a correct "not found" — never like a bug.
+
+```rust
+// WRONG — root still contains a symlink component
+let canon = std::fs::canonicalize(root.join(rel)).ok()?;
+if !canon.starts_with(root) { return forbidden(); }
+
+// RIGHT — resolve the root once, then compare
+let root = std::fs::canonicalize(root).unwrap_or(root);
+```
+
+macOS makes this fire constantly: `/tmp` → `/private/tmp`, `/var` →
+`/private/var`, so every `TempDir` and anything under `/var/folders/…` trips
+it. It has bitten `ug` at least three times — `indexer.rs` (`strip_repo_root`
+stripped nothing, leaving absolute paths in qualified names; see the comment at
+`indexer.rs:202`), and `serve.rs` `file_from_disk` (every file preview 403'd as
+"path escapes repo root" when `repo_root` came from a non-canonical source).
+
+Rules:
+- Canonicalize at the point the path is **stored**, so the invariant holds for
+  every later reader, not at each comparison site.
+- A path that fails to canonicalize (doesn't exist yet) keeps its raw form —
+  `unwrap_or(raw)`, never `unwrap()`.
+- `read_link` returns the symlink's literal target, which may be relative.
+  Resolve it before comparing it to anything.
+- Any check of the form "is A inside B" needs a test with a symlinked path.
+  A `TempDir` on macOS is that test for free.
+
+### 9b. No unbounded work inside `async fn`
+
+An `async fn` body runs on a tokio worker thread. Anything that doesn't `.await`
+holds that worker until it returns, stalling every other in-flight request —
+this is not "slow", it is a server-wide stall.
+
+Push to `tokio::task::spawn_blocking` when the work is:
+- **filesystem traversal or IO whose size scales with user data** — reading
+  `graph.json`, one `stat` per indexed file, `read_dir` (which can hang on a
+  network mount);
+- **whole-graph CPU** — `serde_json::from_str` on a multi-MB graph, centrality,
+  cycle detection, the index → graph pipeline;
+- anything you cannot bound by a small constant.
+
+A single `canonicalize` or `metadata` call is fine inline — the threshold is
+*unbounded*, not *touches the filesystem*.
+
+```rust
+// WRONG — 16 MB read + parse + one stat per file, on a runtime worker
+async fn handler(...) -> Response {
+    let s = std::fs::read_to_string(&graph)?;
+    let v: Value = serde_json::from_str(&s)?;
+    for f in files { std::fs::metadata(f); }
+}
+
+// RIGHT
+let body = tokio::task::spawn_blocking(move || scan(...)).await?;
+```
+
+Prefer deleting the work over moving it: `/api/projects/staleness` was parsing
+every project's `graph.json` on a 2-minute poll to recover a file list that
+`ug gen` could just record in `project.json`. `spawn_blocking` fixed the stall;
+persisting the list removed the work. Also cache results that several clients
+poll for — N open tabs should cost one scan, not N.
+
+And note the CPU-bound helpers take `&GraphData`, not `String`
+(`calculate_centrality_graph`, `detect_cycles_graph`). The `String` overloads
+re-parse the graph from scratch; never call those when a parsed graph is in
+scope.
+
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
