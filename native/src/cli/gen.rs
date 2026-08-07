@@ -232,19 +232,14 @@ pub(crate) fn run_gen(args: &[String]) {
         t1.elapsed()
     );
 
-    let (nodes_count, edges_count) = match serde_json::from_str::<serde_json::Value>(&graph) {
-        Ok(v) => (
-            v.get("nodes")
-                .and_then(|n| n.as_array())
-                .map(|a| a.len())
-                .unwrap_or(0),
-            v.get("edges")
-                .and_then(|e| e.as_array())
-                .map(|a| a.len())
-                .unwrap_or(0),
-        ),
-        Err(_) => (0, 0),
-    };
+    // Parse once, typed. This used to be an untyped `serde_json::Value` parse
+    // that existed only to `.len()` two arrays; the typed graph costs less and
+    // also feeds the file index recorded in project.json below.
+    let parsed_graph: Option<ultragraph::types::GraphData> = serde_json::from_str(&graph).ok();
+    let (nodes_count, edges_count) = parsed_graph
+        .as_ref()
+        .map(|g| (g.nodes.len(), g.edges.len()))
+        .unwrap_or((0, 0));
     println!("  nodes: {}", nodes_count);
     println!("  edges: {}", edges_count);
 
@@ -294,7 +289,13 @@ pub(crate) fn run_gen(args: &[String]) {
     let repo_root_abs = fs::canonicalize(&repo_root)
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| repo_root.clone());
-    let meta = project::ProjectMeta::new(&project_name, &repo_root_abs, nodes_count, edges_count);
+    let mut meta =
+        project::ProjectMeta::new(&project_name, &repo_root_abs, nodes_count, edges_count);
+    // Record the indexed file list so `/api/projects/staleness` can stat the
+    // tree without re-reading and re-parsing graph.json on every poll.
+    if let Some(g) = parsed_graph.as_ref() {
+        meta = meta.with_graph_index(g);
+    }
     if let Err(e) = project::write_meta(Path::new(&output_dir), &meta) {
         eprintln!("⚠ failed to write project.json: {}", e);
     }

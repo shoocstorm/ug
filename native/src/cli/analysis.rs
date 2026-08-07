@@ -21,7 +21,8 @@ use ultragraph::agent_tools::{
 };
 use ultragraph::types::{GraphData, GraphNode, GraphNodeType};
 use ultragraph::{
-    calculate_centrality, detect_cycles, C_BOLD, C_CYAN, C_DIM, C_GREEN, C_RESET, C_YELLOW,
+    calculate_centrality_graph, detect_cycles_graph, C_BOLD, C_CYAN, C_DIM, C_GREEN, C_RESET,
+    C_YELLOW,
 };
 
 use super::agent::{emit_agent_result, load_agent_graph, print_wildcard_help};
@@ -216,8 +217,10 @@ pub(crate) fn run_graph_centrality(args: &[String]) {
     let file_prefix = flag_value(args, &["-f", "--file"]);
     let top = limit_or(args, &["--top", "-l", "--limit"], 20);
 
-    let (graph, raw, _path) = load_agent_graph(&load_args);
-    let centrality = calculate_centrality(raw);
+    let (graph, _raw, _path) = load_agent_graph(&load_args);
+    // Score off the graph we already parsed — the String overload would parse
+    // the whole file a second time just to throw the result away.
+    let centrality = calculate_centrality_graph(&graph);
 
     // Raw output keeps the lib's shape so existing consumers of
     // analysis.json keep working.
@@ -258,9 +261,9 @@ pub(crate) fn run_graph_cycles(args: &[String]) {
     let max_len = limit_or(args, &["--max-len"], usize::MAX);
     let file_prefix = flag_value(args, &["-f", "--file"]);
 
-    let (graph, raw, _path) = load_agent_graph(&load_args);
+    let (graph, _raw, _path) = load_agent_graph(&load_args);
     let by_id = by_id_map(&graph);
-    let cycles_json = detect_cycles(raw);
+    let cycles_json = detect_cycles_graph(&graph);
     let parsed: serde_json::Value =
         serde_json::from_str(&cycles_json).unwrap_or_else(|_| serde_json::json!({}));
     let all: Vec<Vec<String>> = parsed

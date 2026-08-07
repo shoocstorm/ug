@@ -27,8 +27,8 @@ use crate::chat::{self, ChatClient, ChatConfig, ChatMessage, ChatRagOptions};
 use crate::cli::args::{flag_value, flag_value_or, has_flag};
 use crate::cli::embed::{embedder_from_args, tokio_runtime};
 use ultragraph::{
-    calculate_centrality as lib_centrality, detect_cycles as lib_cycles, C_BOLD, C_CYAN, C_GREEN,
-    C_RESET, C_YELLOW,
+    calculate_centrality_graph as lib_centrality_graph, detect_cycles_graph as lib_cycles_graph,
+    C_BOLD, C_CYAN, C_GREEN, C_RESET, C_YELLOW,
 };
 use ultragraph::storage::{
     self, open_store, search_kb as storage_search_kb,
@@ -142,10 +142,25 @@ fn compress_brotli(data: &[u8]) -> Bytes {
 struct GraphSnapshot {
     encoded: EncodedAsset,
     parsed: GraphData,
-    raw_json: String,
     adj: OnceLock<AdjIndex>,
     centrality: OnceLock<String>,
     cycles: OnceLock<String>,
+}
+
+impl GraphSnapshot {
+    /// The graph JSON as text, borrowed from the bytes `/graph.json` already
+    /// serves.
+    ///
+    /// This used to be a separate `raw_json: String` field alongside
+    /// `encoded.identity`, which held a byte-identical copy — a straight
+    /// duplicate of the whole graph (16 MB on a mid-size repo) per loaded
+    /// project. `encoded.identity` is only ever built from a `String`, so the
+    /// UTF-8 check below cannot fail; it is written as a fallback rather than
+    /// an `expect` so a future non-UTF-8 asset source degrades instead of
+    /// taking the server down.
+    fn raw_json(&self) -> &str {
+        std::str::from_utf8(&self.encoded.identity).unwrap_or("{}")
+    }
 }
 
 /// Forward adjacency built once per snapshot. `id_to_idx` lets us look up a
@@ -236,6 +251,25 @@ struct ProjectContext {
     db_unavailable_reason: Option<String>,
 }
 
+impl ProjectContext {
+    /// Rough resident size of this project's snapshot, for cache accounting.
+    ///
+    /// The encoded buffers are measured exactly. `parsed` is estimated at 3×
+    /// the identity bytes: a `GraphData` of `String`-heavy structs runs
+    /// noticeably larger than its JSON, and over-estimating only makes the
+    /// cache more conservative. Precision isn't the point — staying off an
+    /// unbounded growth curve is.
+    fn approx_bytes(&self) -> usize {
+        let snap = self.graph.read().expect("graph poisoned");
+        let identity = snap.encoded.identity.len();
+        identity
+            .saturating_mul(3)
+            .saturating_add(identity)
+            .saturating_add(snap.encoded.gzip.len())
+            .saturating_add(snap.encoded.brotli.len())
+    }
+}
+
 #[derive(Copy, Clone, PartialEq, Eq)]
 enum ServeMode {
     /// Explicit `-i <graph.json>` — exactly one project, no switcher.
@@ -254,6 +288,29 @@ struct ProjectRegistry {
     no_db: bool,
     active: RwLock<String>,
     loaded: RwLock<HashMap<String, Arc<ProjectContext>>>,
+    /// Recency order over `loaded`, least-recently-used first. Kept
+    /// alongside rather than inside the map so the hot read path
+    /// (`active_ctx`) stays a plain lookup.
+    lru: RwLock<Vec<String>>,
+    /// Byte ceiling for cached snapshots — see [`snapshot_cache_budget`].
+    cache_budget: usize,
+}
+
+/// How many bytes of graph snapshot `ug serve` keeps resident across all
+/// projects before it starts evicting.
+///
+/// `loaded` used to grow without bound: `resolve_ctx` loads a project on demand
+/// for any request carrying `?project=<name>`, so an agent walking every
+/// project pinned every snapshot for the life of the process — half a gigabyte
+/// across six mid-size repos. 512 MiB keeps the common case (a handful of
+/// projects) entirely cached while putting a ceiling on the pathological one.
+fn snapshot_cache_budget() -> usize {
+    const DEFAULT: usize = 512 * 1024 * 1024;
+    std::env::var("UG_SERVE_CACHE_BYTES")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(DEFAULT)
 }
 
 impl ProjectRegistry {
@@ -268,17 +325,31 @@ impl ProjectRegistry {
     }
 
     fn get_loaded(&self, name: &str) -> Option<Arc<ProjectContext>> {
-        self.loaded.read().expect("loaded poisoned").get(name).cloned()
+        let hit = self.loaded.read().expect("loaded poisoned").get(name).cloned();
+        if hit.is_some() {
+            self.touch(name);
+        }
+        hit
+    }
+
+    /// Move `name` to the most-recently-used end of the LRU order.
+    fn touch(&self, name: &str) {
+        let mut lru = self.lru.write().expect("lru poisoned");
+        lru.retain(|n| n != name);
+        lru.push(name.to_string());
     }
 
     /// Cache a loaded project without changing the active selection.
     /// Per-request project scoping uses this: a read targeting another
     /// project must not reconfigure the UI for every other client.
     fn insert_loaded(&self, ctx: Arc<ProjectContext>) {
+        let name = ctx.name.clone();
         self.loaded
             .write()
             .expect("loaded poisoned")
-            .insert(ctx.name.clone(), ctx);
+            .insert(name.clone(), ctx);
+        self.touch(&name);
+        self.evict_over_budget();
     }
 
     fn insert_and_activate(&self, ctx: Arc<ProjectContext>) {
@@ -287,11 +358,56 @@ impl ProjectRegistry {
             .write()
             .expect("loaded poisoned")
             .insert(name.clone(), ctx);
-        *self.active.write().expect("active poisoned") = name;
+        *self.active.write().expect("active poisoned") = name.clone();
+        self.touch(&name);
+        self.evict_over_budget();
     }
 
     fn set_active(&self, name: &str) {
         *self.active.write().expect("active poisoned") = name.to_string();
+    }
+
+    /// Drop least-recently-used snapshots until the cache fits its budget.
+    ///
+    /// The active project is never evicted — [`active_ctx`] asserts it is
+    /// loaded, and dropping it would panic every subsequent request. Evicting
+    /// is safe for in-flight work regardless: handlers hold their own `Arc`
+    /// clone, so removing the registry's reference frees the memory only once
+    /// the last reader is done with it.
+    fn evict_over_budget(&self) {
+        // `active` before `loaded`, matching `active_ctx`'s order, so the two
+        // paths can't deadlock against each other.
+        let active = self.active.read().expect("active poisoned").clone();
+        let mut loaded = self.loaded.write().expect("loaded poisoned");
+        let mut lru = self.lru.write().expect("lru poisoned");
+
+        let mut total: usize = loaded.values().map(|c| c.approx_bytes()).sum();
+        if total <= self.cache_budget {
+            return;
+        }
+
+        let mut idx = 0;
+        while total > self.cache_budget && idx < lru.len() {
+            let name = lru[idx].clone();
+            if name == active {
+                idx += 1; // never evict the active project
+                continue;
+            }
+            match loaded.remove(&name) {
+                Some(ctx) => {
+                    total = total.saturating_sub(ctx.approx_bytes());
+                    tracing::debug!(
+                        project = %name,
+                        freed_bytes = ctx.approx_bytes(),
+                        "evicted graph snapshot to stay within cache budget"
+                    );
+                }
+                None => {
+                    // Stale LRU entry (project deleted); just drop it.
+                }
+            }
+            lru.remove(idx);
+        }
     }
 }
 
@@ -352,6 +468,15 @@ async fn build_project_context(
                 .filter(|p| p.as_os_str().len() > 0)
         })
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    // Canonicalize here so the invariant holds no matter which caller supplied
+    // the path. `file_from_disk` compares a *canonicalized* candidate against
+    // this root, so a root that still contains a symlink component (macOS
+    // `/tmp` -> `/private/tmp`, `/var` -> `/private/var`, or a project.json
+    // written before `ug gen` started canonicalizing) fails that prefix check
+    // and turns every legitimate file preview into a 403 "path escapes repo
+    // root". A root that doesn't exist keeps its raw form — the index still
+    // serves content without it.
+    let repo_root = std::fs::canonicalize(&repo_root).unwrap_or(repo_root);
     if !repo_root.exists() {
         tracing::warn!(
             project = %name,
@@ -388,11 +513,10 @@ fn build_placeholder_context(registry: &Arc<ProjectRegistry>) -> Arc<ProjectCont
     };
     let raw_json =
         serde_json::to_string(&empty_graph).unwrap_or_else(|_| "{\"nodes\":[],\"edges\":[]}".to_string());
-    let encoded = EncodedAsset::new(raw_json.clone().into_bytes(), "application/json; charset=utf-8");
+    let encoded = EncodedAsset::new(raw_json.into_bytes(), "application/json; charset=utf-8");
     let snapshot = Arc::new(GraphSnapshot {
         encoded,
         parsed: empty_graph,
-        raw_json,
         adj: OnceLock::new(),
         centrality: OnceLock::new(),
         cycles: OnceLock::new(),
@@ -469,7 +593,7 @@ async fn open_serve_stores(
 }
 
 #[derive(Clone)]
-struct ServeState {
+pub(crate) struct ServeState {
     registry: Arc<ProjectRegistry>,
     html: Arc<EncodedAsset>,
     bundle: Arc<EncodedAsset>,
@@ -493,6 +617,9 @@ struct ServeState {
     embed_lock: Arc<Semaphore>,
     /// Background `ug gen` jobs kicked off from the KB Manager wizard.
     gen_jobs: Arc<GenJobs>,
+    /// Last computed `/api/projects/staleness` payload, reused for
+    /// [`STALENESS_TTL`] so N open tabs cost one filesystem scan, not N.
+    staleness: Arc<RwLock<Option<StalenessCache>>>,
 }
 
 impl ServeState {
@@ -639,14 +766,13 @@ fn load_snapshot(path: &PathBuf) -> Result<Arc<GraphSnapshot>, String> {
         String::from_utf8(raw).map_err(|_| format!("{} is not valid UTF-8", path.display()))?;
     let parsed: GraphData =
         serde_json::from_str(&raw_json).map_err(|e| format!("parse {}: {}", path.display(), e))?;
-    let encoded = EncodedAsset::new(
-        raw_json.clone().into_bytes(),
-        "application/json; charset=utf-8",
-    );
+    // Hand the JSON straight to the encoder — it becomes `encoded.identity`,
+    // which `GraphSnapshot::raw_json()` borrows back. Cloning it into a
+    // second field is what used to double this snapshot's footprint.
+    let encoded = EncodedAsset::new(raw_json.into_bytes(), "application/json; charset=utf-8");
     Ok(Arc::new(GraphSnapshot {
         encoded,
         parsed,
-        raw_json,
         adj: OnceLock::new(),
         centrality: OnceLock::new(),
         cycles: OnceLock::new(),
@@ -842,6 +968,8 @@ pub fn run_serve(args: &[String]) {
             no_db,
             active: RwLock::new(String::new()),
             loaded: RwLock::new(HashMap::new()),
+            lru: RwLock::new(Vec::new()),
+            cache_budget: snapshot_cache_budget(),
         });
 
         let initial_ctx = match &startup {
@@ -936,72 +1064,10 @@ pub fn run_serve(args: &[String]) {
             serve_args: Arc::new(args.to_vec()),
             embed_lock: Arc::new(Semaphore::new(4)),
             gen_jobs: Arc::new(GenJobs::new()),
+            staleness: Arc::new(RwLock::new(None)),
         };
 
-        let app = Router::new()
-            .route("/", get(handle_index))
-            .route("/index.html", get(handle_index))
-            .route("/ug-vis.bundle.js", get(handle_bundle))
-            .route("/favicon.svg", get(handle_favicon))
-            .route("/graph.json", get(handle_graph))
-            .route("/indexed-tree.json", get(handle_indexed_tree))
-            .route("/healthz", get(handle_health))
-            .route("/api/projects", get(api_projects))
-            .route("/api/projects/select", post(api_projects_select))
-            .route("/api/projects/delete", post(api_projects_delete))
-            .route("/api/generate", post(api_generate))
-            .route("/api/generate/status", get(api_generate_status))
-            // Re-embed an already-indexed project from the UI. Same job
-            // tracker as /api/generate, so its status is polled the same way.
-            .route("/api/ingest", post(api_ingest))
-            .route("/api/browse-dir", get(api_browse_dir))
-            .route("/api/capabilities", get(api_capabilities))
-            .route("/api/config", get(api_config_get).post(api_config_post))
-            .route("/api/graph/stats", get(api_stats))
-        .route("/api/projects/staleness", get(api_projects_staleness))
-            .route("/api/graph/node/*id", get(api_node))
-            .route("/api/graph/search", get(api_search))
-            .route("/api/graph/bfs/*id", get(api_bfs))
-            .route("/api/graph/path", get(api_path))
-            .route("/api/graph/filter", get(api_filter))
-            .route("/api/graph/centrality", get(api_centrality))
-            .route("/api/graph/cycles", get(api_cycles))
-            // Agent tools — the same seven the CLI and MCP expose.
-            .route("/api/tools", get(api_tools))
-            .route("/api/presets", get(api_presets))
-            .route("/api/tools/:tool", post(api_tool))
-            // Source file content for the right-panel "Preview" tab.
-            .route("/api/file", get(api_file))
-            // Phase 3 — DB / embedder backed
-            .route("/api/db/node/*id", get(api_db_node))
-            .route("/api/db/traverse/*id", get(api_db_traverse))
-            .route("/api/search/semantic", post(api_search_semantic))
-            .route("/api/search/hybrid", post(api_search_hybrid))
-            .route("/api/chat", post(api_chat))
-            .route("/api/tour", post(api_tour))
-            .route("/api/chat/config", get(api_chat_config))
-            // CompressionLayer skips responses that already have Content-Encoding,
-            // so it only kicks in for the dynamic /api/* JSON.
-            .layer(CompressionLayer::new().br(true))
-            // Reject oversized request bodies before they reach a handler —
-            // every legitimate payload is KB-scale, so 4 MiB is pure abuse
-            // protection and never bites the app.
-            .layer(RequestBodyLimitLayer::new(MAX_REQUEST_BODY_BYTES))
-            // Default CORS policy denies cross-origin requests: same-origin
-            // clients (the web UI and the Tauri shell at 127.0.0.1:8080) are
-            // never subject to CORS and pass through untouched, while a
-            // cross-origin browser fetch hits an empty preflight response and
-            // is blocked — the CSRF / drive-by / DNS-rebinding defense.
-            .layer(CorsLayer::new())
-            // One INFO span per request: method+uri on entry, status+latency on exit.
-            // Matches the structured-log pattern the rest of the server uses.
-            .layer(
-                TraceLayer::new_for_http()
-                    .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
-                    .on_request(DefaultOnRequest::new().level(Level::DEBUG))
-                    .on_response(DefaultOnResponse::new().level(Level::INFO)),
-            )
-            .with_state(state.clone());
+        let app = build_router(state.clone());
 
         let listener = match tokio::net::TcpListener::bind(addr).await {
             Ok(l) => l,
@@ -1052,6 +1118,81 @@ pub fn run_serve(args: &[String]) {
             std::process::exit(1);
         }
     });
+}
+
+/// Assemble the full route table and middleware stack over an already-built
+/// [`ServeState`].
+///
+/// Split out of `run_serve` so the router can be constructed without binding a
+/// port or taking over the process: tests drive it through
+/// `tower::ServiceExt::oneshot`, which is the only way handler behaviour
+/// (project scoping, traversal rejection, the `--no-db` 503 paths) is reachable
+/// from a unit test at all.
+pub(crate) fn build_router(state: ServeState) -> Router {
+    Router::new()
+        .route("/", get(handle_index))
+        .route("/index.html", get(handle_index))
+        .route("/ug-vis.bundle.js", get(handle_bundle))
+        .route("/favicon.svg", get(handle_favicon))
+        .route("/graph.json", get(handle_graph))
+        .route("/indexed-tree.json", get(handle_indexed_tree))
+        .route("/healthz", get(handle_health))
+        .route("/api/projects", get(api_projects))
+        .route("/api/projects/select", post(api_projects_select))
+        .route("/api/projects/delete", post(api_projects_delete))
+        .route("/api/generate", post(api_generate))
+        .route("/api/generate/status", get(api_generate_status))
+        // Re-embed an already-indexed project from the UI. Same job
+        // tracker as /api/generate, so its status is polled the same way.
+        .route("/api/ingest", post(api_ingest))
+        .route("/api/browse-dir", get(api_browse_dir))
+        .route("/api/capabilities", get(api_capabilities))
+        .route("/api/config", get(api_config_get).post(api_config_post))
+        .route("/api/graph/stats", get(api_stats))
+        .route("/api/projects/staleness", get(api_projects_staleness))
+        .route("/api/graph/node/*id", get(api_node))
+        .route("/api/graph/search", get(api_search))
+        .route("/api/graph/bfs/*id", get(api_bfs))
+        .route("/api/graph/path", get(api_path))
+        .route("/api/graph/filter", get(api_filter))
+        .route("/api/graph/centrality", get(api_centrality))
+        .route("/api/graph/cycles", get(api_cycles))
+        // Agent tools — the same seven the CLI and MCP expose.
+        .route("/api/tools", get(api_tools))
+        .route("/api/presets", get(api_presets))
+        .route("/api/tools/:tool", post(api_tool))
+        // Source file content for the right-panel "Preview" tab.
+        .route("/api/file", get(api_file))
+        // Phase 3 — DB / embedder backed
+        .route("/api/db/node/*id", get(api_db_node))
+        .route("/api/db/traverse/*id", get(api_db_traverse))
+        .route("/api/search/semantic", post(api_search_semantic))
+        .route("/api/search/hybrid", post(api_search_hybrid))
+        .route("/api/chat", post(api_chat))
+        .route("/api/tour", post(api_tour))
+        .route("/api/chat/config", get(api_chat_config))
+        // CompressionLayer skips responses that already have Content-Encoding,
+        // so it only kicks in for the dynamic /api/* JSON.
+        .layer(CompressionLayer::new().br(true))
+        // Reject oversized request bodies before they reach a handler —
+        // every legitimate payload is KB-scale, so 4 MiB is pure abuse
+        // protection and never bites the app.
+        .layer(RequestBodyLimitLayer::new(MAX_REQUEST_BODY_BYTES))
+        // Default CORS policy denies cross-origin requests: same-origin
+        // clients (the web UI and the Tauri shell at 127.0.0.1:8080) are
+        // never subject to CORS and pass through untouched, while a
+        // cross-origin browser fetch hits an empty preflight response and
+        // is blocked — the CSRF / drive-by / DNS-rebinding defense.
+        .layer(CorsLayer::new())
+        // One INFO span per request: method+uri on entry, status+latency on exit.
+        // Matches the structured-log pattern the rest of the server uses.
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
+                .on_request(DefaultOnRequest::new().level(Level::DEBUG))
+                .on_response(DefaultOnResponse::new().level(Level::INFO)),
+        )
+        .with_state(state)
 }
 
 // ---------- Watch (Phase 1.5) ----------
@@ -1412,7 +1553,7 @@ async fn api_tool(
     let result = ultragraph::agent_tools::run_tool(
         &tool,
         &snap.parsed,
-        &snap.raw_json,
+        snap.raw_json(),
         ultragraph::agent_tools::SourceCtx::new(&indexed, ctx.repo_root.as_path()),
         ctx.graph_path.as_path(),
         args,
@@ -1545,6 +1686,15 @@ async fn api_projects_delete(
         .write()
         .expect("loaded poisoned")
         .remove(&name);
+    state
+        .registry
+        .lru
+        .write()
+        .expect("lru poisoned")
+        .retain(|n| n != &name);
+    // The deleted project would otherwise keep appearing in the cached
+    // staleness report until its TTL lapsed.
+    *state.staleness.write().expect("staleness poisoned") = None;
 
     let was_active = *state.registry.active.read().expect("active poisoned") == name;
     let mut active_name = name.clone();
@@ -1575,143 +1725,175 @@ async fn api_projects_delete(
     )
 }
 
-/// GET /api/projects/staleness — check staleness for all projects.
-/// Compares graph.json mtime against indexed files' mtimes and returns
-/// changed/deleted counts. Runs on startup and every 2 minutes.
-async fn api_projects_staleness(State(state): State<ServeState>) -> Response {
-    let projects = if state.registry.mode == ServeMode::Multi {
+/// How long a computed staleness report stays fresh.
+///
+/// The KB Manager polls every 2 minutes (`STALENESS_POLL_MS`), and every open
+/// tab polls independently. Caching for 60s collapses a burst of tabs into one
+/// filesystem scan while still reacting well inside a single poll interval.
+const STALENESS_TTL: Duration = Duration::from_secs(60);
+
+/// Cached `/api/projects/staleness` payload plus when it was computed.
+struct StalenessCache {
+    computed_at: std::time::Instant,
+    body: String,
+}
+
+/// One project's staleness row. Split out of the handler so the whole scan can
+/// be handed to `spawn_blocking` as a single unit of plain sync work.
+fn staleness_for_project(project_dir: &std::path::Path, meta: &crate::project::ProjectMeta) -> Option<serde_json::Value> {
+    let graph_path = project_dir.join("graph.json");
+    if !graph_path.exists() {
+        return None;
+    }
+
+    let built_at = std::fs::metadata(&graph_path).ok().and_then(|m| {
+        m.modified().ok().map(|t| {
+            t.duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+        })
+    });
+
+    // Prefer the file list recorded in project.json at `ug gen` time. Falling
+    // back to reading graph.json keeps projects generated before that field
+    // existed working — at the old cost, but only for them, and only once per
+    // TTL window rather than on every poll.
+    let (files, doc_nodes, code_nodes) = if !meta.files.is_empty() {
+        (meta.files.clone(), meta.doc_nodes, meta.code_nodes)
+    } else {
+        match std::fs::read_to_string(&graph_path)
+            .ok()
+            .and_then(|c| serde_json::from_str::<GraphData>(&c).ok())
+        {
+            Some(graph) => {
+                let derived = crate::project::ProjectMeta::new(&meta.name, &meta.repo_root, 0, 0)
+                    .with_graph_index(&graph);
+                (derived.files, derived.doc_nodes, derived.code_nodes)
+            }
+            None => (Vec::new(), 0, 0),
+        }
+    };
+
+    let files_count = files.len();
+    let repo_root = PathBuf::from(&meta.repo_root);
+
+    // A repo root that no longer exists is not "N files deleted" — the whole
+    // tree is gone, and the index simply freezes where it is. Report that
+    // distinctly instead of a misleading count.
+    if !repo_root.exists() {
+        return Some(serde_json::json!({
+            "name": meta.name,
+            "isStale": false,
+            "repoMissing": true,
+            "builtAt": built_at,
+            "files": files_count,
+            "changed": 0,
+            "missing": 0,
+            "kbKind": "unknown",
+            "docNodes": 0,
+            "codeNodes": 0,
+        }));
+    }
+
+    let mut changed = 0usize;
+    let mut missing = 0usize;
+    for file in &files {
+        match std::fs::metadata(repo_root.join(file)) {
+            Ok(metadata) => {
+                if let (Ok(modified), Some(built)) = (metadata.modified(), built_at) {
+                    let file_mtime = modified
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    if file_mtime > built {
+                        changed += 1;
+                    }
+                }
+            }
+            Err(_) => missing += 1,
+        }
+    }
+
+    // Classify the KB by symbol composition: docs (markdown/PDF/office), code
+    // (source symbols), or mixed. File/Folder nodes are structural and
+    // excluded from the ratio.
+    let kb_kind = if doc_nodes > 0 && code_nodes > 0 {
+        "mixed"
+    } else if doc_nodes > code_nodes {
+        "docs"
+    } else {
+        "code"
+    };
+
+    Some(serde_json::json!({
+        "name": meta.name,
+        "isStale": changed > 0 || missing > 0,
+        "repoMissing": false,
+        "builtAt": built_at,
+        "files": files_count,
+        "changed": changed,
+        "missing": missing,
+        "kbKind": kb_kind,
+        "docNodes": doc_nodes,
+        "codeNodes": code_nodes,
+    }))
+}
+
+/// Walk every project and build the staleness payload. Pure blocking work —
+/// directory enumeration plus one `stat` per indexed file.
+fn compute_staleness_body(multi: bool) -> String {
+    let projects = if multi {
         crate::project::list_projects()
     } else {
         vec![]
     };
 
-    let mut staleness_info = Vec::new();
-    for (project_dir, meta) in projects {
-        let graph_path = project_dir.join("graph.json");
-        if !graph_path.exists() {
-            continue;
+    let rows: Vec<serde_json::Value> = projects
+        .iter()
+        .filter_map(|(dir, meta)| staleness_for_project(dir, meta))
+        .collect();
+
+    serde_json::json!({
+        "projects": rows,
+        "checkedAt": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+    })
+    .to_string()
+}
+
+/// GET /api/projects/staleness — check staleness for all projects.
+/// Compares graph.json mtime against indexed files' mtimes and returns
+/// changed/deleted counts. Runs on startup and every 2 minutes.
+///
+/// The scan is filesystem-bound (one `stat` per indexed file across every
+/// project), so it runs on `spawn_blocking` rather than inline: doing it on a
+/// runtime worker stalled every other in-flight request for the duration.
+/// Results are cached for [`STALENESS_TTL`] so concurrent tabs share one scan.
+async fn api_projects_staleness(State(state): State<ServeState>) -> Response {
+    if let Some(cached) = state.staleness.read().expect("staleness poisoned").as_ref() {
+        if cached.computed_at.elapsed() < STALENESS_TTL {
+            return ok_json(cached.body.clone());
         }
-
-        let built_at = match std::fs::metadata(&graph_path) {
-            Ok(m) => m.modified().ok().map(|t| {
-                t.duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs()
-            }),
-            Err(_) => None,
-        };
-
-        let mut changed = 0usize;
-        let mut missing = 0usize;
-        let mut files_count = 0usize;
-        let mut doc_nodes = 0usize;
-        let mut code_nodes = 0usize;
-
-        // Read graph to collect indexed files + node-type composition
-        if let Ok(graph_content) = std::fs::read_to_string(&graph_path) {
-            if let Ok(graph) = serde_json::from_str::<serde_json::Value>(&graph_content) {
-                let mut files = std::collections::HashSet::new();
-                if let Some(nodes) = graph.get("nodes").and_then(|n| n.as_array()) {
-                    for node in nodes {
-                        let node_type = node.get("node_type").and_then(|t| t.as_str());
-                        match node_type {
-                            Some("Folder") | Some("File") | None => {}
-                            Some("Document") | Some("Concept") | Some("Documentation") => {
-                                doc_nodes += 1
-                            }
-                            Some(_) => code_nodes += 1,
-                        }
-                        if let Some(file) = node.get("file").and_then(|f| f.as_str()) {
-                            if node_type != Some("Folder") {
-                                files.insert(file.to_string());
-                            }
-                        }
-                    }
-                }
-
-                files_count = files.len();
-                let repo_root = PathBuf::from(&meta.repo_root);
-
-                // A repo root that no longer exists is not "N files deleted" —
-                // the whole tree is gone, and the index simply freezes where it
-                // is. Report that distinctly instead of a misleading count.
-                if !repo_root.exists() {
-                    let repo_missing = true;
-                    staleness_info.push(serde_json::json!({
-                        "name": meta.name,
-                        "isStale": false,
-                        "repoMissing": repo_missing,
-                        "builtAt": built_at,
-                        "files": files_count,
-                        "changed": 0,
-                        "missing": 0,
-                        "kbKind": "unknown",
-                        "docNodes": 0,
-                        "codeNodes": 0,
-                    }));
-                    continue;
-                }
-
-                for file in files {
-                    let file_path = repo_root.join(&file);
-                    match std::fs::metadata(&file_path) {
-                        Ok(metadata) => {
-                            if let Ok(modified) = metadata.modified() {
-                                let file_mtime = modified
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_secs();
-
-                                if let Some(built) = built_at {
-                                    if file_mtime > built {
-                                        changed += 1;
-                                    }
-                                }
-                            }
-                        }
-                        Err(_) => {
-                            missing += 1;
-                        }
-                    }
-                }
-            }
-        }
-
-        let is_stale = changed > 0 || missing > 0;
-        // Classify the KB by symbol composition: docs (markdown/PDF/office),
-        // code (source symbols), or mixed. File/Folder nodes are structural
-        // and excluded from the ratio.
-        let kb_kind = if doc_nodes > 0 && code_nodes > 0 {
-            "mixed"
-        } else if doc_nodes > code_nodes {
-            "docs"
-        } else {
-            "code"
-        };
-        staleness_info.push(serde_json::json!({
-            "name": meta.name,
-            "isStale": is_stale,
-            "repoMissing": false,
-            "builtAt": built_at,
-            "files": files_count,
-            "changed": changed,
-            "missing": missing,
-            "kbKind": kb_kind,
-            "docNodes": doc_nodes,
-            "codeNodes": code_nodes,
-        }));
     }
 
-    ok_json(
-        serde_json::json!({
-            "projects": staleness_info,
-            "checkedAt": std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-        })
-        .to_string(),
-    )
+    let multi = state.registry.mode == ServeMode::Multi;
+    let body = match tokio::task::spawn_blocking(move || compute_staleness_body(multi)).await {
+        Ok(b) => b,
+        Err(e) => {
+            return err_json(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("staleness scan failed: {}", e),
+            )
+        }
+    };
+
+    *state.staleness.write().expect("staleness poisoned") = Some(StalenessCache {
+        computed_at: std::time::Instant::now(),
+        body: body.clone(),
+    });
+    ok_json(body)
 }
 
 #[derive(serde::Deserialize)]
@@ -1779,6 +1961,9 @@ async fn api_generate(State(state): State<ServeState>, Json(body): Json<Generate
 
     let fallback_name =
         name.unwrap_or_else(|| crate::project::derive_project_name(&canon.to_string_lossy()));
+    // A finished `ug gen` changes the project list and every file mtime the
+    // staleness scan looks at, so the cached report must not outlive it.
+    let staleness = state.staleness.clone();
 
     tokio::spawn(async move {
         let mut child = match cmd.spawn() {
@@ -1799,6 +1984,8 @@ async fn api_generate(State(state): State<ServeState>, Json(body): Json<Generate
         let status = child.wait().await;
         let _ = out_task.await;
         let _ = err_task.await;
+
+        *staleness.write().expect("staleness poisoned") = None;
 
         let mut j = job.write().expect("job poisoned");
         match status {
@@ -2006,29 +2193,21 @@ struct BrowseDirQuery {
 /// symlinks/`..` via `canonicalize` so the returned `path`/`parent` are
 /// always absolute, and falls back to the parent directory if `path`
 /// happens to point at a file rather than a directory.
-async fn api_browse_dir(Query(params): Query<BrowseDirQuery>) -> Response {
-    let requested = params
-        .path
-        .filter(|p| !p.trim().is_empty())
-        .map(PathBuf::from)
-        .or_else(dirs::home_dir)
-        .unwrap_or_else(|| PathBuf::from("/"));
-
+/// The scan itself: canonicalize, enumerate, and stat a `.git` marker per
+/// child. Plain blocking IO, so the handler runs it off the runtime — a
+/// directory on a stalled network mount would otherwise pin a worker thread
+/// for as long as the filesystem takes to answer.
+fn browse_dir_body(requested: PathBuf) -> Result<String, String> {
     let dir = match std::fs::canonicalize(&requested) {
         Ok(p) if p.is_dir() => p,
         Ok(p) => match p.parent() {
             Some(parent) => parent.to_path_buf(),
-            None => return err_json(StatusCode::BAD_REQUEST, "path is not a directory"),
+            None => return Err("path is not a directory".to_string()),
         },
-        Err(e) => return err_json(StatusCode::BAD_REQUEST, &format!("invalid path: {}", e)),
+        Err(e) => return Err(format!("invalid path: {}", e)),
     };
 
-    let read = match std::fs::read_dir(&dir) {
-        Ok(r) => r,
-        Err(e) => {
-            return err_json(StatusCode::BAD_REQUEST, &format!("cannot read directory: {}", e))
-        }
-    };
+    let read = std::fs::read_dir(&dir).map_err(|e| format!("cannot read directory: {}", e))?;
 
     let mut entries: Vec<(String, serde_json::Value)> = Vec::new();
     for entry in read.flatten() {
@@ -2048,14 +2227,30 @@ async fn api_browse_dir(Query(params): Query<BrowseDirQuery>) -> Response {
     }
     entries.sort_by(|a, b| a.0.cmp(&b.0));
 
-    ok_json(
-        serde_json::json!({
-            "path": dir.to_string_lossy(),
-            "parent": dir.parent().map(|p| p.to_string_lossy().to_string()),
-            "entries": entries.into_iter().map(|(_, v)| v).collect::<Vec<_>>(),
-        })
-        .to_string(),
-    )
+    Ok(serde_json::json!({
+        "path": dir.to_string_lossy(),
+        "parent": dir.parent().map(|p| p.to_string_lossy().to_string()),
+        "entries": entries.into_iter().map(|(_, v)| v).collect::<Vec<_>>(),
+    })
+    .to_string())
+}
+
+async fn api_browse_dir(Query(params): Query<BrowseDirQuery>) -> Response {
+    let requested = params
+        .path
+        .filter(|p| !p.trim().is_empty())
+        .map(PathBuf::from)
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(|| PathBuf::from("/"));
+
+    match tokio::task::spawn_blocking(move || browse_dir_body(requested)).await {
+        Ok(Ok(body)) => ok_json(body),
+        Ok(Err(e)) => err_json(StatusCode::BAD_REQUEST, &e),
+        Err(e) => err_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("browse task failed: {}", e),
+        ),
+    }
 }
 
 fn file_mtime(path: &PathBuf) -> Option<SystemTime> {
@@ -2480,22 +2675,45 @@ async fn api_filter(
     ok_json(body.to_string())
 }
 
+/// Betweenness centrality is O(V·E) — seconds of pure CPU on a 15k-node graph.
+/// Computing it inline would park a runtime worker for that whole time and
+/// stall every other in-flight request, so it goes to `spawn_blocking`. The
+/// `OnceLock` still makes it a once-per-snapshot cost; this only governs where
+/// that one computation runs.
 async fn api_centrality(State(state): State<ServeState>) -> Response {
     let snap = state.snapshot();
-    let cached = snap
-        .centrality
-        .get_or_init(|| lib_centrality(snap.raw_json.clone()))
-        .clone();
-    ok_json(cached)
+    match tokio::task::spawn_blocking(move || {
+        snap.centrality
+            .get_or_init(|| lib_centrality_graph(&snap.parsed))
+            .clone()
+    })
+    .await
+    {
+        Ok(cached) => ok_json(cached),
+        Err(e) => err_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("centrality task failed: {}", e),
+        ),
+    }
 }
 
+/// Same reasoning as [`api_centrality`] — cycle detection walks the whole graph
+/// and must not run on a runtime thread.
 async fn api_cycles(State(state): State<ServeState>) -> Response {
     let snap = state.snapshot();
-    let cached = snap
-        .cycles
-        .get_or_init(|| lib_cycles(snap.raw_json.clone()))
-        .clone();
-    ok_json(cached)
+    match tokio::task::spawn_blocking(move || {
+        snap.cycles
+            .get_or_init(|| lib_cycles_graph(&snap.parsed))
+            .clone()
+    })
+    .await
+    {
+        Ok(cached) => ok_json(cached),
+        Err(e) => err_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("cycles task failed: {}", e),
+        ),
+    }
 }
 
 // ---------- Capabilities ----------
@@ -3982,7 +4200,7 @@ async fn run_chat_tool(
             let out = ultragraph::agent_tools::run_tool(
                 &name,
                 &snap.parsed,
-                &snap.raw_json,
+                snap.raw_json(),
                 ultragraph::agent_tools::SourceCtx::new(&indexed, ctx.repo_root.as_path()),
                 ctx.graph_path.as_path(),
                 args,
@@ -4550,6 +4768,9 @@ pub fn print_serve_help() {
     println!("           --base-url http://127.0.0.1:8000/v1 --api-key 12345 \\");
     println!("           --chat-model Qwen3.6-35B-A3B-MLX-8bit");
 }
+
+#[cfg(test)]
+mod router_tests;
 
 #[cfg(test)]
 mod tests {

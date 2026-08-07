@@ -8,8 +8,8 @@ pub mod storage;
 pub mod types;
 
 pub use graph::{
-    build_graph, calculate_centrality, detect_cycles, filter_edges_by_type, find_shortest_path,
-    graph_keyword_search, k_hop_bfs,
+    build_graph, calculate_centrality, calculate_centrality_graph, detect_cycles,
+    detect_cycles_graph, filter_edges_by_type, find_shortest_path, graph_keyword_search, k_hop_bfs,
 };
 pub use indexer::{index, index_with_cache};
 pub use types::*;

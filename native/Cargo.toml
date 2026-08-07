@@ -18,6 +18,9 @@ path = "src/bin/ug_app.rs"
 
 [dev-dependencies]
 tempfile = "3"
+# `ServiceExt::oneshot` — drives `serve::build_router` in-process so handler
+# behaviour is testable without binding a port.
+tower = { version = "0.4", features = ["util"] }
 
 [dependencies]
 rayon = "1.10"

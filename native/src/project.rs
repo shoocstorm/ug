@@ -119,6 +119,20 @@ pub(crate) struct ProjectMeta {
     pub edges: usize,
     #[serde(default)]
     pub ug_version: String,
+    /// Repo-relative paths of every file represented in the graph.
+    ///
+    /// Recorded here so the staleness check (`GET /api/projects/staleness`,
+    /// polled by the KB Manager every 2 minutes) can `stat` the source tree
+    /// without reading and JSON-parsing a multi-megabyte `graph.json` per
+    /// project on every poll. Empty for projects generated before this field
+    /// existed; consumers fall back to reading the graph in that case.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<String>,
+    /// Node-type composition, also for staleness reporting without a re-parse.
+    #[serde(default)]
+    pub doc_nodes: usize,
+    #[serde(default)]
+    pub code_nodes: usize,
 }
 
 impl ProjectMeta {
@@ -132,7 +146,40 @@ impl ProjectMeta {
             nodes,
             edges,
             ug_version: env!("CARGO_PKG_VERSION").to_string(),
+            files: Vec::new(),
+            doc_nodes: 0,
+            code_nodes: 0,
         }
+    }
+
+    /// Record the file list and node composition derived from `graph`.
+    ///
+    /// Folder nodes are excluded: they carry a `file` that names a directory,
+    /// which would always `stat` clean and inflate the file count.
+    pub(crate) fn with_graph_index(mut self, graph: &ultragraph::types::GraphData) -> Self {
+        use ultragraph::types::GraphNodeType;
+        let mut files: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let (mut doc_nodes, mut code_nodes) = (0usize, 0usize);
+
+        for node in &graph.nodes {
+            match node.node_type {
+                GraphNodeType::Folder | GraphNodeType::File => {}
+                GraphNodeType::Concept => doc_nodes += 1,
+                _ => code_nodes += 1,
+            }
+            if node.node_type != GraphNodeType::Folder {
+                if let Some(file) = node.file.as_ref() {
+                    if !file.is_empty() {
+                        files.insert(file.clone());
+                    }
+                }
+            }
+        }
+
+        self.files = files.into_iter().collect();
+        self.doc_nodes = doc_nodes;
+        self.code_nodes = code_nodes;
+        self
     }
 }
 
@@ -295,6 +342,66 @@ pub(crate) fn clear_active_project() -> std::io::Result<()> {
     Ok(())
 }
 
+/// Rename a project: move `<ug_home>/<old>` to `<ug_home>/<new>`,
+/// rewrite the `name` in its project.json, and re-point the active
+/// marker when it named the old project. Nothing inside a project dir
+/// records its own path or name, so the move is the whole migration.
+///
+/// Errors (leaving everything untouched) when `old` has no data dir,
+/// when the two names sanitize to the same thing, or when `new` already
+/// exists — a rename never merges into or clobbers another project.
+/// Returns the sanitized new name.
+pub(crate) fn rename_project(old: &str, new: &str) -> std::io::Result<String> {
+    let old = sanitize_name(old);
+    let new = sanitize_name(new);
+    let old_dir = project_dir(&old);
+    let new_dir = project_dir(&new);
+
+    if !old_dir.exists() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("no project '{}' under {}", old, ug_home().display()),
+        ));
+    }
+    if new == old {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("'{}' is already this project's name", new),
+        ));
+    }
+    if new_dir.exists() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            format!(
+                "a project named '{}' already exists at {}",
+                new,
+                new_dir.display()
+            ),
+        ));
+    }
+
+    // Read before the move: get_active_project() only resolves while the
+    // data is still at the old path.
+    let was_active = get_active_project().as_deref() == Some(old.as_str());
+
+    std::fs::rename(&old_dir, &new_dir)?;
+
+    if let Some(mut meta) = read_meta(&new_dir) {
+        meta.name = new.clone();
+        // Written directly rather than through `write_meta`, which stamps
+        // `updated_at`: a rename doesn't touch the graph, and bumping it
+        // would reshuffle `ug list`'s most-recent-first ordering.
+        let json = serde_json::to_string_pretty(&meta).expect("ProjectMeta serializes");
+        std::fs::write(meta_path(&new_dir), json)?;
+    }
+
+    if was_active {
+        set_active_project(&new)?;
+    }
+
+    Ok(new)
+}
+
 /// Delete a project's data directory (`graph.json`, `ugdb/`,
 /// `project.json`, etc). Errors with `NotFound` instead of silently
 /// no-op'ing when the directory doesn't exist, so callers (`ug rm`) can
@@ -390,6 +497,83 @@ mod tests {
 
     // Serialize the tests that mutate $UG_HOME — the env var is process-wide.
     static UG_HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn rename_moves_data_updates_meta_and_follows_active() {
+        let _guard = UG_HOME_LOCK.lock().unwrap();
+        let home = std::env::temp_dir().join(format!("ug-rename-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::env::set_var("UG_HOME", &home);
+
+        let old_dir = project_dir("old");
+        std::fs::create_dir_all(old_dir.join("ugdb")).unwrap();
+        std::fs::write(old_dir.join("graph.json"), "{\"nodes\":[]}").unwrap();
+        let mut meta = ProjectMeta::new("old", "/repo/old", 7, 9);
+        write_meta(&old_dir, &meta).unwrap();
+        meta = read_meta(&old_dir).unwrap();
+        set_active_project("old").unwrap();
+
+        assert_eq!(rename_project("old", "new name").unwrap(), "new-name");
+
+        let new_dir = project_dir("new-name");
+        assert!(!old_dir.exists(), "old dir is gone");
+        assert!(new_dir.join("ugdb").exists(), "db moved with the project");
+        assert_eq!(
+            std::fs::read_to_string(new_dir.join("graph.json")).unwrap(),
+            "{\"nodes\":[]}"
+        );
+
+        let moved = read_meta(&new_dir).unwrap();
+        assert_eq!(moved.name, "new-name", "project.json renamed");
+        assert_eq!(moved.repo_root, "/repo/old", "rest of the meta untouched");
+        assert_eq!(moved.nodes, 7);
+        assert_eq!(
+            moved.updated_at, meta.updated_at,
+            "a rename is not a data update"
+        );
+        assert_eq!(
+            get_active_project().as_deref(),
+            Some("new-name"),
+            "active marker follows"
+        );
+
+        std::env::remove_var("UG_HOME");
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn rename_refuses_missing_same_and_occupied_names() {
+        let _guard = UG_HOME_LOCK.lock().unwrap();
+        let home = std::env::temp_dir().join(format!("ug-rename-err-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::env::set_var("UG_HOME", &home);
+
+        // Nothing there at all.
+        assert!(rename_project("ghost", "other").is_err());
+
+        let a = project_dir("a");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::write(a.join("graph.json"), "{}").unwrap();
+        let b = project_dir("b");
+        std::fs::create_dir_all(&b).unwrap();
+        std::fs::write(b.join("graph.json"), "{\"b\":1}").unwrap();
+
+        // Same name (including via sanitization) is a no-op error.
+        assert!(rename_project("a", "a").is_err());
+        assert!(rename_project("a", "../a").is_err());
+
+        // Renaming onto an existing project never clobbers it.
+        assert!(rename_project("a", "b").is_err());
+        assert!(a.join("graph.json").exists(), "source left in place");
+        assert_eq!(
+            std::fs::read_to_string(b.join("graph.json")).unwrap(),
+            "{\"b\":1}",
+            "target untouched"
+        );
+
+        std::env::remove_var("UG_HOME");
+        let _ = std::fs::remove_dir_all(&home);
+    }
 
     #[test]
     fn active_project_roundtrip_and_validation() {

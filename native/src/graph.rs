@@ -1515,12 +1515,24 @@ pub fn find_shortest_path(graph_json: String, source_id: String, target_id: Stri
     serde_json::to_string(&result).unwrap_or_default()
 }
 
+/// Parse-and-score convenience wrapper over [`calculate_centrality_graph`].
+///
+/// Callers that already hold a `GraphData` should use that function directly —
+/// on a large graph this wrapper's `from_str` is the dominant cost, and it
+/// throws the parse away on return.
 pub fn calculate_centrality(graph_json: String) -> String {
     let graph: GraphData = match serde_json::from_str(&graph_json) {
         Ok(g) => g,
         Err(_) => return "{}".to_string(),
     };
+    calculate_centrality_graph(&graph)
+}
 
+/// Degree + Brandes betweenness centrality over an already-parsed graph.
+///
+/// This is O(V·E) and runs to completion on the calling thread; async callers
+/// must push it onto `spawn_blocking` rather than awaiting it inline.
+pub fn calculate_centrality_graph(graph: &GraphData) -> String {
     let n = graph.nodes.len() as f64;
     if n == 0.0 {
         let result = crate::types::CentralityResult {
@@ -1567,7 +1579,7 @@ pub fn calculate_centrality(graph_json: String) -> String {
     }
 
     if n > 1.0 {
-    let (di_graph, index_map) = build_di_graph(&graph);
+    let (di_graph, index_map) = build_di_graph(graph);
 
     for node in &graph.nodes {
         let mut pred: HashMap<String, Vec<String>> = HashMap::new();
@@ -1649,13 +1661,21 @@ pub fn calculate_centrality(graph_json: String) -> String {
     serde_json::to_string(&result).unwrap_or_default()
 }
 
+/// Parse-and-detect convenience wrapper over [`detect_cycles_graph`]. See the
+/// note on [`calculate_centrality`] about the cost of the parse.
 pub fn detect_cycles(graph_json: String) -> String {
     let graph: GraphData = match serde_json::from_str(&graph_json) {
         Ok(g) => g,
         Err(_) => return "{}".to_string(),
     };
+    detect_cycles_graph(&graph)
+}
 
-    let (di_graph, index_map) = build_di_graph(&graph);
+/// Cycle detection over an already-parsed graph. Like
+/// [`calculate_centrality_graph`], this is CPU-bound and must not be awaited
+/// inline on an async runtime thread.
+pub fn detect_cycles_graph(graph: &GraphData) -> String {
+    let (di_graph, index_map) = build_di_graph(graph);
     let mut visited: HashMap<String, bool> = HashMap::new();
     let mut rec_stack: HashMap<String, bool> = HashMap::new();
     let mut cycles: Vec<Vec<String>> = vec![];
