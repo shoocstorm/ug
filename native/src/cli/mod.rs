@@ -137,6 +137,7 @@ fn dispatch(cmd: &str, cmd_args: &[String]) {
         // the same names as the tools.
         "list" | "ls" | "list_projects" => projects::run_list(cmd_args),
         "active" => projects::run_active(cmd_args),
+        "rename" | "rn" | "mv" => projects::run_rename(cmd_args),
         "rm" => projects::run_rm(cmd_args),
         "uninstall" => projects::run_uninstall(cmd_args),
         "upgrade" => upgrade::run_upgrade(cmd_args),

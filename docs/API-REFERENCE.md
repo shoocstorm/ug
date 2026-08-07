@@ -120,6 +120,7 @@ resolve to exactly one node, and list the candidates when they don't.
 | `ug api` | — | List every HTTP endpoint `ug serve` exposes. | `--json` |
 | `ug list` | `ls`, `list_projects` | List generated projects under `~/.ug` with stats. | — |
 | `ug active` | — | View or set the active project (default for `ug mcp`). | Sets with `<name>` positional |
+| `ug rename` | `rn`, `mv` | Rename a project's data directory and its `project.json` name; the active marker follows it. One positional renames the current (active, else cwd) project; two rename `<old> <new>`. | `<new>` or `<old> <new>` positionals, `-n <old>` |
 | `ug rm` | — | Delete a project's data directory. | `<name>` positional |
 | `ug regen` | — | Re-run the pipeline for an existing project: reads `repoRoot` from its `project.json`, so no `-i` needed. Incremental. | `-n <name>`, plus every `ug gen` flag |
 | `ug upgrade` | `update` | Check GitHub for a new release and self-update. | `--check` (report only, no update) |

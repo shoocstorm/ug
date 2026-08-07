@@ -5,7 +5,7 @@ use ultragraph::{C_BOLD, C_CYAN, C_DIM, C_GREEN, C_RESET, C_YELLOW};
 
 use crate::project;
 
-use super::args::{first_positional, flag_value, has_flag};
+use super::args::{first_positional, flag_value, has_flag, positionals};
 
 /// `ug list` — enumerate project data dirs under `~/.ug` (or `$UG_HOME`).
 pub(crate) fn run_list(args: &[String]) {
@@ -117,6 +117,85 @@ pub(crate) fn run_active(args: &[String]) {
                 );
             }
         },
+    }
+}
+
+/// `ug rename <new>` (alias `rn`) — rename a project's data directory
+/// under `~/.ug` (or `$UG_HOME`). With one argument it renames the
+/// current project — the active one (`ug active`), falling back to the
+/// current directory's basename — which is the common case. A second
+/// positional (or `-n/--name`) renames some *other* project instead:
+/// `ug rename old new`.
+pub(crate) fn run_rename(args: &[String]) {
+    if has_flag(args, "-h") || has_flag(args, "--help") {
+        print_rename_help();
+        return;
+    }
+
+    let value_flags = ["-n", "--name"];
+    let pos = positionals(args, &value_flags);
+    let (old_name, new_name) = match pos.len() {
+        0 => {
+            eprintln!("{C_BOLD}ug rename{C_RESET} needs a new name.");
+            eprintln!("Usage: {C_CYAN}ug rename <new-name>{C_RESET}  (or {C_CYAN}ug rename <old> <new>{C_RESET})");
+            std::process::exit(1);
+        }
+        // `resolve_active_project_name` honors `-n/--name` first, so
+        // `ug rename -n other new` targets `other`.
+        1 => (
+            project::resolve_active_project_name(args, "."),
+            pos[0].clone(),
+        ),
+        _ => (project::sanitize_name(&pos[0]), pos[1].clone()),
+    };
+
+    let old_dir = project::project_dir(&old_name);
+    if !old_dir.exists() {
+        eprintln!(
+            "No project named {C_BOLD}{}{C_RESET} found at {}.",
+            old_name,
+            old_dir.display()
+        );
+        eprintln!("Run {C_CYAN}ug list{C_RESET} to see available projects.");
+        std::process::exit(1);
+    }
+
+    // Read before the move — both are used in the report below.
+    let was_active = project::get_active_project().as_deref() == Some(old_name.as_str());
+    let repo_root = project::read_meta(&old_dir)
+        .map(|m| m.repo_root)
+        .unwrap_or_default();
+
+    let new_name = match project::rename_project(&old_name, &new_name) {
+        Ok(name) => name,
+        Err(e) => {
+            eprintln!("Failed to rename {C_BOLD}{}{C_RESET}: {}", old_name, e);
+            std::process::exit(1);
+        }
+    };
+
+    println!(
+        "{C_GREEN}✓{C_RESET} Renamed {C_BOLD}{}{C_RESET} → {C_CYAN}{}{C_RESET}",
+        old_name, new_name
+    );
+    println!("  path: {}", project::project_dir(&new_name).display());
+    if was_active {
+        println!("  {C_YELLOW}← active{C_RESET} marker now points at {C_CYAN}{}{C_RESET}", new_name);
+    }
+    // The gotcha: commands that derive a project from the working
+    // directory (`ug gen`, `ug index`, `ug graph`) still use the repo's
+    // basename, so re-generating in that repo would build a *second*
+    // project under the old name rather than updating this one.
+    if !repo_root.is_empty() && project::derive_project_name(&repo_root) == old_name {
+        println!();
+        println!(
+            "{C_YELLOW}Note:{C_RESET} {C_CYAN}ug gen{C_RESET} in {} still derives {C_BOLD}{}{C_RESET} from the directory name.",
+            repo_root, old_name
+        );
+        println!(
+            "  Pass {C_CYAN}-n {}{C_RESET} there to keep updating this project.",
+            new_name
+        );
     }
 }
 
@@ -313,6 +392,28 @@ pub(crate) fn run_uninstall(args: &[String]) {
 
     println!();
     println!("{C_BOLD}ug has been uninstalled.{C_RESET} Thanks for trying UltraGraph.");
+}
+
+fn print_rename_help() {
+    println!("  {C_CYAN}ug rename{C_RESET}  {C_YELLOW}— rename a project{C_RESET}");
+    println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
+    println!();
+    println!("{C_BOLD}Usage:{C_RESET}  ug rename <new-name>          {C_DIM}(alias: rn){C_RESET}");
+    println!("        ug rename <old-name> <new-name>");
+    println!("        ug rename -n <old-name> <new-name>");
+    println!();
+    println!("  Renames the project's data directory under ~/.ug (or $UG_HOME) and");
+    println!("  updates its project.json. With one argument it renames the current");
+    println!("  project: the active one ({C_CYAN}ug active{C_RESET}), else this directory's basename.");
+    println!("  The {C_YELLOW}← active{C_RESET} marker follows the rename; the graph and db are untouched.");
+    println!();
+    println!("  Names are sanitized the same way project names always are (chars");
+    println!("  outside {C_BOLD}[A-Za-z0-9._-]{C_RESET} become {C_BOLD}-{C_RESET}). Renaming onto an existing project");
+    println!("  is refused — remove it first with {C_CYAN}ug rm{C_RESET}.");
+    println!();
+    println!("{C_BOLD}Examples:{C_RESET}");
+    println!("  {C_CYAN}ug rename backend-api{C_RESET}          {C_YELLOW}# rename the active project{C_RESET}");
+    println!("  {C_CYAN}ug rename ug-3 ug{C_RESET}              {C_YELLOW}# rename a specific project{C_RESET}");
 }
 
 fn print_list_help() {

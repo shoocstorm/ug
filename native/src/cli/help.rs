@@ -130,6 +130,7 @@ pub(crate) fn print_help() {
     println!("  {C_DIM}Project management{C_RESET}");
     println!("  {C_BOLD}{C_GREEN}list{C_RESET}             {C_GREEN}List generated projects under ~/.ug (or $UG_HOME){C_RESET}");
     println!("  {C_CYAN}active{C_RESET}           View/set the active project (default for `ug mcp` when no UG_PROJECT)");
+    println!("  {C_CYAN}rename{C_RESET}           Rename a project (aliases: rn, mv) — defaults to the active one");
     println!("  {C_CYAN}rm{C_RESET}               Delete a project's data directory");
     println!("  {C_CYAN}upgrade{C_RESET}          Check GitHub for a new release and self-update (`--check` to only report)");
     println!("  {C_CYAN}uninstall{C_RESET}        Delete ALL indexed projects and uninstall ug itself");
