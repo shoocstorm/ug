@@ -65,7 +65,13 @@ impl LanguageIndexer for RustIndexer {
     }
 
     fn extract_symbols(&self, source: &[u8], root: Node, ctx: &FileContext) -> Vec<Symbol> {
-        let scope = ImportScope::new("rust", module_path(ctx.path, "rust"), ctx.imports);
+        let mut scope = ImportScope::new("rust", module_path(ctx.path, "rust"), ctx.imports);
+        // `mod cli;` is not an import, so it is deliberately absent from
+        // `ImportInfo` — but it is still a name binding, and the only one
+        // that makes `cli::run()` in this file mean `crate::cli::run`.
+        for name in declared_child_modules(root, source) {
+            scope.declare_child_module(&name);
+        }
         let walk = Ctx {
             fields: collect_struct_fields(root, source),
             scope: &scope,
@@ -898,6 +904,39 @@ fn extract_trait_bounds(node: &Node, source: &[u8]) -> Vec<String> {
         }
     }
     out
+}
+
+/// Names of the submodules this file declares as living in *another* file —
+/// `mod cli;`, whose contents are `cli.rs` or `cli/mod.rs`.
+///
+/// Only the bodiless form. An inline `mod tests { … }` is flattened by this
+/// indexer: `visit` steps into the body without extending the module path, so
+/// a function inside it is qualified `crate::foo::helper`, not
+/// `crate::foo::tests::helper`. Binding `tests` to a path no symbol carries
+/// would resolve `tests::helper()` to something that matches nothing — no
+/// worse than today, but a claim the graph cannot honour, so it is left out.
+///
+/// Kept separate from [`walk_for_imports`] rather than folded into it: a
+/// `mod` declaration is a name binding, not an import, and feeding it through
+/// `ImportInfo` would also mint a file-to-file import edge and possibly an
+/// external-dependency node for something that is neither.
+fn declared_child_modules(root: Node, source: &[u8]) -> Vec<String> {
+    let mut out = Vec::new();
+    walk_for_child_modules(root, source, &mut out);
+    out
+}
+
+fn walk_for_child_modules(node: Node, source: &[u8], out: &mut Vec<String>) {
+    if node.kind() == "mod_item" && node.child_by_field_name("body").is_none() {
+        if let Some(name) = get_node_text(node.child_by_field_name("name"), source) {
+            out.push(name);
+        }
+        return;
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        walk_for_child_modules(child, source, out);
+    }
 }
 
 /// Walk the AST collecting `use_declaration` and `extern_crate_declaration`

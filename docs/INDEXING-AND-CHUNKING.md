@@ -122,6 +122,18 @@ its file's module path — `crate::storage::db::Db#open`, `src/svc/order.OrderSe
 (`crate::project::read_meta(..)`, or `agent_tools::find_usages(..)` via a
 `use` binding) is one exact lookup with nothing to disambiguate.
 
+In Rust the head segment can also be bound by a **`mod` declaration** rather
+than a `use`: `cli::run()` written in the file that declares `mod cli;` means
+`crate::cli::run`. That is the discriminator Rust itself uses — a bare
+`cli::run()` is `self::cli::run` exactly when the file declares `mod cli;`,
+and an external crate otherwise — so an unbound head segment is still left
+untouched, because re-rooting `serde_json::from_str` under the current module
+would match nothing while looking like an answer. Only the bodiless form
+counts: an inline `mod tests { … }` is flattened by this indexer (its members
+keep the file's module path), so binding its name would promise a path no
+symbol carries. Without this, `main.rs` calling `cli::run()` produced no edge
+at all, and `crate::cli::run` read as dead code.
+
 **2. The receiver's type.** Each indexer keeps a per-function environment of
 declared types — fields, parameters, locals, `self`/`this` — and tags each
 call site with the type it dispatches on. `orderRepo.save(x)` and

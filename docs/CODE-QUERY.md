@@ -204,8 +204,14 @@ Reachability plus summarisation, shipped as a preset rather than a second tool:
 the walk is expressible as a bounded variable-length GQL path, and what makes
 it useful is the rollup and the caveats, both of which belong in the renderer.
 
-1. **Resolve** target → node set. A File id expands through `Contains` to its
-   symbols; a symbol id is used directly.
+1. **Anchor** on the target. `target` is a **repo-relative file path**
+   (`native/src/serve.rs`) — the query is `WHERE t.file = $target`, matching
+   every symbol declared in that file. A **node id is not accepted**: passing
+   `function:native/src/serve.rs:run_serve` matches no `file` value and comes
+   back as `No rows matched`, which reads like an answer. Resolve a name to
+   its path first (`ug find_symbols run_serve` prints the id, whose middle
+   segment is the path) and pass that. This applies to `impact`,
+   `impact_summary`, `boundary_impact` and `retest_scope` alike.
 2. **Reverse-reach** over `Calls · References · Imports · Extends · Implements ·
    Overrides` (never `Contains` — it is pure structure and would drag in every
    sibling), bounded (`*1..N`, never unbounded), tracking hop distance.

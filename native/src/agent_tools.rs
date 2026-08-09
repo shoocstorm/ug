@@ -2917,7 +2917,10 @@ pub fn graph_schema(graph: &GraphData, graph_path: &Path) -> GraphSchemaResult {
         node_types: top_counts(&node_counts, usize::MAX),
         edge_types,
         vocabulary: EDGE_TYPE_VOCABULARY.iter().map(|s| s.to_string()).collect(),
-        stale_call_graph: schema.map(|v| v < 3).unwrap_or(true),
+        // < 5, not < 3: version 4 resolved cross-file calls but still lost
+        // every Rust `mod`-qualified one, which is the same failure mode
+        // wearing a newer version number.
+        stale_call_graph: schema.map(|v| v < 5).unwrap_or(true),
         boundary_kinds,
         stale_boundaries: schema.map(|v| v < 4).unwrap_or(true),
     }
@@ -3012,15 +3015,15 @@ pub fn render_graph_schema(r: &GraphSchemaResult, style: Render) -> String {
     if r.stale_call_graph {
         line(
             &mut out,
-            "  • This graph predates cross-file call resolution, so Calls edges were matched by",
+            "  • This graph predates the current call resolution, so some Calls edges were matched",
         );
         line(
             &mut out,
-            "    name: some point at a same-named symbol the call site never meant, and module-path",
+            "    by name — pointing at a same-named symbol the call site never meant — and module-path",
         );
         line(
             &mut out,
-            "    calls are missing entirely. Treat find_usages, impact and dead_code as indicative,",
+            "    calls are missing. Treat find_usages, impact and dead_code as indicative,",
         );
         line(&mut out, "    and run \"ug regen\" before relying on them.");
     }

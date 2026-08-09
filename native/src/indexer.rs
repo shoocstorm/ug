@@ -63,7 +63,15 @@ use tree_sitter::Parser;
 /// input nor the output — it would simply look like a file with no entry
 /// points, which is indistinguishable from the truth for most files and
 /// therefore impossible to notice.
-const INDEXER_VERSION: &str = "5";
+///
+/// 6: Rust `mod` declarations bind their child module, so a `cli::run()`
+/// written in the file that declares `mod cli;` resolves to `crate::cli::run`
+/// instead of the literal `cli::run`, which matched no declaration. The
+/// resolved path is stored *in* the cached `CallRef`, so without this bump an
+/// existing install keeps the unresolved one for every file it does not
+/// happen to re-parse — and the resulting call graph would be repaired only
+/// in the files someone edited.
+const INDEXER_VERSION: &str = "6";
 
 /// Reserved key in `cache.json`. Prefixed and suffixed so it cannot collide
 /// with a repo-relative path.

@@ -109,7 +109,7 @@ const MIN_LOC: &[PresetParam] = &[PresetParam {
 
 const TARGET: &[PresetParam] = &[PresetParam {
     name: "target",
-    description: "Repo-relative file path whose dependents you want, e.g. 'src/auth.ts'.",
+    description: "Repo-relative file PATH whose dependents you want, e.g. 'src/auth.ts'. Not a node id — 'function:src/auth.ts:login' matches no file and returns zero rows.",
     default: None,
 }];
 

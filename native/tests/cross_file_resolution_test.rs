@@ -94,6 +94,96 @@ fn rust_a_module_path_call_reaches_the_other_file() {
     );
 }
 
+/// `mod cli;` is a name binding even though it is not an import, and it is
+/// the *only* thing that makes `cli::run()` mean `crate::cli::run`.
+///
+/// The decoys matter: three modules declare `run`, so the bare-name fallback
+/// cannot choose between them and correctly declines. An edge to the right
+/// one therefore proves the path resolved, not that a guess got lucky. This
+/// is the shape of `main.rs` calling `cli::run()` in this very repo, where
+/// the call was silently dropped and `crate::cli::run` read as dead code.
+#[test]
+fn rust_a_mod_declaration_binds_its_child_module() {
+    let graph = run(&[
+        ("src/cli/mod.rs", "pub fn run() -> u32 { 1 }\n"),
+        ("src/mcp/mod.rs", "pub fn run() -> u32 { 2 }\n"),
+        ("src/code_query/mod.rs", "pub fn run() -> u32 { 3 }\n"),
+        (
+            "src/main.rs",
+            "mod cli;\nmod mcp;\nmod code_query;\npub fn start() -> u32 { cli::run() }\n",
+        ),
+    ]);
+
+    let called = targets(&graph, "start", GraphEdgeType::Calls);
+    assert!(called.contains("run"), "no call edge at all: {called:?}");
+
+    // …and to the `run` in cli, not to either decoy.
+    let edge = graph
+        .edges
+        .iter()
+        .find(|e| e.edge_type == GraphEdgeType::Calls && e.source.contains("start"))
+        .expect("call edge");
+    assert!(
+        edge.target.contains("src/cli/mod.rs"),
+        "resolved to the wrong module: {}",
+        edge.target
+    );
+}
+
+/// A `mod` declaration binds *that one name*, not every path-shaped call in
+/// the file. A head segment the file never declared is another crate, and
+/// re-rooting it under the current module would match nothing while looking
+/// like an answer.
+///
+/// The decoy `run` is what makes this a test of path resolution: with a
+/// single candidate the bare-name fallback would resolve `serde_json::run()`
+/// on its own — pre-existing behaviour, and not what is under test here.
+#[test]
+fn rust_a_mod_declaration_binds_only_the_name_it_declares() {
+    let graph = run(&[
+        ("src/cli/mod.rs", "pub fn run() -> u32 { 1 }\n"),
+        ("src/mcp/mod.rs", "pub fn run() -> u32 { 2 }\n"),
+        (
+            "src/main.rs",
+            "mod cli;\nmod mcp;\npub fn start() -> u32 { serde_json::run() }\n",
+        ),
+    ]);
+
+    assert!(
+        targets(&graph, "start", GraphEdgeType::Calls).is_empty(),
+        "an external crate path must not bind to a declared module's function"
+    );
+}
+
+/// An inline `mod` is flattened by this indexer — its members keep the
+/// file's module path — so binding its name would promise a path no symbol
+/// carries. The test that matters is that nothing *wrong* is produced.
+#[test]
+fn rust_an_inline_mod_does_not_invent_a_path() {
+    let graph = run(&[
+        ("src/other/mod.rs", "pub fn helper() -> u32 { 9 }\n"),
+        (
+            "src/main.rs",
+            "mod other;\n\
+             mod helpers { pub fn helper() -> u32 { 1 } }\n\
+             pub fn start() -> u32 { other::helper() }\n",
+        ),
+    ]);
+
+    // `other::helper` is a declared child module and resolves; the inline
+    // `helpers` module must not have shadowed or redirected it.
+    let edge = graph
+        .edges
+        .iter()
+        .find(|e| e.edge_type == GraphEdgeType::Calls && e.source.contains("start"))
+        .expect("call edge");
+    assert!(
+        edge.target.contains("src/other/mod.rs"),
+        "resolved to the wrong helper: {}",
+        edge.target
+    );
+}
+
 /// A fully-rooted path needs no `use` at all.
 #[test]
 fn rust_a_crate_rooted_path_resolves_without_an_import() {

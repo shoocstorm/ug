@@ -429,7 +429,14 @@ pub struct Dependency {
 ///   "this repo has no boundaries" as *not measured* rather than as zero —
 ///   which is why [`crate::storage::facts`] omits the boundary facts
 ///   entirely on an older graph instead of writing them as `0`.
-pub const GRAPH_SCHEMA_VERSION: u32 = 4;
+/// - **5**: Rust `mod` declarations bind their child module, so a
+///   `cli::run()` call in the file declaring `mod cli;` reaches
+///   `crate::cli::run`. Before this the path resolved to the literal
+///   `cli::run`, matched no declaration, and fell to a bare-name lookup that
+///   correctly declines whenever the callee's name is not unique — so on a
+///   version-4 graph these calls are *absent*, and the functions they reach
+///   read as dead code. Same reader advice as version 3.
+pub const GRAPH_SCHEMA_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexStats {

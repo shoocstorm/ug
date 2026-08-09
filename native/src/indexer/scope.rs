@@ -159,6 +159,31 @@ impl ImportScope {
         }
     }
 
+    /// Bind a submodule this file *declares* rather than imports — Rust's
+    /// `mod cli;`, whose contents live in `cli.rs` or `cli/mod.rs`.
+    ///
+    /// Without this, `cli::run()` written in the declaring file resolves to
+    /// the literal `cli::run` while the declaration is `crate::cli::run`, and
+    /// the two never meet. [`resolve_path`](Self::resolve_path) cannot repair
+    /// that on its own: its rule for an unbound head segment is to return the
+    /// path untouched, which is right for `pkg::mod::Base` (re-rooting it
+    /// under the current module would match neither) and wrong here — `cli`
+    /// is not another crate, it is this module's child.
+    ///
+    /// A `mod` declaration is exactly the discriminator Rust itself uses: a
+    /// bare `cli::run()` means `self::cli::run` precisely when the file
+    /// declares `mod cli;`, and an external crate otherwise. Paths that
+    /// genuinely name another crate stay unbound and keep falling through.
+    ///
+    /// An existing binding wins, so an explicit `use` is never overwritten.
+    pub fn declare_child_module(&mut self, name: &str) {
+        if name.is_empty() {
+            return;
+        }
+        let target = self.qualify(name);
+        self.aliases.entry(name.to_string()).or_insert(target);
+    }
+
     /// Qualified name for something *declared in this file*.
     pub fn qualify(&self, name: &str) -> String {
         if self.module.is_empty() {
