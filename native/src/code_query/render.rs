@@ -255,9 +255,17 @@ fn push_table(out: &mut String, answer: &QueryAnswer, style: Render, from: usize
 
 /// Everything that qualifies the number above it.
 fn push_caveats(out: &mut String, answer: &QueryAnswer, style: Render) {
-    // Unindexed properties first: this is the failure that turns a query
-    // into a confident lie, so it does not get buried under coverage.
-    if !answer.unindexed.is_empty() {
+    // An empty index outranks everything else: with no nodes in the store
+    // every property probes as absent, so reporting the property list here
+    // would blame the schema for a project that was simply never ingested —
+    // and send the caller to `ug regen`, which does not ingest.
+    if answer.empty_index {
+        out.push_str(
+            "\n⚠ NOT INGESTED: this project's index holds no nodes, so this answer \
+             is empty for that reason alone — not because nothing matched. Run \
+             `ug ingest` (or `ug gen` without `--no-ingest`) to populate it.\n",
+        );
+    } else if !answer.unindexed.is_empty() {
         out.push_str(&format!(
             "\n⚠ NOT INDEXED: {} — no node carries {}, so every predicate on \
              {} matched nothing. This answer is not about what you asked. \
@@ -383,12 +391,14 @@ mod tests {
             .filter(|c| c.is_absent())
             .map(|c| c.property.clone())
             .collect();
+        let empty_index = !coverage.is_empty() && coverage.iter().all(|c| c.index_is_empty());
         QueryAnswer {
             title: "test".into(),
             description: None,
             page,
             coverage,
             unindexed,
+            empty_index,
             window: crate::code_query::range::RowRange::first(20),
             gql: "MATCH (n) RETURN count(*) AS c".into(),
             from_preset: false,
@@ -429,6 +439,34 @@ mod tests {
         assert!(out.contains("comment_lines"), "{out}");
         // The whole point: the reader must not walk away with the zero.
         assert!(out.contains("not about what you asked"), "{out}");
+    }
+
+    /// An un-ingested project (`ug gen --no-ingest`, or a failed ingest) has
+    /// `total == 0`, which makes *every* property probe as absent. Reporting
+    /// that as "NOT INDEXED: node_type, name, file, …" blames the schema for
+    /// an empty store and prescribes `ug regen`, which does not ingest — so
+    /// the caller loops. It has to name ingest instead.
+    #[test]
+    fn an_empty_index_is_reported_as_not_ingested_not_as_a_schema_gap() {
+        let a = answer(
+            page(&["c"], vec![]),
+            vec![
+                Coverage { property: "node_type".into(), present: 0, total: 0 },
+                Coverage { property: "loc".into(), present: 0, total: 0 },
+            ],
+        );
+        let out = render(&a, Render::Markdown);
+
+        assert!(out.contains("NOT INGESTED"), "{out}");
+        assert!(out.contains("ug ingest"), "{out}");
+        assert!(
+            !out.contains("NOT INDEXED"),
+            "an empty store must not be reported as a missing property: {out}"
+        );
+        assert!(
+            !out.contains("ug regen"),
+            "`ug regen` does not ingest — it is the wrong remedy here: {out}"
+        );
     }
 
     #[test]

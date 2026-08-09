@@ -98,13 +98,22 @@ impl FactContext {
 /// Now the *fallback*, not the rule: the indexer's `FileClassification`
 /// reaches `GraphNode` and takes precedence where it exists (see
 /// [`compute`]). This still matters for graphs written before that landed,
-/// and for files the classifier had no opinion about.
+/// which is the only case left — every `FileClassification` variant is a
+/// decision, so a node that has one never reaches here.
+///
+/// Every marker is anchored — on a `/` (start of a path segment) or on the
+/// `.`/`_` that delimits a filename suffix. An unanchored `test_` matched
+/// mid-word and swept in production code: `latest_version.rs`,
+/// `greatest_hits.rs`, `fastest_path.ts`, `contest_rules.py` all contain
+/// `test_` and all read as test code. Anchoring to `/test_` keeps the real
+/// case (`src/test_thing.py`, where the marker starts a segment) and drops
+/// the false ones.
 const TEST_PATH_MARKERS: &[&str] = &[
     "/test/",
     "/tests/",
     "/__tests__/",
     "/spec/",
-    "test_",
+    "/test_",
     "_test.",
     ".test.",
     ".spec.",
@@ -236,9 +245,16 @@ pub fn compute(n: &GraphNode, ctx: &FactContext) -> Facts {
             // path heuristic stays as the fallback for graphs written
             // before the classification reached the node, and for files
             // the classifier had no opinion about.
+            // `Some(_)` used to fall through to the path heuristic, which
+            // made this comment a lie in the negative direction: a file the
+            // classifier positively identified as `Util` or `Service` could
+            // still be relabelled a test by its *name*. `FileClassification`
+            // has no "unknown" variant — every variant is a decision — so
+            // `Some(c)` is exactly "the classifier had an opinion" and its
+            // answer stands either way. `None` remains the genuine fallback
+            // for graphs written before classification reached the node.
             let is_test = match &n.classification {
-                Some(FileClassification::Test) => true,
-                Some(_) => looks_like_test(file),
+                Some(c) => *c == FileClassification::Test,
                 None => looks_like_test(file),
             };
             f.insert("is_test".into(), FactValue::from_bool(is_test));
@@ -553,6 +569,53 @@ mod tests {
         // No classification at all: fall back to the path, as before.
         let n = node("f", Some("tests/checkout.rs"));
         assert_eq!(compute(&n, &ctx_of(vec![]))["is_test"], FactValue::Int(1));
+
+        // The direction this used to get wrong. "Where they disagree the
+        // classifier wins" has to hold both ways: a file the classifier
+        // positively called `Util` is not a test, however test-like its name
+        // reads. Previously the `Some(_)` arm fell through to the path
+        // heuristic, so this returned 1 and the file dropped out of every
+        // statistic that filters `is_test = 0`.
+        let mut n = node("f", Some("src/utils/test_helpers.rs"));
+        n.classification = Some(FileClassification::Util);
+        assert_eq!(
+            compute(&n, &ctx_of(vec![]))["is_test"],
+            FactValue::Int(0),
+            "a classified non-test must not be relabelled by its path"
+        );
+
+        // Same in the other direction: a test-shaped classification on a
+        // test-shaped path still agrees.
+        let mut n = node("f", Some("tests/checkout.rs"));
+        n.classification = Some(FileClassification::Test);
+        assert_eq!(compute(&n, &ctx_of(vec![]))["is_test"], FactValue::Int(1));
+    }
+
+    /// `test_` was matched anywhere in the path, so ordinary words ending in
+    /// "test" swept real code into the test bucket. Markers are anchored now.
+    #[test]
+    fn test_marker_does_not_match_mid_word() {
+        for path in [
+            "src/config/latest_version.rs",
+            "src/greatest_hits.rs",
+            "src/fastest_path.ts",
+            "src/protest_form.tsx",
+            "src/contest_rules.py",
+        ] {
+            let f = compute(&node("f", Some(path)), &ctx_of(vec![]));
+            assert_eq!(
+                f["is_test"],
+                FactValue::Int(0),
+                "{path} is production code, not a test"
+            );
+        }
+
+        // The real case the marker exists for still matches: `test_` at the
+        // start of a filename.
+        for path in ["src/test_thing.py", "test_top_level.py"] {
+            let f = compute(&node("f", Some(path)), &ctx_of(vec![]));
+            assert_eq!(f["is_test"], FactValue::Int(1), "{path} should read as test");
+        }
     }
 
     /// A Rust struct's methods live in a separate `impl` block, so it has

@@ -71,11 +71,23 @@ pub struct Coverage {
 }
 
 impl Coverage {
-    /// A property no node carries. Every predicate on it matched nothing,
-    /// and the query still returned a number — this is the case the whole
-    /// coverage contract exists to catch.
+    /// A property no node carries, *in a store that has nodes*. Every
+    /// predicate on it matched nothing, and the query still returned a
+    /// number — this is the case the whole coverage contract exists to catch.
+    ///
+    /// The `total > 0` guard matters: `total` is `count(*)` over the store,
+    /// so an un-ingested project makes `present == 0` for every property at
+    /// once. Reporting that as "this property is not indexed" blames the
+    /// schema for an empty index and sends the caller to `ug regen`, which
+    /// does not ingest — see [`Coverage::index_is_empty`].
     pub fn is_absent(&self) -> bool {
-        self.present == 0
+        self.present == 0 && self.total > 0
+    }
+
+    /// The store answered the coverage probe with zero nodes: nothing has
+    /// been ingested for this project yet.
+    pub fn index_is_empty(&self) -> bool {
+        self.total == 0
     }
 }
 
@@ -90,6 +102,12 @@ pub struct QueryAnswer {
     pub coverage: Vec<Coverage>,
     /// Properties the query referenced that no node carries.
     pub unindexed: Vec<String>,
+    /// The store holds no nodes at all — the project was generated with
+    /// `--no-ingest`, or its ingest failed. Distinguished from `unindexed`
+    /// because the remedy is different (`ug ingest`, not `ug regen`) and
+    /// because every property looks absent in this state, which would
+    /// otherwise be reported as a schema problem.
+    pub empty_index: bool,
     /// The window of rows to render. Every count reported alongside the
     /// table is over the *whole* result, not this window.
     pub window: range::RowRange,
@@ -179,6 +197,10 @@ pub async fn run(
         .filter(|c| c.is_absent())
         .map(|c| c.property.clone())
         .collect();
+    // Every entry carries the same `count(*)`, so any one of them answers
+    // this. An empty `coverage` means the probe itself failed, which is a
+    // different (already-reported) problem — not an empty index.
+    let empty_index = !coverage.is_empty() && coverage.iter().all(|c| c.index_is_empty());
 
     Ok(QueryAnswer {
         title,
@@ -186,6 +208,7 @@ pub async fn run(
         page,
         coverage,
         unindexed,
+        empty_index,
         window,
         gql,
         from_preset: params.preset.is_some(),
@@ -586,5 +609,25 @@ mod tests {
             total: 2280,
         };
         assert!(!c.is_absent());
+    }
+
+    /// In an empty store every property has `present == 0`, but none of them
+    /// is "absent" in the sense the caveat means — the index simply has no
+    /// nodes. Without the `total > 0` guard, `unindexed` fills up with every
+    /// property the query touched and reports a schema problem that isn't one.
+    #[test]
+    fn an_empty_store_makes_no_property_absent() {
+        for property in ["node_type", "loc", "has_doc"] {
+            let c = Coverage {
+                property: property.into(),
+                present: 0,
+                total: 0,
+            };
+            assert!(
+                !c.is_absent(),
+                "{property}: an empty index is not a missing property"
+            );
+            assert!(c.index_is_empty(), "{property}: should report the empty index");
+        }
     }
 }

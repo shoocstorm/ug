@@ -324,7 +324,18 @@ pub fn expand_node_refs(graph: &GraphData, refs: &[String], cap: usize) -> Vec<S
             out.push(r.clone());
         }
     }
-    out.dedup();
+    // Order-preserving dedup: keep the first mention of each id, drop later
+    // ones. `Vec::dedup` was wrong here — it only collapses *adjacent*
+    // duplicates, and the duplicates this produces never are. Two refs that
+    // overlap (`pad` and `pa*`, or a name and the file that contains it)
+    // interleave their expansions, so every tool downstream rendered the same
+    // symbol twice and spent the caller's context on it.
+    //
+    // Sorting first would make `dedup` correct but is not an option:
+    // `match_node_refs` orders by (name, id) and that is the order sections
+    // print in, so sorting `out` would reorder the caller's own references.
+    let mut seen: HashSet<String> = HashSet::with_capacity(out.len());
+    out.retain(|id| seen.insert(id.clone()));
     out
 }
 
@@ -3814,6 +3825,31 @@ mod tests {
             },
         );
         assert_eq!(names_of(&r.queries[0]), vec!["Runner"]);
+    }
+
+    /// Two refs that overlap must not yield the same id twice.
+    ///
+    /// `Vec::dedup` only collapses *adjacent* duplicates, and these never
+    /// are: each ref's expansion is appended whole, so a repeat of an
+    /// earlier id lands with other ids between them. The visible symptom was
+    /// `get_code run_gen 'run_*'` printing `run_gen`'s entire body twice.
+    #[test]
+    fn overlapping_refs_do_not_repeat_a_node_id() {
+        let g = glob_fixture();
+        let refs = vec!["run_gen".to_string(), "run_serve".to_string(), "run_*".to_string()];
+        let out = expand_node_refs(&g, &refs, MAX_REF_EXPANSION);
+
+        let mut sorted = out.clone();
+        sorted.sort();
+        let mut unique = sorted.clone();
+        unique.dedup();
+        assert_eq!(sorted, unique, "expansion contains duplicate ids: {out:?}");
+
+        // First mention wins, so the caller's own ordering survives: the two
+        // explicit refs stay in front of the ids the pattern added.
+        assert_eq!(out[0], "function:src/a.rs:1:run_gen");
+        assert_eq!(out[1], "function:src/a.rs:7:run_serve");
+        assert!(out.contains(&"function:src/deep/b.rs:1:run_index".to_string()));
     }
 
     /// `*` in a path must not cross `/`, or every "this directory" query
