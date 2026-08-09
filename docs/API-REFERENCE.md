@@ -41,7 +41,7 @@ These accept the same params as their MCP counterparts and can output `--json`.
 
 | Command | Aliases | What it does | Key flags |
 |---------|---------|-------------|-----------|
-| `ug find_symbols` | — | Symbol lookup by name, fragment (ranked exact > prefix > substring) or **wildcard**. | `--node-type <type>` (repeatable, wildcards ok), `--file-prefix <prefix-or-glob>`, `-k <limit>`, `--include-docs`, `-n <name>`, `--json`, `-o <file>` |
+| `ug find_symbols` | — | Symbol lookup by name, fragment (ranked exact > prefix > substring) or **wildcard**. | `--node-type <type>` (repeatable, wildcards ok), `--file-prefix <prefix-or-glob>`, `--boundary`, `-k <limit>`, `--include-docs`, `-n <name>`, `--json`, `-o <file>` |
 | `ug file_outline` | — | List indexed symbols in a file, in line order. Takes a path **glob**. | `<file-or-glob>` positional(s), `-k/--max-files <n>` (default 20), `--ids`, `-n <name>`, `--json` |
 | `ug get_code` | — | Read source for a symbol (id, name or wildcard), or a file/line range. | `<symbol>...` or `-f <file>`, `-s/--start-line`, `-e/--end-line`, `-r/--range <window>` (`11-35` · `34-end` · `20`, same dialect as `ug query --range`), `--max-chars`, `--no-doc`, `-n <name>` |
 | `ug find_usages` | — | Find inbound references (callers/importers) to a symbol. | `<symbol>...` positional(s), `-k/--hops`, `-t/--edge-type`, `-n <name>`, `--json` |
@@ -75,6 +75,8 @@ finds `src/main.rs`). Quote patterns in a shell.
 ug find_symbols 'handle_*'                       # every handler
 ug find_symbols '*Controller' --node-type Class
 ug find_symbols '*' --file-prefix 'src/auth/**' -k 100
+ug find_symbols --boundary                       # every entry and exit point
+                                                 # (no name needed — it is a listing)
 ug file_outline 'src/**/*.{ts,tsx}' -k 40        # survey a subtree
 ug find_usages 'validate_*'                      # blast radius of a family
 ug traverse 'handle_*' -d inbound
@@ -274,7 +276,7 @@ These 13 tools are advertised over MCP `tools/list` and also available via the C
 | `semantic_search` | Lightweight pure-vector lookup — no graph expansion, no snippets. Returns top-k nearest nodes with distance. | ugdb/Neo4j + embedder | DB/embedder unavailable |
 | `traverse` | Walk graph N hops from seed symbols (id, name or wildcard). Filters by edge type and direction; several seeds make one merged walk. | graph.json (graph-backed, no DB needed) | graph.json missing/invalid |
 | `find_usages` | Inbound references to a symbol (callers, importers, subclasses, etc.), by id, name or wildcard. Wrapper over traverse with direction=inbound + sensible defaults. Call-site lines come from each caller's stored source, with filesystem fallback. | graph.json (+ ugdb for call sites) | graph.json missing/invalid |
-| `find_symbols` | Symbol lookup by name (case-insensitive, ranked exact > prefix > substring) or by wildcard pattern (whole-name match). Filters by node type and file path/glob. Supports batch via array of names/patterns/ids. | graph.json | graph.json missing/invalid |
+| `find_symbols` | Symbol lookup by name (case-insensitive, ranked exact > prefix > substring) or by wildcard pattern (whole-name match). Filters by node type, file path/glob, and `boundary` (system entry/exit points only — works with no name at all, which lists the whole surface). Supports batch via array of names/patterns/ids. | graph.json | graph.json missing/invalid |
 | `file_outline` | List every indexed symbol in a file, in line order. Accepts a path, unique suffix, File node id, or path glob (up to `maxFiles` files). Supports batch via array. | graph.json | graph.json missing/invalid |
 | `get_code` | Read source for a symbol (id, name or wildcard) or a file/line range. Works from stored source in DB (consistent with search) with filesystem fallback; a file/line range is cut out of the file's whole-file capture, so it needs no working tree either. | ugdb (preferred) + filesystem fallback | node/file captured in neither ugdb nor the working tree |
 | `project_overview` | Orient in the codebase: repo root, node/edge counts, biggest files, most depended-upon symbols. | graph.json | graph.json missing/invalid |

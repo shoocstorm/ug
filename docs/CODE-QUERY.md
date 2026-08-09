@@ -109,6 +109,8 @@ it by hand.
 | `in_degree` / `out_degree` | Computed once per ingest. `in_degree` moves when some *other* file starts calling a node, which is why incremental ingest must compare it. |
 | `language` / `classification` | Stamped on every symbol in a file, not just the File node, so "group by language" is a scan and not a join. |
 | `qualified_name` / `route` / `annotations` | Present for languages that resolve them (Java, TypeScript); reported `NOT INDEXED` where they never exist (e.g. `route` on a docs-only sample). |
+| `boundary` / `boundary_in` / `boundary_out` | Whether this symbol is a system boundary, and in which direction. Written for **every** node on a graph new enough to have looked, so `sum(n.boundary_in)/count(*)` is a real fraction — and omitted entirely on an older graph, because most symbols genuinely are not boundaries and a blanket `0` would read as a finished measurement rather than a missing one. |
+| `boundary_kinds` / `boundary_protocols` / `boundary_detail` | Comma-joined and deduplicated, like `annotations`, because the store holds scalars and the question is "does this contain X". `boundary_detail` is the human-facing name of the surface — `GET /api/orders/{id}`, a queue name, a cron expression — and is the only property carrying it for non-HTTP boundaries (`route` covers the Java HTTP case alone). |
 
 Booleans are stored as **0/1 integers** — GQL has no boolean aggregate, so
 `sum(n.has_doc) / count(*)` is the only way to ask "what fraction is
@@ -124,7 +126,8 @@ with "run `ug regen`" rather than read as garbage.
 `loc` · `code_lines` · `comment_lines` · `doc_lines` · `params` ·
 `max_nesting` · `members` · `has_doc` · `has_comments` · `is_test` ·
 `in_degree` · `out_degree` · `qualified_name` · `route` · `annotations` ·
-`start_line` · `end_line`.
+`boundary` · `boundary_in` · `boundary_out` · `boundary_kinds` ·
+`boundary_protocols` · `boundary_detail` · `start_line` · `end_line`.
 
 Three pairs are easy to confuse, and picking the wrong one changes the answer:
 
@@ -187,7 +190,8 @@ e.g. `comment_coverage`, `comment_density`, `token_docs`,
 `undercommented_complexity`, `long_functions`, `long_functions_by_code`,
 `classes_by_members`, `language_breakdown`, `file_kinds`, `param_bloat`,
 `god_classes`, `dead_code`, `orphan_files`, `untested_symbols`, `test_ratio`,
-`impact`, `retest_scope`, `layering_violations`, `coupling_matrix`, `size_histogram`, …
+`impact`, `boundary_impact`, `boundaries`, `boundary_census`,
+`retest_scope`, `layering_violations`, `coupling_matrix`, `size_histogram`, …
 
 Run `ug query --list` (or call `graph_schema`) for the current set — the
 authoritative list is the code, and this paragraph will otherwise drift.
@@ -232,6 +236,30 @@ also_check: 2 files import this module with unresolved symbol edges
 `count(DISTINCT elementKey(dep))` is what makes the transitive number honest —
 a plain `count(*)` counts paths, and an impact report that quadrupled its real
 dependents would not survive first contact with a user.
+
+### `boundary_impact` — the half `impact` cannot answer
+
+"41 dependents" says how much code moves. It does not say whether any of it is
+visible from outside, and that is what decides whether a change needs a
+version bump, a migration or a deprecation notice. `boundary_impact` reverse-
+reaches over the same edges and keeps only the **inbound system boundaries**:
+
+```
+$ ug query boundary_impact --arg target=src/main/java/com/acme/OrderRepository.java
+
+surface                                    kinds          exposed_as               paths
+…r.java:OrderController.find               http.endpoint  GET /api/orders/{id}         1
+…r.java:OrderController.cancel             http.endpoint  DELETE /api/orders/{id}      1
+```
+
+Four hops rather than three: a boundary usually sits one layer further out
+than the callers `impact` is written for. The grouping implied by `count(*)`
+is what collapses a variable-length match's one-row-per-path back to one row
+per boundary — the same trap `impact` documents.
+
+Its companions are `boundaries` (every entry and exit point, with the surface
+each exposes) and `boundary_census` (what the system exposes and consumes, by
+kind and direction — the one-liner for orienting in an unfamiliar repo).
 
 ---
 

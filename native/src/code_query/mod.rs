@@ -159,6 +159,12 @@ pub const QUERYABLE_PROPERTIES: &[&str] = &[
     "qualified_name",
     "route",
     "annotations",
+    "boundary",
+    "boundary_in",
+    "boundary_out",
+    "boundary_kinds",
+    "boundary_protocols",
+    "boundary_detail",
 ];
 
 /// Resolve, execute and annotate one query.

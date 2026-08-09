@@ -44,21 +44,50 @@ struct Sym {
     /// means the fact is absent — which is what a Rust struct looks like,
     /// and what `classes_by_members` has to tolerate.
     members: Option<i64>,
+    /// The system boundary this symbol is, if any. `None` is the common
+    /// case and still writes `boundary = 0`: this fixture stands for a
+    /// graph that *was* boundary-indexed and found nothing here, which is
+    /// a different claim from one that never looked.
+    boundary: Option<Bnd>,
 }
+
+struct Bnd {
+    kinds: &'static str,
+    protocols: &'static str,
+    detail: &'static str,
+    inbound: i64,
+    outbound: i64,
+}
+
+const HTTP_IN: Bnd = Bnd {
+    kinds: "http.endpoint",
+    protocols: "http",
+    detail: "POST /login",
+    inbound: 1,
+    outbound: 0,
+};
+
+const DB_OUT: Bnd = Bnd {
+    kinds: "db.access",
+    protocols: "jdbc",
+    detail: "users",
+    inbound: 0,
+    outbound: 1,
+};
 
 /// A miniature repo: two source folders, one test folder, a documented
 /// core symbol everything depends on, and one symbol nothing calls.
 const SYMBOLS: &[Sym] = &[
-    Sym { id: "function:src/core/auth.rs:verify", node_type: "Function", file: "src/core/auth.rs", loc: 120, code_lines: 90, comment_lines: 20, doc_lines: 4, has_doc: 1, is_test: 0, in_degree: 3, members: None },
-    Sym { id: "function:src/core/auth.rs:hash",   node_type: "Function", file: "src/core/auth.rs", loc: 18,  code_lines: 15, comment_lines: 0,  doc_lines: 0, has_doc: 0, is_test: 0, in_degree: 1, members: None },
+    Sym { id: "function:src/core/auth.rs:verify", node_type: "Function", file: "src/core/auth.rs", loc: 120, code_lines: 90, comment_lines: 20, doc_lines: 4, has_doc: 1, is_test: 0, in_degree: 3, members: None, boundary: Some(DB_OUT) },
+    Sym { id: "function:src/core/auth.rs:hash",   node_type: "Function", file: "src/core/auth.rs", loc: 18,  code_lines: 15, comment_lines: 0,  doc_lines: 0, has_doc: 0, is_test: 0, in_degree: 1, members: None, boundary: None },
     // Commented but undocumented — the case that separates `has_comments`
     // from `has_doc`.
-    Sym { id: "function:src/api/login.rs:handle", node_type: "Function", file: "src/api/login.rs", loc: 64,  code_lines: 48, comment_lines: 11, doc_lines: 0, has_doc: 0, is_test: 0, in_degree: 1, members: None },
-    Sym { id: "function:src/api/login.rs:unused", node_type: "Function", file: "src/api/login.rs", loc: 9,   code_lines: 7,  comment_lines: 0,  doc_lines: 0, has_doc: 0, is_test: 0, in_degree: 0, members: None },
-    Sym { id: "class:src/core/auth.rs:Session",   node_type: "Class",    file: "src/core/auth.rs", loc: 200, code_lines: 150, comment_lines: 30, doc_lines: 0, has_doc: 0, is_test: 0, in_degree: 2, members: Some(7) },
-    Sym { id: "function:tests/auth_test.rs:t_verify", node_type: "Function", file: "tests/auth_test.rs", loc: 25, code_lines: 22, comment_lines: 1, doc_lines: 0, has_doc: 0, is_test: 1, in_degree: 0, members: None },
-    Sym { id: "file:src/core/auth.rs", node_type: "File", file: "src/core/auth.rs", loc: 400, code_lines: 300, comment_lines: 60, doc_lines: 0, has_doc: 0, is_test: 0, in_degree: 2, members: None },
-    Sym { id: "file:src/api/login.rs", node_type: "File", file: "src/api/login.rs", loc: 90,  code_lines: 70, comment_lines: 12, doc_lines: 0, has_doc: 0, is_test: 0, in_degree: 0, members: None },
+    Sym { id: "function:src/api/login.rs:handle", node_type: "Function", file: "src/api/login.rs", loc: 64,  code_lines: 48, comment_lines: 11, doc_lines: 0, has_doc: 0, is_test: 0, in_degree: 1, members: None, boundary: Some(HTTP_IN) },
+    Sym { id: "function:src/api/login.rs:unused", node_type: "Function", file: "src/api/login.rs", loc: 9,   code_lines: 7,  comment_lines: 0,  doc_lines: 0, has_doc: 0, is_test: 0, in_degree: 0, members: None, boundary: None },
+    Sym { id: "class:src/core/auth.rs:Session",   node_type: "Class",    file: "src/core/auth.rs", loc: 200, code_lines: 150, comment_lines: 30, doc_lines: 0, has_doc: 0, is_test: 0, in_degree: 2, members: Some(7), boundary: None },
+    Sym { id: "function:tests/auth_test.rs:t_verify", node_type: "Function", file: "tests/auth_test.rs", loc: 25, code_lines: 22, comment_lines: 1, doc_lines: 0, has_doc: 0, is_test: 1, in_degree: 0, members: None, boundary: None },
+    Sym { id: "file:src/core/auth.rs", node_type: "File", file: "src/core/auth.rs", loc: 400, code_lines: 300, comment_lines: 60, doc_lines: 0, has_doc: 0, is_test: 0, in_degree: 2, members: None, boundary: None },
+    Sym { id: "file:src/api/login.rs", node_type: "File", file: "src/api/login.rs", loc: 90,  code_lines: 70, comment_lines: 12, doc_lines: 0, has_doc: 0, is_test: 0, in_degree: 0, members: None, boundary: None },
 ];
 
 const EDGES: &[(&str, &str, &str)] = &[
@@ -122,6 +151,30 @@ async fn seeded_store(tmp: &TempDir) -> Db {
                     // that declares members — see `Sym::members`.
                     if let Some(m) = s.members {
                         f.insert("members".into(), FactValue::Int(m));
+                    }
+                    // The flags are written for every node, the strings only
+                    // where there is one — mirroring `facts::compute`, so
+                    // "no boundary" reads as a measured zero while the
+                    // detail columns stay genuinely absent.
+                    f.insert(
+                        "boundary".into(),
+                        FactValue::Int(i64::from(s.boundary.is_some())),
+                    );
+                    f.insert(
+                        "boundary_in".into(),
+                        FactValue::Int(s.boundary.as_ref().map_or(0, |b| b.inbound)),
+                    );
+                    f.insert(
+                        "boundary_out".into(),
+                        FactValue::Int(s.boundary.as_ref().map_or(0, |b| b.outbound)),
+                    );
+                    if let Some(b) = &s.boundary {
+                        f.insert("boundary_kinds".into(), FactValue::Str(b.kinds.into()));
+                        f.insert(
+                            "boundary_protocols".into(),
+                            FactValue::Str(b.protocols.into()),
+                        );
+                        f.insert("boundary_detail".into(), FactValue::Str(b.detail.into()));
                     }
                     f
                 },
@@ -266,6 +319,50 @@ async fn impact_counts_dependents_once_not_once_per_path() {
     // node that imports it.
     let dependents = answer.page.rows[0][0].as_f64().unwrap() as usize;
     assert_eq!(dependents, 3, "row: {:?}", answer.page.rows[0]);
+}
+
+#[tokio::test]
+async fn boundary_impact_reports_the_surface_a_change_is_visible_through() {
+    let tmp = TempDir::new().unwrap();
+    let db = seeded_store(&tmp).await;
+
+    let mut p = params("boundary_impact");
+    p.args.insert("target".into(), "src/core/auth.rs".into());
+    let answer = code_query::run(&db, &p).await.unwrap();
+
+    // `handle` is the only inbound boundary that reaches auth.rs. `verify`
+    // is a boundary too, but an outbound one and inside the target file —
+    // neither is a contract a change to auth.rs breaks for someone else.
+    assert_eq!(answer.page.rows.len(), 1, "{:?}", answer.page.rows);
+    let row = &answer.page.rows[0];
+    assert_eq!(row[0], QueryValue::Str("function:src/api/login.rs:handle".into()));
+    assert_eq!(row[1], QueryValue::Str("http.endpoint".into()));
+    assert_eq!(row[2], QueryValue::Str("POST /login".into()));
+}
+
+#[tokio::test]
+async fn boundary_census_separates_the_two_directions() {
+    let tmp = TempDir::new().unwrap();
+    let db = seeded_store(&tmp).await;
+
+    let answer = code_query::run(&db, &params("boundary_census")).await.unwrap();
+
+    // One inbound HTTP surface and one outbound DB one — two rows, because
+    // the kinds differ, and each counted in exactly one direction.
+    assert_eq!(answer.page.rows.len(), 2, "{:?}", answer.page.rows);
+    let total_in: f64 = answer
+        .page
+        .rows
+        .iter()
+        .filter_map(|r| r[2].as_f64())
+        .sum();
+    let total_out: f64 = answer
+        .page
+        .rows
+        .iter()
+        .filter_map(|r| r[3].as_f64())
+        .sum();
+    assert_eq!((total_in, total_out), (1.0, 1.0), "{:?}", answer.page.rows);
 }
 
 #[tokio::test]

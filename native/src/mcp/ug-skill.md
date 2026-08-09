@@ -13,9 +13,14 @@ description: >-
   files rather than one — every handler, all the `*Controller` classes, each
   `test_*`, everything under `src/auth/` — because `ug` takes wildcards
   (`*` `?` `[abc]` `{a,b}`) wherever a symbol or file is named, so one call
-  replaces a loop. Also triggers on: ug, UltraGraph, `ug query`, blast
+  replaces a loop. Also use to find where a system meets the outside world —
+  its REST endpoints, queue listeners, CLI commands, scheduled jobs and
+  outbound HTTP/DB/queue clients — and to ask whether a change is visible
+  beyond the repo. Also triggers on: ug, UltraGraph, `ug query`, blast
   radius, impact analysis, dead code, repo statistics, "which files depend
-  on", "all the functions named like", "every file matching".
+  on", "all the functions named like", "every file matching", system
+  boundary, entry point, API surface, "what endpoints does this expose",
+  "is this a breaking change".
 ---
 
 # ug — codebase knowledge graph from the CLI
@@ -55,6 +60,9 @@ engine, same parameter names, richer `--help`.
 | What does this depend on? | `ug traverse <symbol> -k 1` (widen only if needed) |
 | How are A and B connected? | `ug shortest_path A B` |
 | Where do I start in this repo? | `ug project_overview`, `ug query where_to_start` |
+| What does this service expose / talk to? | `ug query boundary_census`, then `ug query boundaries` |
+| Is this change visible outside the system? | `ug query boundary_impact --arg target=path/to/f.rs` |
+| Every endpoint / listener / CLI command | `ug find_symbols --boundary` |
 | Central symbols · dependency cycles | `ug graph_centrality` · `ug graph_cycles` |
 
 **Confusable properties** — these decide whether a count answers the question
@@ -114,9 +122,9 @@ when it hits that — narrow the pattern rather than trusting a capped answer.
 - **size** — `long_functions` `[min_loc]`, `long_functions_by_folder` `[min_loc]`, `long_functions_by_code` `[min_loc]`, `size_histogram`, `god_classes`, `classes_by_members`, `param_bloat` `[min_params]`, `deep_nesting` `[min_depth]`
 - **documentation** — `comment_coverage`, `comment_density`, `doc_coverage`, `doc_coverage_by_folder`, `token_docs`, `undercommented_complexity`, `undocumented_hotspots`
 - **dead code** — `dead_code`, `orphan_files`, `duplicate_names`
-- **architecture** — `dependency_fanin`, `fanout_offenders` `[min_fanout]`, `coupling_matrix`, `layering_violations` `[from_prefix, to_prefix]`
+- **architecture** — `dependency_fanin`, `fanout_offenders` `[min_fanout]`, `coupling_matrix`, `layering_violations` `[from_prefix, to_prefix]`, `boundaries`, `boundary_census`
 - **tests** — `test_ratio`, `untested_symbols`, `retest_scope` `[target]`
-- **risk** — `impact` `[target]`, `impact_summary` `[target]`, `risky_symbols`
+- **risk** — `impact` `[target]`, `impact_summary` `[target]`, `boundary_impact` `[target]`, `risky_symbols`
 
 Args in `[brackets]` are passed `--arg key=value` (repeatable). The catalog
 moves between versions — re-read `ug query --list` if `ug --version` mismatches.
@@ -150,8 +158,41 @@ what you've seen. Each answer prints the next range to ask for.
 - `-t/--edge-type` filter on a type this graph lacks → `ug graph_schema` first.
 
 **Reachability presets can hit the traversal cap** on hub files (`impact`,
-`retest_scope`, `untested_symbols` walk variable-length paths). The error names
-the fix; fall back to `impact_summary` or `find_usages <id> -k 2`.
+`boundary_impact`, `retest_scope`, `untested_symbols` walk variable-length
+paths). The error names the fix; fall back to `impact_summary` or
+`find_usages <id> -k 2`.
+
+### System boundaries — what "what breaks" actually means
+
+A **boundary** is where the code meets something outside it: an HTTP endpoint,
+a queue listener, a CLI command or a scheduled job coming *in*; an HTTP,
+database or queue client going *out*. These are the contracts other teams and
+other systems depend on, and the call graph cannot show you their callers —
+those callers were never indexed.
+
+So when asked "what breaks if I change X", run **both**:
+
+```bash
+ug query impact --arg target=src/orders/repo.java           # how much code moves
+ug query boundary_impact --arg target=src/orders/repo.java  # what is visible outside
+```
+
+`impact` answering "41 dependents" is a refactor. `boundary_impact` answering
+"two REST endpoints and a Kafka listener" is an API change — say so, because
+that is what decides whether the change needs a version bump, a migration or
+a deprecation notice.
+
+Boundaries also show up without being asked for: `find_usages` prints a
+`⊕ N of M user(s) are system boundaries` line, and every agent-tool hit
+carries a `boundary:` field like `in:http.endpoint GET /api/orders/{id}`.
+
+Detection is heuristic — annotations, decorators, attributes and client call
+sites. It is tuned to under-report rather than invent: Express routes and
+chained axum routers are **not** detected (the receiver cannot be typed), and
+a service method that merely calls a repository is not tagged as database
+access — the repository is. Treat an empty result as "none found", and check
+`ug graph_schema` for the boundary counts; on a graph indexed before this
+existed it says `NOT INDEXED` rather than reporting zero.
 
 ### Hand-written GQL
 

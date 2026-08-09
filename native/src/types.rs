@@ -67,6 +67,73 @@ pub struct Symbol {
     /// composed from type-level and member-level mapping annotations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<String>,
+
+    /// Where this symbol lets the outside world in, or reaches out to it.
+    /// Filled by the [`crate::indexer::boundary`] post-pass, not by the
+    /// language extractors — see [`Boundary`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub boundaries: Vec<Boundary>,
+}
+
+/// A point where the system meets something outside itself.
+///
+/// Deliberately *not* a [`GraphNodeType`]. A Spring handler is a `Function`
+/// that is also an `http.endpoint`, and promoting it to its own node type
+/// would silently change the answer to "how many functions does this repo
+/// have" — along with `dead_code`, `long_functions` and every other count
+/// that filters on node type. Boundary-ness is a property of a symbol, not
+/// a replacement for what the symbol is.
+///
+/// A symbol can carry several: a `@GetMapping` method that calls
+/// `repository.save(..)` is an inbound HTTP surface *and* an outbound
+/// persistence one, and collapsing that to a single tag would lose whichever
+/// half was checked second.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct Boundary {
+    /// Dotted `family.role`, e.g. `http.endpoint`, `mq.listener`,
+    /// `cli.command`, `http.client`, `db.access`. The prefix is what makes
+    /// `boundary_kinds CONTAINS 'http.'` a useful query.
+    pub kind: String,
+
+    pub direction: BoundaryDirection,
+
+    /// The concrete wire protocol or mechanism — `http`, `jms`, `kafka`,
+    /// `amqp`, `jdbc`, `cli`, `schedule`. Separate from [`Self::kind`]
+    /// because `mq.listener` alone cannot answer "what talks to Kafka".
+    pub protocol: String,
+
+    /// The human-facing name of the surface: `GET /api/orders/{id}`, the
+    /// queue name, the cron expression. This is the string someone actually
+    /// searches for, and it appears in no identifier or path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+
+    /// Id of the registry rule that produced this tag (`spring.GetMapping`).
+    ///
+    /// Provenance matters here more than it usually would: detection is
+    /// heuristic, so a wrong tag has to be traceable to one row of
+    /// [`crate::indexer::boundary::RULES`] rather than to "the indexer".
+    pub source: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum BoundaryDirection {
+    /// The outside world reaches in — an HTTP handler, a queue listener, a
+    /// CLI command, a scheduled job.
+    #[default]
+    Inbound,
+    /// The system reaches out — an HTTP client, a DB call, a queue producer.
+    Outbound,
+}
+
+impl BoundaryDirection {
+    /// Lowercase wire form, used in facts, JSON and rendered labels.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            BoundaryDirection::Inbound => "inbound",
+            BoundaryDirection::Outbound => "outbound",
+        }
+    }
 }
 
 /// One declaration-site annotation. `name` is the simple name with any
@@ -134,7 +201,28 @@ pub struct CallRef {
         skip_serializing_if = "std::ops::Not::not"
     )]
     pub has_receiver: bool,
+
+    /// The call's first argument, when it is a plain string literal, with the
+    /// quotes stripped and the text capped at [`MAX_CALL_ARG`].
+    ///
+    /// Narrow on purpose. It exists because the frameworks that declare a
+    /// route by *calling* rather than by annotating — `app.get("/users", h)`,
+    /// `Router::route("/x", get(h))` — put the only interesting string
+    /// there, and without it those boundaries can be detected but not named.
+    /// Anything that is not a literal (a variable, a concatenation, a
+    /// template) stays `None` rather than being guessed at.
+    #[serde(
+        rename = "firstStringArg",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub first_string_arg: Option<String>,
 }
+
+/// Cap on [`CallRef::first_string_arg`]. A route path is short; anything
+/// longer is a message body or a SQL statement, and storing it would put a
+/// paragraph on every call site in the graph.
+pub const MAX_CALL_ARG: usize = 120;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Signature {
@@ -335,7 +423,13 @@ pub struct Dependency {
 ///   at all. A reader seeing version < 3 should treat call-graph answers
 ///   (`find_usages`, `impact`, `dead_code`) as indicative rather than
 ///   accurate, and say so, rather than reporting a confident wrong number.
-pub const GRAPH_SCHEMA_VERSION: u32 = 3;
+/// - **4**: system boundaries ([`Boundary`]) on every symbol, plus
+///   declaration-site annotations for Python, TypeScript and Rust (before
+///   this only Java captured them). A reader seeing version < 4 must treat
+///   "this repo has no boundaries" as *not measured* rather than as zero —
+///   which is why [`crate::storage::facts`] omits the boundary facts
+///   entirely on an older graph instead of writing them as `0`.
+pub const GRAPH_SCHEMA_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexStats {
@@ -460,6 +554,13 @@ pub struct GraphNode {
     /// Mirrors [`Symbol::route`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<String>,
+
+    /// Mirrors [`Symbol::boundaries`]. Carried on the node rather than
+    /// re-derived downstream because the two consumers — `graph.json` (the
+    /// agent tools and the canvas) and the store's facts (GQL) — read from
+    /// different sides of the pipeline and would otherwise disagree.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub boundaries: Vec<Boundary>,
 
     /// Language of the file this node comes from, as its indexer names it
     /// (`rust`, `typescript`, `java`, `python`, `markdown`).

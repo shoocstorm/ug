@@ -302,6 +302,12 @@
                     extends: n.extends || [],
                     implements: n.implements || [],
                     calls: n.calls || [],
+                    // Named `isBoundary`, not `boundary`: `state.showBoundary`
+                    // is already the dashed bounding-box overlay, and two
+                    // unrelated "boundary" concepts one word apart would be
+                    // read as one by the next person here.
+                    isBoundary: !!(n.boundaries && n.boundaries.length),
+                    boundaries: n.boundaries || [],
                     x: cx + Math.cos(angle) * radius,
                     y: cy + Math.sin(angle) * radius
                 });
@@ -520,6 +526,13 @@
             type: ['Node type', 'What kind of thing this is in the graph. Decided by the indexer '
                 + 'from the symbol kind — Concept means a document section or page rather than '
                 + 'code. Node type sets the colour in the graph and can be filtered on in search.'],
+            boundary: ['System boundary', 'Where this code meets something outside the system: an '
+                + 'HTTP endpoint, a queue listener, a CLI command or a scheduled job coming in; an '
+                + 'HTTP, database or queue client going out. Detected from framework annotations, '
+                + 'decorators, attributes and client call sites, so it is a strong signal rather '
+                + 'than a certainty. It matters most before a change — a boundary is a contract '
+                + 'something outside the repo already depends on, and the call graph cannot show '
+                + 'you its callers because they were never indexed.'],
             file: ['File', 'Path the node was indexed from, relative to the repo root. Shared by '
                 + 'every node declared in that file, and the key the Source tab reads from disk.'],
             lines: ['Line range', 'Where this node lives in its file. For PDF and Office pages '

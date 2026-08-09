@@ -20,14 +20,17 @@
 //! `use` declarations become `ImportInfo` entries keyed by the first
 //! crate / module segment.
 
-use crate::indexer::common::{calculate_nesting, extract_return_type, get_node_text};
+use crate::indexer::common::{
+    annotation_args, calculate_nesting, extract_return_type, first_string_arg, get_node_text,
+};
 use crate::indexer::languages::{FileContext, LanguageIndexer};
 use crate::indexer::scope::{
     base_type_name, looks_like_constant, looks_like_type, module_path, ImportScope, TypeEnv,
     CTOR, MEMBER_SEP,
 };
 use crate::types::{
-    CallRef, ExportInfo, ImportInfo, ImportedItem, Param, Signature, Symbol, SymbolMetrics,
+    Annotation, CallRef, ExportInfo, ImportInfo, ImportedItem, Param, Signature, Symbol,
+    SymbolMetrics,
 };
 use std::collections::HashMap;
 use tree_sitter::Node;
@@ -212,6 +215,7 @@ fn extract_symbol_from_node(
     let start = (node.start_position().row + 1) as u32;
     let end = (node.end_position().row + 1) as u32;
     let docstring = extract_rust_docstring(node, source);
+    let annotations = extract_attributes(node, source);
 
     match kind {
         // `function_signature_item` is a trait member with no body
@@ -256,6 +260,7 @@ fn extract_symbol_from_node(
             };
 
             out.push(Symbol {
+                annotations: annotations.clone(),
                 id: format!("fn:{}:{}", start, name),
                 name,
                 kind: "function".to_string(),
@@ -286,6 +291,7 @@ fn extract_symbol_from_node(
             };
             let item_kind = if kind == "struct_item" { "struct" } else { "enum" };
             out.push(Symbol {
+                annotations: annotations.clone(),
                 id: format!("{}:{}:{}", item_kind, start, name),
                 qualified_name: Some(ctx.scope.qualify(&name)),
                 name,
@@ -317,6 +323,7 @@ fn extract_symbol_from_node(
                 .filter_map(|b| ctx.scope.resolve_type_ref(b))
                 .collect();
             out.push(Symbol {
+                annotations: annotations.clone(),
                 id: format!("trait:{}:{}", start, name),
                 qualified_name: Some(ctx.scope.qualify(&name)),
                 name,
@@ -340,6 +347,7 @@ fn extract_symbol_from_node(
                 return;
             };
             out.push(Symbol {
+                annotations: annotations.clone(),
                 id: format!("type:{}:{}", start, name),
                 qualified_name: Some(ctx.scope.qualify(&name)),
                 name,
@@ -363,6 +371,7 @@ fn extract_symbol_from_node(
                 return;
             };
             out.push(Symbol {
+                annotations: annotations.clone(),
                 id: format!("const:{}:{}", start, name),
                 qualified_name: Some(ctx.scope.qualify(&name)),
                 name,
@@ -386,6 +395,7 @@ fn extract_symbol_from_node(
                 return;
             };
             out.push(Symbol {
+                annotations: annotations.clone(),
                 id: format!("macro:{}:{}", start, name),
                 qualified_name: Some(ctx.scope.qualify(&name)),
                 name,
@@ -577,6 +587,8 @@ fn collect_calls(
                         name: CTOR.to_string(),
                         owner_type: ctx.scope.lookup(bare),
                         argc: 0,
+                        // A struct literal has fields, not positional args.
+                        first_string_arg: None,
                         qualified: None,
                         is_ctor: true,
                         // `<init>` is a sentinel, not a name anything is
@@ -595,6 +607,9 @@ fn collect_calls(
                         name: bare,
                         owner_type: None,
                         argc: 0,
+                        // A macro's tokens are not an argument list; the
+                        // grammar gives them no `arguments` field to read.
+                        first_string_arg: None,
                         is_ctor: false,
                         has_receiver: false,
                     });
@@ -655,6 +670,7 @@ fn call_ref_for(
         func = func.child_by_field_name("function")?;
     }
     let argc = argument_count(call);
+    let arg0 = first_string_arg(call, "arguments", source);
 
     match func.kind() {
         "identifier" => {
@@ -664,6 +680,7 @@ fn call_ref_for(
                 name,
                 owner_type: None,
                 argc,
+                first_string_arg: arg0,
                 is_ctor: false,
                 has_receiver: false,
             })
@@ -676,6 +693,7 @@ fn call_ref_for(
                 owner_type: type_of_expr(&recv, source, ctx, imp, env),
                 name,
                 argc,
+                first_string_arg: arg0,
                 qualified: None,
                 is_ctor: false,
                 has_receiver: true,
@@ -694,6 +712,7 @@ fn call_ref_for(
                     owner_type: ctx.scope.resolve_path(prefix),
                     name: name.to_string(),
                     argc,
+                    first_string_arg: arg0,
                     qualified: None,
                     is_ctor: false,
                     // The type qualifier is the whole identity of the
@@ -708,6 +727,7 @@ fn call_ref_for(
                     name: name.to_string(),
                     owner_type: None,
                     argc,
+                    first_string_arg: arg0,
                     is_ctor: false,
                     has_receiver: false,
                 })
@@ -1066,6 +1086,51 @@ fn combine_prefix(prefix: &str, suffix: &str) -> String {
         return prefix.to_string();
     }
     format!("{}::{}", prefix, suffix)
+}
+
+/// Outer attributes (`#[...]`) applied to an item, in source order.
+///
+/// Rust's grammar makes these *preceding siblings* of the item, not children
+/// — the same shape `extract_rust_docstring` walks — so this scans backwards
+/// and reverses at the end.
+///
+/// `#![...]` inner attributes are skipped: they configure the enclosing
+/// module or crate, and attributing `#![no_std]` to whichever item happens
+/// to follow it would be wrong rather than merely noisy.
+///
+/// The path keeps every segment (`tokio::main`, not `main`), because in Rust
+/// the qualifier is what distinguishes an attribute macro from a plain one.
+/// Boundary rules match those with a `*::main` pattern.
+fn extract_attributes(node: &Node, source: &[u8]) -> Vec<Annotation> {
+    let mut out = Vec::new();
+    let mut prev = node.prev_sibling();
+    while let Some(p) = prev {
+        match p.kind() {
+            "attribute_item" => {
+                if let Some(attr) = p.named_child(0) {
+                    // Positional, not by field name: tree-sitter-rust gives
+                    // `attribute` an unnamed `identifier`/`scoped_identifier`
+                    // followed by a `token_tree`, with no `path` or
+                    // `arguments` fields to ask for.
+                    let path = attr.named_child(0);
+                    let args = attr.named_child(1).filter(|n| n.kind() == "token_tree");
+                    if let Some(name) = get_node_text(path, source) {
+                        out.push(Annotation {
+                            name: name.trim().to_string(),
+                            args: annotation_args(args, source),
+                        });
+                    }
+                }
+            }
+            // Doc comments interleave freely with attributes above an item;
+            // neither ends the run.
+            "line_comment" | "block_comment" => {}
+            _ => break,
+        }
+        prev = p.prev_sibling();
+    }
+    out.reverse();
+    out
 }
 
 /// Collapse the run of `///` (outer) or `//!` (inner) doc-comment lines

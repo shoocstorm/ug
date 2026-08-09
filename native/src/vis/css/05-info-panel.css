@@ -150,6 +150,22 @@
 
         #info .info-dim { color: var(--text-dim); }
 
+        /* System boundary tags. The two directions get the same two hues the
+           canvas rings use — warm for a way in, violet for a way out — so the
+           panel and the graph agree without a legend between them. */
+        #info .boundary-tag {
+            display: inline-block;
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            padding: 1px 7px;
+            border-radius: 999px;
+            border: 1px solid currentColor;
+        }
+
+        #info .boundary-in { color: #fbbf24; }
+        #info .boundary-out { color: #a78bfa; }
+
         /* List-valued fields (calls / extends / implements). Wrap rather than
            run off the panel, and navigate when the name resolves to a node. */
         #info .info-chips {

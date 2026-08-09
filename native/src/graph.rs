@@ -405,6 +405,7 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
                 qualified_name: sym.qualified_name.clone(),
                 annotations: sym.annotations.clone(),
                 route: sym.route.clone(),
+                boundaries: sym.boundaries.clone(),
                 // Carried down from the file onto every symbol in it, so
                 // "group by language" or "exclude test code" is a scan
                 // rather than a join back to the File node.

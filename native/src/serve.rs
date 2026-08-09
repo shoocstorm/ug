@@ -4706,7 +4706,22 @@ fn node_row_to_json(n: &storage::NodeRow) -> serde_json::Value {
         "description": n.description,
         // Full chunk text — powers the right-panel "Preview" tab.
         "node_text": n.node_text,
+        // Boundary facts, as the store holds them (comma-joined scalars —
+        // see `storage::facts`). The canvas reads the structured
+        // `GraphNode::boundaries` from graph.json instead; these are here so
+        // a caller hitting the DB route directly is not told less than a
+        // caller hitting the graph route.
+        "boundary_kinds": fact_str(n, "boundary_kinds"),
+        "boundary_detail": fact_str(n, "boundary_detail"),
     })
+}
+
+/// A string-valued fact, or `null` when the node does not carry it.
+fn fact_str(n: &storage::NodeRow, key: &str) -> Option<String> {
+    match n.facts.get(key) {
+        Some(storage::facts::FactValue::Str(s)) => Some(s.clone()),
+        _ => None,
+    }
 }
 
 pub fn print_serve_help() {

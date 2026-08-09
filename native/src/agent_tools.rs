@@ -15,7 +15,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::pattern::{self, Mode, Pattern};
-use crate::types::{GraphData, GraphEdgeType, GraphNode, GraphNodeType};
+use crate::types::{BoundaryDirection, GraphData, GraphEdgeType, GraphNode, GraphNodeType};
 use crate::{C_BOLD, C_CYAN, C_DIM, C_RESET};
 
 // ---------------------------------------------------------------------------
@@ -501,11 +501,51 @@ pub struct SymbolRef {
     pub end_line: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub doc: Option<String>,
+    /// One-line summary of the system boundaries this symbol is, e.g.
+    /// `in:http.endpoint GET /api/orders/{id}`.
+    ///
+    /// Flattened to a string rather than carried as the structured
+    /// [`crate::types::Boundary`] list: this rides on every node of every
+    /// tool result, and a nested object per node would cost more tokens than
+    /// the fact is worth. `None` — the common case — serializes to nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub boundary: Option<String>,
 }
 
 /// How much of a docstring travels in a list result. Full text is available
 /// via `get_code`, so listings stay scannable.
 const DOC_PREVIEW_CHARS: usize = 200;
+
+/// Compact `in:kind detail` label for a node's boundaries, or `None` when it
+/// is not one.
+///
+/// Only the first two are named. A route-registration function can declare a
+/// dozen, and spelling them all out on every row of a `traverse` result would
+/// bury the graph in paths; the count is what tells the reader to go look.
+fn boundary_label(n: &GraphNode) -> Option<String> {
+    if n.boundaries.is_empty() {
+        return None;
+    }
+    let mut parts: Vec<String> = n
+        .boundaries
+        .iter()
+        .take(2)
+        .map(|b| {
+            let dir = match b.direction {
+                BoundaryDirection::Inbound => "in",
+                BoundaryDirection::Outbound => "out",
+            };
+            match b.detail.as_deref().filter(|d| !d.is_empty()) {
+                Some(d) => format!("{dir}:{} {d}", b.kind),
+                None => format!("{dir}:{}", b.kind),
+            }
+        })
+        .collect();
+    if n.boundaries.len() > 2 {
+        parts.push(format!("+{} more", n.boundaries.len() - 2));
+    }
+    Some(parts.join(", "))
+}
 
 impl SymbolRef {
     pub fn from_node(n: &GraphNode) -> Self {
@@ -520,6 +560,7 @@ impl SymbolRef {
                 let flat = d.replace('\n', " ");
                 flat.chars().take(DOC_PREVIEW_CHARS).collect()
             }),
+            boundary: boundary_label(n),
         }
     }
 
@@ -550,6 +591,12 @@ impl SymbolRef {
             ),
         );
         line(out, &format!("  id: {}", style.id(&self.id)));
+        // Above the doc line: that this symbol is a contract with something
+        // outside the repo changes what a reader does next more than its
+        // description does.
+        if let Some(b) = &self.boundary {
+            line(out, &format!("  {}", style.bold(&format!("boundary: {}", b))));
+        }
         if let Some(d) = &self.doc {
             line(out, &format!("  {}", style.dim(&format!("doc: {}", d))));
         }
@@ -620,6 +667,14 @@ pub struct FindSymbolsParams {
     /// hit, since matching the identifier is the stronger signal.
     #[serde(alias = "includeDocs")]
     pub include_docs: bool,
+    /// Keep only symbols that are system boundaries — REST handlers, queue
+    /// listeners, CLI commands, outbound clients.
+    ///
+    /// The way to ask "what is this service's public surface" without
+    /// knowing what any of it is called, which is exactly the position
+    /// someone is in on their first day in an unfamiliar repo.
+    #[serde(default)]
+    pub boundary: bool,
 }
 
 const DEFAULT_SYMBOL_LIMIT: usize = 20;
@@ -726,6 +781,9 @@ pub fn find_symbols(graph: &GraphData, p: &FindSymbolsParams) -> FindSymbolsResu
                 if !f.matches(n.file.as_deref().unwrap_or("")) {
                     continue;
                 }
+            }
+            if p.boundary && n.boundaries.is_empty() {
+                continue;
             }
             // A wildcard is an explicit statement of what the name looks
             // like, so every hit is equally "exact" — there is no weaker
@@ -1923,6 +1981,7 @@ fn walk_usages(graph: &GraphData, p: &FindUsagesParams) -> FindUsagesResult {
                                 start_line: None,
                                 end_line: None,
                                 doc: None,
+                                boundary: None,
                             });
                         users.push(Usage {
                             symbol,
@@ -1954,6 +2013,46 @@ fn walk_usages(graph: &GraphData, p: &FindUsagesParams) -> FindUsagesResult {
         edge_types,
         nodes,
     }
+}
+
+/// "3 of 14 users are system boundaries: 2 http.endpoint, 1 mq.listener."
+///
+/// `None` when none of them are, so the line only appears when it changes
+/// the reader's conclusion.
+fn boundary_summary(users: &[Usage]) -> Option<String> {
+    let hits: Vec<&str> = users
+        .iter()
+        .filter_map(|u| u.symbol.boundary.as_deref())
+        .collect();
+    if hits.is_empty() {
+        return None;
+    }
+
+    // Count by kind, dropping the direction prefix and the detail — the
+    // breakdown is meant to say what sort of contract is at stake, not to
+    // re-list every route.
+    let mut kinds: Vec<(&str, usize)> = Vec::new();
+    for label in &hits {
+        for part in label.split(", ") {
+            let Some(kind) = part.split_once(':').map(|(_, k)| k) else {
+                continue;
+            };
+            let kind = kind.split(' ').next().unwrap_or(kind);
+            match kinds.iter_mut().find(|(k, _)| *k == kind) {
+                Some((_, n)) => *n += 1,
+                None => kinds.push((kind, 1)),
+            }
+        }
+    }
+    kinds.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+    let breakdown: Vec<String> = kinds.iter().map(|(k, n)| format!("{n} {k}")).collect();
+
+    Some(format!(
+        "⊕ {} of {} user(s) are system boundaries: {}.",
+        hits.len(),
+        users.len(),
+        breakdown.join(", ")
+    ))
 }
 
 pub fn render_find_usages(r: &FindUsagesResult, style: Render) -> String {
@@ -1993,6 +2092,14 @@ pub fn render_find_usages(r: &FindUsagesResult, style: Render) -> String {
                 e.users.len()
             )),
         );
+        // "What breaks if I change this" is the question this tool claims to
+        // answer, and a user count alone cannot: eleven internal callers are
+        // a refactor, one REST handler among them is an API change. Called
+        // out above the list because it decides whether the list needs
+        // reading at all.
+        if let Some(summary) = boundary_summary(&e.users) {
+            line(&mut out, &style.bold(&summary));
+        }
         out.push('\n');
 
         if e.users.is_empty() {
@@ -2029,6 +2136,12 @@ pub fn render_find_usages(r: &FindUsagesResult, style: Render) -> String {
                 ),
             );
             line(&mut out, &format!("  id: {}", style.id(&u.symbol.id)));
+            // The summary line above says how many users are boundaries;
+            // this says which, so the reader does not have to re-derive it
+            // from the names.
+            if let Some(b) = &u.symbol.boundary {
+                line(&mut out, &format!("  {}", style.bold(&format!("boundary: {}", b))));
+            }
             for site in &u.call_sites {
                 line(
                     &mut out,
@@ -2327,6 +2440,11 @@ pub fn render_traverse(r: &TraverseResult, style: Render) -> String {
                 style.id(&n.symbol.id)
             ),
         );
+        // A traversal is how someone maps unfamiliar territory, and a
+        // boundary in the neighbourhood is the landmark worth stopping at.
+        if let Some(b) = &n.symbol.boundary {
+            line(&mut out, &format!("  {}", style.bold(&format!("boundary: {}", b))));
+        }
     }
 
     // Edge-type tally: the shape of the neighbourhood in one line.
@@ -2716,6 +2834,17 @@ pub struct GraphSchemaResult {
     /// This is the manifest tool, so saying so here is the cheapest place to
     /// stop a wrong number being quoted as a right one.
     pub stale_call_graph: bool,
+    /// How many nodes are system boundaries, by kind.
+    ///
+    /// Empty on a graph indexed before boundaries existed *and* on one that
+    /// genuinely has none — the same ambiguity the store's facts avoid by
+    /// omission. Here the graph is in hand, so `stale_boundaries` says which
+    /// it is rather than leaving the reader to guess.
+    pub boundary_kinds: Vec<TypeCount>,
+    /// Whether this graph predates boundary detection
+    /// (`GRAPH_SCHEMA_VERSION` 4), i.e. an empty `boundary_kinds` means "not
+    /// measured" rather than "none".
+    pub stale_boundaries: bool,
 }
 
 pub fn graph_schema(graph: &GraphData, graph_path: &Path) -> GraphSchemaResult {
@@ -2765,16 +2894,32 @@ pub fn graph_schema(graph: &GraphData, graph_path: &Path) -> GraphSchemaResult {
         .collect();
     edge_types.sort_by(|a, b| b.count.cmp(&a.count).then(a.name.cmp(&b.name)));
 
+    // Counted by kind, not by node: a symbol that is both an endpoint and a
+    // db client is one of each, and summing the column would double it.
+    let mut boundary_counts: HashMap<&str, usize> = HashMap::new();
+    for n in &graph.nodes {
+        for b in &n.boundaries {
+            *boundary_counts.entry(b.kind.as_str()).or_insert(0) += 1;
+        }
+    }
+    let mut boundary_kinds: Vec<TypeCount> = boundary_counts
+        .into_iter()
+        .map(|(name, count)| TypeCount {
+            name: name.to_string(),
+            count,
+        })
+        .collect();
+    boundary_kinds.sort_by(|a, b| b.count.cmp(&a.count).then(a.name.cmp(&b.name)));
+
+    let schema = graph.stats.as_ref().map(|s| s.graph_schema_version);
     GraphSchemaResult {
         graph_path: graph_path.display().to_string(),
         node_types: top_counts(&node_counts, usize::MAX),
         edge_types,
         vocabulary: EDGE_TYPE_VOCABULARY.iter().map(|s| s.to_string()).collect(),
-        stale_call_graph: graph
-            .stats
-            .as_ref()
-            .map(|s| s.graph_schema_version < 3)
-            .unwrap_or(true),
+        stale_call_graph: schema.map(|v| v < 3).unwrap_or(true),
+        boundary_kinds,
+        stale_boundaries: schema.map(|v| v < 4).unwrap_or(true),
     }
 }
 
@@ -2793,6 +2938,32 @@ pub fn render_graph_schema(r: &GraphSchemaResult, style: Render) -> String {
     line(&mut out, &style.bold("Node types in this graph:"));
     for t in &r.node_types {
         line(&mut out, &format!("  {:<12} {}", t.name, t.count));
+    }
+    out.push('\n');
+
+    line(
+        &mut out,
+        &format!(
+            "{} {}",
+            style.bold("System boundaries"),
+            style.dim("(where this code meets the outside world)")
+        ),
+    );
+    if r.stale_boundaries {
+        line(
+            &mut out,
+            &format!(
+                "  {} {}",
+                style.dim("NOT INDEXED — this graph predates boundary detection; run"),
+                style.id("ug regen")
+            ),
+        );
+    } else if r.boundary_kinds.is_empty() {
+        line(&mut out, &format!("  {}", style.dim("none detected")));
+    } else {
+        for t in &r.boundary_kinds {
+            line(&mut out, &format!("  {:<16} {}", t.name, t.count));
+        }
     }
     out.push('\n');
 

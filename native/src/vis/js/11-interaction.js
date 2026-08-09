@@ -214,6 +214,21 @@
                 ${fieldRow('name', escapeHtml(d.name))}
                 <div class="info-row">${fieldLabel('type')}<span class="info-type-badge" style="background:${typeColor}20;color:${typeColor}">${nodeIconSvg(d.group, 'badge-icon')}${d.group}</span></div>
             `;
+            // Directly under the heading: that a symbol is a contract with
+            // something outside the system is the first thing worth knowing
+            // about it, ahead of where it lives or how long it is.
+            if (d.boundaries && d.boundaries.length) {
+                const parts = d.boundaries.map(b => {
+                    const dir = b.direction === 'Inbound' ? 'in' : 'out';
+                    const detail = b.detail
+                        ? `<span class="info-dim"> ${escapeHtml(b.detail)}</span>`
+                        : '';
+                    return `<span class="boundary-tag boundary-${dir}"`
+                        + ` title="${escapeHtml(dir === 'in' ? 'A way into the system' : 'A way out of the system')}"`
+                        + ` >${escapeHtml(b.kind)}</span>${detail}`;
+                });
+                html += fieldRow('boundary', parts.join('<span class="info-dim"> · </span>'));
+            }
             if (d.file) html += fieldRow('file', escapeHtml(d.file));
             if (d.startLine) {
                 // These formats aren't line-oriented — the indexer repurposes

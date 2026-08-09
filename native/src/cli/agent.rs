@@ -168,6 +168,9 @@ fn print_find_symbols_help() {
     println!("  {C_CYAN}--file-prefix <p>{C_RESET}    Only symbols under this path: a prefix ({C_CYAN}src/auth/{C_RESET}) or a");
     println!("                       glob ({C_CYAN}src/**/*.ts{C_RESET})");
     println!("  {C_CYAN}-k, --limit <n>{C_RESET}      Max hits per query (default 20)");
+    println!("  {C_CYAN}--boundary{C_RESET}           Only system boundaries — REST handlers, queue listeners,");
+    println!("                       CLI commands, outbound HTTP/DB clients. Works with no");
+    println!("                       name at all, which lists the whole public surface.");
     println!("  {C_CYAN}--include-docs{C_RESET}       Also match docstrings, not just names");
     println!("  {C_CYAN}-n, --name <project>{C_RESET} Project name (default: cwd basename)");
     println!("  {C_CYAN}--json{C_RESET}               Machine-readable output");
@@ -190,6 +193,8 @@ fn print_find_symbols_help() {
     println!("                                            {C_YELLOW}# everything in one subtree{C_RESET}");
     println!("  {C_CYAN}ug find_symbols{C_RESET} 'function:src/auth.rs:42:login'  {C_YELLOW}# direct nodeId lookup{C_RESET}");
     println!("  {C_CYAN}ug find_symbols{C_RESET} cache --include-docs         {C_YELLOW}# also scan docstrings{C_RESET}");
+    println!("  {C_CYAN}ug find_symbols{C_RESET} {C_BOLD}--boundary{C_RESET}                  {C_YELLOW}# every entry and exit point{C_RESET}");
+    println!("  {C_CYAN}ug find_symbols{C_RESET} {C_BOLD}--boundary{C_RESET} --file-prefix {C_BOLD}'src/api/**'{C_RESET}");
     println!();
     println!("{C_BOLD}Next:{C_RESET} feed an id from the output into {C_CYAN}ug get_code{C_RESET}, {C_CYAN}ug find_usages{C_RESET} or {C_CYAN}ug traverse{C_RESET}");
     println!("      — those take the same names and patterns directly, too.");
@@ -311,11 +316,18 @@ fn run_find_symbols_with(args: &[String], include_docs: bool) {
     }
     // Accept graph_search's legacy leading `<graph-file>` positional.
     let (load_args, queries) = analysis_input(args);
-    if queries.is_empty() {
-        eprintln!("Usage: ug find_symbols <name>... [--node-type <type>]... [--file-prefix <prefix>] [-k <n>] [--include-docs] [-n <project>]");
+    let boundary = has_flag(args, "--boundary");
+    if queries.is_empty() && !boundary {
+        eprintln!("Usage: ug find_symbols <name>... [--node-type <type>]... [--file-prefix <prefix>] [--boundary] [-k <n>] [--include-docs] [-n <project>]");
         std::process::exit(1);
     }
-    let (node_id, name) = split_ids_and_names(&queries);
+    let (node_id, mut name) = split_ids_and_names(&queries);
+    // `--boundary` on its own is a listing, not a search: "show me this
+    // service's public surface" is a question someone asks precisely because
+    // they do not yet know what any of it is called.
+    if name.is_empty() && node_id.is_empty() {
+        name.push("*".to_string());
+    }
     let params = agent_tools::FindSymbolsParams {
         node_id,
         name,
@@ -324,6 +336,7 @@ fn run_find_symbols_with(args: &[String], include_docs: bool) {
         file_prefix: flag_value(args, &["--file-prefix", "-f", "--file"]),
         limit: flag_value(args, &["-k", "--limit", "-l"]).and_then(|s| s.parse().ok()),
         include_docs: include_docs || has_flag(args, "--include-docs"),
+        boundary,
     };
     let (graph, _raw, _path) = load_agent_graph(&load_args);
 

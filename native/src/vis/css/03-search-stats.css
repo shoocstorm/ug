@@ -168,6 +168,26 @@
             color: var(--text);
         }
 
+        /* The boundary chip filters on a different axis from the type chips
+           beside it, so it is marked out rather than blending in: a dashed
+           border, echoing the dashed ring the canvas draws on the nodes it
+           selects. */
+        .filter-chip-boundary {
+            border-style: dashed;
+        }
+
+        .filter-chip-boundary .boundary-dot {
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            border: 1.5px dashed #fbbf24;
+        }
+
+        .filter-chip-boundary.active {
+            border-color: #fbbf24;
+            background: rgba(251, 191, 36, 0.14);
+        }
+
         .filter-chip .chip-dot {
             width: 7px;
             height: 7px;

@@ -46,6 +46,10 @@
             graph: { nodes: [], edges: [] },
             nodeFilters: new Set(),
             edgeFilters: new Set(),
+            // "Only system boundaries." A separate axis from nodeFilters
+            // because boundary-ness is orthogonal to node type — and named
+            // nothing like `showBoundary`, which is the bounding-box overlay.
+            boundaryFilter: false,
             selectedNode: null,
             suggestionIndex: -1,
             currentSuggestions: [],
@@ -133,7 +137,7 @@
 
         // The 3d-force-graph instance and its scene-decor handles.
         let Graph, width, height, selectionRing, boundaryCube, particleField;
-        let _glowTex, _ringTex;
+        let _glowTex, _ringTex, _boundaryRingTex;
         // Highlight sets re-evaluated by the node/link style accessors.
         state.highlightNodes = new Set();
         state.highlightLinks = new Set();

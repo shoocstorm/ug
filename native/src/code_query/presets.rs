@@ -501,6 +501,42 @@ pub static BUILTIN: &[Preset] = &[
               LIMIT 200",
         headline: None,
     },
+    // ── boundaries ────────────────────────────────────────────────────
+    Preset {
+        name: "boundary_census",
+        category: Category::Architecture,
+        description: "What surfaces this system exposes and consumes, by kind and direction.",
+        params: NO_PARAMS,
+        // Grouping on the joined string rather than on a single kind: a
+        // symbol can be several things at once (an endpoint that also calls
+        // out), and splitting that into one row per kind would double-count
+        // the symbol. The combination is the honest unit.
+        gql: "MATCH (n) \
+              WHERE n.boundary = 1 \
+              RETURN n.boundary_kinds AS kinds, \
+                     n.boundary_protocols AS protocols, \
+                     sum(n.boundary_in) AS inbound, \
+                     sum(n.boundary_out) AS outbound, \
+                     count(*) AS symbols \
+              ORDER BY symbols DESC \
+              LIMIT 200",
+        headline: None,
+    },
+    Preset {
+        name: "boundaries",
+        category: Category::Architecture,
+        description: "Every system entry and exit point — REST handlers, queue listeners, CLI commands, outbound clients.",
+        params: NO_PARAMS,
+        gql: "MATCH (n) \
+              WHERE n.boundary = 1 \
+              RETURN elementKey(n) AS id, \
+                     n.boundary_kinds AS kinds, \
+                     n.boundary_detail AS surface, \
+                     n.file AS file \
+              ORDER BY kinds, file \
+              LIMIT 200",
+        headline: None,
+    },
     // ── tests ─────────────────────────────────────────────────────────
     Preset {
         name: "test_ratio",
@@ -583,6 +619,32 @@ pub static BUILTIN: &[Preset] = &[
               RETURN count(DISTINCT elementKey(dep)) AS dependents, \
                      count(DISTINCT dep.file) AS files_affected",
         headline: Some("dependents"),
+    },
+    Preset {
+        name: "boundary_impact",
+        category: Category::Risk,
+        description: "Which externally-visible surfaces a change to this file reaches — the blast radius that leaves the system.",
+        params: TARGET,
+        // The question `impact` cannot answer. "11 dependents" says how much
+        // code moves; this says how much of what moves is a contract someone
+        // outside the repo already depends on, which is what decides whether
+        // a change needs a version bump, a migration or a deprecation notice.
+        //
+        // 4 hops rather than 3: a boundary is usually a controller sitting
+        // one layer further out than the callers `impact` is written for.
+        // One row per boundary, not per path: a variable-length match yields
+        // a row for every route through the graph, so the grouping implied
+        // by `count(*)` is what collapses them back to the thing being
+        // counted. Same trap the `impact` preset documents.
+        gql: "MATCH (b)-[:Calls|References|Imports|Extends|Implements|Overrides*1..4]->(t) \
+              WHERE t.file = $target AND b.boundary_in = 1 AND b.file <> $target \
+              RETURN elementKey(b) AS surface, \
+                     b.boundary_kinds AS kinds, \
+                     b.boundary_detail AS exposed_as, \
+                     count(*) AS paths \
+              ORDER BY paths DESC \
+              LIMIT 200",
+        headline: None,
     },
     Preset {
         name: "risky_symbols",

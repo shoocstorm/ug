@@ -570,7 +570,7 @@ impl Db {
     pub fn ensure_fact_indexes(&self) {
         use overgraph::{SecondaryIndexField, SecondaryIndexSpec};
 
-        const EQUALITY: &[&str] = &["node_type", "is_test", "folder", "has_doc"];
+        const EQUALITY: &[&str] = &["node_type", "is_test", "folder", "has_doc", "boundary"];
         const RANGE: &[&str] = &["loc", "in_degree", "out_degree", "params", "max_nesting"];
 
         for label in ALL_NODE_LABELS {

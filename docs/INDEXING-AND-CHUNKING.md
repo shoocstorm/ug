@@ -167,12 +167,29 @@ Two consequences worth knowing:
   `Foo()` emit `Instantiates`, pointing at the constructor where one is
   declared and at the type itself where none is.
 
-### 3.1b Java: annotations
+### 3.1b Annotations, decorators and attributes
 
-Java extracts one more thing than the other pipelines, because in Java the
-annotation *is* the semantics.
+All four code pipelines record what is written above a declaration, into the
+same `Symbol.annotations` field: Java annotations, Python decorators,
+TypeScript decorators and Rust attributes. For annotation-driven frameworks
+this carries more of a symbol's meaning than its body does.
 
-**Annotations become prose.** `@Repository`, `@Entity`, `@Table(name =
+| Language | Source | Name recorded |
+|---|---|---|
+| Java | `modifiers` on the declaration | simple name — `@org.junit.Test` → `Test` |
+| Python | `decorated_definition` | **dotted** — `@app.route` → `app.route` |
+| TypeScript | `decorator` on the class/method | simple name — `@Get(':id')` → `Get` |
+| Rust | preceding `#[...]` items | **full path** — `#[tokio::main]` → `tokio::main` |
+
+Python and Rust keep the qualifier because there it *is* the identity: a
+Flask route is written against whatever the app object is called, and
+`@app.route`, `@bp.route` and `@api.route` are one framework — while a bare
+`route` is a plausible name for any method. Rust's `#[tokio::main]` is not
+`main`. Java strips the package because that is how Java itself is written
+and searched. Inner `#![...]` attributes are skipped: they configure the
+enclosing module, not the next item.
+
+**Java annotations become prose.** `@Repository`, `@Entity`, `@Table(name =
 "orders")`, `@Transactional`, `@Query`, `@KafkaListener` and the mapping
 family are rendered into the dense text as the words someone would search
 with ("Spring data access repository", "mapped to table orders"). Mapping
@@ -181,12 +198,71 @@ becomes both a field on the handler and a `Route` node of its own. That
 string appears in no identifier, no path and no Javadoc, and it is exactly
 what a question about an endpoint contains.
 
+Route *composition* — joining a type-level prefix to a member-level path —
+stays Java-only, because it is a Spring/JAX-RS convention. Elsewhere the path
+is reported as the decorator's argument instead (see §3.1c).
+
 Java's qualified names come from the `package` declaration in the source
 rather than from the file's path, which is why it needs none of the module-path
 machinery in §3.1a — it is also why Java had all of this first. Resolution is
 still local to one file: its imports, its own declarations, and its package.
 There is no classpath, and a JDK type that resolves outward to a
 package-local name simply matches nothing.
+
+### 3.1c System boundaries
+
+A call graph answers "what calls what". It cannot answer "who outside this
+system depends on it", because the edges that leave the process are exactly
+the ones it does not have. A `@JmsListener` has no inbound call anywhere in
+the source; a `@GetMapping` handler's real callers are HTTP clients that were
+never indexed. Both look like dead code, and both are contracts.
+
+So a post-pass (`indexer/boundary.rs`) tags them. It runs after extraction,
+when every symbol in the file is available, so a rule can read the symbol's
+own annotations, the annotations on its declaring type, its supertypes and
+its call sites — without any language module knowing "boundary" is a concept.
+
+Each tag carries a `kind` (`http.endpoint`, `mq.listener`, `cli.command`,
+`http.client`, `db.access`, `mq.producer`, `scheduled.job`, `ws.endpoint`), a
+`direction` (inbound = a way in, outbound = a way out), a `protocol` (`http`,
+`jms`, `kafka`, `amqp`, `jdbc`, `cli`, …), a `detail` (the route, the queue
+name, the cron expression) and a `source` — the id of the rule that fired, so
+a wrong tag is traceable to one table row rather than to "the indexer".
+
+A symbol can carry several. A `@GetMapping` method that calls
+`repository.save(..)` is an inbound HTTP surface *and* an outbound
+persistence one, and collapsing that to one tag would lose whichever half was
+checked second.
+
+**Boundary-ness is not a node type.** A Spring handler stays a `Function`.
+Promoting it would silently change the answer to "how many functions does
+this repo have", along with `dead_code`, `long_functions` and every other
+count that filters on node type.
+
+**Adding a framework is one row** in `boundary::RULES` plus one test. A rule
+matches on an annotation (exact, or a `*.route` wildcard), an annotation on
+the declaring type, a supertype, a call site, a `main`-style entry point, or
+all of several at once.
+
+Two deliberate restraints, both about not inventing boundaries:
+
+- **Outbound rules fire on a curated client type** (`RestTemplate`,
+  `JdbcTemplate`, `KafkaTemplate`), never on a verb like `save` or `send`. A
+  service method that calls a repository interface is **not** tagged — the
+  repository is where the system actually reaches the database, and tagging
+  every transitive caller would make "outbound" mean "touches business logic".
+- **Express is not supported.** It registers routes by calling
+  `app.get('/users', h)`, and the only matcher that could reach it is a bare
+  callee name — which would also match `map.get(k)` and tag half a TypeScript
+  codebase as HTTP endpoints. `CallRef` records the receiver's resolved
+  *type*, not the identifier `app`. A missing boundary is recoverable; a graph
+  full of invented ones is not. The same limit applies to axum routers built
+  by chaining, where the receiver cannot be typed.
+
+At query time this becomes the `boundary`, `boundary_in`, `boundary_out`,
+`boundary_kinds`, `boundary_protocols` and `boundary_detail` properties, the
+`boundaries` / `boundary_census` / `boundary_impact` presets, a `boundary`
+field on every agent-tool result, and a dashed ring in the visualization.
 
 ### 3.2 Markdown
 

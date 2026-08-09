@@ -4,8 +4,8 @@
 //! tree-sitter parser is reused for all four extensions.
 
 use crate::indexer::common::{
-    calculate_nesting, extract_docstring, extract_params_from_signature, extract_return_type,
-    get_node_text,
+    annotation_args, calculate_nesting, extract_docstring, extract_params_from_signature,
+    extract_return_type, first_string_arg, get_node_text,
 };
 use crate::indexer::languages::{FileContext, LanguageIndexer};
 use crate::indexer::scope::{
@@ -13,7 +13,8 @@ use crate::indexer::scope::{
     CTOR, MEMBER_SEP,
 };
 use crate::types::{
-    CallRef, ExportInfo, ImportInfo, ImportedItem, Param, Signature, Symbol, SymbolMetrics, TypeRef,
+    Annotation, CallRef, ExportInfo, ImportInfo, ImportedItem, Param, Signature, Symbol,
+    SymbolMetrics, TypeRef,
 };
 use std::collections::HashMap;
 use tree_sitter::Node;
@@ -405,6 +406,8 @@ fn extract_symbol_from_node(
     let start = (node.start_position().row + 1) as u32;
     let end = (node.end_position().row + 1) as u32;
 
+    let annotations = extract_decorators(node, source);
+
     match kind {
         // `method_signature` is an interface member. Extracting it makes an
         // interface a node with contents rather than an empty one, and gives
@@ -469,6 +472,7 @@ fn extract_symbol_from_node(
                 qualified_name,
                 owner: owner.map(|o| o.fqn.clone()),
                 metrics: Some(metrics),
+                annotations,
                 ..Default::default()
             });
         }
@@ -497,6 +501,7 @@ fn extract_symbol_from_node(
                 implements,
                 calls: Vec::new(),
                 metrics: None,
+                annotations,
                 ..Default::default()
             });
         }
@@ -604,6 +609,68 @@ fn extract_symbol_from_node(
     }
 }
 
+/// Decorators on a class, method or interface member, in source order.
+///
+/// The grammar attaches them two different ways depending on the construct
+/// and the grammar version — as leading children of the declaration, or as
+/// preceding siblings when the declaration is wrapped (an `export class`).
+/// Both are checked, and a duplicate cannot arise because only one of the
+/// two ever holds them for a given node.
+///
+/// Names keep their dotted receiver for the same reason Python's do — see
+/// `python::extract_decorators`.
+fn extract_decorators(node: &Node, source: &[u8]) -> Vec<Annotation> {
+    let mut out = Vec::new();
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        // Decorators lead the declaration; stop at the first thing that is
+        // not one so a `@Injectable` on a *parameter* deeper in the body
+        // cannot be read as decorating the method.
+        if child.kind() == "decorator" {
+            push_decorator(&child, source, &mut out);
+        } else if !child.is_extra() && child.kind() != "comment" {
+            break;
+        }
+    }
+    if !out.is_empty() {
+        return out;
+    }
+
+    let mut prev = node.prev_named_sibling();
+    while let Some(p) = prev {
+        if p.kind() != "decorator" {
+            break;
+        }
+        push_decorator(&p, source, &mut out);
+        prev = p.prev_named_sibling();
+    }
+    // Walking backwards yields them bottom-up; source order is what the
+    // `Annotation` contract promises.
+    out.reverse();
+    out
+}
+
+fn push_decorator(node: &Node, source: &[u8], out: &mut Vec<Annotation>) {
+    let Some(expr) = node.named_child(0) else {
+        return;
+    };
+    let (name_node, args) = if expr.kind() == "call_expression" {
+        (
+            expr.child_by_field_name("function"),
+            annotation_args(expr.child_by_field_name("arguments"), source),
+        )
+    } else {
+        (Some(expr), None)
+    };
+    if let Some(name) = get_node_text(name_node, source) {
+        out.push(Annotation {
+            name: name.trim().to_string(),
+            args,
+        });
+    }
+}
+
 /// Qualify written heritage names (`extends Base`, `implements Store`)
 /// through this file's imports, so they key the same way declarations do.
 fn qualify_heritage(written: Vec<String>, ctx: &Ctx) -> Vec<String> {
@@ -686,6 +753,7 @@ fn collect_calls(
                         name: CTOR.to_string(),
                         owner_type: ctx.scope.lookup(bare),
                         argc: argument_count(&child),
+                        first_string_arg: first_string_arg(&child, "arguments", source),
                         qualified: None,
                         is_ctor: true,
                         has_receiver: true,
@@ -739,6 +807,7 @@ fn call_ref_for(
 ) -> Option<CallRef> {
     let func = call.child_by_field_name("function")?;
     let argc = argument_count(call);
+    let arg0 = first_string_arg(call, "arguments", source);
 
     match func.kind() {
         "identifier" => {
@@ -748,6 +817,7 @@ fn call_ref_for(
                 name,
                 owner_type: None,
                 argc,
+                first_string_arg: arg0,
                 is_ctor: false,
                 has_receiver: false,
             })
@@ -760,6 +830,7 @@ fn call_ref_for(
                 owner_type: type_of_expr(&recv, source, ctx, owner, env),
                 name,
                 argc,
+                first_string_arg: arg0,
                 qualified: None,
                 is_ctor: false,
                 has_receiver: true,
@@ -1355,11 +1426,81 @@ function greet() {}
         assert_eq!(method.qualified_name.as_deref(), Some("src/sample.C#m"));
         assert_eq!(method.owner.as_deref(), Some("src/sample.C"));
 
-        // Annotations and routes stay Java-only.
+        // Undecorated code carries no annotations. Route *composition* stays
+        // Java-only: joining a class-level prefix to a member-level path is
+        // a Spring/JAX-RS convention, so a Nest `@Get('/x')` reports its path
+        // as the decorator's argument rather than as a composed
+        // `Symbol::route`.
         for s in &symbols {
             assert!(s.annotations.is_empty(), "{}", s.name);
             assert!(s.route.is_none(), "{}", s.name);
         }
+    }
+
+    #[test]
+    fn decorators_are_captured_on_classes_and_methods() {
+        let (symbols, _, _) = parse(
+            r#"
+            @Controller('orders')
+            class OrderController {
+                @Get(':id')
+                find(id: string) {}
+            }
+            "#,
+        );
+
+        let class = find(&symbols, "OrderController");
+        assert_eq!(class.annotations.len(), 1);
+        assert_eq!(class.annotations[0].name, "Controller");
+        assert_eq!(class.annotations[0].args.as_deref(), Some("'orders'"));
+
+        let method = find(&symbols, "OrderController.find");
+        assert_eq!(method.annotations.len(), 1);
+        assert_eq!(method.annotations[0].name, "Get");
+        assert_eq!(method.annotations[0].args.as_deref(), Some("':id'"));
+    }
+
+    #[test]
+    fn a_marker_decorator_has_no_arguments() {
+        let (symbols, _, _) = parse("@Injectable()\nclass Svc {}\n");
+
+        let c = find(&symbols, "Svc");
+        assert_eq!(c.annotations.len(), 1);
+        assert_eq!(c.annotations[0].name, "Injectable");
+        assert!(c.annotations[0].args.is_none(), "empty parens are no args");
+    }
+
+    #[test]
+    fn a_decorator_on_an_exported_class_is_still_found() {
+        // The `export` wrapper is the case where the grammar hangs the
+        // decorator off a sibling rather than off the declaration.
+        let (symbols, _, _) = parse("@Controller()\nexport class Api {}\n");
+
+        let c = find(&symbols, "Api");
+        assert_eq!(
+            c.annotations.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(),
+            vec!["Controller"]
+        );
+    }
+
+    #[test]
+    fn stacked_decorators_are_kept_in_source_order() {
+        let (symbols, _, _) = parse(
+            r#"
+            class C {
+                @Get('/x')
+                @UseGuards(AuthGuard)
+                handle() {}
+            }
+            "#,
+        );
+
+        let names: Vec<&str> = find(&symbols, "C.handle")
+            .annotations
+            .iter()
+            .map(|a| a.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["Get", "UseGuards"]);
     }
 
     // ---- imports ---------------------------------------------------------

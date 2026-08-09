@@ -18,7 +18,9 @@
 //!    Storing `true`/`false` would make the most common shape of question
 //!    impossible to express.
 
-use crate::types::{FileClassification, GraphData, GraphEdgeType, GraphNode, GraphNodeType};
+use crate::types::{
+    BoundaryDirection, FileClassification, GraphData, GraphEdgeType, GraphNode, GraphNodeType,
+};
 use std::collections::{BTreeMap, HashMap};
 
 /// A stored fact value, in the small set of shapes every backend can hold.
@@ -64,6 +66,16 @@ pub struct FactContext {
     /// metrics. A graph older than that answers "how many functions have
     /// comments" with zero, which is worse than refusing.
     has_line_metrics: bool,
+    /// Whether this graph was written by a build that detects system
+    /// boundaries.
+    ///
+    /// The same trap as [`Self::has_line_metrics`], and a nastier one here:
+    /// most symbols in any repo genuinely are not boundaries, so a graph
+    /// that simply never looked is indistinguishable from one that looked
+    /// and found nothing. `boundary = 0` everywhere reads as a finished
+    /// measurement. Omitting the facts makes the coverage line say
+    /// NOT INDEXED instead.
+    has_boundaries: bool,
 }
 
 impl FactContext {
@@ -79,16 +91,17 @@ impl FactContext {
             *in_degree.entry(e.target.clone()).or_insert(0) += 1;
             *out_degree.entry(e.source.clone()).or_insert(0) += 1;
         }
-        let has_line_metrics = graph
+        let schema = graph
             .stats
             .as_ref()
-            .map(|s| s.graph_schema_version >= 2)
-            .unwrap_or(false);
+            .map(|s| s.graph_schema_version)
+            .unwrap_or(0);
         Self {
             in_degree,
             out_degree,
             members,
-            has_line_metrics,
+            has_line_metrics: schema >= 2,
+            has_boundaries: schema >= 4,
         }
     }
 }
@@ -283,13 +296,72 @@ pub fn compute(n: &GraphNode, ctx: &FactContext) -> Facts {
         f.insert("annotations".into(), FactValue::Str(names.join(",")));
     }
 
+    // Only on a graph that actually looked — see `FactContext::has_boundaries`
+    // for why a zero here would be a lie rather than a measurement.
+    if ctx.has_boundaries {
+        let inbound = n
+            .boundaries
+            .iter()
+            .any(|b| b.direction == BoundaryDirection::Inbound);
+        let outbound = n
+            .boundaries
+            .iter()
+            .any(|b| b.direction == BoundaryDirection::Outbound);
+
+        f.insert(
+            "boundary".into(),
+            FactValue::from_bool(!n.boundaries.is_empty()),
+        );
+        f.insert("boundary_in".into(), FactValue::from_bool(inbound));
+        f.insert("boundary_out".into(), FactValue::from_bool(outbound));
+
+        // Same comma-joined shape as `annotations`, and for the same reason:
+        // the question is "does this contain X". Deduped because one symbol
+        // registering six routes is one `http.endpoint`, not six.
+        if !n.boundaries.is_empty() {
+            f.insert(
+                "boundary_kinds".into(),
+                FactValue::Str(joined(n.boundaries.iter().map(|b| b.kind.as_str()))),
+            );
+            f.insert(
+                "boundary_protocols".into(),
+                FactValue::Str(joined(n.boundaries.iter().map(|b| b.protocol.as_str()))),
+            );
+
+            // The names of the surfaces themselves — `GET /api/orders/{id}`,
+            // `orders.inbound`, a cron expression. `route` already carries
+            // the HTTP case, but only that case and only for Java; a queue
+            // listener's destination appears in no other property, and it is
+            // the string a person actually searches for.
+            let detail = joined(n.boundaries.iter().filter_map(|b| b.detail.as_deref()));
+            if !detail.is_empty() {
+                f.insert("boundary_detail".into(), FactValue::Str(detail));
+            }
+        }
+    }
+
     f
+}
+
+/// Comma-join in first-seen order, dropping repeats.
+///
+/// Order is stable rather than sorted so the string reads the way the source
+/// does, and `stored_row_matches` can compare two ingests of an unchanged
+/// file byte-for-byte instead of re-upserting it every run.
+fn joined<'a>(values: impl Iterator<Item = &'a str>) -> String {
+    let mut out: Vec<&str> = Vec::new();
+    for v in values {
+        if !out.contains(&v) {
+            out.push(v);
+        }
+    }
+    out.join(",")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Annotation, GraphEdge, SymbolMetrics};
+    use crate::types::{Annotation, Boundary, GraphEdge, SymbolMetrics};
 
     fn node(id: &str, file: Option<&str>) -> GraphNode {
         GraphNode {
@@ -544,6 +616,116 @@ mod tests {
         let f = compute(&n, &ctx_at_version(2, vec![]));
         assert_eq!(f["has_comments"], FactValue::Int(0));
         assert_eq!(f["has_doc"], FactValue::Int(0));
+    }
+
+    fn boundary(kind: &str, protocol: &str, direction: BoundaryDirection, detail: &str) -> Boundary {
+        Boundary {
+            kind: kind.into(),
+            direction,
+            protocol: protocol.into(),
+            detail: Some(detail.into()),
+            source: "test".into(),
+        }
+    }
+
+    #[test]
+    fn a_boundary_becomes_flags_and_joined_strings() {
+        let mut n = node("f", Some("src/a.rs"));
+        n.boundaries = vec![
+            boundary(
+                "http.endpoint",
+                "http",
+                BoundaryDirection::Inbound,
+                "GET /orders",
+            ),
+            boundary("db.access", "jdbc", BoundaryDirection::Outbound, "orders"),
+        ];
+
+        let f = compute(&n, &ctx_at_version(4, vec![]));
+        assert_eq!(f["boundary"], FactValue::Int(1));
+        assert_eq!(f["boundary_in"], FactValue::Int(1));
+        assert_eq!(f["boundary_out"], FactValue::Int(1));
+        assert_eq!(
+            f["boundary_kinds"],
+            FactValue::Str("http.endpoint,db.access".into())
+        );
+        assert_eq!(f["boundary_protocols"], FactValue::Str("http,jdbc".into()));
+        assert_eq!(
+            f["boundary_detail"],
+            FactValue::Str("GET /orders,orders".into())
+        );
+    }
+
+    #[test]
+    fn a_symbol_that_is_no_boundary_reports_a_measured_zero() {
+        let n = node("f", Some("src/a.rs"));
+
+        let f = compute(&n, &ctx_at_version(4, vec![]));
+        assert_eq!(f["boundary"], FactValue::Int(0));
+        assert_eq!(f["boundary_in"], FactValue::Int(0));
+        assert_eq!(f["boundary_out"], FactValue::Int(0));
+        // The descriptive columns stay absent: there is nothing to describe,
+        // and an empty string would be a value queries could match on.
+        for key in ["boundary_kinds", "boundary_protocols", "boundary_detail"] {
+            assert!(!f.contains_key(key), "{key} should be absent");
+        }
+    }
+
+    /// The failure this gating exists to prevent. Most symbols in any repo
+    /// are not boundaries, so a graph that never looked and a graph that
+    /// looked and found none produce the same `0` — and only one of them is
+    /// an answer.
+    #[test]
+    fn a_graph_predating_boundaries_omits_them_rather_than_reporting_none() {
+        let mut n = node("f", Some("src/a.rs"));
+        n.boundaries = vec![boundary(
+            "http.endpoint",
+            "http",
+            BoundaryDirection::Inbound,
+            "GET /orders",
+        )];
+
+        let old = compute(&n, &ctx_at_version(3, vec![]));
+        for key in [
+            "boundary",
+            "boundary_in",
+            "boundary_out",
+            "boundary_kinds",
+            "boundary_protocols",
+            "boundary_detail",
+        ] {
+            assert!(
+                !old.contains_key(key),
+                "{key} must be absent, not zero, on a pre-v4 graph"
+            );
+        }
+    }
+
+    #[test]
+    fn repeated_boundary_kinds_are_recorded_once() {
+        // A route-registration function declares six endpoints. It is one
+        // `http.endpoint`, not six, or `boundary_census` would count the
+        // function once per route it happens to register.
+        let mut n = node("routes", Some("src/a.rs"));
+        n.boundaries = (0..6)
+            .map(|i| {
+                boundary(
+                    "http.endpoint",
+                    "http",
+                    BoundaryDirection::Inbound,
+                    &format!("GET /r{i}"),
+                )
+            })
+            .collect();
+
+        let f = compute(&n, &ctx_at_version(4, vec![]));
+        assert_eq!(f["boundary_kinds"], FactValue::Str("http.endpoint".into()));
+        // Details are all distinct, so all six survive — that is the list
+        // someone reads to find the route they care about.
+        assert_eq!(
+            f["boundary_detail"],
+            FactValue::Str("GET /r0,GET /r1,GET /r2,GET /r3,GET /r4,GET /r5".into())
+        );
     }
 
     #[test]

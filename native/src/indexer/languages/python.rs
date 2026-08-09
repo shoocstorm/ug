@@ -1,8 +1,8 @@
 //! Python indexer. Handles `.py`.
 
 use crate::indexer::common::{
-    calculate_nesting, extract_docstring, extract_params_from_signature, extract_return_type,
-    get_node_text,
+    annotation_args, calculate_nesting, extract_docstring, extract_params_from_signature,
+    extract_return_type, first_string_arg, get_node_text,
 };
 use crate::indexer::languages::{FileContext, LanguageIndexer};
 use crate::indexer::scope::{
@@ -10,7 +10,8 @@ use crate::indexer::scope::{
     CTOR, MEMBER_SEP,
 };
 use crate::types::{
-    CallRef, ExportInfo, ImportInfo, ImportedItem, Param, Signature, Symbol, SymbolMetrics,
+    Annotation, CallRef, ExportInfo, ImportInfo, ImportedItem, Param, Signature, Symbol,
+    SymbolMetrics,
 };
 use std::collections::HashMap;
 use tree_sitter::Node;
@@ -237,6 +238,53 @@ fn extract_imports_via_regex(source: &[u8]) -> Vec<ImportInfo> {
     import_lookup.into_values().collect()
 }
 
+/// Decorators applied to a `def` or `class`, in source order.
+///
+/// Python hangs them off a `decorated_definition` wrapper rather than on the
+/// definition itself, so this walks up one level. The name keeps its dotted
+/// receiver — `app.route`, not `route` — because in Python the receiver *is*
+/// the framework: `@app.route` and `@celery.task` share a last segment with
+/// plenty of ordinary methods, and dropping it would make a decorator
+/// indistinguishable from any function of the same name. Boundary rules
+/// match these with a `*.route`-style pattern, which is also what makes them
+/// work when the app object is called `bp` or `api`.
+fn extract_decorators(node: &Node, source: &[u8]) -> Vec<Annotation> {
+    let Some(parent) = node.parent() else {
+        return Vec::new();
+    };
+    if parent.kind() != "decorated_definition" {
+        return Vec::new();
+    }
+
+    let mut out = Vec::new();
+    let mut cursor = parent.walk();
+    for child in parent.children(&mut cursor) {
+        if child.kind() != "decorator" {
+            continue;
+        }
+        // The expression after the `@`: an identifier (`@staticmethod`), an
+        // attribute (`@app.route`), or a call of either.
+        let Some(expr) = child.named_child(0) else {
+            continue;
+        };
+        let (name_node, args) = if expr.kind() == "call" {
+            (
+                expr.child_by_field_name("function"),
+                annotation_args(expr.child_by_field_name("arguments"), source),
+            )
+        } else {
+            (Some(expr), None)
+        };
+        if let Some(name) = get_node_text(name_node, source) {
+            out.push(Annotation {
+                name: name.trim().to_string(),
+                args,
+            });
+        }
+    }
+    out
+}
+
 fn extract_symbol_from_node(
     node: &Node,
     source: &[u8],
@@ -304,6 +352,7 @@ fn extract_symbol_from_node(
                 qualified_name,
                 owner: owner.map(|o| o.fqn.clone()),
                 metrics: Some(metrics),
+                annotations: extract_decorators(node, source),
                 ..Default::default()
             });
         }
@@ -333,6 +382,7 @@ fn extract_symbol_from_node(
                 implements: Vec::new(),
                 calls: Vec::new(),
                 metrics: None,
+                annotations: extract_decorators(node, source),
                 ..Default::default()
             });
         }
@@ -499,6 +549,7 @@ fn call_ref_for(
 ) -> Option<CallRef> {
     let func = call.child_by_field_name("function")?;
     let argc = argument_count(call);
+    let arg0 = first_string_arg(call, "arguments", source);
 
     match func.kind() {
         "identifier" => {
@@ -508,6 +559,7 @@ fn call_ref_for(
                     name: CTOR.to_string(),
                     owner_type: ctx.scope.lookup(&name),
                     argc,
+                    first_string_arg: arg0,
                     qualified: None,
                     is_ctor: true,
                     has_receiver: true,
@@ -518,6 +570,7 @@ fn call_ref_for(
                 name,
                 owner_type: None,
                 argc,
+                first_string_arg: arg0,
                 is_ctor: false,
                 has_receiver: false,
             })
@@ -530,6 +583,7 @@ fn call_ref_for(
                 owner_type: type_of_expr(&recv, source, ctx, owner, env),
                 name,
                 argc,
+                first_string_arg: arg0,
                 qualified: None,
                 is_ctor: false,
                 has_receiver: true,
@@ -1007,11 +1061,64 @@ class C:
         assert_eq!(method.qualified_name.as_deref(), Some("pkg.sample.C#m"));
         assert_eq!(method.owner.as_deref(), Some("pkg.sample.C"));
 
-        // Annotations and routes stay Java-only.
+        // Undecorated code carries no annotations. Route *composition*
+        // stays Java-only — Python has no type-level path prefix to join
+        // against, so a decorator's path is reported as the decorator's
+        // argument rather than as a composed `Symbol::route`.
         for s in &symbols {
             assert!(s.annotations.is_empty(), "{}", s.name);
             assert!(s.route.is_none(), "{}", s.name);
         }
+    }
+
+    #[test]
+    fn decorators_are_captured_with_their_receiver_and_arguments() {
+        let (symbols, _) = parse(
+            "@app.route(\"/users\", methods=[\"GET\"])\ndef list_users():\n    pass\n",
+        );
+
+        let f = find(&symbols, "list_users");
+        assert_eq!(f.annotations.len(), 1);
+        // Dotted, not bare: `@app.route` and a method called `route` are
+        // different things, and the receiver is what says which.
+        assert_eq!(f.annotations[0].name, "app.route");
+        assert_eq!(
+            f.annotations[0].args.as_deref(),
+            Some("\"/users\", methods=[\"GET\"]")
+        );
+    }
+
+    #[test]
+    fn a_marker_decorator_has_no_arguments() {
+        let (symbols, _) = parse("class C:\n    @staticmethod\n    def m():\n        pass\n");
+
+        let m = find(&symbols, "C.m");
+        assert_eq!(m.annotations.len(), 1);
+        assert_eq!(m.annotations[0].name, "staticmethod");
+        assert!(m.annotations[0].args.is_none());
+    }
+
+    #[test]
+    fn decorators_on_a_class_are_captured_too() {
+        let (symbols, _) = parse("@dataclass\nclass Point:\n    x: int\n");
+
+        let c = find(&symbols, "Point");
+        assert_eq!(c.annotations.len(), 1);
+        assert_eq!(c.annotations[0].name, "dataclass");
+    }
+
+    #[test]
+    fn stacked_decorators_are_kept_in_source_order() {
+        let (symbols, _) = parse(
+            "@app.route(\"/x\")\n@login_required\ndef view():\n    pass\n",
+        );
+
+        let names: Vec<&str> = find(&symbols, "view")
+            .annotations
+            .iter()
+            .map(|a| a.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["app.route", "login_required"]);
     }
 
     #[test]

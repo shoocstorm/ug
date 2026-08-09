@@ -50,7 +50,8 @@
 //! started.
 
 use crate::indexer::common::{
-    calculate_nesting, extract_params_from_signature, get_node_text, truncate_chars,
+    calculate_nesting, extract_params_from_signature, first_string_arg, get_node_text,
+    truncate_chars,
 };
 use crate::indexer::languages::{FileContext, LanguageIndexer};
 use crate::indexer::scope::CTOR;
@@ -803,6 +804,7 @@ fn collect_calls(
                     refs.push(CallRef {
                         owner_type: invocation_owner(&child, source, ctx, owner, env, &name),
                         argc: argument_count(&child),
+                        first_string_arg: first_string_arg(&child, "arguments", source),
                         name,
                         // Java names its callee by receiver, never by a
                         // module path, so there is nothing to resolve
@@ -826,6 +828,7 @@ fn collect_calls(
                         name: CTOR.to_string(),
                         owner_type: ctx.resolve_type(&ty),
                         argc: argument_count(&child),
+                        first_string_arg: first_string_arg(&child, "arguments", source),
                         qualified: None,
                         is_ctor: true,
                         // `<init>` is a sentinel, not a declared name.

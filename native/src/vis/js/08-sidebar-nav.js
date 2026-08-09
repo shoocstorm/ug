@@ -165,6 +165,31 @@
                 });
                 container.appendChild(chip);
             });
+
+            // One extra chip, on its own axis: "show only what the outside
+            // world can reach". Appended after the type chips (and only when
+            // the graph has boundaries) so it reads as an additional filter
+            // rather than as another node type.
+            const boundaryCount = state.graph.nodes.filter(n => n.isBoundary).length;
+            if (!boundaryCount) return;
+
+            const chip = document.createElement('div');
+            chip.className = 'filter-chip filter-chip-boundary';
+            if (state.boundaryFilter) chip.classList.add('active');
+            chip.title = 'Only system boundaries — HTTP endpoints, queue listeners, '
+                + 'CLI commands, and outbound HTTP/DB/queue clients.';
+            chip.innerHTML = `
+                <span class="boundary-dot"></span>
+                <span>boundaries</span>
+                <span class="chip-count">${boundaryCount}</span>
+            `;
+            chip.addEventListener('click', () => {
+                state.boundaryFilter = !state.boundaryFilter;
+                chip.classList.toggle('active', state.boundaryFilter);
+                applyFilters();
+                refreshSuggestions(document.getElementById('search').value);
+            });
+            container.appendChild(chip);
         }
 
         function buildEdgeFilterChips() {
@@ -200,8 +225,13 @@
 
 
         function applyFilters() {
+            // Boundary is a separate axis from node type — an endpoint is
+            // still a Function — so it ANDs with the type chips rather than
+            // joining them. Selecting "Function" and "boundaries only"
+            // means both, which is the question someone actually has.
             const nodeMatches = n =>
-                state.nodeFilters.size === 0 || state.nodeFilters.has(n.group);
+                (state.nodeFilters.size === 0 || state.nodeFilters.has(n.group))
+                && (!state.boundaryFilter || n.isBoundary);
             const edgeMatches = e =>
                 state.edgeFilters.size === 0 || state.edgeFilters.has(e.rel);
 
@@ -469,7 +499,32 @@
                     <span class="count">${counts.get(t)}</span>
                 </div>`;
             }).join('');
+            // The legend is the on-canvas key, so the dashed ring drawn on
+            // boundary nodes needs an entry here or it is an unexplained
+            // decoration. Appended below the types and marked as a separate
+            // axis — it filters alongside them, not instead of them.
+            const boundaryCount = state.graph.nodes.filter(n => n.isBoundary).length;
+            if (boundaryCount) {
+                body.insertAdjacentHTML('beforeend',
+                    `<div class="legend-row legend-row-boundary" data-boundary="1"
+                          title="Only system boundaries — HTTP endpoints, queue listeners, CLI commands, outbound clients">
+                        <span class="legend-boundary-ring"></span>
+                        <span class="name">boundary</span>
+                        <span class="count">${boundaryCount}</span>
+                    </div>`);
+            }
+
             body.querySelectorAll('.legend-row').forEach(row => {
+                if (row.dataset.boundary) {
+                    row.addEventListener('click', () => {
+                        state.boundaryFilter = !state.boundaryFilter;
+                        document.querySelectorAll('#node-filter .filter-chip-boundary')
+                            .forEach(c => c.classList.toggle('active', state.boundaryFilter));
+                        applyFilters();
+                        refreshSuggestions(document.getElementById('search').value);
+                    });
+                    return;
+                }
                 row.addEventListener('click', () => toggleTypeFilter(row.dataset.type));
             });
             if (head) head.addEventListener('click', () => {
@@ -482,7 +537,10 @@
         function toggleTypeFilter(type) {
             if (state.nodeFilters.has(type)) state.nodeFilters.delete(type);
             else state.nodeFilters.add(type);
-            document.querySelectorAll('#node-filter .filter-chip').forEach(chip => {
+            // `[data-type]` only: the boundary chip filters on its own axis
+            // and has no type, so an unscoped selector would silently clear
+            // its highlight while `state.boundaryFilter` stayed on.
+            document.querySelectorAll('#node-filter .filter-chip[data-type]').forEach(chip => {
                 chip.classList.toggle('active', state.nodeFilters.has(chip.dataset.type));
             });
             applyFilters();
@@ -493,6 +551,14 @@
         function syncLegend() {
             const active = state.nodeFilters;
             document.querySelectorAll('.legend-row').forEach(row => {
+                // Muting means "this type is filtered out". That reading does
+                // not transfer to a boolean facet: the boundary row is never
+                // excluded, it is either engaged or not, so it gets `active`
+                // rather than the inverse of `muted`.
+                if (row.dataset.boundary) {
+                    row.classList.toggle('active', !!state.boundaryFilter);
+                    return;
+                }
                 const on = active.size === 0 || active.has(row.dataset.type);
                 row.classList.toggle('muted', !on);
             });

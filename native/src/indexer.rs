@@ -15,6 +15,7 @@
 //!
 //! Adding a new language is purely additive - see `languages.rs`.
 
+pub(crate) mod boundary;
 mod classifier;
 pub(crate) mod common;
 pub(crate) mod document;
@@ -55,7 +56,14 @@ use tree_sitter::Parser;
 /// symbol from version 3 has none of them, and the graph builder reads their
 /// absence as "this language reports bare names only", so a stale cache
 /// would silently keep a repo on the old name-matching path.
-const INDEXER_VERSION: &str = "4";
+///
+/// 5: system boundaries on every symbol, and declaration-site annotations for
+/// Python, TypeScript and Rust. Boundaries are derived from those annotations
+/// and from call sites, so a cached symbol from version 4 carries neither the
+/// input nor the output — it would simply look like a file with no entry
+/// points, which is indistinguishable from the truth for most files and
+/// therefore impossible to notice.
+const INDEXER_VERSION: &str = "5";
 
 /// Reserved key in `cache.json`. Prefixed and suffixed so it cannot collide
 /// with a repo-relative path.
@@ -120,6 +128,10 @@ pub fn process_file(path: &Path, repo_root: Option<&str>) -> Option<FileNode> {
     // One pass over the file's lines for every symbol in it — see
     // `line_metrics` for why this is here and not in the five extractors.
     annotate_line_metrics(&mut symbols, &content, indexer.name());
+    // Likewise a post-pass: a boundary rule reads a symbol's annotations, its
+    // declaring type's annotations and its call sites, all of which exist
+    // only once the whole file has been extracted.
+    boundary::annotate(indexer.name(), &mut symbols);
     let classification = classify_file(&path_str, &symbols);
 
     Some(FileNode {

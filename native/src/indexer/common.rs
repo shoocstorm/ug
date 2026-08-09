@@ -102,6 +102,70 @@ pub fn truncate_chars(s: &str, cap: usize) -> String {
     out
 }
 
+/// Cap on stored annotation / decorator / attribute argument text.
+///
+/// Long enough for a `@Query` with a real statement in it, short enough that
+/// a giant array literal or a `#[derive(..)]` list cannot dominate the node's
+/// retrieval text.
+pub const MAX_ANNOTATION_ARGS: usize = 400;
+
+/// Argument text of an annotation-like construct, with the enclosing
+/// delimiters stripped and the result capped at [`MAX_ANNOTATION_ARGS`].
+///
+/// `None` for a marker with no arguments (`@Override`, `#[test]`), which is
+/// the distinction [`crate::types::Annotation::args`] carries.
+pub fn annotation_args(node: Option<Node>, source: &[u8]) -> Option<String> {
+    let raw = get_node_text(node, source)?;
+    let text = raw.trim();
+    // Exactly one pair, not every bracket at each end: `("/users",
+    // methods=["GET"])` legitimately ends in `])`, and stripping greedily
+    // ate the list's own bracket and left unbalanced text behind.
+    let inner = match (text.chars().next(), text.chars().last()) {
+        (Some('('), Some(')')) | (Some('['), Some(']')) => &text[1..text.len() - 1],
+        _ => text,
+    };
+    let inner = inner.trim();
+    if inner.is_empty() {
+        return None;
+    }
+    Some(truncate_chars(inner, MAX_ANNOTATION_ARGS))
+}
+
+/// The first argument of a call, when it is a plain string literal.
+///
+/// `call` is the invocation node; `arguments` is the field name its grammar
+/// uses for the argument list (`"arguments"` everywhere the four indexers
+/// care about). Returns the literal's text with the surrounding quotes
+/// stripped, capped at [`crate::types::MAX_CALL_ARG`].
+///
+/// Deliberately shallow. It matches a *literal* in first position and
+/// nothing else — not a variable, not a concatenation, not an f-string or
+/// template with interpolation. The frameworks this exists for
+/// (`app.get("/users", h)`, `Router::route("/x", get(h))`) all write the
+/// path inline, and anything cleverer would be inventing a route that isn't
+/// in the source. All four grammars name the node kind with "string" in it
+/// (`string_literal` in Java, `string` in Python/Rust/TypeScript), which is
+/// what the kind test keys on.
+pub fn first_string_arg(call: &Node, arguments: &str, source: &[u8]) -> Option<String> {
+    let args = call.child_by_field_name(arguments)?;
+    let first = args.named_child(0)?;
+    if !first.kind().contains("string") {
+        return None;
+    }
+    let raw = get_node_text(Some(first), source)?;
+    let text = raw
+        .trim()
+        // Rust byte/raw prefixes and Python's f/r/b prefixes sit outside the
+        // quotes; strip the quote characters from both ends and let whatever
+        // prefix remains fall away with them.
+        .trim_start_matches(|c: char| c.is_ascii_alphabetic())
+        .trim_matches(|c| c == '"' || c == '\'' || c == '`' || c == '#');
+    if text.is_empty() {
+        return None;
+    }
+    Some(truncate_chars(text, crate::types::MAX_CALL_ARG))
+}
+
 /// Best-effort docstring extractor for JSDoc-style `/** ... */` blocks placed
 /// immediately above a node. Languages that share this convention (TS, JS,
 /// Java) get docstring support for free; languages with native docstring

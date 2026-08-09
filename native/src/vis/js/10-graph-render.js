@@ -179,6 +179,42 @@
             return _ringTex;
         }
 
+        // A dashed halo ring marking a system boundary — a node the outside
+        // world can reach, or that reaches out.
+        //
+        // A *ring* rather than a colour, because colour is already the node's
+        // type channel and boundary-ness is orthogonal to type: an endpoint is
+        // still a Function, and recolouring it would trade one fact for
+        // another. Dashes rather than the solid ring with tick marks, so it
+        // never reads as the selection marker.
+        function boundaryRingTexture() {
+            if (_boundaryRingTex) return _boundaryRingTex;
+            const c = document.createElement('canvas');
+            c.width = c.height = 256;
+            const ctx = c.getContext('2d');
+            ctx.strokeStyle = 'rgba(255,255,255,1)';
+            ctx.lineWidth = 11;
+            ctx.setLineDash([16, 11]);
+            ctx.lineCap = 'round';
+            ctx.beginPath();
+            ctx.arc(128, 128, 110, 0, Math.PI * 2);
+            ctx.stroke();
+            _boundaryRingTex = new THREE.CanvasTexture(c);
+            _boundaryRingTex.minFilter = THREE.LinearFilter;
+            _boundaryRingTex.generateMipmaps = false;
+            return _boundaryRingTex;
+        }
+
+        // Warm for a way in, cool violet for a way out — two directions the
+        // eye can separate without reading a label.
+        const BOUNDARY_IN_COLOR = '#fbbf24';
+        const BOUNDARY_OUT_COLOR = '#a78bfa';
+
+        function boundaryRingColor(n) {
+            const inbound = (n.boundaries || []).some(b => b.direction === 'Inbound');
+            return inbound ? BOUNDARY_IN_COLOR : BOUNDARY_OUT_COLOR;
+        }
+
         // Scene backdrop: a near-black ground with soft out-of-focus washes of
         // the two ink families (orange / steel blue). Dark makes the saturated
         // node colours glow instead of sitting flat, and gives the dimmed
@@ -318,6 +354,25 @@
                 n.__nodeShell = shell;
                 n.__shellBase = 0.14;
                 group.add(shell);
+            }
+
+            // System boundary: a dashed ring outside the sticker, keeping the
+            // node's own type colour and glyph intact.
+            if (n.isBoundary) {
+                const ring = new THREE.Sprite(new THREE.SpriteMaterial({
+                    map: boundaryRingTexture(),
+                    color: boundaryRingColor(n),
+                    transparent: true,
+                    opacity: 0.85,
+                    depthWrite: false,
+                }));
+                // Above the halo, below the sticker: the ring frames the
+                // node rather than sitting on top of its glyph.
+                ring.renderOrder = 1;
+                n.__boundaryRingBase = radius * 3.1;
+                ring.scale.setScalar(n.__boundaryRingBase);
+                n.__boundaryRing = ring;
+                group.add(ring);
             }
 
             const label = truncateName(n.name);
@@ -1100,6 +1155,13 @@
                     // Non-selected halos return to base size; the selected one is
                     // animated by the selection rAF loop.
                     if (!sel && n.__haloBase) n.__nodeHalo.scale.setScalar(n.__haloBase);
+                }
+                // The boundary ring fades with everything else. Left at full
+                // opacity it would survive a tour or a focus filter and read
+                // as "these are the relevant nodes", which is the opposite of
+                // what dimming is saying.
+                if (n.__boundaryRing) {
+                    n.__boundaryRing.material.opacity = dim ? 0 : (tier === 'near' ? 0.35 : 0.85);
                 }
                 // Non-selected cores return to normal scale.
                 if (!sel && n.__nodeCore) n.__nodeCore.scale.setScalar(n.__coreScale || 1);
