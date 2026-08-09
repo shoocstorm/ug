@@ -32,8 +32,8 @@ All accept: `-n <name>` (project), `-i <file>` (explicit graph.json), `--json` (
 | Command | Aliases | What it does | Key flags |
 |---------|---------|-------------|-----------|
 | `ug shortest_path` | — | Find shortest directed path between two symbols. | `<source>` `<target>` positionals, `--strict` (don't retry reverse direction) |
-| `ug graph_centrality` | `centrality` | Rank nodes by degree & betweenness centrality. | `--top <n>` (default 20), `-t <type>` (repeatable), `-f <prefix>` |
-| `ug graph_cycles` | `cycles` | Detect dependency cycles. | `-l <limit>` (default 20), `--min-len <n>`, `--max-len <n>`, `-f <prefix>`, `--fail-on-cycle` |
+| `ug graph_centrality` | — | Rank nodes by degree & betweenness centrality. | `--top <n>` (default 20), `-t <type>` (repeatable), `-f <prefix>` |
+| `ug graph_cycles` | — | Detect dependency cycles. | `-l <limit>` (default 20), `--min-len <n>`, `--max-len <n>`, `-f <prefix>`, `--fail-on-cycle` |
 
 ### 1.3 Agent Tools (graph.json-backed, same as MCP tools)
 
@@ -104,6 +104,11 @@ resolve to exactly one node, and list the candidates when they don't.
 | `ug traverse` | — | K-hop BFS over the OverGraph edges table. | `<node-id>`... positionals, `-k <hops>` (default 2), `-n <name>` |
 | `ug query` | — | **Whole-repo statistics**: counts, groups, distributions, blast radius. Read-only GQL over the stored facts. Needs the db but **no embedder**. | `<preset>` positional or `-p <preset>`, `-a k=v` (repeatable), `-g/--gql <query>`, `-k <limit>` (default 20), `-r/--range <window>` (`20` · `11-35` · `34-end`), `--list`, `-n <name>` |
 
+These read commands also accept `--db <dir>` to point at an explicit
+OverGraph directory (default: the `-n` project's `ugdb`, else the active
+project's), and `-o <file>` to write the result JSON to a file instead of
+stdout.
+
 ### 1.5 Chat & Tour Commands
 
 | Command | Aliases | What it does | Key flags |
@@ -123,7 +128,7 @@ resolve to exactly one node, and list the candidates when they don't.
 | `ug rename` | `rn`, `mv` | Rename a project's data directory and its `project.json` name; the active marker follows it. One positional renames the current (active, else cwd) project; two rename `<old> <new>`. | `<new>` or `<old> <new>` positionals, `-n <old>` |
 | `ug rm` | — | Delete a project's data directory. | `<name>` positional |
 | `ug regen` | — | Re-run the pipeline for an existing project: reads `repoRoot` from its `project.json`, so no `-i` needed. Incremental. | `-n <name>`, plus every `ug gen` flag |
-| `ug upgrade` | `update` | Check GitHub for a new release and self-update. | `--check` (report only, no update) |
+| `ug upgrade` | — | Check GitHub for a new release and self-update. | `--check` (report only, no update) |
 | `ug uninstall` | — | Delete ALL indexed projects and uninstall ug itself. | — |
 | `ug config` | — | View/persist defaults (chat model, endpoints, etc.) in `~/.ug/config.json`. | `set <key> <value>`, `get <key>`, `list` |
 | `ug doctor` | — | Show resolved project/db/embedder/chat config with source for each value. | `-n <name>`, `-d <db>`, embedder and chat overrides |
@@ -214,7 +219,7 @@ The HTTP server (`ug serve`) is built on **axum**. All routes listed below.
 | GET | `/api/graph/stats` | Node/edge counts, file stats | No graph |
 | GET | `/api/graph/node/*id` | Get one node by id | No graph / not found |
 | GET | `/api/graph/search` | Keyword search over node names (query params: `?q=`) | No graph |
-| GET | `/api/graph/bfs/*id` | K-hop BFS from a node seed | No graph |
+| GET | `/api/graph/traverse/*id` | K-hop BFS from a node seed | No graph |
 | GET | `/api/graph/path` | Shortest path between two nodes (query: `?source=&target=`) | No graph |
 | GET | `/api/graph/filter` | Filter edges by type/endpoint | No graph |
 | GET | `/api/graph/centrality` | Degree & betweenness centrality | No graph |

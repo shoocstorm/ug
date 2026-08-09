@@ -89,11 +89,10 @@ pub(crate) fn code_query_params_from_args(
             &[
                 "-p", "--preset", "-g", "--gql", "-a", "--arg", "-n", "--name", "-k", "--limit",
                 "-r", "--range",
-                // `-o` carries the store path on this command, as it does
-                // on every other store-backed one. Leaving it out made
-                // `ug query <preset> -o <path>` read the path as a second
-                // preset.
-                "-o", "--output",
+                // `--db` carries the store path on this command. Leaving it
+                // out of the skip list made `ug query <preset> --db <path>`
+                // read the path as a second preset.
+                "--db",
                 "--dest", "--neo4j-uri", "--neo4j-user", "--neo4j-password", "--neo4j-database",
             ],
         )
@@ -178,6 +177,7 @@ fn print_code_query_help() {
     println!("  {C_CYAN}-r, --range <window>{C_RESET}   Which rows to show, 1-based and inclusive:");
     println!("                         {C_DIM}20 · 11-35 · 34-end{C_RESET} — page a result without re-reading it");
     println!("  {C_CYAN}-n, --name <project>{C_RESET}   Project to query (default: the active one)");
+    println!("  {C_CYAN}--db <dir>{C_RESET}              OverGraph directory (default: the active project's ugdb)");
     println!("      {C_CYAN}--list{C_RESET}             List every preset and exit");
     println!("      {C_CYAN}--terse{C_RESET}            With --list: names + args only, no description prose");
     println!("      {C_CYAN}--by-folder{C_RESET}        Print a \"by file\" concentration summary above the table");
@@ -215,15 +215,14 @@ mod tests {
         assert!(p.gql.is_none());
     }
 
-    /// The bug this test exists for: `-o` carries the store path, and
+    /// The bug this test exists for: `--db` carries the store path, and
     /// leaving it out of the skip list made the path itself read as a
     /// second preset — surfacing as "preset and gql together", which
     /// points nowhere near the cause.
     #[test]
     fn a_flag_value_is_never_mistaken_for_the_positional_preset() {
         for line in [
-            "repo_census -o /tmp/db",
-            "repo_census --output /tmp/db",
+            "repo_census --db /tmp/db",
             "repo_census -n myproject",
             "repo_census -k 5",
             "repo_census -a target=src/a.rs",
@@ -242,7 +241,7 @@ mod tests {
         let args = vec![
             "--gql".to_string(),
             "MATCH (n) RETURN count(*) AS c".to_string(),
-            "-o".to_string(),
+            "--db".to_string(),
             "/tmp/db".to_string(),
         ];
         let p = code_query_params_from_args(&args).unwrap();

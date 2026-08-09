@@ -130,7 +130,7 @@ fn print_regen_help() {
     println!("  files are skipped via content hashes, so this is cheap after a few edits.");
     println!();
     println!("  Runs the whole pipeline (index → graph → embed), which is why it is");
-    println!("  {C_BOLD}regen{C_RESET} and not {C_DIM}reindex{C_RESET} — though {C_CYAN}ug reindex{C_RESET} still works.");
+    println!("  {C_BOLD}regen{C_RESET} and not {C_DIM}reindex{C_RESET}.");
     println!();
     println!("{C_BOLD}Usage:{C_RESET}  ug regen [-n <project>] [gen options]");
     println!();
@@ -519,13 +519,14 @@ fn run_gen_ingest(
         // behavior pointed at `db_path`.
         let mut specs = store_specs_from_args(args, dim);
         // gen already resolved the db path with full precedence
-        // (-d/--db → <output-dir>/ugdb), so pin the
-        // OverGraph-only default spec to it.
-        if specs.len() == 1 {
+        // (-d/--db → <output-dir>/ugdb), so pin every OverGraph spec to
+        // it — including in a --dest overgraph,neo4j fan-out, where the
+        // store layer's own resolution can no longer lean on -o.
+        for spec in &mut specs {
             if let StoreSpec::Overgraph {
                 path,
                 embedding_dim: _,
-            } = &mut specs[0]
+            } = spec
             {
                 *path = PathBuf::from(db_path);
             }

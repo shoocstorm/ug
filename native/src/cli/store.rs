@@ -25,12 +25,13 @@ pub(crate) fn store_specs_from_args(args: &[String], embedding_dim: u32) -> Vec<
 
     // The OverGraph dir path. Commands select a project by name via
     // -n/--name, resolved to ~/.ug/<name>/ugdb, which wins over the
-    // direct -o/--output path (in read commands -o is the JSON output
-    // file, so it must never be treated as a db dir). Otherwise fall
-    // back to default_read_db_path, which prefers the active project.
+    // explicit --db path. `-o` is reserved for the JSON output file on
+    // every read command, so it is never a db dir here; callers that
+    // write a store (`ingest`) translate their destination flag to
+    // --db before handing args in.
     let og_path = flag_value(args, &["-n", "--name"])
         .map(|n| project::project_dir(&project::sanitize_name(&n)).join("ugdb").to_string_lossy().into_owned())
-        .or_else(|| flag_value(args, &["-o", "--output"]))
+        .or_else(|| flag_value(args, &["--db"]))
         .unwrap_or_else(project::default_read_db_path);
 
     let neo4j_uri = flag_value(args, &["--neo4j-uri"]).or_else(|| std::env::var("UG_NEO4J_URI").ok());

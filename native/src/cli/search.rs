@@ -44,6 +44,7 @@ pub(crate) fn run_semantic_search(args: &[String]) {
             "--api-key",
             "--model",
             "--embedding-dim",
+            "--db",
             "-o",
             "--output",
             "--dest",
@@ -132,6 +133,7 @@ pub(crate) fn run_hybrid_search(args: &[String]) {
         "--api-key",
         "--model",
         "--embedding-dim",
+        "--db",
         "-o",
         "--output",
         "--dest",
@@ -219,6 +221,7 @@ pub(crate) fn run_traverse(args: &[String]) {
             "--hops",
             "-o",
             "--output",
+            "--db",
             // Without these, `-t calls` leaves "calls" behind as a seed.
             "-t",
             "--edge-type",
@@ -344,10 +347,11 @@ fn print_semantic_search_help() {
     println!();
     println!("{C_BOLD}Options:{C_RESET}");
     println!("  {C_CYAN}-n, --name{C_RESET} <name>   Project name (default: cwd basename, else most recent under ~/.ug)");
+    println!("  {C_CYAN}--db{C_RESET} <dir>          OverGraph directory (default: the -n project's, else the active one)");
     println!("  {C_CYAN}-k, --limit{C_RESET} <n>     Top-k results (default: 10)");
     println!("  {C_CYAN}--filter{C_RESET} <sql>      Optional SQL WHERE clause");
     println!("  {C_CYAN}--base-url/--api-key/--model/--embedding-dim{C_RESET}  Embedding endpoint overrides");
-    println!("  {C_CYAN}-o, --output{C_RESET} <file>  Output file (optional, omit for stdout)");
+    println!("  {C_CYAN}-o, --output{C_RESET} <file>  Write the result JSON to a file (omit for stdout)");
     println!();
     println!("{C_BOLD}Examples:{C_RESET}");
     println!("  {C_CYAN}ug semantic_search{C_RESET} \"oauth login flow\"");
@@ -368,6 +372,7 @@ fn print_hybrid_search_help() {
     println!();
     println!("{C_BOLD}Options:{C_RESET}");
     println!("  {C_CYAN}-n, --name{C_RESET} <name>    Project name (default: cwd basename, else most recent under ~/.ug)");
+    println!("  {C_CYAN}--db{C_RESET} <dir>           OverGraph directory (default: the -n project's, else the active one)");
     println!("  {C_CYAN}-k, --limit{C_RESET} <n>      Final results (default: 8)");
     println!("  {C_CYAN}--filter{C_RESET} <sql>       SQL WHERE clause for semantic seed filter");
     println!("  {C_CYAN}--direction{C_RESET} <dir>    outbound|inbound|both (default: both)");
@@ -376,7 +381,7 @@ fn print_hybrid_search_help() {
     println!("  {C_CYAN}--no-snippets{C_RESET}        Skip reading source snippets from disk");
     println!("  {C_CYAN}--repo-root{C_RESET} <path>   Repo root for snippet resolution (default: cwd)");
     println!("  {C_CYAN}--base-url/--api-key/--model/--embedding-dim{C_RESET}  Embedding endpoint overrides");
-    println!("  {C_CYAN}-o, --output{C_RESET} <file>  Output file (optional, omit for stdout)");
+    println!("  {C_CYAN}-o, --output{C_RESET} <file>  Write the result JSON to a file (omit for stdout)");
     println!();
     println!("{C_DIM}Ranking is Personalized PageRank over the edge graph, seeded by RRF");
     println!("(vector + full-text). Its tuning knobs (--strategy, --hops, --mmr-lambda,");
@@ -399,11 +404,12 @@ fn print_traverse_help() {
     println!();
     println!("{C_BOLD}Options:{C_RESET}");
     println!("  {C_CYAN}-n, --name{C_RESET} <name>       Project name (default: cwd basename, else most recent under ~/.ug)");
+    println!("  {C_CYAN}--db{C_RESET} <dir>              OverGraph directory (default: the -n project's, else the active one)");
     println!("  {C_CYAN}-k, --hops{C_RESET} <n>          Max hops 1-5 (default: 2)");
     println!("  {C_CYAN}-d, --direction{C_RESET} <dir>   {C_CYAN}outbound{C_RESET} what I depend on (default) · {C_CYAN}inbound{C_RESET} who depends");
     println!("                          on me · {C_CYAN}both{C_RESET}");
     println!("  {C_CYAN}-t, --edge-type{C_RESET} <type>  Restrict to edge type (repeatable; see {C_CYAN}ug graph_schema{C_RESET})");
-    println!("  {C_CYAN}-o, --output{C_RESET} <file>     Output file (optional, omit for stdout)");
+    println!("  {C_CYAN}-o, --output{C_RESET} <file>     Write the result JSON to a file (omit for stdout)");
     println!();
     print_wildcard_help();
     println!();

@@ -451,9 +451,20 @@ pub(crate) fn run_ingest(args: &[String]) {
     // -o was given, so an ingest never writes into a *different* project's
     // store than the one it read the graph from (the default_read_db_path
     // fallback would otherwise do exactly that). store_specs_from_args
-    // prefers -n over -o, so appending it only when -o is absent keeps the
-    // explicit -o override intact.
-    let mut spec_args = args.to_vec();
+    // prefers -n over the db dir flag, so appending it only when -o is
+    // absent keeps the explicit -o override intact.
+    //
+    // `-o/--output` is the store dir on this write command, but on the
+    // read commands it is the JSON output file — so store_specs_from_args
+    // no longer treats it as a db path. It reads `--db` instead, which is
+    // what ingest translates its destination flag to.
+    let mut spec_args: Vec<String> = Vec::new();
+    for a in args {
+        match a.as_str() {
+            "-o" | "--output" => spec_args.push("--db".to_string()),
+            _ => spec_args.push(a.clone()),
+        }
+    }
     if flag_value(args, &["-o", "--output"]).is_none()
         && flag_value(args, &["-n", "--name"]).is_none()
     {

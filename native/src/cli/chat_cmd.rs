@@ -85,6 +85,7 @@ pub(crate) fn run_chat(args: &[String]) {
         "--chat-timeout",
         "--system",
         "--filter",
+        "--db",
         "-o",
         "--output",
         "--dest",
@@ -645,6 +646,7 @@ fn print_chat_help() {
     println!();
     println!("{C_BOLD}Retrieval (matches `ug search`):{C_RESET}");
     println!("  {C_CYAN}-n, --name{C_RESET} <name>        Project name (default: cwd basename, else most recent under ~/.ug)");
+    println!("  {C_CYAN}--db{C_RESET} <dir>               OverGraph directory (default: the -n project's, else the active one)");
     println!("  {C_CYAN}-k, --limit{C_RESET} <n>          Context items to retrieve (default: 8)");
     println!("  {C_CYAN}--direction{C_RESET} <dir>        outbound|inbound|both (default: both)");
     println!("  {C_CYAN}-t, --edge-type{C_RESET} <t>      Restrict expansion to edge type (repeatable)");

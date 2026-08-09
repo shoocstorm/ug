@@ -98,7 +98,7 @@ Reference numbers on a 31.6 MB / 41 614-node / 95 117-edge graph (debug build, b
 | GET | `/api/graph/stats` | node/edge counts + per-type breakdown |
 | GET | `/api/graph/node/*id` | single node by id (wildcard accepts slashes/colons) |
 | GET | `/api/graph/search?q=&types=function,class` | substring match on name + docstring |
-| GET | `/api/graph/bfs/*id?k=2` | k-hop forward BFS, server caps `k` to 8 |
+| GET | `/api/graph/traverse/*id?k=2` | k-hop forward BFS, server caps `k` to 8 |
 | GET | `/api/graph/path?source=&target=` | forward shortest path |
 | GET | `/api/graph/filter?types=Imports,Calls` | edges by type |
 | GET | `/api/graph/centrality` | cached after first call (`OnceLock`) |

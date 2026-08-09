@@ -162,7 +162,7 @@ pub(crate) fn run_graph_path(args: &[String]) {
     }
     let (load_args, pos) = analysis_input(args);
     if pos.len() < 2 {
-        eprintln!("Usage: ug graph_path <source> <target> [--strict] [-n|--name <project>]");
+        eprintln!("Usage: ug shortest_path <source> <target> [--strict] [-n|--name <project>]");
         std::process::exit(1);
     }
     let (graph, raw, _path) = load_agent_graph(&load_args);
@@ -338,10 +338,10 @@ fn print_graph_common_options() {
 }
 
 fn print_graph_path_help() {
-    println!("  {C_CYAN}ug graph_path{C_RESET}  {C_YELLOW}— how are two nodes connected?{C_RESET}");
+    println!("  {C_CYAN}ug shortest_path{C_RESET}  {C_YELLOW}— how are two nodes connected?{C_RESET}");
     println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
     println!();
-    println!("{C_BOLD}Usage:{C_RESET}  ug graph_path <source> <target> [options]   {C_DIM}(aliases: path, shortest_path){C_RESET}");
+    println!("{C_BOLD}Usage:{C_RESET}  ug shortest_path <source> <target> [options]");
     println!();
     println!("  Source/target take a node id, a file path, a symbol name, or a wildcard —");
     println!("  but each has to land on {C_BOLD}exactly one{C_RESET} node, since \"is A connected to B\"");
@@ -357,17 +357,17 @@ fn print_graph_path_help() {
     print_wildcard_help();
     println!();
     println!("{C_BOLD}Examples:{C_RESET}");
-    println!("  {C_CYAN}ug graph_path{C_RESET} run_gen run_ingest");
-    println!("  {C_CYAN}ug graph_path{C_RESET} src/a.ts src/b.ts --strict");
-    println!("  {C_CYAN}ug graph_path{C_RESET} file:src/a.ts file:src/b.ts -n my-repo");
-    println!("  {C_CYAN}ug graph_path{C_RESET} {C_BOLD}'*Controller'{C_RESET} save_user   {C_YELLOW}# ok when one class matches{C_RESET}");
+    println!("  {C_CYAN}ug shortest_path{C_RESET} run_gen run_ingest");
+    println!("  {C_CYAN}ug shortest_path{C_RESET} src/a.ts src/b.ts --strict");
+    println!("  {C_CYAN}ug shortest_path{C_RESET} file:src/a.ts file:src/b.ts -n my-repo");
+    println!("  {C_CYAN}ug shortest_path{C_RESET} {C_BOLD}'*Controller'{C_RESET} save_user   {C_YELLOW}# ok when one class matches{C_RESET}");
 }
 
 fn print_graph_centrality_help() {
     println!("  {C_CYAN}ug graph_centrality{C_RESET}  {C_YELLOW}— degree & betweenness centrality{C_RESET}");
     println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
     println!();
-    println!("{C_BOLD}Usage:{C_RESET}  ug graph_centrality [options]   {C_DIM}(alias: centrality){C_RESET}");
+    println!("{C_BOLD}Usage:{C_RESET}  ug graph_centrality [options]");
     println!();
     println!("  Degree = how connected a node is. Betweenness = how often it sits on");
     println!("  the shortest path between others (architectural bridges).");
@@ -388,7 +388,7 @@ fn print_graph_cycles_help() {
     println!("  {C_CYAN}ug graph_cycles{C_RESET}  {C_YELLOW}— detect dependency cycles{C_RESET}");
     println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
     println!();
-    println!("{C_BOLD}Usage:{C_RESET}  ug graph_cycles [options]   {C_DIM}(alias: cycles){C_RESET}");
+    println!("{C_BOLD}Usage:{C_RESET}  ug graph_cycles [options]");
     println!();
     println!("{C_BOLD}Options:{C_RESET}");
     println!("  {C_CYAN}-l, --limit{C_RESET} <n>       Max cycles printed (default 20)");

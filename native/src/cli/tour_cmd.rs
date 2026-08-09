@@ -28,7 +28,7 @@ pub(crate) fn run_tour(args: &[String]) {
         "--api-key", "--model",
         "--embedding-dim", "--embedding-model", "--embedding-base-url", "--embedding-api-key",
         "--chat-base-url", "--chat-api-key", "--chat-model", "--temperature", "--max-tokens",
-        "--chat-timeout", "--filter", "-o", "--output", "--dest", "--neo4j-uri", "--neo4j-user",
+        "--chat-timeout", "--filter", "--db", "-o", "--output", "--dest", "--neo4j-uri", "--neo4j-user",
         "--neo4j-password", "--neo4j-database",
     ];
 
@@ -475,6 +475,7 @@ fn print_tour_help() {
     println!("  {C_CYAN}-t, --edge-type{C_RESET} <t>   Restrict expansion to an edge type (repeatable)");
     println!("  {C_CYAN}--filter{C_RESET} <sql>        WHERE clause over node columns");
     println!("  {C_CYAN}-n, --name{C_RESET} <project>  Project under ~/.ug (default: cwd basename)");
+    println!("  {C_CYAN}--db{C_RESET} <dir>             OverGraph directory (default: the -n project's, else the active one)");
     println!("  {C_CYAN}--json{C_RESET}                Emit the tour as JSON (node ids, timings, usage)");
     println!("  {C_CYAN}-o, --output{C_RESET} <file>   Write the itinerary/JSON to a file");
     println!();

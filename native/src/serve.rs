@@ -1152,7 +1152,7 @@ pub(crate) fn build_router(state: ServeState) -> Router {
         .route("/api/projects/staleness", get(api_projects_staleness))
         .route("/api/graph/node/*id", get(api_node))
         .route("/api/graph/search", get(api_search))
-        .route("/api/graph/bfs/*id", get(api_bfs))
+        .route("/api/graph/traverse/*id", get(api_traverse))
         .route("/api/graph/path", get(api_path))
         .route("/api/graph/filter", get(api_filter))
         .route("/api/graph/centrality", get(api_centrality))
@@ -2508,7 +2508,7 @@ fn default_k() -> u32 {
     1
 }
 
-async fn api_bfs(
+async fn api_traverse(
     State(state): State<ServeState>,
     AxPath(id): AxPath<String>,
     Query(params): Query<BfsParams>,
