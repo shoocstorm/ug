@@ -305,7 +305,7 @@ async fn ingest_graph_multi_with_progress(
     );
 
     // Vector reuse is planned against the first destination, but every row
-    // is still written to every destination — see `ingest_graph_multi`.
+    // is still written to every destination.
     let tp = std::time::Instant::now();
     let first = set
         .stores

@@ -34,8 +34,8 @@ pub use embed::{
 };
 pub use embed_local::LocalEmbedder;
 pub use ingest::{
-    build_texts, capture_for_graph, graph_id_set, ingest_graph, ingest_graph_multi, plan_incremental_ingest, prune_to_graph,
-    reembed_nodes, refresh_sparse_stats, IngestPlan, IngestStats,
+    build_texts, capture_for_graph, graph_id_set, ingest_graph, plan_incremental_ingest, prune_to_graph,
+    refresh_sparse_stats, IngestPlan, IngestStats,
 };
 pub use comments::extract_prose_comments;
 pub use facts::{FactContext, FactValue, Facts};
@@ -44,7 +44,7 @@ pub use source::{
 };
 pub use ppr::{default_edge_type_weights, run_ppr};
 pub use query::{
-    mmr_rerank, read_snippet, rrf_search, snippet_for, search_kb, semantic_search, semantic_search_w_where,
+    mmr_rerank, read_snippet, snippet_for, search_kb, semantic_search, semantic_search_w_where,
     traverse, traverse_filtered, ContextItem, DEFAULT_CONTEXT_CHARS, RankStrategy, RankedContext,
     SearchHit, SearchKbOptions, TraversalResult,
 };

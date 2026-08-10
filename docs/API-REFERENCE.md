@@ -388,8 +388,8 @@ When `--dest overgraph,neo4j` is specified, both backends are opened as a `Store
 | `text.rs` | `storage/text.rs` | Builds the embedding text for each node (name + signature + docstring + related names + snippet) |
 | `embed.rs` | `storage/embed.rs` | Remote embedder client (OpenAI-compatible `/v1/embeddings`), with auto-probe of dimension |
 | `embed_local.rs` | `storage/embed_local.rs` | Local embedder via fastembed-rs (in-process, no external service) |
-| `query.rs` | `storage/query.rs` | High-level search functions: `search_kb`, `semantic_search`, `semantic_search_w_where`, `rrf_search`, `mmr_rerank`, `traverse_filtered`, `traverse` |
-| `ingest.rs` | `storage/ingest.rs` | Embedding + write pipeline: `ingest_graph`, `ingest_graph_multi`, `plan_incremental_ingest`, `prune_to_graph`, `reembed_nodes` |
+| `query.rs` | `storage/query.rs` | High-level search functions: `search_kb`, `semantic_search`, `semantic_search_w_where`, `mmr_rerank`, `traverse_filtered`, `traverse` |
+| `ingest.rs` | `storage/ingest.rs` | Embedding + write pipeline: `ingest_graph`, `plan_incremental_ingest`, `prune_to_graph` |
 | `ppr.rs` | `storage/ppr.rs` | Wrapper around `personalized_pagerank`: `run_ppr`, `default_edge_type_weights` |
 | `source.rs` | `storage/source.rs` | Captures node source code from the filesystem for indexing in the DB |
 | `types_registry.rs` | `storage/types_registry.rs` | Stable string ↔ u32 mapping for node types and edge types in OverGraph |

@@ -880,7 +880,7 @@ pub async fn vector_search(
 
 /// Hybrid dense + sparse search using OverGraph's native fusion. The
 /// sparse vector is built by `text::build_sparse_keyword_vector`. This
-/// is the function `query::rrf_search` retargets to in Phase D.
+/// is what `query::search_kb` dispatches to for its fused seed channel.
 pub async fn hybrid_search(
     db: &Db,
     query_vec: Vec<f32>,
@@ -973,17 +973,17 @@ pub async fn all_edges(_db: &Db) -> Result<Vec<EdgeRow>, DbError> {
 /// `text::build_sparse_keyword_vector` (Phase D) provides the actual
 /// keyword channel via the hybrid sparse query.
 ///
-/// Returning empty here means `query::rrf_search` degrades to dense-only
-/// seeds during the Phase B/C window; Phase D collapses `rrf_search`
-/// into `hybrid_search` directly and this function becomes unreachable.
+/// Returning empty here means the hybrid search degrades to dense-only
+/// seeds; the keyword channel is carried by `hybrid_search`'s sparse
+/// vector instead, so this stub is unreachable.
 pub async fn fts_search(
     _db: &Db,
     _query: &str,
     _limit: usize,
     _where_clause: Option<&str>,
 ) -> Result<Vec<NodeRow>, DbError> {
-    // TODO(overgraph-fts): once Phase D lands, delete this and have
-    // `query::rrf_search` call `db::hybrid_search` directly.
+    // TODO(overgraph-fts): once Phase D lands, delete this and have the
+    // query layer call `db::hybrid_search` directly.
     Ok(Vec::new())
 }
 

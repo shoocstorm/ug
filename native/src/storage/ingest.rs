@@ -29,7 +29,7 @@
 use crate::storage::db::{EdgeRow, NodeRow};
 use crate::storage::embed::Embedder;
 use crate::storage::facts::FactContext;
-use crate::storage::store::{KnowledgeStore, NodeKey, StoreError, StoreSet};
+use crate::storage::store::{KnowledgeStore, NodeKey, StoreError};
 use crate::storage::source::{capture_graph_code, CapturedCode};
 use crate::limits::EmbedBudget;
 use crate::storage::sparse_stats::SparseStats;
@@ -515,63 +515,6 @@ pub async fn ingest_graph(
     })
 }
 
-/// Multi-destination ingest. Embeds only what changed, then fans the
-/// upserts out across every backend in `set` (parallel, fail-fast on
-/// any backend error). The embedding dim must match across all stores
-/// — call [`StoreSet::validate_dims`] before this if you want a clear
-/// error early instead of a per-row `BadVector`.
-///
-/// Vector reuse is planned against the first store, but *every* row is
-/// still written to *every* destination (`always_write`). Skipping
-/// writes on one store's say-so would let a destination that is missing
-/// or behind on a node silently stay that way.
-pub async fn ingest_graph_multi(
-    set: &StoreSet,
-    embedder: &Embedder,
-    graph: &GraphData,
-) -> Result<IngestStats, Box<dyn std::error::Error + Send + Sync>> {
-    let captured = capture_for_graph(graph);
-    let budget = budget_for(embedder);
-    let model = embedder.config().model.clone();
-    let texts = build_texts(graph, &captured, &budget);
-    let refs: Vec<&dyn KnowledgeStore> = set.stores.iter().map(|s| s.as_ref()).collect();
-    refresh_sparse_stats(&refs, &texts, &captured, graph);
-    let plan = match set.stores.first() {
-        Some(store) => {
-            plan_incremental_ingest(store.as_ref(), graph, &texts, true, &captured, Some(&model))
-                .await?
-        }
-        None => return Err("empty StoreSet".into()),
-    };
-    let (node_rows, embedded, embedding_error) =
-        rows_from_plan(plan, embedder, graph, &captured).await?;
-    let edge_rows = build_edge_rows(graph);
-
-    set.upsert_nodes(&node_rows).await?;
-    set.upsert_edges(&edge_rows).await?;
-    if embedding_error.is_none() {
-        for store in &set.stores {
-            store.record_ingest_model(&model);
-        }
-    }
-    // Every destination is pruned, not just the one the plan read from.
-    let mut pruned = 0usize;
-    for store in &set.stores {
-        pruned += prune_to_graph(store.as_ref(), graph).await?;
-        store.ensure_query_indexes();
-    }
-
-    Ok(IngestStats {
-        nodes_written: node_rows.len(),
-        edges_written: edge_rows.len(),
-        embedding_calls: usize::from(embedded > 0),
-        nodes_embedded: embedded,
-        nodes_unchanged: 0,
-        nodes_pruned: pruned,
-        embedding_error,
-    })
-}
-
 fn build_edge_rows(graph: &GraphData) -> Vec<EdgeRow> {
     graph
         .edges
@@ -588,75 +531,6 @@ fn build_edge_rows(graph: &GraphData) -> Vec<EdgeRow> {
             }
         })
         .collect()
-}
-
-/// Re-embed and upsert only the subset of nodes whose `id` appears in
-/// `changed_ids`. Edges are left untouched - callers are expected to
-/// recompute and upsert those separately when topology changes.
-pub async fn reembed_nodes(
-    store: &dyn KnowledgeStore,
-    embedder: &Embedder,
-    graph: &GraphData,
-    changed_ids: &[String],
-) -> Result<IngestStats, Box<dyn std::error::Error + Send + Sync>> {
-    if changed_ids.is_empty() {
-        return Ok(IngestStats::default());
-    }
-    let related = collect_related_names(graph);
-    let budget = budget_for(embedder);
-    let now = current_unix_secs();
-    let facts_ctx = FactContext::new(graph);
-    let captured = match repo_root_of(graph) {
-        Some(root) => capture_graph_code(graph, &root),
-        None => HashMap::new(),
-    };
-    let id_set: std::collections::HashSet<&str> = changed_ids.iter().map(|s| s.as_str()).collect();
-
-    let mut texts: Vec<String> = Vec::new();
-    let mut targets: Vec<&crate::types::GraphNode> = Vec::new();
-    for n in &graph.nodes {
-        if !id_set.contains(n.id.as_str()) {
-            continue;
-        }
-        let names = related.get(&n.id).map(|v| v.as_slice()).unwrap_or(&[][..]);
-        texts.push(crate::storage::text::build_node_text_with_comments(
-            n, names, "", &budget,
-        ));
-        targets.push(n);
-    }
-
-    let vectors = embedder.embed(&texts).await?;
-    let rows: Vec<NodeRow> = targets
-        .iter()
-        .zip(texts.into_iter())
-        .zip(vectors.into_iter())
-        .map(|((n, node_text), vector)| {
-            node_row(
-                n,
-                format!("{:?}", n.node_type),
-                node_text,
-                vector,
-                now,
-                captured.get(&n.id),
-                &facts_ctx,
-            )
-        })
-        .collect();
-
-    store.upsert_nodes(&rows).await?;
-
-    Ok(IngestStats {
-        nodes_written: rows.len(),
-        edges_written: 0,
-        embedding_calls: 1,
-        nodes_embedded: rows.len(),
-        nodes_unchanged: 0,
-        nodes_pruned: 0,
-        // Re-embedding is the entire point of this call, so a failed embed
-        // propagates as an error above rather than degrading — unlike a
-        // full ingest, there is no structural work here worth salvaging.
-        embedding_error: None,
-    })
 }
 
 // Helper kept for backwards compat; allows ingest_graph to skip the

@@ -119,8 +119,8 @@ fn humanize_identifier(ident: &str) -> Option<String> {
 }
 
 /// As [`build_node_text_with_comments`] with no comments and the default
-/// budget. Kept for callers that have neither — tests, and the
-/// `reembed_nodes` path.
+/// budget. Kept for callers that have neither — tests, and the CLI
+/// progress-reporting paths.
 pub fn build_node_text(node: &GraphNode, related_names: &[String]) -> String {
     build_node_text_with_comments(node, related_names, "", &EmbedBudget::default())
 }

@@ -88,8 +88,7 @@ OverGraph keys nodes by `(type_id: u32, key: String)` and edges by `(from_id, to
 3. Batch-encode: `texts → Vec<Vec<f32>>` (dim configured on the embedder; auto-probed at ingest if not specified).
 4. Store vectors via `Db::upsert_nodes` → OverGraph `batch_upsert_nodes`.
 5. Incremental: steps 2–4 only run for nodes that actually changed — see
-   *Incremental re-ingest* below. `reembed_nodes` remains available for
-   re-running them against an explicit subset of ids.
+   *Incremental re-ingest* below.
 
 **Source code is deliberately not embedded.** `node_text` carries names,
 docstrings, signatures and neighbour names — never function bodies. Three
@@ -180,7 +179,7 @@ last *changed* rather than when ingest last ran.
 
 ### Sparse keyword vectors (replaces LanceDB FTS)
 
-OverGraph has no built-in BM25. To preserve the keyword-search half of `rrf_search`, the project ships a deterministic tokenizer in `text::build_sparse_keyword_vector`:
+OverGraph has no built-in BM25. To preserve the keyword-search half of hybrid search, the project ships a deterministic tokenizer in `text::build_sparse_keyword_vector`:
 
 - Lowercase alphanum tokens, length 2–32 chars.
 - Compound identifiers are additionally split into words by
@@ -232,7 +231,7 @@ let engine = DatabaseEngine::open(path, &opts)?;
 
 1. **Semantic Search** — `db::vector_search(db, query_vec, k, where_clause)`. Pure dense ANN over the HNSW index. `where_clause` parameter is currently ignored; use OverGraph's `type_filter` directly when needed.
 
-2. **Hybrid Search** — `db::hybrid_search(db, dense_vec, sparse_vec, k, where_clause)`. Native OverGraph `VectorSearchMode::Hybrid` with `FusionMode::ReciprocalRankFusion`. Replaces the manual RRF in the previous `query::rrf_search`.
+2. **Hybrid Search** — `db::hybrid_search(db, dense_vec, sparse_vec, k, where_clause)`. Native OverGraph `VectorSearchMode::Hybrid` with `FusionMode::ReciprocalRankFusion`, the fused seed channel behind `query::search_kb`.
 
 3. **Graph Traversal** — `db::traverse_string_ids(db, start, max_hops, edge_type_ids, direction)`. Wraps OverGraph's `engine.traverse` and rehydrates string ids + edge records.
 

@@ -14,7 +14,7 @@ use crate::indexer::scope::{
 };
 use crate::types::{
     Annotation, CallRef, ExportInfo, ImportInfo, ImportedItem, Param, Signature, Symbol,
-    SymbolMetrics, TypeRef,
+    SymbolMetrics,
 };
 use std::collections::HashMap;
 use tree_sitter::Node;
@@ -1080,103 +1080,6 @@ fn push_heritage_types(clause: &Node, source: &[u8], out: &mut Vec<String>) {
         }
     }
 }
-
-/// Pull property and method signatures out of an interface body. Currently
-/// computed but not surfaced on `Symbol`; kept as a building block for an
-/// upcoming richer type model.
-#[allow(dead_code)]
-fn extract_interface_members(node: &Node, source: &[u8]) -> Vec<TypeRef> {
-    let mut members = Vec::new();
-
-    let Some(body) = node.child_by_field_name("body") else {
-        return members;
-    };
-
-    let mut cursor = body.walk();
-    for child in body.children(&mut cursor) {
-        match child.kind() {
-            "property_signature" => {
-                let name = get_node_text(child.child_by_field_name("name"), source)
-                    .unwrap_or_default();
-                let mut type_refs = extract_type_refs(&child, source);
-                if let Some(tr) = type_refs.pop() {
-                    members.push(TypeRef {
-                        name: format!("{}: {}", name, tr.name),
-                        generic: tr.generic,
-                    });
-                } else {
-                    members.push(TypeRef {
-                        name,
-                        generic: None,
-                    });
-                }
-            }
-            "method_signature" => {
-                let name = get_node_text(child.child_by_field_name("name"), source)
-                    .unwrap_or_default();
-                let params = extract_params(&child, source);
-                let return_type = extract_return_type(&child, source);
-
-                let sig = format!(
-                    "{}({}) => {}",
-                    name,
-                    params
-                        .iter()
-                        .map(|p| p.name.clone())
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                    return_type.unwrap_or_default()
-                );
-                members.push(TypeRef {
-                    name: sig,
-                    generic: None,
-                });
-            }
-            _ => {}
-        }
-    }
-    members
-}
-
-/// Collect type annotations attached to children of `node`. Currently
-/// dormant; only used by `extract_interface_members`.
-#[allow(dead_code)]
-fn extract_type_refs(node: &Node, source: &[u8]) -> Vec<TypeRef> {
-    let mut type_refs = Vec::new();
-
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        match child.kind() {
-            "type_annotation" | "attribute" => {
-                if let Some(type_node) = child.child_by_field_name("type") {
-                    if let Some(type_str) = get_node_text(Some(type_node), source) {
-                        // Split off the generic parameters: `Array<T>` ->
-                        // (`Array`, `T`).
-                        let parts: Vec<&str> = type_str.splitn(2, '<').collect();
-                        let name = parts[0].to_string();
-                        let generic =
-                            parts.get(1).map(|s| s.trim_end_matches('>').to_string());
-                        type_refs.push(TypeRef { name, generic });
-                    }
-                }
-            }
-            "variable_declarator" => {
-                if let Some(type_node) = child.child_by_field_name("type") {
-                    if let Some(type_str) = get_node_text(Some(type_node), source) {
-                        type_refs.push(TypeRef {
-                            name: type_str,
-                            generic: None,
-                        });
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    type_refs
-}
-
 
 #[cfg(test)]
 mod tests {

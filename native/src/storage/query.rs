@@ -80,44 +80,7 @@ pub async fn semantic_search_w_where(
         .collect())
 }
 
-/// Reciprocal Rank Fusion of dense + sparse results. Dispatches via
-/// the [`KnowledgeStore`] trait — the OverGraph backend uses its native
-/// RRF, the Neo4j backend fuses vector + full-text in app code.
-///
-/// `distance = -score` is preserved for downstream consumers that sort
-/// ascending — lower `distance` means better hit.
-pub async fn rrf_search(
-    store: &dyn KnowledgeStore,
-    embedder: &Embedder,
-    query: &str,
-    k: usize,
-    where_clause: Option<&str>,
-) -> Result<Vec<SearchHit>, Box<dyn std::error::Error + Send + Sync>> {
-    let vectors = embedder.embed(&[query.to_string()]).await?;
-    let query_vec = vectors
-        .into_iter()
-        .next()
-        .ok_or("embedder returned no vectors")?;
-    // IDF-weighted when the store carries corpus statistics, so common
-    // words in a natural-language query stop scoring like rare ones. Falls
-    // back to plain term frequency on stores ingested before the sidecar.
-    let sparse = build_sparse_query_vector(query, store.sparse_stats().as_deref());
-    let pool = (k * 4).max(20);
-    let filter = where_clause.and_then(NodeFilter::from_legacy_where);
-    let hits = store
-        .hybrid_search(query_vec, sparse, query, pool, filter.as_ref())
-        .await?;
-    Ok(hits
-        .into_iter()
-        .take(k)
-        .map(|(node, score)| SearchHit {
-            node,
-            distance: -score,
-        })
-        .collect())
-}
-
-/// Like [`rrf_search`] but also returns the set of ids the **dense** channel
+/// Fused dense + sparse search that also returns the set of ids the **dense** channel
 /// surfaced on its own, so each seed can be labelled `"semantic"` (in the
 /// dense results) vs `"keyword"` (only in the fused/sparse side). The query
 /// is embedded once and reused for both the fused hybrid search and the

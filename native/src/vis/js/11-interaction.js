@@ -1017,9 +1017,18 @@
             // keyed on what actually determines the output and skipped when
             // that hasn't moved. The node id is in the key so two nodes
             // sharing a span still get their own header.
+            //
+            // The key alone can't say whether the answer it stands for is
+            // still on screen: every selection rebuilds the whole panel, so
+            // re-picking the node that is already selected hands us a fresh,
+            // *empty* container while the key still matches — and the guard
+            // would skip the only render that would fill it, leaving the tab
+            // permanently blank. Pin the key to the element it was rendered
+            // into, so it only suppresses a repeat into that same container.
             const key = `${(node && node.id) || ''}|${file}|${start || ''}|${end || ''}`;
-            if (state.previewKey === key) return;
+            if (state.previewKey === key && state.previewEl === container) return;
             state.previewKey = key;
+            state.previewEl = container;
 
             // Guard against a slow fetch for a previously-selected node landing
             // after the user has moved on.
@@ -1038,6 +1047,7 @@
                 // Release the key so the hydrate's render — or a re-selection —
                 // can retry rather than inheriting a failure.
                 state.previewKey = null;
+                state.previewEl = null;
                 if (state.previewToken !== token) return;
                 const fallback = (row && row.description) || (node && node.docstring) || '';
                 container.innerHTML = fallback
