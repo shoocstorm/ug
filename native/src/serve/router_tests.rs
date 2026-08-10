@@ -479,3 +479,135 @@ async fn cache_evicts_lru_but_never_the_active_project() {
         loaded.keys().collect::<Vec<_>>()
     );
 }
+
+/// POST `uri` with a JSON body, returning the status and the body as a string.
+async fn post(app: &axum::Router, uri: &str, body: serde_json::Value) -> (StatusCode, String) {
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = res.status();
+    let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (status, String::from_utf8_lossy(&bytes).to_string())
+}
+
+/// Total nodes reported by `graph_schema`, summed over its per-type counts.
+fn node_total(body: &str) -> u64 {
+    let v: serde_json::Value = serde_json::from_str(body).expect("graph_schema returns JSON");
+    v["node_types"]
+        .as_array()
+        .expect("node_types is an array")
+        .iter()
+        .filter_map(|t| t["count"].as_u64())
+        .sum()
+}
+
+/// `sample_graph` plus one more function, standing in for a re-indexed repo.
+fn grown_graph() -> GraphData {
+    let mut g = sample_graph();
+    g.nodes.push(GraphNode {
+        id: "function:src/a.rs:6:gamma".to_string(),
+        name: "gamma".to_string(),
+        node_type: GraphNodeType::Function,
+        file: Some("src/a.rs".to_string()),
+        start_line: Some(6),
+        end_line: Some(8),
+        ..Default::default()
+    });
+    g
+}
+
+/// A project reached only through `?project=` is cached by `resolve_ctx` and
+/// was never re-read: the watcher only ever looked at the *active* project. So
+/// a CLI `ug gen` against some other project landed and every later request for
+/// it kept answering from the pre-regen graph — no error, no staleness note,
+/// just an old answer that looks current.
+#[tokio::test]
+async fn a_non_active_project_picks_up_a_regenerated_graph() {
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+    let app = router_for(&tmp, "demo", &sample_graph()).await;
+
+    // A second project, never activated.
+    write_project(&tmp, "other", &sample_graph());
+    let other_graph = tmp.path().join("ug_home").join("other").join("graph.json");
+
+    let (status, body) = post(&app, "/api/tools/graph_schema", serde_json::json!({"project": "other"})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(node_total(&body), 3, "first read sees the graph as written: {body}");
+
+    // Distinct mtime, then rewrite — this is `ug gen` landing out of band.
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    std::fs::write(&other_graph, serde_json::to_string(&grown_graph()).unwrap()).unwrap();
+
+    let (status, body) = post(&app, "/api/tools/graph_schema", serde_json::json!({"project": "other"})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        node_total(&body),
+        4,
+        "the regenerated graph must replace the cached snapshot: {body}"
+    );
+}
+
+/// Deleting the active project used to drop it from `loaded` and only *then*
+/// await the fallback's load, leaving `active` naming a context that was gone
+/// for the length of a graph read + parse. Every request in that window hit
+/// `active_ctx`'s `expect` and panicked — including the watch loop's own tick,
+/// which killed live reloading for the rest of the process.
+#[tokio::test]
+async fn deleting_the_active_project_hands_over_to_a_survivor() {
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+    let app = router_for(&tmp, "demo", &sample_graph()).await;
+    write_project(&tmp, "keeper", &sample_graph());
+
+    let (status, body) = post(&app, "/api/projects/delete", serde_json::json!({"name": "demo"})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["removed"], "demo");
+    assert_eq!(v["active"], "keeper", "the survivor takes over: {body}");
+
+    // The registry has to still be coherent afterwards: every root-relative
+    // route resolves through `active_ctx`.
+    let (status, _) = get(&app, "/graph.json").await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, listed) = get(&app, "/api/projects").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !listed.contains("\"demo\""),
+        "deleted project should be gone from the listing: {listed}"
+    );
+}
+
+/// Deleting a project that isn't active must leave the selection alone. The
+/// response used to echo the *deleted* name back as `active`, which is the one
+/// field a client uses to decide whether it needs to reload.
+#[tokio::test]
+async fn deleting_an_inactive_project_leaves_the_active_one_alone() {
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+    let app = router_for(&tmp, "demo", &sample_graph()).await;
+    write_project(&tmp, "spare", &sample_graph());
+
+    let (status, body) = post(&app, "/api/projects/delete", serde_json::json!({"name": "spare"})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["removed"], "spare");
+    assert_eq!(
+        v["active"], "demo",
+        "deleting an inactive project must not change the active one: {body}"
+    );
+
+    let (status, _) = get(&app, "/graph.json").await;
+    assert_eq!(status, StatusCode::OK);
+}

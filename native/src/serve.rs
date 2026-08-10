@@ -142,6 +142,14 @@ fn compress_brotli(data: &[u8]) -> Bytes {
 struct GraphSnapshot {
     encoded: EncodedAsset,
     parsed: GraphData,
+    /// mtime of the `graph.json` this was read from, sampled *before* the
+    /// read so a file rewritten mid-read reads as stale rather than current.
+    /// `None` for a snapshot with no file behind it (the zero-project
+    /// placeholder), which is never refreshed.
+    ///
+    /// This is what makes a cached snapshot checkable: see
+    /// [`refresh_snapshot_if_stale`].
+    mtime: Option<SystemTime>,
     adj: OnceLock<AdjIndex>,
     centrality: OnceLock<String>,
     cycles: OnceLock<String>,
@@ -517,6 +525,8 @@ fn build_placeholder_context(registry: &Arc<ProjectRegistry>) -> Arc<ProjectCont
     let snapshot = Arc::new(GraphSnapshot {
         encoded,
         parsed: empty_graph,
+        // No file behind it, so nothing to check it against.
+        mtime: None,
         adj: OnceLock::new(),
         centrality: OnceLock::new(),
         cycles: OnceLock::new(),
@@ -761,6 +771,11 @@ fn strip_ansi(s: &str) -> String {
 }
 
 fn load_snapshot(path: &PathBuf) -> Result<Arc<GraphSnapshot>, String> {
+    // Sampled before the read, so a rewrite that lands while we are reading
+    // leaves the snapshot looking older than the file and the next freshness
+    // check picks it up. The other order would record the post-write mtime
+    // against pre-write content and never correct itself.
+    let mtime = file_mtime(path);
     let raw = std::fs::read(path).map_err(|e| format!("read {}: {}", path.display(), e))?;
     let raw_json =
         String::from_utf8(raw).map_err(|_| format!("{} is not valid UTF-8", path.display()))?;
@@ -773,6 +788,7 @@ fn load_snapshot(path: &PathBuf) -> Result<Arc<GraphSnapshot>, String> {
     Ok(Arc::new(GraphSnapshot {
         encoded,
         parsed,
+        mtime,
         adj: OnceLock::new(),
         centrality: OnceLock::new(),
         cycles: OnceLock::new(),
@@ -1199,56 +1215,80 @@ pub(crate) fn build_router(state: ServeState) -> Router {
 
 fn spawn_watch(state: ServeState) {
     tokio::spawn(async move {
-        // Per-project last-seen mtimes: the active project can change at
-        // runtime, and each context keeps its own snapshot to reload into.
-        let mut last_mtimes: HashMap<String, Option<SystemTime>> = HashMap::new();
         loop {
             tokio::time::sleep(Duration::from_secs(2)).await;
-            let ctx = state.registry.active_ctx();
-            let path = ctx.graph_path.clone();
-            let mtime = file_mtime(&path);
-            match last_mtimes.get(&ctx.name) {
-                // First time watching this project: its snapshot was
-                // freshly loaded on activation, so just record the mtime.
-                None => {
-                    last_mtimes.insert(ctx.name.clone(), mtime);
-                    continue;
-                }
-                Some(prev) if mtime.is_none() || mtime == *prev => continue,
-                Some(_) => {}
-            }
-            last_mtimes.insert(ctx.name.clone(), mtime);
-            let path_clone = path.clone();
-            let ctx_clone = ctx.clone();
-            // Parse + recompress can take a few hundred ms on big graphs;
-            // do it off the runtime so we don't stall HTTP handlers.
-            let _ = tokio::task::spawn_blocking(move || match load_snapshot(&path_clone) {
-                Ok(snap) => {
-                    let size = snap.encoded.identity.len();
-                    let nodes = snap.parsed.nodes.len();
-                    let edges = snap.parsed.edges.len();
-                    if let Ok(mut w) = ctx_clone.graph.write() {
-                        *w = snap;
-                        tracing::info!(
-                            target: "ug::serve::watch",
-                            project = %ctx_clone.name,
-                            path = %path_clone.display(),
-                            bytes = size,
-                            nodes,
-                            edges,
-                            "graph reloaded"
-                        );
-                    }
-                }
-                Err(e) => tracing::warn!(
-                    target: "ug::serve::watch",
-                    error = %e,
-                    "graph reload failed"
-                ),
-            })
-            .await;
+            // The snapshot carries the mtime it was read at, so "has this
+            // changed" is answered by the context itself rather than by a
+            // side table of last-seen mtimes here. That side table was the
+            // only reason a *newly activated* project needed a priming tick,
+            // and it could only ever track the active one.
+            refresh_snapshot_if_stale(&state.registry.active_ctx()).await;
         }
     });
+}
+
+/// Reload a project's snapshot when its `graph.json` has changed since the
+/// snapshot was read. No-op when it hasn't, or when there is no file to
+/// compare against (the zero-project placeholder).
+///
+/// Every cached context needs this, not just the active one. `resolve_ctx`
+/// loads a project on demand for any request carrying `?project=<name>` and
+/// then keeps it in `loaded` indefinitely, while the watcher only ever looked
+/// at the active project — so a CLI `ug gen` / `ug ingest` against some other
+/// project landed, and every later request for it kept answering from the
+/// pre-regen graph, with no error and no staleness note. The MCP server has
+/// always checked mtime on read (`mcp::Mcp::load_graph`); the two doors have
+/// to agree about what the graph contains.
+///
+/// One `metadata` call inline, which is bounded; the read + parse behind it
+/// scales with the graph, so it goes to `spawn_blocking`.
+async fn refresh_snapshot_if_stale(ctx: &Arc<ProjectContext>) {
+    let current = file_mtime(&ctx.graph_path);
+    if current.is_none() {
+        return; // no graph.json behind this context — nothing to compare
+    }
+    {
+        let held = ctx.graph.read().expect("graph state poisoned");
+        if held.mtime == current {
+            return;
+        }
+    }
+
+    let path = ctx.graph_path.clone();
+    // Parse + recompress can take a few hundred ms on big graphs; do it off
+    // the runtime so we don't stall HTTP handlers.
+    let loaded = tokio::task::spawn_blocking(move || load_snapshot(&path)).await;
+    match loaded {
+        Ok(Ok(snap)) => {
+            let bytes = snap.encoded.identity.len();
+            let nodes = snap.parsed.nodes.len();
+            let edges = snap.parsed.edges.len();
+            if let Ok(mut w) = ctx.graph.write() {
+                *w = snap;
+                tracing::info!(
+                    target: "ug::serve::watch",
+                    project = %ctx.name,
+                    path = %ctx.graph_path.display(),
+                    bytes,
+                    nodes,
+                    edges,
+                    "graph reloaded"
+                );
+            }
+        }
+        Ok(Err(e)) => tracing::warn!(
+            target: "ug::serve::watch",
+            project = %ctx.name,
+            error = %e,
+            "graph reload failed"
+        ),
+        Err(e) => tracing::warn!(
+            target: "ug::serve::watch",
+            project = %ctx.name,
+            error = %e,
+            "graph reload task failed"
+        ),
+    }
 }
 
 // ---------- Project switching (multi-project mode) ----------
@@ -1262,6 +1302,7 @@ async fn activate_project(
     name: &str,
 ) -> Result<Arc<ProjectContext>, String> {
     if let Some(ctx) = registry.get_loaded(name) {
+        refresh_snapshot_if_stale(&ctx).await;
         registry.set_active(name);
         return Ok(ctx);
     }
@@ -1316,6 +1357,7 @@ async fn resolve_ctx(
     };
     let name = crate::project::sanitize_name(name);
     if let Some(ctx) = registry.get_loaded(&name) {
+        refresh_snapshot_if_stale(&ctx).await;
         return Ok(ctx);
     }
     let (dir, _meta) = crate::project::list_projects()
@@ -1657,11 +1699,63 @@ struct ProjectDeleteBody {
     name: String,
 }
 
+/// The context to make active in place of `deleted`, resolved *without*
+/// touching the registry.
+///
+/// Reuses the already-loaded context when there is one — building a second
+/// would open a second handle on the same OverGraph directory, and the engine
+/// is single-writer. `None` means no other project remains, so the caller
+/// falls back to the placeholder.
+async fn replacement_for_deleted(
+    registry: &Arc<ProjectRegistry>,
+    deleted: &str,
+) -> Option<Arc<ProjectContext>> {
+    let (dir, meta) = crate::project::list_projects()
+        .into_iter()
+        .find(|(_, m)| m.name != deleted)?;
+    if let Some(ctx) = registry.get_loaded(&meta.name) {
+        return Some(ctx);
+    }
+    match build_project_context(
+        &meta.name,
+        dir.join("graph.json"),
+        dir.join("ugdb"),
+        None,
+        registry.no_db,
+    )
+    .await
+    {
+        Ok(ctx) => Some(ctx),
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to build fallback project after delete");
+            None
+        }
+    }
+}
+
 /// POST /api/projects/delete — delete a project's on-disk data
 /// directory (mirrors `ug rm`) and drop it from the in-memory registry.
 /// If the deleted project was active, falls back to another remaining
 /// project, or the zero-project placeholder if none are left, so every
 /// handler always has something to read from.
+///
+/// # Ordering
+///
+/// Three things have to happen in this order, and getting any of them wrong
+/// is invisible until it isn't:
+///
+/// 1. **Resolve the replacement before dropping anything.** `active_ctx`
+///    asserts the active project is loaded and every handler goes through it,
+///    so `active` must never name a context that is absent from `loaded`.
+///    Removing the entry first and *then* awaiting the fallback's load left a
+///    window the length of a `graph.json` read + parse in which every request
+///    panicked — including the watch loop's own tick, which killed live
+///    reloading for the rest of the process.
+/// 2. **Close the store before deleting its files.** OverGraph is embedded;
+///    unlinking the directory under a live handle is the same hazard
+///    [`close_project_stores`] exists for.
+/// 3. **Swap the active selection before removing the deleted entry**, so the
+///    two are never inconsistent in either direction.
 async fn api_projects_delete(
     State(state): State<ServeState>,
     Json(body): Json<ProjectDeleteBody>,
@@ -1674,11 +1768,55 @@ async fn api_projects_delete(
     }
     let name = crate::project::sanitize_name(&body.name);
     let dir = crate::project::project_dir(&name);
+
+    // (1) Everything that can await happens while the registry is still
+    // consistent: the project being deleted stays loaded and active until a
+    // replacement is in hand.
+    let was_active = *state.registry.active.read().expect("active poisoned") == name;
+    let replacement = if was_active {
+        replacement_for_deleted(&state.registry, &name).await
+    } else {
+        None
+    };
+
+    // (2) Drop this server's handle on the store before its files go away.
+    // The context stays loaded (store-less) so `active_ctx` still resolves.
+    let was_loaded = state.registry.get_loaded(&name).is_some();
+    close_project_stores(&state.registry, &name).await;
+
     if let Err(e) = crate::project::remove_project_dir(&dir) {
+        // Nothing was deleted, so put the store back rather than leaving a
+        // live project permanently DB-less because a delete failed.
+        if was_loaded {
+            match build_project_context(
+                &name,
+                dir.join("graph.json"),
+                dir.join("ugdb"),
+                None,
+                state.registry.no_db,
+            )
+            .await
+            {
+                Ok(ctx) => state.registry.insert_loaded(ctx),
+                Err(reopen) => {
+                    tracing::warn!(project = %name, error = %reopen, "failed delete left the store closed")
+                }
+            }
+        }
         return err_json(
             StatusCode::NOT_FOUND,
             &format!("failed to remove '{}': {}", name, e),
         );
+    }
+
+    // (3) Activate the replacement first, drop the deleted entry second.
+    if was_active {
+        match replacement {
+            Some(ctx) => state.registry.insert_and_activate(ctx),
+            None => {
+                build_placeholder_context(&state.registry);
+            }
+        }
     }
     state
         .registry
@@ -1696,24 +1834,10 @@ async fn api_projects_delete(
     // staleness report until its TTL lapsed.
     *state.staleness.write().expect("staleness poisoned") = None;
 
-    let was_active = *state.registry.active.read().expect("active poisoned") == name;
-    let mut active_name = name.clone();
-    if was_active {
-        let remaining = crate::project::list_projects();
-        if let Some((_, meta)) = remaining.first() {
-            match activate_project(&state.registry, &meta.name).await {
-                Ok(ctx) => active_name = ctx.name.clone(),
-                Err(e) => {
-                    tracing::warn!(error = %e, "failed to activate fallback project after delete");
-                    build_placeholder_context(&state.registry);
-                    active_name = "__none__".to_string();
-                }
-            }
-        } else {
-            build_placeholder_context(&state.registry);
-            active_name = "__none__".to_string();
-        }
-    }
+    // Read back rather than tracked alongside: deleting a project that wasn't
+    // active leaves the selection untouched, and this used to report the
+    // *deleted* name as active in that case.
+    let active_name = state.registry.active.read().expect("active poisoned").clone();
 
     tracing::info!(project = %name, "project deleted");
     ok_json(

@@ -1,4 +1,4 @@
-native/target
+native/target*
 native/gen
 .ug
 .ug-*

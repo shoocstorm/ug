@@ -215,6 +215,95 @@ struct CachedGraph {
     mtime: Option<SystemTime>,
 }
 
+impl CachedGraph {
+    /// Rough resident size: the raw JSON, plus the parsed graph it was
+    /// deserialized into, which runs about 3× the text it came from. Same
+    /// multiplier `ug serve` uses to size a snapshot (`approx_bytes` there).
+    fn approx_bytes(&self) -> usize {
+        self.raw.len().saturating_mul(4)
+    }
+}
+
+/// Byte ceiling for parsed graphs held resident by one MCP server process.
+///
+/// An MCP server is one agent session rather than a shared service, so it
+/// needs far fewer projects resident than `ug serve` does — but 256 MiB still
+/// keeps the ordinary case (an agent working across a handful of repos)
+/// entirely cached.
+fn graph_cache_budget() -> usize {
+    const DEFAULT: usize = 256 * 1024 * 1024;
+    std::env::var("UG_MCP_CACHE_BYTES")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(DEFAULT)
+}
+
+/// Parsed `graph.json` bodies keyed by path, under a byte ceiling.
+///
+/// This was a bare `HashMap` with no eviction, so it grew by one whole graph
+/// — parsed *and* raw — for every project an agent touched and never gave any
+/// of it back. `ug serve` hit the same thing (its `loaded` map pinned "half a
+/// gigabyte across six mid-size repos") and answered it with an LRU over a
+/// byte budget; this is that, and it matters more here, because an MCP server
+/// lives as long as the session that started it and nothing restarts it
+/// mid-way.
+struct GraphCache {
+    entries: HashMap<PathBuf, CachedGraph>,
+    /// Recency order over `entries`, least-recently-used first.
+    lru: Vec<PathBuf>,
+    budget: usize,
+}
+
+impl GraphCache {
+    fn new() -> Self {
+        GraphCache {
+            entries: HashMap::new(),
+            lru: Vec::new(),
+            budget: graph_cache_budget(),
+        }
+    }
+
+    fn get(&mut self, path: &Path) -> Option<&CachedGraph> {
+        if !self.entries.contains_key(path) {
+            return None;
+        }
+        self.touch(path);
+        self.entries.get(path)
+    }
+
+    fn insert(&mut self, path: PathBuf, entry: CachedGraph) {
+        self.entries.insert(path.clone(), entry);
+        self.touch(&path);
+        self.evict_over_budget();
+    }
+
+    fn remove(&mut self, path: &Path) {
+        self.entries.remove(path);
+        self.lru.retain(|p| p != path);
+    }
+
+    fn touch(&mut self, path: &Path) {
+        self.lru.retain(|p| p != path);
+        self.lru.push(path.to_path_buf());
+    }
+
+    /// Drop least-recently-used graphs until the cache fits its budget.
+    ///
+    /// Never evicts the last entry: it is the one just inserted, and a single
+    /// graph bigger than the whole budget would otherwise be thrown away
+    /// before its caller could read it, making every call re-parse it.
+    fn evict_over_budget(&mut self) {
+        let mut total: usize = self.entries.values().map(CachedGraph::approx_bytes).sum();
+        while total > self.budget && self.lru.len() > 1 {
+            let victim = self.lru.remove(0);
+            if let Some(evicted) = self.entries.remove(&victim) {
+                total = total.saturating_sub(evicted.approx_bytes());
+            }
+        }
+    }
+}
+
 fn mtime_of(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).ok().and_then(|m| m.modified().ok())
 }
@@ -337,7 +426,7 @@ fn store_spec(db_path: &Path, dim: u32) -> Result<StoreSpec, String> {
 struct Mcp {
     default_ctx: ProjectCtx,
     project_cache: Mutex<HashMap<String, ProjectCtx>>,
-    graph_cache: Mutex<HashMap<PathBuf, CachedGraph>>,
+    graph_cache: Mutex<GraphCache>,
     /// Built lazily on the first DB-backed call, then reused. `None` until
     /// then; a failed build isn't cached so a transient outage can recover.
     embedder: Mutex<Option<Arc<Embedder>>>,
@@ -348,7 +437,7 @@ impl Mcp {
         Mcp {
             default_ctx: default_ctx(),
             project_cache: Mutex::new(HashMap::new()),
-            graph_cache: Mutex::new(HashMap::new()),
+            graph_cache: Mutex::new(GraphCache::new()),
             embedder: Mutex::new(None),
         }
     }
@@ -389,12 +478,16 @@ impl Mcp {
         Ok(e)
     }
 
-    /// Parse graph.json (cached by path, invalidated on mtime change).
+    /// Parse graph.json (cached by path, invalidated on mtime change, and
+    /// bounded by a byte budget — see [`GraphCache`]).
     fn load_graph(&self, graph_path: &Path) -> Result<(Arc<GraphData>, Arc<String>), String> {
         let current = mtime_of(graph_path);
-        if let Some(hit) = self.graph_cache.lock().unwrap().get(graph_path) {
-            if hit.mtime.is_some() && hit.mtime == current {
-                return Ok((hit.parsed.clone(), hit.raw.clone()));
+        {
+            let mut cache = self.graph_cache.lock().unwrap();
+            if let Some(hit) = cache.get(graph_path) {
+                if hit.mtime.is_some() && hit.mtime == current {
+                    return Ok((hit.parsed.clone(), hit.raw.clone()));
+                }
             }
         }
         let raw = std::fs::read_to_string(graph_path).map_err(|e| {
@@ -1109,4 +1202,90 @@ fn run_list_tools() {
     }
     println!("\nRun `ug mcp call <tool> <json>` to invoke one. Example:");
     println!("  ug mcp call find_symbols '{{\"name\":\"run_mcp\"}}'");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A cache entry whose `approx_bytes` is `4 * bytes`.
+    fn entry(bytes: usize) -> CachedGraph {
+        CachedGraph {
+            parsed: Arc::new(GraphData {
+                nodes: Vec::new(),
+                edges: Vec::new(),
+                stats: None,
+                resolution: None,
+            }),
+            raw: Arc::new("x".repeat(bytes)),
+            mtime: None,
+        }
+    }
+
+    fn cache_with_budget(budget: usize) -> GraphCache {
+        GraphCache {
+            entries: HashMap::new(),
+            lru: Vec::new(),
+            budget,
+        }
+    }
+
+    /// The whole point of the bound: without it this map grew by one parsed
+    /// graph per project an agent touched and never gave any of it back, for
+    /// the life of the session.
+    #[test]
+    fn the_graph_cache_evicts_once_it_is_over_budget() {
+        let mut cache = cache_with_budget(40);
+        cache.insert(PathBuf::from("/a/graph.json"), entry(10));
+        cache.insert(PathBuf::from("/b/graph.json"), entry(10));
+
+        assert!(
+            cache.get(Path::new("/a/graph.json")).is_none(),
+            "the least recently used graph should have been dropped"
+        );
+        assert!(
+            cache.get(Path::new("/b/graph.json")).is_some(),
+            "the graph just inserted stays resident"
+        );
+    }
+
+    #[test]
+    fn reading_a_graph_makes_it_the_last_to_be_evicted() {
+        let mut cache = cache_with_budget(90);
+        cache.insert(PathBuf::from("/a/graph.json"), entry(10));
+        cache.insert(PathBuf::from("/b/graph.json"), entry(10));
+        assert!(cache.get(Path::new("/a/graph.json")).is_some(), "hit on /a");
+
+        // Three entries at 40 bytes each is 120 against a budget of 90, so
+        // exactly one has to go — and it must not be the one just read.
+        cache.insert(PathBuf::from("/c/graph.json"), entry(10));
+
+        assert!(
+            cache.get(Path::new("/b/graph.json")).is_none(),
+            "/b was the least recently used"
+        );
+        assert!(cache.get(Path::new("/a/graph.json")).is_some());
+        assert!(cache.get(Path::new("/c/graph.json")).is_some());
+    }
+
+    /// A single graph larger than the entire budget must still be cached:
+    /// evicting it on insert would make every call re-read and re-parse it,
+    /// which is strictly worse than holding it.
+    #[test]
+    fn a_graph_bigger_than_the_budget_is_still_cached() {
+        let mut cache = cache_with_budget(8);
+        cache.insert(PathBuf::from("/big/graph.json"), entry(1000));
+        assert!(cache.get(Path::new("/big/graph.json")).is_some());
+    }
+
+    #[test]
+    fn removing_a_graph_clears_it_from_the_recency_order_too() {
+        // A stale name left in `lru` would make the next eviction pass do
+        // nothing useful on its turn through the list.
+        let mut cache = cache_with_budget(1024);
+        cache.insert(PathBuf::from("/a/graph.json"), entry(10));
+        cache.remove(Path::new("/a/graph.json"));
+        assert!(cache.lru.is_empty(), "recency order still names /a");
+        assert!(cache.get(Path::new("/a/graph.json")).is_none());
+    }
 }
