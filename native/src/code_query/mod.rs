@@ -108,6 +108,11 @@ pub struct QueryAnswer {
     /// because every property looks absent in this state, which would
     /// otherwise be reported as a schema problem.
     pub empty_index: bool,
+    /// A `target` preset argument bound to a path the store has no node for.
+    /// The query matched nothing, but the empty answer is a caller typo (or a
+    /// path ingest never indexed), not a real zero. Set only when the preset
+    /// binds `$target`; raw GQL leaves it `None`.
+    pub target_not_indexed: Option<String>,
     /// The window of rows to render. Every count reported alongside the
     /// table is over the *whole* result, not this window.
     pub window: range::RowRange,
@@ -208,6 +213,22 @@ pub async fn run(
     // different (already-reported) problem — not an empty index.
     let empty_index = !coverage.is_empty() && coverage.iter().all(|c| c.index_is_empty());
 
+    // A `target` bound to a path that exists nowhere in the store is a
+    // caller typo, not an answer. The presets that take it all filter on
+    // `t.file = $target`, so zero rows from a typo'd path is
+    // indistinguishable from "nothing depends on it" — probe once for the
+    // file, only on an empty result, so the renderer can say which.
+    let target_not_indexed = if empty_index || !page.rows.is_empty() {
+        None
+    } else if let Some(QueryValue::Str(target)) = bound.get("target") {
+        match target_file_indexed(store, target, &limits).await {
+            Ok(true) | Err(_) => None,
+            Ok(false) => Some(target.clone()),
+        }
+    } else {
+        None
+    };
+
     Ok(QueryAnswer {
         title,
         description,
@@ -215,11 +236,31 @@ pub async fn run(
         coverage,
         unindexed,
         empty_index,
+        target_not_indexed,
         window,
         gql,
         from_preset: params.preset.is_some(),
         by_folder: params.by_folder,
     })
+}
+
+/// Whether any indexed node carries `file = $target`, the shape every
+/// `TARGET` preset anchors on. Runs only when a `target` query came back
+/// empty, so a failure here costs one cheap anchored query — never a full
+/// scan.
+async fn target_file_indexed(
+    store: &dyn KnowledgeStore,
+    target: &str,
+    limits: &QueryLimits,
+) -> Result<bool, String> {
+    let mut params = QueryParams::new();
+    params.insert("target".to_string(), QueryValue::Str(target.to_string()));
+    let probe = "MATCH (n) WHERE n.file = $target RETURN n.file AS file LIMIT 1";
+    store
+        .execute_query(probe, &params, limits)
+        .await
+        .map(|p| !p.rows.is_empty())
+        .map_err(|e| e.to_string())
 }
 
 /// Turn the request into a query and its bound parameters.

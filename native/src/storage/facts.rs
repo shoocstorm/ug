@@ -266,7 +266,13 @@ pub fn compute(n: &GraphNode, ctx: &FactContext) -> Facts {
             // `Some(c)` is exactly "the classifier had an opinion" and its
             // answer stands either way. `None` remains the genuine fallback
             // for graphs written before classification reached the node.
-            let is_test = match &n.classification {
+            // A per-symbol `cfg(test)` marker — see the Rust indexer's
+            // `test_annotation` — overrides the file-level answer. A
+            // helper inside `#[cfg(test)] mod tests` in a production
+            // file is test code, and only the marker knows that.
+            let is_test = n.annotations.iter().any(|a| {
+                a.name == "test" || a.name == "cfg(test)"
+            }) || match &n.classification {
                 Some(c) => *c == FileClassification::Test,
                 None => looks_like_test(file),
             };
@@ -771,6 +777,37 @@ mod tests {
         let mut n = node("f", Some("tests/checkout.rs"));
         n.classification = Some(FileClassification::Test);
         assert_eq!(compute(&n, &ctx_of(vec![]))["is_test"], FactValue::Int(1));
+    }
+
+    /// A `#[cfg(test)] mod` in a production file is test code, and only the
+    /// indexer's per-symbol marker can say so — the file classifies as
+    /// `Service` and its name carries no test marker.
+    #[test]
+    fn a_cfg_test_annotation_overrides_a_production_classification() {
+        let mut n = node("f", Some("src/server.rs"));
+        n.classification = Some(FileClassification::Service);
+        n.annotations.push(Annotation {
+            name: "cfg(test)".into(),
+            args: None,
+        });
+        assert_eq!(compute(&n, &ctx_of(vec![]))["is_test"], FactValue::Int(1));
+
+        let mut n = node("f", Some("src/server.rs"));
+        n.annotations.push(Annotation {
+            name: "test".into(),
+            args: None,
+        });
+        assert_eq!(compute(&n, &ctx_of(vec![]))["is_test"], FactValue::Int(1));
+
+        // And the marker must not leak: an ordinary annotation never turns
+        // a Service file into a test.
+        let mut n = node("f", Some("src/server.rs"));
+        n.classification = Some(FileClassification::Service);
+        n.annotations.push(Annotation {
+            name: "allow(dead_code)".into(),
+            args: None,
+        });
+        assert_eq!(compute(&n, &ctx_of(vec![]))["is_test"], FactValue::Int(0));
     }
 
     /// `test_` was matched anywhere in the path, so ordinary words ending in

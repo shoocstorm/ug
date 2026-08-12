@@ -24,6 +24,20 @@ pub(crate) enum PrefSource {
 }
 
 pub(crate) fn embedder_from_args(args: &[String]) -> Embedder {
+    match try_embedder_from_args(args) {
+        Some(e) => e,
+        None => die(1, "failed to build embedder (set --base-url, --api-key and/or --model, or run `ug config set embed.base_url …`)"),
+    }
+}
+
+/// Build the embedder the CLI flags / config resolve to, or `None` when
+/// they resolve to nothing usable.
+///
+/// `embedder_from_args` treats failure as fatal — the commands that
+/// *need* embeddings (ingest, gen) have no honest fallback. Search has
+/// one ([`crate::storage::name_search`]), so it calls this instead and
+/// falls back to name matching when the answer is `None`.
+pub(crate) fn try_embedder_from_args(args: &[String]) -> Option<Embedder> {
     let (dim_raw, _) = config::resolve_pref_cfg(flag_value(args, &["--embedding-dim"]), "embed.dim");
     let dim = dim_raw.and_then(|s| s.parse().ok());
     let (base_url, _) = config::resolve_pref_cfg(flag_value(args, &["--base-url"]), "embed.base_url");
@@ -41,12 +55,15 @@ pub(crate) fn embedder_from_args(args: &[String]) -> Embedder {
     } else {
         Embedder::local(cfg)
     };
-    let embedder = result.unwrap_or_else(|e| {
-        eprintln!("failed to build embedder: {}", e);
-        std::process::exit(1);
-    });
+    let embedder = match result {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("warning: embedder unavailable, falling back to name search: {}", e);
+            return None;
+        }
+    };
     announce_embedder(&embedder, dim.is_some());
-    embedder
+    Some(embedder)
 }
 
 /// Resolve how much of each node's description may be embedded, and say so.

@@ -5,15 +5,15 @@ use std::path::PathBuf;
 
 use ultragraph::agent_tools::{self, Render};
 use ultragraph::storage::{
-    self, search_kb as storage_search_kb, semantic_search as storage_semantic_search, Direction,
-    RankStrategy, SearchKbOptions,
+    self, name_search as storage_name_search, search_kb as storage_search_kb,
+    semantic_search as storage_semantic_search, Direction, RankStrategy, SearchKbOptions,
 };
 use ultragraph::{C_BOLD, C_CYAN, C_DIM, C_RESET, C_YELLOW};
 
 use super::agent::{emit_agent_result, load_agent_graph, print_node_ref_help, print_wildcard_help};
 use super::analysis::resolve_node_ref;
 use super::args::{first_positional, flag_value, has_flag, multi_flag, positionals};
-use super::embed::{embedder_from_args, tokio_runtime};
+use super::embed::{tokio_runtime, try_embedder_from_args};
 use super::io::{die, write_or_print};
 use super::store::{open_store_or_exit, single_store_spec_from_args};
 
@@ -60,20 +60,35 @@ pub(crate) fn run_semantic_search(args: &[String]) {
         .unwrap_or(10);
     let filter = flag_value(args, &["--filter"]);
     let output_path = flag_value(args, &["-o", "--output"]);
-    let embedder = embedder_from_args(args);
+    let embedder = try_embedder_from_args(args);
     let rt = tokio_runtime();
 
     let result_json = rt.block_on(async {
-        let dim = embedder.config().dim as u32;
-        let spec = single_store_spec_from_args(args, dim);
+        let spec = match &embedder {
+            Some(e) => single_store_spec_from_args(args, e.config().dim as u32),
+            None => single_store_spec_from_args(args, ultragraph::storage::DEFAULT_EMBEDDING_DIM as u32),
+        };
         let store = open_store_or_exit(&spec).await;
-        let hits = match filter.as_deref() {
-            Some(f) => storage::semantic_search_w_where(store.as_ref(), &embedder, &query, limit, f)
+        let hits = match &embedder {
+            Some(embedder) => {
+                match filter.as_deref() {
+                    Some(f) => storage::semantic_search_w_where(
+                        store.as_ref(),
+                        embedder,
+                        &query,
+                        limit,
+                        f,
+                    )
+                    .await
+                    .unwrap_or_else(|e| die(1, format!("semantic search failed: {e}"))),
+                    None => storage_semantic_search(store.as_ref(), embedder, &query, limit)
+                        .await
+                        .unwrap_or_else(|e| die(1, format!("semantic search failed: {e}"))),
+                }
+            }
+            None => storage_name_search(store.as_ref(), &query, limit, filter.as_deref())
                 .await
-                .unwrap_or_else(|e| die(1, format!("semantic search failed: {e}"))),
-            None => storage_semantic_search(store.as_ref(), &embedder, &query, limit)
-                .await
-                .unwrap_or_else(|e| die(1, format!("semantic search failed: {e}"))),
+                .unwrap_or_else(|e| die(1, format!("name search failed: {e}"))),
         };
 
         let json: Vec<serde_json::Value> = hits
@@ -88,6 +103,7 @@ pub(crate) fn run_semantic_search(args: &[String]) {
                     "end_line": h.node.end_line,
                     "description": h.node.description,
                     "distance": h.distance,
+                    "matched_by": if embedder.is_some() { "semantic" } else { "name" },
                 })
             })
             .collect();
@@ -169,10 +185,37 @@ pub(crate) fn run_hybrid_search(args: &[String]) {
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
     let output_path = flag_value(args, &["-o", "--output"]);
 
-    let embedder = embedder_from_args(args);
+    let embedder = try_embedder_from_args(args);
     let rt = tokio_runtime();
 
     let result_json = rt.block_on(async {
+        let Some(embedder) = embedder else {
+            // No embeddings, no hybrid ranking. Fall back to a name
+            // substring match so `ug search foo` still answers when the
+            // embedding backend is down or unconfigured.
+            let dim = ultragraph::storage::DEFAULT_EMBEDDING_DIM;
+            let spec = single_store_spec_from_args(args, dim as u32);
+            let store = open_store_or_exit(&spec).await;
+            let hits = storage_name_search(store.as_ref(), &query, k, filter.as_deref())
+                .await
+                .unwrap_or_else(|e| die(1, format!("name search failed: {e}")));
+            let json: Vec<serde_json::Value> = hits
+                .into_iter()
+                .map(|h| {
+                    serde_json::json!({
+                        "id": h.node.id,
+                        "name": h.node.name,
+                        "node_type": h.node.node_type,
+                        "file": h.node.file,
+                        "start_line": h.node.start_line,
+                        "end_line": h.node.end_line,
+                        "description": h.node.description,
+                        "matched_by": "name",
+                    })
+                })
+                .collect();
+            return serde_json::to_string_pretty(&json).unwrap_or_default();
+        };
         let dim = embedder.config().dim as u32;
         let spec = single_store_spec_from_args(args, dim);
         let store = open_store_or_exit(&spec).await;

@@ -233,6 +233,58 @@ pub mod inner {
     assert!(names.contains(&"Hidden"), "nested struct missing in {:?}", names);
 }
 
+#[test]
+fn symbols_in_a_cfg_test_module_are_tagged_as_test() {
+    let src = r#"
+pub fn real() -> u8 { 1 }
+
+#[cfg(test)]
+mod tests {
+    fn helper() -> u8 { 2 }
+
+    #[test]
+    fn works() { assert_eq!(helper(), 2); }
+}
+"#;
+    let (dir, _) = stage_rs(src, "lib.rs");
+    let symbols = run_index(&dir).files.remove(0).symbols;
+    let real = symbols.iter().find(|s| s.name == "real").unwrap();
+    assert!(
+        real.annotations.iter().all(|a| a.name != "cfg(test)"),
+        "production fn must not inherit the test marker: {:?}",
+        real.annotations
+    );
+    for name in ["helper", "works"] {
+        let sym = symbols.iter().find(|s| s.name == name).unwrap();
+        let test_marked = sym
+            .annotations
+            .iter()
+            .any(|a| a.name == "test" || a.name == "cfg(test)");
+        assert!(
+            test_marked,
+            "{name} inside #[cfg(test)] mod should be test-marked: {:?}",
+            sym.annotations
+        );
+    }
+}
+
+#[test]
+fn plain_inline_modules_do_not_tag_their_symbols() {
+    let src = r#"
+mod inner {
+    pub fn plain() -> u8 { 7 }
+}
+"#;
+    let (dir, _) = stage_rs(src, "lib.rs");
+    let symbols = run_index(&dir).files.remove(0).symbols;
+    let plain = symbols.iter().find(|s| s.name == "plain").unwrap();
+    assert!(
+        plain.annotations.iter().all(|a| a.name != "cfg(test)"),
+        "a non-cfg module must not tag its symbols: {:?}",
+        plain.annotations
+    );
+}
+
 // ─── Doc comments ──────────────────────────────────────────────────
 
 #[test]

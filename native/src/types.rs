@@ -63,6 +63,18 @@ pub struct Symbol {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub uses: Vec<String>,
 
+    /// Qualified names of module-level functions this symbol passes *as a
+    /// value* — an argument to a call rather than a callee.
+    ///
+    /// This is the wiring a codebase does through callbacks and registration
+    /// (`addEventListener("click", fn)`, `app.get("/x", handler)`,
+    /// `post(api_chat)`), and without it those functions look dead: no edge
+    /// points at a name that is never invoked. The graph resolves each entry
+    /// to a `References` edge, which is also what keeps a route handler out
+    /// of `dead_code`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub value_refs: Vec<String>,
+
     /// Effective HTTP route this symbol serves, e.g. `GET /api/orders/{id}`,
     /// composed from type-level and member-level mapping annotations.
     #[serde(default, skip_serializing_if = "Option::is_none")]

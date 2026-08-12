@@ -178,3 +178,54 @@ async fn declaring_fact_indexes_is_safe_to_repeat() {
     let back = nodes_by_ids(&db, &["f:a".to_string()]).await.unwrap();
     assert_eq!(back[0].facts["loc"], FactValue::Int(9));
 }
+
+/// `name_search` is the no-embedder fallback for `ug search`. It must work
+/// against rows that carry no vectors at all — that is exactly the store
+/// state an unavailable embedder leaves behind.
+#[tokio::test]
+async fn name_search_matches_without_any_vectors() {
+    let tmp = TempDir::new().unwrap();
+    let db = open(&tmp).await;
+
+    let mut rows = vec![
+        row_with("f:get_order", Vec::new(), BTreeMap::new()),
+        row_with("f:save_order", Vec::new(), BTreeMap::new()),
+        row_with("f:get_user", Vec::new(), BTreeMap::new()),
+    ];
+    rows[0].name = "get_order".into();
+    rows[1].name = "save_order".into();
+    rows[2].name = "get_user".into();
+    db.upsert_nodes(&rows).await.unwrap();
+
+    let hits = ultragraph::storage::name_search(&db, "order", 10, None)
+        .await
+        .unwrap();
+    let names: Vec<&str> = hits.iter().map(|h| h.node.name.as_str()).collect();
+    assert!(
+        names.contains(&"get_order") && names.contains(&"save_order"),
+        "expected both order matches, got {:?}",
+        names
+    );
+    assert!(
+        !names.contains(&"get_user"),
+        "get_user must not match 'order': {:?}",
+        names
+    );
+}
+
+/// The legacy `--filter node_type = 'X'` still applies on the fallback path.
+#[tokio::test]
+async fn name_search_respects_a_node_type_filter() {
+    let tmp = TempDir::new().unwrap();
+    let db = open(&tmp).await;
+
+    let mut row = row_with("f:get_order", Vec::new(), BTreeMap::new());
+    row.name = "get_order".into();
+    row.node_type = "Function".into();
+    db.upsert_nodes(&[row]).await.unwrap();
+
+    let hits = ultragraph::storage::name_search(&db, "get", 10, Some("node_type = 'Function'"))
+        .await
+        .unwrap();
+    assert_eq!(hits.len(), 1, "the Function should match its type filter");
+}

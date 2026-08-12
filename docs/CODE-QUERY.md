@@ -212,13 +212,18 @@ it useful is the rollup and the caveats, both of which belong in the renderer.
    its path first (`ug find_symbols run_serve` prints the id, whose middle
    segment is the path) and pass that. This applies to `impact`,
    `impact_summary`, `boundary_impact` and `retest_scope` alike.
-2. **Reverse-reach** over `Calls · References · Imports · Extends · Implements ·
+2. **Distinguish a typo from a zero.** When a `target` preset comes back
+   empty, ug probes the store once for `file = $target`. If the path exists
+   nowhere, it renders `TARGET NOT INDEXED` instead of a bare `No rows
+   matched`, so the reader does not walk away believing nothing depends on a
+   real file.
+3. **Reverse-reach** over `Calls · References · Imports · Extends · Implements ·
    Overrides` (never `Contains` — it is pure structure and would drag in every
    sibling), bounded (`*1..N`, never unbounded), tracking hop distance.
-3. **Roll up, not dump.** Direct dependents, transitive count by hop, affected
+4. **Roll up, not dump.** Direct dependents, transitive count by hop, affected
    files and folders, split test vs non-test, and — the question people
    *actually* mean — which `Route` nodes and exported symbols are reached.
-4. **Report honestly.** ug's `Calls` edges are name-resolved heuristically
+5. **Report honestly.** ug's `Calls` edges are name-resolved heuristically
    (Java uses receiver types, TypeScript is best-effort). Dynamic dispatch, DI,
    reflection and string-keyed lookups are invisible to it. The report says so
    and lists `also_check`: files that *import* the target but whose

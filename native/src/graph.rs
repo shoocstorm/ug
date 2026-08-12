@@ -657,6 +657,23 @@ fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData
                 });
             }
 
+            // Functions passed as values — callbacks, route handlers,
+            // listeners. These are never invoked here, so they draw a
+            // `References` edge rather than a `Calls` one; that edge is also
+            // the only thing standing between a registered handler and the
+            // `dead_code` query.
+            for referenced in &sym.value_refs {
+                let Some(target_id) = qualified.by_qualified.get(referenced) else {
+                    continue;
+                };
+                edges.push(GraphEdge {
+                    source: sym_node_id.clone(),
+                    target: target_id.clone(),
+                    edge_type: GraphEdgeType::References,
+                });
+                resolution.resolved_qualified += 1;
+            }
+
             if sym.call_refs.is_empty() {
                 // Languages that report only bare callee names.
                 for called in &sym.calls {

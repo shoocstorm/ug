@@ -79,7 +79,7 @@ impl LanguageIndexer for RustIndexer {
 
         let mut symbols = Vec::new();
         let mut impl_traits: Vec<(String, String)> = Vec::new();
-        visit(root, source, &walk, None, &mut impl_traits, &mut symbols);
+        visit(root, source, &walk, None, false, &mut impl_traits, &mut symbols);
         attach_impl_traits(&mut symbols, &impl_traits);
         symbols
     }
@@ -107,6 +107,11 @@ struct ImplCtx {
 /// disambiguate them from free functions or methods on other types, and they
 /// carry `owner` so a call through a typed receiver can find them.
 ///
+/// `test_ctx` is `true` while inside a `#[cfg(test)]` module. The marker is
+/// propagated to every symbol extracted in that subtree (see
+/// [`test_annotation`]), so the `is_test` fact reaches code that lives in a
+/// `mod tests` block inside an otherwise production file.
+///
 /// `impl_traits` collects `(type fqn, trait fqn)` pairs for
 /// `impl Trait for Type`. Those land on the *type* rather than on each
 /// method — see [`attach_impl_traits`].
@@ -115,6 +120,7 @@ fn visit(
     source: &[u8],
     ctx: &Ctx,
     imp: Option<&ImplCtx>,
+    test_ctx: bool,
     impl_traits: &mut Vec<(String, String)>,
     out: &mut Vec<Symbol>,
 ) {
@@ -145,7 +151,7 @@ fn visit(
             if let Some(body) = node.child_by_field_name("body") {
                 let mut cursor = body.walk();
                 for child in body.children(&mut cursor) {
-                    visit(child, source, ctx, Some(&inner), impl_traits, out);
+                    visit(child, source, ctx, Some(&inner), test_ctx, impl_traits, out);
                 }
             }
             return;
@@ -154,10 +160,13 @@ fn visit(
             // Step into module bodies so nested items still appear in
             // the symbol list. The `mod` itself isn't a symbol —
             // matches what other indexers (e.g. Python packages) do.
+            // A `#[cfg(test)]` module marks everything inside it as
+            // test code, whatever the file's own classification is.
+            let nested = test_ctx || is_test_module(&node, source);
             if let Some(body) = node.child_by_field_name("body") {
                 let mut cursor = body.walk();
                 for child in body.children(&mut cursor) {
-                    visit(child, source, ctx, imp, impl_traits, out);
+                    visit(child, source, ctx, imp, nested, impl_traits, out);
                 }
             }
             return;
@@ -165,7 +174,7 @@ fn visit(
         _ => {}
     }
 
-    extract_symbol_from_node(&node, source, ctx, imp, out);
+    extract_symbol_from_node(&node, source, ctx, imp, test_ctx, out);
 
     // A trait's members are symbols in their own right. Without them the
     // trait is an empty node: `Overrides` has no declaration to point at, and
@@ -181,7 +190,7 @@ fn visit(
             };
             let mut cursor = body.walk();
             for child in body.children(&mut cursor) {
-                extract_symbol_from_node(&child, source, ctx, Some(&owner), out);
+                extract_symbol_from_node(&child, source, ctx, Some(&owner), test_ctx, out);
             }
         }
         return;
@@ -206,8 +215,19 @@ fn visit(
 
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        visit(child, source, ctx, imp, impl_traits, out);
+        visit(child, source, ctx, imp, test_ctx, impl_traits, out);
     }
+}
+
+/// Whether a `mod_item` node is gated behind `#[cfg(test)]`.
+///
+/// Rust's grammar puts the attribute on the module's preceding sibling, so
+/// this reuses the same backward scan [`extract_attributes`] performs, but
+/// reads the raw text rather than building `Annotation`s.
+fn is_test_module(node: &Node, source: &[u8]) -> bool {
+    extract_attributes(node, source)
+        .iter()
+        .any(|a| a.name == "cfg" && a.args.as_deref().is_some_and(|s| s.contains("test")))
 }
 
 fn extract_symbol_from_node(
@@ -215,13 +235,17 @@ fn extract_symbol_from_node(
     source: &[u8],
     ctx: &Ctx,
     imp: Option<&ImplCtx>,
+    test_ctx: bool,
     out: &mut Vec<Symbol>,
 ) {
     let kind = node.kind();
     let start = (node.start_position().row + 1) as u32;
     let end = (node.end_position().row + 1) as u32;
     let docstring = extract_rust_docstring(node, source);
-    let annotations = extract_attributes(node, source);
+    let mut annotations = extract_attributes(node, source);
+    if test_ctx {
+        test_annotation(&mut annotations);
+    }
 
     match kind {
         // `function_signature_item` is a trait member with no body
@@ -251,7 +275,8 @@ fn extract_symbol_from_node(
 
             let params = extract_params(node, source);
             let return_type = extract_return_type(node, source);
-            let (calls, call_refs, uses) = extract_calls(node, source, ctx, imp, &params);
+            let (calls, call_refs, uses, value_refs) =
+                extract_calls(node, source, ctx, imp, &params);
             let metrics = SymbolMetrics {
                 // Inclusive of both the first and last line, matching the
                 // span fallback used for symbols that carry no metrics.
@@ -285,6 +310,7 @@ fn extract_symbol_from_node(
                 calls,
                 call_refs,
                 uses,
+                value_refs,
                 qualified_name,
                 owner: imp.map(|i| i.fqn.clone()),
                 metrics: Some(metrics),
@@ -522,7 +548,7 @@ fn extract_calls(
     ctx: &Ctx,
     imp: Option<&ImplCtx>,
     params: &[Param],
-) -> (Vec<String>, Vec<CallRef>, Vec<String>) {
+) -> (Vec<String>, Vec<CallRef>, Vec<String>, Vec<String>) {
     let mut env = TypeEnv::new();
 
     if let Some(i) = imp {
@@ -548,12 +574,13 @@ fn extract_calls(
     let mut calls = Vec::new();
     let mut refs = Vec::new();
     let mut uses = Vec::new();
+    let mut value_refs = Vec::new();
     if let Some(body) = node.child_by_field_name("body") {
         collect_calls(
-            &body, source, ctx, imp, &mut env, &mut calls, &mut refs, &mut uses,
+            &body, source, ctx, imp, &mut env, &mut calls, &mut refs, &mut uses, &mut value_refs,
         );
     }
-    (calls, refs, uses)
+    (calls, refs, uses, value_refs)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -566,6 +593,7 @@ fn collect_calls(
     calls: &mut Vec<String>,
     refs: &mut Vec<CallRef>,
     uses: &mut Vec<String>,
+    value_refs: &mut Vec<String>,
 ) {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
@@ -580,6 +608,7 @@ fn collect_calls(
                     push_call(calls, &r.name);
                     refs.push(r);
                 }
+                record_value_refs(&child, source, ctx, env, value_refs);
             }
             // `Foo { .. }` is the one construction form Rust spells
             // unambiguously. `Foo::new(..)` is a convention, not a language
@@ -623,7 +652,46 @@ fn collect_calls(
             }
             _ => {}
         }
-        collect_calls(&child, source, ctx, imp, env, calls, refs, uses);
+        collect_calls(
+            &child, source, ctx, imp, env, calls, refs, uses, value_refs,
+        );
+    }
+}
+
+/// Note a module-level symbol passed *as a value* — a bare identifier or
+/// path in argument position (`post(api_chat)`, `.route("/x", get(h))`).
+/// See the TypeScript indexer's equivalent for why this exists.
+fn record_value_refs(
+    call: &Node,
+    source: &[u8],
+    ctx: &Ctx,
+    env: &TypeEnv,
+    value_refs: &mut Vec<String>,
+) {
+    let Some(args) = call.child_by_field_name("arguments") else {
+        return;
+    };
+    let mut cursor = args.walk();
+    for arg in args.children(&mut cursor) {
+        let text = match arg.kind() {
+            "identifier" | "scoped_identifier" => match get_node_text(Some(arg), source) {
+                Some(t) => t,
+                None => continue,
+            },
+            _ => continue,
+        };
+        let tail = text.rsplit("::").next().unwrap_or(&text);
+        if env.contains_key(tail) {
+            continue;
+        }
+        if looks_like_constant(tail) {
+            continue;
+        }
+        if let Some(fqn) = ctx.scope.resolve_path(&text) {
+            if !value_refs.contains(&fqn) {
+                value_refs.push(fqn);
+            }
+        }
     }
 }
 
@@ -1170,6 +1238,27 @@ fn extract_attributes(node: &Node, source: &[u8]) -> Vec<Annotation> {
     }
     out.reverse();
     out
+}
+
+/// A `#[cfg(test)]` module gates everything inside it behind test builds,
+/// but nothing in its subtree carries the attribute itself — a helper `fn`
+/// inside `mod tests` has no `#[cfg(test)]` of its own. Tag the symbol so
+/// the `is_test` fact can see it without conflating file classification
+/// (a production file like `serve.rs` legitimately holds a `mod tests`).
+///
+/// The annotation is a compact string `cfg(test)` rather than the structural
+/// `{ name: "cfg", args: Some("test") }` pair — it reads correctly in the
+/// `annotations` fact and never round-trips through the AST again.
+fn test_annotation(annotations: &mut Vec<Annotation>) {
+    let tagged = annotations
+        .iter()
+        .any(|a| a.name == "cfg(test)" || a.name == "test");
+    if !tagged {
+        annotations.push(Annotation {
+            name: "cfg(test)".to_string(),
+            args: None,
+        });
+    }
 }
 
 /// Collapse the run of `///` (outer) or `//!` (inner) doc-comment lines

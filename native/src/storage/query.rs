@@ -14,7 +14,7 @@
 use crate::storage::db::{EdgeRow, NodeRow};
 use crate::storage::embed::Embedder;
 use crate::storage::ppr::run_ppr;
-use crate::storage::store::{KnowledgeStore, NodeFilter};
+use crate::storage::store::{KnowledgeStore, NodeFilter, QueryLimits, QueryParams, QueryValue};
 use crate::storage::text::build_sparse_query_vector;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -54,6 +54,74 @@ pub async fn semantic_search(
         .into_iter()
         .map(|(node, distance)| SearchHit { node, distance })
         .collect())
+}
+
+/// Name-substring search that needs no embedder at all.
+///
+/// This is the fallback when `semantic_search` / `search` are asked to
+/// run without one: it matches `name CONTAINS query` over the stored
+/// graph, so a repo can still be searched the day the embedding backend
+/// is down or unconfigured. Rows come back ordered by id so the answer
+/// is stable between runs; `distance` carries the 1-based rank so callers
+/// that sort on it get the same ordering as the rows themselves.
+pub async fn name_search(
+    store: &dyn KnowledgeStore,
+    query: &str,
+    k: usize,
+    where_clause: Option<&str>,
+) -> Result<Vec<SearchHit>, Box<dyn std::error::Error + Send + Sync>> {
+    let filter = where_clause.and_then(NodeFilter::from_legacy_where);
+    let mut params = QueryParams::new();
+    params.insert("q".into(), QueryValue::Str(query.to_string()));
+    let type_pred = match &filter {
+        Some(f) => f
+            .node_types
+            .as_ref()
+            .map(|ts| {
+                if ts.len() == 1 {
+                    format!("AND n.node_type = '{}'", ts[0].replace('\'', "''"))
+                } else {
+                    let list = ts
+                        .iter()
+                        .map(|t| format!("'{}'", t.replace('\'', "''")))
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    format!("AND n.node_type IN ({list})")
+                }
+            })
+            .unwrap_or_default(),
+        None => String::new(),
+    };
+    let gql = format!(
+        "MATCH (n) WHERE n.name CONTAINS $q {type_pred} \
+         RETURN elementKey(n) AS id ORDER BY id LIMIT {k}"
+    );
+    let limits = QueryLimits {
+        max_rows: k,
+        ..Default::default()
+    };
+    let page = store.execute_query(&gql, &params, &limits).await?;
+    let ids: Vec<String> = page
+        .rows
+        .into_iter()
+        .filter_map(|row| match row.first() {
+            Some(QueryValue::Str(s)) => Some(s.clone()),
+            _ => None,
+        })
+        .collect();
+    let rows = store.nodes_by_ids(&ids).await?;
+    let mut by_id: std::collections::HashMap<String, NodeRow> =
+        rows.into_iter().map(|r| (r.id.clone(), r)).collect();
+    let mut hits = Vec::new();
+    for (rank, id) in ids.iter().enumerate() {
+        if let Some(node) = by_id.remove(id) {
+            hits.push(SearchHit {
+                node,
+                distance: (rank + 1) as f32,
+            });
+        }
+    }
+    Ok(hits)
 }
 
 /// Like [`semantic_search`] but with a `node_type` filter parsed from

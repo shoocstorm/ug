@@ -20,11 +20,16 @@ use crate::storage::store::QueryValue;
 
 /// Hard ceiling on rendered output. A statistics answer that costs more
 /// than this has stopped being cheaper than the thing it replaces.
-const MAX_CHARS: usize = 3_000;
+///
+/// 3_000 was too small for real answers: a `dead_code` list over a
+/// mid-size repo, or a `loc` ranking that names its files, routinely
+/// crossed it and came back half-trimmed. 12_000 keeps the whole answer
+/// readable without letting a single query balloon into a dump.
+const MAX_CHARS: usize = 12_000;
 
-/// Longest string cell before it is elided from the middle — node ids are
-/// the long values here, and their two informative ends are the file and
-/// the symbol name.
+/// Longest string cell before it is elided from the middle — the long
+/// values here are paths and symbol names. Node ids are exempt: they
+/// address a symbol, and the whole spelling is the point.
 const MAX_CELL: usize = 58;
 
 /// Engine diagnostics that tell this particular reader nothing.
@@ -285,6 +290,16 @@ fn push_caveats(out: &mut String, answer: &QueryAnswer, style: Render) {
         ));
     }
 
+    if let Some(target) = &answer.target_not_indexed {
+        out.push_str(&format!(
+            "\n⚠ TARGET NOT INDEXED: no node carries file `{}`, so this empty \
+             result means the path is a typo or was never ingested — not that \
+             nothing depends on it. `ug query biggest_files` lists the indexed \
+             files.\n",
+            target
+        ));
+    }
+
     if answer.page.truncated {
         out.push_str("\n⚠ The row cap was reached — this result is a LOWER BOUND, not a total.\n");
     }
@@ -369,14 +384,25 @@ fn percentile(sorted: &[f64], q: f64) -> f64 {
 /// Shorten from the middle: a node id's two ends (file and symbol name)
 /// are the informative parts, and truncating from the right throws the
 /// symbol name away.
+///
+/// Node ids (`kind:file:name`) are exempt entirely — eliding one would
+/// discard exactly the string an agent needs to address the symbol, and
+/// after an id is gone it cannot be re-fetched from the row.
 fn elide(s: &str) -> String {
     let len = s.chars().count();
-    if len <= MAX_CELL {
+    if len <= MAX_CELL || is_node_id(s) {
         return s.to_string();
     }
     let head: String = s.chars().take(MAX_CELL / 2 - 1).collect();
     let tail: String = s.chars().skip(len - (MAX_CELL / 2 - 2)).collect::<String>();
     format!("{}…{}", head, tail)
+}
+
+/// A `kind:file:name` node id — a `:`-joined string whose segments carry a
+/// path. The presence of a `/`-bearing segment is the distinguishing
+/// signal; a bare symbol name or a metric has no directory in it.
+fn is_node_id(s: &str) -> bool {
+    s.contains(':') && s.contains('/')
 }
 
 #[cfg(test)]
@@ -399,6 +425,7 @@ mod tests {
             coverage,
             unindexed,
             empty_index,
+            target_not_indexed: None,
             window: crate::code_query::range::RowRange::first(20),
             gql: "MATCH (n) RETURN count(*) AS c".into(),
             from_preset: false,
@@ -467,6 +494,20 @@ mod tests {
             !out.contains("ug regen"),
             "`ug regen` does not ingest — it is the wrong remedy here: {out}"
         );
+    }
+
+    /// A `target` bound to a path no node carries is a caller typo, not an
+    /// answer — `impact src/typo.ts` must say "TARGET NOT INDEXED" so the
+    /// reader does not walk away believing nothing depends on a real file.
+    #[test]
+    fn a_target_with_no_indexed_file_is_reported_not_a_real_zero() {
+        let mut a = answer(page(&["file"], vec![]), vec![]);
+        a.target_not_indexed = Some("src/typo.ts".into());
+        let out = render(&a, Render::Markdown);
+        assert!(out.contains("No rows matched"), "{out}");
+        assert!(out.contains("TARGET NOT INDEXED"), "{out}");
+        assert!(out.contains("src/typo.ts"), "{out}");
+        assert!(out.contains("biggest_files"), "{out}");
     }
 
     #[test]
@@ -665,12 +706,16 @@ mod tests {
     }
 
     #[test]
-    fn long_ids_keep_both_informative_ends() {
+    fn long_node_ids_are_kept_whole() {
         let id = "function:native/src/storage/backends/neo4j.rs:Neo4jStore::personalized_pagerank";
-        let short = elide(id);
-        assert!(short.starts_with("function:native/src/storage"), "{short}");
-        assert!(short.ends_with("pagerank"), "{short}");
-        assert!(short.chars().count() <= MAX_CELL);
+        assert_eq!(elide(id), id);
+    }
+
+    #[test]
+    fn long_paths_without_a_node_id_shape_are_still_elided() {
+        let long = "native/src/storage/backends/neo4j_metrics_collector".repeat(4);
+        let short = elide(&long);
+        assert!(short.chars().count() <= MAX_CELL, "{short}");
     }
 
     #[test]

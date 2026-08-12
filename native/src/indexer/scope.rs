@@ -403,6 +403,10 @@ impl TypeEnv {
         self.vars.get(name).map(String::as_str)
     }
 
+    pub fn contains_key(&self, name: &str) -> bool {
+        self.vars.contains_key(name)
+    }
+
 }
 
 /// Strip generic arguments and reference/pointer sigils from a written type,

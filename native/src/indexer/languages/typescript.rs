@@ -433,7 +433,8 @@ fn extract_symbol_from_node(
 
             let params = extract_params(node, source);
             let return_type = extract_return_type(node, source);
-            let (calls, call_refs, uses) = extract_calls(node, source, ctx, owner, &params);
+            let (calls, call_refs, uses, value_refs) =
+                extract_calls(node, source, ctx, owner, &params);
             let extends = extract_extends(node, source);
             let implements = extract_implements(node, source);
             let docstring = extract_docstring(node, source);
@@ -469,6 +470,7 @@ fn extract_symbol_from_node(
                 calls,
                 call_refs,
                 uses,
+                value_refs,
                 qualified_name,
                 owner: owner.map(|o| o.fqn.clone()),
                 metrics: Some(metrics),
@@ -559,7 +561,8 @@ fn extract_symbol_from_node(
                 // `const handler = () => …` is the common shape of a function
                 // in this language, so its body's call sites matter as much
                 // as a `function` declaration's.
-                let (calls, call_refs, uses) = extract_calls(&decl, source, ctx, owner, &[]);
+                let (calls, call_refs, uses, value_refs) =
+                    extract_calls(&decl, source, ctx, owner, &[]);
                 out.push(Symbol {
                     id: format!("{}:{}:{}", if is_fn { "fn" } else { "var" }, start, name),
                     qualified_name: Some(ctx.scope.qualify(&name)),
@@ -577,6 +580,7 @@ fn extract_symbol_from_node(
                     calls,
                     call_refs,
                     uses,
+                    value_refs,
                     metrics: None,
                     ..Default::default()
                 });
@@ -693,7 +697,7 @@ fn extract_calls(
     ctx: &Ctx,
     owner: Option<&OwnerCtx>,
     params: &[Param],
-) -> (Vec<String>, Vec<CallRef>, Vec<String>) {
+) -> (Vec<String>, Vec<CallRef>, Vec<String>, Vec<String>) {
     let mut env = TypeEnv::new();
 
     if let Some(o) = owner {
@@ -717,10 +721,19 @@ fn extract_calls(
     let mut calls = Vec::new();
     let mut refs = Vec::new();
     let mut uses = Vec::new();
+    let mut value_refs = Vec::new();
     collect_calls(
-        node, source, ctx, owner, &mut env, &mut calls, &mut refs, &mut uses,
+        node,
+        source,
+        ctx,
+        owner,
+        &mut env,
+        &mut calls,
+        &mut refs,
+        &mut uses,
+        &mut value_refs,
     );
-    (calls, refs, uses)
+    (calls, refs, uses, value_refs)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -733,6 +746,7 @@ fn collect_calls(
     calls: &mut Vec<String>,
     refs: &mut Vec<CallRef>,
     uses: &mut Vec<String>,
+    value_refs: &mut Vec<String>,
 ) {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
@@ -744,6 +758,7 @@ fn collect_calls(
                     push_call(calls, &r.name);
                     refs.push(r);
                 }
+                record_value_refs(&child, source, ctx, env, value_refs);
             }
             "new_expression" => {
                 if let Some(ty) = get_node_text(child.child_by_field_name("constructor"), source) {
@@ -759,10 +774,54 @@ fn collect_calls(
                         has_receiver: true,
                     });
                 }
+                record_value_refs(&child, source, ctx, env, value_refs);
             }
             _ => {}
         }
-        collect_calls(&child, source, ctx, owner, env, calls, refs, uses);
+        collect_calls(&child, source, ctx, owner, env, calls, refs, uses, value_refs);
+    }
+}
+
+/// Note a module-level symbol passed *as a value* — a bare identifier in
+/// argument position (`addEventListener("click", fn)`, `app.get("/x",
+/// handler)`, `post(api_chat)`). The symbol is never invoked here, so it
+/// gets a `References` edge rather than a `Calls` one; without this it
+/// looks dead, because registration is the only edge that ever points at
+/// it.
+///
+/// Three ways a bare argument can be *not* this case:
+/// - a local binding (`const h = () => …; use(h)`), which `env` tracks;
+/// - a constant read, already recorded by `record_constant_use`;
+/// - a name nothing in scope resolves, which would fabricate an edge.
+fn record_value_refs(
+    call: &Node,
+    source: &[u8],
+    ctx: &Ctx,
+    env: &TypeEnv,
+    value_refs: &mut Vec<String>,
+) {
+    let Some(args) = call.child_by_field_name("arguments") else {
+        return;
+    };
+    let mut cursor = args.walk();
+    for arg in args.children(&mut cursor) {
+        if arg.kind() != "identifier" {
+            continue;
+        }
+        let Some(text) = get_node_text(Some(arg), source) else {
+            continue;
+        };
+        if env.contains_key(&text) {
+            continue;
+        }
+        if looks_like_constant(&text) {
+            continue;
+        }
+        if let Some(fqn) = ctx.scope.lookup(&text) {
+            if !value_refs.contains(&fqn) {
+                value_refs.push(fqn);
+            }
+        }
     }
 }
 

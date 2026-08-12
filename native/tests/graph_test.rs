@@ -622,3 +622,95 @@ fn a_python_module_binding_is_a_variable_unless_it_reads_as_a_constant() {
     assert_eq!(ty("MAX_RETRIES"), GraphNodeType::Constant);
     assert_eq!(ty("app"), GraphNodeType::Variable);
 }
+
+#[test]
+fn a_handler_passed_as_a_value_gets_a_references_edge() {
+    let dir = TempDir::new().unwrap();
+    let dir_path = dir.path().to_string_lossy().to_string();
+    fs::write(
+        dir.path().join("router.ts"),
+        "function saveSettings() {}\n\
+         function makeNode() {}\n\
+         function wire() {\n\
+         \x20 addEventListener('click', saveSettings);\n\
+         \x20 app.get('/x', makeNode);\n\
+         }\n",
+    )
+    .unwrap();
+
+    let graph: GraphData =
+        serde_json::from_str(&build_graph(index(dir_path))).unwrap();
+    let by_name = |name: &str| {
+        graph
+            .nodes
+            .iter()
+            .find(|n| n.name == name)
+            .unwrap_or_else(|| panic!("no node named {name}"))
+            .id
+            .clone()
+    };
+
+    for target in ["saveSettings", "makeNode"] {
+        let has_edge = graph.edges.iter().any(|e| {
+            e.edge_type == GraphEdgeType::References && e.target == by_name(target)
+        });
+        assert!(has_edge, "{target} passed as a value should get a References edge");
+    }
+}
+
+#[test]
+fn a_locally_bound_closure_does_not_fabricate_a_references_edge() {
+    let dir = TempDir::new().unwrap();
+    let dir_path = dir.path().to_string_lossy().to_string();
+    fs::write(
+        dir.path().join("mod.ts"),
+        "function use(fn: () => void) { fn(); }\n\
+         function outer() {\n\
+         \x20  const local = () => {};\n\
+         \x20  use(local);\n\
+         }\n",
+    )
+    .unwrap();
+
+    let graph: GraphData =
+        serde_json::from_str(&build_graph(index(dir_path))).unwrap();
+    // `local` is bound inside `outer`; nothing should point a References
+    // edge at a module-level symbol named `local` that does not exist.
+    assert!(
+        !graph
+            .edges
+            .iter()
+            .any(|e| e.edge_type == GraphEdgeType::References && e.target.contains("local")),
+        "a local binding must not resolve to a phantom module-level reference"
+    );
+}
+
+#[test]
+fn a_rust_route_handler_passed_as_a_value_gets_a_references_edge() {
+    let dir = TempDir::new().unwrap();
+    let dir_path = dir.path().to_string_lossy().to_string();
+    fs::write(
+        dir.path().join("server.rs"),
+        "fn api_chat() {}\n\
+         fn route(p: &str, h: fn()) {}\n\
+         fn build() { route(\"/chat\", api_chat); }\n",
+    )
+    .unwrap();
+
+    let graph: GraphData =
+        serde_json::from_str(&build_graph(index(dir_path))).unwrap();
+    let api_chat = graph
+        .nodes
+        .iter()
+        .find(|n| n.name == "api_chat")
+        .unwrap_or_else(|| panic!("no node named api_chat"))
+        .id
+        .clone();
+    assert!(
+        graph
+            .edges
+            .iter()
+            .any(|e| e.edge_type == GraphEdgeType::References && e.target == api_chat),
+        "api_chat passed as a value should get a References edge"
+    );
+}

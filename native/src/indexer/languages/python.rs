@@ -315,7 +315,8 @@ fn extract_symbol_from_node(
 
             let params = extract_params(node, source);
             let return_type = extract_return_type(node, source);
-            let (calls, call_refs, uses) = extract_calls(node, source, ctx, owner, &params);
+            let (calls, call_refs, uses, value_refs) =
+                extract_calls(node, source, ctx, owner, &params);
             let docstring = extract_docstring(node, source);
             let metrics = SymbolMetrics {
                 // Inclusive of both the first and last line, matching the
@@ -349,6 +350,7 @@ fn extract_symbol_from_node(
                 calls,
                 call_refs,
                 uses,
+                value_refs,
                 qualified_name,
                 owner: owner.map(|o| o.fqn.clone()),
                 metrics: Some(metrics),
@@ -443,7 +445,7 @@ fn extract_calls(
     ctx: &Ctx,
     owner: Option<&OwnerCtx>,
     params: &[Param],
-) -> (Vec<String>, Vec<CallRef>, Vec<String>) {
+) -> (Vec<String>, Vec<CallRef>, Vec<String>, Vec<String>) {
     let mut env = TypeEnv::new();
 
     if let Some(o) = owner {
@@ -467,12 +469,21 @@ fn extract_calls(
     let mut calls = Vec::new();
     let mut refs = Vec::new();
     let mut uses = Vec::new();
+    let mut value_refs = Vec::new();
     if let Some(body) = node.child_by_field_name("body") {
         collect_calls(
-            &body, source, ctx, owner, &mut env, &mut calls, &mut refs, &mut uses,
+            &body,
+            source,
+            ctx,
+            owner,
+            &mut env,
+            &mut calls,
+            &mut refs,
+            &mut uses,
+            &mut value_refs,
         );
     }
-    (calls, refs, uses)
+    (calls, refs, uses, value_refs)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -485,6 +496,7 @@ fn collect_calls(
     calls: &mut Vec<String>,
     refs: &mut Vec<CallRef>,
     uses: &mut Vec<String>,
+    value_refs: &mut Vec<String>,
 ) {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
@@ -496,10 +508,48 @@ fn collect_calls(
                     push_call(calls, &r.name);
                     refs.push(r);
                 }
+                record_value_refs(&child, source, ctx, env, value_refs);
             }
             _ => {}
         }
-        collect_calls(&child, source, ctx, owner, env, calls, refs, uses);
+        collect_calls(
+            &child, source, ctx, owner, env, calls, refs, uses, value_refs,
+        );
+    }
+}
+
+/// Note a module-level symbol passed *as a value* — a bare identifier in
+/// argument position (`event_bus.on("ready", handler)`,
+/// `Thread(target=run)`). See the TypeScript indexer's equivalent.
+fn record_value_refs(
+    call: &Node,
+    source: &[u8],
+    ctx: &Ctx,
+    env: &TypeEnv,
+    value_refs: &mut Vec<String>,
+) {
+    let Some(args) = call.child_by_field_name("arguments") else {
+        return;
+    };
+    let mut cursor = args.walk();
+    for arg in args.children(&mut cursor) {
+        if arg.kind() != "identifier" {
+            continue;
+        }
+        let Some(text) = get_node_text(Some(arg), source) else {
+            continue;
+        };
+        if env.contains_key(&text) {
+            continue;
+        }
+        if looks_like_constant(&text) {
+            continue;
+        }
+        if let Some(fqn) = ctx.scope.lookup(&text) {
+            if !value_refs.contains(&fqn) {
+                value_refs.push(fqn);
+            }
+        }
     }
 }
 
