@@ -329,7 +329,10 @@ Sample output:
 > internet-facing.
 
 - Default bind `127.0.0.1`. `--host 0.0.0.0` is opt-in and **must** be paired with an external secured proxy.
-- A default-deny CORS layer (`tower_http::cors::CorsLayer::new()`) blocks cross-origin browser requests; the same-origin web UI / Tauri shell are unaffected. This is defense against drive-by / DNS-rebinding scripts reaching a loopback port — **not** a substitute for authentication.
+- A default-deny CORS layer (`tower_http::cors::CorsLayer::new()`) blocks cross-origin browser requests; the same-origin web UI / Tauri shell are unaffected. This stops a drive-by page from *reading* responses — **not** a substitute for authentication, and on its own **not** a defense against DNS rebinding, which makes the attacker's page same-origin and so bypasses CORS entirely.
+- A `Host` / `Origin` guard (`guard_host`, outermost layer) is what actually closes rebinding: requests whose `Host` names a domain rather than a loopback name or bare IP are rejected with 403, as are cross-site `Origin`s. Set `UG_ALLOWED_HOSTS` (comma-separated hostnames) when running behind a reverse proxy that forwards a real domain.
+- The two routes that accept a caller-supplied filesystem path — `/api/browse-dir` and `/api/generate` — are confined to the user's home directory, `$UG_HOME`, and the server's working directory. `UG_BROWSE_ROOTS` (colon-separated) adds more, for repos on another volume. Without this, the two compose into a whole-machine read: index a sensitive directory as a project, then read it back through `/api/file`.
+- `/api/chat` and `/api/tour` accept a per-request `chat_base_url`, but a request-supplied endpoint **never** inherits the server's stored `chat.api_key` — it must bring its own key or go keyless. Otherwise a single unauthenticated POST would have the server deliver the user's real API key to an attacker-named endpoint. Cloud metadata hosts are refused outright.
 - Request bodies are capped (4 MiB via `RequestBodyLimitLayer`) to bound abuse / OOM.
 - These are local-loopback mitigations only. `ug` has no built-in auth, rate limiting, or TLS. For anything beyond a single developer's machine, front the server with a reverse proxy that adds all three.
 

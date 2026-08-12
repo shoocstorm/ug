@@ -49,6 +49,10 @@ dotenvy = "0.15"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 fastembed = { version = "4", default-features = false, features = ["ort-download-binaries", "hf-hub-rustls-tls"] }
 dirs = "5"
+# Release-archive integrity for `ug upgrade` — TLS authenticates the
+# connection, the SHA-256 authenticates the bytes we're about to execute.
+sha2 = "0.10"
+hex = "0.4"
 axum = "0.7"
 tower-http = { version = "0.5", features = ["compression-br", "compression-gzip", "trace", "cors", "limit"] }
 flate2 = "1"

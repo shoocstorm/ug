@@ -107,6 +107,10 @@ fn write_project(tmp: &TempDir, name: &str, graph: &GraphData) -> (std::path::Pa
 async fn router_for(tmp: &TempDir, name: &str, graph: &GraphData) -> axum::Router {
     let (ug_home, repo_root) = write_project(tmp, name, graph);
     std::env::set_var("UG_HOME", &ug_home);
+    // The wizard's filesystem routes are confined to `browse_roots()`, and a
+    // TempDir sits outside every default root. Declare it the way a user
+    // keeping repos on another volume would.
+    std::env::set_var("UG_BROWSE_ROOTS", tmp.path());
 
     let registry = Arc::new(ProjectRegistry {
         mode: ServeMode::Multi,
@@ -408,6 +412,90 @@ async fn browse_dir_lists_subdirectories() {
         !names.contains(&".hidden"),
         "dotfiles must be hidden, got {names:?}"
     );
+}
+
+/// The server has no authentication, so the two routes that take a
+/// caller-supplied filesystem path must refuse anything outside the allowed
+/// roots. Unconfined they compose into a whole-machine read: browse to a
+/// sensitive directory, index it as a project, then pull its contents back
+/// out through `/api/file`.
+#[tokio::test]
+async fn filesystem_routes_refuse_paths_outside_the_allowed_roots() {
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+    let app = router_for(&tmp, "demo", &sample_graph()).await;
+
+    // `/etc` exists on every platform this runs on, and is outside the
+    // temp root the fixture declared.
+    let (status, body) = get(&app, "/api/browse-dir?path=/etc").await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "body: {body}");
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/generate")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"path":"/etc"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}
+
+/// DNS rebinding makes an attacker's page same-origin with us, so CORS never
+/// fires; the `Host` header carrying their domain is what still gives it away.
+#[tokio::test]
+async fn requests_from_a_rebound_hostname_are_rejected() {
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+    let app = router_for(&tmp, "demo", &sample_graph()).await;
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/graph/stats")
+                .header("host", "evil.tld")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+    // A cross-site Origin is refused even when Host looks fine — that's the
+    // plain CSRF path, which CORS lets through for "simple" requests.
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/graph/stats")
+                .header("host", "127.0.0.1:8080")
+                .header("origin", "https://evil.tld")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+    // The normal local case still works.
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/graph/stats")
+                .header("host", "127.0.0.1:8080")
+                .header("origin", "http://127.0.0.1:8080")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
 }
 
 /// A bad path must be a 400, not a 500 — the `spawn_blocking` wrapper has to

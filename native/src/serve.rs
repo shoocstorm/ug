@@ -2,8 +2,8 @@
 //! See `docs/SERVE.md` for the full design (Phases 1, 1.5, 2, 3).
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::net::{IpAddr, SocketAddr};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{Duration, SystemTime};
@@ -11,8 +11,9 @@ use std::time::{Duration, SystemTime};
 use tokio::sync::OnceCell;
 
 use axum::body::{Body, Bytes};
-use axum::extract::{Json, Path as AxPath, Query, State};
+use axum::extract::{Json, Path as AxPath, Query, Request, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
@@ -1136,6 +1137,115 @@ pub fn run_serve(args: &[String]) {
     });
 }
 
+/// Extra hostnames this server will answer to, from `UG_ALLOWED_HOSTS`
+/// (comma-separated). Needed only when `ug serve` sits behind a reverse
+/// proxy that forwards a real domain in `Host`; the loopback and
+/// bare-IP cases below need no configuration.
+fn extra_allowed_hosts() -> &'static HashSet<String> {
+    static HOSTS: OnceLock<HashSet<String>> = OnceLock::new();
+    HOSTS.get_or_init(|| {
+        std::env::var("UG_ALLOWED_HOSTS")
+            .unwrap_or_default()
+            .split(',')
+            .map(|h| h.trim().trim_matches(['[', ']']).to_ascii_lowercase())
+            .filter(|h| !h.is_empty())
+            .collect()
+    })
+}
+
+/// Strip the `:port` and any IPv6 brackets from a `Host`/`Origin` authority,
+/// returning the lowercased hostname.
+///
+/// Splitting on the *last* colon is wrong for a bracketless IPv6 literal, so
+/// bracketed forms are unwrapped first and anything still holding more than
+/// one colon is treated as a bare IPv6 address rather than host:port.
+fn host_label(authority: &str) -> String {
+    let a = authority.trim();
+    if let Some(rest) = a.strip_prefix('[') {
+        return rest
+            .split(']')
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+    }
+    if a.matches(':').count() > 1 {
+        return a.to_ascii_lowercase(); // bare IPv6 literal
+    }
+    a.split(':').next().unwrap_or_default().to_ascii_lowercase()
+}
+
+/// Does `host` name *this* machine, as opposed to some attacker-controlled
+/// domain that merely resolves to it right now?
+///
+/// An IP literal is accepted outright: a browser sends the hostname the page
+/// was loaded from, so a rebinding attack always arrives carrying a domain
+/// name, never a bare address. That keeps `--host 0.0.0.0` reachable over the
+/// LAN by IP while still rejecting `http://evil.tld` rebound to 127.0.0.1.
+fn is_allowed_host(host: &str) -> bool {
+    let h = host_label(host);
+    if h.is_empty() {
+        return false;
+    }
+    h == "localhost"
+        || h.ends_with(".localhost")
+        || h.parse::<IpAddr>().is_ok()
+        || extra_allowed_hosts().contains(&h)
+}
+
+/// Reject requests whose `Host` or `Origin` names a domain this server
+/// doesn't answer to.
+///
+/// This is the DNS-rebinding defense, and it is what makes the rest of the
+/// server's "it only listens on loopback" assumption actually hold. The
+/// `CorsLayer` below stops a cross-origin page from *reading* a response, but
+/// rebinding sidesteps CORS entirely: the attacker's own domain is re-pointed
+/// at 127.0.0.1, so the browser considers the request same-origin and hands
+/// over the reply. The one thing that still distinguishes it from a genuine
+/// local request is the `Host` header, which carries the attacker's domain.
+///
+/// `Origin` is checked with the same predicate so a cross-site form post — a
+/// "simple" request that needs no preflight and so is never blocked by CORS —
+/// can't reach a state-changing route either.
+async fn guard_host(req: Request, next: Next) -> Response {
+    let host = req
+        .headers()
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string)
+        // HTTP/2 carries the authority in the URI instead of a Host header.
+        .or_else(|| req.uri().host().map(str::to_string));
+
+    if let Some(host) = host {
+        if !is_allowed_host(&host) {
+            tracing::warn!(%host, "rejected request with a non-local Host header");
+            return err_json(
+                StatusCode::FORBIDDEN,
+                "Host header is not a local address — refusing the request (set \
+                 UG_ALLOWED_HOSTS if this server is behind a reverse proxy)",
+            );
+        }
+    }
+
+    // `Origin: null` (sandboxed iframe, file://) is not a host we can check
+    // and not one we should trust with a state change.
+    if let Some(origin) = req
+        .headers()
+        .get(header::ORIGIN)
+        .and_then(|v| v.to_str().ok())
+    {
+        let allowed = origin
+            .split("://")
+            .nth(1)
+            .is_some_and(|authority| is_allowed_host(authority));
+        if !allowed {
+            tracing::warn!(%origin, "rejected request with a cross-site Origin header");
+            return err_json(StatusCode::FORBIDDEN, "cross-site Origin is not allowed");
+        }
+    }
+
+    next.run(req).await
+}
+
 /// Assemble the full route table and middleware stack over an already-built
 /// [`ServeState`].
 ///
@@ -1198,8 +1308,13 @@ pub(crate) fn build_router(state: ServeState) -> Router {
         // clients (the web UI and the Tauri shell at 127.0.0.1:8080) are
         // never subject to CORS and pass through untouched, while a
         // cross-origin browser fetch hits an empty preflight response and
-        // is blocked — the CSRF / drive-by / DNS-rebinding defense.
+        // is blocked — the CSRF / drive-by defense.
         .layer(CorsLayer::new())
+        // CORS alone does not stop DNS rebinding, which makes the attacker's
+        // page same-origin with us. `guard_host` checks the one header that
+        // still gives it away. Outermost so it runs before any handler —
+        // and before the body limit, so a rejected host costs nothing.
+        .layer(middleware::from_fn(guard_host))
         // One INFO span per request: method+uri on entry, status+latency on exit.
         // Matches the structured-log pattern the rest of the server uses.
         .layer(
@@ -2042,10 +2157,13 @@ async fn api_generate(State(state): State<ServeState>, Json(body): Json<Generate
         );
     }
     let raw_path = body.path.trim().to_string();
-    let canon = match std::fs::canonicalize(&raw_path) {
+    // Confine before indexing: whatever is indexed here becomes a project
+    // whose contents `/api/file` will then serve. Unrestricted, this is the
+    // step that turns an unauthenticated port into a whole-machine read.
+    let canon = match confine_to_browse_roots(Path::new(&raw_path)) {
         Ok(p) if p.is_dir() => p,
         Ok(_) => return err_json(StatusCode::BAD_REQUEST, "path is not a directory"),
-        Err(e) => return err_json(StatusCode::BAD_REQUEST, &format!("invalid path: {}", e)),
+        Err(e) => return err_json(e.status(), e.message()),
     };
     let name = body.name.as_deref().map(crate::project::sanitize_name);
 
@@ -2311,27 +2429,128 @@ struct BrowseDirQuery {
     path: Option<String>,
 }
 
+/// Directory trees the KB Manager's filesystem endpoints are allowed to
+/// touch: the user's home, the project data dir, and the directory `ug
+/// serve` was started in. `UG_BROWSE_ROOTS` (colon-separated) adds more,
+/// for repos kept outside home on another volume.
+///
+/// The server has no authentication, so `/api/browse-dir` and
+/// `/api/generate` are reachable by anything that can open a socket to the
+/// port. Unconfined, they compose into a whole-machine read: browse to
+/// `/etc` or `~/.ssh`, index it as a project, then pull the contents back
+/// out through `/api/file` — which enforces "stay inside the repo root" but
+/// happily uses whatever root the previous step just installed.
+///
+/// Recomputed per call rather than cached: `UG_HOME` and the process's
+/// working directory can both change between requests, and a handful of
+/// `canonicalize` calls is nothing next to the directory scan that follows.
+fn browse_roots() -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    let mut push = |p: PathBuf| {
+        if let Ok(c) = std::fs::canonicalize(&p) {
+            if !roots.contains(&c) {
+                roots.push(c);
+            }
+        }
+    };
+    for extra in std::env::var("UG_BROWSE_ROOTS").unwrap_or_default().split(':') {
+        if !extra.trim().is_empty() {
+            push(PathBuf::from(extra.trim()));
+        }
+    }
+    if let Some(home) = dirs::home_dir() {
+        push(home);
+    }
+    push(crate::project::ug_home());
+    if let Ok(cwd) = std::env::current_dir() {
+        push(cwd);
+    }
+    roots
+}
+
+/// Why a path was refused. The distinction matters to the caller: a path
+/// that doesn't resolve is a bad request, while one that resolves outside
+/// the allowed roots is a refusal to look there.
+enum ConfineError {
+    Invalid(String),
+    Outside(String),
+}
+
+impl ConfineError {
+    fn status(&self) -> StatusCode {
+        match self {
+            ConfineError::Invalid(_) => StatusCode::BAD_REQUEST,
+            ConfineError::Outside(_) => StatusCode::FORBIDDEN,
+        }
+    }
+
+    fn message(&self) -> &str {
+        match self {
+            ConfineError::Invalid(m) | ConfineError::Outside(m) => m,
+        }
+    }
+}
+
+/// Canonicalize `requested` and confirm it sits inside one of
+/// [`browse_roots`]. The error names the roots — the UI needs that to
+/// explain why a folder didn't open, and they're the user's own paths.
+fn confine_to_browse_roots(requested: &Path) -> Result<PathBuf, ConfineError> {
+    let canon = std::fs::canonicalize(requested)
+        .map_err(|e| ConfineError::Invalid(format!("invalid path: {}", e)))?;
+    let roots = browse_roots();
+    if roots.iter().any(|r| canon.starts_with(r)) {
+        return Ok(canon);
+    }
+    Err(ConfineError::Outside(format!(
+        "{} is outside the allowed roots ({}). Set UG_BROWSE_ROOTS to add one.",
+        canon.display(),
+        roots
+            .iter()
+            .map(|r| r.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    )))
+}
+
 /// GET /api/browse-dir?path=<dir> — list subdirectories of `path` (or the
 /// user's home directory when omitted) for the KB Manager wizard's folder
 /// browser. Read-only; only ever lists directory entries. Resolves
 /// symlinks/`..` via `canonicalize` so the returned `path`/`parent` are
 /// always absolute, and falls back to the parent directory if `path`
-/// happens to point at a file rather than a directory.
-/// The scan itself: canonicalize, enumerate, and stat a `.git` marker per
-/// child. Plain blocking IO, so the handler runs it off the runtime — a
-/// directory on a stalled network mount would otherwise pin a worker thread
-/// for as long as the filesystem takes to answer.
-fn browse_dir_body(requested: PathBuf) -> Result<String, String> {
-    let dir = match std::fs::canonicalize(&requested) {
-        Ok(p) if p.is_dir() => p,
-        Ok(p) => match p.parent() {
-            Some(parent) => parent.to_path_buf(),
-            None => return Err("path is not a directory".to_string()),
-        },
-        Err(e) => return Err(format!("invalid path: {}", e)),
+/// happens to point at a file rather than a directory. The resolved path
+/// must land inside [`browse_roots`]; anything else is a 403.
+/// The scan itself: canonicalize, confine to [`browse_roots`], enumerate,
+/// and stat a `.git` marker per child. Plain blocking IO, so the handler
+/// runs it off the runtime — a directory on a stalled network mount would
+/// otherwise pin a worker thread for as long as the filesystem takes to
+/// answer.
+fn browse_dir_body(requested: PathBuf) -> Result<String, (StatusCode, String)> {
+    let confine = |p: &Path| {
+        confine_to_browse_roots(p).map_err(|e| (e.status(), e.message().to_string()))
+    };
+    let canon = confine(&requested)?;
+    let dir = if canon.is_dir() {
+        canon
+    } else {
+        // A file was passed: show the folder holding it. Still inside a
+        // root by construction, but re-checked rather than assumed.
+        match canon.parent() {
+            Some(parent) => confine(parent)?,
+            None => {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "path is not a directory".to_string(),
+                ))
+            }
+        }
     };
 
-    let read = std::fs::read_dir(&dir).map_err(|e| format!("cannot read directory: {}", e))?;
+    let read = std::fs::read_dir(&dir).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("cannot read directory: {}", e),
+        )
+    })?;
 
     let mut entries: Vec<(String, serde_json::Value)> = Vec::new();
     for entry in read.flatten() {
@@ -2351,9 +2570,16 @@ fn browse_dir_body(requested: PathBuf) -> Result<String, String> {
     }
     entries.sort_by(|a, b| a.0.cmp(&b.0));
 
+    // Only offer an "up" link the caller is actually allowed to follow —
+    // at a root's own boundary there is nowhere further up to go.
+    let parent = dir
+        .parent()
+        .filter(|p| confine(p).is_ok())
+        .map(|p| p.to_string_lossy().to_string());
+
     Ok(serde_json::json!({
         "path": dir.to_string_lossy(),
-        "parent": dir.parent().map(|p| p.to_string_lossy().to_string()),
+        "parent": parent,
         "entries": entries.into_iter().map(|(_, v)| v).collect::<Vec<_>>(),
     })
     .to_string())
@@ -2369,7 +2595,7 @@ async fn api_browse_dir(Query(params): Query<BrowseDirQuery>) -> Response {
 
     match tokio::task::spawn_blocking(move || browse_dir_body(requested)).await {
         Ok(Ok(body)) => ok_json(body),
-        Ok(Err(e)) => err_json(StatusCode::BAD_REQUEST, &e),
+        Ok(Err((status, e))) => err_json(status, &e),
         Err(e) => err_json(
             StatusCode::INTERNAL_SERVER_ERROR,
             &format!("browse task failed: {}", e),
@@ -3122,8 +3348,16 @@ async fn file_from_disk(state: &ServeState, rel: &str, params: &FileQuery) -> Op
     // is still inside the root — blocks `../` traversal and absolute-path
     // escapes. Only live reads can escape (the store only ever contains
     // indexed paths), so the check lives here rather than on the fallback.
+    //
+    // Both sides must be canonical for `starts_with` to mean anything: a root
+    // reached through a symlink (`/tmp` → `/private/tmp` on macOS) compares
+    // unequal to the resolved file path and would reject every legitimate
+    // read. Fall back to the raw root if it can't be resolved — a
+    // non-existent root is caught above, and comparing against the
+    // unresolved form is stricter, never looser.
+    let canon_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
     let canon = std::fs::canonicalize(root.join(rel)).ok()?;
-    if !canon.starts_with(root) {
+    if !canon.starts_with(&canon_root) {
         return Some(err_json(StatusCode::FORBIDDEN, "path escapes repo root"));
     }
 
@@ -3858,13 +4092,14 @@ async fn api_chat(State(state): State<ServeState>, Json(body): Json<ChatBody>) -
     // without an override we can't pick a model, so the route 503s.
     let chat_default = state.chat_default.read().expect("chat_default poisoned").clone();
     let chat_cfg = match merge_chat_cfg(&chat_default, &body) {
-        Some(c) => c,
-        None => {
+        Ok(c) => c,
+        Err(ChatCfgError::NotConfigured) => {
             return err_json(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "chat not configured (start serve with --chat-model or pass `chat_model` in the request body)",
             )
         }
+        Err(ChatCfgError::Invalid(msg)) => return err_json(StatusCode::BAD_REQUEST, &msg),
     };
 
     let chat_client = match ChatClient::new(chat_cfg) {
@@ -4165,23 +4400,131 @@ fn api_chat_stream(
     Sse::new(stream).keep_alive(KeepAlive::default()).into_response()
 }
 
+/// Why a request couldn't be turned into a usable `ChatConfig`.
+///
+/// Two different failures with two different status codes: "nothing is
+/// configured anywhere" is the server's problem (503), while "your
+/// override is not something we'll send" is the caller's (400).
+#[derive(Debug)]
+pub(crate) enum ChatCfgError {
+    /// No model from flags, config, or the request body.
+    NotConfigured,
+    /// The request's own endpoint override was rejected.
+    Invalid(String),
+}
+
+/// Hosts a request-supplied chat endpoint may never point at.
+///
+/// Cloud instance-metadata services hand out live credentials to anything
+/// that can issue a plain HTTP request from inside the network, so they are
+/// the one SSRF target worth naming explicitly. Everything else — including
+/// loopback and LAN addresses — stays reachable on purpose: pointing chat at
+/// a local Ollama or an on-prem vLLM is the feature.
+const BLOCKED_CHAT_HOSTS: &[&str] = &[
+    "169.254.169.254",
+    "fd00:ec2::254",
+    "metadata.google.internal",
+    "metadata",
+];
+
+/// Scheme + host + port of a chat endpoint, lowercased, for comparing a
+/// request's override against the configured default. `None` when the URL
+/// doesn't parse or names no host.
+fn chat_origin(raw: &str) -> Option<(String, String, Option<u16>)> {
+    let url = url::Url::parse(raw.trim()).ok()?;
+    let host = url.host_str()?.trim_matches(['[', ']']).to_ascii_lowercase();
+    Some((
+        url.scheme().to_ascii_lowercase(),
+        host,
+        url.port_or_known_default(),
+    ))
+}
+
+/// Decide the endpoint and credential a chat/tour request may actually use.
+///
+/// The rule that matters: **a request-supplied `base_url` never inherits the
+/// server's stored API key**. `ug serve` has no authentication, so anything
+/// that can reach the port — another local process, or a browser page that
+/// got there via DNS rebinding — could otherwise post one JSON body naming
+/// its own endpoint and have the server deliver the user's real API key to
+/// it in an `Authorization` header. Overriding the endpoint is still allowed
+/// (flipping models mid-session is the point); it just has to bring its own
+/// key, or go keyless for a local server that wants none.
+///
+/// An override pointing at the *same* origin as the configured default is not
+/// a redirection at all — that one keeps the stored key, so a UI that echoes
+/// the current `base_url` back in the body keeps working.
+fn resolve_chat_endpoint(
+    default: &ChatConfig,
+    override_url: Option<&str>,
+    override_key: Option<&str>,
+) -> Result<(String, String), ChatCfgError> {
+    let stored_key = || default.api_key.clone();
+    let Some(raw) = override_url.map(str::trim).filter(|s| !s.is_empty()) else {
+        // No endpoint override: the stored key is going where it always goes.
+        return Ok((
+            default.base_url.clone(),
+            override_key.map(str::to_string).unwrap_or_else(stored_key),
+        ));
+    };
+
+    let Some((scheme, host, port)) = chat_origin(raw) else {
+        return Err(ChatCfgError::Invalid(format!(
+            "chat_base_url is not a valid absolute URL: {raw}"
+        )));
+    };
+    if scheme != "http" && scheme != "https" {
+        return Err(ChatCfgError::Invalid(format!(
+            "chat_base_url must be http or https, got {scheme}"
+        )));
+    }
+    if BLOCKED_CHAT_HOSTS.contains(&host.as_str()) {
+        return Err(ChatCfgError::Invalid(format!(
+            "chat_base_url host {host} is not allowed"
+        )));
+    }
+
+    let same_origin = chat_origin(&default.base_url)
+        .is_some_and(|d| d == (scheme.clone(), host.clone(), port));
+    let key = match override_key {
+        Some(k) => k.to_string(),
+        None if same_origin => stored_key(),
+        None => {
+            // The interesting case: redirected endpoint, no key of its own.
+            // Send nothing rather than the stored secret.
+            tracing::warn!(
+                host = %host,
+                "chat_base_url override points at a different origin than the configured \
+                 endpoint — sending the request without the stored API key"
+            );
+            String::new()
+        }
+    };
+    Ok((raw.to_string(), key))
+}
+
 /// Combine a default `ChatConfig` (from CLI/env at startup) with
-/// per-request overrides. Returns `None` only when neither side
-/// provides a model — without one we can't sensibly send the request.
-fn merge_chat_cfg(default: &Option<ChatConfig>, body: &ChatBody) -> Option<ChatConfig> {
+/// per-request overrides. Errors when neither side provides a model, or
+/// when the request's endpoint override is rejected by
+/// [`resolve_chat_endpoint`].
+fn merge_chat_cfg(
+    default: &Option<ChatConfig>,
+    body: &ChatBody,
+) -> Result<ChatConfig, ChatCfgError> {
     let base_default = default.clone().unwrap_or_default();
     let model = body
         .chat_model
         .clone()
-        .or_else(|| default.as_ref().map(|c| c.model.clone()))?;
-    let base_url = body
-        .chat_base_url
-        .clone()
-        .unwrap_or(base_default.base_url);
-    let api_key = body.chat_api_key.clone().unwrap_or(base_default.api_key);
+        .or_else(|| default.as_ref().map(|c| c.model.clone()))
+        .ok_or(ChatCfgError::NotConfigured)?;
+    let (base_url, api_key) = resolve_chat_endpoint(
+        &base_default,
+        body.chat_base_url.as_deref(),
+        body.chat_api_key.as_deref(),
+    )?;
     let temperature = body.temperature.unwrap_or(base_default.temperature);
     let max_tokens = body.max_tokens.unwrap_or(base_default.max_tokens);
-    Some(ChatConfig {
+    Ok(ChatConfig {
         extra_body: None,
         base_url,
         api_key,
@@ -4409,19 +4752,30 @@ struct TourBody {
 }
 
 /// Merge the default `ChatConfig` with per-request overrides for a tour.
-/// Returns `None` when no model can be resolved — the caller then plans a
-/// narration-free ranked tour instead of erroring.
-fn merge_tour_chat_cfg(default: &Option<ChatConfig>, body: &TourBody) -> Option<ChatConfig> {
+/// [`ChatCfgError::NotConfigured`] means no model could be resolved — the
+/// caller then plans a narration-free ranked tour instead of erroring —
+/// while `Invalid` is a rejected endpoint override and must surface as a
+/// 400. Endpoint/credential handling is [`resolve_chat_endpoint`]'s, the
+/// same as `/api/chat`: a tour body carries the identical override fields
+/// and would otherwise be the second way to walk off with the stored key.
+fn merge_tour_chat_cfg(
+    default: &Option<ChatConfig>,
+    body: &TourBody,
+) -> Result<ChatConfig, ChatCfgError> {
     let base_default = default.clone().unwrap_or_default();
     let model = body
         .chat_model
         .clone()
-        .or_else(|| default.as_ref().map(|c| c.model.clone()))?;
-    let base_url = body.chat_base_url.clone().unwrap_or(base_default.base_url);
-    let api_key = body.chat_api_key.clone().unwrap_or(base_default.api_key);
+        .or_else(|| default.as_ref().map(|c| c.model.clone()))
+        .ok_or(ChatCfgError::NotConfigured)?;
+    let (base_url, api_key) = resolve_chat_endpoint(
+        &base_default,
+        body.chat_base_url.as_deref(),
+        body.chat_api_key.as_deref(),
+    )?;
     let temperature = body.temperature.unwrap_or(base_default.temperature);
     let max_tokens = body.max_tokens.unwrap_or(base_default.max_tokens);
-    Some(ChatConfig {
+    Ok(ChatConfig {
         extra_body: None,
         base_url,
         api_key,
@@ -4663,7 +5017,15 @@ async fn api_tour(State(state): State<ServeState>, Json(body): Json<TourBody>) -
     let want_llm = !body.no_llm.unwrap_or(false);
     let chat_default = state.chat_default.read().expect("chat_default poisoned").clone();
     let chat_cfg = if want_llm {
-        merge_tour_chat_cfg(&chat_default, &body)
+        match merge_tour_chat_cfg(&chat_default, &body) {
+            Ok(c) => Some(c),
+            // No model anywhere is the documented fallback: plan the tour
+            // without narration rather than failing the request.
+            Err(ChatCfgError::NotConfigured) => None,
+            // A rejected override is a caller error, not a reason to
+            // silently narrate with a different endpoint than was asked for.
+            Err(ChatCfgError::Invalid(msg)) => return err_json(StatusCode::BAD_REQUEST, &msg),
+        }
     } else {
         None
     };
@@ -4913,7 +5275,85 @@ mod router_tests;
 
 #[cfg(test)]
 mod tests {
-    use super::{pick_initial_project, slice_file_text, stored_source_for_file};
+    use super::{
+        is_allowed_host, host_label, pick_initial_project, resolve_chat_endpoint, slice_file_text,
+        stored_source_for_file, ChatCfgError, ChatConfig,
+    };
+
+    fn cfg(base_url: &str, api_key: &str) -> ChatConfig {
+        ChatConfig {
+            base_url: base_url.into(),
+            api_key: api_key.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn request_supplied_endpoint_never_inherits_the_stored_key() {
+        let default = cfg("https://api.openai.com/v1", "sk-real-secret");
+
+        // The attack: point the endpoint elsewhere, send no key, collect the
+        // server's key from the Authorization header. The key must not follow.
+        let (url, key) =
+            resolve_chat_endpoint(&default, Some("https://evil.tld/v1"), None).expect("allowed");
+        assert_eq!(url, "https://evil.tld/v1");
+        assert_eq!(key, "", "stored key leaked to a request-supplied endpoint");
+
+        // A caller bringing its own key is fine — that's the legitimate
+        // "flip to another provider" flow.
+        let (_, key) =
+            resolve_chat_endpoint(&default, Some("https://other.tld/v1"), Some("sk-theirs"))
+                .expect("allowed");
+        assert_eq!(key, "sk-theirs");
+
+        // Same origin as the configured endpoint is not a redirection, so the
+        // stored key still applies (the UI echoes base_url back in the body).
+        let (_, key) = resolve_chat_endpoint(&default, Some("https://api.openai.com/v1/"), None)
+            .expect("allowed");
+        assert_eq!(key, "sk-real-secret");
+
+        // No override at all: unchanged behaviour.
+        let (url, key) = resolve_chat_endpoint(&default, None, None).expect("allowed");
+        assert_eq!((url.as_str(), key.as_str()), ("https://api.openai.com/v1", "sk-real-secret"));
+    }
+
+    #[test]
+    fn chat_endpoint_rejects_metadata_and_non_http_targets() {
+        let default = cfg("https://api.openai.com/v1", "sk-real-secret");
+        for bad in [
+            "http://169.254.169.254/latest/meta-data/",
+            "http://metadata.google.internal/computeMetadata/v1/",
+            "file:///etc/passwd",
+            "not a url",
+        ] {
+            assert!(
+                matches!(
+                    resolve_chat_endpoint(&default, Some(bad), None),
+                    Err(ChatCfgError::Invalid(_))
+                ),
+                "{bad} should have been rejected"
+            );
+        }
+
+        // A local model server is the common legitimate case and stays open.
+        assert!(resolve_chat_endpoint(&default, Some("http://127.0.0.1:11434/v1"), None).is_ok());
+    }
+
+    #[test]
+    fn host_guard_accepts_local_names_and_rejects_domains() {
+        assert_eq!(host_label("127.0.0.1:8080"), "127.0.0.1");
+        assert_eq!(host_label("[::1]:8080"), "::1");
+        assert_eq!(host_label("::1"), "::1");
+        assert_eq!(host_label("Evil.TLD:80"), "evil.tld");
+
+        for ok in ["localhost", "localhost:8080", "127.0.0.1:8080", "[::1]:8080", "192.168.1.9:8080"] {
+            assert!(is_allowed_host(ok), "{ok} should be allowed");
+        }
+        // The rebinding case: attacker's domain, currently resolving to us.
+        for bad in ["evil.tld", "evil.tld:8080", "ug.attacker.example", ""] {
+            assert!(!is_allowed_host(bad), "{bad} should be rejected");
+        }
+    }
     use tempfile::TempDir;
     use ultragraph::storage::db::{Db, NodeRow};
     use ultragraph::storage::embed::DEFAULT_EMBEDDING_DIM;

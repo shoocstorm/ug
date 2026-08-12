@@ -67,6 +67,8 @@ A real env var of the same name still wins over `.env`, and both count as the
 | `UG_EMBED_BASE_URL` / `UG_EMBED_API_KEY` / `UG_EMBED_MODEL` | `--base-url` / `--api-key` / `--model` (embeddings) |
 | `UG_CHAT_BASE_URL` / `UG_CHAT_API_KEY` / `UG_CHAT_MODEL` | `--chat-base-url` / `--chat-api-key` / `--chat-model` (`ug chat`) |
 | `UG_MODEL_CACHE` | Local ONNX model cache directory |
+| `UG_ALLOWED_HOSTS` | Extra hostnames `ug serve` will answer to (comma-separated). Only needed behind a reverse proxy — loopback names and bare IPs are always accepted. See [WEB-SERVE.md](WEB-SERVE.md#security--scope) |
+| `UG_BROWSE_ROOTS` | Extra directory roots `ug serve`'s `/api/browse-dir` and `/api/generate` may read (colon-separated). Defaults to `~`, `$UG_HOME`, and the server's working directory |
 
 ## `ug doctor`
 
