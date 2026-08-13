@@ -190,8 +190,20 @@ e.g. `comment_coverage`, `comment_density`, `token_docs`,
 `undercommented_complexity`, `long_functions`, `long_functions_by_code`,
 `classes_by_members`, `language_breakdown`, `file_kinds`, `param_bloat`,
 `god_classes`, `dead_code`, `orphan_files`, `untested_symbols`, `test_ratio`,
-`impact`, `boundary_impact`, `boundaries`, `boundary_census`,
-`retest_scope`, `layering_violations`, `coupling_matrix`, `size_histogram`, …
+`test_for`, `impact`, `boundary_impact`, `boundaries`, `boundary_census`,
+`diff_impact`, `diff_retest_scope`, `retest_scope`, `layering_violations`,
+`coupling_matrix`, `size_histogram`, …
+
+The `diff_*` and `test_for` presets close the two loops an agent runs most:
+
+- **`diff_impact` / `diff_retest_scope`** take a *list* of changed files
+  (`--arg files=a.ts,b.rs`) and answer blast-radius / test-scope across all of
+  them at once — the multi-file form of `impact` / `retest_scope`. Feed them
+  `git diff --name-only`: the question "what did my whole change break, and
+  which tests cover it" is one call, not one per file.
+- **`test_for`** takes a symbol node id (`--arg symbol=<id>`) and returns the
+  tests that reach it — the code→test half of the test loop that
+  `untested_symbols` (the reverse) only answers in aggregate.
 
 Run `ug query --list` (or call `graph_schema`) for the current set — the
 authoritative list is the code, and this paragraph will otherwise drift.

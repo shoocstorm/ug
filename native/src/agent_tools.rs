@@ -1300,10 +1300,14 @@ pub struct CodeSlice {
     pub code: Option<String>,
     /// Characters dropped to honour `max_chars`; 0 when nothing was cut.
     pub truncated_chars: usize,
-    /// Set when this slice came from the index rather than the working
-    /// tree *and* the file has changed since it was indexed. The code is
-    /// still returned — it is what the node's description and embedding
-    /// describe — but the caller is told not to trust it as current.
+    /// Set when the slice may not be what it claims. Two cases:
+    /// - **live file, indexed copy disagrees** — the slice is current source
+    ///   read from disk, but the node's recorded `start`/`end` came from an
+    ///   older capture, so the span may point at the wrong lines.
+    /// - **indexed copy, file changed** — the slice is the stale captured
+    ///   text served because the repo is absent.
+    /// Either way the code is still returned; the flag tells the caller not
+    /// to trust line numbers as current.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stale: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1319,11 +1323,16 @@ pub use crate::storage::source::{IndexedSource, StoredSource};
 /// also the *consistent* answer, since it is what the node's description
 /// and embedding were built from.
 ///
-/// `repo_root` is a fallback for what the index does not hold: graphs
-/// generated before the store existed, nodes whose file could not be read
-/// at ingest time, and arbitrary line ranges in files with no whole-file
-/// capture. It is allowed to point at nothing — a path that no longer
-/// exists simply means the fallback yields nothing, not an error.
+/// `repo_root` points at the working tree. [`get_code`] prefers it over the
+/// captured copy whenever the file actually exists on disk: an agent
+/// reading source in a live editing session needs the current lines, and a
+/// capture is only ever as current as the last `ug regen`. The captured
+/// copy stays the fallback for when the repo is absent (a moved checkout,
+/// or a machine that only ever held the index), and the two are compared
+/// so a drift between them is flagged rather than silently trusted.
+///
+/// It is allowed to point at nothing — a path that no longer exists simply
+/// means the working-tree half yields nothing, not an error.
 #[derive(Clone, Copy)]
 pub struct SourceCtx<'a> {
     indexed: Option<&'a IndexedSource>,
@@ -1331,7 +1340,7 @@ pub struct SourceCtx<'a> {
 }
 
 impl<'a> SourceCtx<'a> {
-    /// The full context: indexed source first, working tree as backup.
+    /// The full context: indexed source + working tree, live file preferred.
     pub fn new(indexed: &'a IndexedSource, repo_root: &'a Path) -> Self {
         SourceCtx {
             indexed: Some(indexed),
@@ -1399,12 +1408,12 @@ impl GetCodeResult {
 
 /// Read source for nodes, or for a file/line range.
 ///
-/// Serves each node's indexed source when `src` has it, falling back to the
-/// working tree only for what the index does not hold. The indexed copy is
-/// what the node's description and embedding were built from, so serving it
-/// keeps the two consistent, removes the case where a drifted line range
-/// silently returns the wrong lines, and — the reason this is the default —
-/// keeps working when the repo itself is not on this machine.
+/// The working tree wins when it has the file — an agent reading source in
+/// a live session wants current lines, not a capture — and the indexed copy
+/// answers when the repo is not on this machine. Whichever copy is served,
+/// a difference between the two is flagged on the slice (`stale`) rather
+/// than silently trusted, so the caller knows whether a line range is the
+/// current truth or the node's recorded span.
 pub fn get_code(graph: &GraphData, src: SourceCtx, p: &GetCodeParams) -> GetCodeResult {
     let max_chars = p.max_chars.unwrap_or(DEFAULT_MAX_CHARS);
     let mut slices = Vec::new();
@@ -1476,10 +1485,19 @@ pub fn get_code(graph: &GraphData, src: SourceCtx, p: &GetCodeParams) -> GetCode
                 usize::MAX
             }
         });
-        slices.push(match src.node(id) {
-            Some(stored) => stored_slice(stored, src.repo_root(), f, start, end, n, max_chars),
-            None => read_slice(graph, src, f, start, end, Some(n), max_chars),
-        });
+        // Live working tree first — current by definition — then the index
+        // for when the repo is absent. The captured hash is passed through
+        // so a live read that disagrees with what was indexed can be flagged.
+        let indexed_hash = src.node(id).map(|s| s.file_hash.as_str());
+        slices.push(
+            live_slice(src.repo_root(), f, start, end, Some(n), max_chars, indexed_hash)
+                .unwrap_or_else(|| match src.node(id) {
+                    Some(stored) => {
+                        stored_slice(stored, src.repo_root(), f, start, end, n, max_chars)
+                    }
+                    None => read_slice(graph, src, f, start, end, Some(n), max_chars),
+                }),
+        );
     }
 
     let mut result = GetCodeResult { slices };
@@ -1568,13 +1586,14 @@ fn err_slice(title: &str, error: String) -> CodeSlice {
     }
 }
 
-/// Slice `start..=end` out of a whole file, from the index if it captured
-/// the file and from the working tree otherwise.
+/// Slice `start..=end` out of a whole file, from the working tree when it
+/// has it and from the index otherwise.
 ///
-/// The index is tried first for the same reason [`get_code`] prefers it for
-/// nodes — it is the copy that exists whether or not the repo does — but
-/// here it also covers arbitrary ranges, since the file's range-less node
-/// holds the entire text rather than one symbol's span.
+/// The working tree is tried first — for a file/line-range read the caller
+/// almost always wants the *current* lines (an editing agent paging through
+/// a symbol), and the index is only the fallback for when the repo is not
+/// on this machine. The index also covers arbitrary ranges, since the file's
+/// range-less node holds the entire text rather than one symbol's span.
 fn read_slice(
     graph: &GraphData,
     src: SourceCtx,
@@ -1589,15 +1608,64 @@ fn read_slice(
         None => file.to_string(),
     };
 
-    let indexed = src.file(graph, file);
-    let content = match indexed {
-        Some(s) => s.code.clone(),
-        None => match std::fs::read_to_string(src.repo_root().join(file)) {
-            Ok(c) => c,
-            Err(_) => return err_slice(&title, unreadable_reason(src.repo_root(), file)),
-        },
-    };
+    let indexed_hash = src.file(graph, file).map(|s| s.file_hash.as_str());
+    if let Some(slice) = live_slice(src.repo_root(), file, start, end, node, max_chars, indexed_hash) {
+        return slice;
+    }
 
+    // Repo absent (or file gone): the indexed copy is the only source left.
+    match src.file(graph, file) {
+        Some(s) => {
+            let all: Vec<&str> = s.code.split('\n').collect();
+            let from = start.max(1).min(all.len());
+            let to = end.min(all.len()).max(from);
+            let mut text = all[from - 1..to].join("\n");
+            let char_count = text.chars().count();
+            let mut truncated = 0;
+            if char_count > max_chars {
+                truncated = char_count - max_chars;
+                text = text.chars().take(max_chars).collect();
+            }
+            CodeSlice {
+                title,
+                file: Some(file.to_string()),
+                start_line: Some(from),
+                end_line: Some(to),
+                total_lines: Some(all.len()),
+                doc: node.and_then(|n| n.docstring.clone()),
+                code: Some(text),
+                truncated_chars: truncated,
+                // The working tree could not be read at all, so this capture
+                // is the answer. `stale_note` only fires when the file *is*
+                // on disk but no longer hashes the same — which here means
+                // "readable but changed since capture", the signal worth carrying.
+                stale: stale_note(src.repo_root(), file, &s.file_hash),
+                error: None,
+            }
+        }
+        None => err_slice(&title, unreadable_reason(src.repo_root(), file)),
+    }
+}
+
+/// Slice `start..=end` out of the file as it currently sits on disk, or
+/// `None` when the file is not readable from the working tree.
+///
+/// The live copy is current by definition — the reason it is preferred — but
+/// a node's recorded `start`/`end` were captured at index time, so when the
+/// live file disagrees with the indexed hash the slice carries a `stale`
+/// note: the lines shown are real and current, but they came from a span that
+/// may have moved. `indexed_hash` is `None` when nothing was captured, in
+/// which case there is nothing to disagree with and no flag is set.
+fn live_slice(
+    repo_root: &Path,
+    file: &str,
+    start: usize,
+    end: usize,
+    node: Option<&GraphNode>,
+    max_chars: usize,
+    indexed_hash: Option<&str>,
+) -> Option<CodeSlice> {
+    let content = std::fs::read_to_string(repo_root.join(file)).ok()?;
     let all: Vec<&str> = content.split('\n').collect();
     let from = start.max(1).min(all.len());
     let to = end.min(all.len()).max(from);
@@ -1608,8 +1676,26 @@ fn read_slice(
         truncated = char_count - max_chars;
         text = text.chars().take(max_chars).collect();
     }
-
-    CodeSlice {
+    let title = match node {
+        Some(n) => format!("{} {}", node_type_str(&n.node_type), n.name),
+        None => file.to_string(),
+    };
+    // Only flag when there is an indexed copy to compare against, and only
+    // when the live file actually differs from it. A matching hash means the
+    // span and the source agree.
+    let stale = indexed_hash.and_then(|h| {
+        let live = blake3::hash(content.as_bytes()).to_hex();
+        if live.as_str() == h {
+            None
+        } else {
+            Some(format!(
+                "{} has changed since indexing — showing the live working tree; \
+                 the recorded span may be stale, re-run `ug regen` to refresh",
+                file
+            ))
+        }
+    });
+    Some(CodeSlice {
         title,
         file: Some(file.to_string()),
         start_line: Some(from),
@@ -1618,11 +1704,9 @@ fn read_slice(
         doc: node.and_then(|n| n.docstring.clone()),
         code: Some(text),
         truncated_chars: truncated,
-        // A working-tree read is current by definition; an indexed one is
-        // only current while the file still hashes the same.
-        stale: indexed.and_then(|s| stale_note(src.repo_root(), file, &s.file_hash)),
+        stale,
         error: None,
-    }
+    })
 }
 
 /// Why neither the index nor the working tree could produce `file`.
@@ -3622,6 +3706,116 @@ mod tests {
         let err = r.slices[0].error.as_ref().unwrap();
         assert!(err.contains("not captured in the index"), "{}", err);
         assert!(err.contains(NO_REPO), "{}", err);
+    }
+
+    /// The whole point of P1: when the repo is on disk, `get_code` serves the
+    /// *current* file content, not the stale capture. An editing agent that
+    /// just changed the file must read back what it wrote.
+    #[test]
+    fn get_code_prefers_the_live_working_tree_over_the_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo_root = dir.path();
+        // A real file on disk: the symbol body says `99` at lines 1-3.
+        std::fs::create_dir_all(repo_root.join("src")).unwrap();
+        std::fs::write(repo_root.join("src/a.rs"), "fn callee() {\n    99\n}\n").unwrap();
+
+        // The node spans the same lines 1-3, so the span is in range for both
+        // the live file and the stale capture below.
+        let g = GraphData {
+            nodes: vec![node(
+                "function:src/a.rs:1:callee",
+                "callee",
+                GraphNodeType::Function,
+                "src/a.rs",
+                Some((1, 3)),
+            )],
+            edges: vec![],
+            stats: None,
+            resolution: None,
+        };
+
+        // Index holds a *different* (stale) capture of the same span — `42`.
+        let src = indexed(&[(
+            "function:src/a.rs:1:callee",
+            "fn callee() {\n    42\n}\n",
+        )]);
+
+        let r = get_code(
+            &g,
+            SourceCtx::new(&src, repo_root),
+            &GetCodeParams {
+                node_id: vec!["function:src/a.rs:1:callee".into()],
+                ..Default::default()
+            },
+        );
+        assert!(r.ok(), "{:?}", r.slices[0].error);
+        // 99 is the live edit; 42 is the stale capture. Live wins.
+        assert!(
+            r.slices[0].code.as_deref().unwrap().contains("99"),
+            "live content not served: {:?}",
+            r.slices[0].code
+        );
+        assert!(
+            r.slices[0].stale.is_some(),
+            "a live read that disagrees with the index must be flagged"
+        );
+    }
+
+    /// When the live file still matches what was indexed, no staleness flag —
+    /// the span and the source agree, so there is nothing to warn about.
+    #[test]
+    fn get_code_live_read_with_matching_hash_is_not_flagged() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo_root = dir.path();
+        let body = "fn callee() {\n    42\n}\n";
+        std::fs::create_dir_all(repo_root.join("src")).unwrap();
+        std::fs::write(repo_root.join("src/a.rs"), body).unwrap();
+        let hash = blake3::hash(body.as_bytes()).to_hex().to_string();
+
+        let mut src = IndexedSource::default();
+        src.insert(
+            "function:src/a.rs:7:callee",
+            StoredSource { code: body.to_string(), file_hash: hash },
+        );
+
+        let r = get_code(
+            &fixture(),
+            SourceCtx::new(&src, repo_root),
+            &GetCodeParams {
+                node_id: vec!["function:src/a.rs:7:callee".into()],
+                ..Default::default()
+            },
+        );
+        assert!(r.ok());
+        assert!(r.slices[0].stale.is_none(), "matching hash must not flag");
+    }
+
+    /// The file/line-range form reads the working tree too: an agent paging a
+    /// file with `--range` wants current lines, and a changed file is flagged.
+    #[test]
+    fn get_code_file_range_reads_live_and_flags_drift() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo_root = dir.path();
+        std::fs::create_dir_all(repo_root.join("src")).unwrap();
+        std::fs::write(repo_root.join("src/a.rs"), "a\nb\nc\nd\ne\n").unwrap();
+
+        // Index holds a stale, different capture so the drift is detectable.
+        let src = indexed(&[("file:src/a.rs", "one\ntwo\nthree\n")]);
+
+        let r = get_code(
+            &fixture(),
+            SourceCtx::new(&src, repo_root),
+            &GetCodeParams {
+                file: Some("src/a.rs".into()),
+                start_line: Some(2),
+                end_line: Some(4),
+                ..Default::default()
+            },
+        );
+        assert!(r.ok(), "{:?}", r.slices[0].error);
+        // Live lines b/c/d, not the stale two/three/four.
+        assert_eq!(r.slices[0].code.as_deref(), Some("b\nc\nd"));
+        assert!(r.slices[0].stale.is_some(), "drift between live and index must flag");
     }
 
     #[test]

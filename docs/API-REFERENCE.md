@@ -101,10 +101,10 @@ resolve to exactly one node, and list the candidates when they don't.
 
 | Command | Aliases | What it does | Key flags |
 |---------|---------|-------------|-----------|
-| `ug search` | — | **GraphRAG**: semantic search → graph expansion → PPR-ranked context with snippets. | `<query>` positional, `-k <limit>` (default 8), `--filter <sql>`, `--direction`, `-t <edge-type>`, `--max-chars`, `--no-snippets`, `-n <name>`, `--repo-root`, embedding overrides |
+| `ug search` | — | **GraphRAG**: semantic search → graph expansion → PPR-ranked context. Returns lean ids+locations by default; add `--snippets` to read source slices inline. | `<query>` positional, `-k <limit>` (default 8), `--filter <sql>`, `--direction`, `-t <edge-type>`, `--max-chars`, `--snippets` (opt in; off by default), `-n <name>`, `--repo-root`, embedding overrides |
 | `ug semantic_search` | — | Pure vector search over embeddings (no graph context). | `<query>` positional, `-k <limit>` (default 10), `--filter <sql>`, `-n <name>`, embedding overrides |
 | `ug traverse` | — | K-hop BFS over the OverGraph edges table. | `<node-id>`... positionals, `-k <hops>` (default 2), `-n <name>` |
-| `ug query` | — | **Whole-repo statistics**: counts, groups, distributions, blast radius. Read-only GQL over the stored facts. Needs the db but **no embedder**. | `<preset>` positional or `-p <preset>`, `-a k=v` (repeatable), `-g/--gql <query>`, `-k <limit>` (default 20), `-r/--range <window>` (`20` · `11-35` · `34-end`), `--list`, `-n <name>` |
+| `ug query` | — | **Whole-repo statistics**: counts, groups, distributions, blast radius. Read-only GQL over the stored facts. Needs the db but **no embedder**. The `diff_impact`/`diff_retest_scope` presets take a list of changed files (`-a files=a.ts,b.rs`); `test_for` takes a symbol (`-a symbol=<id>`). | `<preset>` positional or `-p <preset>`, `-a k=v` (repeatable), `-g/--gql <query>`, `-k <limit>` (default 20), `-r/--range <window>` (`20` · `11-35` · `34-end`), `--json` (machine envelope matching `POST /api/tools/code_query`), `--list`, `-n <name>` |
 
 These read commands also accept `--db <dir>` to point at an explicit
 OverGraph directory (default: the `-n` project's `ugdb`, else the active
@@ -130,7 +130,8 @@ stdout.
 | `ug rename` | `rn`, `mv` | Rename a project's data directory and its `project.json` name; the active marker follows it. One positional renames the current (active, else cwd) project; two rename `<old> <new>`. | `<new>` or `<old> <new>` positionals, `-n <old>` |
 | `ug rm` | — | Delete a project's data directory. | `<name>` positional |
 | `ug regen` | — | Re-run the pipeline for an existing project: reads `repoRoot` from its `project.json`, so no `-i` needed. Incremental. | `-n <name>`, plus every `ug gen` flag |
-| `ug upgrade` | — | Check GitHub for a new release and self-update. | `--check` (report only, no update) |
+| `ug update` | — | Refresh the graph for the files that just changed (focused regen): re-index, re-resolve cross-file edges, re-embed changed nodes. Built for a live editing session. | `<file>...` positionals, `-n <name>`, `--no-ingest`, plus `ug gen` embedder flags |
+| `ug upgrade` | — | Check GitHub for a new release and self-update. The downloaded archive is verified against the release's published `.sha256` before it is unpacked and executed. | `--check` (report only, no update), `--allow-unverified` (install when a release publishes no checksum) |
 | `ug uninstall` | — | Delete ALL indexed projects and uninstall ug itself. | — |
 | `ug config` | — | View/persist defaults (chat model, endpoints, etc.) in `~/.ug/config.json`. | `set <key> <value>`, `get <key>`, `list` |
 | `ug doctor` | — | Show resolved project/db/embedder/chat config with source for each value. | `-n <name>`, `-d <db>`, embedder and chat overrides |

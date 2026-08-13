@@ -248,7 +248,7 @@ Returns ranked code snippets with file:line locations, descriptions, and node ID
 | `direction` | string | ❌ | Edge direction during the walk (default 'both'). Use 'inbound' for who depends on the seed; 'outbound' for what the seed depends on. |
 | `maxChars` | integer (100-200000) | ❌ | Approximate character budget for assembled context (default ~16k). |
 | `whereClause` | string | ❌ | Optional SQL WHERE applied during seed search. Examples: `node_type = 'Function'`, `file LIKE 'src/auth/%'`. |
-| `includeSnippets` | boolean | ❌ | Read source slice for each item (default true). Set false when you only need IDs and locations. |
+| `includeSnippets` | boolean | ❌ | Read a source slice for each item (default false — returns lean ids+locations; set true when you want the code inline rather than a follow-up `get_code`). |
 
 > **Ranking is not tunable from the tool.** `strategy`, `hops`, `mmrLambda`,
 > `pprRestartProb`, `pprMaxIter`, `pprSeedPool` and `pprEdgeWeights` used to be
@@ -672,6 +672,8 @@ Every tool output is stamped with a staleness note when the index no longer matc
 ```
 
 Staleness is computed by comparing `graph.json`'s mtime against the current mtimes of the indexed files (once per project per server process). When you see the warning, call the `reindex` tool — it's incremental, so unchanged files are skipped.
+
+From the CLI, the focused alternative is `ug update <file>...` — it re-runs the pipeline for just the files you name (cross-file edges are re-resolved over the whole graph on each run, which is what keeps them correct). `ug get_code` also reads the *live* working tree by default and flags drift from the index, so line numbers stay current immediately after an edit even before a re-index.
 
 The web UI's Knowledge Base Manager runs the same check automatically on startup and every 2 minutes, showing a **⚠ Stale — Re-index** badge on affected project cards; clicking it re-runs the generation pipeline for that project.
 

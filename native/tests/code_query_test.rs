@@ -224,6 +224,10 @@ async fn every_builtin_preset_executes() {
                 // here; both want a path this fixture actually contains.
                 let value = match param.name {
                     "target" => "src/core/auth.rs",
+                    // A list of changed files for the diff_* presets.
+                    "files" => "src/core/auth.rs,src/api/login.rs",
+                    // A symbol node id for test_for.
+                    "symbol" => "function:src/core/auth.rs:verify",
                     "from_prefix" => "src/api",
                     "to_prefix" => "src/core",
                     other => panic!("preset `{}` has an unhandled required param `{other}` — give the test a value for it", p.name),

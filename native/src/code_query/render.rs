@@ -290,13 +290,17 @@ fn push_caveats(out: &mut String, answer: &QueryAnswer, style: Render) {
         ));
     }
 
-    if let Some(target) = &answer.target_not_indexed {
+    if !answer.target_not_indexed.is_empty() {
+        // One missing anchor or many read the same way: the empty result is
+        // a typo (or paths ingest never saw), not a real zero. Naming them
+        // all matters for `diff_*` presets, where "one of the five changed
+        // paths was wrong" is the diagnosis.
+        let targets = answer.target_not_indexed.join(", ");
         out.push_str(&format!(
-            "\n⚠ TARGET NOT INDEXED: no node carries file `{}`, so this empty \
-             result means the path is a typo or was never ingested — not that \
-             nothing depends on it. `ug query biggest_files` lists the indexed \
-             files.\n",
-            target
+            "\n⚠ TARGET NOT INDEXED: no node carries {targets}, so this empty \
+             result means a path/symbol is a typo or was never ingested — not \
+             that nothing depends on it. `ug query biggest_files` lists the \
+             indexed files.\n",
         ));
     }
 
@@ -425,7 +429,7 @@ mod tests {
             coverage,
             unindexed,
             empty_index,
-            target_not_indexed: None,
+            target_not_indexed: Vec::new(),
             window: crate::code_query::range::RowRange::first(20),
             gql: "MATCH (n) RETURN count(*) AS c".into(),
             from_preset: false,
@@ -502,7 +506,7 @@ mod tests {
     #[test]
     fn a_target_with_no_indexed_file_is_reported_not_a_real_zero() {
         let mut a = answer(page(&["file"], vec![]), vec![]);
-        a.target_not_indexed = Some("src/typo.ts".into());
+        a.target_not_indexed = vec!["src/typo.ts".into()];
         let out = render(&a, Render::Markdown);
         assert!(out.contains("No rows matched"), "{out}");
         assert!(out.contains("TARGET NOT INDEXED"), "{out}");

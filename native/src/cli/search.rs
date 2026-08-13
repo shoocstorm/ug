@@ -124,7 +124,7 @@ pub(crate) fn run_hybrid_search(args: &[String]) {
             "Usage: ug search <query> [-n|--name <project>] [-k|--limit <n>] \\
                  [--filter <sql>] [--direction <out|in|both>] \\
                  [-t|--edge-type <type>]... [--max-chars <n>] \\
-                 [--no-snippets] [--repo-root <path>] \\
+                 [--snippets] [--repo-root <path>] \\
                  [--base-url <url>] [--api-key <key>] [--model <name>] [--embedding-dim <n>] \\
                  [-o|--output <file>]"
         );
@@ -179,7 +179,7 @@ pub(crate) fn run_hybrid_search(args: &[String]) {
     let mmr_lambda: f32 = flag_value(args, &["--mmr-lambda"])
         .and_then(|s| s.parse().ok())
         .unwrap_or(0.6);
-    let include_snippets = !has_flag(args, "--no-snippets");
+    let include_snippets = has_flag(args, "--snippets");
     let repo_root: PathBuf = flag_value(args, &["--repo-root"])
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
@@ -421,7 +421,8 @@ fn print_hybrid_search_help() {
     println!("  {C_CYAN}--direction{C_RESET} <dir>    outbound|inbound|both (default: both)");
     println!("  {C_CYAN}-t, --edge-type{C_RESET} <t>  Restrict expansion to edge type (repeatable)");
     println!("  {C_CYAN}--max-chars{C_RESET} <n>      Char budget for assembled context (default: 12000)");
-    println!("  {C_CYAN}--no-snippets{C_RESET}        Skip reading source snippets from disk");
+    println!("  {C_CYAN}--snippets{C_RESET}           Read source slices for each hit (off by default — lean ids+locations;");
+    println!("                         {C_DIM}follow with get_code for any you want to read){C_RESET}");
     println!("  {C_CYAN}--repo-root{C_RESET} <path>   Repo root for snippet resolution (default: cwd)");
     println!("  {C_CYAN}--base-url/--api-key/--model/--embedding-dim{C_RESET}  Embedding endpoint overrides");
     println!("  {C_CYAN}-o, --output{C_RESET} <file>  Write the result JSON to a file (omit for stdout)");

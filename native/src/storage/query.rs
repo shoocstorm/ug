@@ -467,7 +467,7 @@ impl<'a> SearchKbOptions<'a> {
             mmr_lambda: 0.6,
             repo_root,
             where_clause: None,
-            include_snippets: true,
+            include_snippets: false,
             strategy: RankStrategy::Ppr,
             ppr_restart_prob: 0.15,
             ppr_max_iter: 30,

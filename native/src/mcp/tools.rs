@@ -267,7 +267,7 @@ fn raw_tools() -> Value {
                     "direction": { "type": "string", "enum": ["outbound", "inbound", "both"], "description": "Edge direction during the walk (default 'both'). Use 'inbound' when you care about who depends on the seed; 'outbound' for what the seed depends on." },
                     "maxChars": { "type": "integer", "minimum": 100, "maximum": 200000, "description": "Approximate character budget for assembled context (default ~16k). Lower it when you only need a sketch." },
                     "whereClause": { "type": "string", "description": "Optional SQL WHERE applied during seed search. Examples: \"node_type = 'Function'\", \"file LIKE 'src/auth/%'\"." },
-                    "includeSnippets": { "type": "boolean", "description": "Read source slice for each item (default true). Set false when you only need IDs and locations for a follow-up traversal." }
+                    "includeSnippets": { "type": "boolean", "description": "Read a source slice for each item (default false — returns lean ids+locations; set true when you want the code inline rather than a follow-up get_code)." }
                 },
                 "required": ["query"]
             }

@@ -364,6 +364,16 @@ fn parse_code_query_args(args: &Value) -> ultragraph::code_query::CodeQueryParam
             let as_text = match v {
                 Value::String(s) => s.clone(),
                 Value::Null => continue,
+                // A model often sends a list param as a JSON array
+                // (`{"files": ["a.ts","b.rs"]}`). code_query binds list params
+                // from a comma-separated string, so join the string elements
+                // rather than stringify the array (which would keep the
+                // brackets and break the split).
+                Value::Array(items) => items
+                    .iter()
+                    .filter_map(|i| i.as_str())
+                    .collect::<Vec<_>>()
+                    .join(","),
                 other => other.to_string(),
             };
             parsed.args.insert(k.clone(), as_text);

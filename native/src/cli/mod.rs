@@ -30,6 +30,7 @@ pub(crate) mod query;
 pub(crate) mod search;
 pub(crate) mod store;
 pub(crate) mod tour_cmd;
+pub(crate) mod update;
 pub(crate) mod upgrade;
 
 use std::env;
@@ -102,6 +103,7 @@ fn dispatch(cmd: &str, cmd_args: &[String]) {
         // Primary entry points.
         "gen" => gen::run_gen(cmd_args),
         "regen" => gen::run_regen(cmd_args),
+        "update" => update::run_update(cmd_args),
         "serve" => serve::run_serve(cmd_args),
         "app" => app::run_app(cmd_args),
         "api" => api::run_api(cmd_args),

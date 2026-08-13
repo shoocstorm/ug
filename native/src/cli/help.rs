@@ -77,6 +77,7 @@ pub(crate) fn print_help() {
         "  {C_BOLD}{C_MAGENTA}gen{C_RESET}              {C_BOLD}{C_MAGENTA}⚡ full pipeline: index → graph → visualization → ingest ⚡{C_RESET}"
     );
     println!("  {C_CYAN}regen{C_RESET}            Re-run that pipeline for an existing project (no -i needed; incremental)");
+    println!("  {C_CYAN}update{C_RESET}            Refresh the graph for the files that just changed (focused regen)");
     println!("  {C_CYAN}serve{C_RESET}            Serve the visualization + graph API");
     println!("  {C_CYAN}app{C_RESET}              Open the native desktop shell (starts serve + a window)");
     println!("  {C_CYAN}api{C_RESET}              List every HTTP endpoint `ug serve` exposes");
@@ -90,7 +91,7 @@ pub(crate) fn print_help() {
     println!(
         "  {C_BOLD}{C_MAGENTA}query{C_RESET}            {C_BOLD}{C_MAGENTA}📊 whole-repo statistics: counts, distributions, blast radius{C_RESET}"
     );
-    println!("                   {C_DIM}33 named questions ({C_RESET}{C_CYAN}ug query --list{C_RESET}{C_DIM}) or write your own GQL{C_RESET}");
+    println!("                   {C_DIM}39 named questions ({C_RESET}{C_CYAN}ug query --list{C_RESET}{C_DIM}) or write your own GQL{C_RESET}");
     println!("  {C_CYAN}semantic_search{C_RESET}  Search by meaning/concept (embeddings; use find_symbols for exact names)");
     println!("  {C_CYAN}traverse{C_RESET}         K-hop BFS over the OverGraph edges table");
     println!(

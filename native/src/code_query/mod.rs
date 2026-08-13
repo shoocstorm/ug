@@ -108,11 +108,12 @@ pub struct QueryAnswer {
     /// because every property looks absent in this state, which would
     /// otherwise be reported as a schema problem.
     pub empty_index: bool,
-    /// A `target` preset argument bound to a path the store has no node for.
-    /// The query matched nothing, but the empty answer is a caller typo (or a
-    /// path ingest never indexed), not a real zero. Set only when the preset
-    /// binds `$target`; raw GQL leaves it `None`.
-    pub target_not_indexed: Option<String>,
+    /// Anchors the preset bound to values the store has no node for. The
+    /// query matched nothing, but the empty answer is a caller typo (or paths
+    /// ingest never indexed), not a real zero. Populated for `target` (one
+    /// file), `files` (the diff_* presets — each missing path listed) and
+    /// `symbol` (test_for) when the result is empty; raw GQL leaves it empty.
+    pub target_not_indexed: Vec<String>,
     /// The window of rows to render. Every count reported alongside the
     /// table is over the *whole* result, not this window.
     pub window: range::RowRange,
@@ -213,20 +214,17 @@ pub async fn run(
     // different (already-reported) problem — not an empty index.
     let empty_index = !coverage.is_empty() && coverage.iter().all(|c| c.index_is_empty());
 
-    // A `target` bound to a path that exists nowhere in the store is a
-    // caller typo, not an answer. The presets that take it all filter on
-    // `t.file = $target`, so zero rows from a typo'd path is
-    // indistinguishable from "nothing depends on it" — probe once for the
-    // file, only on an empty result, so the renderer can say which.
+    // A target bound to a value the store has no node for is a caller typo,
+    // not an answer. The presets that anchor on a path filter on `t.file`, so
+    // zero rows from a typo'd path is indistinguishable from "nothing depends
+    // on it" — probe once for the anchor, only on an empty result, so the
+    // renderer can say which. Covers three shapes: `target` (one file),
+    // `files` (the diff_* list — each missing path named) and `symbol`
+    // (test_for — elementKey or name lookup).
     let target_not_indexed = if empty_index || !page.rows.is_empty() {
-        None
-    } else if let Some(QueryValue::Str(target)) = bound.get("target") {
-        match target_file_indexed(store, target, &limits).await {
-            Ok(true) | Err(_) => None,
-            Ok(false) => Some(target.clone()),
-        }
+        Vec::new()
     } else {
-        None
+        missing_anchors(store, &bound, &limits).await
     };
 
     Ok(QueryAnswer {
@@ -244,10 +242,51 @@ pub async fn run(
     })
 }
 
+/// Which of the preset's anchor values the store has no node for. Runs only
+/// when a target/files/symbol query came back empty, so each probe is one
+/// cheap anchored query — never a full scan. A failure here costs nothing:
+/// best-effort, returning empty (no caveat) rather than failing the answer.
+async fn missing_anchors(
+    store: &dyn KnowledgeStore,
+    bound: &QueryParams,
+    limits: &QueryLimits,
+) -> Vec<String> {
+    let mut missing = Vec::new();
+
+    // Single file: `target` (impact, retest_scope, boundary_impact, …).
+    if let Some(QueryValue::Str(target)) = bound.get("target") {
+        if matches!(target_file_indexed(store, target, limits).await, Ok(false)) {
+            missing.push(target.clone());
+        }
+    }
+
+    // List of files: `files` (diff_impact, diff_retest_scope). Probe each,
+    // because "one of the five changed paths was a typo" is a different
+    // diagnosis from "nothing depends on any of them".
+    if let Some(QueryValue::List(items)) = bound.get("files") {
+        for v in items {
+            if let QueryValue::Str(f) = v {
+                if matches!(target_file_indexed(store, f, limits).await, Ok(false)) {
+                    missing.push(f.clone());
+                }
+            }
+        }
+    }
+
+    // Symbol id: `symbol` (test_for). Match either the node key or the bare
+    // name, since a caller may pass either — but only flag when neither
+    // resolves, so a name that matches nothing reads as a typo, not "untested".
+    if let Some(QueryValue::Str(symbol)) = bound.get("symbol") {
+        if matches!(symbol_indexed(store, symbol, limits).await, Ok(false)) {
+            missing.push(symbol.clone());
+        }
+    }
+
+    missing
+}
+
 /// Whether any indexed node carries `file = $target`, the shape every
-/// `TARGET` preset anchors on. Runs only when a `target` query came back
-/// empty, so a failure here costs one cheap anchored query — never a full
-/// scan.
+/// `TARGET` preset anchors on.
 async fn target_file_indexed(
     store: &dyn KnowledgeStore,
     target: &str,
@@ -256,6 +295,25 @@ async fn target_file_indexed(
     let mut params = QueryParams::new();
     params.insert("target".to_string(), QueryValue::Str(target.to_string()));
     let probe = "MATCH (n) WHERE n.file = $target RETURN n.file AS file LIMIT 1";
+    store
+        .execute_query(probe, &params, limits)
+        .await
+        .map(|p| !p.rows.is_empty())
+        .map_err(|e| e.to_string())
+}
+
+/// Whether any indexed node matches `symbol` — by elementKey (a node id) or
+/// by bare name. `test_for` accepts both, and an empty result is a typo only
+/// when neither resolves.
+async fn symbol_indexed(
+    store: &dyn KnowledgeStore,
+    symbol: &str,
+    limits: &QueryLimits,
+) -> Result<bool, String> {
+    let mut params = QueryParams::new();
+    params.insert("symbol".to_string(), QueryValue::Str(symbol.to_string()));
+    let probe = "MATCH (n) WHERE elementKey(n) = $symbol OR n.name = $symbol \
+                 RETURN elementKey(n) AS id LIMIT 1";
     store
         .execute_query(probe, &params, limits)
         .await
@@ -311,19 +369,43 @@ fn bind(preset: &Preset, args: &BTreeMap<String, String>) -> Result<QueryParams,
     for spec in preset.params {
         match args.get(spec.name) {
             Some(raw) => {
-                let value = match spec.default {
-                    // The declared default fixes the type: a parameter
-                    // that defaults to an integer must bind as one, or
-                    // `n.loc > '50'` compares a number against a string.
-                    Some(ParamValue::Int(_)) => {
-                        QueryValue::Int(raw.trim().parse().map_err(|_| {
-                            format!(
-                                "`{}` expects a number for `{}`, got {:?}.",
-                                preset.name, spec.name, raw
-                            )
-                        })?)
+                let value = if spec.list {
+                    // A list parameter arrives as one comma- or
+                    // newline-separated string (the natural shape for
+                    // `--arg files=a.ts,b.rs` and for a model's JSON) and
+                    // binds as a GQL list so `IN $files` works. An empty
+                    // list is rejected: an `IN` over nothing matches
+                    // nothing, and the empty answer would read as "no
+                    // dependents" — the false zero the coverage contract
+                    // exists to prevent.
+                    let items: Vec<QueryValue> = raw
+                        .split([',', '\n'])
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(|s| QueryValue::Str(s.to_string()))
+                        .collect();
+                    if items.is_empty() {
+                        return Err(format!(
+                            "`{}` requires at least one path in `{}` — the value was empty.",
+                            preset.name, spec.name
+                        ));
                     }
-                    _ => QueryValue::Str(raw.trim().to_string()),
+                    QueryValue::List(items)
+                } else {
+                    match spec.default {
+                        // The declared default fixes the type: a parameter
+                        // that defaults to an integer must bind as one, or
+                        // `n.loc > '50'` compares a number against a string.
+                        Some(ParamValue::Int(_)) => {
+                            QueryValue::Int(raw.trim().parse().map_err(|_| {
+                                format!(
+                                    "`{}` expects a number for `{}`, got {:?}.",
+                                    preset.name, spec.name, raw
+                                )
+                            })?)
+                        }
+                        _ => QueryValue::Str(raw.trim().to_string()),
+                    }
                 };
                 bound.insert(spec.name.to_string(), value);
             }
@@ -569,6 +651,37 @@ mod tests {
         p.args.insert("min_loc".into(), "fifty".into());
         let err = resolve(&p).unwrap_err();
         assert!(err.contains("expects a number"), "{err}");
+    }
+
+    /// A list parameter splits a comma-separated string into a GQL list, so
+    /// `IN $files` works. Newlines split too (the shape `git diff --name-only`
+    /// produces); blanks are dropped.
+    #[test]
+    fn a_list_parameter_splits_into_a_gql_list() {
+        let mut p = params("diff_impact");
+        p.args.insert("files".into(), "src/a.ts, src/b.rs\nc/ignored,,\n".into());
+        let (_, _, _, bound) = resolve(&p).unwrap();
+        match &bound["files"] {
+            QueryValue::List(items) => {
+                let names: Vec<&str> = items.iter().filter_map(|v| match v {
+                    QueryValue::Str(s) => Some(s.as_str()),
+                    _ => None,
+                }).collect();
+                assert_eq!(names, vec!["src/a.ts", "src/b.rs", "c/ignored"]);
+            }
+            other => panic!("expected a list, got {:?}", other),
+        }
+    }
+
+    /// An empty list is rejected outright: `IN` over nothing matches nothing,
+    /// and the empty answer would read as "no dependents" — the false zero
+    /// the whole coverage contract exists to prevent.
+    #[test]
+    fn an_empty_list_parameter_is_rejected() {
+        let mut p = params("diff_impact");
+        p.args.insert("files".into(), ",,\n ".into());
+        let err = resolve(&p).unwrap_err();
+        assert!(err.contains("at least one path"), "{err}");
     }
 
     #[test]

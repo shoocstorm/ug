@@ -29,7 +29,7 @@ use super::store::{IngestOutcome, announce_destinations, store_specs_from_args};
 /// trusted — `indexed-tree.json` holds parsed `FileNode`s, so an
 /// indexer change between versions would otherwise keep serving nodes
 /// in the old shape for every file whose content happened not to change.
-fn resolve_gen_cache(args: &[String], output_dir: &str) -> Option<String> {
+pub(crate) fn resolve_gen_cache(args: &[String], output_dir: &str) -> Option<String> {
     if has_flag(args, "--no-cache") {
         return None;
     }
@@ -487,7 +487,7 @@ fn chain_to_serve(args: &[String], graph_path: &str, db_path: &str, no_db: bool,
     serve::run_serve(&serve_args);
 }
 
-fn run_gen_ingest(
+pub(crate) fn run_gen_ingest(
     graph_json: &str,
     db_path: &str,
     args: &[String],

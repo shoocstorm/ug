@@ -49,6 +49,9 @@ engine, same parameter names, richer `--help`.
 | Question | Command |
 |---|---|
 | How many / what fraction / biggest / what breaks? | `ug query <preset>` — catalog below |
+| What breaks across the files I just changed? | `ug query diff_impact --arg files=...` (feed it `git diff --name-only`) |
+| Which tests should I re-run for my changes? | `ug query diff_retest_scope --arg files=...` |
+| Which test covers this symbol? | `ug query test_for --arg symbol=<id>` |
 | You only have a concept, not a name or path | `ug search "concept"` or `ug find_symbols <word>`, then feed the id/path into the command you wanted |
 | Where is `foo`? (you know the name) | `ug find_symbols foo` |
 | Every symbol in a family / naming convention | `ug find_symbols 'handle_*'` — see Wildcards |
@@ -123,8 +126,8 @@ when it hits that — narrow the pattern rather than trusting a capped answer.
 - **documentation** — `comment_coverage`, `comment_density`, `doc_coverage`, `doc_coverage_by_folder`, `token_docs`, `undercommented_complexity`, `undocumented_hotspots`
 - **dead code** — `dead_code`, `orphan_files`, `duplicate_names`
 - **architecture** — `dependency_fanin`, `fanout_offenders` `[min_fanout]`, `coupling_matrix`, `layering_violations` `[from_prefix, to_prefix]`, `boundaries`, `boundary_census`
-- **tests** — `test_ratio`, `untested_symbols`, `retest_scope` `[target]`
-- **risk** — `impact` `[target]`, `impact_summary` `[target]`, `boundary_impact` `[target]`, `risky_symbols`
+- **tests** — `test_ratio`, `untested_symbols`, `retest_scope` `[target]`, `test_for` `[symbol]`, `diff_retest_scope` `[files]`
+- **risk** — `impact` `[target]`, `impact_summary` `[target]`, `boundary_impact` `[target]`, `diff_impact` `[files]`, `risky_symbols`
 
 Args in `[brackets]` are passed `--arg key=value` (repeatable). The catalog
 moves between versions — re-read `ug query --list` if `ug --version` mismatches.
@@ -219,6 +222,25 @@ Not indexed yet → `ug gen` at the repo root. Stale (line numbers don't match t
 file) → `ug regen`; it's incremental, so cheap. `ug list` shows what exists.
 Graph-backed commands default to the **cwd basename**, db-backed ones to the
 **active project** — away from the repo root, pass `-n <project>`.
+
+**Keep the graph fresh while editing.** `ug get_code` reads the *live* working
+tree (flagging drift from the index), so line numbers stay current after an
+edit. But structural tools (`find_usages`, `ug query`) read the indexed graph —
+after an edit burst, refresh it with `ug update <file>...` (focused, cheaper
+than `ug regen`) so blast-radius and test-scope answers reflect what you wrote.
+
+**Lean search by default.** `ug search` and the MCP `search` tool return ids +
+locations without source slices. Add `--snippets` (CLI) or `includeSnippets:
+true` (MCP) when you want the code inline; otherwise follow a hit with
+`get_code`. For a structure-only first pass on a new repo, `ug gen --no-ingest`
+skips embedding — `find_symbols`, `query`, `traverse` work immediately, and
+`search`/`chat` light up after a later `ug ingest`.
+
+**Persistent connection for many calls.** Each `ug` CLI call is a fresh process
+that reloads the graph; for a session of dozens of calls, `ug serve` keeps the
+graph + db cached in one process and answers the same tools over HTTP
+(`POST /api/tools/<name>`) — the `/api/tools/code_query` envelope matches `ug
+query --json` field-for-field.
 
 ## Traps
 

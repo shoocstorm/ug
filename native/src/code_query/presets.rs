@@ -69,6 +69,10 @@ pub struct PresetParam {
     pub description: &'static str,
     /// `None` makes the parameter required.
     pub default: Option<ParamValue>,
+    /// A list parameter takes a comma-separated string and binds it as a
+    /// `QueryValue::List`, for `IN $name` membership predicates. Off for
+    /// every existing scalar parameter.
+    pub list: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -105,12 +109,36 @@ const MIN_LOC: &[PresetParam] = &[PresetParam {
     name: "min_loc",
     description: "Line-span threshold (a span, so it counts blanks and comments).",
     default: Some(ParamValue::Int(50)),
+    list: false,
 }];
 
 const TARGET: &[PresetParam] = &[PresetParam {
     name: "target",
     description: "Repo-relative file PATH whose dependents you want, e.g. 'src/auth.ts'. Not a node id — 'function:src/auth.ts:login' matches no file and returns zero rows.",
     default: None,
+    list: false,
+}];
+
+/// A list of changed files, for the diff_* presets. Pass a comma-separated
+/// string (the natural shape for `--arg files=a.ts,b.rs` and for a model's
+/// `{"files": "a.ts,b.rs"}`); it is bound as a GQL list so `IN $files`
+/// works. The blast-radius question is "across everything I just changed",
+/// which is N files at once — not one target at a time.
+const FILES: &[PresetParam] = &[PresetParam {
+    name: "files",
+    description: "Comma-separated repo-relative file PATHS that changed, e.g. 'src/auth.ts,src/db.ts'. Not node ids. Use the diff_* presets when a change spans several files at once.",
+    default: None,
+    list: true,
+}];
+
+/// A symbol node id (or exact name) for the `test_for` preset. Resolved
+/// against `elementKey(n)` — pass an id from a prior `find_symbols` for the
+/// unambiguous case.
+const SYMBOL: &[PresetParam] = &[PresetParam {
+    name: "symbol",
+    description: "Node id of the symbol whose tests you want, e.g. 'function:src/auth.ts:login'. A bare name works but may match several symbols; resolve it with find_symbols first for an unambiguous answer.",
+    default: None,
+    list: false,
 }];
 
 pub static BUILTIN: &[Preset] = &[
@@ -265,6 +293,7 @@ pub static BUILTIN: &[Preset] = &[
             name: "min_params",
             description: "Parameter-count threshold.",
             default: Some(ParamValue::Int(5)),
+            list: false,
         }],
         gql: "MATCH (n:Function) \
               WHERE n.params > $min_params \
@@ -281,6 +310,7 @@ pub static BUILTIN: &[Preset] = &[
             name: "min_depth",
             description: "Nesting-depth threshold.",
             default: Some(ParamValue::Int(4)),
+            list: false,
         }],
         gql: "MATCH (n:Function) \
               WHERE n.max_nesting >= $min_depth \
@@ -458,6 +488,7 @@ pub static BUILTIN: &[Preset] = &[
             name: "min_fanout",
             description: "Outbound-edge threshold.",
             default: Some(ParamValue::Int(20)),
+            list: false,
         }],
         gql: "MATCH (n) \
               WHERE n.out_degree > $min_fanout AND n.node_type <> 'File' AND n.node_type <> 'Folder' \
@@ -487,11 +518,13 @@ pub static BUILTIN: &[Preset] = &[
                 name: "from_prefix",
                 description: "Folder prefix of the calling layer, e.g. 'src/ui'.",
                 default: None,
+                list: false,
             },
             PresetParam {
                 name: "to_prefix",
                 description: "Folder prefix that layer should not reach directly, e.g. 'src/db'.",
                 default: None,
+                list: false,
             },
         ],
         gql: "MATCH (a)-[:Calls|References|Imports]->(b) \
@@ -589,6 +622,38 @@ pub static BUILTIN: &[Preset] = &[
               LIMIT 200",
         headline: None,
     },
+    Preset {
+        name: "test_for",
+        category: Category::Tests,
+        description: "Which test symbols reach a given code symbol — the missing code→test half of the test loop. Pass a node id (resolve a bare name with find_symbols first).",
+        params: SYMBOL,
+        // Anchored on `n` (the symbol under test) and walked inbound from
+        // test symbols. 2 hops: a test usually calls the symbol directly or
+        // through one helper, and an unanchored 3-hop walk from every test
+        // node is the cap-blowing shape `untested_symbols` already documents.
+        gql: "MATCH (t)-[:Calls|References|Imports|Extends|Implements|Overrides*1..2]->(n) \
+              WHERE elementKey(n) = $symbol AND t.is_test = 1 \
+              RETURN elementKey(t) AS test, t.file AS file, count(*) AS paths \
+              ORDER BY paths DESC \
+              LIMIT 200",
+        headline: None,
+    },
+    Preset {
+        name: "diff_retest_scope",
+        category: Category::Tests,
+        description: "Which test files to re-run after a change spanning several files — pass the changed paths at once. The multi-file form of retest_scope.",
+        params: FILES,
+        // Same reachability as retest_scope, but anchored on a *set* of
+        // changed files via `IN $files`. Dependents inside the changed set
+        // are excluded — a changed file reaching another changed file is the
+        // change itself, not something a test run would catch.
+        gql: "MATCH (dep)-[:Calls|References|Imports|Extends|Implements|Overrides*1..3]->(t) \
+              WHERE t.file IN $files AND dep.is_test = 1 AND NOT (dep.file IN $files) \
+              RETURN dep.file AS test_file, count(DISTINCT elementKey(dep)) AS test_symbols \
+              ORDER BY test_symbols DESC \
+              LIMIT 200",
+        headline: None,
+    },
     // ── risk ──────────────────────────────────────────────────────────
     Preset {
         name: "impact",
@@ -602,6 +667,24 @@ pub static BUILTIN: &[Preset] = &[
         // between 948 and 11.
         gql: "MATCH (dep)-[:Calls|References|Imports|Extends|Implements|Overrides*1..3]->(t) \
               WHERE t.file = $target AND dep.file <> $target \
+              RETURN dep.file AS file, \
+                     count(DISTINCT elementKey(dep)) AS dependents, \
+                     sum(dep.is_test) AS test_paths \
+              ORDER BY dependents DESC \
+              LIMIT 200",
+        headline: None,
+    },
+    Preset {
+        name: "diff_impact",
+        category: Category::Risk,
+        description: "Blast radius of a change spanning several files — pass the changed paths at once. The multi-file form of impact; feed it `git diff --name-only`.",
+        params: FILES,
+        // Same DISTINCT trap as `impact`: a variable-length match yields one
+        // row per path, so `count(DISTINCT elementKey(dep))` is the only
+        // honest dependent count. `dep.file NOT IN $files` keeps a changed
+        // file from counting as its own blast radius.
+        gql: "MATCH (dep)-[:Calls|References|Imports|Extends|Implements|Overrides*1..3]->(t) \
+              WHERE t.file IN $files AND NOT (dep.file IN $files) \
               RETURN dep.file AS file, \
                      count(DISTINCT elementKey(dep)) AS dependents, \
                      sum(dep.is_test) AS test_paths \
@@ -630,13 +713,22 @@ pub static BUILTIN: &[Preset] = &[
         // outside the repo already depends on, which is what decides whether
         // a change needs a version bump, a migration or a deprecation notice.
         //
-        // 4 hops rather than 3: a boundary is usually a controller sitting
-        // one layer further out than the callers `impact` is written for.
         // One row per boundary, not per path: a variable-length match yields
         // a row for every route through the graph, so the grouping implied
         // by `count(*)` is what collapses them back to the thing being
         // counted. Same trap the `impact` preset documents.
-        gql: "MATCH (b)-[:Calls|References|Imports|Extends|Implements|Overrides*1..4]->(t) \
+        //
+        // `*1..3`, not the `*1..4` you might want for "a controller one
+        // layer further out": the 4-hop version blows OverGraph's
+        // `max_frontier` cap (65_536) on any centrally-depended file. The
+        // single-MATCH `WHERE t.file = $target` does not force the planner
+        // to anchor the variable-length piece on `t`, so it expands from
+        // the un-anchored end and the frontier at hop 4 overflows. Three
+        // hops is the most every other variable-length preset asks for and
+        // is the ceiling that actually completes. The 4-hop wishful
+        // version passed its test only because the seeded graph is 2 hops
+        // deep — see `boundary_impact_reports_the_surface_a_change_is_visible_through`.
+        gql: "MATCH (b)-[:Calls|References|Imports|Extends|Implements|Overrides*1..3]->(t) \
               WHERE t.file = $target AND b.boundary_in = 1 AND b.file <> $target \
               RETURN elementKey(b) AS surface, \
                      b.boundary_kinds AS kinds, \

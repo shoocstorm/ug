@@ -54,10 +54,18 @@ pub(crate) fn run_code_query(args: &[String]) {
 
         match ultragraph::code_query::run(store.as_ref(), &params).await {
             Ok(answer) => {
-                println!(
-                    "{}",
-                    ultragraph::code_query::render::render(&answer, Render::Ansi)
-                );
+                if has_flag(args, "--json") {
+                    // The same envelope shape `POST /api/tools/code_query`
+                    // returns, so a script can parse CLI and HTTP output
+                    // identically. The rendered text rides along under
+                    // `text` for anything that wants to show it.
+                    println!("{}", answer_to_json(&answer));
+                } else {
+                    println!(
+                        "{}",
+                        ultragraph::code_query::render::render(&answer, Render::Ansi)
+                    );
+                }
             }
             Err(e) => {
                 eprintln!("{}", e);
@@ -65,6 +73,49 @@ pub(crate) fn run_code_query(args: &[String]) {
             }
         }
     });
+}
+
+/// The machine-readable envelope for `ug query --json`, mirroring
+/// `POST /api/tools/code_query` so the two are interchangeable.
+fn answer_to_json(answer: &ultragraph::code_query::QueryAnswer) -> String {
+    let total = answer.page.rows.len();
+    let (from, to) = answer.window.slice(total);
+    serde_json::json!({
+        "title": answer.title,
+        "description": answer.description,
+        "gql": answer.gql,
+        "columns": answer.page.columns,
+        "rows": answer.page.rows[from..to].iter()
+            .map(|r| r.iter().map(qv_to_json).collect::<Vec<_>>())
+            .collect::<Vec<_>>(),
+        "rowsTotal": total,
+        "from": from + 1,
+        "to": to,
+        "rowsMatched": answer.page.rows_matched,
+        "truncated": answer.page.truncated,
+        "warnings": answer.page.warnings,
+        "coverage": answer.coverage.iter().map(|c| serde_json::json!({
+            "property": c.property, "present": c.present, "total": c.total,
+        })).collect::<Vec<_>>(),
+        "unindexed": answer.unindexed,
+        "targetNotIndexed": answer.target_not_indexed,
+        "text": ultragraph::code_query::render::render(answer, Render::Markdown),
+    })
+    .to_string()
+}
+
+/// One query cell as JSON — the recursive `List` arm is why this is a
+/// function rather than a closure (a closure cannot name itself).
+fn qv_to_json(v: &ultragraph::storage::store::QueryValue) -> serde_json::Value {
+    use ultragraph::storage::store::QueryValue;
+    match v {
+        QueryValue::Null => serde_json::Value::Null,
+        QueryValue::Bool(b) => serde_json::Value::Bool(*b),
+        QueryValue::Int(i) => (*i).into(),
+        QueryValue::Float(f) => (*f).into(),
+        QueryValue::Str(s) => s.clone().into(),
+        QueryValue::List(items) => items.iter().map(qv_to_json).collect::<Vec<_>>().into(),
+    }
 }
 
 /// Parse `ug query`'s flags into the shared params struct.
@@ -89,6 +140,7 @@ pub(crate) fn code_query_params_from_args(
             &[
                 "-p", "--preset", "-g", "--gql", "-a", "--arg", "-n", "--name", "-k", "--limit",
                 "-r", "--range",
+                "--json",
                 // `--db` carries the store path on this command. Leaving it
                 // out of the skip list made `ug query <preset> --db <path>`
                 // read the path as a second preset.
@@ -176,6 +228,8 @@ fn print_code_query_help() {
     println!("  {C_CYAN}-k, --limit <n>{C_RESET}        Rows to display (default 20) — shorthand for --range 1-N");
     println!("  {C_CYAN}-r, --range <window>{C_RESET}   Which rows to show, 1-based and inclusive:");
     println!("                         {C_DIM}20 · 11-35 · 34-end{C_RESET} — page a result without re-reading it");
+    println!("      {C_CYAN}--json{C_RESET}             Emit the machine-readable envelope (same shape as POST /api/tools/code_query)");
+    println!("                         {C_DIM}— pipe to jq instead of parsing the rendered table{C_RESET}");
     println!("  {C_CYAN}-n, --name <project>{C_RESET}   Project to query (default: the active one)");
     println!("  {C_CYAN}--db <dir>{C_RESET}              OverGraph directory (default: the active project's ugdb)");
     println!("      {C_CYAN}--list{C_RESET}             List every preset and exit");
