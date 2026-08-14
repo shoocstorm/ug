@@ -18,11 +18,48 @@ use super::embed::{budget_from_args, embedder_from_args, tokio_runtime};
 use super::io::die;
 use super::store::{IngestOutcome, announce_destinations, store_specs_from_args};
 
+/// What an ingest run should do about vectors.
+///
+/// The skipping half exists because loading the local embedding model costs
+/// more than everything else in a small incremental ingest put together —
+/// well over a second against roughly 300 ms for the structural work. A run
+/// triggered by a git hook wants the structure now and can let the vectors
+/// arrive later, so it writes the changed nodes with no vector and leaves the
+/// model stamp alone. The incremental planner then sees a vector of the wrong
+/// width on those rows and re-embeds exactly them on the next `ug ingest` —
+/// the same backfill path a failed embedder already takes.
+pub(crate) enum EmbedMode<'a> {
+    /// Embed the changed nodes with this embedder.
+    Embed(&'a Embedder),
+    /// Skip embedding. Carries the model name the *store* was written with,
+    /// which the planner still needs: it decides whether the vectors already
+    /// in the store may be carried forward.
+    Skip(String),
+}
+
+impl EmbedMode<'_> {
+    /// The model the plan should be made against — the live embedder's, or
+    /// the one recorded on the store when we are not loading an embedder.
+    fn model(&self) -> &str {
+        match self {
+            EmbedMode::Embed(e) => &e.config().model,
+            EmbedMode::Skip(model) => model,
+        }
+    }
+
+    fn embedder(&self) -> Option<&Embedder> {
+        match self {
+            EmbedMode::Embed(e) => Some(e),
+            EmbedMode::Skip(_) => None,
+        }
+    }
+}
+
 // ingest graph data into one or more knowledge-store backends.
 // Works against any `KnowledgeStore` impl (OverGraph, Neo4j, …).
 async fn ingest_graph_with_progress(
     store: &dyn KnowledgeStore,
-    embedder: &Embedder,
+    embed_mode: &EmbedMode<'_>,
     graph: &GraphData,
     prune: bool,
     budget: &EmbedBudget,
@@ -53,7 +90,7 @@ async fn ingest_graph_with_progress(
     let tp = std::time::Instant::now();
     print!("{C_CYAN}▸{C_RESET} Diffing against Graph DB ({})", nodes_count);
     let _ = std::io::Write::flush(&mut std::io::stdout());
-    let model = embedder.config().model.clone();
+    let model = embed_mode.model().to_string();
     let plan = storage::plan_incremental_ingest(store, graph, &texts, false, &captured, Some(&model))
         .await
         .map_err(|e| format!("reading existing nodes: {}", e))?;
@@ -75,9 +112,20 @@ async fn ingest_graph_with_progress(
     // questions. Nodes past the failure are written with no vector; the
     // next run sees a missing vector and backfills it.
     let mut embed_error: Option<String> = None;
+    let mut vectors_skipped = 0usize;
     if to_embed == 0 {
         println!("{C_CYAN}▸{C_RESET} Embedding: {C_GREEN}✓ skipped{C_RESET} (no node text changed)");
+    } else if embed_mode.embedder().is_none() {
+        // Deliberate, so it is not an `embed_error`: nothing failed, and
+        // calling it a failure would put a warning on every commit.
+        vectors_skipped = to_embed;
+        vectors.resize(to_embed, Vec::new());
+        println!(
+            "{C_CYAN}▸{C_RESET} Embedding: {C_YELLOW}✓ skipped (--no-embed){C_RESET} — {} node(s) written without vectors",
+            to_embed
+        );
     } else {
+        let embedder = embed_mode.embedder().expect("checked above");
         print!("{C_CYAN}▸{C_RESET} Embedding nodes ({})", to_embed);
         let _ = std::io::Write::flush(&mut std::io::stdout());
         for (i, chunk) in plan.to_embed.chunks(embedder.config().batch_size).enumerate() {
@@ -206,10 +254,10 @@ async fn ingest_graph_with_progress(
 
     // Stamp the model last, so a run that died mid-write doesn't claim its
     // vectors all came from this one. Skipped entirely when embedding
-    // failed: the stamp says "these vectors are current for this model",
-    // which would be a lie about rows that have no vectors, and would stop
-    // the next run from re-embedding them.
-    if embed_error.is_none() {
+    // failed — or was deliberately skipped: the stamp says "these vectors
+    // are current for this model", which would be a lie about rows that
+    // have no vectors, and would stop the next run from re-embedding them.
+    if embed_error.is_none() && vectors_skipped == 0 {
         store.record_ingest_model(&model);
     }
 
@@ -217,6 +265,7 @@ async fn ingest_graph_with_progress(
         nodes: nodes_count,
         edges: edges_count,
         embedding_error: embed_error,
+        vectors_skipped,
     })
 }
 
@@ -225,7 +274,7 @@ async fn ingest_graph_with_progress(
 /// ingest (no per-store progress, but a one-line summary per backend).
 pub(crate) async fn ingest_with_specs(
     specs: &[StoreSpec],
-    embedder: &Embedder,
+    embed_mode: &EmbedMode<'_>,
     graph: &GraphData,
     prune: bool,
     budget: &EmbedBudget,
@@ -271,11 +320,11 @@ pub(crate) async fn ingest_with_specs(
     }
     if stores.len() == 1 {
         let store = stores.into_iter().next().unwrap();
-        ingest_graph_with_progress(store.as_ref(), embedder, graph, prune, budget).await
+        ingest_graph_with_progress(store.as_ref(), embed_mode, graph, prune, budget).await
     } else {
         let set = StoreSet::new(stores);
         set.validate_dims().map_err(|e| format!("dim mismatch across destinations: {}", e))?;
-        ingest_graph_multi_with_progress(&set, embedder, graph, prune, budget).await
+        ingest_graph_multi_with_progress(&set, embed_mode, graph, prune, budget).await
     }
 }
 
@@ -284,7 +333,7 @@ pub(crate) async fn ingest_with_specs(
 /// fan-out is parallel.
 async fn ingest_graph_multi_with_progress(
     set: &StoreSet,
-    embedder: &Embedder,
+    embed_mode: &EmbedMode<'_>,
     graph: &GraphData,
     prune: bool,
     budget: &EmbedBudget,
@@ -311,7 +360,7 @@ async fn ingest_graph_multi_with_progress(
         .stores
         .first()
         .ok_or_else(|| "empty StoreSet".to_string())?;
-    let model = embedder.config().model.clone();
+    let model = embed_mode.model().to_string();
     let plan =
         storage::plan_incremental_ingest(first.as_ref(), graph, &texts, true, &captured, Some(&model))
         .await
@@ -330,13 +379,22 @@ async fn ingest_graph_multi_with_progress(
     // Degrades exactly as the single-destination path does — see the
     // comment there for why a dead embedder must not cost the whole index.
     let mut embed_error: Option<String> = None;
-    for chunk in plan.to_embed.chunks(embedder.config().batch_size) {
-        let chunk_vec: Vec<String> = chunk.iter().map(|(_, t)| t.clone()).collect();
-        match embedder.embed(&chunk_vec).await {
-            Ok(chunk_vectors) => vectors.extend(chunk_vectors),
-            Err(e) => {
-                embed_error = Some(e.to_string());
-                break;
+    let mut vectors_skipped = 0usize;
+    match embed_mode.embedder() {
+        None => {
+            vectors_skipped = to_embed;
+            vectors.resize(to_embed, Vec::new());
+        }
+        Some(embedder) => {
+            for chunk in plan.to_embed.chunks(embedder.config().batch_size) {
+                let chunk_vec: Vec<String> = chunk.iter().map(|(_, t)| t.clone()).collect();
+                match embedder.embed(&chunk_vec).await {
+                    Ok(chunk_vectors) => vectors.extend(chunk_vectors),
+                    Err(e) => {
+                        embed_error = Some(e.to_string());
+                        break;
+                    }
+                }
             }
         }
     }
@@ -417,7 +475,7 @@ async fn ingest_graph_multi_with_progress(
 
     for store in &set.stores {
         store.ensure_query_indexes();
-        if embed_error.is_none() {
+        if embed_error.is_none() && vectors_skipped == 0 {
             store.record_ingest_model(&model);
         }
     }
@@ -426,6 +484,7 @@ async fn ingest_graph_multi_with_progress(
         nodes: nodes_count,
         edges: edges_count,
         embedding_error: embed_error,
+        vectors_skipped,
     })
 }
 
@@ -504,7 +563,7 @@ pub(crate) fn run_ingest(args: &[String]) {
         // and fanning several graphs into one store is a legitimate use —
         // pruning by default would make each ingest erase the last.
         let prune = has_flag(args, "--prune");
-        match ingest_with_specs(&specs, &embedder, &graph, prune, &budget).await {
+        match ingest_with_specs(&specs, &EmbedMode::Embed(&embedder), &graph, prune, &budget).await {
             Ok(out) => {
                 println!("────────────────────────────────────────");
                 println!(
@@ -514,6 +573,14 @@ pub(crate) fn run_ingest(args: &[String]) {
                     dest_label.join(", "),
                     start_total.elapsed()
                 );
+                // This is the command that pays off `--no-embed`, so it is
+                // also the one that clears the debt.
+                if out.embedding_error.is_none() {
+                    project::set_pending_vectors(
+                        &project::project_dir(&project_name),
+                        false,
+                    );
+                }
                 if let Some(e) = &out.embedding_error {
                     eprintln!(
                         "{C_YELLOW}⚠{C_RESET} Written without vectors — embedding failed: {}",

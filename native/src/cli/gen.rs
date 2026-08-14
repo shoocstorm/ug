@@ -6,6 +6,7 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
+use ultragraph::limits::EmbedBudget;
 use ultragraph::storage::StoreSpec;
 use ultragraph::types::GraphData;
 use ultragraph::{
@@ -17,7 +18,7 @@ use crate::{project, serve};
 
 use super::args::{first_positional, flag_value, has_flag};
 use super::embed::{budget_from_args, embedder_from_args, tokio_runtime};
-use super::ingest::ingest_with_specs;
+use super::ingest::{ingest_with_specs, EmbedMode};
 use super::io::die;
 use super::store::{IngestOutcome, announce_destinations, store_specs_from_args};
 
@@ -136,13 +137,17 @@ fn print_regen_help() {
     println!();
     println!("{C_BOLD}Options:{C_RESET}");
     println!("  {C_CYAN}-n, --name <project>{C_RESET}   Project to regenerate (default: the active one)");
-    println!("  {C_CYAN}--no-ingest{C_RESET}            Rebuild graph.json only, skip embedding");
+    println!("  {C_CYAN}--no-ingest{C_RESET}            {C_BOLD}Write nothing to the db.{C_RESET} graph.json only — no nodes,");
+    println!("                         no edges, no vectors. See {C_CYAN}ug gen -h{C_RESET} for what that costs.");
+    println!("  {C_CYAN}--no-embed{C_RESET}             {C_BOLD}Write the db, without vectors.{C_RESET} Nodes and edges land as");
+    println!("                         usual; only embedding is skipped.");
     println!("      {C_DIM}…plus every {C_RESET}{C_CYAN}ug gen{C_RESET}{C_DIM} option — see {C_RESET}{C_CYAN}ug gen -h{C_RESET}");
     println!();
     println!("{C_BOLD}Examples:{C_RESET}");
     println!("  ug regen                    {C_DIM}# the active project{C_RESET}");
     println!("  ug regen -n myrepo");
-    println!("  ug regen --no-ingest        {C_DIM}# structure only, no embedder needed{C_RESET}");
+    println!("  ug regen --no-embed         {C_DIM}# fast: db current except vectors{C_RESET}");
+    println!("  ug regen --no-ingest        {C_DIM}# graph.json only, db untouched{C_RESET}");
 }
 
 pub(crate) fn run_gen(args: &[String]) {
@@ -290,7 +295,8 @@ pub(crate) fn run_gen(args: &[String]) {
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| repo_root.clone());
     let mut meta =
-        project::ProjectMeta::new(&project_name, &repo_root_abs, nodes_count, edges_count);
+        project::ProjectMeta::new(&project_name, &repo_root_abs, nodes_count, edges_count)
+            .carrying_pending_vectors(Path::new(&output_dir));
     // Record the indexed file list so `/api/projects/staleness` can stat the
     // tree without re-reading and re-parsing graph.json on every poll.
     if let Some(g) = parsed_graph.as_ref() {
@@ -311,7 +317,15 @@ pub(crate) fn run_gen(args: &[String]) {
     println!("  {C_GREEN}✓{C_RESET} project.json");
 
     if no_ingest {
-        println!("{C_YELLOW}⚠ Skipping db-ingest (--no-ingest){C_RESET}");
+        println!(
+            "{C_YELLOW}⚠ Nothing written to the db (--no-ingest){C_RESET} — no nodes, no edges, no vectors."
+        );
+        println!(
+            "  {C_DIM}That is more than skipping embedding: {C_RESET}{C_CYAN}ug query{C_RESET}{C_DIM} statistics and blast radius"
+        );
+        println!(
+            "  need the db too. {C_RESET}{C_CYAN}--no-embed{C_RESET}{C_DIM} ingests without vectors if that is what you wanted.{C_RESET}"
+        );
         // Make the path forward explicit before the serve line buries it.
         // Without this the user gets "Run 'ug serve'" and learns only after
         // the server starts that chat, tours, and the Indexed tab are dark.
@@ -332,6 +346,17 @@ pub(crate) fn run_gen(args: &[String]) {
         db_path
     );
     let ingest_outcome = match run_gen_ingest(&graph, &db_path, args) {
+        Ok(out) if out.vectors_skipped > 0 => {
+            println!(
+                "  {C_GREEN}✓ {} nodes, {} edges{C_RESET} written in {C_BOLD}{:?}{C_RESET}; {C_YELLOW}{} awaiting vectors{C_RESET} {C_DIM}(--no-embed){C_RESET}",
+                out.nodes,
+                out.edges,
+                t3.elapsed(),
+                out.vectors_skipped
+            );
+            project::set_pending_vectors(Path::new(&output_dir), true);
+            EmbeddingsOutcome::Missing
+        }
         Ok(out) if out.embedding_error.is_some() => {
             // Not a success. The index is real and queryable, but calling
             // it "embedded" would be false, and the user needs to know a
@@ -351,6 +376,7 @@ pub(crate) fn run_gen(args: &[String]) {
                 out.edges,
                 t3.elapsed()
             );
+            project::set_pending_vectors(Path::new(&output_dir), false);
             EmbeddingsOutcome::Ready
         }
         Err(e) => {
@@ -499,6 +525,23 @@ pub(crate) fn run_gen_ingest(
     // default because `ug gen` indexes a whole repo; `--no-prune` is for
     // the case where several inputs deliberately share one project dir.
     let prune = !has_flag(args, "--no-prune");
+
+    // `--no-embed` is the fast path a git hook takes: it never builds an
+    // embedder, because loading the local model is the single most expensive
+    // thing in an otherwise sub-second incremental run. Everything else —
+    // structure, facts, keyword statistics, pruning — still happens, so only
+    // semantic search lags, and `ug ingest` backfills it.
+    if has_flag(args, "--no-embed") {
+        let (dim, model) = store_dim_and_model(db_path, args);
+        let budget = EmbedBudget::resolve(&model, section_cap_override(args));
+        let rt = tokio_runtime();
+        return rt.block_on(async {
+            let specs = gen_specs(args, db_path, dim);
+            announce_destinations(&specs);
+            ingest_with_specs(&specs, &EmbedMode::Skip(model), &graph, prune, &budget).await
+        });
+    }
+
     let mut embedder = embedder_from_args(args);
     let budget = budget_from_args(&embedder, args);
     let dim_was_explicit = flag_value(args, &["--embedding-dim"]).is_some();
@@ -532,8 +575,99 @@ pub(crate) fn run_gen_ingest(
             }
         }
         announce_destinations(&specs);
-        ingest_with_specs(&specs, &embedder, &graph, prune, &budget).await
+        ingest_with_specs(&specs, &EmbedMode::Embed(&embedder), &graph, prune, &budget).await
     })
+}
+
+/// The one help block that explains `--no-embed` vs `--no-ingest`.
+///
+/// Shared by `ug gen -h`, `ug regen -h` and `ug update -h` rather than
+/// re-worded per command, because the difference is the thing people get
+/// wrong: both read as "skip the slow part", and only one of them leaves
+/// `ug query` — statistics, `diff_impact`, blast radius — answering from the
+/// previous ingest.
+pub(crate) fn skip_flags_help() -> String {
+    let mut o = String::new();
+    macro_rules! line {
+        ($($arg:tt)*) => { o.push_str(&format!("{}\n", format_args!($($arg)*))) };
+    }
+    line!("{C_BOLD}The two skip flags are NOT the same thing:{C_RESET}");
+    line!("");
+    line!("  {C_CYAN}--no-embed{C_RESET}   {C_BOLD}Ingest into the db, without vectors.{C_RESET}");
+    line!("               Nodes and edges {C_BOLD}are{C_RESET} written — facts and keyword statistics too.");
+    line!("               Only the embedding is skipped, and no embedding model is");
+    line!("               loaded, which is most of a small run's wall clock.");
+    line!("               {C_GREEN}Current:{C_RESET} the graph.json tools {C_BOLD}and{C_RESET} {C_CYAN}ug query{C_RESET} — statistics,");
+    line!("                        {C_CYAN}diff_impact{C_RESET}, blast radius, {C_CYAN}traverse --dest{C_RESET}.");
+    line!("               {C_YELLOW}Behind:{C_RESET}  {C_CYAN}search{C_RESET} / {C_CYAN}semantic_search{C_RESET} / {C_CYAN}chat{C_RESET} miss the changed");
+    line!("                        nodes until the vectors are backfilled.");
+    line!("");
+    line!("  {C_CYAN}--no-ingest{C_RESET}  {C_BOLD}Write nothing to the db at all.{C_RESET}");
+    line!("               No nodes, no edges, no vectors — the db is not opened.");
+    line!("               Only graph.json is rebuilt.");
+    line!("               {C_GREEN}Current:{C_RESET} the graph.json tools only — {C_CYAN}find_symbols{C_RESET},");
+    line!("                        {C_CYAN}file_outline{C_RESET}, {C_CYAN}get_code{C_RESET}, {C_CYAN}find_usages{C_RESET}, {C_CYAN}shortest_path{C_RESET},");
+    line!("                        {C_CYAN}project_overview{C_RESET}, {C_CYAN}graph_schema{C_RESET}.");
+    line!("               {C_YELLOW}Behind:{C_RESET}  {C_BOLD}everything the db backs{C_RESET} — {C_CYAN}ug query{C_RESET} statistics and");
+    line!("                        blast radius as well as {C_CYAN}search{C_RESET} / {C_CYAN}semantic_search{C_RESET} / {C_CYAN}chat{C_RESET}");
+    line!("                        keep answering from the {C_BOLD}previous{C_RESET} ingest.");
+    line!("");
+    line!("  Either way, {C_CYAN}ug ingest -n <project>{C_RESET} catches the db up — it embeds only");
+    line!("  the nodes still owed a vector.");
+    o
+}
+
+/// The store specs for a gen-family ingest, pinned to the project's own db
+/// path. Shared by both branches of `run_gen_ingest`.
+///
+/// gen already resolved the db path with full precedence (`-d/--db` →
+/// `<output-dir>/ugdb`), so every OverGraph spec is pinned to it — including
+/// in a `--dest overgraph,neo4j` fan-out, where the store layer's own
+/// resolution can no longer lean on `-o`.
+fn gen_specs(args: &[String], db_path: &str, dim: u32) -> Vec<StoreSpec> {
+    let mut specs = store_specs_from_args(args, dim);
+    for spec in &mut specs {
+        if let StoreSpec::Overgraph { path, embedding_dim: _ } = spec {
+            *path = PathBuf::from(db_path);
+        }
+    }
+    specs
+}
+
+/// The embedding dim and model to plan a `--no-embed` run against.
+///
+/// Both normally come from the loaded embedder, which is exactly what this
+/// path refuses to load — so they come off the store instead. That is also
+/// the *correct* source: opening an existing store with any other dim is a
+/// hard error, and planning against any other model would invalidate every
+/// vector already in it. Falls back to the configured defaults only when
+/// there is no store yet, which is the first-ever ingest.
+fn store_dim_and_model(db_path: &str, args: &[String]) -> (u32, String) {
+    if let Some((dim, model)) = ultragraph::storage::recorded_dim_and_model(Path::new(db_path)) {
+        if dim > 0 {
+            return (dim, model.unwrap_or_else(|| configured_model(args)));
+        }
+    }
+    let dim = flag_value(args, &["--embedding-dim"])
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(ultragraph::storage::DEFAULT_EMBEDDING_DIM as u32);
+    (dim, configured_model(args))
+}
+
+/// The embedding model this invocation resolves to, without constructing an
+/// embedder: `--model`, else a persisted `embed.model`, else the default.
+fn configured_model(args: &[String]) -> String {
+    crate::config::resolve_pref_cfg(flag_value(args, &["--model"]), "embed.model")
+        .0
+        .unwrap_or_else(|| ultragraph::storage::DEFAULT_MODEL.to_string())
+}
+
+/// `--section-cap` as a number, for the budget resolution that normally
+/// happens inside `budget_from_args`.
+fn section_cap_override(args: &[String]) -> Option<usize> {
+    crate::config::resolve_pref_cfg(flag_value(args, &["--section-cap"]), "embed.section_cap")
+        .0
+        .and_then(|s| s.parse().ok())
 }
 
 fn print_gen_help() {
@@ -567,11 +701,14 @@ fn print_gen_help() {
     println!(
         "  {C_CYAN}-d, --db{C_RESET} <dir>           OverGraph directory (default: <output-dir>/ugdb)"
     );
-    println!("  {C_YELLOW}--no-ingest{C_RESET}              Skip the OverGraph ingest step");
+    println!("  {C_YELLOW}--no-ingest{C_RESET}              {C_BOLD}Skip the whole db step.{C_RESET} See below.");
+    println!("  {C_YELLOW}--no-embed{C_RESET}               {C_BOLD}Ingest, minus the vectors.{C_RESET} See below.");
     println!("  {C_GREEN}--serve{C_RESET}                  Chain into 'ug serve' on the generated outputs");
     println!(
         "                            (inherits -p/--port, --host, --watch, --repo-root, embedder flags)"
     );
+    println!();
+    print!("{}", skip_flags_help());
     println!();
     println!("{C_BOLD}Embedding (in-process by default; --base-url switches to remote):{C_RESET}");
     println!("  {C_CYAN}--model{C_RESET} <name>           Local fastembed alias or remote model name");

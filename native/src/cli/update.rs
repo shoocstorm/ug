@@ -6,6 +6,15 @@
 //! re-resolves cross-file edges, re-embeds the changed nodes, and tells you
 //! exactly what landed for those files.
 //!
+//! Two flags shorten the run, and they are not interchangeable:
+//! `--no-embed` still ingests into the db — nodes, edges, facts and keyword
+//! statistics all land, only the vectors are skipped (and no embedding model
+//! is loaded, which is most of a small run's wall clock), so `ug query` and
+//! blast radius stay exact. `--no-ingest` writes nothing to the db at all, so
+//! everything it backs — `ug query` included — keeps answering from the
+//! previous ingest. `skip_flags_help` in `gen` is the one place that
+//! difference is spelled out for users.
+//!
 //! The cross-file edge graph is re-resolved over the whole repo on every run,
 //! not spliced in place. That is the cost of correctness: an edge into the
 //! changed file depends on names and receiver types the change may have
@@ -135,7 +144,13 @@ pub(crate) fn run_update(args: &[String]) {
         "{C_CYAN}▸{C_RESET} Updating {C_BOLD}{}{C_RESET} for {} file(s){}",
         name,
         rel_targets.len(),
-        if no_ingest { " (graph only, --no-ingest)" } else { "" }
+        if no_ingest {
+            " (graph.json only — nothing written to the db, --no-ingest)"
+        } else if has_flag(args, "--no-embed") {
+            " (db written without vectors, --no-embed)"
+        } else {
+            ""
+        }
     );
 
     let cache = resolve_gen_cache(args, &output_dir);
@@ -162,8 +177,8 @@ pub(crate) fn run_update(args: &[String]) {
         .unwrap_or_else(|e| die(1, format!("failed to write {graph_path}: {e}")));
     fs::write(format!("{}/indexed-tree.json", output_dir), &index_result)
         .unwrap_or_else(|e| die(1, format!("failed to write {output_dir}/indexed-tree.json: {e}")));
-    let mut new_meta =
-        project::ProjectMeta::new(&name, &repo_root_str, nodes_count, edges_count);
+    let mut new_meta = project::ProjectMeta::new(&name, &repo_root_str, nodes_count, edges_count)
+        .carrying_pending_vectors(Path::new(&output_dir));
     if let Some(g) = parsed.as_ref() {
         new_meta = new_meta.with_graph_index(g);
     }
@@ -201,8 +216,16 @@ pub(crate) fn run_update(args: &[String]) {
     if no_ingest {
         println!();
         println!(
-            "{C_YELLOW}⚠ Skipping db-ingest (--no-ingest){C_RESET} — structural tools are fresh; \
-             semantic search is not."
+            "{C_YELLOW}⚠ Nothing written to the db (--no-ingest){C_RESET} — no nodes, no edges, no vectors."
+        );
+        println!(
+            "  {C_DIM}Fresh: graph.json tools ({C_RESET}{C_CYAN}find_symbols{C_RESET}{C_DIM}, {C_RESET}{C_CYAN}find_usages{C_RESET}{C_DIM}, …). Answering from the previous"
+        );
+        println!(
+            "  ingest: {C_RESET}{C_CYAN}ug query{C_RESET}{C_DIM} statistics and blast radius, {C_RESET}{C_CYAN}search{C_RESET}{C_DIM}, {C_RESET}{C_CYAN}semantic_search{C_RESET}{C_DIM}, {C_RESET}{C_CYAN}chat{C_RESET}{C_DIM}."
+        );
+        println!(
+            "  Use {C_RESET}{C_CYAN}--no-embed{C_RESET}{C_DIM} instead to keep the db current except for vectors.{C_RESET}"
         );
         println!("Updated {C_BOLD}{}{C_RESET} in {C_BOLD}{:?}{C_RESET}", name, start.elapsed());
         return;
@@ -211,7 +234,16 @@ pub(crate) fn run_update(args: &[String]) {
     println!();
     match run_gen_ingest(&graph_json, &db_path, args) {
         Ok(out) => {
-            if out.embedding_error.is_some() {
+            if out.vectors_skipped > 0 {
+                println!(
+                    "  {C_GREEN}✓{C_RESET} {} nodes, {} edges written; {C_YELLOW}{} awaiting vectors{C_RESET} {C_DIM}(--no-embed){C_RESET}",
+                    out.nodes, out.edges, out.vectors_skipped
+                );
+                println!(
+                    "  {C_DIM}Structure, statistics and blast radius are current. Run {C_RESET}{C_CYAN}ug ingest -n {}{C_RESET}{C_DIM} to catch semantic search up.{C_RESET}",
+                    name
+                );
+            } else if out.embedding_error.is_some() {
                 println!(
                     "  {C_YELLOW}⚠ {} nodes, {} edges{C_RESET} re-indexed {C_BOLD}without vectors{C_RESET}",
                     out.nodes, out.edges
@@ -222,6 +254,9 @@ pub(crate) fn run_update(args: &[String]) {
                     out.nodes, out.edges
                 );
             }
+            // The metadata above was written before the ingest ran, so the
+            // pending mark is applied here, where the answer is known.
+            project::set_pending_vectors(Path::new(&output_dir), out.vectors_skipped > 0);
             println!("Updated {C_BOLD}{}{C_RESET} in {C_BOLD}{:?}{C_RESET}", name, start.elapsed());
         }
         Err(e) => {
@@ -332,11 +367,16 @@ fn print_update_help() {
     println!();
     println!("{C_BOLD}Options:{C_RESET}");
     println!("  {C_CYAN}-n, --name{C_RESET} <project>   Project to update (default: the active one)");
-    println!("  {C_CYAN}--no-ingest{C_RESET}             Refresh graph.json only, skip re-embedding");
+    println!("  {C_CYAN}--no-embed{C_RESET}              Ingest into the db, without vectors {C_DIM}(what git hooks use){C_RESET}");
+    println!("  {C_CYAN}--no-ingest{C_RESET}             Write nothing to the db; refresh graph.json only");
+    println!("      {C_DIM}The two are explained side by side below — they are often confused.{C_RESET}");
     println!("      {C_DIM}…plus every {C_RESET}{C_CYAN}ug gen{C_RESET}{C_DIM} embedder flag — see {C_RESET}{C_CYAN}ug gen -h{C_RESET}");
     println!();
     println!("{C_BOLD}Examples:{C_RESET}");
     println!("  {C_CYAN}ug update{C_RESET} native/src/agent_tools.rs");
     println!("  {C_CYAN}ug update{C_RESET} src/a.ts src/b.ts -n myrepo");
-    println!("  {C_CYAN}ug update{C_RESET} native/src/cli/mod.rs --no-ingest   {C_DIM}# structure only{C_RESET}");
+    println!("  {C_CYAN}ug update{C_RESET} native/src/cli/mod.rs --no-embed   {C_DIM}# db current except vectors{C_RESET}");
+    println!("  {C_CYAN}ug update{C_RESET} native/src/cli/mod.rs --no-ingest  {C_DIM}# graph.json only, db untouched{C_RESET}");
+    println!();
+    print!("{}", super::gen::skip_flags_help());
 }

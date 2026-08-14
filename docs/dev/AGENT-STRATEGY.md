@@ -100,6 +100,15 @@ An agent edits 5 files, then asks `find_usages` / `diff_impact`. The answer is n
 > print one line and log the detail to `~/.ug/<project>/hook.log`;
 > `UG_HOOK_DISABLE=1` skips one command. The remaining gap is the *uncommitted*
 > edit burst — a working-tree watcher, not a git hook, is what closes that.
+>
+> Hook runs pass `--no-embed`: loading the embedding model costs more than the
+> whole structural refresh (~1 s of a ~1.5 s run on this repo), so they write
+> the graph, the facts and the keyword statistics and leave the changed nodes
+> without vectors. Everything the safety story depends on — `find_usages`,
+> `code_query`, `diff_impact` — stays exact; only vector recall lags, the store
+> records the debt in `project.json`, and `ug ingest` backfills exactly the
+> nodes owed. `ug hook status` and the `search`/`semantic_search` tools report
+> it, so the degradation is never silent.
 
 #### 2. A first-class "context pack" tool — collapse 5 tool calls into 1
 

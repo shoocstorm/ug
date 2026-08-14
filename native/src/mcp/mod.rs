@@ -148,6 +148,33 @@ struct ProjectCtx {
     graph_path: PathBuf,
 }
 
+/// Warning appended to the vector-backed tools when the project has nodes
+/// that were written without vectors (a `--no-embed` run, which is what the
+/// git hooks do).
+///
+/// Those nodes are in the graph and in every structural answer, but they are
+/// invisible to a vector search — so a semantic result set can be quietly
+/// incomplete in exactly the way that looks like "no such code exists".
+/// Empty string when nothing is owed.
+fn vectors_note(ctx: &ProjectCtx) -> String {
+    let Some(dir) = ctx.db_path.parent() else {
+        return String::new();
+    };
+    if crate::project::pending_vectors_age(dir).is_none() {
+        return String::new();
+    }
+    let project = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    format!(
+        "\n\n⚠ Some nodes have no vectors yet (a --no-embed refresh, e.g. from the git hooks), \
+         so this ranking may be missing recently-changed code. Structural tools (find_usages, \
+         code_query) are unaffected. Run `ug ingest -n {}` to backfill.",
+        project
+    )
+}
+
 fn graph_path_for(db_path: &Path) -> PathBuf {
     // graph.json sits next to the project's ugdb dir.
     db_path
@@ -591,6 +618,7 @@ impl Mcp {
     }
 
     // ── dispatch ───────────────────────────────────────────────────────────
+    // (`vectors_note` is a free function below — it needs no server state.)
 
     async fn call_tool(&self, raw_name: &str, raw_args: &Value) -> Result<String, String> {
         let name = raw_name;
@@ -606,11 +634,16 @@ impl Mcp {
         tools::normalize_args(name, &mut args);
 
         let with_staleness = |text: String| -> String { text + &self.staleness_note(&ctx) };
+        // Only the vector-backed tools get the vectors note: it is a
+        // statement about recall, and appending it to a structural answer
+        // that is entirely current would be noise that reads as a warning.
+        let with_vectors_note =
+            |text: String| -> String { with_staleness(text) + &vectors_note(&ctx) };
 
         match name {
-            "search" => Ok(with_staleness(self.tool_search(&ctx, &args).await?)),
+            "search" => Ok(with_vectors_note(self.tool_search(&ctx, &args).await?)),
             "semantic_search" => {
-                Ok(with_staleness(self.tool_semantic_search(&ctx, &args).await?))
+                Ok(with_vectors_note(self.tool_semantic_search(&ctx, &args).await?))
             }
             // Statistics are the one structural question that cannot be
             // answered from graph.json: aggregation and reachability need

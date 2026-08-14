@@ -453,8 +453,31 @@ fn run_status() -> Result<(), String> {
             project,
             log_path(&project).display()
         );
+        if let Some(age) = project::pending_vectors_age(&project::project_dir(&project)) {
+            println!(
+                "{C_YELLOW}·{C_RESET} Vectors owed for {} — hooks skip embedding to stay fast.",
+                humanize(age)
+            );
+            println!(
+                "  Run {C_CYAN}ug ingest -n {}{C_RESET} to catch semantic search up. \
+                 {C_DIM}Everything else is current.{C_RESET}",
+                project
+            );
+        }
     }
     Ok(())
+}
+
+/// Coarse "how long ago" for the pending-vectors report. Coarse on purpose:
+/// the useful distinction is minutes vs. days, not seconds.
+fn humanize(d: std::time::Duration) -> String {
+    let secs = d.as_secs();
+    match secs {
+        0..=90 => "under a minute".to_string(),
+        91..=5400 => format!("{}m", secs / 60),
+        5401..=172_800 => format!("{}h", secs / 3600),
+        _ => format!("{}d", secs / 86_400),
+    }
 }
 
 /// Read the project name back out of an installed hook, so `status` reports
@@ -511,10 +534,14 @@ fn run_run(args: &[String]) {
     let Some(diff) = diff_args(hook, &git_args, &stdin) else { return };
     let refs: Vec<&str> = diff.iter().map(String::as_str).collect();
     let Some(out) = git(&root, &refs) else { return };
+    let indexed = project::read_meta(&project::project_dir(&project))
+        .map(|m| m.files)
+        .unwrap_or_default();
     let paths: Vec<String> = out
         .lines()
         .map(str::trim)
         .filter(|l| !l.is_empty())
+        .filter(|p| worth_updating(&root, p, &indexed))
         .take(MAX_PATHS)
         .map(str::to_string)
         .collect();
@@ -525,9 +552,17 @@ fn run_run(args: &[String]) {
     let started = std::time::Instant::now();
     match spawn_update(&project, &root, &paths, hook) {
         Ok(true) => println!(
-            "{C_DIM}ug: graph refreshed for {} file(s) in {:.1}s{C_RESET}",
+            "{C_DIM}ug: graph refreshed for {} file(s) in {:.1}s{}{C_RESET}",
             paths.len(),
-            started.elapsed().as_secs_f32()
+            started.elapsed().as_secs_f32(),
+            // Named on every run, not just the first: the whole point of
+            // skipping vectors is that someone has to know they are owed.
+            // No age here — it is nearly always "just now", and `ug hook
+            // status` is where the number means something.
+            match project::pending_vectors_age(&project::project_dir(&project)) {
+                Some(_) => format!(" · vectors pending (ug ingest -n {})", project),
+                None => String::new(),
+            }
         ),
         Ok(false) => eprintln!(
             "{C_YELLOW}ug: graph refresh failed{C_RESET} — see {}",
@@ -537,13 +572,31 @@ fn run_run(args: &[String]) {
     }
 }
 
-/// Run `ug update` as a child with its output in the project's `hook.log`.
+/// Whether a path from a git diff is worth handing to `ug update`.
+///
+/// Keeps anything that exists (it may be new, or edited) and anything the
+/// index already holds (so a deletion re-indexes the file away). Drops the
+/// remainder: a path that is gone *and* was never indexed — a deleted asset,
+/// a removed lockfile, a `.husky` script.
+///
+/// `ug update` treats those as an error, deliberately, because for a person
+/// typing a filename the alternative is a silent no-op on a typo. A hook
+/// passes whatever git printed, where an unindexed deletion is ordinary and
+/// failing the whole refresh over one is not.
+fn worth_updating(root: &Path, rel: &str, indexed: &[String]) -> bool {
+    root.join(rel).exists() || indexed.iter().any(|f| f == rel)
+}
+
+/// Run `ug update` as a child and put its output in the project's `hook.log`.
 ///
 /// A child rather than a direct call because `ug update` narrates: progress
 /// bars, per-file counts, embedder timings. That is the right output for
 /// someone who typed the command and pure noise in the middle of `git
 /// commit`, and a log file is the only place it can go without threading a
 /// quiet flag through the whole pipeline.
+///
+/// The output is captured rather than piped straight to the file so it can be
+/// flattened to plain text first — see [`plain_text`].
 fn spawn_update(
     project: &str,
     root: &Path,
@@ -554,37 +607,97 @@ fn spawn_update(
     if !dir.exists() {
         return Err(format!("project {} is not indexed (run `ug gen`)", project));
     }
+
+    let out = Command::new(ug_bin())
+        .current_dir(root)
+        .arg("update")
+        .arg("-n")
+        .arg(project)
+        // Vectors are the slow part and the least urgent: skipping them keeps
+        // graph.json and the store's structure current — which is what blast
+        // radius reads — in a fraction of the time. `ug ingest` catches the
+        // embeddings up. See `ug hook -h`.
+        .arg("--no-embed")
+        .args(paths)
+        .env("UG_QUIET_LOGO", "1")
+        .output()
+        .map_err(|e| format!("could not run `ug update`: {}", e))?;
+
     let log = log_path(project);
-    let header = format!(
-        "── ug hook {} · {} file(s) · epoch {} ──\n",
+    // Truncated, not appended: what matters is why the last run failed, and
+    // an unbounded log inside the project dir is a slow leak.
+    let body = format!(
+        "── ug hook {} · {} file(s) · epoch {} ──\n{}{}",
         hook.name(),
         paths.len(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
-            .unwrap_or(0)
+            .unwrap_or(0),
+        plain_text(&out.stdout),
+        plain_text(&out.stderr),
     );
-    // Truncated, not appended: what matters is why the last run failed, and
-    // an unbounded log inside the project dir is a slow leak.
-    std::fs::write(&log, header).map_err(|e| format!("cannot write {}: {}", log.display(), e))?;
-    let sink = std::fs::OpenOptions::new()
-        .append(true)
-        .open(&log)
-        .map_err(|e| format!("cannot open {}: {}", log.display(), e))?;
-    let err_sink = sink.try_clone().map_err(|e| e.to_string())?;
+    std::fs::write(&log, body).map_err(|e| format!("cannot write {}: {}", log.display(), e))?;
+    Ok(out.status.success())
+}
 
-    let status = Command::new(ug_bin())
-        .current_dir(root)
-        .arg("update")
-        .arg("-n")
-        .arg(project)
-        .args(paths)
-        .env("UG_QUIET_LOGO", "1")
-        .stdout(sink)
-        .stderr(err_sink)
-        .status()
-        .map_err(|e| format!("could not run `ug update`: {}", e))?;
-    Ok(status.success())
+/// Flatten terminal output into something `less` will open as text.
+///
+/// `ug update` writes for a terminal: colour escapes, and progress bars that
+/// redraw by returning to the start of the line with `\r`. Written verbatim
+/// to a file both survive — the escapes are control bytes, which is exactly
+/// what makes a pager call the log "a binary file", and the `\r` redraws
+/// stack every intermediate percentage onto one unreadable line.
+///
+/// So: keep only what the terminal would have been left showing (the text
+/// after the last `\r` of each line), and drop the escape sequences.
+fn plain_text(raw: &[u8]) -> String {
+    let mut out = String::new();
+    for line in String::from_utf8_lossy(raw).split_inclusive('\n') {
+        let (body, newline) = match line.strip_suffix('\n') {
+            Some(b) => (b, "\n"),
+            None => (line, ""),
+        };
+        // `rsplit` on '\r' is the final redraw — the 100% line, not the
+        // eleven partial ones before it.
+        let final_paint = body.rsplit('\r').next().unwrap_or("");
+        let stripped = strip_ansi(final_paint);
+        let stripped = stripped.trim_end();
+        if stripped.is_empty() && newline.is_empty() {
+            continue;
+        }
+        out.push_str(stripped);
+        out.push_str(newline);
+    }
+    out
+}
+
+/// Remove ANSI escape sequences. Covers CSI (`ESC [ … final`) — every colour
+/// code `ug` emits — and drops a bare trailing `ESC` rather than keeping a
+/// control byte.
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            // CSI: parameter bytes, then one final byte in 0x40..=0x7E.
+            Some('[') => {
+                for f in chars.by_ref() {
+                    if ('\u{40}'..='\u{7e}').contains(&f) {
+                        break;
+                    }
+                }
+            }
+            // Any other two-character escape (or a stray ESC at the end):
+            // both bytes go.
+            _ => {}
+        }
+    }
+    out
 }
 
 // ── entry point ────────────────────────────────────────────────────────────
@@ -643,6 +756,17 @@ pub(crate) fn hook_help_text() -> String {
     line!("  An existing hook of the same name is kept — ug appends its own block,");
     line!("  marked so {C_CYAN}ug hook uninstall{C_RESET} can strip exactly that much back out.");
     line!("  {C_CYAN}core.hooksPath{C_RESET} is honoured, so husky and lefthook repos work.");
+    line!("");
+    line!("{C_BOLD}Fast on purpose — vectors are the one thing left behind:{C_RESET}");
+    line!("  Hook runs pass {C_CYAN}--no-embed{C_RESET}, which {C_BOLD}still ingests into the db{C_RESET} — nodes,");
+    line!("  edges, facts and keyword statistics all land, only the vectors are");
+    line!("  skipped, and no embedding model is loaded (most of a small run).");
+    line!("  So {C_BOLD}find_usages, ug query, diff_impact and blast radius stay exact{C_RESET}.");
+    line!("  {C_DIM}(Not to be confused with {C_RESET}{C_CYAN}--no-ingest{C_RESET}{C_DIM}, which writes nothing to the db at");
+    line!("  all and would leave ug query stale too. See {C_RESET}{C_CYAN}ug update -h{C_RESET}{C_DIM}.){C_RESET}");
+    line!("  Catch semantic search up whenever you like: {C_CYAN}ug ingest -n <project>{C_RESET}.");
+    line!("  {C_DIM}It embeds only the nodes still owed one. Until then {C_RESET}{C_CYAN}ug hook status{C_RESET}{C_DIM} and each");
+    line!("  hook run say how far behind they are.{C_RESET}");
     line!("");
     line!("{C_BOLD}While they are installed:{C_RESET}");
     line!("  {C_CYAN}UG_HOOK_DISABLE=1 git rebase …{C_RESET}  {C_DIM}skip the refresh for one command{C_RESET}");
@@ -746,6 +870,59 @@ mod tests {
         );
         // No rewritten commits on stdin.
         assert_eq!(diff_args(Hook::PostRewrite, &[], ""), None);
+    }
+
+    /// The log is written from a child that was formatting for a terminal.
+    /// Left verbatim, the escape bytes make `less` refuse to open it as text
+    /// and the `\r` redraws pile every intermediate percentage onto one line.
+    #[test]
+    fn the_log_is_plain_text_a_pager_will_open() {
+        let raw = b"\x1b[36m\xe2\x96\xb8\x1b[0m Writing: \x1b[33m 10.0%\x1b[0m (1/10)\r\
+                    \x1b[36m\xe2\x96\xb8\x1b[0m Writing: \x1b[32m100.0% done\x1b[0m\n\
+                    plain line\n";
+        let out = plain_text(raw);
+        assert_eq!(out, "▸ Writing: 100.0% done\nplain line\n");
+        assert!(!out.contains('\u{1b}'), "escape bytes survived: {:?}", out);
+        assert!(!out.contains('\r'), "carriage returns survived: {:?}", out);
+    }
+
+    #[test]
+    fn ansi_stripping_keeps_the_text_and_drops_the_codes() {
+        assert_eq!(strip_ansi("\x1b[1;32mgreen\x1b[0m text"), "green text");
+        assert_eq!(strip_ansi("no codes"), "no codes");
+        // A truncated sequence at the end must not leave a control byte.
+        assert_eq!(strip_ansi("cut\x1b"), "cut");
+        assert_eq!(strip_ansi("cut\x1b[3"), "cut");
+    }
+
+    /// A commit that removes something the index never held — a deleted
+    /// asset, a lockfile — must not fail the whole refresh.
+    #[test]
+    fn paths_git_names_but_the_index_cannot_use_are_dropped() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+        std::fs::write(root.join("live.rs"), "fn main() {}").expect("write");
+        let indexed = vec!["gone.rs".to_string()];
+
+        // Exists on disk: new or edited, either way re-index it.
+        assert!(worth_updating(root, "live.rs", &indexed));
+        // Gone, but the index holds it: this is the deletion to apply.
+        assert!(worth_updating(root, "gone.rs", &indexed));
+        // Gone and never indexed: nothing to do, and not an error.
+        assert!(!worth_updating(root, "assets/logo.png", &indexed));
+    }
+
+    #[test]
+    fn the_hook_asks_for_the_fast_update() {
+        // Loading the embedding model costs more than the entire structural
+        // refresh; a hook that paid it on every commit would be the reason
+        // people uninstall this.
+        let block = hook_block(Hook::PostCommit, "/bin/ug", "demo");
+        assert!(block.contains("hook run post-commit"));
+        assert!(
+            hook_help_text().contains("--no-embed") || hook_help_text().contains("ug ingest"),
+            "`ug hook -h` must say how to catch the vectors up"
+        );
     }
 
     #[test]

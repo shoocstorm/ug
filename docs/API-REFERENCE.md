@@ -20,10 +20,26 @@
 
 | Command | Aliases | What it does | Data sources | Key flags |
 |---------|---------|-------------|--------------|-----------|
-| `ug gen` | — | **End-to-end pipeline**: index → graph → visualization → OverGraph ingest. The primary entry point. | Repo source → index.json → graph.json → ugdb/ | `-i <path>` input dir, `-o <dir>` output, `-n <name>` project name, `-c <dir>` cache, `--no-cache`, `--no-ingest`, `--no-prune`, `--serve`, `-d <dir>` db path, `--model`, `--base-url`, `--api-key`, `--embedding-dim` |
+| `ug gen` | — | **End-to-end pipeline**: index → graph → visualization → OverGraph ingest. The primary entry point. | Repo source → index.json → graph.json → ugdb/ | `-i <path>` input dir, `-o <dir>` output, `-n <name>` project name, `-c <dir>` cache, `--no-cache`, `--no-ingest`, `--no-embed`, `--no-prune`, `--serve`, `-d <dir>` db path, `--model`, `--base-url`, `--api-key`, `--embedding-dim` |
 | `ug index` | — | Index a directory: parse source files into `FileNode`s with symbols, imports, exports. Writes `indexed-tree.json`. | Repo source → writes index.json | `-i <path>` input (default `.`), `-o <file>` output, `-n <name>`, `-c <dir>` cache |
 | `ug graph` | — | Build graph from indexed tree: resolve cross-file imports, create `GraphData` with nodes + edges. Writes `graph.json`. | index.json → writes graph.json | `-i <file>` input index.json, `-o <file>` output graph.json, `-n <name>` |
 | `ug ingest` | — | Embed graph nodes and write to one or more knowledge stores (OverGraph/Neo4j). Defaults resolve from active project (`ug active <name>`), else cwd basename; reads `~/.ug/<name>/graph.json`, writes `~/.ug/<name>/ugdb`. | graph.json → writes to ugdb/ or Neo4j | `-n <name>` project name, `-i <file>` input graph.json, `-o <dir>` output, `--dest <kind>` (overgraph\|neo4j, comma-separated), `--neo4j-*`, `--prune`, `--model`, `--base-url`, `--api-key`, `--embedding-dim` |
+
+#### `--no-embed` vs `--no-ingest`
+
+Accepted by `ug gen`, `ug regen` and `ug update`. They are commonly confused,
+and the difference decides whether `ug query` (statistics, `diff_impact`,
+blast radius) can be trusted after the run:
+
+| Flag | Written to the OverGraph db | Current after the run | Answering from the *previous* ingest |
+|---|---|---|---|
+| `--no-embed` | nodes, edges, facts and keyword/BM25 statistics — **everything except the vectors**. No embedding model is loaded, which is most of a small run's wall clock. | the graph.json tools **and `ug query`** — statistics, `diff_impact`, `boundary_impact`, blast radius, `traverse --dest` | `search`, `semantic_search`, `chat` — they miss the changed nodes until the vectors are backfilled |
+| `--no-ingest` | **nothing** — no nodes, no edges, no vectors; the db is never opened. Only `graph.json` is rebuilt. | the graph.json tools only: `find_symbols`, `file_outline`, `get_code`, `find_usages`, `shortest_path`, `project_overview`, `graph_schema` | **everything the db backs** — `ug query` statistics and blast radius as well as `search`, `semantic_search`, `chat` |
+
+`ug ingest -n <project>` catches the db up in either case; it embeds only the
+nodes still owed a vector. A `--no-embed` run records the debt in
+`project.json` (`pendingVectorsSince`), which is what `ug hook status` and the
+`search`/`semantic_search` warning line report.
 
 ### 1.2 Graph Analysis Commands (graph.json-backed, offline, in-memory)
 
@@ -130,8 +146,8 @@ stdout.
 | `ug rename` | `rn`, `mv` | Rename a project's data directory and its `project.json` name; the active marker follows it. One positional renames the current (active, else cwd) project; two rename `<old> <new>`. | `<new>` or `<old> <new>` positionals, `-n <old>` |
 | `ug rm` | — | Delete a project's data directory. | `<name>` positional |
 | `ug regen` | — | Re-run the pipeline for an existing project: reads `repoRoot` from its `project.json`, so no `-i` needed. Incremental. | `-n <name>`, plus every `ug gen` flag |
-| `ug update` | — | Refresh the graph for the files that just changed (focused regen): re-index, re-resolve cross-file edges, re-embed changed nodes. Built for a live editing session. | `<file>...` positionals, `-n <name>`, `--no-ingest`, plus `ug gen` embedder flags |
-| `ug hook` | — | Install git hooks (`post-commit`, `post-merge`, `post-checkout`, `post-rewrite`) that run `ug update` on the paths each event touched, so the graph never lags the working tree. Appends to an existing hook of the same name behind `# >>> ug hook >>>` markers, honours `core.hooksPath` (husky/lefthook), never fails the git command, and logs each run to `~/.ug/<project>/hook.log`. `UG_HOOK_DISABLE=1` skips it for one command. | `install` / `uninstall` / `status` (default) subcommands, `-n <name>` |
+| `ug update` | — | Refresh the graph for the files that just changed (focused regen): re-index, re-resolve cross-file edges, re-embed changed nodes. Built for a live editing session. A named path that no longer exists but *is* in the index is treated as a deletion; one the index never held is still an error. | `<file>...` positionals, `-n <name>`, `--no-embed`, `--no-ingest`, plus `ug gen` embedder flags |
+| `ug hook` | — | Install git hooks (`post-commit`, `post-merge`, `post-checkout`, `post-rewrite`) that run `ug update --no-embed` on the paths each event touched, so the graph never lags the working tree. Appends to an existing hook of the same name behind `# >>> ug hook >>>` markers, honours `core.hooksPath` (husky/lefthook), never fails the git command, and logs each run to `~/.ug/<project>/hook.log`. `UG_HOOK_DISABLE=1` skips it for one command. Because hook runs skip embedding, `status` reports how long vectors have been owed — `ug ingest -n <project>` backfills them. | `install` / `uninstall` / `status` (default) subcommands, `-n <name>` |
 | `ug upgrade` | — | Check GitHub for a new release and self-update. The downloaded archive is verified against the release's published `.sha256` before it is unpacked and executed. | `--check` (report only, no update), `--allow-unverified` (install when a release publishes no checksum) |
 | `ug uninstall` | — | Delete ALL indexed projects and uninstall ug itself. | — |
 | `ug config` | — | View/persist defaults (chat model, endpoints, etc.) in `~/.ug/config.json`. | `set <key> <value>`, `get <key>`, `list` |

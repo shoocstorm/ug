@@ -27,7 +27,7 @@ pub mod store;
 pub mod text;
 pub mod types_registry;
 
-pub use db::{Db, EdgeRow, NodeRow};
+pub use db::{recorded_dim_and_model, Db, EdgeRow, NodeRow};
 pub use embed::{
     Embedder, EmbedderConfig, RemoteEmbedder, DEFAULT_BASE_URL, DEFAULT_EMBEDDING_DIM,
     DEFAULT_MODEL,

@@ -133,6 +133,21 @@ pub(crate) struct ProjectMeta {
     pub doc_nodes: usize,
     #[serde(default)]
     pub code_nodes: usize,
+    /// When the oldest still-unpaid `--no-embed` run happened (epoch
+    /// seconds), or 0 when the store's vectors are current.
+    ///
+    /// A run that skips embedding writes real structure and no vectors, so
+    /// everything except semantic search stays correct — but nothing on disk
+    /// distinguishes "this node has no vector because we skipped it" from
+    /// "this node has no vector because the graph has none". This field is
+    /// that distinction, and it is what `ug hook status` and the search
+    /// tools report from. Cleared by any run that does embed.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub pending_vectors_since: u64,
+}
+
+fn is_zero(v: &u64) -> bool {
+    *v == 0
 }
 
 impl ProjectMeta {
@@ -149,7 +164,21 @@ impl ProjectMeta {
             files: Vec::new(),
             doc_nodes: 0,
             code_nodes: 0,
+            pending_vectors_since: 0,
         }
+    }
+
+    /// Carry the pending-vectors mark forward from the project.json already
+    /// on disk.
+    ///
+    /// Every write path builds a *fresh* `ProjectMeta`, whose default says
+    /// "vectors are current" — so a run that writes metadata before it knows
+    /// how the ingest went would silently clear a debt that is still owed.
+    /// Only [`set_pending_vectors`] may clear it, and only after an ingest
+    /// that actually embedded.
+    pub(crate) fn carrying_pending_vectors(mut self, dir: &Path) -> Self {
+        self.pending_vectors_since = read_meta(dir).map(|m| m.pending_vectors_since).unwrap_or(0);
+        self
     }
 
     /// Record the file list and node composition derived from `graph`.
@@ -217,6 +246,37 @@ pub(crate) fn write_meta(dir: &Path, meta: &ProjectMeta) -> std::io::Result<()> 
     let json = serde_json::to_string_pretty(&out).expect("ProjectMeta serializes");
     std::fs::create_dir_all(dir)?;
     std::fs::write(meta_path(dir), json)
+}
+
+/// Record — or clear — the mark that says this project's store holds nodes
+/// with no vectors because a run was told to skip embedding.
+///
+/// Setting keeps the *oldest* unpaid run: "pending since" is what makes the
+/// report ("vectors 3 days behind") mean anything, and each new skipping run
+/// would otherwise reset the clock to now.
+pub(crate) fn set_pending_vectors(dir: &Path, pending: bool) {
+    let Some(mut meta) = read_meta(dir) else {
+        return;
+    };
+    let next = match (pending, meta.pending_vectors_since) {
+        (true, 0) => now_epoch(),
+        (true, oldest) => oldest,
+        (false, _) => 0,
+    };
+    if next == meta.pending_vectors_since {
+        return;
+    }
+    meta.pending_vectors_since = next;
+    let _ = write_meta(dir, &meta);
+}
+
+/// How long a project's vectors have been owed, if they are.
+pub(crate) fn pending_vectors_age(dir: &Path) -> Option<std::time::Duration> {
+    let since = read_meta(dir).map(|m| m.pending_vectors_since).unwrap_or(0);
+    if since == 0 {
+        return None;
+    }
+    Some(std::time::Duration::from_secs(now_epoch().saturating_sub(since)))
 }
 
 /// Enumerate project dirs under `ug_home()`: any subdir containing a
@@ -457,6 +517,39 @@ pub(crate) fn remove_project_dir(dir: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The mark has to survive the metadata rewrite that every refresh does,
+    /// and only an embedding run may clear it — otherwise the next `ug
+    /// update` silently forgets that vectors are owed, which is the whole
+    /// thing the mark exists to prevent.
+    #[test]
+    fn the_pending_vectors_mark_survives_a_refresh_and_ages_from_the_oldest() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path();
+        write_meta(dir, &ProjectMeta::new("demo", "/repo", 1, 1)).expect("write");
+        assert!(pending_vectors_age(dir).is_none(), "starts current");
+
+        set_pending_vectors(dir, true);
+        let first = read_meta(dir).expect("meta").pending_vectors_since;
+        assert!(first > 0, "a skipped run marks the project");
+
+        // A later refresh rebuilds ProjectMeta from scratch — the mark has to
+        // ride along, and a second skipped run must not reset the clock.
+        let refreshed =
+            ProjectMeta::new("demo", "/repo", 2, 2).carrying_pending_vectors(dir);
+        write_meta(dir, &refreshed).expect("write");
+        set_pending_vectors(dir, true);
+        assert_eq!(
+            read_meta(dir).expect("meta").pending_vectors_since,
+            first,
+            "`since` must stay the oldest unpaid run"
+        );
+
+        // The run that embeds is the one that clears it.
+        set_pending_vectors(dir, false);
+        assert_eq!(read_meta(dir).expect("meta").pending_vectors_since, 0);
+        assert!(pending_vectors_age(dir).is_none());
+    }
 
     #[test]
     fn sanitize_keeps_safe_names() {

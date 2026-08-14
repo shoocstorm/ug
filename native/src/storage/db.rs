@@ -99,6 +99,20 @@ fn write_meta(db_path: &Path, meta: &DbMeta) -> Result<(), DbError> {
     Ok(())
 }
 
+/// The embedding dimension and model a store on disk was written with,
+/// without opening it. `None` when there is no store there yet.
+///
+/// Exists for the ingest paths that deliberately skip embedding
+/// (`--no-embed`): they must still open the store with the dim it already
+/// has — passing a different one is a hard [`DbError::DimMismatch`] — and
+/// must plan against the model that produced the stored vectors, and both
+/// facts normally arrive by constructing an embedder, which is the second
+/// or so of model loading those paths exist to avoid.
+pub fn recorded_dim_and_model(db_path: &Path) -> Option<(u32, Option<String>)> {
+    let meta = read_meta(db_path).ok().flatten()?;
+    Some((meta.embedding_dim, meta.model))
+}
+
 /// Reject a store whose on-disk layout this build cannot read.
 ///
 /// Keyed on the manifest alone, deliberately. An earlier version also

@@ -230,13 +230,30 @@ after an edit burst, refresh it with `ug update <file>...` (focused, cheaper
 than `ug regen`) so blast-radius and test-scope answers reflect what you wrote.
 To stop having to remember, `ug hook install` hangs that refresh off git —
 every commit, merge, checkout and rebase re-indexes the paths it touched.
+Those runs skip embedding to stay fast, so structure, `ug query` and blast
+radius are exact while `search`/`semantic_search` may miss just-changed code
+until `ug ingest -n <project>` backfills the vectors; both tools say so when
+it applies.
 
 **Lean search by default.** `ug search` and the MCP `search` tool return ids +
 locations without source slices. Add `--snippets` (CLI) or `includeSnippets:
 true` (MCP) when you want the code inline; otherwise follow a hit with
-`get_code`. For a structure-only first pass on a new repo, `ug gen --no-ingest`
-skips embedding — `find_symbols`, `query`, `traverse` work immediately, and
-`search`/`chat` light up after a later `ug ingest`.
+`get_code`.
+
+**`--no-embed` vs `--no-ingest` — they are not the same flag, and the
+difference decides whether `ug query` is trustworthy.** Both are accepted by
+`ug gen`, `ug regen` and `ug update`:
+
+| Flag | Written to the OverGraph db | What is current | What is behind |
+|---|---|---|---|
+| `--no-embed` | nodes + edges + facts + keyword stats, **no vectors** | graph.json tools **and `ug query`** — statistics, `diff_impact`, blast radius | `search` / `semantic_search` / `chat` miss the changed nodes |
+| `--no-ingest` | **nothing at all** — the db is not opened | graph.json tools only: `find_symbols`, `file_outline`, `get_code`, `find_usages`, `shortest_path`, `project_overview` | **everything db-backed**, including `ug query` statistics and blast radius, answers from the *previous* ingest |
+
+So: use `--no-embed` when you want speed but still need counts and blast
+radius (this is what the git hooks do); use `--no-ingest` only for a
+structure-only first pass where no embedder is available. `ug ingest -n
+<project>` catches the db up either way — it embeds only the nodes still owed
+a vector.
 
 **Persistent connection for many calls.** Each `ug` CLI call is a fresh process
 that reloads the graph; for a session of dozens of calls, `ug serve` keeps the

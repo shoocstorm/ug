@@ -31,15 +31,17 @@ ug            # bare `ug` == `ug serve`: visualization + REST API at :8080
 
 - **`ug gen`** runs the full pipeline on the current directory. Output goes to
   `~/.ug/<project-name>/` (name = directory basename; override with `-n/--name`).
-  Add `--no-ingest` to skip the vector store — everything except semantic search
-  still works (see [Which storage backs what](#which-storage-backs-what)).
+  Add `--no-embed` to write the database without vectors (no embedding model is
+  loaded — much faster; only `search`/`semantic_search`/`chat` lag), or
+  `--no-ingest` to skip the database entirely (`ug query` statistics and blast
+  radius lag too). See [`--no-embed` vs `--no-ingest`](#--no-embed-vs---no-ingest).
 - **`ug serve`** (or bare `ug`) without `-i` runs in **multi-project mode**:
   discovers every project under `~/.ug` and adds a UI project switcher. With zero
   projects it shows the KB Manager wizard instead of erroring — so `ug` alone is
   always safe to run first.
 
 ```bash
-ug gen -i ~/code/other-repo -n other --no-ingest   # index another repo
+ug gen -i ~/code/other-repo -n other --no-embed   # index another repo, no vectors yet
 ```
 
 `ug -h` lists every command; `ug <command> -h` prints its full flags. From a
@@ -106,7 +108,7 @@ The native `ug` binary is the primary CLI. `ug -h` lists every command;
 | `ug gen` | Full pipeline: index → graph → visualization → OverGraph ingest |
 | `ug regen` | The same pipeline again for an already-generated project — reads the repo path from its metadata, so no `-i`. Incremental. |
 | `ug update <file>...` | Refresh the graph for just the files you changed — the focused counterpart to `regen`, built for a live editing session |
-| `ug hook install` | Hang that refresh off git: hooks on commit, merge, checkout and rebase re-index the paths each event touched, so blast-radius answers never lag the working tree. `ug hook status` / `uninstall`; `UG_HOOK_DISABLE=1` skips one command. |
+| `ug hook install` | Hang that refresh off git: hooks on commit, merge, checkout and rebase re-index the paths each event touched, so blast-radius answers never lag the working tree. Hook runs pass `--no-embed` — no embedding model is loaded, which is most of the run time — so vectors alone lag; `ug hook status` says how far and `ug ingest -n <project>` backfills them. `ug hook uninstall`; `UG_HOOK_DISABLE=1` skips one command. |
 | `ug serve` / `ug app` | Serve the viz + REST API (multi-project); `app` wraps it in a native Tauri window |
 | `ug index` / `graph` / `ingest` | The individual pipeline stages `gen` runs for you. Unlisted in `ug -h` — `gen --no-ingest` covers the usual reason to want one. |
 | `ug search "<query>"` | GraphRAG: semantic search → graph expansion → ranked context |
@@ -139,12 +141,28 @@ by `ug ingest`). Which one a command reads tells you what still works after
 | **`ugdb/`** — needs the ingest step, but **no embedder** | `query` (statistics); `traverse --dest <name>`; `GET /api/db/node/:id`, `/api/db/traverse/:id`, `POST /api/tools/code_query` |
 | **`ugdb/` + an embedder** — needs ingest *and* a reachable backend | `search`, `semantic_search`, `chat`; `POST /api/search/hybrid`, `/api/search/semantic`, `/api/chat` |
 
-The practical consequence: **only `search`, `semantic_search` and `chat` need
-the database.** After `ug gen --no-ingest` — or if your embedding endpoint is
-down — symbol lookup, outlines, source reads, usage analysis, traversal and
-pathfinding all still work. `--dest <name>` (or `/api/db/traverse`) runs
-`traverse` against a destination store, to verify what landed in OverGraph or
-Neo4j — see [docs/MULTI-STORAGE-DEST.md](docs/MULTI-STORAGE-DEST.md).
+The practical consequence: **only `search`, `semantic_search` and `chat` need an
+embedder — but `ug query` still needs the database.** If your embedding endpoint
+is down, symbol lookup, outlines, source reads, usage analysis, traversal,
+pathfinding *and* whole-repo statistics all still work. `--dest <name>` (or
+`/api/db/traverse`) runs `traverse` against a destination store, to verify what
+landed in OverGraph or Neo4j — see
+[docs/MULTI-STORAGE-DEST.md](docs/MULTI-STORAGE-DEST.md).
+
+### `--no-embed` vs `--no-ingest`
+
+Both are accepted by `ug gen`, `ug regen` and `ug update`, and they are not the
+same thing. The row above tells you why the difference matters: `ug query` —
+statistics, `diff_impact`, blast radius — needs `ugdb/`, but not an embedder.
+
+| Flag | Written to `ugdb/` | Current after the run | Answering from the *previous* ingest |
+| :--- | :--- | :--- | :--- |
+| `--no-embed` | nodes, edges, facts, keyword statistics — **everything but the vectors**. No embedding model is loaded, which is most of a small run's wall clock. | the `graph.json` tools **and `ug query`** | `search`, `semantic_search`, `chat` |
+| `--no-ingest` | **nothing** — the database is never opened; only `graph.json` is rebuilt. | the `graph.json` tools only | **everything `ugdb/` backs**, including `ug query` |
+
+`ug ingest -n <project>` catches the database up either way — it embeds only the
+nodes still owed a vector. This is why the git hooks use `--no-embed`: blast
+radius stays exact while the vectors arrive on your schedule.
 
 ## Configuration
 
