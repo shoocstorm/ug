@@ -77,12 +77,13 @@ pub(crate) fn resolve_project_name(args: &[String], input: &str) -> String {
 /// project rather than the cwd: `-n/--name` wins, else the persisted
 /// active project (`ug active`), else the cwd's basename.
 ///
-/// This is the chain `regen`, `ingest`, and the read commands use so a
-/// `ug active <name>` from outside an indexed repo lands on the project
-/// the user pinned instead of silently picking the most recently
-/// updated one. Generate commands (`gen`, `index`, `graph`) keep using
-/// [`resolve_project_name`] — they create a project from the cwd and
-/// must not be redirected by the active marker.
+/// This is the chain `gen` (when no input path is named — that is how a
+/// re-run finds the project to re-run), `ingest`, and the read commands
+/// use so a `ug active <name>` from outside an indexed repo lands on the
+/// project the user pinned instead of silently picking the most recently
+/// updated one. `gen` with an explicit path, and `index`/`graph`, keep
+/// using [`resolve_project_name`] — they create a project from the named
+/// tree and must not be redirected by the active marker.
 pub(crate) fn resolve_active_project_name(args: &[String], input: &str) -> String {
     match flag_value(args, &["-n", "--name"]) {
         Some(n) => sanitize_name(&n),

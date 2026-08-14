@@ -105,9 +105,8 @@ The native `ug` binary is the primary CLI. `ug -h` lists every command;
 
 | Command | Description |
 | :--- | :--- |
-| `ug gen` | Full pipeline: index → graph → visualization → OverGraph ingest |
-| `ug regen` | The same pipeline again for an already-generated project — reads the repo path from its metadata, so no `-i`. Incremental. |
-| `ug update <file>...` | Refresh the graph for just the files you changed — the focused counterpart to `regen`, built for a live editing session |
+| `ug gen` | Full pipeline: index → graph → visualization → OverGraph ingest. With no path named, re-runs an already-generated project from its recorded repo root — incremental. |
+| `ug update <file>...` | Refresh the graph for just the files you changed — the focused counterpart to `gen`, built for a live editing session |
 | `ug hook install` | Hang that refresh off git: hooks on commit, merge, checkout and rebase re-index the paths each event touched, so blast-radius answers never lag the working tree. Hook runs pass `--no-embed` — no embedding model is loaded, which is most of the run time — so vectors alone lag; `ug hook status` says how far and `ug ingest -n <project>` backfills them. `ug hook uninstall`; `UG_HOOK_DISABLE=1` skips one command. |
 | `ug serve` / `ug app` | Serve the viz + REST API (multi-project); `app` wraps it in a native Tauri window |
 | `ug index` / `graph` / `ingest` | The individual pipeline stages `gen` runs for you. Unlisted in `ug -h` — `gen --no-ingest` covers the usual reason to want one. |
@@ -151,7 +150,7 @@ landed in OverGraph or Neo4j — see
 
 ### `--no-embed` vs `--no-ingest`
 
-Both are accepted by `ug gen`, `ug regen` and `ug update`, and they are not the
+Both are accepted by `ug gen` and `ug update`, and they are not the
 same thing. The row above tells you why the difference matters: `ug query` —
 statistics, `diff_impact`, blast radius — needs `ugdb/`, but not an embedder.
 
@@ -239,9 +238,30 @@ will not think to refresh the graph, and a stale graph is worst exactly where it
 matters most — the blast-radius answer it asked for *because* it just edited.
 Letting git trigger the refresh removes that from anyone's memory.
 
+### For the agent, this is an edit-safety net — not just a search tool
+
+Search is the part that is easy to describe and the least differentiated: an
+agent already has grep, and most platforms ship their own embeddings. What no
+amount of grepping reproduces is the graph answering the two questions that
+decide whether a change is safe:
+
+```bash
+ug find_usages <symbol>                             # before: who is downstream of this?
+ug query boundary_impact --arg target=path/to/f.rs  # before: does the change escape the system?
+ug query diff_impact --arg files=a.ts,b.rs          # after: what did my edit reach?
+ug query diff_retest_scope --arg files=a.ts,b.rs    # after: which tests must I re-run?
+```
+
+The installed skill now teaches that workflow explicitly, and the hooks are what
+make it trustworthy: those answers describe the code the agent *just wrote*, not
+the code as it was at the last manual index. Between commits the agent can also
+refresh on demand — `ug update <file>...` for the files it touched (a fraction of
+a second), `ug gen` after a large or messy change — and `ug hook status` says
+whether the hooks are installed and whether any vectors are owed.
+
 **Tools exposed:** `search`, `semantic_search`, `traverse`, `find_usages`,
 `find_symbols`, `file_outline`, `get_code`, `project_overview`, `shortest_path`,
-`code_query`, `graph_schema`, `list_projects`, `regen`, `ping_embedder`.
+`code_query`, `graph_schema`, `list_projects`, `gen`, `ping_embedder`.
 
 `code_query` is the one to know about if you have not seen it: it answers
 counting, distribution and blast-radius questions over the whole repo in one

@@ -20,14 +20,14 @@
 
 | Command | Aliases | What it does | Data sources | Key flags |
 |---------|---------|-------------|--------------|-----------|
-| `ug gen` | — | **End-to-end pipeline**: index → graph → visualization → OverGraph ingest. The primary entry point. | Repo source → index.json → graph.json → ugdb/ | `-i <path>` input dir, `-o <dir>` output, `-n <name>` project name, `-c <dir>` cache, `--no-cache`, `--no-ingest`, `--no-embed`, `--no-prune`, `--serve`, `-d <dir>` db path, `--model`, `--base-url`, `--api-key`, `--embedding-dim` |
+| `ug gen` | — | **End-to-end pipeline**: index → graph → visualization → OverGraph ingest. The primary entry point. With no input path named, re-runs the resolved project (`-n` → active → cwd basename) from the repo root recorded in its `project.json` — incremental, unchanged files are skipped. | Repo source → index.json → graph.json → ugdb/ | `-i <path>` input dir, `-o <dir>` output, `-n <name>` project name, `-c <dir>` cache, `--no-cache`, `--no-ingest`, `--no-embed`, `--no-prune`, `--serve`, `-d <dir>` db path, `--model`, `--base-url`, `--api-key`, `--embedding-dim` |
 | `ug index` | — | Index a directory: parse source files into `FileNode`s with symbols, imports, exports. Writes `indexed-tree.json`. | Repo source → writes index.json | `-i <path>` input (default `.`), `-o <file>` output, `-n <name>`, `-c <dir>` cache |
 | `ug graph` | — | Build graph from indexed tree: resolve cross-file imports, create `GraphData` with nodes + edges. Writes `graph.json`. | index.json → writes graph.json | `-i <file>` input index.json, `-o <file>` output graph.json, `-n <name>` |
 | `ug ingest` | — | Embed graph nodes and write to one or more knowledge stores (OverGraph/Neo4j). Defaults resolve from active project (`ug active <name>`), else cwd basename; reads `~/.ug/<name>/graph.json`, writes `~/.ug/<name>/ugdb`. | graph.json → writes to ugdb/ or Neo4j | `-n <name>` project name, `-i <file>` input graph.json, `-o <dir>` output, `--dest <kind>` (overgraph\|neo4j, comma-separated), `--neo4j-*`, `--prune`, `--model`, `--base-url`, `--api-key`, `--embedding-dim` |
 
 #### `--no-embed` vs `--no-ingest`
 
-Accepted by `ug gen`, `ug regen` and `ug update`. They are commonly confused,
+Accepted by `ug gen` and `ug update`. They are commonly confused,
 and the difference decides whether `ug query` (statistics, `diff_impact`,
 blast radius) can be trusted after the run:
 
@@ -145,8 +145,7 @@ stdout.
 | `ug active` | — | View or set the active project (default for `ug mcp`). | Sets with `<name>` positional |
 | `ug rename` | `rn`, `mv` | Rename a project's data directory and its `project.json` name; the active marker follows it. One positional renames the current (active, else cwd) project; two rename `<old> <new>`. | `<new>` or `<old> <new>` positionals, `-n <old>` |
 | `ug rm` | — | Delete a project's data directory. | `<name>` positional |
-| `ug regen` | — | Re-run the pipeline for an existing project: reads `repoRoot` from its `project.json`, so no `-i` needed. Incremental. | `-n <name>`, plus every `ug gen` flag |
-| `ug update` | — | Refresh the graph for the files that just changed (focused regen): re-index, re-resolve cross-file edges, re-embed changed nodes. Built for a live editing session. A named path that no longer exists but *is* in the index is treated as a deletion; one the index never held is still an error. | `<file>...` positionals, `-n <name>`, `--no-embed`, `--no-ingest`, plus `ug gen` embedder flags |
+| `ug update` | — | Refresh the graph for the files that just changed (focused re-run): re-index, re-resolve cross-file edges, re-embed changed nodes. Built for a live editing session. A named path that no longer exists but *is* in the index is treated as a deletion; one the index never held is still an error. | `<file>...` positionals, `-n <name>`, `--no-embed`, `--no-ingest`, plus `ug gen` embedder flags |
 | `ug hook` | — | Install git hooks (`post-commit`, `post-merge`, `post-checkout`, `post-rewrite`) that run `ug update --no-embed` on the paths each event touched, so the graph never lags the working tree. Appends to an existing hook of the same name behind `# >>> ug hook >>>` markers, honours `core.hooksPath` (husky/lefthook), never fails the git command, and logs each run to `~/.ug/<project>/hook.log`. `UG_HOOK_DISABLE=1` skips it for one command. Because hook runs skip embedding, `status` reports how long vectors have been owed — `ug ingest -n <project>` backfills them. | `install` / `uninstall` / `status` (default) subcommands, `-n <name>` |
 | `ug upgrade` | — | Check GitHub for a new release and self-update. The downloaded archive is verified against the release's published `.sha256` before it is unpacked and executed. | `--check` (report only, no update), `--allow-unverified` (install when a release publishes no checksum) |
 | `ug uninstall` | — | Delete ALL indexed projects and uninstall ug itself. | — |
@@ -172,17 +171,17 @@ Commands need to resolve a project name to read `graph.json` and/or write/load t
 
 | Command Group | Resolution Order | Notes |
 |--------------|------------------|------|
-| `gen`, `index`, `graph` | `-n/--name` → derive from input path | Generate commands must use cwd when no `-n` (they create a new project) |
-| `regen` | `-n` → **active project** → cwd basename | Rebuilds existing project; honors user's pinned active project |
+| `gen`, `index`, `graph` | `-n/--name` → derive from input path | Generate commands must use cwd when no `-n` and no project matches (they create a new project); `gen` with no `-i` first checks for an existing project (see below) |
+| `gen` (no `-i/--input`) | `-n` → **active project** → cwd basename | Re-runs the resolved project from the repo root recorded in its `project.json`; honors user's pinned active project |
 | `ingest` | `-n` → **active project** → cwd basename | Reads graph.json and writes ugdb from the active project by default |
-| Read commands<br/>(`semantic_search`, `search`, `traverse`, `chat`, `tour`, `query`, `graph_centrality`, `graph_cycles`) | `-n` → **active project** → cwd basename → most-recent | Now consistent with `regen`/`ingest` |
+| Read commands<br/>(`semantic_search`, `search`, `traverse`, `chat`, `tour`, `query`, `graph_centrality`, `graph_cycles`) | `-n` → **active project** → cwd basename → most-recent | Now consistent with `gen`/`ingest` |
 | `server`, `app`, `mcp` | `-n` → **active project** → cwd | Always opens the active project |
 | Any command with `-i/--input` | `-i` wins | Bypasses all project logic |
 
 #### Helper Functions
 
-- `resolve_project_name(args, input)` → `-n` → `derive_project_name(input)` — for `gen`/`index`/`graph` (no active fallback)
-- `resolve_active_project_name(args, input)` → `-n` → `get_active_project()` → `derive_project_name(input)` — for all other commands |
+- `resolve_project_name(args, input)` → `-n` → `derive_project_name(input)` — for `gen` (with an explicit path)/`index`/`graph` (no active fallback)
+- `resolve_active_project_name(args, input)` → `-n` → `get_active_project()` → `derive_project_name(input)` — for all other commands, and for `gen`'s re-run lookup when no path is named |
 
 #### `default_read_db_path()` Fallback Chain
 
@@ -302,7 +301,7 @@ These 13 tools are advertised over MCP `tools/list` and also available via the C
 | `code_query` | **Whole-repo statistics**: counts, groups, distributions, blast radius. Takes a named `preset` or raw GQL. Read-only — mutations are rejected before write staging. Every answer reports property coverage, because aggregating over an unstored property returns `0` rather than an error. | ugdb (**no embedder**) | db missing or written by an older ug |
 | `graph_schema` | **Capability manifest**: node & edge types with counts and connection shapes (from graph.json), plus queryable properties with live coverage and the `code_query` preset list (from the db). | graph.json + ugdb | graph.json missing/invalid (the db half degrades to a note) |
 | `list_projects` | List every indexed project on this machine (name, repo path, graph size). | `~/.ug/` directory scan | — |
-| `regen` | Re-run index → graph → embed pipeline — the whole of `ug gen`, which is why it is not called `reindex` (that names only the first stage). Incremental (content-hash cache). Graph tools refresh even if embedding fails. | Repo source → index.json → graph.json → ugdb/Neo4j | Repo root missing |
+| `gen` | Re-run index → graph → embed pipeline for the current (or named) project, from its recorded repo root. Incremental (content-hash cache). Graph tools refresh even if embedding fails. | Repo source → index.json → graph.json → ugdb/Neo4j | Repo root missing |
 
 ### 3.2 Unlisted Tools (hidden from agents, available via `ug mcp call`)
 
@@ -312,7 +311,7 @@ These 13 tools are advertised over MCP `tools/list` and also available via the C
 
 ### 3.4 Chat Tool Denylist
 
-`regen` and `list_projects` are excluded from the OpenAI-compatible tool schemas used by `ug chat` — the LLM should not be able to reindex or list projects mid-conversation.
+`gen` and `list_projects` are excluded from the OpenAI-compatible tool schemas used by `ug chat` — the LLM should not be able to reindex or list projects mid-conversation.
 
 ### 3.5 OpenAI-compatible Tool Schemas
 
@@ -504,4 +503,4 @@ Source files
 - **One-step**: `ug gen` runs index → graph → ingest sequentially
 - **Step-by-step**: `ug index && ug graph && ug ingest`
 - **With visualization**: `ug gen --serve` (or just `ug serve`)
-- **MCP regen**: the `regen` MCP tool (formerly `reindex`) runs the full pipeline and reports results
+- **MCP gen**: the `gen` MCP tool (formerly `regen`, before that `reindex`) runs the full pipeline and reports results

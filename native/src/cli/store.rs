@@ -127,7 +127,7 @@ pub(crate) struct IngestOutcome {
 ///
 /// A store written by an older ug is an expected, actionable state after
 /// an upgrade — not a bug. Reporting it through `panic!` buries a
-/// perfectly good "run `ug regen`" message under a backtrace notice and
+/// perfectly good "run `ug gen`" message under a backtrace notice and
 /// makes a routine migration look like a crash. Every other failure keeps
 /// panicking, because it is one.
 pub(crate) async fn open_store_or_exit(spec: &StoreSpec) -> Box<dyn KnowledgeStore> {

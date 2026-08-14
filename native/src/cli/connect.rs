@@ -70,9 +70,12 @@ pub(crate) fn connect_help_text() -> String {
     line!("  {C_DIM}Whichever you pick, the other is removed — the point of choosing is not");
     line!("  to leave the agent two doors into the same graph.{C_RESET}");
     line!("");
-    line!("{C_BOLD}Keep its answers fresh:{C_RESET}");
+    line!("{C_BOLD}Make it useful while the agent edits, not just while it reads:{C_RESET}");
     line!("  {C_CYAN}--hooks{C_RESET}    Also install the git hooks that re-index after every commit,");
-    line!("             merge and rebase, so blast radius never lags your edits.");
+    line!("             merge and rebase. That is what lets an agent trust {C_CYAN}find_usages{C_RESET}");
+    line!("             and {C_CYAN}ug query diff_impact{C_RESET} {C_BOLD}about code it just wrote{C_RESET} — the moment");
+    line!("             the answer matters most. It can still refresh on demand with");
+    line!("             {C_CYAN}ug update <file>...{C_RESET} between commits.");
     line!("             {C_DIM}Same as running {C_RESET}{C_CYAN}ug hook install{C_RESET}{C_DIM}; see {C_RESET}{C_CYAN}ug hook -h{C_RESET}{C_DIM}.{C_RESET}");
     line!("");
     line!("{C_BOLD}Scope:{C_RESET}");

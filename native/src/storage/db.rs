@@ -219,7 +219,7 @@ impl std::fmt::Display for DbError {
                 f,
                 "this index was written by an older ug (store format v{}, this build needs v{}). \
                  Node and edge typing changed, so the old data cannot be read correctly. \
-                 Run `ug regen` (or `ug gen`) to rebuild it.",
+                 Run `ug gen` to rebuild it.",
                 existing, supported
             ),
         }

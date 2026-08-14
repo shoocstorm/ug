@@ -275,7 +275,7 @@ impl std::fmt::Display for StoreError {
             } => write!(
                 f,
                 "this index was written by an older ug (store format v{}, this build needs v{}). \
-                 Run `ug regen` (or `ug gen`) to rebuild it.",
+                 Run `ug gen` to rebuild it.",
                 existing, supported
             ),
             StoreError::Corrupt(msg) => write!(f, "corrupt store on disk: {}", msg),

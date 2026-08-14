@@ -103,7 +103,6 @@ fn dispatch(cmd: &str, cmd_args: &[String]) {
     match cmd {
         // Primary entry points.
         "gen" => gen::run_gen(cmd_args),
-        "regen" => gen::run_regen(cmd_args),
         "update" => update::run_update(cmd_args),
         "hook" => hook::run_hook(cmd_args),
         "serve" => serve::run_serve(cmd_args),

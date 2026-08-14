@@ -118,7 +118,7 @@ documented".
 
 These are also written to `graph.json` under a schema version
 (`GRAPH_SCHEMA_VERSION`); a store built before a property existed is rejected
-with "run `ug regen`" rather than read as garbage.
+with "run `ug gen`" rather than read as garbage.
 
 ### Queryable columns
 
@@ -300,7 +300,7 @@ by folder                        count   avg loc   p90
   …                                                     (13 more groups)
 
 samples: function:native/src/main.rs:36:main, function:…
-coverage: loc 1191/1191 · is_test 1878/1891 · comment_lines NOT INDEXED (run `ug regen`)
+coverage: loc 1191/1191 · is_test 1878/1891 · comment_lines NOT INDEXED (run `ug gen`)
 ⚠ Index may be stale: 3 changed files
 ```
 
@@ -325,7 +325,7 @@ mid-execution*. Both produce a confident wrong number, so both are surfaced.
 The rule this feature holds:
 
 > **A new MCP tool is justified only when it needs a different resource or
-> transport.** `get_code` reads the filesystem; `regen` mutates. Anything that
+> transport.** `get_code` reads the filesystem; `gen` mutates. Anything that
 > is *a question about the graph* is a preset or a column — never a tool.
 
 Every tool's JSON Schema sits in the tool list of every request, forever, used

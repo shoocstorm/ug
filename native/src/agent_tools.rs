@@ -1326,7 +1326,7 @@ pub use crate::storage::source::{IndexedSource, StoredSource};
 /// `repo_root` points at the working tree. [`get_code`] prefers it over the
 /// captured copy whenever the file actually exists on disk: an agent
 /// reading source in a live editing session needs the current lines, and a
-/// capture is only ever as current as the last `ug regen`. The captured
+/// capture is only ever as current as the last `ug gen`. The captured
 /// copy stays the fallback for when the repo is absent (a moved checkout,
 /// or a machine that only ever held the index), and the two are compared
 /// so a drift between them is flagged rather than silently trusted.
@@ -1690,7 +1690,7 @@ fn live_slice(
         } else {
             Some(format!(
                 "{} has changed since indexing — showing the live working tree; \
-                 the recorded span may be stale, re-run `ug regen` to refresh",
+                 the recorded span may be stale, re-run `ug gen` to refresh",
                 file
             ))
         }
@@ -3042,7 +3042,7 @@ pub fn render_graph_schema(r: &GraphSchemaResult, style: Render) -> String {
             &format!(
                 "  {} {}",
                 style.dim("NOT INDEXED — this graph predates boundary detection; run"),
-                style.id("ug regen")
+                style.id("ug gen")
             ),
         );
     } else if r.boundary_kinds.is_empty() {
@@ -3109,7 +3109,7 @@ pub fn render_graph_schema(r: &GraphSchemaResult, style: Render) -> String {
             &mut out,
             "    calls are missing. Treat find_usages, impact and dead_code as indicative,",
         );
-        line(&mut out, "    and run \"ug regen\" before relying on them.");
+        line(&mut out, "    and run \"ug gen\" before relying on them.");
     }
     out
 }

@@ -1,12 +1,18 @@
 ---
 name: ug
 description: >-
-  Answer any question about an existing codebase or docs set by querying its
-  `ug` (UltraGraph) knowledge graph from the CLI. Use this BEFORE grep, glob
-  or reading files whenever the task is to understand code rather than edit a
-  file you have already located: how does X work, where is X defined, who
-  calls or imports X, what breaks if I change X, how are A and B connected,
-  where do I start in this repo. Also use for every count, fraction, ranking
+  Answer any question about an existing codebase or docs set — and check the
+  safety of your own edits to it — by querying its `ug` (UltraGraph)
+  knowledge graph from the CLI. Use this BEFORE grep, glob or reading files
+  whenever the task is to understand code rather than open a file you have
+  already located: how does X work, where is X defined, who calls or imports
+  X, what breaks if I change X, how are A and B connected, where do I start
+  in this repo. Use it WHILE editing too, in both directions: before changing
+  a symbol, ask who depends on it (`ug find_usages`, `ug query
+  boundary_impact`); after changing files, ask what that broke and what to
+  re-test (`ug query diff_impact`, `ug query diff_retest_scope`) — the graph
+  is kept current by git hooks, and `ug update <file>...` refreshes it on
+  demand mid-edit. Also use for every count, fraction, ranking
   or distribution over the repo (how many functions are undocumented, which
   files are biggest, what is dead or untested) — one `ug query` replaces a
   loop of greps. Also use whenever a question spans a FAMILY of symbols or
@@ -20,7 +26,8 @@ description: >-
   radius, impact analysis, dead code, repo statistics, "which files depend
   on", "all the functions named like", "every file matching", system
   boundary, entry point, API surface, "what endpoints does this expose",
-  "is this a breaking change".
+  "is this a breaking change", "what did my change break", "what should I
+  re-test", "is it safe to change this", "did I miss a caller".
 ---
 
 # ug — codebase knowledge graph from the CLI
@@ -28,6 +35,42 @@ description: >-
 `ug` indexes a repo (code *and* prose docs) into a graph of symbols and edges.
 Prefer it over `grep`/`Read` for anything relational or aggregate: those see
 text, `ug` sees the graph.
+
+**It is for editing work, not only for reading.** The graph answers the two
+questions that decide whether a change is safe — *who depends on this?* before
+you touch it, and *what did I just break, and what do I re-test?* after — and
+grep cannot answer either. Use it on your own edits, not just on unfamiliar
+code.
+
+## Editing a codebase with `ug`
+
+```bash
+# 1. BEFORE you change a symbol — who is downstream of it?
+ug find_usages <symbol>                       # callers, importers, call sites
+ug query boundary_impact --arg target=<file>  # is the change visible outside the system?
+
+# 2. AFTER an edit burst — what did it reach, and what covers it?
+git diff --name-only | tr '\n' ',' | sed 's/,$//'      # the changed-file list
+ug query diff_impact --arg files=a.ts,b.rs             # blast radius of those files
+ug query diff_retest_scope --arg files=a.ts,b.rs       # the tests to re-run
+```
+
+**The graph keeps up with you.** `ug hook install` puts git hooks in the repo,
+so every commit, merge, checkout and rebase re-indexes the paths it touched —
+you do not have to remember to refresh, and the answers above stay true as you
+work. Between commits, or in a repo without the hooks, refresh on demand:
+
+```bash
+ug update src/a.ts src/b.rs   # the files you just edited — focused and fast
+ug gen                        # whole project, incremental; after a big or messy change
+ug hook status                # are the hooks installed here? are vectors owed?
+```
+
+Run `ug update` yourself whenever you have edited files and are about to ask a
+structural question about them — it costs a fraction of a second and it is the
+difference between a real blast radius and a stale one. `ug get_code` always
+reads the live working tree, so a stale graph shows up as an id that no longer
+resolves, never as silently wrong source.
 
 Two rules turn a loop into one call — reach for them before iterating:
 
@@ -49,8 +92,10 @@ engine, same parameter names, richer `--help`.
 | Question | Command |
 |---|---|
 | How many / what fraction / biggest / what breaks? | `ug query <preset>` — catalog below |
+| Is it safe to change this symbol? | `ug find_usages <symbol>` before you edit |
 | What breaks across the files I just changed? | `ug query diff_impact --arg files=...` (feed it `git diff --name-only`) |
 | Which tests should I re-run for my changes? | `ug query diff_retest_scope --arg files=...` |
+| I just edited files — make the graph match | `ug update <file>...` (git hooks do this on commit) |
 | Which test covers this symbol? | `ug query test_for --arg symbol=<id>` |
 | You only have a concept, not a name or path | `ug search "concept"` or `ug find_symbols <word>`, then feed the id/path into the command you wanted |
 | Where is `foo`? (you know the name) | `ug find_symbols foo` |
@@ -218,22 +263,24 @@ ug graph_schema    # node/edge types actually in THIS graph, + the full vocabula
 `query --list` and `graph_schema` change per repo/version — re-read them rather
 than remembering them.
 
-Not indexed yet → `ug gen` at the repo root. Stale (line numbers don't match the
-file) → `ug regen`; it's incremental, so cheap. `ug list` shows what exists.
+Not indexed yet → `ug gen` at the repo root. Stale after *your* edits → `ug
+update <the files you changed>`; stale generally (line numbers don't match the
+file) → `ug gen` again, which re-runs an existing project from its recorded
+root. Both are incremental, so cheap. `ug list` shows what exists.
 Graph-backed commands default to the **cwd basename**, db-backed ones to the
 **active project** — away from the repo root, pass `-n <project>`.
 
-**Keep the graph fresh while editing.** `ug get_code` reads the *live* working
-tree (flagging drift from the index), so line numbers stay current after an
-edit. But structural tools (`find_usages`, `ug query`) read the indexed graph —
-after an edit burst, refresh it with `ug update <file>...` (focused, cheaper
-than `ug regen`) so blast-radius and test-scope answers reflect what you wrote.
-To stop having to remember, `ug hook install` hangs that refresh off git —
-every commit, merge, checkout and rebase re-indexes the paths it touched.
-Those runs skip embedding to stay fast, so structure, `ug query` and blast
-radius are exact while `search`/`semantic_search` may miss just-changed code
-until `ug ingest -n <project>` backfills the vectors; both tools say so when
-it applies.
+**Freshness, in detail** (see [Editing a codebase with `ug`](#editing-a-codebase-with-ug)
+for the workflow). `ug get_code` reads the *live* working tree and flags drift
+from the index, so source and line numbers are never silently wrong. The
+structural tools (`find_usages`, `ug query`) read the indexed graph, so they
+are as current as the last index — which is why `ug update <file>...` after an
+edit burst, or the git hooks, matter. Hook runs pass `--no-embed` to stay
+fast: structure, `ug query`, `diff_impact` and blast radius are exact, while
+`search`/`semantic_search` may miss just-changed code until `ug ingest -n
+<project>` backfills the vectors. Both of those tools say so in their output
+when it applies, and `ug hook status` reports how far behind they are — you
+will never have to guess whether an answer is stale.
 
 **Lean search by default.** `ug search` and the MCP `search` tool return ids +
 locations without source slices. Add `--snippets` (CLI) or `includeSnippets:
@@ -242,7 +289,7 @@ true` (MCP) when you want the code inline; otherwise follow a hit with
 
 **`--no-embed` vs `--no-ingest` — they are not the same flag, and the
 difference decides whether `ug query` is trustworthy.** Both are accepted by
-`ug gen`, `ug regen` and `ug update`:
+`ug gen` and `ug update`:
 
 | Flag | Written to the OverGraph db | What is current | What is behind |
 |---|---|---|---|

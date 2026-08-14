@@ -1351,7 +1351,7 @@ fn spawn_watch(state: ServeState) {
 /// then keeps it in `loaded` indefinitely, while the watcher only ever looked
 /// at the active project — so a CLI `ug gen` / `ug ingest` against some other
 /// project landed, and every later request for it kept answering from the
-/// pre-regen graph, with no error and no staleness note. The MCP server has
+/// pre-run graph, with no error and no staleness note. The MCP server has
 /// always checked mtime on read (`mcp::Mcp::load_graph`); the two doors have
 /// to agree about what the graph contains.
 ///
@@ -4623,7 +4623,7 @@ async fn api_chat_config(State(state): State<ServeState>) -> Response {
 /// The schemas come straight from the MCP registry, so the model behind
 /// `/api/chat` sees exactly the toolbox an MCP client sees — one
 /// description to maintain, not two. Tools that mutate or that only make
-/// sense to an operator (`regen`, `list_projects`) are left out: a chat
+/// sense to an operator (`gen`, `list_projects`) are left out: a chat
 /// turn should read the graph, not reshape it.
 /// Run one tool against the server's live state.
 ///

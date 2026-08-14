@@ -56,7 +56,7 @@ accepted; that divergence is what a compatibility alias buys you.
 
 Store formats are the one place to still be deliberate: bump
 `STORE_FORMAT_VERSION` / `GRAPH_SCHEMA_VERSION` so an existing index is
-*rejected with a "run `ug regen`" message* rather than read as garbage. That
+*rejected with a "run `ug gen`" message* rather than read as garbage. That
 is not backward compatibility — it is refusing to answer from data this
 build cannot read, which stays correct however old the index is.
 

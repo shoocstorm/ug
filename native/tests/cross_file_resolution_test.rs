@@ -778,7 +778,7 @@ fn graph_schema_flags_a_graph_written_before_cross_file_resolution() {
         ultragraph::agent_tools::Render::Markdown,
     );
     assert!(
-        rendered.contains("ug regen"),
+        rendered.contains("ug gen"),
         "the note has to say what to do about it: {rendered}"
     );
 }

@@ -171,7 +171,7 @@ Two consequences worth knowing:
 
 - **Member nodes are named `Type.member`.** Java always did this; TypeScript
   and Python now do too, which changes their node ids and costs a one-time
-  re-embed on the first `ug regen`. It buys correct `Contains` edges from a
+  re-embed on the first `ug gen`. It buys correct `Contains` edges from a
   type to its members, and it splits into searchable words —
   `OrderService.cancel` gives four where `cancel` gives one. Rust keeps its
   existing `Type::method` spelling, so Rust ids are unchanged.

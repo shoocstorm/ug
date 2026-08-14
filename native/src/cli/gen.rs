@@ -1,5 +1,6 @@
-//! `ug gen` and `ug regen` — the one-command pipeline (index → graph →
-//! ingest → embed), and re-running it over an existing project.
+//! `ug gen` — the one-command pipeline (index → graph → ingest → embed),
+//! for both a first run against a path and a re-run of an existing project
+//! (whose recorded repo root is used when no path is named).
 
 use std::env;
 use std::fs;
@@ -50,46 +51,38 @@ pub(crate) fn resolve_gen_cache(args: &[String], output_dir: &str) -> Option<Str
     Some(output_dir.to_string())
 }
 
-/// `ug regen [-n <project>]` — re-run the pipeline for a project that has
-/// already been generated once.
+/// What `ug gen` should index when the caller named no path: the repo
+/// root recorded in an existing project's `project.json`, else the cwd.
 ///
-/// This is `ug gen` with the input path remembered rather than retyped:
-/// it reads `repoRoot` out of the project's `project.json` and hands off.
-/// Everything else — the content-hash cache, the progress output, the
-/// degraded-embedder path — is `gen`'s, because re-running the pipeline
-/// and running it the first time are the same operation.
+/// This is the operation `ug regen` used to be: re-running the pipeline
+/// and running it the first time are the same operation, so one command
+/// covers both. The project is resolved the way every project-scoped
+/// command resolves it (`-n/--name` → active project → cwd basename),
+/// and the resolved name rides along with the root — it may differ from
+/// the root's basename (`ug gen -i /x/myrepo -n custom`), and deriving
+/// it from the root would write the refreshed graph into the wrong
+/// project dir.
 ///
-/// **On the name.** This indexes, rebuilds the graph *and* re-embeds into
-/// the store, so `reindex` — which names only the first of the three —
-/// would be a lie. `regen` says what it does and pairs with the `gen` it
-/// repeats.
-pub(crate) fn run_regen(args: &[String]) {
-    if has_flag(args, "-h") || has_flag(args, "--help") {
-        print_regen_help();
-        return;
-    }
-
-    // Same resolution order every project-scoped command uses: -n/--name,
-    // then the active project, then the cwd's basename.
+/// When the resolved project's recorded root is gone, a name the user
+/// pinned (`-n` or the active marker) has nothing safe to fall back to —
+/// indexing the cwd into that project would silently re-point it at an
+/// unrelated tree — so this stops and says how to repoint. A name that
+/// was merely the cwd's basename falls back to `.`: the user is standing
+/// in the tree they mean (most likely the repo moved here), which is
+/// also exactly what gen did before the project existed.
+fn resolve_gen_input(args: &[String]) -> (String, Option<String>) {
     let name = project::resolve_active_project_name(args, ".");
-
-    let dir = project::project_dir(&name);
-    let Some(meta) = project::read_meta(&dir) else {
-        eprintln!(
-            "{C_YELLOW}⚠{C_RESET}  No generated project named {C_BOLD}{}{C_RESET} under {}.",
-            name,
-            project::ug_home().display()
-        );
-        eprintln!(
-            "   Run {C_CYAN}ug gen -i <path>{C_RESET} to create it, or {C_CYAN}ug list{C_RESET} to see what exists."
-        );
-        std::process::exit(1);
+    let Some(meta) = project::read_meta(&project::project_dir(&name)) else {
+        return (".".to_string(), None);
     };
-
-    if meta.repo_root.is_empty() || !Path::new(&meta.repo_root).exists() {
-        // The recorded path is how regen knows what to re-read; without a
-        // usable one there is nothing to re-run against, and guessing the
-        // cwd would silently re-index the wrong tree.
+    if !meta.repo_root.is_empty() && Path::new(&meta.repo_root).exists() {
+        println!(
+            "{C_CYAN}▸{C_RESET} Re-generating {C_BOLD}{}{C_RESET} from {}",
+            name, meta.repo_root
+        );
+        return (meta.repo_root.clone(), Some(name));
+    }
+    if flag_value(args, &["-n", "--name"]).is_some() || project::get_active_project().is_some() {
         eprintln!(
             "{C_YELLOW}⚠{C_RESET}  Project {C_BOLD}{}{C_RESET} points at {}, which no longer exists.",
             name,
@@ -99,55 +92,13 @@ pub(crate) fn run_regen(args: &[String]) {
                 &meta.repo_root
             }
         );
-        eprintln!("   Re-run {C_CYAN}ug gen -i <path> -n {}{C_RESET} to repoint it.", name);
+        eprintln!(
+            "   Re-run {C_CYAN}ug gen -i <path> -n {}{C_RESET} to repoint it.",
+            name
+        );
         std::process::exit(1);
     }
-
-    println!(
-        "{C_CYAN}▸{C_RESET} Regenerating {C_BOLD}{}{C_RESET} from {}",
-        name, meta.repo_root
-    );
-
-    // Forward the caller's flags (embedder overrides, --no-ingest, …) and
-    // add the two `gen` needs, unless they were already supplied.
-    let mut forwarded: Vec<String> = args.to_vec();
-    if flag_value(args, &["-i", "--input"]).is_none() {
-        forwarded.push("-i".into());
-        forwarded.push(meta.repo_root.clone());
-    }
-    if flag_value(args, &["-n", "--name"]).is_none() {
-        forwarded.push("-n".into());
-        forwarded.push(name);
-    }
-    run_gen(&forwarded);
-}
-
-fn print_regen_help() {
-    println!("  {C_CYAN}ug regen{C_RESET}  {C_YELLOW}— re-run the pipeline for an existing project{C_RESET}");
-    println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
-    println!();
-    println!("  {C_CYAN}ug gen{C_RESET} with the input path remembered instead of retyped — it reads");
-    println!("  the repo root from the project's own metadata. Incremental: unchanged");
-    println!("  files are skipped via content hashes, so this is cheap after a few edits.");
-    println!();
-    println!("  Runs the whole pipeline (index → graph → embed), which is why it is");
-    println!("  {C_BOLD}regen{C_RESET} and not {C_DIM}reindex{C_RESET}.");
-    println!();
-    println!("{C_BOLD}Usage:{C_RESET}  ug regen [-n <project>] [gen options]");
-    println!();
-    println!("{C_BOLD}Options:{C_RESET}");
-    println!("  {C_CYAN}-n, --name <project>{C_RESET}   Project to regenerate (default: the active one)");
-    println!("  {C_CYAN}--no-ingest{C_RESET}            {C_BOLD}Write nothing to the db.{C_RESET} graph.json only — no nodes,");
-    println!("                         no edges, no vectors. See {C_CYAN}ug gen -h{C_RESET} for what that costs.");
-    println!("  {C_CYAN}--no-embed{C_RESET}             {C_BOLD}Write the db, without vectors.{C_RESET} Nodes and edges land as");
-    println!("                         usual; only embedding is skipped.");
-    println!("      {C_DIM}…plus every {C_RESET}{C_CYAN}ug gen{C_RESET}{C_DIM} option — see {C_RESET}{C_CYAN}ug gen -h{C_RESET}");
-    println!();
-    println!("{C_BOLD}Examples:{C_RESET}");
-    println!("  ug regen                    {C_DIM}# the active project{C_RESET}");
-    println!("  ug regen -n myrepo");
-    println!("  ug regen --no-embed         {C_DIM}# fast: db current except vectors{C_RESET}");
-    println!("  ug regen --no-ingest        {C_DIM}# graph.json only, db untouched{C_RESET}");
+    (".".to_string(), None)
 }
 
 pub(crate) fn run_gen(args: &[String]) {
@@ -158,31 +109,36 @@ pub(crate) fn run_gen(args: &[String]) {
 
     let start_total = std::time::Instant::now();
 
-    let input = flag_value(args, &["-i", "--input"])
-        .or_else(|| {
-            first_positional(
-                args,
-                &[
-                    "-i",
-                    "--input",
-                    "-c",
-                    "--cache",
-                    "-o",
-                    "--output",
-                    "-d",
-                    "--db",
-                    "-n",
-                    "--name",
-                    "--base-url",
-                    "--api-key",
-                    "--model",
-                    "--embedding-dim",
-                ],
-            )
-        })
-        .unwrap_or_else(|| ".".to_string());
+    // An explicit -i/positional always wins. Without one, gen is also the
+    // re-run command: the recorded repo root of the project this resolves
+    // to (-n → active → cwd basename), else the cwd on a first run.
+    let (input, pinned_project) = match flag_value(args, &["-i", "--input"]).or_else(|| {
+        first_positional(
+            args,
+            &[
+                "-i",
+                "--input",
+                "-c",
+                "--cache",
+                "-o",
+                "--output",
+                "-d",
+                "--db",
+                "-n",
+                "--name",
+                "--base-url",
+                "--api-key",
+                "--model",
+                "--embedding-dim",
+            ],
+        )
+    }) {
+        Some(explicit) => (explicit, None),
+        None => resolve_gen_input(args),
+    };
     let repo_root = input.clone();
-    let project_name = project::resolve_project_name(args, &input);
+    let project_name = pinned_project
+        .unwrap_or_else(|| project::resolve_project_name(args, &input));
     let output_dir = flag_value(args, &["-o", "--output"])
         .unwrap_or_else(|| project::project_dir(&project_name).to_string_lossy().into_owned());
     // Parse caching is on by default, keyed to the project dir — which
@@ -581,7 +537,7 @@ pub(crate) fn run_gen_ingest(
 
 /// The one help block that explains `--no-embed` vs `--no-ingest`.
 ///
-/// Shared by `ug gen -h`, `ug regen -h` and `ug update -h` rather than
+/// Shared by `ug gen -h` and `ug update -h` rather than
 /// re-worded per command, because the difference is the thing people get
 /// wrong: both read as "skip the slow part", and only one of them leaves
 /// `ug query` — statistics, `diff_impact`, blast radius — answering from the
@@ -682,7 +638,12 @@ fn print_gen_help() {
     println!("{C_BOLD}Usage:{C_RESET}  ug gen [<path>] [options]");
     println!();
     println!("{C_BOLD}Options:{C_RESET}");
-    println!("  {C_CYAN}-i, --input{C_RESET} <path>       Input directory (default: .)");
+    println!(
+        "  {C_CYAN}-i, --input{C_RESET} <path>       Input directory (default: the resolved project's recorded"
+    );
+    println!(
+        "                            repo root — {C_CYAN}-n{C_RESET} → active → cwd basename — else .)"
+    );
     println!(
         "  {C_CYAN}-c, --cache{C_RESET} <dir>        Parse cache directory (default: the output dir)"
     );
@@ -721,6 +682,79 @@ fn print_gen_help() {
     println!();
     println!("{C_BOLD}Examples:{C_RESET}");
     println!("  {C_MAGENTA}ug gen{C_RESET}                              {C_YELLOW}# ~/.ug/<cwd-basename>/{C_RESET}");
+    println!(
+        "  {C_MAGENTA}ug gen{C_RESET} -n myrepo                   {C_YELLOW}# re-run that project from its recorded root{C_RESET}"
+    );
     println!("  {C_MAGENTA}ug gen{C_RESET} -i ./src -n myrepo           {C_YELLOW}# ~/.ug/myrepo/{C_RESET}");
     println!("  {C_MAGENTA}ug gen{C_RESET} -i ./src --no-ingest --serve");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::project::UG_HOME_LOCK;
+
+    fn isolated_home() -> tempfile::TempDir {
+        let home = tempfile::tempdir().expect("tempdir");
+        std::env::set_var("UG_HOME", home.path());
+        home
+    }
+
+    /// No existing project: gen indexes the cwd, exactly as it did before
+    /// projects existed. This is the first-run path.
+    #[test]
+    fn without_a_project_gen_defaults_to_the_cwd() {
+        let _guard = UG_HOME_LOCK.blocking_lock();
+        let _home = isolated_home();
+        let (input, pinned) = resolve_gen_input(&[]);
+        assert_eq!(input, ".");
+        assert!(pinned.is_none());
+        std::env::remove_var("UG_HOME");
+    }
+
+    /// An existing project with a live recorded root is re-run from that
+    /// root, with the project name pinned — even when it differs from the
+    /// root's basename, so the refresh lands in the right project dir.
+    #[test]
+    fn an_existing_project_re_runs_from_its_recorded_root() {
+        let _guard = UG_HOME_LOCK.blocking_lock();
+        let _home = isolated_home();
+        let repo = tempfile::tempdir().expect("repo");
+        let dir = project::project_dir("custom");
+        std::fs::create_dir_all(&dir).unwrap();
+        project::write_meta(
+            &dir,
+            &project::ProjectMeta::new("custom", repo.path().to_str().unwrap(), 1, 1),
+        )
+        .unwrap();
+
+        let args = ["-n".to_string(), "custom".to_string()];
+        let (input, pinned) = resolve_gen_input(&args);
+        assert_eq!(input, repo.path().to_string_lossy(), "the recorded root");
+        assert_eq!(pinned.as_deref(), Some("custom"));
+
+        std::env::remove_var("UG_HOME");
+    }
+
+    /// A project whose recorded root is gone, resolved only via the cwd's
+    /// basename, falls back to the cwd: the user is standing in the tree
+    /// they mean (most likely the repo moved here), which is also what gen
+    /// did before the project existed.
+    #[test]
+    fn a_basename_matched_project_with_a_dead_root_falls_back_to_the_cwd() {
+        let _guard = UG_HOME_LOCK.blocking_lock();
+        let _home = isolated_home();
+        let dir = project::project_dir(&project::derive_project_name("."));
+        std::fs::create_dir_all(&dir).unwrap();
+        project::write_meta(
+            &dir,
+            &project::ProjectMeta::new("gone", "/no/such/path/anymore", 1, 1),
+        )
+        .unwrap();
+
+        let (input, pinned) = resolve_gen_input(&[]);
+        assert_eq!(input, ".");
+        assert!(pinned.is_none());
+        std::env::remove_var("UG_HOME");
+    }
 }

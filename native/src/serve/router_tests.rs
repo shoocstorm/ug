@@ -618,7 +618,7 @@ fn grown_graph() -> GraphData {
 /// A project reached only through `?project=` is cached by `resolve_ctx` and
 /// was never re-read: the watcher only ever looked at the *active* project. So
 /// a CLI `ug gen` against some other project landed and every later request for
-/// it kept answering from the pre-regen graph — no error, no staleness note,
+/// it kept answering from the stale pre-run graph — no error, no staleness note,
 /// just an old answer that looks current.
 #[tokio::test]
 async fn a_non_active_project_picks_up_a_regenerated_graph() {

@@ -263,7 +263,7 @@ fn push_caveats(out: &mut String, answer: &QueryAnswer, style: Render) {
     // An empty index outranks everything else: with no nodes in the store
     // every property probes as absent, so reporting the property list here
     // would blame the schema for a project that was simply never ingested —
-    // and send the caller to `ug regen`, which does not ingest.
+    // and send the caller to `ug gen`, which does not ingest.
     if answer.empty_index {
         out.push_str(
             "\n⚠ NOT INGESTED: this project's index holds no nodes, so this answer \
@@ -274,7 +274,7 @@ fn push_caveats(out: &mut String, answer: &QueryAnswer, style: Render) {
         out.push_str(&format!(
             "\n⚠ NOT INDEXED: {} — no node carries {}, so every predicate on \
              {} matched nothing. This answer is not about what you asked. \
-             Run `ug regen`; if the property still shows as absent, this \
+             Run `ug gen`; if the property still shows as absent, this \
              build's indexer does not produce it yet.\n",
             answer.unindexed.join(", "),
             if answer.unindexed.len() == 1 {
@@ -475,7 +475,7 @@ mod tests {
     /// An un-ingested project (`ug gen --no-ingest`, or a failed ingest) has
     /// `total == 0`, which makes *every* property probe as absent. Reporting
     /// that as "NOT INDEXED: node_type, name, file, …" blames the schema for
-    /// an empty store and prescribes `ug regen`, which does not ingest — so
+    /// an empty store and prescribes `ug gen`, which does not ingest — so
     /// the caller loops. It has to name ingest instead.
     #[test]
     fn an_empty_index_is_reported_as_not_ingested_not_as_a_schema_gap() {
@@ -495,8 +495,8 @@ mod tests {
             "an empty store must not be reported as a missing property: {out}"
         );
         assert!(
-            !out.contains("ug regen"),
-            "`ug regen` does not ingest — it is the wrong remedy here: {out}"
+            out.contains("ug ingest"),
+            "an empty store needs ingest named as the remedy: {out}"
         );
     }
 

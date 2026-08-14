@@ -1,6 +1,6 @@
 //! `ug update <file>...` — refresh the graph for the files that just changed.
 //!
-//! `ug regen` re-runs the whole pipeline, which is the right hammer for "the
+//! `ug gen` re-runs the whole pipeline, which is the right hammer for "the
 //! repo drifted". `ug update` is the focused version an agent reaches for
 //! after an edit burst: name the file(s) you touched, and it re-indexes,
 //! re-resolves cross-file edges, re-embeds the changed nodes, and tells you
@@ -171,7 +171,7 @@ pub(crate) fn run_update(args: &[String]) {
         .unwrap_or((0, 0));
 
     // Persist the rebuilt outputs so the next command — `ug find_symbols`,
-    // the server, `ug regen` — reads the refreshed graph.
+    // the server, `ug gen` — reads the refreshed graph.
     let graph_path = format!("{}/graph.json", output_dir);
     fs::write(&graph_path, &graph_json)
         .unwrap_or_else(|e| die(1, format!("failed to write {graph_path}: {e}")));
@@ -353,7 +353,7 @@ fn print_update_help() {
     println!("  {C_CYAN}ug update{C_RESET}  {C_YELLOW}— refresh the graph for the files that just changed{C_RESET}");
     println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
     println!();
-    println!("  The focused counterpart to {C_CYAN}ug regen{C_RESET}: name the file(s) you edited and");
+    println!("  The focused counterpart to {C_CYAN}ug gen{C_RESET}: name the file(s) you edited and");
     println!("  this re-indexes, re-resolves cross-file edges, and re-embeds the changed");
     println!("  nodes. Incremental via the blake3 parse cache and the ingest diff, so");
     println!("  unchanged files are neither re-parsed nor re-embedded.");

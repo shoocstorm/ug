@@ -61,6 +61,17 @@ Prefer them over grep/file reads for anything relational (who calls X, what \
 breaks if I change X, how are A and B connected) or aggregate (how many, which \
 are biggest, what fraction).
 
+USE THEM WHILE EDITING, NOT ONLY WHILE READING. Before changing a symbol, ask \
+who depends on it: find_usages, and code_query {preset: 'boundary_impact'} for \
+whether the change escapes the system. After an edit burst, ask what it reached \
+and what covers it: code_query {preset: 'diff_impact', args: {files: 'a.ts,b.rs'}} \
+and {preset: 'diff_retest_scope'}. Grep cannot answer either question. The graph \
+is kept current by git hooks (`ug hook install`), and you can refresh it yourself \
+at any point with `ug update <file>...` — do that after editing and before asking \
+a structural question about those files. get_code always reads the live working \
+tree, so source is never silently stale; the structural tools say so in their \
+output when the index has fallen behind.
+
 Two habits make them cheap:
 
 1. WILDCARDS — every parameter that names a symbol or file accepts a shell-style \
@@ -607,10 +618,10 @@ impl Mcp {
             .map(|days| format!(" (index built {} day(s) ago)", days))
             .unwrap_or_default();
         format!(
-            // Names the `regen` tool, not the `reindex` it was called before
-            // the rename: this line tells an agent what to call next, and a
+            // Names the `gen` tool (the CLI's `ug gen`), not a stale
+            // spelling: this line tells an agent what to call next, and a
             // name that is no longer dispatched sends it into an error.
-            "\n\n⚠ Index may be stale: {} of {} indexed files since the last index{}. Call the regen tool to refresh.",
+            "\n\n⚠ Index may be stale: {} of {} indexed files since the last index{}. Call the gen tool to refresh.",
             bits.join(", "),
             files.len(),
             age
@@ -670,7 +681,7 @@ impl Mcp {
                     None => text,
                 })
             }
-            "regen" => self.tool_regen(&ctx).await,
+            "gen" => self.tool_gen(&ctx).await,
             "ping_embedder" => {
                 self.embedder()?.ping().await.map_err(|e| e.to_string())?;
                 Ok("ok".to_string())
@@ -694,7 +705,7 @@ impl Mcp {
         open_store(&spec).await.map_err(|e| {
             format!(
                 "code_query needs the indexed database, and {} could not be opened: {}.\n\
-                 Run `ug regen` for this project. (Structural tools like traverse and \
+                 Run `ug gen` for this project. (Structural tools like traverse and \
                  find_usages read graph.json and keep working without it.)",
                 ctx.db_path.display(),
                 e
@@ -938,10 +949,10 @@ impl Mcp {
     }
 
     /// Quiet re-run of the whole `gen` pipeline (index → graph → ingest);
-    /// the CLI half is `ug regen`. Ingest
+    /// the CLI half is `ug gen`. Ingest
     /// failure (embedder down) is reported but doesn't fail the call: the
     /// graph-backed tools are already fresh at that point.
-    async fn tool_regen(&self, ctx: &ProjectCtx) -> Result<String, String> {
+    async fn tool_gen(&self, ctx: &ProjectCtx) -> Result<String, String> {
         if !ctx.repo_root.exists() {
             return Err(format!(
                 "Repo root {} no longer exists — re-run `ug gen -i <path>` manually.",
@@ -990,7 +1001,7 @@ impl Mcp {
                         .to_string()
                 });
                 // Record the same file index `ug gen` writes. Without this an
-                // MCP-driven regen would leave project.json without a `files`
+                // MCP-driven gen would leave project.json without a `files`
                 // list, permanently forcing /api/projects/staleness onto its
                 // slow read-and-parse-the-graph fallback for this project.
                 let _ = project::write_meta(
@@ -1008,7 +1019,7 @@ impl Mcp {
             },
         )
         .await
-        .map_err(|e| format!("regen task failed: {}", e))??;
+        .map_err(|e| format!("gen task failed: {}", e))??;
 
         let ingest_msg = match self.reindex_ingest(ctx, &graph).await {
             Ok(m) => m,

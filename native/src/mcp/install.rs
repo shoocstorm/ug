@@ -480,7 +480,7 @@ fn skill_body() -> String {
 
 /// One-line description for targets whose format carries its own
 /// frontmatter (Cursor, Windsurf) rather than the skill's. Quoted for YAML.
-const GUIDE_BLURB: &str = "\"UltraGraph guide — answer codebase questions (where is X, who calls X, blast radius, repo statistics) with the ug CLI instead of grepping\"";
+const GUIDE_BLURB: &str = "\"UltraGraph guide — answer codebase questions (where is X, who calls X, repo statistics) with the ug CLI instead of grepping, and check your own edits: who depends on this before changing it, what broke and what to re-test after\"";
 
 /// How a target wants the guide written.
 enum SkillKind {
@@ -926,7 +926,9 @@ fn do_install(args: &[String]) -> Result<(), String> {
     println!("{C_CYAN}Restart {} to pick it up.{C_RESET}", target.label);
     match mode {
         Mode::Cli => println!(
-            "{C_DIM}  The skill teaches your agent to answer codebase questions by running the ug CLI.{C_RESET}"
+            "{C_DIM}  The skill teaches your agent to answer codebase questions by running the ug\n  \
+             CLI — and to check its own edits with it: who depends on this before changing\n  \
+             it, what broke and what to re-test after.{C_RESET}"
         ),
         Mode::Mcp => println!(
             "{C_DIM}  Your agent will call ug over MCP. Add the CLI guide too with `ug connect {} --both`.{C_RESET}",
@@ -950,7 +952,8 @@ fn install_hooks_if_asked(args: &[String]) {
     if !args.iter().any(|a| a == "--hooks") {
         println!(
             "{C_DIM}  Tip: `ug hook install` adds git hooks that refresh the graph after every\n  \
-             commit, merge and rebase — so its answers never lag your edits.{C_RESET}"
+             commit, merge and rebase — so blast radius and re-test scope keep telling your\n  \
+             agent the truth about the code it is editing, with nothing to remember.{C_RESET}"
         );
         return;
     }

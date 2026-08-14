@@ -26,7 +26,7 @@ pub const TOOL_NAMES: &[&str] = &[
     "code_query",
     "graph_schema",
     "list_projects",
-    "regen",
+    "gen",
 ];
 
 /// Handled by the dispatcher but deliberately absent from `tools/list` —
@@ -40,7 +40,7 @@ pub fn is_known_tool(canonical: &str) -> bool {
     TOOL_NAMES.contains(&canonical) || is_unlisted_tool(canonical)
 }
 
-pub const CHAT_TOOL_DENYLIST: &[&str] = &["regen", "list_projects"];
+pub const CHAT_TOOL_DENYLIST: &[&str] = &["gen", "list_projects"];
 
 /// Tools the chat and tour dispatchers answer from the open store, in their
 /// own match arms. Everything else advertised falls through to
@@ -415,8 +415,8 @@ fn raw_tools() -> Value {
             "inputSchema": { "type": "object", "properties": {} }
         },
         {
-            "name": "regen",
-            "description": "Re-run the whole pipeline (index → graph → embed) for the current (or named) project — the same thing `ug gen` does, which is why it is `regen`. Call it when tool outputs carry an \"Index may be stale\" warning, when the user says results look outdated, or after you (or they) changed many files. Incremental — unchanged files are skipped via content hashes — but embedding changed nodes needs the embedding backend, so it can take a while on big diffs; the structural tools are refreshed even if embedding fails.",
+            "name": "gen",
+            "description": "Re-run the whole pipeline (index → graph → embed) for the current (or named) project — the same thing `ug gen` does in the CLI, which is why the tool shares its name. Call it when tool outputs carry an \"Index may be stale\" warning, when the user says results look outdated, or after you (or they) changed many files. Incremental — unchanged files are skipped via content hashes — but embedding changed nodes needs the embedding backend, so it can take a while on big diffs; the structural tools are refreshed even if embedding fails.",
             "inputSchema": { "type": "object", "properties": {} }
         }
     ])
@@ -604,21 +604,19 @@ mod tests {
     /// ability to kick off a full re-index mid-answer.
     #[test]
     fn the_chat_denylist_tracks_the_rename() {
-        assert!(CHAT_TOOL_DENYLIST.contains(&"regen"));
+        assert!(CHAT_TOOL_DENYLIST.contains(&"gen"));
         let exposed: Vec<String> = openai_tool_schemas()
             .iter()
             .filter_map(|t| t["function"]["name"].as_str().map(str::to_string))
             .collect();
-        assert!(!exposed.contains(&"regen".to_string()), "{exposed:?}");
+        assert!(!exposed.contains(&"gen".to_string()), "{exposed:?}");
     }
-
-
 
     /// With aliases gone, the only names that work are the advertised
     /// ones. A near-miss must fail rather than quietly resolving.
     #[test]
     fn an_unadvertised_name_is_not_a_tool() {
-        for gone in ["reindex", "search_kb", "hybrid_search", "graph_path", "graph_search", "list"] {
+        for gone in ["reindex", "regen", "search_kb", "hybrid_search", "graph_path", "graph_search", "list"] {
             assert!(!is_known_tool(gone), "`{gone}` should no longer resolve");
         }
         for real in TOOL_NAMES {

@@ -78,7 +78,7 @@ impl Coverage {
     /// The `total > 0` guard matters: `total` is `count(*)` over the store,
     /// so an un-ingested project makes `present == 0` for every property at
     /// once. Reporting that as "this property is not indexed" blames the
-    /// schema for an empty index and sends the caller to `ug regen`, which
+    /// schema for an empty index and sends the caller to `ug gen`, which
     /// does not ingest — see [`Coverage::index_is_empty`].
     pub fn is_absent(&self) -> bool {
         self.present == 0 && self.total > 0
@@ -104,7 +104,7 @@ pub struct QueryAnswer {
     pub unindexed: Vec<String>,
     /// The store holds no nodes at all — the project was generated with
     /// `--no-ingest`, or its ingest failed. Distinguished from `unindexed`
-    /// because the remedy is different (`ug ingest`, not `ug regen`) and
+    /// because the remedy is different (`ug ingest`, not `ug gen`) and
     /// because every property looks absent in this state, which would
     /// otherwise be reported as a schema problem.
     pub empty_index: bool,
@@ -556,7 +556,7 @@ fn explain_failure(err: &str, gql: &str) -> String {
     if err.contains("ReadOnlyViolation") {
         out.push_str(
             "\n\ncode_query is read-only. It answers questions about the graph; \
-             it cannot modify the index (use `regen` for that).",
+             it cannot modify the index (use `gen` for that).",
         );
     } else if err.contains("max_frontier") || err.contains("exceeded configured cap") {
         // Worth an explicit hand-hold: this is the one failure mode whose
