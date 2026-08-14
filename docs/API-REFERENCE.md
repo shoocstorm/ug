@@ -231,6 +231,7 @@ The HTTP server (`ug serve`) is built on **axum**. All routes listed below.
 | Method | Path | What it does | Data source | Returns 503 when |
 |--------|------|-------------|--------------|-------------------|
 | GET | `/graph.json` | Serve the full graph.json (gzip/brotli compressed) | graph.json on disk | No graph loaded |
+| GET | `/indexed-tree.json` | Serve the indexed tree (per-file parse snapshot) | indexed-tree.json on disk | No graph loaded |
 | GET | `/healthz` | Health check — returns `"ok"` | — | — |
 
 ### 2.3 Project Management
@@ -249,14 +250,14 @@ The HTTP server (`ug serve`) is built on **axum**. All routes listed below.
 | POST | `/api/generate` | Kick off `ug gen` as a background job. Body: `{ "inputDir", "projectName", "model", "baseUrl", "apiKey" }` | Spawns subprocess, streams log lines via SSE |
 | GET | `/api/generate/status` | Check status of a gen job. Query: `?id=<uuid>` | In-memory `GenJobs` map |
 | POST | `/api/ingest` | Re-embed an already-indexed project (the UI's "Ingest now" button). Body: `{ "name": "<project>" }` — defaults to the active project. Spawns `ug ingest`, poll with `/api/generate/status`. Reopens the active project's stores on success so the new vectors are live without a restart. A store that can't be opened (stale format or corrupt on-disk manifest) is wiped and rebuilt automatically. | Spawns subprocess |
-| GET | `/api/browse-dir` | List files/dirs for the KB Manager file picker. Query: `?path=<path>` | Filesystem |
+| GET | `/api/browse-dir` | List subdirectories of a path (KB Manager folder picker). Query: `?path=<path>` | Filesystem |
 
 ### 2.5 Graph API (graph.json-backed, read-only)
 
 | Method | Path | What it does | Returns 503 when |
 |--------|------|-------------|-------------------|
 | GET | `/api/capabilities` | Server capabilities matrix: backends, models, features enabled | — |
-| GET | `/api/config` | Read the active chat config (model, base_url, etc.) | No chat config |
+| GET | `/api/config` | Persisted + effective settings, with per-key source (flag/env/config/default) | — |
 | POST | `/api/config` | Update the persisted chat config | — |
 | GET | `/api/graph/stats` | Node/edge counts, file stats | No graph |
 | GET | `/api/graph/node/*id` | Get one node by id | No graph / not found |
@@ -272,10 +273,9 @@ The HTTP server (`ug serve`) is built on **axum**. All routes listed below.
 | Method | Path | What it does | Data source |
 |--------|------|-------------|--------------|
 | GET | `/api/tools` | List available agent tools with descriptions | MCP tool registry |
-| GET | `/api/presets` | List `code_query` presets (name, category, description, params, source) | Preset registry |
+| GET | `/api/presets` | Preset registry **plus** `properties` — the queryable property vocabulary, so the UI and the MCP capability manifest read the same list rather than each hardcoding one (name, category, description, params, source) | Preset registry |
 | POST | `/api/tools/:tool` | Run one agent tool (same params as MCP). Accepts body JSON with optional `project` field. | graph.json |
 | POST | `/api/tools/code_query` | Run a statistical query. Body: `{preset, args, gql, limit, range}`. Returns `columns` plus **only the requested window** of `rows`, with `from`/`to`/`rowsTotal` to page by, `rowsMatched`, `coverage`, `unindexed`, `warnings`, `truncated` and a rendered `text`. | ugdb (no embedder) |
-| GET | `/api/presets` | Preset registry **plus** `properties` — the queryable property vocabulary, so the UI and the MCP capability manifest read the same list rather than each hardcoding one. | Preset registry |
 
 ### 2.7 File Content
 
@@ -296,11 +296,9 @@ The HTTP server (`ug serve`) is built on **axum**. All routes listed below.
 
 | Method | Path | What it does | Data source | Returns 503 when |
 |--------|------|-------------|--------------|------------------|
-| POST | `/api/chat` | RAG chat (non-streaming). Body: `{ "message", "history", "k", "direction", "edgeTypes", "repoRoot", "model", "baseUrl", "apiKey", "temperature", "maxTokens", "system", "tools", ... }` | DB + embedder + chat LLM | Chat endpoint not configured |
-| POST | `/api/chat/stream` | RAG chat **streaming** (SSE). Same body as `/api/chat`. Streams `event: message` + `event: citations` + `event: done`. | DB + embedder + chat LLM | Chat endpoint not configured |
+| POST | `/api/chat` | RAG chat. Body: `{ "message", "history", "k", "direction", "edgeTypes", "repoRoot", "model", "baseUrl", "apiKey", "temperature", "maxTokens", "system", "tools", "stream", ... }` — non-streaming by default; `"stream": true` switches to an SSE response (`event: context` / `delta` / `done` / terminal `error`) | DB + embedder + chat LLM | Chat endpoint not configured |
 | GET | `/api/chat/config` | Get the server's default chat configuration | Config |
-| POST | `/api/tour` | Guided tour (non-streaming). Body: `{ "topic", "projectName", "maxStops", "model", ... }` → plan → candidates → narration + links | DB + embedder + chat LLM | See tour opts |
-| POST | `/api/tour/stream` | Guided tour **streaming** (SSE). Body same as `/api/tour`. Streams `event: stop` per stop as they arrive. | DB + embedder + chat LLM | — |
+| POST | `/api/tour` | Guided tour. Body: `{ "topic", "projectName", "maxStops", "model", "stream", ... }` → plan → candidates → narration + links — non-streaming by default; `"stream": true` narrates itself over SSE (`event: progress` per phase, then `tour`, or terminal `error`) | DB + embedder + chat LLM | See tour opts |
 
 ---
 

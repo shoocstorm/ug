@@ -59,97 +59,120 @@ pub(crate) fn print_logo() {
     println!();
 }
 
+/// Width of the command column. Sized to the longest name printed
+/// (`project_overview`, `graph_centrality` — 16) plus a two-space gutter.
+const CMD_W: usize = 18;
+
+/// A command row: `  name              description`.
+///
+/// The name is padded *before* it is coloured. ANSI escapes are characters as
+/// far as `{:<n}` is concerned, so colouring first pushes every row that
+/// carries colour out of the column — which is how the old `update` line ended
+/// up one space right of its neighbours.
+fn cmd(name: &str, desc: &str) {
+    println!("  {C_CYAN}{:<CMD_W$}{C_RESET}{}", name, desc);
+}
+
+/// A command row for the three commands worth reaching for first. Only the
+/// name is emphasised — colouring the description too turned three rows into
+/// three blocks of magenta and made the section harder to scan, not easier.
+fn cmd_hi(name: &str, desc: &str) {
+    println!("  {C_BOLD}{C_MAGENTA}{:<CMD_W$}{C_RESET}{}", name, desc);
+}
+
+/// A continuation line under a command row — indented into the description
+/// column so it reads as part of the entry above, not as another command.
+fn cont(text: &str) {
+    println!("  {:<CMD_W$}{C_DIM}{}{C_RESET}", "", text);
+}
+
+/// A row in the closing `Conventions` block: same column as a command, but
+/// the label is bold rather than cyan, so it never reads as a command name.
+fn note(label: &str, text: &str) {
+    println!("  {C_BOLD}{:<CMD_W$}{C_RESET}{}", label, text);
+}
+
+/// A section header, with an optional dim qualifier that applies to every
+/// command under it. The qualifier is the group's *precondition* — stating it
+/// once beats repeating "(needs the db)" on six rows.
+fn group(title: &str, qualifier: &str) {
+    println!();
+    if qualifier.is_empty() {
+        println!("{C_BOLD}{}{C_RESET}", title);
+    } else {
+        println!("{C_BOLD}{}{C_RESET}  {C_DIM}{}{C_RESET}", title, qualifier);
+    }
+}
+
 pub(crate) fn print_help() {
     println!();
-    println!("Usage: {C_BOLD}ug <command>{C_RESET} [options]");
-    println!();
-    println!("{C_BOLD}Quick start:{C_RESET}");
-    println!("  {C_CYAN}ug gen{C_RESET}     Index this directory, build the graph, and ingest it (→ ~/.ug/<name>/)");
-    println!("  {C_CYAN}ug app{C_RESET}     Explore the graph in a native desktop window (starts the server for you)");
-    println!("  {C_CYAN}ug{C_RESET}         Bare `ug` starts the server (visualization + REST API at http://localhost:8080)");
-    println!("{C_BOLD}Connect an AI agent (Claude Code / Claude Desktop / Cursor / Windsurf / VS Code / Gemini CLI / Codex CLI / Hermes Agent / opencode):{C_RESET}");
-    println!("  {C_CYAN}ug connect{C_RESET}                Wire ug into an agent (interactive picker; or name one, e.g. `ug connect claude`)");
-    println!("  {C_DIM}                          Asks how: {C_RESET}{C_CYAN}--cli{C_RESET}{C_DIM} teaches the agent this CLI (recommended), {C_RESET}{C_CYAN}--mcp{C_RESET}{C_DIM} wires the MCP server, {C_RESET}{C_CYAN}--both{C_RESET}{C_DIM} does both.{C_RESET}");
+    println!(
+        "Usage: {C_BOLD}ug <command>{C_RESET} [options]  {C_DIM}·{C_RESET}  {C_CYAN}ug <command> -h{C_RESET} {C_DIM}flags + examples{C_RESET}  {C_DIM}·{C_RESET}  {C_CYAN}ug -v{C_RESET} {C_DIM}version{C_RESET}"
+    );
 
-    println!();
-    println!("{C_BOLD}Commands:{C_RESET}");
-    println!(
-        "  {C_BOLD}{C_MAGENTA}gen{C_RESET}              {C_BOLD}{C_MAGENTA}⚡ full pipeline: index → graph → visualization → ingest ⚡{C_RESET}"
-    );
-    println!("                   {C_DIM}re-run an existing project from its recorded root (incremental){C_RESET}");
-    println!("  {C_CYAN}update{C_RESET}            Refresh the graph for the files that just changed (focused re-run)");
-    println!("  {C_CYAN}hook{C_RESET}             Install git hooks that run `update` for you — the graph self-heals");
-    println!("  {C_CYAN}serve{C_RESET}            Serve the visualization + graph API");
-    println!("  {C_CYAN}app{C_RESET}              Open the native desktop shell (starts serve + a window)");
-    println!("  {C_CYAN}api{C_RESET}              List every HTTP endpoint `ug serve` exposes");
-    println!("  {C_CYAN}connect{C_RESET}          Wire ug into an AI agent — CLI skill and/or MCP server");
-    println!("                   {C_DIM}(also spelled `ug mcp install`; undo with `ug disconnect`){C_RESET}");
-    println!();
-    println!("  {C_DIM}Retrieval & analysis (OverGraph-backed){C_RESET}");
-    println!(
-        "  {C_BOLD}{C_YELLOW}search{C_RESET}           {C_YELLOW}GraphRAG: semantic search → graph expansion → ranked context{C_RESET}"
-    );
-    println!(
-        "  {C_BOLD}{C_MAGENTA}query{C_RESET}            {C_BOLD}{C_MAGENTA}📊 whole-repo statistics: counts, distributions, blast radius{C_RESET}"
-    );
-    println!("                   {C_DIM}39 named questions ({C_RESET}{C_CYAN}ug query --list{C_RESET}{C_DIM}) or write your own GQL{C_RESET}");
-    println!("  {C_CYAN}semantic_search{C_RESET}  Search by meaning/concept (embeddings; use find_symbols for exact names)");
-    println!("  {C_CYAN}traverse{C_RESET}         K-hop BFS over the OverGraph edges table");
-    println!(
-        "  {C_BOLD}{C_MAGENTA}chat{C_RESET}             {C_BOLD}{C_MAGENTA}💬 GraphRAG-grounded chat (one-shot or REPL){C_RESET}"
-    );
-    println!(
-        "  {C_BOLD}{C_MAGENTA}tour{C_RESET}             {C_BOLD}{C_MAGENTA}🎬 guided, narrated walkthrough — flies the camera in the web UI{C_RESET}"
-    );
-    println!();
+    group("Start here", "");
+    cmd_hi("gen", "Index this directory into a graph at ~/.ug/<name>/");
+    cont("run it again any time to refresh the project from its recorded root");
+    cmd("connect", "Wire ug into an AI agent — Claude Code, Cursor, Codex, Gemini, …");
+    cont("--cli the CLI skill (recommended) · --mcp the MCP server · --both");
+    cmd("serve", "Web UI + REST API on localhost:8080 — also what bare `ug` starts");
+    cmd("app", "The same, in a native desktop window");
+
     // `index` / `graph` / `ingest` are the stages `gen` runs and are still
     // dispatched, but they are not listed: they are internal seams, and
     // `gen --no-ingest` already covers the one reason an end user reached
     // for them. `ug api` and the docs still name them.
-    println!("  {C_DIM}Structural analysis (graph.json only — no database needed){C_RESET}");
-    println!("  {C_CYAN}graph_centrality{C_RESET} Rank nodes by degree/betweenness (--top, -t, -f)");
-    println!("                   {C_DIM}degree ranking is also {C_RESET}{C_CYAN}ug query dependency_fanin{C_RESET}{C_DIM}; betweenness is only here{C_RESET}");
-    println!("  {C_CYAN}graph_cycles{C_RESET}     Detect dependency cycles (--min-len, --fail-on-cycle for CI)");
-    println!();
-    println!("  {C_DIM}Agent tools — what AI coding agents use (via MCP) to understand a repo; run by hand to explore or verify{C_RESET}");
-    println!("  {C_CYAN}project_overview{C_RESET} Orient in the codebase: stats, biggest files, most depended-upon symbols");
-    println!("  {C_CYAN}find_symbols{C_RESET}     Name lookup, no embeddings — returns the ids the tools below take");
-    println!("  {C_CYAN}file_outline{C_RESET}     List every indexed symbol in a file, in line order");
-    println!("  {C_CYAN}get_code{C_RESET}         Read the source for a symbol, or a file/line range");
-    println!("  {C_CYAN}find_usages{C_RESET}      Who uses this symbol? (inbound callers/importers + call sites)");
-    println!("  {C_CYAN}shortest_path{C_RESET}    How two symbols are connected (directed edge path)");
-    println!("  {C_CYAN}graph_schema{C_RESET}     Node & edge types in this graph — what to pass to --edge-type filters");
-    println!("  {C_DIM}  All accept {C_RESET}{C_CYAN}--json{C_RESET}{C_DIM} and take the same names/params as the MCP tools.{C_RESET}");
-    println!();
-    println!("  {C_BOLD}Wildcards{C_RESET} work anywhere a symbol or file is named — quote them:");
-    println!("    {C_CYAN}ug find_symbols{C_RESET} 'handle_*'          {C_DIM}every handler{C_RESET}");
-    println!("    {C_CYAN}ug find_usages{C_RESET}  'validate_*'        {C_DIM}blast radius of a family{C_RESET}");
-    println!("    {C_CYAN}ug file_outline{C_RESET} 'src/**/*.ts'       {C_DIM}outline a whole subtree{C_RESET}");
-    println!("  {C_DIM}  * ? [abc] [a-z] [!ab] {{a,b}} — whole-name match; ** crosses directories.{C_RESET}");
-    println!("  {C_DIM}  These tools also take a plain symbol name, not just an id.{C_RESET}");
-    println!();
+    group("Read the code", "from graph.json — no database needed");
+    cmd("find_symbols", "Find symbols by name or wildcard — start here; gives the ids below");
+    cmd("get_code", "Read a symbol's source, or a file and line range");
+    cmd("file_outline", "Every indexed symbol in a file, in line order");
+    cmd("find_usages", "Who calls or imports this? Callers, importers, call sites");
+    cmd("shortest_path", "How two symbols are connected (directed edge path)");
+    cmd("project_overview", "Orient: stats, biggest files, most depended-upon symbols");
+    cmd("graph_schema", "Node & edge types in this graph — what --edge-type takes");
+    cmd("graph_centrality", "Rank nodes by degree or betweenness");
+    cmd("graph_cycles", "Detect dependency cycles (--fail-on-cycle for CI)");
 
-    println!("  {C_DIM}Project management{C_RESET}");
-    println!("  {C_BOLD}{C_GREEN}list{C_RESET}             {C_GREEN}List generated projects under ~/.ug (or $UG_HOME){C_RESET}");
-    println!("  {C_CYAN}active{C_RESET}           View/set the active project (default for `ug mcp` when no UG_PROJECT)");
-    println!("  {C_CYAN}rename{C_RESET}           Rename a project (aliases: rn, mv) — defaults to the active one");
-    println!("  {C_CYAN}rm{C_RESET}               Delete a project's data directory");
-    println!("  {C_CYAN}upgrade{C_RESET}          Check GitHub for a new release and self-update (`--check` to only report)");
-    println!("  {C_CYAN}uninstall{C_RESET}        Delete ALL indexed projects and uninstall ug itself");
-    println!("  {C_CYAN}config{C_RESET}           View/persist defaults (chat model, endpoints, …) in ~/.ug/config.json");
-    println!("  {C_CYAN}doctor{C_RESET}           Show resolved project/db/embedder/chat config");
+    group("Search & analyse", "from the database `ug gen` builds");
+    cmd_hi("query", "Statistics, distributions and blast radius, as read-only GQL");
+    cont("39 named questions (ug query --list) or write your own");
+    cmd_hi("search", "GraphRAG: semantic search → graph expansion → ranked context");
+    cmd("semantic_search", "Search by meaning alone; find_symbols for exact names");
+    cmd("traverse", "K-hop walk over the stored edges from a symbol");
+    cmd("chat", "GraphRAG-grounded chat — one-shot, or an interactive REPL");
+    cmd("tour", "Guided, narrated walkthrough; flies the camera in the web UI");
+
+    group("Keep the graph current", "");
+    cmd("update", "Refresh only the files you just changed — focused and incremental");
+    cmd("hook", "Install git hooks: `update` runs on commit, merge, checkout, rebase");
+
+    group("Manage projects", "");
+    cmd("list", "Projects under ~/.ug: nodes, size on disk, how stale each one is");
+    cmd("active", "The project commands default to when run outside an indexed repo");
+    cmd("rename · rm", "Rename a project (aliases: rn, mv) · delete its data directory");
+    cmd("doctor · config", "Show how every setting resolved · view and persist defaults");
+    cmd("upgrade", "Check GitHub for a new release and self-update; --check only reports");
+    cmd("uninstall", "Delete ALL indexed projects and remove ug itself");
+    cmd("api", "List every HTTP endpoint `ug serve` exposes");
+    cmd("mcp", "Run the MCP stdio server; `mcp call <tool> <json>` runs one by hand");
+    cmd("disconnect", "Undo `connect` for an agent");
+
+    // No blanket "these apply to every command" — `--json` and `-o` do not,
+    // and an agent that believes a claim this page makes and then hits a
+    // command without the flag has been told something false. Each row states
+    // only what is true everywhere, and points at `-h` for the rest.
+    group("Conventions", "");
+    note("Projects", "-n <name> picks one; else the active project, else this directory.");
+    cont("Each command prints which project it resolved to, and why, first.");
+    note("Symbols", "A symbol argument takes an id, a plain name, or a quoted wildcard:");
+    println!(
+        "  {:<CMD_W$}{C_CYAN}'handle_*'{C_RESET}  {C_CYAN}'src/**/*.ts'{C_RESET}  {C_DIM}* ? [a-z] {{a,b}}; ** crosses dirs{C_RESET}",
+        ""
+    );
+    note("Output", "--json for machine-readable output · -o <file> to write it to");
+    cont("a file. Per command — check -h. --no-color · --no-logo · --no-banner");
+    cont("strip decoration; all three are already off when output is piped.");
     println!();
-    println!("{C_BOLD}Global flags:{C_RESET}");
-    println!("  {C_CYAN}--no-logo{C_RESET}        Skip the banner. Already skipped automatically whenever stdout");
-    println!("                   is not a terminal, so piped and captured output is clean.");
-    println!("  {C_CYAN}--no-color{C_RESET}       Force colour off (agent-tool + query output). Also off automatically");
-    println!("                   when piped or when the NO_COLOR env var is set; this flag makes it explicit.");
-    println!("  {C_CYAN}--no-banner{C_RESET}      Skip the `▸ project <name> · <repo> · [<how it resolved>]` line every");
-    println!("                   project-scoped command prints. It goes to stderr, so it never touches");
-    println!("                   piped output; UG_NO_BANNER=1 does the same.");
-    println!("  {C_CYAN}-v, --version{C_RESET}    Print the version");
-    println!();
-    println!("Run {C_CYAN}ug <command> -h{C_RESET} for that command's options and examples.");
 }
 
 #[cfg(test)]

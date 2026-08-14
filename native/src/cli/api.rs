@@ -26,6 +26,7 @@ const API_ENDPOINTS: &[(&str, &[ApiEntry])] = &[
         "Knowledge-base / project management",
         &[
             ApiEntry { method: "GET", path: "/api/projects", desc: "list discovered projects (or the single active one)", availability: "always", cli_equivalent: Some("ug list") },
+            ApiEntry { method: "GET", path: "/api/projects/staleness", desc: "per-project staleness report (changed/deleted files vs graph.json mtime)", availability: "always", cli_equivalent: Some("ug list (same scan)") },
             ApiEntry { method: "POST", path: "/api/projects/select", desc: "switch the server's active project", availability: "multi-project mode only", cli_equivalent: None },
             ApiEntry { method: "POST", path: "/api/projects/delete", desc: "delete a project's data directory", availability: "multi-project mode only", cli_equivalent: Some("ug rm") },
             ApiEntry { method: "POST", path: "/api/generate", desc: "spawn `ug gen` against a folder, returns a job id", availability: "multi-project mode only", cli_equivalent: Some("ug gen") },
@@ -55,6 +56,7 @@ const API_ENDPOINTS: &[(&str, &[ApiEntry])] = &[
         "Agent tools (graph.json-backed — same names/params as the CLI and MCP)",
         &[
             ApiEntry { method: "GET", path: "/api/tools", desc: "list the agent tools and their paths (HTTP equivalent of MCP tools/list)", availability: "always", cli_equivalent: Some("ug help") },
+            ApiEntry { method: "GET", path: "/api/presets", desc: "code_query preset catalog plus the queryable property vocabulary", availability: "always", cli_equivalent: Some("ug query --list") },
             ApiEntry { method: "POST", path: "/api/tools/project_overview", desc: "stats, biggest files, most depended-upon symbols", availability: "always (empty if no project active)", cli_equivalent: Some("ug project_overview --json") },
             ApiEntry { method: "POST", path: "/api/tools/find_symbols", desc: "symbol lookup by name or wildcard ('handle_*')", availability: "always (empty if no project active)", cli_equivalent: Some("ug find_symbols --json") },
             ApiEntry { method: "POST", path: "/api/tools/file_outline", desc: "every indexed symbol in a file, in line order; takes a path glob", availability: "always (empty if no project active)", cli_equivalent: Some("ug file_outline --json") },
@@ -72,8 +74,9 @@ const API_ENDPOINTS: &[(&str, &[ApiEntry])] = &[
             ApiEntry { method: "GET", path: "/api/db/traverse/:id", desc: "k-hop BFS over the OverGraph edges table", availability: "503 if no DB backend configured", cli_equivalent: Some("ug traverse") },
             ApiEntry { method: "POST", path: "/api/search/semantic", desc: "semantic vector search", availability: "503 if no DB + embedder configured", cli_equivalent: Some("ug semantic_search") },
             ApiEntry { method: "POST", path: "/api/search/hybrid", desc: "GraphRAG: semantic search → graph expansion → ranked context", availability: "503 if no DB + embedder configured", cli_equivalent: Some("ug search") },
-            ApiEntry { method: "POST", path: "/api/chat", desc: "GraphRAG-grounded chat completion", availability: "503 if no DB + embedder + chat model configured", cli_equivalent: Some("ug chat") },
-            ApiEntry { method: "POST", path: "/api/tour", desc: "Guided, narrated walkthrough — ordered stops bound to node ids", availability: "503 if no DB + embedder; LLM narration optional (ranked fallback)", cli_equivalent: Some("ug tour") },
+            ApiEntry { method: "POST", path: "/api/chat", desc: "GraphRAG-grounded chat completion (\"stream\": true in the body switches to SSE)", availability: "503 if no DB + embedder + chat model configured", cli_equivalent: Some("ug chat") },
+            ApiEntry { method: "GET", path: "/api/chat/config", desc: "the server's default chat configuration", availability: "always", cli_equivalent: Some("ug config list (similar info)") },
+            ApiEntry { method: "POST", path: "/api/tour", desc: "Guided, narrated walkthrough — ordered stops bound to node ids (\"stream\": true switches to SSE)", availability: "503 if no DB + embedder; LLM narration optional (ranked fallback)", cli_equivalent: Some("ug tour") },
         ],
     ),
     (
@@ -85,6 +88,7 @@ const API_ENDPOINTS: &[(&str, &[ApiEntry])] = &[
             ApiEntry { method: "GET", path: "/favicon.svg", desc: "browser tab icon", availability: "always", cli_equivalent: None },
             ApiEntry { method: "GET", path: "/healthz", desc: "liveness probe — always returns \"ok\"", availability: "always", cli_equivalent: None },
             ApiEntry { method: "GET", path: "/graph.json", desc: "raw graph JSON for the active project", availability: "always (empty if no project active)", cli_equivalent: None },
+            ApiEntry { method: "GET", path: "/indexed-tree.json", desc: "the indexed tree (per-file parse snapshot)", availability: "always (empty if no project active)", cli_equivalent: None },
         ],
     )    
 ];

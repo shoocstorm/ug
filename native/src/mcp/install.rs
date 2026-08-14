@@ -725,6 +725,31 @@ fn prompt_choice(
     }
 }
 
+/// A yes/no question with a default — for the one thing `ug connect` asks
+/// that is not a choice between paths.
+///
+/// Bare Enter, or anything unrecognised, takes the default: this is a nudge
+/// with a recommended answer, not a gate to get past. Callers check
+/// `is_terminal` themselves, because what they print instead of asking
+/// differs.
+fn prompt_yes_no(question: &str, default_yes: bool) -> bool {
+    print!(
+        "{} {C_DIM}{}{C_RESET} ",
+        question,
+        if default_yes { "[Y/n]" } else { "[y/N]" }
+    );
+    let _ = std::io::stdout().flush();
+    let mut line = String::new();
+    if std::io::stdin().read_line(&mut line).is_err() {
+        return default_yes;
+    }
+    match line.trim().to_ascii_lowercase().as_str() {
+        "y" | "yes" => true,
+        "n" | "no" => false,
+        _ => default_yes,
+    }
+}
+
 /// Which of the two ways to reach `ug` this install wires up.
 ///
 /// They are alternatives, not layers. Both work, and installing both means
@@ -909,8 +934,8 @@ fn do_install(args: &[String]) -> Result<(), String> {
 
     // Freshness is the other half of connecting an agent: the tools it just
     // gained answer from the graph, and an agent that edits does not think to
-    // refresh it. `--hooks` hands that job to git.
-    install_hooks_if_asked(args);
+    // refresh it. This hands that job to git.
+    offer_git_hooks(args);
 
     // Whichever path was wired, it answers about *this* project — baked into
     // the MCP config as UG_PROJECT, and the CLI's active project otherwise.
@@ -942,26 +967,130 @@ fn do_install(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// `--hooks`: also install the git hooks that keep the graph in step with the
-/// repo. Opt-in, because writing into someone's `.git/hooks` is not something
-/// to do as a side effect of connecting an agent.
+/// The git hooks that keep the graph in step with the repo.
 ///
-/// Failures here are reported, not fatal: the agent wiring above already
-/// landed, and "not in a git repo" is a perfectly ordinary reason.
-fn install_hooks_if_asked(args: &[String]) {
-    if !args.iter().any(|a| a == "--hooks") {
-        println!(
-            "{C_DIM}  Tip: `ug hook install` adds git hooks that refresh the graph after every\n  \
-             commit, merge and rebase — so blast radius and re-test scope keep telling your\n  \
-             agent the truth about the code it is editing, with nothing to remember.{C_RESET}"
-        );
-        return;
-    }
+/// A connected agent answers from the graph, and an agent that edits does not
+/// think to refresh it — so a stale graph is the default outcome unless
+/// something refreshes it, and git is the only thing that knows when the tree
+/// moved. That makes the hooks part of connecting, not a footnote to it:
+/// `--hooks` installs them outright, `--no-hooks` declines, and an interactive
+/// run without either is asked, with the reason.
+///
+/// Asked, not assumed. Writing into someone's `.git/hooks` still happens only
+/// on a yes — the prompt is what keeps that consent while making the useful
+/// answer the default one.
+fn offer_git_hooks(args: &[String]) {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    match crate::cli::hook::install(args, &cwd) {
+    let asked = if args.iter().any(|a| a == "--hooks") {
+        Some(true)
+    } else if args.iter().any(|a| a == "--no-hooks") {
+        Some(false)
+    } else {
+        None
+    };
+    // Both lookups shell out to git / read `$UG_HOME`, so they are skipped
+    // when `--hooks` already settled it.
+    let (installed, indexed) = if asked == Some(true) {
+        (Some(false), true)
+    } else {
+        (
+            crate::cli::hook::installed_in(&cwd),
+            crate::cli::hook::has_indexed_project(args),
+        )
+    };
+    match hook_step(asked, installed, indexed, std::io::stdin().is_terminal()) {
+        HookStep::Install => install_hooks(args, &cwd),
+        HookStep::Silent => {}
+        HookStep::AlreadyInstalled => println!(
+            "{C_GREEN}✓{C_RESET} Git hooks already installed {C_DIM}— the graph refreshes itself after every commit.{C_RESET}"
+        ),
+        HookStep::IndexFirst => println!(
+            "{C_DIM}  Next: `ug gen` to build the graph, then `ug hook install` so git keeps it\n  \
+             current after every commit, merge and rebase.{C_RESET}"
+        ),
+        HookStep::Tip => print_hooks_tip(),
+        HookStep::Ask => {
+            println!();
+            println!("{C_BOLD}Keep the graph true while your agent edits?{C_RESET}");
+            println!(
+                "{C_DIM}  Git hooks re-index after every commit, merge and rebase, so blast radius and\n  \
+                 re-test scope tell your agent the truth about the code it just wrote — the moment\n  \
+                 that answer matters most. Writes a marked block into .git/hooks; `ug hook\n  \
+                 uninstall` takes it back out.{C_RESET}"
+            );
+            if prompt_yes_no("Install git hooks?", true) {
+                install_hooks(args, &cwd);
+            } else {
+                print_hooks_tip();
+            }
+        }
+    }
+}
+
+/// What `offer_git_hooks` does about the hooks on this run.
+#[derive(PartialEq, Debug)]
+enum HookStep {
+    /// Install them now.
+    Install,
+    /// Ask first, defaulting to yes.
+    Ask,
+    /// Say nothing: not a git repo, so there is no hook to install.
+    Silent,
+    /// They are already there.
+    AlreadyInstalled,
+    /// No graph yet — point at `ug gen` instead of offering a failing install.
+    IndexFirst,
+    /// Mention `ug hook install` and move on.
+    Tip,
+}
+
+/// The decision itself, separated from git and the terminal so the part worth
+/// getting right — when a user is asked, and when they are only told — can be
+/// tested.
+///
+/// `asked` is `--hooks` / `--no-hooks`; `installed` is
+/// `hook::installed_in` (`None` for "no git repo").
+fn hook_step(
+    asked: Option<bool>,
+    installed: Option<bool>,
+    indexed: bool,
+    interactive: bool,
+) -> HookStep {
+    // An explicit `--hooks` is obeyed even outside a repo, so the error comes
+    // from the installer and names the actual problem.
+    if asked == Some(true) {
+        return HookStep::Install;
+    }
+    match installed {
+        None => return HookStep::Silent,
+        Some(true) => return HookStep::AlreadyInstalled,
+        Some(false) => {}
+    }
+    if !indexed {
+        return HookStep::IndexFirst;
+    }
+    if asked == Some(false) || !interactive {
+        return HookStep::Tip;
+    }
+    HookStep::Ask
+}
+
+/// Failures are reported, not fatal: the agent wiring already landed, and
+/// "the project indexes some other tree" is an ordinary reason to stop here.
+fn install_hooks(args: &[String], cwd: &std::path::Path) {
+    match crate::cli::hook::install(args, cwd) {
         Ok(()) => {}
         Err(e) => eprintln!("{C_YELLOW}⚠{C_RESET}  Git hooks not installed — {}", e),
     }
+}
+
+/// What to say when the hooks were declined, or when nobody was there to ask.
+fn print_hooks_tip() {
+    println!(
+        "{C_DIM}  Tip: `ug hook install` adds git hooks that refresh the graph after every\n  \
+         commit, merge and rebase — so blast radius and re-test scope keep telling your\n  \
+         agent the truth about the code it is editing, with nothing to remember.{C_RESET}"
+    );
 }
 
 /// Which paths to wire: the flag if given, otherwise ask.
@@ -1051,6 +1180,34 @@ mod tests {
 
     fn server() -> Value {
         json!({ "command": "/bin/ug", "args": ["mcp"], "env": { "UG_PROJECT": "demo" } })
+    }
+
+    /// The reason `ug connect` asks about hooks at all: a connected agent
+    /// answers from the graph, so an interactive user in a git repo with a
+    /// graph and no hooks is the one case worth a question rather than a tip
+    /// they will scroll past.
+    #[test]
+    fn an_interactive_repo_without_hooks_is_asked() {
+        assert_eq!(hook_step(None, Some(false), true, true), HookStep::Ask);
+    }
+
+    /// Everything else is told, never asked — and each "told" says the thing
+    /// that is actually true of that repo.
+    #[test]
+    fn every_other_state_is_told_not_asked() {
+        // Flags answer the question up front, in both directions.
+        assert_eq!(hook_step(Some(true), Some(false), true, true), HookStep::Install);
+        assert_eq!(hook_step(Some(false), Some(false), true, true), HookStep::Tip);
+        // `--hooks` is obeyed outside a repo too, so the installer can explain.
+        assert_eq!(hook_step(Some(true), None, false, false), HookStep::Install);
+        // A pipe has nobody to answer the prompt.
+        assert_eq!(hook_step(None, Some(false), true, false), HookStep::Tip);
+        // Already wired: no nagging.
+        assert_eq!(hook_step(None, Some(true), true, true), HookStep::AlreadyInstalled);
+        // Not a git repo: git hooks are the mechanism, so there is no offer.
+        assert_eq!(hook_step(None, None, true, true), HookStep::Silent);
+        // No graph yet — offering an install that can only fail helps nobody.
+        assert_eq!(hook_step(None, Some(false), false, true), HookStep::IndexFirst);
     }
 
     #[test]

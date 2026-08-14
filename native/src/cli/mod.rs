@@ -135,7 +135,7 @@ fn dispatch(cmd: &str, cmd_args: &[String]) {
         "project_overview" => agent::run_project_overview(cmd_args),
         "shortest_path" => analysis::run_graph_path(cmd_args),
         "graph_schema" => agent::run_graph_schema(cmd_args),
-        "query" | "code_query" => query::run_code_query(cmd_args),
+        "query" => query::run_code_query(cmd_args),
         // Retrieval (OverGraph-backed).
         "semantic_search" => search::run_semantic_search(cmd_args),
         "search" => search::run_hybrid_search(cmd_args),

@@ -389,6 +389,32 @@ pub(crate) fn install(args: &[String], dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Whether every ug block is already spliced into this repo's hooks:
+/// `Some(false)` for a git repo without them, `None` when there is no repo (or
+/// no git) to install into at all.
+///
+/// This exists for callers that want to *offer* the install rather than run it
+/// — `ug connect` asks, and the answer only makes sense in a repo that would
+/// benefit. A partial install counts as not installed, because that is the
+/// state re-running `install` fixes.
+pub(crate) fn installed_in(dir: &Path) -> Option<bool> {
+    let root = repo_root(dir).ok()?;
+    let hooks = hooks_dir(&root).ok()?;
+    Some(HOOKS.iter().all(|h| {
+        std::fs::read_to_string(hooks.join(h.name()))
+            .map(|c| c.contains(BEGIN))
+            .unwrap_or(false)
+    }))
+}
+
+/// Whether `install` would find a graph to point the hooks at. Offering the
+/// install before `ug gen` has run only earns the caller an error, so the
+/// offer is replaced by the `ug gen` advice in that case.
+pub(crate) fn has_indexed_project(args: &[String]) -> bool {
+    let name = project::resolve_active_project_name(args, ".");
+    project::read_meta(&project::project_dir(&name)).is_some()
+}
+
 fn run_install(args: &[String]) -> Result<(), String> {
     install(args, &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
 }

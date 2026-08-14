@@ -52,7 +52,7 @@ pub(crate) fn connect_help_text() -> String {
     line!("  {C_BOLD}{C_GREEN}★ ug connect{C_RESET}  {C_YELLOW}— wire ug into an AI coding agent{C_RESET}");
     line!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
     line!("");
-    line!("{C_BOLD}Usage:{C_RESET}  ug connect [<agent>] [--cli|--mcp|--both] [--project|--global] [--hooks]");
+    line!("{C_BOLD}Usage:{C_RESET}  ug connect [<agent>] [--cli|--mcp|--both] [--project|--global] [--hooks|--no-hooks]");
     line!("        ug disconnect [<agent>]        {C_DIM}remove it again{C_RESET}");
     line!("        {C_DIM}(`ug mcp install` / `ug mcp uninstall` are the same commands){C_RESET}");
     line!("");
@@ -71,12 +71,15 @@ pub(crate) fn connect_help_text() -> String {
     line!("  to leave the agent two doors into the same graph.{C_RESET}");
     line!("");
     line!("{C_BOLD}Make it useful while the agent edits, not just while it reads:{C_RESET}");
-    line!("  {C_CYAN}--hooks{C_RESET}    Also install the git hooks that re-index after every commit,");
-    line!("             merge and rebase. That is what lets an agent trust {C_CYAN}find_usages{C_RESET}");
+    line!("  {C_DIM}In a git repo without them, connect offers to install the hooks and{C_RESET}");
+    line!("  {C_DIM}recommends yes. These flags answer that question up front:{C_RESET}");
+    line!("  {C_CYAN}--hooks{C_RESET}    Install the git hooks that re-index after every commit, merge");
+    line!("             and rebase. That is what lets an agent trust {C_CYAN}find_usages{C_RESET}");
     line!("             and {C_CYAN}ug query diff_impact{C_RESET} {C_BOLD}about code it just wrote{C_RESET} — the moment");
     line!("             the answer matters most. It can still refresh on demand with");
     line!("             {C_CYAN}ug update <file>...{C_RESET} between commits.");
     line!("             {C_DIM}Same as running {C_RESET}{C_CYAN}ug hook install{C_RESET}{C_DIM}; see {C_RESET}{C_CYAN}ug hook -h{C_RESET}{C_DIM}.{C_RESET}");
+    line!("  {C_CYAN}--no-hooks{C_RESET} Don't ask, don't install. {C_DIM}(Scripted runs are never asked.){C_RESET}");
     line!("");
     line!("{C_BOLD}Scope:{C_RESET}");
     line!("  {C_CYAN}--project{C_RESET}  this repo only    {C_CYAN}--global{C_RESET}  every project");
@@ -101,7 +104,7 @@ mod tests {
     fn connect_help_teaches_the_modes_and_keeps_the_old_spelling() {
         let help = connect_help_text();
         for expected in [
-            "--cli", "--mcp", "--both", "--hooks",
+            "--cli", "--mcp", "--both", "--hooks", "--no-hooks",
             "Recommended",
             "ug disconnect",
             "ug mcp install",
