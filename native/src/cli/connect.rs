@@ -52,7 +52,7 @@ pub(crate) fn connect_help_text() -> String {
     line!("  {C_BOLD}{C_GREEN}★ ug connect{C_RESET}  {C_YELLOW}— wire ug into an AI coding agent{C_RESET}");
     line!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
     line!("");
-    line!("{C_BOLD}Usage:{C_RESET}  ug connect [<agent>] [--cli|--mcp|--both] [--project|--global]");
+    line!("{C_BOLD}Usage:{C_RESET}  ug connect [<agent>] [--cli|--mcp|--both] [--project|--global] [--hooks]");
     line!("        ug disconnect [<agent>]        {C_DIM}remove it again{C_RESET}");
     line!("        {C_DIM}(`ug mcp install` / `ug mcp uninstall` are the same commands){C_RESET}");
     line!("");
@@ -69,6 +69,11 @@ pub(crate) fn connect_help_text() -> String {
     line!("");
     line!("  {C_DIM}Whichever you pick, the other is removed — the point of choosing is not");
     line!("  to leave the agent two doors into the same graph.{C_RESET}");
+    line!("");
+    line!("{C_BOLD}Keep its answers fresh:{C_RESET}");
+    line!("  {C_CYAN}--hooks{C_RESET}    Also install the git hooks that re-index after every commit,");
+    line!("             merge and rebase, so blast radius never lags your edits.");
+    line!("             {C_DIM}Same as running {C_RESET}{C_CYAN}ug hook install{C_RESET}{C_DIM}; see {C_RESET}{C_CYAN}ug hook -h{C_RESET}{C_DIM}.{C_RESET}");
     line!("");
     line!("{C_BOLD}Scope:{C_RESET}");
     line!("  {C_CYAN}--project{C_RESET}  this repo only    {C_CYAN}--global{C_RESET}  every project");
@@ -93,7 +98,7 @@ mod tests {
     fn connect_help_teaches_the_modes_and_keeps_the_old_spelling() {
         let help = connect_help_text();
         for expected in [
-            "--cli", "--mcp", "--both",
+            "--cli", "--mcp", "--both", "--hooks",
             "Recommended",
             "ug disconnect",
             "ug mcp install",

@@ -228,6 +228,8 @@ tree (flagging drift from the index), so line numbers stay current after an
 edit. But structural tools (`find_usages`, `ug query`) read the indexed graph —
 after an edit burst, refresh it with `ug update <file>...` (focused, cheaper
 than `ug regen`) so blast-radius and test-scope answers reflect what you wrote.
+To stop having to remember, `ug hook install` hangs that refresh off git —
+every commit, merge, checkout and rebase re-indexes the paths it touched.
 
 **Lean search by default.** `ug search` and the MCP `search` tool return ids +
 locations without source slices. Add `--snippets` (CLI) or `includeSnippets:

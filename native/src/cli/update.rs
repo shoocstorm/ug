@@ -109,7 +109,7 @@ pub(crate) fn run_update(args: &[String]) {
     // mistyped needs to hear that, not believe the refresh happened.
     let mut rel_targets: Vec<String> = Vec::new();
     for raw in &targets {
-        match resolve_target(raw, &repo_root) {
+        match resolve_target(raw, &repo_root, &meta.files) {
             Ok(rel) => {
                 if !meta.files.is_empty() && !meta.files.iter().any(|f| f == &rel) {
                     eprintln!(
@@ -185,7 +185,9 @@ pub(crate) fn run_update(args: &[String]) {
                     .count()
             })
             .unwrap_or(0);
-        if symbols == 0 {
+        if symbols == 0 && !repo_root.join(rel).exists() {
+            println!("  {C_GREEN}✓{C_RESET} {:<50} deleted — dropped from the index", rel);
+        } else if symbols == 0 {
             println!(
                 "  {C_YELLOW}·{C_RESET} {:<50} no indexed symbols (unsupported extension?)",
                 rel
@@ -240,7 +242,13 @@ pub(crate) fn run_update(args: &[String]) {
 /// repo, a path relative to the current directory, or an already
 /// repo-relative path. Whichever resolves, the result is repo-relative so it
 /// matches what the graph stores.
-fn resolve_target(raw: &str, repo_root: &Path) -> Result<String, String> {
+///
+/// A path that no longer exists is a *deletion* when the index already knows
+/// it (`indexed` holds `project.json`'s file list) — that is exactly what a
+/// commit that removes a file looks like, and the refresh has to drop its
+/// nodes. Anything else that does not exist is still an error: an agent that
+/// mistypes a filename needs to hear so, not believe a refresh happened.
+fn resolve_target(raw: &str, repo_root: &Path, indexed: &[String]) -> Result<String, String> {
     let candidate = Path::new(raw);
     let abs = if candidate.is_absolute() {
         candidate.to_path_buf()
@@ -256,14 +264,20 @@ fn resolve_target(raw: &str, repo_root: &Path) -> Result<String, String> {
         }
     };
 
-    let canon = fs::canonicalize(&abs).map_err(|_| {
-        format!(
-            "{} does not exist (looked as {} and under repo root {}) — nothing to update.",
-            raw,
-            abs.display(),
-            repo_root.display()
-        )
-    })?;
+    let canon = match fs::canonicalize(&abs) {
+        Ok(c) => c,
+        Err(_) => {
+            if let Some(rel) = deleted_target(raw, &abs, repo_root, indexed) {
+                return Ok(rel);
+            }
+            return Err(format!(
+                "{} does not exist (looked as {} and under repo root {}) — nothing to update.",
+                raw,
+                abs.display(),
+                repo_root.display()
+            ));
+        }
+    };
 
     if !canon.starts_with(repo_root) {
         return Err(format!(
@@ -277,6 +291,27 @@ fn resolve_target(raw: &str, repo_root: &Path) -> Result<String, String> {
         .strip_prefix(repo_root)
         .map_err(|e| format!("could not make {} repo-relative: {}", raw, e))?;
     Ok(rel.to_string_lossy().into_owned())
+}
+
+/// The repo-relative path for a target that is gone from disk but present in
+/// the index — a deletion to be re-indexed away. `None` for anything the
+/// index never held, which keeps a typo an error.
+///
+/// `abs` cannot be canonicalised (it does not exist), so the repo-relative
+/// form is derived lexically, falling back to the argument as given when it
+/// was already relative — the spelling `git diff --name-only` produces.
+fn deleted_target(
+    raw: &str,
+    abs: &Path,
+    repo_root: &Path,
+    indexed: &[String],
+) -> Option<String> {
+    let rel = abs
+        .strip_prefix(repo_root)
+        .map(|p| p.to_string_lossy().into_owned())
+        .ok()
+        .or_else(|| Path::new(raw).is_relative().then(|| raw.to_string()))?;
+    indexed.iter().any(|f| f == &rel).then_some(rel)
 }
 
 fn print_update_help() {

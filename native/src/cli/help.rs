@@ -78,6 +78,7 @@ pub(crate) fn print_help() {
     );
     println!("  {C_CYAN}regen{C_RESET}            Re-run that pipeline for an existing project (no -i needed; incremental)");
     println!("  {C_CYAN}update{C_RESET}            Refresh the graph for the files that just changed (focused regen)");
+    println!("  {C_CYAN}hook{C_RESET}             Install git hooks that run `update` for you — the graph self-heals");
     println!("  {C_CYAN}serve{C_RESET}            Serve the visualization + graph API");
     println!("  {C_CYAN}app{C_RESET}              Open the native desktop shell (starts serve + a window)");
     println!("  {C_CYAN}api{C_RESET}              List every HTTP endpoint `ug serve` exposes");

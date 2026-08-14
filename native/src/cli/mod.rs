@@ -22,6 +22,7 @@ pub(crate) mod doctor;
 pub(crate) mod embed;
 pub(crate) mod gen;
 pub(crate) mod help;
+pub(crate) mod hook;
 pub(crate) mod index_cmd;
 pub(crate) mod ingest;
 pub(crate) mod io;
@@ -104,6 +105,7 @@ fn dispatch(cmd: &str, cmd_args: &[String]) {
         "gen" => gen::run_gen(cmd_args),
         "regen" => gen::run_regen(cmd_args),
         "update" => update::run_update(cmd_args),
+        "hook" => hook::run_hook(cmd_args),
         "serve" => serve::run_serve(cmd_args),
         "app" => app::run_app(cmd_args),
         "api" => api::run_api(cmd_args),

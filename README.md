@@ -105,6 +105,8 @@ The native `ug` binary is the primary CLI. `ug -h` lists every command;
 | :--- | :--- |
 | `ug gen` | Full pipeline: index → graph → visualization → OverGraph ingest |
 | `ug regen` | The same pipeline again for an already-generated project — reads the repo path from its metadata, so no `-i`. Incremental. |
+| `ug update <file>...` | Refresh the graph for just the files you changed — the focused counterpart to `regen`, built for a live editing session |
+| `ug hook install` | Hang that refresh off git: hooks on commit, merge, checkout and rebase re-index the paths each event touched, so blast-radius answers never lag the working tree. `ug hook status` / `uninstall`; `UG_HOOK_DISABLE=1` skips one command. |
 | `ug serve` / `ug app` | Serve the viz + REST API (multi-project); `app` wraps it in a native Tauri window |
 | `ug index` / `graph` / `ingest` | The individual pipeline stages `gen` runs for you. Unlisted in `ug -h` — `gen --no-ingest` covers the usual reason to want one. |
 | `ug search "<query>"` | GraphRAG: semantic search → graph expansion → ranked context |
@@ -212,6 +214,12 @@ no target, else one of: `claude`, `claude-desk`, `cursor`, `windsurf`, `vscode`,
 Installing both leaves the agent to choose, and it tends to reach for the
 connected tools — so if you want the CLI path, `--cli` is the way to get it.
 Whichever you pick, the other is removed.
+
+Add `--hooks` (or run `ug hook install` any time) to install the git hooks that
+re-index after every commit, merge, checkout and rebase. An agent that edits
+will not think to refresh the graph, and a stale graph is worst exactly where it
+matters most — the blast-radius answer it asked for *because* it just edited.
+Letting git trigger the refresh removes that from anyone's memory.
 
 **Tools exposed:** `search`, `semantic_search`, `traverse`, `find_usages`,
 `find_symbols`, `file_outline`, `get_code`, `project_overview`, `shortest_path`,

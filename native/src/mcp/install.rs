@@ -907,6 +907,11 @@ fn do_install(args: &[String]) -> Result<(), String> {
         }
     }
 
+    // Freshness is the other half of connecting an agent: the tools it just
+    // gained answer from the graph, and an agent that edits does not think to
+    // refresh it. `--hooks` hands that job to git.
+    install_hooks_if_asked(args);
+
     // Whichever path was wired, it answers about *this* project — baked into
     // the MCP config as UG_PROJECT, and the CLI's active project otherwise.
     let (project, why) = resolve_ug_project();
@@ -933,6 +938,27 @@ fn do_install(args: &[String]) -> Result<(), String> {
         ),
     }
     Ok(())
+}
+
+/// `--hooks`: also install the git hooks that keep the graph in step with the
+/// repo. Opt-in, because writing into someone's `.git/hooks` is not something
+/// to do as a side effect of connecting an agent.
+///
+/// Failures here are reported, not fatal: the agent wiring above already
+/// landed, and "not in a git repo" is a perfectly ordinary reason.
+fn install_hooks_if_asked(args: &[String]) {
+    if !args.iter().any(|a| a == "--hooks") {
+        println!(
+            "{C_DIM}  Tip: `ug hook install` adds git hooks that refresh the graph after every\n  \
+             commit, merge and rebase — so its answers never lag your edits.{C_RESET}"
+        );
+        return;
+    }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    match crate::cli::hook::install(args, &cwd) {
+        Ok(()) => {}
+        Err(e) => eprintln!("{C_YELLOW}⚠{C_RESET}  Git hooks not installed — {}", e),
+    }
 }
 
 /// Which paths to wire: the flag if given, otherwise ask.

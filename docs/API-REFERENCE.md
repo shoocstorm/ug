@@ -131,6 +131,7 @@ stdout.
 | `ug rm` | — | Delete a project's data directory. | `<name>` positional |
 | `ug regen` | — | Re-run the pipeline for an existing project: reads `repoRoot` from its `project.json`, so no `-i` needed. Incremental. | `-n <name>`, plus every `ug gen` flag |
 | `ug update` | — | Refresh the graph for the files that just changed (focused regen): re-index, re-resolve cross-file edges, re-embed changed nodes. Built for a live editing session. | `<file>...` positionals, `-n <name>`, `--no-ingest`, plus `ug gen` embedder flags |
+| `ug hook` | — | Install git hooks (`post-commit`, `post-merge`, `post-checkout`, `post-rewrite`) that run `ug update` on the paths each event touched, so the graph never lags the working tree. Appends to an existing hook of the same name behind `# >>> ug hook >>>` markers, honours `core.hooksPath` (husky/lefthook), never fails the git command, and logs each run to `~/.ug/<project>/hook.log`. `UG_HOOK_DISABLE=1` skips it for one command. | `install` / `uninstall` / `status` (default) subcommands, `-n <name>` |
 | `ug upgrade` | — | Check GitHub for a new release and self-update. The downloaded archive is verified against the release's published `.sha256` before it is unpacked and executed. | `--check` (report only, no update), `--allow-unverified` (install when a release publishes no checksum) |
 | `ug uninstall` | — | Delete ALL indexed projects and uninstall ug itself. | — |
 | `ug config` | — | View/persist defaults (chat model, endpoints, etc.) in `~/.ug/config.json`. | `set <key> <value>`, `get <key>`, `list` |
@@ -142,7 +143,7 @@ stdout.
 | Command | What it does | Key flags |
 |---------|-------------|-----------|
 | `ug mcp` | Run the stdio JSON-RPC MCP server (meant to be launched by an AI agent). | — |
-| `ug connect <agent>` (alias `ug mcp install`) | Connect an AI agent: the CLI skill (`--cli`, recommended), the MCP server (`--mcp`), or both (`--both`); asks when not given. Agents: `claude`, `claude-desk`, `cursor`, `windsurf`, `vscode`, `gemini`, `codex`, `opencode`, `zed`, ... | `--project` (scope to this repo), `--global` (everywhere) |
+| `ug connect <agent>` (alias `ug mcp install`) | Connect an AI agent: the CLI skill (`--cli`, recommended), the MCP server (`--mcp`), or both (`--both`); asks when not given. Agents: `claude`, `claude-desk`, `cursor`, `windsurf`, `vscode`, `gemini`, `codex`, `opencode`, `zed`, ... | `--project` (scope to this repo), `--global` (everywhere), `--hooks` (also install the git hooks — same as `ug hook install`) |
 | `ug disconnect <agent>` (alias `ug mcp uninstall`) | Remove the agent skill and the MCP server registration. | `--project`, `--global` |
 | `ug mcp list` / `ls` | Print the tools this server advertises. | — |
 | `ug mcp call <tool> <json>` | Invoke one tool directly from the command line. | `<tool>` name, `<json>` arguments |
