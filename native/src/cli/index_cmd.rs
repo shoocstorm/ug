@@ -10,6 +10,7 @@ use crate::project;
 
 use super::args::{first_positional, flag_value, has_flag};
 use super::io::{die, write_file};
+use super::scope;
 
 pub(crate) fn run_index(args: &[String]) {
     if has_flag(args, "-h") || has_flag(args, "--help") {
@@ -26,7 +27,19 @@ pub(crate) fn run_index(args: &[String]) {
         })
         .unwrap_or_else(|| ".".to_string());
     let cache = flag_value(args, &["-c", "--cache"]);
-    let project_dir = project::project_dir(&project::resolve_project_name(args, &path));
+    let name = project::resolve_project_name(args, &path);
+    let project_dir = project::project_dir(&name);
+    // `index` and `graph` create a project from the tree they are pointed at,
+    // so the input path is the repo root — there may not be a project.json to
+    // read one from yet.
+    scope::announce(
+        &name,
+        &project_dir,
+        &fs::canonicalize(&path)
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| path.clone()),
+        scope::why_project(args, false),
+    );
     let output = flag_value(args, &["-o", "--output"]).unwrap_or_else(|| {
         project_dir
             .join("indexed-tree.json")
@@ -51,7 +64,16 @@ pub(crate) fn run_graph(args: &[String]) {
         return;
     }
 
-    let project_dir = project::project_dir(&project::resolve_project_name(args, "."));
+    let name = project::resolve_project_name(args, ".");
+    let project_dir = project::project_dir(&name);
+    scope::announce(
+        &name,
+        &project_dir,
+        &project::read_meta(&project_dir)
+            .map(|m| m.repo_root)
+            .unwrap_or_default(),
+        scope::why_project(args, false),
+    );
     let input = flag_value(args, &["-i", "--input"]).unwrap_or_else(|| {
         project_dir
             .join("indexed-tree.json")

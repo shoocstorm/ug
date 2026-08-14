@@ -5,7 +5,6 @@
 use std::env;
 use std::fs;
 use std::path::Path;
-use std::path::PathBuf;
 
 use ultragraph::limits::EmbedBudget;
 use ultragraph::storage::StoreSpec;
@@ -21,6 +20,7 @@ use super::args::{first_positional, flag_value, has_flag};
 use super::embed::{budget_from_args, embedder_from_args, tokio_runtime};
 use super::ingest::{ingest_with_specs, EmbedMode};
 use super::io::die;
+use super::scope;
 use super::store::{IngestOutcome, announce_destinations, store_specs_from_args};
 
 /// Decide which directory `ug gen` should use as its incremental parse
@@ -76,10 +76,9 @@ fn resolve_gen_input(args: &[String]) -> (String, Option<String>) {
         return (".".to_string(), None);
     };
     if !meta.repo_root.is_empty() && Path::new(&meta.repo_root).exists() {
-        println!(
-            "{C_CYAN}▸{C_RESET} Re-generating {C_BOLD}{}{C_RESET} from {}",
-            name, meta.repo_root
-        );
+        // No announcement here — `run_gen` prints the scope banner a few lines
+        // later with this exact project and root, and two lines saying the
+        // same thing is how output stops being read.
         return (meta.repo_root.clone(), Some(name));
     }
     if flag_value(args, &["-n", "--name"]).is_some() || project::get_active_project().is_some() {
@@ -112,7 +111,7 @@ pub(crate) fn run_gen(args: &[String]) {
     // An explicit -i/positional always wins. Without one, gen is also the
     // re-run command: the recorded repo root of the project this resolves
     // to (-n → active → cwd basename), else the cwd on a first run.
-    let (input, pinned_project) = match flag_value(args, &["-i", "--input"]).or_else(|| {
+    let explicit_input = flag_value(args, &["-i", "--input"]).or_else(|| {
         first_positional(
             args,
             &[
@@ -132,15 +131,35 @@ pub(crate) fn run_gen(args: &[String]) {
                 "--embedding-dim",
             ],
         )
-    }) {
+    });
+    let named_input = explicit_input.is_some();
+    let (input, pinned_project) = match explicit_input {
         Some(explicit) => (explicit, None),
         None => resolve_gen_input(args),
     };
     let repo_root = input.clone();
     let project_name = pinned_project
         .unwrap_or_else(|| project::resolve_project_name(args, &input));
+    // Canonicalized once, here, so the banner, the containment checks and the
+    // `repoRoot` written into project.json all name the same resolved tree
+    // (Agents.md §9a). A path that does not exist yet keeps its raw form.
+    let repo_root_abs = fs::canonicalize(&repo_root)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| repo_root.clone());
     let output_dir = flag_value(args, &["-o", "--output"])
         .unwrap_or_else(|| project::project_dir(&project_name).to_string_lossy().into_owned());
+    scope::announce(
+        &project_name,
+        Path::new(&output_dir),
+        &repo_root_abs,
+        if flag_value(args, &["-n", "--name"]).is_some() {
+            "-n/--name"
+        } else if named_input {
+            "input path"
+        } else {
+            scope::why_project(args, true)
+        },
+    );
     // Parse caching is on by default, keyed to the project dir — which
     // already holds the `indexed-tree.json` snapshot `index_with_cache`
     // needs to restore a cached file's nodes, so enabling it costs one
@@ -247,9 +266,6 @@ pub(crate) fn run_gen(args: &[String]) {
         t2.elapsed()
     );
 
-    let repo_root_abs = fs::canonicalize(&repo_root)
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| repo_root.clone());
     let mut meta =
         project::ProjectMeta::new(&project_name, &repo_root_abs, nodes_count, edges_count)
             .carrying_pending_vectors(Path::new(&output_dir));
@@ -516,20 +532,7 @@ pub(crate) fn run_gen_ingest(
         // `ug gen` accepts the same --dest / --neo4j-* flags as `ug
         // ingest`. When --dest is omitted we keep the OverGraph-only
         // behavior pointed at `db_path`.
-        let mut specs = store_specs_from_args(args, dim);
-        // gen already resolved the db path with full precedence
-        // (-d/--db → <output-dir>/ugdb), so pin every OverGraph spec to
-        // it — including in a --dest overgraph,neo4j fan-out, where the
-        // store layer's own resolution can no longer lean on -o.
-        for spec in &mut specs {
-            if let StoreSpec::Overgraph {
-                path,
-                embedding_dim: _,
-            } = spec
-            {
-                *path = PathBuf::from(db_path);
-            }
-        }
+        let specs = gen_specs(args, db_path, dim);
         announce_destinations(&specs);
         ingest_with_specs(&specs, &EmbedMode::Embed(&embedder), &graph, prune, &budget).await
     })
@@ -577,17 +580,29 @@ pub(crate) fn skip_flags_help() -> String {
 /// path. Shared by both branches of `run_gen_ingest`.
 ///
 /// gen already resolved the db path with full precedence (`-d/--db` →
-/// `<output-dir>/ugdb`), so every OverGraph spec is pinned to it — including
-/// in a `--dest overgraph,neo4j` fan-out, where the store layer's own
-/// resolution can no longer lean on `-o`.
+/// `<output-dir>/ugdb`), so the flags that would make the store layer resolve
+/// its own are dropped and `db_path` handed over as `--db`. Pinning it *into*
+/// the arguments rather than overwriting the resulting specs is what lets the
+/// store layer announce the project it is actually writing: `-n myproj -o
+/// /elsewhere` resolves to `~/.ug/myproj/ugdb` there and `/elsewhere/ugdb`
+/// here, and an override after the fact would have already printed the wrong
+/// one. Neo4j flags pass through untouched, so a `--dest overgraph,neo4j`
+/// fan-out still reaches both.
 fn gen_specs(args: &[String], db_path: &str, dim: u32) -> Vec<StoreSpec> {
-    let mut specs = store_specs_from_args(args, dim);
-    for spec in &mut specs {
-        if let StoreSpec::Overgraph { path, embedding_dim: _ } = spec {
-            *path = PathBuf::from(db_path);
+    let mut pinned: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-n" | "--name" | "-d" | "--db" | "-o" | "--output" => i += 2,
+            _ => {
+                pinned.push(args[i].clone());
+                i += 1;
+            }
         }
     }
-    specs
+    pinned.push("--db".to_string());
+    pinned.push(db_path.to_string());
+    store_specs_from_args(&pinned, dim)
 }
 
 /// The embedding dim and model to plan a `--no-embed` run against.

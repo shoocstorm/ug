@@ -266,9 +266,24 @@ than remembering them.
 Not indexed yet → `ug gen` at the repo root. Stale after *your* edits → `ug
 update <the files you changed>`; stale generally (line numbers don't match the
 file) → `ug gen` again, which re-runs an existing project from its recorded
-root. Both are incremental, so cheap. `ug list` shows what exists.
+root. Both are incremental, so cheap. `ug list` shows what exists — with each
+project's size, and a `STATUS` telling you whether it is `fresh`, `N changed`
+(the index is behind the tree), `no db` (`query`/`search`/`chat` cannot read
+it), or `repo gone`.
+
 Graph-backed commands default to the **cwd basename**, db-backed ones to the
-**active project** — away from the repo root, pass `-n <project>`.
+**active project** — away from the repo root, pass `-n <project>`. You never
+have to infer which one answered: every command prints the project it resolved
+to on **stderr** before doing any work, with the rule that picked it —
+
+```
+▸ project ug · ~/Documents/project/ug · data ~/.ug/ug · [active project]
+```
+
+Read that line. `[most recently updated project]` means the command fell all
+the way through the chain and answered from a project unrelated to the
+directory you are in — re-run it with `-n <project>`. The banner is on stderr,
+so `--json` output stays parseable; `--no-banner` turns it off.
 
 **Freshness, in detail** (see [Editing a codebase with `ug`](#editing-a-codebase-with-ug)
 for the workflow). `ug get_code` reads the *live* working tree and flags drift

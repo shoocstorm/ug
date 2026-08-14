@@ -7,8 +7,13 @@
 | Field | Value |
 | :--- | :--- |
 | **Date** | 2026-08-14 |
+| **Revised** | 2026-08-14 — re-verified against `main` @ `e538c78` plus the working tree (`scope.rs`, the `ug list` staleness scan) |
 | **Audience** | Product direction / design |
 | **Method** | Codebase analysis + reasoning about agent workflows (not session telemetry) |
+
+Each numbered gap carries a status: **Shipped** / **Partial** / **Open**. Claims
+about the code are cited to a path so the next revision can re-check them
+instead of re-deriving them.
 
 ---
 
@@ -28,14 +33,25 @@ This framing drives every recommendation below.
 
 ## What `ug` already does exceptionally well for agents
 
-These are genuine differentiators that no amount of grep can replicate:
+The agent-facing surface is deliberately small: **13 MCP tools** (`search`,
+`semantic_search`, `traverse`, `find_usages`, `find_symbols`, `file_outline`,
+`get_code`, `project_overview`, `shortest_path`, `code_query`, `graph_schema`,
+`list_projects`, `gen` — `native/src/mcp/tools.rs`), each mirrored one-for-one
+as a CLI subcommand (`native/src/cli/mod.rs::dispatch`), with the analytical
+depth pushed into **39 `code_query` presets** rather than into more tools
+(`native/src/code_query/presets.rs`). That ratio is the right one: an agent
+pays context for every tool schema but nothing for a preset name it only uses
+when it needs it.
+
+Within that surface, these are genuine differentiators that no amount of grep
+can replicate:
 
 1. **Graph-structured blast radius.** `diff_impact`, `boundary_impact`, `find_usages` answer "what breaks if I change X?" — the single hardest question for an agent making a safe edit. Grep cannot do this.
 2. **PPR graph expansion in `search`.** Personalized PageRank over edges is the real moat. It's structurally-aware ranking that neither grep nor a plain vector DB can reproduce.
 3. **`code_query` presets + GQL.** One-call answers to "how many functions exceed 100 LOC and where" — replaces a loop of greps. The coverage-honesty (`NOT INDEXED` vs. a wrong zero) is exactly what an agent needs to avoid confident-but-wrong answers.
 4. **Boundary detection.** Knowing which symbols are system entry/exit points (REST handlers, queue listeners) makes impact analysis mean something *beyond the repo.*
 5. **Wildcards + batching + bare-name resolution.** Turns multi-call loops into one call (`find_usages 'validate_*'`). Token- and round-trip-efficient.
-6. **Embedder-optional design.** The structural tools work on `graph.json` with zero external deps. An embedding failure is never a dead end.
+6. **Embedder-optional design.** Nothing an agent needs for safety requires a model. The tools split across two backing stores — `find_symbols`, `file_outline`, `get_code`, `find_usages`, `project_overview`, `graph_schema` and `shortest_path` read `graph.json` directly with zero external deps; `code_query`, `traverse` and `search` read the `ugdb` store — and **neither half needs vectors**, which is exactly what makes the `--no-embed` hook path viable. An embedding failure degrades ranking, never correctness.
 
 ---
 
@@ -71,46 +87,116 @@ Scenarios where it's **redundant or inferior**:
 
 Sharper framing: **for an agent, `find_symbols` + `traverse` + `find_usages` + `code_query` (all embedder-free) already cover 80%+ of needs.** `search` / `semantic_search` are the remaining 20%, and `semantic_search` (pure dense, no graph) is the least valuable of all — it's just a local vector DB, which agents increasingly have natively.
 
+The `--no-embed` hook path is the first production evidence for this split, and
+it points the same way. Git-hook refreshes deliberately skip the embedder
+because loading the model costs more than the entire structural refresh, and the
+result is a graph where every safety answer is exact and only vector recall
+lags. That trade would be unacceptable if dense search were load-bearing for
+agents. It isn't — which is why the debt is merely *reported*
+(`vectors_note`, `ug hook status`, `ug list`) rather than blocking.
+
 ---
 
 ## Gaps & opportunities — ranked by leverage
 
 ### Tier 1: Highest leverage — fix the trust problem and own the edit-safety workflow
 
-#### 1. The graph goes silently stale during editing — the #1 risk to agent trust
+#### 1. The graph goes silently stale during editing — the #1 risk to agent trust — **Partial**
 
 An agent edits 5 files, then asks `find_usages` / `diff_impact`. The answer is now wrong, and nothing warns it. `get_code` reads the live tree (good), but the structural tools the agent relies on for safety read the stale graph. If an agent can't trust blast-radius *after its own edits*, the killer feature is undermined at exactly the moment it matters most.
 
-- `ug update <file>` exists but is **manual** — the agent must remember, every time.
-- There's no staleness signal on tool output ("⚠ graph is 4 files behind the working tree for this result").
-- This is the asymmetry that breaks trust: read-tools are live, structural-tools are stale, and they look identical.
+This is the asymmetry that breaks trust: read-tools are live, structural-tools
+are stale, and they look identical. Three of the four pieces needed to close it
+now exist; the one that closes it *for the agent* does not.
 
-**Opportunities:**
+**Shipped — self-healing across git events.** `ug hook install`
+(`native/src/cli/hook.rs`) writes `post-commit`, `post-merge`, `post-checkout`
+and `post-rewrite` hooks that call back into `ug hook run`, which diffs the two
+commits the event moved between and runs `ug update` on those paths.
+`ug connect --hooks` installs them alongside the agent wiring. The hooks append
+to an existing hook of the same name behind `# >>> ug hook >>>` markers, honour
+`core.hooksPath`, never fail the git command, print one line naming the project
+they refreshed, and log the detail — hook, project, repo, data dir, binary
+version, file list, exit code — to `~/.ug/<project>/hook.log`;
+`UG_HOOK_DISABLE=1` skips one command.
 
-- **Automatic staleness detection** — track working-tree mtime/hash vs. indexed hash; emit a warning line on every structural tool result that touches changed files. Cheap to compute (the index already stores `file_hash` per node).
-- **File-system watcher** — a `ug serve` background mode that incrementally re-indexes changed files (`ug update` + blake3 caching already exist; this is wiring). Or at minimum, a `ug watch` that an agent/shell hook/git hook triggers.
-- **Git-hook integration** — `ug connect` could install a post-edit/post-commit hook that calls `ug update` on the changed paths, so the graph self-heals without the agent remembering.
+Hook runs pass `--no-embed`: loading the embedding model costs more than the
+whole structural refresh (~1 s of a ~1.5 s run on this repo), so they write the
+graph, the facts and the keyword statistics and leave the changed nodes without
+vectors. Everything the safety story depends on — `find_usages`, `code_query`,
+`diff_impact` — stays exact; only vector recall lags, the store records the debt
+in `project.json` (`pendingVectorsSince`), and `ug ingest` backfills exactly the
+nodes owed. `ug hook status`, `ug list` and the `search` / `semantic_search`
+tools all report it (`native/src/mcp/mod.rs::vectors_note`), so the degradation
+is never silent.
 
-> **Shipped (2026-08-14): git-hook integration.** `ug hook install` writes
-> `post-commit`, `post-merge`, `post-checkout` and `post-rewrite` hooks that call
-> back into `ug hook run`, which diffs the two commits the event moved between and
-> runs `ug update` on those paths. `ug connect --hooks` installs them alongside the
-> agent wiring. The hooks append to an existing hook of the same name behind
-> `# >>> ug hook >>>` markers, honour `core.hooksPath`, never fail the git command,
-> print one line and log the detail to `~/.ug/<project>/hook.log`;
-> `UG_HOOK_DISABLE=1` skips one command. The remaining gap is the *uncommitted*
-> edit burst — a working-tree watcher, not a git hook, is what closes that.
->
-> Hook runs pass `--no-embed`: loading the embedding model costs more than the
-> whole structural refresh (~1 s of a ~1.5 s run on this repo), so they write
-> the graph, the facts and the keyword statistics and leave the changed nodes
-> without vectors. Everything the safety story depends on — `find_usages`,
-> `code_query`, `diff_impact` — stays exact; only vector recall lags, the store
-> records the debt in `project.json`, and `ug ingest` backfills exactly the
-> nodes owed. `ug hook status` and the `search`/`semantic_search` tools report
-> it, so the degradation is never silent.
+**Shipped — per-slice staleness on the read path.** `get_code` compares the live
+file's blake3 against the `file_hash` the node was indexed with and attaches a
+`stale` note to the returned slice
+(`native/src/agent_tools.rs::stale_note`) — "the recorded span may be stale,
+re-run `ug gen`". The read path is honest.
 
-#### 2. A first-class "context pack" tool — collapse 5 tool calls into 1
+**Shipped — project-level staleness.** `project::staleness`
+(`native/src/project.rs`) stats every file recorded in `project.json` against
+`graph.json`'s mtime and separates *changed*, *missing* and *repo gone* — a
+moved checkout is not "every file deleted". `ug list` renders it as a STATUS
+column (`fresh` / `N changed` / `no db` / `repo gone` / `no graph`), and
+`GET /api/projects/staleness` serves the same struct so the CLI and the KB
+Manager cannot disagree.
+
+**Open — the structural tools still don't say it.** The one consumer that most
+needs the signal is the one that doesn't get it: `find_usages`, `code_query`,
+`traverse` and `shortest_path` return the same shape whether the graph is
+current or forty commits behind. `project::staleness` is the missing input, and
+it is already computed cheaply enough to run per call (one `stat` per indexed
+file, or narrowed to just the files in the result set). The concrete move:
+**append a staleness line to every structural tool result the way `vectors_note`
+already appends a vector-debt line** — same mechanism, same file, one tier more
+important.
+
+**Open — the uncommitted edit burst.** A git hook fires on commit; an agent
+edits, asks, edits, asks, and commits once at the end. That whole window is
+unprotected. A working-tree watcher — a `ug serve` background mode or a `ug
+watch` that a shell/agent hook triggers — is what closes it, and `ug update` +
+blake3 caching mean it is wiring, not new machinery. Second-best and much
+cheaper: teach the skill text to call `ug update <files>` right after a batch of
+edits, so the refresh is the agent's habit rather than its memory.
+
+#### 1b. The *other* silent-wrongness: answering about the wrong project — **Shipped**
+
+Staleness is one way a confident answer can be wrong; **scope** is the other,
+and it was the less obvious of the two. Every project-scoped command resolves
+its target through a fallback chain — `-n/--name` → the active project → the
+cwd's basename → *the most recently updated project* — and that last link is a
+trap: run `ug find_usages` from a directory that was never indexed and you get
+a fluent, well-formed answer about some other repo. For an agent, which has no
+peripheral vision and cannot notice that the file paths look unfamiliar, this
+is worse than staleness: a stale answer is about the right code, a mis-scoped
+one is about the wrong code entirely.
+
+`native/src/cli/scope.rs` closes it. Every project-scoped command announces —
+one line, on **stderr**, deduplicated per resolved data dir — which project it
+picked, which repo that project indexes, where the data lives, and **which link
+of the chain fired** (`-n/--name`, `active project`, `current directory`, `most
+recently updated project`). stderr, not stdout, because `--json` / `-o` output
+has to stay pipeable; `--no-banner` / `UG_NO_BANNER=1` turns it off.
+
+The agent-facing lesson generalizes beyond this one banner: **a resolution rule
+that can silently pick the wrong input must name the rule it followed.** The
+same reasoning is why `ug hook` now logs the project, repo and binary version it
+refreshed rather than "graph refresh failed", and why `ug hook status` prints
+the repo the *project* records rather than the one the hook is installed in —
+when those disagree, the hooks have been faithfully refreshing a graph of some
+other tree.
+
+Worth carrying further: the MCP server resolves through its own chain
+(`UG_PROJECT` → cwd match → active → local `./ugdb`,
+`native/src/mcp/mod.rs`), where a stderr banner is *not* visible to the agent.
+Putting the resolved project name into `project_overview` — and into the
+"NOT INDEXED" style coverage line the tools already emit — is the MCP-side
+equivalent, and it is not there yet.
+
+#### 2. A first-class "context pack" tool — collapse 5 tool calls into 1 — **Open**
 
 When an agent works on symbol F, it typically assembles context through 4–6 round trips:
 
@@ -122,35 +208,75 @@ Each round trip is latency + tokens. A single curated call — `ug context <id>`
 
 - The **tour** feature is *almost* this, but wrapped in LLM narration (human-oriented). Agents want the **raw curated bundle**, not prose. Consider: `ug context` = tour's retrieval/assembly without the LLM step.
 - Budget it with `maxChars` like `search` does. Rank sub-items by relevance.
+- The pieces all exist already and are individually reachable: `get_code`,
+  `find_usages`, `traverse`, and the `test_for` preset
+  (`native/src/code_query/presets.rs:626`). This is assembly and budgeting, not
+  new analysis — which is exactly why it stays the best ratio of value to work
+  on this list.
 
-#### 3. Symbol-level / semantic-diff impact — "you changed the signature of F; here's the precise blast radius"
+Now that the CLI has a scope banner, note the shape this should take: **one
+call, one project, one budget**, with the sub-items labelled by why they were
+included ("caller", "dependency", "test", "doc") so the agent can drop the half
+it doesn't need without a second round trip.
 
-`diff_impact` is file-level. An agent changing a function signature wants symbol-level precision: "callers of F, with their call-site arity, flagged if mismatched." The graph has `Calls` edges but **edges carry no properties** (no call-site line, no arg count) — this is the key limitation.
+#### 3. Symbol-level / semantic-diff impact — "you changed the signature of F; here's the precise blast radius" — **Open**
 
-- **Edges have empty properties** (`build_edge_rows` writes `properties: String = ""`). Adding call-site line + arity to `Calls` edges at ingest would unlock signature-change analysis — one of the most common and error-prone agent tasks.
-- A `ug verify <changed-files>` / `ug precommit` that combines: `diff_impact` + `diff_retest_scope` + `boundary_impact` + signature-mismatch detection into one "safety report." This makes `ug` the agent's **verification layer**, not just a search layer.
+`diff_impact` is file-level. An agent changing a function signature wants symbol-level precision: "callers of F, with their call-site arity, flagged if mismatched." The graph has `Calls` edges but **edges carry no properties** (no call-site line, no arg count) — this is the key limitation, and it is unchanged: `build_edge_rows` still writes `properties: String::new()` (`native/src/storage/ingest.rs:530`).
 
-#### 4. Double down on "`ug` as the edit-safety net" as the product positioning for agents
+- Adding call-site line + arity to `Calls` edges at ingest would unlock signature-change analysis — one of the most common and error-prone agent tasks. It is also the only item on this list that requires touching the *indexers*, so it is the most expensive; everything else is assembly over data that already exists.
+- A `ug verify <changed-files>` / `ug precommit` that combines: `diff_impact` + `diff_retest_scope` + `boundary_impact` + signature-mismatch detection into one "safety report." This makes `ug` the agent's **verification layer**, not just a search layer. Worth splitting from the edge work: the first three presets exist today, so a `ug verify` that reports impact + retest + boundary is shippable now and gains signature-mismatch later.
+- The natural home for it is the git-hook path that already exists: `ug hook run` knows the exact file set that changed between two commits, which is the same input `ug verify` wants.
 
-The structural graph tools (`find_usages`, `impact`, `boundary_impact`, `retest_scope`) answer the question agents care about most: *"did I break anything, and what do I re-test?"* This is a stronger and more defensible positioning than "semantic code search" (crowded, commoditized by every agent platform's own embeddings). Lead with safety/verification in the agent skill text.
+#### 4. Double down on "`ug` as the edit-safety net" as the product positioning for agents — **Shipped**
+
+The structural graph tools (`find_usages`, `impact`, `boundary_impact`, `retest_scope`) answer the question agents care about most: *"did I break anything, and what do I re-test?"* This is a stronger and more defensible positioning than "semantic code search" (crowded, commoditized by every agent platform's own embeddings).
+
+This has landed in the agent-facing text. The bundled skill
+(`native/src/mcp/ug-skill.md`) now leads with "answer any question about an
+existing codebase **— and check the safety of your own edits to it**", tells the
+agent to use `ug` *while* editing in both directions (ask who depends on a
+symbol before changing it; ask what broke and what to re-test after), and
+triggers on the safety phrasings directly: *"is this a breaking change"*,
+*"what did my change break"*, *"what should I re-test"*, *"is it safe to change
+this"*, *"did I miss a caller"*. The MCP server description
+(`native/src/mcp/mod.rs`) carries the same framing.
+
+The remaining copy gap is small but real: the skill promises the graph "is kept
+current by git hooks", which is true at commit boundaries and *not* true during
+an uncommitted edit burst (see #1). Either the watcher closes that, or the
+sentence should say so and point at `ug update`.
 
 ---
 
 ### Tier 2: Solid value — expand coverage and connectivity
 
-#### 5. Language coverage gaps
+#### 5. Language coverage gaps — **Open**
 
-Currently: TS/JS, Python, Java, Rust, Markdown, PDF. Missing: **Go, C/C++, C#, Ruby, PHP, Kotlin, Swift, Scala.** Agents work across all of these. Each missing language is a market where the agent falls back to grep. **Go and C# are likely the highest-ROI additions** (large agent-active ecosystems).
+Unchanged since the first draft. The indexed extension list
+(`native/src/indexer/common.rs`) is `ts, tsx, js, jsx, py, java, rs, md, mdx,
+markdown, pdf` — five tree-sitter grammars (TypeScript/TSX covering JS/JSX,
+Python, Java, Rust, Markdown) plus a pure-Rust PDF text path. Office formats
+were dropped with the pdfium backend and are not coming back cheaply.
 
-#### 6. "Find similar / duplicated code" tool
+Missing: **Go, C/C++, C#, Ruby, PHP, Kotlin, Swift, Scala.** Agents work across
+all of these. Each missing language is a market where the agent falls back to
+grep — and, worse, where it falls back *silently*, because a repo with no
+indexable files still produces a graph and answers questions about the
+Markdown in it. **Go and C# are likely the highest-ROI additions** (large
+agent-active ecosystems). A cheap partial mitigation ahead of any new grammar:
+have `project_overview` state the indexed-language coverage of the repo, so an
+agent working in a Go service learns in one call that `ug` can only see its
+docs.
 
-Agents refactor by finding repeated patterns. `duplicate_names` is name-based only. A structural-similarity or embedding-similarity tool ("functions structurally similar to F") would serve a real refactoring need. (This is actually one place where dense embeddings *are* useful for agents.)
+#### 6. "Find similar / duplicated code" tool — **Open**
 
-#### 7. Stack-trace / error-to-graph resolution
+Agents refactor by finding repeated patterns. `duplicate_names` (a preset, name-based only) is what exists. A structural-similarity or embedding-similarity tool ("functions structurally similar to F") would serve a real refactoring need. (This is actually one place where dense embeddings *are* useful for agents.)
+
+#### 7. Stack-trace / error-to-graph resolution — **Open**
 
 Agents debug from stack traces constantly. A tool that ingests a stack trace, resolves each frame to a node, and shows the call path / blast radius would be high-value. `shortest_path` is the building block; a `ug explain_trace` wrapper would be the product.
 
-#### 8. Documentation-to-symbol linkage
+#### 8. Documentation-to-symbol linkage — **Open**
 
 Concept nodes from Markdown exist, and there are `Imports` edges from doc links, but there's no "this doc section explains this symbol" link. Agents answering "how does X work" benefit enormously from linked prose. Consider: detect symbol references in prose (backticks, code refs) and emit `Documents` / `Explains` edges.
 
@@ -174,20 +300,32 @@ The retrieval + assembly is great; the LLM-written 40-word narrations and camera
 
 ## Summary recommendations
 
-| Priority | Action |
-|---|---|
-| **1 — Trust** | Add staleness detection/warning on every structural result; add `ug watch` / git-hook auto-refresh so the graph stays fresh during editing. |
-| **2 — Context pack** | Add `ug context <id>` — curated, token-budgeted bundle (code + callers + deps + test + doc) in one call. |
-| **3 — Edit safety** | Enrich `Calls` edges with call-site line/arity; add `ug verify` / `ug precommit` combining impact + retest + boundary + signature mismatch. |
-| **4 — Positioning** | For agents, lead with "edit-safety / blast-radius verification" (the moat), not "semantic search" (commoditized). |
-| **5 — Languages** | Add Go and C# next (largest agent-active ecosystems not yet covered). |
-| **6 — De-emphasize** | Don't over-invest in dense semantic search for agents (supplementary, ~20% of queries); keep chat/tour for the human surface. |
+| Priority | Action | Status |
+|---|---|---|
+| **1 — Trust** | Keep the graph fresh and say so when it isn't. | **Partial** — git hooks auto-refresh on commit/merge/checkout/rewrite; `get_code` flags stale slices; `ug list` + `/api/projects/staleness` report project drift; scope banner names the resolved project. **Still open:** no staleness line on structural tool results, no working-tree watcher for uncommitted edits. |
+| **2 — Context pack** | Add `ug context <id>` — curated, token-budgeted bundle (code + callers + deps + test + doc) in one call. | **Open** — now the highest-leverage unstarted item; all inputs already exist. |
+| **3 — Edit safety** | `ug verify` combining impact + retest + boundary; then enrich `Calls` edges with call-site line/arity for signature-mismatch detection. | **Open** — split: `ug verify` is shippable from existing presets; edge properties need indexer work (`ingest.rs:530` still writes `""`). |
+| **4 — Positioning** | For agents, lead with "edit-safety / blast-radius verification" (the moat), not "semantic search" (commoditized). | **Shipped** — `ug-skill.md` and the MCP server description both lead with edit safety and trigger on the safety phrasings. |
+| **5 — Languages** | Add Go and C# next (largest agent-active ecosystems not yet covered). | **Open** — still 5 grammars + PDF. Interim: report language coverage in `project_overview`. |
+| **6 — De-emphasize** | Don't over-invest in dense semantic search for agents (supplementary, ~20% of queries); keep chat/tour for the human surface. | **Holding** — the `--no-embed` hook path proves the point: the structural half is what the safety story needs, vectors are the part that can lag without breaking anything. |
+
+**If only one thing ships next:** the staleness line on structural results
+(#1). It is small, it reuses the `vectors_note` mechanism verbatim, and it is
+the difference between a tool an agent can trust after its own edits and one it
+can't.
 
 ---
 
 ## The one-sentence version
 
 `ug`'s structural graph + PPR + blast-radius is a genuine moat that agents can't replicate with grep; the highest-leverage move is to make that graph **trustworthy during editing** (staleness), **cheaper to consume** (context pack), and **tied to change-safety** (semantic diff + verify) — while treating dense semantic search as a supplementary layer, not the centerpiece, for the agent audience.
+
+Since the first draft, the trust half has moved: the graph now self-heals across
+git events, the read path admits when a slice is stale, projects report their own
+drift, and every command names the project it resolved. What's left is the last
+mile of the same idea — **telling the agent, in the answer itself, when the
+answer is behind the tree** — and the two build-outs that were never started
+(`ug context`, `ug verify`).
 
 ---
 
@@ -199,4 +337,7 @@ These are observations from reading the codebase and reasoning about agent workf
 - where round-trips pile up (the case for a context pack), and
 - where stale results cause bad edits (the case for freshness).
 
-That telemetry would tell you definitively which gap to close first.
+That telemetry would tell you definitively which gap to close first. Note that
+the trust work shipped so far was driven the same way this doc was — by reading
+the code and reasoning about failure modes — so the ordering of what remains is
+still an argument, not a measurement.

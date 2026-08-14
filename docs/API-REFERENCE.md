@@ -141,12 +141,12 @@ stdout.
 | `ug serve` | (default) | Serve the visualization + REST API at `http://localhost:8080`. Runs by default with no args. | `-p <port>` (default 8080), `--host <ip>` (default 127.0.0.1), `--watch`, `--no-db`, `-i <graph.json>`, `-d <db>`, `--project <name>`, `--repo-root` |
 | `ug app` | — | Open the native desktop shell (starts the server + a window). | Same as `ug serve` |
 | `ug api` | — | List every HTTP endpoint `ug serve` exposes. | `--json` |
-| `ug list` | `ls`, `list_projects` | List generated projects under `~/.ug` with stats. | — |
+| `ug list` | `ls`, `list_projects` | List generated projects under `~/.ug`: node/edge counts, size on disk, `STATUS` (`fresh` · `N changed` · `no db` · `repo gone` · `no graph`), last-updated time and repo root, plus per-project follow-ups naming the command that resolves each one. `STATUS` reports whatever blocks you soonest, from the same scan as `GET /api/projects/staleness`. | `--quick` (skip the size walk and staleness scan), `--json` |
 | `ug active` | — | View or set the active project (default for `ug mcp`). | Sets with `<name>` positional |
 | `ug rename` | `rn`, `mv` | Rename a project's data directory and its `project.json` name; the active marker follows it. One positional renames the current (active, else cwd) project; two rename `<old> <new>`. | `<new>` or `<old> <new>` positionals, `-n <old>` |
 | `ug rm` | — | Delete a project's data directory. | `<name>` positional |
 | `ug update` | — | Refresh the graph for the files that just changed (focused re-run): re-index, re-resolve cross-file edges, re-embed changed nodes. Built for a live editing session. A named path that no longer exists but *is* in the index is treated as a deletion; one the index never held is still an error. | `<file>...` positionals, `-n <name>`, `--no-embed`, `--no-ingest`, plus `ug gen` embedder flags |
-| `ug hook` | — | Install git hooks (`post-commit`, `post-merge`, `post-checkout`, `post-rewrite`) that run `ug update --no-embed` on the paths each event touched, so the graph never lags the working tree. Appends to an existing hook of the same name behind `# >>> ug hook >>>` markers, honours `core.hooksPath` (husky/lefthook), never fails the git command, and logs each run to `~/.ug/<project>/hook.log`. `UG_HOOK_DISABLE=1` skips it for one command. Because hook runs skip embedding, `status` reports how long vectors have been owed — `ug ingest -n <project>` backfills them. | `install` / `uninstall` / `status` (default) subcommands, `-n <name>` |
+| `ug hook` | — | Install git hooks (`post-commit`, `post-merge`, `post-checkout`, `post-rewrite`) that run `ug update --no-embed` on the paths each event touched, so the graph never lags the working tree. Appends to an existing hook of the same name behind `# >>> ug hook >>>` markers, honours `core.hooksPath` (husky/lefthook), never fails the git command, and logs each run to `~/.ug/<project>/hook.log`. That log's header records the run's whole provenance — which hook fired, timestamp, project, repo root, data dir, `ug` binary and version, the files handed over, and the child's exit code — so a failed refresh can be diagnosed without reconstructing it from shell history. `UG_HOOK_DISABLE=1` skips it for one command. Because hook runs skip embedding, `status` reports how long vectors have been owed — `ug ingest -n <project>` backfills them. | `install` / `uninstall` / `status` (default) subcommands, `-n <name>` |
 | `ug upgrade` | — | Check GitHub for a new release and self-update. The downloaded archive is verified against the release's published `.sha256` before it is unpacked and executed. | `--check` (report only, no update), `--allow-unverified` (install when a release publishes no checksum) |
 | `ug uninstall` | — | Delete ALL indexed projects and uninstall ug itself. | — |
 | `ug config` | — | View/persist defaults (chat model, endpoints, etc.) in `~/.ug/config.json`. | `set <key> <value>`, `get <key>`, `list` |
@@ -182,6 +182,29 @@ Commands need to resolve a project name to read `graph.json` and/or write/load t
 
 - `resolve_project_name(args, input)` → `-n` → `derive_project_name(input)` — for `gen` (with an explicit path)/`index`/`graph` (no active fallback)
 - `resolve_active_project_name(args, input)` → `-n` → `get_active_project()` → `derive_project_name(input)` — for all other commands, and for `gen`'s re-run lookup when no path is named |
+
+#### The Scope Banner
+
+Every project-scoped command prints the project it resolved to — and which
+link of the chain above produced it — as one line on **stderr** before it does
+any work:
+
+```
+▸ project ug · ~/Documents/project/ug · data ~/.ug/ug · [active project]
+```
+
+It is on stderr, not stdout, so `--json`/`-o` output stays pipeable
+(`ug find_symbols x --json | jq` is unaffected). A command that resolves the
+same project twice — the agent tools read `graph.json` and then the `ugdb`
+beside it — prints one line, not two. The `[…]` label is the rule that fired:
+`-n/--name`, `--db`, `-i/--input`, `input path`, `active project`,
+`current directory`, `legacy ./.ug/ugdb`, or **`most recently updated
+project`** — the last being the one worth noticing, since it means the command
+answered from a project that has nothing to do with the current directory.
+
+Because `ug hook` captures the child's output into `~/.ug/<project>/hook.log`,
+this line is also what makes a hook run auditable after the fact. Suppress it
+with `--no-banner` or `UG_NO_BANNER=1`.
 
 #### `default_read_db_path()` Fallback Chain
 

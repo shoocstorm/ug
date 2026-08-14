@@ -16,6 +16,7 @@ use crate::project;
 use super::args::{flag_value, has_flag};
 use super::embed::{budget_from_args, embedder_from_args, tokio_runtime};
 use super::io::die;
+use super::scope;
 use super::store::{IngestOutcome, announce_destinations, store_specs_from_args};
 
 /// What an ingest run should do about vectors.
@@ -498,6 +499,18 @@ pub(crate) fn run_ingest(args: &[String]) {
     // (`ug active`), else the cwd basename. Resolved once so the input
     // graph and the output store land in the same project directory.
     let project_name = project::resolve_active_project_name(args, ".");
+    // Announced before the store layer gets a look-in: `spec_args` below
+    // rewrites the resolution into an explicit `-n`, which would make the
+    // store layer's banner report a flag the user never typed.
+    let project_dir = project::project_dir(&project_name);
+    scope::announce(
+        &project_name,
+        &project_dir,
+        &project::read_meta(&project_dir)
+            .map(|m| m.repo_root)
+            .unwrap_or_default(),
+        scope::why_project(args, true),
+    );
 
     let graph_file = flag_value(args, &["-i", "--input"]).unwrap_or_else(|| {
         project::project_dir(&project_name)

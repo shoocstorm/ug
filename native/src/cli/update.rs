@@ -36,6 +36,7 @@ use crate::project;
 use super::args::{has_flag, positionals};
 use super::gen::{resolve_gen_cache, run_gen_ingest};
 use super::io::die;
+use super::scope;
 
 /// Value-carrying flags to skip when collecting the positional file list.
 const VALUE_FLAGS: &[&str] = &[
@@ -103,6 +104,13 @@ pub(crate) fn run_update(args: &[String]) {
         eprintln!("   Re-run {C_CYAN}ug gen -i <path> -n {}{C_RESET} to repoint it.", name);
         std::process::exit(1);
     }
+
+    scope::announce(
+        &name,
+        &dir,
+        &meta.repo_root,
+        scope::why_project(args, true),
+    );
 
     // Canonicalise the repo root ONCE (Agents.md §9a): the recorded path can
     // carry a symlink (`/tmp` → `/private/tmp` on macOS), and comparing an

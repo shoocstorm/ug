@@ -378,6 +378,11 @@ pub(crate) fn install(args: &[String], dir: &Path) -> Result<(), String> {
         project
     );
     println!(
+        "{C_DIM}  repo {} → data {}{C_RESET}",
+        root.display(),
+        project::project_dir(&project).display()
+    );
+    println!(
         "{C_DIM}  Each run logs to {}. Skip once with UG_HOOK_DISABLE=1.{C_RESET}",
         log_path(&project).display()
     );
@@ -453,6 +458,18 @@ fn run_status() -> Result<(), String> {
             project,
             log_path(&project).display()
         );
+        // The repo the *project* records, not `root` — when they disagree the
+        // hooks are refreshing a graph of some other tree, which is the whole
+        // reason `resolve_project` warns at install time.
+        match project::read_meta(&project::project_dir(&project)) {
+            Some(meta) if !meta.repo_root.is_empty() => {
+                println!("{C_DIM}  indexes {}{C_RESET}", meta.repo_root);
+            }
+            _ => println!(
+                "{C_YELLOW}·{C_RESET} {C_BOLD}{}{C_RESET} has no project.json — run {C_CYAN}ug gen{C_RESET}.",
+                project
+            ),
+        }
         if let Some(age) = project::pending_vectors_age(&project::project_dir(&project)) {
             println!(
                 "{C_YELLOW}·{C_RESET} Vectors owed for {} — hooks skip embedding to stay fast.",
@@ -552,7 +569,11 @@ fn run_run(args: &[String]) {
     let started = std::time::Instant::now();
     match spawn_update(&project, &root, &paths, hook) {
         Ok(true) => println!(
-            "{C_DIM}ug: graph refreshed for {} file(s) in {:.1}s{}{C_RESET}",
+            // Named, not just counted: a repo can have several projects
+            // indexing it, and `git commit` output is the only place a user
+            // sees which one the hook keeps current.
+            "{C_DIM}ug: {} refreshed for {} file(s) in {:.1}s{}{C_RESET}",
+            project,
             paths.len(),
             started.elapsed().as_secs_f32(),
             // Named on every run, not just the first: the whole point of
@@ -565,10 +586,14 @@ fn run_run(args: &[String]) {
             }
         ),
         Ok(false) => eprintln!(
-            "{C_YELLOW}ug: graph refresh failed{C_RESET} — see {}",
+            "{C_YELLOW}ug: refresh of {} failed{C_RESET} — see {}",
+            project,
             log_path(&project).display()
         ),
-        Err(e) => eprintln!("{C_YELLOW}ug: graph refresh skipped{C_RESET} — {}", e),
+        Err(e) => eprintln!(
+            "{C_YELLOW}ug: refresh of {} skipped{C_RESET} — {}",
+            project, e
+        ),
     }
 }
 
@@ -626,16 +651,39 @@ fn spawn_update(
     let log = log_path(project);
     // Truncated, not appended: what matters is why the last run failed, and
     // an unbounded log inside the project dir is a slow leak.
+    //
+    // The header names every input the run depended on — which git hook fired,
+    // which project it refreshed, which repo it read, which binary ran, and
+    // which files were handed over. Reading a bare "graph refresh failed" and
+    // then having to reconstruct all of that from the shell history is what
+    // made the old one-line header useless for auditing.
     let body = format!(
-        "── ug hook {} · {} file(s) · epoch {} ──\n{}{}",
-        hook.name(),
-        paths.len(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0),
-        plain_text(&out.stdout),
-        plain_text(&out.stderr),
+        "── ug hook {hook} · {when} ──\n\
+         project:  {project}\n\
+         repo:     {repo}\n\
+         data:     {data}\n\
+         ug:       {bin} (v{version})\n\
+         files:    {count}\n{files}\
+         exit:     {exit}\n\
+         ──\n{stdout}{stderr}",
+        hook = hook.name(),
+        when = project::format_epoch(project::now_epoch()),
+        project = project,
+        repo = root.display(),
+        data = dir.display(),
+        bin = ug_bin(),
+        version = env!("CARGO_PKG_VERSION"),
+        count = paths.len(),
+        files = paths
+            .iter()
+            .map(|p| format!("          {}\n", p))
+            .collect::<String>(),
+        exit = match out.status.code() {
+            Some(c) => c.to_string(),
+            None => "signal".to_string(),
+        },
+        stdout = plain_text(&out.stdout),
+        stderr = plain_text(&out.stderr),
     );
     std::fs::write(&log, body).map_err(|e| format!("cannot write {}: {}", log.display(), e))?;
     Ok(out.status.success())

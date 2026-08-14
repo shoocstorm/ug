@@ -96,11 +96,37 @@ pub(crate) fn project_dir(name: &str) -> PathBuf {
     ug_home().join(sanitize_name(name))
 }
 
-fn now_epoch() -> u64 {
+pub(crate) fn now_epoch() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+/// Render epoch seconds as `YYYY-MM-DD HH:MM:SS` (UTC).
+///
+/// Every timestamp ug shows a user comes through here — `ug list`'s UPDATED
+/// column and the git hook log's header — so the two are the same clock and
+/// the same format when someone is correlating them.
+pub(crate) fn format_epoch(secs: u64) -> String {
+    if secs == 0 {
+        return "-".to_string();
+    }
+    // Days-from-civil algorithm (Howard Hinnant) — avoids a chrono dep.
+    let days = (secs / 86_400) as i64;
+    let rem = secs % 86_400;
+    let (h, m, s) = (rem / 3600, (rem % 3600) / 60, rem % 60);
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let mo = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if mo <= 2 { y + 1 } else { y };
+    format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", y, mo, d, h, m, s)
 }
 
 /// Flat per-project metadata persisted as `<project-dir>/project.json`.
@@ -280,6 +306,145 @@ pub(crate) fn pending_vectors_age(dir: &Path) -> Option<std::time::Duration> {
     Some(std::time::Duration::from_secs(now_epoch().saturating_sub(since)))
 }
 
+/// Where a project's index stands against the tree it was built from.
+///
+/// One `stat` per file recorded in `project.json`, compared against
+/// `graph.json`'s mtime. Both `ug list` and `GET /api/projects/staleness`
+/// report from this, so the CLI and the KB Manager can never disagree about
+/// whether a project needs re-generating.
+pub(crate) struct Staleness {
+    /// graph.json's mtime — the moment the index describes.
+    pub built_at: Option<u64>,
+    pub files: usize,
+    pub changed: usize,
+    pub missing: usize,
+    /// The indexed tree is gone. Not "every file was deleted": the index is
+    /// simply frozen where it is, and counting its files as missing would
+    /// report a catastrophe where there is only a moved checkout.
+    pub repo_missing: bool,
+    pub doc_nodes: usize,
+    pub code_nodes: usize,
+}
+
+impl Staleness {
+    pub(crate) fn is_stale(&self) -> bool {
+        !self.repo_missing && (self.changed > 0 || self.missing > 0)
+    }
+
+    /// Classify the KB by symbol composition: docs (markdown/PDF/office),
+    /// code (source symbols), or mixed. File/Folder nodes are structural and
+    /// were excluded upstream by [`ProjectMeta::with_graph_index`].
+    pub(crate) fn kb_kind(&self) -> &'static str {
+        if self.repo_missing {
+            "unknown"
+        } else if self.doc_nodes > 0 && self.code_nodes > 0 {
+            "mixed"
+        } else if self.doc_nodes > self.code_nodes {
+            "docs"
+        } else {
+            "code"
+        }
+    }
+}
+
+/// Stat the tree behind `meta` and report how far its index has drifted.
+/// `None` when the project holds no `graph.json` — there is no index to
+/// compare against.
+pub(crate) fn staleness(project_dir: &Path, meta: &ProjectMeta) -> Option<Staleness> {
+    let graph_path = project_dir.join("graph.json");
+    if !graph_path.exists() {
+        return None;
+    }
+
+    let built_at = std::fs::metadata(&graph_path).ok().and_then(|m| {
+        m.modified()
+            .ok()
+            .map(|t| t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs())
+    });
+
+    // Prefer the file list recorded in project.json at `ug gen` time. Falling
+    // back to reading graph.json keeps projects generated before that field
+    // existed working — at the old cost, but only for them.
+    let (files, doc_nodes, code_nodes) = if !meta.files.is_empty() {
+        (meta.files.clone(), meta.doc_nodes, meta.code_nodes)
+    } else {
+        match std::fs::read_to_string(&graph_path)
+            .ok()
+            .and_then(|c| serde_json::from_str::<ultragraph::types::GraphData>(&c).ok())
+        {
+            Some(graph) => {
+                let derived =
+                    ProjectMeta::new(&meta.name, &meta.repo_root, 0, 0).with_graph_index(&graph);
+                (derived.files, derived.doc_nodes, derived.code_nodes)
+            }
+            None => (Vec::new(), 0, 0),
+        }
+    };
+
+    let repo_root = PathBuf::from(&meta.repo_root);
+    if !repo_root.exists() {
+        return Some(Staleness {
+            built_at,
+            files: files.len(),
+            changed: 0,
+            missing: 0,
+            repo_missing: true,
+            doc_nodes: 0,
+            code_nodes: 0,
+        });
+    }
+
+    let mut changed = 0usize;
+    let mut missing = 0usize;
+    for file in &files {
+        match std::fs::metadata(repo_root.join(file)) {
+            Ok(metadata) => {
+                if let (Ok(modified), Some(built)) = (metadata.modified(), built_at) {
+                    let file_mtime = modified
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    if file_mtime > built {
+                        changed += 1;
+                    }
+                }
+            }
+            Err(_) => missing += 1,
+        }
+    }
+
+    Some(Staleness {
+        built_at,
+        files: files.len(),
+        changed,
+        missing,
+        repo_missing: false,
+        doc_nodes,
+        code_nodes,
+    })
+}
+
+/// Bytes on disk under `dir`, walked recursively.
+///
+/// What `ug list` reports as a project's size — almost entirely `ugdb/` and
+/// `graph.json`, and the number a user needs before deciding what to `ug rm`.
+/// Symlinks are counted as the links they are rather than followed: nothing
+/// ug writes into a project dir is one, so a symlink here is not ours to
+/// traverse.
+pub(crate) fn dir_size(dir: &Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .map(|entry| match entry.file_type() {
+            Ok(t) if t.is_dir() => dir_size(&entry.path()),
+            Ok(t) if t.is_file() => entry.metadata().map(|m| m.len()).unwrap_or(0),
+            _ => 0,
+        })
+        .sum()
+}
+
 /// Enumerate project dirs under `ug_home()`: any subdir containing a
 /// `project.json` or a `graph.json`. When project.json is missing,
 /// synthesize metadata from the dir name and graph.json mtime. Sorted
@@ -331,6 +496,17 @@ pub(crate) fn list_projects() -> Vec<(PathBuf, ProjectMeta)> {
 /// `~/.ug/<cwd-basename>/ugdb` (so error messages point users at the
 /// new layout).
 pub(crate) fn default_read_db_path() -> String {
+    default_read_db_path_with_origin().0
+}
+
+/// [`default_read_db_path`], plus a label naming which link of the chain
+/// produced the path.
+///
+/// The label is what the scope banner prints. A read that silently fell
+/// through to "most recently updated project" is precisely the case a user
+/// needs told about — it is how a question about one repo gets a confident
+/// answer about another.
+pub(crate) fn default_read_db_path_with_origin() -> (String, &'static str) {
     // The active marker is the same one `serve` and `mcp` honor, so a
     // read from outside an indexed repo lands where `ug active` pointed
     // instead of on whatever was touched last. Only used when its db
@@ -339,24 +515,30 @@ pub(crate) fn default_read_db_path() -> String {
     if let Some(name) = get_active_project() {
         let active_path = project_dir(&name).join("ugdb");
         if active_path.exists() {
-            return active_path.to_string_lossy().into_owned();
+            return (active_path.to_string_lossy().into_owned(), "active project");
         }
     }
     let new_path = project_dir(&derive_project_name(".")).join("ugdb");
     if new_path.exists() {
-        return new_path.to_string_lossy().into_owned();
+        return (new_path.to_string_lossy().into_owned(), "current directory");
     }
     let legacy = Path::new(".ug/ugdb");
     if legacy.exists() {
-        return ".ug/ugdb".to_string();
+        return (".ug/ugdb".to_string(), "legacy ./.ug/ugdb");
     }
     if let Some((dir, _meta)) = list_projects().into_iter().next() {
         let fallback = dir.join("ugdb");
         if fallback.exists() {
-            return fallback.to_string_lossy().into_owned();
+            return (
+                fallback.to_string_lossy().into_owned(),
+                "most recently updated project",
+            );
         }
     }
-    new_path.to_string_lossy().into_owned()
+    (
+        new_path.to_string_lossy().into_owned(),
+        "current directory (not generated yet)",
+    )
 }
 
 /// Whether a project dir holds usable data (a graph or a db), used to
@@ -550,6 +732,86 @@ mod tests {
         set_pending_vectors(dir, false);
         assert_eq!(read_meta(dir).expect("meta").pending_vectors_since, 0);
         assert!(pending_vectors_age(dir).is_none());
+    }
+
+    /// Backdate a file's mtime so a test can produce a genuinely "newer"
+    /// file without sleeping. The staleness comparison is in whole seconds,
+    /// so a source and a graph written in the same tick read as current and
+    /// the test would pass for the wrong reason.
+    fn backdate(path: &Path, secs: u64) {
+        let f = std::fs::File::options().write(true).open(path).expect("open");
+        let when = SystemTime::now() - std::time::Duration::from_secs(secs);
+        f.set_times(std::fs::FileTimes::new().set_modified(when))
+            .expect("set mtime");
+    }
+
+    /// The three states `ug list` and `/api/projects/staleness` report from,
+    /// each of which sends the user somewhere different: edit a file and it
+    /// is `changed`, delete one and it is `missing`, move the whole checkout
+    /// and neither count means anything.
+    #[test]
+    fn staleness_separates_edited_deleted_and_a_vanished_repo() {
+        let repo = tempfile::tempdir().expect("repo");
+        let data = tempfile::tempdir().expect("data");
+        std::fs::write(repo.path().join("a.rs"), "fn a() {}").expect("a");
+        std::fs::write(repo.path().join("b.rs"), "fn b() {}").expect("b");
+
+        let mut meta = ProjectMeta::new("demo", &repo.path().to_string_lossy(), 2, 1);
+        meta.files = vec!["a.rs".to_string(), "b.rs".to_string()];
+        meta.code_nodes = 2;
+        write_meta(data.path(), &meta).expect("meta");
+        std::fs::write(data.path().join("graph.json"), "{}").expect("graph");
+        // Sources at T-120, the graph built from them at T-60. Both are in the
+        // past so the edit below lands strictly after the graph — the
+        // comparison is in whole seconds, and a same-tick edit reads as
+        // current.
+        backdate(&repo.path().join("a.rs"), 120);
+        backdate(&repo.path().join("b.rs"), 120);
+        backdate(&data.path().join("graph.json"), 60);
+
+        let fresh = staleness(data.path(), &meta).expect("has a graph");
+        assert_eq!((fresh.changed, fresh.missing), (0, 0));
+        assert!(!fresh.is_stale(), "nothing moved since the graph was built");
+        assert_eq!(fresh.files, 2);
+        assert_eq!(fresh.kb_kind(), "code");
+
+        // One edited, one deleted — counted separately, because only the
+        // second means the file list itself is wrong.
+        std::fs::write(repo.path().join("a.rs"), "fn a() { todo!() }").expect("edit");
+        std::fs::remove_file(repo.path().join("b.rs")).expect("delete");
+        let drifted = staleness(data.path(), &meta).expect("has a graph");
+        assert_eq!((drifted.changed, drifted.missing), (1, 1));
+        assert!(drifted.is_stale());
+
+        // A repo that is gone is not "every file deleted": the index is
+        // frozen, and reporting 2 missing files would send the user chasing
+        // deletions that never happened.
+        let mut orphan = meta.clone();
+        orphan.repo_root = "/nonexistent/tree".to_string();
+        let gone = staleness(data.path(), &orphan).expect("has a graph");
+        assert!(gone.repo_missing);
+        assert!(!gone.is_stale(), "a moved checkout is not drift");
+        assert_eq!((gone.changed, gone.missing), (0, 0));
+    }
+
+    /// No graph.json means there is no index to compare the tree against —
+    /// distinct from "an index that happens to be current".
+    #[test]
+    fn staleness_is_none_without_a_graph() {
+        let data = tempfile::tempdir().expect("data");
+        let meta = ProjectMeta::new("demo", "/repo", 0, 0);
+        write_meta(data.path(), &meta).expect("meta");
+        assert!(staleness(data.path(), &meta).is_none());
+    }
+
+    #[test]
+    fn dir_size_sums_nested_files() {
+        let dir = tempfile::tempdir().expect("dir");
+        std::fs::write(dir.path().join("top"), vec![0u8; 100]).expect("top");
+        std::fs::create_dir_all(dir.path().join("ugdb/seg")).expect("nested");
+        std::fs::write(dir.path().join("ugdb/seg/data"), vec![0u8; 250]).expect("nested file");
+        assert_eq!(dir_size(dir.path()), 350);
+        assert_eq!(dir_size(Path::new("/nonexistent/tree")), 0);
     }
 
     #[test]

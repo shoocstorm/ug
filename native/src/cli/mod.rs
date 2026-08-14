@@ -28,6 +28,7 @@ pub(crate) mod ingest;
 pub(crate) mod io;
 pub(crate) mod projects;
 pub(crate) mod query;
+pub(crate) mod scope;
 pub(crate) mod search;
 pub(crate) mod store;
 pub(crate) mod tour_cmd;
@@ -68,10 +69,17 @@ pub(crate) fn run() {
     let _ = dotenvy::dotenv();
 
     // `--no-logo` is consumed here rather than passed through, so no
-    // subcommand's argument parser can mistake it for a positional.
+    // subcommand's argument parser can mistake it for a positional. Same for
+    // `--no-banner`, which silences the "which project am I working against"
+    // line every project-scoped command prints to stderr (see [`scope`]).
     let mut argv: Vec<String> = raw_args;
     let logo_flagged_off = argv.iter().any(|a| a == "--no-logo" || a == "--quiet-logo");
-    argv.retain(|a| a != "--no-logo" && a != "--quiet-logo" && a != "--no-color");
+    if argv.iter().any(|a| a == "--no-banner") {
+        scope::silence();
+    }
+    argv.retain(|a| {
+        a != "--no-logo" && a != "--quiet-logo" && a != "--no-color" && a != "--no-banner"
+    });
     let argv = argv;
 
     if !help::suppress_logo(&argv, logo_flagged_off) {

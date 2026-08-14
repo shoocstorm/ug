@@ -144,6 +144,9 @@ pub(crate) fn print_help() {
     println!("                   is not a terminal, so piped and captured output is clean.");
     println!("  {C_CYAN}--no-color{C_RESET}       Force colour off (agent-tool + query output). Also off automatically");
     println!("                   when piped or when the NO_COLOR env var is set; this flag makes it explicit.");
+    println!("  {C_CYAN}--no-banner{C_RESET}      Skip the `▸ project <name> · <repo> · [<how it resolved>]` line every");
+    println!("                   project-scoped command prints. It goes to stderr, so it never touches");
+    println!("                   piped output; UG_NO_BANNER=1 does the same.");
     println!("  {C_CYAN}-v, --version{C_RESET}    Print the version");
     println!();
     println!("Run {C_CYAN}ug <command> -h{C_RESET} for that command's options and examples.");

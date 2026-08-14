@@ -4,7 +4,7 @@
 //! read commands accept exactly one. `IngestOutcome` lives here because it
 //! is what a write against those stores produces.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use ultragraph::storage::{self, KnowledgeStore, StoreSpec};
 use ultragraph::{C_BOLD, C_CYAN, C_RESET};
@@ -13,6 +13,7 @@ use crate::project;
 
 use super::args::flag_value;
 use super::io::die;
+use super::scope;
 
 /// Parse `--dest <kind>[,<kind>...]` into one or more `StoreSpec`s.
 /// Defaults to `overgraph` when no `--dest` is supplied so existing
@@ -23,16 +24,25 @@ pub(crate) fn store_specs_from_args(args: &[String], embedding_dim: u32) -> Vec<
         .or_else(|| std::env::var("UG_DEST").ok())
         .unwrap_or_else(|| "overgraph".to_string());
 
-    // The OverGraph dir path. Commands select a project by name via
-    // -n/--name, resolved to ~/.ug/<name>/ugdb, which wins over the
-    // explicit --db path. `-o` is reserved for the JSON output file on
-    // every read command, so it is never a db dir here; callers that
-    // write a store (`ingest`) translate their destination flag to
-    // --db before handing args in.
-    let og_path = flag_value(args, &["-n", "--name"])
-        .map(|n| project::project_dir(&project::sanitize_name(&n)).join("ugdb").to_string_lossy().into_owned())
-        .or_else(|| flag_value(args, &["--db"]))
-        .unwrap_or_else(project::default_read_db_path);
+    // The OverGraph dir path, and which rule produced it — the latter for the
+    // scope banner below. Commands select a project by name via -n/--name,
+    // resolved to ~/.ug/<name>/ugdb, which wins over the explicit --db path.
+    // `-o` is reserved for the JSON output file on every read command, so it
+    // is never a db dir here; callers that write a store (`gen`, `ingest`)
+    // translate their destination flag to --db before handing args in.
+    let (og_path, og_why) = if let Some(name) = flag_value(args, &["-n", "--name"]) {
+        (
+            project::project_dir(&project::sanitize_name(&name))
+                .join("ugdb")
+                .to_string_lossy()
+                .into_owned(),
+            "-n/--name",
+        )
+    } else if let Some(db) = flag_value(args, &["--db"]) {
+        (db, "--db")
+    } else {
+        project::default_read_db_path_with_origin()
+    };
 
     let neo4j_uri = flag_value(args, &["--neo4j-uri"]).or_else(|| std::env::var("UG_NEO4J_URI").ok());
     let neo4j_user = flag_value(args, &["--neo4j-user"])
@@ -47,10 +57,18 @@ pub(crate) fn store_specs_from_args(args: &[String], embedding_dim: u32) -> Vec<
     let mut specs: Vec<StoreSpec> = Vec::new();
     for kind in dest.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
         match kind {
-            "overgraph" | "og" => specs.push(StoreSpec::Overgraph {
-                path: PathBuf::from(&og_path),
-                embedding_dim,
-            }),
+            "overgraph" | "og" => {
+                // Announced here rather than at each of the ~10 call sites:
+                // this is the one place that knows both the resolved path and
+                // the rule that chose it. Only in the overgraph arm — a
+                // `--dest neo4j` run never touches this path, and naming a
+                // local project it isn't reading would be a lie.
+                scope::announce_data("store", Path::new(&og_path), og_why);
+                specs.push(StoreSpec::Overgraph {
+                    path: PathBuf::from(&og_path),
+                    embedding_dim,
+                });
+            }
             "neo4j" | "neo" => {
                 let uri = neo4j_uri.clone().unwrap_or_else(|| {
                     eprintln!(

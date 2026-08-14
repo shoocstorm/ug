@@ -23,30 +23,38 @@ use super::args::{
     split_ids_and_names,
 };
 use super::embed::tokio_runtime;
+use super::scope;
 
 /// graph.json for the agent-tool commands: `-i/--input` wins, else the
 /// `-n/--name`, active, or cwd-derived project dir, else the most recently
 /// updated project under ~/.ug — same fallback spirit as the db reads.
-fn agent_graph_path(args: &[String]) -> PathBuf {
+///
+/// Returns the rule that fired alongside the path, for the scope banner:
+/// falling through to "most recently updated project" is how a question about
+/// this repo gets answered from another one, and it should never be silent.
+fn agent_graph_path(args: &[String]) -> (PathBuf, &'static str) {
     if let Some(p) = flag_value(args, &["-i", "--input"]) {
-        return PathBuf::from(p);
+        return (PathBuf::from(p), "-i/--input");
     }
     let p =
         project::project_dir(&project::resolve_active_project_name(args, ".")).join("graph.json");
     if p.exists() || flag_value(args, &["-n", "--name"]).is_some() {
-        return p;
+        return (p, scope::why_project(args, true));
     }
     for (dir, _meta) in project::list_projects() {
         let candidate = dir.join("graph.json");
         if candidate.exists() {
-            return candidate;
+            return (candidate, "most recently updated project");
         }
     }
-    p
+    (p, scope::why_project(args, true))
 }
 
 pub(crate) fn load_agent_graph(args: &[String]) -> (GraphData, String, PathBuf) {
-    let path = agent_graph_path(args);
+    let (path, why) = agent_graph_path(args);
+    // Before the read, so a "graph.json not found" failure below still says
+    // which project it was looking for and why it looked there.
+    scope::announce_data("graph", &path, why);
     let raw = match fs::read_to_string(&path) {
         Ok(r) => r,
         Err(_) => {

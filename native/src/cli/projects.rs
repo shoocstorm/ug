@@ -7,6 +7,47 @@ use crate::project;
 
 use super::args::{first_positional, flag_value, has_flag, positionals};
 
+/// One project's row, with everything the scans produced.
+///
+/// Assembled up front so the table can size its columns to the widest cell
+/// rather than to a guess — project names and repo paths vary by an order of
+/// magnitude, and a fixed `{:<24}` either truncates or wastes half the line.
+struct Row {
+    meta: project::ProjectMeta,
+    dir: std::path::PathBuf,
+    /// Bytes under the project dir. `None` when `--quick` skipped the walk.
+    size: Option<u64>,
+    /// `None` when `--quick` skipped the scan, or the project has no graph.
+    staleness: Option<project::Staleness>,
+    has_db: bool,
+    is_active: bool,
+    is_cwd: bool,
+}
+
+impl Row {
+    /// The STATUS cell: the single most actionable thing about this project.
+    ///
+    /// Ordered by what blocks the user soonest — a missing repo or graph means
+    /// nothing can be refreshed at all, a missing db means half the commands
+    /// (`ug query`, `chat`, `search`) have nothing to read, and only then does
+    /// drift matter. Returns the plain text and its colour separately so the
+    /// column can be padded to width: ANSI escapes count toward `{:<n}` and
+    /// would skew every row that carries them.
+    fn status(&self) -> (String, &'static str) {
+        match &self.staleness {
+            None if self.dir.join("graph.json").exists() => ("?".to_string(), C_DIM),
+            None => ("no graph".to_string(), C_YELLOW),
+            Some(s) if s.repo_missing => ("repo gone".to_string(), C_YELLOW),
+            Some(_) if !self.has_db => ("no db".to_string(), C_YELLOW),
+            Some(s) if s.is_stale() => (
+                format!("{} changed", s.changed + s.missing),
+                C_YELLOW,
+            ),
+            Some(_) => ("fresh".to_string(), C_GREEN),
+        }
+    }
+}
+
 /// `ug list` — enumerate project data dirs under `~/.ug` (or `$UG_HOME`).
 pub(crate) fn run_list(args: &[String]) {
     if has_flag(args, "-h") || has_flag(args, "--help") {
@@ -22,37 +63,218 @@ pub(crate) fn run_list(args: &[String]) {
         );
         return;
     }
+
+    // `--quick` skips both filesystem scans: the recursive size walk and the
+    // one `stat` per indexed file. Both are fast on a normal project and
+    // neither is on a network mount or a repo with a hundred thousand files,
+    // and `ug list` is also what a script calls in a loop.
+    let quick = has_flag(args, "--quick");
     let cwd_name = project::derive_project_name(".");
     let active = project::get_active_project();
+    let rows: Vec<Row> = projects
+        .into_iter()
+        .map(|(dir, meta)| Row {
+            size: (!quick).then(|| project::dir_size(&dir)),
+            staleness: (!quick).then(|| project::staleness(&dir, &meta)).flatten(),
+            has_db: dir.join("ugdb").exists(),
+            is_active: active.as_deref() == Some(meta.name.as_str()),
+            is_cwd: meta.name == cwd_name,
+            meta,
+            dir,
+        })
+        .collect();
+
+    if has_flag(args, "--json") {
+        println!("{}", list_json(&rows, &root));
+        return;
+    }
+
     println!(
         "{C_BOLD}Projects in {}{C_RESET} ({}):\n",
         root.display(),
-        projects.len()
+        rows.len()
     );
+
+    let w_name = rows.iter().map(|r| r.meta.name.len()).max().unwrap_or(4).max(4);
+    let w_nodes = rows.iter().map(|r| commas(r.meta.nodes).len()).max().unwrap_or(5).max(5);
+    let w_edges = rows.iter().map(|r| commas(r.meta.edges).len()).max().unwrap_or(5).max(5);
+    let w_size = rows
+        .iter()
+        .map(|r| size_cell(r.size).len())
+        .max()
+        .unwrap_or(4)
+        .max(4);
+    let w_status = rows.iter().map(|r| r.status().0.len()).max().unwrap_or(6).max(6);
+
     println!(
-        "  {C_BOLD}{:<24} {:>8} {:>8}  {:<19}  {}{C_RESET}",
-        "NAME", "NODES", "EDGES", "UPDATED", "REPO"
+        "  {C_BOLD}{:<w_name$}  {:>w_nodes$}  {:>w_edges$}  {:>w_size$}  {:<w_status$}  {:<19}  {}{C_RESET}",
+        "NAME", "NODES", "EDGES", "SIZE", "STATUS", "UPDATED", "REPO"
     );
-    for (_dir, meta) in &projects {
-        // `*` = matches the current directory; `→` = the active project
-        // (`ug active`). When one project is both, `*` wins the leading slot
-        // and the row still carries the active tag.
-        let is_active = active.as_deref() == Some(meta.name.as_str());
-        let marker = if meta.name == cwd_name { "*" } else { " " };
-        let tag = if is_active {
+
+    for row in &rows {
+        // `*` = matches the current directory; `← active` = the project
+        // (`ug active`) that `ug mcp` and `ug serve` default to. When one
+        // project is both, `*` wins the leading slot and the row still carries
+        // the active tag.
+        let marker = if row.is_cwd { "*" } else { " " };
+        let tag = if row.is_active {
             format!("  {C_YELLOW}← active{C_RESET}")
         } else {
             String::new()
         };
-        let updated = format_epoch(meta.updated_at);
+        let (status, status_color) = row.status();
+        let repo = if row.meta.repo_root.is_empty() {
+            "(no repo recorded)".to_string()
+        } else {
+            row.meta.repo_root.clone()
+        };
         println!(
-            "{C_GREEN}{}{C_RESET} {C_CYAN}{:<24}{C_RESET} {:>8} {:>8}  {:<19}  {}{}",
-            marker, meta.name, meta.nodes, meta.edges, updated, meta.repo_root, tag
+            "{C_GREEN}{}{C_RESET} {C_CYAN}{:<w_name$}{C_RESET}  {:>w_nodes$}  {:>w_edges$}  {:>w_size$}  \
+             {}{:<w_status$}{C_RESET}  {:<19}  {}{}",
+            marker,
+            row.meta.name,
+            commas(row.meta.nodes),
+            commas(row.meta.edges),
+            size_cell(row.size),
+            status_color,
+            status,
+            project::format_epoch(row.meta.updated_at),
+            repo,
+            tag,
         );
+    }
+
+    // Per-project follow-ups, below the table rather than crammed into it:
+    // each names the command that resolves it, which a status cell has no
+    // room for.
+    println!();
+    for row in &rows {
+        if let Some(age) = project::pending_vectors_age(&row.dir) {
+            println!(
+                "  {C_YELLOW}·{C_RESET} {C_CYAN}{}{C_RESET} owes vectors ({} behind) — \
+                 {C_CYAN}ug ingest -n {}{C_RESET} catches semantic search up.",
+                row.meta.name,
+                humanize(age),
+                row.meta.name
+            );
+        }
+        match &row.staleness {
+            Some(s) if s.repo_missing => println!(
+                "  {C_YELLOW}·{C_RESET} {C_CYAN}{}{C_RESET} indexes {}, which is gone — \
+                 {C_CYAN}ug gen -i <path> -n {}{C_RESET} repoints it.",
+                row.meta.name, row.meta.repo_root, row.meta.name
+            ),
+            Some(s) if s.is_stale() => println!(
+                "  {C_YELLOW}·{C_RESET} {C_CYAN}{}{C_RESET} is {} of {} file(s) behind \
+                 ({} changed, {} deleted) — {C_CYAN}ug gen -n {}{C_RESET} refreshes it.",
+                row.meta.name,
+                s.changed + s.missing,
+                s.files,
+                s.changed,
+                s.missing,
+                row.meta.name
+            ),
+            _ => {}
+        }
+        if !row.has_db {
+            println!(
+                "  {C_YELLOW}·{C_RESET} {C_CYAN}{}{C_RESET} has no db — {C_CYAN}ug query{C_RESET}, \
+                 {C_CYAN}search{C_RESET} and {C_CYAN}chat{C_RESET} cannot read it. \
+                 {C_CYAN}ug ingest -n {}{C_RESET} builds one.",
+                row.meta.name, row.meta.name
+            );
+        }
+    }
+
+    if let Some(total) = rows.iter().map(|r| r.size).sum::<Option<u64>>() {
+        println!("  {C_DIM}{} total in {}{C_RESET}", format_bytes(total), root.display());
     }
     println!(
         "\n{C_BOLD}*{C_RESET} matches the current directory; {C_YELLOW}← active{C_RESET} is the default for {C_CYAN}ug mcp{C_RESET} and {C_CYAN}ug serve{C_RESET} (set with {C_CYAN}ug active <name>{C_RESET})."
     );
+}
+
+/// `ug list --json` — the same rows, for anything that parses rather than
+/// reads. Field names match `GET /api/projects/staleness` where they overlap.
+fn list_json(rows: &[Row], root: &std::path::Path) -> String {
+    let projects: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            let (status, _) = r.status();
+            serde_json::json!({
+                "name": r.meta.name,
+                "repoRoot": r.meta.repo_root,
+                "dataDir": r.dir.to_string_lossy(),
+                "nodes": r.meta.nodes,
+                "edges": r.meta.edges,
+                "sizeBytes": r.size,
+                "status": status,
+                "updatedAt": r.meta.updated_at,
+                "createdAt": r.meta.created_at,
+                "ugVersion": r.meta.ug_version,
+                "hasDb": r.has_db,
+                "active": r.is_active,
+                "matchesCwd": r.is_cwd,
+                "pendingVectorsSince": r.meta.pending_vectors_since,
+                "files": r.staleness.as_ref().map(|s| s.files),
+                "changed": r.staleness.as_ref().map(|s| s.changed),
+                "missing": r.staleness.as_ref().map(|s| s.missing),
+                "isStale": r.staleness.as_ref().map(|s| s.is_stale()),
+                "repoMissing": r.staleness.as_ref().map(|s| s.repo_missing),
+                "kbKind": r.staleness.as_ref().map(|s| s.kb_kind()),
+            })
+        })
+        .collect();
+    serde_json::json!({ "ugHome": root.to_string_lossy(), "projects": projects }).to_string()
+}
+
+/// A count with thousands separators — `ug list`'s two widest numeric columns
+/// are otherwise an unreadable run of digits at repo scale.
+fn commas(n: usize) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+fn size_cell(size: Option<u64>) -> String {
+    size.map(format_bytes).unwrap_or_else(|| "-".to_string())
+}
+
+/// Bytes at human scale. Three significant figures below 10 units, so a
+/// column of sizes stays comparable at a glance.
+fn format_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{} B", bytes)
+    } else if value < 10.0 {
+        format!("{:.1} {}", value, UNITS[unit])
+    } else {
+        format!("{:.0} {}", value, UNITS[unit])
+    }
+}
+
+/// Coarse "how long ago" for the pending-vectors note — the useful
+/// distinction is minutes vs. days, not seconds.
+fn humanize(d: std::time::Duration) -> String {
+    let secs = d.as_secs();
+    match secs {
+        0..=90 => "under a minute".to_string(),
+        91..=5400 => format!("{}m", secs / 60),
+        5401..=172_800 => format!("{}h", secs / 3600),
+        _ => format!("{}d", secs / 86_400),
+    }
 }
 
 /// `ug active [<project>|--clear]` — view or set the persisted active
@@ -428,30 +650,88 @@ fn print_list_help() {
     println!("  {C_BOLD}{C_GREEN}★ ug list{C_RESET}  {C_YELLOW}— list generated projects{C_RESET}");
     println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
     println!();
-    println!("{C_BOLD}Usage:{C_RESET}  ug list   {C_DIM}(aliases: ls, list_projects — the MCP tool's name){C_RESET}");
+    println!("{C_BOLD}Usage:{C_RESET}  ug list [--quick] [--json]   {C_DIM}(aliases: ls, list_projects — the MCP tool's name){C_RESET}");
     println!();
-    println!("  Lists every project under ~/.ug (or $UG_HOME), with node/edge counts");
-    println!("  and last-updated time. The current directory's project is marked with {C_BOLD}*{C_RESET}.");
+    println!("  Lists every project under ~/.ug (or $UG_HOME): node/edge counts, size on");
+    println!("  disk, how far the index has drifted from the repo, and last-updated time.");
+    println!("  The current directory's project is marked with {C_BOLD}*{C_RESET}, the {C_CYAN}ug active{C_RESET} one with {C_YELLOW}←{C_RESET}.");
+    println!();
+    println!("{C_BOLD}STATUS{C_RESET} is whatever blocks you soonest:");
+    println!("  {C_GREEN}fresh{C_RESET}        every indexed file still matches the graph");
+    println!("  {C_YELLOW}N changed{C_RESET}    N indexed files were edited or deleted — {C_CYAN}ug gen -n <name>{C_RESET}");
+    println!("  {C_YELLOW}no db{C_RESET}        never ingested: {C_CYAN}query{C_RESET}/{C_CYAN}search{C_RESET}/{C_CYAN}chat{C_RESET} cannot read it");
+    println!("  {C_YELLOW}repo gone{C_RESET}    the indexed tree has moved or been deleted");
+    println!("  {C_YELLOW}no graph{C_RESET}     the project dir holds no graph.json");
+    println!();
+    println!("{C_BOLD}Options:{C_RESET}");
+    println!("  {C_CYAN}--quick{C_RESET}   Skip the size walk and the staleness scan (SIZE and STATUS read {C_BOLD}-{C_RESET}/{C_BOLD}?{C_RESET}).");
+    println!("  {C_CYAN}--json{C_RESET}    Machine-readable rows, including the per-file changed/missing counts.");
 }
 
-/// Render epoch seconds as local-naive `YYYY-MM-DD HH:MM:SS` (UTC).
-fn format_epoch(secs: u64) -> String {
-    if secs == 0 {
-        return "-".to_string();
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(dir: std::path::PathBuf, has_db: bool, staleness: Option<project::Staleness>) -> Row {
+        Row {
+            meta: project::ProjectMeta::new("demo", "/repo", 0, 0),
+            dir,
+            size: None,
+            staleness,
+            has_db,
+            is_active: false,
+            is_cwd: false,
+        }
     }
-    // Days-from-civil algorithm (Howard Hinnant) — avoids a chrono dep.
-    let days = (secs / 86_400) as i64;
-    let rem = secs % 86_400;
-    let (h, m, s) = (rem / 3600, (rem % 3600) / 60, rem % 60);
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let mo = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if mo <= 2 { y + 1 } else { y };
-    format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", y, mo, d, h, m, s)
+
+    fn drift(changed: usize, missing: usize, repo_missing: bool) -> project::Staleness {
+        project::Staleness {
+            built_at: Some(1),
+            files: 10,
+            changed,
+            missing,
+            repo_missing,
+            doc_nodes: 0,
+            code_nodes: 10,
+        }
+    }
+
+    /// STATUS shows whatever blocks the user soonest, not everything at once.
+    /// A project with no db is *also* usually stale, and telling someone to
+    /// re-generate a graph they cannot query yet is the wrong next step.
+    #[test]
+    fn status_reports_the_soonest_blocker() {
+        let empty = tempfile::tempdir().expect("dir");
+        let d = empty.path().to_path_buf();
+
+        assert_eq!(row(d.clone(), true, None).status().0, "no graph");
+        assert_eq!(row(d.clone(), true, Some(drift(0, 0, true))).status().0, "repo gone");
+        assert_eq!(row(d.clone(), false, Some(drift(3, 0, false))).status().0, "no db");
+        assert_eq!(row(d.clone(), true, Some(drift(3, 2, false))).status().0, "5 changed");
+        assert_eq!(row(d.clone(), true, Some(drift(0, 0, false))).status().0, "fresh");
+
+        // `--quick` skipped the scan on a project that *does* have a graph:
+        // unknown, which is not the same claim as "fresh".
+        std::fs::write(empty.path().join("graph.json"), "{}").expect("graph");
+        assert_eq!(row(d, true, None).status().0, "?");
+    }
+
+    #[test]
+    fn commas_group_digits() {
+        assert_eq!(commas(0), "0");
+        assert_eq!(commas(999), "999");
+        assert_eq!(commas(1_000), "1,000");
+        assert_eq!(commas(43_831), "43,831");
+        assert_eq!(commas(1_234_567), "1,234,567");
+    }
+
+    #[test]
+    fn bytes_render_at_human_scale() {
+        assert_eq!(format_bytes(0), "0 B");
+        assert_eq!(format_bytes(999), "999 B");
+        assert_eq!(format_bytes(1024), "1.0 KB");
+        assert_eq!(format_bytes(72_743_516), "69 MB");
+        // The unit ladder stops at TB rather than overflowing off the end.
+        assert_eq!(format_bytes(5 * 1024 * 1024 * 1024 * 1024), "5.0 TB");
+    }
 }

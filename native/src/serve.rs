@@ -1979,102 +1979,23 @@ struct StalenessCache {
 
 /// One project's staleness row. Split out of the handler so the whole scan can
 /// be handed to `spawn_blocking` as a single unit of plain sync work.
+///
+/// The scan itself lives in `project::staleness`, shared with `ug list` — the
+/// CLI and the KB Manager must never disagree about whether a project is
+/// stale, and two implementations of the same `stat` loop is how they would.
 fn staleness_for_project(project_dir: &std::path::Path, meta: &crate::project::ProjectMeta) -> Option<serde_json::Value> {
-    let graph_path = project_dir.join("graph.json");
-    if !graph_path.exists() {
-        return None;
-    }
-
-    let built_at = std::fs::metadata(&graph_path).ok().and_then(|m| {
-        m.modified().ok().map(|t| {
-            t.duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs()
-        })
-    });
-
-    // Prefer the file list recorded in project.json at `ug gen` time. Falling
-    // back to reading graph.json keeps projects generated before that field
-    // existed working — at the old cost, but only for them, and only once per
-    // TTL window rather than on every poll.
-    let (files, doc_nodes, code_nodes) = if !meta.files.is_empty() {
-        (meta.files.clone(), meta.doc_nodes, meta.code_nodes)
-    } else {
-        match std::fs::read_to_string(&graph_path)
-            .ok()
-            .and_then(|c| serde_json::from_str::<GraphData>(&c).ok())
-        {
-            Some(graph) => {
-                let derived = crate::project::ProjectMeta::new(&meta.name, &meta.repo_root, 0, 0)
-                    .with_graph_index(&graph);
-                (derived.files, derived.doc_nodes, derived.code_nodes)
-            }
-            None => (Vec::new(), 0, 0),
-        }
-    };
-
-    let files_count = files.len();
-    let repo_root = PathBuf::from(&meta.repo_root);
-
-    // A repo root that no longer exists is not "N files deleted" — the whole
-    // tree is gone, and the index simply freezes where it is. Report that
-    // distinctly instead of a misleading count.
-    if !repo_root.exists() {
-        return Some(serde_json::json!({
-            "name": meta.name,
-            "isStale": false,
-            "repoMissing": true,
-            "builtAt": built_at,
-            "files": files_count,
-            "changed": 0,
-            "missing": 0,
-            "kbKind": "unknown",
-            "docNodes": 0,
-            "codeNodes": 0,
-        }));
-    }
-
-    let mut changed = 0usize;
-    let mut missing = 0usize;
-    for file in &files {
-        match std::fs::metadata(repo_root.join(file)) {
-            Ok(metadata) => {
-                if let (Ok(modified), Some(built)) = (metadata.modified(), built_at) {
-                    let file_mtime = modified
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs();
-                    if file_mtime > built {
-                        changed += 1;
-                    }
-                }
-            }
-            Err(_) => missing += 1,
-        }
-    }
-
-    // Classify the KB by symbol composition: docs (markdown/PDF/office), code
-    // (source symbols), or mixed. File/Folder nodes are structural and
-    // excluded from the ratio.
-    let kb_kind = if doc_nodes > 0 && code_nodes > 0 {
-        "mixed"
-    } else if doc_nodes > code_nodes {
-        "docs"
-    } else {
-        "code"
-    };
-
+    let s = crate::project::staleness(project_dir, meta)?;
     Some(serde_json::json!({
         "name": meta.name,
-        "isStale": changed > 0 || missing > 0,
-        "repoMissing": false,
-        "builtAt": built_at,
-        "files": files_count,
-        "changed": changed,
-        "missing": missing,
-        "kbKind": kb_kind,
-        "docNodes": doc_nodes,
-        "codeNodes": code_nodes,
+        "isStale": s.is_stale(),
+        "repoMissing": s.repo_missing,
+        "builtAt": s.built_at,
+        "files": s.files,
+        "changed": s.changed,
+        "missing": s.missing,
+        "kbKind": s.kb_kind(),
+        "docNodes": s.doc_nodes,
+        "codeNodes": s.code_nodes,
     }))
 }
 
