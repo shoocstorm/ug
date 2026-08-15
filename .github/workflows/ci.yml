@@ -51,7 +51,11 @@ jobs:
             librsvg2-dev
 
       - name: Clippy (correctness gate)
-        run: cargo clippy --all-targets -- -D clippy::correctness
+        # `--all-features` so the feature-gated `ug-app` binary is still
+        # linted here — it is excluded from the default build, and this is the
+        # only job that would otherwise catch a compile error in it before a
+        # release tag does.
+        run: cargo clippy --all-targets --all-features -- -D clippy::correctness
         working-directory: native
 
       - name: Rust tests

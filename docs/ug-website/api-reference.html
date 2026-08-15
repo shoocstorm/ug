@@ -121,14 +121,15 @@
   }
   .brand .hl { color: var(--teal); }
   .brand .sub { font-weight: 400; color: var(--slate); font-size: 13px; margin-left: 4px; }
-  .back-link {
+  .back-link, .nav-pill {
     font-family: var(--mono); font-size: 12.5px; color: var(--ink-2);
     text-decoration: none; display: inline-flex; align-items: center; gap: 8px;
     padding: 8px 14px; border-radius: 10px;
     border: 1px solid var(--line-strong); background: var(--panel);
     transition: background .15s ease, border-color .15s ease, transform .15s ease;
   }
-  .back-link:hover { background: var(--panel-2); border-color: var(--teal); color: var(--ink); transform: translateY(-1px); }
+  .back-link:hover, .nav-pill:hover { background: var(--panel-2); border-color: var(--teal); color: var(--ink); transform: translateY(-1px); }
+  .nav-pill svg { width: 14px; height: 14px; }
 
   .topbar-actions { display: flex; align-items: center; gap: 10px; }
   .theme-toggle {
@@ -325,6 +326,8 @@
     .container { padding: 32px 16px 70px; }
     .table-wrap td, .table-wrap th { padding: 9px 11px; font-size: 12.5px; }
     .brand .sub { display: none; }
+    .nav-pill .label { display: none; }
+    .nav-pill { padding: 8px 10px; }
   }
 </style>
 </head>
@@ -339,6 +342,10 @@
         <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
         <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
       </button>
+      <a class="nav-pill" href="architecture.html" aria-label="Architecture diagram">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="18" r="2"/><path d="M7 7l3 4M17 7l-3 4M7 17l3-4M17 17l-3-4"/></svg>
+        <span class="label">Architecture</span>
+      </a>
       <a class="back-link" href="index.html">&larr; Back to home</a>
     </div>
   </div>
@@ -547,10 +554,7 @@ function:native/src/indexer.rs:index_with_cache           <span class="c-num">16
     </table>
   </div>
 
-</div>
-
 <!-- ═══════════════════════════ PROJECTION & PROJECT RESOLUTION ═══════════════════════════ -->
-<div class="tab-content" id="tab-cli">
 <div class="separator">— — —</div>
 
 <h2>1.9 Project Resolution & Active Project Fallback</h2>

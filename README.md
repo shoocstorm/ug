@@ -18,7 +18,8 @@ Installs the `ug` binary (and the `ug-app` desktop shell) to
 `~/.local/share/ultragraph/.ug/` and symlinks `ug` onto `~/.local/bin`.
 Windows: download `ultragraph-windows-x64.zip` from
 [Releases](https://github.com/shoocstorm/ug/releases/latest). Build from source
-with **Rust** (latest stable): `cd native && cargo build --release`.
+with **Rust** (latest stable): `cd native && cargo build --release --features app`
+(drop `--features app` to build just the `ug` CLI, without the desktop shell).
 
 `ug upgrade` self-updates (`--check` reports whether a release is available).
 
@@ -337,8 +338,13 @@ The standalone binary is the default path, but the same core is reachable other 
 ## Testing
 
 ```bash
-cd native && cargo test     # native Rust tests
+cargo install cargo-nextest --locked   # one time
+cd native && cargo nextest run         # native Rust tests
 ```
+
+Parallelism is set in `native/.config/nextest.toml` and scales to your
+machine, so no `-j` flag is needed. Plain `cargo test` still works if you
+would rather not install nextest.
 
 ## Further Reading
 

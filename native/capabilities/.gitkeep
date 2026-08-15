@@ -1,0 +1,4 @@
+# Tauri v2 reads this directory at build time (`tauri_build::build()` emits a
+# `rerun-if-changed` for it). If the directory does not exist, cargo treats the
+# build script as permanently stale and re-runs it — and so recompiles the
+# whole crate — on every single `cargo build`, even a no-op one.

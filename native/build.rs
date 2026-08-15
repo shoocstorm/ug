@@ -3,6 +3,11 @@ use std::path::{Path, PathBuf};
 
 fn main() {
     assemble_visualization();
+    // Only the `ug-app` desktop binary needs a Tauri context, and that binary
+    // is behind the `app` feature — see Cargo.toml. Cargo compiles build
+    // scripts with the package's enabled features as `cfg`s, so this arm
+    // switches off with the dependency itself.
+    #[cfg(feature = "app")]
     tauri_build::build();
 }
 

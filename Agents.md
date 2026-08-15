@@ -122,7 +122,17 @@ format), stream only the final answer, and show every call to the user as it hap
 **Always verify changes with tests before marking a task complete.**
 
 ### Rust Tests (Native Code)
-- Run `cd native && cargo test` to execute all Rust tests
+- Run `cd native && cargo nextest run` to execute all Rust tests
+- **Use `cargo nextest run`, not `cargo test`.** `cargo test -- --test-threads=N`
+  only parallelizes within a single test binary, and this workspace has a dozen
+  of them, so the big ones serialize against each other and most of the machine
+  sits idle. nextest schedules every test across all binaries in one pool.
+  Thread count is already set in `native/.config/nextest.toml`
+  (`test-threads = -3` — all logical CPUs minus 3, so 15 on this 18-core
+  machine), so **do not pass `-j` yourself**; the config is the one place to
+  change it.
+- Install once with `cargo install cargo-nextest --locked`. If nextest is
+  genuinely unavailable, `cargo test -- --test-threads=15` is the fallback.
 - Tests are in `native/tests/`: `indexer_test.rs`, `graph_test.rs`, `search_test.rs`,
   `storage_test.rs`, `rust_indexer_test.rs`, `pdf_indexer_test.rs`, `storage_bench.rs`,
   and the `#[ignore]`-gated `neo4j_smoke.rs` / `neo4j_write_smoke.rs`
@@ -132,10 +142,27 @@ format), stream only the final answer, and show every call to the user as it hap
 
 ### Verification Checklist
 ```
-1. cd native && cargo test              → all tests must pass
-2. cd native && cargo build   → native module must build
-3. ./native/target/release/ug help      → CLI works
+1. cd native && cargo nextest run   → all tests must pass
+2. cd native && cargo build         → native module must build
+3. ./native/target/debug/ug help    → CLI works
 ```
+
+`cargo build` builds the `ug` binary only. The `ug-app` desktop shell needs
+`--features app`, which pulls in Tauri and ~110 more crates; CI's clippy job
+runs `--all-features`, so leaving it out locally cannot hide a break in it.
+Touch that binary or `build.rs` and you should run the feature-enabled build
+yourself before pushing.
+
+The first test run on a fresh checkout downloads the ONNX runtime and the
+embedding model (several hundred MB, ~9 minutes on a home connection) the
+first time a test reaches the embedder. It is a one-time cost cached under
+`~/.cache`; a warm run finishes in seconds. Do not read that first run
+as a slow test suite.
+
+nextest does not run doctests — it cannot, by design. That costs us nothing
+today: every ` ``` ` block in `native/src/` is fenced as `text`, so there are
+no doctests to skip. Add a real doctest and you have to run `cargo test --doc`
+alongside nextest to see it.
 
 ## 7. Documentation & Website
 
@@ -151,7 +178,7 @@ checkout, symlinked in. That repo is superseded — edit the files here.
 |------|-----------------|----------------------|
 | `index.html` | Slide-deck landing page | `#what` `#how` `#demo` `#features` `#agents` `#showcase` `#get-started` |
 | `api-reference.html` | Multi-tab API reference, mirroring `docs/API-REFERENCE.md` | `#tab-cli` `#tab-http` `#tab-mcp` `#tab-storage` `#tab-pipeline` |
-| `architecture.html` | Architecture diagram and component overview | — |
+| `architecture.html` | Architecture diagram, in two tabbed layouts of the *same* pipeline | `#tab-horizontal` (default) `#tab-vertical` |
 | `install.sh` | The script behind the landing page's `curl \| sh` install | — |
 | `img/UG-*.png` | Screenshots used by the hero background and `#showcase` | — |
 | `404.html`, `favicon.svg` | Static assets served at the site root | — |
@@ -174,7 +201,7 @@ change. Do not wait to be told, and do not file it as future work.
 | A storage backend, `StoreSpec`, or `KnowledgeStore` method | `docs/API-REFERENCE.md` §4.x → `#tab-storage` |
 | The pipeline, `index.json`, or `graph.json` schema | `docs/API-REFERENCE.md` §5.x → `#tab-pipeline` |
 | Install or upgrade steps | `index.html` `#get-started` **and** `docs/ug-website/install.sh` — they must agree |
-| Architecture or component boundaries | `architecture.html` **and** `docs/architecture.html` |
+| Architecture or component boundaries | `architecture.html` — **both tabs**, `#tab-horizontal` and `#tab-vertical`, which draw the same pipeline at different densities |
 | A user-visible UI feature worth showing off | `index.html` `#showcase` (reuse an existing `img/UG-*.png` unless the feature is genuinely new) |
 
 Renames and deletions count. Per §3a there are no aliases, so a command that
@@ -186,7 +213,16 @@ While editing the HTML:
 - Match the surrounding markup and class names. Do not reformat, re-indent, or
   "modernize" a page you are only adding a row to (§3).
 - **Keep the `#tab-*` ids and `data-tab` values stable** — the tab bar's JS
-  pairs them by name.
+  pairs them by name. **Exactly one `.tab-content` per id.** To extend a tab,
+  add the section *inside* its existing pane; opening a second
+  `<div class="tab-content" id="tab-cli">` looks harmless but silently breaks
+  every tab — the later div wins the id lookup, so the earlier one keeps its
+  hardcoded `active` and shows under all five tabs. This has already shipped
+  once.
+- In `architecture.html`, the two tabs reuse the same class names (`.card`,
+  `.tag`, `.chip`, `.bullet`, `.icon`, `.code`, …) at different sizes, so every
+  rule is scoped under `.view-h` or `.view-v`. **Never unscope one** — it
+  silently restyles the other tab. Add new rules inside the matching block.
 - Every command string on the page must be copy-paste runnable. Verify it
   against actual `ug help <cmd>` output, not from memory.
 - `favicon.svg` is referenced from the site root (`/favicon.svg`); screenshots

@@ -64,7 +64,10 @@ jobs:
             librsvg2-dev
 
       - name: Build
-        run: cargo build --release
+        # `--features app` is what pulls in Tauri and builds the `ug-app`
+        # desktop binary staged below; it is off by default so that everyday
+        # `cargo build`/`cargo test` skip ~110 crates. See native/Cargo.toml.
+        run: cargo build --release --features app
         working-directory: native
 
       - name: Stage binaries

@@ -1,0 +1,22 @@
+# cargo-nextest configuration.
+#
+# Why nextest instead of `cargo test`: `cargo test -- --test-threads=N` only
+# parallelizes *within* one test binary. This workspace has a dozen of them
+# (indexer_test, graph_test, search_test, storage_test, ...), and the big ones
+# serialize against each other. nextest schedules every test across all
+# binaries in one pool, so the whole suite fills the machine.
+
+[profile.default]
+# Negative means "logical CPUs minus this many", so it scales with whatever
+# machine you are on instead of hardcoding one dev's core count. 3 free cores
+# leaves room for rustc's own jobs and the OS.
+test-threads = -3
+
+# The embedder tests can genuinely take a while on a cold model cache; don't
+# nag about it until something is actually stuck.
+slow-timeout = { period = "60s", terminate-after = 10 }
+
+[profile.ci]
+# CI runners are small (2-4 cores) — oversubscribing them is a net loss there.
+test-threads = "num-cpus"
+fail-fast = false

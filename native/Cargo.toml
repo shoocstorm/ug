@@ -15,6 +15,16 @@ path = "src/main.rs"
 [[bin]]
 name = "ug-app"
 path = "src/bin/ug_app.rs"
+# Tauri and its ~200 transitive crates exist for this binary alone — nothing
+# in the library or in `ug` itself touches it, and the two talk over a URL in
+# `UG_APP_URL`, not a linker symbol. Gating it keeps that whole subtree, and
+# `tauri_build::build()` in build.rs, out of the everyday `cargo build` /
+# `cargo test` loop. Release builds pass `--features app`.
+required-features = ["app"]
+
+[features]
+default = []
+app = ["dep:tauri", "dep:tauri-build"]
 
 [dev-dependencies]
 tempfile = "3"
@@ -59,7 +69,7 @@ flate2 = "1"
 brotli = "8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-tauri = "2"
+tauri = { version = "2", optional = true }
 url = "2"
 
 # Pure-Rust PDF text extraction. Replaces `liteparse`, which pulled in
@@ -70,16 +80,25 @@ url = "2"
 pdf-extract = "0.12"
 
 [build-dependencies]
-tauri-build = "2"
+# Optional for the same reason `tauri` is: without the `app` feature there is
+# no desktop binary to generate a context for, and `tauri_build::build()` is
+# the only thing in build.rs that is not cheap.
+tauri-build = { version = "2", optional = true }
 
 [profile.release]
 lto = "thin"
 codegen-units = 16
 panic = "abort"
 
-[profile.dev-fast]
-inherits = "release"
-lto = false
-codegen-units = 256
-opt-level = 1
+# Debug info is the single largest input to link time, and linking the two
+# binaries plus 21 test harnesses is where an incremental `cargo test` spends
+# most of its wall clock. `line-tables-only` keeps what is actually read day
+# to day — backtraces with file and line — and drops the variable/type DWARF
+# that only an interactive debugger consumes. Dependencies drop it entirely:
+# stepping into `tokio` is rare enough to be worth an explicit
+# `--profile release` (or a temporary edit here) on the day it is needed.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
 debug = false

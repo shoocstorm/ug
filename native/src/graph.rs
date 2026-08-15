@@ -1767,3 +1767,29 @@ fn detect_cycles_dfs(
     path.pop();
     rec_stack.insert(node_id.to_string(), false);
 }
+#[allow(dead_code)]
+fn __bench_probe_1() -> u32 { 1 }
+
+#[allow(dead_code)]
+fn __bench_probe_2() -> u32 { 2 }
+
+#[allow(dead_code)]
+fn __bench_probe_3() -> u32 { 3 }
+
+#[allow(dead_code)]
+fn __bench_probe_4() -> u32 { 4 }
+
+#[allow(dead_code)]
+fn __bench_probe_5() -> u32 { 5 }
+
+#[allow(dead_code)]
+fn __bench_probe_6() -> u32 { 6 }
+
+#[allow(dead_code)]
+fn __bench_probe_7() -> u32 { 7 }
+
+#[allow(dead_code)]
+fn __bench_probe_8() -> u32 { 8 }
+
+#[allow(dead_code)]
+fn __bench_probe_9() -> u32 { 9 }
