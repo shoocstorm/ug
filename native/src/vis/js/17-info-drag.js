@@ -12,7 +12,7 @@
         window.addEventListener('resize', () => {
             width = document.getElementById('container').clientWidth;
             height = document.getElementById('container').clientHeight;
-            if (Graph) Graph.width(width).height(height);
+            resizeRenderer(width, height);
         });
 
         document.addEventListener('keydown', e => {

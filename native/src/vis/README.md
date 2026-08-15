@@ -9,7 +9,7 @@ the parts in this directory.
 index.html          the shell: <head>, markup, {{CSS}} and {{JS}} placeholders
 css/NN-name.css     stylesheet parts, concatenated in filename order
 js/NN-name.js       script parts, concatenated in filename order
-ug-vis.bundle.js    Three.js + 3d-force-graph, vendored (do not hand-edit)
+threejs-vis.bundle.js    Three.js + 3d-force-graph, vendored (do not hand-edit)
 demo-shim.js        the static-hosting wrapper for the public demo — see below
 favicon.svg
 ```

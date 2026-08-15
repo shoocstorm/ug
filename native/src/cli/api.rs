@@ -83,9 +83,10 @@ const API_ENDPOINTS: &[(&str, &[ApiEntry])] = &[
     (
         "UI & static assets",
         &[
-            ApiEntry { method: "GET", path: "/", desc: "3D visualization UI (single-page app)", availability: "always", cli_equivalent: None },
+            ApiEntry { method: "GET", path: "/", desc: "graph visualization UI (single-page app)", availability: "always", cli_equivalent: None },
             ApiEntry { method: "GET", path: "/index.html", desc: "same as /", availability: "always", cli_equivalent: None },
-            ApiEntry { method: "GET", path: "/ug-vis.bundle.js", desc: "three.js/3d-force-graph JS bundle for the UI", availability: "always", cli_equivalent: None },
+            ApiEntry { method: "GET", path: "/threejs-vis.bundle.js", desc: "3D renderer bundle (three.js + 3d-force-graph), loaded on demand", availability: "always", cli_equivalent: None },
+            ApiEntry { method: "GET", path: "/cosmos-vis.bundle.js", desc: "2D renderer bundle (cosmos.gl), loaded on demand", availability: "always", cli_equivalent: None },
             ApiEntry { method: "GET", path: "/favicon.svg", desc: "browser tab icon", availability: "always", cli_equivalent: None },
             ApiEntry { method: "GET", path: "/healthz", desc: "liveness probe — always returns \"ok\"", availability: "always", cli_equivalent: None },
             ApiEntry { method: "GET", path: "/graph.json", desc: "raw graph JSON for the active project", availability: "always (empty if no project active)", cli_equivalent: None },

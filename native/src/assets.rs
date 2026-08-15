@@ -17,7 +17,11 @@
 /// `the_published_demo_page_is_not_stale` can catch it; `ug demo
 /// --page-only` is the fix.
 pub(crate) const VIS_HTML: &str = include_str!(concat!(env!("OUT_DIR"), "/visualization.html"));
-pub(crate) const VIS_BUNDLE: &[u8] = include_bytes!("./vis/ug-vis.bundle.js");
+/// The 3D renderer: three.js + 3d-force-graph.
+pub(crate) const VIS_THREEJS_BUNDLE: &[u8] = include_bytes!("./vis/threejs-vis.bundle.js");
+/// The 2D renderer: cosmos.gl. Both ship; the page imports whichever backend
+/// it mounts, so a session only ever downloads one of them.
+pub(crate) const VIS_COSMOS_BUNDLE: &[u8] = include_bytes!("./vis/cosmos-vis.bundle.js");
 pub(crate) const VIS_FAVICON: &[u8] = include_bytes!("./vis/favicon.svg");
 pub(crate) const VIS_MD: &str = include_str!("../../README.md");
 

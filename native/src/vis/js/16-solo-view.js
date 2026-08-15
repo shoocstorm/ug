@@ -21,7 +21,7 @@
         // is what makes the filters, the tour and "light up … in graph" fall out
         // of the same code path.
 
-        const SOLO_THRESHOLD = 10000;     // max(nodes, edges) above this → solo mode
+        const SOLO_THRESHOLD = 100000;     // max(nodes, edges) above this → solo mode
         const SOLO_MAX_NODES = 1500;      // hard render budget for one view
         const SOLO_MAX_NEIGHBORS = 300;   // per-seed 1-hop cap, so a hub can't blow the budget
 
@@ -133,8 +133,8 @@
             state.view = { nodes, edges };
             state.viewIds = ids;
             state.viewTruncated = truncated;
-            if (!Graph) return;
-            Graph.graphData({ nodes, links: edges });
+            if (!activeRenderer()) return;
+            setGraphData(state.view);
             // Let the existing settle-then-frame path (onEngineStop → autoFrame)
             // re-fit the camera around the new, differently sized view.
             state._didFit = false;

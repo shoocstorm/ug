@@ -608,6 +608,7 @@ pub(crate) struct ServeState {
     registry: Arc<ProjectRegistry>,
     html: Arc<EncodedAsset>,
     bundle: Arc<EncodedAsset>,
+    cosmos_bundle: Arc<EncodedAsset>,
     favicon: Arc<EncodedAsset>,
     /// `None` when the embedder couldn't be constructed (e.g. missing endpoint).
     /// Phase 3 search routes need it; `/api/db/*` routes don't.
@@ -941,7 +942,11 @@ pub fn run_serve(args: &[String]) {
         "text/html; charset=utf-8",
     ));
     let bundle = Arc::new(EncodedAsset::new(
-        crate::assets::VIS_BUNDLE.to_vec(),
+        crate::assets::VIS_THREEJS_BUNDLE.to_vec(),
+        "application/javascript; charset=utf-8",
+    ));
+    let cosmos_bundle = Arc::new(EncodedAsset::new(
+        crate::assets::VIS_COSMOS_BUNDLE.to_vec(),
         "application/javascript; charset=utf-8",
     ));
     let favicon = Arc::new(EncodedAsset::new(
@@ -1075,6 +1080,7 @@ pub fn run_serve(args: &[String]) {
             registry: registry.clone(),
             html,
             bundle,
+            cosmos_bundle,
             favicon,
             embedder: embedder_arc,
             chat_default: Arc::new(RwLock::new(chat_default)),
@@ -1258,7 +1264,8 @@ pub(crate) fn build_router(state: ServeState) -> Router {
     Router::new()
         .route("/", get(handle_index))
         .route("/index.html", get(handle_index))
-        .route("/ug-vis.bundle.js", get(handle_bundle))
+        .route("/threejs-vis.bundle.js", get(handle_bundle))
+        .route("/cosmos-vis.bundle.js", get(handle_cosmos_bundle))
         .route("/favicon.svg", get(handle_favicon))
         .route("/graph.json", get(handle_graph))
         .route("/indexed-tree.json", get(handle_indexed_tree))
@@ -2614,6 +2621,10 @@ async fn handle_indexed_tree(State(state): State<ServeState>, headers: HeaderMap
 
 async fn handle_bundle(State(state): State<ServeState>, headers: HeaderMap) -> Response {
     asset_response(&state.bundle, &headers)
+}
+
+async fn handle_cosmos_bundle(State(state): State<ServeState>, headers: HeaderMap) -> Response {
+    asset_response(&state.cosmos_bundle, &headers)
 }
 
 async fn handle_favicon(State(state): State<ServeState>, headers: HeaderMap) -> Response {

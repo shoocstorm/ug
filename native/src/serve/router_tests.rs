@@ -137,6 +137,7 @@ async fn router_for(tmp: &TempDir, name: &str, graph: &GraphData) -> axum::Route
         registry,
         html: asset(b"<html></html>"),
         bundle: asset(b"// bundle"),
+        cosmos_bundle: asset(b"// cosmos bundle"),
         favicon: asset(b"<svg/>"),
         embedder: None,
         chat_default: Arc::new(RwLock::new(None)),

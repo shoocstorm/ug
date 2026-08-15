@@ -1,0 +1,37 @@
+/* ─── The 2D renderer's FX overlay ─────────────────────────────
+   A canvas laid exactly over the WebGL one, carrying the labels, halos,
+   selection marker, link-flow particles and walk burst that cosmos.gl has no
+   way to draw. It must never take a pointer event: every click, drag and
+   hover belongs to the renderer underneath it. */
+
+#fx-overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    /* Above the canvas, below every panel and HUD element (which sit on the
+       .canvas-overlay layer at z-index 10 and up). */
+    z-index: 2;
+}
+
+#fx-overlay[hidden] {
+    display: none;
+}
+
+/* The renderer toggle reads as a mode, not an action, so the active backend is
+   spelled out on the button rather than implied by a pressed state. */
+#toggle-renderer .vt-lbl {
+    font-variant-numeric: tabular-nums;
+    min-width: 1.6em;
+}
+
+/* `applyRendererCaps()` hides the controls a backend cannot honour by setting
+   the `hidden` property — but the UA's `[hidden] { display: none }` is the
+   weakest rule there is, and `#viewbar .vbtn { display: flex }` outranks it on
+   specificity. Without these, setting `hidden` is a silent no-op and the 2D
+   canvas keeps a full set of 3D camera controls that do nothing.
+   Scoped through #viewbar so they outrank the display rules they undo. */
+#viewbar .vbtn[hidden],
+#viewbar .vtoggle[hidden],
+#viewbar .vsep[hidden] {
+    display: none;
+}

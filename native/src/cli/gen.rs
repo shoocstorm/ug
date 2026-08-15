@@ -256,8 +256,9 @@ pub(crate) fn run_gen(args: &[String]) {
         .unwrap_or_else(|e| die(1, format!("failed to write {output_dir}/indexed-tree.json: {e}")));
 
     let t2 = std::time::Instant::now();
-    // index.html and ug-vis.bundle.js are embedded in `ug serve` (VIS_HTML /
-    // VIS_BUNDLE) and served directly, so there's no need to write them here.
+    // index.html and the renderer bundles are embedded in `ug serve`
+    // (VIS_HTML / VIS_THREEJS_BUNDLE / VIS_COSMOS_BUNDLE) and served directly, so
+    // there's no need to write them here.
     println!("{C_CYAN}▸{C_RESET} Writing visualization README");
     fs::write(format!("{}/README.md", output_dir), crate::assets::VIS_MD)
         .unwrap_or_else(|e| die(1, format!("failed to write {output_dir}/README.md: {e}")));

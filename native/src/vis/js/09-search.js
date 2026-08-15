@@ -146,25 +146,6 @@
             focusNode(n);
         }
 
-        function focusNode(n) {
-            if (!Graph || n == null) return;
-            // Wait one frame so any panel toggles (info open/close) commit their
-            // layout before the camera flies.
-            requestAnimationFrame(() => {
-                // Centre the camera on the node at a consistent, comfortable
-                // distance. Isolation is conveyed by the focus dimming, not by the
-                // camera — fitting a scattered neighbourhood tends to either
-                // over-zoom (tiny clusters bloom out) or under-zoom (sparse, empty
-                // view), so we keep the framing simple and predictable.
-                const x = +n.x || 0, y = +n.y || 0, z = +n.z || 0;
-                // Total camera-to-node distance (the (d,d,d) offset has magnitude
-                // sqrt(3)*d). Pulled well back so a generous slice of the
-                // surrounding neighbourhood stays in frame on focus.
-                const d = 480 / Math.sqrt(3);
-                Graph.cameraPosition(
-                    { x: x + d, y: y + d, z: z + d },
-                    { x, y, z },
-                    800);
-            });
-        }
+        // focusNode() is a renderer dispatcher — see 10-render-core.js. How a
+        // node is centred depends on whether there is a camera to fly.
 

@@ -24,13 +24,14 @@
 # either: that is `ug serve`. 8081 is neither.
 #
 # ── WHY THIS SUBTREE, NOT THE WHOLE REPO ────────────────────────────────────
-# The renderer draws a graph in full up to 10,000 elements and switches to
+# The renderer draws a graph in full up to 100,000 elements and switches to
 # solo mode — one node and its neighbourhood, on an otherwise empty canvas —
 # above that. Solo mode is correct for a real repo and a poor first
-# impression for a demo, and the whole `ug` checkout lands just over the line
-# (~10.3k edges). `native/src` is the engine itself, ~2.9k nodes / ~8.7k
-# edges, and draws whole. `ug demo` warns if whatever you point it at would
-# cross the threshold, so this is checked at generation time, not guessed.
+# impression for a demo. `native/src` is the engine itself, ~2.9k nodes /
+# ~8.7k edges and draws whole; the whole checkout's ~10.3k edges stays well
+# under the line too, so the subtree is a size/preview tradeoff rather than a
+# hard limit. `ug demo` warns if whatever you point it at would cross the
+# threshold, so this is checked at generation time, not guessed.
 
 set -euo pipefail
 

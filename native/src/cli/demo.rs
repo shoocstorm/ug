@@ -49,40 +49,51 @@ use super::io::die;
 /// The element count past which the page stops drawing the whole graph and
 /// switches to solo mode — one node and its neighbourhood at a time.
 ///
-/// Mirrors `SOLO_THRESHOLD` in `src/vis/js/13-solo-view.js`, which is the
+/// Mirrors `SOLO_THRESHOLD` in `src/vis/js/16-solo-view.js`, which is the
 /// source of truth; `the_solo_threshold_matches_the_renderer` fails if the
 /// two drift. Duplicated rather than derived because it is needed on the
 /// other side of a language boundary, and the cost of being wrong is a demo
 /// that silently opens on an empty canvas — correct behaviour for a large
 /// repo, and a bad first impression for a demo, which is exactly the kind of
 /// change worth a warning at publish time.
-const SOLO_THRESHOLD: usize = 10_000;
+const SOLO_THRESHOLD: usize = 100_000;
 
-/// A short hash of everything that decides what the demo's `index.html`
-/// looks like: the assembled visualization page and the shim wrapped around
-/// it.
+/// A short hash of everything that decides what the demo *renders*: the
+/// assembled visualization page, the shim wrapped around it, and both
+/// renderer bundles.
 ///
 /// Stamped into `demo.json` so staleness becomes a *fact* rather than
 /// something a person has to remember. The published page is a copy of a
 /// page that lives inside this binary, and a copy has no way to notice its
-/// original moved — edit `src/vis/js/10-graph-render.js`, and the live demo
+/// original moved — edit `src/vis/js/11-render-three.js`, and the live demo
 /// keeps serving the old renderer with nothing anywhere to say so. The
 /// fingerprint is what `the_published_demo_page_is_not_stale` compares, so
 /// that silence turns into a failing test naming the command that fixes it.
+///
+/// The bundles are in the hash because they are shipped files too. Re-vendor
+/// cosmos.gl without them and the demo keeps serving the old renderer with
+/// an `index.html` that still matches — the exact silent staleness this
+/// guard exists to prevent, one level down.
 fn vis_fingerprint() -> String {
-    fingerprint_of(crate::assets::VIS_HTML, crate::assets::VIS_DEMO_SHIM)
+    fingerprint_of(&[
+        crate::assets::VIS_HTML.as_bytes(),
+        crate::assets::VIS_DEMO_SHIM.as_bytes(),
+        crate::assets::VIS_THREEJS_BUNDLE,
+        crate::assets::VIS_COSMOS_BUNDLE,
+    ])
 }
 
-/// The hash itself, over its two inputs — split out from [`vis_fingerprint`]
-/// so a test can prove it actually reacts to a change in either, which is
+/// The hash itself, over its inputs — split out from [`vis_fingerprint`] so
+/// a test can prove it actually reacts to a change in any of them, which is
 /// the whole property the staleness guard rests on.
-fn fingerprint_of(page: &str, shim: &str) -> String {
+fn fingerprint_of(parts: &[&[u8]]) -> String {
     let mut hasher = blake3::Hasher::new();
-    hasher.update(page.as_bytes());
-    // A separator, so a byte moving across the boundary between the two
-    // still changes the hash.
-    hasher.update(b"\0");
-    hasher.update(shim.as_bytes());
+    for part in parts {
+        hasher.update(part);
+        // A separator after every part, so a byte moving across the boundary
+        // between two of them still changes the hash.
+        hasher.update(b"\0");
+    }
     hasher.finalize().to_hex()[..16].to_string()
 }
 
@@ -301,7 +312,8 @@ fn run_page_refresh(output_dir: &str, args: &[String]) {
         bytes.len() as u64
     };
     let html = write("index.html", page.as_bytes());
-    write("ug-vis.bundle.js", crate::assets::VIS_BUNDLE);
+    write("threejs-vis.bundle.js", crate::assets::VIS_THREEJS_BUNDLE);
+    write("cosmos-vis.bundle.js", crate::assets::VIS_COSMOS_BUNDLE);
     write("favicon.svg", crate::assets::VIS_FAVICON);
     write("README.md", readme(&label).as_bytes());
     write(
@@ -429,8 +441,12 @@ pub(crate) fn run_demo(args: &[String]) {
         ("graph.json", write("graph.json", graph.as_bytes())),
         ("index.html", write("index.html", page.as_bytes())),
         (
-            "ug-vis.bundle.js",
-            write("ug-vis.bundle.js", crate::assets::VIS_BUNDLE),
+            "threejs-vis.bundle.js",
+            write("threejs-vis.bundle.js", crate::assets::VIS_THREEJS_BUNDLE),
+        ),
+        (
+            "cosmos-vis.bundle.js",
+            write("cosmos-vis.bundle.js", crate::assets::VIS_COSMOS_BUNDLE),
         ),
         (
             "favicon.svg",
@@ -552,7 +568,8 @@ fn print_demo_help() {
     println!("{C_BOLD}Written{C_RESET}");
     println!("  graph.json          the indexed graph — what the page draws");
     println!("  index.html          the visualization, wrapped for static hosting");
-    println!("  ug-vis.bundle.js    the renderer");
+    println!("  threejs-vis.bundle.js    the 3D renderer (three.js)");
+    println!("  cosmos-vis.bundle.js  the 2D renderer (cosmos.gl)");
     println!("  favicon.svg  demo.json  README.md");
     println!();
     println!("{C_BOLD}Not included{C_RESET}  {C_DIM}— these need the local index and cannot be published{C_RESET}");
@@ -626,21 +643,27 @@ mod tests {
         assert!(page.contains("<title>MyRepo · ug live demo</title>"));
     }
 
-    /// The staleness guard is only as good as this: a change to *either*
-    /// input has to move the fingerprint, including one that merely shifts
-    /// bytes across the boundary between them.
+    /// The staleness guard is only as good as this: a change to *any* input
+    /// has to move the fingerprint, including one that merely shifts bytes
+    /// across the boundary between two of them.
     #[test]
-    fn the_fingerprint_reacts_to_both_of_its_inputs() {
-        let base = fingerprint_of("<html>page</html>", "shim();");
-        assert_ne!(base, fingerprint_of("<html>page!</html>", "shim();"), "page edit");
-        assert_ne!(base, fingerprint_of("<html>page</html>", "shim2();"), "shim edit");
+    fn the_fingerprint_reacts_to_each_of_its_inputs() {
+        let fp = |parts: &[&str]| {
+            fingerprint_of(&parts.iter().map(|p| p.as_bytes()).collect::<Vec<_>>())
+        };
+        let base = fp(&["<html>page</html>", "shim();", "three();", "cosmos();"]);
+        for (i, label) in ["page", "shim", "three bundle", "cosmos bundle"].iter().enumerate() {
+            let mut parts = vec!["<html>page</html>", "shim();", "three();", "cosmos();"];
+            parts[i] = "changed";
+            assert_ne!(base, fp(&parts), "{label} edit must move the fingerprint");
+        }
         // Concatenating without a separator would hash these two identically.
         assert_ne!(
-            fingerprint_of("ab", "c"),
-            fingerprint_of("a", "bc"),
-            "the boundary between page and shim must be part of the hash"
+            fp(&["ab", "c"]),
+            fp(&["a", "bc"]),
+            "the boundary between parts must be part of the hash"
         );
-        assert_eq!(base, fingerprint_of("<html>page</html>", "shim();"), "stable");
+        assert_eq!(base, fp(&["<html>page</html>", "shim();", "three();", "cosmos();"]), "stable");
     }
 
     /// **The live demo ships a copy of the visualization page, and a copy
@@ -696,18 +719,18 @@ mod tests {
     }
 
     /// The publish-time warning is only worth anything if it fires at the
-    /// count the renderer actually switches on. `13-solo-view.js` owns that
+    /// count the renderer actually switches on. `16-solo-view.js` owns that
     /// number; this fails the moment the two stop agreeing.
     #[test]
     fn the_solo_threshold_matches_the_renderer() {
         let src = std::fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("src/vis/js/13-solo-view.js"),
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("src/vis/js/16-solo-view.js"),
         )
         .expect("the solo-view part exists");
         let decl = src
             .split("const SOLO_THRESHOLD")
             .nth(1)
-            .expect("13-solo-view.js declares SOLO_THRESHOLD");
+            .expect("16-solo-view.js declares SOLO_THRESHOLD");
         let value: usize = decl
             .trim_start_matches(|c: char| c == '=' || c.is_whitespace())
             .chars()
@@ -717,7 +740,7 @@ mod tests {
             .expect("SOLO_THRESHOLD is a plain integer literal");
         assert_eq!(
             value, SOLO_THRESHOLD,
-            "src/vis/js/13-solo-view.js moved SOLO_THRESHOLD to {value}; update the \
+            "src/vis/js/16-solo-view.js moved SOLO_THRESHOLD to {value}; update the \
              constant in this module so `ug demo` still warns at the right size"
         );
     }

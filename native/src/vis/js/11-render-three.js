@@ -1,138 +1,27 @@
-        // ─── 3D force graph & rendering ──────────────────────
+        // ─── Renderer backend: 3D force graph (three.js + 3d-force-graph) ──
+        //
+        // The original renderer, now behind the seam in 10-render-core.js. It
+        // owns everything three-dimensional: the orbit camera, the six face
+        // projections, the dashed boundary cube, the orientation gizmo, fog as
+        // depth-of-field, and the sprite "sticker" nodes.
+        //
+        // Nothing here decides what a node should look like — that lives in
+        // 10-render-core.js and is shared with the 2D backend.
 
-        // Selected node / hovered neighbours flare to a hot saturated orange —
-        // the brightest ink on the page; everything else keeps its type colour.
-        function nodeColorFor(n) {
-            if (state.selectedNode && n.id === state.selectedNode.id) return '#ff3d00';
-            if (state.highlightNodes.has(n.id)) return '#f96716';
-            // Graph Walk: reached nodes take their hop's colour on a
-            // hot→cool gradient; unreached nodes keep their type colour and
-            // are dimmed to near-invisible by bumpGraphStyles.
-            if (state.walkActive && state.walkColors.has(n.id)) return state.walkColors.get(n.id);
-            // On a tour the other stops burn amber so the route reads as one
-            // chain; everything else keeps its type colour and gets lowlit
-            // by opacity instead (see bumpGraphStyles).
-            if (tourTier(n.id) === 'stop') return '#fb923c';
-            return config.getColor(n.group);
-        }
-        function linkColorFor(e) {
-            if (state.highlightLinks.has(e)) {
-                return state.highlightLinkDir.get(e) === 'in' ? CANVAS.linkIn : CANVAS.linkOut;
-            }
-            // Graph Walk: walked edges glow in the frontier colour, everything
-            // else recedes into the background so the expanding frontier is
-            // the only thing the eye tracks.
-            if (state.walkActive) {
-                const sId = e.source.id || e.source;
-                const tId = e.target.id || e.target;
-                const key = sId < tId ? sId + '|' + tId : tId + '|' + sId;
-                if (state.walkEdgeKeys.has(key)) {
-                    return state.walkColors.get(tId) || state.walkColors.get(sId) || '#f97316';
-                }
-                // Both endpoints reached but the BFS didn't walk this edge —
-                // dim structural context between frontier nodes, rather than
-                // the bright background tone used for everything unreached.
-                if (state.walkReached.has(sId) && state.walkReached.has(tId)) return CANVAS.linkRecede;
-                return CANVAS.linkFar;
-            }
-            // On a tour the route glows and everything else fades out, so the
-            // path through the graph is the only thing the eye can follow.
-            if (tourTier(e.source.id || e.source)) {
-                const sId = e.source.id || e.source;
-                const tId = e.target.id || e.target;
-                if (isTourRouteEdge(e)) return '#f97316';
-                const cur = tourCurrentStop();
-                if (cur && (sId === cur.node_id || tId === cur.node_id)) return config.getRelColor(e.rel);
-                if (tourState.routeIds.has(sId) && tourState.routeIds.has(tId)) return CANVAS.linkRouteDim;
-                return CANVAS.linkFar;
-            }
-            // In focus mode, links not wholly inside the focused neighbourhood
-            // recede to a near-background tone so the local structure stands out.
-            if (state.focusNode) {
-                const sId = e.source.id || e.source;
-                const tId = e.target.id || e.target;
-                if (!(state.focusSet.has(sId) && state.focusSet.has(tId))) return CANVAS.linkRecede;
-            }
-            return config.getRelColor(e.rel);
-        }
+        // Bound by mount(), from the vendored bundle. Loaded lazily so a page
+        // running the 2D renderer never pays for 1.4 MB of three.js.
+        let ForceGraph3D, THREE, SpriteText;
 
-        // Visibility accessors handed to the graph. Filters own the base
-        // answer; a tour in "solo" mode narrows it further to the route,
-        // which turns the walk into a standalone diagram of the answer.
-        // Is focus solo mode actually in force? Guarded rather than read raw:
-        // an empty focus set would hide every node and leave a blank canvas,
-        // and a tour owns isolation while it runs.
-        function focusIsolateOn() {
-            // In solo mode the *view* already holds nothing but the chosen
-            // neighbourhood, so a second isolation layer has nothing to add and
-            // plenty to break: it would hide everything outside the last
-            // anchor's focus set, blanking a plotted result set.
-            if (state.soloOnly) return false;
-            return state.focusIsolate
-                && !!state.focusNode
-                && state.focusSet.size > 0
-                && !tourState.active;
-        }
+        // The 3d-force-graph instance and its scene-decor handles.
+        let Graph, selectionRing, boundaryCube, particleField;
+        let _glowTex, _ringTex, _boundaryRingTex, _dotTex;
 
-        function nodeVisibleFor(n) {
-            // Graph Walk isolates the canvas to the reached set so each new
-            // frontier is the only thing on screen — the same "forced solo"
-            // feel as the tour's isolate toggle, applied automatically for
-            // every walk regardless of graph size.
-            if (state.walkActive && !state.walkReached.has(n.id)) return false;
-            if (tourState.active && tourState.isolate && !tourState.routeIds.has(n.id)) return false;
-            if (focusIsolateOn() && !state.focusSet.has(n.id)) return false;
-            return !(state.nodeHidden && state.nodeHidden(n));
-        }
-
-        function linkVisibleFor(e) {
-            if (state.walkActive) {
-                const sId = e.source.id || e.source;
-                const tId = e.target.id || e.target;
-                if (!state.walkReached.has(sId) || !state.walkReached.has(tId)) return false;
-            }
-            if (tourState.active && tourState.isolate) {
-                const sId = e.source.id || e.source;
-                const tId = e.target.id || e.target;
-                if (!(tourState.routeIds.has(sId) && tourState.routeIds.has(tId))) return false;
-            }
-            if (focusIsolateOn()) {
-                const sId = e.source.id || e.source;
-                const tId = e.target.id || e.target;
-                if (!(state.focusSet.has(sId) && state.focusSet.has(tId))) return false;
-            }
-            return !(state.linkHidden && state.linkHidden(e));
-        }
-
-        // Particles crawl along highlighted links, and along the tour route so
-        // the walk has visible direction of travel.
-        function linkParticlesFor(e) {
-            if (state.highlightLinks.has(e)) return 4;
-            if (state.walkActive) {
-                const sId = e.source.id || e.source;
-                const tId = e.target.id || e.target;
-                const key = sId < tId ? sId + '|' + tId : tId + '|' + sId;
-                return state.walkEdgeKeys.has(key) ? 3 : 0;
-            }
-            if (tourState.active && isTourRouteEdge(e)) return 2;
-            return 0;
-        }
-
-        // Particles inherit their link's direction colour on hover. Elsewhere
-        // (tour route, graph walk) there is only one flow to read, so the hot
-        // orange stands.
-        function linkParticleColorFor(e) {
-            const dir = state.highlightLinkDir.get(e);
-            if (!dir) return CANVAS.particleOut;
-            return dir === 'in' ? CANVAS.particleIn : CANVAS.particleOut;
-        }
-
-        function nodeRadiusFor(n) {
-            // Nodes are deliberately large — the sticker discs are the primary
-            // visual, and a 5-unit disc drowns against edges that span hundreds
-            // of units.
-            return (config.nodeRadius[n.group] || 6) * 1.6;
-        }
+        // Generation counter for the rAF loops this file starts. Each mount
+        // captures the current value; dispose() bumps it, so loops from a dead
+        // mount exit on their next frame — otherwise they run forever and,
+        // once the renderer mounts again, two loops fight over the same shared
+        // selectionRing / gizmo state.
+        let threeGen = 0;
 
         // A soft circular glow texture (white radial gradient → transparent),
         // tinted per-node via the sprite colour. Built once and shared.
@@ -203,16 +92,6 @@
             _boundaryRingTex.minFilter = THREE.LinearFilter;
             _boundaryRingTex.generateMipmaps = false;
             return _boundaryRingTex;
-        }
-
-        // Warm for a way in, cool violet for a way out — two directions the
-        // eye can separate without reading a label.
-        const BOUNDARY_IN_COLOR = '#fbbf24';
-        const BOUNDARY_OUT_COLOR = '#a78bfa';
-
-        function boundaryRingColor(n) {
-            const inbound = (n.boundaries || []).some(b => b.direction === 'Inbound');
-            return inbound ? BOUNDARY_IN_COLOR : BOUNDARY_OUT_COLOR;
         }
 
         // Scene backdrop: a near-black ground with soft out-of-focus washes of
@@ -424,29 +303,15 @@
             return force;
         }
 
-        function createGraph() {
-            const el = document.getElementById('graph-3d');
-            // A fresh graph (first load, retry, project switch) means a fresh
-            // render: the loading overlay must stay up until this engine's
-            // first painted frame.
-            state._graphRevealed = false;
-            window.addEventListener('mousemove', e => {
-                // page coords position the tooltip; client coords feed the
-                // pointerOverCanvas hit-test (elementFromPoint wants viewport
-                // coordinates — identical here, but kept separate for safety).
-                state._mouse = { x: e.pageX, y: e.pageY, cx: e.clientX, cy: e.clientY };
-                // A hover struck on-canvas would otherwise stick (highlight +
-                // tooltip) when the pointer crosses into a panel, because the
-                // renderer never reports a leave for occluded pixels.
-                if (state._hoverNode && !pointerOverCanvas()) handleNodeHover(null);
-            });
+        function threeMount(el, view) {
+            window.addEventListener('mousemove', threeTrackMouse);
 
             Graph = ForceGraph3D({ controlType: 'orbit' })(el)
                 .backgroundColor(CANVAS.bg)
                 // The *view*, not the graph: in solo mode this starts empty and
-                // only ever holds a neighbourhood (see 13-solo-view.js). Below
+                // only ever holds a neighbourhood (see 16-solo-view.js). Below
                 // the threshold `state.view` is `state.graph` itself.
-                .graphData({ nodes: state.view.nodes, links: state.view.edges })
+                .graphData({ nodes: view.nodes, links: view.edges })
                 .nodeId('id')
                 // Suppress the library's own hover tooltip. Its `nodeLabel`
                 // accessor defaults to the `name` field, so leaving it unset
@@ -515,6 +380,7 @@
             selectionRing.visible = false;
             selectionRing.renderOrder = 999;
             Graph.scene().add(selectionRing);
+            threeGen += 1;
             startSelectionAnimation();
 
             // Frame the bulk of the graph once the layout settles. Use frameGraph
@@ -531,7 +397,7 @@
                 // solo mode swapped the view out from under it.
                 if (state._didFit) return;
                 state._didFit = true;
-                frameGraph(900);
+                threeSetView('3d', 900);
             };
             // Mark the layout as truly settled only on a real engine stop (the
             // timeout fallbacks below may fire while nodes are still moving).
@@ -566,30 +432,15 @@
             startOverlayLoop();
         }
 
-        // The loading overlay is owned by the render lifecycle now: data is
-        // loaded before the diagram exists, so the overlay stays up through
-        // the force-layout + first WebGL paint and only comes down once a
-        // frame has actually been drawn.
-        function graphReveal() {
-            if (state._graphRevealed) return;
-            state._graphRevealed = true;
-            const loading = document.getElementById('loading');
-            if (loading) loading.style.display = 'none';
-        }
-
-        // Centroid + a robust (90th-percentile) radius of the laid-out graph,
-        // ignoring far-flung outliers. Shared by camera framing and depth cues.
-        function computeExtent() {
-            const nodes = state.view.nodes.filter(n => Number.isFinite(n.x));
-            if (!nodes.length) return null;
-            let cx = 0, cy = 0, cz = 0;
-            nodes.forEach(n => { cx += n.x; cy += n.y; cz += n.z || 0; });
-            cx /= nodes.length; cy /= nodes.length; cz /= nodes.length;
-            const dists = nodes
-                .map(n => Math.hypot(n.x - cx, n.y - cy, (n.z || 0) - cz))
-                .sort((a, b) => a - b);
-            const pct = dists[Math.floor(dists.length * 0.9)] || dists[dists.length - 1] || 120;
-            return { cx, cy, cz, radius: Math.max(pct, 40) };
+        // page coords position the tooltip; client coords feed the
+        // pointerOverCanvas hit-test (elementFromPoint wants viewport
+        // coordinates — identical here, but kept separate for safety).
+        function threeTrackMouse(e) {
+            state._mouse = { x: e.pageX, y: e.pageY, cx: e.clientX, cy: e.clientY };
+            // A hover struck on-canvas would otherwise stick (highlight +
+            // tooltip) when the pointer crosses into a panel, because the
+            // renderer never reports a leave for occluded pixels.
+            if (state._hoverNode && !pointerOverCanvas()) handleNodeHover(null);
         }
 
         // Fog and label-distance must track the graph's actual size. The fog was
@@ -612,21 +463,9 @@
             }
         }
 
-        // The six face views (id → outward camera direction + the coordinate
-        // plane that face lies in). Numbers match the digi labels on the boundary
-        // box, so "view N" flies the camera to look straight at face N.
-        const VIEWS = {
-            '1': { dir: [0, 0, 1], plane: 'XY' },   // +Z front
-            '2': { dir: [1, 0, 0], plane: 'YZ' },   // +X right
-            '3': { dir: [0, 0, -1], plane: 'XY' },  // -Z back
-            '4': { dir: [-1, 0, 0], plane: 'YZ' },  // -X left
-            '5': { dir: [0, 1, 0], plane: 'XZ' },   // +Y top
-            '6': { dir: [0, -1, 0], plane: 'XZ' },  // -Y bottom
-        };
-
         // Snap the camera to a predefined view. id: '1'–'6' (face projections) or
         // '3d' (isometric).
-        function setView(id, ms = 600) {
+        function threeSetView(id, ms = 600) {
             if (!Graph) return;
             const ext = computeExtent();
             if (!ext) return;
@@ -646,13 +485,10 @@
             Graph.cameraPosition(pos, { x: cx, y: cy, z: cz }, ms);
         }
 
-        // Frame the graph at the default 3D isometric view.
-        function frameGraph(ms = 600) { setView('3d', ms); }
-
         // Fit the camera around an arbitrary set of node ids — used when solo
-        // mode leaves only a neighbourhood on screen. (`frameTourRoute` does the
+        // mode leaves only a neighbourhood on screen. (`threeFrameRoute` does the
         // same for a tour route, with its own route-specific guards.)
-        function frameNodeSet(ids, ms = 700) {
+        function threeFrameNodes(ids, ms = 700) {
             if (!Graph) return;
             const pts = [];
             ids.forEach(id => {
@@ -679,10 +515,32 @@
             );
         }
 
+        // Centre the camera on the node at a consistent, comfortable distance.
+        // Isolation is conveyed by the focus dimming, not by the camera —
+        // fitting a scattered neighbourhood tends to either over-zoom (tiny
+        // clusters bloom out) or under-zoom (sparse, empty view), so we keep the
+        // framing simple and predictable.
+        function threeFocusNode(n) {
+            if (!Graph) return;
+            // Wait one frame so any panel toggles (info open/close) commit their
+            // layout before the camera flies.
+            requestAnimationFrame(() => {
+                const x = +n.x || 0, y = +n.y || 0, z = +n.z || 0;
+                // Total camera-to-node distance (the (d,d,d) offset has magnitude
+                // sqrt(3)*d). Pulled well back so a generous slice of the
+                // surrounding neighbourhood stays in frame on focus.
+                const d = 480 / Math.sqrt(3);
+                Graph.cameraPosition(
+                    { x: x + d, y: y + d, z: z + d },
+                    { x, y, z },
+                    800);
+            });
+        }
+
         // Scale the camera's orbit radius by `factor` (mirrors the mouse-wheel
         // dolly: <1 zooms in, >1 zooms out). Keeps the same look-at target so the
         // view direction is preserved; only the distance changes.
-        function zoomBy(factor) {
+        function threeZoomBy(factor) {
             if (!Graph) return;
             const controls = Graph.controls && Graph.controls();
             const cam = Graph.camera && Graph.camera();
@@ -700,6 +558,95 @@
                 180
             );
         }
+
+        // ─── Tour camera ───────────────────────────────────────
+
+        function tourVec(n) { return { x: +n.x || 0, y: +n.y || 0, z: +n.z || 0 }; }
+        function vSub(a, b) { return { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z }; }
+        function vAdd(a, b) { return { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z }; }
+        function vScale(a, s) { return { x: a.x * s, y: a.y * s, z: a.z * s }; }
+        function vLen(a) { return Math.sqrt(a.x * a.x + a.y * a.y + a.z * a.z); }
+        function vNorm(a) { const l = vLen(a) || 1; return vScale(a, 1 / l); }
+        function vCross(a, b) {
+            return {
+                x: a.y * b.z - a.z * b.y,
+                y: a.z * b.x - a.x * b.z,
+                z: a.x * b.y - a.y * b.x,
+            };
+        }
+        function vLerp(a, b, t) { return vAdd(a, vScale(vSub(b, a), t)); }
+
+        // Fly to a stop with framing that tells the story: the camera sits
+        // broadside to the direction of travel (so the hop we just took is
+        // visible, not hidden behind us), pulled back far enough to hold the
+        // stop's neighbourhood, and aimed a touch toward the next stop so
+        // where we're heading is already on screen.
+        function threeFlyToStop(stop, opts) {
+            opts = opts || {};
+            const node = state.nodeById ? state.nodeById.get(stop.node_id) : null;
+            if (!node || !Graph) return;
+            const prevNode = opts.prev && state.nodeById ? state.nodeById.get(opts.prev.node_id) : null;
+            const nextNode = opts.next && state.nodeById ? state.nodeById.get(opts.next.node_id) : null;
+
+            const p = tourVec(node);
+            // Everything we'd like in frame, to pick a distance from.
+            const context = [];
+            if (prevNode) context.push(tourVec(prevNode));
+            if (nextNode) context.push(tourVec(nextNode));
+            tourState.nearIds.forEach(id => {
+                const nn = state.nodeById && state.nodeById.get(id);
+                if (nn) context.push(tourVec(nn));
+            });
+            let spread = 0;
+            context.forEach(c => { spread = Math.max(spread, vLen(vSub(c, p))); });
+            const dist = Math.max(230, Math.min(900, 200 + spread * 1.35));
+
+            const travel = prevNode ? vSub(p, tourVec(prevNode))
+                : (nextNode ? vSub(tourVec(nextNode), p) : null);
+            let dir;
+            if (travel && vLen(travel) > 1e-3) {
+                const t = vNorm(travel);
+                let up = { x: 0, y: 1, z: 0 };
+                let side = vCross(t, up);
+                // Travelling straight up/down: pick another reference axis so
+                // the cross product doesn't collapse.
+                if (vLen(side) < 0.2) { up = { x: 0, y: 0, z: 1 }; side = vCross(t, up); }
+                side = vNorm(side);
+                dir = vNorm(vAdd(vScale(side, 1), vAdd(vScale(up, 0.5), vScale(t, -0.3))));
+            } else {
+                const d = 1 / Math.sqrt(3);
+                dir = { x: d, y: d, z: d };
+            }
+            const look = nextNode ? vLerp(p, tourVec(nextNode), 0.16) : p;
+            const cam = vAdd(p, vScale(dir, dist));
+            // One frame of slack so any panel toggle commits its layout first.
+            requestAnimationFrame(() => {
+                Graph.cameraPosition(cam, look, opts.ms || 1100);
+            });
+        }
+
+        // Frame every stop on the route, so the ending shot is the shape of
+        // the answer rather than one more close-up.
+        function threeFrameRoute(ms) {
+            if (!Graph || !tourState.data) return;
+            const pts = [];
+            tourState.routeIds.forEach(id => {
+                const n = state.nodeById && state.nodeById.get(id);
+                if (n) pts.push(tourVec(n));
+            });
+            if (pts.length < 2) return;
+            const c = pts.reduce((a, p) => vAdd(a, p), { x: 0, y: 0, z: 0 });
+            const centre = vScale(c, 1 / pts.length);
+            let radius = 0;
+            pts.forEach(p => { radius = Math.max(radius, vLen(vSub(p, centre))); });
+            const d = Math.max(300, Math.min(1500, radius * 2 + 200)) / Math.sqrt(3);
+            Graph.cameraPosition(
+                { x: centre.x + d, y: centre.y + d * 0.8, z: centre.z + d },
+                centre,
+                ms || 1400);
+        }
+
+        // ─── Boundary cube ─────────────────────────────────────
 
         // Dashed wireframe cube showing the graph bounding box as spatial reference.
         function makeAxisLabel(text, hex) {
@@ -837,7 +784,7 @@
         function updateBoundaryCube() {
             if (!Graph) return;
             // Nothing keeps the box in sync while it is off, so there is no
-            // point building it — applyBoundaryVisibility() rebuilds from the
+            // point building it — setBoundaryVisible() rebuilds from the
             // current layout at the moment it is switched on.
             if (!state.showBoundary) { disposeBoundaryCube(); return; }
             const nodes = state.view.nodes.filter(n => Number.isFinite(n.x));
@@ -994,7 +941,6 @@
         // three fleck sizes: a fine dust layer, a mid layer, and a sparse
         // large layer whose soft texture reads as out-of-focus bokeh. All of
         // them inherit the scene fog, so distant flecks melt into the paper.
-        let _dotTex;
         function dotTexture() {
             if (_dotTex) return _dotTex;
             const c = document.createElement('canvas');
@@ -1070,7 +1016,9 @@
 
         // Continuous rAF loop driving the selected-node ring + halo pulse.
         function startSelectionAnimation() {
+            const gen = threeGen;
             const tick = () => {
+                if (gen !== threeGen) return;
                 requestAnimationFrame(tick);
                 const n = state.selectedNode;
                 if (!selectionRing) return;
@@ -1098,37 +1046,240 @@
             requestAnimationFrame(tick);
         }
 
-        // Re-evaluate the style accessors after a selection / highlight / filter
-        // change, without rebuilding the whole scene.
-        function bumpGraphStyles() {
-            if (!Graph) return;
+        // ─── Orientation gizmo + distance-adaptive labels ──────
+
+        const GIZMO_AXES = [
+            { v: [1, 0, 0], color: '#ff5d5d', label: 'X' },
+            { v: [0, 1, 0], color: '#5dff8f', label: 'Y' },
+            { v: [0, 0, 1], color: '#5d9dff', label: 'Z' },
+        ];
+
+        function startOverlayLoop() {
+            const gen = threeGen;
+            const svg = document.getElementById('gizmo-svg');
+            let frame = 0;
+            const v = new THREE.Vector3();
+            const tick = () => {
+                if (gen !== threeGen) return;
+                requestAnimationFrame(tick);
+                if (!Graph) return;
+                const cam = Graph.camera();
+                if (!cam) return;
+                frame++;
+                // Gizmo: rotate the world axes into the camera's view frame so the
+                // little triad mirrors how the graph is oriented on screen.
+                if (svg && frame % 2 === 0) {
+                    cam.updateMatrixWorld();
+                    const q = cam.quaternion.clone().invert();
+                    const R = 26;
+                    const drawn = GIZMO_AXES.map(a => {
+                        v.set(a.v[0], a.v[1], a.v[2]).applyQuaternion(q);
+                        return { color: a.color, label: a.label, x: v.x, y: v.y, z: v.z };
+                    }).sort((a, b) => a.z - b.z); // painter's order: far axes first
+                    let s = '';
+                    for (const a of drawn) {
+                        const x = (a.x * R).toFixed(1);
+                        const y = (-a.y * R).toFixed(1);
+                        const op = (0.4 + 0.6 * ((a.z + 1) / 2)).toFixed(2);
+                        s += `<line x1="0" y1="0" x2="${x}" y2="${y}" stroke="${a.color}" stroke-width="2.4" stroke-linecap="round" opacity="${op}"/>`;
+                        s += `<circle cx="${x}" cy="${y}" r="3.2" fill="${a.color}" opacity="${op}"/>`;
+                        s += `<text x="${(a.x * R * 1.34).toFixed(1)}" y="${(-a.y * R * 1.34 + 3.4).toFixed(1)}" fill="${a.color}" font-size="9.5" font-family="JetBrains Mono, monospace" text-anchor="middle" opacity="${op}">${a.label}</text>`;
+                    }
+                    svg.innerHTML = s;
+                }
+                // Distance-adaptive labels: hide labels for nodes far from the
+                // camera so a zoomed-out view stays clean and they reappear as you
+                // move in. Throttled.
+                if (frame % 8 === 0) updateAdaptiveLabels(cam);
+                // Legend counts track the on-screen set during a walk or tour.
+                if (frame % 12 === 0) refreshModeLegend();
+            };
+            requestAnimationFrame(tick);
+        }
+
+        function updateAdaptiveLabels(cam) {
+            // The viewbar's Names toggle wins over every distance rule below.
+            if (!state.showLabels) {
+                state.view.nodes.forEach(n => { if (n.__nodeLabel) n.__nodeLabel.visible = false; });
+                return;
+            }
+            const px = cam.position.x, py = cam.position.y, pz = cam.position.z;
+            const D = state._labelDist || 340;
+            const D2 = D * D;
             const focusOn = !!state.focusNode;
-            // Custom node objects own their material, so recolour them directly.
-            // Only what is on screen: in solo mode that is the difference
-            // between a few hundred nodes per hover and a hundred thousand.
+            const tourOn = tourState.active && tourState.routeIds.size > 0;
+            state.view.nodes.forEach(n => {
+                const s = n.__nodeLabel;
+                if (!s) return;
+                // On a tour only the stops are named — the surrounding
+                // neighbourhood stays present but anonymous.
+                if (tourOn) {
+                    s.visible = tourState.routeIds.has(n.id);
+                    return;
+                }
+                if (focusOn) {
+                    // While focused, always label the neighbourhood; hide the rest.
+                    s.visible = state.focusSet.has(n.id);
+                    return;
+                }
+                const dx = (n.x || 0) - px, dy = (n.y || 0) - py, dz = (n.z || 0) - pz;
+                s.visible = (dx * dx + dy * dy + dz * dz) < D2;
+            });
+        }
+
+        // ─── Graph Walk ignition pulse ─────────────────────────
+        //
+        // Four additive-blended layers bloom against the dark canvas:
+        //   • a fresnel-rim glow shell — bright silhouette, hot core (the
+        //     "energy bubble"; the part that reads as a real blast),
+        //   • a wireframe cage slightly larger — geometric structure / edge,
+        //   • a soft plasma core — a luminous centre,
+        //   • a radial particle burst — the explosion of debris outward.
+        // All self-disposing (geometry + materials freed once the burst ends).
+        const _fresnelShell = () => `
+            varying vec3 vNormal; varying vec3 vView;
+            void main() {
+                vec4 mv = modelViewMatrix * vec4(position, 1.0);
+                vNormal = normalize(normalMatrix * normal);
+                vView = normalize(-mv.xyz);
+                gl_Position = projectionMatrix * mv;
+            }`;
+        const _fresnelFrag = () => `
+            varying vec3 vNormal; varying vec3 vView;
+            uniform vec3 uColor; uniform vec3 uCore; uniform float uPower; uniform float uOpacity;
+            void main() {
+                float rim = 1.0 - max(0.0, dot(normalize(vNormal), normalize(vView)));
+                rim = pow(rim, uPower);
+                vec3 c = mix(uCore, uColor, rim);
+                gl_FragColor = vec4(c, rim * uOpacity);
+            }`;
+
+        function threeEmitPulse(seedNode, colour, fromR, toR, growMs) {
+            if (!Graph || !seedNode || !Number.isFinite(seedNode.x)) return;
+            const scene = Graph.scene();
+            const fromRr = Math.max(fromR || 0, 6);
+            const toRr = Math.max((toR || 0) + 18, fromRr + 24);
+            const grow = Math.max(160, growMs || 420);
+            const fade = Math.min(640, Math.max(240, grow * 0.9));
+            const total = grow + fade;
+            const t0 = performance.now();
+
+            const group = new THREE.Group();
+            group.position.set(seedNode.x || 0, seedNode.y || 0, seedNode.z || 0);
+            scene.add(group);
+            const disposables = [];
+            const addDispose = (o) => { if (o.geometry) disposables.push(o.geometry); if (o.material) disposables.push(o.material); };
+
+            // Fresnel rim shell — the energy bubble.
+            const shellMat = new THREE.ShaderMaterial({
+                transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
+                uniforms: {
+                    uColor: { value: new THREE.Color(colour) },
+                    uCore: { value: new THREE.Color('#fff3e8') },
+                    uPower: { value: 2.6 },
+                    uOpacity: { value: 0 },
+                },
+                vertexShader: _fresnelShell(),
+                fragmentShader: _fresnelFrag(),
+            });
+            const shell = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 4), shellMat);
+            shell.renderOrder = 500;
+            group.add(shell); addDispose(shell);
+
+            // Wireframe cage — structure / edge shimmer.
+            const cageMat = new THREE.MeshBasicMaterial({
+                color: new THREE.Color(colour), wireframe: true, transparent: true,
+                opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
+            });
+            const cage = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 1), cageMat);
+            cage.renderOrder = 501;
+            group.add(cage); addDispose(cage);
+
+            // Plasma core — luminous centre (kept faint so it doesn't white out).
+            const coreMat = new THREE.MeshBasicMaterial({
+                color: new THREE.Color(colour), transparent: true, opacity: 0,
+                depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
+            });
+            const core = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 3), coreMat);
+            core.renderOrder = 499;
+            group.add(core); addDispose(core);
+
+            // Radial particle burst — debris exploding outward to the frontier.
+            const N = 96;
+            const positions = new Float32Array(N * 3);
+            const dirs = [];
+            for (let i = 0; i < N; i++) {
+                const u = Math.random(), v = Math.random();
+                const theta = 2 * Math.PI * u, phi = Math.acos(2 * v - 1);
+                dirs.push({
+                    dx: Math.sin(phi) * Math.cos(theta),
+                    dy: Math.sin(phi) * Math.sin(theta),
+                    dz: Math.cos(phi),
+                    spd: 0.55 + Math.random() * 0.7,   // some reach past the shell
+                });
+            }
+            const pGeo = new THREE.BufferGeometry();
+            pGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            const pMat = new THREE.PointsMaterial({
+                color: new THREE.Color(colour), size: 3.4, transparent: true, opacity: 0,
+                depthWrite: false, blending: THREE.AdditiveBlending, sizeAttenuation: true, fog: false,
+            });
+            const points = new THREE.Points(pGeo, pMat);
+            points.renderOrder = 502;
+            group.add(points); addDispose({ geometry: pGeo, material: pMat });
+
+            const step = () => {
+                const t = performance.now() - t0;
+                if (t >= total || !state.walkActive) {
+                    scene.remove(group);
+                    disposables.forEach(d => d.dispose());
+                    return;
+                }
+                const p = Math.min(1, t / grow);           // grow progress
+                const e = 1 - Math.pow(1 - p, 3);           // ease-out: decelerate at the frontier
+                const r = fromRr + (toRr - fromRr) * e;
+                const rs = Math.max(0.1, r);
+                shell.scale.setScalar(rs);
+                cage.scale.setScalar(Math.max(0.1, r * 1.07));
+                core.scale.setScalar(Math.max(0.1, r * 0.62));
+                // Envelope: quick ramp-in over the first 25% of the grow, hold,
+                // then fade out across `fade`. The burst flashes to life, sweeps
+                // outward, and dissolves — reads as an explosion, not a fade.
+                const fadeIn = Math.min(1, p / 0.25);
+                const env = t <= grow ? fadeIn : Math.max(0, 1 - (t - grow) / fade);
+                shellMat.uniforms.uOpacity.value = 0.95 * env;
+                cageMat.opacity = 0.5 * env;
+                coreMat.opacity = 0.14 * env;
+                pMat.opacity = 0.95 * env;
+                // Particles fly outward, each on its own speed curve.
+                const arr = pGeo.attributes.position.array;
+                for (let i = 0; i < N; i++) {
+                    const d = dirs[i];
+                    const dist = r * d.spd;
+                    arr[i * 3] = d.dx * dist;
+                    arr[i * 3 + 1] = d.dy * dist;
+                    arr[i * 3 + 2] = d.dz * dist;
+                }
+                pGeo.attributes.position.needsUpdate = true;
+                // Slow counter-rotation for shimmer on the structural layers.
+                cage.rotation.y += 0.012; cage.rotation.x += 0.007;
+                shell.rotation.y -= 0.005;
+                requestAnimationFrame(step);
+            };
+            requestAnimationFrame(step);
+        }
+
+        // ─── Restyle ───────────────────────────────────────────
+
+        // Custom node objects own their material, so recolour them directly.
+        // Only what is on screen: in solo mode that is the difference between a
+        // few hundred nodes per hover and a hundred thousand.
+        function threeRestyle() {
+            if (!Graph) return;
             state.view.nodes.forEach(n => {
                 if (n.__nodeMat) n.__nodeMat.color.set(nodeColorFor(n));
                 const sel = state.selectedNode && n.id === state.selectedNode.id;
-                // On a tour, brightness is a four-ring gradient (this stop →
-                // the rest of the route → its neighbours → everything else).
-                // Otherwise focus mode's binary dim applies. Graph Walk has
-                // its own three-state version (seed / reached / far).
-                const tier = state.walkActive ? null : tourTier(n.id);
-                let dim, op;
-                if (state.walkActive) {
-                    const w = walkTier(n.id);
-                    // 'pending' = in the reached set but not yet ignited (its
-                    // edges are streaming toward it). Kept as a faint ghost so
-                    // the eye has a target to watch the particles flow into.
-                    dim = w === 'far' || w === 'pending';
-                    op = w === 'seed' ? 1.0
-                        : w === 'reached' ? 0.96
-                        : w === 'pending' ? 0.14
-                        : 0.05;
-                } else {
-                    dim = tier ? tier === 'far' : (focusOn && !state.focusSet.has(n.id));
-                    op = tier ? TOUR_TIER_OPACITY[tier] : (dim ? 0.06 : 0.95);
-                }
+                const { dim, opacity: op, tier } = nodeLightingFor(n);
                 if (n.__nodeMat) n.__nodeMat.opacity = op;
                 // Dimmed labels hide immediately; otherwise distance owns it (see
                 // updateAdaptiveLabels), so we only force-hide here.
@@ -1177,10 +1328,69 @@
                 .linkDirectionalParticles(linkParticlesFor);
         }
 
-        function truncateName(name) {
-            const parts = String(name).split('/');
-            const last = parts.pop();
-            const short = last.split(':').pop();
-            return short.length > 32 ? short.slice(0, 31) + '…' : short;
-        }
+        // ─── The backend ───────────────────────────────────────
 
+        RENDERERS.three = () => ({
+            name: 'three',
+            caps: { threeD: true, faceViews: true, autoSpin: true, boundaryCube: true },
+
+            async mount(el, view) {
+                ({ ForceGraph3D, THREE, SpriteText } = await import('./threejs-vis.bundle.js'));
+                threeMount(el, view);
+            },
+
+            setData(view) {
+                if (Graph) Graph.graphData({ nodes: view.nodes, links: view.edges });
+            },
+
+            restyle() { threeRestyle(); },
+
+            resize(w, h) { if (Graph) Graph.width(w).height(h); },
+
+            frameAll(ms) { threeSetView('3d', ms); },
+            setView(id, ms) { threeSetView(id, ms); },
+            frameNodes(ids, ms) { threeFrameNodes(ids, ms); },
+            focusNode(n) { threeFocusNode(n); },
+            zoomBy(f) { threeZoomBy(f); },
+            flyToStop(stop, opts) { threeFlyToStop(stop, opts); },
+            frameRoute(ms) { threeFrameRoute(ms); },
+
+            setAutoSpin(on) {
+                const controls = Graph && Graph.controls && Graph.controls();
+                if (!controls) return;
+                controls.autoRotate = on;
+                controls.autoRotateSpeed = 1.6;
+            },
+
+            setBoundaryVisible(on) {
+                if (on) updateBoundaryCube();
+                else disposeBoundaryCube();
+            },
+
+            emitPulse(node, colour, fromR, toR, growMs) {
+                threeEmitPulse(node, colour, fromR, toR, growMs);
+            },
+
+            // Project a node into page pixels via the live camera.
+            screenPos(n) {
+                if (!Graph || !n || !Number.isFinite(n.x)) return null;
+                const c = Graph.graph2ScreenCoords
+                    ? Graph.graph2ScreenCoords(n.x, n.y, n.z || 0)
+                    : null;
+                if (!c) return null;
+                const rect = Graph.renderer().domElement.getBoundingClientRect();
+                return { x: c.x + rect.left + window.scrollX, y: c.y + rect.top + window.scrollY };
+            },
+
+            dispose() {
+                window.removeEventListener('mousemove', threeTrackMouse);
+                threeGen += 1;
+                disposeBoundaryCube();
+                if (Graph) {
+                    try { Graph._destructor && Graph._destructor(); } catch (err) { console.error(err); }
+                }
+                Graph = null;
+                selectionRing = null;
+                particleField = null;
+            },
+        });

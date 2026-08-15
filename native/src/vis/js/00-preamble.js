@@ -1,5 +1,6 @@
-        import { ForceGraph3D, THREE, SpriteText }
-            from './ug-vis.bundle.js';
+        // The renderer bundles (three.js, cosmos.gl) are imported lazily by
+        // whichever backend mounts — see 10-render-core.js. Loading both up
+        // front would cost every page 1.4 MB of a renderer it may never use.
 
         const config = {
             nodeRadius: { File: 10, Interface: 7, Function: 6, Class: 8, Dependency: 5, Config: 8, Route: 7, Constant: 5, Variable: 5, Default: 6 },
@@ -44,6 +45,15 @@
 
         const state = {
             graph: { nodes: [], edges: [] },
+            // Which renderer backend draws the canvas: 'three' (3D force
+            // graph) or 'cosmos' (2D, GPU-simulated). Resolved against the
+            // registered backends in pickRendererName() — see 10-render-core.js.
+            renderer: null,
+            // Node name labels. Off by default — past a few hundred nodes a
+            // full set of names is a wall of text rather than a map, and the
+            // shape of the graph is what the canvas is for. Toggled from the
+            // viewbar; honoured by both renderers.
+            showLabels: false,
             nodeFilters: new Set(),
             edgeFilters: new Set(),
             // "Only system boundaries." A separate axis from nodeFilters
@@ -75,7 +85,7 @@
             // actually handed to the renderer. Below the threshold the two are
             // the same object and nothing changes.
             soloOnly: false,        // forced solo: the canvas only ever shows a neighbourhood
-            view: null,             // { nodes, edges } passed to Graph.graphData()
+            view: null,             // { nodes, edges } handed to the renderer
             viewIds: new Set(),     // ids currently in the view
             viewSeeds: new Set(),   // ids explicitly placed on the canvas
             viewExpanded: new Set(),// seeds whose neighbours are drawn too
@@ -135,9 +145,8 @@
             particleIn: '#67e8f9',
         };
 
-        // The 3d-force-graph instance and its scene-decor handles.
-        let Graph, width, height, selectionRing, boundaryCube, particleField;
-        let _glowTex, _ringTex, _boundaryRingTex;
+        // Canvas size, shared by the renderer backends and the resize handler.
+        let width, height;
         // Highlight sets re-evaluated by the node/link style accessors.
         state.highlightNodes = new Set();
         state.highlightLinks = new Set();

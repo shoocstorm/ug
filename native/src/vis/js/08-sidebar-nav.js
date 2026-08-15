@@ -121,10 +121,6 @@
             document.getElementById('download-graph').addEventListener('click', downloadGraph);
         }
 
-        function wireFooter() {
-            document.getElementById('reset').addEventListener('click', resetView);
-        }
-
         function wireFilterActions() {
             document.getElementById('filter-clear').addEventListener('click', () => {
                 state.nodeFilters.clear();
@@ -437,24 +433,42 @@
         // rebuilds from the current layout rather than revealing whatever
         // cube was last built, which would enclose the wrong region.
         function applyBoundaryVisibility() {
-            if (state.showBoundary) updateBoundaryCube();
-            else disposeBoundaryCube();
+            const r = activeRenderer();
+            if (r) r.setBoundaryVisible(state.showBoundary);
         }
 
         function applyAutoSpin() {
-            const controls = Graph && Graph.controls && Graph.controls();
-            if (!controls) return;
-            controls.autoRotate = state.autoSpin;
-            controls.autoRotateSpeed = 1.6;
+            const r = activeRenderer();
+            if (r) r.setAutoSpin(state.autoSpin);
         }
 
         function wireViewbar() {
+            wireRendererToggle();
             document.querySelectorAll('#viewbar .vbtn').forEach(btn => {
                 btn.addEventListener('click', () => {
                     setActiveViewBtn(btn.dataset.view);
                     setView(btn.dataset.view);
                 });
             });
+
+            const labelBtn = document.getElementById('toggle-labels');
+            if (labelBtn) {
+                labelBtn.classList.toggle('active', state.showLabels);
+                labelBtn.setAttribute('aria-pressed', String(state.showLabels));
+                labelBtn.addEventListener('click', () => {
+                    state.showLabels = !state.showLabels;
+                    labelBtn.classList.toggle('active', state.showLabels);
+                    labelBtn.setAttribute('aria-pressed', String(state.showLabels));
+                    // The 2D overlay re-reads state every frame; the 3D backend
+                    // owns sprite visibility and needs telling.
+                    bumpGraphStyles();
+                });
+            }
+
+            // The reset button moved here from the sidebar footer — everything
+            // it undoes happens on the canvas.
+            const resetBtn = document.getElementById('reset');
+            if (resetBtn) resetBtn.addEventListener('click', resetView);
 
             const boxBtn = document.getElementById('toggle-box');
             if (boxBtn) boxBtn.addEventListener('click', () => {
@@ -610,79 +624,5 @@
             if (!el) return;
             el.textContent = text || '';
             el.style.display = text ? '' : 'none';
-        }
-
-        // ─── Orientation gizmo + distance-adaptive labels ────
-
-        const GIZMO_AXES = [
-            { v: [1, 0, 0], color: '#ff5d5d', label: 'X' },
-            { v: [0, 1, 0], color: '#5dff8f', label: 'Y' },
-            { v: [0, 0, 1], color: '#5d9dff', label: 'Z' },
-        ];
-
-        function startOverlayLoop() {
-            const svg = document.getElementById('gizmo-svg');
-            let frame = 0;
-            const v = new THREE.Vector3();
-            const tick = () => {
-                requestAnimationFrame(tick);
-                if (!Graph) return;
-                const cam = Graph.camera();
-                if (!cam) return;
-                frame++;
-                // Gizmo: rotate the world axes into the camera's view frame so the
-                // little triad mirrors how the graph is oriented on screen.
-                if (svg && frame % 2 === 0) {
-                    cam.updateMatrixWorld();
-                    const q = cam.quaternion.clone().invert();
-                    const R = 26;
-                    const drawn = GIZMO_AXES.map(a => {
-                        v.set(a.v[0], a.v[1], a.v[2]).applyQuaternion(q);
-                        return { color: a.color, label: a.label, x: v.x, y: v.y, z: v.z };
-                    }).sort((a, b) => a.z - b.z); // painter's order: far axes first
-                    let s = '';
-                    for (const a of drawn) {
-                        const x = (a.x * R).toFixed(1);
-                        const y = (-a.y * R).toFixed(1);
-                        const op = (0.4 + 0.6 * ((a.z + 1) / 2)).toFixed(2);
-                        s += `<line x1="0" y1="0" x2="${x}" y2="${y}" stroke="${a.color}" stroke-width="2.4" stroke-linecap="round" opacity="${op}"/>`;
-                        s += `<circle cx="${x}" cy="${y}" r="3.2" fill="${a.color}" opacity="${op}"/>`;
-                        s += `<text x="${(a.x * R * 1.34).toFixed(1)}" y="${(-a.y * R * 1.34 + 3.4).toFixed(1)}" fill="${a.color}" font-size="9.5" font-family="JetBrains Mono, monospace" text-anchor="middle" opacity="${op}">${a.label}</text>`;
-                    }
-                    svg.innerHTML = s;
-                }
-                // Distance-adaptive labels: hide labels for nodes far from the
-                // camera so a zoomed-out view stays clean and they reappear as you
-                // move in. Throttled.
-                if (frame % 8 === 0) updateAdaptiveLabels(cam);
-                // Legend counts track the on-screen set during a walk or tour.
-                if (frame % 12 === 0) refreshModeLegend();
-            };
-            requestAnimationFrame(tick);
-        }
-
-        function updateAdaptiveLabels(cam) {
-            const px = cam.position.x, py = cam.position.y, pz = cam.position.z;
-            const D = state._labelDist || 340;
-            const D2 = D * D;
-            const focusOn = !!state.focusNode;
-            const tourOn = tourState.active && tourState.routeIds.size > 0;
-            state.view.nodes.forEach(n => {
-                const s = n.__nodeLabel;
-                if (!s) return;
-                // On a tour only the stops are named — the surrounding
-                // neighbourhood stays present but anonymous.
-                if (tourOn) {
-                    s.visible = tourState.routeIds.has(n.id);
-                    return;
-                }
-                if (focusOn) {
-                    // While focused, always label the neighbourhood; hide the rest.
-                    s.visible = state.focusSet.has(n.id);
-                    return;
-                }
-                const dx = (n.x || 0) - px, dy = (n.y || 0) - py, dz = (n.z || 0) - pz;
-                s.visible = (dx * dx + dy * dy + dz * dz) < D2;
-            });
         }
 

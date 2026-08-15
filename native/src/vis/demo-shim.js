@@ -104,7 +104,7 @@
 
         // Resolved against the page so a relative request is matched by the
         // path it will actually hit. The demo is served from a subdirectory
-        // (`/demo/`), so `graph.json` and `ug-vis.bundle.js` resolve *under*
+        // (`/demo/`), so `graph.json` and `threejs-vis.bundle.js` resolve *under*
         // it while the app's own `/api/...` calls stay absolute — which is
         // precisely the line this needs to draw.
         let path;

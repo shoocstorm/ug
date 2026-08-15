@@ -5,7 +5,7 @@ A self-contained Axum-based web server that serves the visualization UI plus a f
 ## Goals
 
 - Replace the "spin up `python -m http.server`" step in the dev loop with a single `ug serve` command.
-- Serve `visualization.html`, `ug-vis.bundle.js` (three.js + 3d-force-graph), and `graph.json` from one process so users only need the `ug` binary at runtime.
+- Serve `visualization.html`, `threejs-vis.bundle.js` (three.js + 3d-force-graph), and `graph.json` from one process so users only need the `ug` binary at runtime.
 - Pre-load `graph.json` into memory and serve pre-compressed (br + gzip) bytes so the UI loads fast even on remote machines or large graphs.
 - Provide a clean foundation for read-only HTTP API endpoints (search, BFS, centrality, semantic / hybrid search) without needing a second server.
 
@@ -24,7 +24,7 @@ Worth being explicit, because it confuses people:
 | File | Source | Resolved at |
 |------|--------|-------------|
 | `/` and `/index.html` | `native/src/vis/visualization.html` via `include_str!` | **compile time** — baked into the `ug` binary |
-| `/ug-vis.bundle.js` | `native/src/vis/ug-vis.bundle.js` via `include_bytes!` | **compile time** — baked into the `ug` binary |
+| `/threejs-vis.bundle.js` | `native/src/vis/threejs-vis.bundle.js` via `include_bytes!` | **compile time** — baked into the `ug` binary |
 | `/graph.json` | `-i <path>` flag, or the active project's `~/.ug/<name>/graph.json` in multi-project mode | **startup / project activation** — read once per project, held in memory |
 | `/api/db/*`, `/api/search/*` | OverGraph DB at `-d <path>`, or the active project's `~/.ug/<name>/ugdb` | **startup / project activation** — opened once per project |
 | `/api/chat` | OpenAI-compatible chat endpoint configured via `--chat-model` / `--chat-base-url` / `--chat-api-key` (or `UG_CHAT_*` env vars). Disabled when no `--chat-model` is set — route returns 503. | **startup** — config baked once; per-request body can override `chat_model` / `chat_base_url` / `chat_api_key` / `temperature` / `max_tokens` |
@@ -32,7 +32,7 @@ Worth being explicit, because it confuses people:
 So:
 
 - Editing `native/src/vis/*` does **not** affect a running `ug serve` until you `cargo build` again.
-- The `index.html` / `ug-vis.bundle.js` files written into `.ug/` by `ug gen` are a *separate* copy meant for serving the directory with any static server (or `file://`). `ug serve` does not consult that copy.
+- The `index.html` / `threejs-vis.bundle.js` files written into `.ug/` by `ug gen` are a *separate* copy meant for serving the directory with any static server (or `file://`). `ug serve` does not consult that copy.
 - Path resolution for `--input` and `--db` is relative to the working directory where you invoked `ug serve`, not relative to the binary's location.
 
 ---
@@ -63,7 +63,7 @@ single-project mode (the pre-multi behavior).
 | Method | Path | Response |
 |--------|------|----------|
 | GET | `/`, `/index.html` | `visualization.html` (embedded) |
-| GET | `/ug-vis.bundle.js` | bundled three.js + 3d-force-graph viz runtime (embedded ES module) |
+| GET | `/threejs-vis.bundle.js` | bundled three.js + 3d-force-graph viz runtime (embedded ES module) |
 | GET | `/graph.json` | bytes of the graph file |
 | GET | `/healthz` | `ok` plain text |
 

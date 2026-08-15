@@ -493,7 +493,6 @@
             wireSidebarResize();
             wireInfoResize();
             wireToolTabs();
-            wireFooter();
             wireFilterActions();
             wireSemanticPanel();
             wireChatPanel();

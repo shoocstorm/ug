@@ -296,6 +296,12 @@
     <div id="container">
         <div id="graph-3d"></div>
 
+        <!-- FX overlay for the 2D renderer: labels, halos, the selection
+             marker, link-flow particles and the walk burst — everything
+             cosmos.gl cannot draw itself. Hidden while the 3D renderer, which
+             draws all of it in-scene, is mounted. -->
+        <canvas id="fx-overlay" hidden></canvas>
+
         <!-- Guided Tour: cinematic narration overlay (camera flies stop to
              stop). Draggable by its header; the JSON button opens the plan
              the LLM produced. -->
@@ -562,13 +568,27 @@
             <button class="vbtn" data-view="5" title="View face 5 — XZ plane (top)"><span class="vn" style="color:#f59e0b">5</span><span class="vp">XZ</span></button>
             <button class="vbtn" data-view="6" title="View face 6 — XZ plane (bottom)"><span class="vn" style="color:#2f5f96">6</span><span class="vp">XZ</span></button>
             <button class="vbtn vbtn-3d active" data-view="3d" title="Isometric 3D view"><span class="vn">3D</span><span class="vp">ISO</span></button>
-            <div class="vsep"></div>
+            <!-- Hidden alongside the projection buttons: a 2D renderer has no
+                 camera to place, so the whole group goes with it. -->
+            <div class="vsep" id="vsep-views"></div>
             <button class="vtoggle" id="zoom-in" title="Zoom in — move camera closer (mouse wheel up)"><span class="vt-ico">＋</span><span class="vt-lbl">In</span></button>
             <button class="vtoggle" id="zoom-out" title="Zoom out — move camera farther (mouse wheel down)"><span class="vt-ico">－</span><span class="vt-lbl">Out</span></button>
             <div class="vsep"></div>
+            <!-- Node names. Off by default: on anything past a few hundred
+                 nodes a full set of labels is a wall of text, not a map. -->
+            <button class="vtoggle" id="toggle-labels" aria-pressed="false" title="Show / hide node name labels"><span class="vt-ico">Aa</span><span class="vt-lbl">Names</span></button>
             <button class="vtoggle" id="toggle-box" title="Show / hide the boundary box, corners & face labels"><span class="vt-ico">▦</span><span class="vt-lbl">Box</span></button>
             <button class="vtoggle" id="toggle-spin" title="Toggle auto-rotation"><span class="vt-ico">⟳</span><span class="vt-lbl">Spin</span></button>
             <button class="vtoggle" id="toggle-solo" aria-pressed="false" title="Solo the selected node — show only it and everything it connects to (select a node first)"><span class="vt-ico">◎</span><span class="vt-lbl">Solo</span></button>
+            <div class="vsep"></div>
+            <!-- Renderer: 2D is GPU-simulated and scales to very large graphs;
+                 3D adds the orbit camera, face projections and boundary cube. -->
+            <button class="vtoggle" id="toggle-renderer" title="Switch renderer — 2D (cosmos.gl, GPU layout, scales to very large graphs) or 3D (three.js, orbit camera and face views)"><span class="vt-ico">◫</span><span class="vt-lbl" id="renderer-label">2D</span></button>
+            <div class="vsep"></div>
+            <!-- Lives with the other canvas controls rather than in the sidebar
+                 footer: everything it undoes — framing, filters, selection —
+                 happens on the canvas. -->
+            <button class="vtoggle" id="reset" title="Reset view — clear search, filters, selection and focus, and re-frame the graph (r)"><span class="vt-ico">⟲</span><span class="vt-lbl">Reset</span></button>
         </div>
 
         <div class="header">
@@ -1396,9 +1416,6 @@ traverse({
                 </div><!-- /#pane-graph -->
             </div>
 
-            <div class="sidebar-footer">
-                <button id="reset">Reset View <kbd class="btn-kbd">r</kbd></button>
-            </div>
         </aside>
 
         <button id="sidebar-launcher" class="pending" title="Show panel">

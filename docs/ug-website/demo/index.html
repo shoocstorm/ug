@@ -8353,9 +8353,35 @@
             font-size: 12.5px;
             color: var(--text-muted);
         }
+/* ==== 16-overlay.css ==== */
+/* ─── The 2D renderer's FX overlay ─────────────────────────────
+   A canvas laid exactly over the WebGL one, carrying the labels, halos,
+   selection marker, link-flow particles and walk burst that cosmos.gl has no
+   way to draw. It must never take a pointer event: every click, drag and
+   hover belongs to the renderer underneath it. */
+
+#fx-overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    /* Above the canvas, below every panel and HUD element (which sit on the
+       .canvas-overlay layer at z-index 10 and up). */
+    z-index: 2;
+}
+
+#fx-overlay[hidden] {
+    display: none;
+}
+
+/* The renderer toggle reads as a mode, not an action, so the active backend is
+   spelled out on the button rather than implied by a pressed state. */
+#toggle-renderer .vt-lbl {
+    font-variant-numeric: tabular-nums;
+    min-width: 1.6em;
+}
     </style>
 <script>
-window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":2947,"edges":8749,"files":101,"lines":68500,"ugVersion":"0.1.13","visFingerprint":"59f0ff68d6711a7c","generatedAt":1786799893};
+window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":2947,"edges":8749,"files":101,"lines":68500,"ugVersion":"0.1.14","visFingerprint":"bad4619123e9878a","generatedAt":1786809729};
 /* ==========================================================================
    UltraGraph — static demo shim
    ==========================================================================
@@ -8462,7 +8488,7 @@ window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#g
 
         // Resolved against the page so a relative request is matched by the
         // path it will actually hit. The demo is served from a subdirectory
-        // (`/demo/`), so `graph.json` and `ug-vis.bundle.js` resolve *under*
+        // (`/demo/`), so `graph.json` and `threejs-vis.bundle.js` resolve *under*
         // it while the app's own `/api/...` calls stay absolute — which is
         // precisely the line this needs to draw.
         let path;
@@ -9038,6 +9064,12 @@ window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#g
     <div id="container">
         <div id="graph-3d"></div>
 
+        <!-- FX overlay for the 2D renderer: labels, halos, the selection
+             marker, link-flow particles and the walk burst — everything
+             cosmos.gl cannot draw itself. Hidden while the 3D renderer, which
+             draws all of it in-scene, is mounted. -->
+        <canvas id="fx-overlay" hidden></canvas>
+
         <!-- Guided Tour: cinematic narration overlay (camera flies stop to
              stop). Draggable by its header; the JSON button opens the plan
              the LLM produced. -->
@@ -9311,6 +9343,10 @@ window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#g
             <button class="vtoggle" id="toggle-box" title="Show / hide the boundary box, corners & face labels"><span class="vt-ico">▦</span><span class="vt-lbl">Box</span></button>
             <button class="vtoggle" id="toggle-spin" title="Toggle auto-rotation"><span class="vt-ico">⟳</span><span class="vt-lbl">Spin</span></button>
             <button class="vtoggle" id="toggle-solo" aria-pressed="false" title="Solo the selected node — show only it and everything it connects to (select a node first)"><span class="vt-ico">◎</span><span class="vt-lbl">Solo</span></button>
+            <div class="vsep"></div>
+            <!-- Renderer: 2D is GPU-simulated and scales to very large graphs;
+                 3D adds the orbit camera, face projections and boundary cube. -->
+            <button class="vtoggle" id="toggle-renderer" title="Switch renderer — 2D (cosmos.gl, GPU layout, scales to very large graphs) or 3D (three.js, orbit camera and face views)"><span class="vt-ico">◫</span><span class="vt-lbl" id="renderer-label">2D</span></button>
         </div>
 
         <div class="header">
@@ -10253,8 +10289,9 @@ traverse({
 
     <script type="module">
 // ==== 00-preamble.js ====
-        import { ForceGraph3D, THREE, SpriteText }
-            from './ug-vis.bundle.js';
+        // The renderer bundles (three.js, cosmos.gl) are imported lazily by
+        // whichever backend mounts — see 10-render-core.js. Loading both up
+        // front would cost every page 1.4 MB of a renderer it may never use.
 
         const config = {
             nodeRadius: { File: 10, Interface: 7, Function: 6, Class: 8, Dependency: 5, Config: 8, Route: 7, Constant: 5, Variable: 5, Default: 6 },
@@ -10299,6 +10336,10 @@ traverse({
 
         const state = {
             graph: { nodes: [], edges: [] },
+            // Which renderer backend draws the canvas: 'three' (3D force
+            // graph) or 'cosmos' (2D, GPU-simulated). Resolved against the
+            // registered backends in pickRendererName() — see 10-render-core.js.
+            renderer: null,
             nodeFilters: new Set(),
             edgeFilters: new Set(),
             // "Only system boundaries." A separate axis from nodeFilters
@@ -10330,7 +10371,7 @@ traverse({
             // actually handed to the renderer. Below the threshold the two are
             // the same object and nothing changes.
             soloOnly: false,        // forced solo: the canvas only ever shows a neighbourhood
-            view: null,             // { nodes, edges } passed to Graph.graphData()
+            view: null,             // { nodes, edges } handed to the renderer
             viewIds: new Set(),     // ids currently in the view
             viewSeeds: new Set(),   // ids explicitly placed on the canvas
             viewExpanded: new Set(),// seeds whose neighbours are drawn too
@@ -10390,9 +10431,8 @@ traverse({
             particleIn: '#67e8f9',
         };
 
-        // The 3d-force-graph instance and its scene-decor handles.
-        let Graph, width, height, selectionRing, boundaryCube, particleField;
-        let _glowTex, _ringTex, _boundaryRingTex;
+        // Canvas size, shared by the renderer backends and the resize handler.
+        let width, height;
         // Highlight sets re-evaluated by the node/link style accessors.
         state.highlightNodes = new Set();
         state.highlightLinks = new Set();
@@ -14092,70 +14132,10 @@ traverse({
         }
 
         // ── Camera ────────────────────────────────────────────
-
-        function tourVec(n) { return { x: +n.x || 0, y: +n.y || 0, z: +n.z || 0 }; }
-        function vSub(a, b) { return { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z }; }
-        function vAdd(a, b) { return { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z }; }
-        function vScale(a, s) { return { x: a.x * s, y: a.y * s, z: a.z * s }; }
-        function vLen(a) { return Math.sqrt(a.x * a.x + a.y * a.y + a.z * a.z); }
-        function vNorm(a) { const l = vLen(a) || 1; return vScale(a, 1 / l); }
-        function vCross(a, b) {
-            return {
-                x: a.y * b.z - a.z * b.y,
-                y: a.z * b.x - a.x * b.z,
-                z: a.x * b.y - a.y * b.x,
-            };
-        }
-        function vLerp(a, b, t) { return vAdd(a, vScale(vSub(b, a), t)); }
-
-        // Fly to a stop with framing that tells the story: the camera sits
-        // broadside to the direction of travel (so the hop we just took is
-        // visible, not hidden behind us), pulled back far enough to hold the
-        // stop's neighbourhood, and aimed a touch toward the next stop so
-        // where we're heading is already on screen.
-        function flyToTourStop(stop, opts) {
-            opts = opts || {};
-            const node = state.nodeById ? state.nodeById.get(stop.node_id) : null;
-            if (!node || !Graph) return;
-            const prevNode = opts.prev && state.nodeById ? state.nodeById.get(opts.prev.node_id) : null;
-            const nextNode = opts.next && state.nodeById ? state.nodeById.get(opts.next.node_id) : null;
-
-            const p = tourVec(node);
-            // Everything we'd like in frame, to pick a distance from.
-            const context = [];
-            if (prevNode) context.push(tourVec(prevNode));
-            if (nextNode) context.push(tourVec(nextNode));
-            tourState.nearIds.forEach(id => {
-                const nn = state.nodeById && state.nodeById.get(id);
-                if (nn) context.push(tourVec(nn));
-            });
-            let spread = 0;
-            context.forEach(c => { spread = Math.max(spread, vLen(vSub(c, p))); });
-            const dist = Math.max(230, Math.min(900, 200 + spread * 1.35));
-
-            const travel = prevNode ? vSub(p, tourVec(prevNode))
-                : (nextNode ? vSub(tourVec(nextNode), p) : null);
-            let dir;
-            if (travel && vLen(travel) > 1e-3) {
-                const t = vNorm(travel);
-                let up = { x: 0, y: 1, z: 0 };
-                let side = vCross(t, up);
-                // Travelling straight up/down: pick another reference axis so
-                // the cross product doesn't collapse.
-                if (vLen(side) < 0.2) { up = { x: 0, y: 0, z: 1 }; side = vCross(t, up); }
-                side = vNorm(side);
-                dir = vNorm(vAdd(vScale(side, 1), vAdd(vScale(up, 0.5), vScale(t, -0.3))));
-            } else {
-                const d = 1 / Math.sqrt(3);
-                dir = { x: d, y: d, z: d };
-            }
-            const look = nextNode ? vLerp(p, tourVec(nextNode), 0.16) : p;
-            const cam = vAdd(p, vScale(dir, dist));
-            // One frame of slack so any panel toggle commits its layout first.
-            requestAnimationFrame(() => {
-                Graph.cameraPosition(cam, look, opts.ms || 1100);
-            });
-        }
+        //
+        // The tour's camera work is renderer-specific — broadside framing only
+        // means something in 3D — so it lives in the backends and is reached
+        // through flyToTourStop() / frameTourRoute() in 10-render-core.js.
 
         // Select the stop's node without letting the details panel slide back
         // over the graph (the card carries the code inline instead).
@@ -15024,26 +15004,6 @@ traverse({
             }
         }
 
-        // Frame every stop on the route, so the ending shot is the shape of
-        // the answer rather than one more close-up.
-        function frameTourRoute(ms) {
-            if (!Graph || !tourState.data) return;
-            const pts = [];
-            tourState.routeIds.forEach(id => {
-                const n = state.nodeById && state.nodeById.get(id);
-                if (n) pts.push(tourVec(n));
-            });
-            if (pts.length < 2) return;
-            const c = pts.reduce((a, p) => vAdd(a, p), { x: 0, y: 0, z: 0 });
-            const centre = vScale(c, 1 / pts.length);
-            let radius = 0;
-            pts.forEach(p => { radius = Math.max(radius, vLen(vSub(p, centre))); });
-            const d = Math.max(300, Math.min(1500, radius * 2 + 200)) / Math.sqrt(3);
-            Graph.cameraPosition(
-                { x: centre.x + d, y: centre.y + d * 0.8, z: centre.z + d },
-                centre,
-                ms || 1400);
-        }
 
         function nextStop() {
             if (!tourState.data) return;
@@ -16011,18 +15971,17 @@ traverse({
         // rebuilds from the current layout rather than revealing whatever
         // cube was last built, which would enclose the wrong region.
         function applyBoundaryVisibility() {
-            if (state.showBoundary) updateBoundaryCube();
-            else disposeBoundaryCube();
+            const r = activeRenderer();
+            if (r) r.setBoundaryVisible(state.showBoundary);
         }
 
         function applyAutoSpin() {
-            const controls = Graph && Graph.controls && Graph.controls();
-            if (!controls) return;
-            controls.autoRotate = state.autoSpin;
-            controls.autoRotateSpeed = 1.6;
+            const r = activeRenderer();
+            if (r) r.setAutoSpin(state.autoSpin);
         }
 
         function wireViewbar() {
+            wireRendererToggle();
             document.querySelectorAll('#viewbar .vbtn').forEach(btn => {
                 btn.addEventListener('click', () => {
                     setActiveViewBtn(btn.dataset.view);
@@ -16186,80 +16145,6 @@ traverse({
             el.style.display = text ? '' : 'none';
         }
 
-        // ─── Orientation gizmo + distance-adaptive labels ────
-
-        const GIZMO_AXES = [
-            { v: [1, 0, 0], color: '#ff5d5d', label: 'X' },
-            { v: [0, 1, 0], color: '#5dff8f', label: 'Y' },
-            { v: [0, 0, 1], color: '#5d9dff', label: 'Z' },
-        ];
-
-        function startOverlayLoop() {
-            const svg = document.getElementById('gizmo-svg');
-            let frame = 0;
-            const v = new THREE.Vector3();
-            const tick = () => {
-                requestAnimationFrame(tick);
-                if (!Graph) return;
-                const cam = Graph.camera();
-                if (!cam) return;
-                frame++;
-                // Gizmo: rotate the world axes into the camera's view frame so the
-                // little triad mirrors how the graph is oriented on screen.
-                if (svg && frame % 2 === 0) {
-                    cam.updateMatrixWorld();
-                    const q = cam.quaternion.clone().invert();
-                    const R = 26;
-                    const drawn = GIZMO_AXES.map(a => {
-                        v.set(a.v[0], a.v[1], a.v[2]).applyQuaternion(q);
-                        return { color: a.color, label: a.label, x: v.x, y: v.y, z: v.z };
-                    }).sort((a, b) => a.z - b.z); // painter's order: far axes first
-                    let s = '';
-                    for (const a of drawn) {
-                        const x = (a.x * R).toFixed(1);
-                        const y = (-a.y * R).toFixed(1);
-                        const op = (0.4 + 0.6 * ((a.z + 1) / 2)).toFixed(2);
-                        s += `<line x1="0" y1="0" x2="${x}" y2="${y}" stroke="${a.color}" stroke-width="2.4" stroke-linecap="round" opacity="${op}"/>`;
-                        s += `<circle cx="${x}" cy="${y}" r="3.2" fill="${a.color}" opacity="${op}"/>`;
-                        s += `<text x="${(a.x * R * 1.34).toFixed(1)}" y="${(-a.y * R * 1.34 + 3.4).toFixed(1)}" fill="${a.color}" font-size="9.5" font-family="JetBrains Mono, monospace" text-anchor="middle" opacity="${op}">${a.label}</text>`;
-                    }
-                    svg.innerHTML = s;
-                }
-                // Distance-adaptive labels: hide labels for nodes far from the
-                // camera so a zoomed-out view stays clean and they reappear as you
-                // move in. Throttled.
-                if (frame % 8 === 0) updateAdaptiveLabels(cam);
-                // Legend counts track the on-screen set during a walk or tour.
-                if (frame % 12 === 0) refreshModeLegend();
-            };
-            requestAnimationFrame(tick);
-        }
-
-        function updateAdaptiveLabels(cam) {
-            const px = cam.position.x, py = cam.position.y, pz = cam.position.z;
-            const D = state._labelDist || 340;
-            const D2 = D * D;
-            const focusOn = !!state.focusNode;
-            const tourOn = tourState.active && tourState.routeIds.size > 0;
-            state.view.nodes.forEach(n => {
-                const s = n.__nodeLabel;
-                if (!s) return;
-                // On a tour only the stops are named — the surrounding
-                // neighbourhood stays present but anonymous.
-                if (tourOn) {
-                    s.visible = tourState.routeIds.has(n.id);
-                    return;
-                }
-                if (focusOn) {
-                    // While focused, always label the neighbourhood; hide the rest.
-                    s.visible = state.focusSet.has(n.id);
-                    return;
-                }
-                const dx = (n.x || 0) - px, dy = (n.y || 0) - py, dz = (n.z || 0) - pz;
-                s.visible = (dx * dx + dy * dy + dz * dz) < D2;
-            });
-        }
-
 // ==== 09-search.js ====
         // ─── Search ─────────────────────────────────────────
 
@@ -16409,30 +16294,21 @@ traverse({
             focusNode(n);
         }
 
-        function focusNode(n) {
-            if (!Graph || n == null) return;
-            // Wait one frame so any panel toggles (info open/close) commit their
-            // layout before the camera flies.
-            requestAnimationFrame(() => {
-                // Centre the camera on the node at a consistent, comfortable
-                // distance. Isolation is conveyed by the focus dimming, not by the
-                // camera — fitting a scattered neighbourhood tends to either
-                // over-zoom (tiny clusters bloom out) or under-zoom (sparse, empty
-                // view), so we keep the framing simple and predictable.
-                const x = +n.x || 0, y = +n.y || 0, z = +n.z || 0;
-                // Total camera-to-node distance (the (d,d,d) offset has magnitude
-                // sqrt(3)*d). Pulled well back so a generous slice of the
-                // surrounding neighbourhood stays in frame on focus.
-                const d = 480 / Math.sqrt(3);
-                Graph.cameraPosition(
-                    { x: x + d, y: y + d, z: z + d },
-                    { x, y, z },
-                    800);
-            });
-        }
+        // focusNode() is a renderer dispatcher — see 10-render-core.js. How a
+        // node is centred depends on whether there is a camera to fly.
 
-// ==== 10-graph-render.js ====
-        // ─── 3D force graph & rendering ──────────────────────
+// ==== 10-render-core.js ====
+        // ─── Renderer core: shared style rules + the backend seam ──────────
+        //
+        // The page has two renderers. `11-render-three.js` draws a 3D force
+        // graph (three.js + 3d-force-graph); `12-render-cosmos.js` draws a 2D
+        // GPU-simulated one (cosmos.gl). Everything in *this* file is the part
+        // they share — what colour a node is, whether it is visible, how dim it
+        // should be — plus the dispatchers the rest of the page calls.
+        //
+        // Keeping the style rules here is the whole point: a second renderer is
+        // only affordable if "what should this node look like?" has one answer.
+        // A backend decides how to *draw* that answer, never what it is.
 
         // Selected node / hovered neighbours flare to a hot saturated orange —
         // the brightest ink on the page; everything else keeps its type colour.
@@ -16445,10 +16321,11 @@ traverse({
             if (state.walkActive && state.walkColors.has(n.id)) return state.walkColors.get(n.id);
             // On a tour the other stops burn amber so the route reads as one
             // chain; everything else keeps its type colour and gets lowlit
-            // by opacity instead (see bumpGraphStyles).
+            // by opacity instead (see nodeOpacityFor).
             if (tourTier(n.id) === 'stop') return '#fb923c';
             return config.getColor(n.group);
         }
+
         function linkColorFor(e) {
             if (state.highlightLinks.has(e)) {
                 return state.highlightLinkDir.get(e) === 'in' ? CANVAS.linkIn : CANVAS.linkOut;
@@ -16490,7 +16367,7 @@ traverse({
             return config.getRelColor(e.rel);
         }
 
-        // Visibility accessors handed to the graph. Filters own the base
+        // Visibility accessors handed to the renderer. Filters own the base
         // answer; a tour in "solo" mode narrows it further to the route,
         // which turns the walk into a standalone diagram of the answer.
         // Is focus solo mode actually in force? Guarded rather than read raw:
@@ -16568,6 +16445,322 @@ traverse({
             return (config.nodeRadius[n.group] || 6) * 1.6;
         }
 
+        // How lit a node is, as a single number both backends apply the same
+        // way (three tints sprite materials, cosmos writes the colour alpha).
+        // Extracted from what used to live inline in bumpGraphStyles so the two
+        // renderers cannot disagree about what "dimmed" means.
+        //
+        // Returns { dim, opacity, tier }: `tier` is the tour ring (null when no
+        // tour is running), `dim` is the binary "push this to the background".
+        function nodeLightingFor(n) {
+            const focusOn = !!state.focusNode;
+            // On a tour, brightness is a four-ring gradient (this stop → the
+            // rest of the route → its neighbours → everything else). Otherwise
+            // focus mode's binary dim applies. Graph Walk has its own
+            // three-state version (seed / reached / far).
+            const tier = state.walkActive ? null : tourTier(n.id);
+            if (state.walkActive) {
+                const w = walkTier(n.id);
+                // 'pending' = in the reached set but not yet ignited (its edges
+                // are streaming toward it). Kept as a faint ghost so the eye has
+                // a target to watch the particles flow into.
+                const opacity = w === 'seed' ? 1.0
+                    : w === 'reached' ? 0.96
+                    : w === 'pending' ? 0.14
+                    : 0.05;
+                return { dim: w === 'far' || w === 'pending', opacity, tier: null };
+            }
+            const dim = tier ? tier === 'far' : (focusOn && !state.focusSet.has(n.id));
+            const opacity = tier ? TOUR_TIER_OPACITY[tier] : (dim ? 0.06 : 0.95);
+            return { dim, opacity, tier };
+        }
+
+        // Warm for a way in, cool violet for a way out — two directions the
+        // eye can separate without reading a label.
+        const BOUNDARY_IN_COLOR = '#fbbf24';
+        const BOUNDARY_OUT_COLOR = '#a78bfa';
+
+        function boundaryRingColor(n) {
+            const inbound = (n.boundaries || []).some(b => b.direction === 'Inbound');
+            return inbound ? BOUNDARY_IN_COLOR : BOUNDARY_OUT_COLOR;
+        }
+
+        function truncateName(name) {
+            const parts = String(name).split('/');
+            const last = parts.pop();
+            const short = last.split(':').pop();
+            return short.length > 32 ? short.slice(0, 31) + '…' : short;
+        }
+
+        // Centroid + a robust (90th-percentile) radius of the laid-out graph,
+        // ignoring far-flung outliers. Shared by camera framing and depth cues.
+        function computeExtent() {
+            const nodes = state.view.nodes.filter(n => Number.isFinite(n.x));
+            if (!nodes.length) return null;
+            let cx = 0, cy = 0, cz = 0;
+            nodes.forEach(n => { cx += n.x; cy += n.y; cz += n.z || 0; });
+            cx /= nodes.length; cy /= nodes.length; cz /= nodes.length;
+            const dists = nodes
+                .map(n => Math.hypot(n.x - cx, n.y - cy, (n.z || 0) - cz))
+                .sort((a, b) => a - b);
+            const pct = dists[Math.floor(dists.length * 0.9)] || dists[dists.length - 1] || 120;
+            return { cx, cy, cz, radius: Math.max(pct, 40) };
+        }
+
+        // The six face views (id → outward camera direction + the coordinate
+        // plane that face lies in). Numbers match the digi labels on the boundary
+        // box, so "view N" flies the camera to look straight at face N.
+        // 3D-only: a 2D renderer reports `caps.faceViews === false` and the
+        // viewbar hides the buttons rather than leaving them dead.
+        const VIEWS = {
+            '1': { dir: [0, 0, 1], plane: 'XY' },   // +Z front
+            '2': { dir: [1, 0, 0], plane: 'YZ' },   // +X right
+            '3': { dir: [0, 0, -1], plane: 'XY' },  // -Z back
+            '4': { dir: [-1, 0, 0], plane: 'YZ' },  // -X left
+            '5': { dir: [0, 1, 0], plane: 'XZ' },   // +Y top
+            '6': { dir: [0, -1, 0], plane: 'XZ' },  // -Y bottom
+        };
+
+        // ─── The backend seam ──────────────────────────────────
+
+        // name → factory. Each backend file registers itself at load time.
+        const RENDERERS = {};
+        // The mounted backend. Null until createGraph() resolves, which is why
+        // every dispatcher below either guards or queues.
+        let R = null;
+        // Camera moves that arrived before the backend finished mounting —
+        // URL state restore is the usual source, and dropping its framing
+        // silently would look like the deep link half-worked.
+        let _pendingRenderOps = [];
+
+        // The mounted backend, or null while one is still coming up. Callers
+        // that need a capability rather than a dispatcher reach for this.
+        function activeRenderer() { return R; }
+
+        function whenRendererReady(fn) {
+            if (R) { fn(R); return; }
+            _pendingRenderOps.push(fn);
+        }
+
+        function flushRenderOps() {
+            const ops = _pendingRenderOps;
+            _pendingRenderOps = [];
+            ops.forEach(fn => { try { fn(R); } catch (err) { console.error(err); } });
+        }
+
+        // Which backend to use, in order of authority: an explicit choice made
+        // this session, then `?r=` on the URL, then whatever was last chosen on
+        // this machine, then the size-based default.
+        //
+        // The default follows the graph: a small repo (at or below
+        // THREE_D_DEFAULT_MAX elements) opens in 3D, where the extra dimension
+        // and the in-scene effects are still readable; past that the 2D engine
+        // takes over, because the per-node object cost that makes 3D pleasant
+        // on a small graph is the same cost that makes a big one unusable.
+        const RENDERER_STORAGE_KEY = 'ug-renderer';
+        const THREE_D_DEFAULT_MAX = 3000;  // max(nodes, edges) at or below this → default to 3D
+
+        // The graph-size default: 3D under the threshold, 2D above it. Reads
+        // the full `state.graph`, not the (possibly empty solo) view.
+        function autoRendererName() {
+            const nodes = state.graph && state.graph.nodes ? state.graph.nodes.length : 0;
+            const edges = state.graph && state.graph.edges ? state.graph.edges.length : 0;
+            return Math.max(nodes, edges) <= THREE_D_DEFAULT_MAX ? 'three' : 'cosmos';
+        }
+
+        function pickRendererName() {
+            const candidates = [
+                state.renderer,
+                new URLSearchParams(window.location.search).get('r'),
+                (() => { try { return localStorage.getItem(RENDERER_STORAGE_KEY); } catch (err) { return null; } })(),
+                autoRendererName(),
+            ];
+            for (const c of candidates) if (c && RENDERERS[c]) return c;
+            // Every named backend is missing — fall back to whatever registered.
+            return Object.keys(RENDERERS)[0];
+        }
+
+        function rendererCaps() {
+            return (R && R.caps) || { threeD: false, faceViews: false, autoSpin: false, boundaryCube: false };
+        }
+
+        // A backend that throws while mounting leaves the page in limbo: R is
+        // still null, the loading overlay is up, and nothing on the canvas can
+        // say why. Surface the failure in the overlay itself, with a way back
+        // to the other renderer — the dead end this page used to hit silently.
+        function otherRendererName(name) {
+            return Object.keys(RENDERERS)[0] === name ? Object.keys(RENDERERS)[1] : Object.keys(RENDERERS)[0];
+        }
+
+        function mountFailed(name, err) {
+            const loading = document.getElementById('loading');
+            if (!loading) return;
+            loading.style.display = 'block';
+            loading.innerHTML = `
+                <div class="load-error-card">
+                    <div class="load-error-title">Could not start the ${name} renderer</div>
+                    <div class="load-error-msg">${escapeHtml((err && err.message) || String(err))}</div>
+                    <div class="load-error-file">${escapeHtml(name)}</div>
+                    <div class="load-error-actions">
+                        <button type="button" class="load-error-btn" id="load-renderer-fallback">Try the ${otherRendererName(name)} renderer</button>
+                    </div>
+                </div>`;
+            const fallback = document.getElementById('load-renderer-fallback');
+            if (fallback) fallback.addEventListener('click', () => {
+                if (RENDERERS[otherRendererName(name)]) {
+                    // Restore a spinner so a retry reads as work, not as
+                    // a leftover error card the toggle forgot to clear.
+                    loading.innerHTML = '<div class="loader"></div><p>Loading graph…</p>';
+                    setRenderer(otherRendererName(name));
+                }
+            });
+        }
+
+        async function createGraph() {
+            const el = document.getElementById('graph-3d');
+            // A fresh graph (first load, retry, project switch) means a fresh
+            // render: the loading overlay must stay up until this engine's
+            // first painted frame.
+            state._graphRevealed = false;
+            if (R) { try { R.dispose(); } catch (err) { console.error(err); } R = null; }
+
+            const name = pickRendererName();
+            state.renderer = name;
+            document.body.dataset.renderer = name;
+            const backend = RENDERERS[name]();
+            // A backend's teardown disposes its GPU context but not its
+            // <canvas> — three's `_destructor()` leaves its element in #graph-3d,
+            // so the new backend would mount *underneath* a dead frame that keeps
+            // drawing its last painted scene on top. Everything here was owned by
+            // the renderer just disposed, so drop it outright.
+            el.replaceChildren();
+            try {
+                await backend.mount(el, state.view);
+            } catch (err) {
+                console.error('Renderer failed to mount:', err);
+                mountFailed(name, err);
+                return;
+            }
+            R = backend;
+            applyRendererCaps();
+            flushRenderOps();
+        }
+
+        // Swap renderers at runtime. Tears the old one down and re-mounts, then
+        // restores the current styling — the graph data itself never moved.
+        async function setRenderer(name) {
+            if (!RENDERERS[name] || name === state.renderer) return;
+            state.renderer = name;
+            try { localStorage.setItem(RENDERER_STORAGE_KEY, name); } catch (err) { /* private mode */ }
+            state._didFit = false;
+            state._boxSettled = false;
+            // The layout is about to be recomputed by a different engine, so
+            // the overlay must come up blank rather than over a stale frame.
+            const loading = document.getElementById('loading');
+            if (loading) loading.style.display = 'block';
+            await createGraph();
+            bumpGraphStyles();
+        }
+
+        function wireRendererToggle() {
+            const btn = document.getElementById('toggle-renderer');
+            if (!btn) return;
+            btn.addEventListener('click', () => {
+                setRenderer(state.renderer === 'cosmos' ? 'three' : 'cosmos');
+            });
+        }
+
+        // Hide the chrome a backend cannot honour, rather than leaving buttons
+        // that do nothing. A dead control is worse than an absent one: it reads
+        // as a bug in the graph rather than a property of the renderer.
+        function applyRendererCaps() {
+            const caps = rendererCaps();
+            document.querySelectorAll('#viewbar .vbtn').forEach(btn => {
+                if (VIEWS[btn.dataset.view]) btn.hidden = !caps.faceViews;
+            });
+            const gizmo = document.getElementById('axis-gizmo');
+            if (gizmo) gizmo.hidden = !caps.threeD;
+            const spin = document.getElementById('toggle-spin');
+            if (spin) spin.hidden = !caps.autoSpin;
+            const box = document.getElementById('toggle-box');
+            if (box) box.hidden = !caps.boundaryCube;
+            const label = document.getElementById('renderer-label');
+            if (label) label.textContent = caps.threeD ? '3D' : '2D';
+            // The 3D backend draws its labels and effects in-scene; the 2D one
+            // needs the overlay canvas. Exactly one of them is ever running.
+            if (caps.threeD) overlayStop();
+            else overlayStart();
+        }
+
+        // ─── Dispatchers ───────────────────────────────────────
+        // These keep the names the rest of the page already calls, so adding a
+        // backend did not mean touching every caller.
+
+        // Re-evaluate the style accessors after a selection / highlight / filter
+        // change, without rebuilding the whole scene.
+        function bumpGraphStyles() { if (R) R.restyle(); }
+
+        function setGraphData(view) { if (R) R.setData(view); }
+
+        function resizeRenderer(w, h) { if (R) R.resize(w, h); }
+
+        function frameGraph(ms = 600) { whenRendererReady(r => r.frameAll(ms)); }
+
+        function setView(id, ms = 600) { whenRendererReady(r => r.setView(id, ms)); }
+
+        function frameNodeSet(ids, ms = 700) { whenRendererReady(r => r.frameNodes(ids, ms)); }
+
+        function focusNode(n) { if (n != null) whenRendererReady(r => r.focusNode(n)); }
+
+        function zoomBy(factor) { if (R) R.zoomBy(factor); }
+
+        function flyToTourStop(stop, opts) { whenRendererReady(r => r.flyToStop(stop, opts || {})); }
+
+        function frameTourRoute(ms) { whenRendererReady(r => r.frameRoute(ms || 1400)); }
+
+        function emitWalkPulse(seedNode, colour, fromR, toR, growMs) {
+            if (R) R.emitPulse(seedNode, colour, fromR, toR, growMs);
+        }
+
+        // Where a node sits on screen, in page pixels — the tooltip and the
+        // overlay both need it, and only the backend knows the projection.
+        function nodeScreenPos(n) { return R ? R.screenPos(n) : null; }
+
+        // The loading overlay is owned by the render lifecycle: data is loaded
+        // before the diagram exists, so the overlay stays up through the layout
+        // + first paint and only comes down once a frame has actually been drawn.
+        function graphReveal() {
+            if (state._graphRevealed) return;
+            state._graphRevealed = true;
+            const loading = document.getElementById('loading');
+            if (loading) loading.style.display = 'none';
+        }
+// ==== 11-render-three.js ====
+        // ─── Renderer backend: 3D force graph (three.js + 3d-force-graph) ──
+        //
+        // The original renderer, now behind the seam in 10-render-core.js. It
+        // owns everything three-dimensional: the orbit camera, the six face
+        // projections, the dashed boundary cube, the orientation gizmo, fog as
+        // depth-of-field, and the sprite "sticker" nodes.
+        //
+        // Nothing here decides what a node should look like — that lives in
+        // 10-render-core.js and is shared with the 2D backend.
+
+        // Bound by mount(), from the vendored bundle. Loaded lazily so a page
+        // running the 2D renderer never pays for 1.4 MB of three.js.
+        let ForceGraph3D, THREE, SpriteText;
+
+        // The 3d-force-graph instance and its scene-decor handles.
+        let Graph, selectionRing, boundaryCube, particleField;
+        let _glowTex, _ringTex, _boundaryRingTex, _dotTex;
+
+        // Generation counter for the rAF loops this file starts. Each mount
+        // captures the current value; dispose() bumps it, so loops from a dead
+        // mount exit on their next frame — otherwise they run forever and,
+        // once the renderer mounts again, two loops fight over the same shared
+        // selectionRing / gizmo state.
+        let threeGen = 0;
+
         // A soft circular glow texture (white radial gradient → transparent),
         // tinted per-node via the sprite colour. Built once and shared.
         function glowTexture() {
@@ -16637,16 +16830,6 @@ traverse({
             _boundaryRingTex.minFilter = THREE.LinearFilter;
             _boundaryRingTex.generateMipmaps = false;
             return _boundaryRingTex;
-        }
-
-        // Warm for a way in, cool violet for a way out — two directions the
-        // eye can separate without reading a label.
-        const BOUNDARY_IN_COLOR = '#fbbf24';
-        const BOUNDARY_OUT_COLOR = '#a78bfa';
-
-        function boundaryRingColor(n) {
-            const inbound = (n.boundaries || []).some(b => b.direction === 'Inbound');
-            return inbound ? BOUNDARY_IN_COLOR : BOUNDARY_OUT_COLOR;
         }
 
         // Scene backdrop: a near-black ground with soft out-of-focus washes of
@@ -16858,29 +17041,15 @@ traverse({
             return force;
         }
 
-        function createGraph() {
-            const el = document.getElementById('graph-3d');
-            // A fresh graph (first load, retry, project switch) means a fresh
-            // render: the loading overlay must stay up until this engine's
-            // first painted frame.
-            state._graphRevealed = false;
-            window.addEventListener('mousemove', e => {
-                // page coords position the tooltip; client coords feed the
-                // pointerOverCanvas hit-test (elementFromPoint wants viewport
-                // coordinates — identical here, but kept separate for safety).
-                state._mouse = { x: e.pageX, y: e.pageY, cx: e.clientX, cy: e.clientY };
-                // A hover struck on-canvas would otherwise stick (highlight +
-                // tooltip) when the pointer crosses into a panel, because the
-                // renderer never reports a leave for occluded pixels.
-                if (state._hoverNode && !pointerOverCanvas()) handleNodeHover(null);
-            });
+        function threeMount(el, view) {
+            window.addEventListener('mousemove', threeTrackMouse);
 
             Graph = ForceGraph3D({ controlType: 'orbit' })(el)
                 .backgroundColor(CANVAS.bg)
                 // The *view*, not the graph: in solo mode this starts empty and
-                // only ever holds a neighbourhood (see 13-solo-view.js). Below
+                // only ever holds a neighbourhood (see 16-solo-view.js). Below
                 // the threshold `state.view` is `state.graph` itself.
-                .graphData({ nodes: state.view.nodes, links: state.view.edges })
+                .graphData({ nodes: view.nodes, links: view.edges })
                 .nodeId('id')
                 // Suppress the library's own hover tooltip. Its `nodeLabel`
                 // accessor defaults to the `name` field, so leaving it unset
@@ -16949,6 +17118,7 @@ traverse({
             selectionRing.visible = false;
             selectionRing.renderOrder = 999;
             Graph.scene().add(selectionRing);
+            threeGen += 1;
             startSelectionAnimation();
 
             // Frame the bulk of the graph once the layout settles. Use frameGraph
@@ -16965,7 +17135,7 @@ traverse({
                 // solo mode swapped the view out from under it.
                 if (state._didFit) return;
                 state._didFit = true;
-                frameGraph(900);
+                threeSetView('3d', 900);
             };
             // Mark the layout as truly settled only on a real engine stop (the
             // timeout fallbacks below may fire while nodes are still moving).
@@ -17000,30 +17170,15 @@ traverse({
             startOverlayLoop();
         }
 
-        // The loading overlay is owned by the render lifecycle now: data is
-        // loaded before the diagram exists, so the overlay stays up through
-        // the force-layout + first WebGL paint and only comes down once a
-        // frame has actually been drawn.
-        function graphReveal() {
-            if (state._graphRevealed) return;
-            state._graphRevealed = true;
-            const loading = document.getElementById('loading');
-            if (loading) loading.style.display = 'none';
-        }
-
-        // Centroid + a robust (90th-percentile) radius of the laid-out graph,
-        // ignoring far-flung outliers. Shared by camera framing and depth cues.
-        function computeExtent() {
-            const nodes = state.view.nodes.filter(n => Number.isFinite(n.x));
-            if (!nodes.length) return null;
-            let cx = 0, cy = 0, cz = 0;
-            nodes.forEach(n => { cx += n.x; cy += n.y; cz += n.z || 0; });
-            cx /= nodes.length; cy /= nodes.length; cz /= nodes.length;
-            const dists = nodes
-                .map(n => Math.hypot(n.x - cx, n.y - cy, (n.z || 0) - cz))
-                .sort((a, b) => a - b);
-            const pct = dists[Math.floor(dists.length * 0.9)] || dists[dists.length - 1] || 120;
-            return { cx, cy, cz, radius: Math.max(pct, 40) };
+        // page coords position the tooltip; client coords feed the
+        // pointerOverCanvas hit-test (elementFromPoint wants viewport
+        // coordinates — identical here, but kept separate for safety).
+        function threeTrackMouse(e) {
+            state._mouse = { x: e.pageX, y: e.pageY, cx: e.clientX, cy: e.clientY };
+            // A hover struck on-canvas would otherwise stick (highlight +
+            // tooltip) when the pointer crosses into a panel, because the
+            // renderer never reports a leave for occluded pixels.
+            if (state._hoverNode && !pointerOverCanvas()) handleNodeHover(null);
         }
 
         // Fog and label-distance must track the graph's actual size. The fog was
@@ -17046,21 +17201,9 @@ traverse({
             }
         }
 
-        // The six face views (id → outward camera direction + the coordinate
-        // plane that face lies in). Numbers match the digi labels on the boundary
-        // box, so "view N" flies the camera to look straight at face N.
-        const VIEWS = {
-            '1': { dir: [0, 0, 1], plane: 'XY' },   // +Z front
-            '2': { dir: [1, 0, 0], plane: 'YZ' },   // +X right
-            '3': { dir: [0, 0, -1], plane: 'XY' },  // -Z back
-            '4': { dir: [-1, 0, 0], plane: 'YZ' },  // -X left
-            '5': { dir: [0, 1, 0], plane: 'XZ' },   // +Y top
-            '6': { dir: [0, -1, 0], plane: 'XZ' },  // -Y bottom
-        };
-
         // Snap the camera to a predefined view. id: '1'–'6' (face projections) or
         // '3d' (isometric).
-        function setView(id, ms = 600) {
+        function threeSetView(id, ms = 600) {
             if (!Graph) return;
             const ext = computeExtent();
             if (!ext) return;
@@ -17080,13 +17223,10 @@ traverse({
             Graph.cameraPosition(pos, { x: cx, y: cy, z: cz }, ms);
         }
 
-        // Frame the graph at the default 3D isometric view.
-        function frameGraph(ms = 600) { setView('3d', ms); }
-
         // Fit the camera around an arbitrary set of node ids — used when solo
-        // mode leaves only a neighbourhood on screen. (`frameTourRoute` does the
+        // mode leaves only a neighbourhood on screen. (`threeFrameRoute` does the
         // same for a tour route, with its own route-specific guards.)
-        function frameNodeSet(ids, ms = 700) {
+        function threeFrameNodes(ids, ms = 700) {
             if (!Graph) return;
             const pts = [];
             ids.forEach(id => {
@@ -17113,10 +17253,32 @@ traverse({
             );
         }
 
+        // Centre the camera on the node at a consistent, comfortable distance.
+        // Isolation is conveyed by the focus dimming, not by the camera —
+        // fitting a scattered neighbourhood tends to either over-zoom (tiny
+        // clusters bloom out) or under-zoom (sparse, empty view), so we keep the
+        // framing simple and predictable.
+        function threeFocusNode(n) {
+            if (!Graph) return;
+            // Wait one frame so any panel toggles (info open/close) commit their
+            // layout before the camera flies.
+            requestAnimationFrame(() => {
+                const x = +n.x || 0, y = +n.y || 0, z = +n.z || 0;
+                // Total camera-to-node distance (the (d,d,d) offset has magnitude
+                // sqrt(3)*d). Pulled well back so a generous slice of the
+                // surrounding neighbourhood stays in frame on focus.
+                const d = 480 / Math.sqrt(3);
+                Graph.cameraPosition(
+                    { x: x + d, y: y + d, z: z + d },
+                    { x, y, z },
+                    800);
+            });
+        }
+
         // Scale the camera's orbit radius by `factor` (mirrors the mouse-wheel
         // dolly: <1 zooms in, >1 zooms out). Keeps the same look-at target so the
         // view direction is preserved; only the distance changes.
-        function zoomBy(factor) {
+        function threeZoomBy(factor) {
             if (!Graph) return;
             const controls = Graph.controls && Graph.controls();
             const cam = Graph.camera && Graph.camera();
@@ -17134,6 +17296,95 @@ traverse({
                 180
             );
         }
+
+        // ─── Tour camera ───────────────────────────────────────
+
+        function tourVec(n) { return { x: +n.x || 0, y: +n.y || 0, z: +n.z || 0 }; }
+        function vSub(a, b) { return { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z }; }
+        function vAdd(a, b) { return { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z }; }
+        function vScale(a, s) { return { x: a.x * s, y: a.y * s, z: a.z * s }; }
+        function vLen(a) { return Math.sqrt(a.x * a.x + a.y * a.y + a.z * a.z); }
+        function vNorm(a) { const l = vLen(a) || 1; return vScale(a, 1 / l); }
+        function vCross(a, b) {
+            return {
+                x: a.y * b.z - a.z * b.y,
+                y: a.z * b.x - a.x * b.z,
+                z: a.x * b.y - a.y * b.x,
+            };
+        }
+        function vLerp(a, b, t) { return vAdd(a, vScale(vSub(b, a), t)); }
+
+        // Fly to a stop with framing that tells the story: the camera sits
+        // broadside to the direction of travel (so the hop we just took is
+        // visible, not hidden behind us), pulled back far enough to hold the
+        // stop's neighbourhood, and aimed a touch toward the next stop so
+        // where we're heading is already on screen.
+        function threeFlyToStop(stop, opts) {
+            opts = opts || {};
+            const node = state.nodeById ? state.nodeById.get(stop.node_id) : null;
+            if (!node || !Graph) return;
+            const prevNode = opts.prev && state.nodeById ? state.nodeById.get(opts.prev.node_id) : null;
+            const nextNode = opts.next && state.nodeById ? state.nodeById.get(opts.next.node_id) : null;
+
+            const p = tourVec(node);
+            // Everything we'd like in frame, to pick a distance from.
+            const context = [];
+            if (prevNode) context.push(tourVec(prevNode));
+            if (nextNode) context.push(tourVec(nextNode));
+            tourState.nearIds.forEach(id => {
+                const nn = state.nodeById && state.nodeById.get(id);
+                if (nn) context.push(tourVec(nn));
+            });
+            let spread = 0;
+            context.forEach(c => { spread = Math.max(spread, vLen(vSub(c, p))); });
+            const dist = Math.max(230, Math.min(900, 200 + spread * 1.35));
+
+            const travel = prevNode ? vSub(p, tourVec(prevNode))
+                : (nextNode ? vSub(tourVec(nextNode), p) : null);
+            let dir;
+            if (travel && vLen(travel) > 1e-3) {
+                const t = vNorm(travel);
+                let up = { x: 0, y: 1, z: 0 };
+                let side = vCross(t, up);
+                // Travelling straight up/down: pick another reference axis so
+                // the cross product doesn't collapse.
+                if (vLen(side) < 0.2) { up = { x: 0, y: 0, z: 1 }; side = vCross(t, up); }
+                side = vNorm(side);
+                dir = vNorm(vAdd(vScale(side, 1), vAdd(vScale(up, 0.5), vScale(t, -0.3))));
+            } else {
+                const d = 1 / Math.sqrt(3);
+                dir = { x: d, y: d, z: d };
+            }
+            const look = nextNode ? vLerp(p, tourVec(nextNode), 0.16) : p;
+            const cam = vAdd(p, vScale(dir, dist));
+            // One frame of slack so any panel toggle commits its layout first.
+            requestAnimationFrame(() => {
+                Graph.cameraPosition(cam, look, opts.ms || 1100);
+            });
+        }
+
+        // Frame every stop on the route, so the ending shot is the shape of
+        // the answer rather than one more close-up.
+        function threeFrameRoute(ms) {
+            if (!Graph || !tourState.data) return;
+            const pts = [];
+            tourState.routeIds.forEach(id => {
+                const n = state.nodeById && state.nodeById.get(id);
+                if (n) pts.push(tourVec(n));
+            });
+            if (pts.length < 2) return;
+            const c = pts.reduce((a, p) => vAdd(a, p), { x: 0, y: 0, z: 0 });
+            const centre = vScale(c, 1 / pts.length);
+            let radius = 0;
+            pts.forEach(p => { radius = Math.max(radius, vLen(vSub(p, centre))); });
+            const d = Math.max(300, Math.min(1500, radius * 2 + 200)) / Math.sqrt(3);
+            Graph.cameraPosition(
+                { x: centre.x + d, y: centre.y + d * 0.8, z: centre.z + d },
+                centre,
+                ms || 1400);
+        }
+
+        // ─── Boundary cube ─────────────────────────────────────
 
         // Dashed wireframe cube showing the graph bounding box as spatial reference.
         function makeAxisLabel(text, hex) {
@@ -17271,7 +17522,7 @@ traverse({
         function updateBoundaryCube() {
             if (!Graph) return;
             // Nothing keeps the box in sync while it is off, so there is no
-            // point building it — applyBoundaryVisibility() rebuilds from the
+            // point building it — setBoundaryVisible() rebuilds from the
             // current layout at the moment it is switched on.
             if (!state.showBoundary) { disposeBoundaryCube(); return; }
             const nodes = state.view.nodes.filter(n => Number.isFinite(n.x));
@@ -17428,7 +17679,6 @@ traverse({
         // three fleck sizes: a fine dust layer, a mid layer, and a sparse
         // large layer whose soft texture reads as out-of-focus bokeh. All of
         // them inherit the scene fog, so distant flecks melt into the paper.
-        let _dotTex;
         function dotTexture() {
             if (_dotTex) return _dotTex;
             const c = document.createElement('canvas');
@@ -17504,7 +17754,9 @@ traverse({
 
         // Continuous rAF loop driving the selected-node ring + halo pulse.
         function startSelectionAnimation() {
+            const gen = threeGen;
             const tick = () => {
+                if (gen !== threeGen) return;
                 requestAnimationFrame(tick);
                 const n = state.selectedNode;
                 if (!selectionRing) return;
@@ -17532,37 +17784,235 @@ traverse({
             requestAnimationFrame(tick);
         }
 
-        // Re-evaluate the style accessors after a selection / highlight / filter
-        // change, without rebuilding the whole scene.
-        function bumpGraphStyles() {
-            if (!Graph) return;
+        // ─── Orientation gizmo + distance-adaptive labels ──────
+
+        const GIZMO_AXES = [
+            { v: [1, 0, 0], color: '#ff5d5d', label: 'X' },
+            { v: [0, 1, 0], color: '#5dff8f', label: 'Y' },
+            { v: [0, 0, 1], color: '#5d9dff', label: 'Z' },
+        ];
+
+        function startOverlayLoop() {
+            const gen = threeGen;
+            const svg = document.getElementById('gizmo-svg');
+            let frame = 0;
+            const v = new THREE.Vector3();
+            const tick = () => {
+                if (gen !== threeGen) return;
+                requestAnimationFrame(tick);
+                if (!Graph) return;
+                const cam = Graph.camera();
+                if (!cam) return;
+                frame++;
+                // Gizmo: rotate the world axes into the camera's view frame so the
+                // little triad mirrors how the graph is oriented on screen.
+                if (svg && frame % 2 === 0) {
+                    cam.updateMatrixWorld();
+                    const q = cam.quaternion.clone().invert();
+                    const R = 26;
+                    const drawn = GIZMO_AXES.map(a => {
+                        v.set(a.v[0], a.v[1], a.v[2]).applyQuaternion(q);
+                        return { color: a.color, label: a.label, x: v.x, y: v.y, z: v.z };
+                    }).sort((a, b) => a.z - b.z); // painter's order: far axes first
+                    let s = '';
+                    for (const a of drawn) {
+                        const x = (a.x * R).toFixed(1);
+                        const y = (-a.y * R).toFixed(1);
+                        const op = (0.4 + 0.6 * ((a.z + 1) / 2)).toFixed(2);
+                        s += `<line x1="0" y1="0" x2="${x}" y2="${y}" stroke="${a.color}" stroke-width="2.4" stroke-linecap="round" opacity="${op}"/>`;
+                        s += `<circle cx="${x}" cy="${y}" r="3.2" fill="${a.color}" opacity="${op}"/>`;
+                        s += `<text x="${(a.x * R * 1.34).toFixed(1)}" y="${(-a.y * R * 1.34 + 3.4).toFixed(1)}" fill="${a.color}" font-size="9.5" font-family="JetBrains Mono, monospace" text-anchor="middle" opacity="${op}">${a.label}</text>`;
+                    }
+                    svg.innerHTML = s;
+                }
+                // Distance-adaptive labels: hide labels for nodes far from the
+                // camera so a zoomed-out view stays clean and they reappear as you
+                // move in. Throttled.
+                if (frame % 8 === 0) updateAdaptiveLabels(cam);
+                // Legend counts track the on-screen set during a walk or tour.
+                if (frame % 12 === 0) refreshModeLegend();
+            };
+            requestAnimationFrame(tick);
+        }
+
+        function updateAdaptiveLabels(cam) {
+            const px = cam.position.x, py = cam.position.y, pz = cam.position.z;
+            const D = state._labelDist || 340;
+            const D2 = D * D;
             const focusOn = !!state.focusNode;
-            // Custom node objects own their material, so recolour them directly.
-            // Only what is on screen: in solo mode that is the difference
-            // between a few hundred nodes per hover and a hundred thousand.
+            const tourOn = tourState.active && tourState.routeIds.size > 0;
+            state.view.nodes.forEach(n => {
+                const s = n.__nodeLabel;
+                if (!s) return;
+                // On a tour only the stops are named — the surrounding
+                // neighbourhood stays present but anonymous.
+                if (tourOn) {
+                    s.visible = tourState.routeIds.has(n.id);
+                    return;
+                }
+                if (focusOn) {
+                    // While focused, always label the neighbourhood; hide the rest.
+                    s.visible = state.focusSet.has(n.id);
+                    return;
+                }
+                const dx = (n.x || 0) - px, dy = (n.y || 0) - py, dz = (n.z || 0) - pz;
+                s.visible = (dx * dx + dy * dy + dz * dz) < D2;
+            });
+        }
+
+        // ─── Graph Walk ignition pulse ─────────────────────────
+        //
+        // Four additive-blended layers bloom against the dark canvas:
+        //   • a fresnel-rim glow shell — bright silhouette, hot core (the
+        //     "energy bubble"; the part that reads as a real blast),
+        //   • a wireframe cage slightly larger — geometric structure / edge,
+        //   • a soft plasma core — a luminous centre,
+        //   • a radial particle burst — the explosion of debris outward.
+        // All self-disposing (geometry + materials freed once the burst ends).
+        const _fresnelShell = () => `
+            varying vec3 vNormal; varying vec3 vView;
+            void main() {
+                vec4 mv = modelViewMatrix * vec4(position, 1.0);
+                vNormal = normalize(normalMatrix * normal);
+                vView = normalize(-mv.xyz);
+                gl_Position = projectionMatrix * mv;
+            }`;
+        const _fresnelFrag = () => `
+            varying vec3 vNormal; varying vec3 vView;
+            uniform vec3 uColor; uniform vec3 uCore; uniform float uPower; uniform float uOpacity;
+            void main() {
+                float rim = 1.0 - max(0.0, dot(normalize(vNormal), normalize(vView)));
+                rim = pow(rim, uPower);
+                vec3 c = mix(uCore, uColor, rim);
+                gl_FragColor = vec4(c, rim * uOpacity);
+            }`;
+
+        function threeEmitPulse(seedNode, colour, fromR, toR, growMs) {
+            if (!Graph || !seedNode || !Number.isFinite(seedNode.x)) return;
+            const scene = Graph.scene();
+            const fromRr = Math.max(fromR || 0, 6);
+            const toRr = Math.max((toR || 0) + 18, fromRr + 24);
+            const grow = Math.max(160, growMs || 420);
+            const fade = Math.min(640, Math.max(240, grow * 0.9));
+            const total = grow + fade;
+            const t0 = performance.now();
+
+            const group = new THREE.Group();
+            group.position.set(seedNode.x || 0, seedNode.y || 0, seedNode.z || 0);
+            scene.add(group);
+            const disposables = [];
+            const addDispose = (o) => { if (o.geometry) disposables.push(o.geometry); if (o.material) disposables.push(o.material); };
+
+            // Fresnel rim shell — the energy bubble.
+            const shellMat = new THREE.ShaderMaterial({
+                transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
+                uniforms: {
+                    uColor: { value: new THREE.Color(colour) },
+                    uCore: { value: new THREE.Color('#fff3e8') },
+                    uPower: { value: 2.6 },
+                    uOpacity: { value: 0 },
+                },
+                vertexShader: _fresnelShell(),
+                fragmentShader: _fresnelFrag(),
+            });
+            const shell = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 4), shellMat);
+            shell.renderOrder = 500;
+            group.add(shell); addDispose(shell);
+
+            // Wireframe cage — structure / edge shimmer.
+            const cageMat = new THREE.MeshBasicMaterial({
+                color: new THREE.Color(colour), wireframe: true, transparent: true,
+                opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
+            });
+            const cage = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 1), cageMat);
+            cage.renderOrder = 501;
+            group.add(cage); addDispose(cage);
+
+            // Plasma core — luminous centre (kept faint so it doesn't white out).
+            const coreMat = new THREE.MeshBasicMaterial({
+                color: new THREE.Color(colour), transparent: true, opacity: 0,
+                depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
+            });
+            const core = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 3), coreMat);
+            core.renderOrder = 499;
+            group.add(core); addDispose(core);
+
+            // Radial particle burst — debris exploding outward to the frontier.
+            const N = 96;
+            const positions = new Float32Array(N * 3);
+            const dirs = [];
+            for (let i = 0; i < N; i++) {
+                const u = Math.random(), v = Math.random();
+                const theta = 2 * Math.PI * u, phi = Math.acos(2 * v - 1);
+                dirs.push({
+                    dx: Math.sin(phi) * Math.cos(theta),
+                    dy: Math.sin(phi) * Math.sin(theta),
+                    dz: Math.cos(phi),
+                    spd: 0.55 + Math.random() * 0.7,   // some reach past the shell
+                });
+            }
+            const pGeo = new THREE.BufferGeometry();
+            pGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            const pMat = new THREE.PointsMaterial({
+                color: new THREE.Color(colour), size: 3.4, transparent: true, opacity: 0,
+                depthWrite: false, blending: THREE.AdditiveBlending, sizeAttenuation: true, fog: false,
+            });
+            const points = new THREE.Points(pGeo, pMat);
+            points.renderOrder = 502;
+            group.add(points); addDispose({ geometry: pGeo, material: pMat });
+
+            const step = () => {
+                const t = performance.now() - t0;
+                if (t >= total || !state.walkActive) {
+                    scene.remove(group);
+                    disposables.forEach(d => d.dispose());
+                    return;
+                }
+                const p = Math.min(1, t / grow);           // grow progress
+                const e = 1 - Math.pow(1 - p, 3);           // ease-out: decelerate at the frontier
+                const r = fromRr + (toRr - fromRr) * e;
+                const rs = Math.max(0.1, r);
+                shell.scale.setScalar(rs);
+                cage.scale.setScalar(Math.max(0.1, r * 1.07));
+                core.scale.setScalar(Math.max(0.1, r * 0.62));
+                // Envelope: quick ramp-in over the first 25% of the grow, hold,
+                // then fade out across `fade`. The burst flashes to life, sweeps
+                // outward, and dissolves — reads as an explosion, not a fade.
+                const fadeIn = Math.min(1, p / 0.25);
+                const env = t <= grow ? fadeIn : Math.max(0, 1 - (t - grow) / fade);
+                shellMat.uniforms.uOpacity.value = 0.95 * env;
+                cageMat.opacity = 0.5 * env;
+                coreMat.opacity = 0.14 * env;
+                pMat.opacity = 0.95 * env;
+                // Particles fly outward, each on its own speed curve.
+                const arr = pGeo.attributes.position.array;
+                for (let i = 0; i < N; i++) {
+                    const d = dirs[i];
+                    const dist = r * d.spd;
+                    arr[i * 3] = d.dx * dist;
+                    arr[i * 3 + 1] = d.dy * dist;
+                    arr[i * 3 + 2] = d.dz * dist;
+                }
+                pGeo.attributes.position.needsUpdate = true;
+                // Slow counter-rotation for shimmer on the structural layers.
+                cage.rotation.y += 0.012; cage.rotation.x += 0.007;
+                shell.rotation.y -= 0.005;
+                requestAnimationFrame(step);
+            };
+            requestAnimationFrame(step);
+        }
+
+        // ─── Restyle ───────────────────────────────────────────
+
+        // Custom node objects own their material, so recolour them directly.
+        // Only what is on screen: in solo mode that is the difference between a
+        // few hundred nodes per hover and a hundred thousand.
+        function threeRestyle() {
+            if (!Graph) return;
             state.view.nodes.forEach(n => {
                 if (n.__nodeMat) n.__nodeMat.color.set(nodeColorFor(n));
                 const sel = state.selectedNode && n.id === state.selectedNode.id;
-                // On a tour, brightness is a four-ring gradient (this stop →
-                // the rest of the route → its neighbours → everything else).
-                // Otherwise focus mode's binary dim applies. Graph Walk has
-                // its own three-state version (seed / reached / far).
-                const tier = state.walkActive ? null : tourTier(n.id);
-                let dim, op;
-                if (state.walkActive) {
-                    const w = walkTier(n.id);
-                    // 'pending' = in the reached set but not yet ignited (its
-                    // edges are streaming toward it). Kept as a faint ghost so
-                    // the eye has a target to watch the particles flow into.
-                    dim = w === 'far' || w === 'pending';
-                    op = w === 'seed' ? 1.0
-                        : w === 'reached' ? 0.96
-                        : w === 'pending' ? 0.14
-                        : 0.05;
-                } else {
-                    dim = tier ? tier === 'far' : (focusOn && !state.focusSet.has(n.id));
-                    op = tier ? TOUR_TIER_OPACITY[tier] : (dim ? 0.06 : 0.95);
-                }
+                const { dim, opacity: op, tier } = nodeLightingFor(n);
                 if (n.__nodeMat) n.__nodeMat.opacity = op;
                 // Dimmed labels hide immediately; otherwise distance owns it (see
                 // updateAdaptiveLabels), so we only force-hide here.
@@ -17611,14 +18061,990 @@ traverse({
                 .linkDirectionalParticles(linkParticlesFor);
         }
 
-        function truncateName(name) {
-            const parts = String(name).split('/');
-            const last = parts.pop();
-            const short = last.split(':').pop();
-            return short.length > 32 ? short.slice(0, 31) + '…' : short;
+        // ─── The backend ───────────────────────────────────────
+
+        RENDERERS.three = () => ({
+            name: 'three',
+            caps: { threeD: true, faceViews: true, autoSpin: true, boundaryCube: true },
+
+            async mount(el, view) {
+                ({ ForceGraph3D, THREE, SpriteText } = await import('./threejs-vis.bundle.js'));
+                threeMount(el, view);
+            },
+
+            setData(view) {
+                if (Graph) Graph.graphData({ nodes: view.nodes, links: view.edges });
+            },
+
+            restyle() { threeRestyle(); },
+
+            resize(w, h) { if (Graph) Graph.width(w).height(h); },
+
+            frameAll(ms) { threeSetView('3d', ms); },
+            setView(id, ms) { threeSetView(id, ms); },
+            frameNodes(ids, ms) { threeFrameNodes(ids, ms); },
+            focusNode(n) { threeFocusNode(n); },
+            zoomBy(f) { threeZoomBy(f); },
+            flyToStop(stop, opts) { threeFlyToStop(stop, opts); },
+            frameRoute(ms) { threeFrameRoute(ms); },
+
+            setAutoSpin(on) {
+                const controls = Graph && Graph.controls && Graph.controls();
+                if (!controls) return;
+                controls.autoRotate = on;
+                controls.autoRotateSpeed = 1.6;
+            },
+
+            setBoundaryVisible(on) {
+                if (on) updateBoundaryCube();
+                else disposeBoundaryCube();
+            },
+
+            emitPulse(node, colour, fromR, toR, growMs) {
+                threeEmitPulse(node, colour, fromR, toR, growMs);
+            },
+
+            // Project a node into page pixels via the live camera.
+            screenPos(n) {
+                if (!Graph || !n || !Number.isFinite(n.x)) return null;
+                const c = Graph.graph2ScreenCoords
+                    ? Graph.graph2ScreenCoords(n.x, n.y, n.z || 0)
+                    : null;
+                if (!c) return null;
+                const rect = Graph.renderer().domElement.getBoundingClientRect();
+                return { x: c.x + rect.left + window.scrollX, y: c.y + rect.top + window.scrollY };
+            },
+
+            dispose() {
+                window.removeEventListener('mousemove', threeTrackMouse);
+                threeGen += 1;
+                disposeBoundaryCube();
+                if (Graph) {
+                    try { Graph._destructor && Graph._destructor(); } catch (err) { console.error(err); }
+                }
+                Graph = null;
+                selectionRing = null;
+                particleField = null;
+            },
+        });
+// ==== 12-render-cosmos.js ====
+        // ─── Renderer backend: 2D GPU force graph (cosmos.gl) ──────────────
+        //
+        // The scale renderer. cosmos.gl runs both the force simulation and the
+        // drawing in WebGL2 shaders, so it holds graphs that the 3D backend
+        // cannot: there is one instanced draw call for every point rather than
+        // a THREE.Group of five objects each.
+        //
+        // What it costs is the third dimension — there is no z-axis, no orbit
+        // camera and no scene to add meshes to. The face views, the boundary
+        // cube and the orientation gizmo are reported unsupported through
+        // `caps` and the viewbar hides them.
+        //
+        // Everything here is index-addressed: cosmos.gl has no node ids, only
+        // positions in flat Float32Arrays, so this file owns the id ↔ index
+        // map and rebuilds it whenever the view changes.
+
+        let CosmosLib = null;      // { Graph, PointShape, LinkStyle }
+        let cosmos = null;         // the mounted cosmos.gl Graph
+        let cosmosNodes = [];      // point index → node object
+        let cosmosEdges = [];      // link index → edge object
+        let cosmosIndexOf = new Map();   // node id → point index
+        let cosmosBuf = null;      // the live typed arrays handed to the GPU
+        let cosmosHidden = null;   // Uint8Array: visibility as last uploaded
+        let cosmosImageIndex = new Map();  // image key → atlas index
+        let _cosmosSyncAt = 0;
+
+        // cosmos.gl's simulation space. Positions outside [0, spaceSize] are
+        // trouble (the library's own docs flag >4096 as an iOS crash), and the
+        // circle seeding in transformData lands well inside it.
+        const COSMOS_SPACE = 4096;
+
+        // ─── Colour plumbing ───────────────────────────────────
+
+        // '#rgb' | '#rrggbb' | 'rgb(…)' | 'rgba(…)' → [r, g, b] in 0..1.
+        // cosmos.gl takes colour channels as floats, and every colour the style
+        // rules produce is one of these three spellings.
+        const _rgbCache = new Map();
+        function cosmosRgb(css) {
+            const hit = _rgbCache.get(css);
+            if (hit) return hit;
+            let out = [1, 1, 1];
+            const s = String(css).trim();
+            if (s[0] === '#') {
+                const h = s.slice(1);
+                const full = h.length === 3 ? h[0] + h[0] + h[1] + h[1] + h[2] + h[2] : h;
+                const v = parseInt(full.slice(0, 6), 16);
+                if (Number.isFinite(v)) out = [((v >> 16) & 255) / 255, ((v >> 8) & 255) / 255, (v & 255) / 255];
+            } else {
+                const m = s.match(/rgba?\(([^)]+)\)/);
+                if (m) {
+                    const p = m[1].split(',').map(x => parseFloat(x));
+                    out = [(p[0] || 0) / 255, (p[1] || 0) / 255, (p[2] || 0) / 255];
+                }
+            }
+            _rgbCache.set(css, out);
+            return out;
         }
 
-// ==== 11-interaction.js ====
+        // ─── Glyph atlas ───────────────────────────────────────
+
+        // cosmos.gl does not tint point images — the fragment shader blends
+        // them *above* the shape colour (`mix(shapeColor, imageColor, alpha)`).
+        // So the sticker is split in two: the disc is the point's own Circle
+        // shape, which keeps its per-node colour and can flare orange on
+        // selection or take a walk hop's tint; the image carries only the dark
+        // glyph and the boundary ring, both of which are the same whatever
+        // colour the disc happens to be.
+        //
+        // That split is what makes a per-node dynamic colour possible at all —
+        // baking the disc into the image would freeze it per node type.
+        function cosmosImageKey(n) {
+            if (!n.isBoundary) return n.group;
+            const inbound = (n.boundaries || []).some(b => b.direction === 'Inbound');
+            return n.group + (inbound ? '|in' : '|out');
+        }
+
+        function cosmosGlyphImage(key) {
+            const [group, dir] = key.split('|');
+            const S = 128;
+            const c = document.createElement('canvas');
+            c.width = c.height = S;
+            const ctx = c.getContext('2d');
+
+            // The glyph, drawn dark so it reads as a punch-through on whatever
+            // colour the disc underneath happens to be. NODE_ICONS bodies are
+            // authored in a 24-unit box, so centre and scale it to ~75% of the
+            // point, leaving a margin for the boundary ring.
+            ctx.save();
+            ctx.translate(S / 2, S / 2);
+            ctx.scale(S / 32, S / 32);
+            ctx.translate(-12, -12);
+            const body = NODE_ICONS[group] || '<circle cx="12" cy="12" r="6.5"/>';
+            ctx.strokeStyle = 'rgba(24,24,30,0.95)';
+            ctx.lineWidth = 2.2;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            // The Interface glyph is a dashed diamond; Path2D doesn't carry
+            // the dasharray attribute, so re-apply it here.
+            if (body.includes('stroke-dasharray="3.2 2.6"')) ctx.setLineDash([3.2, 2.6]);
+            ctx.stroke(new Path2D(body));
+            ctx.restore();
+
+            // System boundary: a dashed rim. In 3D this ring floats outside the
+            // sticker; a point image cannot exceed its own quad, so here it
+            // sits on the disc's edge instead — still a dashed ring, still not
+            // the selection marker, still orthogonal to the node's type colour.
+            if (dir) {
+                ctx.strokeStyle = dir === 'in' ? BOUNDARY_IN_COLOR : BOUNDARY_OUT_COLOR;
+                ctx.lineWidth = 6;
+                ctx.setLineDash([8, 6]);
+                ctx.lineCap = 'round';
+                ctx.beginPath();
+                ctx.arc(S / 2, S / 2, S / 2 - 5, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+            return ctx.getImageData(0, 0, S, S);
+        }
+
+        // Build one image per (type × boundary direction) actually present in
+        // the view. Types the graph doesn't contain cost nothing.
+        function cosmosBuildAtlas(nodes) {
+            const keys = [];
+            cosmosImageIndex = new Map();
+            for (const n of nodes) {
+                const k = cosmosImageKey(n);
+                if (cosmosImageIndex.has(k)) continue;
+                cosmosImageIndex.set(k, keys.length);
+                keys.push(k);
+            }
+            cosmos.setImageData(keys.map(cosmosGlyphImage));
+        }
+
+        // ─── Buffers ───────────────────────────────────────────
+
+        function cosmosBuild(view) {
+            const nodes = view.nodes;
+            const edges = view.edges;
+            const n = nodes.length;
+
+            cosmosNodes = nodes;
+            cosmosEdges = edges;
+            cosmosIndexOf = new Map();
+            for (let i = 0; i < n; i++) cosmosIndexOf.set(nodes[i].id, i);
+
+            const positions = new Float32Array(n * 2);
+            const colors = new Float32Array(n * 4);
+            const sizes = new Float32Array(n);
+            const shapes = new Float32Array(n);
+            const imageIdx = new Float32Array(n);
+            const imageSizes = new Float32Array(n);
+            cosmosHidden = new Uint8Array(n);
+
+            // Links reference points by index. Endpoints are ids here (the raw
+            // view) or node objects (once a layout has run over them), so
+            // accept both — the same `.id || value` shape the style rules use.
+            const src = [];
+            for (const e of edges) {
+                const s = cosmosIndexOf.get(e.source.id || e.source);
+                const t = cosmosIndexOf.get(e.target.id || e.target);
+                // transformData already drops edges with a missing endpoint;
+                // this catches the solo view's freshly cloned ones.
+                src.push(s === undefined || t === undefined ? -1 : s, s === undefined || t === undefined ? -1 : t);
+            }
+            const keep = [];
+            for (let i = 0; i < edges.length; i++) if (src[i * 2] >= 0) keep.push(i);
+            const links = new Float32Array(keep.length * 2);
+            keep.forEach((ei, i) => { links[i * 2] = src[ei * 2]; links[i * 2 + 1] = src[ei * 2 + 1]; });
+            cosmosEdges = keep.map(i => edges[i]);
+
+            cosmosBuf = {
+                positions, colors, sizes, shapes, imageIdx, imageSizes, links,
+                linkColors: new Float32Array(cosmosEdges.length * 4),
+                linkWidths: new Float32Array(cosmosEdges.length),
+            };
+
+            cosmosBuildAtlas(nodes);
+            for (let i = 0; i < n; i++) {
+                const node = nodes[i];
+                positions[i * 2] = +node.x || 0;
+                positions[i * 2 + 1] = +node.y || 0;
+                shapes[i] = CosmosLib.PointShape.Circle;
+                imageIdx[i] = cosmosImageIndex.get(cosmosImageKey(node)) ?? -1;
+                sizes[i] = nodeRadiusFor(node);
+                imageSizes[i] = sizes[i];
+            }
+            cosmosPaint();
+
+            cosmos.setPointPositions(positions);
+            cosmos.setPointShapes(shapes);
+            cosmos.setPointImageIndices(imageIdx);
+            cosmos.setPointImageSizes(imageSizes);
+            cosmos.setPointSizes(sizes);
+            cosmos.setPointColors(colors);
+            cosmos.setLinks(links);
+            cosmos.setLinkColors(cosmosBuf.linkColors);
+            cosmos.setLinkWidths(cosmosBuf.linkWidths);
+        }
+
+        // Refresh the colour/width buffers from the shared style rules. Alpha
+        // is where the dimming lives: cosmos.gl has no per-node material to
+        // fade, so "lowlit" is simply a smaller colour alpha.
+        function cosmosPaint() {
+            const { colors, linkColors, linkWidths } = cosmosBuf;
+            for (let i = 0; i < cosmosNodes.length; i++) {
+                const n = cosmosNodes[i];
+                const [r, g, b] = cosmosRgb(nodeColorFor(n));
+                const { opacity } = nodeLightingFor(n);
+                colors[i * 4] = r; colors[i * 4 + 1] = g; colors[i * 4 + 2] = b;
+                colors[i * 4 + 3] = opacity;
+            }
+            for (let i = 0; i < cosmosEdges.length; i++) {
+                const e = cosmosEdges[i];
+                const [r, g, b] = cosmosRgb(linkColorFor(e));
+                linkColors[i * 4] = r; linkColors[i * 4 + 1] = g; linkColors[i * 4 + 2] = b;
+                // Strands read stronger on a dark ground, so they're pulled
+                // back to keep nodes dominant — the same 0.38 the 3D renderer
+                // applies globally, carried per link so invisibility is just
+                // alpha 0 (cosmos.gl has no per-link visibility accessor).
+                linkColors[i * 4 + 3] = linkVisibleFor(e) ? 0.38 : 0;
+                linkWidths[i] = e.rel === 'Contains' ? 1.1 : 0.45;
+            }
+        }
+
+        // Hidden points are moved to NaN, which cosmos.gl treats as *absent*:
+        // excluded from the forces, from hover and from zoom targets. That is
+        // exactly the isolate semantics a walk or a tour wants, and it is why
+        // dimming (alpha) and hiding (NaN) are kept separate here.
+        //
+        // Only rewritten when visibility actually changed. Uploading positions
+        // on every restyle would fight the running simulation, snapping every
+        // node back to its last synced position on each hover.
+        function cosmosApplyVisibility() {
+            let changed = false;
+            const { positions } = cosmosBuf;
+            for (let i = 0; i < cosmosNodes.length; i++) {
+                const n = cosmosNodes[i];
+                const hide = nodeVisibleFor(n) ? 0 : 1;
+                if (hide === cosmosHidden[i]) continue;
+                cosmosHidden[i] = hide;
+                changed = true;
+                if (hide) {
+                    positions[i * 2] = NaN;
+                    positions[i * 2 + 1] = NaN;
+                } else {
+                    // Back to its last known-good spot — cosmosSync keeps
+                    // n.x/n.y current for everything still on screen.
+                    positions[i * 2] = +n.x || 0;
+                    positions[i * 2 + 1] = +n.y || 0;
+                }
+            }
+            if (changed) cosmos.setPointPositions(positions);
+            return changed;
+        }
+
+        // Read the GPU's positions back onto the node objects.
+        //
+        // The rest of the page treats `n.x` / `n.y` as the truth — extent
+        // maths, framing, the tooltip and the walk all read them — but under
+        // cosmos.gl the simulation runs on the GPU and those fields would
+        // otherwise stay frozen at their seeded values. Absent (NaN) points are
+        // skipped so hiding a node never destroys the position it comes back to.
+        function cosmosSync() {
+            if (!cosmos || !cosmos.isReady) return;
+            const p = cosmos.getPointPositions();
+            if (!p || !p.length) return;
+            for (let i = 0; i < cosmosNodes.length; i++) {
+                const x = p[i * 2], y = p[i * 2 + 1];
+                if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+                cosmosNodes[i].x = x;
+                cosmosNodes[i].y = y;
+                cosmosNodes[i].z = 0;
+            }
+        }
+
+        // ─── Selection / highlight ─────────────────────────────
+
+        // In cosmos.gl selection is configuration, not a method call: name the
+        // indices and the shader greys out everything else. That replaces the
+        // per-node material walk the 3D backend has to do.
+        function cosmosApplyHighlight() {
+            const focusIdx = state.selectedNode
+                ? cosmosIndexOf.get(state.selectedNode.id)
+                : undefined;
+            const hot = [];
+            state.highlightNodes.forEach(id => {
+                const i = cosmosIndexOf.get(id);
+                if (i !== undefined) hot.push(i);
+            });
+            if (focusIdx !== undefined) hot.push(focusIdx);
+            const outlined = [];
+            for (let i = 0; i < cosmosNodes.length; i++) {
+                if (cosmosNodes[i].isBoundary) outlined.push(i);
+            }
+            cosmos.setConfigPartial({
+                focusedPointIndex: focusIdx,
+                // An empty array greys out *everything*, which is not what "no
+                // hover" means — undefined is how the highlight is cleared.
+                highlightedPointIndices: hot.length ? hot : undefined,
+                outlinedPointIndices: outlined.length ? outlined : undefined,
+            });
+        }
+
+        function cosmosIndicesFor(ids) {
+            const out = [];
+            ids.forEach(id => {
+                const i = cosmosIndexOf.get(id);
+                if (i !== undefined && !cosmosHidden[i]) out.push(i);
+            });
+            return out;
+        }
+
+        // ─── The backend ───────────────────────────────────────
+
+        RENDERERS.cosmos = () => ({
+            name: 'cosmos',
+            // No third dimension, so no face projections, no orbit to spin and
+            // no cube to draw. Reported rather than silently ignored: the
+            // viewbar hides what this cannot do.
+            caps: { threeD: false, faceViews: false, autoSpin: false, boundaryCube: false },
+
+            async mount(el, view) {
+                CosmosLib = await import('./cosmos-vis.bundle.js');
+                cosmos = new CosmosLib.Graph(el, {
+                    spaceSize: COSMOS_SPACE,
+                    backgroundColor: CANVAS.bg,
+                    pointDefaultSize: 6,
+                    pointOpacity: 1,
+                    // The disc is the point's own shape; the glyph rides on top
+                    // as an image. See cosmosGlyphImage.
+                    pointDefaultShape: 0,
+                    scalePointsOnZoom: true,
+                    linkWidthScale: 1,
+                    linkDefaultArrows: true,
+                    linkArrowsSizeScale: 0.8,
+                    curvedLinks: true,
+                    linkGreyoutOpacity: 0.05,
+                    pointGreyoutOpacity: 0.12,
+                    renderHoveredPointRing: true,
+                    hoveredPointRingColor: '#f96716',
+                    focusedPointRingColor: '#ff3d00',
+                    outlinedPointRingColor: BOUNDARY_IN_COLOR,
+                    hoveredPointCursor: 'pointer',
+                    enableDrag: true,
+                    enableZoom: true,
+                    fitViewOnInit: false,
+                    // Reproducible layouts: the same graph settles the same way
+                    // twice, which matters for a screenshot and for a demo.
+                    randomSeed: 'ug',
+                    // Tuned against the 3D renderer's d3-force settings:
+                    // charge -70 / link distance 50 / velocityDecay 0.6.
+                    simulationLinkDistance: 50,
+                    simulationLinkSpring: 1,
+                    simulationRepulsion: 0.6,
+                    simulationGravity: 0.12,
+                    simulationCenter: 0.1,
+                    simulationFriction: 0.4,
+                    simulationDecay: 3000,
+                    onPointClick: (index, _pos, event) => {
+                        const n = cosmosNodes[index];
+                        if (n) handleNodeClick(event, n);
+                    },
+                    onPointMouseOver: (index) => {
+                        const n = cosmosNodes[index];
+                        if (n && pointerOverCanvas()) handleNodeHover(n);
+                    },
+                    onPointMouseOut: () => handleNodeHover(null),
+                    onBackgroundClick: () => clearSelection(),
+                    onMouseMove: (_i, _p, event) => {
+                        if (!event) return;
+                        state._mouse = {
+                            x: event.pageX, y: event.pageY,
+                            cx: event.clientX, cy: event.clientY,
+                        };
+                    },
+                    onSimulationTick: () => {
+                        if (!state._graphRevealed) {
+                            requestAnimationFrame(() => requestAnimationFrame(graphReveal));
+                        }
+                        // Throttled: a full position readback is a GPU stall,
+                        // and nothing off-canvas needs per-frame accuracy.
+                        const now = performance.now();
+                        if (now - _cosmosSyncAt < 400) return;
+                        _cosmosSyncAt = now;
+                        cosmosSync();
+                    },
+                    onSimulationEnd: () => {
+                        cosmosSync();
+                        state._boxSettled = true;
+                        if (!state._didFit) {
+                            state._didFit = true;
+                            cosmos.fitView(900, 0.15);
+                        }
+                        refreshModeLegend();
+                        graphReveal();
+                    },
+                });
+
+                await cosmos.ready;
+                cosmosBuild(view);
+                cosmos.render();
+                cosmos.start(1);
+                cosmosApplyHighlight();
+                // If the engine never ticks (an empty solo view, say), don't
+                // leave the loading overlay up forever.
+                setTimeout(graphReveal, 4000);
+            },
+
+            setData(view) {
+                if (!cosmos) return;
+                cosmosBuild(view);
+                cosmos.render();
+                cosmos.start(1);
+                cosmosApplyHighlight();
+            },
+
+            restyle() {
+                if (!cosmos || !cosmosBuf) return;
+                cosmosPaint();
+                cosmos.setPointColors(cosmosBuf.colors);
+                cosmos.setLinkColors(cosmosBuf.linkColors);
+                cosmos.setLinkWidths(cosmosBuf.linkWidths);
+                cosmosApplyVisibility();
+                cosmosApplyHighlight();
+                // Snap rather than animate: a restyle is a response to a hover
+                // or a filter, and an 800 ms colour tween reads as lag.
+                cosmos.render(undefined, 0);
+            },
+
+            // The canvas is sized by CSS (100% of #graph-3d), so cosmos.gl
+            // picks the new size up itself; nothing to push.
+            resize() {},
+
+            frameAll(ms) { if (cosmos) cosmos.fitView(ms, 0.15); },
+
+            // Every face projection collapses to the same 2D fit. The buttons
+            // are hidden by caps, but the 1–6 keyboard shortcuts still land here.
+            setView(_id, ms) { if (cosmos) cosmos.fitView(ms, 0.15); },
+
+            frameNodes(ids, ms) {
+                if (!cosmos) return;
+                const idx = cosmosIndicesFor(ids);
+                if (!idx.length) return;
+                cosmos.fitViewByPointIndices(idx, ms, 0.2);
+            },
+
+            focusNode(n) {
+                if (!cosmos) return;
+                const i = cosmosIndexOf.get(n.id);
+                if (i === undefined || cosmosHidden[i]) return;
+                // Wait one frame so any panel toggles (info open/close) commit
+                // their layout before the view moves.
+                requestAnimationFrame(() => cosmos.zoomToPointByIndex(i, 800, 4));
+            },
+
+            zoomBy(factor) {
+                if (!cosmos) return;
+                // The 3D renderer's factor scales an orbit *radius*, so <1 is
+                // closer. A zoom level is the reciprocal of that.
+                cosmos.setZoomLevel(cosmos.getZoomLevel() / factor, 180);
+            },
+
+            // No camera to place broadside, so the 2D reading of "fly to this
+            // stop" is: frame the stop with its neighbourhood and the hop on
+            // either side, so where we came from and where we're going are both
+            // on screen.
+            flyToStop(stop, opts) {
+                if (!cosmos) return;
+                const ids = new Set([stop.node_id]);
+                if (opts.prev) ids.add(opts.prev.node_id);
+                if (opts.next) ids.add(opts.next.node_id);
+                tourState.nearIds.forEach(id => ids.add(id));
+                const idx = cosmosIndicesFor(ids);
+                if (!idx.length) return;
+                requestAnimationFrame(() => {
+                    cosmos.fitViewByPointIndices(idx, opts.ms || 1100, 0.28);
+                });
+            },
+
+            frameRoute(ms) {
+                if (!cosmos || !tourState.data) return;
+                const idx = cosmosIndicesFor(tourState.routeIds);
+                if (idx.length < 2) return;
+                cosmos.fitViewByPointIndices(idx, ms || 1400, 0.2);
+            },
+
+            // Both are 3D-only affordances; caps already hide their controls.
+            setAutoSpin() {},
+            setBoundaryVisible() {},
+
+            // The walk's ignition burst is drawn by the 2D FX overlay.
+            emitPulse(node, colour, fromR, toR, growMs) {
+                overlayEmitPulse(node, colour, fromR, toR, growMs);
+            },
+
+            screenPos(n) {
+                if (!cosmos || !n || !Number.isFinite(n.x)) return null;
+                const p = cosmos.spaceToScreenPosition([n.x, n.y]);
+                if (!p) return null;
+                const canvas = cosmos.canvas || document.querySelector('#graph-3d canvas');
+                const rect = canvas ? canvas.getBoundingClientRect() : { left: 0, top: 0 };
+                return {
+                    x: p[0] + rect.left + window.scrollX,
+                    y: p[1] + rect.top + window.scrollY,
+                };
+            },
+
+            dispose() {
+                if (cosmos) {
+                    try { cosmos.destroy(); } catch (err) { console.error(err); }
+                }
+                cosmos = null;
+                cosmosBuf = null;
+                cosmosNodes = [];
+                cosmosEdges = [];
+                cosmosIndexOf = new Map();
+            },
+        });
+// ==== 13-render-overlay.js ====
+        // ─── The 2D FX overlay ─────────────────────────────────────────────
+        //
+        // Everything the cosmos.gl backend cannot draw itself, painted on one
+        // 2D canvas sitting over its WebGL one: labels, halos, the selection
+        // marker, link-flow particles, the Graph Walk ignition burst and the
+        // boundary frame.
+        //
+        // Why an overlay rather than more shader work: cosmos.gl renders no
+        // text at all, has no dash *offset* uniform (so a flowing link cannot
+        // be faked with a marching dash pattern), and draws point images inside
+        // the point's own quad (so a halo cannot extend past its node). Each of
+        // those is a hard limit of the library, not a gap worth patching in a
+        // vendored bundle.
+        //
+        // This file is deliberately cosmos-specific — it reads `cosmos`
+        // directly from 12-render-cosmos.js. The 3D backend draws all of this
+        // in-scene and never starts the loop.
+        //
+        // The one rule that keeps it affordable: **never iterate every node per
+        // frame.** Labels come from cosmos.gl's own density sampling, and every
+        // other layer is bounded by the "hot" set — what is selected, hovered,
+        // on the tour route, or in the walk frontier.
+
+        let fxCanvas = null, fxCtx = null, fxRunning = false, fxFrame = 0;
+        let fxPulses = [];
+
+        // Above this, an effect stops being read as a set and starts being
+        // read as noise — and stops being cheap. Hover on a hub node is the
+        // case that finds this.
+        const FX_MAX_HALOS = 400;
+        const FX_MAX_FLOW_LINKS = 600;
+
+        function overlayStart() {
+            fxCanvas = document.getElementById('fx-overlay');
+            if (!fxCanvas) return;
+            fxCtx = fxCanvas.getContext('2d');
+            fxCanvas.hidden = false;
+            if (fxRunning) return;
+            fxRunning = true;
+            const tick = () => {
+                if (!fxRunning) return;
+                requestAnimationFrame(tick);
+                overlayDraw();
+            };
+            requestAnimationFrame(tick);
+        }
+
+        function overlayStop() {
+            fxRunning = false;
+            fxPulses = [];
+            if (fxCanvas) {
+                fxCanvas.hidden = true;
+                if (fxCtx) fxCtx.clearRect(0, 0, fxCanvas.width, fxCanvas.height);
+            }
+        }
+
+        // Canvas pixels track the container and the display's pixel ratio, so
+        // text stays crisp on a retina screen instead of being upscaled.
+        function overlayResize() {
+            const dpr = Math.min(window.devicePixelRatio || 1, 2);
+            const w = Math.max(1, Math.round(width * dpr));
+            const h = Math.max(1, Math.round(height * dpr));
+            if (fxCanvas.width !== w || fxCanvas.height !== h) {
+                fxCanvas.width = w;
+                fxCanvas.height = h;
+                fxCanvas.style.width = width + 'px';
+                fxCanvas.style.height = height + 'px';
+            }
+            fxCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        }
+
+        // Node → canvas-local pixels. The backend's screenPos() answers in page
+        // coordinates because the tooltip needs those; the overlay is aligned
+        // with the canvas, so the offsets come back off again here.
+        function fxPos(n) {
+            if (!cosmos || !n || !Number.isFinite(n.x)) return null;
+            const p = cosmos.spaceToScreenPosition([n.x, n.y]);
+            return p ? { x: p[0], y: p[1] } : null;
+        }
+
+        function fxRadius(n) {
+            const r = cosmos ? cosmos.spaceToScreenRadius(nodeRadiusFor(n)) : 0;
+            return Math.max(r || 0, 2);
+        }
+
+        // The bounded set every layer except labels works from.
+        function fxHotNodes() {
+            const ids = new Set();
+            if (state.selectedNode) ids.add(state.selectedNode.id);
+            state.highlightNodes.forEach(id => ids.add(id));
+            if (tourState.active) tourState.routeIds.forEach(id => ids.add(id));
+            if (state.walkActive) {
+                // The frontier, not the whole reached set — a walk over a big
+                // graph reaches thousands, and the newest hop is the thing the
+                // eye is following.
+                state.walkColors.forEach((_c, id) => ids.add(id));
+            }
+            const out = [];
+            for (const id of ids) {
+                const n = state.nodeById && state.nodeById.get(id);
+                if (n && Number.isFinite(n.x)) out.push(n);
+                if (out.length >= FX_MAX_HALOS) break;
+            }
+            return out;
+        }
+
+        function overlayDraw() {
+            if (!fxCanvas || !fxCtx || !cosmos || !cosmos.isReady) return;
+            overlayResize();
+            fxCtx.clearRect(0, 0, width, height);
+            fxFrame++;
+
+            if (state.showBoundary) fxDrawBoundary();
+            fxDrawFlow();
+            const hot = fxHotNodes();
+            fxDrawHalos(hot);
+            fxDrawSelection();
+            fxDrawPulses();
+            fxDrawLabels();
+        }
+
+        // ── Halos ──────────────────────────────────────────────
+        // A port of the 3D renderer's glowTexture() gradient stops, painted
+        // straight into 2D. Only the hot set gets one: the ambient halo every
+        // node carries in 3D would mean a full-graph pass per frame, which is
+        // the cost this renderer exists to avoid.
+        function fxDrawHalos(hot) {
+            const ctx = fxCtx;
+            ctx.save();
+            ctx.globalCompositeOperation = 'lighter';
+            for (const n of hot) {
+                const p = fxPos(n);
+                if (!p) continue;
+                const { dim } = nodeLightingFor(n);
+                if (dim) continue;
+                const sel = state.selectedNode && n.id === state.selectedNode.id;
+                const isHot = sel || state.highlightNodes.has(n.id);
+                const wave = sel ? 1 + 0.2 * Math.sin(performance.now() * 0.0032) : 1;
+                const r = fxRadius(n) * 2.6 * wave;
+                if (r < 3) continue;
+                const [cr, cg, cb] = cosmosRgb(config.getColor(n.group));
+                const a = isHot ? 0.75 : (tourTier(n.id) === 'stop' ? 0.5 : 0.25);
+                const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r);
+                const rgb = `${Math.round(cr * 255)},${Math.round(cg * 255)},${Math.round(cb * 255)}`;
+                g.addColorStop(0, `rgba(${rgb},${(a).toFixed(3)})`);
+                g.addColorStop(0.2, `rgba(${rgb},${(a * 0.65).toFixed(3)})`);
+                g.addColorStop(0.55, `rgba(${rgb},${(a * 0.18).toFixed(3)})`);
+                g.addColorStop(1, `rgba(${rgb},0)`);
+                ctx.fillStyle = g;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            ctx.restore();
+        }
+
+        // ── Selection marker ───────────────────────────────────
+        // The spinning, pulsing ring with four tick marks — the same marker the
+        // 3D renderer builds as a sprite, drawn directly.
+        function fxDrawSelection() {
+            const n = state.selectedNode;
+            if (!n) return;
+            const p = fxPos(n);
+            if (!p) return;
+            const t = performance.now() * 0.001;
+            const wave = Math.sin(t * 3.2);
+            const r = Math.max(fxRadius(n) * 2.4, 16) * (1 + 0.16 * wave);
+            const ctx = fxCtx;
+            ctx.save();
+            ctx.translate(p.x, p.y);
+            ctx.rotate(t * 1.1);
+            ctx.strokeStyle = `rgba(255,61,0,${(0.7 + 0.15 * wave).toFixed(3)})`;
+            ctx.lineWidth = Math.max(1.5, r * 0.055);
+            ctx.beginPath();
+            ctx.arc(0, 0, r, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.lineWidth = Math.max(2, r * 0.075);
+            for (let a = 0; a < 4; a++) {
+                const ang = a * Math.PI / 2;
+                ctx.beginPath();
+                ctx.arc(0, 0, r * 1.17, ang - 0.12, ang + 0.12);
+                ctx.stroke();
+            }
+            ctx.restore();
+        }
+
+        // ── Link flow particles ────────────────────────────────
+        // cosmos.gl's dash pattern has no offset uniform, so a flowing strand
+        // cannot be faked in the link shader. These are the 3D renderer's
+        // directional particles, drawn as dots marching along the on-screen
+        // segment. Only hot links have any (hover 4, walk 3, tour route 2), so
+        // the loop is bounded by the interaction, not by the graph.
+        function fxDrawFlow() {
+            const ctx = fxCtx;
+            const now = performance.now();
+            let drawn = 0;
+            ctx.save();
+            ctx.globalCompositeOperation = 'lighter';
+            for (const e of cosmosEdges) {
+                const count = linkParticlesFor(e);
+                if (!count) continue;
+                if (++drawn > FX_MAX_FLOW_LINKS) break;
+                const s = state.nodeById.get(e.source.id || e.source);
+                const t = state.nodeById.get(e.target.id || e.target);
+                if (!s || !t) continue;
+                const a = fxPos(s), b = fxPos(t);
+                if (!a || !b) continue;
+                const [r, g, bl] = cosmosRgb(linkParticleColorFor(e));
+                ctx.fillStyle = `rgba(${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(bl * 255)},0.95)`;
+                for (let i = 0; i < count; i++) {
+                    // Evenly spaced along the strand, all sliding source→target
+                    // at the same rate, so direction of travel is readable.
+                    const phase = ((now * 0.0004) + i / count) % 1;
+                    const x = a.x + (b.x - a.x) * phase;
+                    const y = a.y + (b.y - a.y) * phase;
+                    ctx.beginPath();
+                    ctx.arc(x, y, 1.7, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+            ctx.restore();
+        }
+
+        // ── Graph Walk ignition ────────────────────────────────
+        // The 3D burst is a fresnel shell, a wireframe cage and a 96-point
+        // debris cloud. Flat, that reads as an expanding ring with a spark
+        // burst — same beat, same colour, same easing.
+        function overlayEmitPulse(seedNode, colour, fromR, toR, growMs) {
+            if (!seedNode || !Number.isFinite(seedNode.x)) return;
+            const grow = Math.max(160, growMs || 420);
+            const sparks = [];
+            for (let i = 0; i < 48; i++) {
+                const ang = Math.random() * Math.PI * 2;
+                sparks.push({ dx: Math.cos(ang), dy: Math.sin(ang), spd: 0.55 + Math.random() * 0.7 });
+            }
+            fxPulses.push({
+                node: seedNode,
+                colour,
+                fromR: Math.max(fromR || 0, 6),
+                toR: Math.max((toR || 0) + 18, Math.max(fromR || 0, 6) + 24),
+                grow,
+                fade: Math.min(640, Math.max(240, grow * 0.9)),
+                t0: performance.now(),
+                sparks,
+            });
+        }
+
+        function fxDrawPulses() {
+            if (!fxPulses.length) return;
+            const ctx = fxCtx;
+            const now = performance.now();
+            ctx.save();
+            ctx.globalCompositeOperation = 'lighter';
+            fxPulses = fxPulses.filter(p => {
+                const t = now - p.t0;
+                if (t >= p.grow + p.fade || !state.walkActive) return false;
+                const pr = Math.min(1, t / p.grow);
+                // Ease-out: decelerate at the frontier.
+                const e = 1 - Math.pow(1 - pr, 3);
+                // Envelope: quick ramp-in over the first 25%, then fade.
+                const env = t <= p.grow
+                    ? Math.min(1, pr / 0.25)
+                    : Math.max(0, 1 - (t - p.grow) / p.fade);
+                const at = fxPos(p.node);
+                if (!at) return true;
+                const spaceR = p.fromR + (p.toR - p.fromR) * e;
+                const r = cosmos.spaceToScreenRadius(spaceR) || 0;
+                if (r <= 0) return true;
+                const [cr, cg, cb] = cosmosRgb(p.colour);
+                const rgb = `${Math.round(cr * 255)},${Math.round(cg * 255)},${Math.round(cb * 255)}`;
+
+                // The shell: a bright rim with a hot falloff inward.
+                const g = ctx.createRadialGradient(at.x, at.y, r * 0.55, at.x, at.y, r);
+                g.addColorStop(0, `rgba(${rgb},0)`);
+                g.addColorStop(0.75, `rgba(${rgb},${(0.30 * env).toFixed(3)})`);
+                g.addColorStop(1, `rgba(255,243,232,${(0.95 * env).toFixed(3)})`);
+                ctx.fillStyle = g;
+                ctx.beginPath();
+                ctx.arc(at.x, at.y, r, 0, Math.PI * 2);
+                ctx.fill();
+
+                // The debris.
+                ctx.fillStyle = `rgba(${rgb},${(0.95 * env).toFixed(3)})`;
+                for (const s of p.sparks) {
+                    const d = r * s.spd;
+                    ctx.beginPath();
+                    ctx.arc(at.x + s.dx * d, at.y + s.dy * d, 1.7, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+                return true;
+            });
+            ctx.restore();
+        }
+
+        // ── Labels ─────────────────────────────────────────────
+        // cosmos.gl renders no text, so this replaces both the SpriteText
+        // labels and the distance-adaptive visibility rule. Density sampling
+        // does the job zoom-distance did in 3D: getSampledPoints() returns a
+        // spread-out subset (one per ~100 screen px), so a zoomed-out view
+        // stays legible and names appear as you move in.
+        function fxDrawLabels() {
+            const ctx = fxCtx;
+            const tourOn = tourState.active && tourState.routeIds.size > 0;
+            const focusOn = !!state.focusNode;
+
+            let nodes;
+            if (tourOn) {
+                // On a tour only the stops are named — the surrounding
+                // neighbourhood stays present but anonymous.
+                nodes = [];
+                tourState.routeIds.forEach(id => {
+                    const n = state.nodeById.get(id);
+                    if (n) nodes.push(n);
+                });
+            } else if (focusOn) {
+                nodes = [];
+                state.focusSet.forEach(id => {
+                    const n = state.nodeById.get(id);
+                    if (n) nodes.push(n);
+                });
+            } else {
+                const sampled = cosmos.getSampledPoints();
+                nodes = (sampled && sampled.indices ? sampled.indices : [])
+                    .map(i => cosmosNodes[i])
+                    .filter(Boolean);
+            }
+
+            ctx.save();
+            ctx.font = '11px "JetBrains Mono", monospace';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'bottom';
+            for (const n of nodes) {
+                const { dim, tier } = nodeLightingFor(n);
+                if (dim) continue;
+                if (cosmosHidden && cosmosHidden[cosmosIndexOf.get(n.id)]) continue;
+                const p = fxPos(n);
+                if (!p || p.x < -80 || p.y < -20 || p.x > width + 80 || p.y > height + 20) continue;
+                const label = truncateName(n.name);
+                if (!label) continue;
+                // Tour stops get their names inked in warm orange so the route
+                // is readable at a glance.
+                ctx.fillStyle = (tier === 'current' || tier === 'stop')
+                    ? CANVAS.labelTour : CANVAS.label;
+                // A dark rim keeps text legible where it crosses a bright node.
+                ctx.strokeStyle = 'rgba(13,13,16,0.85)';
+                ctx.lineWidth = 3;
+                const y = p.y - fxRadius(n) - 4;
+                ctx.strokeText(label, p.x, y);
+                ctx.fillText(label, p.x, y);
+            }
+            ctx.restore();
+        }
+
+        // ── Boundary frame ─────────────────────────────────────
+        // The 3D renderer's dashed cube, flattened: in 2D a bounding *box* has
+        // four edges and four labelled sides, so the six numbered faces become
+        // the four the plane actually has. Reuses drawSevenSeg from the 3D
+        // backend — it was already a plain canvas2D routine.
+        function fxDrawBoundary() {
+            const ext = computeExtent();
+            if (!ext || !cosmos) return;
+            const r = ext.radius * 1.08;
+            const a = cosmos.spaceToScreenPosition([ext.cx - r, ext.cy - r]);
+            const b = cosmos.spaceToScreenPosition([ext.cx + r, ext.cy + r]);
+            if (!a || !b) return;
+            const x0 = Math.min(a[0], b[0]), x1 = Math.max(a[0], b[0]);
+            const y0 = Math.min(a[1], b[1]), y1 = Math.max(a[1], b[1]);
+            const ctx = fxCtx;
+            ctx.save();
+            ctx.strokeStyle = 'rgba(143,163,184,0.35)';
+            ctx.lineWidth = 1.4;
+            ctx.setLineDash([10, 7]);
+            ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+            ctx.setLineDash([]);
+            // Corner ticks, so the frame reads as a measured box rather than a
+            // plain border.
+            ctx.strokeStyle = 'rgba(143,163,184,0.6)';
+            ctx.lineWidth = 2;
+            const k = Math.min(18, (x1 - x0) * 0.05);
+            for (const [cx, cy, sx, sy] of [[x0, y0, 1, 1], [x1, y0, -1, 1], [x0, y1, 1, -1], [x1, y1, -1, -1]]) {
+                ctx.beginPath();
+                ctx.moveTo(cx + sx * k, cy);
+                ctx.lineTo(cx, cy);
+                ctx.lineTo(cx, cy + sy * k);
+                ctx.stroke();
+            }
+            // Side numbers, matching the viewbar's colour coding for 1–4.
+            const sides = [
+                { num: 1, hex: '#f97316', x: (x0 + x1) / 2, y: y1 + 6 },
+                { num: 2, hex: '#3a6ea5', x: x1 + 6, y: (y0 + y1) / 2 },
+                { num: 3, hex: '#c2410c', x: (x0 + x1) / 2, y: y0 - 34 },
+                { num: 4, hex: '#5b8fc9', x: x0 - 34, y: (y0 + y1) / 2 },
+            ];
+            for (const s of sides) {
+                drawSevenSeg(ctx, s.num, s.x - 9, s.y, 18, 28, s.hex);
+            }
+            ctx.restore();
+        }
+// ==== 14-interaction.js ====
         // ─── Hover & selection ──────────────────────────────
 
         // Whether the pointer is genuinely over the 3D canvas (and not over
@@ -18827,7 +20253,7 @@ traverse({
             bumpGraphStyles();
         }
 
-// ==== 12-tools-catalog.js ====
+// ==== 15-tools-catalog.js ====
         // ─── Tools ──────────────────────────────────────────
 
         // "Start here" strip: the most connected nodes, so the first view of
@@ -19413,7 +20839,7 @@ traverse({
             }
         }
 
-// ==== 13-solo-view.js ====
+// ==== 16-solo-view.js ====
         // ─── Solo view (large graphs) ───────────────────────
         //
         // Past SOLO_THRESHOLD elements a full render is not slow-but-usable,
@@ -19437,7 +20863,7 @@ traverse({
         // is what makes the filters, the tour and "light up … in graph" fall out
         // of the same code path.
 
-        const SOLO_THRESHOLD = 10000;     // max(nodes, edges) above this → solo mode
+        const SOLO_THRESHOLD = 100000;     // max(nodes, edges) above this → solo mode
         const SOLO_MAX_NODES = 1500;      // hard render budget for one view
         const SOLO_MAX_NEIGHBORS = 300;   // per-seed 1-hop cap, so a hub can't blow the budget
 
@@ -19549,8 +20975,8 @@ traverse({
             state.view = { nodes, edges };
             state.viewIds = ids;
             state.viewTruncated = truncated;
-            if (!Graph) return;
-            Graph.graphData({ nodes, links: edges });
+            if (!activeRenderer()) return;
+            setGraphData(state.view);
             // Let the existing settle-then-frame path (onEngineStop → autoFrame)
             // re-fit the camera around the new, differently sized view.
             state._didFit = false;
@@ -19730,7 +21156,7 @@ traverse({
                 ? `Light up the first ${formatNumber(capped)} of ${formatNumber(ids.length)} matches`
                 : 'Light up every match, dimming the rest of the graph';
         }
-// ==== 14-info-drag.js ====
+// ==== 17-info-drag.js ====
         // ─── Info-panel dragging ────────────────────────────
 
         // Info panel is docked to the right side — drag is no longer applicable.
@@ -19745,7 +21171,7 @@ traverse({
         window.addEventListener('resize', () => {
             width = document.getElementById('container').clientWidth;
             height = document.getElementById('container').clientHeight;
-            if (Graph) Graph.width(width).height(height);
+            resizeRenderer(width, height);
         });
 
         document.addEventListener('keydown', e => {
@@ -19780,7 +21206,7 @@ traverse({
         });
 
         bootstrap();
-// ==== 15-walk.js ====
+// ==== 18-walk.js ====
         // ─── Graph Walk (Discover → Walk) ────────────────────
         //
         // An animated, step-able BFS frontier. Pick a seed and the walk takes
@@ -20774,151 +22200,14 @@ traverse({
             }
             return max;
         }
-
         // The wavefront burst — a composite "energy explosion" that radiates
         // from the seed to the new frontier. Timed to the two-phase beat: it
         // starts at the previous frontier's radius when the stream phase
         // opens and arrives at the new nodes exactly as they ignite.
         //
-        // Four additive-blended layers bloom against the dark canvas:
-        //   • a fresnel-rim glow shell — bright silhouette, hot core (the
-        //     "energy bubble"; the part that reads as a real blast),
-        //   • a wireframe cage slightly larger — geometric structure / edge,
-        //   • a soft plasma core — a luminous centre,
-        //   • a radial particle burst — the explosion of debris outward.
-        // All self-disposing (geometry + materials freed once the burst ends).
-        const _fresnelShell = () => `
-            varying vec3 vNormal; varying vec3 vView;
-            void main() {
-                vec4 mv = modelViewMatrix * vec4(position, 1.0);
-                vNormal = normalize(normalMatrix * normal);
-                vView = normalize(-mv.xyz);
-                gl_Position = projectionMatrix * mv;
-            }`;
-        const _fresnelFrag = () => `
-            varying vec3 vNormal; varying vec3 vView;
-            uniform vec3 uColor; uniform vec3 uCore; uniform float uPower; uniform float uOpacity;
-            void main() {
-                float rim = 1.0 - max(0.0, dot(normalize(vNormal), normalize(vView)));
-                rim = pow(rim, uPower);
-                vec3 c = mix(uCore, uColor, rim);
-                gl_FragColor = vec4(c, rim * uOpacity);
-            }`;
-
-        function emitWalkPulse(seedNode, colour, fromR, toR, growMs) {
-            if (!Graph || !seedNode || !Number.isFinite(seedNode.x)) return;
-            const scene = Graph.scene();
-            const fromRr = Math.max(fromR || 0, 6);
-            const toRr = Math.max((toR || 0) + 18, fromRr + 24);
-            const grow = Math.max(160, growMs || 420);
-            const fade = Math.min(640, Math.max(240, grow * 0.9));
-            const total = grow + fade;
-            const t0 = performance.now();
-
-            const group = new THREE.Group();
-            group.position.set(seedNode.x || 0, seedNode.y || 0, seedNode.z || 0);
-            scene.add(group);
-            const disposables = [];
-            const addDispose = (o) => { if (o.geometry) disposables.push(o.geometry); if (o.material) disposables.push(o.material); };
-
-            // Fresnel rim shell — the energy bubble.
-            const shellMat = new THREE.ShaderMaterial({
-                transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
-                uniforms: {
-                    uColor: { value: new THREE.Color(colour) },
-                    uCore: { value: new THREE.Color('#fff3e8') },
-                    uPower: { value: 2.6 },
-                    uOpacity: { value: 0 },
-                },
-                vertexShader: _fresnelShell(),
-                fragmentShader: _fresnelFrag(),
-            });
-            const shell = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 4), shellMat);
-            shell.renderOrder = 500;
-            group.add(shell); addDispose(shell);
-
-            // Wireframe cage — structure / edge shimmer.
-            const cageMat = new THREE.MeshBasicMaterial({
-                color: new THREE.Color(colour), wireframe: true, transparent: true,
-                opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
-            });
-            const cage = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 1), cageMat);
-            cage.renderOrder = 501;
-            group.add(cage); addDispose(cage);
-
-            // Plasma core — luminous centre (kept faint so it doesn't white out).
-            const coreMat = new THREE.MeshBasicMaterial({
-                color: new THREE.Color(colour), transparent: true, opacity: 0,
-                depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
-            });
-            const core = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 3), coreMat);
-            core.renderOrder = 499;
-            group.add(core); addDispose(core);
-
-            // Radial particle burst — debris exploding outward to the frontier.
-            const N = 96;
-            const positions = new Float32Array(N * 3);
-            const dirs = [];
-            for (let i = 0; i < N; i++) {
-                const u = Math.random(), v = Math.random();
-                const theta = 2 * Math.PI * u, phi = Math.acos(2 * v - 1);
-                dirs.push({
-                    dx: Math.sin(phi) * Math.cos(theta),
-                    dy: Math.sin(phi) * Math.sin(theta),
-                    dz: Math.cos(phi),
-                    spd: 0.55 + Math.random() * 0.7,   // some reach past the shell
-                });
-            }
-            const pGeo = new THREE.BufferGeometry();
-            pGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-            const pMat = new THREE.PointsMaterial({
-                color: new THREE.Color(colour), size: 3.4, transparent: true, opacity: 0,
-                depthWrite: false, blending: THREE.AdditiveBlending, sizeAttenuation: true, fog: false,
-            });
-            const points = new THREE.Points(pGeo, pMat);
-            points.renderOrder = 502;
-            group.add(points); addDispose({ geometry: pGeo, material: pMat });
-
-            const step = () => {
-                const t = performance.now() - t0;
-                if (t >= total || !state.walkActive) {
-                    scene.remove(group);
-                    disposables.forEach(d => d.dispose());
-                    return;
-                }
-                const p = Math.min(1, t / grow);           // grow progress
-                const e = 1 - Math.pow(1 - p, 3);           // ease-out: decelerate at the frontier
-                const r = fromRr + (toRr - fromRr) * e;
-                const rs = Math.max(0.1, r);
-                shell.scale.setScalar(rs);
-                cage.scale.setScalar(Math.max(0.1, r * 1.07));
-                core.scale.setScalar(Math.max(0.1, r * 0.62));
-                // Envelope: quick ramp-in over the first 25% of the grow, hold,
-                // then fade out across `fade`. The burst flashes to life, sweeps
-                // outward, and dissolves — reads as an explosion, not a fade.
-                const fadeIn = Math.min(1, p / 0.25);
-                const env = t <= grow ? fadeIn : Math.max(0, 1 - (t - grow) / fade);
-                shellMat.uniforms.uOpacity.value = 0.95 * env;
-                cageMat.opacity = 0.5 * env;
-                coreMat.opacity = 0.14 * env;
-                pMat.opacity = 0.95 * env;
-                // Particles fly outward, each on its own speed curve.
-                const arr = pGeo.attributes.position.array;
-                for (let i = 0; i < N; i++) {
-                    const d = dirs[i];
-                    const dist = r * d.spd;
-                    arr[i * 3] = d.dx * dist;
-                    arr[i * 3 + 1] = d.dy * dist;
-                    arr[i * 3 + 2] = d.dz * dist;
-                }
-                pGeo.attributes.position.needsUpdate = true;
-                // Slow counter-rotation for shimmer on the structural layers.
-                cage.rotation.y += 0.012; cage.rotation.x += 0.007;
-                shell.rotation.y -= 0.005;
-                requestAnimationFrame(step);
-            };
-            requestAnimationFrame(step);
-        }
+        // The burst itself is drawn by the renderer — it is a volumetric
+        // effect in 3D and a flat one in 2D — so it is reached through
+        // emitWalkPulse() in 10-render-core.js.
 
         // Pulse the pipeline diagram's GRAPH WALK box in sync with each
         // ignited frontier — ties the canvas animation to the explainer.
@@ -20930,7 +22219,7 @@ traverse({
             box.classList.add('pulse');
             setTimeout(() => box.classList.remove('pulse'), walkDwellMs());
         }
-// ==== 16-url-state.js ====
+// ==== 19-url-state.js ====
         // ─── URL state sync (deep-linkable views) ─────────────
         // A small slice of `state` maps onto the query string, so a view is
         // shareable (`?p=&n=&tab=&nf=`) and survives a reload. The URL is
@@ -21119,7 +22408,7 @@ traverse({
         }
 
         wireUrlState();
-// ==== 17-palette.js ====
+// ==== 20-palette.js ====
         // ─── Command palette (⌘K) + shortcut sheet (?) ──────
         // One input that dispatches to everything the app already does, plus
         // a single declarative registry of the global bindings so the `?`

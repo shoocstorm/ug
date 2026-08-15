@@ -110,12 +110,13 @@ they do not need to be exact, and nothing has to be updated when you
 re-publish. (They used to be hardcoded. They were wrong within a day.)
 
 **Watch for the solo-mode warning.** The renderer draws a graph in full up to
-10,000 elements and switches to *solo mode* above that — an empty canvas
+100,000 elements and switches to *solo mode* above that — an empty canvas
 asking the visitor to pick a node. Correct for a real repo, a poor first
 impression for a demo. `ug demo` prints a warning when the graph it just
-built crosses the line; if it does, point `DEMO_INPUT` at a subtree. This is
-why the default is `native/src` (~2.9k nodes / 8.7k edges) and not the whole
-checkout (~10.3k edges, just over).
+built crosses the line; if it does, point `DEMO_INPUT` at a subtree. The
+default (`native/src`, ~2.9k nodes / 8.7k edges) and the whole checkout
+(~10.3k edges) both sit well under it, so a demo opens on the full graph
+rather than an empty canvas.
 
 **A published graph is public.** It carries file paths, symbol names and
 docstrings from whatever was indexed. `ug demo` rewrites local absolute paths
