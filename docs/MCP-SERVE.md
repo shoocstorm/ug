@@ -239,6 +239,16 @@ Returns ranked code snippets with file:line locations, descriptions, and node ID
 
 **Internals:** RRF fuses vector + FTS hits to seed Personalized PageRank over the edge graph, so results combine semantic relevance with structural importance.
 
+**Requires an embedder and a database ingested with vectors — and unlike the CLI,
+this tool has no fallback.** The FTS half is a channel inside the fusion, not a
+standalone mode: the query is embedded before either channel runs. `ug search` on
+the command line degrades to a name-substring match when no embedder can be built;
+the MCP tool returns an error instead, deliberately, so an agent is never handed
+substring hits it would read as ranked GraphRAG results. When it errors, switch to
+`find_symbols` / `file_outline` / `find_usages` / `traverse` / `analyze` — none of
+those touch embeddings. See
+[docs/EMBEDDING-BACKENDS.md](EMBEDDING-BACKENDS.md#running-without-an-embedder).
+
 **Parameters:**
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -283,6 +293,10 @@ Use this when `search` would be overkill:
 - Filtered lookups via `whereClause` (e.g. only Functions in a given folder)
 
 Cheaper and faster than `search`. Switch to `search` when you need actual code snippets or graph-aware ranking.
+
+Same hard dependency as `search`: an embedder plus vectors in the database, with
+no fallback at the MCP layer. If you only need to match a **name**, use
+`find_symbols` — exact, wildcard-capable, and needs no embeddings at all.
 
 **Parameters:**
 | Parameter | Type | Required | Description |

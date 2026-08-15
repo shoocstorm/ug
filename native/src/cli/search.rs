@@ -374,15 +374,47 @@ pub(crate) fn run_traverse(args: &[String]) {
     write_or_print(output_path.as_deref(), &json, "traverse result");
 }
 
+/// What these two commands do when no embedder is available.
+///
+/// Printed by both `search -h` and `semantic_search -h` because the answer
+/// is the same for both and is the thing a caller most needs to know before
+/// deciding whether an embedding backend is worth configuring: neither
+/// command hard-fails, but what comes back is a plain name match, and the
+/// difference is invisible in the output unless you look at `matched_by`.
+fn print_embedder_fallback_note() {
+    println!("{C_BOLD}Without an embedder:{C_RESET}  {C_DIM}degrades, does not fail{C_RESET}");
+    println!(
+        "  If no embedder can be built, {C_CYAN}search{C_RESET} and {C_CYAN}semantic_search{C_RESET} warn on stderr and return"
+    );
+    println!(
+        "  a {C_BOLD}name-substring match{C_RESET} instead, every hit tagged {C_CYAN}\"matched_by\": \"name\"{C_RESET}. No vector"
+    );
+    println!("  or keyword ranking, no graph expansion, no snippets: enough to locate a");
+    println!("  symbol, not a substitute for GraphRAG.");
+    println!();
+    println!("  {C_YELLOW}The fallback covers a backend that cannot be built, not one that is down.{C_RESET}");
+    println!("  {C_DIM}The default local ONNX model failing to load or download lands here. A remote");
+    println!("  {C_CYAN}--base-url{C_RESET}{C_DIM} endpoint always builds, so an unreachable one fails the query outright.{C_RESET}");
+    println!();
+    println!("  {C_BOLD}Hard dependencies{C_RESET} {C_DIM}(no fallback anywhere):{C_RESET}");
+    println!("  {C_DIM}·{C_RESET} {C_CYAN}ug chat{C_RESET} · {C_CYAN}ug tour{C_RESET} — exit if the embedder cannot be built");
+    println!("  {C_DIM}·{C_RESET} the MCP {C_BOLD}search{C_RESET}/{C_BOLD}semantic_search{C_RESET} tools and {C_CYAN}POST /api/search/*{C_RESET} — error / 503");
+    println!("  {C_DIM}·{C_RESET} vectors must be {C_BOLD}in{C_RESET} the db: a {C_CYAN}--no-embed{C_RESET} run ingests without them, so the");
+    println!("    semantic channel stays empty until {C_CYAN}ug ingest{C_RESET} catches up");
+    println!();
+    println!("  {C_DIM}Embeddings-free alternatives: {C_RESET}{C_CYAN}ug find_symbols{C_RESET}{C_DIM} (exact names, wildcards),");
+    println!("  {C_RESET}{C_CYAN}ug analyze{C_RESET}{C_DIM} (statistics, blast radius), {C_RESET}{C_CYAN}ug traverse{C_RESET}{C_DIM} (edge walks).{C_RESET}");
+    println!();
+}
+
 fn print_semantic_search_help() {
     println!("  {C_CYAN}ug semantic_search{C_RESET}  {C_YELLOW}— semantic vector search (OverGraph, no graph context){C_RESET}");
     println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
     println!();
     println!("  Search by {C_BOLD}meaning{C_RESET}: describe what the code does (\"oauth login flow\") and get");
-    println!("  the closest symbols by embedding similarity. Needs an ingested db ({C_CYAN}ug gen{C_RESET})");
-    println!("  and an embedding endpoint. If you already know the identifier's name, use");
-    println!("  {C_CYAN}ug find_symbols{C_RESET} (exact, no embeddings); for search {C_BOLD}plus{C_RESET} related-code context,");
-    println!("  use {C_CYAN}ug search{C_RESET}.");
+    println!("  the closest symbols by embedding similarity. Needs an ingested db ({C_CYAN}ug gen{C_RESET}).");
+    println!("  If you already know the identifier's name, use {C_CYAN}ug find_symbols{C_RESET} (exact, no");
+    println!("  embeddings); for search {C_BOLD}plus{C_RESET} related-code context, use {C_CYAN}ug search{C_RESET}.");
     println!();
     println!("{C_BOLD}Usage:{C_RESET}  ug semantic_search <query> [options]");
     println!();
@@ -394,6 +426,7 @@ fn print_semantic_search_help() {
     println!("  {C_CYAN}--base-url/--api-key/--model/--embedding-dim{C_RESET}  Embedding endpoint overrides");
     println!("  {C_CYAN}-o, --output{C_RESET} <file>  Write the result JSON to a file (omit for stdout)");
     println!();
+    print_embedder_fallback_note();
     println!("{C_BOLD}Examples:{C_RESET}");
     println!("  {C_CYAN}ug semantic_search{C_RESET} \"oauth login flow\"");
 }
@@ -429,8 +462,10 @@ fn print_hybrid_search_help() {
     println!("(vector + full-text). Its tuning knobs (--strategy, --hops, --mmr-lambda,");
     println!("--ppr-*) still parse but are undocumented operator controls — the defaults");
     println!("are what you want. Backends without native PPR (Neo4j without GDS) fall back");
-    println!("to MMR automatically.{C_RESET}");
+    println!("to MMR automatically. The full-text half is a channel *inside* that fusion,");
+    println!("not a standalone mode: it runs only on the embedder-backed path.{C_RESET}");
     println!();
+    print_embedder_fallback_note();
     println!("{C_BOLD}Examples:{C_RESET}");
     println!("  {C_CYAN}ug search{C_RESET} \"oauth login flow\" -k 8");
 }

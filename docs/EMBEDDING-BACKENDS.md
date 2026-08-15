@@ -290,6 +290,55 @@ release per target — see `ort` docs.
 
 ---
 
+## Running without an embedder
+
+Most of `ug` never touches this subsystem: `find_symbols`, `get_code`,
+`file_outline`, `find_usages`, `shortest_path`, `project_overview` and the
+`graph_*` tools read `graph.json`, and `analyze` / `traverse` read the database.
+Only four commands are embedding-backed, and they do not all behave the same way
+when no embedder is available.
+
+| Surface                                            | Behaviour                                                                         |
+|----------------------------------------------------|-----------------------------------------------------------------------------------|
+| `ug search`, `ug semantic_search` (CLI)            | **Degrade.** `warning: embedder unavailable, falling back to name search` on stderr, then a name-substring match tagged `"matched_by": "name"` |
+| MCP `search` / `semantic_search` tools             | **Hard fail** — the tool returns an error                                          |
+| `POST /api/search/hybrid`, `/api/search/semantic`, `/api/chat` | **503**                                                                |
+| `ug chat`, `ug tour`                               | **Exit** — `failed to build embedder`; they need an embedder *and* a chat model    |
+
+### What the CLI fallback actually is
+
+`storage::name_search` — `MATCH (n) WHERE n.name CONTAINS $q ... ORDER BY id`,
+with `distance` carrying the 1-based rank so callers that sort on it keep row
+order. No vector search, no full-text search, no graph expansion, no PPR or MMR
+rerank, no snippet assembly. `ug search` returns a flat array of hits rather than
+its usual `RankedContext`. It exists so `ug search foo` still answers on a machine
+that has never reached an embedding backend — not as a keyword search mode.
+
+Three consequences that are easy to get wrong:
+
+1. **Full-text search is not the fallback path.** FTS is one channel of the RRF
+   fusion in `seeds_and_dense_ids`, which embeds the query *before* calling
+   `store.hybrid_search`. There is no code path that runs the FTS channel without
+   an embedder, so losing the embedder loses keyword ranking too.
+2. **Only construction failures fall back.** `try_embedder_from_args` returns
+   `None` when `Embedder::local`/`Embedder::remote` fail to build. `LocalEmbedder::new`
+   loads the ONNX model and runs a dim probe, so local outages (missing alias,
+   failed download) land in the fallback. `RemoteEmbedder::new` only builds a
+   `reqwest::Client` — a dead `--base-url` endpoint constructs fine and fails
+   later inside `embed()`, which exits with `hybrid search failed: ...`.
+   Fallback and unreachable-backend are therefore *different* failure modes.
+3. **Vectors must exist in the database.** A working embedder is not enough if
+   ingest skipped them: after `--no-embed` (what the git hooks run) the affected
+   nodes have no vectors, and the semantic channel silently returns less until
+   `ug ingest -n <project>` catches up. The MCP layer appends a
+   "Some nodes have no vectors yet" note when it detects this.
+
+If you are deliberately running embedding-free, prefer the commands that never
+needed it — `find_symbols` with wildcards for names, `analyze` for statistics and
+blast radius, `traverse`/`find_usages` for structure — over the degraded search.
+
+---
+
 ## Files
 
 | File                                       | Role                                                |

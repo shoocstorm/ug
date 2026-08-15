@@ -138,15 +138,47 @@ by `ug ingest`). Which one a command reads tells you what still works after
 | :--- | :--- |
 | **`graph.json`** — no DB or embedder needed | `find_symbols`, `file_outline`, `get_code`, `find_usages`, `traverse`, `shortest_path`, `project_overview`, `graph_schema`, all `graph_*` tools; `GET /api/graph/*`, `/api/file`, `/graph.json` |
 | **`ugdb/`** — needs the ingest step, but **no embedder** | `analyze` (statistics); `traverse --dest <name>`; `GET /api/db/node/:id`, `/api/db/traverse/:id`, `POST /api/tools/analyze` |
-| **`ugdb/` + an embedder** — needs ingest *and* a reachable backend | `search`, `semantic_search`, `chat`; `POST /api/search/hybrid`, `/api/search/semantic`, `/api/chat` |
+| **`ugdb/` + an embedder** — needs ingest *and* a reachable backend | `search`, `semantic_search`, `chat`, `tour`; `POST /api/search/hybrid`, `/api/search/semantic`, `/api/chat` |
 
-The practical consequence: **only `search`, `semantic_search` and `chat` need an
-embedder — but `ug analyze` still needs the database.** If your embedding endpoint
-is down, symbol lookup, outlines, source reads, usage analysis, traversal,
+The practical consequence: **only `search`, `semantic_search`, `chat` and `tour`
+need an embedder — but `ug analyze` still needs the database.** If your embedding
+endpoint is down, symbol lookup, outlines, source reads, usage analysis, traversal,
 pathfinding *and* whole-repo statistics all still work. `--dest <name>` (or
 `/api/db/traverse`) runs `traverse` against a destination store, to verify what
 landed in OverGraph or Neo4j — see
 [docs/MULTI-STORAGE-DEST.md](docs/MULTI-STORAGE-DEST.md).
+
+#### What `search` does when there is no embedder
+
+The last row is not uniform: the two search commands **degrade rather than fail**,
+but only from the CLI, and only so far.
+
+| Surface | Behaviour without an embedder |
+| :--- | :--- |
+| `ug search`, `ug semantic_search` (CLI) | Warn on stderr, then return a **name-substring match** over indexed symbols, tagged `"matched_by": "name"` |
+| MCP `search` / `semantic_search` tools | Error — no fallback |
+| `POST /api/search/hybrid`, `/api/search/semantic`, `/api/chat` | `503` |
+| `ug chat`, `ug tour` | Exit — they need an embedder *and* a chat model |
+
+The CLI fallback is a genuine name match — `name CONTAINS <query>` — and nothing
+more: no vector or full-text ranking, no graph expansion, no PPR, no snippets. It
+keeps `ug search foo` answering when the embedding backend is unconfigured; it is
+not a keyword search mode. Three things worth knowing before relying on it:
+
+- **The full-text half of hybrid search is not the fallback.** FTS is a channel
+  *inside* the RRF fusion that seeds PPR, and that path embeds the query first.
+  Lose the embedder and you lose the keyword channel with it.
+- **It triggers on a backend that cannot be built, not one that is down.** The
+  default local ONNX embedder fails at construction (missing model, failed
+  download) and falls back cleanly. A remote `--base-url` endpoint always
+  constructs, so an unreachable one fails the query outright instead.
+- **Vectors have to be in the database too.** After a `--no-embed` run the
+  semantic channel is empty for the changed nodes even with a working embedder,
+  until `ug ingest` catches up. See the next section.
+
+When you land on the fallback, `ug find_symbols` (exact, wildcards), `ug analyze`
+(statistics, blast radius) and `ug traverse` (edge walks) answer the same
+questions without embeddings at all.
 
 ### `--no-embed` vs `--no-ingest`
 
