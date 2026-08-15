@@ -1,6 +1,6 @@
-# `code_query` — whole-repo statistics & impact analysis
+# `analyze` — whole-repo statistics & impact analysis
 
-`code_query` answers counting, distribution and blast-radius questions over the
+`analyze` answers counting, distribution and blast-radius questions over the
 entire indexed graph in one call: *"how many methods are longer than 50
 lines?"*, *"which folders are worst documented?"*, *"what breaks if I change
 this file?"*. One MCP tool / CLI command / HTTP route; capability grows through
@@ -9,7 +9,7 @@ this file?"*. One MCP tool / CLI command / HTTP route; capability grows through
 The point is cost. Answered by grep-and-read, "how many methods are longer than
 50 lines?" is ~500k tokens on a medium repo and impossible on a monorepo;
 answered by looping `file_outline` it is ~40k tokens and 80 round-trips.
-`code_query` answers it in one call and roughly 100 tokens, because ingest
+`analyze` answers it in one call and roughly 100 tokens, because ingest
 already stored the facts a query engine can aggregate.
 
 This doc covers the design, the fact layer, the query surface, and the
@@ -141,20 +141,20 @@ Three pairs are easy to confuse, and picking the wrong one changes the answer:
 
 ## The query surface
 
-One implementation (`native/src/code_query/`), three transports, matching the
+One implementation (`native/src/analyze/`), three transports, matching the
 `agent_tools` pattern:
 
 | Surface | Entry point |
 | --- | --- |
-| CLI | `ug query <preset>` · `ug query --preset impact --target src/a.ts` · `ug query --gql "MATCH …"` · `ug query --list` |
-| MCP | `code_query` tool — `{"preset": "long_functions"}` or `{"gql": "…"}` |
-| HTTP | `POST /api/tools/code_query` · `GET /api/presets` |
+| CLI | `ug analyze <preset>` · `ug analyze --preset impact --target src/a.ts` · `ug analyze --gql "MATCH …"` · `ug analyze --list` |
+| MCP | `analyze` tool — `{"preset": "long_functions"}` or `{"gql": "…"}` |
+| HTTP | `POST /api/tools/analyze` · `GET /api/presets` |
 
-`code_query` takes either a named `preset` or raw `gql` (mutually exclusive),
+`analyze` takes either a named `preset` or raw `gql` (mutually exclusive),
 plus `args`, `limit`, and `range`. **Arguments are bound as GQL params, never
 interpolated**; an undeclared argument is an error, not an ignored key.
 
-`code_query` does **not** join the `tool_graph` arm — that arm is DB-free, and
+`analyze` does **not** join the `tool_graph` arm — that arm is DB-free, and
 aggregation needs stored properties. It has its own dispatch arm that opens the
 store **without an embedder**, which preserves the useful half of the property:
 statistics keep working when `search` cannot. `graph_schema` stays graph-only
@@ -205,7 +205,7 @@ The `diff_*` and `test_for` presets close the two loops an agent runs most:
   tests that reach it — the code→test half of the test loop that
   `untested_symbols` (the reverse) only answers in aggregate.
 
-Run `ug query --list` (or call `graph_schema`) for the current set — the
+Run `ug analyze --list` (or call `graph_schema`) for the current set — the
 authoritative list is the code, and this paragraph will otherwise drift.
 
 ---
@@ -268,7 +268,7 @@ version bump, a migration or a deprecation notice. `boundary_impact` reverse-
 reaches over the same edges and keeps only the **inbound system boundaries**:
 
 ```
-$ ug query boundary_impact --arg target=src/main/java/com/acme/OrderRepository.java
+$ ug analyze boundary_impact --arg target=src/main/java/com/acme/OrderRepository.java
 
 surface                                    kinds          exposed_as               paths
 …r.java:OrderController.find               http.endpoint  GET /api/orders/{id}         1
@@ -307,7 +307,7 @@ coverage: loc 1191/1191 · is_test 1878/1891 · comment_lines NOT INDEXED (run `
 The coverage line is the contract. `MATCH (n:Function) WHERE n.comment_lines >
 3 RETURN count(*)` returns `Int(0)` on an index that has never recorded comment
 lines — **no error, no engine warning** — and "no functions have long comments"
-is a far worse outcome than a refusal. So `code_query` probes the properties
+is a far worse outcome than a refusal. So `analyze` probes the properties
 each query reads, reports their denominators, and flags any that are entirely
 unpopulated as `NOT INDEXED`. Caps truncate silently, so the blast radius of an
 impact query that hit `max_frontier` is a *lower bound* — that warning is
@@ -348,7 +348,7 @@ question would push that past 7k as a permanent tax. Instead:
   replaces a growing tool list:
 
 > **For any counting, aggregate, distribution or blast-radius question, call
-> `graph_schema` then `code_query`. Never grep for a count. Never loop a
+> `graph_schema` then `analyze`. Never grep for a count. Never loop a
 > per-file tool to build one.**
 
 ---
@@ -356,12 +356,12 @@ question would push that past 7k as a permanent tax. Instead:
 ## Risks that remain
 
 1. **Silent zero — the dominant risk.** Mitigated by the coverage contract, but
-   it is why `graph_schema` lists property denominators and `code_query`
+   it is why `graph_schema` lists property denominators and `analyze`
    renders `NOT INDEXED` instead of `0`. A regression here is worse than a
    crash.
 2. **Stale index.** `staleness_note` propagates into the envelope — a
    precise-looking number implies freshness it may not have.
-3. **Statistics depend on the store.** `code_query` opens the ugdb without an
+3. **Statistics depend on the store.** `analyze` opens the ugdb without an
    embedder, but it still needs the store to exist. Ingest writes nodes and
    properties even when embedding fails, so the degraded mode is *supported*,
    not an error.
@@ -379,7 +379,7 @@ question would push that past 7k as a permanent tax. Instead:
 ## Status
 
 Shipped. Tracked from design through implementation in the session logs under
-`docs/dev/` (2026-07-28 → 2026-07-29); the working state is: `code_query` +
+`docs/dev/` (2026-07-28 → 2026-07-29); the working state is: `analyze` +
 `graph_schema` live on CLI / MCP / HTTP; 33 built-in presets; the fact layer
 (comment/class metrics, file classification, schema versioning) lands on a
 reindex; the Insights pane in the visualization is the fourth Discover subtab;

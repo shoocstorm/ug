@@ -9,9 +9,9 @@
 //! Two flags shorten the run, and they are not interchangeable:
 //! `--no-embed` still ingests into the db — nodes, edges, facts and keyword
 //! statistics all land, only the vectors are skipped (and no embedding model
-//! is loaded, which is most of a small run's wall clock), so `ug query` and
+//! is loaded, which is most of a small run's wall clock), so `ug analyze` and
 //! blast radius stay exact. `--no-ingest` writes nothing to the db at all, so
-//! everything it backs — `ug query` included — keeps answering from the
+//! everything it backs — `ug analyze` included — keeps answering from the
 //! previous ingest. `skip_flags_help` in `gen` is the one place that
 //! difference is spelled out for users.
 //!
@@ -230,7 +230,7 @@ pub(crate) fn run_update(args: &[String]) {
             "  {C_DIM}Fresh: graph.json tools ({C_RESET}{C_CYAN}find_symbols{C_RESET}{C_DIM}, {C_RESET}{C_CYAN}find_usages{C_RESET}{C_DIM}, …). Answering from the previous"
         );
         println!(
-            "  ingest: {C_RESET}{C_CYAN}ug query{C_RESET}{C_DIM} statistics and blast radius, {C_RESET}{C_CYAN}search{C_RESET}{C_DIM}, {C_RESET}{C_CYAN}semantic_search{C_RESET}{C_DIM}, {C_RESET}{C_CYAN}chat{C_RESET}{C_DIM}."
+            "  ingest: {C_RESET}{C_CYAN}ug analyze{C_RESET}{C_DIM} statistics and blast radius, {C_RESET}{C_CYAN}search{C_RESET}{C_DIM}, {C_RESET}{C_CYAN}semantic_search{C_RESET}{C_DIM}, {C_RESET}{C_CYAN}chat{C_RESET}{C_DIM}."
         );
         println!(
             "  Use {C_RESET}{C_CYAN}--no-embed{C_RESET}{C_DIM} instead to keep the db current except for vectors.{C_RESET}"
@@ -367,7 +367,7 @@ fn print_update_help() {
     println!("  unchanged files are neither re-parsed nor re-embedded.");
     println!();
     println!("  Built for a live editing session: call it after an edit burst so the");
-    println!("  structural and statistical tools ({C_CYAN}find_usages{C_RESET}, {C_CYAN}ug query{C_RESET}, …) reflect what");
+    println!("  structural and statistical tools ({C_CYAN}find_usages{C_RESET}, {C_CYAN}ug analyze{C_RESET}, …) reflect what");
     println!("  you just wrote. Cross-file edges are re-resolved over the whole graph on");
     println!("  each run — that is what keeps them correct.");
     println!();

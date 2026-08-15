@@ -453,7 +453,7 @@ fn ordinary_code_is_not_a_boundary() {
 fn boundaries_survive_into_the_graph() {
     // `graph.json` is one of the two consumers (the agent tools and the
     // canvas read it; the store's facts are the other). A field that stops
-    // at `Symbol` would work in `ug query` and be invisible everywhere else.
+    // at `Symbol` would work in `ug analyze` and be invisible everywhere else.
     let dir = stage(&[(
         "src/main/java/com/acme/PingController.java",
         r#"

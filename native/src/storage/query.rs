@@ -35,7 +35,7 @@ pub struct TraversalResult {
     pub distances: HashMap<String, u32>,
 }
 
-/// Vector search by free-text query. Embeds `query` once with `embedder`,
+/// Vector search by free-text query. Embeds `analyze` once with `embedder`,
 /// then asks the backend for the top-`k` nearest node rows. Works
 /// against any [`KnowledgeStore`].
 pub async fn semantic_search(

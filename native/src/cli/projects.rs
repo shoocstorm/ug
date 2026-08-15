@@ -29,7 +29,7 @@ impl Row {
     ///
     /// Ordered by what blocks the user soonest — a missing repo or graph means
     /// nothing can be refreshed at all, a missing db means half the commands
-    /// (`ug query`, `chat`, `search`) have nothing to read, and only then does
+    /// (`ug analyze`, `chat`, `search`) have nothing to read, and only then does
     /// drift matter. Returns the plain text and its colour separately so the
     /// column can be padded to width: ANSI escapes count toward `{:<n}` and
     /// would skew every row that carries them.
@@ -178,7 +178,7 @@ pub(crate) fn run_list(args: &[String]) {
         }
         if !row.has_db {
             println!(
-                "  {C_YELLOW}·{C_RESET} {C_CYAN}{}{C_RESET} has no db — {C_CYAN}ug query{C_RESET}, \
+                "  {C_YELLOW}·{C_RESET} {C_CYAN}{}{C_RESET} has no db — {C_CYAN}ug analyze{C_RESET}, \
                  {C_CYAN}search{C_RESET} and {C_CYAN}chat{C_RESET} cannot read it. \
                  {C_CYAN}ug ingest -n {}{C_RESET} builds one.",
                 row.meta.name, row.meta.name

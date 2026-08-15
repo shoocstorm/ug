@@ -293,7 +293,7 @@ pub(crate) fn run_gen(args: &[String]) {
             "{C_YELLOW}⚠ Nothing written to the db (--no-ingest){C_RESET} — no nodes, no edges, no vectors."
         );
         println!(
-            "  {C_DIM}That is more than skipping embedding: {C_RESET}{C_CYAN}ug query{C_RESET}{C_DIM} statistics and blast radius"
+            "  {C_DIM}That is more than skipping embedding: {C_RESET}{C_CYAN}ug analyze{C_RESET}{C_DIM} statistics and blast radius"
         );
         println!(
             "  need the db too. {C_RESET}{C_CYAN}--no-embed{C_RESET}{C_DIM} ingests without vectors if that is what you wanted.{C_RESET}"
@@ -375,7 +375,7 @@ pub(crate) fn run_gen(args: &[String]) {
         EmbeddingsOutcome::Missing | EmbeddingsOutcome::Failed => {
             // Structural-only commands — these work without vectors.
             println!(
-                "Works now: {C_BOLD}ug find_symbols{C_RESET}, {C_BOLD}ug file_outline{C_RESET}, {C_BOLD}ug traverse{C_RESET}, {C_BOLD}ug query{C_RESET}."
+                "Works now: {C_BOLD}ug find_symbols{C_RESET}, {C_BOLD}ug file_outline{C_RESET}, {C_BOLD}ug traverse{C_RESET}, {C_BOLD}ug analyze{C_RESET}."
             );
             println!(
                 "Disabled until embeddings exist: {C_YELLOW}ug search{C_RESET}, {C_YELLOW}ug semantic_search{C_RESET}, chat, tours, the Indexed tab."
@@ -423,7 +423,7 @@ enum EmbeddingsOutcome {
 fn print_embeddings_missing_next_steps(project_name: &str, chain_serve: bool) {
     println!();
     println!(
-        "{C_BOLD}What works now:{C_RESET}  the graph view, catalog, keyword search, {C_CYAN}ug query{C_RESET}, traverse."
+        "{C_BOLD}What works now:{C_RESET}  the graph view, catalog, keyword search, {C_CYAN}ug analyze{C_RESET}, traverse."
     );
     println!(
         "{C_BOLD}Disabled:{C_RESET}       semantic search, chat, guided tours, the Indexed tab — they need vectors."
@@ -543,7 +543,7 @@ pub(crate) fn run_gen_ingest(
 /// Shared by `ug gen -h` and `ug update -h` rather than
 /// re-worded per command, because the difference is the thing people get
 /// wrong: both read as "skip the slow part", and only one of them leaves
-/// `ug query` — statistics, `diff_impact`, blast radius — answering from the
+/// `ug analyze` — statistics, `diff_impact`, blast radius — answering from the
 /// previous ingest.
 pub(crate) fn skip_flags_help() -> String {
     let mut o = String::new();
@@ -556,7 +556,7 @@ pub(crate) fn skip_flags_help() -> String {
     line!("               Nodes and edges {C_BOLD}are{C_RESET} written — facts and keyword statistics too.");
     line!("               Only the embedding is skipped, and no embedding model is");
     line!("               loaded, which is most of a small run's wall clock.");
-    line!("               {C_GREEN}Current:{C_RESET} the graph.json tools {C_BOLD}and{C_RESET} {C_CYAN}ug query{C_RESET} — statistics,");
+    line!("               {C_GREEN}Current:{C_RESET} the graph.json tools {C_BOLD}and{C_RESET} {C_CYAN}ug analyze{C_RESET} — statistics,");
     line!("                        {C_CYAN}diff_impact{C_RESET}, blast radius, {C_CYAN}traverse --dest{C_RESET}.");
     line!("               {C_YELLOW}Behind:{C_RESET}  {C_CYAN}search{C_RESET} / {C_CYAN}semantic_search{C_RESET} / {C_CYAN}chat{C_RESET} miss the changed");
     line!("                        nodes until the vectors are backfilled.");
@@ -567,7 +567,7 @@ pub(crate) fn skip_flags_help() -> String {
     line!("               {C_GREEN}Current:{C_RESET} the graph.json tools only — {C_CYAN}find_symbols{C_RESET},");
     line!("                        {C_CYAN}file_outline{C_RESET}, {C_CYAN}get_code{C_RESET}, {C_CYAN}find_usages{C_RESET}, {C_CYAN}shortest_path{C_RESET},");
     line!("                        {C_CYAN}project_overview{C_RESET}, {C_CYAN}graph_schema{C_RESET}.");
-    line!("               {C_YELLOW}Behind:{C_RESET}  {C_BOLD}everything the db backs{C_RESET} — {C_CYAN}ug query{C_RESET} statistics and");
+    line!("               {C_YELLOW}Behind:{C_RESET}  {C_BOLD}everything the db backs{C_RESET} — {C_CYAN}ug analyze{C_RESET} statistics and");
     line!("                        blast radius as well as {C_CYAN}search{C_RESET} / {C_CYAN}semantic_search{C_RESET} / {C_CYAN}chat{C_RESET}");
     line!("                        keep answering from the {C_BOLD}previous{C_RESET} ingest.");
     line!("");

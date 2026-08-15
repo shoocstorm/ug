@@ -37,7 +37,7 @@ pub enum Render {
 impl Render {
     /// Wrap `s` in an SGR pair when colour is on, return it untouched when off.
     /// Called only from the `Render::Ansi` arm of each styling method, so the
-    /// runtime gate ([`crate::color`]) covers every agent-tool and `query`
+    /// runtime gate ([`crate::color`]) covers every agent-tool and `analyze`
     /// renderer without each call site branching on it.
     fn ansi(self, open: &str, s: &str) -> String {
         if crate::color::enabled() {
@@ -1268,7 +1268,7 @@ pub struct GetCodeParams {
     #[serde(alias = "endLine", alias = "end")]
     pub end_line: Option<usize>,
     /// The line window as one value — `"11-35"`, `"34-end"`, `"20"` — in the
-    /// same dialect `code_query` uses for row windows, and parsed by the same
+    /// same dialect `analyze` uses for row windows, and parsed by the same
     /// code. `start_line`/`end_line` win when both are given, so the two
     /// spellings can never disagree about what was asked for.
     pub range: Option<String>,
@@ -1544,8 +1544,8 @@ fn stored_slice(
 
 /// The `(start, end)` lines a `get_code` call asks for, from either spelling.
 ///
-/// `range` is parsed by [`crate::code_query::range`] — the same parser behind
-/// `code_query`'s row windows — so `--range 11-35` means the same shape of
+/// `range` is parsed by [`crate::analyze::range`] — the same parser behind
+/// `analyze`'s row windows — so `--range 11-35` means the same shape of
 /// thing in both commands and every spelling that works in one works in the
 /// other (`11-35`, `11..35`, `34-end`, `34-`, `20`, `top 20`). What it does
 /// *not* borrow is that module's `MAX_WINDOW` row cap: a line window is
@@ -1558,7 +1558,7 @@ fn line_window(p: &GetCodeParams) -> Result<(Option<usize>, Option<usize>), Stri
     let Some(raw) = p.range.as_deref().map(str::trim).filter(|s| !s.is_empty()) else {
         return Ok((p.start_line, p.end_line));
     };
-    let w = crate::code_query::range::parse(raw).ok_or_else(|| {
+    let w = crate::analyze::range::parse(raw).ok_or_else(|| {
         format!(
             "Could not read {:?} as a line range. Use a count (`20` = the first 20 lines), \
              a closed range (`11-35`), or an open one (`34-end`).",
@@ -4008,18 +4008,18 @@ mod tests {
         .unwrap()
     }
 
-    /// `--range` has to mean on `get_code` what it means on `ug query`, or
+    /// `--range` has to mean on `get_code` what it means on `ug analyze`, or
     /// the shared spelling is a trap. Same parser, so every phrasing that
     /// works there works here.
     #[test]
-    fn range_accepts_the_same_spellings_as_code_query() {
+    fn range_accepts_the_same_spellings_as_analyze() {
         assert_eq!(window(Some("11-35"), None, None), (Some(11), Some(35)));
         assert_eq!(window(Some("11..35"), None, None), (Some(11), Some(35)));
         assert_eq!(window(Some("rows 11 to 35"), None, None), (Some(11), Some(35)));
         // Open-ended: no end bound, which the reader turns into EOF.
         assert_eq!(window(Some("34-end"), None, None), (Some(34), None));
         assert_eq!(window(Some("34-"), None, None), (Some(34), None));
-        // A bare count is "the first N" — as in code_query, not "line N".
+        // A bare count is "the first N" — as in analyze, not "line N".
         assert_eq!(window(Some("20"), None, None), (Some(1), Some(20)));
     }
 
@@ -4042,7 +4042,7 @@ mod tests {
         assert!(e.contains("banana"), "got: {e}");
         assert!(e.contains("34-end"), "the message shows the valid forms: {e}");
 
-        // A backwards range is nonsense too, and code_query rejects it.
+        // A backwards range is nonsense too, and analyze rejects it.
         assert!(line_window(&GetCodeParams {
             range: Some("35-11".into()),
             ..Default::default()

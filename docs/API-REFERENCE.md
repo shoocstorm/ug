@@ -28,13 +28,13 @@
 #### `--no-embed` vs `--no-ingest`
 
 Accepted by `ug gen` and `ug update`. They are commonly confused,
-and the difference decides whether `ug query` (statistics, `diff_impact`,
+and the difference decides whether `ug analyze` (statistics, `diff_impact`,
 blast radius) can be trusted after the run:
 
 | Flag | Written to the OverGraph db | Current after the run | Answering from the *previous* ingest |
 |---|---|---|---|
-| `--no-embed` | nodes, edges, facts and keyword/BM25 statistics — **everything except the vectors**. No embedding model is loaded, which is most of a small run's wall clock. | the graph.json tools **and `ug query`** — statistics, `diff_impact`, `boundary_impact`, blast radius, `traverse --dest` | `search`, `semantic_search`, `chat` — they miss the changed nodes until the vectors are backfilled |
-| `--no-ingest` | **nothing** — no nodes, no edges, no vectors; the db is never opened. Only `graph.json` is rebuilt. | the graph.json tools only: `find_symbols`, `file_outline`, `get_code`, `find_usages`, `shortest_path`, `project_overview`, `graph_schema` | **everything the db backs** — `ug query` statistics and blast radius as well as `search`, `semantic_search`, `chat` |
+| `--no-embed` | nodes, edges, facts and keyword/BM25 statistics — **everything except the vectors**. No embedding model is loaded, which is most of a small run's wall clock. | the graph.json tools **and `ug analyze`** — statistics, `diff_impact`, `boundary_impact`, blast radius, `traverse --dest` | `search`, `semantic_search`, `chat` — they miss the changed nodes until the vectors are backfilled |
+| `--no-ingest` | **nothing** — no nodes, no edges, no vectors; the db is never opened. Only `graph.json` is rebuilt. | the graph.json tools only: `find_symbols`, `file_outline`, `get_code`, `find_usages`, `shortest_path`, `project_overview`, `graph_schema` | **everything the db backs** — `ug analyze` statistics and blast radius as well as `search`, `semantic_search`, `chat` |
 
 `ug ingest -n <project>` catches the db up in either case; it embeds only the
 nodes still owed a vector. A `--no-embed` run records the debt in
@@ -59,7 +59,7 @@ These accept the same params as their MCP counterparts and can output `--json`.
 |---------|---------|-------------|-----------|
 | `ug find_symbols` | — | Symbol lookup by name, fragment (ranked exact > prefix > substring) or **wildcard**. | `--node-type <type>` (repeatable, wildcards ok), `--file-prefix <prefix-or-glob>`, `--boundary`, `-k <limit>`, `--include-docs`, `-n <name>`, `--json`, `-o <file>` |
 | `ug file_outline` | — | List indexed symbols in a file, in line order. Takes a path **glob**. | `<file-or-glob>` positional(s), `-k/--max-files <n>` (default 20), `--ids`, `-n <name>`, `--json` |
-| `ug get_code` | — | Read source for a symbol (id, name or wildcard), or a file/line range. | `<symbol>...` or `-f <file>`, `-s/--start-line`, `-e/--end-line`, `-r/--range <window>` (`11-35` · `34-end` · `20`, same dialect as `ug query --range`), `--max-chars`, `--no-doc`, `-n <name>` |
+| `ug get_code` | — | Read source for a symbol (id, name or wildcard), or a file/line range. | `<symbol>...` or `-f <file>`, `-s/--start-line`, `-e/--end-line`, `-r/--range <window>` (`11-35` · `34-end` · `20`, same dialect as `ug analyze --range`), `--max-chars`, `--no-doc`, `-n <name>` |
 | `ug find_usages` | — | Find inbound references (callers/importers) to a symbol. | `<symbol>...` positional(s), `-k/--hops`, `-t/--edge-type`, `-n <name>`, `--json` |
 | `ug project_overview` | — | Orient in the codebase: stats, biggest files, most depended-upon symbols. | `-n <name>`, `--json` |
 | `ug graph_schema` | — | Node & edge types with counts and connection info. | `-n <name>`, `--json` |
@@ -105,13 +105,14 @@ first. A name or pattern expands to at most 25 symbols there; going over the
 cap is reported in the output, never silent. `shortest_path` endpoints must
 resolve to exactly one node, and list the candidates when they don't.
 
-**Removed.** `graph_bfs`/`bfs`, `graph_filter`/`filter` and `graph_search` are gone, along with every pre-rename alias (`hybrid_search`, `search_kb`, `graph_path`, `path`, `list`, `find_symbol`, `reindex`, `update`, `centrality`, `cycles`, `code_query`). Each duplicated something else exactly, and duplicates drift — the two BFS commands had already diverged on whether a bare symbol name was accepted. Every command and tool now has exactly one name:
+**Removed.** `graph_bfs`/`bfs`, `graph_filter`/`filter` and `graph_search` are gone, along with every pre-rename alias (`hybrid_search`, `search_kb`, `graph_path`, `path`, `list`, `find_symbol`, `reindex`, `update`, `centrality`, `cycles`). Each duplicated something else exactly, and duplicates drift — the two BFS commands had already diverged on whether a bare symbol name was accepted. Every command and tool now has exactly one name:
 
 | Retired | Use instead |
 |---------|-------------|
 | `ug graph_bfs <name>` | `ug traverse <node-or-name>` — same graph.json walk, and it now resolves a bare name or file path too |
-| `ug graph_filter` | `ug graph_schema` for the edge-type census (no database needed), or `ug query` for anything more |
+| `ug graph_filter` | `ug graph_schema` for the edge-type census (no database needed), or `ug analyze` for anything more |
 | `ug graph_search <name>` | `ug find_symbols <name> --include-docs` — the flag was all `graph_search` set |
+| `ug query` / MCP `code_query` | `ug analyze` / MCP `analyze` — same engine, same presets, same flags. Renamed because `query` and `search` are synonyms in English and gave a caller no signal about which one answers "how many" and which one answers "find me": `search` retrieves matching symbols, `analyze` computes over all of them |
 
 ### 1.4 Retrieval Commands (ugdb/Neo4j-backed)
 
@@ -120,7 +121,7 @@ resolve to exactly one node, and list the candidates when they don't.
 | `ug search` | — | **GraphRAG**: semantic search → graph expansion → PPR-ranked context. Returns lean ids+locations by default; add `--snippets` to read source slices inline. | `<query>` positional, `-k <limit>` (default 8), `--filter <sql>`, `--direction`, `-t <edge-type>`, `--max-chars`, `--snippets` (opt in; off by default), `-n <name>`, `--repo-root`, embedding overrides |
 | `ug semantic_search` | — | Pure vector search over embeddings (no graph context). | `<query>` positional, `-k <limit>` (default 10), `--filter <sql>`, `-n <name>`, embedding overrides |
 | `ug traverse` | — | K-hop BFS over the OverGraph edges table. | `<node-id>`... positionals, `-k <hops>` (default 2), `-n <name>` |
-| `ug query` | — | **Whole-repo statistics**: counts, groups, distributions, blast radius. Read-only GQL over the stored facts. Needs the db but **no embedder**. The `diff_impact`/`diff_retest_scope` presets take a list of changed files (`-a files=a.ts,b.rs`); `test_for` takes a symbol (`-a symbol=<id>`). | `<preset>` positional or `-p <preset>`, `-a k=v` (repeatable), `-g/--gql <query>`, `-k <limit>` (default 20), `-r/--range <window>` (`20` · `11-35` · `34-end`), `--json` (machine envelope matching `POST /api/tools/code_query`), `--list`, `-n <name>` |
+| `ug analyze` | — | **Whole-repo statistics**: counts, groups, distributions, blast radius. Read-only GQL over the stored facts. Needs the db but **no embedder**. The `diff_impact`/`diff_retest_scope` presets take a list of changed files (`-a files=a.ts,b.rs`); `test_for` takes a symbol (`-a symbol=<id>`). | `<preset>` positional or `-p <preset>`, `-a k=v` (repeatable), `-g/--gql <query>`, `-k <limit>` (default 20), `-r/--range <window>` (`20` · `11-35` · `34-end`), `--json` (machine envelope matching `POST /api/tools/analyze`), `--list`, `-n <name>` |
 
 These read commands also accept `--db <dir>` to point at an explicit
 OverGraph directory (default: the `-n` project's `ugdb`, else the active
@@ -174,7 +175,7 @@ Commands need to resolve a project name to read `graph.json` and/or write/load t
 | `gen`, `index`, `graph` | `-n/--name` → derive from input path | Generate commands must use cwd when no `-n` and no project matches (they create a new project); `gen` with no `-i` first checks for an existing project (see below) |
 | `gen` (no `-i/--input`) | `-n` → **active project** → cwd basename | Re-runs the resolved project from the repo root recorded in its `project.json`; honors user's pinned active project |
 | `ingest` | `-n` → **active project** → cwd basename | Reads graph.json and writes ugdb from the active project by default |
-| Read commands<br/>(`semantic_search`, `search`, `traverse`, `chat`, `tour`, `query`, `graph_centrality`, `graph_cycles`) | `-n` → **active project** → cwd basename → most-recent | Now consistent with `gen`/`ingest` |
+| Read commands<br/>(`semantic_search`, `search`, `traverse`, `chat`, `tour`, `analyze`, `graph_centrality`, `graph_cycles`) | `-n` → **active project** → cwd basename → most-recent | Now consistent with `gen`/`ingest` |
 | `server`, `app`, `mcp` | `-n` → **active project** → cwd | Always opens the active project |
 | Any command with `-i/--input` | `-i` wins | Bypasses all project logic |
 
@@ -275,7 +276,7 @@ The HTTP server (`ug serve`) is built on **axum**. All routes listed below.
 | GET | `/api/tools` | List available agent tools with descriptions | MCP tool registry |
 | GET | `/api/presets` | Preset registry **plus** `properties` — the queryable property vocabulary, so the UI and the MCP capability manifest read the same list rather than each hardcoding one (name, category, description, params, source) | Preset registry |
 | POST | `/api/tools/:tool` | Run one agent tool (same params as MCP). Accepts body JSON with optional `project` field. | graph.json |
-| POST | `/api/tools/code_query` | Run a statistical query. Body: `{preset, args, gql, limit, range}`. Returns `columns` plus **only the requested window** of `rows`, with `from`/`to`/`rowsTotal` to page by, `rowsMatched`, `coverage`, `unindexed`, `warnings`, `truncated` and a rendered `text`. | ugdb (no embedder) |
+| POST | `/api/tools/analyze` | Run a statistical query. Body: `{preset, args, gql, limit, range}`. Returns `columns` plus **only the requested window** of `rows`, with `from`/`to`/`rowsTotal` to page by, `rowsMatched`, `coverage`, `unindexed`, `warnings`, `truncated` and a rendered `text`. | ugdb (no embedder) |
 
 ### 2.7 File Content
 
@@ -319,8 +320,8 @@ These 13 tools are advertised over MCP `tools/list` and also available via the C
 | `get_code` | Read source for a symbol (id, name or wildcard) or a file/line range. Works from stored source in DB (consistent with search) with filesystem fallback; a file/line range is cut out of the file's whole-file capture, so it needs no working tree either. | ugdb (preferred) + filesystem fallback | node/file captured in neither ugdb nor the working tree |
 | `project_overview` | Orient in the codebase: repo root, node/edge counts, biggest files, most depended-upon symbols. | graph.json | graph.json missing/invalid |
 | `shortest_path` | Find shortest directed edge path between two symbols. Each endpoint (id, name or wildcard) must resolve to exactly one node. | graph.json | graph.json missing/invalid |
-| `code_query` | **Whole-repo statistics**: counts, groups, distributions, blast radius. Takes a named `preset` or raw GQL. Read-only — mutations are rejected before write staging. Every answer reports property coverage, because aggregating over an unstored property returns `0` rather than an error. | ugdb (**no embedder**) | db missing or written by an older ug |
-| `graph_schema` | **Capability manifest**: node & edge types with counts and connection shapes (from graph.json), plus queryable properties with live coverage and the `code_query` preset list (from the db). | graph.json + ugdb | graph.json missing/invalid (the db half degrades to a note) |
+| `analyze` | **Whole-repo statistics**: counts, groups, distributions, blast radius. Takes a named `preset` or raw GQL. Read-only — mutations are rejected before write staging. Every answer reports property coverage, because aggregating over an unstored property returns `0` rather than an error. | ugdb (**no embedder**) | db missing or written by an older ug |
+| `graph_schema` | **Capability manifest**: node & edge types with counts and connection shapes (from graph.json), plus queryable properties with live coverage and the `analyze` preset list (from the db). | graph.json + ugdb | graph.json missing/invalid (the db half degrades to a note) |
 | `list_projects` | List every indexed project on this machine (name, repo path, graph size). | `~/.ug/` directory scan | — |
 | `gen` | Re-run index → graph → embed pipeline for the current (or named) project, from its recorded repo root. Incremental (content-hash cache). Graph tools refresh even if embedding fails. | Repo source → index.json → graph.json → ugdb/Neo4j | Repo root missing |
 

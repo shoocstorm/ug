@@ -1470,7 +1470,7 @@ fn silent_progress() -> impl FnMut(TourProgress) + Send {
     |_| {}
 }
 
-/// Plan a guided tour for `query`: retrieve, ask the guide to order and
+/// Plan a guided tour for `analyze`: retrieve, ask the guide to order and
 /// narrate a subset, and bind the result back to real graph nodes. Always
 /// returns a `Tour` — on any planning failure it degrades to a ranked
 /// itinerary rather than erroring, so the UI/CLI always has something to

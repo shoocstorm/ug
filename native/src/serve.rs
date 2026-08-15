@@ -1526,7 +1526,7 @@ async fn api_tools() -> Response {
     )
 }
 
-/// GET /api/presets — the `code_query` preset registry.
+/// GET /api/presets — the `analyze` preset registry.
 ///
 /// Served from the same registry the MCP `graph_schema` manifest reads, so
 /// the UI and an agent can never disagree about what exists. `source` is
@@ -1534,7 +1534,7 @@ async fn api_tools() -> Response {
 /// `.ug/presets.toml`: a card built from the working tree needs to be
 /// visibly distinguishable from one ug shipped.
 async fn api_presets() -> Response {
-    let presets: Vec<serde_json::Value> = ultragraph::code_query::presets::all()
+    let presets: Vec<serde_json::Value> = ultragraph::analyze::presets::all()
         .iter()
         .map(|p| {
             serde_json::json!({
@@ -1558,32 +1558,32 @@ async fn api_presets() -> Response {
             // capability manifest cannot drift apart — both read the same
             // constant, and neither hardcodes a list that quietly goes stale
             // when a fact is added.
-            "properties": ultragraph::code_query::QUERYABLE_PROPERTIES,
-            "run": "POST /api/tools/code_query with {\"preset\": \"<name>\", \"args\": {…}}",
+            "properties": ultragraph::analyze::QUERYABLE_PROPERTIES,
+            "run": "POST /api/tools/analyze with {\"preset\": \"<name>\", \"args\": {…}}",
         })
         .to_string(),
     )
 }
 
-/// `code_query` over HTTP.
+/// `analyze` over HTTP.
 ///
 /// Split out of [`api_tool`] because it is the one tool here that needs
 /// the store rather than `graph.json` — aggregation and reachability run
 /// on indexed properties. Returns rows as JSON rather than the rendered
 /// text an agent reads, since the caller is the viz layer, which wants to
 /// build its own table and map result ids onto graph selection.
-async fn api_code_query(state: &ServeState, params: serde_json::Value) -> Response {
+async fn api_analyze(state: &ServeState, params: serde_json::Value) -> Response {
     let store = match pick_store(state, None) {
         Ok(s) => s,
         Err(r) => return r,
     };
-    // Validation lives in `code_query::run` — an unknown preset, a missing
+    // Validation lives in `analyze::run` — an unknown preset, a missing
     // required argument and a malformed query all come back from there with
     // a message that names the alternatives, which is more than this layer
     // could say.
-    let request = parse_code_query_body(&params);
+    let request = parse_analyze_body(&params);
 
-    match ultragraph::code_query::run(store.as_ref(), &request).await {
+    match ultragraph::analyze::run(store.as_ref(), &request).await {
         Ok(answer) => {
             // Ship only the requested window, not the whole result.
             // Returning every row and leaving the client to slice would
@@ -1618,7 +1618,7 @@ async fn api_code_query(state: &ServeState, params: serde_json::Value) -> Respon
                     "total": c.total,
                 })).collect::<Vec<_>>(),
                 "unindexed": answer.unindexed,
-                "text": ultragraph::code_query::render::render(
+                "text": ultragraph::analyze::render::render(
                     &answer,
                     ultragraph::agent_tools::Render::Markdown,
                 ),
@@ -1642,14 +1642,14 @@ fn query_value_to_json(v: &ultragraph::storage::store::QueryValue) -> serde_json
     }
 }
 
-fn parse_code_query_body(body: &serde_json::Value) -> ultragraph::code_query::CodeQueryParams {
+fn parse_analyze_body(body: &serde_json::Value) -> ultragraph::analyze::AnalyzeParams {
     let text = |k: &str| {
         body.get(k)
             .and_then(|v| v.as_str())
             .map(str::to_string)
             .filter(|s| !s.trim().is_empty())
     };
-    let mut parsed = ultragraph::code_query::CodeQueryParams {
+    let mut parsed = ultragraph::analyze::AnalyzeParams {
         preset: text("preset"),
         gql: text("gql"),
         limit: body.get("limit").and_then(|v| v.as_u64()).map(|n| n as usize),
@@ -1687,10 +1687,10 @@ async fn api_tool(
         .remove("project")
         .and_then(|v| v.as_str().map(str::to_string));
 
-    // `code_query` is store-backed, so it never reaches `run_tool` — that
+    // `analyze` is store-backed, so it never reaches `run_tool` — that
     // dispatcher only knows about graph.json.
-    if tool == "code_query" {
-        return api_code_query(&state, serde_json::Value::Object(params)).await;
+    if tool == "analyze" {
+        return api_analyze(&state, serde_json::Value::Object(params)).await;
     }
 
     let ctx = match resolve_ctx(&state.registry, project.as_deref()).await {
@@ -4573,7 +4573,7 @@ async fn run_chat_tool(
         }
         // Statistics come from the store's indexed properties, not the graph —
         // the one advertised tool `agent_tools::run_tool` cannot answer.
-        "code_query" => crate::mcp::run_code_query_json(&*db, &args).await,
+        "analyze" => crate::mcp::run_analyze_json(&*db, &args).await,
         _ => {
             crate::mcp::tools::reject_if_store_backed(&name)?;
             let snap = state.snapshot();

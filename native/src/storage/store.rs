@@ -1,7 +1,7 @@
 //! `KnowledgeStore`: the pluggable storage abstraction.
 //!
 //! Every backend (today: OverGraph; coming: Neo4j) implements one trait so
-//! the upper layers (`ingest`, `query`, `ppr`, `serve`, `mcp`) can
+//! the upper layers (`ingest`, `analyze`, `ppr`, `serve`, `mcp`) can
 //! run against any of them. The wire-format DTOs `NodeRow` / `EdgeRow` are
 //! shared; only persistence and search differ.
 //!

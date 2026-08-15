@@ -308,7 +308,7 @@ fn cli_tool_runner(
                 }
                 // Statistics come from the store's indexed properties, not the
                 // graph — the one advertised tool `run_tool` cannot answer.
-                "code_query" => crate::mcp::run_code_query_json(&*store, &args).await,
+                "analyze" => crate::mcp::run_analyze_json(&*store, &args).await,
                 _ => {
                     crate::mcp::tools::reject_if_store_backed(&name)?;
                     // Chat already holds this project's store open, so the

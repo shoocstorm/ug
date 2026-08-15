@@ -56,7 +56,7 @@ const API_ENDPOINTS: &[(&str, &[ApiEntry])] = &[
         "Agent tools (graph.json-backed — same names/params as the CLI and MCP)",
         &[
             ApiEntry { method: "GET", path: "/api/tools", desc: "list the agent tools and their paths (HTTP equivalent of MCP tools/list)", availability: "always", cli_equivalent: Some("ug help") },
-            ApiEntry { method: "GET", path: "/api/presets", desc: "code_query preset catalog plus the queryable property vocabulary", availability: "always", cli_equivalent: Some("ug query --list") },
+            ApiEntry { method: "GET", path: "/api/presets", desc: "analyze preset catalog plus the queryable property vocabulary", availability: "always", cli_equivalent: Some("ug analyze --list") },
             ApiEntry { method: "POST", path: "/api/tools/project_overview", desc: "stats, biggest files, most depended-upon symbols", availability: "always (empty if no project active)", cli_equivalent: Some("ug project_overview --json") },
             ApiEntry { method: "POST", path: "/api/tools/find_symbols", desc: "symbol lookup by name or wildcard ('handle_*')", availability: "always (empty if no project active)", cli_equivalent: Some("ug find_symbols --json") },
             ApiEntry { method: "POST", path: "/api/tools/file_outline", desc: "every indexed symbol in a file, in line order; takes a path glob", availability: "always (empty if no project active)", cli_equivalent: Some("ug file_outline --json") },
@@ -64,7 +64,7 @@ const API_ENDPOINTS: &[(&str, &[ApiEntry])] = &[
             ApiEntry { method: "POST", path: "/api/tools/find_usages", desc: "inbound callers/importers, with call sites", availability: "always (empty if no project active)", cli_equivalent: Some("ug find_usages --json") },
             ApiEntry { method: "POST", path: "/api/tools/shortest_path", desc: "shortest directed edge path between two symbols", availability: "always (empty if no project active)", cli_equivalent: Some("ug shortest_path --json") },
             ApiEntry { method: "POST", path: "/api/tools/graph_schema", desc: "node & edge types present, with counts", availability: "always (empty if no project active)", cli_equivalent: Some("ug graph_schema --json") },
-            ApiEntry { method: "POST", path: "/api/tools/code_query", desc: "run a GQL (Cypher-like) query or built-in preset against the OverGraph store", availability: "503 if no DB backend configured", cli_equivalent: Some("ug query") },
+            ApiEntry { method: "POST", path: "/api/tools/analyze", desc: "run a GQL (Cypher-like) query or built-in preset against the OverGraph store", availability: "503 if no DB backend configured", cli_equivalent: Some("ug analyze") },
         ],
     ),
     (

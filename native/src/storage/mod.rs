@@ -6,7 +6,7 @@
 //!   - `db`              - OverGraph engine wrapper (also implements `KnowledgeStore`)
 //!   - `backends::neo4j` - Neo4j driver wrapper implementing `KnowledgeStore`
 //!   - `store`           - the `KnowledgeStore` trait + portable types + `open_store`
-//!   - `query`           - semantic / hybrid / traversal queries (over `&dyn KnowledgeStore`)
+//!   - `analyze`           - semantic / hybrid / traversal queries (over `&dyn KnowledgeStore`)
 //!   - `ingest`          - graph -> embed -> upsert pipeline (single + multi destination)
 //!   - `ppr`             - thin wrapper around `KnowledgeStore::personalized_pagerank`
 //!   - `facts`           - per-node queryable facts (loc, degrees, is_test, ...)

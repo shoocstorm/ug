@@ -35,11 +35,11 @@ This framing drives every recommendation below.
 
 The agent-facing surface is deliberately small: **13 MCP tools** (`search`,
 `semantic_search`, `traverse`, `find_usages`, `find_symbols`, `file_outline`,
-`get_code`, `project_overview`, `shortest_path`, `code_query`, `graph_schema`,
+`get_code`, `project_overview`, `shortest_path`, `analyze`, `graph_schema`,
 `list_projects`, `gen` — `native/src/mcp/tools.rs`), each mirrored one-for-one
 as a CLI subcommand (`native/src/cli/mod.rs::dispatch`), with the analytical
-depth pushed into **39 `code_query` presets** rather than into more tools
-(`native/src/code_query/presets.rs`). That ratio is the right one: an agent
+depth pushed into **39 `analyze` presets** rather than into more tools
+(`native/src/analyze/presets.rs`). That ratio is the right one: an agent
 pays context for every tool schema but nothing for a preset name it only uses
 when it needs it.
 
@@ -48,10 +48,10 @@ can replicate:
 
 1. **Graph-structured blast radius.** `diff_impact`, `boundary_impact`, `find_usages` answer "what breaks if I change X?" — the single hardest question for an agent making a safe edit. Grep cannot do this.
 2. **PPR graph expansion in `search`.** Personalized PageRank over edges is the real moat. It's structurally-aware ranking that neither grep nor a plain vector DB can reproduce.
-3. **`code_query` presets + GQL.** One-call answers to "how many functions exceed 100 LOC and where" — replaces a loop of greps. The coverage-honesty (`NOT INDEXED` vs. a wrong zero) is exactly what an agent needs to avoid confident-but-wrong answers.
+3. **`analyze` presets + GQL.** One-call answers to "how many functions exceed 100 LOC and where" — replaces a loop of greps. The coverage-honesty (`NOT INDEXED` vs. a wrong zero) is exactly what an agent needs to avoid confident-but-wrong answers.
 4. **Boundary detection.** Knowing which symbols are system entry/exit points (REST handlers, queue listeners) makes impact analysis mean something *beyond the repo.*
 5. **Wildcards + batching + bare-name resolution.** Turns multi-call loops into one call (`find_usages 'validate_*'`). Token- and round-trip-efficient.
-6. **Embedder-optional design.** Nothing an agent needs for safety requires a model. The tools split across two backing stores — `find_symbols`, `file_outline`, `get_code`, `find_usages`, `project_overview`, `graph_schema` and `shortest_path` read `graph.json` directly with zero external deps; `code_query`, `traverse` and `search` read the `ugdb` store — and **neither half needs vectors**, which is exactly what makes the `--no-embed` hook path viable. An embedding failure degrades ranking, never correctness.
+6. **Embedder-optional design.** Nothing an agent needs for safety requires a model. The tools split across two backing stores — `find_symbols`, `file_outline`, `get_code`, `find_usages`, `project_overview`, `graph_schema` and `shortest_path` read `graph.json` directly with zero external deps; `analyze`, `traverse` and `search` read the `ugdb` store — and **neither half needs vectors**, which is exactly what makes the `--no-embed` hook path viable. An embedding failure degrades ranking, never correctness.
 
 ---
 
@@ -85,7 +85,7 @@ Scenarios where it's **redundant or inferior**:
 
 **Recommendation:** Treat the structural graph + PPR as the core value prop for agents. Treat dense/semantic search as an *enhancement layer* for the ~20% exploration case — keep it, don't let it be a single point of failure (the embedder-optional design is correct), but don't over-invest here for the agent audience. The dense half is far more valuable in the **human-facing** surface (chat, tour, web UI) than in the agent-facing one.
 
-Sharper framing: **for an agent, `find_symbols` + `traverse` + `find_usages` + `code_query` (all embedder-free) already cover 80%+ of needs.** `search` / `semantic_search` are the remaining 20%, and `semantic_search` (pure dense, no graph) is the least valuable of all — it's just a local vector DB, which agents increasingly have natively.
+Sharper framing: **for an agent, `find_symbols` + `traverse` + `find_usages` + `analyze` (all embedder-free) already cover 80%+ of needs.** `search` / `semantic_search` are the remaining 20%, and `semantic_search` (pure dense, no graph) is the least valuable of all — it's just a local vector DB, which agents increasingly have natively.
 
 The `--no-embed` hook path is the first production evidence for this split, and
 it points the same way. Git-hook refreshes deliberately skip the embedder
@@ -123,7 +123,7 @@ version, file list, exit code — to `~/.ug/<project>/hook.log`;
 Hook runs pass `--no-embed`: loading the embedding model costs more than the
 whole structural refresh (~1 s of a ~1.5 s run on this repo), so they write the
 graph, the facts and the keyword statistics and leave the changed nodes without
-vectors. Everything the safety story depends on — `find_usages`, `code_query`,
+vectors. Everything the safety story depends on — `find_usages`, `analyze`,
 `diff_impact` — stays exact; only vector recall lags, the store records the debt
 in `project.json` (`pendingVectorsSince`), and `ug ingest` backfills exactly the
 nodes owed. `ug hook status`, `ug list` and the `search` / `semantic_search`
@@ -145,7 +145,7 @@ column (`fresh` / `N changed` / `no db` / `repo gone` / `no graph`), and
 Manager cannot disagree.
 
 **Open — the structural tools still don't say it.** The one consumer that most
-needs the signal is the one that doesn't get it: `find_usages`, `code_query`,
+needs the signal is the one that doesn't get it: `find_usages`, `analyze`,
 `traverse` and `shortest_path` return the same shape whether the graph is
 current or forty commits behind. `project::staleness` is the missing input, and
 it is already computed cheaply enough to run per call (one `stat` per indexed
@@ -210,7 +210,7 @@ Each round trip is latency + tokens. A single curated call — `ug context <id>`
 - Budget it with `maxChars` like `search` does. Rank sub-items by relevance.
 - The pieces all exist already and are individually reachable: `get_code`,
   `find_usages`, `traverse`, and the `test_for` preset
-  (`native/src/code_query/presets.rs:626`). This is assembly and budgeting, not
+  (`native/src/analyze/presets.rs:626`). This is assembly and budgeting, not
   new analysis — which is exactly why it stays the best ratio of value to work
   on this list.
 

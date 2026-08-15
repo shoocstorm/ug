@@ -62,9 +62,9 @@ breaks if I change X, how are A and B connected) or aggregate (how many, which \
 are biggest, what fraction).
 
 USE THEM WHILE EDITING, NOT ONLY WHILE READING. Before changing a symbol, ask \
-who depends on it: find_usages, and code_query {preset: 'boundary_impact'} for \
+who depends on it: find_usages, and analyze {preset: 'boundary_impact'} for \
 whether the change escapes the system. After an edit burst, ask what it reached \
-and what covers it: code_query {preset: 'diff_impact', args: {files: 'a.ts,b.rs'}} \
+and what covers it: analyze {preset: 'diff_impact', args: {files: 'a.ts,b.rs'}} \
 and {preset: 'diff_retest_scope'}. Grep cannot answer either question. The graph \
 is kept current by git hooks (`ug hook install`), and you can refresh it yourself \
 at any point with `ug update <file>...` — do that after editing and before asking \
@@ -86,7 +86,7 @@ would otherwise loop.
 traverse and shortest_path also takes a plain symbol name, so find_symbols first \
 is optional, not required.
 
-For counts, rankings, distributions and blast radius, call code_query once rather \
+For counts, rankings, distributions and blast radius, call analyze once rather \
 than assembling the answer yourself. Every truncated or capped result says so — \
 trust the stated totals over what you can see.";
 
@@ -181,7 +181,7 @@ fn vectors_note(ctx: &ProjectCtx) -> String {
     format!(
         "\n\n⚠ Some nodes have no vectors yet (a --no-embed refresh, e.g. from the git hooks), \
          so this ranking may be missing recently-changed code. Structural tools (find_usages, \
-         code_query) are unaffected. Run `ug ingest -n {}` to backfill.",
+         analyze) are unaffected. Run `ug ingest -n {}` to backfill.",
         project
     )
 }
@@ -368,20 +368,20 @@ fn build_embedder() -> Result<Embedder, String> {
 
 /// Single store spec from env (`UG_DEST` and friends). Unlike `ug serve`, MCP
 /// targets exactly one backend.
-/// Read `code_query` tool arguments off the JSON-RPC params.
+/// Read `analyze` tool arguments off the JSON-RPC params.
 ///
 /// `args` values are stringified rather than passed through as JSON:
 /// preset parameters are coerced against their declared types in
-/// `code_query::bind`, which is the one place that knows whether
+/// `analyze::bind`, which is the one place that knows whether
 /// `min_loc` wants a number. Models send `{"min_loc": 100}` and
 /// `{"min_loc": "100"}` about equally often, so both have to arrive here
 /// looking the same.
 ///
 /// Infallible: every way this can be wrong — unknown preset, missing
-/// required argument, malformed query — is caught in `code_query::run`,
+/// required argument, malformed query — is caught in `analyze::run`,
 /// which can name the alternatives in its error. There is nothing this
 /// layer could reject more helpfully.
-fn parse_code_query_args(args: &Value) -> ultragraph::code_query::CodeQueryParams {
+fn parse_analyze_args(args: &Value) -> ultragraph::analyze::AnalyzeParams {
     let str_field = |k: &str| {
         args.get(k)
             .and_then(|v| v.as_str())
@@ -389,7 +389,7 @@ fn parse_code_query_args(args: &Value) -> ultragraph::code_query::CodeQueryParam
             .filter(|s| !s.trim().is_empty())
     };
 
-    let mut parsed = ultragraph::code_query::CodeQueryParams {
+    let mut parsed = ultragraph::analyze::AnalyzeParams {
         preset: str_field("preset"),
         gql: str_field("gql"),
         limit: args.get("limit").and_then(|v| v.as_u64()).map(|n| n as usize),
@@ -403,7 +403,7 @@ fn parse_code_query_args(args: &Value) -> ultragraph::code_query::CodeQueryParam
                 Value::String(s) => s.clone(),
                 Value::Null => continue,
                 // A model often sends a list param as a JSON array
-                // (`{"files": ["a.ts","b.rs"]}`). code_query binds list params
+                // (`{"files": ["a.ts","b.rs"]}`). analyze binds list params
                 // from a comma-separated string, so join the string elements
                 // rather than stringify the array (which would keep the
                 // brackets and break the split).
@@ -420,19 +420,19 @@ fn parse_code_query_args(args: &Value) -> ultragraph::code_query::CodeQueryParam
     parsed
 }
 
-/// Answer a `code_query` tool call from JSON args against an already-open store.
+/// Answer a `analyze` tool call from JSON args against an already-open store.
 ///
 /// Shared with the chat and tour toolboxes in `serve` and `ug chat`. All three
 /// hand the model the same MCP schemas, so all three have to answer every tool
-/// those schemas advertise — and unlike [`Mcp::tool_code_query`], the chat
+/// those schemas advertise — and unlike [`Mcp::tool_analyze`], the chat
 /// paths already hold a store and must not open a second one.
-pub(crate) async fn run_code_query_json(
+pub(crate) async fn run_analyze_json(
     store: &dyn KnowledgeStore,
     args: &Value,
 ) -> Result<String, String> {
-    let params = parse_code_query_args(args);
-    let answer = ultragraph::code_query::run(store, &params).await?;
-    Ok(ultragraph::code_query::render::render(
+    let params = parse_analyze_args(args);
+    let answer = ultragraph::analyze::run(store, &params).await?;
+    Ok(ultragraph::analyze::render::render(
         &answer,
         Render::Markdown,
     ))
@@ -660,7 +660,7 @@ impl Mcp {
             // answered from graph.json: aggregation and reachability need
             // the store's indexed properties. It still needs no embedder,
             // so it stays available when `search` is not.
-            "code_query" => Ok(with_staleness(self.tool_code_query(&ctx, args).await?)),
+            "analyze" => Ok(with_staleness(self.tool_analyze(&ctx, args).await?)),
             "graph_schema" => {
                 let mut text = self.tool_graph(name, &ctx, args).await?;
                 text.push_str(&self.query_capabilities(&ctx).await);
@@ -704,7 +704,7 @@ impl Mcp {
         let spec = store_spec(&ctx.db_path, dim)?;
         open_store(&spec).await.map_err(|e| {
             format!(
-                "code_query needs the indexed database, and {} could not be opened: {}.\n\
+                "analyze needs the indexed database, and {} could not be opened: {}.\n\
                  Run `ug gen` for this project. (Structural tools like traverse and \
                  find_usages read graph.json and keep working without it.)",
                 ctx.db_path.display(),
@@ -713,9 +713,9 @@ impl Mcp {
         })
     }
 
-    async fn tool_code_query(&self, ctx: &ProjectCtx, args: Value) -> Result<String, String> {
+    async fn tool_analyze(&self, ctx: &ProjectCtx, args: Value) -> Result<String, String> {
         let store = self.open_query_store(ctx).await?;
-        run_code_query_json(store.as_ref(), &args).await
+        run_analyze_json(store.as_ref(), &args).await
     }
 
     /// The half of `graph_schema` that only the store can answer: which
@@ -727,9 +727,9 @@ impl Mcp {
     /// one line saying why the rest is missing — that is more useful than
     /// failing the call an agent makes to orient itself.
     async fn query_capabilities(&self, ctx: &ProjectCtx) -> String {
-        use ultragraph::code_query::presets;
+        use ultragraph::analyze::presets;
 
-        let mut out = String::from("\n**Queryable properties** (code_query)\n");
+        let mut out = String::from("\n**Queryable properties** (analyze)\n");
 
         match self.open_query_store(ctx).await {
             Ok(store) => {
@@ -738,13 +738,13 @@ impl Mcp {
                 // absent rather than silently missing from the list.
                 let gql = format!(
                     "MATCH (n) RETURN {}",
-                    ultragraph::code_query::QUERYABLE_PROPERTIES
+                    ultragraph::analyze::QUERYABLE_PROPERTIES
                         .iter()
                         .map(|p| format!("n.{}", p))
                         .collect::<Vec<_>>()
                         .join(", ")
                 );
-                let coverage = ultragraph::code_query::coverage_for(
+                let coverage = ultragraph::analyze::coverage_for(
                     store.as_ref(),
                     &gql,
                     &ultragraph::storage::store::QueryLimits::default(),
@@ -773,7 +773,7 @@ impl Mcp {
             }
         }
 
-        out.push_str("\n**code_query presets**\n");
+        out.push_str("\n**analyze presets**\n");
         let mut category = "";
         for p in presets::all() {
             if p.category.as_str() != category {

@@ -1346,7 +1346,7 @@ mod tests {
     fn skill_body_strips_frontmatter() {
         let body = skill_body();
         assert!(!body.starts_with("---"));
-        assert!(body.contains("ug query"));
+        assert!(body.contains("ug analyze"));
     }
 
     #[test]

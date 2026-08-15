@@ -242,7 +242,7 @@ Returns ranked code snippets with file:line locations, descriptions, and node ID
 **Parameters:**
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `query` | string | ✅ | Natural-language query. Be specific — name the concept, function, or behavior you're after. |
+| `analyze` | string | ✅ | Natural-language query. Be specific — name the concept, function, or behavior you're after. |
 | `k` | integer (1-50) | ❌ | How many context items to return (default 8). Bump to 15-20 when surveying a subsystem. |
 | `edgeTypes` | string[] | ❌ | Restrict the walk to these edge types (case-insensitive). Common: imports, calls, extends, implements, contains, references, instantiates, uses, overrides. |
 | `direction` | string | ❌ | Edge direction during the walk (default 'both'). Use 'inbound' for who depends on the seed; 'outbound' for what the seed depends on. |
@@ -287,7 +287,7 @@ Cheaper and faster than `search`. Switch to `search` when you need actual code s
 **Parameters:**
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `query` | string | ✅ | Natural-language query. |
+| `analyze` | string | ✅ | Natural-language query. |
 | `k` | integer (1-100) | ❌ | How many candidate nodes to return (default 10). |
 | `whereClause` | string | ❌ | Optional SQL WHERE filter applied to the vector search. Examples: `node_type = 'Function'`, `file LIKE 'src/auth/%'`, `node_type IN ('Class','Interface')`. |
 
@@ -431,7 +431,7 @@ file_outline: { file: "**/test_*.py" }                     // by naming conventi
 | `nodeId` | string \| string[] | ❌* | What to read: a node id from any prior result, an exact symbol **name**, or a **wildcard**. Array of up to 10 reads several in one call (per-symbol `maxChars`). |
 | `file` | string | ❌* | Repo-relative path (when no nodeId). |
 | `startLine` / `endLine` | integer | ❌ | 1-based inclusive range (with `file`; defaults to whole file). |
-| `range` | string | ❌ | The window as one value, in the same dialect `code_query` uses for rows: `"11-35"`, `"34-end"`, `"20"` (the first 20 lines). `startLine`/`endLine` win if you send both. |
+| `range` | string | ❌ | The window as one value, in the same dialect `analyze` uses for rows: `"11-35"`, `"34-end"`, `"20"` (the first 20 lines). `startLine`/`endLine` win if you send both. |
 | `maxChars` | integer | ❌ | Character cap per symbol (default 20000). |
 
 *One of `nodeId` or `file` is required.
@@ -477,15 +477,15 @@ shortest_path: { sourceId: "file:native/src/mcp/install.rs", targetId: "function
 
 ---
 
-### 10. `code_query` - Whole-Repo Statistics
+### 10. `analyze` - Whole-Repo Statistics
 
 **Counts, groups, distributions and blast radius over the indexed graph.** This is the tool for any question of the form "how many", "what fraction", "which are the biggest / longest / most depended-upon", "what does nothing call", "which folders depend on which", "what breaks if I change this file".
 
-The point is cost. "How many methods are longer than 50 lines?" answered by grep-and-read is ~500k tokens on a medium repo and impossible on a monorepo; answered by looping `file_outline` it is ~40k tokens and 80 round trips. `code_query` answers it in one call and about 100 tokens, because ingest already stored the facts a query engine can aggregate.
+The point is cost. "How many methods are longer than 50 lines?" answered by grep-and-read is ~500k tokens on a medium repo and impossible on a monorepo; answered by looping `file_outline` it is ~40k tokens and 80 round trips. `analyze` answers it in one call and about 100 tokens, because ingest already stored the facts a query engine can aggregate.
 
 Two ways to call it:
 
-- **`preset`** — a named question. The cheap path (~20 tokens). Run `graph_schema` or `ug query --list` for the current set.
+- **`preset`** — a named question. The cheap path (~20 tokens). Run `graph_schema` or `ug analyze --list` for the current set.
 - **`gql`** — a raw OverGraph GQL query (Cypher-shaped), when no preset fits.
 
 Read-only by construction: mutation statements are rejected before any write staging, so a query cannot modify the index.
@@ -509,9 +509,9 @@ next: rerun with range "36-55"
 A window past the end says how many rows there actually are, rather than reporting "no rows" — those are different situations and confusing them sends you off to debug a query that is working.
 
 ```
-code_query: { preset: "long_functions", args: { min_loc: 100 } }
-code_query: { preset: "impact", args: { target: "native/src/storage/store.rs" } }
-code_query: { gql: "MATCH (n:Function) WHERE n.params > 6 RETURN n.folder AS f, count(*) AS c ORDER BY c DESC" }
+analyze: { preset: "long_functions", args: { min_loc: 100 } }
+analyze: { preset: "impact", args: { target: "native/src/storage/store.rs" } }
+analyze: { gql: "MATCH (n:Function) WHERE n.params > 6 RETURN n.folder AS f, count(*) AS c ORDER BY c DESC" }
 ```
 
 **Queryable properties:** `node_type` · `name` · `file` · `folder` · `language` · `classification` · `loc` · `code_lines` · `comment_lines` · `doc_lines` · `params` · `max_nesting` · `members` · `has_doc` · `has_comments` · `is_test` · `in_degree` · `out_degree` · `qualified_name` · `route` · `annotations` · `start_line` · `end_line`.
@@ -526,7 +526,7 @@ Three pairs are easy to confuse, and picking the wrong one changes the answer:
 
 `members` counts declared members and is only populated for languages whose class body encloses them (Java, Python, TypeScript). A Rust struct's methods live in a separate `impl` block, so Rust types carry no `members` at all — the coverage line will say so rather than ranking them all as memberless.
 
-**Every answer states its coverage, and this is not a nicety.** Aggregating over a property no node carries returns `0` — not an error, not a warning from the engine. `MATCH (n:Function) WHERE n.comment_lines > 3 RETURN count(*)` answers `0` on an index that has never recorded comment lines, and "no functions have long comments" is a far worse outcome than a refusal. So `code_query` probes the properties each query reads and reports their denominators, flagging any that are entirely unpopulated as `NOT INDEXED`. Call `graph_schema` first to see them all.
+**Every answer states its coverage, and this is not a nicety.** Aggregating over a property no node carries returns `0` — not an error, not a warning from the engine. `MATCH (n:Function) WHERE n.comment_lines > 3 RETURN count(*)` answers `0` on an index that has never recorded comment lines, and "no functions have long comments" is a far worse outcome than a refusal. So `analyze` probes the properties each query reads and reports their denominators, flagging any that are entirely unpopulated as `NOT INDEXED`. Call `graph_schema` first to see them all.
 
 Writing GQL by hand, three things to know:
 
@@ -534,7 +534,7 @@ Writing GQL by hand, three things to know:
 - Every variable-length path needs a finite bound (`*1..3`, never `*`), and an *unanchored* walk past 2 hops can exceed the traversal cap and error. Anchor one end (`WHERE t.file = $target`) or reduce the bound.
 - An `EXISTS { … }` subquery needs its own `RETURN` clause inside it, and negated membership must be parenthesised: `NOT (x IN [...])`.
 
-Also available on the CLI as `ug query` and over HTTP as `POST /api/tools/code_query` (with `GET /api/presets` for the registry).
+Also available on the CLI as `ug analyze` and over HTTP as `POST /api/tools/analyze` (with `GET /api/presets` for the registry).
 
 ---
 
@@ -544,8 +544,8 @@ Also available on the CLI as `ug query` and over HTTP as `POST /api/tools/code_q
 
 - node and edge types this graph actually contains, with counts and what each edge type connects (e.g. `Calls: Function→Function (305)`);
 - the full edge-type vocabulary indexers can emit;
-- the properties `code_query` can filter on, **each with how many nodes actually carry it**;
-- every available `code_query` preset, with its arguments.
+- the properties `analyze` can filter on, **each with how many nodes actually carry it**;
+- every available `analyze` preset, with its arguments.
 
 Both halves exist for the same reason: filtering on a node or edge type the graph doesn't contain silently returns nothing, and aggregating over a property nothing carries silently returns zero. Neither is an error, so this call is how you avoid both.
 

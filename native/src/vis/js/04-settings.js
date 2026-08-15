@@ -96,7 +96,7 @@
                     tourNoLlm.classList.toggle('cap-hidden', !(caps.search_ready && !caps.chat_ready));
                 }
                 // ── Insights tab ──
-                // Insights presets run /api/tools/code_query, which is
+                // Insights presets run /api/tools/analyze, which is
                 // store-backed: the preset list itself is static, but
                 // running one needs the structural DB. The banner offers
                 // an Ingest button — `ug ingest` writes the structural

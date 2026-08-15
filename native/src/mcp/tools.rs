@@ -23,7 +23,7 @@ pub const TOOL_NAMES: &[&str] = &[
     "get_code",
     "project_overview",
     "shortest_path",
-    "code_query",
+    "analyze",
     "graph_schema",
     "list_projects",
     "gen",
@@ -46,14 +46,14 @@ pub const CHAT_TOOL_DENYLIST: &[&str] = &["gen", "list_projects"];
 /// own match arms. Everything else advertised falls through to
 /// `agent_tools::run_tool`, which reads graph.json — so a tool that is in
 /// neither place is one the model can call and nothing can run.
-pub const STORE_BACKED_CHAT_TOOLS: &[&str] = &["search", "semantic_search", "code_query"];
+pub const STORE_BACKED_CHAT_TOOLS: &[&str] = &["search", "semantic_search", "analyze"];
 
 /// Guard for the chat dispatchers' graph.json fall-through.
 ///
 /// Reaching `agent_tools::run_tool` with a store-backed name means the tool is
 /// advertised but has no arm to run it. Saying so beats that function's
 /// "Unknown agent tool", which sends the reader looking for a missing *graph*
-/// tool — the wrong hunt, and how `code_query` stayed broken in chat.
+/// tool — the wrong hunt, and how `analyze` stayed broken in chat.
 pub fn reject_if_store_backed(name: &str) -> Result<(), String> {
     if STORE_BACKED_CHAT_TOOLS.contains(&name) {
         return Err(format!(
@@ -122,7 +122,7 @@ const NODE_REF_FORMS: &str = "Accepts a node id, a plain symbol name, or a wildc
 /// `long_functions(min_loc)`. Naming the arguments is what stops a model
 /// inventing them, or borrowing `limit` from the wrong level.
 fn preset_signatures() -> String {
-    ultragraph::code_query::presets::all()
+    ultragraph::analyze::presets::all()
         .iter()
         .map(|p| {
             if p.params.is_empty() {
@@ -136,7 +136,7 @@ fn preset_signatures() -> String {
         .join(", ")
 }
 
-/// Lift `code_query`'s own parameters out of `args`, where models keep
+/// Lift `analyze`'s own parameters out of `args`, where models keep
 /// putting them. A misfiled `limit` is a well-formed intention expressed in
 /// the wrong shape; rejecting it costs a round trip and teaches nothing.
 /// An explicit top-level value always wins — that one was deliberate.
@@ -146,7 +146,7 @@ fn hoist_own_params(args: &mut Value) {
         return;
     };
     let mut lifted: Vec<(String, Value)> = Vec::new();
-    for name in ultragraph::code_query::OWN_PARAMS {
+    for name in ultragraph::analyze::OWN_PARAMS {
         if let Some(v) = nested.remove(*name) {
             lifted.push(((*name).to_string(), v));
         }
@@ -169,7 +169,7 @@ fn hoist_own_params(args: &mut Value) {
 /// the model nothing and costs the user a round-trip.
 pub fn normalize_args(tool: &str, args: &mut Value) {
     let canonical = tool;
-    if canonical == "code_query" {
+    if canonical == "analyze" {
         hoist_own_params(args);
     }
     let schema = raw_tools();
@@ -365,7 +365,7 @@ fn raw_tools() -> Value {
                     "file": { "type": "string", "description": "Repo-relative file path. Used when nodeId is not given (or to read outside any symbol)." },
                     "startLine": { "type": "integer", "minimum": 1, "description": "1-based first line (with file; default 1)." },
                     "endLine": { "type": "integer", "minimum": 1, "description": "1-based last line, inclusive (with file; default EOF)." },
-                    "range": { "type": "string", "description": "The line window as one value, in the same dialect code_query uses for rows: \"11-35\" (closed, inclusive both ends), \"34-end\" (open), \"20\" (the first 20 lines). Use it to page through a long file — ask for the next window rather than re-reading from line 1 with a bigger endLine. startLine/endLine win if you send both." },
+                    "range": { "type": "string", "description": "The line window as one value, in the same dialect analyze uses for rows: \"11-35\" (closed, inclusive both ends), \"34-end\" (open), \"20\" (the first 20 lines). Use it to page through a long file — ask for the next window rather than re-reading from line 1 with a bigger endLine. startLine/endLine win if you send both." },
                     "maxChars": { "type": "integer", "minimum": 200, "maximum": 200000, "description": "Character cap on returned code (default 20000). Output notes truncation." }
                 }
             }
@@ -388,7 +388,7 @@ fn raw_tools() -> Value {
             }
         },
         {
-            "name": "code_query",
+            "name": "analyze",
             "description": format!(
                 "WHOLE-REPO STATISTICS over the indexed graph — counts, groups, distributions and blast radius. Use this for ANY question of the form 'how many', 'which are the biggest / longest / most depended-upon', 'what fraction', 'where is the worst X', 'what breaks if I change Y'. NEVER grep for a count and NEVER loop a per-file tool to build one: this answers in one call and ~100 tokens what reading the repo costs hundreds of thousands. Two ways to call it. (1) `preset` — a named question, the cheap path, e.g. {{\"preset\": \"long_functions\"}} or {{\"preset\": \"impact\", \"args\": {{\"target\": \"src/auth.ts\"}}}}. Available: {presets}. (2) `gql` — a raw OverGraph GQL (Cypher-shaped) query when no preset fits, e.g. \"MATCH (n:Function) WHERE n.loc > 50 AND n.is_test = 0 RETURN n.folder AS folder, count(*) AS c ORDER BY c DESC\". Queryable properties: node_type, name, file, folder, loc, params, max_nesting, has_doc, is_test, in_degree, out_degree, qualified_name, route, annotations, start_line, end_line, boundary, boundary_in, boundary_out, boundary_kinds, boundary_protocols, boundary_detail — call graph_schema for their live population counts before relying on one. A *boundary* is where the system meets the outside world (a REST handler, a queue listener, a CLI command, an outbound HTTP or DB client); `boundary_impact` is the blast-radius question that matters before a change, because it reports which externally-visible contracts a change reaches rather than merely how many symbols move. Booleans are stored as 0/1 so they can be summed: documented fraction is sum(n.has_doc)/count(*). Read-only; it cannot modify the index. Every answer states its coverage denominators — treat a 'NOT INDEXED' warning as meaning the number is about nothing.",
                 presets = preset_signatures()
@@ -406,7 +406,7 @@ fn raw_tools() -> Value {
         },
         {
             "name": "graph_schema",
-            "description": "The capability manifest for this project's graph, and the one call to make before any filtered or statistical query. Returns: node & edge types actually present, with counts and what each edge type connects (e.g. Calls: Function→Function); the full edge-type vocabulary indexers can emit; the properties code_query can filter and aggregate on, each with how many nodes actually carry it; and every available code_query preset. Filtering on a type the graph doesn't contain, or aggregating over a property nothing carries, returns a confident zero rather than an error — this call is how you avoid both. Edges are directed (Calls A→B means A calls B); Contains is pure structure (Folder→File→Symbol), exclude it when you mean 'depends on'.",
+            "description": "The capability manifest for this project's graph, and the one call to make before any filtered or statistical query. Returns: node & edge types actually present, with counts and what each edge type connects (e.g. Calls: Function→Function); the full edge-type vocabulary indexers can emit; the properties analyze can filter and aggregate on, each with how many nodes actually carry it; and every available analyze preset. Filtering on a type the graph doesn't contain, or aggregating over a property nothing carries, returns a confident zero rather than an error — this call is how you avoid both. Edges are directed (Calls A→B means A calls B); Contains is pure structure (Folder→File→Symbol), exclude it when you mean 'depends on'.",
             "inputSchema": { "type": "object", "properties": {} }
         },
         {
@@ -426,9 +426,9 @@ fn raw_tools() -> Value {
 mod tests {
     use super::*;
 
-    /// The bug this guards: `code_query` was advertised to the chat model but
+    /// The bug this guards: `analyze` was advertised to the chat model but
     /// only the MCP dispatcher could run it, so the tab answered "Unknown
-    /// agent tool 'code_query'" — a tool the model was told to call.
+    /// agent tool 'analyze'" — a tool the model was told to call.
     #[test]
     fn every_tool_offered_to_chat_can_be_dispatched() {
         for name in TOOL_NAMES {
@@ -458,7 +458,7 @@ mod tests {
                     .map(|s| s.to_string())
             })
             .collect();
-        assert!(offered.iter().any(|n| n == "code_query"), "offered: {:?}", offered);
+        assert!(offered.iter().any(|n| n == "analyze"), "offered: {:?}", offered);
         for denied in CHAT_TOOL_DENYLIST {
             assert!(TOOL_NAMES.contains(denied), "'{}' is not a tool", denied);
             assert!(!offered.iter().any(|n| n == denied), "'{}' leaked into chat", denied);
@@ -473,7 +473,7 @@ mod tests {
             "preset": "long_functions",
             "args": { "min_loc": 100, "limit": 20, "range": "1-20" }
         });
-        normalize_args("code_query", &mut args);
+        normalize_args("analyze", &mut args);
         assert_eq!(args["limit"], json!(20));
         assert_eq!(args["range"], json!("1-20"));
         assert_eq!(args["args"], json!({ "min_loc": 100 }));
@@ -487,7 +487,7 @@ mod tests {
             "limit": 50,
             "args": { "limit": 5 }
         });
-        normalize_args("code_query", &mut args);
+        normalize_args("analyze", &mut args);
         assert_eq!(args["limit"], json!(50));
         assert_eq!(args["args"], json!({}));
     }
@@ -496,10 +496,10 @@ mod tests {
     /// if one ever did, its argument would be silently relocated.
     #[test]
     fn no_preset_shadows_a_query_parameter() {
-        for p in ultragraph::code_query::presets::all() {
+        for p in ultragraph::analyze::presets::all() {
             for param in p.params {
                 assert!(
-                    !ultragraph::code_query::OWN_PARAMS.contains(&param.name),
+                    !ultragraph::analyze::OWN_PARAMS.contains(&param.name),
                     "preset '{}' declares '{}', which hoist_own_params would steal",
                     p.name,
                     param.name

@@ -133,9 +133,9 @@ pub(crate) fn print_help() {
     cmd("graph_centrality", "Rank nodes by degree or betweenness");
     cmd("graph_cycles", "Detect dependency cycles (--fail-on-cycle for CI)");
 
-    group("Search & analyse", "from the database `ug gen` builds");
-    cmd_hi("query", "Statistics, distributions and blast radius, as read-only GQL");
-    cont("39 named questions (ug query --list) or write your own");
+    group("Search & analyze the repo", "from the database `ug gen` builds");
+    cmd_hi("analyze", "Statistics, distributions and blast radius — read-only GQL");
+    cont("39 named questions (ug analyze --list) or write your own");
     cmd_hi("search", "GraphRAG: semantic search → graph expansion → ranked context");
     cmd("semantic_search", "Search by meaning alone; find_symbols for exact names");
     cmd("traverse", "K-hop walk over the stored edges from a symbol");

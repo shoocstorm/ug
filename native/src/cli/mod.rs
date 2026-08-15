@@ -14,6 +14,7 @@ pub(crate) mod agent;
 pub(crate) mod analysis;
 pub(crate) mod api;
 pub(crate) mod app;
+pub(crate) mod analyze_cmd;
 pub(crate) mod args;
 pub(crate) mod chat_cmd;
 pub(crate) mod config_cmd;
@@ -27,7 +28,6 @@ pub(crate) mod index_cmd;
 pub(crate) mod ingest;
 pub(crate) mod io;
 pub(crate) mod projects;
-pub(crate) mod query;
 pub(crate) mod scope;
 pub(crate) mod search;
 pub(crate) mod store;
@@ -50,7 +50,7 @@ pub(crate) fn run() {
     io::install_panic_hook();
 
     // Colour gate, resolved once before any command runs. `Render::Ansi`
-    // output (the agent-tool commands and `ug query`) consults this so a
+    // output (the agent-tool commands and `ug analyze`) consults this so a
     // non-tty consumer — a pipe, an LLM, a log — gets plain text without
     // every format string branching. `--no-color` and the `NO_COLOR` env
     // var (https://no-color.org) force it off; otherwise it follows the
@@ -135,7 +135,7 @@ fn dispatch(cmd: &str, cmd_args: &[String]) {
         "project_overview" => agent::run_project_overview(cmd_args),
         "shortest_path" => analysis::run_graph_path(cmd_args),
         "graph_schema" => agent::run_graph_schema(cmd_args),
-        "query" => query::run_code_query(cmd_args),
+        "analyze" => analyze_cmd::run_analyze(cmd_args),
         // Retrieval (OverGraph-backed).
         "semantic_search" => search::run_semantic_search(cmd_args),
         "search" => search::run_hybrid_search(cmd_args),

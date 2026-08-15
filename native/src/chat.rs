@@ -755,7 +755,7 @@ pub struct ToolBox<'a> {
 /// The two embedding-backed tools, once, for every transport: `ug chat` and
 /// `/api/chat` both offer the model the same schemas and both hold an open
 /// store, so both were carrying their own copy of this — the arrangement that
-/// let `code_query` work over MCP and fail in chat. Graph-backed tools stay
+/// let `analyze` work over MCP and fail in chat. Graph-backed tools stay
 /// with their caller, which is where the graph lives.
 pub async fn run_search_tool(
     name: &str,
@@ -1450,7 +1450,7 @@ pub async fn retrieve_context(
 }
 
 /// Single-turn RAG: retrieve from `store`, then ask `chat` to answer
-/// `query`. `repo_root` is forwarded to the retrieval pipeline so it
+/// `analyze`. `repo_root` is forwarded to the retrieval pipeline so it
 /// can resolve relative source paths when building snippets.
 ///
 /// `toolbox` is threaded through exactly as in [`run_chat_rag_stream`]:

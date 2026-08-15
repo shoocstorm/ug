@@ -815,7 +815,7 @@ pub(crate) fn hook_help_text() -> String {
     line!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
     line!("");
     line!("  Installs git hooks that run {C_CYAN}ug update{C_RESET} on the paths each event");
-    line!("  touched, so the structural tools ({C_CYAN}find_usages{C_RESET}, {C_CYAN}ug query{C_RESET}, blast radius)");
+    line!("  touched, so the structural tools ({C_CYAN}find_usages{C_RESET}, {C_CYAN}ug analyze{C_RESET}, blast radius)");
     line!("  never answer from a graph the repo has moved on from.");
     line!("");
     line!("{C_BOLD}Usage:{C_RESET}  ug hook install [-n <project>]   {C_DIM}write the hooks{C_RESET}");
@@ -835,9 +835,9 @@ pub(crate) fn hook_help_text() -> String {
     line!("  Hook runs pass {C_CYAN}--no-embed{C_RESET}, which {C_BOLD}still ingests into the db{C_RESET} — nodes,");
     line!("  edges, facts and keyword statistics all land, only the vectors are");
     line!("  skipped, and no embedding model is loaded (most of a small run).");
-    line!("  So {C_BOLD}find_usages, ug query, diff_impact and blast radius stay exact{C_RESET}.");
+    line!("  So {C_BOLD}find_usages, ug analyze, diff_impact and blast radius stay exact{C_RESET}.");
     line!("  {C_DIM}(Not to be confused with {C_RESET}{C_CYAN}--no-ingest{C_RESET}{C_DIM}, which writes nothing to the db at");
-    line!("  all and would leave ug query stale too. See {C_RESET}{C_CYAN}ug update -h{C_RESET}{C_DIM}.){C_RESET}");
+    line!("  all and would leave ug analyze stale too. See {C_RESET}{C_CYAN}ug update -h{C_RESET}{C_DIM}.){C_RESET}");
     line!("  Catch semantic search up whenever you like: {C_CYAN}ug ingest -n <project>{C_RESET}.");
     line!("  {C_DIM}It embeds only the nodes still owed one. Until then {C_RESET}{C_CYAN}ug hook status{C_RESET}{C_DIM} and each");
     line!("  hook run say how far behind they are.{C_RESET}");

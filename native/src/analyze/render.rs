@@ -38,7 +38,7 @@ const MAX_CELL: usize = 58;
 ///
 /// - **Full-scan notices**, always. A statistic is a full scan by nature —
 ///   there is no bounded anchor for "how many functions exceed 50 lines" —
-///   so `code_query` opts into full scans deliberately. Echoing the
+///   so `analyze` opts into full scans deliberately. Echoing the
 ///   engine's note about it on every answer would train the reader to skip
 ///   the warning line, which is exactly where the load-bearing warnings
 ///   live.
@@ -122,7 +122,7 @@ pub fn render(answer: &QueryAnswer, style: Render) -> String {
         out.push_str(&style.dim(&format!("\n{}\n", parts.join(" · "))));
 
         if to < total {
-            // A full, runnable command — `range` is a `ug query` flag, not a
+            // A full, runnable command — `range` is a `ug analyze` flag, not a
             // preset argument, and a bare `range "26-45"` left callers
             // guessing the syntax. For a preset we can name it; for raw GQL
             // the query is too long to embed, so point at the flag instead.
@@ -135,7 +135,7 @@ pub fn render(answer: &QueryAnswer, style: Render) -> String {
             };
             let hint = if answer.from_preset {
                 format!(
-                    "next: ug query {} --range {}-{}{}",
+                    "next: ug analyze {} --range {}-{}{}",
                     answer.title, next_from, next_to, cap
                 )
             } else {
@@ -253,7 +253,7 @@ fn push_table(out: &mut String, answer: &QueryAnswer, style: Render, from: usize
 
 // A previous revision also printed a handful of node ids from beyond the
 // visible rows, as a nudge toward the next call. Row ranges replaced it:
-// "next: ug query dead_code --range 21-40" says the same thing precisely,
+// "next: ug analyze dead_code --range 21-40" says the same thing precisely,
 // costs a line instead of five ids, and unlike a sample it does not leave
 // the reader guessing which rows it skipped — or, crucially, where the
 // `--range` flag goes.
@@ -299,7 +299,7 @@ fn push_caveats(out: &mut String, answer: &QueryAnswer, style: Render) {
         out.push_str(&format!(
             "\n⚠ TARGET NOT INDEXED: no node carries {targets}, so this empty \
              result means a path/symbol is a typo or was never ingested — not \
-             that nothing depends on it. `ug query biggest_files` lists the \
+             that nothing depends on it. `ug analyze biggest_files` lists the \
              indexed files.\n",
         ));
     }
@@ -412,7 +412,7 @@ fn is_node_id(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::code_query::QueryAnswer;
+    use crate::analyze::QueryAnswer;
     use crate::storage::store::QueryPage;
 
     fn answer(page: QueryPage, coverage: Vec<Coverage>) -> QueryAnswer {
@@ -430,7 +430,7 @@ mod tests {
             unindexed,
             empty_index,
             target_not_indexed: Vec::new(),
-            window: crate::code_query::range::RowRange::first(20),
+            window: crate::analyze::range::RowRange::first(20),
             gql: "MATCH (n) RETURN count(*) AS c".into(),
             from_preset: false,
             by_folder: false,
@@ -617,7 +617,7 @@ mod tests {
     #[test]
     fn the_window_is_always_stated_so_the_reader_knows_which_rows_these_are() {
         let mut a = answer(numbered_rows(30), vec![]);
-        a.window = crate::code_query::range::RowRange::first(5);
+        a.window = crate::analyze::range::RowRange::first(5);
         let out = render(&a, Render::Markdown);
         assert!(out.contains("rows 1–5 of 30"), "{out}");
         assert!(out.contains("f0") && out.contains("f4"), "{out}");
@@ -627,7 +627,7 @@ mod tests {
     #[test]
     fn a_mid_result_window_shows_exactly_that_slice() {
         let mut a = answer(numbered_rows(122), vec![]);
-        a.window = crate::code_query::range::parse("11-35").unwrap();
+        a.window = crate::analyze::range::parse("11-35").unwrap();
         let out = render(&a, Render::Markdown);
         assert!(out.contains("rows 11–35 of 122"), "{out}");
         // Rows are 1-based, so row 11 is `f10`.
@@ -640,7 +640,7 @@ mod tests {
     #[test]
     fn a_window_that_reaches_the_end_offers_no_next_page() {
         let mut a = answer(numbered_rows(30), vec![]);
-        a.window = crate::code_query::range::parse("21-end").unwrap();
+        a.window = crate::analyze::range::parse("21-end").unwrap();
         let out = render(&a, Render::Markdown);
         assert!(out.contains("rows 21–30 of 30"), "{out}");
         assert!(!out.contains("next:"), "nothing left to fetch: {out}");
@@ -649,7 +649,7 @@ mod tests {
     #[test]
     fn a_partial_window_names_the_exact_range_to_ask_for_next() {
         let mut a = answer(numbered_rows(122), vec![]);
-        a.window = crate::code_query::range::parse("11-35").unwrap();
+        a.window = crate::analyze::range::parse("11-35").unwrap();
         // Default `answer()` is `from_preset: false`, so the hint points at
         // the `--range` flag rather than embedding a (raw GQL) command.
         let out = render(&a, Render::Markdown);
@@ -661,11 +661,11 @@ mod tests {
         let mut a = answer(numbered_rows(122), vec![]);
         a.title = "dead_code".into();
         a.from_preset = true;
-        a.window = crate::code_query::range::parse("11-35").unwrap();
+        a.window = crate::analyze::range::parse("11-35").unwrap();
         let out = render(&a, Render::Markdown);
         // The hint is a full command an agent can copy-paste: the preset
         // name and the `--range` flag, not a bare `range "36-55"`.
-        assert!(out.contains("next: ug query dead_code --range 36-55"), "{out}");
+        assert!(out.contains("next: ug analyze dead_code --range 36-55"), "{out}");
     }
 
     /// Distinct from "the query matched nothing", which would send the
@@ -673,7 +673,7 @@ mod tests {
     #[test]
     fn a_window_past_the_end_says_how_many_rows_there_actually_are() {
         let mut a = answer(numbered_rows(12), vec![]);
-        a.window = crate::code_query::range::parse("50-60").unwrap();
+        a.window = crate::analyze::range::parse("50-60").unwrap();
         let out = render(&a, Render::Markdown);
         assert!(out.contains("has 12 row(s)"), "{out}");
         assert!(out.contains("starts at row 50"), "{out}");
@@ -686,7 +686,7 @@ mod tests {
             .map(|i| vec![QueryValue::Str("x".repeat(50)), QueryValue::Int(i)])
             .collect();
         let mut a = answer(page(&["id", "loc"], rows), vec![]);
-        a.window = crate::code_query::range::parse("1-end").unwrap();
+        a.window = crate::analyze::range::parse("1-end").unwrap();
         let out = render(&a, Render::Markdown);
         assert!(out.chars().count() <= MAX_CHARS + 80, "{}", out.len());
     }

@@ -1,6 +1,6 @@
-//! `code_query` against a real store.
+//! `analyze` against a real store.
 //!
-//! The unit tests in `code_query` cover parameter binding and rendering
+//! The unit tests in `analyze` cover parameter binding and rendering
 //! from hand-built rows. What only a live engine can show is whether the
 //! shipped preset queries actually *execute* — and that is the thing most
 //! worth testing, because a preset is a string. Nothing in the type system
@@ -12,7 +12,7 @@
 use std::collections::BTreeMap;
 use tempfile::TempDir;
 use ultragraph::agent_tools::Render;
-use ultragraph::code_query::{self, presets, CodeQueryParams};
+use ultragraph::analyze::{self, presets, AnalyzeParams};
 use ultragraph::storage::db::{Db, EdgeRow, NodeRow};
 use ultragraph::storage::embed::DEFAULT_EMBEDDING_DIM;
 use ultragraph::storage::facts::{FactValue, Facts};
@@ -198,8 +198,8 @@ async fn seeded_store(tmp: &TempDir) -> Db {
     db
 }
 
-fn params(preset: &str) -> CodeQueryParams {
-    CodeQueryParams {
+fn params(preset: &str) -> AnalyzeParams {
+    AnalyzeParams {
         preset: Some(preset.to_string()),
         ..Default::default()
     }
@@ -235,12 +235,12 @@ async fn every_builtin_preset_executes() {
                 args.insert(param.name.to_string(), value.to_string());
             }
         }
-        let request = CodeQueryParams {
+        let request = AnalyzeParams {
             preset: Some(p.name.to_string()),
             args,
             ..Default::default()
         };
-        if let Err(e) = code_query::run(&db, &request).await {
+        if let Err(e) = analyze::run(&db, &request).await {
             failed.push(format!("{}: {e}", p.name));
         }
     }
@@ -268,9 +268,9 @@ async fn no_builtin_preset_reads_an_unindexed_property() {
                 args.insert(param.name.to_string(), value.to_string());
             }
         }
-        let answer = code_query::run(
+        let answer = analyze::run(
             &db,
-            &CodeQueryParams {
+            &AnalyzeParams {
                 preset: Some(p.name.to_string()),
                 args,
                 ..Default::default()
@@ -296,7 +296,7 @@ async fn a_preset_returns_the_right_answer_not_just_a_number() {
 
     let mut p = params("long_functions");
     p.args.insert("min_loc".into(), "50".into());
-    let answer = code_query::run(&db, &p).await.unwrap();
+    let answer = analyze::run(&db, &p).await.unwrap();
 
     // verify (120) and handle (64) qualify; hash (18), unused (9) and the
     // 25-line test do not, and neither does the 200-line Class.
@@ -315,7 +315,7 @@ async fn impact_counts_dependents_once_not_once_per_path() {
 
     let mut p = params("impact_summary");
     p.args.insert("target".into(), "src/core/auth.rs".into());
-    let answer = code_query::run(&db, &p).await.unwrap();
+    let answer = analyze::run(&db, &p).await.unwrap();
 
     // `handle` reaches auth.rs by two distinct routes (directly via verify,
     // and via Session), so a path-counting query would report it twice.
@@ -332,7 +332,7 @@ async fn boundary_impact_reports_the_surface_a_change_is_visible_through() {
 
     let mut p = params("boundary_impact");
     p.args.insert("target".into(), "src/core/auth.rs".into());
-    let answer = code_query::run(&db, &p).await.unwrap();
+    let answer = analyze::run(&db, &p).await.unwrap();
 
     // `handle` is the only inbound boundary that reaches auth.rs. `verify`
     // is a boundary too, but an outbound one and inside the target file —
@@ -349,7 +349,7 @@ async fn boundary_census_separates_the_two_directions() {
     let tmp = TempDir::new().unwrap();
     let db = seeded_store(&tmp).await;
 
-    let answer = code_query::run(&db, &params("boundary_census")).await.unwrap();
+    let answer = analyze::run(&db, &params("boundary_census")).await.unwrap();
 
     // One inbound HTTP surface and one outbound DB one — two rows, because
     // the kinds differ, and each counted in exactly one direction.
@@ -377,9 +377,9 @@ async fn a_query_over_an_unstored_property_is_reported_not_answered() {
     // A plausible-sounding metric this indexer has never produced. The
     // point is that the engine cannot tell the difference between "no
     // function exceeds this" and "nothing has ever recorded this".
-    let answer = code_query::run(
+    let answer = analyze::run(
         &db,
-        &CodeQueryParams {
+        &AnalyzeParams {
             gql: Some(
                 "MATCH (n:Function) WHERE n.cyclomatic_complexity > 3 RETURN count(*) AS c".into(),
             ),
@@ -396,7 +396,7 @@ async fn a_query_over_an_unstored_property_is_reported_not_answered() {
         answer.unindexed,
         vec!["cyclomatic_complexity".to_string()]
     );
-    let text = code_query::render::render(&answer, Render::Markdown);
+    let text = analyze::render::render(&answer, Render::Markdown);
     assert!(text.contains("NOT INDEXED"), "{text}");
 }
 
@@ -437,13 +437,13 @@ async fn an_index_predating_comment_metrics_reports_them_as_unindexed() {
     };
     db.upsert_nodes(&[row]).await.unwrap();
 
-    let answer = code_query::run(&db, &params("comment_coverage")).await.unwrap();
+    let answer = analyze::run(&db, &params("comment_coverage")).await.unwrap();
     assert!(
         answer.unindexed.contains(&"has_comments".to_string()),
         "expected has_comments to report unindexed, got {:?}",
         answer.unindexed
     );
-    let text = code_query::render::render(&answer, Render::Markdown);
+    let text = analyze::render::render(&answer, Render::Markdown);
     assert!(text.contains("NOT INDEXED"), "{text}");
     assert!(text.contains("ug gen"), "must say how to fix it: {text}");
 }
@@ -453,9 +453,9 @@ async fn coverage_reports_real_denominators() {
     let tmp = TempDir::new().unwrap();
     let db = seeded_store(&tmp).await;
 
-    let answer = code_query::run(
+    let answer = analyze::run(
         &db,
-        &CodeQueryParams {
+        &AnalyzeParams {
             gql: Some("MATCH (n) WHERE n.loc > 0 RETURN count(*) AS c".into()),
             ..Default::default()
         },
@@ -480,9 +480,9 @@ async fn a_mutation_is_refused_however_it_arrives() {
     let tmp = TempDir::new().unwrap();
     let db = seeded_store(&tmp).await;
 
-    let err = code_query::run(
+    let err = analyze::run(
         &db,
-        &CodeQueryParams {
+        &AnalyzeParams {
             gql: Some("MATCH (n:Function) SET n.loc = 0 RETURN count(*) AS c".into()),
             ..Default::default()
         },

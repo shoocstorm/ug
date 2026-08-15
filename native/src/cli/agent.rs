@@ -252,7 +252,7 @@ fn print_get_code_help() {
     println!("  {C_CYAN}-f, --file <file>{C_RESET}     Repo-relative file path (instead of a symbol)");
     println!("  {C_CYAN}-s, --start <n>{C_RESET}       First line (1-based, with --file; default 1)");
     println!("  {C_CYAN}-e, --end <n>{C_RESET}         Last line inclusive (with --file; default EOF)");
-    println!("  {C_CYAN}-r, --range <window>{C_RESET}  Both at once (with --file), same dialect as {C_CYAN}ug query --range{C_RESET}:");
+    println!("  {C_CYAN}-r, --range <window>{C_RESET}  Both at once (with --file), same dialect as {C_CYAN}ug analyze --range{C_RESET}:");
     println!("                        {C_CYAN}11-35{C_RESET} · {C_CYAN}34-end{C_RESET} · {C_CYAN}20{C_RESET} (the first 20) · {C_CYAN}11..35{C_RESET} · {C_CYAN}rows 11 to 35{C_RESET}");
     println!("                        {C_DIM}-s/-e win if you give both spellings{C_RESET}");
     println!("  {C_CYAN}--max-chars <n>{C_RESET}       Character cap per symbol (default 20000)");
@@ -414,7 +414,7 @@ pub(crate) fn run_get_code(args: &[String]) {
 
     // `--range 11-35` is one flag for what `-s 11 -e 35` says in two. Both
     // are handed to the tool as written: resolving the window there is what
-    // gives MCP and HTTP the same flag, in the same dialect `ug query` uses.
+    // gives MCP and HTTP the same flag, in the same dialect `ug analyze` uses.
     let params = agent_tools::GetCodeParams {
         node_id: node_ids,
         file: file_flag,

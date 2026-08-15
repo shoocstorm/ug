@@ -1,5 +1,5 @@
 pub mod agent_tools;
-pub mod code_query;
+pub mod analyze;
 mod graph;
 mod indexer;
 pub mod limits;
@@ -19,7 +19,7 @@ pub use types::*;
 // These are the escape codes used when colour is ON. The runtime gate lives
 // in [`color`] below: when it is off, the `Render::Ansi` styling helpers in
 // `agent_tools` return the plain string instead of wrapping it in these
-// codes, so every agent-tool / `query` command emits plain text when piped
+// codes, so every agent-tool / `analyze` command emits plain text when piped
 // or when the caller asks for it. Human-facing CLI banners (in `main.rs`)
 // keep using these constants directly and stay coloured in a terminal.
 pub const C_CYAN: &str = "\x1b[36m";
@@ -32,7 +32,7 @@ pub const C_RESET: &str = "\x1b[0m";
 pub const C_BOLD: &str = "\x1b[1m";
 pub const C_DIM: &str = "\x1b[2m";
 
-/// Runtime colour gate for the agent-tool / `query` renderers.
+/// Runtime colour gate for the agent-tool / `analyze` renderers.
 ///
 // Set once at process start from `--no-color`, `NO_COLOR`, and whether
 // stdout is a terminal. The `Render::Ansi` styling helpers consult

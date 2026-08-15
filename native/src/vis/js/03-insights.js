@@ -1,4 +1,4 @@
-        // ─── Insights (code_query in the browser) ──────────
+        // ─── Insights (analyze in the browser) ──────────
 
         // Worked examples for the GQL console. Each one exists to teach a
         // different capability rather than to be a useful query in itself —
@@ -214,7 +214,7 @@
                 ...(run.preset ? { preset: run.preset, args: run.args } : { gql: run.gql }),
             };
             try {
-                const res = await fetch('/api/tools/code_query', {
+                const res = await fetch('/api/tools/analyze', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(body),
@@ -376,7 +376,7 @@
             const props = insState.properties;
             if (!props.length) { box.textContent = 'Property list unavailable.'; return; }
             try {
-                const res = await fetch('/api/tools/code_query', {
+                const res = await fetch('/api/tools/analyze', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({

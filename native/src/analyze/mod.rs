@@ -1,4 +1,4 @@
-//! `code_query`: whole-repo statistical questions over the indexed graph.
+//! `analyze`: whole-repo statistical questions over the indexed graph.
 //!
 //! An agent asked "how many methods are longer than 50 lines?" has, without
 //! this, two bad options: grep every file and count (≈500k tokens on this
@@ -19,7 +19,7 @@
 //!   blast radius can be a silent under-report that reads as precise.
 //!
 //! One implementation, three transports, matching `agent_tools`: the MCP
-//! tool, the `ug query` subcommand and `POST /api/tools/code_query` all
+//! tool, the `ug analyze` subcommand and `POST /api/tools/analyze` all
 //! call [`run`] and render the same [`QueryAnswer`].
 
 pub mod presets;
@@ -30,7 +30,7 @@ use crate::storage::store::{KnowledgeStore, QueryLimits, QueryPage, QueryParams,
 use presets::{ParamValue, Preset};
 use std::collections::BTreeMap;
 
-/// The names [`CodeQueryParams`] owns, which no preset argument may shadow.
+/// The names [`AnalyzeParams`] owns, which no preset argument may shadow.
 ///
 /// Callers — models especially — file these under `args` beside the preset's
 /// own arguments, because that is where "the parameters for this call" look
@@ -41,7 +41,7 @@ pub const OWN_PARAMS: &[&str] = &["preset", "gql", "limit", "range", "project"];
 
 /// What the caller asked for: a preset by name, or raw GQL.
 #[derive(Debug, Clone, Default)]
-pub struct CodeQueryParams {
+pub struct AnalyzeParams {
     pub preset: Option<String>,
     pub gql: Option<String>,
     /// Preset arguments, as strings — they arrive from JSON tool args and
@@ -124,7 +124,7 @@ pub struct QueryAnswer {
     /// `render::is_expected_noise`.
     pub from_preset: bool,
     /// Whether to render the "by file" concentration summary. Copied from
-    /// [`CodeQueryParams::by_folder`] so the renderer needs no extra arg.
+    /// [`AnalyzeParams::by_folder`] so the renderer needs no extra arg.
     pub by_folder: bool,
 }
 
@@ -176,7 +176,7 @@ pub const QUERYABLE_PROPERTIES: &[&str] = &[
 /// Resolve, execute and annotate one query.
 pub async fn run(
     store: &dyn KnowledgeStore,
-    params: &CodeQueryParams,
+    params: &AnalyzeParams,
 ) -> Result<QueryAnswer, String> {
     let (title, description, gql, bound) = resolve(params)?;
 
@@ -323,14 +323,14 @@ async fn symbol_indexed(
 
 /// Turn the request into a query and its bound parameters.
 fn resolve(
-    params: &CodeQueryParams,
+    params: &AnalyzeParams,
 ) -> Result<(String, Option<String>, String, QueryParams), String> {
     match (&params.preset, &params.gql) {
         (Some(_), Some(_)) => Err(
             "Pass either `preset` or `gql`, not both — a preset is already a query.".to_string(),
         ),
         (None, None) => Err(format!(
-            "code_query needs a `preset` or a `gql` query.\n\nAvailable presets: {}",
+            "analyze needs a `preset` or a `gql` query.\n\nAvailable presets: {}",
             preset_names().join(", ")
         )),
         (Some(name), None) => {
@@ -555,7 +555,7 @@ fn explain_failure(err: &str, gql: &str) -> String {
     let mut out = format!("Query failed: {}", err);
     if err.contains("ReadOnlyViolation") {
         out.push_str(
-            "\n\ncode_query is read-only. It answers questions about the graph; \
+            "\n\nanalyze is read-only. It answers questions about the graph; \
              it cannot modify the index (use `gen` for that).",
         );
     } else if err.contains("max_frontier") || err.contains("exceeded configured cap") {
@@ -620,8 +620,8 @@ fn unknown_preset(name: &str) -> String {
 mod tests {
     use super::*;
 
-    fn params(preset: &str) -> CodeQueryParams {
-        CodeQueryParams {
+    fn params(preset: &str) -> AnalyzeParams {
+        AnalyzeParams {
             preset: Some(preset.to_string()),
             ..Default::default()
         }
@@ -719,7 +719,7 @@ mod tests {
 
     #[test]
     fn preset_and_gql_together_are_rejected() {
-        let p = CodeQueryParams {
+        let p = AnalyzeParams {
             preset: Some("repo_census".into()),
             gql: Some("MATCH (n) RETURN count(*)".into()),
             ..Default::default()
@@ -729,7 +729,7 @@ mod tests {
 
     #[test]
     fn neither_preset_nor_gql_lists_the_presets() {
-        let err = resolve(&CodeQueryParams::default()).unwrap_err();
+        let err = resolve(&AnalyzeParams::default()).unwrap_err();
         assert!(err.contains("repo_census"), "{err}");
     }
 

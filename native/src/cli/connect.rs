@@ -61,7 +61,7 @@ pub(crate) fn connect_help_text() -> String {
     line!("");
     line!("{C_BOLD}Two ways to reach ug — connect asks, or pass one:{C_RESET}");
     line!("  {C_CYAN}--cli{C_RESET}      {C_BOLD}Recommended.{C_RESET} Installs the agent skill only; the agent runs");
-    line!("             {C_CYAN}ug{C_RESET} itself. {C_CYAN}ug --help{C_RESET} and {C_CYAN}ug query --list{C_RESET} teach it the rest,");
+    line!("             {C_CYAN}ug{C_RESET} itself. {C_CYAN}ug --help{C_RESET} and {C_CYAN}ug analyze --list{C_RESET} teach it the rest,");
     line!("             so it stays current with the binary and costs no idle context.");
     line!("  {C_CYAN}--mcp{C_RESET}      MCP server entry only — the agent calls tools over the protocol.");
     line!("  {C_CYAN}--both{C_RESET}     Both, and the agent chooses. It usually reaches for the");
@@ -75,7 +75,7 @@ pub(crate) fn connect_help_text() -> String {
     line!("  {C_DIM}recommends yes. These flags answer that question up front:{C_RESET}");
     line!("  {C_CYAN}--hooks{C_RESET}    Install the git hooks that re-index after every commit, merge");
     line!("             and rebase. That is what lets an agent trust {C_CYAN}find_usages{C_RESET}");
-    line!("             and {C_CYAN}ug query diff_impact{C_RESET} {C_BOLD}about code it just wrote{C_RESET} — the moment");
+    line!("             and {C_CYAN}ug analyze diff_impact{C_RESET} {C_BOLD}about code it just wrote{C_RESET} — the moment");
     line!("             the answer matters most. It can still refresh on demand with");
     line!("             {C_CYAN}ug update <file>...{C_RESET} between commits.");
     line!("             {C_DIM}Same as running {C_RESET}{C_CYAN}ug hook install{C_RESET}{C_DIM}; see {C_RESET}{C_CYAN}ug hook -h{C_RESET}{C_DIM}.{C_RESET}");

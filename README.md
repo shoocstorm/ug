@@ -33,7 +33,7 @@ ug            # bare `ug` == `ug serve`: visualization + REST API at :8080
   `~/.ug/<project-name>/` (name = directory basename; override with `-n/--name`).
   Add `--no-embed` to write the database without vectors (no embedding model is
   loaded — much faster; only `search`/`semantic_search`/`chat` lag), or
-  `--no-ingest` to skip the database entirely (`ug query` statistics and blast
+  `--no-ingest` to skip the database entirely (`ug analyze` statistics and blast
   radius lag too). See [`--no-embed` vs `--no-ingest`](#--no-embed-vs---no-ingest).
 - **`ug serve`** (or bare `ug`) without `-i` runs in **multi-project mode**:
   discovers every project under `~/.ug` and adds a UI project switcher. With zero
@@ -116,7 +116,7 @@ The native `ug` binary is the primary CLI. `ug -h` lists every command;
 | `ug chat "<question>"` | RAG-grounded chat against an LLM — see [docs/CHAT.md](docs/CHAT.md) |
 | `ug project_overview` / `find_symbols` / `file_outline` / `get_code` / `find_usages` / `shortest_path` / `graph_schema` | Agent tools — same names, params and output as the MCP tools and `POST /api/tools/<name>`. Add `--json` for the machine-readable envelope. |
 | `ug find_symbols 'handle_*'` · `ug file_outline 'src/**/*.ts'` · `ug find_usages 'validate_*'` | Wildcards (`*` `?` `[abc]` `{a,b}`) work anywhere a symbol or file is named — one call instead of a loop. Those commands also take a plain symbol name, not just a node id. See [docs/API-REFERENCE.md](docs/API-REFERENCE.md#wildcards). |
-| `ug query <preset>` | Whole-repo statistics: "how many functions over 50 lines", "what breaks if I change this file", "which endpoints a change is visible through", "which folders are worst documented". `ug query --list` shows every preset; `--gql` runs a raw query. |
+| `ug analyze <preset>` | Whole-repo statistics: "how many functions over 50 lines", "what breaks if I change this file", "which endpoints a change is visible through", "which folders are worst documented". `ug analyze --list` shows every preset; `--gql` runs a raw query. |
 | `ug list` / `ug rename <new>` / `ug rm <project>` | List projects under `~/.ug`, rename one (the active one by default), or delete one |
 | `ug doctor` | Print resolved project/db/embedder/chat config and where each value came from |
 | `ug connect [agent]` | Connect an AI agent — CLI skill, MCP server, or both. See [Connecting an AI agent](#connecting-an-ai-agent) |
@@ -137,11 +137,11 @@ by `ug ingest`). Which one a command reads tells you what still works after
 | Reads | Works |
 | :--- | :--- |
 | **`graph.json`** — no DB or embedder needed | `find_symbols`, `file_outline`, `get_code`, `find_usages`, `traverse`, `shortest_path`, `project_overview`, `graph_schema`, all `graph_*` tools; `GET /api/graph/*`, `/api/file`, `/graph.json` |
-| **`ugdb/`** — needs the ingest step, but **no embedder** | `query` (statistics); `traverse --dest <name>`; `GET /api/db/node/:id`, `/api/db/traverse/:id`, `POST /api/tools/code_query` |
+| **`ugdb/`** — needs the ingest step, but **no embedder** | `analyze` (statistics); `traverse --dest <name>`; `GET /api/db/node/:id`, `/api/db/traverse/:id`, `POST /api/tools/analyze` |
 | **`ugdb/` + an embedder** — needs ingest *and* a reachable backend | `search`, `semantic_search`, `chat`; `POST /api/search/hybrid`, `/api/search/semantic`, `/api/chat` |
 
 The practical consequence: **only `search`, `semantic_search` and `chat` need an
-embedder — but `ug query` still needs the database.** If your embedding endpoint
+embedder — but `ug analyze` still needs the database.** If your embedding endpoint
 is down, symbol lookup, outlines, source reads, usage analysis, traversal,
 pathfinding *and* whole-repo statistics all still work. `--dest <name>` (or
 `/api/db/traverse`) runs `traverse` against a destination store, to verify what
@@ -151,13 +151,13 @@ landed in OverGraph or Neo4j — see
 ### `--no-embed` vs `--no-ingest`
 
 Both are accepted by `ug gen` and `ug update`, and they are not the
-same thing. The row above tells you why the difference matters: `ug query` —
+same thing. The row above tells you why the difference matters: `ug analyze` —
 statistics, `diff_impact`, blast radius — needs `ugdb/`, but not an embedder.
 
 | Flag | Written to `ugdb/` | Current after the run | Answering from the *previous* ingest |
 | :--- | :--- | :--- | :--- |
-| `--no-embed` | nodes, edges, facts, keyword statistics — **everything but the vectors**. No embedding model is loaded, which is most of a small run's wall clock. | the `graph.json` tools **and `ug query`** | `search`, `semantic_search`, `chat` |
-| `--no-ingest` | **nothing** — the database is never opened; only `graph.json` is rebuilt. | the `graph.json` tools only | **everything `ugdb/` backs**, including `ug query` |
+| `--no-embed` | nodes, edges, facts, keyword statistics — **everything but the vectors**. No embedding model is loaded, which is most of a small run's wall clock. | the `graph.json` tools **and `ug analyze`** | `search`, `semantic_search`, `chat` |
+| `--no-ingest` | **nothing** — the database is never opened; only `graph.json` is rebuilt. | the `graph.json` tools only | **everything `ugdb/` backs**, including `ug analyze` |
 
 `ug ingest -n <project>` catches the database up either way — it embeds only the
 nodes still owed a vector. This is why the git hooks use `--no-embed`: blast
@@ -219,7 +219,7 @@ Flags, the REPL commands, `--json` output, and the HTTP API are documented in
 An agent can reach UltraGraph two ways, and they are alternatives:
 
 - **The `ug` CLI (recommended)** — install the agent skill and the agent runs
-  `ug` itself. `ug --help` and `ug query --list` teach it the rest, so its
+  `ug` itself. `ug --help` and `ug analyze --list` teach it the rest, so its
   knowledge stays current with the binary and costs no idle context.
 - **The MCP server** — the agent calls tools over the protocol.
 
@@ -247,9 +247,9 @@ decide whether a change is safe:
 
 ```bash
 ug find_usages <symbol>                             # before: who is downstream of this?
-ug query boundary_impact --arg target=path/to/f.rs  # before: does the change escape the system?
-ug query diff_impact --arg files=a.ts,b.rs          # after: what did my edit reach?
-ug query diff_retest_scope --arg files=a.ts,b.rs    # after: which tests must I re-run?
+ug analyze boundary_impact --arg target=path/to/f.rs  # before: does the change escape the system?
+ug analyze diff_impact --arg files=a.ts,b.rs          # after: what did my edit reach?
+ug analyze diff_retest_scope --arg files=a.ts,b.rs    # after: which tests must I re-run?
 ```
 
 The installed skill now teaches that workflow explicitly, and the hooks are what
@@ -261,9 +261,9 @@ whether the hooks are installed and whether any vectors are owed.
 
 **Tools exposed:** `search`, `semantic_search`, `traverse`, `find_usages`,
 `find_symbols`, `file_outline`, `get_code`, `project_overview`, `shortest_path`,
-`code_query`, `graph_schema`, `list_projects`, `gen`, `ping_embedder`.
+`analyze`, `graph_schema`, `list_projects`, `gen`, `ping_embedder`.
 
-`code_query` is the one to know about if you have not seen it: it answers
+`analyze` is the one to know about if you have not seen it: it answers
 counting, distribution and blast-radius questions over the whole repo in one
 call — the questions an agent would otherwise answer by grepping every file
 and reading the results, at roughly a thousandth of the tokens.
@@ -318,7 +318,7 @@ cd native && cargo test     # native Rust tests
 | [`docs/WEB-SERVE.md`](docs/WEB-SERVE.md) | `ug serve`'s REST API, routes, logging, asset resolution |
 | [`docs/MCP-SERVE.md`](docs/MCP-SERVE.md) | Full MCP tool reference, client setup, troubleshooting |
 | [`docs/MULTI-STORAGE-DEST.md`](docs/MULTI-STORAGE-DEST.md) | Neo4j backend: CLI flags, capability matrix, schema |
-| [`docs/CODE-QUERY.md`](docs/CODE-QUERY.md) | `code_query` / `ug query`: whole-repo statistics, impact analysis, the fact layer |
+| [`docs/ANALYZE.md`](docs/ANALYZE.md) | `analyze` / `ug analyze`: whole-repo statistics, impact analysis, the fact layer |
 | [`docs/API-REFERENCE.md`](docs/API-REFERENCE.md) | Complete CLI, HTTP API, MCP tools, storage backends, pipeline & schemas |
 | [`native/README.md`](native/README.md) | Rust crate internals: CLI commands, project structure, extensibility |
 

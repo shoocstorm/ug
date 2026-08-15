@@ -8,13 +8,13 @@ description: >-
   already located: how does X work, where is X defined, who calls or imports
   X, what breaks if I change X, how are A and B connected, where do I start
   in this repo. Use it WHILE editing too, in both directions: before changing
-  a symbol, ask who depends on it (`ug find_usages`, `ug query
+  a symbol, ask who depends on it (`ug find_usages`, `ug analyze
   boundary_impact`); after changing files, ask what that broke and what to
-  re-test (`ug query diff_impact`, `ug query diff_retest_scope`) — the graph
+  re-test (`ug analyze diff_impact`, `ug analyze diff_retest_scope`) — the graph
   is kept current by git hooks, and `ug update <file>...` refreshes it on
   demand mid-edit. Also use for every count, fraction, ranking
   or distribution over the repo (how many functions are undocumented, which
-  files are biggest, what is dead or untested) — one `ug query` replaces a
+  files are biggest, what is dead or untested) — one `ug analyze` replaces a
   loop of greps. Also use whenever a question spans a FAMILY of symbols or
   files rather than one — every handler, all the `*Controller` classes, each
   `test_*`, everything under `src/auth/` — because `ug` takes wildcards
@@ -22,7 +22,7 @@ description: >-
   replaces a loop. Also use to find where a system meets the outside world —
   its REST endpoints, queue listeners, CLI commands, scheduled jobs and
   outbound HTTP/DB/queue clients — and to ask whether a change is visible
-  beyond the repo. Also triggers on: ug, UltraGraph, `ug query`, blast
+  beyond the repo. Also triggers on: ug, UltraGraph, `ug analyze`, blast
   radius, impact analysis, dead code, repo statistics, "which files depend
   on", "all the functions named like", "every file matching", system
   boundary, entry point, API surface, "what endpoints does this expose",
@@ -47,12 +47,12 @@ code.
 ```bash
 # 1. BEFORE you change a symbol — who is downstream of it?
 ug find_usages <symbol>                       # callers, importers, call sites
-ug query boundary_impact --arg target=<file>  # is the change visible outside the system?
+ug analyze boundary_impact --arg target=<file>  # is the change visible outside the system?
 
 # 2. AFTER an edit burst — what did it reach, and what covers it?
 git diff --name-only | tr '\n' ',' | sed 's/,$//'      # the changed-file list
-ug query diff_impact --arg files=a.ts,b.rs             # blast radius of those files
-ug query diff_retest_scope --arg files=a.ts,b.rs       # the tests to re-run
+ug analyze diff_impact --arg files=a.ts,b.rs             # blast radius of those files
+ug analyze diff_retest_scope --arg files=a.ts,b.rs       # the tests to re-run
 ```
 
 **The graph keeps up with you.** `ug hook install` puts git hooks in the repo,
@@ -75,9 +75,9 @@ resolves, never as silently wrong source.
 Two rules turn a loop into one call — reach for them before iterating:
 
 > **1. For any count, fraction, ranking, distribution or blast-radius question,
-> run one `ug query`.** Never grep for a count; never loop a per-file command to
+> run one `ug analyze`.** Never grep for a count; never loop a per-file command to
 > build one. "How many functions are over 100 lines, and where do they cluster?"
-> is `ug query long_functions_by_folder` — one call.
+> is `ug analyze long_functions_by_folder` — one call.
 >
 > **2. For any question about a *family* of symbols or files, use a wildcard.**
 > Every command that names a symbol or file takes `* ? [abc] {a,b}`. "Who calls
@@ -91,12 +91,12 @@ engine, same parameter names, richer `--help`.
 
 | Question | Command |
 |---|---|
-| How many / what fraction / biggest / what breaks? | `ug query <preset>` — catalog below |
+| How many / what fraction / biggest / what breaks? | `ug analyze <preset>` — catalog below |
 | Is it safe to change this symbol? | `ug find_usages <symbol>` before you edit |
-| What breaks across the files I just changed? | `ug query diff_impact --arg files=...` (feed it `git diff --name-only`) |
-| Which tests should I re-run for my changes? | `ug query diff_retest_scope --arg files=...` |
+| What breaks across the files I just changed? | `ug analyze diff_impact --arg files=...` (feed it `git diff --name-only`) |
+| Which tests should I re-run for my changes? | `ug analyze diff_retest_scope --arg files=...` |
 | I just edited files — make the graph match | `ug update <file>...` (git hooks do this on commit) |
-| Which test covers this symbol? | `ug query test_for --arg symbol=<id>` |
+| Which test covers this symbol? | `ug analyze test_for --arg symbol=<id>` |
 | You only have a concept, not a name or path | `ug search "concept"` or `ug find_symbols <word>`, then feed the id/path into the command you wanted |
 | Where is `foo`? (you know the name) | `ug find_symbols foo` |
 | Every symbol in a family / naming convention | `ug find_symbols 'handle_*'` — see Wildcards |
@@ -107,9 +107,9 @@ engine, same parameter names, richer `--help`.
 | Who calls / imports / implements this? | `ug find_usages <symbol>` |
 | What does this depend on? | `ug traverse <symbol> -k 1` (widen only if needed) |
 | How are A and B connected? | `ug shortest_path A B` |
-| Where do I start in this repo? | `ug project_overview`, `ug query where_to_start` |
-| What does this service expose / talk to? | `ug query boundary_census`, then `ug query boundaries` |
-| Is this change visible outside the system? | `ug query boundary_impact --arg target=path/to/f.rs` |
+| Where do I start in this repo? | `ug project_overview`, `ug analyze where_to_start` |
+| What does this service expose / talk to? | `ug analyze boundary_census`, then `ug analyze boundaries` |
+| Is this change visible outside the system? | `ug analyze boundary_impact --arg target=path/to/f.rs` |
 | Every endpoint / listener / CLI command | `ug find_symbols --boundary` |
 | Central symbols · dependency cycles | `ug graph_centrality` · `ug graph_cycles` |
 
@@ -124,7 +124,7 @@ you actually asked:
 - **`members`** is populated only for languages that nest members in the type
   body (Java, Python, TS) — check coverage before ranking on it.
 
-Only `search` and `semantic_search` need an embedder; `query` and `traverse`
+Only `search` and `semantic_search` need an embedder; `analyze` and `traverse`
 need the db. Everything else reads `graph.json` — so an embedding error is
 never a dead end.
 
@@ -162,7 +162,7 @@ the id-taking commands a pattern expands to at most 25 symbols and says so
 when it hits that — narrow the pattern rather than trusting a capped answer.
 `shortest_path` needs each endpoint to match exactly one symbol.
 
-## `ug query`
+## `ug analyze`
 
 ### Preset catalog — pick directly, no `--list` needed
 
@@ -175,14 +175,14 @@ when it hits that — narrow the pattern rather than trusting a capped answer.
 - **risk** — `impact` `[target]`, `impact_summary` `[target]`, `boundary_impact` `[target]`, `diff_impact` `[files]`, `risky_symbols`
 
 Args in `[brackets]` are passed `--arg key=value` (repeatable). The catalog
-moves between versions — re-read `ug query --list` if `ug --version` mismatches.
+moves between versions — re-read `ug analyze --list` if `ug --version` mismatches.
 
 ### Usage
 
 ```bash
-ug query long_functions --arg min_loc=150            # preset + arg (repeatable)
-ug query impact --arg target=path/to/file.rs
-ug query --gql "MATCH (n:Function) WHERE n.params > 6 \
+ug analyze long_functions --arg min_loc=150            # preset + arg (repeatable)
+ug analyze impact --arg target=path/to/file.rs
+ug analyze --gql "MATCH (n:Function) WHERE n.params > 6 \
   RETURN n.folder AS f, count(*) AS c ORDER BY c DESC"
 ```
 
@@ -192,7 +192,7 @@ look the path up yourself — never ask them for it:
 
 ```bash
 ug find_symbols queue          # → …:src/…/queue/AbstractQueue.java:…
-ug query impact --arg target=<resolved path>
+ug analyze impact --arg target=<resolved path>
 ```
 
 **Page with `--range 21-40` / `--range 34-end`, not a bigger `-k`.** It windows
@@ -221,8 +221,8 @@ those callers were never indexed.
 So when asked "what breaks if I change X", run **both**:
 
 ```bash
-ug query impact --arg target=src/orders/repo.java           # how much code moves
-ug query boundary_impact --arg target=src/orders/repo.java  # what is visible outside
+ug analyze impact --arg target=src/orders/repo.java           # how much code moves
+ug analyze boundary_impact --arg target=src/orders/repo.java  # what is visible outside
 ```
 
 `impact` answering "41 dependents" is a refactor. `boundary_impact` answering
@@ -256,7 +256,7 @@ prose rather than the code.
 ```bash
 ug --help          # every command, grouped by what it needs (db vs graph.json)
 ug <command> -h    # flags AND worked examples — cheap; read it instead of guessing
-ug query --list    # every built-in question, by category, with args (full detail)
+ug analyze --list    # every built-in question, by category, with args (full detail)
 ug graph_schema    # node/edge types actually in THIS graph, + the full vocabulary
 ```
 
@@ -268,7 +268,7 @@ update <the files you changed>`; stale generally (line numbers don't match the
 file) → `ug gen` again, which re-runs an existing project from its recorded
 root. Both are incremental, so cheap. `ug list` shows what exists — with each
 project's size, and a `STATUS` telling you whether it is `fresh`, `N changed`
-(the index is behind the tree), `no db` (`query`/`search`/`chat` cannot read
+(the index is behind the tree), `no db` (`analyze`/`search`/`chat` cannot read
 it), or `repo gone`.
 
 Graph-backed commands default to the **cwd basename**, db-backed ones to the
@@ -288,10 +288,10 @@ so `--json` output stays parseable; `--no-banner` turns it off.
 **Freshness, in detail** (see [Editing a codebase with `ug`](#editing-a-codebase-with-ug)
 for the workflow). `ug get_code` reads the *live* working tree and flags drift
 from the index, so source and line numbers are never silently wrong. The
-structural tools (`find_usages`, `ug query`) read the indexed graph, so they
+structural tools (`find_usages`, `ug analyze`) read the indexed graph, so they
 are as current as the last index — which is why `ug update <file>...` after an
 edit burst, or the git hooks, matter. Hook runs pass `--no-embed` to stay
-fast: structure, `ug query`, `diff_impact` and blast radius are exact, while
+fast: structure, `ug analyze`, `diff_impact` and blast radius are exact, while
 `search`/`semantic_search` may miss just-changed code until `ug ingest -n
 <project>` backfills the vectors. Both of those tools say so in their output
 when it applies, and `ug hook status` reports how far behind they are — you
@@ -303,13 +303,13 @@ true` (MCP) when you want the code inline; otherwise follow a hit with
 `get_code`.
 
 **`--no-embed` vs `--no-ingest` — they are not the same flag, and the
-difference decides whether `ug query` is trustworthy.** Both are accepted by
+difference decides whether `ug analyze` is trustworthy.** Both are accepted by
 `ug gen` and `ug update`:
 
 | Flag | Written to the OverGraph db | What is current | What is behind |
 |---|---|---|---|
-| `--no-embed` | nodes + edges + facts + keyword stats, **no vectors** | graph.json tools **and `ug query`** — statistics, `diff_impact`, blast radius | `search` / `semantic_search` / `chat` miss the changed nodes |
-| `--no-ingest` | **nothing at all** — the db is not opened | graph.json tools only: `find_symbols`, `file_outline`, `get_code`, `find_usages`, `shortest_path`, `project_overview` | **everything db-backed**, including `ug query` statistics and blast radius, answers from the *previous* ingest |
+| `--no-embed` | nodes + edges + facts + keyword stats, **no vectors** | graph.json tools **and `ug analyze`** — statistics, `diff_impact`, blast radius | `search` / `semantic_search` / `chat` miss the changed nodes |
+| `--no-ingest` | **nothing at all** — the db is not opened | graph.json tools only: `find_symbols`, `file_outline`, `get_code`, `find_usages`, `shortest_path`, `project_overview` | **everything db-backed**, including `ug analyze` statistics and blast radius, answers from the *previous* ingest |
 
 So: use `--no-embed` when you want speed but still need counts and blast
 radius (this is what the git hooks do); use `--no-ingest` only for a
@@ -320,7 +320,7 @@ a vector.
 **Persistent connection for many calls.** Each `ug` CLI call is a fresh process
 that reloads the graph; for a session of dozens of calls, `ug serve` keeps the
 graph + db cached in one process and answers the same tools over HTTP
-(`POST /api/tools/<name>`) — the `/api/tools/code_query` envelope matches `ug
+(`POST /api/tools/<name>`) — the `/api/tools/analyze` envelope matches `ug
 query --json` field-for-field.
 
 ## Traps

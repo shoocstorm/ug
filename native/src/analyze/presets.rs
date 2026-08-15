@@ -9,14 +9,14 @@
 //!
 //! **Every preset here must run against the facts ingest actually
 //! writes** — the authoritative list is
-//! [`crate::code_query::QUERYABLE_PROPERTIES`], and
+//! [`crate::analyze::QUERYABLE_PROPERTIES`], and
 //! `no_builtin_preset_reads_an_unindexed_property` enforces it. Querying
 //! anything else does not error; it returns a confident zero. A preset
 //! that reaches for a property the indexer does not yet produce is a
 //! shipped bug, not a forward-looking one.
 //!
 //! **List presets return up to 200 rows, not 20.** Row ranges (see
-//! [`crate::code_query::range`]) are a window over what the query
+//! [`crate::analyze::range`]) are a window over what the query
 //! returned, so a `LIMIT 30` preset could never show row 31 however the
 //! caller asked. Only the visible window is ever formatted, so the wider
 //! limit costs memory rather than tokens.

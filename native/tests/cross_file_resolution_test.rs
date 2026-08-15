@@ -107,10 +107,10 @@ fn rust_a_mod_declaration_binds_its_child_module() {
     let graph = run(&[
         ("src/cli/mod.rs", "pub fn run() -> u32 { 1 }\n"),
         ("src/mcp/mod.rs", "pub fn run() -> u32 { 2 }\n"),
-        ("src/code_query/mod.rs", "pub fn run() -> u32 { 3 }\n"),
+        ("src/analyze/mod.rs", "pub fn run() -> u32 { 3 }\n"),
         (
             "src/main.rs",
-            "mod cli;\nmod mcp;\nmod code_query;\npub fn start() -> u32 { cli::run() }\n",
+            "mod cli;\nmod mcp;\nmod analyze;\npub fn start() -> u32 { cli::run() }\n",
         ),
     ]);
 
