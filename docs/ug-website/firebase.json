@@ -1,0 +1,16 @@
+{
+  "hosting": {
+    "site": "ultra-graph",
+    "public": ".",
+    "ignore": [
+      "firebase.json",
+      ".firebaserc",
+      ".firebase/**",
+      ".git/**",
+      "**/.*",
+      "**/node_modules/**",
+      "docs/**",
+      "*.md"
+    ]
+  }
+}

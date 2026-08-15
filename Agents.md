@@ -133,25 +133,88 @@ format), stream only the final answer, and show every call to the user as it hap
 ### Verification Checklist
 ```
 1. cd native && cargo test              → all tests must pass
-2. cd native && cargo build --release   → native module must build
+2. cd native && cargo build   → native module must build
 3. ./native/target/release/ug help      → CLI works
 ```
 
 ## 7. Documentation & Website
 
-**Significant changes must be reflected in both the docs and the ug website.**
+**The website lives in this repo at `docs/ug-website/`. Updating it is part of
+the change, not a follow-up task.**
 
-`docs/ug-website/` is the public-facing promotional portal for ug — what end users see first. It is deployed to Firebase and contains:
+It used to be the separate `shoocstorm/AI-Ultra-Graph-RAG-for-AI-Agent`
+checkout, symlinked in. That repo is superseded — edit the files here.
 
-| Page | What it presents |
-|------|-----------------|
-| `index.html` | Slide-deck landing page: product intro, demo video, problem/solution, features, MCP integration, install/upgrade instructions |
-| `api-reference.html` | Full multi-tab API reference: CLI commands, HTTP API routes, MCP tools, storage backends, pipeline & schemas (generated from `docs/API-REFERENCE.md`) |
-| `architecture.html` | Architecture diagram and component overview |
+### 7.1 What is in `docs/ug-website/`
 
-When making significant changes (new commands, new API routes, new MCP tools, storage changes, pipeline changes), update both:
-1. The relevant markdown docs in `docs/` (especially `docs/API-REFERENCE.md`)
-2. The corresponding `docs/ug-website/*.html` pages
+| File | What it presents | Anchors you will edit |
+|------|-----------------|----------------------|
+| `index.html` | Slide-deck landing page | `#what` `#how` `#demo` `#features` `#agents` `#showcase` `#get-started` |
+| `api-reference.html` | Multi-tab API reference, mirroring `docs/API-REFERENCE.md` | `#tab-cli` `#tab-http` `#tab-mcp` `#tab-storage` `#tab-pipeline` |
+| `architecture.html` | Architecture diagram and component overview | — |
+| `install.sh` | The script behind the landing page's `curl \| sh` install | — |
+| `img/UG-*.png` | Screenshots used by the hero background and `#showcase` | — |
+| `404.html`, `favicon.svg` | Static assets served at the site root | — |
+| `firebase.json`, `.firebaserc` | Hosting config — see 7.3 | — |
+
+These are hand-written static pages. **There is no build step and no
+generator** — nothing regenerates them from the markdown, which is exactly why
+they go stale unless you edit them in the same pass.
+
+### 7.2 The standing trigger — apply without being asked
+
+If a change lands in the left column, the right column is part of that same
+change. Do not wait to be told, and do not file it as future work.
+
+| You changed… | Update, in the same commit |
+|---|---|
+| A CLI subcommand, flag, or its help text | `docs/API-REFERENCE.md` §1.x → `api-reference.html` `#tab-cli`. If it is a headline capability, also `index.html` `#features` |
+| An HTTP route, its params, or its response shape | `docs/API-REFERENCE.md` §2.x → `#tab-http` |
+| An MCP tool — name, schema, or **description text** | `docs/API-REFERENCE.md` §3.1 → `#tab-mcp` → `index.html` `#agents` |
+| A storage backend, `StoreSpec`, or `KnowledgeStore` method | `docs/API-REFERENCE.md` §4.x → `#tab-storage` |
+| The pipeline, `index.json`, or `graph.json` schema | `docs/API-REFERENCE.md` §5.x → `#tab-pipeline` |
+| Install or upgrade steps | `index.html` `#get-started` **and** `docs/ug-website/install.sh` — they must agree |
+| Architecture or component boundaries | `architecture.html` **and** `docs/architecture.html` |
+| A user-visible UI feature worth showing off | `index.html` `#showcase` (reuse an existing `img/UG-*.png` unless the feature is genuinely new) |
+
+Renames and deletions count. Per §3a there are no aliases, so a command that
+disappeared from the CLI must disappear from the website too — a page
+documenting a command that no longer exists is worse than no page.
+
+While editing the HTML:
+
+- Match the surrounding markup and class names. Do not reformat, re-indent, or
+  "modernize" a page you are only adding a row to (§3).
+- **Keep the `#tab-*` ids and `data-tab` values stable** — the tab bar's JS
+  pairs them by name.
+- Every command string on the page must be copy-paste runnable. Verify it
+  against actual `ug help <cmd>` output, not from memory.
+- `favicon.svg` is referenced from the site root (`/favicon.svg`); screenshots
+  are referenced relatively (`img/UG-Query.png`, and `url('img/UG-Graph.png')`
+  in the inline `<style>` block). Keep new screenshots in `img/`.
+- Screenshots are still multi-MB each. Reuse what is in `img/`, and compress
+  anything new — a 33 MB animated GIF was already removed once for this reason.
+  Two are currently unreferenced (`UG-Guided-Tour.png`,
+  `UG-Semantic-Search.png`); prefer wiring one of those in over adding a file.
+
+### 7.3 Deploying to Firebase
+
+`firebase.json` sets `"public": "."`, so the deploy **must run from inside the
+website folder**:
+
+```bash
+cd docs/ug-website
+firebase login          # once
+firebase deploy --only hosting:ultra-graph
+```
+
+Do not hoist `firebase.json` / `.firebaserc` to the repo root or rewrite
+`public` to a path — the pages reference assets at the site root, and repointing
+`public` silently changes what `/favicon.svg` and `install.sh` resolve to.
+`.firebase/` (the local deploy cache) is gitignored.
+
+Deploying publishes to a live public site. Edit and commit freely; **deploy only
+when asked.**
 
 ## 8. OverGraph — the storage engine
 

@@ -1,0 +1,1360 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=1280, initial-scale=1" />
+<title>UltraGraph-KB — Perfect context, in seconds.</title>
+<link rel="icon" type="image/svg+xml" href="../favicon.svg" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --ink: #1F2937;
+    --ink-soft: #334155;
+    --slate: #64748B;
+    --slate-soft: #94A3B8;
+    --line: #E2E8F0;
+    --bg: #FFFFFF;
+    --bg-alt: #F8FAFC;
+    --teal: #14B8A6;
+    --teal-2: #2DD4BF;
+    --teal-ink: #0F766E;
+    --teal-wash: rgba(20, 184, 166, .08);
+    --code-bg: #0F172A;
+    --code-bg-2: #0B1224;
+    --code-line: #1E293B;
+    --code-text: #E2E8F0;
+    --code-dim: #94A3B8;
+    --code-key: #C084FC;
+    --code-str: #34D399;
+    --code-num: #FBBF24;
+    --code-fn:  #60A5FA;
+    --code-com: #64748B;
+    --shadow-lg: 0 25px 50px -12px rgba(15, 23, 42, .18);
+    --shadow-md: 0 12px 28px -10px rgba(15, 23, 42, .14);
+    --shadow-sm: 0 2px 8px rgba(15, 23, 42, .06);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    font-family: 'Inter', system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    color: var(--ink);
+    background:
+      radial-gradient(900px 600px at 12% -10%, rgba(45, 212, 191, .14), transparent 60%),
+      radial-gradient(900px 700px at 110% 10%, rgba(96, 165, 250, .10), transparent 55%),
+      radial-gradient(800px 700px at 50% 120%, rgba(20, 184, 166, .08), transparent 60%),
+      linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%);
+    background-attachment: fixed;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  .deck {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  .slide {
+    position: absolute;
+    inset: 0;
+    display: none;
+    padding: 64px 88px 96px;
+    flex-direction: column;
+    justify-content: flex-start;
+    animation: fadeUp .35s ease both;
+  }
+  .slide.active { display: flex; }
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* — Slide chrome — */
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    border-radius: 999px;
+    background: #0F172A;
+    color: #fff;
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: .02em;
+    box-shadow: var(--shadow-sm);
+    align-self: flex-start;
+  }
+  .badge .dot { color: var(--teal-2); font-family: 'JetBrains Mono', monospace; font-weight: 700; }
+  .badge.alt  { background: var(--teal-wash); color: var(--teal-ink); }
+  .badge.alt .dot { color: var(--teal); }
+
+  h1 {
+    font-size: 76px;
+    line-height: 1.04;
+    letter-spacing: -.025em;
+    font-weight: 800;
+    margin: 28px 0 18px;
+    color: var(--ink);
+  }
+  h1.small { font-size: 56px; }
+  h1 .hl { color: var(--teal); }
+  h1 .ink-soft { color: var(--ink-soft); font-weight: 700; }
+
+  h2 {
+    font-size: 44px;
+    line-height: 1.1;
+    letter-spacing: -.02em;
+    font-weight: 800;
+    margin: 22px 0 12px;
+  }
+  h2 .hl { color: var(--teal); }
+
+  .lede {
+    font-size: 22px;
+    line-height: 1.45;
+    color: var(--slate);
+    max-width: 980px;
+    margin: 0 0 22px;
+    font-weight: 400;
+  }
+  .lede strong { color: var(--ink); font-weight: 600; }
+
+  .footer-bar {
+    position: absolute;
+    left: 50%;
+    bottom: 28px;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 10px 18px;
+    border-radius: 999px;
+    background: rgba(248, 250, 252, .75);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid var(--line);
+    color: var(--slate);
+    font-size: 13px;
+    box-shadow: var(--shadow-sm);
+    max-width: calc(100% - 64px);
+  }
+  .footer-bar .tip { color: var(--ink-soft); font-weight: 500; }
+  .footer-bar .sep { width: 4px; height: 4px; border-radius: 50%; background: var(--slate-soft); }
+  .footer-bar code {
+    font-family: 'JetBrains Mono', monospace;
+    background: #fff;
+    border: 1px solid var(--line);
+    padding: 2px 8px;
+    border-radius: 6px;
+    color: var(--ink);
+    font-size: 12px;
+  }
+
+  .hud {
+    position: fixed;
+    right: 24px;
+    bottom: 24px;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    z-index: 50;
+  }
+  .hud .pill {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--slate);
+    background: rgba(255,255,255,.7);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 6px 12px;
+    backdrop-filter: blur(8px);
+  }
+  .hud button {
+    width: 32px; height: 32px;
+    border-radius: 999px;
+    background: #fff;
+    border: 1px solid var(--line);
+    color: var(--ink);
+    cursor: pointer;
+    font-size: 14px;
+    box-shadow: var(--shadow-sm);
+    transition: transform .15s ease, background .15s ease;
+  }
+  .hud button:hover { background: var(--teal-wash); transform: translateY(-1px); }
+
+  .progress {
+    position: fixed;
+    top: 0; left: 0;
+    height: 3px;
+    background: linear-gradient(90deg, var(--teal-2), var(--teal));
+    width: 0%;
+    transition: width .3s ease;
+    z-index: 100;
+  }
+
+  /* — Layout helpers — */
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+  .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+  .row { display: flex; gap: 16px; flex-wrap: wrap; }
+  .stack { display: flex; flex-direction: column; gap: 14px; }
+  .center-block { display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; }
+
+  /* — Cards — */
+  .card {
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    padding: 22px 24px;
+    box-shadow: var(--shadow-sm);
+  }
+  .card.tinted {
+    background: linear-gradient(180deg, #fff, var(--teal-wash));
+    border-color: rgba(20, 184, 166, .25);
+  }
+  .card h3 {
+    font-size: 18px;
+    margin: 0 0 8px;
+    letter-spacing: -.01em;
+  }
+  .card .num {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 36px;
+    font-weight: 700;
+    color: var(--teal-ink);
+    line-height: 1;
+    margin: 4px 0 6px;
+  }
+  .card .sub { font-size: 13px; color: var(--slate); }
+
+  .kbd {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--ink);
+    background: #fff;
+    border: 1px solid var(--line);
+    border-bottom-width: 2px;
+    padding: 2px 8px;
+    border-radius: 6px;
+  }
+
+  /* — Code window — */
+  .terminal {
+    background: var(--code-bg);
+    border-radius: 16px;
+    box-shadow: var(--shadow-lg);
+    overflow: hidden;
+    color: var(--code-text);
+    border: 1px solid #1E293B;
+  }
+  .terminal .titlebar {
+    display: flex;
+    align-items: center;
+    padding: 12px 16px;
+    background: linear-gradient(180deg, #111B30, #0B1224);
+    border-bottom: 1px solid var(--code-line);
+    position: relative;
+  }
+  .terminal .lights {
+    display: flex; gap: 7px;
+  }
+  .terminal .lights span {
+    width: 12px; height: 12px; border-radius: 50%;
+    display: inline-block;
+    box-shadow: inset 0 0 0 1px rgba(0,0,0,.2);
+  }
+  .terminal .lights .r { background: #FF5F57; }
+  .terminal .lights .y { background: #FEBC2E; }
+  .terminal .lights .g { background: #28C840; }
+  .terminal .title {
+    position: absolute;
+    left: 50%; transform: translateX(-50%);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--code-dim);
+    letter-spacing: .02em;
+  }
+  .terminal pre, .terminal .body {
+    margin: 0;
+    padding: 18px 22px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 14px;
+    line-height: 1.65;
+    white-space: pre;
+    overflow-x: auto;
+  }
+  .terminal.compact pre { font-size: 13px; padding: 14px 18px; }
+  .c-key { color: var(--code-key); }
+  .c-str { color: var(--code-str); }
+  .c-num { color: var(--code-num); }
+  .c-fn  { color: var(--code-fn); }
+  .c-com { color: var(--code-com); font-style: italic; }
+  .c-dim { color: var(--code-dim); }
+  .c-flag { color: #F472B6; }
+  .c-acc { color: var(--teal-2); }
+  .prompt { color: var(--teal-2); }
+
+  /* — Tables — */
+  table.t {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 14px;
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: var(--shadow-sm);
+  }
+  table.t th, table.t td {
+    text-align: left;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--line);
+  }
+  table.t th {
+    background: var(--bg-alt);
+    color: var(--ink-soft);
+    font-weight: 600;
+    font-size: 12px;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+  }
+  table.t tr:last-child td { border-bottom: none; }
+  table.t td.mono, table.t th.mono { font-family: 'JetBrains Mono', monospace; }
+  table.t td .pillv {
+    display: inline-block;
+    background: var(--teal-wash);
+    color: var(--teal-ink);
+    padding: 2px 8px;
+    border-radius: 6px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .num-after, .num-before {
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 600;
+  }
+  .num-before { color: var(--slate); text-decoration: line-through; text-decoration-color: rgba(100,116,139,.45); }
+  .num-after { color: var(--teal-ink); }
+
+  /* — Edge weight ladder (motif) — */
+  .ladder {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+  }
+  .ladder .rung {
+    display: grid;
+    grid-template-columns: 130px 1fr 70px;
+    align-items: center;
+    gap: 14px;
+    font-size: 14px;
+  }
+  .ladder .rung .name { font-family: 'JetBrains Mono', monospace; color: var(--ink); font-weight: 600; }
+  .ladder .rung .bar {
+    height: 10px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, var(--teal), var(--teal-2));
+    box-shadow: inset 0 0 0 1px rgba(15,23,42,.04);
+  }
+  .ladder .rung .bar.dim { background: linear-gradient(90deg, #CBD5E1, #94A3B8); }
+  .ladder .rung .val { text-align: right; font-family: 'JetBrains Mono', monospace; color: var(--slate); }
+
+  /* — Pipeline blocks (PPR diagram) — */
+  .pipe { display: flex; flex-direction: column; align-items: center; gap: 10px; width: 100%; }
+  .pipe .block {
+    width: 100%;
+    max-width: 720px;
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 16px 22px;
+    box-shadow: var(--shadow-sm);
+  }
+  .pipe .block.accent {
+    background: linear-gradient(180deg, #fff, var(--teal-wash));
+    border-color: rgba(20,184,166,.4);
+  }
+  .pipe .block h4 {
+    margin: 0 0 4px;
+    font-size: 16px;
+    color: var(--ink);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .pipe .block h4 .tag {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--teal-ink);
+    background: var(--teal-wash);
+    padding: 2px 8px;
+    border-radius: 6px;
+  }
+  .pipe .block p {
+    margin: 0;
+    color: var(--slate);
+    font-size: 13px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .pipe .arrow {
+    width: 2px; height: 22px;
+    background: linear-gradient(180deg, var(--teal), var(--teal-2));
+    border-radius: 2px;
+    position: relative;
+  }
+  .pipe .arrow::after {
+    content: '';
+    position: absolute;
+    left: 50%; bottom: -4px;
+    transform: translateX(-50%) rotate(45deg);
+    width: 8px; height: 8px;
+    border-right: 2px solid var(--teal);
+    border-bottom: 2px solid var(--teal);
+  }
+
+  /* — Architecture stack — */
+  .stack-layers { display: flex; flex-direction: column; gap: 10px; width: 100%; max-width: 920px; margin: 0 auto; }
+  .layer {
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    align-items: center;
+    gap: 18px;
+    padding: 16px 20px;
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    box-shadow: var(--shadow-sm);
+  }
+  .layer .label {
+    font-size: 14px;
+    color: var(--ink-soft);
+    font-weight: 600;
+  }
+  .layer .label .sub {
+    display: block;
+    color: var(--slate);
+    font-weight: 400;
+    font-size: 12px;
+    margin-top: 2px;
+  }
+  .layer .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    background: var(--bg-alt);
+    color: var(--ink-soft);
+    border: 1px solid var(--line);
+    padding: 4px 10px;
+    border-radius: 8px;
+  }
+  .chip.acc { background: var(--teal-wash); color: var(--teal-ink); border-color: rgba(20,184,166,.25); }
+  .layer.core { background: linear-gradient(180deg, #0F172A, #0B1224); color: #fff; border-color: #1E293B; }
+  .layer.core .label { color: #fff; }
+  .layer.core .label .sub { color: var(--slate-soft); }
+  .layer.core .chip {
+    background: rgba(255,255,255,.06);
+    color: #E2E8F0;
+    border-color: rgba(255,255,255,.10);
+  }
+  .layer.core .chip.acc { background: rgba(45,212,191,.16); color: var(--teal-2); border-color: rgba(45,212,191,.30); }
+
+  /* — Big number — */
+  .stat {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    padding: 24px;
+    box-shadow: var(--shadow-sm);
+  }
+  .stat .big {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 56px;
+    font-weight: 700;
+    color: var(--ink);
+    line-height: 1;
+    letter-spacing: -.02em;
+  }
+  .stat .big .unit { color: var(--teal); font-size: 28px; margin-left: 4px; }
+  .stat .lbl { color: var(--slate); font-size: 13px; margin-top: 8px; }
+  .stat .delta {
+    margin-top: 12px;
+    font-size: 12px;
+    color: var(--teal-ink);
+    background: var(--teal-wash);
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-weight: 600;
+  }
+
+  /* — Title slide — */
+  .title-slide {
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding-top: 0;
+  }
+  .title-slide .brand {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 14px;
+    color: var(--slate);
+    letter-spacing: .2em;
+    text-transform: uppercase;
+    margin-bottom: 18px;
+  }
+  .title-slide h1 {
+    font-size: 116px;
+    line-height: .98;
+    letter-spacing: -.04em;
+    margin: 0;
+  }
+  .title-slide .tag {
+    margin-top: 28px;
+    font-size: 26px;
+    color: var(--slate);
+    font-weight: 400;
+  }
+  .title-slide .meta {
+    margin-top: 44px;
+    display: flex; gap: 14px; flex-wrap: wrap; justify-content: center;
+  }
+
+  .node-thumb {
+    position: absolute;
+    right: 88px;
+    bottom: 96px;
+    width: 92px; height: 92px;
+    opacity: .55;
+  }
+  .node-thumb svg { width: 100%; height: 100%; }
+
+  /* — list bullets — */
+  ul.feat {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  ul.feat li {
+    padding-left: 26px;
+    position: relative;
+    color: var(--ink-soft);
+    font-size: 16px;
+    line-height: 1.5;
+  }
+  ul.feat li::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 9px;
+    width: 14px; height: 2px;
+    background: var(--teal);
+    border-radius: 2px;
+  }
+  ul.feat li strong { color: var(--ink); font-weight: 600; }
+  ul.feat li code {
+    font-family: 'JetBrains Mono', monospace;
+    background: var(--bg-alt);
+    border: 1px solid var(--line);
+    padding: 1px 6px;
+    border-radius: 5px;
+    font-size: 13px;
+    color: var(--ink);
+  }
+
+  /* — Section title style — */
+  .section-tag {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    color: var(--teal-ink);
+    background: var(--teal-wash);
+    padding: 6px 14px;
+    border-radius: 999px;
+    align-self: flex-start;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    font-weight: 600;
+  }
+
+  .two-col {
+    display: grid;
+    grid-template-columns: 1.05fr 1fr;
+    gap: 40px;
+    align-items: start;
+    margin-top: 14px;
+  }
+
+  .three-fail {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    margin-top: 14px;
+  }
+  .three-fail .card { padding: 18px; }
+  .three-fail .idx {
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--teal);
+    font-size: 13px;
+    font-weight: 700;
+    margin-bottom: 6px;
+  }
+  .three-fail h3 { font-size: 15px; margin: 0 0 6px; }
+  .three-fail p { margin: 0; color: var(--slate); font-size: 13px; line-height: 1.5; }
+
+  /* — Compression visual — */
+  .compress {
+    display: flex; flex-direction: column; gap: 12px; max-width: 720px;
+  }
+  .compress .row-c {
+    display: grid;
+    grid-template-columns: 90px 1fr 130px;
+    align-items: center;
+    gap: 14px;
+    font-size: 14px;
+  }
+  .compress .row-c .lbl { color: var(--ink-soft); font-weight: 600; font-family: 'JetBrains Mono', monospace; font-size: 13px; }
+  .compress .row-c .bar { height: 18px; background: var(--bg-alt); border-radius: 6px; position: relative; overflow: hidden; }
+  .compress .row-c .bar .fill { position: absolute; left: 0; top: 0; bottom: 0; background: linear-gradient(90deg, #94A3B8, #64748B); border-radius: 6px; }
+  .compress .row-c .bar .fill.t { background: linear-gradient(90deg, var(--teal-2), var(--teal)); }
+  .compress .row-c .val { font-family: 'JetBrains Mono', monospace; color: var(--slate); font-size: 13px; text-align: right; }
+
+  .roadmap-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+  }
+  .roadmap-grid .card .when {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--teal-ink);
+    background: var(--teal-wash);
+    padding: 2px 8px;
+    border-radius: 6px;
+    display: inline-block;
+    margin-bottom: 8px;
+    font-weight: 600;
+  }
+</style>
+</head>
+<body>
+<div class="progress" id="progress"></div>
+<div class="deck" id="deck">
+
+  <!-- ───────────────────────────────────────── 1 · TITLE ───────────────────────────────────────── -->
+  <section class="slide title-slide active" data-title="Title">
+    <div>
+      <div class="brand">UltraGraph-KB · <span style="color: var(--teal)">ug</span></div>
+      <h1>Perfect <span class="hl">context</span>,<br/>in <span class="hl">seconds</span>.</h1>
+      <div class="tag">A local-first knowledge-base generator that turns any codebase into a queryable <strong style="color: var(--ink)">Semantic Knowledge Graph</strong>.</div>
+      <div class="meta">
+        <span class="badge"><span class="dot">&gt;_</span> pure rust — 10 mb binary</span>
+        <span class="badge alt"><span class="dot">●</span> all four phases shipped</span>
+      </div>
+    </div>
+    <div class="footer-bar">
+      <span class="tip">Tip</span> <span class="sep"></span>
+      <span>navigate with</span> <span class="kbd">←</span> <span class="kbd">→</span> <span class="sep"></span>
+      <span>jump with</span> <span class="kbd">1</span>–<span class="kbd">9</span>
+    </div>
+  </section>
+
+  <!-- ───────────────────────────────────────── 2 · PROBLEM ─────────────────────────────────────── -->
+  <section class="slide" data-title="The Problem">
+    <span class="badge"><span class="dot">01</span> The problem</span>
+    <h1>Traditional RAG <span class="hl">fails</span> on codebases.</h1>
+    <p class="lede">One wrong top-1 vector hit poisons the whole neighborhood. Most real questions span <strong>five or more nodes</strong> — there is no single seed.</p>
+
+    <div class="three-fail">
+      <div class="card">
+        <div class="idx">FAILURE · 01</div>
+        <h3>Errors compound</h3>
+        <p>A wrong top-1 vector hit taints every downstream expansion. The seed is the answer's blast radius.</p>
+      </div>
+      <div class="card">
+        <div class="idx">FAILURE · 02</div>
+        <h3>No single seed exists</h3>
+        <p>"How does auth work?" lives across handlers, middleware, configs, types — at least five nodes, none privileged.</p>
+      </div>
+      <div class="card">
+        <div class="idx">FAILURE · 03</div>
+        <h3>MMR ≠ relevance</h3>
+        <p>MMR optimizes diversity, not answer quality. The rerank step is a heuristic, not a retrieval signal.</p>
+      </div>
+    </div>
+
+    <div style="margin-top: 24px;">
+      <div class="terminal compact" style="max-width: 920px;">
+        <div class="titlebar"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="title">traditional-rag.failure.log</div></div>
+<pre><span class="c-com"># query: "how does auth work"</span>
+<span class="c-com"># top-1 vector hit:</span>
+<span class="c-key">→</span> <span class="c-str">src/utils/passwordHash.ts</span>   <span class="c-com">// adjacent, not central</span>
+<span class="c-com"># BFS expansion seeded from above:</span>
+<span class="c-key">→</span> crypto.ts · bcrypt-wrapper.ts · hash-helpers.ts   <span class="c-flag">// missing: oauth, middleware, session</span>
+<span class="c-com"># MMR rerank: picked 3 "diverse" hash utilities. Answer never recovers.</span></pre>
+      </div>
+    </div>
+
+    <div class="footer-bar">
+      <span class="tip">The fix →</span><span class="sep"></span>
+      <span>RRF seed pool · Personalized PageRank · token-budgeted assembly</span>
+    </div>
+  </section>
+
+  <!-- ───────────────────────────────────────── 3 · ARCHITECTURE ────────────────────────────────── -->
+  <section class="slide" data-title="Architecture">
+    <span class="badge"><span class="dot">02</span> Pure Rust architecture</span>
+    <h1 class="small">Rust saturates cores. <span class="hl">Pure binary</span> — no runtime.</h1>
+
+    <div class="stack-layers" style="margin-top: 16px;">
+      <div class="layer core">
+        <div class="label">Core Engine <span class="sub">Rust · single 10 MB binary</span></div>
+        <div class="chips">
+          <span class="chip">cli (axum)</span>
+          <span class="chip">ignore + rayon</span>
+          <span class="chip">tree-sitter</span>
+          <span class="chip">blake3</span>
+          <span class="chip acc">ppr + rrf</span>
+        </div>
+      </div>
+      <div class="layer">
+        <div class="label">Interfaces <span class="sub">stdin/stdout MCP · embedded HTTP · Tauri desktop</span></div>
+        <div class="chips">
+          <span class="chip acc">ug mcp (stdio)</span>
+          <span class="chip acc">HTTP API</span>
+          <span class="chip">ug app (Tauri)</span>
+        </div>
+      </div>
+      <div class="layer">
+        <div class="label">Storage & Embeddings <span class="sub">embedded graph + vector + FTS</span></div>
+        <div class="chips">
+          <span class="chip acc">OverGraph</span>
+          <span class="chip">Qwen3-Embedding-0.6B-4bit-DWQ</span>
+          <span class="chip">openai-compatible @ :8000</span>
+        </div>
+      </div>
+      <div class="layer">
+        <div class="label">Agent Protocol <span class="sub">one binary, three surfaces</span></div>
+        <div class="chips">
+          <span class="chip">MCP stdio</span>
+          <span class="chip">HTTP <code>/api/tools</code></span>
+          <span class="chip">CLI flags</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer-bar">
+      <span class="tip">No Node.js · no NAPI</span><span class="sep"></span>
+      <span>Pure Rust from index to API — <strong style="color: var(--ink)">10 MB</strong> static binary.</span>
+    </div>
+  </section>
+
+  <!-- ───────────────────────────────────────── 4 · PHASE 1 ─────────────────────────────────────── -->
+  <section class="slide" data-title="Phase 1 — Indexer">
+    <span class="section-tag">Phase 1 · the turbo indexer</span>
+    <h1 class="small">A 1,000-file repo, <span class="hl">in seconds</span>.</h1>
+
+    <div class="two-col">
+      <ul class="feat">
+        <li><strong>Parallel crawler</strong> — <code>rayon</code> over <code>ignore</code>, respects <code>.gitignore</code></li>
+        <li><strong>Incremental indexing</strong> — <code>blake3</code> hashes → only re-parse changed files</li>
+        <li><strong>AST extraction</strong> — TypeScript · Python · Markdown (CommonMark)</li>
+        <li><strong>Rust-first dispatch</strong> — <code>crawl()</code> → <code>parse_ast()</code> → structured nodes + edges, all in native code</li>
+      </ul>
+      <div class="terminal compact">
+        <div class="titlebar"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="title">native/src/indexer.rs</div></div>
+<pre><span class="c-key">use</span> rayon::prelude::*;
+<span class="c-key">use</span> ignore::WalkBuilder;
+
+<span class="c-key">fn</span> <span class="c-fn">crawl</span>(root: &<span class="c-key">Path</span>) -> Vec&lt;FileNode&gt; {
+    WalkBuilder::<span class="c-fn">new</span>(root)
+        .<span class="c-fn">build</span>()
+        .par_bridge()
+        .<span class="c-fn">filter_map</span>(|entry| {
+            <span class="c-key">let</span> p = entry.<span class="c-fn">ok</span>()?.<span class="c-fn">into_path</span>();
+            <span class="c-key">let</span> hash = blake3::<span class="c-fn">hash</span>(&fs::<span class="c-fn">read</span>(&p).<span class="c-fn">ok</span>()?);
+            <span class="c-fn">parse_ast</span>(&p, hash)   <span class="c-com">// tree-sitter</span>
+        })
+        .<span class="c-fn">collect</span>()
+}</pre>
+      </div>
+    </div>
+
+    <div class="footer-bar">
+      <span class="tip">Spec target</span><span class="sep"></span>
+      <span>Ingest a 1,000-file repo in <strong style="color: var(--ink)">&lt; 5 s</strong> · memory <strong style="color: var(--ink)">&lt; 500 MB</strong></span>
+    </div>
+  </section>
+
+  <!-- ───────────────────────────────────────── 5 · PHASE 1 EXTENDED ─────────────────────────────── -->
+  <section class="slide" data-title="Phase 1 — Extended">
+    <span class="section-tag">Phase 1 · extended · the relationship cheat-sheet</span>
+    <h1 class="small">Nine edges. <span class="hl">Every</span> structural truth.</h1>
+
+    <table class="t">
+      <thead><tr><th class="mono">Edge</th><th>Source → Target</th><th>What it surfaces</th></tr></thead>
+      <tbody>
+        <tr><td><span class="pillv">CONTAINS</span></td>          <td class="mono">Folder/File → Folder/File/Symbol</td> <td>Structural hierarchy (folder forest + symbol + heading nesting)</td></tr>
+        <tr><td><span class="pillv">IMPORTS</span></td>           <td class="mono">File/Symbol → File/Symbol</td>        <td>Cross-file dependencies</td></tr>
+        <tr><td><span class="pillv">EXPORTS</span></td>           <td class="mono">Symbol → File</td>                     <td>Module exports</td></tr>
+        <tr><td><span class="pillv">CALLS</span></td>             <td class="mono">Function → Function</td>               <td>The call graph</td></tr>
+        <tr><td><span class="pillv">EXTENDS</span></td>           <td class="mono">Class → Class</td>                     <td>Inheritance</td></tr>
+        <tr><td><span class="pillv">IMPLEMENTS</span></td>        <td class="mono">Class → Interface</td>                 <td>Interface implementations</td></tr>
+        <tr><td><span class="pillv">TYPED_AS</span></td>          <td class="mono">Symbol → Type/Symbol</td>              <td>Type relationships</td></tr>
+        <tr><td><span class="pillv">CONFIGURED_BY</span></td>     <td class="mono">Symbol → Config</td>                   <td>Configuration links</td></tr>
+        <tr><td><span class="pillv">DEPENDS_ON</span></td>        <td class="mono">File → Package</td>                    <td>NPM / external deps</td></tr>
+      </tbody>
+    </table>
+
+    <div class="footer-bar">
+      <span class="tip">Also extracted</span><span class="sep"></span>
+      <span>JSDoc · Python docstrings · signatures · code metrics · file classification · folder hierarchy w/ READMEs</span>
+    </div>
+  </section>
+
+  <!-- ───────────────────────────────────────── 6 · PHASE 2 ─────────────────────────────────────── -->
+  <section class="slide" data-title="Phase 2 — Graph + Viz">
+    <span class="section-tag">Phase 2 · embedded persistence + visualization</span>
+    <h1 class="small">Zero-latency traversal. <span class="hl">No external DB.</span></h1>
+
+    <div class="two-col">
+      <ul class="feat">
+        <li><strong>Schema</strong> — Nodes: <code>File · Folder · Symbol · Concept</code></li>
+        <li><strong>K-Hop BFS</strong> — in-memory, Rust-side</li>
+        <li><strong>Graph analytics</strong> — edge-type filtering · shortest path · degree/betweenness · cycle detection</li>
+        <li><strong>D3.js viz</strong> — forceLink + forceManyBody + forceCenter + forceCollide + group-pull forceX/Y</li>
+        <li><strong>Single embedded HTML</strong> — drag · zoom · pan · neighbor hover · responsive SVG</li>
+      </ul>
+      <div class="terminal compact">
+        <div class="titlebar"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="title">visualization.html · d3.v7</div></div>
+<pre><span class="c-key">const</span> sim = d3.<span class="c-fn">forceSimulation</span>(nodes)
+  .<span class="c-fn">force</span>(<span class="c-str">"link"</span>,    d3.<span class="c-fn">forceLink</span>(edges).<span class="c-fn">id</span>(d =&gt; d.id))
+  .<span class="c-fn">force</span>(<span class="c-str">"charge"</span>,  d3.<span class="c-fn">forceManyBody</span>().<span class="c-fn">strength</span>(<span class="c-num">-220</span>))
+  .<span class="c-fn">force</span>(<span class="c-str">"center"</span>,  d3.<span class="c-fn">forceCenter</span>(W/<span class="c-num">2</span>, H/<span class="c-num">2</span>))
+  .<span class="c-fn">force</span>(<span class="c-str">"collide"</span>, d3.<span class="c-fn">forceCollide</span>().<span class="c-fn">radius</span>(<span class="c-num">18</span>))
+  .<span class="c-fn">force</span>(<span class="c-str">"x"</span>, d3.<span class="c-fn">forceX</span>(byGroupX).<span class="c-fn">strength</span>(<span class="c-num">0.06</span>))
+  .<span class="c-fn">force</span>(<span class="c-str">"y"</span>, d3.<span class="c-fn">forceY</span>(byGroupY).<span class="c-fn">strength</span>(<span class="c-num">0.06</span>));</pre>
+      </div>
+    </div>
+
+    <div class="footer-bar">
+      <span class="tip">Built with</span><span class="sep"></span>
+      <span>vanilla JS · HTML5 · SVG — <strong style="color: var(--ink)">no build pipeline</strong></span>
+    </div>
+  </section>
+
+  <!-- ───────────────────────────────────────── 7 · PHASE 3 ─────────────────────────────────────── -->
+  <section class="slide" data-title="Phase 3 — Semantic Storage">
+    <span class="section-tag">Phase 3 · semantic storage + enrichment</span>
+    <h1 class="small">Meaning, layered on the <span class="hl">structural map</span>.</h1>
+
+    <div class="grid-3" style="margin-top: 14px;">
+      <div class="card tinted">
+        <h3>Vector integration</h3>
+        <p class="sub">Embed every node via a local OpenAI-compatible endpoint, persist into OverGraph alongside the graph.</p>
+      </div>
+      <div class="card tinted">
+        <h3>Folder-aware embedding text</h3>
+        <p class="sub">Folders ship with a synthesized synopsis — classification, language breakdown, depth — so they have retrieval signal pre-LLM.</p>
+      </div>
+      <div class="card tinted">
+        <h3>Auto-created indexes</h3>
+        <p class="sub">Vector + FTS, built at ingest. No second pass, no maintenance dance.</p>
+      </div>
+    </div>
+
+    <div style="margin-top: 22px;" class="terminal compact">
+      <div class="titlebar"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="title">folder-synopsis (pre-LLM)</div></div>
+<pre>{
+  <span class="c-key">"id"</span>:           <span class="c-str">"folder:src/auth"</span>,
+  <span class="c-key">"kind"</span>:         <span class="c-str">"Folder"</span>,
+  <span class="c-key">"classification"</span>: <span class="c-str">"Source"</span>,
+  <span class="c-key">"depth"</span>:        <span class="c-num">2</span>,
+  <span class="c-key">"languages"</span>:    [{ <span class="c-key">"ts"</span>: <span class="c-num">0.82</span> }, { <span class="c-key">"md"</span>: <span class="c-num">0.18</span> }],
+  <span class="c-key">"synopsis"</span>:     <span class="c-str">"Source folder under src/. 9 files. TS-heavy. Contains oauth/, session.ts, README.md."</span>
+}</pre>
+    </div>
+
+    <div class="footer-bar">
+      <span class="tip">Deferred (on roadmap)</span><span class="sep"></span>
+      <span>LLM-written summaries · semantic clustering · "functional modules"</span>
+    </div>
+  </section>
+
+  <!-- ───────────────────────────────────────── 8 · PHASE 4 — THE HEADLINE ──────────────────────── -->
+  <section class="slide" data-title="Phase 4 — GraphRAG">
+    <span class="badge"><span class="dot">★</span> Phase 4 · the headline</span>
+    <h1 class="small">Many seeds. <span class="hl">One walk.</span> Token-budgeted answer.</h1>
+    <p class="lede">We replaced the legacy <em>vector top-1 → BFS → MMR rerank</em> with <strong>Personalized PageRank seeded by RRF</strong>, HippoRAG-style. Legacy MMR remains behind <code style="background: var(--bg-alt); padding: 1px 6px; border-radius: 5px; font-family: 'JetBrains Mono', monospace; font-size: 14px;">strategy:"mmr"</code> for diversity-first callers.</p>
+
+    <div class="pipe" style="margin-top: 12px;">
+      <div class="block">
+        <h4><span class="tag">stage 1</span> RRF seed pool · vector + FTS</h4>
+        <p>top-16 hits → weighted personalization vector (not fixed BFS roots)</p>
+      </div>
+      <div class="arrow"></div>
+      <div class="block accent">
+        <h4><span class="tag">stage 2</span> Personalized PageRank</h4>
+        <p>random walk + restart α = 0.15  ·  edge-type weights  ·  L1 tol = 1e-4</p>
+      </div>
+      <div class="arrow"></div>
+      <div class="block">
+        <h4><span class="tag">stage 3</span> Token-budgeted assembly</h4>
+        <p>top-K by PPR · attach snippets · apply char budget</p>
+      </div>
+    </div>
+
+    <div class="footer-bar">
+      <span class="tip">MCP-native</span><span class="sep"></span>
+      <span><code>search</code> · <code>traverse</code> · <code>find_symbols</code> over stdio or HTTP — drop-in for any MCP agent</span>
+    </div>
+  </section>
+
+  <!-- ───────────────────────────────────────── 9 · PPR KNOBS + LADDER ──────────────────────────── -->
+  <section class="slide" data-title="PPR Tuning">
+    <span class="section-tag">PPR · tuning knobs</span>
+    <h1 class="small">The <span class="hl">edge-weight ladder</span> is the soul of the retrieval story.</h1>
+
+    <div class="two-col" style="grid-template-columns: 1.15fr 1fr;">
+      <div>
+        <table class="t">
+          <thead><tr><th class="mono">parameter</th><th>default</th><th>effect</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">pprRestartProb (α)</td><td><span class="pillv">0.15</span></td><td>Teleport prob. Higher → near seeds; lower → centrality dominates.</td></tr>
+            <tr><td class="mono">pprMaxIter</td><td><span class="pillv">100</span></td><td>Power-iteration cap (L1 tol = 1e-4).</td></tr>
+            <tr><td class="mono">pprSeedPool</td><td><span class="pillv">16</span></td><td>RRF hits feeding the personalization vector.</td></tr>
+            <tr><td class="mono">pprEdgeWeights</td><td><span class="pillv">per-type</span></td><td>Override edge-type weights (case-insensitive).</td></tr>
+          </tbody>
+        </table>
+        <p class="lede" style="font-size: 13px; margin-top: 16px;"><strong>Scaling note:</strong> PPR loads the full edges table per query — single-digit ms via sparse iteration at ≤100K edges. Past ~1M edges, switch to subgraph restriction or precomputed PPR vectors.</p>
+      </div>
+      <div class="card">
+        <h3 style="margin-bottom: 14px;">Default edge weights</h3>
+        <div class="ladder">
+          <div class="rung"><div class="name">calls</div>      <div class="bar" style="width: 100%;"></div>      <div class="val">1.00</div></div>
+          <div class="rung"><div class="name">extends</div>    <div class="bar" style="width: 90%;"></div>       <div class="val">0.90</div></div>
+          <div class="rung"><div class="name">implements</div> <div class="bar" style="width: 90%;"></div>       <div class="val">0.90</div></div>
+          <div class="rung"><div class="name">imports</div>    <div class="bar" style="width: 70%;"></div>       <div class="val">0.70</div></div>
+          <div class="rung"><div class="name">requires</div>   <div class="bar" style="width: 70%;"></div>       <div class="val">0.70</div></div>
+          <div class="rung"><div class="name">exports</div>    <div class="bar" style="width: 60%;"></div>       <div class="val">0.60</div></div>
+          <div class="rung"><div class="name">uses</div>       <div class="bar" style="width: 60%;"></div>       <div class="val">0.60</div></div>
+          <div class="rung"><div class="name">references</div> <div class="bar dim" style="width: 50%;"></div>   <div class="val">0.50</div></div>
+          <div class="rung"><div class="name">dependson</div>  <div class="bar dim" style="width: 40%;"></div>   <div class="val">0.40</div></div>
+          <div class="rung"><div class="name">contains</div>   <div class="bar dim" style="width: 30%;"></div>   <div class="val">0.30</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer-bar">
+      <span class="tip">Exposed via</span><span class="sep"></span>
+      <span>MCP <code>search</code> · HTTP <code>POST /api/tools/search</code> · CLI <code>ug mcp call search</code></span>
+    </div>
+  </section>
+
+  <!-- ───────────────────────────────────────── 10 · UG SERVE ───────────────────────────────────── -->
+  <section class="slide" data-title="ug serve">
+    <span class="section-tag"><code style="background: transparent; font-size: 13px; color: var(--teal-ink);">ug serve</code> · the embedded web api</span>
+    <h1 class="small">One Axum process. <span class="hl">Pre-compressed</span> bytes. Zero setup.</h1>
+
+    <div class="two-col">
+      <div>
+        <ul class="feat">
+          <li><strong>Self-contained binary</strong> — <code>visualization.html</code> + <code>d3.v7.min.js</code> are <code>include_str!</code>'d</li>
+          <li><strong>Pre-compressed at startup</strong> — brotli-9 + gzip-9 baked once, served forever</li>
+          <li><strong>Three route phases</strong> — static · read-only graph API · DB-backed semantic/hybrid</li>
+          <li><strong>Default bind</strong> — <code>127.0.0.1</code> — local-first, always</li>
+        </ul>
+        <div style="margin-top: 16px;" class="terminal compact">
+          <div class="titlebar"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="title">~/repo · zsh</div></div>
+<pre><span class="prompt">$</span> ug gen <span class="c-flag">-i</span> ./src <span class="c-flag">--serve --watch</span>
+<span class="c-com"># index → graph → viz → ingest → live server</span>
+<span class="c-acc">▸</span> listening on http://127.0.0.1:8080</pre>
+        </div>
+      </div>
+      <div>
+        <h3 style="font-size: 15px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: .05em; margin: 0 0 10px;">Compression payoff · 31.6 MB graph</h3>
+        <div class="compress">
+          <div class="row-c"><div class="lbl">identity</div><div class="bar"><div class="fill" style="width: 100%;"></div></div><div class="val">31,625,670 B · 1×</div></div>
+          <div class="row-c"><div class="lbl">gzip-9</div>  <div class="bar"><div class="fill t" style="width: 8.8%;"></div></div><div class="val">2,777,891 B · ~11×</div></div>
+          <div class="row-c"><div class="lbl">brotli-9</div><div class="bar"><div class="fill t" style="width: 7.2%;"></div></div><div class="val">2,272,127 B · ~14×</div></div>
+        </div>
+
+        <h3 style="font-size: 15px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: .05em; margin: 22px 0 10px;">Route surface</h3>
+        <table class="t">
+          <thead><tr><th>phase</th><th>routes</th></tr></thead>
+          <tbody>
+            <tr><td><span class="pillv">1 static</span></td><td class="mono" style="font-size: 12px;">/ · /index.html · /d3.v7.min.js · /graph.json · /healthz</td></tr>
+            <tr><td><span class="pillv">2 graph</span></td><td class="mono" style="font-size: 12px;">/api/graph/stats · /node/*id · /search · /bfs · /path · /filter · /centrality · /cycles</td></tr>
+            <tr><td><span class="pillv">3 db</span></td><td class="mono" style="font-size: 12px;">/api/db/node/*id · /api/db/traverse/*id · POST /api/search/{semantic,hybrid}</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="footer-bar">
+      <span class="tip">41,614 nodes / 95,117 edges</span><span class="sep"></span>
+      <span>compressed once at boot — served forever from RAM</span>
+    </div>
+  </section>
+
+  <!-- ───────────────────────────────────────── 11 · GUIDED TOUR ──────────────────────────────────── -->
+  <section class="slide" data-title="Guided Tour">
+    <span class="badge"><span class="dot">🎬</span> Guided graph tours</span>
+    <h1 class="small">LLM-narrated walkthroughs.<br /><span class="hl">Flies the camera</span> in the web UI.</h1>
+    <p class="lede">GraphRAG picks the nodes that matter for your question. An LLM "tour guide" orders them into a narrative arc, narrates each stop, and the result is an ordered itinerary bound to real graph nodes — ready to <strong>walk stop by stop</strong> in the CLI or the graph visualization.</p>
+
+    <div class="two-col">
+      <div>
+        <div class="terminal compact">
+          <div class="titlebar"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="title">ug tour · cli</div><button class="copy-btn" data-copy='ug tour "how does authentication work?"'>Copy</button></div>
+<pre><span class="prompt">$</span> ug tour <span class="c-str">"how does authentication work?"</span>
+
+<span class="c-acc">❯</span> Auth Flow · from login to session
+
+  This tour traces a request from the login
+  endpoint through credential validation, token
+  issuance, and middleware enforcement.
+
+<span class="c-acc">  ●</span> <span class="c-dim">Stop 1/5</span> · <span class="c-key">login handler</span> <span class="c-dim">(Function)</span>
+     src/auth/login.ts:42  POST /login
+
+  <span class="c-dim">  │  → calls</span>
+<span class="c-acc">  ●</span> <span class="c-dim">Stop 2/5</span> · <span class="c-key">verify_credentials</span> <span class="c-dim">(Function)</span>
+     src/auth/verify.ts:18  bcrypt check
+
+<span class="c-dim">  │  → calls</span>
+<span class="c-acc">  ●</span> <span class="c-dim">Stop 3/5</span> · <span class="c-key">issue_token</span> <span class="c-dim">(Function)</span>
+     src/auth/jwt.ts:55  JWT signing
+
+<span class="c-dim">  │  → extends</span>
+<span class="c-acc">  ●</span> <span class="c-dim">Stop 4/5</span> · <span class="c-key">AuthMiddleware</span> <span class="c-dim">(Class)</span>
+     src/auth/middleware.ts:12  bearer extract
+
+<span class="c-acc">  ●</span> <span class="c-dim">Stop 5/5</span> · <span class="c-key">SessionStore</span> <span class="c-dim">(Class)</span>
+     src/auth/session.ts:89  redis-backed
+
+  ✦ That's the auth pipeline — from HTTP
+     handler through credential checks, token
+     signing, and middleware enforcement.</pre>
+        </div>
+
+        <div class="card" style="margin-top: 14px;">
+          <h3 style="margin-top:0;">CLI flags</h3>
+          <div class="chips" style="margin-top: 6px;">
+            <span class="chip">--max-stops 10</span>
+            <span class="chip">--no-llm</span>
+            <span class="chip">--json</span>
+            <span class="chip">--show-plan</span>
+            <span class="chip">--strategy ppr</span>
+            <span class="chip">--no-snippets</span>
+            <span class="chip">--think</span>
+            <span class="chip">-o tour.json</span>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="terminal compact">
+          <div class="titlebar"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="title">post /api/tour · sse streaming</div></div>
+<pre><span class="c-com"># POST /api/tour with SSE streaming</span>
+<span class="prompt">$</span> curl <span class="c-flag">-N</span> <span class="c-flag">-X</span> POST http://localhost:8080/api/tour \
+  <span class="c-flag">-H</span> <span class="c-str">"Content-Type: application/json"</span> \
+  <span class="c-flag">-d</span> <span class="c-str">'{"query":"auth flow","stream":true}'</span>
+
+<span class="c-dim">event: progress</span>
+<span class="c-dim">data: {"phase":"retrieved","candidates":14}</span>
+<span class="c-dim">event: progress</span>
+<span class="c-dim">data: {"phase":"writing","chars":924,"tokens":237}</span>
+<span class="c-dim">event: progress</span>
+<span class="c-dim">data: {"phase":"assembled","stops":5}</span>
+<span class="c-dim">event: tour</span>
+<span class="c-dim">data: {</span>
+  <span class="c-key">"title"</span>:   <span class="c-str">"Auth Flow: from login to session"</span>,
+  <span class="c-key">"stops"</span>:   [···],
+  <span class="c-key">"route"</span>:   [<span class="c-str">"calls"</span>, <span class="c-str">"calls"</span>, <span class="c-str">"extends"</span>, <span class="c-str">"imports"</span>],
+  <span class="c-key">"warnings"</span>: [],
+  <span class="c-key">"usage"</span>:   { <span class="c-str">"total_tokens"</span>: <span class="c-num">847</span> }
+<span class="c-dim">}</span></pre>
+        </div>
+
+        <div style="margin-top: 14px;">
+          <ul class="feat" style="gap: 8px;">
+            <li><strong>PPR-powered retrieval</strong> — candidate nodes from GraphRAG</li>
+            <li><strong>LLM tour guide</strong> — orders + narrates each stop</li>
+            <li><strong>Camera animation</strong> — flies the D3 viz stop-to-stop in the web UI</li>
+            <li><strong>SSE via API</strong> — progress events during long completions</li>
+            <li><strong>Graceful degradation</strong> — <code>--no-llm</code> → ranked itinerary; model error → same</li>
+            <li><strong>Route edges</strong> — tour carries structural links between stops</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer-bar">
+      <span class="tip">Both CLI and API</span><span class="sep"></span>
+      <span>Shared module <code>native/src/tour.rs</code> — <code>ug tour</code> and <code>POST /api/tour</code> produce identical tours</span>
+    </div>
+  </section>
+
+  <!-- ───────────────────────────────────────── 12 · PERFORMANCE ────────────────────────────────── -->
+  <section class="slide" data-title="Performance">
+    <span class="badge"><span class="dot">▲</span> performance · overgraph migration</span>
+    <h1 class="small">From <span style="color: var(--slate); text-decoration: line-through; text-decoration-color: rgba(100,116,139,.5);">5 minutes</span> to <span class="hl">~1–2 minutes</span>.</h1>
+
+    <div class="grid-4" style="margin-top: 18px;">
+      <div class="stat">
+        <div class="big">9.27<span class="unit">s</span></div>
+        <div class="lbl">Indexing</div>
+        <div class="delta">spec: &lt; 5 s / 1K files</div>
+      </div>
+      <div class="stat">
+        <div class="big">264<span class="unit">ms</span></div>
+        <div class="lbl">Graph build</div>
+        <div class="delta">in-memory, Rust-side</div>
+      </div>
+      <div class="stat">
+        <div class="big">5.7<span class="unit">ms</span></div>
+        <div class="lbl">Hybrid search · p95</div>
+        <div class="delta">PPR · single-digit ms</div>
+      </div>
+      <div class="stat">
+        <div class="big">64.8<span class="unit">ms</span></div>
+        <div class="lbl">Ingest 1K nodes + 5K edges</div>
+        <div class="delta">dev profile · ARM64</div>
+      </div>
+    </div>
+
+    <h3 style="font-size: 15px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: .05em; margin: 26px 0 8px;">Before / after · ~/.hermes/hermes-agent · M5 Max</h3>
+    <table class="t">
+      <thead><tr><th>metric</th><th>before · LanceDB</th><th>after · OverGraph (2026-05-01)</th></tr></thead>
+      <tbody>
+        <tr><td>Total wall time (full pipeline + embeddings)</td><td><span class="num-before">~5 min</span></td><td><span class="num-after">~1–2 min</span></td></tr>
+        <tr><td>Embeddings (41,619 nodes)</td><td><span class="c-dim" style="font-family: 'JetBrains Mono', monospace;">—</span></td><td class="num-after">618 s</td></tr>
+        <tr><td>Node write</td><td><span class="c-dim" style="font-family: 'JetBrains Mono', monospace;">—</span></td><td class="num-after">993 ms</td></tr>
+        <tr><td>Edge write (95,071)</td><td><span class="c-dim" style="font-family: 'JetBrains Mono', monospace;">—</span></td><td class="num-after">215 ms</td></tr>
+        <tr><td>Native binary</td><td><span class="num-before">300 MB</span></td><td><span class="num-after">10 MB · 30× smaller</span></td></tr>
+        <tr><td>DB on disk</td><td><span class="num-before">300 MB</span></td><td><span class="num-after">200 MB</span></td></tr>
+        <tr><td><code style="background: var(--bg-alt); padding: 1px 6px; border-radius: 4px; font-family: 'JetBrains Mono', monospace; font-size: 12px;">ppr.rs</code> source size</td><td><span class="num-before">445 LOC</span></td><td><span class="num-after">116 LOC · 3.8×</span></td></tr>
+      </tbody>
+    </table>
+
+    <div class="footer-bar">
+      <span class="tip">Hardware</span><span class="sep"></span>
+      <span>MacBook Pro · M5 Max · 18-core · 40-GPU · 128 GB</span>
+    </div>
+  </section>
+
+  <!-- ───────────────────────────────────────── 13 · MCP + HTTP INTEGRATION ─────────────────────── -->
+  <section class="slide" data-title="MCP + HTTP Integration">
+    <span class="section-tag">MCP + HTTP · drop-in for any agent</span>
+    <h1 class="small">One tool call away from <span class="hl">perfect context</span>.</h1>
+
+    <div class="two-col">
+      <div>
+        <div class="terminal">
+          <div class="titlebar"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="title">mcp · tool call · search</div></div>
+<pre>{
+  <span class="c-key">"name"</span>: <span class="c-str">"search"</span>,
+  <span class="c-key">"arguments"</span>: {
+    <span class="c-key">"query"</span>:    <span class="c-str">"how does auth work"</span>,
+    <span class="c-key">"k"</span>:        <span class="c-num">8</span>,
+    <span class="c-key">"strategy"</span>: <span class="c-str">"ppr"</span>
+  }
+}</pre>
+        </div>
+        <div class="terminal compact" style="margin-top: 16px;">
+          <div class="titlebar"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="title">HTTP · same tools, any client</div></div>
+<pre><span class="c-com"># discover available tools:</span>
+<span class="prompt">$</span> GET  http://localhost:8080/api/tools
+
+<span class="c-com"># call any tool by name:</span>
+<span class="prompt">$</span> curl <span class="c-flag">-X</span> POST <span class="c-flag">-H</span> <span class="c-str">"Content-Type: application/json"</span> \
+    http://localhost:8080/api/tools/search \
+    <span class="c-flag">-d</span> <span class="c-str">'{"query":"oauth login flow","k":8,"strategy":"ppr"}'</span></pre>
+        </div>
+      </div>
+      <div class="stack">
+        <div class="card">
+          <h3><code style="background: var(--bg-alt); padding: 2px 8px; border-radius: 5px; font-family: 'JetBrains Mono', monospace; font-size: 14px;">search</code></h3>
+          <p class="sub">GraphRAG search (PPR/MMR). Returns ranked nodes with attached source snippets, token-budgeted. Unified name across CLI, MCP and HTTP.</p>
+        </div>
+        <div class="card">
+          <h3><code style="background: var(--bg-alt); padding: 2px 8px; border-radius: 5px; font-family: 'JetBrains Mono', monospace; font-size: 14px;">traverse</code></h3>
+          <p class="sub">Edge-typed walk over the graph. Filter by edge type, depth, direction. Works on <code>graph.json</code> alone (no embedder needed).</p>
+        </div>
+        <div class="card">
+          <h3><code style="background: var(--bg-alt); padding: 2px 8px; border-radius: 5px; font-family: 'JetBrains Mono', monospace; font-size: 14px;">shortest_path</code></h3>
+          <p class="sub">Find the shortest path between two nodes. Also works <code>graph.json</code>-only.</p>
+        </div>
+        <div class="card">
+          <h3><code style="background: var(--bg-alt); padding: 2px 8px; border-radius: 5px; font-family: 'JetBrains Mono', monospace; font-size: 14px;">···</code></h3>
+          <p class="sub"><strong>11 tools</strong> in total — every surface exposes the same set. Old names (<code>search_kb</code>, <code>traverse_kb</code>, <code>find_symbol</code>) still work as aliases.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer-bar">
+      <span class="tip">Local embedding endpoint</span><span class="sep"></span>
+      <span><code>openai/Qwen3-Embedding-0.6B-4bit-DWQ</code> @ <code>http://localhost:8000/v1</code></span>
+    </div>
+  </section>
+
+  <!-- ───────────────────────────────────────── 14 · ROADMAP ───────────────────────────────────── -->
+  <section class="slide" data-title="Roadmap">
+    <span class="section-tag">roadmap · next</span>
+    <h1 class="small">What ships <span class="hl">after</span> perfect context.</h1>
+
+    <div class="roadmap-grid" style="margin-top: 18px;">
+      <div class="card">
+        <div class="when">Q3</div>
+        <h3>Query by signature</h3>
+        <p class="sub">"find every async function that returns Result&lt;T, E&gt; and takes &amp;mut self"</p>
+      </div>
+      <div class="card">
+        <div class="when">Q3</div>
+        <h3>Query by pattern</h3>
+        <p class="sub">AST-shape matching across the call graph — refactor radar with teeth.</p>
+      </div>
+      <div class="card">
+        <div class="when">Q4</div>
+        <h3>LLM summaries + clustering</h3>
+        <p class="sub">"Functional modules" — semantic groups, written summaries per cluster.</p>
+      </div>
+      <div class="card">
+        <div class="when">2027</div>
+        <h3>Scale beyond 1M edges</h3>
+        <p class="sub">Subgraph restriction (k-hop frontier) · precomputed PPR vectors.</p>
+      </div>
+    </div>
+
+    <h3 style="font-size: 15px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: .05em; margin: 28px 0 10px;">Three surfaces, one core · today</h3>
+    <div class="grid-3">
+      <div class="card">
+        <h3>CLI · <code style="background: var(--bg-alt); padding: 2px 8px; border-radius: 5px; font-family: 'JetBrains Mono', monospace; font-size: 13px;">ug</code></h3>
+        <p class="sub" style="font-family: 'JetBrains Mono', monospace; font-size: 12px; line-height: 1.7;">gen · index · graph · serve · chat · <strong>tour</strong><br/>list · active · rm · mcp · app · doctor</p>
+      </div>
+      <div class="card">
+        <h3>HTTP API · <code style="background: var(--bg-alt); padding: 2px 8px; border-radius: 5px; font-family: 'JetBrains Mono', monospace; font-size: 13px;">GET/POST /api/tools/*</code></h3>
+        <p class="sub" style="font-family: 'JetBrains Mono', monospace; font-size: 12px; line-height: 1.7;">search · traverse · find_symbols · find_usages · file_outline · get_code · project_overview · graph_schema · list_projects · reindex</p>
+      </div>
+      <div class="card">
+        <h3>MCP · <code style="background: var(--bg-alt); padding: 2px 8px; border-radius: 5px; font-family: 'JetBrains Mono', monospace; font-size: 13px;">ug mcp</code></h3>
+        <p class="sub" style="font-family: 'JetBrains Mono', monospace; font-size: 12px; line-height: 1.7;">Identical tool set over stdio.<br/>Install: <code>ug mcp install claude|cursor|windsurf|vscode|gemini</code></p>
+      </div>
+    </div>
+
+    <div class="footer-bar">
+      <span class="tip">Built for</span><span class="sep"></span>
+      <span>AI coding agents that need <strong style="color: var(--ink)">perfect context</strong> from a repo</span>
+    </div>
+  </section>
+
+  <!-- ───────────────────────────────────────── 15 · CLOSE ─────────────────────────────────────── -->
+  <section class="slide title-slide" data-title="Try it">
+    <div>
+      <div class="brand">Try it</div>
+      <h1 style="font-size: 88px;">One command. <br/><span class="hl">Perfect context.</span></h1>
+
+      <div style="max-width: 820px; margin: 32px auto 0;">
+        <div class="terminal">
+          <div class="titlebar"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="title">index & serve</div></div>
+<pre><span class="prompt">$</span> ug gen <span class="c-flag">-i</span> ~/.hermes/hermes-agent <span class="c-flag">-o</span> ugout/ugdb <span class="c-flag">--serve</span>
+
+<span class="c-acc">▸</span> indexing                 <span class="c-num">9.27</span>s
+<span class="c-acc">▸</span> graph build              <span class="c-num">264</span>ms
+<span class="c-acc">▸</span> embeddings (41,619)      <span class="c-num">618</span>s
+<span class="c-acc">▸</span> node write               <span class="c-num">993</span>ms
+<span class="c-acc">▸</span> edge write (95,071)      <span class="c-num">215</span>ms
+<span class="c-acc">▸</span> listening on             <span class="c-str">http://localhost:8080</span></pre>
+        </div>
+
+        <div class="terminal" style="margin-top: 16px;">
+          <div class="titlebar"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="title">upgrade</div></div>
+<pre><span class="prompt">$</span> ug upgrade
+
+▸ Current version v0.1.4 — checking latest release...
+▸ Downloading v0.1.6 (ultragraph-macos-arm64.tar.gz)...
+  <span class="c-num">19.5</span> / <span class="c-num">19.5</span> MB (<span class="c-num">100</span>%)
+▸ Installing to ~/.local/share/ultragraph/.ug...
+
+<span class="c-acc">✓</span> Upgraded to v0.1.6
+  ug version 0.1.6
+  (restart any running `ug serve` / MCP server to pick it up)</pre>
+        </div>
+      </div>
+
+      <div class="tag" style="margin-top: 36px;">
+        UltraGraph · <code style="background: var(--bg-alt); padding: 4px 10px; border-radius: 6px; font-family: 'JetBrains Mono', monospace; color: var(--ink); font-size: 18px;">ug</code> · perfect context, in seconds.
+      </div>
+    </div>
+    <div class="footer-bar">
+      <span class="tip">Last refreshed</span><span class="sep"></span>
+      <span>2026-07-25 · pure Rust binary · canonical tool names · HTTP API parity · <code>ug tour</code> guided walkthroughs · SSE streaming · <code>ug active</code> · <code>project_overview</code> stats</span>
+    </div>
+  </section>
+
+</div>
+
+<div class="hud">
+  <button id="prev" aria-label="Previous">◀</button>
+  <div class="pill"><span id="cur">1</span> / <span id="tot">15</span></div>
+  <button id="next" aria-label="Next">▶</button>
+</div>
+
+<script>
+  (function () {
+    const slides = Array.from(document.querySelectorAll('.slide'));
+    const total = slides.length;
+    let idx = 0;
+
+    const cur = document.getElementById('cur');
+    const tot = document.getElementById('tot');
+    const progress = document.getElementById('progress');
+    tot.textContent = total;
+
+    function go(n) {
+      idx = Math.max(0, Math.min(total - 1, n));
+      slides.forEach((s, i) => s.classList.toggle('active', i === idx));
+      cur.textContent = idx + 1;
+      progress.style.width = ((idx + 1) / total * 100) + '%';
+      document.title = (slides[idx].dataset.title || 'UltraGraph-KB') + ' · UltraGraph-KB';
+    }
+
+    document.getElementById('prev').addEventListener('click', () => go(idx - 1));
+    document.getElementById('next').addEventListener('click', () => go(idx + 1));
+
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') { e.preventDefault(); go(idx + 1); }
+      else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); go(idx - 1); }
+      else if (e.key === 'Home') { go(0); }
+      else if (e.key === 'End') { go(total - 1); }
+      else if (/^[1-9]$/.test(e.key)) {
+        const n = parseInt(e.key, 10) - 1;
+        if (n < total) go(n);
+      } else if (e.key === '0') {
+        if (total >= 10) go(9);
+      }
+    });
+
+    // touch swipe
+    let tx = 0;
+    window.addEventListener('touchstart', (e) => { tx = e.changedTouches[0].clientX; });
+    window.addEventListener('touchend', (e) => {
+      const dx = e.changedTouches[0].clientX - tx;
+      if (Math.abs(dx) > 60) go(idx + (dx < 0 ? 1 : -1));
+    });
+
+    go(0);
+  })();
+</script>
+</body>
+</html>
