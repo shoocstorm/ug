@@ -416,8 +416,17 @@ fn raw_tools() -> Value {
         },
         {
             "name": "gen",
-            "description": "Re-run the whole pipeline (index → graph → embed) for the current (or named) project — the same thing `ug gen` does in the CLI, which is why the tool shares its name. Call it when tool outputs carry an \"Index may be stale\" warning, when the user says results look outdated, or after you (or they) changed many files. Incremental — unchanged files are skipped via content hashes — but embedding changed nodes needs the embedding backend, so it can take a while on big diffs; the structural tools are refreshed even if embedding fails.",
-            "inputSchema": { "type": "object", "properties": {} }
+            "description": "Refresh the index (index → graph → embed) for the current (or named) project — the same thing `ug gen` / `ug update` do in the CLI. Call it AFTER YOU EDIT FILES and before you ask any structural question about them: the structural tools (find_usages, traverse, analyze, shortest_path) answer from the index, so until you refresh, a blast radius describes the code as it was before your edit and looks exactly like a correct one. Also call it when a tool output carries an \"Index may be stale\" warning, or when results look outdated. Pass files: [\"src/a.ts\", \"src/b.rs\"] naming what you changed — the run reports how many symbols each of those files contributed, so you find out if one of them is not indexed at all; omit it to refresh everything. Incremental either way (unchanged files are skipped via content hashes), but embedding changed nodes needs the embedding backend, so it can take a while on big diffs; the structural tools are refreshed even if embedding fails.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "files": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Paths you just changed (repo-relative or absolute, inside the repo). Scopes the report, not the work — the refresh is incremental regardless. A path outside the repo is an error rather than a silent skip."
+                    }
+                }
+            }
         }
     ])
 }

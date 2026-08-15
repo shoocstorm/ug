@@ -324,11 +324,38 @@ pub(crate) struct Staleness {
     pub repo_missing: bool,
     pub doc_nodes: usize,
     pub code_nodes: usize,
+    /// The first few drifted paths, edited ones before deleted ones, capped at
+    /// [`STALE_SAMPLE`].
+    ///
+    /// Counts are enough for a status column; they are not enough for the
+    /// warning the structural commands print, because "3 changed" leaves an
+    /// agent unable to tell whether the drift is in the files it just edited
+    /// (refresh and re-ask) or somewhere it does not care about (proceed).
+    /// Capped because this goes in a one-line warning, not a report.
+    pub changed_sample: Vec<String>,
 }
+
+/// How many drifted paths [`Staleness`] carries. Four fits a terminal line
+/// alongside the counts and is enough to recognise one's own edit burst.
+pub(crate) const STALE_SAMPLE: usize = 4;
 
 impl Staleness {
     pub(crate) fn is_stale(&self) -> bool {
         !self.repo_missing && (self.changed > 0 || self.missing > 0)
+    }
+
+    /// The drifted paths as a display list: up to [`STALE_SAMPLE`] names, then
+    /// `+N more`. Empty when nothing drifted.
+    pub(crate) fn changed_summary(&self) -> String {
+        if self.changed_sample.is_empty() {
+            return String::new();
+        }
+        let rest = (self.changed + self.missing).saturating_sub(self.changed_sample.len());
+        let mut s = self.changed_sample.join(", ");
+        if rest > 0 {
+            s.push_str(&format!(", +{} more", rest));
+        }
+        s
     }
 
     /// Classify the KB by symbol composition: docs (markdown/PDF/office),
@@ -391,11 +418,17 @@ pub(crate) fn staleness(project_dir: &Path, meta: &ProjectMeta) -> Option<Stalen
             repo_missing: true,
             doc_nodes: 0,
             code_nodes: 0,
+            changed_sample: Vec::new(),
         });
     }
 
     let mut changed = 0usize;
     let mut missing = 0usize;
+    // Edited paths first, deleted ones only if there is room left: an edit is
+    // the drift an agent can act on by re-running `ug update`, while a delete
+    // it already knows about.
+    let mut edited_sample: Vec<String> = Vec::new();
+    let mut deleted_sample: Vec<String> = Vec::new();
     for file in &files {
         match std::fs::metadata(repo_root.join(file)) {
             Ok(metadata) => {
@@ -406,12 +439,23 @@ pub(crate) fn staleness(project_dir: &Path, meta: &ProjectMeta) -> Option<Stalen
                         .as_secs();
                     if file_mtime > built {
                         changed += 1;
+                        if edited_sample.len() < STALE_SAMPLE {
+                            edited_sample.push(file.clone());
+                        }
                     }
                 }
             }
-            Err(_) => missing += 1,
+            Err(_) => {
+                missing += 1;
+                if deleted_sample.len() < STALE_SAMPLE {
+                    deleted_sample.push(format!("{} (deleted)", file));
+                }
+            }
         }
     }
+    let mut changed_sample = edited_sample;
+    changed_sample.extend(deleted_sample);
+    changed_sample.truncate(STALE_SAMPLE);
 
     Some(Staleness {
         built_at,
@@ -421,6 +465,7 @@ pub(crate) fn staleness(project_dir: &Path, meta: &ProjectMeta) -> Option<Stalen
         repo_missing: false,
         doc_nodes,
         code_nodes,
+        changed_sample,
     })
 }
 
@@ -774,6 +819,7 @@ mod tests {
         assert!(!fresh.is_stale(), "nothing moved since the graph was built");
         assert_eq!(fresh.files, 2);
         assert_eq!(fresh.kb_kind(), "code");
+        assert!(fresh.changed_summary().is_empty(), "nothing to name");
 
         // One edited, one deleted — counted separately, because only the
         // second means the file list itself is wrong.
@@ -782,6 +828,14 @@ mod tests {
         let drifted = staleness(data.path(), &meta).expect("has a graph");
         assert_eq!((drifted.changed, drifted.missing), (1, 1));
         assert!(drifted.is_stale());
+        // Named, not just counted — the staleness warning the structural
+        // commands print has to let an agent recognise its own edit burst,
+        // which "1 changed" cannot. Edited before deleted.
+        assert_eq!(
+            drifted.changed_sample,
+            vec!["a.rs".to_string(), "b.rs (deleted)".to_string()]
+        );
+        assert_eq!(drifted.changed_summary(), "a.rs, b.rs (deleted)");
 
         // A repo that is gone is not "every file deleted": the index is
         // frozen, and reporting 2 missing files would send the user chasing
@@ -792,6 +846,35 @@ mod tests {
         assert!(gone.repo_missing);
         assert!(!gone.is_stale(), "a moved checkout is not drift");
         assert_eq!((gone.changed, gone.missing), (0, 0));
+    }
+
+    /// The sample is capped and says how much it left out. Without the
+    /// `+N more`, a burst that touched 40 files and one that touched 5 would
+    /// print the same four names and read as equally small.
+    #[test]
+    fn changed_sample_caps_and_reports_the_remainder() {
+        let repo = tempfile::tempdir().expect("repo");
+        let data = tempfile::tempdir().expect("data");
+        let names: Vec<String> = (0..10).map(|i| format!("f{}.rs", i)).collect();
+        for n in &names {
+            std::fs::write(repo.path().join(n), "fn x() {}").expect("write");
+        }
+
+        let mut meta = ProjectMeta::new("demo", &repo.path().to_string_lossy(), 10, 0);
+        meta.files = names.clone();
+        write_meta(data.path(), &meta).expect("meta");
+        std::fs::write(data.path().join("graph.json"), "{}").expect("graph");
+        // Graph older than every source, so all ten read as changed.
+        backdate(&data.path().join("graph.json"), 60);
+
+        let stale = staleness(data.path(), &meta).expect("has a graph");
+        assert_eq!(stale.changed, 10);
+        assert_eq!(stale.changed_sample.len(), STALE_SAMPLE);
+        let summary = stale.changed_summary();
+        assert!(
+            summary.ends_with(&format!("+{} more", 10 - STALE_SAMPLE)),
+            "{summary}"
+        );
     }
 
     /// No graph.json means there is no index to compare the tree against —

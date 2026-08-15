@@ -574,16 +574,20 @@ search: { query: "auth flow", project: "other-repo" }
 
 **Regenerate the index → graph → embeddings pipeline** for the current (or given) project. Incremental: a blake3 content cache skips files that haven't changed, so re-indexing after a few edits is fast.
 
-Call this when tool outputs carry a staleness warning (see below), or after any burst of file changes you want reflected in search results.
+Call this **after you edit files and before you ask anything structural about them** — `find_usages`, `traverse`, `shortest_path` and `analyze` all answer from the index, so until you refresh, a blast radius describes the code as it was before your edit and looks exactly like a correct one. Git hooks cover commit boundaries; this covers the edit burst in between. Also call it when tool outputs carry a staleness warning (see below).
 
 **Parameters:**
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `project` | string | ❌ | Project to re-index (default: the current one). |
+| `files` | string[] | ❌ | Paths you just changed, repo-relative or absolute. Scopes the **report**, not the work — the refresh is incremental either way. A path outside the repo is an error rather than a silent skip. |
 
 ```
 gen: {}
+gen: { files: ["src/auth.ts", "src/session.ts"] }
 ```
+
+With `files`, the result appends a per-file line giving the symbol count each path contributed — see [Index Freshness](#index-freshness--staleness-warnings) for why `0 symbols` is the line that matters. The CLI equivalent is `ug update <file>...`.
 
 ---
 
@@ -668,12 +672,28 @@ ping_embedder: {}
 Every tool output is stamped with a staleness note when the index no longer matches the repo:
 
 ```
-⚠ Index may be stale: 3 changed, 1 deleted of 214 indexed files since the last index (index built 2 day(s) ago). Call the gen tool to refresh.
+⚠ Index may be stale: 3 changed, 1 deleted of 214 indexed files since the last index (index built 2 day(s) ago).
+Drifted: src/auth.ts, src/session.ts, src/db/pool.ts, src/old.ts (deleted)
+This answer describes the last index, not the current tree. Call the gen tool with files: [...] naming what you changed (fast), or with no arguments to refresh everything.
 ```
 
-Staleness is computed by comparing `graph.json`'s mtime against the current mtimes of the indexed files (once per project per server process). When you see the warning, call the `gen` tool — it's incremental, so unchanged files are skipped.
+The note names the drifted paths, not just a count, because the count alone cannot answer the question that decides what to do next: *are these the files I just edited?* If they are, the answer above describes the previous version of your own work.
 
-From the CLI, the focused alternative is `ug update <file>...` — it re-runs the pipeline for just the files you name (cross-file edges are re-resolved over the whole graph on each run, which is what keeps them correct). `ug get_code` also reads the *live* working tree by default and flags drift from the index, so line numbers stay current immediately after an edit even before a re-index.
+Staleness is computed by comparing `graph.json`'s mtime against the current mtimes of the indexed files (once per project per server process). When you see the warning, call the `gen` tool — it's incremental either way, so unchanged files are skipped.
+
+Pass `files` to scope the **report** (not the work): `gen: { files: ["src/auth.ts", "src/session.ts"] }` re-runs the same incremental pipeline and then tells you how many symbols each path you named contributed —
+
+```
+  src/auth.ts: 14 symbol(s)
+  src/session.ts: 6 symbol(s)
+  src/handler.go: 0 symbols — extension not indexed, so this file is invisible to every structural tool
+```
+
+That last line is the point: a repo in a language `ug` has no grammar for still indexes its Markdown and still answers questions, so without a per-file report an unindexed file is indistinguishable from one with no callers. Paths may be repo-relative or absolute; anything outside the repo root is an error rather than a silent skip.
+
+The CLI equivalent is `ug update <file>...`. Both re-resolve cross-file edges over the whole graph on each run, which is what keeps them correct. `ug get_code` reads the *live* working tree by default and flags drift from the index, so line numbers stay current immediately after an edit even before a re-index.
+
+**On the CLI, the same warning goes to stderr** before every structural command's output — `find_usages`, `traverse`, `shortest_path`, `analyze`, `search` and the rest — naming the drifted files and suppressed by `--no-banner` / `UG_NO_BANNER=1` along with the scope banner. stdout stays clean, so `--json` and `-o` remain parseable.
 
 The web UI's Knowledge Base Manager runs the same check automatically on startup and every 2 minutes, showing a **⚠ Stale — Re-index** badge on affected project cards; clicking it re-runs the generation pipeline for that project.
 
@@ -693,6 +713,7 @@ ug mcp call file_outline '{"file":"chat.rs"}'
 ug mcp call list_projects '{}'
 ug mcp call search '{"query":"how does auth work","k":8}'
 ug mcp call gen '{}'
+ug mcp call gen '{"files":["src/auth.ts","src/session.ts"]}'   # refresh + per-file report
 ```
 
 `ug mcp call` resolves the same project/env configuration as the stdio server (`UG_PROJECT`, `.env`, …), so what you see is exactly what an agent would get. Pass `"project":"<name>"` inside the JSON to target another indexed project.

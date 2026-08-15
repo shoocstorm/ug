@@ -109,6 +109,13 @@ pub(crate) fn store_specs_from_args(args: &[String], embedding_dim: u32) -> Vec<
 /// Read commands accept exactly one destination — the first parsed
 /// spec wins, with a hard error on multi-spec inputs so users don't
 /// accidentally fan out a query.
+///
+/// Also where the db-backed reads (`analyze`, `search`, `semantic_search`,
+/// `traverse`, `chat`, `tour`) pick up the staleness warning. This function
+/// rather than [`store_specs_from_args`] because that one is shared with the
+/// commands that *write* the store — `ug gen` and `ug ingest` — and telling
+/// them the index is behind the tree immediately before they refresh it would
+/// be pure noise.
 pub(crate) fn single_store_spec_from_args(args: &[String], embedding_dim: u32) -> StoreSpec {
     let specs = store_specs_from_args(args, embedding_dim);
     if specs.len() > 1 {
@@ -118,7 +125,17 @@ pub(crate) fn single_store_spec_from_args(args: &[String], embedding_dim: u32) -
         );
         std::process::exit(2);
     }
-    specs.into_iter().next().expect("at least one spec")
+    let spec = specs.into_iter().next().expect("at least one spec");
+    // Only for a local project: the db dir's parent is the project dir that
+    // holds project.json and graph.json. A `--dest neo4j` run, or a `--db`
+    // pointed somewhere with no project.json beside it, has nothing to compare
+    // against and `announce_staleness` returns without printing.
+    if let StoreSpec::Overgraph { path, .. } = &spec {
+        if let Some(dir) = path.parent() {
+            scope::announce_staleness(dir);
+        }
+    }
+    spec
 }
 
 /// What an ingest run actually produced.

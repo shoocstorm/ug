@@ -55,6 +55,14 @@ pub(crate) fn load_agent_graph(args: &[String]) -> (GraphData, String, PathBuf) 
     // Before the read, so a "graph.json not found" failure below still says
     // which project it was looking for and why it looked there.
     scope::announce_data("graph", &path, why);
+    // Every command routed through here answers from the indexed graph, so
+    // every one of them can be silently behind the working tree. `get_code` is
+    // the exception that proves it — it re-reads the live file and flags the
+    // drift per slice — and this is the same honesty for the tools that
+    // cannot, which are exactly the ones an agent trusts for blast radius.
+    if let Some(dir) = path.parent() {
+        scope::announce_staleness(dir);
+    }
     let raw = match fs::read_to_string(&path) {
         Ok(r) => r,
         Err(_) => {

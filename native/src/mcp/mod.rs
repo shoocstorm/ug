@@ -186,6 +186,112 @@ fn vectors_note(ctx: &ProjectCtx) -> String {
     )
 }
 
+/// Resolve `gen`'s optional `files` argument to repo-relative paths.
+///
+/// Accepts the three spellings an agent reaches for — an absolute path under
+/// the repo root, a repo-relative path, or a path relative to the cwd — and
+/// mirrors `ug update`'s rule that an unresolvable target is an **error**, not
+/// a silent skip. An agent that mistypes a path and is told the refresh
+/// happened goes on to trust a blast radius that never saw its edit, which is
+/// the exact failure this whole staleness story exists to prevent.
+///
+/// `Ok(vec![])` when `files` is absent: a whole-repo `gen`, unchanged.
+fn gen_targets(ctx: &ProjectCtx, args: &Value) -> Result<Vec<String>, String> {
+    let Some(raw) = args.get("files") else {
+        return Ok(Vec::new());
+    };
+    // `normalize_args` already turns a stringified JSON array into an array.
+    // A bare comma-separated string is the other spelling agents reach for,
+    // because that is exactly how `analyze --arg files=a.ts,b.rs` takes its
+    // file list — accepting it here beats an error the caller has to guess
+    // its way out of.
+    let owned: Vec<Value>;
+    let list = match raw {
+        Value::Array(a) => a,
+        Value::String(s) => {
+            owned = s
+                .split(',')
+                .map(str::trim)
+                .filter(|p| !p.is_empty())
+                .map(|p| Value::String(p.to_string()))
+                .collect();
+            &owned
+        }
+        _ => return Err("gen: `files` must be an array of paths".to_string()),
+    };
+    // Canonicalise the root once: the recorded path can carry a symlink
+    // (`/tmp` → `/private/tmp` on macOS), and comparing an un-canonicalised
+    // root against a canonicalised file always reports "outside the repo" — a
+    // failure that reads as a security denial and is really a bug.
+    let root = std::fs::canonicalize(&ctx.repo_root).unwrap_or_else(|_| ctx.repo_root.clone());
+    let mut out = Vec::new();
+    for entry in list {
+        let Some(p) = entry.as_str().map(str::trim).filter(|s| !s.is_empty()) else {
+            return Err("gen: every entry in `files` must be a non-empty string".to_string());
+        };
+        let candidate = if Path::new(p).is_absolute() {
+            PathBuf::from(p)
+        } else {
+            root.join(p)
+        };
+        // A deleted file cannot be canonicalised, and "I just deleted this"
+        // is a legitimate reason to refresh — fall back to the lexical path so
+        // the removal still gets reported rather than rejected.
+        let resolved = std::fs::canonicalize(&candidate).unwrap_or(candidate);
+        let rel = resolved.strip_prefix(&root).map_err(|_| {
+            format!(
+                "gen: {} is outside the indexed repo ({})",
+                p,
+                root.display()
+            )
+        })?;
+        // `strip_prefix` is lexical, and the fallback path above is
+        // un-canonicalised whenever the target does not exist — so
+        // `<root>/../outside.rs` strips cleanly to `../outside.rs` and would
+        // otherwise be accepted as repo-relative. Canonicalisation resolves
+        // `..` for every path that *does* exist; this covers the ones that do
+        // not, which is exactly the deleted-file case the fallback is for.
+        if rel.components().any(|c| c == std::path::Component::ParentDir) {
+            return Err(format!(
+                "gen: {} is outside the indexed repo ({})",
+                p,
+                root.display()
+            ));
+        }
+        out.push(rel.to_string_lossy().replace('\\', "/"));
+    }
+    Ok(out)
+}
+
+/// Per-file confirmation for a `gen` that named `files`: how many symbols the
+/// refreshed graph holds for each. Empty when nothing was named.
+fn per_file_report(graph: &GraphData, targets: &[String], repo_root: &Path) -> String {
+    if targets.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("\n");
+    for rel in targets {
+        let symbols = graph
+            .nodes
+            .iter()
+            .filter(|n| n.file.as_deref() == Some(rel.as_str()))
+            .count();
+        // Counted from the *new* graph, so this reflects what landed rather
+        // than what the parse produced.
+        let note = if symbols > 0 {
+            format!("{} symbol(s)", symbols)
+        } else if !repo_root.join(rel).exists() {
+            "deleted — dropped from the index".to_string()
+        } else {
+            "0 symbols — extension not indexed, so this file is invisible to \
+             every structural tool"
+                .to_string()
+        };
+        out.push_str(&format!("\n  {}: {}", rel, note));
+    }
+    out
+}
+
 fn graph_path_for(db_path: &Path) -> PathBuf {
     // graph.json sits next to the project's ugdb dir.
     db_path
@@ -593,11 +699,28 @@ impl Mcp {
             }
         }
         let (mut changed, mut missing) = (0usize, 0usize);
+        // Named, not just counted. "3 changed" leaves an agent unable to tell
+        // whether the drift is in the files it just edited — in which case this
+        // answer is about the previous version of its own work and it must
+        // refresh before trusting it — or somewhere it does not care about.
+        // Edited paths before deleted ones, capped so the note stays a line.
+        let mut edited: Vec<&str> = Vec::new();
+        let mut deleted: Vec<String> = Vec::new();
         for f in &files {
             match mtime_of(&ctx.repo_root.join(f)) {
-                Some(mt) if mt > built_at => changed += 1,
+                Some(mt) if mt > built_at => {
+                    changed += 1;
+                    if edited.len() < project::STALE_SAMPLE {
+                        edited.push(f);
+                    }
+                }
                 Some(_) => {}
-                None => missing += 1,
+                None => {
+                    missing += 1;
+                    if deleted.len() < project::STALE_SAMPLE {
+                        deleted.push(format!("{} (deleted)", f));
+                    }
+                }
             }
         }
         if changed == 0 && missing == 0 {
@@ -610,6 +733,14 @@ impl Mcp {
         if missing > 0 {
             bits.push(format!("{} deleted", missing));
         }
+        let mut sample: Vec<String> = edited.iter().map(|f| f.to_string()).collect();
+        sample.extend(deleted);
+        sample.truncate(project::STALE_SAMPLE);
+        let rest = (changed + missing).saturating_sub(sample.len());
+        let mut which = sample.join(", ");
+        if rest > 0 {
+            which.push_str(&format!(", +{} more", rest));
+        }
         let age = built_at
             .elapsed()
             .ok()
@@ -621,10 +752,18 @@ impl Mcp {
             // Names the `gen` tool (the CLI's `ug gen`), not a stale
             // spelling: this line tells an agent what to call next, and a
             // name that is no longer dispatched sends it into an error.
-            "\n\n⚠ Index may be stale: {} of {} indexed files since the last index{}. Call the gen tool to refresh.",
+            // `files` is named too, because the whole-repo refresh is the
+            // wrong-sized hammer for the case that produces this note most
+            // often — an agent that just edited three files.
+            "\n\n⚠ Index may be stale: {} of {} indexed files since the last index{}.\n\
+             Drifted: {}\n\
+             This answer describes the last index, not the current tree. Call the gen tool with \
+             files: [...] naming what you changed (fast), or with no arguments to refresh \
+             everything.",
             bits.join(", "),
             files.len(),
-            age
+            age,
+            which
         )
     }
 
@@ -681,7 +820,7 @@ impl Mcp {
                     None => text,
                 })
             }
-            "gen" => self.tool_gen(&ctx).await,
+            "gen" => self.tool_gen(&ctx, &args).await,
             "ping_embedder" => {
                 self.embedder()?.ping().await.map_err(|e| e.to_string())?;
                 Ok("ok".to_string())
@@ -952,13 +1091,27 @@ impl Mcp {
     /// the CLI half is `ug gen`. Ingest
     /// failure (embedder down) is reported but doesn't fail the call: the
     /// graph-backed tools are already fresh at that point.
-    async fn tool_gen(&self, ctx: &ProjectCtx) -> Result<String, String> {
+    /// `gen`, optionally scoped to the files the caller just edited.
+    ///
+    /// The MCP mirror of `ug update <file>...`. The pipeline is the same either
+    /// way — the parse cache (blake3 per file) and the ingest node-hash diff
+    /// already keep unchanged work out of the hot path, and the cross-file edge
+    /// graph has to be re-resolved over the whole repo regardless, because an
+    /// edge into a changed file depends on names the change may have moved.
+    ///
+    /// What `files` buys is not speed, it is the answer: the caller is told how
+    /// many symbols each path it named actually contributed. That closes a real
+    /// silent failure — edit a `.go` file in a repo `ug` indexes only for its
+    /// Markdown, refresh, and every structural answer stays confidently empty.
+    /// A per-file `0 symbols` says so; a whole-repo "12043 nodes" does not.
+    async fn tool_gen(&self, ctx: &ProjectCtx, args: &Value) -> Result<String, String> {
         if !ctx.repo_root.exists() {
             return Err(format!(
                 "Repo root {} no longer exists — re-run `ug gen -i <path>` manually.",
                 ctx.repo_root.display()
             ));
         }
+        let targets = gen_targets(ctx, args)?;
         let output_dir = ctx
             .graph_path
             .parent()
@@ -1030,12 +1183,13 @@ impl Mcp {
         };
         self.invalidate(&ctx.graph_path);
         Ok(format!(
-            "Reindexed {} → {}\n{} nodes, {} edges\n{}",
+            "Reindexed {} → {}\n{} nodes, {} edges\n{}{}",
             ctx.repo_root.display(),
             output_dir.display(),
             nodes,
             edges,
-            ingest_msg
+            ingest_msg,
+            per_file_report(&graph, &targets, &ctx.repo_root)
         ))
     }
 
@@ -1261,6 +1415,83 @@ fn run_list_tools() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ctx_for(repo: &Path) -> ProjectCtx {
+        ProjectCtx {
+            db_path: repo.join("ugdb"),
+            repo_root: repo.to_path_buf(),
+            graph_path: repo.join("graph.json"),
+        }
+    }
+
+    /// The three spellings an agent reaches for all land on the same
+    /// repo-relative path, and a path outside the repo is refused.
+    ///
+    /// The refusal is the load-bearing half: `gen` reporting success for a
+    /// file it never indexed is how an agent ends up trusting a blast radius
+    /// that predates its own edit — the failure the staleness note exists to
+    /// prevent, re-introduced by the tool that is supposed to fix it.
+    #[test]
+    fn gen_targets_resolves_every_spelling_and_refuses_escapes() {
+        let repo = tempfile::tempdir().expect("repo");
+        std::fs::create_dir_all(repo.path().join("src")).expect("src");
+        std::fs::write(repo.path().join("src/a.rs"), "fn a() {}").expect("a");
+        // The recorded root can carry a symlink (`/tmp` → `/private/tmp` on
+        // macOS); canonicalise here so the assertions compare like with like.
+        let root = std::fs::canonicalize(repo.path()).expect("canonical");
+        let ctx = ctx_for(&root);
+
+        let rel = gen_targets(&ctx, &json!({ "files": ["src/a.rs"] })).expect("relative");
+        let abs = gen_targets(&ctx, &json!({ "files": [root.join("src/a.rs").to_string_lossy()] }))
+            .expect("absolute");
+        // A bare comma-separated string, the spelling `analyze --arg
+        // files=a,b` teaches — accepted rather than rejected.
+        let csv = gen_targets(&ctx, &json!({ "files": "src/a.rs" })).expect("csv");
+        assert_eq!(rel, vec!["src/a.rs".to_string()]);
+        assert_eq!(abs, rel);
+        assert_eq!(csv, rel);
+
+        // Absent `files` is a whole-repo gen, not an error.
+        assert!(gen_targets(&ctx, &json!({})).expect("no files").is_empty());
+
+        // A file that does not exist yet cannot be canonicalised, but "I just
+        // deleted this" is a legitimate refresh — it resolves lexically.
+        let deleted = gen_targets(&ctx, &json!({ "files": ["src/gone.rs"] })).expect("deleted");
+        assert_eq!(deleted, vec!["src/gone.rs".to_string()]);
+
+        for escape in [json!(["/etc/hosts"]), json!(["../outside.rs"])] {
+            let err = gen_targets(&ctx, &json!({ "files": escape }))
+                .expect_err("must not accept a path outside the repo");
+            assert!(err.contains("outside the indexed repo"), "{err}");
+        }
+    }
+
+    /// A named file that contributed nothing has to say so. A repo whose
+    /// language `ug` does not parse still produces a graph and still answers
+    /// questions, so "0 symbols" is the only signal that a structural answer
+    /// about this file will be confidently empty forever.
+    #[test]
+    fn per_file_report_flags_an_unindexed_file() {
+        let repo = tempfile::tempdir().expect("repo");
+        std::fs::write(repo.path().join("main.go"), "package main").expect("go");
+        let graph = GraphData {
+            nodes: Vec::new(),
+            edges: Vec::new(),
+            stats: None,
+            resolution: None,
+        };
+
+        let present = per_file_report(&graph, &["main.go".to_string()], repo.path());
+        assert!(present.contains("0 symbols"), "{present}");
+        assert!(present.contains("extension not indexed"), "{present}");
+
+        // Gone from disk is a different story with a different fix.
+        let absent = per_file_report(&graph, &["removed.rs".to_string()], repo.path());
+        assert!(absent.contains("deleted"), "{absent}");
+
+        // Nothing named, nothing appended — a whole-repo gen reads as before.
+        assert!(per_file_report(&graph, &[], repo.path()).is_empty());
+    }
 
     /// A cache entry whose `approx_bytes` is `4 * bytes`.
     fn entry(bytes: usize) -> CachedGraph {

@@ -7,7 +7,7 @@
 | Field | Value |
 | :--- | :--- |
 | **Date** | 2026-08-14 |
-| **Revised** | 2026-08-14 — re-verified against `main` @ `e538c78` plus the working tree (`scope.rs`, the `ug list` staleness scan) |
+| **Revised** | 2026-08-15 — Tier 1.1 closed: staleness line on every structural result (CLI + MCP), `gen files:[...]` as the MCP mirror of `ug update`, skill text reworked around the edit burst |
 | **Audience** | Product direction / design |
 | **Method** | Codebase analysis + reasoning about agent workflows (not session telemetry) |
 
@@ -101,13 +101,14 @@ agents. It isn't — which is why the debt is merely *reported*
 
 ### Tier 1: Highest leverage — fix the trust problem and own the edit-safety workflow
 
-#### 1. The graph goes silently stale during editing — the #1 risk to agent trust — **Partial**
+#### 1. The graph goes silently stale during editing — the #1 risk to agent trust — **Shipped**
 
 An agent edits 5 files, then asks `find_usages` / `diff_impact`. The answer is now wrong, and nothing warns it. `get_code` reads the live tree (good), but the structural tools the agent relies on for safety read the stale graph. If an agent can't trust blast-radius *after its own edits*, the killer feature is undermined at exactly the moment it matters most.
 
 This is the asymmetry that breaks trust: read-tools are live, structural-tools
-are stale, and they look identical. Three of the four pieces needed to close it
-now exist; the one that closes it *for the agent* does not.
+are stale, and they look identical. All four pieces now exist — the last one,
+the warning on the structural result itself, is what turns the other three from
+plumbing into something the agent can act on.
 
 **Shipped — self-healing across git events.** `ug hook install`
 (`native/src/cli/hook.rs`) writes `post-commit`, `post-merge`, `post-checkout`
@@ -144,23 +145,46 @@ column (`fresh` / `N changed` / `no db` / `repo gone` / `no graph`), and
 `GET /api/projects/staleness` serves the same struct so the CLI and the KB
 Manager cannot disagree.
 
-**Open — the structural tools still don't say it.** The one consumer that most
-needs the signal is the one that doesn't get it: `find_usages`, `analyze`,
-`traverse` and `shortest_path` return the same shape whether the graph is
-current or forty commits behind. `project::staleness` is the missing input, and
-it is already computed cheaply enough to run per call (one `stat` per indexed
-file, or narrowed to just the files in the result set). The concrete move:
-**append a staleness line to every structural tool result the way `vectors_note`
-already appends a vector-debt line** — same mechanism, same file, one tier more
-important.
+**Shipped — the structural tools now say it, on both surfaces.** The MCP
+server appended `staleness_note` to every structural result already
+(`native/src/mcp/mod.rs::call_tool`); what was missing was the CLI, which is
+the surface the bundled skill actually drives. `scope::announce_staleness`
+(`native/src/cli/scope.rs`) closes it, riding the scope banner's channel and
+contract: one line on **stderr**, deduplicated per project, suppressed by
+`--no-banner` / `UG_NO_BANNER=1`, so `--json` and `-o` stay pipeable.
 
-**Open — the uncommitted edit burst.** A git hook fires on commit; an agent
-edits, asks, edits, asks, and commits once at the end. That whole window is
-unprotected. A working-tree watcher — a `ug serve` background mode or a `ug
-watch` that a shell/agent hook triggers — is what closes it, and `ug update` +
-blake3 caching mean it is wiring, not new machinery. Second-best and much
-cheaper: teach the skill text to call `ug update <files>` right after a batch of
-edits, so the refresh is the agent's habit rather than its memory.
+```
+⚠ index is behind the tree · 2 changed of 418 indexed files · src/a.ts, src/b.rs
+  Structural answers describe the last index. Refresh: ug update <file>... (fast) or ug gen -n ug.
+```
+
+Two hook points cover all thirteen commands: `load_agent_graph`
+(`native/src/cli/agent.rs`) for the graph.json readers, and
+`single_store_spec_from_args` (`native/src/cli/store.rs`) for the db readers.
+The latter rather than `store_specs_from_args` deliberately — that one is
+shared with `gen` and `ingest`, and warning that the index is stale immediately
+before refreshing it is noise.
+
+Both notes now **name the drifted files** rather than only counting them
+(`Staleness::changed_sample`, capped at four with `+N more`). The count alone
+cannot answer the question that decides what the agent does next: *are these
+the files I just edited?* If yes, the answer it is holding describes the
+previous version of its own work; if no, it can proceed.
+
+**Shipped — the uncommitted edit burst, via the cheap path.** The watcher is
+still unbuilt; the second-best move landed instead, on both surfaces. The skill
+(`native/src/mcp/ug-skill.md`) no longer claims the graph "is kept current by
+git hooks" full stop — it says hooks cover *commit boundaries*, names the
+edit-ask-edit-ask window as the gap, and makes `ug update <files>` an explicit
+habit before any structural question. The MCP mirror is `gen` taking
+`files: [...]` (`tool_gen` + `gen_targets`), which also closes a silent failure
+the whole-repo `gen` hid: it reports symbols-per-named-file, so a `.go` file in
+a repo with no Go grammar comes back `0 symbols — extension not indexed`
+instead of as an empty structural answer the agent would have believed.
+
+The habit is not load-bearing on its own, which is the point of shipping it
+alongside the warning: an agent that forgets to refresh is told by the next
+structural call that it forgot.
 
 #### 1b. The *other* silent-wrongness: answering about the wrong project — **Shipped**
 
@@ -241,10 +265,12 @@ triggers on the safety phrasings directly: *"is this a breaking change"*,
 this"*, *"did I miss a caller"*. The MCP server description
 (`native/src/mcp/mod.rs`) carries the same framing.
 
-The remaining copy gap is small but real: the skill promises the graph "is kept
-current by git hooks", which is true at commit boundaries and *not* true during
-an uncommitted edit burst (see #1). Either the watcher closes that, or the
-sentence should say so and point at `ug update`.
+The copy gap noted in the previous revision is closed. The skill no longer
+promises the graph "is kept current by git hooks" — a claim true at commit
+boundaries and false during an uncommitted edit burst. It now scopes the claim
+to commit boundaries, names the burst as the gap, makes `ug update <files>` an
+explicit pre-question habit, and shows the warning the agent will see if it
+forgets.
 
 ---
 
@@ -302,17 +328,18 @@ The retrieval + assembly is great; the LLM-written 40-word narrations and camera
 
 | Priority | Action | Status |
 |---|---|---|
-| **1 — Trust** | Keep the graph fresh and say so when it isn't. | **Partial** — git hooks auto-refresh on commit/merge/checkout/rewrite; `get_code` flags stale slices; `ug list` + `/api/projects/staleness` report project drift; scope banner names the resolved project. **Still open:** no staleness line on structural tool results, no working-tree watcher for uncommitted edits. |
+| **1 — Trust** | Keep the graph fresh and say so when it isn't. | **Shipped** — git hooks auto-refresh on commit/merge/checkout/rewrite; `get_code` flags stale slices; `ug list` + `/api/projects/staleness` report project drift; scope banner names the resolved project; **every structural result now carries a staleness line naming the drifted files**, on stderr (CLI) and appended to the text (MCP); the skill and the `gen` tool both make `ug update <files>` the post-edit habit. **Still open:** the working-tree watcher, which would make the habit unnecessary rather than merely backstopped. |
 | **2 — Context pack** | Add `ug context <id>` — curated, token-budgeted bundle (code + callers + deps + test + doc) in one call. | **Open** — now the highest-leverage unstarted item; all inputs already exist. |
 | **3 — Edit safety** | `ug verify` combining impact + retest + boundary; then enrich `Calls` edges with call-site line/arity for signature-mismatch detection. | **Open** — split: `ug verify` is shippable from existing presets; edge properties need indexer work (`ingest.rs:530` still writes `""`). |
 | **4 — Positioning** | For agents, lead with "edit-safety / blast-radius verification" (the moat), not "semantic search" (commoditized). | **Shipped** — `ug-skill.md` and the MCP server description both lead with edit safety and trigger on the safety phrasings. |
 | **5 — Languages** | Add Go and C# next (largest agent-active ecosystems not yet covered). | **Open** — still 5 grammars + PDF. Interim: report language coverage in `project_overview`. |
 | **6 — De-emphasize** | Don't over-invest in dense semantic search for agents (supplementary, ~20% of queries); keep chat/tour for the human surface. | **Holding** — the `--no-embed` hook path proves the point: the structural half is what the safety story needs, vectors are the part that can lag without breaking anything. |
 
-**If only one thing ships next:** the staleness line on structural results
-(#1). It is small, it reuses the `vectors_note` mechanism verbatim, and it is
-the difference between a tool an agent can trust after its own edits and one it
-can't.
+**If only one thing ships next:** `ug context` (#2). With the staleness line
+shipped, the trust half of Tier 1 is closed and the remaining leverage is in
+the two build-outs that were never started — and `ug context` is the cheaper of
+them, since every input already exists and the work is assembly and budgeting
+rather than new analysis.
 
 ---
 
@@ -320,12 +347,14 @@ can't.
 
 `ug`'s structural graph + PPR + blast-radius is a genuine moat that agents can't replicate with grep; the highest-leverage move is to make that graph **trustworthy during editing** (staleness), **cheaper to consume** (context pack), and **tied to change-safety** (semantic diff + verify) — while treating dense semantic search as a supplementary layer, not the centerpiece, for the agent audience.
 
-Since the first draft, the trust half has moved: the graph now self-heals across
-git events, the read path admits when a slice is stale, projects report their own
-drift, and every command names the project it resolved. What's left is the last
-mile of the same idea — **telling the agent, in the answer itself, when the
-answer is behind the tree** — and the two build-outs that were never started
-(`ug context`, `ug verify`).
+Since the first draft, the trust half has closed: the graph self-heals across
+git events, the read path admits when a slice is stale, projects report their
+own drift, every command names the project it resolved, and — the last mile —
+**every structural answer now says when it is behind the tree, and which files
+moved.** What remains on this list is the two build-outs that were never
+started (`ug context`, `ug verify`), the `Calls`-edge properties that would
+unlock signature-level impact, and the working-tree watcher that would make the
+`ug update` habit unnecessary rather than merely backstopped by a warning.
 
 ---
 

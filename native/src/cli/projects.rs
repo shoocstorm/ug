@@ -693,6 +693,7 @@ mod tests {
             repo_missing,
             doc_nodes: 0,
             code_nodes: 10,
+            changed_sample: Vec::new(),
         }
     }
 

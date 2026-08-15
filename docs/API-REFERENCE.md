@@ -198,6 +198,37 @@ Because `ug hook` captures the child's output into `~/.ug/<project>/hook.log`,
 this line is also what makes a hook run auditable after the fact. Suppress it
 with `--no-banner` or `UG_NO_BANNER=1`.
 
+#### Staleness Warning
+
+Riding the same channel, and suppressed by the same flag: every command that
+answers from the **index** rather than the working tree warns when that index
+is behind the tree, naming the files that drifted.
+
+```
+⚠ index is behind the tree · 2 changed of 418 indexed files · src/a.ts, src/b.rs
+  Structural answers describe the last index. Refresh: ug update <file>... (fast) or ug gen -n ug.
+```
+
+This covers the graph.json readers (`find_symbols`, `file_outline`,
+`get_code`, `find_usages`, `project_overview`, `graph_schema`,
+`shortest_path`) and the db readers (`analyze`, `search`, `semantic_search`,
+`traverse`, `chat`, `tour`). The commands that *write* the index — `gen`,
+`ingest`, `update` — deliberately stay quiet, since warning that the index is
+stale immediately before refreshing it is noise.
+
+The reason it exists: `get_code` re-reads the live file and flags drift per
+slice, but a structural answer has no such tell — a stale blast radius is
+shaped exactly like a true one, and it is likeliest to be stale right after the
+caller's own edits, which is exactly when it gets asked. Naming the drifted
+files (rather than counting them) is what lets a caller tell "these are the
+files I just edited, re-ask after refreshing" from "irrelevant, carry on".
+
+Cost is one `stat` per indexed file, skipped entirely when the banner is off. A
+project whose repo has vanished reports nothing: an index frozen against a
+moved checkout is not drift anyone can fix with `ug update`. The MCP server
+appends the equivalent note to its tool results (`Index may be stale`), since a
+stderr line is invisible to an MCP client.
+
 #### `default_read_db_path()` Fallback Chain
 
 When no `-n/--name` flag is provided, the store/db path resolves through:

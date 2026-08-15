@@ -10,9 +10,10 @@ description: >-
   in this repo. Use it WHILE editing too, in both directions: before changing
   a symbol, ask who depends on it (`ug find_usages`, `ug analyze
   boundary_impact`); after changing files, ask what that broke and what to
-  re-test (`ug analyze diff_impact`, `ug analyze diff_retest_scope`) — the graph
-  is kept current by git hooks, and `ug update <file>...` refreshes it on
-  demand mid-edit. Also use for every count, fraction, ranking
+  re-test (`ug analyze diff_impact`, `ug analyze diff_retest_scope`) — run `ug
+  update <file>...` on the files you just edited first, because git hooks only
+  refresh the graph at commit boundaries and structural answers otherwise
+  describe your code as it was before the edit. Also use for every count, fraction, ranking
   or distribution over the repo (how many functions are undocumented, which
   files are biggest, what is dead or untested) — one `ug analyze` replaces a
   loop of greps. Also use whenever a question spans a FAMILY of symbols or
@@ -55,10 +56,14 @@ ug analyze diff_impact --arg files=a.ts,b.rs             # blast radius of those
 ug analyze diff_retest_scope --arg files=a.ts,b.rs       # the tests to re-run
 ```
 
-**The graph keeps up with you.** `ug hook install` puts git hooks in the repo,
-so every commit, merge, checkout and rebase re-indexes the paths it touched —
-you do not have to remember to refresh, and the answers above stay true as you
-work. Between commits, or in a repo without the hooks, refresh on demand:
+**The graph keeps up with you — at commit boundaries.** `ug hook install` puts
+git hooks in the repo, so every commit, merge, checkout and rebase re-indexes
+the paths it touched. What the hooks do *not* cover is the window you spend
+most of your time in: edit, ask, edit, ask, commit once at the end. Across that
+burst the index describes the code as it was before you started.
+
+**So make this a habit: after you edit files, run `ug update` on them before
+you ask anything structural about them.**
 
 ```bash
 ug update src/a.ts src/b.rs   # the files you just edited — focused and fast
@@ -66,11 +71,22 @@ ug gen                        # whole project, incremental; after a big or messy
 ug hook status                # are the hooks installed here? are vectors owed?
 ```
 
-Run `ug update` yourself whenever you have edited files and are about to ask a
-structural question about them — it costs a fraction of a second and it is the
-difference between a real blast radius and a stale one. `ug get_code` always
-reads the live working tree, so a stale graph shows up as an id that no longer
-resolves, never as silently wrong source.
+It costs a fraction of a second and it is the difference between a real blast
+radius and a stale one. You are not relied on to remember, though — **every
+structural command tells you when it is answering from a stale index**, on
+stderr, naming the files that drifted:
+
+```
+⚠ index is behind the tree · 2 changed of 418 indexed files · src/a.ts, src/b.rs
+  Structural answers describe the last index. Refresh: ug update <file>... (fast) or ug gen -n ug.
+```
+
+If you see that line and the named files are ones you just edited, the answer
+you are reading is about the previous version of your own work — refresh and
+ask again. If they are files you do not care about, carry on. `ug get_code` is
+the exception that needs none of this: it always reads the live working tree,
+so a stale graph shows up there as an id that no longer resolves, never as
+silently wrong source.
 
 Two rules turn a loop into one call — reach for them before iterating:
 
@@ -85,7 +101,11 @@ Two rules turn a loop into one call — reach for them before iterating:
 > per validator. See [Wildcards](#wildcards--one-call-instead-of-a-loop).
 
 If the `ultragraph` MCP tools are also connected you don't need them: same
-engine, same parameter names, richer `--help`.
+engine, same parameter names, richer `--help`. If you are using them *instead*
+of the CLI, the post-edit refresh above is the `gen` tool with
+`files: ["src/a.ts", "src/b.rs"]` — same job as `ug update`, and it reports how
+many symbols each file you named contributed, so a file `ug` cannot parse shows
+up as `0 symbols` rather than as an empty answer you would have believed.
 
 ## Routing — which command do I run?
 
@@ -95,7 +115,7 @@ engine, same parameter names, richer `--help`.
 | Is it safe to change this symbol? | `ug find_usages <symbol>` before you edit |
 | What breaks across the files I just changed? | `ug analyze diff_impact --arg files=...` (feed it `git diff --name-only`) |
 | Which tests should I re-run for my changes? | `ug analyze diff_retest_scope --arg files=...` |
-| I just edited files — make the graph match | `ug update <file>...` (git hooks do this on commit) |
+| I just edited files — make the graph match | `ug update <file>...` — do this **before** asking anything structural about them (git hooks only fire on commit) |
 | Which test covers this symbol? | `ug analyze test_for --arg symbol=<id>` |
 | You only have a concept, not a name or path | `ug search "concept"` or `ug find_symbols <word>`, then feed the id/path into the command you wanted |
 | Where is `foo`? (you know the name) | `ug find_symbols foo` |
@@ -286,16 +306,22 @@ directory you are in — re-run it with `-n <project>`. The banner is on stderr,
 so `--json` output stays parseable; `--no-banner` turns it off.
 
 **Freshness, in detail** (see [Editing a codebase with `ug`](#editing-a-codebase-with-ug)
-for the workflow). `ug get_code` reads the *live* working tree and flags drift
-from the index, so source and line numbers are never silently wrong. The
-structural tools (`find_usages`, `ug analyze`) read the indexed graph, so they
-are as current as the last index — which is why `ug update <file>...` after an
-edit burst, or the git hooks, matter. Hook runs pass `--no-embed` to stay
-fast: structure, `ug analyze`, `diff_impact` and blast radius are exact, while
-`search`/`semantic_search` may miss just-changed code until `ug ingest -n
-<project>` backfills the vectors. Both of those tools say so in their output
-when it applies, and `ug hook status` reports how far behind they are — you
-will never have to guess whether an answer is stale.
+for the workflow). Two independent kinds of drift, each reported where it
+applies, so you never have to guess whether an answer is stale:
+
+| Drift | Who is affected | What you see | Fix |
+|---|---|---|---|
+| **Index behind the tree** — files edited since the last `gen`/`update` | every structural command: `find_usages`, `traverse`, `shortest_path`, `ug analyze`, `search` | `⚠ index is behind the tree …` on stderr, naming the drifted files | `ug update <file>...` |
+| **Vectors owed** — nodes indexed with `--no-embed` (what the git hooks do) | `search` / `semantic_search` ranking only; structure and blast radius stay exact | `⚠ Some nodes have no vectors yet …` | `ug ingest -n <project>` |
+
+`ug get_code` sits outside both: it reads the *live* working tree and flags
+drift per slice, so source and line numbers are never silently wrong. The
+structural tools cannot do that — they answer from the indexed graph and a
+stale blast radius looks exactly like a true one — which is why they announce
+the drift instead. `ug hook status` reports both kinds for the repo you are in.
+
+Neither warning appears on stdout, so `--json` and `-o` stay parseable;
+`--no-banner` (or `UG_NO_BANNER=1`) silences them along with the scope banner.
 
 **Lean search by default.** `ug search` and the MCP `search` tool return ids +
 locations without source slices. Add `--snippets` (CLI) or `includeSnippets:

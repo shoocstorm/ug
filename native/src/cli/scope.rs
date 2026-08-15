@@ -4,7 +4,7 @@
 //! (`-n/--name` → the active project → the cwd's basename → the most recently
 //! updated project), and none of them used to say which link fired. That is
 //! the failure mode this exists to close: run from the wrong directory, `ug
-//! query` answers confidently about a different repo, and a git hook logs a
+//! analyze` answers confidently about a different repo, and a git hook logs a
 //! refresh without naming what it refreshed.
 //!
 //! One line per distinct project a command touches, on **stderr** — the
@@ -16,7 +16,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
-use ultragraph::{C_BOLD, C_CYAN, C_DIM, C_RESET};
+use ultragraph::{C_BOLD, C_CYAN, C_DIM, C_RESET, C_YELLOW};
 
 use crate::project;
 
@@ -105,6 +105,64 @@ pub(crate) fn announce_data(kind: &str, path: &Path, why: &str) {
             ),
         ),
     }
+}
+
+/// Warn that the index this command is about to answer from is behind the
+/// tree, naming the files that drifted.
+///
+/// The CLI half of the MCP server's `staleness_note` (`src/mcp/mod.rs`), and
+/// the same argument: `get_code` reads the live working tree and flags drift,
+/// but `find_usages`, `analyze`, `traverse` and `shortest_path` read the
+/// indexed graph and return the identical shape whether it is current or forty
+/// commits behind. That asymmetry is the one failure an agent cannot see from
+/// the output — a stale blast radius looks exactly like a true one — and it
+/// bites hardest right after the agent's own edits, which is precisely when it
+/// asks. Git hooks close the gap at commit boundaries; this closes it in
+/// between by saying so.
+///
+/// stderr, deduplicated per project and suppressed by `--no-banner` for the
+/// same reasons as [`announce`] — this rides alongside the banner and must not
+/// reach the stdout that `--json` and `-o` promise to keep parseable. Keyed
+/// separately so a command that announces a scope still gets its warning.
+pub(crate) fn announce_staleness(data_dir: &Path) {
+    // Both reads are cheap and skipped entirely when the banner is off, so a
+    // `--no-banner` run pays nothing for a line it would not print. Doing this
+    // before the stat walk matters: `staleness` is one stat per indexed file.
+    if SILENT.load(Ordering::Relaxed) || std::env::var_os("UG_NO_BANNER").is_some() {
+        return;
+    }
+    let Some(meta) = project::read_meta(data_dir) else {
+        return;
+    };
+    let Some(stale) = project::staleness(data_dir, &meta) else {
+        return;
+    };
+    // `is_stale` is already false for a vanished repo: an index frozen against
+    // a moved checkout is not drift the caller can fix with `ug update`.
+    if !stale.is_stale() {
+        return;
+    }
+
+    let mut counts = Vec::new();
+    if stale.changed > 0 {
+        counts.push(format!("{} changed", stale.changed));
+    }
+    if stale.missing > 0 {
+        counts.push(format!("{} deleted", stale.missing));
+    }
+    emit(
+        format!("stale:{}", data_dir.display()),
+        format!(
+            "{C_YELLOW}⚠{C_RESET} index is behind the tree {C_DIM}·{C_RESET} {} of {} indexed \
+             files {C_DIM}·{C_RESET} {}\n  {C_DIM}Structural answers describe the last index. \
+             Refresh: {C_RESET}{C_CYAN}ug update <file>...{C_RESET}{C_DIM} (fast) or \
+             {C_RESET}{C_CYAN}ug gen -n {}{C_RESET}{C_DIM}.{C_RESET}",
+            counts.join(", "),
+            stale.files,
+            stale.changed_summary(),
+            meta.name,
+        ),
+    );
 }
 
 /// Which link of the resolution chain a command will follow, as a label.

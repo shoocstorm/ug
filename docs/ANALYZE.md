@@ -380,7 +380,7 @@ question would push that past 7k as a permanent tax. Instead:
 
 Shipped. Tracked from design through implementation in the session logs under
 `docs/dev/` (2026-07-28 → 2026-07-29); the working state is: `analyze` +
-`graph_schema` live on CLI / MCP / HTTP; 33 built-in presets; the fact layer
+`graph_schema` live on CLI / MCP / HTTP; 39 built-in presets; the fact layer
 (comment/class metrics, file classification, schema versioning) lands on a
 reindex; the Insights pane in the visualization is the fourth Discover subtab;
 row ranges give paging without re-reading. **Remaining:** CSV/Parquet export
