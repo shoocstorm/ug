@@ -93,7 +93,7 @@ pub(crate) fn run_doctor(args: &[String]) {
     );
     println!();
 
-    println!("{C_BOLD}Embeddings{C_RESET} (ingest / gen / semantic_search / search / serve)");
+    println!("{C_BOLD}Embeddings{C_RESET} (ingest / gen / search / serve)");
     let (base_url, base_src) =
         config::resolve_pref_cfg(flag_value(args, &["--base-url"]), "embed.base_url");
     let (_api_key, api_src) =

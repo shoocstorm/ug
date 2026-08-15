@@ -364,12 +364,11 @@ pub(crate) fn run_gen(args: &[String]) {
             // Only suggest these now that they actually work — suggesting
             // them after an ingest failure was actively misleading.
             println!(
-                "Run '{C_BOLD}ug semantic_search \"hello\" -n {}{C_RESET}' for a semantic RAG query.",
+                "Run '{C_BOLD}ug search \"hello\" -n {}{C_RESET}' for a hybrid graph + semantic RAG query.",
                 project_name
             );
             println!(
-                "Run '{C_BOLD}ug search \"hello\" -n {}{C_RESET}' for a hybrid graph + semantic RAG query.",
-                project_name
+                "Add {C_BOLD}--no-expand{C_RESET} for the matching symbols alone, without the graph walk."
             );
         }
         EmbeddingsOutcome::Missing | EmbeddingsOutcome::Failed => {
@@ -378,7 +377,7 @@ pub(crate) fn run_gen(args: &[String]) {
                 "Works now: {C_BOLD}ug find_symbols{C_RESET}, {C_BOLD}ug file_outline{C_RESET}, {C_BOLD}ug traverse{C_RESET}, {C_BOLD}ug analyze{C_RESET}."
             );
             println!(
-                "Disabled until embeddings exist: {C_YELLOW}ug search{C_RESET}, {C_YELLOW}ug semantic_search{C_RESET}, chat, tours, the Indexed tab."
+                "Disabled until embeddings exist: {C_YELLOW}ug search{C_RESET}, chat, tours, the Indexed tab."
             );
             println!();
             println!("{C_BOLD}Next steps:{C_RESET}");
@@ -558,7 +557,7 @@ pub(crate) fn skip_flags_help() -> String {
     line!("               loaded, which is most of a small run's wall clock.");
     line!("               {C_GREEN}Current:{C_RESET} the graph.json tools {C_BOLD}and{C_RESET} {C_CYAN}ug analyze{C_RESET} — statistics,");
     line!("                        {C_CYAN}diff_impact{C_RESET}, blast radius, {C_CYAN}traverse --dest{C_RESET}.");
-    line!("               {C_YELLOW}Behind:{C_RESET}  {C_CYAN}search{C_RESET} / {C_CYAN}semantic_search{C_RESET} / {C_CYAN}chat{C_RESET} miss the changed");
+    line!("               {C_YELLOW}Behind:{C_RESET}  {C_CYAN}search{C_RESET} / {C_CYAN}chat{C_RESET} miss the changed");
     line!("                        nodes until the vectors are backfilled.");
     line!("");
     line!("  {C_CYAN}--no-ingest{C_RESET}  {C_BOLD}Write nothing to the db at all.{C_RESET}");
@@ -568,7 +567,7 @@ pub(crate) fn skip_flags_help() -> String {
     line!("                        {C_CYAN}file_outline{C_RESET}, {C_CYAN}get_code{C_RESET}, {C_CYAN}find_usages{C_RESET}, {C_CYAN}shortest_path{C_RESET},");
     line!("                        {C_CYAN}project_overview{C_RESET}, {C_CYAN}graph_schema{C_RESET}.");
     line!("               {C_YELLOW}Behind:{C_RESET}  {C_BOLD}everything the db backs{C_RESET} — {C_CYAN}ug analyze{C_RESET} statistics and");
-    line!("                        blast radius as well as {C_CYAN}search{C_RESET} / {C_CYAN}semantic_search{C_RESET} / {C_CYAN}chat{C_RESET}");
+    line!("                        blast radius as well as {C_CYAN}search{C_RESET} / {C_CYAN}chat{C_RESET}");
     line!("                        keep answering from the {C_BOLD}previous{C_RESET} ingest.");
     line!("");
     line!("  Either way, {C_CYAN}ug ingest -n <project>{C_RESET} catches the db up — it embeds only");

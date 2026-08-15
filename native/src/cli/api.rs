@@ -73,7 +73,7 @@ const API_ENDPOINTS: &[(&str, &[ApiEntry])] = &[
         &[
             ApiEntry { method: "GET", path: "/api/db/node/:id", desc: "fetch one node from the OverGraph store", availability: "503 if no DB backend configured", cli_equivalent: None },
             ApiEntry { method: "GET", path: "/api/db/traverse/:id", desc: "k-hop BFS over the OverGraph edges table", availability: "503 if no DB backend configured", cli_equivalent: Some("ug traverse") },
-            ApiEntry { method: "POST", path: "/api/search/semantic", desc: "semantic vector search", availability: "503 if no DB + embedder configured", cli_equivalent: Some("ug semantic_search") },
+            ApiEntry { method: "POST", path: "/api/search/semantic", desc: "semantic vector search", availability: "503 if no DB + embedder configured", cli_equivalent: Some("ug search --no-expand") },
             ApiEntry { method: "POST", path: "/api/search/hybrid", desc: "GraphRAG: semantic search → graph expansion → ranked context", availability: "503 if no DB + embedder configured", cli_equivalent: Some("ug search") },
             ApiEntry { method: "POST", path: "/api/chat", desc: "GraphRAG-grounded chat completion (\"stream\": true in the body switches to SSE)", availability: "503 if no DB + embedder + chat model configured", cli_equivalent: Some("ug chat") },
             ApiEntry { method: "GET", path: "/api/chat/config", desc: "the server's default chat configuration", availability: "always", cli_equivalent: Some("ug config list (similar info)") },

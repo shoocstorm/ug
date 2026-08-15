@@ -634,7 +634,7 @@ fn print_ingest_help() {
     println!();
     println!("{C_BOLD}Destinations (default: overgraph):{C_RESET}");
     println!("  {C_CYAN}--dest{C_RESET} <kind[,kind...]>   {C_BOLD}overgraph{C_RESET} | {C_BOLD}neo4j{C_RESET}. Comma-separated for fan-out ingest.");
-    println!("                              Reads (semantic_search/search/traverse) accept");
+    println!("                              Reads (search/traverse) accept");
     println!("                              exactly one --dest.");
     println!("  {C_CYAN}--neo4j-uri{C_RESET} <uri>      e.g. neo4j://localhost:7687 (env: UG_NEO4J_URI)");
     println!("  {C_CYAN}--neo4j-user{C_RESET} <user>    Default: neo4j (env: UG_NEO4J_USER)");

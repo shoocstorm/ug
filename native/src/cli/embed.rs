@@ -103,7 +103,7 @@ pub(crate) fn budget_from_args(embedder: &Embedder, args: &[String]) -> EmbedBud
 
 /// One-line banner on stderr so the user can see which backend the
 /// command is using before any progress output appears. Stderr so that
-/// stdout-bound JSON from `semantic_search` / `hybrid_search` stays
+/// stdout-bound JSON from `hybrid_search` stays
 /// clean for piping.
 fn announce_embedder(embedder: &Embedder, dim_was_explicit: bool) {
     let cfg = embedder.config();

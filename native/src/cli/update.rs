@@ -230,7 +230,7 @@ pub(crate) fn run_update(args: &[String]) {
             "  {C_DIM}Fresh: graph.json tools ({C_RESET}{C_CYAN}find_symbols{C_RESET}{C_DIM}, {C_RESET}{C_CYAN}find_usages{C_RESET}{C_DIM}, …). Answering from the previous"
         );
         println!(
-            "  ingest: {C_RESET}{C_CYAN}ug analyze{C_RESET}{C_DIM} statistics and blast radius, {C_RESET}{C_CYAN}search{C_RESET}{C_DIM}, {C_RESET}{C_CYAN}semantic_search{C_RESET}{C_DIM}, {C_RESET}{C_CYAN}chat{C_RESET}{C_DIM}."
+            "  ingest: {C_RESET}{C_CYAN}ug analyze{C_RESET}{C_DIM} statistics and blast radius, {C_RESET}{C_CYAN}search{C_RESET}{C_DIM}, {C_RESET}{C_CYAN}chat{C_RESET}{C_DIM}."
         );
         println!(
             "  Use {C_RESET}{C_CYAN}--no-embed{C_RESET}{C_DIM} instead to keep the db current except for vectors.{C_RESET}"

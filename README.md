@@ -32,7 +32,7 @@ ug            # bare `ug` == `ug serve`: visualization + REST API at :8080
 - **`ug gen`** runs the full pipeline on the current directory. Output goes to
   `~/.ug/<project-name>/` (name = directory basename; override with `-n/--name`).
   Add `--no-embed` to write the database without vectors (no embedding model is
-  loaded — much faster; only `search`/`semantic_search`/`chat` lag), or
+  loaded — much faster; only `search`/`chat` lag), or
   `--no-ingest` to skip the database entirely (`ug analyze` statistics and blast
   radius lag too). See [`--no-embed` vs `--no-ingest`](#--no-embed-vs---no-ingest).
 - **`ug serve`** (or bare `ug`) without `-i` runs in **multi-project mode**:
@@ -110,8 +110,7 @@ The native `ug` binary is the primary CLI. `ug -h` lists every command;
 | `ug hook install` | Hang that refresh off git: hooks on commit, merge, checkout and rebase re-index the paths each event touched, so blast-radius answers never lag the working tree. Hook runs pass `--no-embed` — no embedding model is loaded, which is most of the run time — so vectors alone lag; `ug hook status` says how far and `ug ingest -n <project>` backfills them. `ug hook uninstall`; `UG_HOOK_DISABLE=1` skips one command. |
 | `ug serve` / `ug app` | Serve the viz + REST API (multi-project); `app` wraps it in a native Tauri window |
 | `ug index` / `graph` / `ingest` | The individual pipeline stages `gen` runs for you. Unlisted in `ug -h` — `gen --no-ingest` covers the usual reason to want one. |
-| `ug search "<query>"` | GraphRAG: semantic search → graph expansion → ranked context |
-| `ug semantic_search "<query>"` | Plain vector search, no graph expansion |
+| `ug search "<query>"` | GraphRAG: semantic search → graph expansion → ranked context. `--no-expand` returns just what matched, no graph walk (this replaced the separate `ug semantic_search`, which still works as an alias) |
 | `ug traverse <node-id>` | K-hop BFS over the stored OverGraph edges |
 | `ug chat "<question>"` | RAG-grounded chat against an LLM — see [docs/CHAT.md](docs/CHAT.md) |
 | `ug context <symbol>` | **Everything about one symbol in one budgeted call** — its doc + source, its callers with call sites, the tests that reach it, its dependencies and any linked prose, each labelled with the role that put it there. Replaces the `get_code` + `find_usages` + `traverse` + `analyze test_for` sequence. `--max-chars` sets the budget; `--include <role>` narrows it. |
@@ -139,9 +138,9 @@ by `ug ingest`). Which one a command reads tells you what still works after
 | :--- | :--- |
 | **`graph.json`** — no DB or embedder needed | `find_symbols`, `file_outline`, `get_code`, `find_usages`, `context`, `traverse`, `shortest_path`, `project_overview`, `graph_schema`, all `graph_*` tools; `GET /api/graph/*`, `/api/file`, `/graph.json` |
 | **`ugdb/`** — needs the ingest step, but **no embedder** | `analyze` (statistics); `traverse --dest <name>`; `GET /api/db/node/:id`, `/api/db/traverse/:id`, `POST /api/tools/analyze` |
-| **`ugdb/` + an embedder** — needs ingest *and* a reachable backend | `search`, `semantic_search`, `chat`, `tour`; `POST /api/search/hybrid`, `/api/search/semantic`, `/api/chat` |
+| **`ugdb/` + an embedder** — needs ingest *and* a reachable backend | `search`, `chat`, `tour`; `POST /api/search/hybrid`, `/api/search/semantic`, `/api/chat` |
 
-The practical consequence: **only `search`, `semantic_search`, `chat` and `tour`
+The practical consequence: **only `search`, `chat` and `tour`
 need an embedder — but `ug analyze` still needs the database.** If your embedding
 endpoint is down, symbol lookup, outlines, source reads, usage analysis, traversal,
 pathfinding *and* whole-repo statistics all still work. `--dest <name>` (or
@@ -151,13 +150,13 @@ landed in OverGraph or Neo4j — see
 
 #### What `search` does when there is no embedder
 
-The last row is not uniform: the two search commands **degrade rather than fail**,
-but only from the CLI, and only so far.
+The last row is not uniform: `search` **degrades rather than fails**, but only
+from the CLI, and only so far.
 
 | Surface | Behaviour without an embedder |
 | :--- | :--- |
-| `ug search`, `ug semantic_search` (CLI) | Warn on stderr, then return a **name-substring match** over indexed symbols, tagged `"matched_by": "name"` |
-| MCP `search` / `semantic_search` tools | Error — no fallback |
+| `ug search` (CLI) | Warn on stderr, then return a **name-substring match** over indexed symbols, tagged `"matched_by": "name"` |
+| MCP `search` tool | Error — no fallback |
 | `POST /api/search/hybrid`, `/api/search/semantic`, `/api/chat` | `503` |
 | `ug chat`, `ug tour` | Exit — they need an embedder *and* a chat model |
 
@@ -189,7 +188,7 @@ statistics, `diff_impact`, blast radius — needs `ugdb/`, but not an embedder.
 
 | Flag | Written to `ugdb/` | Current after the run | Answering from the *previous* ingest |
 | :--- | :--- | :--- | :--- |
-| `--no-embed` | nodes, edges, facts, keyword statistics — **everything but the vectors**. No embedding model is loaded, which is most of a small run's wall clock. | the `graph.json` tools **and `ug analyze`** | `search`, `semantic_search`, `chat` |
+| `--no-embed` | nodes, edges, facts, keyword statistics — **everything but the vectors**. No embedding model is loaded, which is most of a small run's wall clock. | the `graph.json` tools **and `ug analyze`** | `search`, `chat` |
 | `--no-ingest` | **nothing** — the database is never opened; only `graph.json` is rebuilt. | the `graph.json` tools only | **everything `ugdb/` backs**, including `ug analyze` |
 
 `ug ingest -n <project>` catches the database up either way — it embeds only the
@@ -215,7 +214,7 @@ setting. Full key list, the env-var table, and `.env` details are in
 
 ## Embeddings
 
-Pick a backend with a single flag on `ingest`/`gen`/`semantic_search`/`search`:
+Pick a backend with a single flag on `ingest`/`gen`/`search`:
 **omit `--base-url` for the local in-process ONNX embedder (default), or pass
 `--base-url` for a remote OpenAI-compatible endpoint.**
 
@@ -293,10 +292,9 @@ refresh on demand — `ug update <file>...` for the files it touched (a fraction
 a second), `ug gen` after a large or messy change — and `ug hook status` says
 whether the hooks are installed and whether any vectors are owed.
 
-**Tools exposed:** `search`, `semantic_search`, `traverse`, `find_usages`,
+**Tools exposed:** `search`, `traverse`, `find_usages`,
 `find_symbols`, `file_outline`, `get_code`, `project_overview`, `context`,
-`shortest_path`, `analyze`, `graph_schema`, `list_projects`, `gen`,
-`ping_embedder`.
+`shortest_path`, `analyze`, `graph_schema`, `list_projects`, `gen`.
 
 `analyze` is the one to know about if you have not seen it: it answers
 counting, distribution and blast-radius questions over the whole repo in one

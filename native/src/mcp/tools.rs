@@ -15,7 +15,6 @@ use serde_json::{json, Value};
 /// Canonical tool names, in the order `tools/list` advertises them.
 pub const TOOL_NAMES: &[&str] = &[
     "search",
-    "semantic_search",
     "traverse",
     "find_usages",
     "find_symbols",
@@ -37,8 +36,19 @@ pub fn is_unlisted_tool(name: &str) -> bool {
     name == "ping_embedder"
 }
 
+/// Retired tool names the dispatcher still answers.
+///
+/// `semantic_search` is now `search` with `expand: false` — the two took
+/// the same arguments and differed only in whether graph expansion ran,
+/// which made picking between them a coin flip an agent had to get right
+/// on prompt text alone. The name stays callable (it is not advertised) so
+/// existing agent configs, cached tool lists and transcripts keep working.
+pub fn is_alias_tool(name: &str) -> bool {
+    name == "semantic_search"
+}
+
 pub fn is_known_tool(canonical: &str) -> bool {
-    TOOL_NAMES.contains(&canonical) || is_unlisted_tool(canonical)
+    TOOL_NAMES.contains(&canonical) || is_unlisted_tool(canonical) || is_alias_tool(canonical)
 }
 
 pub const CHAT_TOOL_DENYLIST: &[&str] = &["gen", "list_projects"];
@@ -169,7 +179,10 @@ fn hoist_own_params(args: &mut Value) {
 /// says it should be. Rejecting a well-meant call over quoting teaches
 /// the model nothing and costs the user a round-trip.
 pub fn normalize_args(tool: &str, args: &mut Value) {
-    let canonical = tool;
+    // The retired alias runs `search`'s code, so it needs `search`'s
+    // coercion too — otherwise a stringified `"k": "10"` survives to
+    // deserialization and fails there instead.
+    let canonical = if is_alias_tool(tool) { "search" } else { tool };
     if canonical == "analyze" {
         hoist_own_params(args);
     }
@@ -258,7 +271,7 @@ fn raw_tools() -> Value {
     json!([
         {
             "name": "search",
-            "description": "PRIMARY KNOWLEDGE-BASE SEARCH for this codebase. Use this whenever the user asks about anything that might exist in the indexed repository: how a feature works, where something is defined, what a symbol does, why some code exists, how modules connect, or to gather context before making a code change. Returns ranked code snippets with file:line locations, descriptions, and node IDs you can drill into via traverse / find_usages. Trigger phrases include: 'how does X work', 'where is X', 'what is X', 'find / show me code for X', 'explain X', 'is there a function that...', 'how is X implemented', 'before I change X look up...', 'context on X', or any question whose answer likely lives in the repo. Prefer calling this once with a focused natural-language query over guessing file paths. Two questions this is the WRONG tool for: a name you already know (use find_symbols — exact, no embeddings) and a family of symbols or files ('all the handlers', 'every *Controller', 'everything under src/auth/') — those are one find_symbols / file_outline / find_usages call with a WILDCARD, which is exact and cheaper than ranking. Internals: RRF fuses vector + FTS hits to seed Personalized PageRank over the edge graph, so results combine semantic relevance with structural importance. Requires an embedder AND a database ingested with vectors: the FTS half is a channel inside that fusion, not a standalone mode, so unlike the `ug search` CLI (which quietly degrades to a name-substring match) this tool has NO fallback and returns an error instead. When it errors, switch to find_symbols / file_outline / find_usages / traverse / analyze — none of those touch embeddings.",
+            "description": "PRIMARY KNOWLEDGE-BASE SEARCH for this codebase. Use this whenever the user asks about anything that might exist in the indexed repository: how a feature works, where something is defined, what a symbol does, why some code exists, how modules connect, or to gather context before making a code change. Returns ranked code snippets with file:line locations, descriptions, and node IDs you can drill into via traverse / find_usages. Trigger phrases include: 'how does X work', 'where is X', 'what is X', 'find / show me code for X', 'explain X', 'is there a function that...', 'how is X implemented', 'before I change X look up...', 'context on X', or any question whose answer likely lives in the repo. Prefer calling this once with a focused natural-language query over guessing file paths. Two questions this is the WRONG tool for: a name you already know (use find_symbols — exact, no embeddings) and a family of symbols or files ('all the handlers', 'every *Controller', 'everything under src/auth/') — those are one find_symbols / file_outline / find_usages call with a WILDCARD, which is exact and cheaper than ranking. Internals: RRF fuses vector + FTS hits to seed Personalized PageRank over the edge graph, so results combine semantic relevance with structural importance; set expand:false to skip that walk and get the matching nodes alone (this replaces the former semantic_search tool). Requires an embedder AND a database ingested with vectors: the FTS half is a channel inside that fusion, not a standalone mode, so unlike the `ug search` CLI (which quietly degrades to a name-substring match) this tool has NO fallback and returns an error instead. When it errors, switch to find_symbols / file_outline / find_usages / traverse / analyze — none of those touch embeddings.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -268,20 +281,8 @@ fn raw_tools() -> Value {
                     "direction": { "type": "string", "enum": ["outbound", "inbound", "both"], "description": "Edge direction during the walk (default 'both'). Use 'inbound' when you care about who depends on the seed; 'outbound' for what the seed depends on." },
                     "maxChars": { "type": "integer", "minimum": 100, "maximum": 200000, "description": "Approximate character budget for assembled context (default ~16k). Lower it when you only need a sketch." },
                     "whereClause": { "type": "string", "description": "Optional SQL WHERE applied during seed search. Examples: \"node_type = 'Function'\", \"file LIKE 'src/auth/%'\"." },
-                    "includeSnippets": { "type": "boolean", "description": "Read a source slice for each item (default false — returns lean ids+locations; set true when you want the code inline rather than a follow-up get_code)." }
-                },
-                "required": ["query"]
-            }
-        },
-        {
-            "name": "semantic_search",
-            "description": "Lightweight pure-vector lookup over the knowledge base — no graph expansion, no snippet read, no PPR. Returns the top-k nearest nodes with id/name/type/file/lines/description/distance. Use this when search would be overkill: (a) quick disambiguation ('which node is the user talking about?'), (b) candidate generation before a deeper traverse, (c) filtered lookups via whereClause (e.g. only Functions in a given folder). Cheaper and faster than search. Switch to search when you need actual code snippets or graph-aware ranking. Same hard dependency as search: an embedder plus vectors in the database, with no fallback here — if you only need to match a NAME, use find_symbols, which is exact and needs no embeddings at all.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "query": { "type": "string", "description": "Natural-language query." },
-                    "k": { "type": "integer", "minimum": 1, "maximum": 100, "description": "How many candidate nodes to return (default 10)." },
-                    "whereClause": { "type": "string", "description": "Optional SQL WHERE filter applied to the vector search. Examples: \"node_type = 'Function'\", \"file LIKE 'src/auth/%'\", \"node_type IN ('Class','Interface')\"." }
+                    "includeSnippets": { "type": "boolean", "description": "Read a source slice for each item (default false — returns lean ids+locations; set true when you want the code inline rather than a follow-up get_code)." },
+                    "expand": { "type": "boolean", "description": "Whether results may include code the query did not match directly (default true). Leave it alone for normal questions — graph expansion is why this tool answers 'how does X work' better than grep. Set false to get ONLY the nodes that matched, no neighbors and no PPR: right for disambiguation ('which node do they mean?'), candidate generation before a traverse, and filtered inventory via whereClause. Cheaper, and the results are all seeds." }
                 },
                 "required": ["query"]
             }
@@ -289,7 +290,7 @@ fn raw_tools() -> Value {
         {
             "name": "traverse",
             "description": format!(
-                "Walk the graph N hops from given seed symbols. The natural follow-up to search / semantic_search: take a node id you got back, expand outward to see what it imports, calls, contains, or extends. {refs} Several seeds make ONE merged walk, so a pattern like 'handle_*' traces everything reachable from a whole family in a single call. Filters by edge type and direction: 'outbound' is what the seed depends on, 'inbound' is who depends on the seed. Output is grouped by hop, with an edge-type tally, so the structure is easy to scan. Reads the structural graph directly — no database or embedding backend needed, so it keeps working when search does not.",
+                "Walk the graph N hops from given seed symbols. The natural follow-up to search: take a node id you got back, expand outward to see what it imports, calls, contains, or extends. {refs} Several seeds make ONE merged walk, so a pattern like 'handle_*' traces everything reachable from a whole family in a single call. Filters by edge type and direction: 'outbound' is what the seed depends on, 'inbound' is who depends on the seed. Output is grouped by hop, with an edge-type tally, so the structure is easy to scan. Reads the structural graph directly — no database or embedding backend needed, so it keeps working when search does not.",
                 refs = NODE_REF_FORMS
             ),
             "inputSchema": {
@@ -657,5 +658,51 @@ mod tests {
         assert!(!TOOL_NAMES.contains(&"ping_embedder"));
         assert!(is_known_tool("search"));
         assert!(!is_known_tool("nonsense"));
+    }
+
+    /// `semantic_search` folded into `search` as `expand: false`. It stays
+    /// dispatchable so a cached tool list keeps working, but advertising it
+    /// again would restore the ambiguity the merge removed.
+    #[test]
+    fn semantic_search_is_a_callable_alias_but_not_advertised() {
+        assert!(is_known_tool("semantic_search"));
+        assert!(is_alias_tool("semantic_search"));
+        assert!(!TOOL_NAMES.contains(&"semantic_search"));
+        let list = tool_list();
+        let names: Vec<&str> = list
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap())
+            .collect();
+        assert!(!names.contains(&"semantic_search"), "{names:?}");
+    }
+
+    /// The alias has no schema of its own, so it borrows `search`'s — without
+    /// that, a model's stringified `"k": "10"` reaches serde and errors.
+    #[test]
+    fn the_alias_borrows_searchs_arg_coercion() {
+        let mut args = json!({ "query": "oauth", "k": "10", "expand": "false" });
+        normalize_args("semantic_search", &mut args);
+        assert_eq!(args["k"], json!(10));
+        assert_eq!(args["expand"], json!(false));
+        assert_eq!(args["query"], json!("oauth"), "a real string stays a string");
+    }
+
+    /// The one knob the merge added. If it ever stops being a boolean the
+    /// coercion above silently stops firing.
+    #[test]
+    fn search_advertises_expand_as_a_boolean() {
+        let search = raw_tools()
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == json!("search"))
+            .cloned()
+            .expect("search is advertised");
+        assert_eq!(
+            search["inputSchema"]["properties"]["expand"]["type"],
+            json!("boolean")
+        );
     }
 }

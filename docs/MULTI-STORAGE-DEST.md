@@ -33,11 +33,11 @@ ug ingest -n <project> \
   --neo4j-password $NEO4J_PASSWORD
 
 # Read from Neo4j
-ug semantic_search "how does authentication work?" \
+ug search "how does authentication work?" \
   --dest neo4j --neo4j-uri neo4j://localhost:7687 \
   --neo4j-user neo4j --neo4j-password $NEO4J_PASSWORD
 
-# Same for hybrid_search and traverse
+# Same for traverse
 ug search "loadConfig" --dest neo4j --neo4j-uri … --strategy ppr
 ug traverse file:src/main.ts --dest neo4j --neo4j-uri …
 ```
@@ -84,9 +84,9 @@ UG_NEO4J_PASSWORD=your-password
 Then commands collapse to:
 
 ```bash
-ug semantic_search "..." --dest neo4j
-ug search          "..." --dest neo4j
-ug traverse <id>          --dest neo4j
+ug search   "..." --dest neo4j
+ug search   "..." --dest neo4j --no-expand
+ug traverse <id>  --dest neo4j
 ug ingest -n <project> --dest overgraph,neo4j
 ```
 

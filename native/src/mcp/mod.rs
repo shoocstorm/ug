@@ -33,8 +33,8 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use ultragraph::agent_tools::{run_tool, Render};
 use ultragraph::storage::{
-    ingest_graph, open_store, search_kb, semantic_search, semantic_search_w_where, Direction,
-    Embedder, EmbedderConfig, KnowledgeStore, RankStrategy, SearchKbOptions, StoreSpec,
+    ingest_graph, open_store, search_kb, Direction, Embedder, EmbedderConfig, KnowledgeStore,
+    RankStrategy, SearchKbOptions, StoreSpec,
 };
 use ultragraph::types::{GraphData, GraphNodeType};
 use ultragraph::{build_graph, index_with_cache, C_BOLD, C_CYAN, C_GREEN, C_RESET, C_YELLOW};
@@ -791,10 +791,13 @@ impl Mcp {
             |text: String| -> String { with_staleness(text) + &vectors_note(&ctx) };
 
         match name {
-            "search" => Ok(with_vectors_note(self.tool_search(&ctx, &args).await?)),
-            "semantic_search" => {
-                Ok(with_vectors_note(self.tool_semantic_search(&ctx, &args).await?))
-            }
+            // One implementation, two entry points. `semantic_search` is
+            // the retired standalone tool, kept as an alias so agent
+            // configs and transcripts that still name it keep working: it
+            // is `search` with expansion off unless the caller asked for it.
+            "search" | "semantic_search" => Ok(with_vectors_note(
+                self.tool_search(&ctx, &args, name == "search").await?,
+            )),
             // Statistics are the one structural question that cannot be
             // answered from graph.json: aggregation and reachability need
             // the store's indexed properties. It still needs no embedder,
@@ -977,7 +980,14 @@ impl Mcp {
         })
     }
 
-    async fn tool_search(&self, ctx: &ProjectCtx, args: &Value) -> Result<String, String> {
+    /// `expand_default` is what applies when the caller passes no `expand`:
+    /// true for `search`, false for the `semantic_search` alias.
+    async fn tool_search(
+        &self,
+        ctx: &ProjectCtx,
+        args: &Value,
+        expand_default: bool,
+    ) -> Result<String, String> {
         let a: SearchArgs = serde_json::from_value(args.clone())
             .map_err(|e| format!("invalid search params: {}", e))?;
         if a.query.trim().is_empty() {
@@ -1015,6 +1025,7 @@ impl Mcp {
         if let Some(s) = a.include_snippets {
             opts.include_snippets = s;
         }
+        opts.expand = a.expand.unwrap_or(expand_default);
         if let Some(s) = a.strategy.as_deref() {
             opts.strategy = RankStrategy::from_str_lossy(s);
         }
@@ -1029,38 +1040,11 @@ impl Mcp {
         }
         opts.ppr_edge_weights = a.ppr_edge_weights.clone();
 
+        let expanded = opts.expand;
         let result = search_kb(store.as_ref(), embedder.as_ref(), opts)
             .await
             .map_err(|e| format!("search_kb failed: {}", e))?;
-        Ok(format::format_ranked_context(&result))
-    }
-
-    async fn tool_semantic_search(
-        &self,
-        ctx: &ProjectCtx,
-        args: &Value,
-    ) -> Result<String, String> {
-        let a: SemanticArgs = serde_json::from_value(args.clone())
-            .map_err(|e| format!("invalid semantic_search params: {}", e))?;
-        if a.query.trim().is_empty() {
-            return Err("semantic_search requires a non-empty query.".to_string());
-        }
-        let k = a.k.unwrap_or(10);
-        let embedder = self.embedder()?;
-        let dim = embedder.config().dim as u32;
-        let spec = store_spec(&ctx.db_path, dim)?;
-        let store = open_store(&spec)
-            .await
-            .map_err(|e| format!("failed to open {} store: {}", spec.name(), e))?;
-        let hits = match a.where_clause.as_deref() {
-            Some(w) => semantic_search_w_where(store.as_ref(), embedder.as_ref(), &a.query, k, w)
-                .await
-                .map_err(|e| format!("search failed: {}", e))?,
-            None => semantic_search(store.as_ref(), embedder.as_ref(), &a.query, k)
-                .await
-                .map_err(|e| format!("search failed: {}", e))?,
-        };
-        Ok(format::format_semantic_hits(&a.query, &hits))
+        Ok(format::format_ranked_context(&result, expanded))
     }
 
     fn tool_list_projects(&self, ctx: &ProjectCtx) -> String {
@@ -1230,20 +1214,15 @@ struct SearchArgs {
     mmr_lambda: Option<f32>,
     where_clause: Option<String>,
     include_snippets: Option<bool>,
+    /// `false` = seeds only, no graph expansion. Absent means "caller
+    /// didn't say", which lets the `semantic_search` alias supply
+    /// `false` as its default without overriding an explicit `true`.
+    expand: Option<bool>,
     strategy: Option<String>,
     ppr_restart_prob: Option<f32>,
     ppr_max_iter: Option<usize>,
     ppr_seed_pool: Option<usize>,
     ppr_edge_weights: Option<HashMap<String, f32>>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SemanticArgs {
-    #[serde(default)]
-    query: String,
-    k: Option<usize>,
-    where_clause: Option<String>,
 }
 
 // ── stdio JSON-RPC server ──────────────────────────────────────────────────

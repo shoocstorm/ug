@@ -1,12 +1,16 @@
-//! Markdown formatters for the DB-backed MCP tools (`search`,
-//! `semantic_search`). Ported verbatim in behaviour from the old
-//! `node/cli.mjs` `formatRankedContext` / `formatSemanticHits` so MCP output
-//! is byte-for-byte what agents were already trained against.
+//! Markdown formatters for the DB-backed MCP tools (`search`, and the
+//! store-backed project listing). Ported in behaviour from the old
+//! `node/cli.mjs` `formatRankedContext` so MCP output stays what agents
+//! were already trained against.
+//!
+//! Both halves of `search` render through [`format_ranked_context`]: the
+//! expanded pass and the `expand: false` pass differ by one line per item,
+//! not by output format.
 //!
 //! The graph-backed tools don't need anything here — they render themselves
 //! inside [`crate::agent_tools`] via `Render::Markdown`.
 
-use ultragraph::storage::query::{RankedContext, SearchHit};
+use ultragraph::storage::query::RankedContext;
 
 /// Long snippets blow up the prompt. Cap each item but indicate truncation so
 /// the agent knows it can re-fetch the full slice via `get_code`.
@@ -60,7 +64,10 @@ fn summarize_node_types<'a, I: IntoIterator<Item = &'a str>>(types: I) -> String
         .join(", ")
 }
 
-pub fn format_ranked_context(ctx: &RankedContext) -> String {
+/// Render a search result. `expanded` says whether graph expansion ran:
+/// when it didn't, every item is a seed, so the per-item `hop` line is a
+/// constant 0 and gets dropped rather than printed as noise.
+pub fn format_ranked_context(ctx: &RankedContext, expanded: bool) -> String {
     let mut lines: Vec<String> = Vec::new();
     let items = &ctx.items;
 
@@ -84,9 +91,11 @@ pub fn format_ranked_context(ctx: &RankedContext) -> String {
     if items.is_empty() {
         lines.push("No matches. Try:".to_string());
         lines.push("- a broader query (drop qualifiers)".to_string());
-        lines.push(
-            "- semantic_search for a pure-vector pass with whereClause filters".to_string(),
-        );
+        if expanded {
+            lines.push("- a whereClause to filter rather than a longer query".to_string());
+        } else {
+            lines.push("- expand: true, so graph neighbors of a near-miss still land".to_string());
+        }
         lines.push("- ping_embedder to confirm the embedding endpoint is up".to_string());
         return lines.join("\n");
     }
@@ -101,7 +110,11 @@ pub fn format_ranked_context(ctx: &RankedContext) -> String {
         lines.push(format!("## [{}] {} {}", idx + 1, it.node_type, it.name));
         lines.push(format!("- id: `{}`", it.id));
         lines.push(format!("- loc: {}", loc));
-        lines.push(format!("- hop={}  •  score={}", it.hop, score));
+        if expanded {
+            lines.push(format!("- hop={}  •  score={}", it.hop, score));
+        } else {
+            lines.push(format!("- score={}  •  via={}", score, it.matched_by));
+        }
         if !it.description.is_empty() {
             lines.push(format!("- desc: {}", it.description));
         }
@@ -142,55 +155,6 @@ pub fn format_ranked_context(ctx: &RankedContext) -> String {
     lines.join("\n")
 }
 
-pub fn format_semantic_hits(query: &str, hits: &[SearchHit]) -> String {
-    let mut lines: Vec<String> = Vec::new();
-    lines.push(format!("# Semantic search for: {}", query));
-    let mut meta = vec![format!("hits={}", hits.len())];
-    if !hits.is_empty() {
-        meta.push(format!(
-            "types=[{}]",
-            summarize_node_types(hits.iter().map(|h| h.node.node_type.as_str()))
-        ));
-    }
-    lines.push(meta.join("  •  "));
-    lines.push(String::new());
-
-    if hits.is_empty() {
-        lines.push(
-            "No matches. Loosen the whereClause or try search for graph-aware ranking.".to_string(),
-        );
-        return lines.join("\n");
-    }
-
-    for (idx, h) in hits.iter().enumerate() {
-        let n = &h.node;
-        let loc = if n.file.is_empty() {
-            "(no file)".to_string()
-        } else {
-            format!("{}:{}-{}", n.file, n.start_line, n.end_line)
-        };
-        let score = format!("{:.3}", h.distance);
-        lines.push(format!(
-            "[{}] {} {}  •  id=`{}`  •  dist={}",
-            idx + 1,
-            n.node_type,
-            n.name,
-            n.id,
-            score
-        ));
-        lines.push(format!("    {}", loc));
-        if !n.description.is_empty() {
-            lines.push(format!("    {}", n.description));
-        }
-    }
-
-    lines.push(String::new());
-    lines.push(format!(
-        "Next: search({{ query: \"{}\" }}) for graph-ranked snippets, or traverse({{ nodeId: \"{}\" }}) to expand.",
-        query, hits[0].node.id
-    ));
-    lines.join("\n")
-}
 
 /// Info row for `list_projects`. Kept here next to the formatter that consumes
 /// it so the two stay in sync.

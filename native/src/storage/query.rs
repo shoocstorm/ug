@@ -438,6 +438,12 @@ pub struct SearchKbOptions<'a> {
     pub repo_root: &'a Path,
     pub where_clause: Option<&'a str>,
     pub include_snippets: bool,
+    /// Whether results may include nodes the query did not match
+    /// directly. `false` stops after the seed search: no PPR, no BFS,
+    /// no neighbors — the lookup the old `semantic_search` command was.
+    /// Cheaper, and the right shape when you want candidates to pick
+    /// from rather than a context bundle to read.
+    pub expand: bool,
     pub strategy: RankStrategy,
     /// PPR teleport probability. Higher = stay closer to seeds; lower =
     /// let structural centrality dominate. Ignored unless
@@ -468,6 +474,7 @@ impl<'a> SearchKbOptions<'a> {
             repo_root,
             where_clause: None,
             include_snippets: false,
+            expand: true,
             strategy: RankStrategy::Ppr,
             ppr_restart_prob: 0.15,
             ppr_max_iter: 30,
@@ -484,11 +491,17 @@ impl<'a> SearchKbOptions<'a> {
 /// Backends without native PPR (Neo4j without GDS) silently fall back to
 /// MMR with a single warning log line — callers don't need to opt in, and
 /// that fallback is the only reason [`RankStrategy::Mmr`] still exists.
+///
+/// `opts.expand == false` short-circuits to [`search_kb_flat`]: seeds
+/// only, no ranking stage at all.
 pub async fn search_kb(
     store: &dyn KnowledgeStore,
     embedder: &Embedder,
     opts: SearchKbOptions<'_>,
 ) -> Result<RankedContext, Box<dyn std::error::Error + Send + Sync>> {
+    if !opts.expand {
+        return search_kb_flat(store, embedder, opts).await;
+    }
     let strategy = match opts.strategy {
         RankStrategy::Ppr if !store.supports_native_ppr() => {
             tracing::warn!(
@@ -607,6 +620,73 @@ async fn search_kb_ppr(
             // downstream consumers (sort-ascending) keep working.
             distance: -score,
             hop,
+            snippet,
+            matched_by: matched_by.to_string(),
+        };
+        let item_chars = item.snippet.as_ref().map(|s| s.len()).unwrap_or(0)
+            + item.description.len()
+            + item.name.len();
+        if total_chars + item_chars > opts.max_chars && !items.is_empty() {
+            break;
+        }
+        total_chars += item_chars;
+        items.push(item);
+        if items.len() >= opts.k {
+            break;
+        }
+    }
+
+    Ok(RankedContext {
+        query: opts.query.to_string(),
+        items,
+        total_chars,
+        seed_id,
+    })
+}
+
+/// Seeds only: RRF fusion, then stop. No PPR, no BFS, no neighbors —
+/// every item came back because the query matched it, so `hop` is always
+/// 0 and `matched_by` is only ever `semantic` or `keyword`.
+///
+/// This is what `expand: false` selects, and what the standalone
+/// `semantic_search` command used to be. One difference worth knowing:
+/// seeds here are RRF-fused (vector + full-text), where the old command
+/// was vector-only. For code that is usually better — an exact identifier
+/// arrives through the keyword channel — and `matched_by` still says which
+/// channel found each hit.
+async fn search_kb_flat(
+    store: &dyn KnowledgeStore,
+    embedder: &Embedder,
+    opts: SearchKbOptions<'_>,
+) -> Result<RankedContext, Box<dyn std::error::Error + Send + Sync>> {
+    let (seeds, dense_ids) =
+        seeds_and_dense_ids(store, embedder, opts.query, opts.k.max(1), opts.where_clause).await?;
+    let seed_id = seeds.first().map(|h| h.node.id.clone());
+
+    let mut items: Vec<ContextItem> = Vec::new();
+    let mut total_chars: usize = 0;
+    for h in seeds.into_iter() {
+        let n = h.node;
+        let snippet = if opts.include_snippets {
+            snippet_for(&n, opts.repo_root)
+        } else {
+            None
+        };
+        let matched_by = if dense_ids.contains(&n.id) {
+            "semantic"
+        } else {
+            "keyword"
+        };
+        let item = ContextItem {
+            id: n.id,
+            name: n.name,
+            node_type: n.node_type,
+            file: n.file,
+            start_line: n.start_line,
+            end_line: n.end_line,
+            description: n.description,
+            distance: h.distance,
+            hop: 0,
             snippet,
             matched_by: matched_by.to_string(),
         };

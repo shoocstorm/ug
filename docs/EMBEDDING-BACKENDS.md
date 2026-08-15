@@ -199,7 +199,6 @@ ingest, and any later open with a mismatched dim returns
 |--------------------------|-----------------------------------------------------------------|
 | `ug ingest` / `ug gen`   | `--base-url` present → remote, else local                       |
 | `ug serve`               | Same rule, applied during `embedder_from_args`                  |
-| `ug semantic_search`     | Same                                                            |
 | `ug search`              | Same                                                            |
 | NAPI `db_ingest`         | `embedderOptions.baseUrl` non-empty → remote, else local        |
 | NAPI `db_*_search`       | Same                                                            |
@@ -295,13 +294,13 @@ release per target — see `ort` docs.
 Most of `ug` never touches this subsystem: `find_symbols`, `get_code`,
 `file_outline`, `find_usages`, `shortest_path`, `project_overview` and the
 `graph_*` tools read `graph.json`, and `analyze` / `traverse` read the database.
-Only four commands are embedding-backed, and they do not all behave the same way
+Only three commands are embedding-backed, and they do not all behave the same way
 when no embedder is available.
 
 | Surface                                            | Behaviour                                                                         |
 |----------------------------------------------------|-----------------------------------------------------------------------------------|
-| `ug search`, `ug semantic_search` (CLI)            | **Degrade.** `warning: embedder unavailable, falling back to name search` on stderr, then a name-substring match tagged `"matched_by": "name"` |
-| MCP `search` / `semantic_search` tools             | **Hard fail** — the tool returns an error                                          |
+| `ug search` (CLI)                                  | **Degrade.** `warning: embedder unavailable, falling back to name search` on stderr, then a name-substring match tagged `"matched_by": "name"` |
+| MCP `search` tool                                  | **Hard fail** — the tool returns an error                                          |
 | `POST /api/search/hybrid`, `/api/search/semantic`, `/api/chat` | **503**                                                                |
 | `ug chat`, `ug tour`                               | **Exit** — `failed to build embedder`; they need an embedder *and* a chat model    |
 

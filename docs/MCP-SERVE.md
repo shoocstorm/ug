@@ -42,7 +42,7 @@ Before using the MCP server, ensure you have:
    ug ingest -n src   # reads ~/.ug/src/graph.json → writes ~/.ug/src/ugdb
    ```
 
-3. **Embedding endpoint** (for `search` / `semantic_search`): not required by
+3. **Embedding endpoint** (for `search`): not required by
    default — UltraGraph ships an in-process ONNX embedder (no external service).
    Set `UG_EMBED_BASE_URL` to opt into a remote OpenAI-compatible endpoint instead
    (e.g. `ollama serve` with `nomic-embed-text`).
@@ -237,7 +237,7 @@ Returns ranked code snippets with file:line locations, descriptions, and node ID
 
 **Trigger phrases:** "how does X work", "where is X", "what is X", "find/show me code for X", "explain X", "is there a function that...", "how is X implemented", "before I change X look up...", "context on X", or any question whose answer likely lives in the repo.
 
-**Internals:** RRF fuses vector + FTS hits to seed Personalized PageRank over the edge graph, so results combine semantic relevance with structural importance.
+**Internals:** RRF fuses vector + FTS hits to seed Personalized PageRank over the edge graph, so results combine semantic relevance with structural importance. `expand: false` stops after the seed search — no PPR, no neighbors, just what matched. That is what the separate `semantic_search` tool used to be; it was folded in here because the two took the same arguments and picking between them was guesswork. The name still dispatches (as `expand: false`) but is no longer advertised in `tools/list`.
 
 **Requires an embedder and a database ingested with vectors — and unlike the CLI,
 this tool has no fallback.** The FTS half is a channel inside the fusion, not a
@@ -259,6 +259,7 @@ those touch embeddings. See
 | `maxChars` | integer (100-200000) | ❌ | Approximate character budget for assembled context (default ~16k). |
 | `whereClause` | string | ❌ | Optional SQL WHERE applied during seed search. Examples: `node_type = 'Function'`, `file LIKE 'src/auth/%'`. |
 | `includeSnippets` | boolean | ❌ | Read a source slice for each item (default false — returns lean ids+locations; set true when you want the code inline rather than a follow-up `get_code`). |
+| `expand` | boolean | ❌ | Whether results may include code the query did not match directly (default true). Leave it alone for normal questions — graph expansion is why this beats grep. Set false for disambiguation, candidate generation before a `traverse`, or a filtered inventory via `whereClause`. |
 
 > **Ranking is not tunable from the tool.** `strategy`, `hops`, `mmrLambda`,
 > `pprRestartProb`, `pprMaxIter`, `pprSeedPool` and `pprEdgeWeights` used to be
@@ -279,48 +280,15 @@ search: { query: "where is the main entry point", k: 5, whereClause: "node_type 
 search: { query: "error handling", k: 8, edgeTypes: ["calls", "references"], direction: "both" }
 
 search: { query: "database schema", k: 12, maxChars: 5000 }
+
+search: { query: "auth middleware", k: 5, expand: false, whereClause: "node_type = 'Function'" }
 ```
 
 ---
 
-### 2. `semantic_search` - Lightweight Vector Lookup
+### 2. `traverse` - Graph Traversal
 
-**Lightweight pure-vector lookup** over the knowledge base — no graph expansion, no snippet read, no PPR. Returns the top-k nearest nodes with id/name/type/file/lines/description/distance.
-
-Use this when `search` would be overkill:
-- Quick disambiguation ("which node is the user talking about?")
-- Candidate generation before a deeper `traverse`
-- Filtered lookups via `whereClause` (e.g. only Functions in a given folder)
-
-Cheaper and faster than `search`. Switch to `search` when you need actual code snippets or graph-aware ranking.
-
-Same hard dependency as `search`: an embedder plus vectors in the database, with
-no fallback at the MCP layer. If you only need to match a **name**, use
-`find_symbols` — exact, wildcard-capable, and needs no embeddings at all.
-
-**Parameters:**
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `analyze` | string | ✅ | Natural-language query. |
-| `k` | integer (1-100) | ❌ | How many candidate nodes to return (default 10). |
-| `whereClause` | string | ❌ | Optional SQL WHERE filter applied to the vector search. Examples: `node_type = 'Function'`, `file LIKE 'src/auth/%'`, `node_type IN ('Class','Interface')`. |
-
-**Example usage:**
-```
-semantic_search: { query: "auth middleware", k: 5, whereClause: "node_type = 'Function'" }
-
-semantic_search: { query: "User class", k: 3, whereClause: "node_type IN ('Class', 'Interface')" }
-
-semantic_search: { query: "database connection", k: 10, whereClause: "file LIKE 'src/db/%'" }
-
-semantic_search: { query: "API handler", k: 5 }
-```
-
----
-
-### 3. `traverse` - Graph Traversal
-
-**Walk the graph N hops** from given seed symbols. The natural follow-up to `search` / `semantic_search`: take a node id you got back, expand outward to see what it imports, calls, contains, or extends.
+**Walk the graph N hops** from given seed symbols. The natural follow-up to `search`: take a node id you got back, expand outward to see what it imports, calls, contains, or extends.
 
 Use `'outbound'` to see what the seed depends on; `'inbound'` to see who depends on the seed. Output groups edges by type so the structure is easy to scan. Several seeds make **one merged walk**, so a pattern traces a whole family at once.
 
@@ -349,7 +317,7 @@ traverse: { nodeId: "file-202", hops: 3, edgeTypes: ["contains", "imports"] }
 
 ---
 
-### 4. `find_usages` - Find Inbound References
+### 3. `find_usages` - Find Inbound References
 
 **Find inbound references** to a node — i.e. callers of a function, importers of a module, subclasses of a class, or anything else pointing at the node.
 
@@ -381,7 +349,7 @@ find_usages: { nodeId: "*Repository", edgeTypes: ["implements"] }
 
 ---
 
-### 5. `find_symbols` - Symbol Lookup by Name or Wildcard
+### 4. `find_symbols` - Symbol Lookup by Name or Wildcard
 
 **Name-based lookup, no embeddings.** Use instead of `search` whenever you know (part of) an identifier: a function/class the user named, a symbol from a stack trace, something you are about to edit. Three ways to ask, all case-insensitive:
 
@@ -412,7 +380,7 @@ find_symbols: { name: "*", filePrefix: "src/auth/**", limit: 100 }  // a whole s
 
 ---
 
-### 6. `file_outline` - File Table of Contents
+### 5. `file_outline` - File Table of Contents
 
 **Every indexed symbol in a file, in line order.** Call before opening or editing a file. Accepts a repo-relative path, a unique suffix (just the basename works if unambiguous; ambiguous suffixes return the candidate list), a File node id, or a **path glob** that outlines every file it matches — one call to survey a directory or a subtree instead of one call per file.
 
@@ -435,7 +403,7 @@ file_outline: { file: "**/test_*.py" }                     // by naming conventi
 
 ---
 
-### 7. `get_code` - Read Full Source
+### 6. `get_code` - Read Full Source
 
 **Read the full source for a symbol, or a file/line range.** The follow-up to every other tool: search previews truncate at ~1200 chars and traversals return no code — call this to see the real implementation. Works even when the client has no file access (e.g. Claude Desktop), and even when the repo itself is not on the machine: a symbol reads its captured span, and a file/line range is cut out of the file's whole-file capture. The working tree is only a fallback for what ingest did not capture; a slice whose file changed since indexing comes back flagged.
 
@@ -461,7 +429,7 @@ get_code: { file: "native/src/serve.rs", range: "181-260" }   // page on, don't 
 
 ---
 
-### 8. `project_overview` - Orientation
+### 7. `project_overview` - Orientation
 
 **One-call orientation:** repo root, node/edge counts by type, biggest files by symbol count, and the most depended-upon symbols (highest inbound degree, containment edges excluded). Call it first in a new session, or for "what is this project / how is it structured".
 
@@ -473,7 +441,7 @@ project_overview: {}
 
 ---
 
-### 8b. `context` - Everything About One Symbol, In One Call
+### 7b. `context` - Everything About One Symbol, In One Call
 
 **The curated bundle.** Returns a symbol's source, its direct callers with call sites, the tests that reach it, what it depends on, and any prose linked to it — replacing the `get_code` → `find_usages` → `traverse` → `analyze test_for` → read-the-doc sequence with a single round trip and a single token budget.
 
@@ -516,7 +484,7 @@ The CLI equivalent is `ug context <symbol> [--max-chars N] [--include ROLE]...`.
 
 ---
 
-### 9. `shortest_path` - How Are Two Symbols Connected?
+### 8. `shortest_path` - How Are Two Symbols Connected?
 
 **Shortest directed edge path between two symbols.** Answers "does A reach B", "how does the route reach the db call", "can editing A affect B". If no forward path exists the reverse direction is tried and labeled.
 
@@ -534,7 +502,7 @@ shortest_path: { sourceId: "file:native/src/mcp/install.rs", targetId: "function
 
 ---
 
-### 10. `analyze` - Whole-Repo Statistics
+### 9. `analyze` - Whole-Repo Statistics
 
 **Counts, groups, distributions and blast radius over the indexed graph.** This is the tool for any question of the form "how many", "what fraction", "which are the biggest / longest / most depended-upon", "what does nothing call", "which folders depend on which", "what breaks if I change this file".
 
@@ -595,7 +563,7 @@ Also available on the CLI as `ug analyze` and over HTTP as `POST /api/tools/anal
 
 ---
 
-### 11. `graph_schema` - Capability Manifest
+### 10. `graph_schema` - Capability Manifest
 
 **Everything you need before filtering or aggregating**, in one cheap call:
 
@@ -614,7 +582,7 @@ graph_schema: {}
 
 ---
 
-### 12. `list_projects` - Enumerate Indexed Projects
+### 11. `list_projects` - Enumerate Indexed Projects
 
 **List every indexed project under `~/.ug`** with name, repo root, and node/edge counts. One server instance can query all of them: every other tool accepts an optional `project: '<name>'` parameter to target another project instead of the one the server was started for.
 
@@ -627,7 +595,7 @@ search: { query: "auth flow", project: "other-repo" }
 
 ---
 
-### 13. `gen` - Refresh a Stale Index
+### 12. `gen` - Refresh a Stale Index
 
 **Regenerate the index → graph → embeddings pipeline** for the current (or given) project. Incremental: a blake3 content cache skips files that haven't changed, so re-indexing after a few edits is fast.
 
@@ -648,11 +616,11 @@ With `files`, the result appends a per-file line giving the symbol count each pa
 
 ---
 
-### 14. `ping_embedder` - Health Check
+### 13. `ping_embedder` - Health Check
 
 **Probe the configured embedding endpoint.** Returns 'ok' on success or throws with the upstream error.
 
-Call this when `search` / `semantic_search` fails with an embedding-related error, or as a one-off health check before kicking off a batch of queries.
+Call this when `search` fails with an embedding-related error, or as a one-off health check before kicking off a batch of queries.
 
 **Parameters:** None
 
@@ -705,7 +673,7 @@ Here are 20 common questions end users might ask when using the MCP tools. These
 ```claude
 search: { query: "How is authentication handled in this codebase?", k: 10 }
 
-semantic_search: { query: "auth middleware", k: 5, whereClause: "node_type = 'Function'" }
+search: { query: "auth middleware", k: 5, expand: false, whereClause: "node_type = 'Function'" }
 
 # Name search
 find_symbols: { name: "authenticateUser" }

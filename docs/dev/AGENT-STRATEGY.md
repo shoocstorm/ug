@@ -33,8 +33,8 @@ This framing drives every recommendation below.
 
 ## What `ug` already does exceptionally well for agents
 
-The agent-facing surface is deliberately small: **14 MCP tools** (`search`,
-`semantic_search`, `traverse`, `find_usages`, `find_symbols`, `file_outline`,
+The agent-facing surface is deliberately small: **13 MCP tools** (`search`,
+`traverse`, `find_usages`, `find_symbols`, `file_outline`,
 `get_code`, `project_overview`, `context`, `shortest_path`, `analyze`,
 `graph_schema`, `list_projects`, `gen` — `native/src/mcp/tools.rs`), each mirrored one-for-one
 as a CLI subcommand (`native/src/cli/mod.rs::dispatch`), with the analytical

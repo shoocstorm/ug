@@ -139,9 +139,8 @@ pub(crate) fn print_help() {
     cmd_hi("analyze", "Statistics, distributions and blast radius — read-only GQL");
     cont("39 named questions (ug analyze --list) or write your own");
     cmd_hi("search", "GraphRAG: semantic search → graph expansion → ranked context");
+    cont("--no-expand for matches alone; find_symbols for exact names");
     cont("no embedder? degrades to a name match — never a dead end");
-    cmd("semantic_search", "Search by meaning alone; find_symbols for exact names");
-    cont("same degrade; meaning-based hits are what needs the embedder");
     cmd("traverse", "K-hop walk over the stored edges from a symbol");
     cmd("chat", "GraphRAG-grounded chat — one-shot, or an interactive REPL");
     cmd("tour", "Guided, narrated walkthrough; flies the camera in the web UI");

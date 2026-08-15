@@ -110,7 +110,7 @@ pub(crate) fn store_specs_from_args(args: &[String], embedding_dim: u32) -> Vec<
 /// spec wins, with a hard error on multi-spec inputs so users don't
 /// accidentally fan out a query.
 ///
-/// Also where the db-backed reads (`analyze`, `search`, `semantic_search`,
+/// Also where the db-backed reads (`analyze`, `search`,
 /// `traverse`, `chat`, `tour`) pick up the staleness warning. This function
 /// rather than [`store_specs_from_args`] because that one is shared with the
 /// commands that *write* the store — `ug gen` and `ug ingest` — and telling

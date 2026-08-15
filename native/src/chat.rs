@@ -17,9 +17,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use ultragraph::storage::{
-    search_kb as storage_search_kb, semantic_search as storage_semantic_search, ContextItem,
-    DEFAULT_CONTEXT_CHARS, Direction, Embedder, KnowledgeStore, RankStrategy, RankedContext,
-    SearchKbOptions,
+    search_kb as storage_search_kb, ContextItem, DEFAULT_CONTEXT_CHARS, Direction, Embedder,
+    KnowledgeStore, RankStrategy, RankedContext, SearchKbOptions,
 };
 
 /// Default chat model. Picked so the CLI works as soon as the user
@@ -610,7 +609,7 @@ items don't already show completely:\n\
 - `get_code` to read a symbol's exact source before describing or quoting it.\n\
 - `file_outline` to see everything a file declares.\n\
 - `find_symbols` to resolve a name you were given into a real node id.\n\
-- `search` / `semantic_search` to widen the net when the items look thin or off-topic.\n\
+- `search` to widen the net when the items look thin or off-topic.\n\
 - `shortest_path` / `traverse` to show how two things connect.\n\n\
 The items above were retrieved from the user's wording alone. If they look thin, off-topic, or miss \
 the part being asked about, REWRITE the query in the vocabulary the codebase actually uses and call \
@@ -750,7 +749,7 @@ pub struct ToolBox<'a> {
     pub max_result_chars: usize,
 }
 
-/// Run `search` / `semantic_search` for a chat toolbox.
+/// Run the `search` tool (or its `semantic_search` alias) for a chat toolbox.
 ///
 /// The two embedding-backed tools, once, for every transport: `ug chat` and
 /// `/api/chat` both offer the model the same schemas and both hold an open
@@ -771,31 +770,16 @@ pub async fn run_search_tool(
     }
     let k = args.get("k").and_then(|v| v.as_u64()).unwrap_or(8).clamp(1, 25) as usize;
 
-    if name == "semantic_search" {
-        let hits = storage_semantic_search(store, embedder, query, k)
-            .await
-            .map_err(|e| e.to_string())?;
-        if hits.is_empty() {
-            return Ok("No matches.".into());
-        }
-        let mut out = String::new();
-        for (i, h) in hits.iter().enumerate() {
-            out.push_str(&format!(
-                "{}. {} ({}) — {}:{} · distance {:.3}\n",
-                i + 1,
-                h.node.name,
-                h.node.node_type,
-                h.node.file,
-                h.node.start_line,
-                h.distance
-            ));
-        }
-        return Ok(out);
-    }
-
     let mut opts = SearchKbOptions::new(query, repo_root);
     opts.k = k;
     opts.hops = args.get("hops").and_then(|v| v.as_u64()).unwrap_or(2).min(4) as u32;
+    // `semantic_search` is the retired alias for `search` with expansion
+    // off; an explicit `expand` still wins, so a model that names the old
+    // tool but asks for expansion gets it.
+    opts.expand = args
+        .get("expand")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(name != "semantic_search");
     opts.include_snippets = true;
     opts.max_chars = 6_000;
     let ctx = storage_search_kb(store, embedder, opts)

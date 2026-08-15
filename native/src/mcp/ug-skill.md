@@ -163,13 +163,13 @@ you actually asked:
 ## What needs an embedder — and what happens without one
 
 `analyze`/`traverse` need the db but **no** embedder; everything else reads
-`graph.json` and needs neither. Only the two search commands are embedding-backed,
-and they behave differently depending on how you call them:
+`graph.json` and needs neither. Only `search` is embedding-backed, and it behaves
+differently depending on how you call it:
 
 | Surface | No embedder |
 |---|---|
-| `ug search` · `ug semantic_search` **(CLI)** | **Degrades, doesn't fail** — warns on stderr, returns a name-substring match tagged `"matched_by": "name"`: no vector/FTS ranking, no graph expansion, no snippets |
-| MCP `search` · `semantic_search` tools | **Hard fail** — error, no fallback |
+| `ug search` **(CLI)** | **Degrades, doesn't fail** — warns on stderr, returns a name-substring match tagged `"matched_by": "name"`: no vector/FTS ranking, no graph expansion, no snippets |
+| MCP `search` tool | **Hard fail** — error, no fallback |
 | `POST /api/search/hybrid` · `/api/search/semantic` · `/api/chat` | **503** |
 | `ug chat` · `ug tour` | **Exit** — need an embedder *and* a chat model |
 
@@ -316,7 +316,7 @@ reports both for your repo):
 | Drift | Affects | What you see | Fix |
 |---|---|---|---|
 | **Index behind the tree** — files edited since last `gen`/`update` | every structural command | `⚠ index is behind the tree …` on stderr, naming files | `ug update <file>...` |
-| **Vectors owed** — `--no-embed` nodes (what the hooks do) | `search`/`semantic_search`/`chat`/`tour` only | `⚠ Some nodes have no vectors yet …` | `ug ingest -n <project>` |
+| **Vectors owed** — `--no-embed` nodes (what the hooks do) | `search`/`chat`/`tour` only | `⚠ Some nodes have no vectors yet …` | `ug ingest -n <project>` |
 
 `ug get_code` sits outside both — it reads the live tree and flags drift per
 slice, so source and line numbers are never silently wrong. Neither warning is
@@ -327,12 +327,18 @@ locations without source slices. Add `--snippets` (CLI) or
 `includeSnippets: true` (MCP) when you want code inline; otherwise follow a hit
 with `get_code`.
 
+**One search, one knob.** `search` expands hits along graph edges by default —
+that is why it answers "how does X work" better than grep. `--no-expand` (CLI) /
+`expand: false` (MCP) returns only what matched: cheaper, and the right shape for
+disambiguation or a filtered inventory via `--filter`/`whereClause`. The old
+`semantic_search` command and tool were exactly that, and still work as aliases.
+
 **`--no-embed` vs `--no-ingest`** — the difference decides whether `ug analyze`
 is trustworthy:
 
 | Flag | Written to the db | Current | Behind |
 |---|---|---|---|
-| `--no-embed` | nodes + edges + facts + keyword stats, **no vectors** | graph.json tools **and** `ug analyze` — stats, `diff_impact`, blast radius | `search`/`semantic_search`/`chat` miss the changed nodes |
+| `--no-embed` | nodes + edges + facts + keyword stats, **no vectors** | graph.json tools **and** `ug analyze` — stats, `diff_impact`, blast radius | `search`/`chat` miss the changed nodes |
 | `--no-ingest` | **nothing** — db not opened | graph.json tools only | **everything db-backed**, incl. `analyze`, answers from the *previous* ingest |
 
 Use `--no-embed` for speed with counts and blast radius (what the hooks do);

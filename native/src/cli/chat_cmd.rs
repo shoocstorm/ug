@@ -300,8 +300,9 @@ fn cli_tool_runner(
             let mut args = args;
             crate::mcp::tools::normalize_args(&name, &mut args);
             match name.as_str() {
-                // The two search tools need the vector store; everything
-                // else answers from the loaded graph.
+                // `search` (and its retired `semantic_search` alias) need
+                // the vector store; everything else answers from the loaded
+                // graph.
                 "search" | "semantic_search" => {
                     chat::run_search_tool(&name, &args, &*store, Some(&embedder), repo_root.as_path())
                         .await

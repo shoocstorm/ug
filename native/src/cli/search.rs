@@ -1,12 +1,13 @@
 //! Retrieval commands backed by the knowledge store rather than
-//! `graph.json`: `semantic_search`, `search` (hybrid), and `traverse`.
+//! `graph.json`: `search` (hybrid, with `semantic_search` as a retired
+//! alias for `--no-expand`) and `traverse`.
 
 use std::path::PathBuf;
 
 use ultragraph::agent_tools::{self, Render};
 use ultragraph::storage::{
-    self, name_search as storage_name_search, search_kb as storage_search_kb,
-    semantic_search as storage_semantic_search, Direction, RankStrategy, SearchKbOptions,
+    self, name_search as storage_name_search, search_kb as storage_search_kb, Direction,
+    RankStrategy, SearchKbOptions,
 };
 use ultragraph::{C_BOLD, C_CYAN, C_DIM, C_RESET, C_YELLOW};
 
@@ -17,100 +18,20 @@ use super::embed::{tokio_runtime, try_embedder_from_args};
 use super::io::{die, write_or_print};
 use super::store::{open_store_or_exit, single_store_spec_from_args};
 
-// vector search on OverGraph (only)
+/// Retired subcommand, kept as an alias so muscle memory and existing
+/// scripts keep working: `ug semantic_search <q>` is `ug search <q>
+/// --no-expand`. It stays out of `ug --help`; `ug semantic_search -h`
+/// says where it went.
 pub(crate) fn run_semantic_search(args: &[String]) {
     if has_flag(args, "-h") || has_flag(args, "--help") {
         print_semantic_search_help();
         return;
     }
-    if args.is_empty() {
-        eprintln!(
-            "Usage: ug semantic_search <query> [-n|--name <project>] [-k|--limit <n>] \\
-                 [--filter <sql>] [--base-url <url>] [--api-key <key>] [--model <name>] \\
-                 [--embedding-dim <n>] [-o|--output <file>]"
-        );
-        std::process::exit(1);
+    let mut forwarded = args.to_vec();
+    if !has_flag(args, "--expand") {
+        forwarded.push("--no-expand".to_string());
     }
-
-    let query = first_positional(
-        args,
-        &[
-            "-n",
-            "--name",
-            "-k",
-            "--limit",
-            "--filter",
-            "--base-url",
-            "--api-key",
-            "--model",
-            "--embedding-dim",
-            "--db",
-            "-o",
-            "--output",
-            "--dest",
-            "--neo4j-uri",
-            "--neo4j-user",
-            "--neo4j-password",
-            "--neo4j-database",
-        ],
-    )
-    .unwrap_or_else(|| die(2, "missing query argument"));
-    let limit: usize = flag_value(args, &["-k", "--limit"])
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(10);
-    let filter = flag_value(args, &["--filter"]);
-    let output_path = flag_value(args, &["-o", "--output"]);
-    let embedder = try_embedder_from_args(args);
-    let rt = tokio_runtime();
-
-    let result_json = rt.block_on(async {
-        let spec = match &embedder {
-            Some(e) => single_store_spec_from_args(args, e.config().dim as u32),
-            None => single_store_spec_from_args(args, ultragraph::storage::DEFAULT_EMBEDDING_DIM as u32),
-        };
-        let store = open_store_or_exit(&spec).await;
-        let hits = match &embedder {
-            Some(embedder) => {
-                match filter.as_deref() {
-                    Some(f) => storage::semantic_search_w_where(
-                        store.as_ref(),
-                        embedder,
-                        &query,
-                        limit,
-                        f,
-                    )
-                    .await
-                    .unwrap_or_else(|e| die(1, format!("semantic search failed: {e}"))),
-                    None => storage_semantic_search(store.as_ref(), embedder, &query, limit)
-                        .await
-                        .unwrap_or_else(|e| die(1, format!("semantic search failed: {e}"))),
-                }
-            }
-            None => storage_name_search(store.as_ref(), &query, limit, filter.as_deref())
-                .await
-                .unwrap_or_else(|e| die(1, format!("name search failed: {e}"))),
-        };
-
-        let json: Vec<serde_json::Value> = hits
-            .into_iter()
-            .map(|h| {
-                serde_json::json!({
-                    "id": h.node.id,
-                    "name": h.node.name,
-                    "node_type": h.node.node_type,
-                    "file": h.node.file,
-                    "start_line": h.node.start_line,
-                    "end_line": h.node.end_line,
-                    "description": h.node.description,
-                    "distance": h.distance,
-                    "matched_by": if embedder.is_some() { "semantic" } else { "name" },
-                })
-            })
-            .collect();
-        serde_json::to_string_pretty(&json).unwrap_or_default()
-    });
-
-    write_or_print(output_path.as_deref(), &result_json, "search result");
+    run_hybrid_search(&forwarded);
 }
 
 // graphRAG hybrid search: RRF seeds → PPR (default) or MMR rerank → snippet-attached context
@@ -122,7 +43,7 @@ pub(crate) fn run_hybrid_search(args: &[String]) {
     if args.is_empty() {
         eprintln!(
             "Usage: ug search <query> [-n|--name <project>] [-k|--limit <n>] \\
-                 [--filter <sql>] [--direction <out|in|both>] \\
+                 [--filter <sql>] [--no-expand] [--direction <out|in|both>] \\
                  [-t|--edge-type <type>]... [--max-chars <n>] \\
                  [--snippets] [--repo-root <path>] \\
                  [--base-url <url>] [--api-key <key>] [--model <name>] [--embedding-dim <n>] \\
@@ -180,6 +101,9 @@ pub(crate) fn run_hybrid_search(args: &[String]) {
         .and_then(|s| s.parse().ok())
         .unwrap_or(0.6);
     let include_snippets = has_flag(args, "--snippets");
+    // `--expand` is only meaningful as the way the `semantic_search` alias
+    // is overridden back to the default, so it is accepted but unlisted.
+    let expand = !has_flag(args, "--no-expand") || has_flag(args, "--expand");
     let repo_root: PathBuf = flag_value(args, &["--repo-root"])
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
@@ -232,6 +156,7 @@ pub(crate) fn run_hybrid_search(args: &[String]) {
         opts.mmr_lambda = mmr_lambda;
         opts.where_clause = filter.as_deref();
         opts.include_snippets = include_snippets;
+        opts.expand = expand;
         opts.strategy = strategy;
 
         let result = storage_search_kb(store.as_ref(), &embedder, opts)
@@ -374,17 +299,16 @@ pub(crate) fn run_traverse(args: &[String]) {
     write_or_print(output_path.as_deref(), &json, "traverse result");
 }
 
-/// What these two commands do when no embedder is available.
+/// What `search` does when no embedder is available.
 ///
-/// Printed by both `search -h` and `semantic_search -h` because the answer
-/// is the same for both and is the thing a caller most needs to know before
-/// deciding whether an embedding backend is worth configuring: neither
-/// command hard-fails, but what comes back is a plain name match, and the
-/// difference is invisible in the output unless you look at `matched_by`.
+/// Printed by `search -h` because it is the thing a caller most needs to
+/// know before deciding whether an embedding backend is worth configuring:
+/// the command doesn't hard-fail, but what comes back is a plain name
+/// match, and the difference is invisible unless you look at `matched_by`.
 fn print_embedder_fallback_note() {
     println!("{C_BOLD}Without an embedder:{C_RESET}  {C_DIM}degrades, does not fail{C_RESET}");
     println!(
-        "  If no embedder can be built, {C_CYAN}search{C_RESET} and {C_CYAN}semantic_search{C_RESET} warn on stderr and return"
+        "  If no embedder can be built, {C_CYAN}search{C_RESET} warns on stderr and returns"
     );
     println!(
         "  a {C_BOLD}name-substring match{C_RESET} instead, every hit tagged {C_CYAN}\"matched_by\": \"name\"{C_RESET}. No vector"
@@ -398,7 +322,7 @@ fn print_embedder_fallback_note() {
     println!();
     println!("  {C_BOLD}Hard dependencies{C_RESET} {C_DIM}(no fallback anywhere):{C_RESET}");
     println!("  {C_DIM}·{C_RESET} {C_CYAN}ug chat{C_RESET} · {C_CYAN}ug tour{C_RESET} — exit if the embedder cannot be built");
-    println!("  {C_DIM}·{C_RESET} the MCP {C_BOLD}search{C_RESET}/{C_BOLD}semantic_search{C_RESET} tools and {C_CYAN}POST /api/search/*{C_RESET} — error / 503");
+    println!("  {C_DIM}·{C_RESET} the MCP {C_BOLD}search{C_RESET} tool and {C_CYAN}POST /api/search/*{C_RESET} — error / 503");
     println!("  {C_DIM}·{C_RESET} vectors must be {C_BOLD}in{C_RESET} the db: a {C_CYAN}--no-embed{C_RESET} run ingests without them, so the");
     println!("    semantic channel stays empty until {C_CYAN}ug ingest{C_RESET} catches up");
     println!();
@@ -408,27 +332,23 @@ fn print_embedder_fallback_note() {
 }
 
 fn print_semantic_search_help() {
-    println!("  {C_CYAN}ug semantic_search{C_RESET}  {C_YELLOW}— semantic vector search (OverGraph, no graph context){C_RESET}");
+    println!("  {C_CYAN}ug semantic_search{C_RESET}  {C_YELLOW}— merged into {C_CYAN}ug search --no-expand{C_RESET}");
     println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
     println!();
-    println!("  Search by {C_BOLD}meaning{C_RESET}: describe what the code does (\"oauth login flow\") and get");
-    println!("  the closest symbols by embedding similarity. Needs an ingested db ({C_CYAN}ug gen{C_RESET}).");
-    println!("  If you already know the identifier's name, use {C_CYAN}ug find_symbols{C_RESET} (exact, no");
-    println!("  embeddings); for search {C_BOLD}plus{C_RESET} related-code context, use {C_CYAN}ug search{C_RESET}.");
+    println!("  The two commands took the same arguments and differed only in whether");
+    println!("  results were expanded along graph edges, so that is now a {C_BOLD}flag{C_RESET} rather than");
+    println!("  a second command:");
     println!();
-    println!("{C_BOLD}Usage:{C_RESET}  ug semantic_search <query> [options]");
+    println!("    {C_CYAN}ug search{C_RESET} \"oauth login flow\" {C_BOLD}--no-expand{C_RESET}   {C_YELLOW}# matching symbols only{C_RESET}");
+    println!("    {C_CYAN}ug search{C_RESET} \"oauth login flow\"               {C_YELLOW}# + related code, ranked{C_RESET}");
     println!();
-    println!("{C_BOLD}Options:{C_RESET}");
-    println!("  {C_CYAN}-n, --name{C_RESET} <name>   Project name (default: cwd basename, else most recent under ~/.ug)");
-    println!("  {C_CYAN}--db{C_RESET} <dir>          OverGraph directory (default: the -n project's, else the active one)");
-    println!("  {C_CYAN}-k, --limit{C_RESET} <n>     Top-k results (default: 10)");
-    println!("  {C_CYAN}--filter{C_RESET} <sql>      Optional SQL WHERE clause");
-    println!("  {C_CYAN}--base-url/--api-key/--model/--embedding-dim{C_RESET}  Embedding endpoint overrides");
-    println!("  {C_CYAN}-o, --output{C_RESET} <file>  Write the result JSON to a file (omit for stdout)");
+    println!("  This name still works and forwards to exactly that, so existing scripts");
+    println!("  keep running. See {C_CYAN}ug search -h{C_RESET} for the full option list.");
     println!();
-    print_embedder_fallback_note();
-    println!("{C_BOLD}Examples:{C_RESET}");
-    println!("  {C_CYAN}ug semantic_search{C_RESET} \"oauth login flow\"");
+    println!("  {C_DIM}One behaviour change: seeds are now RRF-fused (vector + full-text) rather");
+    println!("  than vector-only, which finds exact identifiers more reliably. Each hit's");
+    println!("  {C_RESET}{C_CYAN}matched_by{C_RESET}{C_DIM} field says which channel found it.{C_RESET}");
+    println!();
 }
 
 fn print_hybrid_search_help() {
@@ -437,10 +357,13 @@ fn print_hybrid_search_help() {
     );
     println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
     println!();
-    println!("  The most complete search: semantic seeds ({C_CYAN}semantic_search{C_RESET}) expanded along");
-    println!("  graph edges, then ranked into one context bundle with source snippets —");
+    println!("  The most complete search: semantic + keyword seeds expanded along graph");
+    println!("  edges, then ranked into one context bundle with source snippets —");
     println!("  what the MCP {C_BOLD}search{C_RESET} tool runs for agents. Best when you want to hand");
     println!("  code + its related code to an LLM, or answer \"where is X and what touches it\".");
+    println!();
+    println!("  {C_BOLD}--no-expand{C_RESET} turns off the graph half and returns just what matched —");
+    println!("  the old {C_CYAN}ug semantic_search{C_RESET}, which now forwards here.");
     println!();
     println!("{C_BOLD}Usage:{C_RESET}  ug search <query> [options]");
     println!();
@@ -449,6 +372,8 @@ fn print_hybrid_search_help() {
     println!("  {C_CYAN}--db{C_RESET} <dir>           OverGraph directory (default: the -n project's, else the active one)");
     println!("  {C_CYAN}-k, --limit{C_RESET} <n>      Final results (default: 8)");
     println!("  {C_CYAN}--filter{C_RESET} <sql>       SQL WHERE clause for semantic seed filter");
+    println!("  {C_CYAN}--no-expand{C_RESET}          Seeds only: no graph walk, no neighbors. Cheaper, and the");
+    println!("                         {C_DIM}right shape for disambiguation or a filtered inventory{C_RESET}");
     println!("  {C_CYAN}--direction{C_RESET} <dir>    outbound|inbound|both (default: both)");
     println!("  {C_CYAN}-t, --edge-type{C_RESET} <t>  Restrict expansion to edge type (repeatable)");
     println!("  {C_CYAN}--max-chars{C_RESET} <n>      Char budget for assembled context (default: 12000)");
@@ -468,6 +393,7 @@ fn print_hybrid_search_help() {
     print_embedder_fallback_note();
     println!("{C_BOLD}Examples:{C_RESET}");
     println!("  {C_CYAN}ug search{C_RESET} \"oauth login flow\" -k 8");
+    println!("  {C_CYAN}ug search{C_RESET} \"oauth login flow\" {C_BOLD}--no-expand{C_RESET}    {C_YELLOW}# just the symbols that matched{C_RESET}");
 }
 
 fn print_traverse_help() {

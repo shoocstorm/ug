@@ -84,7 +84,7 @@ Project
   project dir:  /Users/you/.ug/my-repo (exists)
   db path:      /Users/you/.ug/my-repo/ugdb (exists)  [default: ...]
 
-Embeddings (ingest / gen / semantic_search / search / serve)
+Embeddings (ingest / gen / search / serve)
   backend:      local (in-process ONNX)  [default]
   model:        BAAI/bge-small-en-v1.5  [default]
   ...

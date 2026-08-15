@@ -33,13 +33,13 @@ blast radius) can be trusted after the run:
 
 | Flag | Written to the OverGraph db | Current after the run | Answering from the *previous* ingest |
 |---|---|---|---|
-| `--no-embed` | nodes, edges, facts and keyword/BM25 statistics — **everything except the vectors**. No embedding model is loaded, which is most of a small run's wall clock. | the graph.json tools **and `ug analyze`** — statistics, `diff_impact`, `boundary_impact`, blast radius, `traverse --dest` | `search`, `semantic_search`, `chat` — they miss the changed nodes until the vectors are backfilled |
-| `--no-ingest` | **nothing** — no nodes, no edges, no vectors; the db is never opened. Only `graph.json` is rebuilt. | the graph.json tools only: `find_symbols`, `file_outline`, `get_code`, `find_usages`, `shortest_path`, `project_overview`, `graph_schema` | **everything the db backs** — `ug analyze` statistics and blast radius as well as `search`, `semantic_search`, `chat` |
+| `--no-embed` | nodes, edges, facts and keyword/BM25 statistics — **everything except the vectors**. No embedding model is loaded, which is most of a small run's wall clock. | the graph.json tools **and `ug analyze`** — statistics, `diff_impact`, `boundary_impact`, blast radius, `traverse --dest` | `search`, `chat` — they miss the changed nodes until the vectors are backfilled |
+| `--no-ingest` | **nothing** — no nodes, no edges, no vectors; the db is never opened. Only `graph.json` is rebuilt. | the graph.json tools only: `find_symbols`, `file_outline`, `get_code`, `find_usages`, `shortest_path`, `project_overview`, `graph_schema` | **everything the db backs** — `ug analyze` statistics and blast radius as well as `search`, `chat` |
 
 `ug ingest -n <project>` catches the db up in either case; it embeds only the
 nodes still owed a vector. A `--no-embed` run records the debt in
 `project.json` (`pendingVectorsSince`), which is what `ug hook status` and the
-`search`/`semantic_search` warning line report.
+`search` warning line report.
 
 ### 1.2 Graph Analysis Commands (graph.json-backed, offline, in-memory)
 
@@ -110,8 +110,7 @@ resolve to exactly one node, and list the candidates when they don't.
 
 | Command | Aliases | What it does | Key flags |
 |---------|---------|-------------|-----------|
-| `ug search` | — | **GraphRAG**: semantic search → graph expansion → PPR-ranked context. Returns lean ids+locations by default; add `--snippets` to read source slices inline. | `<query>` positional, `-k <limit>` (default 8), `--filter <sql>`, `--direction`, `-t <edge-type>`, `--max-chars`, `--snippets` (opt in; off by default), `-n <name>`, `--repo-root`, embedding overrides |
-| `ug semantic_search` | — | Pure vector search over embeddings (no graph context). | `<query>` positional, `-k <limit>` (default 10), `--filter <sql>`, `-n <name>`, embedding overrides |
+| `ug search` | `semantic_search` (retired; forwards with `--no-expand`) | **GraphRAG**: semantic + keyword seeds → graph expansion → PPR-ranked context. Returns lean ids+locations by default; add `--snippets` to read source slices inline. `--no-expand` skips the graph half and returns only what matched. | `<query>` positional, `-k <limit>` (default 8), `--filter <sql>`, `--no-expand`, `--direction`, `-t <edge-type>`, `--max-chars`, `--snippets` (opt in; off by default), `-n <name>`, `--repo-root`, embedding overrides |
 | `ug traverse` | — | K-hop BFS over the OverGraph edges table. | `<node-id>`... positionals, `-k <hops>` (default 2), `-n <name>` |
 | `ug analyze` | — | **Whole-repo statistics**: counts, groups, distributions, blast radius. Read-only GQL over the stored facts. Needs the db but **no embedder**. The `diff_impact`/`diff_retest_scope` presets take a list of changed files (`-a files=a.ts,b.rs`); `test_for` takes a symbol (`-a symbol=<id>`). | `<preset>` positional or `-p <preset>`, `-a k=v` (repeatable), `-g/--gql <query>`, `-k <limit>` (default 20), `-r/--range <window>` (`20` · `11-35` · `34-end`), `--json` (machine envelope matching `POST /api/tools/analyze`), `--list`, `-n <name>` |
 
@@ -167,7 +166,7 @@ Commands need to resolve a project name to read `graph.json` and/or write/load t
 | `gen`, `index`, `graph` | `-n/--name` → derive from input path | Generate commands must use cwd when no `-n` and no project matches (they create a new project); `gen` with no `-i` first checks for an existing project (see below) |
 | `gen` (no `-i/--input`) | `-n` → **active project** → cwd basename | Re-runs the resolved project from the repo root recorded in its `project.json`; honors user's pinned active project |
 | `ingest` | `-n` → **active project** → cwd basename | Reads graph.json and writes ugdb from the active project by default |
-| Read commands<br/>(`semantic_search`, `search`, `traverse`, `chat`, `tour`, `analyze`, `graph_centrality`, `graph_cycles`) | `-n` → **active project** → cwd basename → most-recent | Now consistent with `gen`/`ingest` |
+| Read commands<br/>(`search`, `traverse`, `chat`, `tour`, `analyze`, `graph_centrality`, `graph_cycles`) | `-n` → **active project** → cwd basename → most-recent | Now consistent with `gen`/`ingest` |
 | `server`, `app`, `mcp` | `-n` → **active project** → cwd | Always opens the active project |
 | Any command with `-i/--input` | `-i` wins | Bypasses all project logic |
 
@@ -212,8 +211,8 @@ is behind the tree, naming the files that drifted.
 
 This covers the graph.json readers (`find_symbols`, `file_outline`,
 `get_code`, `find_usages`, `project_overview`, `graph_schema`,
-`shortest_path`) and the db readers (`analyze`, `search`, `semantic_search`,
-`traverse`, `chat`, `tour`). The commands that *write* the index — `gen`,
+`shortest_path`) and the db readers (`analyze`, `search`, `traverse`, `chat`,
+`tour`). The commands that *write* the index — `gen`,
 `ingest`, `update` — deliberately stay quiet, since warning that the index is
 stale immediately before refreshing it is noise.
 
@@ -330,12 +329,11 @@ The HTTP server (`ug serve`) is built on **axum**. All routes listed below.
 
 ### 3.1 Advertised MCP Tools (`tools/list`)
 
-These 14 tools are advertised over MCP `tools/list` and also available via the CLI and HTTP `/api/tools/:tool`. Each tool accepts an optional `project` parameter (except `list_projects`).
+These 13 tools are advertised over MCP `tools/list` and also available via the CLI and HTTP `/api/tools/:tool`. Each tool accepts an optional `project` parameter (except `list_projects`).
 
 | Tool | What it does | Data source | When it errors |
 |------|-------------|-------------|----------------|
-| `search` | **Primary KB search.** RRF (vector + FTS) → Personalized PageRank over edge graph → ranked context with snippets. | ugdb/Neo4j + embedder + graph.json | DB/embedder unavailable |
-| `semantic_search` | Lightweight pure-vector lookup — no graph expansion, no snippets. Returns top-k nearest nodes with distance. | ugdb/Neo4j + embedder | DB/embedder unavailable |
+| `search` | **Primary KB search.** RRF (vector + FTS) → Personalized PageRank over edge graph → ranked context with snippets. `expand: false` stops at the seeds — no graph walk, no neighbors — which is what the retired `semantic_search` tool did; that name still dispatches here. | ugdb/Neo4j + embedder + graph.json | DB/embedder unavailable |
 | `traverse` | Walk graph N hops from seed symbols (id, name or wildcard). Filters by edge type and direction; several seeds make one merged walk. | graph.json (graph-backed, no DB needed) | graph.json missing/invalid |
 | `find_usages` | Inbound references to a symbol (callers, importers, subclasses, etc.), by id, name or wildcard. Wrapper over traverse with direction=inbound + sensible defaults. Call-site lines come from each caller's stored source, with filesystem fallback. | graph.json (+ ugdb for call sites) | graph.json missing/invalid |
 | `find_symbols` | Symbol lookup by name (case-insensitive, ranked exact > prefix > substring) or by wildcard pattern (whole-name match). Filters by node type, file path/glob, and `boundary` (system entry/exit points only — works with no name at all, which lists the whole surface). Supports batch via array of names/patterns/ids. | graph.json | graph.json missing/invalid |
