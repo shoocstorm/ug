@@ -381,6 +381,7 @@
       <tr><td><code>ug index</code></td><td>—</td><td>Index a directory: parse source files into <code>FileNode</code>s. Writes <code>indexed-tree.json</code>.</td><td><code>-i</code> <code>-o</code> <code>-n</code> <code>-c</code></td></tr>
       <tr><td><code>ug graph</code></td><td>—</td><td>Build graph from indexed tree: resolve cross-file imports. Writes <code>graph.json</code>.</td><td><code>-i</code> <code>-o</code> <code>-n</code></td></tr>
       <tr><td><code>ug ingest</code></td><td>—</td><td>Embed graph nodes and write to knowledge stores (OverGraph / Neo4j). Defaults resolve from active project (`<code>ug active</code>`), else cwd basename.</td><td><code>-n</code> <code>-i</code> <code>-o</code> <code>--dest</code> <code>--prune</code> <code>--model</code></td></tr>
+      <tr><td><code>ug demo</code></td><td>—</td><td><strong>Publish</strong> a repo as a static web demo — index → graph → a folder any static host serves. Stops after the graph: no db, no vectors, no project under <code>~/.ug</code>. Writes <code>graph.json</code> beside the visualization page, wrapped so it needs no backend; features that read the local index (semantic search, chat, tours, statistics, source preview) are off and say so in the UI. Local absolute paths are scrubbed from the published graph. Powers <a href="demo/">the live demo</a>.</td><td><code>-i</code> <code>-o</code> <code>--label</code> <code>--source-url</code> <code>--site</code></td></tr>
     </table>
   </div>
 

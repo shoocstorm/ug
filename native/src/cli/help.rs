@@ -158,6 +158,7 @@ pub(crate) fn print_help() {
     cmd("upgrade", "Check GitHub for a new release and self-update; --check only reports");
     cmd("uninstall", "Delete ALL indexed projects and remove ug itself");
     cmd("api", "List every HTTP endpoint `ug serve` exposes");
+    cmd("demo", "Publish a repo's graph as a static web page — no server needed");
     cmd("mcp", "Run the MCP stdio server; `mcp call <tool> <json>` runs one by hand");
     cmd("disconnect", "Undo `connect` for an agent");
 

@@ -19,6 +19,7 @@ pub(crate) mod args;
 pub(crate) mod chat_cmd;
 pub(crate) mod config_cmd;
 pub(crate) mod connect;
+pub(crate) mod demo;
 pub(crate) mod doctor;
 pub(crate) mod embed;
 pub(crate) mod gen;
@@ -116,6 +117,7 @@ fn dispatch(cmd: &str, cmd_args: &[String]) {
         "serve" => serve::run_serve(cmd_args),
         "app" => app::run_app(cmd_args),
         "api" => api::run_api(cmd_args),
+        "demo" => demo::run_demo(cmd_args),
         // Pipeline steps `gen` runs for you.
         "index" => index_cmd::run_index(cmd_args),
         "graph" => index_cmd::run_graph(cmd_args),

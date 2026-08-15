@@ -119,6 +119,7 @@ The native `ug` binary is the primary CLI. `ug -h` lists every command;
 | `ug find_symbols 'handle_*'` · `ug file_outline 'src/**/*.ts'` · `ug find_usages 'validate_*'` | Wildcards (`*` `?` `[abc]` `{a,b}`) work anywhere a symbol or file is named — one call instead of a loop. Those commands also take a plain symbol name, not just a node id. See [docs/API-REFERENCE.md](docs/API-REFERENCE.md#wildcards). |
 | `ug analyze <preset>` | Whole-repo statistics: "how many functions over 50 lines", "what breaks if I change this file", "which endpoints a change is visible through", "which folders are worst documented". `ug analyze --list` shows every preset; `--gql` runs a raw query. |
 | `ug list` / `ug rename <new>` / `ug rm <project>` | List projects under `~/.ug`, rename one (the active one by default), or delete one |
+| `ug demo` | Publish a repo's graph as a static web page — index → graph → a folder any static host serves, no database and no server. What powers the [live demo](https://ultra-graph.web.app/demo/); the features that read the local index are off there and say so. |
 | `ug doctor` | Print resolved project/db/embedder/chat config and where each value came from |
 | `ug connect [agent]` | Connect an AI agent — CLI skill, MCP server, or both. See [Connecting an AI agent](#connecting-an-ai-agent) |
 | `ug config ...` | Persist defaults — see [Configuration](#configuration) |

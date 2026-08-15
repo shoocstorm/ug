@@ -124,9 +124,12 @@ format), stream only the final answer, and show every call to the user as it hap
 ### Rust Tests (Native Code)
 - Run `cd native && cargo nextest run` to execute all Rust tests
 - **Use `cargo nextest run`, not `cargo test`.** `cargo test -- --test-threads=N`
-  only parallelizes within a single test binary, and this workspace has a dozen
-  of them, so the big ones serialize against each other and most of the machine
+  only parallelizes within a single test binary, and this workspace has 22 of
+  them, so the big ones serialize against each other and most of the machine
   sits idle. nextest schedules every test across all binaries in one pool.
+  Measured on the 18-core dev machine, warm, same 809 tests: `cargo test`
+  12.3s, `cargo test -- --test-threads=15` 12.4s (i.e. the flag buys nothing),
+  `cargo nextest run` 5.0s.
   Thread count is already set in `native/.config/nextest.toml`
   (`test-threads = -3` — all logical CPUs minus 3, so 15 on this 18-core
   machine), so **do not pass `-j` yourself**; the config is the one place to
@@ -183,10 +186,12 @@ checkout, symlinked in. That repo is superseded — edit the files here.
 | `img/UG-*.png` | Screenshots used by the hero background and `#showcase` | — |
 | `404.html`, `favicon.svg` | Static assets served at the site root | — |
 | `firebase.json`, `.firebaserc` | Hosting config — see 7.3 | — |
+| `demo/` | **Generated** — the live demo at `/demo/`. See 7.4 | — |
+| `docs/deploy.md` | How to deploy, and how to regenerate `demo/` | — |
 
-These are hand-written static pages. **There is no build step and no
-generator** — nothing regenerates them from the markdown, which is exactly why
-they go stale unless you edit them in the same pass.
+Everything except `demo/` is a hand-written static page. **There is no build
+step and no generator** — nothing regenerates them from the markdown, which is
+exactly why they go stale unless you edit them in the same pass.
 
 ### 7.2 The standing trigger — apply without being asked
 
@@ -203,6 +208,8 @@ change. Do not wait to be told, and do not file it as future work.
 | Install or upgrade steps | `index.html` `#get-started` **and** `docs/ug-website/install.sh` — they must agree |
 | Architecture or component boundaries | `architecture.html` — **both tabs**, `#tab-horizontal` and `#tab-vertical`, which draw the same pipeline at different densities |
 | A user-visible UI feature worth showing off | `index.html` `#showcase` (reuse an existing `img/UG-*.png` unless the feature is genuinely new) |
+| The visualization page (`native/src/vis/`), or the `graph.json` shape | `./scripts/gen-demo.sh` — the live demo embeds both, so it ships the *old* page until it is regenerated. See 7.4 |
+| An endpoint the page calls **at startup** | `native/src/vis/demo-shim.js` must answer it, or the demo hangs on a request no static host can serve |
 
 Renames and deletions count. Per §3a there are no aliases, so a command that
 disappeared from the CLI must disappear from the website too — a page
@@ -251,6 +258,35 @@ Do not hoist `firebase.json` / `.firebaserc` to the repo root or rewrite
 
 Deploying publishes to a live public site. Edit and commit freely; **deploy only
 when asked.**
+
+### 7.4 The live demo (`docs/ug-website/demo/`)
+
+The one generated directory under the website: a real indexed repo a visitor
+can fly before installing anything. `ug demo` writes it — `graph.json` plus the
+visualization page, wrapped in a static stand-in for the server. No database,
+no vectors, no backend. It deploys with the site because `"public": "."`
+publishes the whole folder.
+
+```bash
+./scripts/gen-demo.sh              # regenerate (builds ug first, on purpose)
+./scripts/gen-demo.sh --preview    # …then serve the site at :8000
+```
+
+Full notes — overrides, what ships, the failure modes — live in
+`docs/ug-website/docs/deploy.md`. Four things that decide whether an edit here
+lands:
+
+- **The page is embedded in the binary.** `build.rs` assembles `native/src/vis/`
+  into `ug`, so regenerating with a stale `ug` silently republishes that build's
+  page and your edit appears to do nothing. `gen-demo.sh` builds first for
+  exactly this reason — do not "optimize" that away.
+- **The demo's behaviour lives in one file**, `native/src/vis/demo-shim.js`.
+  Nothing under `native/src/vis/js/` knows the demo exists, and it must stay
+  that way — that is what stops the demo and the real app from drifting.
+  Add a startup endpoint to the app, and the shim needs to answer it.
+- **Commit the generated files.** The deploy publishes the working tree.
+- **Refresh `index.html`'s `#demo` counts** (`.demo-facts`) in the same commit
+  as a regeneration — they are hardcoded from the generator's output.
 
 ## 8. OverGraph — the storage engine
 

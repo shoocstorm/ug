@@ -11,3 +11,10 @@ pub(crate) const VIS_HTML: &str = include_str!(concat!(env!("OUT_DIR"), "/visual
 pub(crate) const VIS_BUNDLE: &[u8] = include_bytes!("./vis/ug-vis.bundle.js");
 pub(crate) const VIS_FAVICON: &[u8] = include_bytes!("./vis/favicon.svg");
 pub(crate) const VIS_MD: &str = include_str!("../../README.md");
+
+/// The static-demo wrapper `ug demo` injects into its copy of the page.
+///
+/// Deliberately *not* under `src/vis/js/` — build.rs concatenates that
+/// directory into every build of the page, and the demo shim must ship only
+/// in a published snapshot. See the file's own header for what it does.
+pub(crate) const VIS_DEMO_SHIM: &str = include_str!("./vis/demo-shim.js");
