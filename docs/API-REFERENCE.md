@@ -105,15 +105,6 @@ first. A name or pattern expands to at most 25 symbols there; going over the
 cap is reported in the output, never silent. `shortest_path` endpoints must
 resolve to exactly one node, and list the candidates when they don't.
 
-**Removed.** `graph_bfs`/`bfs`, `graph_filter`/`filter` and `graph_search` are gone, along with every pre-rename alias (`hybrid_search`, `search_kb`, `graph_path`, `path`, `list`, `find_symbol`, `reindex`, `update`, `centrality`, `cycles`). Each duplicated something else exactly, and duplicates drift — the two BFS commands had already diverged on whether a bare symbol name was accepted. Every command and tool now has exactly one name:
-
-| Retired | Use instead |
-|---------|-------------|
-| `ug graph_bfs <name>` | `ug traverse <node-or-name>` — same graph.json walk, and it now resolves a bare name or file path too |
-| `ug graph_filter` | `ug graph_schema` for the edge-type census (no database needed), or `ug analyze` for anything more |
-| `ug graph_search <name>` | `ug find_symbols <name> --include-docs` — the flag was all `graph_search` set |
-| `ug query` / MCP `code_query` | `ug analyze` / MCP `analyze` — same engine, same presets, same flags. Renamed because `query` and `search` are synonyms in English and gave a caller no signal about which one answers "how many" and which one answers "find me": `search` retrieves matching symbols, `analyze` computes over all of them |
-
 ### 1.4 Retrieval Commands (ugdb/Neo4j-backed)
 
 | Command | Aliases | What it does | Key flags |
@@ -525,4 +516,4 @@ Source files
 - **One-step**: `ug gen` runs index → graph → ingest sequentially
 - **Step-by-step**: `ug index && ug graph && ug ingest`
 - **With visualization**: `ug gen --serve` (or just `ug serve`)
-- **MCP gen**: the `gen` MCP tool (formerly `regen`, before that `reindex`) runs the full pipeline and reports results
+- **MCP gen**: the `gen` MCP tool runs the full pipeline and reports results

@@ -100,10 +100,9 @@ const GRAPH_VALUE_FLAGS: &[&str] = &[
 ];
 
 /// Split an analysis command's arguments into (args used to locate the
-/// graph, remaining positionals). A legacy `<graph-file>` first
-/// positional — an existing `.json` file — is promoted to `-i` and
-/// dropped from the positionals, so the pre-rename call style keeps
-/// working.
+/// graph, remaining positionals). A first positional that is an existing
+/// `.json` file is promoted to `-i` and dropped from the positionals, so
+/// naming a graph file directly works without the flag.
 pub(crate) fn analysis_input(args: &[String]) -> (Vec<String>, Vec<String>) {
     let mut load_args = args.to_vec();
     let mut pos = positionals(args, GRAPH_VALUE_FLAGS);

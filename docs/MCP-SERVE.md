@@ -668,10 +668,10 @@ ping_embedder: {}
 Every tool output is stamped with a staleness note when the index no longer matches the repo:
 
 ```
-⚠ Index may be stale: 3 changed, 1 deleted of 214 indexed files since the last index (index built 2 day(s) ago). Call the reindex tool to refresh.
+⚠ Index may be stale: 3 changed, 1 deleted of 214 indexed files since the last index (index built 2 day(s) ago). Call the gen tool to refresh.
 ```
 
-Staleness is computed by comparing `graph.json`'s mtime against the current mtimes of the indexed files (once per project per server process). When you see the warning, call the `reindex` tool — it's incremental, so unchanged files are skipped.
+Staleness is computed by comparing `graph.json`'s mtime against the current mtimes of the indexed files (once per project per server process). When you see the warning, call the `gen` tool — it's incremental, so unchanged files are skipped.
 
 From the CLI, the focused alternative is `ug update <file>...` — it re-runs the pipeline for just the files you name (cross-file edges are re-resolved over the whole graph on each run, which is what keeps them correct). `ug get_code` also reads the *live* working tree by default and flags drift from the index, so line numbers stay current immediately after an edit even before a re-index.
 

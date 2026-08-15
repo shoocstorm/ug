@@ -612,12 +612,13 @@ mod tests {
         assert!(!exposed.contains(&"gen".to_string()), "{exposed:?}");
     }
 
-    /// With aliases gone, the only names that work are the advertised
-    /// ones. A near-miss must fail rather than quietly resolving.
+    /// The only names that work are the advertised ones. A near-miss must
+    /// fail rather than quietly resolving — including `analyse`, whose other
+    /// spelling is a real tool, and the singular of `find_symbols`.
     #[test]
     fn an_unadvertised_name_is_not_a_tool() {
-        for gone in ["reindex", "regen", "search_kb", "hybrid_search", "graph_path", "graph_search", "list"] {
-            assert!(!is_known_tool(gone), "`{gone}` should no longer resolve");
+        for miss in ["analyse", "find_symbol", "graph", "search_code", "outline"] {
+            assert!(!is_known_tool(miss), "`{miss}` must not resolve");
         }
         for real in TOOL_NAMES {
             assert!(is_known_tool(real), "{real}");

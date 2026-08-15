@@ -662,9 +662,9 @@ pub struct FindSymbolsParams {
     pub file_prefix: Option<String>,
     #[serde(alias = "k")]
     pub limit: Option<usize>,
-    /// Also match against docstrings, not just names. This is what the old
-    /// `graph_search` command did; a docstring hit ranks below every name
-    /// hit, since matching the identifier is the stronger signal.
+    /// Also match against docstrings, not just names. A docstring hit ranks
+    /// below every name hit, since matching the identifier is the stronger
+    /// signal.
     #[serde(alias = "includeDocs")]
     pub include_docs: bool,
     /// Keep only symbols that are system boundaries — REST handlers, queue
@@ -3216,8 +3216,8 @@ pub fn render_shortest_path(r: &ShortestPathResult, style: Render, strict: bool)
         line(
             &mut out,
             &format!(
-                // `graph_bfs` was retired into `traverse`; pointing at a
-                // command that no longer exists is worse than no hint.
+                // Every hint names a command that exists today; pointing at
+                // one that does not is worse than giving no hint at all.
                 "They may be connected only through shared ancestors — try {} from each end.",
                 style.id("traverse <symbol> -d both")
             ),
@@ -3871,8 +3871,8 @@ mod tests {
     }
 
     #[test]
-    /// `include_docs` is what the old `graph_search` command did. Docstring
-    /// matches must be additive and must rank below every name match.
+    /// `include_docs` widens the search to docstrings: the matches must be
+    /// additive, and must rank below every name match.
     fn find_symbol_include_docs_ranks_below_name_hits() {
         let mut g = GraphData {
             nodes: vec![

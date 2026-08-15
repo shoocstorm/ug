@@ -54,9 +54,9 @@ pub(crate) fn resolve_gen_cache(args: &[String], output_dir: &str) -> Option<Str
 /// What `ug gen` should index when the caller named no path: the repo
 /// root recorded in an existing project's `project.json`, else the cwd.
 ///
-/// This is the operation `ug regen` used to be: re-running the pipeline
-/// and running it the first time are the same operation, so one command
-/// covers both. The project is resolved the way every project-scoped
+/// Re-running the pipeline and running it the first time are the same
+/// operation, so one command covers both — there is no separate
+/// regenerate. The project is resolved the way every project-scoped
 /// command resolves it (`-n/--name` → active project → cwd basename),
 /// and the resolved name rides along with the root — it may differ from
 /// the root's basename (`ug gen -i /x/myrepo -n custom`), and deriving

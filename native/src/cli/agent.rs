@@ -322,7 +322,7 @@ fn run_find_symbols_with(args: &[String], include_docs: bool) {
         print_find_symbols_help();
         return;
     }
-    // Accept graph_search's legacy leading `<graph-file>` positional.
+    // A leading `<graph-file>.json` positional is read as `-i`, not as a name.
     let (load_args, queries) = analysis_input(args);
     let boundary = has_flag(args, "--boundary");
     if queries.is_empty() && !boundary {

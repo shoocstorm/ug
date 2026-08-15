@@ -292,10 +292,8 @@ pub(crate) fn run_traverse(args: &[String]) {
     // landed in a destination (see docs/MULTI-STORAGE-DEST.md).
     if flag_value(args, &["--dest"]).is_none() {
         let (graph, _raw, _path) = load_agent_graph(args);
-        // Accept a bare name or file path, not just an exact node id. The
-        // retired `graph_bfs` did this and `traverse` did not, which was
-        // the only reason to reach for the older command — typing
-        // `ug traverse run_serve` is what people try first, and being told
+        // Accept a bare name or file path, not just an exact node id.
+        // Typing `ug traverse run_serve` is what people try first, and being told
         // "no node with id 'run_serve'" when the symbol plainly exists is
         // a bad way to learn that ids come from somewhere else.
         //
