@@ -1,6 +1,6 @@
 [package]
 name = "ultragraph"
-version = "0.1.13"
+version = "0.1.14"
 edition = "2021"
 authors = ["Aldrick Wan"]
 description = "High-Performance Graph-Based Knowledge Base Generator & Visualizer"
@@ -100,5 +100,15 @@ panic = "abort"
 [profile.dev]
 debug = "line-tables-only"
 
+# Dependencies are ~90% of the code volume in this binary (tokio, reqwest,
+# ort, five tree-sitter grammars, overgraph, brotli, pdf-extract) and none of
+# it changes between edits, so it is compiled once and then read from the
+# cache forever. Leaving it at `opt-level = 0` inflates `target/debug/ug` to
+# ~123 MB, and macOS validates the code signature of every page of a freshly
+# linked Mach-O on its first execution — a cost that scales with size and is
+# paid again after every link. Optimizing dependencies (but not this crate,
+# whose `opt-level = 0` is what keeps the incremental rebuild at ~6s) shrinks
+# the binary without touching the edit-rebuild loop.
 [profile.dev.package."*"]
 debug = false
+opt-level = 2
