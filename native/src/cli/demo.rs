@@ -346,10 +346,22 @@ pub(crate) fn run_demo(args: &[String]) {
     }
 
     println!();
+    // Served from the *parent*, and on a named port. Both matter:
+    //   • the "Install ug" links are site-root-relative, so serving the demo
+    //     folder itself points them at the demo rather than the landing page;
+    //   • bare `http.server` binds 8000, which is the port every other local
+    //     tool also reaches for — a neighbour's polling then fills the log
+    //     with 404s that look like the demo failing, and are not.
+    let parent = Path::new(&output_dir)
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| ".".to_string());
+    let leaf = basename(&output_dir);
     println!(
-        "  {C_DIM}Preview:{C_RESET} {C_CYAN}cd {} && python3 -m http.server{C_RESET}",
-        output_dir
+        "  {C_DIM}Preview:{C_RESET} {C_CYAN}cd {parent} && python3 -m http.server 8081 --bind 127.0.0.1{C_RESET}"
     );
+    println!("           {C_DIM}then open{C_RESET} {C_CYAN}http://localhost:8081/{leaf}/{C_RESET}");
     println!("Total time: {C_BOLD}{:?}{C_RESET}", start.elapsed());
 }
 

@@ -9,13 +9,21 @@ nothing new has to be registered anywhere to be served.
 
 ```bash
 cd docs/ug-website
-python3 -m http.server        # http://localhost:8000
-# or: npx serve               # http://localhost:3000
+python3 -m http.server 8081 --bind 127.0.0.1     # http://localhost:8081
 ```
 
 Serve from `docs/ug-website`, **not** from `demo/`. The demo's "Install ug"
 links point at the site root (`/#get-started`), and the YouTube embed on the
 landing page will not stream from a plain `file://`.
+
+**Pick a port, don't take the default.** Bare `python3 -m http.server` binds
+8000, which is exactly why every other local tool grabs it too — oMLX's admin
+panel, for one, polls `localhost:8000/admin/api/stats` once a second and its
+404s bury the four lines the demo actually logs. 8080 is `ug serve`. If a page
+misbehaves on a shared port, suspect a neighbour before suspecting the demo:
+serving the demo should produce exactly four requests, all 200 —
+`/demo/`, `graph.json`, `ug-vis.bundle.js`, `favicon.svg`. Anything else in
+the log came from something else on your machine.
 
 ## Deploy
 
@@ -40,8 +48,9 @@ serves, next to a `graph.json` snapshot and a static stand-in for the server
 ## Regenerate it
 
 ```bash
-./scripts/gen-demo.sh              # from the repo root
-./scripts/gen-demo.sh --preview    # …and then serve the site at :8000
+./scripts/gen-demo.sh                      # from the repo root
+./scripts/gen-demo.sh --preview            # …and then serve the site at :8081
+PORT=9000 ./scripts/gen-demo.sh --preview  # …on some other port
 ```
 
 The script builds `ug` from the working tree first, on purpose: the

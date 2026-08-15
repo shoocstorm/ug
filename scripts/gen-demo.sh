@@ -8,12 +8,20 @@
 # whole website folder and nothing here needs to be registered anywhere.
 #
 #   ./scripts/gen-demo.sh              # regenerate, using ./native/target/…/ug
-#   ./scripts/gen-demo.sh --preview    # …then serve the site at :8000
+#   ./scripts/gen-demo.sh --preview    # …then serve the site locally
 #
 # Environment overrides:
 #   UG          path to the ug binary (default: a local build, else `ug` on PATH)
 #   DEMO_INPUT  what to index (default: native/src — see WHY THIS SUBTREE below)
 #   DEMO_LABEL  the name shown on the page
+#   PORT        --preview port (default 8081, see PICKING A PORT below)
+#
+# ── PICKING A PORT ──────────────────────────────────────────────────────────
+# Not 8000. It is the obvious choice and the wrong one: it is `http.server`'s
+# default, which makes it the port every other local tool also reaches for —
+# oMLX's admin panel polls `localhost:8000/admin/api/stats` once a second, for
+# one real example, and its 404s bury the demo's own four log lines. Not 8080
+# either: that is `ug serve`. 8081 is neither.
 #
 # ── WHY THIS SUBTREE, NOT THE WHOLE REPO ────────────────────────────────────
 # The renderer draws a graph in full up to 10,000 elements and switches to
@@ -81,10 +89,20 @@ echo "    git add $OUT && git commit -m 'chore: refresh the live demo'"
 echo "    cd docs/ug-website && firebase deploy --only hosting:ultra-graph"
 
 if [ "${1:-}" = "--preview" ]; then
+  PORT="${PORT:-8081}"
   echo
-  echo "▸ Serving the site at http://localhost:8000/demo/ — Ctrl-C to stop."
+  if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+    echo "error: something is already listening on port $PORT." >&2
+    echo "       Re-run with PORT=<other> ./scripts/gen-demo.sh --preview" >&2
+    exit 1
+  fi
+  echo "▸ Serving the site at http://localhost:$PORT/demo/ — Ctrl-C to stop."
   # From the website root, not the demo folder: the demo's "Install ug" links
   # point at the site root (`/#get-started`), which only resolves from here.
+  #
+  # Bound to 127.0.0.1 rather than the default all-interfaces: this serves an
+  # unreleased copy of the site, and there is no reason for it to be reachable
+  # from the network you happen to be on.
   cd "$ROOT/docs/ug-website"
-  python3 -m http.server 8000
+  python3 -m http.server "$PORT" --bind 127.0.0.1
 fi

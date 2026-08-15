@@ -1,0 +1,10 @@
+{
+  "label": "The UltraGraph engine",
+  "project": "src",
+  "install": "/#get-started",
+  "source": "https://github.com/shoocstorm/ug",
+  "nodes": 2939,
+  "edges": 8734,
+  "ugVersion": "0.1.13",
+  "generatedAt": 1786795727
+}

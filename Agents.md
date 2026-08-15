@@ -269,7 +269,7 @@ publishes the whole folder.
 
 ```bash
 ./scripts/gen-demo.sh              # regenerate (builds ug first, on purpose)
-./scripts/gen-demo.sh --preview    # …then serve the site at :8000
+./scripts/gen-demo.sh --preview    # …then serve the site at :8081 (not :8000 — see deploy.md)
 ```
 
 Full notes — overrides, what ships, the failure modes — live in
