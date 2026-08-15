@@ -128,6 +128,7 @@ fn dispatch(cmd: &str, cmd_args: &[String]) {
         "graph_cycles" => analysis::run_graph_cycles(cmd_args),
         // Agent tools (graph.json-backed, for AI coding agents). Names match
         // the MCP tools one-for-one.
+        "context" => agent::run_context(cmd_args),
         "find_symbols" => agent::run_find_symbols(cmd_args),
         "file_outline" => agent::run_file_outline(cmd_args),
         "get_code" => agent::run_get_code(cmd_args),

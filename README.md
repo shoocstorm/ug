@@ -114,6 +114,7 @@ The native `ug` binary is the primary CLI. `ug -h` lists every command;
 | `ug semantic_search "<query>"` | Plain vector search, no graph expansion |
 | `ug traverse <node-id>` | K-hop BFS over the stored OverGraph edges |
 | `ug chat "<question>"` | RAG-grounded chat against an LLM — see [docs/CHAT.md](docs/CHAT.md) |
+| `ug context <symbol>` | **Everything about one symbol in one budgeted call** — its doc + source, its callers with call sites, the tests that reach it, its dependencies and any linked prose, each labelled with the role that put it there. Replaces the `get_code` + `find_usages` + `traverse` + `analyze test_for` sequence. `--max-chars` sets the budget; `--include <role>` narrows it. |
 | `ug project_overview` / `find_symbols` / `file_outline` / `get_code` / `find_usages` / `shortest_path` / `graph_schema` | Agent tools — same names, params and output as the MCP tools and `POST /api/tools/<name>`. Add `--json` for the machine-readable envelope. |
 | `ug find_symbols 'handle_*'` · `ug file_outline 'src/**/*.ts'` · `ug find_usages 'validate_*'` | Wildcards (`*` `?` `[abc]` `{a,b}`) work anywhere a symbol or file is named — one call instead of a loop. Those commands also take a plain symbol name, not just a node id. See [docs/API-REFERENCE.md](docs/API-REFERENCE.md#wildcards). |
 | `ug analyze <preset>` | Whole-repo statistics: "how many functions over 50 lines", "what breaks if I change this file", "which endpoints a change is visible through", "which folders are worst documented". `ug analyze --list` shows every preset; `--gql` runs a raw query. |
@@ -136,7 +137,7 @@ by `ug ingest`). Which one a command reads tells you what still works after
 
 | Reads | Works |
 | :--- | :--- |
-| **`graph.json`** — no DB or embedder needed | `find_symbols`, `file_outline`, `get_code`, `find_usages`, `traverse`, `shortest_path`, `project_overview`, `graph_schema`, all `graph_*` tools; `GET /api/graph/*`, `/api/file`, `/graph.json` |
+| **`graph.json`** — no DB or embedder needed | `find_symbols`, `file_outline`, `get_code`, `find_usages`, `context`, `traverse`, `shortest_path`, `project_overview`, `graph_schema`, all `graph_*` tools; `GET /api/graph/*`, `/api/file`, `/graph.json` |
 | **`ugdb/`** — needs the ingest step, but **no embedder** | `analyze` (statistics); `traverse --dest <name>`; `GET /api/db/node/:id`, `/api/db/traverse/:id`, `POST /api/tools/analyze` |
 | **`ugdb/` + an embedder** — needs ingest *and* a reachable backend | `search`, `semantic_search`, `chat`, `tour`; `POST /api/search/hybrid`, `/api/search/semantic`, `/api/chat` |
 
@@ -278,6 +279,7 @@ amount of grepping reproduces is the graph answering the two questions that
 decide whether a change is safe:
 
 ```bash
+ug context <symbol>                                 # before: the whole picture in one call
 ug find_usages <symbol>                             # before: who is downstream of this?
 ug analyze boundary_impact --arg target=path/to/f.rs  # before: does the change escape the system?
 ug analyze diff_impact --arg files=a.ts,b.rs          # after: what did my edit reach?
@@ -292,8 +294,9 @@ a second), `ug gen` after a large or messy change — and `ug hook status` says
 whether the hooks are installed and whether any vectors are owed.
 
 **Tools exposed:** `search`, `semantic_search`, `traverse`, `find_usages`,
-`find_symbols`, `file_outline`, `get_code`, `project_overview`, `shortest_path`,
-`analyze`, `graph_schema`, `list_projects`, `gen`, `ping_embedder`.
+`find_symbols`, `file_outline`, `get_code`, `project_overview`, `context`,
+`shortest_path`, `analyze`, `graph_schema`, `list_projects`, `gen`,
+`ping_embedder`.
 
 `analyze` is the one to know about if you have not seen it: it answers
 counting, distribution and blast-radius questions over the whole repo in one

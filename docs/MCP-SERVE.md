@@ -473,6 +473,49 @@ project_overview: {}
 
 ---
 
+### 8b. `context` - Everything About One Symbol, In One Call
+
+**The curated bundle.** Returns a symbol's source, its direct callers with call sites, the tests that reach it, what it depends on, and any prose linked to it — replacing the `get_code` → `find_usages` → `traverse` → `analyze test_for` → read-the-doc sequence with a single round trip and a single token budget.
+
+Reach for it when you are about to change a symbol, or need to understand one properly. Use plain `get_code` when you only want source text.
+
+**Parameters:**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `nodeId` | string | ✅ | The one symbol to build the pack around. A node id, an exact name, or a wildcard — must resolve to exactly one symbol. |
+| `maxChars` | integer | ❌ | Total budget for the pack (default 12000, minimum 500). |
+| `include` | string[] | ❌ | Keep only these roles. Omit for all five. |
+
+```
+context: { nodeId: "run_gen" }
+context: { nodeId: "run_gen", maxChars: 4000 }
+context: { nodeId: "run_gen", include: ["caller", "test"] }
+```
+
+**Every item carries a `role` saying why it is there** — that label is the feature. A bundle of related symbols with no stated reason for each is a pile the agent has to re-derive; labelled, it can drop the half it doesn't need without a second call.
+
+| Role | What it is | Carries |
+|---|---|---|
+| `target` | the symbol itself | its doc comment + source, capped at half the budget |
+| `caller` | direct (1-hop) inbound users | signature + call-site lines |
+| `test` | test symbols reaching it within 2 hops | signature + call sites |
+| `dependency` | 1-hop outbound neighbours | signature only |
+| `doc` | `Concept` nodes linked to it | prose preview |
+
+Roles are filled **in that order**, which is a priority claim: working on a symbol you need its body first, then who breaks if it changes, then what proves it still works, then what it leans on, then the prose. Lowering `maxChars` therefore sheds docs and dependencies before it sheds callers, and whatever didn't fit is reported rather than silently omitted:
+
+```
+7293 chars of 12000 budget · 3 caller, 2 test, 15 dependency · not shown: 4 dependency
+```
+
+Two classification rules keep the roles from overlapping. A test that calls the target is listed **once, as a `test`** — "who breaks" and "what re-verifies" are different questions, and the same node answering both would read as two callers. A `Concept` node pointing at the target is a **`doc`**, not a caller: prose referencing a symbol is not code that breaks when it changes. Test detection shares one definition with the `test_for` preset (`storage::facts::is_test_node`), so `context` and `analyze test_for` can never disagree about what a test is.
+
+`maxChars` is a budget, not a guarantee — assembly and rendering are separate steps, so the renderer's fixed overhead is charged as an estimate. At the default the pack lands under; at very small budgets it can run a couple of hundred characters over.
+
+The CLI equivalent is `ug context <symbol> [--max-chars N] [--include ROLE]...`. Like every graph.json tool it needs no embedder and no database.
+
+---
+
 ### 9. `shortest_path` - How Are Two Symbols Connected?
 
 **Shortest directed edge path between two symbols.** Answers "does A reach B", "how does the route reach the db call", "can editing A affect B". If no forward path exists the reverse direction is tried and labeled.

@@ -57,6 +57,7 @@ These accept the same params as their MCP counterparts and can output `--json`.
 
 | Command | Aliases | What it does | Key flags |
 |---------|---------|-------------|-----------|
+| `ug context` | — | **Everything about one symbol in one budgeted call**: its source, callers with call sites, tests reaching it, dependencies and linked docs — each labelled with the role that put it there. Replaces `get_code` + `find_usages` + `traverse` + `analyze test_for`. | `<symbol>` positional (must resolve to exactly one), `--max-chars <n>` (default 12000), `--include <role>` (repeatable: `target`, `caller`, `test`, `dependency`, `doc`), `-n <name>`, `--json` |
 | `ug find_symbols` | — | Symbol lookup by name, fragment (ranked exact > prefix > substring) or **wildcard**. | `--node-type <type>` (repeatable, wildcards ok), `--file-prefix <prefix-or-glob>`, `--boundary`, `-k <limit>`, `--include-docs`, `-n <name>`, `--json`, `-o <file>` |
 | `ug file_outline` | — | List indexed symbols in a file, in line order. Takes a path **glob**. | `<file-or-glob>` positional(s), `-k/--max-files <n>` (default 20), `--ids`, `-n <name>`, `--json` |
 | `ug get_code` | — | Read source for a symbol (id, name or wildcard), or a file/line range. | `<symbol>...` or `-f <file>`, `-s/--start-line`, `-e/--end-line`, `-r/--range <window>` (`11-35` · `34-end` · `20`, same dialect as `ug analyze --range`), `--max-chars`, `--no-doc`, `-n <name>` |
@@ -329,7 +330,7 @@ The HTTP server (`ug serve`) is built on **axum**. All routes listed below.
 
 ### 3.1 Advertised MCP Tools (`tools/list`)
 
-These 13 tools are advertised over MCP `tools/list` and also available via the CLI and HTTP `/api/tools/:tool`. Each tool accepts an optional `project` parameter (except `list_projects`).
+These 14 tools are advertised over MCP `tools/list` and also available via the CLI and HTTP `/api/tools/:tool`. Each tool accepts an optional `project` parameter (except `list_projects`).
 
 | Tool | What it does | Data source | When it errors |
 |------|-------------|-------------|----------------|
@@ -341,6 +342,7 @@ These 13 tools are advertised over MCP `tools/list` and also available via the C
 | `file_outline` | List every indexed symbol in a file, in line order. Accepts a path, unique suffix, File node id, or path glob (up to `maxFiles` files). Supports batch via array. | graph.json | graph.json missing/invalid |
 | `get_code` | Read source for a symbol (id, name or wildcard) or a file/line range. Works from stored source in DB (consistent with search) with filesystem fallback; a file/line range is cut out of the file's whole-file capture, so it needs no working tree either. | ugdb (preferred) + filesystem fallback | node/file captured in neither ugdb nor the working tree |
 | `project_overview` | Orient in the codebase: repo root, node/edge counts, biggest files, most depended-upon symbols. | graph.json | graph.json missing/invalid |
+| `context` | **Curated bundle for one symbol**: source + callers (with call sites) + tests + dependencies + linked docs, each item labelled by role, filled in priority order under one `maxChars` budget. Assembly over the existing tools, not new analysis — so it needs no embedder and no db beyond the stored source `get_code` and `find_usages` already use. Takes exactly one symbol; an ambiguous name is an error listing the candidates. | graph.json (+ ugdb for source & call sites) | graph.json missing/invalid, or the symbol resolves to zero/several nodes |
 | `shortest_path` | Find shortest directed edge path between two symbols. Each endpoint (id, name or wildcard) must resolve to exactly one node. | graph.json | graph.json missing/invalid |
 | `analyze` | **Whole-repo statistics**: counts, groups, distributions, blast radius. Takes a named `preset` or raw GQL. Read-only — mutations are rejected before write staging. Every answer reports property coverage, because aggregating over an unstored property returns `0` rather than an error. | ugdb (**no embedder**) | db missing or written by an older ug |
 | `graph_schema` | **Capability manifest**: node & edge types with counts and connection shapes (from graph.json), plus queryable properties with live coverage and the `analyze` preset list (from the db). | graph.json + ugdb | graph.json missing/invalid (the db half degrades to a note) |

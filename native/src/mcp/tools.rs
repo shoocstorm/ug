@@ -22,6 +22,7 @@ pub const TOOL_NAMES: &[&str] = &[
     "file_outline",
     "get_code",
     "project_overview",
+    "context",
     "shortest_path",
     "analyze",
     "graph_schema",
@@ -374,6 +375,22 @@ fn raw_tools() -> Value {
             "name": "project_overview",
             "description": "Orient yourself in the indexed codebase in one call: repo root, node/edge counts by type, the biggest files by symbol count, and the most depended-upon symbols (highest inbound degree, ignoring folder-containment edges). Call this FIRST in a new session, or when the user asks 'what is this project', 'how is it structured', 'where should I start'. The listed hotspot ids are good seeds for traverse / get_code.",
             "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "context",
+            "description": format!(
+                "EVERYTHING about ONE symbol in a single budgeted call — its source, its direct callers with call sites, the tests that reach it, what it depends on, and any prose linked to it. This is the tool to reach for when you are about to change a symbol, or need to understand one properly: it replaces the get_code → find_usages → traverse → analyze test_for → read-the-doc sequence you would otherwise run, in one round trip and one token budget. Every entry is labelled with the ROLE explaining why it is there ('target', 'caller', 'test', 'dependency', 'doc'), so you can ignore the half you do not need without asking again. Use include:['caller','test'] for the edit-safety half alone (who breaks, what re-verifies). Budget with maxChars — the roles are filled in priority order and what did not fit is reported as 'not shown', so a tight budget still returns the target and its callers rather than an arbitrary slice. Takes exactly ONE symbol: {refs} — a name matching several is an error listing the candidates, because a pack is a claim about one symbol's neighbourhood. Prefer this over get_code when the question is 'how does X work' or 'is it safe to change X'; prefer plain get_code when you only want the source text.",
+                refs = NODE_REF_FORMS
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "nodeId": { "type": "string", "description": format!("The one symbol to build the pack around. {refs} It must resolve to exactly one symbol; resolve an ambiguous name with find_symbols first.", refs = NODE_REF_FORMS) },
+                    "maxChars": { "type": "integer", "minimum": 500, "description": "Total character budget for the whole pack (default 12000). Roles are filled in priority order — target, caller, test, dependency, doc — so lowering this drops docs and dependencies before it drops callers." },
+                    "include": { "type": "array", "items": { "type": "string", "enum": ["target", "caller", "test", "dependency", "doc"] }, "description": "Keep only these roles. Omit for all five. ['caller','test'] is the edit-safety pair; ['target'] is just the source." }
+                },
+                "required": ["nodeId"]
+            }
         },
         {
             "name": "shortest_path",

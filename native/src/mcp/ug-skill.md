@@ -7,8 +7,12 @@ description: >-
   whenever the task is to understand code rather than open a file you have
   already located: how does X work, where is X defined, who calls or imports
   X, what breaks if I change X, how are A and B connected, where do I start
-  in this repo. Use it WHILE editing too: before changing a symbol, ask who
-  depends on it (`ug find_usages`, `ug analyze boundary_impact`); after
+  in this repo. When the question is about ONE symbol, `ug context <symbol>`
+  answers all of that in a single budgeted call — its source, its callers with
+  call sites, the tests that reach it, its dependencies and its linked docs —
+  instead of a get_code + find_usages + traverse + test_for sequence. Use it
+  WHILE editing too: before changing a symbol, ask who
+  depends on it (`ug context`, `ug find_usages`, `ug analyze boundary_impact`); after
   changing files, ask what that broke and what to re-test (`ug analyze
   diff_impact`, `ug analyze diff_retest_scope`) — run `ug update <file>...`
   on the files you just edited first, because git hooks only refresh the
@@ -27,7 +31,9 @@ description: >-
   "which files depend on", "all the functions named like", "every file
   matching", system boundary, entry point, API surface, "what endpoints does
   this expose", "is this a breaking change", "what did my change break",
-  "what should I re-test", "is it safe to change this", "did I miss a caller".
+  "what should I re-test", "is it safe to change this", "did I miss a caller",
+  "give me context on", "everything about this function", "walk me through this
+  symbol", "what do I need to know before changing X".
 ---
 
 # ug — codebase knowledge graph from the CLI
@@ -43,7 +49,10 @@ after, which grep cannot. Use it on your own edits, not just unfamiliar code.
 ## Editing workflow
 
 ```bash
-# BEFORE touching a symbol — who is downstream of it?
+# BEFORE touching a symbol — the whole picture in ONE call
+ug context <symbol>                            # code + callers + tests + deps + docs
+
+# …or the individual questions, if you only need one
 ug find_usages <symbol>                        # callers, importers, call sites
 ug analyze boundary_impact --arg target=<file> # visible outside the system?
 
@@ -70,6 +79,31 @@ refresh is the `gen` tool with `files: [...]` — same job as `ug update`, and i
 reports each file's symbol count, so an unparseable file shows as `0 symbols`
 rather than an empty answer you would have believed.
 
+## `ug context` — one call instead of five
+
+When you are about to change a symbol, or need to understand one properly, this
+is the first thing to run. It returns the symbol's source, its direct callers
+**with call sites**, the tests that reach it, what it depends on, and any prose
+linked to it — replacing the sequence you would otherwise run by hand:
+
+```bash
+ug context run_gen                    # instead of: get_code + find_usages +
+                                      # traverse + analyze test_for + read the doc
+ug context run_gen --max-chars 4000                  # tighter budget
+ug context run_gen --include caller --include test   # the edit-safety half only
+```
+
+Every entry is labelled with **why it is there** — `target`, `caller`, `test`,
+`dependency`, `doc` — so you can drop the half you don't need without a second
+call. Roles fill in that priority order, so shrinking the budget sheds docs and
+dependencies before callers, and whatever didn't fit is reported (`not shown: 4
+dependency`) rather than silently omitted.
+
+It takes **exactly one symbol** — a pack is a claim about one neighbourhood, so
+a name matching several is an error listing the candidates. Use plain `get_code`
+when you only want source text; use `ug context` when the question is *how does
+this work* or *is it safe to change this*.
+
 Two rules turn a loop into one call:
 
 > **1. For any count, fraction, ranking, distribution or blast-radius question,
@@ -85,7 +119,8 @@ Two rules turn a loop into one call:
 | Question | Command |
 |---|---|
 | Counts / fractions / rankings / what breaks? | `ug analyze <preset>` — catalog below |
-| Safe to change this symbol? | `ug find_usages <symbol>` before you edit |
+| **Everything about one symbol at once** | **`ug context <symbol>`** — code + callers + tests + deps + docs |
+| Safe to change this symbol? | `ug context <symbol>` (or just `ug find_usages <symbol>`) before you edit |
 | What did my edited files break? | `ug analyze diff_impact --arg files=...` (feed it `git diff --name-only`) |
 | Which tests should I re-run? | `ug analyze diff_retest_scope --arg files=...` |
 | Graph match my edits? | `ug update <file>...` — do this before asking structurally |

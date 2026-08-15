@@ -7,7 +7,7 @@
 | Field | Value |
 | :--- | :--- |
 | **Date** | 2026-08-14 |
-| **Revised** | 2026-08-15 — Tier 1.1 closed: staleness line on every structural result (CLI + MCP), `gen files:[...]` as the MCP mirror of `ug update`, skill text reworked around the edit burst |
+| **Revised** | 2026-08-15 — Tier 1.1 and 1.2 closed: staleness line on every structural result (CLI + MCP), `gen files:[...]` as the MCP mirror of `ug update`, and `ug context` / the `context` MCP tool as the curated pack |
 | **Audience** | Product direction / design |
 | **Method** | Codebase analysis + reasoning about agent workflows (not session telemetry) |
 
@@ -33,10 +33,10 @@ This framing drives every recommendation below.
 
 ## What `ug` already does exceptionally well for agents
 
-The agent-facing surface is deliberately small: **13 MCP tools** (`search`,
+The agent-facing surface is deliberately small: **14 MCP tools** (`search`,
 `semantic_search`, `traverse`, `find_usages`, `find_symbols`, `file_outline`,
-`get_code`, `project_overview`, `shortest_path`, `analyze`, `graph_schema`,
-`list_projects`, `gen` — `native/src/mcp/tools.rs`), each mirrored one-for-one
+`get_code`, `project_overview`, `context`, `shortest_path`, `analyze`,
+`graph_schema`, `list_projects`, `gen` — `native/src/mcp/tools.rs`), each mirrored one-for-one
 as a CLI subcommand (`native/src/cli/mod.rs::dispatch`), with the analytical
 depth pushed into **39 `analyze` presets** rather than into more tools
 (`native/src/analyze/presets.rs`). That ratio is the right one: an agent
@@ -220,28 +220,68 @@ Putting the resolved project name into `project_overview` — and into the
 "NOT INDEXED" style coverage line the tools already emit — is the MCP-side
 equivalent, and it is not there yet.
 
-#### 2. A first-class "context pack" tool — collapse 5 tool calls into 1 — **Open**
+#### 2. A first-class "context pack" tool — collapse 5 tool calls into 1 — **Shipped**
 
-When an agent works on symbol F, it typically assembles context through 4–6 round trips:
+When an agent works on symbol F, it used to assemble context through 4–6 round trips:
 
 ```
 get_code F → find_usages F → traverse F → test_for F → read relevant doc
 ```
 
-Each round trip is latency + tokens. A single curated call — `ug context <id>` — that returns a token-budgeted bundle (the symbol's code, its direct callers' call sites, its dependencies' signatures, the linked test, the linked doc section) would be **enormously** valuable. This is arguably the single highest-impact tool to add for agents.
+`context` (`native/src/agent_tools.rs::context`) is that sequence as one call,
+on both surfaces — `ug context <symbol>` and the `context` MCP tool. As
+predicted, it needed no new analysis: it is assembly and budgeting over
+`get_code`, `find_usages`, a 1-hop edge scan and the shared `is_test_node`
+predicate, which is why it landed cheaply and why it needs neither an embedder
+nor anything from the db that `get_code` was not already reading.
 
-- The **tour** feature is *almost* this, but wrapped in LLM narration (human-oriented). Agents want the **raw curated bundle**, not prose. Consider: `ug context` = tour's retrieval/assembly without the LLM step.
-- Budget it with `maxChars` like `search` does. Rank sub-items by relevance.
-- The pieces all exist already and are individually reachable: `get_code`,
-  `find_usages`, `traverse`, and the `test_for` preset
-  (`native/src/analyze/presets.rs:626`). This is assembly and budgeting, not
-  new analysis — which is exactly why it stays the best ratio of value to work
-  on this list.
+The shape is the one this section argued for — **one call, one symbol, one
+budget, every sub-item labelled by why it is there**:
 
-Now that the CLI has a scope banner, note the shape this should take: **one
-call, one project, one budget**, with the sub-items labelled by why they were
-included ("caller", "dependency", "test", "doc") so the agent can drop the half
-it doesn't need without a second round trip.
+```
+Context for Function staleness  native/src/project.rs:380-470
+1986 chars of 12000 budget · 3 caller, 2 test · not shown: 4 dependency
+
+── callers (3) ──
+- Function announce_staleness  native/src/cli/scope.rs:127-166
+  this —Calls→ target
+    137  let Some(stale) = project::staleness(data_dir, &meta) else {
+```
+
+Five roles — `target`, `caller`, `test`, `dependency`, `doc` — filled in that
+order, which is a priority claim rather than a taxonomy: you need the body
+first, then who breaks, then what re-verifies, then what it leans on, then the
+prose. Shrinking `maxChars` therefore sheds docs and dependencies before
+callers, and what did not fit is reported (`not shown: 4 dependency`) instead
+of silently omitted — the same "never be quietly incomplete" rule as the
+coverage line and the staleness note.
+
+Three decisions worth recording, because each was a way the pack could have
+been subtly wrong:
+
+- **A test that calls the target is a `test`, not a `caller`.** *Who breaks* and
+  *what re-verifies* are different questions; the same node answering both
+  would read as two callers and overstate the blast radius. Test detection
+  shares one definition with the `test_for` preset
+  (`storage::facts::is_test_node`, extracted for this), so the pack and
+  `analyze test_for` cannot disagree about what a test is.
+- **A `Concept` pointing at the target is a `doc`, not a caller.** Prose that
+  references a symbol is a real inbound edge, so `find_usages` returns it — but
+  it is not code that breaks.
+- **The budget charges rendering overhead.** Counting only the payload made a
+  500-char pack return 894 characters — a 79% overshoot, worst exactly when the
+  caller is being careful about tokens. Per-item chrome and a fixed header
+  reserve are charged, which brings a tight pack to ~26% over and a
+  default-sized one under. It remains a budget, not a guarantee, and says so.
+
+`--include` narrows it: `ug context F --include caller --include test` buys the
+edit-safety half alone. What is *not* here is doc linkage worth much — see #8,
+still open: `doc` items only appear where the indexer already emitted a
+`Concept` edge, which is rare. The role exists and is honest about being empty.
+
+The **tour** feature remains the human-facing sibling: same assembly instinct,
+wrapped in LLM narration. `context` is that retrieval without the LLM step,
+which is what an agent wanted all along (see Tier 3 #9).
 
 #### 3. Symbol-level / semantic-diff impact — "you changed the signature of F; here's the precise blast radius" — **Open**
 
@@ -306,13 +346,22 @@ Agents debug from stack traces constantly. A tool that ingests a stack trace, re
 
 Concept nodes from Markdown exist, and there are `Imports` edges from doc links, but there's no "this doc section explains this symbol" link. Agents answering "how does X work" benefit enormously from linked prose. Consider: detect symbol references in prose (backticks, code refs) and emit `Documents` / `Explains` edges.
 
+**This got more valuable when #2 shipped.** `ug context` has a `doc` role and
+populates it from `Concept` nodes adjacent to the target — but on this repo that
+is 366 Concept nodes and almost no edges reaching a code symbol, so the role is
+nearly always empty. The consumer now exists and is wired; the edges are the
+only missing half. Emitting `Documents` edges from backticked symbol references
+in prose would light up the one part of the context pack that is currently
+honest-but-blank, which makes this the cheapest remaining upgrade to a shipped
+feature rather than a speculative new one.
+
 ---
 
 ### Tier 3: De-emphasize for the agent use case
 
 #### 9. The tour's LLM narration is human-oriented
 
-The retrieval + assembly is great; the LLM-written 40-word narrations and camera-fly are for humans in the web UI. For agents, `--no-llm` (raw stops) is the useful mode, and that's essentially a **context pack** (see Tier 1 #2). Consider reframing: keep tour for the human/web surface, expose the raw assembly as `ug context` for agents.
+The retrieval + assembly is great; the LLM-written 40-word narrations and camera-fly are for humans in the web UI. For agents, `--no-llm` (raw stops) is the useful mode, and that's essentially a **context pack** (see Tier 1 #2). That reframing has now happened: `ug context` is the raw assembly for agents, and tour keeps the narration for the human/web surface. The two are separate code paths rather than one with a flag — tour walks a *route* between several symbols for a reader with no prior knowledge, `context` describes *one* symbol's neighbourhood for a caller about to edit it — but if a third consumer appears, tour's retrieval is the place to look for shared machinery.
 
 #### 10. The chat REPL is redundant with the agent itself
 
@@ -329,17 +378,19 @@ The retrieval + assembly is great; the LLM-written 40-word narrations and camera
 | Priority | Action | Status |
 |---|---|---|
 | **1 — Trust** | Keep the graph fresh and say so when it isn't. | **Shipped** — git hooks auto-refresh on commit/merge/checkout/rewrite; `get_code` flags stale slices; `ug list` + `/api/projects/staleness` report project drift; scope banner names the resolved project; **every structural result now carries a staleness line naming the drifted files**, on stderr (CLI) and appended to the text (MCP); the skill and the `gen` tool both make `ug update <files>` the post-edit habit. **Still open:** the working-tree watcher, which would make the habit unnecessary rather than merely backstopped. |
-| **2 — Context pack** | Add `ug context <id>` — curated, token-budgeted bundle (code + callers + deps + test + doc) in one call. | **Open** — now the highest-leverage unstarted item; all inputs already exist. |
+| **2 — Context pack** | Add `ug context <id>` — curated, token-budgeted bundle (code + callers + deps + test + doc) in one call. | **Shipped** — `ug context` + the `context` MCP tool. Five labelled roles filled in priority order under one `maxChars`; `--include` narrows it. Assembly over existing tools, so no embedder and no new analysis. |
 | **3 — Edit safety** | `ug verify` combining impact + retest + boundary; then enrich `Calls` edges with call-site line/arity for signature-mismatch detection. | **Open** — split: `ug verify` is shippable from existing presets; edge properties need indexer work (`ingest.rs:530` still writes `""`). |
 | **4 — Positioning** | For agents, lead with "edit-safety / blast-radius verification" (the moat), not "semantic search" (commoditized). | **Shipped** — `ug-skill.md` and the MCP server description both lead with edit safety and trigger on the safety phrasings. |
 | **5 — Languages** | Add Go and C# next (largest agent-active ecosystems not yet covered). | **Open** — still 5 grammars + PDF. Interim: report language coverage in `project_overview`. |
 | **6 — De-emphasize** | Don't over-invest in dense semantic search for agents (supplementary, ~20% of queries); keep chat/tour for the human surface. | **Holding** — the `--no-embed` hook path proves the point: the structural half is what the safety story needs, vectors are the part that can lag without breaking anything. |
 
-**If only one thing ships next:** `ug context` (#2). With the staleness line
-shipped, the trust half of Tier 1 is closed and the remaining leverage is in
-the two build-outs that were never started — and `ug context` is the cheaper of
-them, since every input already exists and the work is assembly and budgeting
-rather than new analysis.
+**If only one thing ships next:** `ug verify` (#3). Tier 1 now has one item
+left, and its cheap half is shippable today: `diff_impact` +
+`diff_retest_scope` + `boundary_impact` combined into a single "safety report"
+over the file set `ug hook run` already computes. The expensive half — call-site
+line and arity on `Calls` edges, for signature-mismatch detection — is the only
+item on this list that requires touching the indexers, and it is what turns
+that report from file-level into symbol-level.
 
 ---
 
@@ -347,14 +398,17 @@ rather than new analysis.
 
 `ug`'s structural graph + PPR + blast-radius is a genuine moat that agents can't replicate with grep; the highest-leverage move is to make that graph **trustworthy during editing** (staleness), **cheaper to consume** (context pack), and **tied to change-safety** (semantic diff + verify) — while treating dense semantic search as a supplementary layer, not the centerpiece, for the agent audience.
 
-Since the first draft, the trust half has closed: the graph self-heals across
-git events, the read path admits when a slice is stale, projects report their
-own drift, every command names the project it resolved, and — the last mile —
-**every structural answer now says when it is behind the tree, and which files
-moved.** What remains on this list is the two build-outs that were never
-started (`ug context`, `ug verify`), the `Calls`-edge properties that would
-unlock signature-level impact, and the working-tree watcher that would make the
-`ug update` habit unnecessary rather than merely backstopped by a warning.
+Since the first draft, two of those three have closed. **Trustworthy during
+editing:** the graph self-heals across git events, the read path admits when a
+slice is stale, projects report their own drift, every command names the project
+it resolved, and every structural answer now says when it is behind the tree and
+which files moved. **Cheaper to consume:** `ug context` collapses the five-call
+assembly into one labelled, budgeted bundle.
+
+What remains is the third — **tied to change-safety**: `ug verify` (shippable
+today from existing presets), the `Calls`-edge properties that would raise it
+from file-level to signature-level, and the working-tree watcher that would make
+the `ug update` habit unnecessary rather than merely backstopped by a warning.
 
 ---
 

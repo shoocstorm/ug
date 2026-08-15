@@ -806,7 +806,7 @@ impl Mcp {
                 Ok(with_staleness(text))
             }
             "find_symbols" | "file_outline" | "find_usages" | "traverse" | "shortest_path"
-            | "project_overview" | "get_code" => {
+            | "project_overview" | "get_code" | "context" => {
                 Ok(with_staleness(self.tool_graph(name, &ctx, args).await?))
             }
             "list_projects" => {

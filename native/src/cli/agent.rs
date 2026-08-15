@@ -247,6 +247,41 @@ fn print_file_outline_help() {
     println!("  {C_CYAN}ug file_outline{C_RESET} native/src/main.rs --ids   {C_YELLOW}# force ids on when piped{C_RESET}");
 }
 
+fn print_context_help() {
+    println!("  {C_CYAN}ug context{C_RESET}  {C_YELLOW}— everything about one symbol, in one call{C_RESET}");
+    println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
+    println!();
+    println!("{C_BOLD}Usage:{C_RESET}  ug context <symbol> [options]");
+    println!();
+    println!("Replaces the round trips you would otherwise spend assembling the same");
+    println!("picture — {C_CYAN}get_code{C_RESET} → {C_CYAN}find_usages{C_RESET} → {C_CYAN}traverse{C_RESET} → {C_CYAN}analyze test_for{C_RESET} → read the doc —");
+    println!("with one budgeted bundle. Every entry says {C_BOLD}why{C_RESET} it is there, so you can");
+    println!("skip the half you don't need without a second call.");
+    println!();
+    println!("{C_BOLD}What comes back, in budget priority order:{C_RESET}");
+    println!("  {C_BOLD}target{C_RESET}      its doc comment + source (capped at half the budget)");
+    println!("  {C_BOLD}caller{C_RESET}      direct users, with call sites — what breaks if you change it");
+    println!("  {C_BOLD}test{C_RESET}        tests reaching it within 2 hops — what re-verifies it");
+    println!("  {C_BOLD}dependency{C_RESET}  what it leans on, signatures only");
+    println!("  {C_BOLD}doc{C_RESET}         prose the indexer linked to it");
+    println!();
+    println!("{C_BOLD}Options:{C_RESET}");
+    println!("  {C_CYAN}--max-chars <n>{C_RESET}       Total character budget (default 12000)");
+    println!("  {C_CYAN}--include <role>{C_RESET}      Keep only this role; repeatable");
+    println!("  {C_CYAN}-n, --name <project>{C_RESET}  Project name (default: cwd basename)");
+    println!("  {C_CYAN}--json{C_RESET}                Machine-readable output");
+    println!();
+    println!("{C_BOLD}Examples:{C_RESET}");
+    println!("  {C_CYAN}ug context{C_RESET} run_gen                          {C_YELLOW}# the whole neighbourhood{C_RESET}");
+    println!("  {C_CYAN}ug context{C_RESET} run_gen --max-chars 4000        {C_YELLOW}# tighter budget{C_RESET}");
+    println!("  {C_CYAN}ug context{C_RESET} run_gen --include caller --include test  {C_YELLOW}# the edit-safety half{C_RESET}");
+    println!("  {C_CYAN}ug context{C_RESET} \"function:native/src/cli/gen.rs:run_gen\"  {C_YELLOW}# by id{C_RESET}");
+    println!();
+    println!("{C_DIM}Takes one symbol: a pack is a claim about one neighbourhood, and splitting");
+    println!("the budget across several would thin every answer. Names and wildcards work,");
+    println!("but must match exactly one symbol — resolve with {C_RESET}{C_CYAN}ug find_symbols{C_RESET}{C_DIM} first if not.{C_RESET}");
+}
+
 fn print_get_code_help() {
     println!("  {C_CYAN}ug get_code{C_RESET}  {C_YELLOW}— read full source for a node id or file/line range{C_RESET}");
     println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
@@ -501,6 +536,44 @@ pub(crate) fn run_find_usages(args: &[String]) {
         &result,
         || agent_tools::render_find_usages(&result, Render::Ansi),
         "find_usages result",
+        ok,
+    );
+}
+
+/// `ug context <symbol>` — the whole neighbourhood of one symbol, budgeted.
+pub(crate) fn run_context(args: &[String]) {
+    if has_flag(args, "-h") || has_flag(args, "--help") {
+        print_context_help();
+        return;
+    }
+    let refs = positionals(args, AGENT_VALUE_FLAGS);
+    if refs.is_empty() {
+        eprintln!(
+            "Usage: ug context <symbol> [--max-chars <n>] [--include <role>]... [-n|--name <project>]"
+        );
+        eprintln!("   Run {C_CYAN}ug context -h{C_RESET} for details.");
+        std::process::exit(1);
+    }
+    let (graph, _raw, graph_path) = load_agent_graph(args);
+    let repo_root = agent_repo_root(&graph, &graph_path);
+
+    let params = agent_tools::ContextParams {
+        node_id: refs,
+        max_chars: flag_value(args, &["--max-chars"]).and_then(|s| s.parse().ok()),
+        include: multi_flag(args, &["--include"]),
+    };
+    let indexed = indexed_source(&graph_path, &agent_tools::context_source_ids(&graph, &params));
+    let result = agent_tools::context(
+        &graph,
+        agent_tools::SourceCtx::new(&indexed, &repo_root),
+        &params,
+    );
+    let ok = result.ok();
+    emit_agent_result(
+        args,
+        &result,
+        || agent_tools::render_context(&result, Render::Ansi),
+        "context result",
         ok,
     );
 }

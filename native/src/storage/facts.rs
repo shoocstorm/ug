@@ -141,6 +141,51 @@ fn looks_like_test(file: &str) -> bool {
     TEST_PATH_MARKERS.iter().any(|m| lower.contains(m))
 }
 
+/// Is this node test code?
+///
+/// The single definition, because two of them would disagree. This backs the
+/// stored `is_test` fact — which every `analyze` test preset filters on,
+/// `test_for` included — and [`crate::agent_tools::context`], which has to
+/// find a symbol's tests straight from `graph.json` with no store open. A
+/// second heuristic in the second caller would mean `ug context` and
+/// `ug analyze test_for` disagreeing about what a test is, on the same repo,
+/// in the same session.
+///
+/// Three signals, most specific first:
+///
+/// 1. A per-symbol `test` / `cfg(test)` annotation (the Rust indexer's
+///    `test_annotation`). A helper inside `#[cfg(test)] mod tests` in an
+///    otherwise production file is test code, and only the marker knows that.
+/// 2. The indexer's `FileClassification`, which saw the file's contents
+///    rather than just its name. It has no "unknown" variant — every variant
+///    is a decision — so `Some(c)` means the classifier had an opinion, and
+///    its answer stands in both directions. Letting `Some(Util)` fall through
+///    to the path heuristic below is how a `fastest_path.ts` got relabelled a
+///    test by its name.
+/// 3. The path markers, for graphs written before classification reached the
+///    node.
+///
+/// Nodes without a file (and `Folder` nodes, whose `file` is their own path)
+/// are never tests.
+pub fn is_test_node(n: &GraphNode) -> bool {
+    if matches!(n.node_type, GraphNodeType::Folder) {
+        return false;
+    }
+    let Some(file) = n.file.as_deref().filter(|s| !s.is_empty()) else {
+        return false;
+    };
+    if n.annotations
+        .iter()
+        .any(|a| a.name == "test" || a.name == "cfg(test)")
+    {
+        return true;
+    }
+    match &n.classification {
+        Some(c) => *c == FileClassification::Test,
+        None => looks_like_test(file),
+    }
+}
+
 /// Stable lowercase name for a file classification.
 ///
 /// Spelled out rather than derived from `Debug`, so a rename of the enum
@@ -253,30 +298,7 @@ pub fn compute(n: &GraphNode, ctx: &FactContext) -> Facts {
     if !matches!(n.node_type, GraphNodeType::Folder) {
         if let Some(file) = n.file.as_deref().filter(|s| !s.is_empty()) {
             f.insert("folder".into(), FactValue::Str(folder_of(file).to_string()));
-            // The indexer's classification is authoritative where it
-            // exists — it saw the file's contents, not just its name. The
-            // path heuristic stays as the fallback for graphs written
-            // before the classification reached the node, and for files
-            // the classifier had no opinion about.
-            // `Some(_)` used to fall through to the path heuristic, which
-            // made this comment a lie in the negative direction: a file the
-            // classifier positively identified as `Util` or `Service` could
-            // still be relabelled a test by its *name*. `FileClassification`
-            // has no "unknown" variant — every variant is a decision — so
-            // `Some(c)` is exactly "the classifier had an opinion" and its
-            // answer stands either way. `None` remains the genuine fallback
-            // for graphs written before classification reached the node.
-            // A per-symbol `cfg(test)` marker — see the Rust indexer's
-            // `test_annotation` — overrides the file-level answer. A
-            // helper inside `#[cfg(test)] mod tests` in a production
-            // file is test code, and only the marker knows that.
-            let is_test = n.annotations.iter().any(|a| {
-                a.name == "test" || a.name == "cfg(test)"
-            }) || match &n.classification {
-                Some(c) => *c == FileClassification::Test,
-                None => looks_like_test(file),
-            };
-            f.insert("is_test".into(), FactValue::from_bool(is_test));
+            f.insert("is_test".into(), FactValue::from_bool(is_test_node(n)));
         }
     }
 

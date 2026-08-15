@@ -123,6 +123,8 @@ pub(crate) fn print_help() {
     // `gen --no-ingest` already covers the one reason an end user reached
     // for them. `ug api` and the docs still name them.
     group("Read the code", "from graph.json — no database needed");
+    cmd_hi("context", "Everything about one symbol at once: code, callers, tests, deps, docs");
+    cont("one budgeted call instead of get_code + find_usages + traverse + test_for");
     cmd("find_symbols", "Find symbols by name or wildcard — start here; gives the ids below");
     cmd("get_code", "Read a symbol's source, or a file and line range");
     cmd("file_outline", "Every indexed symbol in a file, in line order");

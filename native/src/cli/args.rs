@@ -188,6 +188,7 @@ pub(crate) const AGENT_VALUE_FLAGS: &[&str] = &[
     "--hops",
     "--max-chars",
     "--max-files",
+    "--include",
     "--range",
     "-r",
     "--node-type",
