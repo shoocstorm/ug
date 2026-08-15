@@ -58,6 +58,34 @@ use super::io::die;
 /// change worth a warning at publish time.
 const SOLO_THRESHOLD: usize = 10_000;
 
+/// A short hash of everything that decides what the demo's `index.html`
+/// looks like: the assembled visualization page and the shim wrapped around
+/// it.
+///
+/// Stamped into `demo.json` so staleness becomes a *fact* rather than
+/// something a person has to remember. The published page is a copy of a
+/// page that lives inside this binary, and a copy has no way to notice its
+/// original moved — edit `src/vis/js/10-graph-render.js`, and the live demo
+/// keeps serving the old renderer with nothing anywhere to say so. The
+/// fingerprint is what `the_published_demo_page_is_not_stale` compares, so
+/// that silence turns into a failing test naming the command that fixes it.
+fn vis_fingerprint() -> String {
+    fingerprint_of(crate::assets::VIS_HTML, crate::assets::VIS_DEMO_SHIM)
+}
+
+/// The hash itself, over its two inputs — split out from [`vis_fingerprint`]
+/// so a test can prove it actually reacts to a change in either, which is
+/// the whole property the staleness guard rests on.
+fn fingerprint_of(page: &str, shim: &str) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(page.as_bytes());
+    // A separator, so a byte moving across the boundary between the two
+    // still changes the hash.
+    hasher.update(b"\0");
+    hasher.update(shim.as_bytes());
+    hasher.finalize().to_hex()[..16].to_string()
+}
+
 /// Where `ug demo` writes when the caller names no `-o`.
 ///
 /// The command exists for the website's demo page, so when it is run from a
@@ -194,9 +222,115 @@ fn human_bytes(n: u64) -> String {
     }
 }
 
+/// One counter out of the graph's `stats` block, or 0 if it isn't there.
+fn stat_u64(graph: &serde_json::Value, key: &str) -> u64 {
+    graph
+        .get("stats")
+        .and_then(|s| s.get(key))
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0)
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// `--page-only`: rebuild the published page from this binary, leaving the
+/// graph snapshot alone.
+///
+/// This exists so the staleness guard is *affordable*. A vis edit invalidates
+/// the page and nothing else — the snapshot is a point in time and is
+/// supposed to be older than the code — but a full re-publish also rewrites
+/// `graph.json`, and `stats.lastIndexedAt` moves on every run, so 2.7 MB of
+/// git churn would land on every CSS tweak. A guard that expensive gets
+/// deleted rather than obeyed. This path writes ~910 KB and touches nothing
+/// else, so keeping the demo current costs a second and a small diff.
+fn run_page_refresh(output_dir: &str, args: &[String]) {
+    let manifest_path = format!("{output_dir}/demo.json");
+    let existing = fs::read_to_string(&manifest_path).unwrap_or_else(|e| {
+        die(
+            1,
+            format!(
+                "cannot read {manifest_path}: {e}\n       \
+                 --page-only refreshes an existing demo. Publish one first:\n       \
+                 ug demo -i <repo> -o {output_dir}"
+            ),
+        )
+    });
+    let mut manifest: serde_json::Value = serde_json::from_str(&existing)
+        .unwrap_or_else(|e| die(1, format!("{manifest_path} is not valid JSON: {e}")));
+
+    // Everything about *the repo* is carried over untouched — it describes
+    // the snapshot on disk, which this command is deliberately not rebuilding.
+    // Only what the page is built from moves.
+    let obj = manifest
+        .as_object_mut()
+        .unwrap_or_else(|| die(1, format!("{manifest_path} is not a JSON object")));
+    for (key, value) in [
+        ("ugVersion", serde_json::json!(env!("CARGO_PKG_VERSION"))),
+        ("visFingerprint", serde_json::json!(vis_fingerprint())),
+        ("generatedAt", serde_json::json!(now_secs())),
+    ] {
+        obj.insert(key.to_string(), value);
+    }
+    // Flags still win when given, so a link target can be corrected without
+    // a re-index.
+    if let Some(label) = flag_value(args, &["--label"]) {
+        obj.insert("label".into(), serde_json::json!(label));
+    }
+    if let Some(site) = flag_value(args, &["--site"]) {
+        obj.insert(
+            "install".into(),
+            serde_json::json!(format!("{}#get-started", site.trim_end_matches('#'))),
+        );
+    }
+
+    let label = manifest
+        .get("label")
+        .and_then(|l| l.as_str())
+        .unwrap_or("this repository")
+        .to_string();
+    let page = build_demo_page(&manifest, &label);
+
+    let write = |name: &str, bytes: &[u8]| {
+        let path = format!("{output_dir}/{name}");
+        fs::write(&path, bytes).unwrap_or_else(|e| die(1, format!("failed to write {path}: {e}")));
+        bytes.len() as u64
+    };
+    let html = write("index.html", page.as_bytes());
+    write("ug-vis.bundle.js", crate::assets::VIS_BUNDLE);
+    write("favicon.svg", crate::assets::VIS_FAVICON);
+    write("README.md", readme(&label).as_bytes());
+    write(
+        "demo.json",
+        serde_json::to_string_pretty(&manifest)
+            .unwrap_or_default()
+            .as_bytes(),
+    );
+
+    println!(
+        "{C_GREEN}✓ Refreshed the page{C_RESET} in {C_BOLD}{}{C_RESET} {C_DIM}({}){C_RESET}",
+        output_dir,
+        human_bytes(html)
+    );
+    println!(
+        "  {C_DIM}graph.json left as it was — the snapshot is unchanged, only the visualization.{C_RESET}"
+    );
+}
+
 pub(crate) fn run_demo(args: &[String]) {
     if has_flag(args, "-h") || has_flag(args, "--help") {
         print_demo_help();
+        return;
+    }
+
+    let output_dir_early = flag_value(args, &["-o", "--output"])
+        .unwrap_or_else(|| default_output().to_string());
+    if has_flag(args, "--page-only") {
+        run_page_refresh(&output_dir_early, args);
         return;
     }
 
@@ -210,8 +344,7 @@ pub(crate) fn run_demo(args: &[String]) {
             )
         })
         .unwrap_or_else(|| ".".to_string());
-    let output_dir = flag_value(args, &["-o", "--output"])
-        .unwrap_or_else(|| default_output().to_string());
+    let output_dir = output_dir_early;
 
     // Canonicalized once, so the banner, the scrub and the derived label all
     // name the same resolved tree (Agents.md §9a).
@@ -270,11 +403,15 @@ pub(crate) fn run_demo(args: &[String]) {
         "source": public_root,
         "nodes": nodes,
         "edges": edges,
+        // Carried so the landing page can state the demo's size without
+        // downloading the 2.7 MB graph to count it — and, more to the point,
+        // without anyone hand-copying four numbers that change on every
+        // re-publish. See `.demo-facts` in docs/ug-website/index.html.
+        "files": stat_u64(&parsed, "totalFiles"),
+        "lines": stat_u64(&parsed, "totalLines"),
         "ugVersion": env!("CARGO_PKG_VERSION"),
-        "generatedAt": std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0),
+        "visFingerprint": vis_fingerprint(),
+        "generatedAt": now_secs(),
     });
 
     fs::create_dir_all(&output_dir)
@@ -408,6 +545,9 @@ fn print_demo_help() {
     println!("  {C_CYAN}--label <text>{C_RESET}         Name shown in the page. Default: the repo's directory name");
     println!("  {C_CYAN}--source-url <url>{C_RESET}     Public URL of the repo, shown in place of the local path");
     println!("  {C_CYAN}--site <url>{C_RESET}           Base URL the \"Install ug\" links point at. Default: /");
+    println!("  {C_CYAN}--page-only{C_RESET}            Rebuild the page from this binary and leave graph.json");
+    println!("                         alone. What to run after editing {C_CYAN}native/src/vis/{C_RESET} —");
+    println!("                         the published demo embeds that page and goes stale.");
     println!();
     println!("{C_BOLD}Written{C_RESET}");
     println!("  graph.json          the indexed graph — what the page draws");
@@ -484,6 +624,75 @@ mod tests {
         assert!(page.contains(r#"href="favicon.svg""#), "favicon made relative");
         assert!(!page.contains(r#"href="/favicon.svg""#), "absolute favicon left behind");
         assert!(page.contains("<title>MyRepo · ug live demo</title>"));
+    }
+
+    /// The staleness guard is only as good as this: a change to *either*
+    /// input has to move the fingerprint, including one that merely shifts
+    /// bytes across the boundary between them.
+    #[test]
+    fn the_fingerprint_reacts_to_both_of_its_inputs() {
+        let base = fingerprint_of("<html>page</html>", "shim();");
+        assert_ne!(base, fingerprint_of("<html>page!</html>", "shim();"), "page edit");
+        assert_ne!(base, fingerprint_of("<html>page</html>", "shim2();"), "shim edit");
+        // Concatenating without a separator would hash these two identically.
+        assert_ne!(
+            fingerprint_of("ab", "c"),
+            fingerprint_of("a", "bc"),
+            "the boundary between page and shim must be part of the hash"
+        );
+        assert_eq!(base, fingerprint_of("<html>page</html>", "shim();"), "stable");
+    }
+
+    /// **The live demo ships a copy of the visualization page, and a copy
+    /// cannot notice its original changed.**
+    ///
+    /// This is the one failure in this area with no symptom: edit anything
+    /// under `src/vis/`, and `cargo build`, every other test, and `ug serve`
+    /// all keep working perfectly — while `https://ultra-graph.web.app/demo/`
+    /// quietly keeps serving the page from whenever it was last published.
+    /// Nothing points back at the edit, because the edit was fine. So the
+    /// check has to live where a change to `src/vis/` is already going to
+    /// run (`cargo nextest run`, per Agents.md §6), and it has to name the
+    /// fix rather than just the fact.
+    ///
+    /// Fixing it is cheap on purpose — see `run_page_refresh`.
+    #[test]
+    fn the_published_demo_page_is_not_stale() {
+        let manifest_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../docs/ug-website/demo/demo.json");
+
+        let Ok(body) = std::fs::read_to_string(&manifest_path) else {
+            // A checkout without the demo is a checkout that cannot publish
+            // it, which is worth saying — but it is not a reason to fail a
+            // test run for someone who never touched the vis layer.
+            eprintln!(
+                "note: {} is missing — the live demo has not been published in this \
+                 checkout. `./scripts/gen-demo.sh` creates it.",
+                manifest_path.display()
+            );
+            return;
+        };
+
+        let manifest: serde_json::Value =
+            serde_json::from_str(&body).expect("demo.json is valid JSON");
+        let published = manifest
+            .get("visFingerprint")
+            .and_then(|f| f.as_str())
+            .unwrap_or("<none>");
+
+        assert_eq!(
+            published,
+            vis_fingerprint(),
+            "\n\n\
+             The live demo at docs/ug-website/demo/ was built from a different \
+             visualization page than this one.\n\
+             Something under native/src/vis/ changed since it was last published, so \
+             the demo would ship the old page.\n\n\
+             Refresh just the page (fast, leaves graph.json alone):\n    \
+             cargo run --bin ug -- demo --page-only\n\n\
+             Or re-publish the whole snapshot, when the graph itself should move too:\n    \
+             ./scripts/gen-demo.sh\n"
+        );
     }
 
     /// The publish-time warning is only worth anything if it fires at the

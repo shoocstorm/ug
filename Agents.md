@@ -208,8 +208,9 @@ change. Do not wait to be told, and do not file it as future work.
 | Install or upgrade steps | `index.html` `#get-started` **and** `docs/ug-website/install.sh` — they must agree |
 | Architecture or component boundaries | `architecture.html` — **both tabs**, `#tab-horizontal` and `#tab-vertical`, which draw the same pipeline at different densities |
 | A user-visible UI feature worth showing off | `index.html` `#showcase` (reuse an existing `img/UG-*.png` unless the feature is genuinely new) |
-| The visualization page (`native/src/vis/`), or the `graph.json` shape | `./scripts/gen-demo.sh` — the live demo embeds both, so it ships the *old* page until it is regenerated. See 7.4 |
-| An endpoint the page calls **at startup** | `native/src/vis/demo-shim.js` must answer it, or the demo hangs on a request no static host can serve |
+| Anything under `native/src/vis/` (css, js, the shell, the shim) | `ug demo --page-only` — the live demo ships a *copy* of that page and keeps serving the old one until you re-publish it. `the_published_demo_page_is_not_stale` fails until you do. See 7.4 |
+| The indexer, or the `graph.json` shape | `./scripts/gen-demo.sh` — a full re-publish, so the demo's snapshot is one this build could actually have produced. The landing page's counts follow `demo/demo.json` on their own |
+| An endpoint the page calls **at startup**, or any fetch outside `/api/` | `native/src/vis/demo-shim.js` must answer it — on a static host there is no such route, and the demo blocks on a request nothing will serve |
 
 Renames and deletions count. Per §3a there are no aliases, so a command that
 disappeared from the CLI must disappear from the website too — a page
@@ -267,14 +268,37 @@ visualization page, wrapped in a static stand-in for the server. No database,
 no vectors, no backend. It deploys with the site because `"public": "."`
 publishes the whole folder.
 
-```bash
-./scripts/gen-demo.sh              # regenerate (builds ug first, on purpose)
-./scripts/gen-demo.sh --preview    # …then serve the site at :8081 (not :8000 — see deploy.md)
+**Editing `native/src/vis/` changes two deployments, not one.** The app gets
+your edit on the next `cargo build`; the public demo is a *copy* of that page
+and gets it only when re-published. A copy cannot notice its original moved,
+so this fails with no symptom: the build is fine, the tests are fine, `ug
+serve` is fine, and the live demo quietly keeps serving the old renderer.
+
+You do not have to remember this. A test does:
+
+```
+the_published_demo_page_is_not_stale   (native/src/cli/demo.rs)
 ```
 
+It compares a hash of the assembled page + shim against the one stamped in
+`demo/demo.json`, and prints the fix. It runs in CI too — the demo is
+committed, so `cargo test` on every PR sees the same mismatch you would.
+
+The fix is cheap, and is the one to reach for after a vis edit:
+
+```bash
+cargo run --bin ug -- demo --page-only   # rewrites the page; graph.json untouched
+./scripts/gen-demo.sh                    # full re-publish: re-indexes, new snapshot
+```
+
+Prefer `--page-only`. A full re-publish rewrites `graph.json` — 2.7 MB, and
+`stats.lastIndexedAt` moves every run, so it churns the repo on every CSS
+tweak. Re-publish when the *snapshot* should move (indexer or graph-schema
+changes, or the demo has drifted from the code it shows), not when the page did.
+
 Full notes — overrides, what ships, the failure modes — live in
-`docs/ug-website/docs/deploy.md`. Four things that decide whether an edit here
-lands:
+`docs/ug-website/docs/deploy.md`. Four more things that decide whether an edit
+here lands:
 
 - **The page is embedded in the binary.** `build.rs` assembles `native/src/vis/`
   into `ug`, so regenerating with a stale `ug` silently republishes that build's
@@ -282,11 +306,16 @@ lands:
   exactly this reason — do not "optimize" that away.
 - **The demo's behaviour lives in one file**, `native/src/vis/demo-shim.js`.
   Nothing under `native/src/vis/js/` knows the demo exists, and it must stay
-  that way — that is what stops the demo and the real app from drifting.
-  Add a startup endpoint to the app, and the shim needs to answer it.
+  that way — that is what stops the demo and the real app from drifting. The
+  shim answers `/healthz`, `/api/projects` and `/api/capabilities` and refuses
+  every other `/api/*`; a fetch to a path outside that prefix, or a new
+  blocking startup request, reaches a static host with no such route. Teach the
+  shim, never branch on "am I the demo" inside `js/`.
 - **Commit the generated files.** The deploy publishes the working tree.
-- **Refresh `index.html`'s `#demo` counts** (`.demo-facts`) in the same commit
-  as a regeneration — they are hardcoded from the generator's output.
+- **The landing page's counts need no maintenance.** `index.html` reads
+  `demo/demo.json` at load time to fill `.demo-facts`; the numbers in the
+  markup are just the fallback for a failed fetch. Do not re-hardcode them —
+  they were hardcoded first, and went stale within a day.
 
 ## 8. OverGraph — the storage engine
 

@@ -95,17 +95,19 @@ way:
 | `index.html` | the visualization, with the demo shim injected |
 | `ug-vis.bundle.js` | the renderer (Three.js + 3d-force-graph) |
 | `favicon.svg` | so the folder also works served standalone |
-| `demo.json` | label, node/edge counts, `ug` version, generation time |
+| `demo.json` | label, node/edge/file/line counts (the landing page reads these), `ug` version, generation time, and `visFingerprint` — the staleness check below |
 | `README.md` | a "this is generated" note; not deployed |
 
 All of it is rewritten on every run. Do not hand-edit anything in there.
 
 ## Things that will bite you
 
-**Refresh the counts on the landing page.** `index.html`'s `#demo` section
-hardcodes the node/edge/file/line figures in `.demo-facts`. They come from
-the generator's output (and `demo/demo.json`) — update them in the same
-commit, or the page advertises a graph that no longer exists.
+**The counts on the landing page look after themselves.** `index.html`'s
+`#demo` section reads `demo/demo.json` at load time and fills in
+`.demo-facts`, so the figures follow the demo rather than being hand-copied
+after it. The values in the markup are only a fallback for a failed fetch —
+they do not need to be exact, and nothing has to be updated when you
+re-publish. (They used to be hardcoded. They were wrong within a day.)
 
 **Watch for the solo-mode warning.** The renderer draws a graph in full up to
 10,000 elements and switches to *solo mode* above that — an empty canvas
@@ -131,3 +133,24 @@ callers and imports all work — they read `graph.json` in the browser.
 `ug demo`. Nothing under `native/src/vis/js/` knows the demo exists, which is
 what stops the demo and the real app from drifting apart. If a startup
 endpoint is added to the app, teach the shim to answer it there.
+
+## After editing the visualization
+
+The published page is a copy of the one embedded in the `ug` binary, so an
+edit under `native/src/vis/` lands in the app and **not** in the live demo —
+with nothing to say so: the build passes, the tests pass, `ug serve` shows the
+new page, and `/demo/` keeps serving the old one.
+
+`demo.json` carries a `visFingerprint` (a hash of the assembled page plus the
+shim) so this is caught rather than remembered — the
+`the_published_demo_page_is_not_stale` test fails until the demo is refreshed,
+and prints the fix:
+
+```bash
+cargo run --bin ug -- demo --page-only    # or: ug demo --page-only
+```
+
+That rewrites `index.html` (~910 KB) and leaves `graph.json` untouched, so a
+CSS tweak costs a small diff instead of 2.7 MB. Reach for the full
+`./scripts/gen-demo.sh` when the *snapshot* should move — an indexer or
+graph-schema change, or the demo has drifted from the code it shows.
