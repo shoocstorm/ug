@@ -151,6 +151,51 @@
             cosmos.setImageData(keys.map(cosmosGlyphImage));
         }
 
+        // ─── Shape by node type ────────────────────────────────
+        //
+        // Shape is a second, redundant channel alongside colour, and it is the
+        // one that survives everything colour does not: a node dimmed under a
+        // focus filter, recoloured by a walk hop, or flared orange on selection
+        // keeps its silhouette. Grouped by family rather than one shape per
+        // type — seven silhouettes is a code to memorise, four is a glance.
+        //
+        //   square   containers            Folder, File
+        //   diamond  declared types        Class, Interface
+        //   hexagon  behaviour             Function
+        //   circle   everything else       data, deps, config, routes
+        function cosmosShapeFor(group) {
+            const S = CosmosLib.PointShape;
+            switch (group) {
+                case 'Folder':
+                case 'File':
+                    return S.Square;
+                case 'Class':
+                case 'Interface':
+                    return S.Diamond;
+                case 'Function':
+                    return S.Hexagon;
+                default:
+                    return S.Circle;
+            }
+        }
+
+        // How much of the point the glyph may fill, per shape. The image is
+        // drawn inside the point's quad, so a shape whose inscribed circle is
+        // small clips the glyph at its corners: a diamond's is 0.71 of the half
+        // width, against the ~0.75 the glyph already spans. Square and circle
+        // contain the full quad and need no trim.
+        function cosmosGlyphFit(group) {
+            switch (group) {
+                case 'Class':
+                case 'Interface':
+                    return 0.82;
+                case 'Function':
+                    return 0.94;
+                default:
+                    return 1;
+            }
+        }
+
         // ─── Buffers ───────────────────────────────────────────
 
         function cosmosBuild(view) {
@@ -199,19 +244,10 @@
                 const node = nodes[i];
                 positions[i * 2] = +node.x || 0;
                 positions[i * 2 + 1] = +node.y || 0;
-                // Shape is a second, redundant channel for the one node type
-                // worth finding at a glance. Colour alone fails exactly when
-                // you need it most — dimmed under a focus filter, greyed out
-                // behind a highlight, or tinted by a walk hop — whereas a
-                // silhouette survives all of that. Hexagon rather than a star
-                // or a cross because the glyph rides *inside* the shape here,
-                // and only a near-circular one leaves room for it.
-                shapes[i] = node.group === 'Function'
-                    ? CosmosLib.PointShape.Hexagon
-                    : CosmosLib.PointShape.Circle;
+                shapes[i] = cosmosShapeFor(node.group);
                 imageIdx[i] = cosmosImageIndex.get(cosmosImageKey(node)) ?? -1;
                 sizes[i] = nodeRadiusFor(node);
-                imageSizes[i] = sizes[i];
+                imageSizes[i] = sizes[i] * cosmosGlyphFit(node.group);
             }
             cosmosPaint();
 
@@ -263,26 +299,45 @@
         // on every restyle would fight the running simulation, snapping every
         // node back to its last synced position on each hover.
         function cosmosApplyVisibility() {
-            let changed = false;
             const { positions } = cosmosBuf;
+            const changed = [];
             for (let i = 0; i < cosmosNodes.length; i++) {
-                const n = cosmosNodes[i];
-                const hide = nodeVisibleFor(n) ? 0 : 1;
+                const hide = nodeVisibleFor(cosmosNodes[i]) ? 0 : 1;
                 if (hide === cosmosHidden[i]) continue;
                 cosmosHidden[i] = hide;
-                changed = true;
-                if (hide) {
+                changed.push(i);
+            }
+            if (!changed.length) return false;
+
+            // Re-read the GPU before uploading anything.
+            //
+            // `cosmosBuf.positions` is only ever what was *last uploaded*. The
+            // simulation and the user's dragging both move points afterwards,
+            // and neither writes back here — so uploading this buffer to change
+            // two nodes' visibility silently reset every other node to where it
+            // used to be. Selecting a node after dragging one snapped the whole
+            // graph back, which is what "the node moves when I select it" was.
+            const live = cosmos.getPointPositions();
+            if (live && live.length >= positions.length) {
+                for (let k = 0; k < positions.length; k++) {
+                    // Hidden points read back as NaN; skipping them keeps the
+                    // last known-good spot, which is what they return to.
+                    if (Number.isFinite(live[k])) positions[k] = live[k];
+                }
+            }
+
+            for (const i of changed) {
+                if (cosmosHidden[i]) {
                     positions[i * 2] = NaN;
                     positions[i * 2 + 1] = NaN;
                 } else {
-                    // Back to its last known-good spot — cosmosSync keeps
-                    // n.x/n.y current for everything still on screen.
+                    const n = cosmosNodes[i];
                     positions[i * 2] = +n.x || 0;
                     positions[i * 2 + 1] = +n.y || 0;
                 }
             }
-            if (changed) cosmos.setPointPositions(positions);
-            return changed;
+            cosmos.setPointPositions(positions);
+            return true;
         }
 
         // Read the GPU's positions back onto the node objects.
@@ -410,9 +465,13 @@
                 const list = by.get(g);
                 if (list) list.push(i); else by.set(g, [i]);
             }
-            // Biggest group first, ties broken by name so it never depends on
-            // insertion order.
-            return [...by.entries()].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
+            // Canonical type order (see NODE_TYPE_ORDER), not population. These
+            // orderings are *spatial* — the ring a type sits on, its place in
+            // the grid, where its island lands — so they should read the way a
+            // codebase nests rather than reshuffling with the data. Ties broken
+            // by name so it never depends on insertion order.
+            return [...by.entries()].sort((a, b) =>
+                nodeTypeRank(a[0]) - nodeTypeRank(b[0]) || a[0].localeCompare(b[0]));
         }
 
         // An even disc. Every node gets the same amount of room, so this is the
@@ -495,7 +554,9 @@
             const cx = COSMOS_SPACE / 2, cy = COSMOS_SPACE / 2;
             const groups = cosmosGroups();
             const ring = COSMOS_SPACE * 0.22;
-            const biggest = groups.length ? groups[0][1].length : 1;
+            // Max, not groups[0] — these are ordered by type now, not by size,
+            // so the first entry is the *smallest* group as often as not.
+            const biggest = groups.reduce((m, g) => Math.max(m, g[1].length), 1);
             groups.forEach(([, idx], g) => {
                 const a = (g / Math.max(1, groups.length)) * Math.PI * 2;
                 // Area ∝ population, so a cluster's size is readable against
@@ -714,30 +775,56 @@
 
         // ─── Selection / highlight ─────────────────────────────
 
-        // In cosmos.gl selection is configuration, not a method call: name the
-        // indices and the shader greys out everything else. That replaces the
-        // per-node material walk the 3D backend has to do.
+        // Selection marking, and *only* marking.
+        //
+        // cosmos.gl offers `highlightedPointIndices`, which greys out every
+        // point not named in it. Using it here dimmed the graph a second time:
+        // the shared style rules already express dimming as colour alpha
+        // (nodeLightingFor — 0.95 for a focused neighbourhood, 0.06 for the
+        // background), so a selected node's neighbours were multiplied down to
+        // 0.95 × pointGreyoutOpacity and all but vanished. Exactly the nodes
+        // you selected the node to look at.
+        //
+        // So dimming stays in one place — the alpha channel, shared with the 3D
+        // renderer — and this sets only the rings, which add emphasis without
+        // taking any away.
         function cosmosApplyHighlight() {
             const focusIdx = state.selectedNode
                 ? cosmosIndexOf.get(state.selectedNode.id)
                 : undefined;
-            const hot = [];
-            state.highlightNodes.forEach(id => {
-                const i = cosmosIndexOf.get(id);
-                if (i !== undefined) hot.push(i);
-            });
-            if (focusIdx !== undefined) hot.push(focusIdx);
             const outlined = [];
             for (let i = 0; i < cosmosNodes.length; i++) {
                 if (cosmosNodes[i].isBoundary) outlined.push(i);
             }
             cosmos.setConfigPartial({
                 focusedPointIndex: focusIdx,
-                // An empty array greys out *everything*, which is not what "no
-                // hover" means — undefined is how the highlight is cleared.
-                highlightedPointIndices: hot.length ? hot : undefined,
                 outlinedPointIndices: outlined.length ? outlined : undefined,
             });
+
+            // Ask cosmos.gl to publish live positions for the handful of points
+            // the overlay draws on top of. This is the cheap subset readback —
+            // no full GPU stall — and it is what keeps the selection ring
+            // centred on its node while the simulation moves it or the user
+            // drags it. Reading n.x/n.y instead leaves the ring at wherever the
+            // node last happened to be written back.
+            const tracked = [];
+            if (focusIdx !== undefined) tracked.push(focusIdx);
+            state.highlightNodes.forEach(id => {
+                const i = cosmosIndexOf.get(id);
+                if (i !== undefined && i !== focusIdx) tracked.push(i);
+            });
+            cosmos.trackPointPositionsByIndices(tracked);
+        }
+
+        // Live position of a point, in space coords — the tracked value if we
+        // asked for it, else the last synced one. Null when the point is absent.
+        function cosmosLivePos(node) {
+            const i = cosmosIndexOf.get(node.id);
+            if (i === undefined) return null;
+            const m = cosmos.getTrackedPointPositionsMap && cosmos.getTrackedPointPositionsMap();
+            const p = m && m.get(i);
+            if (p && Number.isFinite(p[0]) && Number.isFinite(p[1])) return p;
+            return Number.isFinite(node.x) ? [node.x, node.y] : null;
         }
 
         function cosmosIndicesFor(ids) {
@@ -759,6 +846,9 @@
             // — the FX overlay draws it as a framed rectangle — so its toggle
             // stays live.
             caps: { threeD: false, faceViews: false, autoSpin: false, boundaryCube: true },
+            // Instanced points and a GPU simulation, so the whole graph stays
+            // on screen far longer than the 3D renderer manages.
+            soloThreshold: SOLO_THRESHOLD,
 
             async mount(el, view) {
                 CosmosLib = await import('./cosmos-vis.bundle.js');
@@ -784,8 +874,10 @@
                     linkDefaultArrows: true,
                     linkArrowsSizeScale: 0.8,
                     curvedLinks: true,
-                    linkGreyoutOpacity: 0.05,
-                    pointGreyoutOpacity: 0.12,
+                    // Occlusion culling assumes opaque points; ours carry their
+                    // dimming in the alpha channel, so it would drop points
+                    // that are meant to show through each other.
+                    pointOcclusionCulling: false,
                     renderHoveredPointRing: true,
                     hoveredPointRingColor: '#f96716',
                     focusedPointRingColor: '#ff3d00',
@@ -830,6 +922,15 @@
                     },
                     onPointMouseOut: () => handleNodeHover(null),
                     onBackgroundClick: () => clearSelection(),
+                    // A drag moves points on the GPU and writes back nowhere.
+                    // Under a static layout there are no simulation ticks to
+                    // pick that up either, so without this every position the
+                    // page reads — framing, the tooltip, the walk, the next
+                    // visibility change — would keep describing where the node
+                    // used to be. Once per drag, not per frame: the overlay
+                    // already follows the dragged node through tracked
+                    // positions, so this only has to settle the bookkeeping.
+                    onDragEnd: () => cosmosSync(),
                     onMouseMove: (_i, _p, event) => {
                         if (!event) return;
                         state._mouse = {

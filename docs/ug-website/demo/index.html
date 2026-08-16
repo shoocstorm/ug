@@ -187,6 +187,16 @@
             text-align: center;
             pointer-events: none;
             z-index: 5;
+            transition: opacity 0.2s, visibility 0.2s;
+        }
+
+        /* The history bar and the title block want the same piece of screen,
+           and only one of them is useful at a time: the title names the graph
+           you are looking at, the bar names where you are inside it. Once you
+           are navigating, the trail wins. */
+        body.nav-active .header {
+            opacity: 0;
+            visibility: hidden;
         }
 
         /* The graph runs right under the title, so give it a soft pool of
@@ -1556,35 +1566,6 @@
             50% {
                 opacity: 0.4;
             }
-        }
-
-        .sidebar-footer {
-            padding: 12px 20px;
-            border-top: 1px solid var(--border-soft);
-            display: flex;
-            gap: 8px;
-        }
-
-        .sidebar-footer button {
-            flex: 1;
-            background: var(--bg-elevated);
-            border: 1px solid var(--border-soft);
-            color: var(--text-muted);
-            padding: 8px 10px;
-            border-radius: 6px;
-            font-size: 11px;
-            font-weight: 600;
-            letter-spacing: 0.3px;
-            cursor: pointer;
-            font-family: inherit;
-            transition: background 0.15s, color 0.15s, border-color 0.15s, box-shadow 0.15s;
-        }
-
-        .sidebar-footer button:hover {
-            background: rgba(249, 115, 22, 0.08);
-            color: var(--accent);
-            border-color: var(--accent-dim);
-            box-shadow: 0 0 12px rgba(249, 115, 22, 0.15);
         }
 
         /* ─── Sidebar launcher (shown only when collapsed) ───── */
@@ -5629,7 +5610,9 @@
         /* Nav / breadcrumb bar — top centre, under the title. */
         #navbar {
             left: 50%;
-            top: 56px;
+            /* Sits at the very top: it replaces the title block rather than
+               stacking under it (see body.nav-active .header). */
+            top: 10px;
             transform: translateX(-50%);
             display: flex;
             align-items: center;
@@ -5639,6 +5622,42 @@
             opacity: 0;
             pointer-events: none;
             transition: opacity 0.2s;
+            cursor: grab;
+        }
+
+        /* Dragged to a chosen spot: `left`/`top` are then absolute pixels, so
+           the centring transform has to come off or it shifts by half a bar. */
+        #navbar.dragged {
+            transform: none;
+        }
+
+        #navbar.dragging {
+            cursor: grabbing;
+            transition: none;
+            user-select: none;
+        }
+
+        /* Children keep their own cursor — only the bar's own chrome drags. */
+        #navbar .nav-btn,
+        #navbar .nav-exit,
+        #navbar .crumb {
+            cursor: pointer;
+        }
+
+        #navbar .nav-exit:disabled {
+            opacity: 0.32;
+            cursor: default;
+        }
+
+        /* Subtle by design: destructive, and never the reason you came here. */
+        #navbar .nav-clear {
+            opacity: 0.4;
+            transition: opacity 0.15s, color 0.15s;
+        }
+
+        #navbar .nav-clear:hover {
+            opacity: 1;
+            color: var(--accent);
         }
 
         #navbar.visible {
@@ -5713,26 +5732,61 @@
             color: var(--accent);
         }
 
+        /* The selected node, in the same hot orange the canvas gives it — so
+           the crumb and the node on screen are recognisably the same thing.
+           A filled chip rather than another colour: the trail is already
+           colour-coded by type icon, and one more hue would be one too many. */
+        .crumb.selected {
+            color: #fff;
+            background: #ff3d00;
+            box-shadow: 0 0 0 1px rgba(255, 61, 0, 0.5), 0 0 12px rgba(255, 61, 0, 0.35);
+        }
+
+        .crumb.selected:hover {
+            background: #ff5a26;
+            color: #fff;
+        }
+
+        .crumb.selected svg {
+            color: #fff;
+        }
+
+        /* Focused but not selected: focus mode dims the graph around a
+           neighbourhood, so its crumb gets the ring without the fill. */
+        .crumb.focused:not(.selected) {
+            box-shadow: inset 0 0 0 1px var(--accent-dim);
+            color: var(--accent);
+        }
+
         .crumb-sep {
             color: var(--text-dim);
             flex-shrink: 0;
             font-size: 11px;
         }
 
+        /* Icon-only: the bar competes for width with the breadcrumb trail,
+           which is the part that carries information, so the controls around
+           it are kept to glyphs. The label survives as the tooltip and the
+           aria-label, and Esc still does the same job. */
         .nav-exit {
             flex-shrink: 0;
             margin-left: 2px;
-            padding: 3px 9px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 26px;
+            height: 26px;
+            padding: 0;
             border-radius: 999px;
             border: 1px solid var(--border-soft);
             background: rgba(249, 115, 22, 0.1);
             color: var(--accent);
-            font-size: 10px;
-            font-weight: 600;
-            letter-spacing: 0.4px;
-            text-transform: uppercase;
             cursor: pointer;
-            white-space: nowrap;
+        }
+
+        .nav-exit svg {
+            width: 15px;
+            height: 15px;
         }
 
         .nav-exit:hover {
@@ -8379,9 +8433,71 @@
     font-variant-numeric: tabular-nums;
     min-width: 1.6em;
 }
+
+/* `applyRendererCaps()` hides the controls a backend cannot honour by setting
+   the `hidden` property — but the UA's `[hidden] { display: none }` is the
+   weakest rule there is, and `#viewbar .vbtn { display: flex }` outranks it on
+   specificity. Without these, setting `hidden` is a silent no-op and the 2D
+   canvas keeps a full set of 3D camera controls that do nothing.
+   Scoped through #viewbar so they outrank the display rules they undo. */
+#viewbar .vbtn[hidden],
+#viewbar .vtoggle[hidden],
+#viewbar .vsep[hidden] {
+    display: none;
+}
+
+/* Bulk type filters in the legend header. Sized to read as affordances on the
+   header strip rather than as a toolbar — the legend's job is still to decode
+   colours; these are a shortcut for the filtering it happens to also do. */
+.legend-acts {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    margin-left: auto;
+    margin-right: 4px;
+}
+
+.legend-act {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    opacity: 0.55;
+    transition: opacity 0.15s, background 0.15s, color 0.15s;
+}
+
+.legend-act svg {
+    width: 12px;
+    height: 12px;
+}
+
+.legend-act:hover {
+    opacity: 1;
+    color: var(--accent);
+    background: var(--bg-hover);
+}
+
+/* Collapsed, the header is just a title bar — nothing to bulk-filter. */
+#legend.is-collapsed .legend-acts {
+    display: none;
+}
+
+/* Same trap, one element over: `#axis-gizmo { display: flex }` is an id rule,
+   so the orientation triad ignored `hidden` and stayed on screen after a
+   switch back to 2D — an XYZ indicator floating over a plane with no Z. */
+#axis-gizmo[hidden] {
+    display: none;
+}
     </style>
 <script>
-window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":2947,"edges":8749,"files":101,"lines":68500,"ugVersion":"0.1.14","visFingerprint":"bad4619123e9878a","generatedAt":1786809729};
+window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":2947,"edges":8749,"files":101,"lines":68500,"ugVersion":"0.1.14","visFingerprint":"fe002ef54bcc5615","generatedAt":1786855906};
 /* ==========================================================================
    UltraGraph — static demo shim
    ==========================================================================
@@ -9234,11 +9350,22 @@ window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#g
                                 <path d="M12 8h.01M11 12h1v4h1" />
                             </svg>
                         </button>
-                        <button class="walk-icon" id="walk-o-spin" title="Auto-rotate (R)" aria-pressed="false" type="button">
+                        <button class="walk-icon" id="walk-o-flow" title="Edge flow animation (R)" aria-pressed="true" type="button">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                                 stroke-linecap="round" stroke-linejoin="round">
-                                <path d="M21 12a9 9 0 1 1-3.3-6.95" />
-                                <path d="M21 4v5h-5" />
+                                <path d="M2 8c3.5-4 6.5 4 10 0s6.5 4 10 0" />
+                                <path d="M2 16c3.5-4 6.5 4 10 0s6.5 4 10 0" />
+                            </svg>
+                        </button>
+                        <!-- The viewbar's Names toggle, repeated here: during a
+                             walk the card is where your hands are, and the
+                             viewbar is behind the immersive dimming. Same
+                             state, so the two stay in step. -->
+                        <button class="walk-icon" id="walk-o-labels" title="Show / hide node name labels (L)" aria-pressed="false" type="button">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                                stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M4 17V8m0 0 4 9m-4-9 4 0" />
+                                <path d="M14 17V9m0 0h3.5a2.5 2.5 0 0 1 0 5H14" />
                             </svg>
                         </button>
                         <button class="walk-icon danger" id="walk-o-close" title="Exit walk (Esc)" type="button">
@@ -9304,13 +9431,52 @@ window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#g
                 </svg>
             </button>
             <div class="crumbs" id="nav-crumbs"></div>
-            <button class="nav-exit" id="nav-exit" title="Exit focus (Esc)">Exit focus <kbd class="btn-kbd">Esc</kbd></button>
+            <button class="nav-exit" id="nav-exit" title="Exit focus (Esc)" aria-label="Exit focus" disabled>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <!-- Break out of a frame: a bracketed box with an arrow leaving it. -->
+                    <path d="M9 5H6a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h3" />
+                    <path d="M14 12h7M18 8l4 4-4 4" />
+                </svg>
+            </button>
+            <!-- Clearing the trail empties the bar, and an empty bar hides
+                 itself — so this doubles as the way to dismiss it. -->
+            <button class="nav-btn nav-clear" id="nav-clear" title="Clear visit history" type="button">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M6 6l12 12M18 6L6 18" />
+                </svg>
+            </button>
         </div>
 
         <!-- Colour legend / quick type filter -->
         <div id="legend" class="canvas-overlay">
             <div class="legend-head" id="legend-head">
                 <span class="label">Legend</span>
+                <!-- Bulk type filtering. Stop the collapse toggle on the header
+                     from firing when one of these is clicked (see wireLegendBulk). -->
+                <div class="legend-acts">
+                    <button class="legend-act" id="legend-all" title="Show all node types" type="button">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
+                            stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M4 12l5 5L20 6" />
+                        </svg>
+                    </button>
+                    <button class="legend-act" id="legend-none" title="Hide all node types" type="button">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
+                            stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="8" />
+                            <path d="M6.5 17.5 17.5 6.5" />
+                        </svg>
+                    </button>
+                    <button class="legend-act" id="legend-invert" title="Invert type selection" type="button">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+                            stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="8" />
+                            <path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor" stroke="none" />
+                        </svg>
+                    </button>
+                </div>
                 <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                     stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M6 9l6 6 6-6" />
@@ -9336,10 +9502,27 @@ window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#g
             <button class="vbtn" data-view="5" title="View face 5 — XZ plane (top)"><span class="vn" style="color:#f59e0b">5</span><span class="vp">XZ</span></button>
             <button class="vbtn" data-view="6" title="View face 6 — XZ plane (bottom)"><span class="vn" style="color:#2f5f96">6</span><span class="vp">XZ</span></button>
             <button class="vbtn vbtn-3d active" data-view="3d" title="Isometric 3D view"><span class="vn">3D</span><span class="vp">ISO</span></button>
-            <div class="vsep"></div>
+            <!-- Hidden alongside the projection buttons: a 2D renderer has no
+                 camera to place, so the whole group goes with it. -->
+            <div class="vsep" id="vsep-views"></div>
+
+            <!-- The 2D counterpart of the face projections. With no camera to
+                 move, what is worth switching is the arrangement itself. Shown
+                 only while the 2D renderer is mounted. -->
+            <button class="vbtn lbtn" data-layout="folders" title="By folder — one named island per directory, so the codebase settles into the shape of its own tree"><span class="vn">FD</span><span class="vp">FOLDER</span></button>
+            <button class="vbtn lbtn" data-layout="galaxy" title="Galaxy — three spiral arms around a dense core"><span class="vn">GX</span><span class="vp">GAL</span></button>
+            <button class="vbtn lbtn" data-layout="spiral" title="Sunflower — even phyllotaxis disc, equal room for every node"><span class="vn">SP</span><span class="vp">SUN</span></button>
+            <button class="vbtn lbtn" data-layout="grid" title="Grid — a lattice ordered by node type, then name"><span class="vn">GD</span><span class="vp">GRID</span></button>
+            <button class="vbtn lbtn" data-layout="rings" title="Rings — one concentric ring per node type, commonest innermost"><span class="vn">RG</span><span class="vp">RING</span></button>
+            <button class="vbtn lbtn" data-layout="clusters" title="Clusters — each node type as its own island, sized by population"><span class="vn">CL</span><span class="vp">CLUS</span></button>
+            <button class="vbtn lbtn" data-layout="force" title="Force layout — the force simulation finds the arrangement"><span class="vn">FS</span><span class="vp">FORCE</span></button>
+            <div class="vsep" id="vsep-layouts"></div>
             <button class="vtoggle" id="zoom-in" title="Zoom in — move camera closer (mouse wheel up)"><span class="vt-ico">＋</span><span class="vt-lbl">In</span></button>
             <button class="vtoggle" id="zoom-out" title="Zoom out — move camera farther (mouse wheel down)"><span class="vt-ico">－</span><span class="vt-lbl">Out</span></button>
             <div class="vsep"></div>
+            <!-- Node names. Off by default: on anything past a few hundred
+                 nodes a full set of labels is a wall of text, not a map. -->
+            <button class="vtoggle" id="toggle-labels" aria-pressed="false" title="Show / hide node name labels"><span class="vt-ico">Aa</span><span class="vt-lbl">Names</span></button>
             <button class="vtoggle" id="toggle-box" title="Show / hide the boundary box, corners & face labels"><span class="vt-ico">▦</span><span class="vt-lbl">Box</span></button>
             <button class="vtoggle" id="toggle-spin" title="Toggle auto-rotation"><span class="vt-ico">⟳</span><span class="vt-lbl">Spin</span></button>
             <button class="vtoggle" id="toggle-solo" aria-pressed="false" title="Solo the selected node — show only it and everything it connects to (select a node first)"><span class="vt-ico">◎</span><span class="vt-lbl">Solo</span></button>
@@ -9347,6 +9530,11 @@ window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#g
             <!-- Renderer: 2D is GPU-simulated and scales to very large graphs;
                  3D adds the orbit camera, face projections and boundary cube. -->
             <button class="vtoggle" id="toggle-renderer" title="Switch renderer — 2D (cosmos.gl, GPU layout, scales to very large graphs) or 3D (three.js, orbit camera and face views)"><span class="vt-ico">◫</span><span class="vt-lbl" id="renderer-label">2D</span></button>
+            <div class="vsep"></div>
+            <!-- Lives with the other canvas controls rather than in the sidebar
+                 footer: everything it undoes — framing, filters, selection —
+                 happens on the canvas. -->
+            <button class="vtoggle" id="reset" title="Reset view — clear search, filters, selection and focus, and re-frame the graph (r)"><span class="vt-ico">⟲</span><span class="vt-lbl">Reset</span></button>
         </div>
 
         <div class="header">
@@ -10174,9 +10362,6 @@ traverse({
                 </div><!-- /#pane-graph -->
             </div>
 
-            <div class="sidebar-footer">
-                <button id="reset">Reset View <kbd class="btn-kbd">r</kbd></button>
-            </div>
         </aside>
 
         <button id="sidebar-launcher" class="pending" title="Show panel">
@@ -10294,16 +10479,32 @@ traverse({
         // front would cost every page 1.4 MB of a renderer it may never use.
 
         const config = {
-            nodeRadius: { File: 10, Interface: 7, Function: 6, Class: 8, Dependency: 5, Config: 8, Route: 7, Constant: 5, Variable: 5, Default: 6 },
+            // Functions are deliberately large. They are the first-class
+            // citizen of almost every language and the unit most code analysis
+            // is actually about, so they outrank everything except the files
+            // that contain them.
+            nodeRadius: { File: 10, Interface: 7, Function: 9, Class: 8, Dependency: 5, Config: 8, Route: 7, Constant: 5, Variable: 5, Default: 6 },
             // Two-family "ink" palette: warm oranges carry the structural
             // spine (folders, files, deps), steel blues carry code symbols —
             // mirroring the orange-trunk / blue-scatter reading of the
             // reference art (docs/node-diagram-ref.jpg).
+            //
+            // Functions are the deliberate exception, in green outside both
+            // families. A palette exists to group things, but the one type you
+            // most often need to pick out of a crowd should not be grouped with
+            // anything.
             colorMap: {
                 File: '#f26a1b',
                 Folder: '#c2410c',
                 Interface: '#8fb8dd',
-                Function: '#5b8fc9',
+                // The one colour outside both ink families, and the only green
+                // on the canvas. Functions are what most questions are about —
+                // who calls this, what does this reach — so they are pulled out
+                // of the steel-blue code family entirely rather than being one
+                // more shade of it. Green also reads as "executable" next to
+                // the passive blues of data. Paired with a hexagon in 2D, so it
+                // is separable by shape as well as by hue.
+                Function: '#34d399',
                 Class: '#2f5f96',
                 Dependency: '#fb923c',
                 Config: '#f59e0b',
@@ -10334,12 +10535,49 @@ traverse({
             getRelColor: r => r ? (config.relColorMap[r] || '#9aa7b4') : '#9aa7b4'
         };
 
+        // The canonical order of node types: containers first, then the
+        // symbols they contain, ending at functions.
+        //
+        // Before this there was no such thing — anything that needed an order
+        // sorted by population, which put the *largest* type first. That is
+        // wrong wherever the order is spatial: the Rings layout gave the
+        // biggest group the innermost, shortest ring and the smallest group the
+        // outermost, longest one, so the crowding was exactly inverted. This
+        // reads outward the way a codebase nests, and lands the populous types
+        // on the rings with the most room.
+        //
+        // Types absent from a graph are skipped; types not listed here sort
+        // after everything named, alphabetically, so an unknown type is never
+        // dropped.
+        const NODE_TYPE_ORDER = [
+            'Folder', 'File', 'Route', 'Config', 'Dependency',
+            'Class', 'Interface', 'Concept',
+            'Constant', 'Variable', 'Function',
+        ];
+
+        function nodeTypeRank(type) {
+            const i = NODE_TYPE_ORDER.indexOf(type);
+            return i === -1 ? NODE_TYPE_ORDER.length : i;
+        }
+
         const state = {
             graph: { nodes: [], edges: [] },
             // Which renderer backend draws the canvas: 'three' (3D force
             // graph) or 'cosmos' (2D, GPU-simulated). Resolved against the
             // registered backends in pickRendererName() — see 10-render-core.js.
             renderer: null,
+            // Node name labels. Off by default — past a few hundred nodes a
+            // full set of names is a wall of text rather than a map, and the
+            // shape of the graph is what the canvas is for. Toggled from the
+            // viewbar; honoured by both renderers.
+            showLabels: false,
+            // Which 2D arrangement is showing. The 2D renderer's answer to the
+            // 3D one's face projections — see COSMOS_LAYOUTS.
+            layout2d: 'folders',
+            // Animated flow along the edges — the hover particles, the tour
+            // route and the Graph Walk's travelling strands. Toggled from the
+            // walk card, and honoured by both renderers.
+            lineFlow: true,
             nodeFilters: new Set(),
             edgeFilters: new Set(),
             // "Only system boundaries." A separate axis from nodeFilters
@@ -12245,7 +12483,6 @@ traverse({
             wireSidebarResize();
             wireInfoResize();
             wireToolTabs();
-            wireFooter();
             wireFilterActions();
             wireSemanticPanel();
             wireChatPanel();
@@ -15655,10 +15892,6 @@ traverse({
             document.getElementById('download-graph').addEventListener('click', downloadGraph);
         }
 
-        function wireFooter() {
-            document.getElementById('reset').addEventListener('click', resetView);
-        }
-
         function wireFilterActions() {
             document.getElementById('filter-clear').addEventListener('click', () => {
                 state.nodeFilters.clear();
@@ -15815,6 +16048,9 @@ traverse({
             // Solo, if on, follows the new anchor rather than stranding the
             // view on the previous node's neighbourhood.
             syncSoloButton();
+            // The trail rings the focused crumb, so it has to be re-read
+            // whenever focus moves.
+            updateNavbar();
             writeUrlState();
         }
 
@@ -15827,6 +16063,7 @@ traverse({
             // canvas on the next focus.
             state.focusIsolate = false;
             syncSoloButton();
+            updateNavbar();
             writeUrlState();
         }
 
@@ -15927,6 +16164,14 @@ traverse({
             if (!bar) return;
             const active = state.historyIndex >= 0 && state.history.length > 0;
             bar.classList.toggle('visible', active);
+            // The bar and the title block share the top of the screen; the
+            // class is what hands it over (see body.nav-active .header).
+            document.body.classList.toggle('nav-active', active);
+            // Nothing to exit *from* unless something is focused or selected —
+            // an always-live button here reads as "this does something", and
+            // then does nothing.
+            const exit = document.getElementById('nav-exit');
+            if (exit) exit.disabled = !state.focusNode && !state.selectedNode;
             if (!active) { crumbs.innerHTML = ''; return; }
             back.disabled = state.historyIndex <= 0;
             fwd.disabled = state.historyIndex >= state.history.length - 1;
@@ -15939,7 +16184,16 @@ traverse({
                 const n = state.nodeById.get(state.history[i]);
                 if (!n) continue;
                 if (i > start || start > 0) html += '<span class="crumb-sep">›</span>';
-                html += `<span class="crumb${i === cur ? ' current' : ''}" data-idx="${i}" title="${escapeHtml(n.name)}">
+                // `current` is where you are in the *trail*; `selected` is what
+                // is lit on the canvas. They are usually the same crumb — but
+                // clicking a node off-trail, or clearing the selection, splits
+                // them, and then the trail alone stops telling you which node
+                // the details panel is actually describing.
+                const cls = 'crumb'
+                    + (i === cur ? ' current' : '')
+                    + (state.selectedNode && state.selectedNode.id === state.history[i] ? ' selected' : '')
+                    + (state.focusNode === state.history[i] ? ' focused' : '');
+                html += `<span class="${cls}" data-idx="${i}" title="${escapeHtml(n.name)}">
                     ${nodeIconSvg(n.group)}
                     <span class="name">${escapeHtml(truncateName(n.name))}</span>
                 </span>`;
@@ -15950,13 +16204,94 @@ traverse({
             });
         }
 
+        // Forget the trail. The bar hides itself once the history is empty, so
+        // this is also how it is dismissed. Closing it drops the focus too —
+        // the dimming is meaningless once the crumb trail it was anchored to
+        // is gone. The selection is left as it is.
+        function clearNavHistory() {
+            state.history = [];
+            state.historyIndex = -1;
+            exitFocus();
+        }
+
+        // Drag the history bar anywhere. It defaults to the very top, which is
+        // where it is least in the way — but "least in the way" depends on what
+        // is on the canvas underneath, and only the person looking at it knows
+        // that. The position is remembered across reloads.
+        const NAVBAR_POS_KEY = 'ug-navbar-pos';
+
+        function placeNavbar(x, y) {
+            const bar = document.getElementById('navbar');
+            if (!bar) return;
+            // Keep it reachable: a bar dragged off-screen (or parked before a
+            // window resize) is one the user cannot get back.
+            const w = bar.offsetWidth || 320;
+            const h = bar.offsetHeight || 36;
+            const cx = Math.min(Math.max(x, 4), Math.max(4, window.innerWidth - w - 4));
+            const cy = Math.min(Math.max(y, 4), Math.max(4, window.innerHeight - h - 4));
+            bar.classList.add('dragged');
+            bar.style.left = cx + 'px';
+            bar.style.top = cy + 'px';
+            return { x: cx, y: cy };
+        }
+
+        function wireNavbarDrag() {
+            const bar = document.getElementById('navbar');
+            if (!bar) return;
+
+            const saved = (() => {
+                try { return JSON.parse(localStorage.getItem(NAVBAR_POS_KEY) || 'null'); }
+                catch (err) { return null; }
+            })();
+            if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) {
+                placeNavbar(saved.x, saved.y);
+            }
+
+            let dx = 0, dy = 0;
+            const onMove = (e) => {
+                const at = placeNavbar(e.clientX - dx, e.clientY - dy);
+                if (at) { bar._pos = at; }
+            };
+            const onUp = () => {
+                bar.classList.remove('dragging');
+                window.removeEventListener('mousemove', onMove);
+                window.removeEventListener('mouseup', onUp);
+                try { localStorage.setItem(NAVBAR_POS_KEY, JSON.stringify(bar._pos || null)); }
+                catch (err) { /* private mode */ }
+            };
+            bar.addEventListener('mousedown', (e) => {
+                // Buttons and crumbs are targets, not handles.
+                if (e.target.closest('button, .crumb')) return;
+                e.preventDefault();
+                const r = bar.getBoundingClientRect();
+                dx = e.clientX - r.left;
+                dy = e.clientY - r.top;
+                bar._pos = { x: r.left, y: r.top };
+                bar.classList.add('dragging');
+                // Freeze it where it currently sits before the first move, so a
+                // still-centred bar doesn't jump by half its width on grab.
+                placeNavbar(r.left, r.top);
+                window.addEventListener('mousemove', onMove);
+                window.addEventListener('mouseup', onUp);
+            });
+            // A window that shrank can strand it off-screen.
+            window.addEventListener('resize', () => {
+                if (!bar.classList.contains('dragged')) return;
+                const r = bar.getBoundingClientRect();
+                placeNavbar(r.left, r.top);
+            });
+        }
+
         function wireNav() {
             const back = document.getElementById('nav-back');
             const fwd = document.getElementById('nav-forward');
             const exit = document.getElementById('nav-exit');
+            const clear = document.getElementById('nav-clear');
             if (back) back.addEventListener('click', () => navHistory(-1));
             if (fwd) fwd.addEventListener('click', () => navHistory(1));
             if (exit) exit.addEventListener('click', () => { clearSelection(); frameGraph(700); });
+            if (clear) clear.addEventListener('click', clearNavHistory);
+            wireNavbarDrag();
         }
 
         // ─── Bottom view bar: projections + box / spin toggles ─
@@ -15989,6 +16324,19 @@ traverse({
                 });
             });
 
+            document.querySelectorAll('#viewbar .lbtn').forEach(btn => {
+                btn.addEventListener('click', () => setGraphLayout(btn.dataset.layout));
+            });
+
+            const labelBtn = document.getElementById('toggle-labels');
+            if (labelBtn) labelBtn.addEventListener('click', toggleShowLabels);
+            syncLabelButtons();
+
+            // The reset button moved here from the sidebar footer — everything
+            // it undoes happens on the canvas.
+            const resetBtn = document.getElementById('reset');
+            if (resetBtn) resetBtn.addEventListener('click', resetView);
+
             const boxBtn = document.getElementById('toggle-box');
             if (boxBtn) boxBtn.addEventListener('click', () => {
                 state.showBoundary = !state.showBoundary;
@@ -16015,6 +16363,39 @@ traverse({
             if (zOut) zOut.addEventListener('click', () => zoomBy(1.25));
         }
 
+        // Node name labels. The control appears twice — in the viewbar and on
+        // the walk card, because during a walk the viewbar is behind the
+        // immersive dimming — so the state lives here and both buttons are
+        // rendered from it rather than each keeping its own idea of it.
+        function syncLabelButtons() {
+            ['toggle-labels', 'walk-o-labels'].forEach(id => {
+                const btn = document.getElementById(id);
+                if (!btn) return;
+                btn.classList.toggle('active', state.showLabels);
+                btn.setAttribute('aria-pressed', String(state.showLabels));
+            });
+        }
+
+        function setShowLabels(on) {
+            state.showLabels = on;
+            syncLabelButtons();
+            // The 2D overlay re-reads state every frame; the 3D backend owns
+            // sprite visibility and has to be told.
+            bumpGraphStyles();
+        }
+
+        function toggleShowLabels() {
+            setShowLabels(!state.showLabels);
+        }
+
+        // Mark which arrangement is showing. Called by the renderer whenever it
+        // changes one, including the opening's hand-off to the force layout.
+        function syncLayoutButtons() {
+            document.querySelectorAll('#viewbar .lbtn').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.layout === state.layout2d);
+            });
+        }
+
         // ─── On-canvas legend (doubles as a type filter) ─────
 
         function buildLegend() {
@@ -16023,7 +16404,12 @@ traverse({
             if (!body) return;
             const counts = new Map();
             state.graph.nodes.forEach(n => counts.set(n.group, (counts.get(n.group) || 0) + 1));
-            const types = [...counts.keys()].sort((a, b) => counts.get(b) - counts.get(a));
+            // Canonical type order (NODE_TYPE_ORDER), matching the Rings layout
+            // and the rest of the type orderings — so the legend reads top to
+            // bottom the way the rings read inside out, and the two can be
+            // compared without re-finding each type in a different place.
+            const types = [...counts.keys()].sort((a, b) =>
+                nodeTypeRank(a) - nodeTypeRank(b) || a.localeCompare(b));
             if (!types.length) { document.getElementById('legend').style.display = 'none'; return; }
             body.innerHTML = types.map(t => {
                 return `<div class="legend-row" data-type="${escapeHtml(t)}" title="Filter to ${escapeHtml(t)}">
@@ -16063,11 +16449,78 @@ traverse({
             if (head) head.addEventListener('click', () => {
                 document.getElementById('legend').classList.toggle('is-collapsed');
             });
+            wireLegendBulk();
             syncLegend();
         }
 
         // Toggle a node-type filter, keeping the sidebar chips + legend in sync.
+        // ─── Bulk type filtering ─────────────────────────────
+        //
+        // An empty `state.nodeFilters` means "no filter — show everything",
+        // which is the right default but leaves "show *nothing*" with no
+        // representation at all. Rather than invert that meaning everywhere
+        // (initialize, resetView, the chips, the walk's seed list all read
+        // `size === 0` as "unfiltered"), one sentinel value carries it: a
+        // string no node type can equal, so every existing `has(group)` test
+        // answers false and the canvas empties. Nothing else needs to know.
+        const NODE_FILTER_NONE = ' none';
+
+        function presentNodeTypes() {
+            return [...new Set(state.graph.nodes.map(n => n.group))];
+        }
+
+        // The types actually showing, resolving both special cases.
+        function activeNodeTypes() {
+            if (state.nodeFilters.has(NODE_FILTER_NONE)) return [];
+            if (state.nodeFilters.size === 0) return presentNodeTypes();
+            return presentNodeTypes().filter(t => state.nodeFilters.has(t));
+        }
+
+        // Apply a set of types, normalising the two ends so the state stays
+        // canonical: everything selected is stored as "no filter", nothing
+        // selected as the sentinel.
+        function setNodeTypeFilter(types) {
+            const present = presentNodeTypes();
+            const keep = present.filter(t => types.includes(t));
+            state.nodeFilters = keep.length === 0 ? new Set([NODE_FILTER_NONE])
+                : keep.length === present.length ? new Set()
+                : new Set(keep);
+            document.querySelectorAll('#node-filter .filter-chip[data-type]').forEach(chip => {
+                chip.classList.toggle('active', state.nodeFilters.has(chip.dataset.type));
+            });
+            applyFilters();
+            refreshSuggestions(document.getElementById('search').value);
+        }
+
+        function wireLegendBulk() {
+            const acts = [
+                ['legend-all', () => presentNodeTypes()],
+                ['legend-none', () => []],
+                ['legend-invert', () => {
+                    const on = new Set(activeNodeTypes());
+                    return presentNodeTypes().filter(t => !on.has(t));
+                }],
+            ];
+            acts.forEach(([id, pick]) => {
+                const btn = document.getElementById(id);
+                // buildLegend runs again on a project switch; a second listener
+                // here would invert twice per click, which reads as nothing
+                // happening at all.
+                if (!btn || btn.dataset.wired === '1') return;
+                btn.dataset.wired = '1';
+                btn.addEventListener('click', (e) => {
+                    // The whole header collapses the legend; these sit inside it.
+                    e.stopPropagation();
+                    setNodeTypeFilter(pick());
+                });
+            });
+        }
+
         function toggleTypeFilter(type) {
+            // Picking a type out of "show nothing" retires the sentinel —
+            // otherwise it would linger and re-selecting every type by hand
+            // would leave the set in a state that means both things at once.
+            state.nodeFilters.delete(NODE_FILTER_NONE);
             if (state.nodeFilters.has(type)) state.nodeFilters.delete(type);
             else state.nodeFilters.add(type);
             // `[data-type]` only: the boundary chip filters on its own axis
@@ -16111,30 +16564,60 @@ traverse({
                 ids = new Set([...tourState.routeIds, ...(tourState.nearIds || [])]);
                 modeLabel = 'tour';
             }
+            // Solo mode never draws the whole graph — the renderer is handed
+            // one neighbourhood at a time — so whole-graph totals here describe
+            // a diagram that is not on screen. Note the empty set is used as-is
+            // rather than falling through: a solo canvas with nothing picked
+            // yet genuinely has zero of everything, and saying otherwise is the
+            // same lie in its most misleading form.
+            else if (state.soloOnly) {
+                ids = state.viewIds || new Set();
+                modeLabel = 'solo';
+            }
             const rows = body.querySelectorAll('.legend-row');
+            // The boundary row is a second axis, not a node type: it counts the
+            // `isBoundary` flag, which any type can carry. It has no
+            // `data-type`, so the type lookup below returns undefined for it —
+            // which is why its count read 0 from the first refresh onward, no
+            // matter how many boundary nodes the graph had. buildLegend set it
+            // correctly and this function immediately overwrote it.
+            const boundaryRow = body.querySelector('.legend-row[data-boundary]');
+            const setCount = (row, c) => {
+                row.querySelector('.count').textContent = c;
+                row.classList.toggle('zero', c === 0);
+            };
+
             if (!ids) {
                 const counts = new Map();
-                state.graph.nodes.forEach(n => counts.set(n.group, (counts.get(n.group) || 0) + 1));
+                let boundary = 0;
+                state.graph.nodes.forEach(n => {
+                    counts.set(n.group, (counts.get(n.group) || 0) + 1);
+                    if (n.isBoundary) boundary++;
+                });
                 rows.forEach(row => {
+                    if (row === boundaryRow) return;
                     row.querySelector('.count').textContent = counts.get(row.dataset.type) || 0;
                     row.classList.remove('zero');
                 });
+                if (boundaryRow) setCount(boundaryRow, boundary);
                 setLegendModeNote(null);
                 return;
             }
             const counts = new Map();
             let total = 0;
+            let boundary = 0;
             ids.forEach(id => {
                 const n = state.nodeById && state.nodeById.get(id);
                 if (!n) return;
                 counts.set(n.group, (counts.get(n.group) || 0) + 1);
+                if (n.isBoundary) boundary++;
                 total++;
             });
             rows.forEach(row => {
-                const c = counts.get(row.dataset.type) || 0;
-                row.querySelector('.count').textContent = c;
-                row.classList.toggle('zero', c === 0);
+                if (row === boundaryRow) return;
+                setCount(row, counts.get(row.dataset.type) || 0);
             });
+            if (boundaryRow) setCount(boundaryRow, boundary);
             setLegendModeNote(`${modeLabel} · ${total} node${total === 1 ? '' : 's'} on screen`);
         }
 
@@ -16418,6 +16901,10 @@ traverse({
         // Particles crawl along highlighted links, and along the tour route so
         // the walk has visible direction of travel.
         function linkParticlesFor(e) {
+            // One switch for every animated strand on the canvas: 3D draws
+            // these as travelling sprites, 2D as dots on the overlay, and both
+            // ask this the same question.
+            if (!state.lineFlow) return 0;
             if (state.highlightLinks.has(e)) return 4;
             if (state.walkActive) {
                 const sId = e.source.id || e.source;
@@ -16553,19 +17040,25 @@ traverse({
         // this machine, then the size-based default.
         //
         // The default follows the graph: a small repo (at or below
-        // THREE_D_DEFAULT_MAX elements) opens in 3D, where the extra dimension
+        // THREE_D_MAX_ELEMENTS elements) opens in 3D, where the extra dimension
         // and the in-scene effects are still readable; past that the 2D engine
         // takes over, because the per-node object cost that makes 3D pleasant
         // on a small graph is the same cost that makes a big one unusable.
         const RENDERER_STORAGE_KEY = 'ug-renderer';
-        const THREE_D_DEFAULT_MAX = 3000;  // max(nodes, edges) at or below this → default to 3D
+        // max(nodes, edges) the 3D renderer can draw whole. It builds a
+        // THREE.Group of ~5 objects per node and restyles all of them on every
+        // hover, so this is an order of magnitude below what the 2D renderer
+        // manages. It does double duty: the size at which 3D stops being the
+        // default, and the size above which 3D is handed one neighbourhood at a
+        // time instead (see applySoloMode).
+        const THREE_D_MAX_ELEMENTS = 3000;
 
         // The graph-size default: 3D under the threshold, 2D above it. Reads
         // the full `state.graph`, not the (possibly empty solo) view.
         function autoRendererName() {
             const nodes = state.graph && state.graph.nodes ? state.graph.nodes.length : 0;
             const edges = state.graph && state.graph.edges ? state.graph.edges.length : 0;
-            return Math.max(nodes, edges) <= THREE_D_DEFAULT_MAX ? 'three' : 'cosmos';
+            return Math.max(nodes, edges) <= THREE_D_MAX_ELEMENTS ? 'three' : 'cosmos';
         }
 
         function pickRendererName() {
@@ -16628,6 +17121,12 @@ traverse({
             state.renderer = name;
             document.body.dataset.renderer = name;
             const backend = RENDERERS[name]();
+            // Solo mode is decided per renderer, and this is the moment it can
+            // change: a graph that draws whole in 2D may be far past what 3D
+            // can hold. Done before mount so the backend is handed the view it
+            // is actually going to render, rather than the whole graph followed
+            // by a correction.
+            applySoloMode(backend.soloThreshold);
             // A backend's teardown disposes its GPU context but not its
             // <canvas> — three's `_destructor()` leaves its element in #graph-3d,
             // so the new backend would mount *underneath* a dead frame that keeps
@@ -16675,9 +17174,22 @@ traverse({
         // as a bug in the graph rather than a property of the renderer.
         function applyRendererCaps() {
             const caps = rendererCaps();
+            // Every projection button, the isometric one included: without a
+            // camera there is no view to switch to, so "3D / ISO" is as
+            // meaningless as face 4. Leaving it visible was the one control
+            // that still claimed the 2D canvas had an orientation.
             document.querySelectorAll('#viewbar .vbtn').forEach(btn => {
-                if (VIEWS[btn.dataset.view]) btn.hidden = !caps.faceViews;
+                btn.hidden = !caps.faceViews;
             });
+            const vsep = document.getElementById('vsep-views');
+            if (vsep) vsep.hidden = !caps.faceViews;
+            // The layout switcher is the mirror image: it stands in for the
+            // face projections wherever there is no camera to aim.
+            const hasLayouts = !!(R && R.setLayout);
+            document.querySelectorAll('#viewbar .lbtn').forEach(btn => { btn.hidden = !hasLayouts; });
+            const lsep = document.getElementById('vsep-layouts');
+            if (lsep) lsep.hidden = !hasLayouts;
+            syncLayoutButtons();
             const gizmo = document.getElementById('axis-gizmo');
             if (gizmo) gizmo.hidden = !caps.threeD;
             const spin = document.getElementById('toggle-spin');
@@ -16713,6 +17225,10 @@ traverse({
         function focusNode(n) { if (n != null) whenRendererReady(r => r.focusNode(n)); }
 
         function zoomBy(factor) { if (R) R.zoomBy(factor); }
+
+        // Arrangement, not viewpoint — only a backend without a camera offers
+        // these (see COSMOS_LAYOUTS in 12-render-cosmos.js).
+        function setGraphLayout(name) { if (R && R.setLayout) R.setLayout(name); }
 
         function flyToTourStop(stop, opts) { whenRendererReady(r => r.flyToStop(stop, opts || {})); }
 
@@ -17836,6 +18352,11 @@ traverse({
         }
 
         function updateAdaptiveLabels(cam) {
+            // The viewbar's Names toggle wins over every distance rule below.
+            if (!state.showLabels) {
+                state.view.nodes.forEach(n => { if (n.__nodeLabel) n.__nodeLabel.visible = false; });
+                return;
+            }
             const px = cam.position.x, py = cam.position.y, pz = cam.position.z;
             const D = state._labelDist || 340;
             const D2 = D * D;
@@ -18066,6 +18587,10 @@ traverse({
         RENDERERS.three = () => ({
             name: 'three',
             caps: { threeD: true, faceViews: true, autoSpin: true, boundaryCube: true },
+            // Past this it is handed one neighbourhood at a time — a Group of
+            // five objects per node does not scale, which is what solo mode
+            // was built for in the first place.
+            soloThreshold: THREE_D_MAX_ELEMENTS,
 
             async mount(el, view) {
                 ({ ForceGraph3D, THREE, SpriteText } = await import('./threejs-vis.bundle.js'));
@@ -18153,6 +18678,10 @@ traverse({
         let cosmosHidden = null;   // Uint8Array: visibility as last uploaded
         let cosmosImageIndex = new Map();  // image key → atlas index
         let _cosmosSyncAt = 0;
+        // The opening fit: one early frame so the graph arrives already framed,
+        // then the settle fit tidies it once the layout stops.
+        let _cosmosEarlyFit = false;
+        let _cosmosStartedAt = 0;
 
         // cosmos.gl's simulation space. Positions outside [0, spaceSize] are
         // trouble (the library's own docs flag >4096 as an iOS crash), and the
@@ -18184,6 +18713,23 @@ traverse({
             }
             _rgbCache.set(css, out);
             return out;
+        }
+
+        // Raise a near-black colour to something a flat renderer can actually
+        // show. The walk's background tones (`linkFar` #1b1b21, `linkRecede`
+        // #26262e) were chosen for a 3D scene where fog and depth separate an
+        // edge from the backdrop; on a 2D plane they sit below the noise floor
+        // and the graph looks like it has no edges at all.
+        //
+        // Only genuinely dark colours are touched, and they are lifted toward
+        // the background's own hue rather than washed to grey, so "receded"
+        // still reads as receded — just visibly so.
+        function cosmosLift([r, g, b]) {
+            const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+            if (lum >= 0.18) return [r, g, b];
+            const k = Math.min(1, (0.18 - lum) * 3.2);
+            const t = 0.42;   // the tone dark links are lifted toward
+            return [r + (t - r) * k, g + (t - g) * k, b + (t * 1.06 - b) * k];
         }
 
         // ─── Glyph atlas ───────────────────────────────────────
@@ -18260,6 +18806,51 @@ traverse({
             cosmos.setImageData(keys.map(cosmosGlyphImage));
         }
 
+        // ─── Shape by node type ────────────────────────────────
+        //
+        // Shape is a second, redundant channel alongside colour, and it is the
+        // one that survives everything colour does not: a node dimmed under a
+        // focus filter, recoloured by a walk hop, or flared orange on selection
+        // keeps its silhouette. Grouped by family rather than one shape per
+        // type — seven silhouettes is a code to memorise, four is a glance.
+        //
+        //   square   containers            Folder, File
+        //   diamond  declared types        Class, Interface
+        //   hexagon  behaviour             Function
+        //   circle   everything else       data, deps, config, routes
+        function cosmosShapeFor(group) {
+            const S = CosmosLib.PointShape;
+            switch (group) {
+                case 'Folder':
+                case 'File':
+                    return S.Square;
+                case 'Class':
+                case 'Interface':
+                    return S.Diamond;
+                case 'Function':
+                    return S.Hexagon;
+                default:
+                    return S.Circle;
+            }
+        }
+
+        // How much of the point the glyph may fill, per shape. The image is
+        // drawn inside the point's quad, so a shape whose inscribed circle is
+        // small clips the glyph at its corners: a diamond's is 0.71 of the half
+        // width, against the ~0.75 the glyph already spans. Square and circle
+        // contain the full quad and need no trim.
+        function cosmosGlyphFit(group) {
+            switch (group) {
+                case 'Class':
+                case 'Interface':
+                    return 0.82;
+                case 'Function':
+                    return 0.94;
+                default:
+                    return 1;
+            }
+        }
+
         // ─── Buffers ───────────────────────────────────────────
 
         function cosmosBuild(view) {
@@ -18308,10 +18899,10 @@ traverse({
                 const node = nodes[i];
                 positions[i * 2] = +node.x || 0;
                 positions[i * 2 + 1] = +node.y || 0;
-                shapes[i] = CosmosLib.PointShape.Circle;
+                shapes[i] = cosmosShapeFor(node.group);
                 imageIdx[i] = cosmosImageIndex.get(cosmosImageKey(node)) ?? -1;
                 sizes[i] = nodeRadiusFor(node);
-                imageSizes[i] = sizes[i];
+                imageSizes[i] = sizes[i] * cosmosGlyphFit(node.group);
             }
             cosmosPaint();
 
@@ -18340,14 +18931,17 @@ traverse({
             }
             for (let i = 0; i < cosmosEdges.length; i++) {
                 const e = cosmosEdges[i];
-                const [r, g, b] = cosmosRgb(linkColorFor(e));
+                const [r, g, b] = cosmosLift(cosmosRgb(linkColorFor(e)));
                 linkColors[i * 4] = r; linkColors[i * 4 + 1] = g; linkColors[i * 4 + 2] = b;
-                // Strands read stronger on a dark ground, so they're pulled
-                // back to keep nodes dominant — the same 0.38 the 3D renderer
-                // applies globally, carried per link so invisibility is just
-                // alpha 0 (cosmos.gl has no per-link visibility accessor).
-                linkColors[i * 4 + 3] = linkVisibleFor(e) ? 0.38 : 0;
-                linkWidths[i] = e.rel === 'Contains' ? 1.1 : 0.45;
+                // The 3D renderer applies a flat 0.38 and lets fog and depth do
+                // the rest. Flat on a plane there is neither, so opacity has to
+                // carry the hierarchy itself: a walked or hovered edge is the
+                // subject and reads at full strength, everything else is
+                // context. Invisible is simply alpha 0 — cosmos.gl has no
+                // per-link visibility accessor.
+                const hot = state.highlightLinks.has(e) || linkParticlesFor(e) > 0;
+                linkColors[i * 4 + 3] = linkVisibleFor(e) ? (hot ? 0.95 : 0.55) : 0;
+                linkWidths[i] = e.rel === 'Contains' ? 1.4 : 0.7;
             }
         }
 
@@ -18360,26 +18954,45 @@ traverse({
         // on every restyle would fight the running simulation, snapping every
         // node back to its last synced position on each hover.
         function cosmosApplyVisibility() {
-            let changed = false;
             const { positions } = cosmosBuf;
+            const changed = [];
             for (let i = 0; i < cosmosNodes.length; i++) {
-                const n = cosmosNodes[i];
-                const hide = nodeVisibleFor(n) ? 0 : 1;
+                const hide = nodeVisibleFor(cosmosNodes[i]) ? 0 : 1;
                 if (hide === cosmosHidden[i]) continue;
                 cosmosHidden[i] = hide;
-                changed = true;
-                if (hide) {
+                changed.push(i);
+            }
+            if (!changed.length) return false;
+
+            // Re-read the GPU before uploading anything.
+            //
+            // `cosmosBuf.positions` is only ever what was *last uploaded*. The
+            // simulation and the user's dragging both move points afterwards,
+            // and neither writes back here — so uploading this buffer to change
+            // two nodes' visibility silently reset every other node to where it
+            // used to be. Selecting a node after dragging one snapped the whole
+            // graph back, which is what "the node moves when I select it" was.
+            const live = cosmos.getPointPositions();
+            if (live && live.length >= positions.length) {
+                for (let k = 0; k < positions.length; k++) {
+                    // Hidden points read back as NaN; skipping them keeps the
+                    // last known-good spot, which is what they return to.
+                    if (Number.isFinite(live[k])) positions[k] = live[k];
+                }
+            }
+
+            for (const i of changed) {
+                if (cosmosHidden[i]) {
                     positions[i * 2] = NaN;
                     positions[i * 2 + 1] = NaN;
                 } else {
-                    // Back to its last known-good spot — cosmosSync keeps
-                    // n.x/n.y current for everything still on screen.
+                    const n = cosmosNodes[i];
                     positions[i * 2] = +n.x || 0;
                     positions[i * 2 + 1] = +n.y || 0;
                 }
             }
-            if (changed) cosmos.setPointPositions(positions);
-            return changed;
+            cosmos.setPointPositions(positions);
+            return true;
         }
 
         // Read the GPU's positions back onto the node objects.
@@ -18402,32 +19015,471 @@ traverse({
             }
         }
 
+        // ─── The opening morph: galaxy → sunflower → force ─────
+        //
+        // The graph used to arrive by drifting in from one corner as the force
+        // simulation cooled — which is not an animation, it is a layout being
+        // computed in public. This replaces it with a deliberate one, using the
+        // same mechanism cosmos.gl's own transition examples do: positions are
+        // just a buffer, and `render(alpha, duration)` tweens the whole buffer
+        // on the GPU. So the opening is three staged arrangements.
+        //
+        //   1. the galaxy, struck instantly and held for a beat
+        //   2. the sunflower disc — the spiral arms unwind into an even field
+        //   3. the folder islands — that field gathers into the shape of the
+        //      codebase, which is the view worth landing on
+        //
+        // The simulation never runs during any of it, and does not take over at
+        // the end: all three are computed arrangements, so each one arrives and
+        // then holds perfectly still. Handing off to the force layout at the end
+        // would undo stage 3 in public, which is the thing this replaced.
+
+        const INTRO_HOLD_MS = 620;     // how long the galaxy stands before it moves
+        const INTRO_MORPH_MS = 1000;   // one stage → the next
+
+        // Pending timers for whatever animation is in flight — the opening's
+        // stages, or a layout morph's write-back. Cleared on dispose and
+        // whenever a new animation supersedes the last.
+        let _cosmosAnimTimers = [];
+        let _cosmosIntroDone = false;
+        // A restyle that arrived mid-morph. Applying it there would upload
+        // positions and re-render at zero duration, cancelling the transition
+        // the intro is in the middle of — so it is deferred to the settle.
+        let _cosmosRestylePending = false;
+        // When the in-flight position transition finishes. Restyles arriving
+        // before then are deferred — see cosmosSetLayout.
+        let _cosmosMorphUntil = 0;
+
+        function cosmosClearIntro() {
+            _cosmosAnimTimers.forEach(clearTimeout);
+            _cosmosAnimTimers = [];
+        }
+
+        // A small deterministic PRNG, so the opening is the same every load —
+        // the intro is choreography, and choreography that reshuffles each time
+        // reads as noise.
+        function cosmosRand(seed) {
+            let s = seed >>> 0;
+            return () => {
+                s = (s * 1664525 + 1013904223) >>> 0;
+                return s / 4294967296;
+            };
+        }
+
+        // A barred spiral: a dense core bulge, then log-spiral arms whose
+        // angular scatter widens with radius. This is also a genuinely good
+        // seed for the force layout — it is already roughly radial, so the
+        // simulation has little left to undo.
+        function cosmosGalaxyPositions(count) {
+            const out = new Float32Array(count * 2);
+            const rand = cosmosRand(0xc05a1);
+            const cx = COSMOS_SPACE / 2, cy = COSMOS_SPACE / 2;
+            const ARMS = 3;
+            const SPAN = COSMOS_SPACE * 0.30;
+            const TWIST = 2.6;
+            for (let i = 0; i < count; i++) {
+                const t = count > 1 ? i / (count - 1) : 0;
+                // pow < 1 concentrates points toward the centre — the bulge.
+                const r = SPAN * Math.pow(t, 0.62);
+                const arm = (i % ARMS) * ((Math.PI * 2) / ARMS);
+                // Scatter tightens near the core and frays at the rim, which is
+                // what makes it read as arms rather than as three curves.
+                const spread = 0.22 + 0.55 * t;
+                const wobble = (rand() + rand() + rand() - 1.5) * spread;
+                const theta = arm + (r / SPAN) * TWIST * Math.PI + wobble;
+                const jitter = (rand() - 0.5) * SPAN * 0.06;
+                out[i * 2] = cx + Math.cos(theta) * (r + jitter);
+                out[i * 2 + 1] = cy + Math.sin(theta) * (r + jitter) * 0.82;  // slight tilt
+            }
+            return out;
+        }
+
+        // ─── The other layouts ─────────────────────────────────
+        //
+        // The 2D renderer's answer to the 3D one's six face projections: with
+        // no camera to move, the thing worth switching is the *arrangement*.
+        // Each of these is a pure function from node count (and, where it is
+        // interesting, node type) to a position buffer, so any of them can be
+        // morphed into with the same GPU transition the opening uses.
+        //
+        // Only `force` hands control to the simulation. The rest are static
+        // arrangements, and the simulation is switched off while one is showing
+        // — otherwise the forces pull it apart within a second of arriving.
+
+        // Golden angle: the packing that makes a sunflower head even at every
+        // radius, with no ring seams.
+        const PHYLLOTAXIS_ANGLE = Math.PI * (3 - Math.sqrt(5));
+
+        // Nodes grouped by type, in a stable order — the data-aware layouts all
+        // want the same grouping, and it has to be deterministic or the
+        // arrangement reshuffles every time you switch back to it.
+        function cosmosGroups() {
+            const by = new Map();
+            for (let i = 0; i < cosmosNodes.length; i++) {
+                const g = cosmosNodes[i].group || 'Default';
+                const list = by.get(g);
+                if (list) list.push(i); else by.set(g, [i]);
+            }
+            // Canonical type order (see NODE_TYPE_ORDER), not population. These
+            // orderings are *spatial* — the ring a type sits on, its place in
+            // the grid, where its island lands — so they should read the way a
+            // codebase nests rather than reshuffling with the data. Ties broken
+            // by name so it never depends on insertion order.
+            return [...by.entries()].sort((a, b) =>
+                nodeTypeRank(a[0]) - nodeTypeRank(b[0]) || a[0].localeCompare(b[0]));
+        }
+
+        // An even disc. Every node gets the same amount of room, so this is the
+        // honest "here is how much there is" view.
+        function cosmosSpiralPositions(count) {
+            const out = new Float32Array(count * 2);
+            const cx = COSMOS_SPACE / 2, cy = COSMOS_SPACE / 2;
+            const R = COSMOS_SPACE * 0.30;
+            for (let i = 0; i < count; i++) {
+                const r = R * Math.sqrt((i + 0.5) / count);
+                const theta = i * PHYLLOTAXIS_ANGLE;
+                out[i * 2] = cx + Math.cos(theta) * r;
+                out[i * 2 + 1] = cy + Math.sin(theta) * r;
+            }
+            return out;
+        }
+
+        // A lattice, ordered by type then name. Reading order becomes a sorted
+        // index of the codebase — the one arrangement where position is a
+        // lookup rather than a shape.
+        function cosmosGridPositions(count) {
+            const out = new Float32Array(count * 2);
+            const order = [];
+            for (const [, idx] of cosmosGroups()) {
+                idx.sort((a, b) => String(cosmosNodes[a].name).localeCompare(String(cosmosNodes[b].name)));
+                order.push(...idx);
+            }
+            const cols = Math.max(1, Math.ceil(Math.sqrt(count)));
+            const rows = Math.max(1, Math.ceil(count / cols));
+            const span = COSMOS_SPACE * 0.62;
+            const step = span / Math.max(cols, rows);
+            const x0 = COSMOS_SPACE / 2 - (cols - 1) * step / 2;
+            const y0 = COSMOS_SPACE / 2 - (rows - 1) * step / 2;
+            order.forEach((node, k) => {
+                out[node * 2] = x0 + (k % cols) * step;
+                out[node * 2 + 1] = y0 + Math.floor(k / cols) * step;
+            });
+            return out;
+        }
+
+        // One concentric ring per node type, commonest innermost. The ring a
+        // node sits on *is* its type, so the composition of the codebase reads
+        // straight off the radii.
+        function cosmosRingPositions(count) {
+            const out = new Float32Array(count * 2);
+            const cx = COSMOS_SPACE / 2, cy = COSMOS_SPACE / 2;
+            const groups = cosmosGroups();
+            const inner = COSMOS_SPACE * 0.06;
+            const step = (COSMOS_SPACE * 0.32 - inner) / Math.max(1, groups.length - 1 || 1);
+            groups.forEach(([, idx], g) => {
+                const r = inner + g * step;
+                idx.forEach((node, k) => {
+                    // Offset each ring so the rings don't line up into spokes.
+                    const theta = (k / idx.length) * Math.PI * 2 + g * 0.618;
+                    out[node * 2] = cx + Math.cos(theta) * r;
+                    out[node * 2 + 1] = cy + Math.sin(theta) * r;
+                });
+            });
+            return out;
+        }
+
+        // Pack a set of point indices into a disc — a sunflower again, so the
+        // island has even density and no ring seams. Shared by the two
+        // island-style layouts.
+        function cosmosPackIsland(out, indices, gx, gy, rad) {
+            const n = indices.length || 1;
+            indices.forEach((node, k) => {
+                const r = rad * Math.sqrt((k + 0.5) / n);
+                const theta = k * PHYLLOTAXIS_ANGLE;
+                out[node * 2] = gx + Math.cos(theta) * r;
+                out[node * 2 + 1] = gy + Math.sin(theta) * r;
+            });
+        }
+
+        // Each type as its own island, the islands laid around a ring and each
+        // packed as a little sunflower sized to its population. The modular
+        // read: how many kinds of thing there are, and how big each one is.
+        function cosmosClusterPositions(count) {
+            const out = new Float32Array(count * 2);
+            const cx = COSMOS_SPACE / 2, cy = COSMOS_SPACE / 2;
+            const groups = cosmosGroups();
+            const ring = COSMOS_SPACE * 0.22;
+            // Max, not groups[0] — these are ordered by type now, not by size,
+            // so the first entry is the *smallest* group as often as not.
+            const biggest = groups.reduce((m, g) => Math.max(m, g[1].length), 1);
+            groups.forEach(([, idx], g) => {
+                const a = (g / Math.max(1, groups.length)) * Math.PI * 2;
+                // Area ∝ population, so a cluster's size is readable against
+                // its neighbours rather than every blob being the same.
+                const rad = COSMOS_SPACE * 0.075 * Math.sqrt(idx.length / biggest) + 20;
+                cosmosPackIsland(out, idx, cx + Math.cos(a) * ring, cy + Math.sin(a) * ring, rad);
+            });
+            return out;
+        }
+
+        // ─── By-folder islands ─────────────────────────────────
+        //
+        // One named island per directory: the layout that says which parts of
+        // the codebase hang together, straight off the folder structure.
+        //
+        // cosmos.gl offers a cluster *force* for this (`setPointClusters` +
+        // `simulationCluster`), which is how its own example does it — but a
+        // force has to converge, and converging in public is exactly the slow
+        // arrival this whole sequence exists to avoid. Computed directly, the
+        // islands are simply *there*, one morph away, and they hold still.
+        //
+        // Folders come from each node's `file` path. Nodes without one
+        // (dependencies, say) go to an outer ring rather than being forced into
+        // a folder they are not in.
+
+        // Beyond this the labels collide and the islands stop being separable;
+        // the tail joins the unfiled ring rather than becoming a fake "other".
+        const MAX_FOLDER_CLUSTERS = 28;
+
+        // Island names and their centres in space coords, published for the FX
+        // overlay to label. Rebuilt whenever the folder layout is.
+        let cosmosClusterNames = [];
+        let cosmosClusterCentres = null;
+
+        function cosmosFolderOf(n) {
+            const f = n.file;
+            if (!f) return null;
+            const i = String(f).lastIndexOf('/');
+            return i > 0 ? String(f).slice(0, i) : '/';
+        }
+
+        // Folders as [name, indices], biggest first, ties by name — so
+        // switching away and back lands on exactly the same islands.
+        function cosmosFolderGroups() {
+            const by = new Map();
+            const unfiled = [];
+            for (let i = 0; i < cosmosNodes.length; i++) {
+                const f = cosmosFolderOf(cosmosNodes[i]);
+                if (!f) { unfiled.push(i); continue; }
+                const list = by.get(f);
+                if (list) list.push(i); else by.set(f, [i]);
+            }
+            const ranked = [...by.entries()]
+                .sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
+            const kept = ranked.slice(0, MAX_FOLDER_CLUSTERS);
+            // Everything past the cap joins the unfiled ring.
+            ranked.slice(MAX_FOLDER_CLUSTERS).forEach(([, idx]) => unfiled.push(...idx));
+            return { groups: kept, unfiled };
+        }
+
+        function cosmosFolderPositions(count) {
+            const out = new Float32Array(count * 2);
+            const cx = COSMOS_SPACE / 2, cy = COSMOS_SPACE / 2;
+            const { groups, unfiled } = cosmosFolderGroups();
+            cosmosClusterNames = groups.map(g => g[0]);
+            cosmosClusterCentres = new Float32Array(groups.length * 2);
+
+            const SPAN = COSMOS_SPACE * 0.26;
+            const biggest = groups.length ? groups[0][1].length : 1;
+            groups.forEach(([, idx], g) => {
+                // Island centres on a phyllotaxis spiral rather than a ring:
+                // with up to 28 folders a single ring leaves a hole in the
+                // middle and crowds the rim. The biggest folder lands at the
+                // centre, which is also where the eye starts.
+                const theta = g * PHYLLOTAXIS_ANGLE;
+                const rr = SPAN * Math.sqrt((g + 0.28) / Math.max(1, groups.length));
+                const gx = cx + Math.cos(theta) * rr;
+                const gy = cy + Math.sin(theta) * rr;
+                const rad = COSMOS_SPACE * 0.055 * Math.sqrt(idx.length / biggest) + 14;
+                cosmosPackIsland(out, idx, gx, gy, rad);
+                cosmosClusterCentres[g * 2] = gx;
+                cosmosClusterCentres[g * 2 + 1] = gy;
+            });
+
+            // The unfiled: a thin annulus outside everything, so they read as
+            // context around the codebase rather than part of any folder.
+            const ring = SPAN * 1.55;
+            unfiled.forEach((node, k) => {
+                const a = (k / Math.max(1, unfiled.length)) * Math.PI * 2;
+                const jitter = ((k % 7) - 3) * (COSMOS_SPACE * 0.004);
+                out[node * 2] = cx + Math.cos(a) * (ring + jitter);
+                out[node * 2 + 1] = cy + Math.sin(a) * (ring + jitter);
+            });
+            return out;
+        }
+
+        // The catalogue the viewbar is built from.
+        //
+        //   kind 'static' — a position buffer, morphed into with the simulation
+        //                   off, so it arrives and then holds still
+        //   kind 'force'  — hand the arrangement back to the simulation
+        const COSMOS_LAYOUTS = {
+            force: { label: 'FORCE', kind: 'force' },
+            galaxy: { label: 'GAL', kind: 'static', build: cosmosGalaxyPositions },
+            spiral: { label: 'SUN', kind: 'static', build: cosmosSpiralPositions },
+            grid: { label: 'GRID', kind: 'static', build: cosmosGridPositions },
+            rings: { label: 'RING', kind: 'static', build: cosmosRingPositions },
+            clusters: { label: 'CLUS', kind: 'static', build: cosmosClusterPositions },
+            folders: { label: 'FOLDER', kind: 'static', build: cosmosFolderPositions },
+        };
+
+        const LAYOUT_MORPH_MS = 900;
+
+        // Switch arrangement. Static layouts stop the simulation and morph the
+        // position buffer; `force` hands it back and re-heats.
+        function cosmosSetLayout(name, ms) {
+            if (!cosmos || !cosmosBuf || !COSMOS_LAYOUTS[name]) return;
+            cosmosClearIntro();
+            _cosmosIntroDone = true;
+            state.layout2d = name;
+            const dur = ms == null ? LAYOUT_MORPH_MS : ms;
+            // Anything that would re-render at zero duration has to wait until
+            // this lands, or it cancels the transition mid-flight.
+            _cosmosMorphUntil = performance.now() + dur;
+
+            const spec = COSMOS_LAYOUTS[name];
+            // Only the folder layout names its islands; anything else clears
+            // the labels rather than leaving them floating over a new shape.
+            if (name !== 'folders') cosmosClusterNames = [];
+
+            if (spec.kind === 'force') {
+                cosmos.setConfigPartial({ enableSimulation: true });
+                _cosmosEarlyFit = false;
+                _cosmosStartedAt = performance.now();
+                // Enough heat to re-find a layout, short of throwing the
+                // current arrangement away — you asked to switch layout, not
+                // to reload the page.
+                cosmos.start(0.7);
+                syncLayoutButtons();
+                return;
+            }
+
+            const pos = spec.build(cosmosNodes.length);
+            cosmos.setConfigPartial({ enableSimulation: false });
+            cosmosBuf.positions.set(pos);
+            cosmosApplyVisibilityInto(cosmosBuf.positions);
+            cosmos.setPointPositions(cosmosBuf.positions);
+            cosmos.render(undefined, dur);
+            cosmos.fitView(dur, 0.16);
+            // The page treats n.x/n.y as the truth, and with the simulation off
+            // there are no ticks to sync from — so publish the arrangement
+            // once the tween has actually landed on it.
+            _cosmosAnimTimers.push(setTimeout(() => {
+                for (let i = 0; i < cosmosNodes.length; i++) {
+                    cosmosNodes[i].x = pos[i * 2];
+                    cosmosNodes[i].y = pos[i * 2 + 1];
+                    cosmosNodes[i].z = 0;
+                }
+                // A restyle that arrived mid-morph was deferred rather than
+                // allowed to cancel the transition; apply it now.
+                if (_cosmosRestylePending) {
+                    _cosmosRestylePending = false;
+                    bumpGraphStyles();
+                }
+            }, dur));
+            syncLayoutButtons();
+        }
+
+        // Re-apply the NaN holes for hidden nodes over a freshly built layout,
+        // which knows nothing about what is filtered out.
+        function cosmosApplyVisibilityInto(positions) {
+            if (!cosmosHidden) return;
+            for (let i = 0; i < cosmosHidden.length; i++) {
+                if (!cosmosHidden[i]) continue;
+                positions[i * 2] = NaN;
+                positions[i * 2 + 1] = NaN;
+            }
+        }
+
+        // Someone who has asked the OS for less motion should get the graph,
+        // not a performance.
+        function cosmosReducedMotion() {
+            return window.matchMedia
+                && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        }
+
+        // Run the opening: galaxy → sunflower → folder islands. `land` is the
+        // final stage, which is a normal layout switch like any other.
+        function cosmosPlayIntro(land) {
+            const n = cosmosNodes.length;
+            cosmosClearIntro();
+            if (!n || cosmosReducedMotion()) { land(0); return; }
+
+            const sunflower = cosmosSpiralPositions(n);
+            cosmos.setPointPositions(cosmosGalaxyPositions(n));
+            cosmos.render(undefined, 0);
+            // Frame it immediately — the whole point is that something
+            // deliberate is on screen from the first frame.
+            cosmos.fitView(0, 0.24);
+            // The simulation never runs here, so there are no ticks to release
+            // the loading overlay — it has to be done explicitly or it would
+            // sit over the whole animation.
+            requestAnimationFrame(() => requestAnimationFrame(graphReveal));
+
+            _cosmosAnimTimers.push(setTimeout(() => {
+                cosmos.setPointPositions(sunflower);
+                cosmos.render(undefined, INTRO_MORPH_MS);
+                cosmos.fitView(INTRO_MORPH_MS, 0.16);
+            }, INTRO_HOLD_MS));
+
+            _cosmosAnimTimers.push(setTimeout(
+                () => land(INTRO_MORPH_MS),
+                INTRO_HOLD_MS + INTRO_MORPH_MS
+            ));
+        }
+
         // ─── Selection / highlight ─────────────────────────────
 
-        // In cosmos.gl selection is configuration, not a method call: name the
-        // indices and the shader greys out everything else. That replaces the
-        // per-node material walk the 3D backend has to do.
+        // Selection marking, and *only* marking.
+        //
+        // cosmos.gl offers `highlightedPointIndices`, which greys out every
+        // point not named in it. Using it here dimmed the graph a second time:
+        // the shared style rules already express dimming as colour alpha
+        // (nodeLightingFor — 0.95 for a focused neighbourhood, 0.06 for the
+        // background), so a selected node's neighbours were multiplied down to
+        // 0.95 × pointGreyoutOpacity and all but vanished. Exactly the nodes
+        // you selected the node to look at.
+        //
+        // So dimming stays in one place — the alpha channel, shared with the 3D
+        // renderer — and this sets only the rings, which add emphasis without
+        // taking any away.
         function cosmosApplyHighlight() {
             const focusIdx = state.selectedNode
                 ? cosmosIndexOf.get(state.selectedNode.id)
                 : undefined;
-            const hot = [];
-            state.highlightNodes.forEach(id => {
-                const i = cosmosIndexOf.get(id);
-                if (i !== undefined) hot.push(i);
-            });
-            if (focusIdx !== undefined) hot.push(focusIdx);
             const outlined = [];
             for (let i = 0; i < cosmosNodes.length; i++) {
                 if (cosmosNodes[i].isBoundary) outlined.push(i);
             }
             cosmos.setConfigPartial({
                 focusedPointIndex: focusIdx,
-                // An empty array greys out *everything*, which is not what "no
-                // hover" means — undefined is how the highlight is cleared.
-                highlightedPointIndices: hot.length ? hot : undefined,
                 outlinedPointIndices: outlined.length ? outlined : undefined,
             });
+
+            // Ask cosmos.gl to publish live positions for the handful of points
+            // the overlay draws on top of. This is the cheap subset readback —
+            // no full GPU stall — and it is what keeps the selection ring
+            // centred on its node while the simulation moves it or the user
+            // drags it. Reading n.x/n.y instead leaves the ring at wherever the
+            // node last happened to be written back.
+            const tracked = [];
+            if (focusIdx !== undefined) tracked.push(focusIdx);
+            state.highlightNodes.forEach(id => {
+                const i = cosmosIndexOf.get(id);
+                if (i !== undefined && i !== focusIdx) tracked.push(i);
+            });
+            cosmos.trackPointPositionsByIndices(tracked);
+        }
+
+        // Live position of a point, in space coords — the tracked value if we
+        // asked for it, else the last synced one. Null when the point is absent.
+        function cosmosLivePos(node) {
+            const i = cosmosIndexOf.get(node.id);
+            if (i === undefined) return null;
+            const m = cosmos.getTrackedPointPositionsMap && cosmos.getTrackedPointPositionsMap();
+            const p = m && m.get(i);
+            if (p && Number.isFinite(p[0]) && Number.isFinite(p[1])) return p;
+            return Number.isFinite(node.x) ? [node.x, node.y] : null;
         }
 
         function cosmosIndicesFor(ids) {
@@ -18443,16 +19495,30 @@ traverse({
 
         RENDERERS.cosmos = () => ({
             name: 'cosmos',
-            // No third dimension, so no face projections, no orbit to spin and
-            // no cube to draw. Reported rather than silently ignored: the
-            // viewbar hides what this cannot do.
-            caps: { threeD: false, faceViews: false, autoSpin: false, boundaryCube: false },
+            // No third dimension: no face projections and no orbit to spin.
+            // Reported rather than silently ignored — the viewbar hides what
+            // this cannot do. The bounding box survives the flattening, though
+            // — the FX overlay draws it as a framed rectangle — so its toggle
+            // stays live.
+            caps: { threeD: false, faceViews: false, autoSpin: false, boundaryCube: true },
+            // Instanced points and a GPU simulation, so the whole graph stays
+            // on screen far longer than the 3D renderer manages.
+            soloThreshold: SOLO_THRESHOLD,
 
             async mount(el, view) {
                 CosmosLib = await import('./cosmos-vis.bundle.js');
                 cosmos = new CosmosLib.Graph(el, {
                     spaceSize: COSMOS_SPACE,
                     backgroundColor: CANVAS.bg,
+                    // Held off until the opening morph finishes — the forces
+                    // would otherwise dissolve the letters mid-transition.
+                    // Re-enabled by the intro's settle step.
+                    enableSimulation: false,
+                    // With the simulation off, cosmos.gl auto-rescales incoming
+                    // positions unless told not to. That would quietly rewrite
+                    // the intro's carefully placed glyph and spiral coordinates.
+                    rescalePositions: false,
+                    transitionEasing: CosmosLib.TransitionEasing.CubicInOut,
                     pointDefaultSize: 6,
                     pointOpacity: 1,
                     // The disc is the point's own shape; the glyph rides on top
@@ -18463,8 +19529,10 @@ traverse({
                     linkDefaultArrows: true,
                     linkArrowsSizeScale: 0.8,
                     curvedLinks: true,
-                    linkGreyoutOpacity: 0.05,
-                    pointGreyoutOpacity: 0.12,
+                    // Occlusion culling assumes opaque points; ours carry their
+                    // dimming in the alpha channel, so it would drop points
+                    // that are meant to show through each other.
+                    pointOcclusionCulling: false,
                     renderHoveredPointRing: true,
                     hoveredPointRingColor: '#f96716',
                     focusedPointRingColor: '#ff3d00',
@@ -18483,8 +19551,22 @@ traverse({
                     simulationRepulsion: 0.6,
                     simulationGravity: 0.12,
                     simulationCenter: 0.1,
-                    simulationFriction: 0.4,
-                    simulationDecay: 3000,
+                    // Enough damping to settle promptly, not so much that the
+                    // layout freezes before it has untangled.
+                    simulationFriction: 0.55,
+                    // **This is a tick count, and lower is faster.**
+                    //
+                    // cosmos.gl's own docs say the opposite ("use smaller
+                    // values if you want the simulation to cool down slower"),
+                    // but the maths is unambiguous: alpha decays by
+                    // `1 - ALPHA_MIN^(1/decay)` per tick, so after `decay`
+                    // ticks it has reached the floor. The default 5000 is
+                    // therefore ~80 seconds of simulation at 60fps.
+                    //
+                    // The 3D renderer caps itself at 100 ticks (cooldownTicks)
+                    // precisely so a layout is never a wait. This is the 2D
+                    // equivalent: start(0.7) × 300 lands around 200 ticks.
+                    simulationDecay: 300,
                     onPointClick: (index, _pos, event) => {
                         const n = cosmosNodes[index];
                         if (n) handleNodeClick(event, n);
@@ -18495,6 +19577,15 @@ traverse({
                     },
                     onPointMouseOut: () => handleNodeHover(null),
                     onBackgroundClick: () => clearSelection(),
+                    // A drag moves points on the GPU and writes back nowhere.
+                    // Under a static layout there are no simulation ticks to
+                    // pick that up either, so without this every position the
+                    // page reads — framing, the tooltip, the walk, the next
+                    // visibility change — would keep describing where the node
+                    // used to be. Once per drag, not per frame: the overlay
+                    // already follows the dragged node through tracked
+                    // positions, so this only has to settle the bookkeeping.
+                    onDragEnd: () => cosmosSync(),
                     onMouseMove: (_i, _p, event) => {
                         if (!event) return;
                         state._mouse = {
@@ -18505,6 +19596,15 @@ traverse({
                     onSimulationTick: () => {
                         if (!state._graphRevealed) {
                             requestAnimationFrame(() => requestAnimationFrame(graphReveal));
+                        }
+                        // Frame the graph as soon as it has a shape, rather than
+                        // waiting for it to stop moving. Fitting only on settle
+                        // is most of why the opening felt slow: the layout was
+                        // already legible long before, but it was still a small
+                        // knot off in a corner with the camera parked wide.
+                        if (!_cosmosEarlyFit && performance.now() - _cosmosStartedAt > 220) {
+                            _cosmosEarlyFit = true;
+                            cosmos.fitView(220, 0.15);
                         }
                         // Throttled: a full position readback is a GPU stall,
                         // and nothing off-canvas needs per-frame accuracy.
@@ -18518,7 +19618,7 @@ traverse({
                         state._boxSettled = true;
                         if (!state._didFit) {
                             state._didFit = true;
-                            cosmos.fitView(900, 0.15);
+                            cosmos.fitView(350, 0.15);
                         }
                         refreshModeLegend();
                         graphReveal();
@@ -18527,9 +19627,24 @@ traverse({
 
                 await cosmos.ready;
                 cosmosBuild(view);
-                cosmos.render();
-                cosmos.start(1);
+                // Snap the first upload into place. The default 800 ms
+                // transition tweens every point from nothing on load, which
+                // reads as the graph arriving late rather than arriving.
+                cosmos.render(undefined, 0);
                 cosmosApplyHighlight();
+                _cosmosIntroDone = false;
+
+                // The opening lands on the folder islands — a computed layout,
+                // so it arrives and holds. cosmosSetLayout owns the rest:
+                // marking the switcher, publishing positions, flushing any
+                // restyle that was deferred during the morph.
+                cosmosPlayIntro((ms) => {
+                    _cosmosIntroDone = true;
+                    _cosmosEarlyFit = true;
+                    state._didFit = true;
+                    cosmosSetLayout('folders', ms);
+                });
+
                 // If the engine never ticks (an empty solo view, say), don't
                 // leave the loading overlay up forever.
                 setTimeout(graphReveal, 4000);
@@ -18537,14 +19652,34 @@ traverse({
 
             setData(view) {
                 if (!cosmos) return;
+                // A view swap is not an arrival — solo mode changes this on
+                // every click, and replaying the opening each time would be
+                // absurd. Straight to the layout.
+                cosmosClearIntro();
                 cosmosBuild(view);
-                cosmos.render();
-                cosmos.start(1);
+                cosmos.render(undefined, 0);
+                _cosmosIntroDone = true;
                 cosmosApplyHighlight();
+                // A static arrangement has to be rebuilt for the new node set —
+                // the layouts are functions of the view, so the old buffer
+                // describes the wrong nodes. Instant, because a solo click is
+                // navigation, not an arrival.
+                if (state.layout2d && state.layout2d !== 'force') {
+                    cosmosSetLayout(state.layout2d, 0);
+                    return;
+                }
+                _cosmosEarlyFit = false;
+                _cosmosStartedAt = performance.now();
+                cosmos.setConfigPartial({ enableSimulation: true });
+                cosmos.start(1);
             },
 
             restyle() {
                 if (!cosmos || !cosmosBuf) return;
+                if (!_cosmosIntroDone || performance.now() < _cosmosMorphUntil) {
+                    _cosmosRestylePending = true;
+                    return;
+                }
                 cosmosPaint();
                 cosmos.setPointColors(cosmosBuf.colors);
                 cosmos.setLinkColors(cosmosBuf.linkColors);
@@ -18617,6 +19752,10 @@ traverse({
             setAutoSpin() {},
             setBoundaryVisible() {},
 
+            // The 2D stand-in for the 3D renderer's face projections.
+            layouts: COSMOS_LAYOUTS,
+            setLayout(name, ms) { cosmosSetLayout(name, ms); },
+
             // The walk's ignition burst is drawn by the 2D FX overlay.
             emitPulse(node, colour, fromR, toR, growMs) {
                 overlayEmitPulse(node, colour, fromR, toR, growMs);
@@ -18635,6 +19774,9 @@ traverse({
             },
 
             dispose() {
+                // Pending intro steps would otherwise fire into a destroyed
+                // instance a beat after the renderer was swapped away.
+                cosmosClearIntro();
                 if (cosmos) {
                     try { cosmos.destroy(); } catch (err) { console.error(err); }
                 }
@@ -18721,8 +19863,14 @@ traverse({
         // coordinates because the tooltip needs those; the overlay is aligned
         // with the canvas, so the offsets come back off again here.
         function fxPos(n) {
-            if (!cosmos || !n || !Number.isFinite(n.x)) return null;
-            const p = cosmos.spaceToScreenPosition([n.x, n.y]);
+            if (!cosmos || !n) return null;
+            // Live position where one is being tracked (the selected node and
+            // its highlighted neighbours), so the ring and halos stay glued to
+            // their nodes through a drag or a running simulation. Everything
+            // else falls back to the last synced n.x/n.y.
+            const sp = cosmosLivePos(n);
+            if (!sp) return null;
+            const p = cosmos.spaceToScreenPosition(sp);
             return p ? { x: p[0], y: p[1] } : null;
         }
 
@@ -18759,12 +19907,24 @@ traverse({
             fxFrame++;
 
             if (state.showBoundary) fxDrawBoundary();
+            fxDrawClusterLabels();
+            fxDrawWalkEdges();
             fxDrawFlow();
             const hot = fxHotNodes();
             fxDrawHalos(hot);
             fxDrawSelection();
             fxDrawPulses();
             fxDrawLabels();
+
+            // The legend counts what is actually on the canvas — during a walk
+            // that is the reached set, during a tour the route — so it has to
+            // be re-read as those grow, not once at the end.
+            //
+            // The 3D renderer does this from its own rAF loop. Here it was only
+            // wired to onSimulationEnd, which never fires at all under a static
+            // layout, so the counts sat frozen at the whole-graph totals for
+            // the entire walk. Throttled to every 12th frame, same as 3D.
+            if (fxFrame % 12 === 0) refreshModeLegend();
         }
 
         // ── Halos ──────────────────────────────────────────────
@@ -18783,11 +19943,19 @@ traverse({
                 if (dim) continue;
                 const sel = state.selectedNode && n.id === state.selectedNode.id;
                 const isHot = sel || state.highlightNodes.has(n.id);
-                const wave = sel ? 1 + 0.2 * Math.sin(performance.now() * 0.0032) : 1;
-                const r = fxRadius(n) * 2.6 * wave;
+                // A whisper of breathing on the selected node only. In 3D the
+                // halo is a depth cue you read past; flat on a 2D plane the
+                // same amplitude reads as the node throbbing at you.
+                const wave = sel ? 1 + 0.04 * Math.sin(performance.now() * 0.0026) : 1;
+                const r = fxRadius(n) * 1.45 * wave;
                 if (r < 3) continue;
                 const [cr, cg, cb] = cosmosRgb(config.getColor(n.group));
-                const a = isHot ? 0.75 : (tourTier(n.id) === 'stop' ? 0.5 : 0.25);
+                // Pulled well back from the 3D values. There the halo competes
+                // with fog, depth and a dark backdrop; here it sits directly on
+                // the disc, so the same alpha blows out the glyph underneath.
+                // A halo should say "this one" from the corner of your eye and
+                // otherwise stay out of the way of the glyph it surrounds.
+                const a = isHot ? 0.22 : (tourTier(n.id) === 'stop' ? 0.16 : 0.09);
                 const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r);
                 const rgb = `${Math.round(cr * 255)},${Math.round(cg * 255)},${Math.round(cb * 255)}`;
                 g.addColorStop(0, `rgba(${rgb},${(a).toFixed(3)})`);
@@ -18812,11 +19980,13 @@ traverse({
             if (!p) return;
             const t = performance.now() * 0.001;
             const wave = Math.sin(t * 3.2);
-            const r = Math.max(fxRadius(n) * 2.4, 16) * (1 + 0.16 * wave);
+            // Close to the disc: the ring marks the node, it does not enclose
+            // its neighbourhood.
+            const r = Math.max(fxRadius(n) * 1.28, 9) * (1 + 0.028 * wave);
             const ctx = fxCtx;
             ctx.save();
             ctx.translate(p.x, p.y);
-            ctx.rotate(t * 1.1);
+            ctx.rotate(t * 0.32);
             ctx.strokeStyle = `rgba(255,61,0,${(0.7 + 0.15 * wave).toFixed(3)})`;
             ctx.lineWidth = Math.max(1.5, r * 0.055);
             ctx.beginPath();
@@ -18869,6 +20039,54 @@ traverse({
             ctx.restore();
         }
 
+        // ── Graph Walk: the travelled edges ────────────────────
+        //
+        // The edges the walk actually crossed, drawn as glowing strands in
+        // their hop colour. The renderer draws them too, but a 1px WebGL line
+        // at 0.95 alpha is still a thin dark thread on a dark ground — and
+        // these are the single most important thing on screen during a walk,
+        // because they are the *route*, not the scenery.
+        //
+        // Two passes: a wide soft glow, then a bright thin core. That is what
+        // makes a line read as lit rather than merely coloured, and it is the
+        // flat equivalent of the additive bloom the 3D walk gets for free.
+        // Bounded by the walked set, which is the frontier — not the graph.
+        function fxDrawWalkEdges() {
+            if (!state.walkActive || !state.walkEdgeKeys || !state.walkEdgeKeys.size) return;
+            const ctx = fxCtx;
+            ctx.save();
+            ctx.globalCompositeOperation = 'lighter';
+            ctx.lineCap = 'round';
+            let drawn = 0;
+            for (const e of cosmosEdges) {
+                const sId = e.source.id || e.source;
+                const tId = e.target.id || e.target;
+                const key = sId < tId ? sId + '|' + tId : tId + '|' + sId;
+                if (!state.walkEdgeKeys.has(key)) continue;
+                if (++drawn > FX_MAX_FLOW_LINKS) break;
+                const s = state.nodeById.get(sId);
+                const t = state.nodeById.get(tId);
+                if (!s || !t) continue;
+                const a = fxPos(s), b = fxPos(t);
+                if (!a || !b) continue;
+                // The hop colour of the end being *reached*, so a strand
+                // carries the temperature of the frontier it fed.
+                const hex = state.walkColors.get(tId) || state.walkColors.get(sId) || '#f97316';
+                const [r, g, bl] = cosmosRgb(hex);
+                const rgb = `${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(bl * 255)}`;
+                ctx.beginPath();
+                ctx.moveTo(a.x, a.y);
+                ctx.lineTo(b.x, b.y);
+                ctx.strokeStyle = `rgba(${rgb},0.20)`;
+                ctx.lineWidth = 5;
+                ctx.stroke();
+                ctx.strokeStyle = `rgba(${rgb},0.85)`;
+                ctx.lineWidth = 1.4;
+                ctx.stroke();
+            }
+            ctx.restore();
+        }
+
         // ── Graph Walk ignition ────────────────────────────────
         // The 3D burst is a fresnel shell, a wireframe cage and a 96-point
         // debris cloud. Flat, that reads as an expanding ring with a spark
@@ -18881,11 +20099,22 @@ traverse({
                 const ang = Math.random() * Math.PI * 2;
                 sparks.push({ dx: Math.cos(ang), dy: Math.sin(ang), spd: 0.55 + Math.random() * 0.7 });
             }
+            // The hop pulses arrive with real radii measured off the layout
+            // (layerReachRadius), but the *seed* pulse is called with the
+            // literal 4 → 44 that suited the 3D scene's units. In this space a
+            // graph spans thousands, so that burst was about one percent of the
+            // view — present, and completely invisible. Anything that small is
+            // treated as "a flash at the seed" and given a share of the graph's
+            // own extent, so a wavefront always sweeps a distance you can see.
+            const ext = computeExtent();
+            const R = ext ? ext.radius : 500;
+            const from = Math.max(fromR || 0, 6);
+            const to = Math.max((toR || 0) + 18, from + 24, R * 0.16);
             fxPulses.push({
                 node: seedNode,
                 colour,
-                fromR: Math.max(fromR || 0, 6),
-                toR: Math.max((toR || 0) + 18, Math.max(fromR || 0, 6) + 24),
+                fromR: from,
+                toR: to,
                 grow,
                 fade: Math.min(640, Math.max(240, grow * 0.9)),
                 t0: performance.now(),
@@ -18927,6 +20156,16 @@ traverse({
                 ctx.arc(at.x, at.y, r, 0, Math.PI * 2);
                 ctx.fill();
 
+                // A crisp leading edge on the wavefront. The gradient alone
+                // reads as a glow that happens to be getting bigger; an actual
+                // travelling circle reads as a front sweeping outward, which is
+                // the thing the walk is trying to show.
+                ctx.strokeStyle = `rgba(255,243,232,${(0.75 * env).toFixed(3)})`;
+                ctx.lineWidth = Math.max(1, 2.2 * env);
+                ctx.beginPath();
+                ctx.arc(at.x, at.y, r, 0, Math.PI * 2);
+                ctx.stroke();
+
                 // The debris.
                 ctx.fillStyle = `rgba(${rgb},${(0.95 * env).toFixed(3)})`;
                 for (const s of p.sparks) {
@@ -18947,6 +20186,7 @@ traverse({
         // spread-out subset (one per ~100 screen px), so a zoomed-out view
         // stays legible and names appear as you move in.
         function fxDrawLabels() {
+            if (!state.showLabels) return;
             const ctx = fxCtx;
             const tourOn = tourState.active && tourState.routeIds.size > 0;
             const focusOn = !!state.focusNode;
@@ -18995,6 +20235,38 @@ traverse({
                 const y = p.y - fxRadius(n) - 4;
                 ctx.strokeText(label, p.x, y);
                 ctx.fillText(label, p.x, y);
+            }
+            ctx.restore();
+        }
+
+        // ── Folder cluster labels ──────────────────────────────
+        // The by-folder layout is only legible if the islands are named. The
+        // centres are computed by the layout itself, so they are exact and
+        // fixed rather than a centroid chased frame by frame. At most
+        // MAX_FOLDER_CLUSTERS of them, so this is cheap.
+        function fxDrawClusterLabels() {
+            if (state.layout2d !== 'folders' || !cosmosClusterNames.length) return;
+            const pos = cosmosClusterCentres;
+            if (!pos || !pos.length) return;
+            const ctx = fxCtx;
+            ctx.save();
+            ctx.font = '600 12px "JetBrains Mono", monospace';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            for (let i = 0; i < cosmosClusterNames.length; i++) {
+                const x = pos[i * 2], y = pos[i * 2 + 1];
+                if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+                const p = cosmos.spaceToScreenPosition([x, y]);
+                if (!p || p[0] < 0 || p[1] < 0 || p[0] > width || p[1] > height) continue;
+                // The last path segment: the full path is what makes folders
+                // distinct, but the leaf is what makes them recognisable.
+                const full = cosmosClusterNames[i];
+                const leaf = full.split('/').filter(Boolean).pop() || full;
+                ctx.strokeStyle = 'rgba(13,13,16,0.9)';
+                ctx.lineWidth = 3.5;
+                ctx.strokeText(leaf, p[0], p[1]);
+                ctx.fillStyle = 'rgba(233,233,240,0.92)';
+                ctx.fillText(leaf, p[0], p[1]);
             }
             ctx.restore();
         }
@@ -20227,6 +21499,10 @@ traverse({
             exitFocus();
             bumpGraphStyles();
             document.getElementById('info').classList.remove('visible');
+            // The history bar's Exit button is enabled off the selection, so it
+            // has to be re-read here — otherwise it stays lit with nothing left
+            // to exit.
+            updateNavbar();
         }
 
         function resetView() {
@@ -20863,7 +22139,7 @@ traverse({
         // is what makes the filters, the tour and "light up … in graph" fall out
         // of the same code path.
 
-        const SOLO_THRESHOLD = 100000;     // max(nodes, edges) above this → solo mode
+        const SOLO_THRESHOLD = 1000000;   // max(nodes, edges) above this → solo mode
         const SOLO_MAX_NODES = 1500;      // hard render budget for one view
         const SOLO_MAX_NEIGHBORS = 300;   // per-seed 1-hop cap, so a hub can't blow the budget
 
@@ -20982,7 +22258,62 @@ traverse({
             state._didFit = false;
             state._boxSettled = false;
             updateSoloHud();
+            // The legend counts what is on screen, and in solo mode that just
+            // changed. The renderers' overlay loops re-read it on a throttle
+            // too, but a click should not wait for the next tick.
+            refreshModeLegend();
             bumpGraphStyles();
+        }
+
+        // Turn solo mode on or off for the element budget the *mounted*
+        // renderer can actually draw whole.
+        //
+        // The threshold is not a property of the graph, it is a property of the
+        // renderer: cosmos.gl instances a hundred thousand points happily,
+        // three.js builds a Group of five objects per node and dies long
+        // before that. So a graph that renders whole in 2D can be far past what
+        // 3D can hold, and switching renderers has to re-decide — otherwise
+        // 2D → 3D on a large graph hands three.js the entire hairball and the
+        // tab stops responding.
+        //
+        // Returns true if the mode changed. Safe to call before a renderer is
+        // mounted: it leaves `state.view` correct for whoever mounts next.
+        function applySoloMode(limit) {
+            const total = Math.max(state.graph.nodes.length, state.graph.edges.length);
+            const want = total > (limit || SOLO_THRESHOLD);
+            if (want === state.soloOnly) return false;
+            state.soloOnly = want;
+            document.body.classList.toggle('solo-only', want);
+
+            if (want) {
+                // Carry the selection in as the first seed, so a renderer
+                // switch lands on the node you were already looking at rather
+                // than on a blank canvas with no explanation.
+                state.viewSeeds = new Set();
+                state.viewExpanded = new Set();
+                if (state.selectedNode && state.nodeById.has(state.selectedNode.id)) {
+                    state.viewSeeds.add(state.selectedNode.id);
+                    state.viewExpanded.add(state.selectedNode.id);
+                }
+                setupSoloEmptyState();
+                const { ids, truncated } = soloViewIds(state.viewSeeds, state.viewExpanded);
+                setSoloView(ids, truncated);
+            } else {
+                // Back to the whole graph.
+                state.view = state.graph;
+                state.viewIds = new Set(state.graph.nodes.map(n => n.id));
+                state.viewTruncated = 0;
+                const chip = document.getElementById('view-count');
+                if (chip) chip.hidden = true;
+                const empty = document.getElementById('canvas-empty');
+                if (empty) empty.hidden = true;
+            }
+            state._didFit = false;
+            state._boxSettled = false;
+            updateSoloHud();
+            refreshModeLegend();
+            syncSoloButton();
+            return true;
         }
 
         // Re-derive the view from the current seeds under the current filters.
@@ -21066,11 +22397,15 @@ traverse({
             if (empty) empty.hidden = shown > 0;
         }
 
-        // Fill in the guidance overlay and wire its shortcuts. Called once,
-        // from initialize(), and only in solo mode.
+        // Fill in the guidance overlay and wire its shortcuts. Called from
+        // initialize(), and again by applySoloMode when a renderer switch drops
+        // the page into solo mode — hence the guard: everything below is
+        // derived from `state.graph`, which does not change, and re-running it
+        // would stack a second set of click handlers on every button.
         function setupSoloEmptyState() {
             const empty = document.getElementById('canvas-empty');
-            if (!empty) return;
+            if (!empty || empty.dataset.wired === '1') return;
+            empty.dataset.wired = '1';
 
             const countEl = empty.querySelector('.ce-count');
             if (countEl) countEl.textContent = formatNumber(state.graph.nodes.length);
@@ -21370,8 +22705,9 @@ traverse({
             bind('walk-o-exit', () => exitWalk());
             bind('walk-o-close', () => exitWalk());
             bind('walk-o-speed', () => cycleWalkSpeed());
-            bind('walk-o-spin', toggleWalkSpin);
+            bind('walk-o-flow', toggleWalkFlow);
             bind('walk-o-info', toggleWalkInfo);
+            bind('walk-o-labels', toggleShowLabels);
 
             wireWalkDrag();
 
@@ -21386,8 +22722,9 @@ traverse({
                 else if (e.key === 'ArrowRight') { e.preventDefault(); nextHop(); }
                 else if (e.key === ' ' || e.key === 'Spacebar') { e.preventDefault(); togglePlayWalk(); }
                 else if (e.key === 's' || e.key === 'S') { e.preventDefault(); cycleWalkSpeed(); }
-                else if (e.key === 'r' || e.key === 'R') { e.preventDefault(); toggleWalkSpin(); }
+                else if (e.key === 'r' || e.key === 'R') { e.preventDefault(); toggleWalkFlow(); }
                 else if (e.key === 'd' || e.key === 'D') { e.preventDefault(); toggleWalkInfo(); }
+                else if (e.key === 'l' || e.key === 'L') { e.preventDefault(); toggleShowLabels(); }
             });
 
             // Seed follows the current selection (see syncWalkSeed, wired
@@ -21692,9 +23029,6 @@ traverse({
             walkPlay.index = h;
             setOverlayPhase('ignite', h);
             updateWalkOverlay();
-            // Last hop reached — celebrate by turning the auto-rotate on, so
-            // the finished walk keeps turning while the user looks at it.
-            if (h >= walkPlay.layers.length - 1) setWalkSpin(true);
             scheduleAutoAdvance();
         }
 
@@ -21770,22 +23104,29 @@ traverse({
             if (btn) btn.setAttribute('aria-label', p ? 'Pause' : 'Play');
         }
 
-        // Auto-rotate on/off during a walk, keeping the viewbar toggle and the
-        // walk card's spin button in step.
-        function syncWalkSpinButton() {
-            const btn = walkEl('walk-o-spin');
+        // Edge-flow animation on/off during a walk.
+        //
+        // This control used to drive auto-rotate, which only ever meant
+        // anything to the 3D renderer — on a 2D plane there is nothing to
+        // rotate, so the button sat there doing nothing. What a walk actually
+        // has worth switching off is the motion *along the edges*: the
+        // travelling strands are the whole point when you are following a
+        // frontier, and a distraction when you are reading one.
+        function syncWalkFlowButton() {
+            const btn = walkEl('walk-o-flow');
             if (!btn) return;
-            btn.classList.toggle('active', state.autoSpin);
-            btn.classList.toggle('spinning', state.autoSpin);
+            btn.classList.toggle('active', state.lineFlow);
+            btn.setAttribute('aria-pressed', String(state.lineFlow));
         }
-        function setWalkSpin(on) {
-            state.autoSpin = on;
-            if (typeof applyAutoSpin === 'function') applyAutoSpin();
-            if (typeof syncSpinButton === 'function') syncSpinButton();
-            syncWalkSpinButton();
+        function setWalkFlow(on) {
+            state.lineFlow = on;
+            syncWalkFlowButton();
+            // The particle counts are read from the style rules, so the change
+            // only reaches the canvas on a restyle.
+            bumpGraphStyles();
         }
-        function toggleWalkSpin() {
-            setWalkSpin(!state.autoSpin);
+        function toggleWalkFlow() {
+            setWalkFlow(!state.lineFlow);
         }
 
         // Show/hide the (already populated) details panel while a walk is live.
@@ -21963,7 +23304,7 @@ traverse({
                 if (typeof applyAutoSpin === 'function') applyAutoSpin();
                 if (typeof syncSpinButton === 'function') syncSpinButton();
             }
-            syncWalkSpinButton();
+            syncWalkFlowButton();
             if (state.showBoundary) {
                 state.showBoundary = false;
                 if (typeof applyBoundaryVisibility === 'function') applyBoundaryVisibility();
@@ -21984,7 +23325,7 @@ traverse({
             state.autoSpin = !!r.autoSpin;
             if (typeof applyAutoSpin === 'function') applyAutoSpin();
             if (typeof syncSpinButton === 'function') syncSpinButton();
-            syncWalkSpinButton();
+            syncWalkFlowButton();
             if (r.showBoundary) {
                 state.showBoundary = true;
                 if (typeof applyBoundaryVisibility === 'function') applyBoundaryVisibility();

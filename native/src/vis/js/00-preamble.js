@@ -59,6 +59,31 @@
             getRelColor: r => r ? (config.relColorMap[r] || '#9aa7b4') : '#9aa7b4'
         };
 
+        // The canonical order of node types: containers first, then the
+        // symbols they contain, ending at functions.
+        //
+        // Before this there was no such thing — anything that needed an order
+        // sorted by population, which put the *largest* type first. That is
+        // wrong wherever the order is spatial: the Rings layout gave the
+        // biggest group the innermost, shortest ring and the smallest group the
+        // outermost, longest one, so the crowding was exactly inverted. This
+        // reads outward the way a codebase nests, and lands the populous types
+        // on the rings with the most room.
+        //
+        // Types absent from a graph are skipped; types not listed here sort
+        // after everything named, alphabetically, so an unknown type is never
+        // dropped.
+        const NODE_TYPE_ORDER = [
+            'Folder', 'File', 'Route', 'Config', 'Dependency',
+            'Class', 'Interface', 'Concept',
+            'Constant', 'Variable', 'Function',
+        ];
+
+        function nodeTypeRank(type) {
+            const i = NODE_TYPE_ORDER.indexOf(type);
+            return i === -1 ? NODE_TYPE_ORDER.length : i;
+        }
+
         const state = {
             graph: { nodes: [], edges: [] },
             // Which renderer backend draws the canvas: 'three' (3D force

@@ -21,7 +21,7 @@
         // is what makes the filters, the tour and "light up … in graph" fall out
         // of the same code path.
 
-        const SOLO_THRESHOLD = 100000;     // max(nodes, edges) above this → solo mode
+        const SOLO_THRESHOLD = 1000000;   // max(nodes, edges) above this → solo mode
         const SOLO_MAX_NODES = 1500;      // hard render budget for one view
         const SOLO_MAX_NEIGHBORS = 300;   // per-seed 1-hop cap, so a hub can't blow the budget
 
@@ -140,7 +140,62 @@
             state._didFit = false;
             state._boxSettled = false;
             updateSoloHud();
+            // The legend counts what is on screen, and in solo mode that just
+            // changed. The renderers' overlay loops re-read it on a throttle
+            // too, but a click should not wait for the next tick.
+            refreshModeLegend();
             bumpGraphStyles();
+        }
+
+        // Turn solo mode on or off for the element budget the *mounted*
+        // renderer can actually draw whole.
+        //
+        // The threshold is not a property of the graph, it is a property of the
+        // renderer: cosmos.gl instances a hundred thousand points happily,
+        // three.js builds a Group of five objects per node and dies long
+        // before that. So a graph that renders whole in 2D can be far past what
+        // 3D can hold, and switching renderers has to re-decide — otherwise
+        // 2D → 3D on a large graph hands three.js the entire hairball and the
+        // tab stops responding.
+        //
+        // Returns true if the mode changed. Safe to call before a renderer is
+        // mounted: it leaves `state.view` correct for whoever mounts next.
+        function applySoloMode(limit) {
+            const total = Math.max(state.graph.nodes.length, state.graph.edges.length);
+            const want = total > (limit || SOLO_THRESHOLD);
+            if (want === state.soloOnly) return false;
+            state.soloOnly = want;
+            document.body.classList.toggle('solo-only', want);
+
+            if (want) {
+                // Carry the selection in as the first seed, so a renderer
+                // switch lands on the node you were already looking at rather
+                // than on a blank canvas with no explanation.
+                state.viewSeeds = new Set();
+                state.viewExpanded = new Set();
+                if (state.selectedNode && state.nodeById.has(state.selectedNode.id)) {
+                    state.viewSeeds.add(state.selectedNode.id);
+                    state.viewExpanded.add(state.selectedNode.id);
+                }
+                setupSoloEmptyState();
+                const { ids, truncated } = soloViewIds(state.viewSeeds, state.viewExpanded);
+                setSoloView(ids, truncated);
+            } else {
+                // Back to the whole graph.
+                state.view = state.graph;
+                state.viewIds = new Set(state.graph.nodes.map(n => n.id));
+                state.viewTruncated = 0;
+                const chip = document.getElementById('view-count');
+                if (chip) chip.hidden = true;
+                const empty = document.getElementById('canvas-empty');
+                if (empty) empty.hidden = true;
+            }
+            state._didFit = false;
+            state._boxSettled = false;
+            updateSoloHud();
+            refreshModeLegend();
+            syncSoloButton();
+            return true;
         }
 
         // Re-derive the view from the current seeds under the current filters.
@@ -224,11 +279,15 @@
             if (empty) empty.hidden = shown > 0;
         }
 
-        // Fill in the guidance overlay and wire its shortcuts. Called once,
-        // from initialize(), and only in solo mode.
+        // Fill in the guidance overlay and wire its shortcuts. Called from
+        // initialize(), and again by applySoloMode when a renderer switch drops
+        // the page into solo mode — hence the guard: everything below is
+        // derived from `state.graph`, which does not change, and re-running it
+        // would stack a second set of click handlers on every button.
         function setupSoloEmptyState() {
             const empty = document.getElementById('canvas-empty');
-            if (!empty) return;
+            if (!empty || empty.dataset.wired === '1') return;
+            empty.dataset.wired = '1';
 
             const countEl = empty.querySelector('.ce-count');
             if (countEl) countEl.textContent = formatNumber(state.graph.nodes.length);

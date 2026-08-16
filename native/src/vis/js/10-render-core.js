@@ -257,19 +257,25 @@
         // this machine, then the size-based default.
         //
         // The default follows the graph: a small repo (at or below
-        // THREE_D_DEFAULT_MAX elements) opens in 3D, where the extra dimension
+        // THREE_D_MAX_ELEMENTS elements) opens in 3D, where the extra dimension
         // and the in-scene effects are still readable; past that the 2D engine
         // takes over, because the per-node object cost that makes 3D pleasant
         // on a small graph is the same cost that makes a big one unusable.
         const RENDERER_STORAGE_KEY = 'ug-renderer';
-        const THREE_D_DEFAULT_MAX = 3000;  // max(nodes, edges) at or below this → default to 3D
+        // max(nodes, edges) the 3D renderer can draw whole. It builds a
+        // THREE.Group of ~5 objects per node and restyles all of them on every
+        // hover, so this is an order of magnitude below what the 2D renderer
+        // manages. It does double duty: the size at which 3D stops being the
+        // default, and the size above which 3D is handed one neighbourhood at a
+        // time instead (see applySoloMode).
+        const THREE_D_MAX_ELEMENTS = 3000;
 
         // The graph-size default: 3D under the threshold, 2D above it. Reads
         // the full `state.graph`, not the (possibly empty solo) view.
         function autoRendererName() {
             const nodes = state.graph && state.graph.nodes ? state.graph.nodes.length : 0;
             const edges = state.graph && state.graph.edges ? state.graph.edges.length : 0;
-            return Math.max(nodes, edges) <= THREE_D_DEFAULT_MAX ? 'three' : 'cosmos';
+            return Math.max(nodes, edges) <= THREE_D_MAX_ELEMENTS ? 'three' : 'cosmos';
         }
 
         function pickRendererName() {
@@ -332,6 +338,12 @@
             state.renderer = name;
             document.body.dataset.renderer = name;
             const backend = RENDERERS[name]();
+            // Solo mode is decided per renderer, and this is the moment it can
+            // change: a graph that draws whole in 2D may be far past what 3D
+            // can hold. Done before mount so the backend is handed the view it
+            // is actually going to render, rather than the whole graph followed
+            // by a correction.
+            applySoloMode(backend.soloThreshold);
             // A backend's teardown disposes its GPU context but not its
             // <canvas> — three's `_destructor()` leaves its element in #graph-3d,
             // so the new backend would mount *underneath* a dead frame that keeps

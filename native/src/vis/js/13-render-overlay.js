@@ -73,8 +73,14 @@
         // coordinates because the tooltip needs those; the overlay is aligned
         // with the canvas, so the offsets come back off again here.
         function fxPos(n) {
-            if (!cosmos || !n || !Number.isFinite(n.x)) return null;
-            const p = cosmos.spaceToScreenPosition([n.x, n.y]);
+            if (!cosmos || !n) return null;
+            // Live position where one is being tracked (the selected node and
+            // its highlighted neighbours), so the ring and halos stay glued to
+            // their nodes through a drag or a running simulation. Everything
+            // else falls back to the last synced n.x/n.y.
+            const sp = cosmosLivePos(n);
+            if (!sp) return null;
+            const p = cosmos.spaceToScreenPosition(sp);
             return p ? { x: p[0], y: p[1] } : null;
         }
 

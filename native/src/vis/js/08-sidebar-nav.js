@@ -434,12 +434,13 @@
         }
 
         // Forget the trail. The bar hides itself once the history is empty, so
-        // this is also how it is dismissed — the selection and the graph are
-        // left exactly as they are; only the breadcrumbs go.
+        // this is also how it is dismissed. Closing it drops the focus too —
+        // the dimming is meaningless once the crumb trail it was anchored to
+        // is gone. The selection is left as it is.
         function clearNavHistory() {
             state.history = [];
             state.historyIndex = -1;
-            updateNavbar();
+            exitFocus();
         }
 
         // Drag the history bar anywhere. It defaults to the very top, which is
@@ -632,7 +633,12 @@
             if (!body) return;
             const counts = new Map();
             state.graph.nodes.forEach(n => counts.set(n.group, (counts.get(n.group) || 0) + 1));
-            const types = [...counts.keys()].sort((a, b) => counts.get(b) - counts.get(a));
+            // Canonical type order (NODE_TYPE_ORDER), matching the Rings layout
+            // and the rest of the type orderings — so the legend reads top to
+            // bottom the way the rings read inside out, and the two can be
+            // compared without re-finding each type in a different place.
+            const types = [...counts.keys()].sort((a, b) =>
+                nodeTypeRank(a) - nodeTypeRank(b) || a.localeCompare(b));
             if (!types.length) { document.getElementById('legend').style.display = 'none'; return; }
             body.innerHTML = types.map(t => {
                 return `<div class="legend-row" data-type="${escapeHtml(t)}" title="Filter to ${escapeHtml(t)}">
@@ -672,11 +678,78 @@
             if (head) head.addEventListener('click', () => {
                 document.getElementById('legend').classList.toggle('is-collapsed');
             });
+            wireLegendBulk();
             syncLegend();
         }
 
         // Toggle a node-type filter, keeping the sidebar chips + legend in sync.
+        // ─── Bulk type filtering ─────────────────────────────
+        //
+        // An empty `state.nodeFilters` means "no filter — show everything",
+        // which is the right default but leaves "show *nothing*" with no
+        // representation at all. Rather than invert that meaning everywhere
+        // (initialize, resetView, the chips, the walk's seed list all read
+        // `size === 0` as "unfiltered"), one sentinel value carries it: a
+        // string no node type can equal, so every existing `has(group)` test
+        // answers false and the canvas empties. Nothing else needs to know.
+        const NODE_FILTER_NONE = ' none';
+
+        function presentNodeTypes() {
+            return [...new Set(state.graph.nodes.map(n => n.group))];
+        }
+
+        // The types actually showing, resolving both special cases.
+        function activeNodeTypes() {
+            if (state.nodeFilters.has(NODE_FILTER_NONE)) return [];
+            if (state.nodeFilters.size === 0) return presentNodeTypes();
+            return presentNodeTypes().filter(t => state.nodeFilters.has(t));
+        }
+
+        // Apply a set of types, normalising the two ends so the state stays
+        // canonical: everything selected is stored as "no filter", nothing
+        // selected as the sentinel.
+        function setNodeTypeFilter(types) {
+            const present = presentNodeTypes();
+            const keep = present.filter(t => types.includes(t));
+            state.nodeFilters = keep.length === 0 ? new Set([NODE_FILTER_NONE])
+                : keep.length === present.length ? new Set()
+                : new Set(keep);
+            document.querySelectorAll('#node-filter .filter-chip[data-type]').forEach(chip => {
+                chip.classList.toggle('active', state.nodeFilters.has(chip.dataset.type));
+            });
+            applyFilters();
+            refreshSuggestions(document.getElementById('search').value);
+        }
+
+        function wireLegendBulk() {
+            const acts = [
+                ['legend-all', () => presentNodeTypes()],
+                ['legend-none', () => []],
+                ['legend-invert', () => {
+                    const on = new Set(activeNodeTypes());
+                    return presentNodeTypes().filter(t => !on.has(t));
+                }],
+            ];
+            acts.forEach(([id, pick]) => {
+                const btn = document.getElementById(id);
+                // buildLegend runs again on a project switch; a second listener
+                // here would invert twice per click, which reads as nothing
+                // happening at all.
+                if (!btn || btn.dataset.wired === '1') return;
+                btn.dataset.wired = '1';
+                btn.addEventListener('click', (e) => {
+                    // The whole header collapses the legend; these sit inside it.
+                    e.stopPropagation();
+                    setNodeTypeFilter(pick());
+                });
+            });
+        }
+
         function toggleTypeFilter(type) {
+            // Picking a type out of "show nothing" retires the sentinel —
+            // otherwise it would linger and re-selecting every type by hand
+            // would leave the set in a state that means both things at once.
+            state.nodeFilters.delete(NODE_FILTER_NONE);
             if (state.nodeFilters.has(type)) state.nodeFilters.delete(type);
             else state.nodeFilters.add(type);
             // `[data-type]` only: the boundary chip filters on its own axis
@@ -720,30 +793,60 @@
                 ids = new Set([...tourState.routeIds, ...(tourState.nearIds || [])]);
                 modeLabel = 'tour';
             }
+            // Solo mode never draws the whole graph — the renderer is handed
+            // one neighbourhood at a time — so whole-graph totals here describe
+            // a diagram that is not on screen. Note the empty set is used as-is
+            // rather than falling through: a solo canvas with nothing picked
+            // yet genuinely has zero of everything, and saying otherwise is the
+            // same lie in its most misleading form.
+            else if (state.soloOnly) {
+                ids = state.viewIds || new Set();
+                modeLabel = 'solo';
+            }
             const rows = body.querySelectorAll('.legend-row');
+            // The boundary row is a second axis, not a node type: it counts the
+            // `isBoundary` flag, which any type can carry. It has no
+            // `data-type`, so the type lookup below returns undefined for it —
+            // which is why its count read 0 from the first refresh onward, no
+            // matter how many boundary nodes the graph had. buildLegend set it
+            // correctly and this function immediately overwrote it.
+            const boundaryRow = body.querySelector('.legend-row[data-boundary]');
+            const setCount = (row, c) => {
+                row.querySelector('.count').textContent = c;
+                row.classList.toggle('zero', c === 0);
+            };
+
             if (!ids) {
                 const counts = new Map();
-                state.graph.nodes.forEach(n => counts.set(n.group, (counts.get(n.group) || 0) + 1));
+                let boundary = 0;
+                state.graph.nodes.forEach(n => {
+                    counts.set(n.group, (counts.get(n.group) || 0) + 1);
+                    if (n.isBoundary) boundary++;
+                });
                 rows.forEach(row => {
+                    if (row === boundaryRow) return;
                     row.querySelector('.count').textContent = counts.get(row.dataset.type) || 0;
                     row.classList.remove('zero');
                 });
+                if (boundaryRow) setCount(boundaryRow, boundary);
                 setLegendModeNote(null);
                 return;
             }
             const counts = new Map();
             let total = 0;
+            let boundary = 0;
             ids.forEach(id => {
                 const n = state.nodeById && state.nodeById.get(id);
                 if (!n) return;
                 counts.set(n.group, (counts.get(n.group) || 0) + 1);
+                if (n.isBoundary) boundary++;
                 total++;
             });
             rows.forEach(row => {
-                const c = counts.get(row.dataset.type) || 0;
-                row.querySelector('.count').textContent = c;
-                row.classList.toggle('zero', c === 0);
+                if (row === boundaryRow) return;
+                setCount(row, counts.get(row.dataset.type) || 0);
             });
+            if (boundaryRow) setCount(boundaryRow, boundary);
             setLegendModeNote(`${modeLabel} · ${total} node${total === 1 ? '' : 's'} on screen`);
         }
 

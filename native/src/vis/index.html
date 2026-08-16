@@ -569,6 +569,30 @@
         <div id="legend" class="canvas-overlay">
             <div class="legend-head" id="legend-head">
                 <span class="label">Legend</span>
+                <!-- Bulk type filtering. Stop the collapse toggle on the header
+                     from firing when one of these is clicked (see wireLegendBulk). -->
+                <div class="legend-acts">
+                    <button class="legend-act" id="legend-all" title="Show all node types" type="button">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
+                            stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M4 12l5 5L20 6" />
+                        </svg>
+                    </button>
+                    <button class="legend-act" id="legend-none" title="Hide all node types" type="button">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
+                            stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="8" />
+                            <path d="M6.5 17.5 17.5 6.5" />
+                        </svg>
+                    </button>
+                    <button class="legend-act" id="legend-invert" title="Invert type selection" type="button">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+                            stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="8" />
+                            <path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor" stroke="none" />
+                        </svg>
+                    </button>
+                </div>
                 <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                     stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M6 9l6 6 6-6" />
