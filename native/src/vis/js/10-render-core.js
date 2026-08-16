@@ -118,6 +118,10 @@
         // Particles crawl along highlighted links, and along the tour route so
         // the walk has visible direction of travel.
         function linkParticlesFor(e) {
+            // One switch for every animated strand on the canvas: 3D draws
+            // these as travelling sprites, 2D as dots on the overlay, and both
+            // ask this the same question.
+            if (!state.lineFlow) return 0;
             if (state.highlightLinks.has(e)) return 4;
             if (state.walkActive) {
                 const sId = e.source.id || e.source;

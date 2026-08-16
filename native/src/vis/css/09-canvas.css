@@ -245,7 +245,9 @@
         /* Nav / breadcrumb bar — top centre, under the title. */
         #navbar {
             left: 50%;
-            top: 56px;
+            /* Sits at the very top: it replaces the title block rather than
+               stacking under it (see body.nav-active .header). */
+            top: 10px;
             transform: translateX(-50%);
             display: flex;
             align-items: center;
@@ -255,6 +257,42 @@
             opacity: 0;
             pointer-events: none;
             transition: opacity 0.2s;
+            cursor: grab;
+        }
+
+        /* Dragged to a chosen spot: `left`/`top` are then absolute pixels, so
+           the centring transform has to come off or it shifts by half a bar. */
+        #navbar.dragged {
+            transform: none;
+        }
+
+        #navbar.dragging {
+            cursor: grabbing;
+            transition: none;
+            user-select: none;
+        }
+
+        /* Children keep their own cursor — only the bar's own chrome drags. */
+        #navbar .nav-btn,
+        #navbar .nav-exit,
+        #navbar .crumb {
+            cursor: pointer;
+        }
+
+        #navbar .nav-exit:disabled {
+            opacity: 0.32;
+            cursor: default;
+        }
+
+        /* Subtle by design: destructive, and never the reason you came here. */
+        #navbar .nav-clear {
+            opacity: 0.4;
+            transition: opacity 0.15s, color 0.15s;
+        }
+
+        #navbar .nav-clear:hover {
+            opacity: 1;
+            color: var(--accent);
         }
 
         #navbar.visible {
@@ -329,26 +367,61 @@
             color: var(--accent);
         }
 
+        /* The selected node, in the same hot orange the canvas gives it — so
+           the crumb and the node on screen are recognisably the same thing.
+           A filled chip rather than another colour: the trail is already
+           colour-coded by type icon, and one more hue would be one too many. */
+        .crumb.selected {
+            color: #fff;
+            background: #ff3d00;
+            box-shadow: 0 0 0 1px rgba(255, 61, 0, 0.5), 0 0 12px rgba(255, 61, 0, 0.35);
+        }
+
+        .crumb.selected:hover {
+            background: #ff5a26;
+            color: #fff;
+        }
+
+        .crumb.selected svg {
+            color: #fff;
+        }
+
+        /* Focused but not selected: focus mode dims the graph around a
+           neighbourhood, so its crumb gets the ring without the fill. */
+        .crumb.focused:not(.selected) {
+            box-shadow: inset 0 0 0 1px var(--accent-dim);
+            color: var(--accent);
+        }
+
         .crumb-sep {
             color: var(--text-dim);
             flex-shrink: 0;
             font-size: 11px;
         }
 
+        /* Icon-only: the bar competes for width with the breadcrumb trail,
+           which is the part that carries information, so the controls around
+           it are kept to glyphs. The label survives as the tooltip and the
+           aria-label, and Esc still does the same job. */
         .nav-exit {
             flex-shrink: 0;
             margin-left: 2px;
-            padding: 3px 9px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 26px;
+            height: 26px;
+            padding: 0;
             border-radius: 999px;
             border: 1px solid var(--border-soft);
             background: rgba(249, 115, 22, 0.1);
             color: var(--accent);
-            font-size: 10px;
-            font-weight: 600;
-            letter-spacing: 0.4px;
-            text-transform: uppercase;
             cursor: pointer;
-            white-space: nowrap;
+        }
+
+        .nav-exit svg {
+            width: 15px;
+            height: 15px;
         }
 
         .nav-exit:hover {

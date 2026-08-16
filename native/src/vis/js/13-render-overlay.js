@@ -112,12 +112,23 @@
 
             if (state.showBoundary) fxDrawBoundary();
             fxDrawClusterLabels();
+            fxDrawWalkEdges();
             fxDrawFlow();
             const hot = fxHotNodes();
             fxDrawHalos(hot);
             fxDrawSelection();
             fxDrawPulses();
             fxDrawLabels();
+
+            // The legend counts what is actually on the canvas — during a walk
+            // that is the reached set, during a tour the route — so it has to
+            // be re-read as those grow, not once at the end.
+            //
+            // The 3D renderer does this from its own rAF loop. Here it was only
+            // wired to onSimulationEnd, which never fires at all under a static
+            // layout, so the counts sat frozen at the whole-graph totals for
+            // the entire walk. Throttled to every 12th frame, same as 3D.
+            if (fxFrame % 12 === 0) refreshModeLegend();
         }
 
         // ── Halos ──────────────────────────────────────────────
@@ -232,6 +243,54 @@
             ctx.restore();
         }
 
+        // ── Graph Walk: the travelled edges ────────────────────
+        //
+        // The edges the walk actually crossed, drawn as glowing strands in
+        // their hop colour. The renderer draws them too, but a 1px WebGL line
+        // at 0.95 alpha is still a thin dark thread on a dark ground — and
+        // these are the single most important thing on screen during a walk,
+        // because they are the *route*, not the scenery.
+        //
+        // Two passes: a wide soft glow, then a bright thin core. That is what
+        // makes a line read as lit rather than merely coloured, and it is the
+        // flat equivalent of the additive bloom the 3D walk gets for free.
+        // Bounded by the walked set, which is the frontier — not the graph.
+        function fxDrawWalkEdges() {
+            if (!state.walkActive || !state.walkEdgeKeys || !state.walkEdgeKeys.size) return;
+            const ctx = fxCtx;
+            ctx.save();
+            ctx.globalCompositeOperation = 'lighter';
+            ctx.lineCap = 'round';
+            let drawn = 0;
+            for (const e of cosmosEdges) {
+                const sId = e.source.id || e.source;
+                const tId = e.target.id || e.target;
+                const key = sId < tId ? sId + '|' + tId : tId + '|' + sId;
+                if (!state.walkEdgeKeys.has(key)) continue;
+                if (++drawn > FX_MAX_FLOW_LINKS) break;
+                const s = state.nodeById.get(sId);
+                const t = state.nodeById.get(tId);
+                if (!s || !t) continue;
+                const a = fxPos(s), b = fxPos(t);
+                if (!a || !b) continue;
+                // The hop colour of the end being *reached*, so a strand
+                // carries the temperature of the frontier it fed.
+                const hex = state.walkColors.get(tId) || state.walkColors.get(sId) || '#f97316';
+                const [r, g, bl] = cosmosRgb(hex);
+                const rgb = `${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(bl * 255)}`;
+                ctx.beginPath();
+                ctx.moveTo(a.x, a.y);
+                ctx.lineTo(b.x, b.y);
+                ctx.strokeStyle = `rgba(${rgb},0.20)`;
+                ctx.lineWidth = 5;
+                ctx.stroke();
+                ctx.strokeStyle = `rgba(${rgb},0.85)`;
+                ctx.lineWidth = 1.4;
+                ctx.stroke();
+            }
+            ctx.restore();
+        }
+
         // ── Graph Walk ignition ────────────────────────────────
         // The 3D burst is a fresnel shell, a wireframe cage and a 96-point
         // debris cloud. Flat, that reads as an expanding ring with a spark
@@ -244,11 +303,22 @@
                 const ang = Math.random() * Math.PI * 2;
                 sparks.push({ dx: Math.cos(ang), dy: Math.sin(ang), spd: 0.55 + Math.random() * 0.7 });
             }
+            // The hop pulses arrive with real radii measured off the layout
+            // (layerReachRadius), but the *seed* pulse is called with the
+            // literal 4 → 44 that suited the 3D scene's units. In this space a
+            // graph spans thousands, so that burst was about one percent of the
+            // view — present, and completely invisible. Anything that small is
+            // treated as "a flash at the seed" and given a share of the graph's
+            // own extent, so a wavefront always sweeps a distance you can see.
+            const ext = computeExtent();
+            const R = ext ? ext.radius : 500;
+            const from = Math.max(fromR || 0, 6);
+            const to = Math.max((toR || 0) + 18, from + 24, R * 0.16);
             fxPulses.push({
                 node: seedNode,
                 colour,
-                fromR: Math.max(fromR || 0, 6),
-                toR: Math.max((toR || 0) + 18, Math.max(fromR || 0, 6) + 24),
+                fromR: from,
+                toR: to,
                 grow,
                 fade: Math.min(640, Math.max(240, grow * 0.9)),
                 t0: performance.now(),
@@ -289,6 +359,16 @@
                 ctx.beginPath();
                 ctx.arc(at.x, at.y, r, 0, Math.PI * 2);
                 ctx.fill();
+
+                // A crisp leading edge on the wavefront. The gradient alone
+                // reads as a glow that happens to be getting bigger; an actual
+                // travelling circle reads as a front sweeping outward, which is
+                // the thing the walk is trying to show.
+                ctx.strokeStyle = `rgba(255,243,232,${(0.75 * env).toFixed(3)})`;
+                ctx.lineWidth = Math.max(1, 2.2 * env);
+                ctx.beginPath();
+                ctx.arc(at.x, at.y, r, 0, Math.PI * 2);
+                ctx.stroke();
 
                 // The debris.
                 ctx.fillStyle = `rgba(${rgb},${(0.95 * env).toFixed(3)})`;

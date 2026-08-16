@@ -35,3 +35,10 @@
 #viewbar .vsep[hidden] {
     display: none;
 }
+
+/* Same trap, one element over: `#axis-gizmo { display: flex }` is an id rule,
+   so the orientation triad ignored `hidden` and stayed on screen after a
+   switch back to 2D — an XYZ indicator floating over a plane with no Z. */
+#axis-gizmo[hidden] {
+    display: none;
+}

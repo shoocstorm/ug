@@ -161,8 +161,9 @@
             bind('walk-o-exit', () => exitWalk());
             bind('walk-o-close', () => exitWalk());
             bind('walk-o-speed', () => cycleWalkSpeed());
-            bind('walk-o-spin', toggleWalkSpin);
+            bind('walk-o-flow', toggleWalkFlow);
             bind('walk-o-info', toggleWalkInfo);
+            bind('walk-o-labels', toggleShowLabels);
 
             wireWalkDrag();
 
@@ -177,8 +178,9 @@
                 else if (e.key === 'ArrowRight') { e.preventDefault(); nextHop(); }
                 else if (e.key === ' ' || e.key === 'Spacebar') { e.preventDefault(); togglePlayWalk(); }
                 else if (e.key === 's' || e.key === 'S') { e.preventDefault(); cycleWalkSpeed(); }
-                else if (e.key === 'r' || e.key === 'R') { e.preventDefault(); toggleWalkSpin(); }
+                else if (e.key === 'r' || e.key === 'R') { e.preventDefault(); toggleWalkFlow(); }
                 else if (e.key === 'd' || e.key === 'D') { e.preventDefault(); toggleWalkInfo(); }
+                else if (e.key === 'l' || e.key === 'L') { e.preventDefault(); toggleShowLabels(); }
             });
 
             // Seed follows the current selection (see syncWalkSeed, wired
@@ -483,9 +485,6 @@
             walkPlay.index = h;
             setOverlayPhase('ignite', h);
             updateWalkOverlay();
-            // Last hop reached — celebrate by turning the auto-rotate on, so
-            // the finished walk keeps turning while the user looks at it.
-            if (h >= walkPlay.layers.length - 1) setWalkSpin(true);
             scheduleAutoAdvance();
         }
 
@@ -561,22 +560,29 @@
             if (btn) btn.setAttribute('aria-label', p ? 'Pause' : 'Play');
         }
 
-        // Auto-rotate on/off during a walk, keeping the viewbar toggle and the
-        // walk card's spin button in step.
-        function syncWalkSpinButton() {
-            const btn = walkEl('walk-o-spin');
+        // Edge-flow animation on/off during a walk.
+        //
+        // This control used to drive auto-rotate, which only ever meant
+        // anything to the 3D renderer — on a 2D plane there is nothing to
+        // rotate, so the button sat there doing nothing. What a walk actually
+        // has worth switching off is the motion *along the edges*: the
+        // travelling strands are the whole point when you are following a
+        // frontier, and a distraction when you are reading one.
+        function syncWalkFlowButton() {
+            const btn = walkEl('walk-o-flow');
             if (!btn) return;
-            btn.classList.toggle('active', state.autoSpin);
-            btn.classList.toggle('spinning', state.autoSpin);
+            btn.classList.toggle('active', state.lineFlow);
+            btn.setAttribute('aria-pressed', String(state.lineFlow));
         }
-        function setWalkSpin(on) {
-            state.autoSpin = on;
-            if (typeof applyAutoSpin === 'function') applyAutoSpin();
-            if (typeof syncSpinButton === 'function') syncSpinButton();
-            syncWalkSpinButton();
+        function setWalkFlow(on) {
+            state.lineFlow = on;
+            syncWalkFlowButton();
+            // The particle counts are read from the style rules, so the change
+            // only reaches the canvas on a restyle.
+            bumpGraphStyles();
         }
-        function toggleWalkSpin() {
-            setWalkSpin(!state.autoSpin);
+        function toggleWalkFlow() {
+            setWalkFlow(!state.lineFlow);
         }
 
         // Show/hide the (already populated) details panel while a walk is live.
@@ -754,7 +760,7 @@
                 if (typeof applyAutoSpin === 'function') applyAutoSpin();
                 if (typeof syncSpinButton === 'function') syncSpinButton();
             }
-            syncWalkSpinButton();
+            syncWalkFlowButton();
             if (state.showBoundary) {
                 state.showBoundary = false;
                 if (typeof applyBoundaryVisibility === 'function') applyBoundaryVisibility();
@@ -775,7 +781,7 @@
             state.autoSpin = !!r.autoSpin;
             if (typeof applyAutoSpin === 'function') applyAutoSpin();
             if (typeof syncSpinButton === 'function') syncSpinButton();
-            syncWalkSpinButton();
+            syncWalkFlowButton();
             if (r.showBoundary) {
                 state.showBoundary = true;
                 if (typeof applyBoundaryVisibility === 'function') applyBoundaryVisibility();

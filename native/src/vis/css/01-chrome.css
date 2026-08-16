@@ -8,6 +8,16 @@
             text-align: center;
             pointer-events: none;
             z-index: 5;
+            transition: opacity 0.2s, visibility 0.2s;
+        }
+
+        /* The history bar and the title block want the same piece of screen,
+           and only one of them is useful at a time: the title names the graph
+           you are looking at, the bar names where you are inside it. Once you
+           are navigating, the trail wins. */
+        body.nav-active .header {
+            opacity: 0;
+            visibility: hidden;
         }
 
         /* The graph runs right under the title, so give it a soft pool of

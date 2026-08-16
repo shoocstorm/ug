@@ -60,6 +60,23 @@
             return out;
         }
 
+        // Raise a near-black colour to something a flat renderer can actually
+        // show. The walk's background tones (`linkFar` #1b1b21, `linkRecede`
+        // #26262e) were chosen for a 3D scene where fog and depth separate an
+        // edge from the backdrop; on a 2D plane they sit below the noise floor
+        // and the graph looks like it has no edges at all.
+        //
+        // Only genuinely dark colours are touched, and they are lifted toward
+        // the background's own hue rather than washed to grey, so "receded"
+        // still reads as receded — just visibly so.
+        function cosmosLift([r, g, b]) {
+            const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+            if (lum >= 0.18) return [r, g, b];
+            const k = Math.min(1, (0.18 - lum) * 3.2);
+            const t = 0.42;   // the tone dark links are lifted toward
+            return [r + (t - r) * k, g + (t - g) * k, b + (t * 1.06 - b) * k];
+        }
+
         // ─── Glyph atlas ───────────────────────────────────────
 
         // cosmos.gl does not tint point images — the fragment shader blends
@@ -182,7 +199,16 @@
                 const node = nodes[i];
                 positions[i * 2] = +node.x || 0;
                 positions[i * 2 + 1] = +node.y || 0;
-                shapes[i] = CosmosLib.PointShape.Circle;
+                // Shape is a second, redundant channel for the one node type
+                // worth finding at a glance. Colour alone fails exactly when
+                // you need it most — dimmed under a focus filter, greyed out
+                // behind a highlight, or tinted by a walk hop — whereas a
+                // silhouette survives all of that. Hexagon rather than a star
+                // or a cross because the glyph rides *inside* the shape here,
+                // and only a near-circular one leaves room for it.
+                shapes[i] = node.group === 'Function'
+                    ? CosmosLib.PointShape.Hexagon
+                    : CosmosLib.PointShape.Circle;
                 imageIdx[i] = cosmosImageIndex.get(cosmosImageKey(node)) ?? -1;
                 sizes[i] = nodeRadiusFor(node);
                 imageSizes[i] = sizes[i];
@@ -214,14 +240,17 @@
             }
             for (let i = 0; i < cosmosEdges.length; i++) {
                 const e = cosmosEdges[i];
-                const [r, g, b] = cosmosRgb(linkColorFor(e));
+                const [r, g, b] = cosmosLift(cosmosRgb(linkColorFor(e)));
                 linkColors[i * 4] = r; linkColors[i * 4 + 1] = g; linkColors[i * 4 + 2] = b;
-                // Strands read stronger on a dark ground, so they're pulled
-                // back to keep nodes dominant — the same 0.38 the 3D renderer
-                // applies globally, carried per link so invisibility is just
-                // alpha 0 (cosmos.gl has no per-link visibility accessor).
-                linkColors[i * 4 + 3] = linkVisibleFor(e) ? 0.38 : 0;
-                linkWidths[i] = e.rel === 'Contains' ? 1.1 : 0.45;
+                // The 3D renderer applies a flat 0.38 and lets fog and depth do
+                // the rest. Flat on a plane there is neither, so opacity has to
+                // carry the hierarchy itself: a walked or hovered edge is the
+                // subject and reads at full strength, everything else is
+                // context. Invisible is simply alpha 0 — cosmos.gl has no
+                // per-link visibility accessor.
+                const hot = state.highlightLinks.has(e) || linkParticlesFor(e) > 0;
+                linkColors[i * 4 + 3] = linkVisibleFor(e) ? (hot ? 0.95 : 0.55) : 0;
+                linkWidths[i] = e.rel === 'Contains' ? 1.4 : 0.7;
             }
         }
 
@@ -775,12 +804,22 @@
                     simulationRepulsion: 0.6,
                     simulationGravity: 0.12,
                     simulationCenter: 0.1,
-                    simulationFriction: 0.25,
-                    // Higher cools *faster* (the config's wording is inverted:
-                    // "smaller values ... cool down slower"). The 3D renderer
-                    // caps itself at 100 ticks so a layout is never a wait;
-                    // this is the 2D equivalent of that impatience.
-                    simulationDecay: 25000,
+                    // Enough damping to settle promptly, not so much that the
+                    // layout freezes before it has untangled.
+                    simulationFriction: 0.55,
+                    // **This is a tick count, and lower is faster.**
+                    //
+                    // cosmos.gl's own docs say the opposite ("use smaller
+                    // values if you want the simulation to cool down slower"),
+                    // but the maths is unambiguous: alpha decays by
+                    // `1 - ALPHA_MIN^(1/decay)` per tick, so after `decay`
+                    // ticks it has reached the floor. The default 5000 is
+                    // therefore ~80 seconds of simulation at 60fps.
+                    //
+                    // The 3D renderer caps itself at 100 ticks (cooldownTicks)
+                    // precisely so a layout is never a wait. This is the 2D
+                    // equivalent: start(0.7) × 300 lands around 200 ticks.
+                    simulationDecay: 300,
                     onPointClick: (index, _pos, event) => {
                         const n = cosmosNodes[index];
                         if (n) handleNodeClick(event, n);

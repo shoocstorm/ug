@@ -466,11 +466,22 @@
                                 <path d="M12 8h.01M11 12h1v4h1" />
                             </svg>
                         </button>
-                        <button class="walk-icon" id="walk-o-spin" title="Auto-rotate (R)" aria-pressed="false" type="button">
+                        <button class="walk-icon" id="walk-o-flow" title="Edge flow animation (R)" aria-pressed="true" type="button">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                                 stroke-linecap="round" stroke-linejoin="round">
-                                <path d="M21 12a9 9 0 1 1-3.3-6.95" />
-                                <path d="M21 4v5h-5" />
+                                <path d="M2 8c3.5-4 6.5 4 10 0s6.5 4 10 0" />
+                                <path d="M2 16c3.5-4 6.5 4 10 0s6.5 4 10 0" />
+                            </svg>
+                        </button>
+                        <!-- The viewbar's Names toggle, repeated here: during a
+                             walk the card is where your hands are, and the
+                             viewbar is behind the immersive dimming. Same
+                             state, so the two stay in step. -->
+                        <button class="walk-icon" id="walk-o-labels" title="Show / hide node name labels (L)" aria-pressed="false" type="button">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                                stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M4 17V8m0 0 4 9m-4-9 4 0" />
+                                <path d="M14 17V9m0 0h3.5a2.5 2.5 0 0 1 0 5H14" />
                             </svg>
                         </button>
                         <button class="walk-icon danger" id="walk-o-close" title="Exit walk (Esc)" type="button">
@@ -536,7 +547,22 @@
                 </svg>
             </button>
             <div class="crumbs" id="nav-crumbs"></div>
-            <button class="nav-exit" id="nav-exit" title="Exit focus (Esc)">Exit focus <kbd class="btn-kbd">Esc</kbd></button>
+            <button class="nav-exit" id="nav-exit" title="Exit focus (Esc)" aria-label="Exit focus" disabled>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <!-- Break out of a frame: a bracketed box with an arrow leaving it. -->
+                    <path d="M9 5H6a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h3" />
+                    <path d="M14 12h7M18 8l4 4-4 4" />
+                </svg>
+            </button>
+            <!-- Clearing the trail empties the bar, and an empty bar hides
+                 itself — so this doubles as the way to dismiss it. -->
+            <button class="nav-btn nav-clear" id="nav-clear" title="Clear visit history" type="button">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M6 6l12 12M18 6L6 18" />
+                </svg>
+            </button>
         </div>
 
         <!-- Colour legend / quick type filter -->
@@ -575,13 +601,13 @@
             <!-- The 2D counterpart of the face projections. With no camera to
                  move, what is worth switching is the arrangement itself. Shown
                  only while the 2D renderer is mounted. -->
-            <button class="vbtn lbtn" data-layout="force" title="Force layout — the force simulation finds the arrangement"><span class="vn">FS</span><span class="vp">FORCE</span></button>
+            <button class="vbtn lbtn" data-layout="folders" title="By folder — one named island per directory, so the codebase settles into the shape of its own tree"><span class="vn">FD</span><span class="vp">FOLDER</span></button>
             <button class="vbtn lbtn" data-layout="galaxy" title="Galaxy — three spiral arms around a dense core"><span class="vn">GX</span><span class="vp">GAL</span></button>
             <button class="vbtn lbtn" data-layout="spiral" title="Sunflower — even phyllotaxis disc, equal room for every node"><span class="vn">SP</span><span class="vp">SUN</span></button>
             <button class="vbtn lbtn" data-layout="grid" title="Grid — a lattice ordered by node type, then name"><span class="vn">GD</span><span class="vp">GRID</span></button>
             <button class="vbtn lbtn" data-layout="rings" title="Rings — one concentric ring per node type, commonest innermost"><span class="vn">RG</span><span class="vp">RING</span></button>
             <button class="vbtn lbtn" data-layout="clusters" title="Clusters — each node type as its own island, sized by population"><span class="vn">CL</span><span class="vp">CLUS</span></button>
-            <button class="vbtn lbtn" data-layout="folders" title="By folder — the simulation pulls each node toward its directory, so the codebase settles into one named island per folder"><span class="vn">FD</span><span class="vp">FOLDER</span></button>
+            <button class="vbtn lbtn" data-layout="force" title="Force layout — the force simulation finds the arrangement"><span class="vn">FS</span><span class="vp">FORCE</span></button>
             <div class="vsep" id="vsep-layouts"></div>
             <button class="vtoggle" id="zoom-in" title="Zoom in — move camera closer (mouse wheel up)"><span class="vt-ico">＋</span><span class="vt-lbl">In</span></button>
             <button class="vtoggle" id="zoom-out" title="Zoom out — move camera farther (mouse wheel down)"><span class="vt-ico">－</span><span class="vt-lbl">Out</span></button>

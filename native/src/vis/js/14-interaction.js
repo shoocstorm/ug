@@ -1180,6 +1180,10 @@
             exitFocus();
             bumpGraphStyles();
             document.getElementById('info').classList.remove('visible');
+            // The history bar's Exit button is enabled off the selection, so it
+            // has to be re-read here — otherwise it stays lit with nothing left
+            // to exit.
+            updateNavbar();
         }
 
         function resetView() {

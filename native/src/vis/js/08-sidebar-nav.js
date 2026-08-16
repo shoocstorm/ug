@@ -277,6 +277,9 @@
             // Solo, if on, follows the new anchor rather than stranding the
             // view on the previous node's neighbourhood.
             syncSoloButton();
+            // The trail rings the focused crumb, so it has to be re-read
+            // whenever focus moves.
+            updateNavbar();
             writeUrlState();
         }
 
@@ -289,6 +292,7 @@
             // canvas on the next focus.
             state.focusIsolate = false;
             syncSoloButton();
+            updateNavbar();
             writeUrlState();
         }
 
@@ -389,6 +393,14 @@
             if (!bar) return;
             const active = state.historyIndex >= 0 && state.history.length > 0;
             bar.classList.toggle('visible', active);
+            // The bar and the title block share the top of the screen; the
+            // class is what hands it over (see body.nav-active .header).
+            document.body.classList.toggle('nav-active', active);
+            // Nothing to exit *from* unless something is focused or selected —
+            // an always-live button here reads as "this does something", and
+            // then does nothing.
+            const exit = document.getElementById('nav-exit');
+            if (exit) exit.disabled = !state.focusNode && !state.selectedNode;
             if (!active) { crumbs.innerHTML = ''; return; }
             back.disabled = state.historyIndex <= 0;
             fwd.disabled = state.historyIndex >= state.history.length - 1;
@@ -401,7 +413,16 @@
                 const n = state.nodeById.get(state.history[i]);
                 if (!n) continue;
                 if (i > start || start > 0) html += '<span class="crumb-sep">›</span>';
-                html += `<span class="crumb${i === cur ? ' current' : ''}" data-idx="${i}" title="${escapeHtml(n.name)}">
+                // `current` is where you are in the *trail*; `selected` is what
+                // is lit on the canvas. They are usually the same crumb — but
+                // clicking a node off-trail, or clearing the selection, splits
+                // them, and then the trail alone stops telling you which node
+                // the details panel is actually describing.
+                const cls = 'crumb'
+                    + (i === cur ? ' current' : '')
+                    + (state.selectedNode && state.selectedNode.id === state.history[i] ? ' selected' : '')
+                    + (state.focusNode === state.history[i] ? ' focused' : '');
+                html += `<span class="${cls}" data-idx="${i}" title="${escapeHtml(n.name)}">
                     ${nodeIconSvg(n.group)}
                     <span class="name">${escapeHtml(truncateName(n.name))}</span>
                 </span>`;
@@ -412,13 +433,93 @@
             });
         }
 
+        // Forget the trail. The bar hides itself once the history is empty, so
+        // this is also how it is dismissed — the selection and the graph are
+        // left exactly as they are; only the breadcrumbs go.
+        function clearNavHistory() {
+            state.history = [];
+            state.historyIndex = -1;
+            updateNavbar();
+        }
+
+        // Drag the history bar anywhere. It defaults to the very top, which is
+        // where it is least in the way — but "least in the way" depends on what
+        // is on the canvas underneath, and only the person looking at it knows
+        // that. The position is remembered across reloads.
+        const NAVBAR_POS_KEY = 'ug-navbar-pos';
+
+        function placeNavbar(x, y) {
+            const bar = document.getElementById('navbar');
+            if (!bar) return;
+            // Keep it reachable: a bar dragged off-screen (or parked before a
+            // window resize) is one the user cannot get back.
+            const w = bar.offsetWidth || 320;
+            const h = bar.offsetHeight || 36;
+            const cx = Math.min(Math.max(x, 4), Math.max(4, window.innerWidth - w - 4));
+            const cy = Math.min(Math.max(y, 4), Math.max(4, window.innerHeight - h - 4));
+            bar.classList.add('dragged');
+            bar.style.left = cx + 'px';
+            bar.style.top = cy + 'px';
+            return { x: cx, y: cy };
+        }
+
+        function wireNavbarDrag() {
+            const bar = document.getElementById('navbar');
+            if (!bar) return;
+
+            const saved = (() => {
+                try { return JSON.parse(localStorage.getItem(NAVBAR_POS_KEY) || 'null'); }
+                catch (err) { return null; }
+            })();
+            if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) {
+                placeNavbar(saved.x, saved.y);
+            }
+
+            let dx = 0, dy = 0;
+            const onMove = (e) => {
+                const at = placeNavbar(e.clientX - dx, e.clientY - dy);
+                if (at) { bar._pos = at; }
+            };
+            const onUp = () => {
+                bar.classList.remove('dragging');
+                window.removeEventListener('mousemove', onMove);
+                window.removeEventListener('mouseup', onUp);
+                try { localStorage.setItem(NAVBAR_POS_KEY, JSON.stringify(bar._pos || null)); }
+                catch (err) { /* private mode */ }
+            };
+            bar.addEventListener('mousedown', (e) => {
+                // Buttons and crumbs are targets, not handles.
+                if (e.target.closest('button, .crumb')) return;
+                e.preventDefault();
+                const r = bar.getBoundingClientRect();
+                dx = e.clientX - r.left;
+                dy = e.clientY - r.top;
+                bar._pos = { x: r.left, y: r.top };
+                bar.classList.add('dragging');
+                // Freeze it where it currently sits before the first move, so a
+                // still-centred bar doesn't jump by half its width on grab.
+                placeNavbar(r.left, r.top);
+                window.addEventListener('mousemove', onMove);
+                window.addEventListener('mouseup', onUp);
+            });
+            // A window that shrank can strand it off-screen.
+            window.addEventListener('resize', () => {
+                if (!bar.classList.contains('dragged')) return;
+                const r = bar.getBoundingClientRect();
+                placeNavbar(r.left, r.top);
+            });
+        }
+
         function wireNav() {
             const back = document.getElementById('nav-back');
             const fwd = document.getElementById('nav-forward');
             const exit = document.getElementById('nav-exit');
+            const clear = document.getElementById('nav-clear');
             if (back) back.addEventListener('click', () => navHistory(-1));
             if (fwd) fwd.addEventListener('click', () => navHistory(1));
             if (exit) exit.addEventListener('click', () => { clearSelection(); frameGraph(700); });
+            if (clear) clear.addEventListener('click', clearNavHistory);
+            wireNavbarDrag();
         }
 
         // ─── Bottom view bar: projections + box / spin toggles ─
@@ -456,18 +557,8 @@
             });
 
             const labelBtn = document.getElementById('toggle-labels');
-            if (labelBtn) {
-                labelBtn.classList.toggle('active', state.showLabels);
-                labelBtn.setAttribute('aria-pressed', String(state.showLabels));
-                labelBtn.addEventListener('click', () => {
-                    state.showLabels = !state.showLabels;
-                    labelBtn.classList.toggle('active', state.showLabels);
-                    labelBtn.setAttribute('aria-pressed', String(state.showLabels));
-                    // The 2D overlay re-reads state every frame; the 3D backend
-                    // owns sprite visibility and needs telling.
-                    bumpGraphStyles();
-                });
-            }
+            if (labelBtn) labelBtn.addEventListener('click', toggleShowLabels);
+            syncLabelButtons();
 
             // The reset button moved here from the sidebar footer — everything
             // it undoes happens on the canvas.
@@ -498,6 +589,31 @@
             const zOut = document.getElementById('zoom-out');
             if (zIn) zIn.addEventListener('click', () => zoomBy(0.8));
             if (zOut) zOut.addEventListener('click', () => zoomBy(1.25));
+        }
+
+        // Node name labels. The control appears twice — in the viewbar and on
+        // the walk card, because during a walk the viewbar is behind the
+        // immersive dimming — so the state lives here and both buttons are
+        // rendered from it rather than each keeping its own idea of it.
+        function syncLabelButtons() {
+            ['toggle-labels', 'walk-o-labels'].forEach(id => {
+                const btn = document.getElementById(id);
+                if (!btn) return;
+                btn.classList.toggle('active', state.showLabels);
+                btn.setAttribute('aria-pressed', String(state.showLabels));
+            });
+        }
+
+        function setShowLabels(on) {
+            state.showLabels = on;
+            syncLabelButtons();
+            // The 2D overlay re-reads state every frame; the 3D backend owns
+            // sprite visibility and has to be told.
+            bumpGraphStyles();
+        }
+
+        function toggleShowLabels() {
+            setShowLabels(!state.showLabels);
         }
 
         // Mark which arrangement is showing. Called by the renderer whenever it

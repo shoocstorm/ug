@@ -3,16 +3,32 @@
         // front would cost every page 1.4 MB of a renderer it may never use.
 
         const config = {
-            nodeRadius: { File: 10, Interface: 7, Function: 6, Class: 8, Dependency: 5, Config: 8, Route: 7, Constant: 5, Variable: 5, Default: 6 },
+            // Functions are deliberately large. They are the first-class
+            // citizen of almost every language and the unit most code analysis
+            // is actually about, so they outrank everything except the files
+            // that contain them.
+            nodeRadius: { File: 10, Interface: 7, Function: 9, Class: 8, Dependency: 5, Config: 8, Route: 7, Constant: 5, Variable: 5, Default: 6 },
             // Two-family "ink" palette: warm oranges carry the structural
             // spine (folders, files, deps), steel blues carry code symbols —
             // mirroring the orange-trunk / blue-scatter reading of the
             // reference art (docs/node-diagram-ref.jpg).
+            //
+            // Functions are the deliberate exception, in green outside both
+            // families. A palette exists to group things, but the one type you
+            // most often need to pick out of a crowd should not be grouped with
+            // anything.
             colorMap: {
                 File: '#f26a1b',
                 Folder: '#c2410c',
                 Interface: '#8fb8dd',
-                Function: '#5b8fc9',
+                // The one colour outside both ink families, and the only green
+                // on the canvas. Functions are what most questions are about —
+                // who calls this, what does this reach — so they are pulled out
+                // of the steel-blue code family entirely rather than being one
+                // more shade of it. Green also reads as "executable" next to
+                // the passive blues of data. Paired with a hexagon in 2D, so it
+                // is separable by shape as well as by hue.
+                Function: '#34d399',
                 Class: '#2f5f96',
                 Dependency: '#fb923c',
                 Config: '#f59e0b',
@@ -57,6 +73,10 @@
             // Which 2D arrangement is showing. The 2D renderer's answer to the
             // 3D one's face projections — see COSMOS_LAYOUTS.
             layout2d: 'folders',
+            // Animated flow along the edges — the hover particles, the tour
+            // route and the Graph Walk's travelling strands. Toggled from the
+            // walk card, and honoured by both renderers.
+            lineFlow: true,
             nodeFilters: new Set(),
             edgeFilters: new Set(),
             // "Only system boundaries." A separate axis from nodeFilters
