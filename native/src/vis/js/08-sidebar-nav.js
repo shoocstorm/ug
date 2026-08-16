@@ -451,6 +451,10 @@
                 });
             });
 
+            document.querySelectorAll('#viewbar .lbtn').forEach(btn => {
+                btn.addEventListener('click', () => setGraphLayout(btn.dataset.layout));
+            });
+
             const labelBtn = document.getElementById('toggle-labels');
             if (labelBtn) {
                 labelBtn.classList.toggle('active', state.showLabels);
@@ -494,6 +498,14 @@
             const zOut = document.getElementById('zoom-out');
             if (zIn) zIn.addEventListener('click', () => zoomBy(0.8));
             if (zOut) zOut.addEventListener('click', () => zoomBy(1.25));
+        }
+
+        // Mark which arrangement is showing. Called by the renderer whenever it
+        // changes one, including the opening's hand-off to the force layout.
+        function syncLayoutButtons() {
+            document.querySelectorAll('#viewbar .lbtn').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.layout === state.layout2d);
+            });
         }
 
         // ─── On-canvas legend (doubles as a type filter) ─────

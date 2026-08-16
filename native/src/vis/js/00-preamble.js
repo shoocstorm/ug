@@ -54,6 +54,9 @@
             // shape of the graph is what the canvas is for. Toggled from the
             // viewbar; honoured by both renderers.
             showLabels: false,
+            // Which 2D arrangement is showing. The 2D renderer's answer to the
+            // 3D one's face projections — see COSMOS_LAYOUTS.
+            layout2d: 'folders',
             nodeFilters: new Set(),
             edgeFilters: new Set(),
             // "Only system boundaries." A separate axis from nodeFilters

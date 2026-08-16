@@ -384,6 +384,13 @@
             });
             const vsep = document.getElementById('vsep-views');
             if (vsep) vsep.hidden = !caps.faceViews;
+            // The layout switcher is the mirror image: it stands in for the
+            // face projections wherever there is no camera to aim.
+            const hasLayouts = !!(R && R.setLayout);
+            document.querySelectorAll('#viewbar .lbtn').forEach(btn => { btn.hidden = !hasLayouts; });
+            const lsep = document.getElementById('vsep-layouts');
+            if (lsep) lsep.hidden = !hasLayouts;
+            syncLayoutButtons();
             const gizmo = document.getElementById('axis-gizmo');
             if (gizmo) gizmo.hidden = !caps.threeD;
             const spin = document.getElementById('toggle-spin');
@@ -419,6 +426,10 @@
         function focusNode(n) { if (n != null) whenRendererReady(r => r.focusNode(n)); }
 
         function zoomBy(factor) { if (R) R.zoomBy(factor); }
+
+        // Arrangement, not viewpoint — only a backend without a camera offers
+        // these (see COSMOS_LAYOUTS in 12-render-cosmos.js).
+        function setGraphLayout(name) { if (R && R.setLayout) R.setLayout(name); }
 
         function flyToTourStop(stop, opts) { whenRendererReady(r => r.flyToStop(stop, opts || {})); }
 

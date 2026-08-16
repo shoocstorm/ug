@@ -571,6 +571,18 @@
             <!-- Hidden alongside the projection buttons: a 2D renderer has no
                  camera to place, so the whole group goes with it. -->
             <div class="vsep" id="vsep-views"></div>
+
+            <!-- The 2D counterpart of the face projections. With no camera to
+                 move, what is worth switching is the arrangement itself. Shown
+                 only while the 2D renderer is mounted. -->
+            <button class="vbtn lbtn" data-layout="force" title="Force layout — the force simulation finds the arrangement"><span class="vn">FS</span><span class="vp">FORCE</span></button>
+            <button class="vbtn lbtn" data-layout="galaxy" title="Galaxy — three spiral arms around a dense core"><span class="vn">GX</span><span class="vp">GAL</span></button>
+            <button class="vbtn lbtn" data-layout="spiral" title="Sunflower — even phyllotaxis disc, equal room for every node"><span class="vn">SP</span><span class="vp">SUN</span></button>
+            <button class="vbtn lbtn" data-layout="grid" title="Grid — a lattice ordered by node type, then name"><span class="vn">GD</span><span class="vp">GRID</span></button>
+            <button class="vbtn lbtn" data-layout="rings" title="Rings — one concentric ring per node type, commonest innermost"><span class="vn">RG</span><span class="vp">RING</span></button>
+            <button class="vbtn lbtn" data-layout="clusters" title="Clusters — each node type as its own island, sized by population"><span class="vn">CL</span><span class="vp">CLUS</span></button>
+            <button class="vbtn lbtn" data-layout="folders" title="By folder — the simulation pulls each node toward its directory, so the codebase settles into one named island per folder"><span class="vn">FD</span><span class="vp">FOLDER</span></button>
+            <div class="vsep" id="vsep-layouts"></div>
             <button class="vtoggle" id="zoom-in" title="Zoom in — move camera closer (mouse wheel up)"><span class="vt-ico">＋</span><span class="vt-lbl">In</span></button>
             <button class="vtoggle" id="zoom-out" title="Zoom out — move camera farther (mouse wheel down)"><span class="vt-ico">－</span><span class="vt-lbl">Out</span></button>
             <div class="vsep"></div>

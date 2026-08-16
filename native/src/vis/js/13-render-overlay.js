@@ -111,6 +111,7 @@
             fxFrame++;
 
             if (state.showBoundary) fxDrawBoundary();
+            fxDrawClusterLabels();
             fxDrawFlow();
             const hot = fxHotNodes();
             fxDrawHalos(hot);
@@ -358,6 +359,38 @@
                 const y = p.y - fxRadius(n) - 4;
                 ctx.strokeText(label, p.x, y);
                 ctx.fillText(label, p.x, y);
+            }
+            ctx.restore();
+        }
+
+        // ── Folder cluster labels ──────────────────────────────
+        // The by-folder layout is only legible if the islands are named. The
+        // centres are computed by the layout itself, so they are exact and
+        // fixed rather than a centroid chased frame by frame. At most
+        // MAX_FOLDER_CLUSTERS of them, so this is cheap.
+        function fxDrawClusterLabels() {
+            if (state.layout2d !== 'folders' || !cosmosClusterNames.length) return;
+            const pos = cosmosClusterCentres;
+            if (!pos || !pos.length) return;
+            const ctx = fxCtx;
+            ctx.save();
+            ctx.font = '600 12px "JetBrains Mono", monospace';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            for (let i = 0; i < cosmosClusterNames.length; i++) {
+                const x = pos[i * 2], y = pos[i * 2 + 1];
+                if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+                const p = cosmos.spaceToScreenPosition([x, y]);
+                if (!p || p[0] < 0 || p[1] < 0 || p[0] > width || p[1] > height) continue;
+                // The last path segment: the full path is what makes folders
+                // distinct, but the leaf is what makes them recognisable.
+                const full = cosmosClusterNames[i];
+                const leaf = full.split('/').filter(Boolean).pop() || full;
+                ctx.strokeStyle = 'rgba(13,13,16,0.9)';
+                ctx.lineWidth = 3.5;
+                ctx.strokeText(leaf, p[0], p[1]);
+                ctx.fillStyle = 'rgba(233,233,240,0.92)';
+                ctx.fillText(leaf, p[0], p[1]);
             }
             ctx.restore();
         }

@@ -276,6 +276,413 @@
             }
         }
 
+        // ─── The opening morph: galaxy → sunflower → force ─────
+        //
+        // The graph used to arrive by drifting in from one corner as the force
+        // simulation cooled — which is not an animation, it is a layout being
+        // computed in public. This replaces it with a deliberate one, using the
+        // same mechanism cosmos.gl's own transition examples do: positions are
+        // just a buffer, and `render(alpha, duration)` tweens the whole buffer
+        // on the GPU. So the opening is three staged arrangements.
+        //
+        //   1. the galaxy, struck instantly and held for a beat
+        //   2. the sunflower disc — the spiral arms unwind into an even field
+        //   3. the folder islands — that field gathers into the shape of the
+        //      codebase, which is the view worth landing on
+        //
+        // The simulation never runs during any of it, and does not take over at
+        // the end: all three are computed arrangements, so each one arrives and
+        // then holds perfectly still. Handing off to the force layout at the end
+        // would undo stage 3 in public, which is the thing this replaced.
+
+        const INTRO_HOLD_MS = 620;     // how long the galaxy stands before it moves
+        const INTRO_MORPH_MS = 1000;   // one stage → the next
+
+        // Pending timers for whatever animation is in flight — the opening's
+        // stages, or a layout morph's write-back. Cleared on dispose and
+        // whenever a new animation supersedes the last.
+        let _cosmosAnimTimers = [];
+        let _cosmosIntroDone = false;
+        // A restyle that arrived mid-morph. Applying it there would upload
+        // positions and re-render at zero duration, cancelling the transition
+        // the intro is in the middle of — so it is deferred to the settle.
+        let _cosmosRestylePending = false;
+        // When the in-flight position transition finishes. Restyles arriving
+        // before then are deferred — see cosmosSetLayout.
+        let _cosmosMorphUntil = 0;
+
+        function cosmosClearIntro() {
+            _cosmosAnimTimers.forEach(clearTimeout);
+            _cosmosAnimTimers = [];
+        }
+
+        // A small deterministic PRNG, so the opening is the same every load —
+        // the intro is choreography, and choreography that reshuffles each time
+        // reads as noise.
+        function cosmosRand(seed) {
+            let s = seed >>> 0;
+            return () => {
+                s = (s * 1664525 + 1013904223) >>> 0;
+                return s / 4294967296;
+            };
+        }
+
+        // A barred spiral: a dense core bulge, then log-spiral arms whose
+        // angular scatter widens with radius. This is also a genuinely good
+        // seed for the force layout — it is already roughly radial, so the
+        // simulation has little left to undo.
+        function cosmosGalaxyPositions(count) {
+            const out = new Float32Array(count * 2);
+            const rand = cosmosRand(0xc05a1);
+            const cx = COSMOS_SPACE / 2, cy = COSMOS_SPACE / 2;
+            const ARMS = 3;
+            const SPAN = COSMOS_SPACE * 0.30;
+            const TWIST = 2.6;
+            for (let i = 0; i < count; i++) {
+                const t = count > 1 ? i / (count - 1) : 0;
+                // pow < 1 concentrates points toward the centre — the bulge.
+                const r = SPAN * Math.pow(t, 0.62);
+                const arm = (i % ARMS) * ((Math.PI * 2) / ARMS);
+                // Scatter tightens near the core and frays at the rim, which is
+                // what makes it read as arms rather than as three curves.
+                const spread = 0.22 + 0.55 * t;
+                const wobble = (rand() + rand() + rand() - 1.5) * spread;
+                const theta = arm + (r / SPAN) * TWIST * Math.PI + wobble;
+                const jitter = (rand() - 0.5) * SPAN * 0.06;
+                out[i * 2] = cx + Math.cos(theta) * (r + jitter);
+                out[i * 2 + 1] = cy + Math.sin(theta) * (r + jitter) * 0.82;  // slight tilt
+            }
+            return out;
+        }
+
+        // ─── The other layouts ─────────────────────────────────
+        //
+        // The 2D renderer's answer to the 3D one's six face projections: with
+        // no camera to move, the thing worth switching is the *arrangement*.
+        // Each of these is a pure function from node count (and, where it is
+        // interesting, node type) to a position buffer, so any of them can be
+        // morphed into with the same GPU transition the opening uses.
+        //
+        // Only `force` hands control to the simulation. The rest are static
+        // arrangements, and the simulation is switched off while one is showing
+        // — otherwise the forces pull it apart within a second of arriving.
+
+        // Golden angle: the packing that makes a sunflower head even at every
+        // radius, with no ring seams.
+        const PHYLLOTAXIS_ANGLE = Math.PI * (3 - Math.sqrt(5));
+
+        // Nodes grouped by type, in a stable order — the data-aware layouts all
+        // want the same grouping, and it has to be deterministic or the
+        // arrangement reshuffles every time you switch back to it.
+        function cosmosGroups() {
+            const by = new Map();
+            for (let i = 0; i < cosmosNodes.length; i++) {
+                const g = cosmosNodes[i].group || 'Default';
+                const list = by.get(g);
+                if (list) list.push(i); else by.set(g, [i]);
+            }
+            // Biggest group first, ties broken by name so it never depends on
+            // insertion order.
+            return [...by.entries()].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
+        }
+
+        // An even disc. Every node gets the same amount of room, so this is the
+        // honest "here is how much there is" view.
+        function cosmosSpiralPositions(count) {
+            const out = new Float32Array(count * 2);
+            const cx = COSMOS_SPACE / 2, cy = COSMOS_SPACE / 2;
+            const R = COSMOS_SPACE * 0.30;
+            for (let i = 0; i < count; i++) {
+                const r = R * Math.sqrt((i + 0.5) / count);
+                const theta = i * PHYLLOTAXIS_ANGLE;
+                out[i * 2] = cx + Math.cos(theta) * r;
+                out[i * 2 + 1] = cy + Math.sin(theta) * r;
+            }
+            return out;
+        }
+
+        // A lattice, ordered by type then name. Reading order becomes a sorted
+        // index of the codebase — the one arrangement where position is a
+        // lookup rather than a shape.
+        function cosmosGridPositions(count) {
+            const out = new Float32Array(count * 2);
+            const order = [];
+            for (const [, idx] of cosmosGroups()) {
+                idx.sort((a, b) => String(cosmosNodes[a].name).localeCompare(String(cosmosNodes[b].name)));
+                order.push(...idx);
+            }
+            const cols = Math.max(1, Math.ceil(Math.sqrt(count)));
+            const rows = Math.max(1, Math.ceil(count / cols));
+            const span = COSMOS_SPACE * 0.62;
+            const step = span / Math.max(cols, rows);
+            const x0 = COSMOS_SPACE / 2 - (cols - 1) * step / 2;
+            const y0 = COSMOS_SPACE / 2 - (rows - 1) * step / 2;
+            order.forEach((node, k) => {
+                out[node * 2] = x0 + (k % cols) * step;
+                out[node * 2 + 1] = y0 + Math.floor(k / cols) * step;
+            });
+            return out;
+        }
+
+        // One concentric ring per node type, commonest innermost. The ring a
+        // node sits on *is* its type, so the composition of the codebase reads
+        // straight off the radii.
+        function cosmosRingPositions(count) {
+            const out = new Float32Array(count * 2);
+            const cx = COSMOS_SPACE / 2, cy = COSMOS_SPACE / 2;
+            const groups = cosmosGroups();
+            const inner = COSMOS_SPACE * 0.06;
+            const step = (COSMOS_SPACE * 0.32 - inner) / Math.max(1, groups.length - 1 || 1);
+            groups.forEach(([, idx], g) => {
+                const r = inner + g * step;
+                idx.forEach((node, k) => {
+                    // Offset each ring so the rings don't line up into spokes.
+                    const theta = (k / idx.length) * Math.PI * 2 + g * 0.618;
+                    out[node * 2] = cx + Math.cos(theta) * r;
+                    out[node * 2 + 1] = cy + Math.sin(theta) * r;
+                });
+            });
+            return out;
+        }
+
+        // Pack a set of point indices into a disc — a sunflower again, so the
+        // island has even density and no ring seams. Shared by the two
+        // island-style layouts.
+        function cosmosPackIsland(out, indices, gx, gy, rad) {
+            const n = indices.length || 1;
+            indices.forEach((node, k) => {
+                const r = rad * Math.sqrt((k + 0.5) / n);
+                const theta = k * PHYLLOTAXIS_ANGLE;
+                out[node * 2] = gx + Math.cos(theta) * r;
+                out[node * 2 + 1] = gy + Math.sin(theta) * r;
+            });
+        }
+
+        // Each type as its own island, the islands laid around a ring and each
+        // packed as a little sunflower sized to its population. The modular
+        // read: how many kinds of thing there are, and how big each one is.
+        function cosmosClusterPositions(count) {
+            const out = new Float32Array(count * 2);
+            const cx = COSMOS_SPACE / 2, cy = COSMOS_SPACE / 2;
+            const groups = cosmosGroups();
+            const ring = COSMOS_SPACE * 0.22;
+            const biggest = groups.length ? groups[0][1].length : 1;
+            groups.forEach(([, idx], g) => {
+                const a = (g / Math.max(1, groups.length)) * Math.PI * 2;
+                // Area ∝ population, so a cluster's size is readable against
+                // its neighbours rather than every blob being the same.
+                const rad = COSMOS_SPACE * 0.075 * Math.sqrt(idx.length / biggest) + 20;
+                cosmosPackIsland(out, idx, cx + Math.cos(a) * ring, cy + Math.sin(a) * ring, rad);
+            });
+            return out;
+        }
+
+        // ─── By-folder islands ─────────────────────────────────
+        //
+        // One named island per directory: the layout that says which parts of
+        // the codebase hang together, straight off the folder structure.
+        //
+        // cosmos.gl offers a cluster *force* for this (`setPointClusters` +
+        // `simulationCluster`), which is how its own example does it — but a
+        // force has to converge, and converging in public is exactly the slow
+        // arrival this whole sequence exists to avoid. Computed directly, the
+        // islands are simply *there*, one morph away, and they hold still.
+        //
+        // Folders come from each node's `file` path. Nodes without one
+        // (dependencies, say) go to an outer ring rather than being forced into
+        // a folder they are not in.
+
+        // Beyond this the labels collide and the islands stop being separable;
+        // the tail joins the unfiled ring rather than becoming a fake "other".
+        const MAX_FOLDER_CLUSTERS = 28;
+
+        // Island names and their centres in space coords, published for the FX
+        // overlay to label. Rebuilt whenever the folder layout is.
+        let cosmosClusterNames = [];
+        let cosmosClusterCentres = null;
+
+        function cosmosFolderOf(n) {
+            const f = n.file;
+            if (!f) return null;
+            const i = String(f).lastIndexOf('/');
+            return i > 0 ? String(f).slice(0, i) : '/';
+        }
+
+        // Folders as [name, indices], biggest first, ties by name — so
+        // switching away and back lands on exactly the same islands.
+        function cosmosFolderGroups() {
+            const by = new Map();
+            const unfiled = [];
+            for (let i = 0; i < cosmosNodes.length; i++) {
+                const f = cosmosFolderOf(cosmosNodes[i]);
+                if (!f) { unfiled.push(i); continue; }
+                const list = by.get(f);
+                if (list) list.push(i); else by.set(f, [i]);
+            }
+            const ranked = [...by.entries()]
+                .sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
+            const kept = ranked.slice(0, MAX_FOLDER_CLUSTERS);
+            // Everything past the cap joins the unfiled ring.
+            ranked.slice(MAX_FOLDER_CLUSTERS).forEach(([, idx]) => unfiled.push(...idx));
+            return { groups: kept, unfiled };
+        }
+
+        function cosmosFolderPositions(count) {
+            const out = new Float32Array(count * 2);
+            const cx = COSMOS_SPACE / 2, cy = COSMOS_SPACE / 2;
+            const { groups, unfiled } = cosmosFolderGroups();
+            cosmosClusterNames = groups.map(g => g[0]);
+            cosmosClusterCentres = new Float32Array(groups.length * 2);
+
+            const SPAN = COSMOS_SPACE * 0.26;
+            const biggest = groups.length ? groups[0][1].length : 1;
+            groups.forEach(([, idx], g) => {
+                // Island centres on a phyllotaxis spiral rather than a ring:
+                // with up to 28 folders a single ring leaves a hole in the
+                // middle and crowds the rim. The biggest folder lands at the
+                // centre, which is also where the eye starts.
+                const theta = g * PHYLLOTAXIS_ANGLE;
+                const rr = SPAN * Math.sqrt((g + 0.28) / Math.max(1, groups.length));
+                const gx = cx + Math.cos(theta) * rr;
+                const gy = cy + Math.sin(theta) * rr;
+                const rad = COSMOS_SPACE * 0.055 * Math.sqrt(idx.length / biggest) + 14;
+                cosmosPackIsland(out, idx, gx, gy, rad);
+                cosmosClusterCentres[g * 2] = gx;
+                cosmosClusterCentres[g * 2 + 1] = gy;
+            });
+
+            // The unfiled: a thin annulus outside everything, so they read as
+            // context around the codebase rather than part of any folder.
+            const ring = SPAN * 1.55;
+            unfiled.forEach((node, k) => {
+                const a = (k / Math.max(1, unfiled.length)) * Math.PI * 2;
+                const jitter = ((k % 7) - 3) * (COSMOS_SPACE * 0.004);
+                out[node * 2] = cx + Math.cos(a) * (ring + jitter);
+                out[node * 2 + 1] = cy + Math.sin(a) * (ring + jitter);
+            });
+            return out;
+        }
+
+        // The catalogue the viewbar is built from.
+        //
+        //   kind 'static' — a position buffer, morphed into with the simulation
+        //                   off, so it arrives and then holds still
+        //   kind 'force'  — hand the arrangement back to the simulation
+        const COSMOS_LAYOUTS = {
+            force: { label: 'FORCE', kind: 'force' },
+            galaxy: { label: 'GAL', kind: 'static', build: cosmosGalaxyPositions },
+            spiral: { label: 'SUN', kind: 'static', build: cosmosSpiralPositions },
+            grid: { label: 'GRID', kind: 'static', build: cosmosGridPositions },
+            rings: { label: 'RING', kind: 'static', build: cosmosRingPositions },
+            clusters: { label: 'CLUS', kind: 'static', build: cosmosClusterPositions },
+            folders: { label: 'FOLDER', kind: 'static', build: cosmosFolderPositions },
+        };
+
+        const LAYOUT_MORPH_MS = 900;
+
+        // Switch arrangement. Static layouts stop the simulation and morph the
+        // position buffer; `force` hands it back and re-heats.
+        function cosmosSetLayout(name, ms) {
+            if (!cosmos || !cosmosBuf || !COSMOS_LAYOUTS[name]) return;
+            cosmosClearIntro();
+            _cosmosIntroDone = true;
+            state.layout2d = name;
+            const dur = ms == null ? LAYOUT_MORPH_MS : ms;
+            // Anything that would re-render at zero duration has to wait until
+            // this lands, or it cancels the transition mid-flight.
+            _cosmosMorphUntil = performance.now() + dur;
+
+            const spec = COSMOS_LAYOUTS[name];
+            // Only the folder layout names its islands; anything else clears
+            // the labels rather than leaving them floating over a new shape.
+            if (name !== 'folders') cosmosClusterNames = [];
+
+            if (spec.kind === 'force') {
+                cosmos.setConfigPartial({ enableSimulation: true });
+                _cosmosEarlyFit = false;
+                _cosmosStartedAt = performance.now();
+                // Enough heat to re-find a layout, short of throwing the
+                // current arrangement away — you asked to switch layout, not
+                // to reload the page.
+                cosmos.start(0.7);
+                syncLayoutButtons();
+                return;
+            }
+
+            const pos = spec.build(cosmosNodes.length);
+            cosmos.setConfigPartial({ enableSimulation: false });
+            cosmosBuf.positions.set(pos);
+            cosmosApplyVisibilityInto(cosmosBuf.positions);
+            cosmos.setPointPositions(cosmosBuf.positions);
+            cosmos.render(undefined, dur);
+            cosmos.fitView(dur, 0.16);
+            // The page treats n.x/n.y as the truth, and with the simulation off
+            // there are no ticks to sync from — so publish the arrangement
+            // once the tween has actually landed on it.
+            _cosmosAnimTimers.push(setTimeout(() => {
+                for (let i = 0; i < cosmosNodes.length; i++) {
+                    cosmosNodes[i].x = pos[i * 2];
+                    cosmosNodes[i].y = pos[i * 2 + 1];
+                    cosmosNodes[i].z = 0;
+                }
+                // A restyle that arrived mid-morph was deferred rather than
+                // allowed to cancel the transition; apply it now.
+                if (_cosmosRestylePending) {
+                    _cosmosRestylePending = false;
+                    bumpGraphStyles();
+                }
+            }, dur));
+            syncLayoutButtons();
+        }
+
+        // Re-apply the NaN holes for hidden nodes over a freshly built layout,
+        // which knows nothing about what is filtered out.
+        function cosmosApplyVisibilityInto(positions) {
+            if (!cosmosHidden) return;
+            for (let i = 0; i < cosmosHidden.length; i++) {
+                if (!cosmosHidden[i]) continue;
+                positions[i * 2] = NaN;
+                positions[i * 2 + 1] = NaN;
+            }
+        }
+
+        // Someone who has asked the OS for less motion should get the graph,
+        // not a performance.
+        function cosmosReducedMotion() {
+            return window.matchMedia
+                && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        }
+
+        // Run the opening: galaxy → sunflower → folder islands. `land` is the
+        // final stage, which is a normal layout switch like any other.
+        function cosmosPlayIntro(land) {
+            const n = cosmosNodes.length;
+            cosmosClearIntro();
+            if (!n || cosmosReducedMotion()) { land(0); return; }
+
+            const sunflower = cosmosSpiralPositions(n);
+            cosmos.setPointPositions(cosmosGalaxyPositions(n));
+            cosmos.render(undefined, 0);
+            // Frame it immediately — the whole point is that something
+            // deliberate is on screen from the first frame.
+            cosmos.fitView(0, 0.24);
+            // The simulation never runs here, so there are no ticks to release
+            // the loading overlay — it has to be done explicitly or it would
+            // sit over the whole animation.
+            requestAnimationFrame(() => requestAnimationFrame(graphReveal));
+
+            _cosmosAnimTimers.push(setTimeout(() => {
+                cosmos.setPointPositions(sunflower);
+                cosmos.render(undefined, INTRO_MORPH_MS);
+                cosmos.fitView(INTRO_MORPH_MS, 0.16);
+            }, INTRO_HOLD_MS));
+
+            _cosmosAnimTimers.push(setTimeout(
+                () => land(INTRO_MORPH_MS),
+                INTRO_HOLD_MS + INTRO_MORPH_MS
+            ));
+        }
+
         // ─── Selection / highlight ─────────────────────────────
 
         // In cosmos.gl selection is configuration, not a method call: name the
@@ -317,12 +724,11 @@
 
         RENDERERS.cosmos = () => ({
             name: 'cosmos',
-            // No third dimension, so no face projections, no orbit to spin and
-            // no cube to draw. Reported rather than silently ignored: the
-            // viewbar hides what this cannot do.
             // No third dimension: no face projections and no orbit to spin.
-            // The bounding box survives the flattening, though — the FX overlay
-            // draws it as a framed rectangle — so its toggle stays live.
+            // Reported rather than silently ignored — the viewbar hides what
+            // this cannot do. The bounding box survives the flattening, though
+            // — the FX overlay draws it as a framed rectangle — so its toggle
+            // stays live.
             caps: { threeD: false, faceViews: false, autoSpin: false, boundaryCube: true },
 
             async mount(el, view) {
@@ -330,6 +736,15 @@
                 cosmos = new CosmosLib.Graph(el, {
                     spaceSize: COSMOS_SPACE,
                     backgroundColor: CANVAS.bg,
+                    // Held off until the opening morph finishes — the forces
+                    // would otherwise dissolve the letters mid-transition.
+                    // Re-enabled by the intro's settle step.
+                    enableSimulation: false,
+                    // With the simulation off, cosmos.gl auto-rescales incoming
+                    // positions unless told not to. That would quietly rewrite
+                    // the intro's carefully placed glyph and spiral coordinates.
+                    rescalePositions: false,
+                    transitionEasing: CosmosLib.TransitionEasing.CubicInOut,
                     pointDefaultSize: 6,
                     pointOpacity: 1,
                     // The disc is the point's own shape; the glyph rides on top
@@ -421,10 +836,20 @@
                 // transition tweens every point from nothing on load, which
                 // reads as the graph arriving late rather than arriving.
                 cosmos.render(undefined, 0);
-                _cosmosEarlyFit = false;
-                _cosmosStartedAt = performance.now();
-                cosmos.start(1);
                 cosmosApplyHighlight();
+                _cosmosIntroDone = false;
+
+                // The opening lands on the folder islands — a computed layout,
+                // so it arrives and holds. cosmosSetLayout owns the rest:
+                // marking the switcher, publishing positions, flushing any
+                // restyle that was deferred during the morph.
+                cosmosPlayIntro((ms) => {
+                    _cosmosIntroDone = true;
+                    _cosmosEarlyFit = true;
+                    state._didFit = true;
+                    cosmosSetLayout('folders', ms);
+                });
+
                 // If the engine never ticks (an empty solo view, say), don't
                 // leave the loading overlay up forever.
                 setTimeout(graphReveal, 4000);
@@ -432,16 +857,34 @@
 
             setData(view) {
                 if (!cosmos) return;
+                // A view swap is not an arrival — solo mode changes this on
+                // every click, and replaying the opening each time would be
+                // absurd. Straight to the layout.
+                cosmosClearIntro();
                 cosmosBuild(view);
                 cosmos.render(undefined, 0);
+                _cosmosIntroDone = true;
+                cosmosApplyHighlight();
+                // A static arrangement has to be rebuilt for the new node set —
+                // the layouts are functions of the view, so the old buffer
+                // describes the wrong nodes. Instant, because a solo click is
+                // navigation, not an arrival.
+                if (state.layout2d && state.layout2d !== 'force') {
+                    cosmosSetLayout(state.layout2d, 0);
+                    return;
+                }
                 _cosmosEarlyFit = false;
                 _cosmosStartedAt = performance.now();
+                cosmos.setConfigPartial({ enableSimulation: true });
                 cosmos.start(1);
-                cosmosApplyHighlight();
             },
 
             restyle() {
                 if (!cosmos || !cosmosBuf) return;
+                if (!_cosmosIntroDone || performance.now() < _cosmosMorphUntil) {
+                    _cosmosRestylePending = true;
+                    return;
+                }
                 cosmosPaint();
                 cosmos.setPointColors(cosmosBuf.colors);
                 cosmos.setLinkColors(cosmosBuf.linkColors);
@@ -514,6 +957,10 @@
             setAutoSpin() {},
             setBoundaryVisible() {},
 
+            // The 2D stand-in for the 3D renderer's face projections.
+            layouts: COSMOS_LAYOUTS,
+            setLayout(name, ms) { cosmosSetLayout(name, ms); },
+
             // The walk's ignition burst is drawn by the 2D FX overlay.
             emitPulse(node, colour, fromR, toR, growMs) {
                 overlayEmitPulse(node, colour, fromR, toR, growMs);
@@ -532,6 +979,9 @@
             },
 
             dispose() {
+                // Pending intro steps would otherwise fire into a destroyed
+                // instance a beat after the renderer was swapped away.
+                cosmosClearIntro();
                 if (cosmos) {
                     try { cosmos.destroy(); } catch (err) { console.error(err); }
                 }
