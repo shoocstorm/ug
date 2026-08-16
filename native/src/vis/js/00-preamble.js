@@ -246,7 +246,7 @@
             const file = params.get('file') || 'graph.json';
             state.graphFile = file;
             const loading = document.getElementById('loading');
-            loading.style.display = 'block';
+            graphConceal();
             loading.innerHTML = `
                 <div class="loader"></div>
                 <p class="load-phase" id="load-phase">Connecting…</p>

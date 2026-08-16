@@ -305,7 +305,7 @@
         function mountFailed(name, err) {
             const loading = document.getElementById('loading');
             if (!loading) return;
-            loading.style.display = 'block';
+            graphConceal();
             loading.innerHTML = `
                 <div class="load-error-card">
                     <div class="load-error-title">Could not start the ${name} renderer</div>
@@ -372,8 +372,7 @@
             state._boxSettled = false;
             // The layout is about to be recomputed by a different engine, so
             // the overlay must come up blank rather than over a stale frame.
-            const loading = document.getElementById('loading');
-            if (loading) loading.style.display = 'block';
+            graphConceal();
             await createGraph();
             bumpGraphStyles();
         }
@@ -509,4 +508,18 @@
             state._graphRevealed = true;
             const loading = document.getElementById('loading');
             if (loading) loading.style.display = 'none';
+            document.body.classList.remove('graph-loading');
+        }
+
+        // The other half of that lifecycle: put the overlay back up.
+        //
+        // The canvas chrome goes with it. The legend decodes colours that are
+        // not on screen yet, and every view-bar control — the layouts, the
+        // face views, Reset — aims at a graph that does not exist, so leaving
+        // them up over a spinner offers actions that can only misfire. The
+        // class is the switch; see `body.graph-loading` in 09-canvas.css.
+        function graphConceal() {
+            const loading = document.getElementById('loading');
+            if (loading) loading.style.display = 'block';
+            document.body.classList.add('graph-loading');
         }

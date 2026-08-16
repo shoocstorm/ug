@@ -340,6 +340,24 @@
             return true;
         }
 
+        // Is there anything on the GPU to read or frame?
+        //
+        // Every cosmos.gl camera helper that fits a view — `fitView`,
+        // `getPointPositions` — works by reading the position framebuffer back
+        // off the GPU. With no points that framebuffer is never allocated, and
+        // the readback dies inside luma.gl destructuring `device` off an
+        // undefined texture ("Cannot destructure property 'device' of 'e'").
+        // Thrown out of `mount`, that becomes "Could not start the cosmos
+        // renderer" and the page never comes up at all.
+        //
+        // An empty view is not a corner case here: past SOLO_THRESHOLD
+        // elements the page opens in solo mode, whose view holds nothing until
+        // a node is picked (see applySoloMode). So *every* large graph mounts
+        // through this path.
+        function cosmosHasPoints() {
+            return !!cosmos && cosmosNodes.length > 0;
+        }
+
         // Read the GPU's positions back onto the node objects.
         //
         // The rest of the page treats `n.x` / `n.y` as the truth — extent
@@ -348,7 +366,7 @@
         // otherwise stay frozen at their seeded values. Absent (NaN) points are
         // skipped so hiding a node never destroys the position it comes back to.
         function cosmosSync() {
-            if (!cosmos || !cosmos.isReady) return;
+            if (!cosmos || !cosmos.isReady || !cosmosHasPoints()) return;
             const p = cosmos.getPointPositions();
             if (!p || !p.length) return;
             for (let i = 0; i < cosmosNodes.length; i++) {
@@ -677,6 +695,11 @@
             cosmosClearIntro();
             _cosmosIntroDone = true;
             state.layout2d = name;
+            // An empty view has no arrangement to make — and asking cosmos.gl
+            // to fit a camera to nothing is fatal (see cosmosHasPoints). The
+            // choice still sticks: `setData` re-applies it the moment the view
+            // has nodes again, which in solo mode is the very next click.
+            if (!cosmosHasPoints()) { syncLayoutButtons(); return; }
             const dur = ms == null ? LAYOUT_MORPH_MS : ms;
             // Anything that would re-render at zero duration has to wait until
             // this lands, or it cancels the transition mid-flight.
@@ -731,7 +754,7 @@
         // from the caller rather than from COSMOS_LAYOUTS, and only the named
         // nodes move: everything else holds the spot it already had.
         function cosmosSetNodePositions(pos, ms) {
-            if (!cosmos || !cosmosBuf) return;
+            if (!cosmos || !cosmosBuf || !cosmosHasPoints()) return;
             // A morph in flight would fight this one, and the opening's staged
             // timers would land on top of it.
             cosmosClearIntro();
@@ -814,7 +837,16 @@
         function cosmosPlayIntro(land) {
             const n = cosmosNodes.length;
             cosmosClearIntro();
-            if (!n || cosmosReducedMotion()) { land(0); return; }
+            if (!n || cosmosReducedMotion()) {
+                land(0);
+                // Neither of these paths runs the simulation, so no tick will
+                // take the loading overlay down — without this it sits there
+                // until mount's 4 s backstop, over a canvas that is already
+                // finished (or, for an empty solo view, over the card
+                // explaining how to put something on it).
+                requestAnimationFrame(() => requestAnimationFrame(graphReveal));
+                return;
+            }
 
             const sunflower = cosmosSpiralPositions(n);
             cosmos.setPointPositions(cosmosGalaxyPositions(n));
@@ -1013,7 +1045,8 @@
                         // is most of why the opening felt slow: the layout was
                         // already legible long before, but it was still a small
                         // knot off in a corner with the camera parked wide.
-                        if (!_cosmosEarlyFit && performance.now() - _cosmosStartedAt > 220) {
+                        if (!_cosmosEarlyFit && cosmosHasPoints()
+                            && performance.now() - _cosmosStartedAt > 220) {
                             _cosmosEarlyFit = true;
                             cosmos.fitView(220, 0.15);
                         }
@@ -1027,7 +1060,7 @@
                     onSimulationEnd: () => {
                         cosmosSync();
                         state._boxSettled = true;
-                        if (!state._didFit) {
+                        if (!state._didFit && cosmosHasPoints()) {
                             state._didFit = true;
                             cosmos.fitView(350, 0.15);
                         }
@@ -1079,6 +1112,7 @@
                     cosmosSetLayout(state.layout2d, 0);
                     return;
                 }
+                if (!cosmosHasPoints()) return;
                 _cosmosEarlyFit = false;
                 _cosmosStartedAt = performance.now();
                 cosmos.setConfigPartial({ enableSimulation: true });
@@ -1106,11 +1140,14 @@
             // picks the new size up itself; nothing to push.
             resize() {},
 
-            frameAll(ms) { if (cosmos) cosmos.fitView(ms, 0.15); },
+            // Both fits are reachable with an empty canvas — Reset and the 1–6
+            // keys are live in solo mode before a node has been picked — and
+            // fitting a camera to no points is fatal (see cosmosHasPoints).
+            frameAll(ms) { if (cosmosHasPoints()) cosmos.fitView(ms, 0.15); },
 
             // Every face projection collapses to the same 2D fit. The buttons
             // are hidden by caps, but the 1–6 keyboard shortcuts still land here.
-            setView(_id, ms) { if (cosmos) cosmos.fitView(ms, 0.15); },
+            setView(_id, ms) { if (cosmosHasPoints()) cosmos.fitView(ms, 0.15); },
 
             // `opts.flat` is a 3D notion (which way the camera points); a plane
             // is already flat, so the fit is the same either way.

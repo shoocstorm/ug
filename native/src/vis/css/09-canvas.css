@@ -30,6 +30,18 @@
             font-size: 14px;
         }
 
+        /* While the overlay is up, the canvas chrome goes with it: the legend
+           is a key to colours nothing is drawn in yet, and the view bar steers
+           a graph that does not exist. Both come back on the first painted
+           frame — the class is set and cleared by graphConceal / graphReveal.
+           Faded rather than `display:none` so the view bar keeps its measured
+           width and does not reflow the moment it appears. */
+        body.graph-loading #legend,
+        body.graph-loading #viewbar {
+            opacity: 0;
+            pointer-events: none;
+        }
+
         .tooltip {
             position: absolute;
             background: rgba(15, 15, 17, 0.95);

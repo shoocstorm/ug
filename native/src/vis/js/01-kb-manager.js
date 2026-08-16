@@ -369,7 +369,7 @@
                 if (!graphInitialized) loadGraph();
                 return;
             }
-            document.getElementById('loading').style.display = 'block';
+            graphConceal();
             try {
                 const res = await fetch('/api/projects/select', {
                     method: 'POST',

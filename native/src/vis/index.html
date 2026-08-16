@@ -11,7 +11,10 @@
     </style>
 </head>
 
-<body>
+<!-- The page opens on the loading overlay, so it opens with the canvas
+     chrome held back — see `body.graph-loading` in 09-canvas.css and
+     graphReveal/graphConceal in 10-render-core.js. -->
+<body class="graph-loading">
     <!-- Knowledge Base Manager: always shown first in multi-project mode.
          Lists discovered ~/.ug projects to open, or a wizard to generate
          a new one from a folder. Hidden entirely in single-project mode
