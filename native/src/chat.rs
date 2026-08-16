@@ -158,7 +158,6 @@ impl ChatMessage {
 #[derive(Clone, Debug, Default)]
 pub struct Completion {
     pub content: String,
-    #[allow(dead_code)]
     pub reasoning: String,
     pub tool_calls: Vec<ToolCall>,
     pub usage: Option<Usage>,
@@ -803,6 +802,20 @@ pub struct ToolEvent {
     pub result: Option<String>,
 }
 
+/// What a tool-calling exchange left behind for the final turn.
+pub struct ToolRounds {
+    /// The conversation to send for the final answer.
+    pub messages: Vec<ChatMessage>,
+    /// What the rounds cost.
+    pub usage: Option<Usage>,
+    /// How many tools actually ran.
+    pub calls: usize,
+    /// The answer a round produced *instead* of calling a tool, when one
+    /// did. See [`run_tool_rounds`] — the caller must use this rather than
+    /// asking for the same answer a second time.
+    pub answer: Option<Completion>,
+}
+
 /// Run the model's tool calls until it answers in prose.
 ///
 /// Tool rounds are deliberately non-streaming: partial `tool_calls` deltas
@@ -810,12 +823,21 @@ pub struct ToolEvent {
 /// no user-visible text anyway. The caller streams the *final* answer.
 /// Returns the messages to send for that final turn, plus the usage the
 /// rounds cost.
+///
+/// **A round that answers instead of calling a tool has already written the
+/// whole answer**, and it comes back in [`ToolRounds::answer`]. This used to
+/// be thrown away so the caller could redo it streamed, which made every
+/// tool-less turn generate its answer twice — the single largest avoidable
+/// cost in a chat turn, and pure decode time on a local endpoint (§5). One
+/// measured turn against a 161k-node graph: 17.1 s writing the draft, then
+/// 9.8 s streaming the same answer again. Reusing the draft ends the turn at
+/// the moment the old code was only starting to show its first token.
 pub async fn run_tool_rounds<F>(
     chat: &ChatClient,
     toolbox: &ToolBox<'_>,
     mut messages: Vec<ChatMessage>,
     mut on_event: F,
-) -> Result<(Vec<ChatMessage>, Option<Usage>, usize), ChatError>
+) -> Result<ToolRounds, ChatError>
 where
     F: FnMut(ToolEvent),
 {
@@ -825,10 +847,11 @@ where
         let out = chat.complete_raw(&messages, Some(&toolbox.schemas)).await?;
         usage = merge_usage(usage, out.usage.clone());
         if out.tool_calls.is_empty() {
-            // The model answered instead of calling a tool. Drop that draft
-            // and let the caller redo it streamed — the context it built up
-            // (the tool results) is what matters.
-            return Ok((messages, usage, calls));
+            // The model answered instead of calling a tool. Hand that answer
+            // back rather than paying to generate it again; an empty one is
+            // no answer at all, so that still falls through to the caller.
+            let answer = (!out.content.trim().is_empty()).then_some(out);
+            return Ok(ToolRounds { messages, usage, calls, answer });
         }
 
         // Record the assistant turn verbatim; providers reject tool results
@@ -884,7 +907,7 @@ where
         "user",
         "You have used all available tool calls. Answer now with what you have.",
     ));
-    Ok((messages, usage, calls))
+    Ok(ToolRounds { messages, usage, calls, answer: None })
 }
 
 /// One-line rendering of tool arguments for the progress feed.
@@ -1468,18 +1491,25 @@ pub async fn run_chat_rag(
     let t_cmp = std::time::Instant::now();
     let mut tool_usage = None;
     let mut tool_calls = 0;
+    let mut drafted = None;
     if let Some(tb) = toolbox {
         if let Some(sys) = messages.first_mut().filter(|m| m.role == "system") {
             sys.content.push_str(TOOL_SYSTEM_SUFFIX);
         }
         // No progress feed here: nothing is watching a non-streamed turn.
-        let (msgs, usage, calls) = run_tool_rounds(chat, tb, messages, |_| {}).await?;
-        messages = msgs;
-        tool_usage = usage;
-        tool_calls = calls;
+        let rounds = run_tool_rounds(chat, tb, messages, |_| {}).await?;
+        messages = rounds.messages;
+        tool_usage = rounds.usage;
+        tool_calls = rounds.calls;
+        drafted = rounds.answer;
     }
 
-    let (answer, usage) = chat.complete(&messages).await?;
+    // A round that answered instead of calling a tool already wrote this
+    // answer, and its cost is in `tool_usage`.
+    let (answer, usage) = match drafted {
+        Some(d) => (d.content, None),
+        None => chat.complete(&messages).await?,
+    };
     let completion_ms = t_cmp.elapsed().as_millis();
 
     Ok(ChatRagOutcome {
@@ -1539,6 +1569,7 @@ where
     // starting neighbourhood, the tools let it follow the threads it finds.
     let mut tool_usage = None;
     let mut tool_calls = 0;
+    let mut drafted = None;
     if toolbox.is_some() {
         // Tell it the tools exist, and when they're worth using.
         if let Some(sys) = messages.first_mut().filter(|m| m.role == "system") {
@@ -1546,11 +1577,33 @@ where
         }
     }
     if let Some(tb) = toolbox {
-        let (msgs, usage, calls) =
-            run_tool_rounds(chat, tb, messages, |e| on_tool(e)).await?;
-        messages = msgs;
-        tool_usage = usage;
-        tool_calls = calls;
+        let rounds = run_tool_rounds(chat, tb, messages, |e| on_tool(e)).await?;
+        messages = rounds.messages;
+        tool_usage = rounds.usage;
+        tool_calls = rounds.calls;
+        drafted = rounds.answer;
+    }
+
+    // A round that answered instead of calling a tool already wrote the whole
+    // answer. Re-asking for it streamed would double the turn's decode time
+    // for nothing — the second copy would not even start arriving until after
+    // the first one finished. Deliver the draft as one delta instead, which
+    // is what the non-streaming fallback below already does.
+    if let Some(d) = drafted {
+        on_delta(StreamDelta {
+            content: Some(d.content.clone()),
+            reasoning: (!d.reasoning.is_empty()).then(|| d.reasoning.clone()),
+            ..Default::default()
+        });
+        return Ok(ChatRagOutcome {
+            answer: d.content,
+            reasoning: d.reasoning,
+            context,
+            retrieval_ms,
+            completion_ms: t_cmp.elapsed().as_millis(),
+            usage: tool_usage,
+            tool_calls,
+        });
     }
 
     let (answer, reasoning, usage) = match chat.complete_stream(&messages, &mut on_delta).await {

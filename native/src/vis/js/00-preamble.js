@@ -216,8 +216,6 @@
         // link hot?" question stays a single lookup.
         state.highlightLinkDir = new Map();
 
-        let rawData = null;
-
         function downloadJSON(data, filename) {
             const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
@@ -230,15 +228,32 @@
             URL.revokeObjectURL(url);
         }
 
+        // Both re-read the file rather than keeping the parsed payload around.
+        // Holding it meant the tab carried the graph twice for the whole
+        // session — the untrimmed parse *and* the objects `transformData`
+        // built from it — so that two buttons nobody presses on most visits
+        // could re-serialize it. On a 162k-node repo that second copy is
+        // hundreds of megabytes of permanently live objects. A download is
+        // not a hot path; paying for the re-read at click time is the trade.
+        async function downloadFromGraphFile(pick, filename) {
+            try {
+                const res = await fetch(state.graphFile);
+                if (!res.ok) throw new Error(`Server answered ${res.status} ${res.statusText}`);
+                downloadJSON(pick(await res.json()), filename);
+            } catch (err) {
+                // The old version read an in-memory copy and could not fail;
+                // re-reading can, so say so somewhere rather than rejecting
+                // into nothing.
+                console.error(`Failed to download ${filename}:`, err);
+            }
+        }
+
         function downloadIndex() {
-            if (!rawData) return;
-            downloadJSON(rawData, 'index.json');
+            return downloadFromGraphFile(d => d, 'index.json');
         }
 
         function downloadGraph() {
-            if (!rawData) return;
-            const graph = { nodes: rawData.nodes, edges: rawData.edges };
-            downloadJSON(graph, 'graph.json');
+            return downloadFromGraphFile(d => ({ nodes: d.nodes, edges: d.edges }), 'graph.json');
         }
 
         async function loadGraph() {
@@ -293,28 +308,45 @@
                 const length = parseInt(response.headers.get('Content-Length') || '0', 10);
                 let data;
                 if (response.body && length > 0) {
+                    // Decoded as it arrives, so the payload exists once rather
+                    // than three times over. Keeping every chunk, copying them
+                    // into one `Uint8Array`, then decoding *that* to a string
+                    // meant a 346 MB graph needed ~1 GB of transient buffers
+                    // before `JSON.parse` had even started — on the repos big
+                    // enough to show a progress bar, which is the whole set of
+                    // repos this branch exists for. `text +=` builds a rope
+                    // that is flattened once, at the parse.
                     const reader = response.body.getReader();
-                    const chunks = [];
+                    const decoder = new TextDecoder('utf-8');
+                    let text = '';
                     let received = 0;
                     setPhase('Downloading…', 0);
                     for (;;) {
                         const { done, value } = await reader.read();
                         if (done) break;
-                        if (value) { chunks.push(value); received += value.length; }
+                        if (value) {
+                            received += value.length;
+                            text += decoder.decode(value, { stream: true });
+                        }
                         const pct = Math.min(100, Math.round((received / length) * 100));
                         setPhase(`Downloading (${formatBytes(received)} of ${formatBytes(length)})…`, pct);
                     }
-                    const all = new Uint8Array(received);
-                    let off = 0;
-                    for (const c of chunks) { all.set(c, off); off += c.length; }
-                    data = JSON.parse(new TextDecoder('utf-8').decode(all));
+                    text += decoder.decode();
+                    data = JSON.parse(text);
                 } else {
                     data = await response.json();
                 }
 
                 setPhase('Building graph…', 100);
-                rawData = data;
                 transformData(data);
+                // Released before `initialize()`, which is the peak: it builds
+                // `nodeById`, the adjacency index and the filter/legend passes
+                // on top of what `transformData` just allocated. `state.graph`
+                // holds trimmed copies (and shares the sub-objects it kept), so
+                // what goes here is the untrimmed shells, the fields the app
+                // never reads, and every original edge — the parse is the one
+                // copy nothing needs a second time.
+                data = null;
                 initialize();
                 graphInitialized = true;
                 // The URL may carry a view worth restoring (a shared link, or

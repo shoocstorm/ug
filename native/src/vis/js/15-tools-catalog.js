@@ -83,38 +83,41 @@
             });
         }
 
+        // Cycle detection runs on the server (`GET /api/graph/cycles`), which
+        // already owns a cached, iterative implementation over the same
+        // graph.json.
+        //
+        // It used to run here, and could not: the DFS re-`filter`ed all of
+        // `state.graph.edges` at every node it visited, so the work was
+        // O(nodes × edges) — on a 162k-node / 746k-edge repo that is ~10¹¹
+        // comparisons on the main thread, with a recursion depth that
+        // overflows the stack long before it gets there. The server answers
+        // the same graph in 0.33 s.
+        //
+        // On the published demo there is no server; the shim's 501 lands in
+        // the catch and says so, which is the honest answer rather than a
+        // frozen tab.
         async function detectAndShowCycles() {
             const status = document.getElementById('cycle-status');
             const text = document.getElementById('cycle-status-text');
             text.textContent = 'Computing…';
             status.className = 'cycle-status';
 
-            const visited = new Set();
-            const recStack = new Set();
-            const cycles = [];
-
-            function dfs(id, path) {
-                visited.add(id);
-                recStack.add(id);
-                path.push(id);
-                const outgoing = state.graph.edges.filter(e => (e.source.id || e.source) === id);
-                for (const edge of outgoing) {
-                    const next = edge.target.id || edge.target;
-                    if (!visited.has(next)) dfs(next, [...path]);
-                    else if (recStack.has(next)) {
-                        cycles.push([...path.slice(path.indexOf(next)), next]);
-                    }
+            try {
+                const res = await fetch('/api/graph/cycles');
+                if (!res.ok) throw new Error(await readErr(res));
+                const data = await res.json();
+                const count = (data.cycles || []).length;
+                if (count) {
+                    text.textContent = `${count} cycle(s) detected`;
+                    status.className = 'cycle-status has-cycles';
+                } else {
+                    text.textContent = 'No cycles found';
+                    status.className = 'cycle-status no-cycles';
                 }
-                recStack.delete(id);
-            }
-            state.graph.nodes.forEach(n => { if (!visited.has(n.id)) dfs(n.id, []); });
-
-            if (cycles.length) {
-                text.textContent = `${cycles.length} cycle(s) detected`;
-                status.className = 'cycle-status has-cycles';
-            } else {
-                text.textContent = 'No cycles found';
-                status.className = 'cycle-status no-cycles';
+            } catch (err) {
+                text.textContent = `Cycle detection unavailable — ${err.message || err}`;
+                status.className = 'cycle-status';
             }
         }
 

@@ -313,13 +313,21 @@
                 });
             });
 
-            const edges = data.edges
-                .map(e => ({
-                    source: e.source,
-                    target: e.target,
-                    rel: e.edge_type || e.rel || null
-                }))
-                .filter(e => e.source && e.target && nodeMap.has(e.source) && nodeMap.has(e.target));
+            // Endpoints are carried over as the *node's own* id string rather
+            // than the one JSON.parse made for this edge. graph.json spells
+            // every endpoint out in full, so a large repo arrives with a fresh
+            // string per endpoint: 1.5M of them on a 746k-edge graph, where
+            // only 162k distinct ids exist. Pointing at the node's copy leaves
+            // the duplicates collectable along with the rest of the parsed
+            // payload instead of pinning ~130 MB for the life of the tab.
+            // The lookup is the same one the old `.has()` filter did.
+            const edges = [];
+            for (const e of data.edges) {
+                const s = nodeMap.get(e.source);
+                const t = nodeMap.get(e.target);
+                if (!s || !t) continue;
+                edges.push({ source: s.id, target: t.id, rel: e.edge_type || e.rel || null });
+            }
 
             state.graph = { nodes: Array.from(nodeMap.values()), edges };
             state.containsMaps = null;

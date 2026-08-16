@@ -5395,6 +5395,18 @@
             font-size: 14px;
         }
 
+        /* While the overlay is up, the canvas chrome goes with it: the legend
+           is a key to colours nothing is drawn in yet, and the view bar steers
+           a graph that does not exist. Both come back on the first painted
+           frame — the class is set and cleared by graphConceal / graphReveal.
+           Faded rather than `display:none` so the view bar keeps its measured
+           width and does not reflow the moment it appears. */
+        body.graph-loading #legend,
+        body.graph-loading #viewbar {
+            opacity: 0;
+            pointer-events: none;
+        }
+
         .tooltip {
             position: absolute;
             background: rgba(15, 15, 17, 0.95);
@@ -8606,7 +8618,7 @@
 }
     </style>
 <script>
-window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3162,"edges":9271,"files":104,"lines":72348,"ugVersion":"0.1.14","visFingerprint":"79f3368ceed44342","generatedAt":1786868144};
+window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3162,"edges":9271,"files":104,"lines":72348,"ugVersion":"0.1.15","visFingerprint":"c8b7730b186d8685","generatedAt":1786878322};
 /* ==========================================================================
    UltraGraph — static demo shim
    ==========================================================================
@@ -9004,7 +9016,10 @@ window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#g
 </script>
 </head>
 
-<body>
+<!-- The page opens on the loading overlay, so it opens with the canvas
+     chrome held back — see `body.graph-loading` in 09-canvas.css and
+     graphReveal/graphConceal in 10-render-core.js. -->
+<body class="graph-loading">
     <!-- Knowledge Base Manager: always shown first in multi-project mode.
          Lists discovered ~/.ug projects to open, or a wizard to generate
          a new one from a folder. Hidden entirely in single-project mode
@@ -10831,8 +10846,6 @@ traverse({
         // link hot?" question stays a single lookup.
         state.highlightLinkDir = new Map();
 
-        let rawData = null;
-
         function downloadJSON(data, filename) {
             const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
@@ -10845,15 +10858,32 @@ traverse({
             URL.revokeObjectURL(url);
         }
 
+        // Both re-read the file rather than keeping the parsed payload around.
+        // Holding it meant the tab carried the graph twice for the whole
+        // session — the untrimmed parse *and* the objects `transformData`
+        // built from it — so that two buttons nobody presses on most visits
+        // could re-serialize it. On a 162k-node repo that second copy is
+        // hundreds of megabytes of permanently live objects. A download is
+        // not a hot path; paying for the re-read at click time is the trade.
+        async function downloadFromGraphFile(pick, filename) {
+            try {
+                const res = await fetch(state.graphFile);
+                if (!res.ok) throw new Error(`Server answered ${res.status} ${res.statusText}`);
+                downloadJSON(pick(await res.json()), filename);
+            } catch (err) {
+                // The old version read an in-memory copy and could not fail;
+                // re-reading can, so say so somewhere rather than rejecting
+                // into nothing.
+                console.error(`Failed to download ${filename}:`, err);
+            }
+        }
+
         function downloadIndex() {
-            if (!rawData) return;
-            downloadJSON(rawData, 'index.json');
+            return downloadFromGraphFile(d => d, 'index.json');
         }
 
         function downloadGraph() {
-            if (!rawData) return;
-            const graph = { nodes: rawData.nodes, edges: rawData.edges };
-            downloadJSON(graph, 'graph.json');
+            return downloadFromGraphFile(d => ({ nodes: d.nodes, edges: d.edges }), 'graph.json');
         }
 
         async function loadGraph() {
@@ -10861,7 +10891,7 @@ traverse({
             const file = params.get('file') || 'graph.json';
             state.graphFile = file;
             const loading = document.getElementById('loading');
-            loading.style.display = 'block';
+            graphConceal();
             loading.innerHTML = `
                 <div class="loader"></div>
                 <p class="load-phase" id="load-phase">Connecting…</p>
@@ -10908,28 +10938,45 @@ traverse({
                 const length = parseInt(response.headers.get('Content-Length') || '0', 10);
                 let data;
                 if (response.body && length > 0) {
+                    // Decoded as it arrives, so the payload exists once rather
+                    // than three times over. Keeping every chunk, copying them
+                    // into one `Uint8Array`, then decoding *that* to a string
+                    // meant a 346 MB graph needed ~1 GB of transient buffers
+                    // before `JSON.parse` had even started — on the repos big
+                    // enough to show a progress bar, which is the whole set of
+                    // repos this branch exists for. `text +=` builds a rope
+                    // that is flattened once, at the parse.
                     const reader = response.body.getReader();
-                    const chunks = [];
+                    const decoder = new TextDecoder('utf-8');
+                    let text = '';
                     let received = 0;
                     setPhase('Downloading…', 0);
                     for (;;) {
                         const { done, value } = await reader.read();
                         if (done) break;
-                        if (value) { chunks.push(value); received += value.length; }
+                        if (value) {
+                            received += value.length;
+                            text += decoder.decode(value, { stream: true });
+                        }
                         const pct = Math.min(100, Math.round((received / length) * 100));
                         setPhase(`Downloading (${formatBytes(received)} of ${formatBytes(length)})…`, pct);
                     }
-                    const all = new Uint8Array(received);
-                    let off = 0;
-                    for (const c of chunks) { all.set(c, off); off += c.length; }
-                    data = JSON.parse(new TextDecoder('utf-8').decode(all));
+                    text += decoder.decode();
+                    data = JSON.parse(text);
                 } else {
                     data = await response.json();
                 }
 
                 setPhase('Building graph…', 100);
-                rawData = data;
                 transformData(data);
+                // Released before `initialize()`, which is the peak: it builds
+                // `nodeById`, the adjacency index and the filter/legend passes
+                // on top of what `transformData` just allocated. `state.graph`
+                // holds trimmed copies (and shares the sub-objects it kept), so
+                // what goes here is the untrimmed shells, the fields the app
+                // never reads, and every original edge — the parse is the one
+                // copy nothing needs a second time.
+                data = null;
                 initialize();
                 graphInitialized = true;
                 // The URL may carry a view worth restoring (a shared link, or
@@ -11322,7 +11369,7 @@ traverse({
                 if (!graphInitialized) loadGraph();
                 return;
             }
-            document.getElementById('loading').style.display = 'block';
+            graphConceal();
             try {
                 const res = await fetch('/api/projects/select', {
                     method: 'POST',
@@ -11661,13 +11708,21 @@ traverse({
                 });
             });
 
-            const edges = data.edges
-                .map(e => ({
-                    source: e.source,
-                    target: e.target,
-                    rel: e.edge_type || e.rel || null
-                }))
-                .filter(e => e.source && e.target && nodeMap.has(e.source) && nodeMap.has(e.target));
+            // Endpoints are carried over as the *node's own* id string rather
+            // than the one JSON.parse made for this edge. graph.json spells
+            // every endpoint out in full, so a large repo arrives with a fresh
+            // string per endpoint: 1.5M of them on a 746k-edge graph, where
+            // only 162k distinct ids exist. Pointing at the node's copy leaves
+            // the duplicates collectable along with the rest of the parsed
+            // payload instead of pinning ~130 MB for the life of the tab.
+            // The lookup is the same one the old `.has()` filter did.
+            const edges = [];
+            for (const e of data.edges) {
+                const s = nodeMap.get(e.source);
+                const t = nodeMap.get(e.target);
+                if (!s || !t) continue;
+                edges.push({ source: s.id, target: t.id, rel: e.edge_type || e.rel || null });
+            }
 
             state.graph = { nodes: Array.from(nodeMap.values()), edges };
             state.containsMaps = null;
@@ -17244,7 +17299,7 @@ traverse({
         function mountFailed(name, err) {
             const loading = document.getElementById('loading');
             if (!loading) return;
-            loading.style.display = 'block';
+            graphConceal();
             loading.innerHTML = `
                 <div class="load-error-card">
                     <div class="load-error-title">Could not start the ${name} renderer</div>
@@ -17311,8 +17366,7 @@ traverse({
             state._boxSettled = false;
             // The layout is about to be recomputed by a different engine, so
             // the overlay must come up blank rather than over a stale frame.
-            const loading = document.getElementById('loading');
-            if (loading) loading.style.display = 'block';
+            graphConceal();
             await createGraph();
             bumpGraphStyles();
         }
@@ -17448,6 +17502,20 @@ traverse({
             state._graphRevealed = true;
             const loading = document.getElementById('loading');
             if (loading) loading.style.display = 'none';
+            document.body.classList.remove('graph-loading');
+        }
+
+        // The other half of that lifecycle: put the overlay back up.
+        //
+        // The canvas chrome goes with it. The legend decodes colours that are
+        // not on screen yet, and every view-bar control — the layouts, the
+        // face views, Reset — aims at a graph that does not exist, so leaving
+        // them up over a spinner offers actions that can only misfire. The
+        // class is the switch; see `body.graph-loading` in 09-canvas.css.
+        function graphConceal() {
+            const loading = document.getElementById('loading');
+            if (loading) loading.style.display = 'block';
+            document.body.classList.add('graph-loading');
         }
 // ==== 11-render-three.js ====
         // ─── Renderer backend: 3D force graph (three.js + 3d-force-graph) ──
@@ -19585,6 +19653,24 @@ traverse({
             return true;
         }
 
+        // Is there anything on the GPU to read or frame?
+        //
+        // Every cosmos.gl camera helper that fits a view — `fitView`,
+        // `getPointPositions` — works by reading the position framebuffer back
+        // off the GPU. With no points that framebuffer is never allocated, and
+        // the readback dies inside luma.gl destructuring `device` off an
+        // undefined texture ("Cannot destructure property 'device' of 'e'").
+        // Thrown out of `mount`, that becomes "Could not start the cosmos
+        // renderer" and the page never comes up at all.
+        //
+        // An empty view is not a corner case here: past SOLO_THRESHOLD
+        // elements the page opens in solo mode, whose view holds nothing until
+        // a node is picked (see applySoloMode). So *every* large graph mounts
+        // through this path.
+        function cosmosHasPoints() {
+            return !!cosmos && cosmosNodes.length > 0;
+        }
+
         // Read the GPU's positions back onto the node objects.
         //
         // The rest of the page treats `n.x` / `n.y` as the truth — extent
@@ -19593,7 +19679,7 @@ traverse({
         // otherwise stay frozen at their seeded values. Absent (NaN) points are
         // skipped so hiding a node never destroys the position it comes back to.
         function cosmosSync() {
-            if (!cosmos || !cosmos.isReady) return;
+            if (!cosmos || !cosmos.isReady || !cosmosHasPoints()) return;
             const p = cosmos.getPointPositions();
             if (!p || !p.length) return;
             for (let i = 0; i < cosmosNodes.length; i++) {
@@ -19922,6 +20008,11 @@ traverse({
             cosmosClearIntro();
             _cosmosIntroDone = true;
             state.layout2d = name;
+            // An empty view has no arrangement to make — and asking cosmos.gl
+            // to fit a camera to nothing is fatal (see cosmosHasPoints). The
+            // choice still sticks: `setData` re-applies it the moment the view
+            // has nodes again, which in solo mode is the very next click.
+            if (!cosmosHasPoints()) { syncLayoutButtons(); return; }
             const dur = ms == null ? LAYOUT_MORPH_MS : ms;
             // Anything that would re-render at zero duration has to wait until
             // this lands, or it cancels the transition mid-flight.
@@ -19976,7 +20067,7 @@ traverse({
         // from the caller rather than from COSMOS_LAYOUTS, and only the named
         // nodes move: everything else holds the spot it already had.
         function cosmosSetNodePositions(pos, ms) {
-            if (!cosmos || !cosmosBuf) return;
+            if (!cosmos || !cosmosBuf || !cosmosHasPoints()) return;
             // A morph in flight would fight this one, and the opening's staged
             // timers would land on top of it.
             cosmosClearIntro();
@@ -20059,7 +20150,16 @@ traverse({
         function cosmosPlayIntro(land) {
             const n = cosmosNodes.length;
             cosmosClearIntro();
-            if (!n || cosmosReducedMotion()) { land(0); return; }
+            if (!n || cosmosReducedMotion()) {
+                land(0);
+                // Neither of these paths runs the simulation, so no tick will
+                // take the loading overlay down — without this it sits there
+                // until mount's 4 s backstop, over a canvas that is already
+                // finished (or, for an empty solo view, over the card
+                // explaining how to put something on it).
+                requestAnimationFrame(() => requestAnimationFrame(graphReveal));
+                return;
+            }
 
             const sunflower = cosmosSpiralPositions(n);
             cosmos.setPointPositions(cosmosGalaxyPositions(n));
@@ -20258,7 +20358,8 @@ traverse({
                         // is most of why the opening felt slow: the layout was
                         // already legible long before, but it was still a small
                         // knot off in a corner with the camera parked wide.
-                        if (!_cosmosEarlyFit && performance.now() - _cosmosStartedAt > 220) {
+                        if (!_cosmosEarlyFit && cosmosHasPoints()
+                            && performance.now() - _cosmosStartedAt > 220) {
                             _cosmosEarlyFit = true;
                             cosmos.fitView(220, 0.15);
                         }
@@ -20272,7 +20373,7 @@ traverse({
                     onSimulationEnd: () => {
                         cosmosSync();
                         state._boxSettled = true;
-                        if (!state._didFit) {
+                        if (!state._didFit && cosmosHasPoints()) {
                             state._didFit = true;
                             cosmos.fitView(350, 0.15);
                         }
@@ -20324,6 +20425,7 @@ traverse({
                     cosmosSetLayout(state.layout2d, 0);
                     return;
                 }
+                if (!cosmosHasPoints()) return;
                 _cosmosEarlyFit = false;
                 _cosmosStartedAt = performance.now();
                 cosmos.setConfigPartial({ enableSimulation: true });
@@ -20351,11 +20453,14 @@ traverse({
             // picks the new size up itself; nothing to push.
             resize() {},
 
-            frameAll(ms) { if (cosmos) cosmos.fitView(ms, 0.15); },
+            // Both fits are reachable with an empty canvas — Reset and the 1–6
+            // keys are live in solo mode before a node has been picked — and
+            // fitting a camera to no points is fatal (see cosmosHasPoints).
+            frameAll(ms) { if (cosmosHasPoints()) cosmos.fitView(ms, 0.15); },
 
             // Every face projection collapses to the same 2D fit. The buttons
             // are hidden by caps, but the 1–6 keyboard shortcuts still land here.
-            setView(_id, ms) { if (cosmos) cosmos.fitView(ms, 0.15); },
+            setView(_id, ms) { if (cosmosHasPoints()) cosmos.fitView(ms, 0.15); },
 
             // `opts.flat` is a 3D notion (which way the camera points); a plane
             // is already flat, so the fit is the same either way.
@@ -22559,38 +22664,41 @@ traverse({
             });
         }
 
+        // Cycle detection runs on the server (`GET /api/graph/cycles`), which
+        // already owns a cached, iterative implementation over the same
+        // graph.json.
+        //
+        // It used to run here, and could not: the DFS re-`filter`ed all of
+        // `state.graph.edges` at every node it visited, so the work was
+        // O(nodes × edges) — on a 162k-node / 746k-edge repo that is ~10¹¹
+        // comparisons on the main thread, with a recursion depth that
+        // overflows the stack long before it gets there. The server answers
+        // the same graph in 0.33 s.
+        //
+        // On the published demo there is no server; the shim's 501 lands in
+        // the catch and says so, which is the honest answer rather than a
+        // frozen tab.
         async function detectAndShowCycles() {
             const status = document.getElementById('cycle-status');
             const text = document.getElementById('cycle-status-text');
             text.textContent = 'Computing…';
             status.className = 'cycle-status';
 
-            const visited = new Set();
-            const recStack = new Set();
-            const cycles = [];
-
-            function dfs(id, path) {
-                visited.add(id);
-                recStack.add(id);
-                path.push(id);
-                const outgoing = state.graph.edges.filter(e => (e.source.id || e.source) === id);
-                for (const edge of outgoing) {
-                    const next = edge.target.id || edge.target;
-                    if (!visited.has(next)) dfs(next, [...path]);
-                    else if (recStack.has(next)) {
-                        cycles.push([...path.slice(path.indexOf(next)), next]);
-                    }
+            try {
+                const res = await fetch('/api/graph/cycles');
+                if (!res.ok) throw new Error(await readErr(res));
+                const data = await res.json();
+                const count = (data.cycles || []).length;
+                if (count) {
+                    text.textContent = `${count} cycle(s) detected`;
+                    status.className = 'cycle-status has-cycles';
+                } else {
+                    text.textContent = 'No cycles found';
+                    status.className = 'cycle-status no-cycles';
                 }
-                recStack.delete(id);
-            }
-            state.graph.nodes.forEach(n => { if (!visited.has(n.id)) dfs(n.id, []); });
-
-            if (cycles.length) {
-                text.textContent = `${cycles.length} cycle(s) detected`;
-                status.className = 'cycle-status has-cycles';
-            } else {
-                text.textContent = 'No cycles found';
-                status.className = 'cycle-status no-cycles';
+            } catch (err) {
+                text.textContent = `Cycle detection unavailable — ${err.message || err}`;
+                status.className = 'cycle-status';
             }
         }
 

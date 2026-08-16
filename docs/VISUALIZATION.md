@@ -177,7 +177,7 @@ node — and the renderer is handed `state.view`, one neighbourhood at a time.
 | Renderer | Threshold |
 |---|---|
 | 3D | `THREE_D_MAX_ELEMENTS` = 3 000 |
-| 2D | `SOLO_THRESHOLD` = 1 000 000 |
+| 2D | `SOLO_THRESHOLD` = 200 000 |
 
 `applySoloMode(backend.soloThreshold)` runs in `createGraph()` *before* mount, so
 switching renderers re-decides: a 50k-node graph that renders whole in 2D drops

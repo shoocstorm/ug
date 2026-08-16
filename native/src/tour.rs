@@ -1540,18 +1540,20 @@ pub async fn plan_tour_with_progress(
     let mut messages = messages;
     let mut research_usage = None;
     if let Some(tb) = toolbox {
-        let (msgs, usage, _calls) =
-            crate::chat::run_tool_rounds(planner, tb, messages, |e| {
-                on_progress(TourProgress::Tool {
-                    name: e.name,
-                    args: e.args,
-                    summary: e.summary,
-                    result: e.result,
-                });
-            })
-            .await?;
-        messages = msgs;
-        research_usage = usage;
+        // `rounds.answer` is deliberately dropped: the research pass ends in
+        // prose, but the route has to come back as the structured JSON that
+        // `run_plan` asks for next, so that prose is not a plan.
+        let rounds = crate::chat::run_tool_rounds(planner, tb, messages, |e| {
+            on_progress(TourProgress::Tool {
+                name: e.name,
+                args: e.args,
+                summary: e.summary,
+                result: e.result,
+            });
+        })
+        .await?;
+        messages = rounds.messages;
+        research_usage = rounds.usage;
     }
 
     let t_cmp = Instant::now();
