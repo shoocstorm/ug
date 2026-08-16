@@ -3965,6 +3965,16 @@ pub const AGENT_TOOLS: &[(&str, &str)] = &[
     ("graph_schema", "Node & edge types present in this graph, with counts."),
 ];
 
+/// Store-backed tools `POST /api/tools/:tool` also dispatches, which
+/// [`run_tool`] itself cannot answer — aggregation and reachability need the
+/// indexed database rather than graph.json. Kept beside [`AGENT_TOOLS`] rather
+/// than in it, so "can `run_tool` answer this?" stays true for one list while
+/// the HTTP discovery still advertises everything an agent can call.
+pub const STORE_BACKED_AGENT_TOOLS: &[(&str, &str)] = &[(
+    "analyze",
+    "Whole-repo statistics, distributions and blast radius — a named preset or a raw GQL query over the indexed store.",
+)];
+
 /// Does `run_tool` answer this name?
 pub fn is_agent_tool(tool: &str) -> bool {
     AGENT_TOOLS.iter().any(|(name, _)| *name == tool)
@@ -3987,6 +3997,7 @@ pub fn tool_example(tool: &str) -> &'static str {
         "traverse" => r#"{"node_id": ["handle_*"], "hops": 2, "direction": "inbound"}"#,
         "shortest_path" => r#"{"source": "run_gen", "target": "run_ingest"}"#,
         "graph_schema" => r#"{}"#,
+        "analyze" => r#"{"preset": "long_functions", "args": {"min_loc": 100}}"#,
         _ => "{}",
     }
 }
@@ -3995,6 +4006,7 @@ pub fn tool_example(tool: &str) -> &'static str {
 pub fn tool_summary(tool: &str) -> &'static str {
     AGENT_TOOLS
         .iter()
+        .chain(STORE_BACKED_AGENT_TOOLS.iter())
         .find(|(name, _)| *name == tool)
         .map(|(_, summary)| *summary)
         .unwrap_or("")

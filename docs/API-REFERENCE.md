@@ -132,7 +132,7 @@ stdout.
 
 | Command | Aliases | What it does | Key flags |
 |---------|---------|-------------|-----------|
-| `ug serve` | (default) | Serve the visualization + REST API at `http://localhost:8080`. Runs by default with no args. | `-p <port>` (default 8080), `--host <ip>` (default 127.0.0.1), `--watch`, `--no-db`, `-i <graph.json>`, `-d <db>`, `--project <name>`, `--repo-root` |
+| `ug serve` | (default) | Serve the visualization + REST API at `http://localhost:8080`. Runs by default with no args. | `-p <port>` (default 8080), `--host <ip>` (default 127.0.0.1), `--watch`, `--no-db`, `--graph-mode <auto|local|server>`, `-i <graph.json>`, `-d <db>`, `--project <name>`, `--repo-root` |
 | `ug app` | — | Open the native desktop shell (starts the server + a window). | Same as `ug serve` |
 | `ug api` | — | List every HTTP endpoint `ug serve` exposes. | `--json` |
 | `ug list` | `ls`, `list_projects` | List generated projects under `~/.ug`: node/edge counts, size on disk, `STATUS` (`fresh` · `N changed` · `no db` · `repo gone` · `no graph`), last-updated time and repo root, plus per-project follow-ups naming the command that resolves each one. `STATUS` reports whatever blocks you soonest, from the same scan as `GET /api/projects/staleness`. | `--quick` (skip the size walk and staleness scan), `--json` |
@@ -281,10 +281,11 @@ The HTTP server (`ug serve`) is built on **axum**. All routes listed below.
 
 | Method | Path | What it does | Returns 503 when |
 |--------|------|-------------|-------------------|
-| GET | `/api/capabilities` | Server capabilities matrix: backends, models, features enabled | — |
+| GET | `/api/capabilities` | Server capabilities matrix: backends, models, features enabled, **plus the `graph` block below** | — |
 | GET | `/api/config` | Persisted + effective settings, with per-key source (flag/env/config/default) | — |
 | POST | `/api/config` | Update the persisted chat config | — |
 | GET | `/api/graph/stats` | Node/edge counts, file stats | No graph |
+| GET | `/api/graph/nodes` | **Slim node index** — every node's `{id, name, type, file, startLine, endLine}` in columnar form with `node_type` and `file` dictionary-coded, plus undirected `deg`, sparse `boundary`, `catalogRoots` and the per-type counts. No edges. This is what the page loads instead of `graph.json` when `capabilities.graph.mode` is `server`; a node's index in these columns is its identity for every other server-mode request. Built once per snapshot | No graph |
 | GET | `/api/graph/node/*id` | Get one node by id | No graph / not found |
 | GET | `/api/graph/search` | Keyword search over node names (query params: `?q=`) | No graph |
 | GET | `/api/graph/traverse/*id` | K-hop BFS from a node seed | No graph |
@@ -293,14 +294,37 @@ The HTTP server (`ug serve`) is built on **axum**. All routes listed below.
 | GET | `/api/graph/centrality` | Degree & betweenness centrality | No graph |
 | GET | `/api/graph/cycles` | Detect dependency cycles | No graph |
 
+#### How the page gets its graph — `capabilities.graph`
+
+`/api/capabilities` carries a `graph` block that decides this:
+
+```json
+"graph": { "mode": "server", "bytes": 346266017,
+           "nodes": 161725, "edges": 745964, "threshold": 52428800 }
+```
+
+| `mode` | What the page does |
+|---|---|
+| `local` | Downloads `/graph.json` whole and answers everything in the browser. What every release before this did, and still the default for graphs under the threshold. |
+| `server` | Loads `/api/graph/nodes` instead — every node, no edges — and asks this server for edges, neighbourhoods and per-node detail. |
+
+`ug serve --graph-mode <auto\|local\|server>` sets the policy; `auto` (the
+default) resolves it per project by comparing `bytes` against `threshold`
+(50 MB). The size is `graph.json`'s identity bytes, not its compressed size,
+because what costs the browser is the parse and the retained objects rather
+than the transfer.
+
+**A missing `graph` block means `local`.** That is what a static host answers,
+which is why the published demo keeps working with no shim change.
+
 ### 2.6 Agent Tool API (same as MCP tools, over HTTP)
 
 | Method | Path | What it does | Data source |
 |--------|------|-------------|--------------|
-| GET | `/api/tools` | List available agent tools with descriptions | MCP tool registry |
+| GET | `/api/tools` | List available agent tools (`name`, one-line `summary`, `path`, `method`, copyable example `body` each) — the HTTP equivalent of MCP `tools/list`. Includes the store-backed `analyze`, marked with a `note` that its preset catalog lives at `GET /api/presets` | MCP tool registry |
 | GET | `/api/presets` | Preset registry **plus** `properties` — the queryable property vocabulary, so the UI and the MCP capability manifest read the same list rather than each hardcoding one (name, category, description, params, source) | Preset registry |
 | POST | `/api/tools/:tool` | Run one agent tool (same params as MCP). Accepts body JSON with optional `project` field. | graph.json |
-| POST | `/api/tools/analyze` | Run a statistical query. Body: `{preset, args, gql, limit, range}`. Returns `columns` plus **only the requested window** of `rows`, with `from`/`to`/`rowsTotal` to page by, `rowsMatched`, `coverage`, `unindexed`, `warnings`, `truncated` and a rendered `text`. | ugdb (no embedder) |
+| POST | `/api/tools/analyze` | Run a statistical query. Body: `{preset, args, gql, limit, range}`. Accepts the optional `project` field like every other tool, resolves its store the same way, and applies the MCP-side arg normalization (stringified numbers/booleans coerced, paging `limit`/`range` lifted out of `args`, JSON-array `args` like `{"files": ["a.ts","b.rs"]}` joined to comma form). Returns `columns` plus **only the requested window** of `rows`, with `from`/`to`/`rowsTotal` to page by, `rowsMatched`, `coverage`, `unindexed`, `warnings`, `truncated` and a rendered `text`. | ugdb (no embedder) |
 
 ### 2.7 File Content
 

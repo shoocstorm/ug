@@ -664,6 +664,7 @@ function:native/src/indexer.rs:index_with_cache           <span class="c-num">16
       <tr><td><code>GET</code></td><td><code>/api/config</code></td><td>Persisted + effective settings, with per-key source (flag/env/config/default)</td><td>—</td></tr>
       <tr><td><code>POST</code></td><td><code>/api/config</code></td><td>Update the persisted chat config</td><td>—</td></tr>
       <tr><td><code>GET</code></td><td><code>/api/graph/stats</code></td><td>Node/edge counts, file stats</td><td>No graph</td></tr>
+      <tr><td><code>GET</code></td><td><code>/api/graph/nodes</code></td><td><strong>Slim node index</strong> — every node's id/name/type/file/lines in columnar form, no edges. What the page loads instead of <code>graph.json</code> when <code>capabilities.graph.mode</code> is <code>server</code></td><td>No graph</td></tr>
       <tr><td><code>GET</code></td><td><code>/api/graph/node/*id</code></td><td>Get one node by id</td><td>No graph / not found</td></tr>
       <tr><td><code>GET</code></td><td><code>/api/graph/search</code></td><td>Keyword search over node names</td><td>No graph</td></tr>
       <tr><td><code>GET</code></td><td><code>/api/graph/traverse/*id</code></td><td>K-hop BFS from a node seed</td><td>No graph</td></tr>
@@ -678,9 +679,10 @@ function:native/src/indexer.rs:index_with_cache           <span class="c-num">16
   <div class="table-wrap">
     <table>
       <tr><th>Method</th><th>Path</th><th>What it does</th></tr>
-      <tr><td><code>GET</code></td><td><code>/api/tools</code></td><td>List available agent tools, each with a copyable example body, plus the wildcard syntax</td></tr>
-      <tr><td><code>GET</code></td><td><code>/api/presets</code></td><td>The <code>analyze</code> preset catalog (name, category, description)</td></tr>
+      <tr><td><code>GET</code></td><td><code>/api/tools</code></td><td>List available agent tools (<code>name</code>, <code>summary</code>, <code>path</code>, <code>method</code>, copyable <code>example</code>), each with the wildcard syntax — the HTTP equivalent of MCP <code>tools/list</code>, now including the store-backed <code>analyze</code></td></tr>
+      <tr><td><code>GET</code></td><td><code>/api/presets</code></td><td>The <code>analyze</code> preset catalog (name, category, description) plus the queryable property vocabulary</td></tr>
       <tr><td><code>POST</code></td><td><code>/api/tools/:tool</code></td><td>Run one agent tool (same params as MCP — including wildcards)</td></tr>
+      <tr><td><code>POST</code></td><td><code>/api/tools/analyze</code></td><td>Run a statistical query <code>{"preset"|"gql", "args", "limit", "range"}</code>, store-backed (503 without a db). Accepts <code>project</code> like every tool; returns rows over <code>columns</code> for the requested window, plus <code>coverage</code>/<code>warnings</code> and a rendered <code>text</code></td></tr>
     </table>
   </div>
 

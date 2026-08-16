@@ -16,11 +16,11 @@ use axum::http::{Request, StatusCode};
 use tempfile::TempDir;
 use tokio::sync::Semaphore;
 use tower::ServiceExt;
-use ultragraph::types::{GraphData, GraphNode, GraphNodeType};
+use ultragraph::types::{GraphData, GraphEdge, GraphEdgeType, GraphNode, GraphNodeType};
 
 use super::{
     build_project_context, build_router, snapshot_cache_budget, EncodedAsset, GenJobs,
-    ProjectRegistry, ServeMode, ServeState,
+    GraphModePolicy, ProjectRegistry, ServeMode, ServeState,
 };
 
 /// `UG_HOME` is process-global, so tests that enumerate projects must not run
@@ -33,7 +33,13 @@ use super::{
 use crate::project::UG_HOME_LOCK as ENV_GUARD;
 
 /// A small but structurally real graph: two symbols in one file, plus the
-/// File node the indexer always emits.
+/// File node the indexer always emits, plus the edges that always come with
+/// them — the file `Contains` both symbols and one symbol `Calls` the other.
+///
+/// The edges are not decoration. Without them `AdjIndex`, `/api/graph/traverse`
+/// and `/api/graph/path` were all exercised against an empty edge list, which
+/// is the one shape that cannot distinguish a working adjacency index from a
+/// broken one.
 fn sample_graph() -> GraphData {
     let node = |id: &str, name: &str, ty: GraphNodeType, file: Option<&str>| GraphNode {
         id: id.to_string(),
@@ -43,6 +49,11 @@ fn sample_graph() -> GraphData {
         start_line: Some(1),
         end_line: Some(4),
         ..Default::default()
+    };
+    let edge = |source: &str, target: &str, edge_type: GraphEdgeType| GraphEdge {
+        source: source.to_string(),
+        target: target.to_string(),
+        edge_type,
     };
 
     GraphData {
@@ -61,7 +72,15 @@ fn sample_graph() -> GraphData {
                 Some("src/a.rs"),
             ),
         ],
-        edges: vec![],
+        edges: vec![
+            edge("file:src/a.rs", "function:src/a.rs:1:alpha", GraphEdgeType::Contains),
+            edge("file:src/a.rs", "function:src/a.rs:3:beta", GraphEdgeType::Contains),
+            edge(
+                "function:src/a.rs:1:alpha",
+                "function:src/a.rs:3:beta",
+                GraphEdgeType::Calls,
+            ),
+        ],
         stats: None,
         resolution: None,
     }
@@ -105,6 +124,18 @@ fn write_project(tmp: &TempDir, name: &str, graph: &GraphData) -> (std::path::Pa
 /// no network — which is exactly the configuration the `503` assertions below
 /// are about.
 async fn router_for(tmp: &TempDir, name: &str, graph: &GraphData) -> axum::Router {
+    router_with_mode(tmp, name, graph, GraphModePolicy::Auto).await
+}
+
+/// As [`router_for`], with the graph-delivery policy pinned. Server mode is
+/// otherwise only reachable with a 50 MB fixture, which is not a thing to put
+/// in a test suite.
+async fn router_with_mode(
+    tmp: &TempDir,
+    name: &str,
+    graph: &GraphData,
+    graph_mode: GraphModePolicy,
+) -> axum::Router {
     let (ug_home, repo_root) = write_project(tmp, name, graph);
     std::env::set_var("UG_HOME", &ug_home);
     // The wizard's filesystem routes are confined to `browse_roots()`, and a
@@ -145,6 +176,7 @@ async fn router_for(tmp: &TempDir, name: &str, graph: &GraphData) -> axum::Route
         embed_lock: Arc::new(Semaphore::new(4)),
         gen_jobs: Arc::new(GenJobs::new()),
         staleness: Arc::new(RwLock::new(None)),
+        graph_mode,
     };
 
     build_router(state)
@@ -187,6 +219,180 @@ async fn graph_stats_reflect_the_loaded_graph() {
         v.get("nodes").and_then(|n| n.as_u64()),
         Some(3),
         "stats should count the graph's nodes, got {body}"
+    );
+}
+
+/// The slim index is what a browser in server mode gets *instead of*
+/// `graph.json`, so the two must describe the same graph. Position is identity
+/// in the server-mode protocol — a node's index in these columns is how every
+/// later request refers to it — which is why the id order is asserted rather
+/// than the id set.
+#[tokio::test]
+async fn the_slim_index_describes_the_same_graph_as_graph_json() {
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+    let graph = sample_graph();
+    let app = router_for(&tmp, "demo", &graph).await;
+
+    let (status, body) = get(&app, "/api/graph/nodes").await;
+    assert_eq!(status, StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+
+    assert_eq!(v["n"], serde_json::json!(3));
+    assert_eq!(v["edgeCount"], serde_json::json!(3));
+
+    let ids: Vec<&str> = v["ids"].as_array().unwrap().iter().map(|i| i.as_str().unwrap()).collect();
+    let expected: Vec<&str> = graph.nodes.iter().map(|n| n.id.as_str()).collect();
+    assert_eq!(ids, expected, "column order must be graph.json node order: {body}");
+
+    // Every per-node column is exactly n long, or the client's positional
+    // decode silently reads the wrong node.
+    for col in ["ids", "names", "typeIdx", "fileIdx", "startLine", "endLine", "deg"] {
+        assert_eq!(
+            v[col].as_array().unwrap().len(),
+            3,
+            "column {col} must have one entry per node: {body}"
+        );
+    }
+
+    // Dictionary coding round-trips.
+    let types = v["types"].as_array().unwrap();
+    let type_of = |i: usize| types[v["typeIdx"][i].as_u64().unwrap() as usize].as_str().unwrap();
+    assert_eq!(type_of(0), "File");
+    assert_eq!(type_of(1), "Function");
+
+    let files = v["files"].as_array().unwrap();
+    assert_eq!(files.len(), 1, "all three nodes share one file path: {body}");
+    assert_eq!(files[0].as_str(), Some("src/a.rs"));
+
+    // Undirected degree: the file contains two symbols, alpha also calls beta.
+    let deg: Vec<u64> = v["deg"].as_array().unwrap().iter().map(|d| d.as_u64().unwrap()).collect();
+    assert_eq!(deg, vec![2, 2, 2], "file:2 contains, alpha:1+1, beta:1+1: {body}");
+
+    // Sparse, not a column — no node here carries a boundary.
+    assert_eq!(v["boundary"], serde_json::json!([]));
+    // The file has no Folder/File parent, so it is the one catalog root.
+    assert_eq!(v["catalogRoots"], serde_json::json!([0]));
+    assert_eq!(v["edgeTypeCounts"]["Contains"], serde_json::json!(2));
+    assert_eq!(v["edgeTypeCounts"]["Calls"], serde_json::json!(1));
+}
+
+/// The one bit of the handshake the page keys off. A graph under the threshold
+/// must keep today's behaviour, and `--graph-mode` must be able to say
+/// otherwise — that override is how the server path gets tested at all without
+/// a 50 MB fixture.
+#[tokio::test]
+async fn capabilities_publishes_the_graph_delivery_mode() {
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+
+    let app = router_for(&tmp, "demo", &sample_graph()).await;
+    let (status, body) = get(&app, "/api/capabilities").await;
+    assert_eq!(status, StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        v["graph"]["mode"],
+        serde_json::json!("local"),
+        "a tiny graph must stay on the whole-file path: {body}"
+    );
+    assert_eq!(v["graph"]["nodes"], serde_json::json!(3));
+    assert_eq!(v["graph"]["edges"], serde_json::json!(3));
+    assert!(
+        v["graph"]["bytes"].as_u64().unwrap() > 0,
+        "bytes is what the threshold compares: {body}"
+    );
+
+    let forced = router_with_mode(&tmp, "demo", &sample_graph(), GraphModePolicy::Server).await;
+    let (_, body) = get(&forced, "/api/capabilities").await;
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["graph"]["mode"], serde_json::json!("server"), "{body}");
+}
+
+#[test]
+fn graph_mode_policy_resolves_by_size_only_on_auto() {
+    let big = super::GRAPH_SERVER_MODE_BYTES;
+    assert_eq!(GraphModePolicy::Auto.resolve(big), "server");
+    assert_eq!(GraphModePolicy::Auto.resolve(big - 1), "local");
+    // The overrides ignore size in both directions — that is their whole job.
+    assert_eq!(GraphModePolicy::Local.resolve(big), "local");
+    assert_eq!(GraphModePolicy::Server.resolve(0), "server");
+    assert_eq!(GraphModePolicy::parse("AUTO"), Some(GraphModePolicy::Auto));
+    assert_eq!(GraphModePolicy::parse("nonsense"), None);
+}
+
+/// `AdjIndex` stores edge indices rather than neighbour indices, so every
+/// traversal now resolves the far endpoint through `id_to_idx`. These two tests
+/// are the ones that would have caught a mis-wired index — and could not have,
+/// while `sample_graph` had no edges at all.
+///
+/// The graph is `file:src/a.rs --Contains--> {alpha, beta}` and
+/// `alpha --Calls--> beta`.
+#[tokio::test]
+async fn traverse_walks_outbound_edges_and_returns_induced_ones() {
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+    let app = router_for(&tmp, "demo", &sample_graph()).await;
+
+    let (status, body) = get(&app, "/api/graph/traverse/file:src/a.rs?k=1").await;
+    assert_eq!(status, StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+
+    // One hop from the file reaches both symbols.
+    let mut reached: Vec<&str> = v["distances"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    reached.sort_unstable();
+    assert_eq!(
+        reached,
+        vec![
+            "file:src/a.rs",
+            "function:src/a.rs:1:alpha",
+            "function:src/a.rs:3:beta"
+        ],
+        "1 hop from the file should reach both symbols, got {body}"
+    );
+
+    // *Induced*, not merely walked: alpha→beta was never traversed (it is not
+    // reachable from the file in one hop through alpha), but both endpoints are
+    // in the visited set, so it belongs in the answer. Dropping it is the
+    // regression the rewrite could plausibly have introduced.
+    let rels: Vec<&str> = v["edges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["edge_type"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        rels,
+        vec!["Contains", "Contains", "Calls"],
+        "all three edges are induced by the visited set, in graph.json order, got {body}"
+    );
+}
+
+/// Forward-only, and the client's `findPath` relies on exactly that.
+#[tokio::test]
+async fn path_follows_edge_direction_only() {
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+    let app = router_for(&tmp, "demo", &sample_graph()).await;
+
+    let fwd = "/api/graph/path?source=function:src/a.rs:1:alpha&target=function:src/a.rs:3:beta";
+    let (status, body) = get(&app, fwd).await;
+    assert_eq!(status, StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["found"], serde_json::json!(true), "alpha calls beta: {body}");
+    assert_eq!(v["length"], serde_json::json!(1), "one edge apart: {body}");
+
+    let rev = "/api/graph/path?source=function:src/a.rs:3:beta&target=function:src/a.rs:1:alpha";
+    let (_, body) = get(&app, rev).await;
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        v["found"],
+        serde_json::json!(false),
+        "beta does not call alpha, and path must not walk the edge backwards: {body}"
     );
 }
 
@@ -382,6 +588,59 @@ async fn unknown_project_scope_is_a_404() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+/// `analyze` was the one tool `GET /api/tools` never listed: the discovery
+/// walked `AGENT_TOOLS`, which is only the set `run_tool` can dispatch, so
+/// an agent enumerating the HTTP surface learned that `analyze` existed only
+/// by guessing. It must be advertised like the rest — with its real path,
+/// method and a copyable preset-shaped example.
+#[tokio::test]
+async fn tools_discovery_advertises_analyze() {
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+    let app = router_for(&tmp, "demo", &sample_graph()).await;
+
+    let (status, body) = get(&app, "/api/tools").await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let list = v["tools"].as_array().expect("tools is an array");
+    let analyze = list
+        .iter()
+        .find(|t| t["name"] == "analyze")
+        .expect("analyze is advertised in GET /api/tools: {body}");
+    assert_eq!(analyze["path"], "/api/tools/analyze");
+    assert_eq!(analyze["method"], "POST");
+    let example = analyze["example"].as_str().expect("example is a string");
+    assert!(
+        example.contains("preset") && example.contains("long_functions"),
+        "the example should show the preset-shaped call, got: {example}"
+    );
+}
+
+/// `analyze` is store-backed: the `POST /api/tools/analyze` route dispatches it
+/// but it needs the indexed database, so under `--no-db` it must 503 (not fall
+/// over) — and it scopes by `project` like every other tool.
+#[tokio::test]
+async fn analyze_route_is_dispatched_and_requires_the_db() {
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+    let app = router_for(&tmp, "demo", &sample_graph()).await;
+
+    let (status, body) = post(&app, "/api/tools/analyze", serde_json::json!({"preset": "long_functions"})).await;
+    assert_eq!(
+        status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "analyze without a db must 503, got {status}: {body}"
+    );
+
+    let (status, body) = post(
+        &app,
+        "/api/tools/analyze",
+        serde_json::json!({"preset": "long_functions", "project": "nope"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "unknown project: {body}");
 }
 
 /// `/api/browse-dir` moved onto `spawn_blocking`; it must still list only

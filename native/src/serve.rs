@@ -26,6 +26,7 @@ use tracing::Level;
 
 use crate::chat::{self, ChatClient, ChatConfig, ChatMessage, ChatRagOptions};
 use crate::cli::args::{flag_value, flag_value_or, has_flag};
+use crate::cli::io::die;
 use crate::cli::embed::{embedder_from_args, tokio_runtime};
 use ultragraph::{
     calculate_centrality_graph as lib_centrality_graph, detect_cycles_graph as lib_cycles_graph,
@@ -85,7 +86,7 @@ fn build_serve_store_specs(db_path: &PathBuf) -> Vec<StoreSpec> {
     }
     specs
 }
-use ultragraph::types::{GraphData, GraphEdge, GraphNode};
+use ultragraph::types::{GraphData, GraphEdge, GraphEdgeType, GraphNode, GraphNodeType};
 
 /// Cap on inbound HTTP request bodies. Every route the UI/agent uses takes a
 /// small JSON payload (search query, chat message, config patch, a generate
@@ -95,6 +96,10 @@ const MAX_REQUEST_BODY_BYTES: usize = 4 * 1024 * 1024;
 
 // ---------- Encoded asset (identity + gzip + br, all pre-built) ----------
 
+/// `Clone` is cheap and refcounted: `Bytes` clones bump a refcount rather than
+/// copying, which is what lets a cached asset be handed out of a `OnceLock`
+/// without holding a borrow across an await.
+#[derive(Clone)]
 struct EncodedAsset {
     identity: Bytes,
     gzip: Bytes,
@@ -154,6 +159,10 @@ struct GraphSnapshot {
     adj: OnceLock<AdjIndex>,
     centrality: OnceLock<String>,
     cycles: OnceLock<String>,
+    /// The slim node index `/api/graph/nodes` serves — see [`build_slim_index`].
+    /// Built on first request and encoded once, like `centrality` and `cycles`,
+    /// because a browser in server mode asks for it exactly once per load.
+    slim: OnceLock<EncodedAsset>,
 }
 
 impl GraphSnapshot {
@@ -172,12 +181,32 @@ impl GraphSnapshot {
     }
 }
 
-/// Forward adjacency built once per snapshot. `id_to_idx` lets us look up a
-/// node's index in `parsed.nodes` from its string id; `out[i]` is the list of
-/// neighbor indices reachable via outgoing edges from node `i`.
+/// Adjacency built once per snapshot. `id_to_idx` maps a node's string id to
+/// its index in `parsed.nodes`; `out[i]` and `inc[i]` are the **edge** indices
+/// into `parsed.edges` whose source (respectively target) is node `i`.
+///
+/// Storing edge indices rather than neighbour indices is what makes the edge
+/// *type* reachable from the index. The previous form kept neighbour indices,
+/// so every caller that needed `edge_type` had to rediscover it by scanning the
+/// whole edge list — which is exactly what `api_traverse` did, once per request,
+/// over three quarters of a million edges on a large repo.
+///
+/// Both directions are kept because the questions asked of this index are not
+/// all directed: "who calls this" and "what is one hop away from this" are
+/// inbound and undirected respectively, and a forward-only index answers
+/// neither without a full scan.
 struct AdjIndex {
     id_to_idx: HashMap<String, usize>,
-    out: Vec<Vec<usize>>,
+    out: Vec<Vec<u32>>,
+    inc: Vec<Vec<u32>>,
+}
+
+impl AdjIndex {
+    /// Every edge incident to node `i`, outbound first. Callers that care about
+    /// direction compare `edges[ei].source` themselves.
+    fn incident(&self, i: usize) -> impl Iterator<Item = u32> + '_ {
+        self.out[i].iter().copied().chain(self.inc[i].iter().copied())
+    }
 }
 
 fn build_adj(graph: &GraphData) -> AdjIndex {
@@ -187,13 +216,228 @@ fn build_adj(graph: &GraphData) -> AdjIndex {
         .enumerate()
         .map(|(i, n)| (n.id.clone(), i))
         .collect();
-    let mut out: Vec<Vec<usize>> = vec![Vec::new(); graph.nodes.len()];
-    for e in &graph.edges {
+    let mut out: Vec<Vec<u32>> = vec![Vec::new(); graph.nodes.len()];
+    let mut inc: Vec<Vec<u32>> = vec![Vec::new(); graph.nodes.len()];
+    for (ei, e) in graph.edges.iter().enumerate() {
+        // An edge index that doesn't fit in a u32 would mean four billion edges
+        // in one graph; the cast is checked rather than assumed away.
+        let Ok(ei) = u32::try_from(ei) else { break };
         if let (Some(&si), Some(&ti)) = (id_to_idx.get(&e.source), id_to_idx.get(&e.target)) {
-            out[si].push(ti);
+            out[si].push(ei);
+            inc[ti].push(ei);
         }
     }
-    AdjIndex { id_to_idx, out }
+    AdjIndex { id_to_idx, out, inc }
+}
+
+/// Bytes of `graph.json` at or above which the browser is told to leave the
+/// file alone and ask the server its questions instead.
+///
+/// This is a property of what a browser tab can hold, not of the graph: past
+/// roughly this size the download, the `JSON.parse` and the retained object
+/// graph together cost more than every interaction the page then performs.
+/// Measured on a 346 MB index, the whole-file path retains ~295 MB of JS heap
+/// against ~66 MB for the slim index.
+const GRAPH_SERVER_MODE_BYTES: usize = 50 * 1024 * 1024;
+
+/// How `ug serve` decides which of the two the browser gets.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum GraphModePolicy {
+    /// Pick per project, by `graph.json`'s size. The default.
+    Auto,
+    /// Always ship the whole file — what every release before this did.
+    Local,
+    /// Always serve the slim index, whatever the size. For testing the server
+    /// path against a small repo.
+    Server,
+}
+
+impl GraphModePolicy {
+    fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(Self::Auto),
+            "local" => Some(Self::Local),
+            "server" => Some(Self::Server),
+            _ => None,
+        }
+    }
+
+    /// `"local"` or `"server"` for a graph of `bytes`.
+    fn resolve(self, bytes: usize) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Server => "server",
+            Self::Auto if bytes >= GRAPH_SERVER_MODE_BYTES => "server",
+            Self::Auto => "local",
+        }
+    }
+}
+
+/// The slim node index: every node the graph has, carrying only the fields the
+/// page needs *before* you click something.
+///
+/// The point is what it leaves out. `graph.json` is dominated by edges — 228 MB
+/// of the 346 MB on a large Java repo, nearly all of it the same endpoint id
+/// strings written out twice each — and by per-node prose the page does not
+/// read until a node is selected. Dropping both is what takes the browser from
+/// a 346 MB download to a 2.8 MB one.
+///
+/// Three encoding decisions, each load-bearing rather than cosmetic:
+///
+/// * **Columnar.** One array per field instead of one object per node. Saves
+///   the parser 160k × 6 key strings, and lets the client build every node with
+///   its properties assigned in the same order — one hidden class for the whole
+///   graph instead of a shape per field combination.
+/// * **Dictionary-coded `node_type` and `file`.** 158,638 file values on that
+///   repo are 8,910 distinct paths; written inline they are ~15 MB of JSON and
+///   ~32 MB of duplicate JS strings, coded they are under 1 MB and ~1.8 MB.
+/// * **Position is identity.** A node's index in these arrays *is* its id
+///   everywhere else in the server-mode protocol, which is what lets edge
+///   endpoints travel as integers rather than as 141-character strings.
+///
+/// `boundary` is a sparse list of indices, not a column: on a 161,725-node
+/// graph exactly 170 nodes carry one.
+fn build_slim_index(graph: &GraphData) -> String {
+    let n = graph.nodes.len();
+
+    // Dictionaries, in first-seen order so the arrays stay stable between
+    // builds of the same graph.
+    let mut type_names: Vec<String> = Vec::new();
+    let mut type_idx: HashMap<String, u32> = HashMap::new();
+    let mut file_names: Vec<&str> = Vec::new();
+    let mut file_idx: HashMap<&str, i64> = HashMap::new();
+
+    let mut ids: Vec<&str> = Vec::with_capacity(n);
+    let mut names: Vec<&str> = Vec::with_capacity(n);
+    let mut types: Vec<u32> = Vec::with_capacity(n);
+    let mut files: Vec<i64> = Vec::with_capacity(n);
+    let mut start: Vec<u32> = Vec::with_capacity(n);
+    let mut end: Vec<u32> = Vec::with_capacity(n);
+    let mut boundary: Vec<u32> = Vec::new();
+
+    for (i, node) in graph.nodes.iter().enumerate() {
+        ids.push(&node.id);
+        names.push(if node.name.is_empty() { &node.id } else { &node.name });
+
+        let ty = format!("{:?}", node.node_type);
+        let next = type_names.len() as u32;
+        let ti = *type_idx.entry(ty.clone()).or_insert_with(|| {
+            type_names.push(ty);
+            next
+        });
+        types.push(ti);
+
+        match node.file.as_deref() {
+            Some(f) => {
+                let next = file_names.len() as i64;
+                let fi = *file_idx.entry(f).or_insert_with(|| {
+                    file_names.push(f);
+                    next
+                });
+                files.push(fi);
+            }
+            // -1 rather than null: a column of one type parses faster and the
+            // client's check is `>= 0` either way.
+            None => files.push(-1),
+        }
+
+        start.push(node.start_line.unwrap_or(0));
+        end.push(node.end_line.unwrap_or(0));
+        if !node.boundaries.is_empty() {
+            boundary.push(i as u32);
+        }
+    }
+
+    // Undirected degree, plus the Contains parentage the catalog needs. Both
+    // are whole-graph answers the slim index cannot otherwise support, and both
+    // are cheap here because we are already walking every edge once.
+    let mut deg: Vec<u32> = vec![0; n];
+    let mut has_container: Vec<bool> = vec![false; n];
+    let idx_of: HashMap<&str, usize> = graph
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, node)| (node.id.as_str(), i))
+        .collect();
+    let mut node_type_counts: BTreeMap<String, usize> = BTreeMap::new();
+    for node in &graph.nodes {
+        *node_type_counts.entry(format!("{:?}", node.node_type)).or_insert(0) += 1;
+    }
+    let mut edge_type_counts: BTreeMap<String, usize> = BTreeMap::new();
+    for e in &graph.edges {
+        *edge_type_counts.entry(format!("{:?}", e.edge_type)).or_insert(0) += 1;
+        let (Some(&si), Some(&ti)) = (idx_of.get(e.source.as_str()), idx_of.get(e.target.as_str()))
+        else {
+            continue;
+        };
+        deg[si] += 1;
+        if si != ti {
+            deg[ti] += 1;
+        }
+        // Only Folder/File parents make a catalog root — a Function contained
+        // by a File is a child in the tree, but a File contained by a Folder is
+        // what stops that File being a root.
+        if matches!(e.edge_type, GraphEdgeType::Contains)
+            && matches!(
+                graph.nodes[si].node_type,
+                GraphNodeType::Folder | GraphNodeType::File
+            )
+            && matches!(
+                graph.nodes[ti].node_type,
+                GraphNodeType::Folder | GraphNodeType::File
+            )
+        {
+            has_container[ti] = true;
+        }
+    }
+    let catalog_roots: Vec<u32> = graph
+        .nodes
+        .iter()
+        .enumerate()
+        .filter(|(i, node)| {
+            !has_container[*i]
+                && matches!(
+                    node.node_type,
+                    GraphNodeType::Folder | GraphNodeType::File
+                )
+        })
+        .map(|(i, _)| i as u32)
+        .collect();
+
+    // The repo-root folder node carries the language breakdown, same as
+    // `api_stats` reads it.
+    let root_folder = graph
+        .nodes
+        .iter()
+        .filter_map(|node| node.folder.as_ref())
+        .min_by_key(|f| f.depth);
+
+    serde_json::json!({
+        "v": 1,
+        "n": n,
+        "edgeCount": graph.edges.len(),
+        "ids": ids,
+        "names": names,
+        "types": type_names,
+        "typeIdx": types,
+        "files": file_names,
+        "fileIdx": files,
+        "startLine": start,
+        "endLine": end,
+        "boundary": boundary,
+        "deg": deg,
+        "catalogRoots": catalog_roots,
+        "nodeTypeCounts": node_type_counts,
+        "edgeTypeCounts": edge_type_counts,
+        // Verbatim, because `IndexStats` already serialises to the camelCase
+        // shape `transformData` reads — the page needs no translation layer.
+        "stats": graph.stats,
+        "languages": root_folder.map(|f| f.language_breakdown.clone()),
+        "kbType": root_folder
+            .and_then(|f| f.classification.as_ref())
+            .map(|c| format!("{:?}", c).to_lowercase()),
+    })
+    .to_string()
 }
 
 /// One or more backends `ug serve` is wired up to. Populated when
@@ -276,6 +520,14 @@ impl ProjectContext {
             .saturating_add(identity)
             .saturating_add(snap.encoded.gzip.len())
             .saturating_add(snap.encoded.brotli.len())
+            // The slim index is another whole encoded asset once it has been
+            // asked for — ~34 MB identity plus its two compressions on a large
+            // repo. Uncounted, the LRU would hold three of them for free.
+            .saturating_add(
+                snap.slim
+                    .get()
+                    .map_or(0, |s| s.identity.len() + s.gzip.len() + s.brotli.len()),
+            )
     }
 }
 
@@ -531,6 +783,7 @@ fn build_placeholder_context(registry: &Arc<ProjectRegistry>) -> Arc<ProjectCont
         adj: OnceLock::new(),
         centrality: OnceLock::new(),
         cycles: OnceLock::new(),
+        slim: OnceLock::new(),
     });
     let ctx = Arc::new(ProjectContext {
         name: "__none__".to_string(),
@@ -632,6 +885,10 @@ pub(crate) struct ServeState {
     /// Last computed `/api/projects/staleness` payload, reused for
     /// [`STALENESS_TTL`] so N open tabs cost one filesystem scan, not N.
     staleness: Arc<RwLock<Option<StalenessCache>>>,
+    /// Whether the browser is handed the whole `graph.json` or the slim index.
+    /// The *policy* is per-server (`--graph-mode`); the mode it resolves to is
+    /// per-project, because size is a property of the graph.
+    graph_mode: GraphModePolicy,
 }
 
 impl ServeState {
@@ -794,6 +1051,7 @@ fn load_snapshot(path: &PathBuf) -> Result<Arc<GraphSnapshot>, String> {
         adj: OnceLock::new(),
         centrality: OnceLock::new(),
         cycles: OnceLock::new(),
+        slim: OnceLock::new(),
     }))
 }
 
@@ -867,6 +1125,26 @@ pub fn run_serve(args: &[String]) {
     let host = flag_value_or(args, &["--host"], "127.0.0.1");
     let watch = has_flag(args, "--watch");
     let no_db = has_flag(args, "--no-db");
+    // `flag_value` takes `--flag value`, never `--flag=value`. Every other flag
+    // here has the same shape, but silently ignoring the `=` form would leave
+    // the server in the opposite mode to the one asked for with nothing said —
+    // so it is named as an error rather than skipped.
+    if let Some(bad) = args.iter().find(|a| a.starts_with("--graph-mode=")) {
+        die(
+            2,
+            format!("use `--graph-mode <value>`, not `{bad}` — this CLI takes flag values as a separate argument"),
+        );
+    }
+    let graph_mode = match flag_value(args, &["--graph-mode"]) {
+        Some(raw) => match GraphModePolicy::parse(&raw) {
+            Some(p) => p,
+            None => die(
+                2,
+                format!("--graph-mode must be auto, local or server (got {raw:?})"),
+            ),
+        },
+        None => GraphModePolicy::Auto,
+    };
 
     enum Startup {
         Single { graph_file: String },
@@ -1088,6 +1366,7 @@ pub fn run_serve(args: &[String]) {
             embed_lock: Arc::new(Semaphore::new(4)),
             gen_jobs: Arc::new(GenJobs::new()),
             staleness: Arc::new(RwLock::new(None)),
+            graph_mode,
         };
 
         let app = build_router(state.clone());
@@ -1283,6 +1562,7 @@ pub(crate) fn build_router(state: ServeState) -> Router {
         .route("/api/config", get(api_config_get).post(api_config_post))
         .route("/api/graph/stats", get(api_stats))
         .route("/api/projects/staleness", get(api_projects_staleness))
+        .route("/api/graph/nodes", get(api_slim_index))
         .route("/api/graph/node/*id", get(api_node))
         .route("/api/graph/search", get(api_search))
         .route("/api/graph/traverse/*id", get(api_traverse))
@@ -1500,11 +1780,19 @@ async fn resolve_ctx(
 
 /// GET /api/tools — discovery for the graph-backed agent tools, so an agent
 /// speaking HTTP can enumerate them the way an MCP client reads `tools/list`.
+/// Lists the store-backed tools too (`POST /api/tools/:tool` dispatches those
+/// through their own arm, not [`agent_tools::run_tool`]), so nothing an agent
+/// can call is invisible.
 async fn api_tools() -> Response {
+    let store_backed: Vec<&str> = ultragraph::agent_tools::STORE_BACKED_AGENT_TOOLS
+        .iter()
+        .map(|(name, _)| *name)
+        .collect();
     let tools: Vec<serde_json::Value> = ultragraph::agent_tools::AGENT_TOOLS
         .iter()
+        .chain(ultragraph::agent_tools::STORE_BACKED_AGENT_TOOLS.iter())
         .map(|(name, summary)| {
-            serde_json::json!({
+            let mut entry = serde_json::json!({
                 "name": name,
                 "summary": summary,
                 "path": format!("/api/tools/{}", name),
@@ -1512,7 +1800,14 @@ async fn api_tools() -> Response {
                 // A copyable body beats a parameter list: it shows the shape
                 // and the wildcard form in the same round trip.
                 "example": ultragraph::agent_tools::tool_example(name),
-            })
+            });
+            if store_backed.contains(name) {
+                entry["note"] = serde_json::json!(
+                    "Store-backed: needs the indexed database (503 otherwise). \
+                     The analyze preset catalog lives at GET /api/presets."
+                );
+            }
+            entry
         })
         .collect();
     ok_json(
@@ -1574,15 +1869,23 @@ async fn api_presets() -> Response {
 
 /// `analyze` over HTTP.
 ///
-/// Split out of [`api_tool`] because it is the one tool here that needs
+/// Split out of [`api_tool`] because it is the one tool there that needs
 /// the store rather than `graph.json` — aggregation and reachability run
-/// on indexed properties. Returns rows as JSON rather than the rendered
-/// text an agent reads, since the caller is the viz layer, which wants to
-/// build its own table and map result ids onto graph selection.
-async fn api_analyze(state: &ServeState, params: serde_json::Value) -> Response {
-    let store = match pick_store(state, None) {
-        Ok(s) => s,
-        Err(r) => return r,
+/// on indexed properties. Answers from the *resolved* project's store, so
+/// a request carrying `project` analyses the project it named, like every
+/// other tool answers from its graph. Returns rows as JSON rather than the
+/// rendered text an agent reads, since the caller is the viz layer, which
+/// wants to build its own table and map result ids onto graph selection.
+async fn api_analyze(ctx: &ProjectContext, params: serde_json::Value) -> Response {
+    let store = match ctx.stores.as_ref().and_then(|s| s.get(&s.primary)) {
+        Some(s) => s.clone(),
+        None => {
+            let reason = ctx
+                .db_unavailable_reason
+                .as_deref()
+                .unwrap_or("DB not opened");
+            return err_json(StatusCode::SERVICE_UNAVAILABLE, reason);
+        }
     };
     // Validation lives in `analyze::run` — an unknown preset, a missing
     // required argument and a malformed query all come back from there with
@@ -1668,6 +1971,16 @@ fn parse_analyze_body(body: &serde_json::Value) -> ultragraph::analyze::AnalyzeP
             let as_text = match v {
                 serde_json::Value::String(s) => s.clone(),
                 serde_json::Value::Null => continue,
+                // A model often sends a list param as a JSON array
+                // (`{"files": ["a.ts","b.rs"]}`). analyze binds list params
+                // from a comma-separated string, so join the string elements
+                // rather than stringify the array (which would keep the
+                // brackets and break the split) — same as the MCP side.
+                serde_json::Value::Array(items) => items
+                    .iter()
+                    .filter_map(|i| i.as_str())
+                    .collect::<Vec<_>>()
+                    .join(","),
                 other => other.to_string(),
             };
             parsed.args.insert(k.clone(), as_text);
@@ -1694,12 +2007,6 @@ async fn api_tool(
         .remove("project")
         .and_then(|v| v.as_str().map(str::to_string));
 
-    // `analyze` is store-backed, so it never reaches `run_tool` — that
-    // dispatcher only knows about graph.json.
-    if tool == "analyze" {
-        return api_analyze(&state, serde_json::Value::Object(params)).await;
-    }
-
     let ctx = match resolve_ctx(&state.registry, project.as_deref()).await {
         Ok(c) => c,
         Err(e) if e.starts_with("unknown project") => {
@@ -1707,6 +2014,16 @@ async fn api_tool(
         }
         Err(e) => return err_json(StatusCode::INTERNAL_SERVER_ERROR, &e),
     };
+
+    // `analyze` is store-backed, so it never reaches `run_tool` — that
+    // dispatcher only knows about graph.json. It still gets the same arg
+    // coercion as the MCP and chat paths, and answers from the resolved
+    // project's store just like every other tool answers from its graph.
+    if tool == "analyze" {
+        let mut args = serde_json::Value::Object(params);
+        crate::mcp::tools::normalize_args(&tool, &mut args);
+        return api_analyze(&ctx, args).await;
+    }
 
     let snap = ctx.graph.read().expect("graph state poisoned").clone();
     // Same coercion the chat and MCP paths apply — every entry point sees
@@ -2715,6 +3032,7 @@ async fn api_stats(State(state): State<ServeState>) -> Response {
             "lines": s.total_lines,
             "indexed_at": s.last_indexed_at,
             "indexing_time_ms": s.indexing_time_ms,
+            "repo_root": s.repo_root,
         })),
         "languages": root_folder.map(|f| f.language_breakdown.clone()),
         "kb_type": root_folder
@@ -2724,9 +3042,42 @@ async fn api_stats(State(state): State<ServeState>) -> Response {
     ok_json(body.to_string())
 }
 
+/// `GET /api/graph/nodes` — the slim node index (see [`build_slim_index`]).
+///
+/// Encoded once per snapshot and served from the cache thereafter, the same
+/// deal `/graph.json` gets. The build runs on a blocking thread: it walks every
+/// node and every edge and serialises ~34 MB, which is not something to do on a
+/// runtime worker.
+async fn api_slim_index(State(state): State<ServeState>, headers: HeaderMap) -> Response {
+    let snap = state.snapshot();
+    let built = tokio::task::spawn_blocking(move || {
+        snap.slim
+            .get_or_init(|| {
+                EncodedAsset::new(
+                    build_slim_index(&snap.parsed).into_bytes(),
+                    "application/json; charset=utf-8",
+                )
+            })
+            .clone()
+    })
+    .await;
+    match built {
+        Ok(asset) => asset_response(&asset, &headers),
+        Err(e) => err_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("slim index task failed: {}", e),
+        ),
+    }
+}
+
 async fn api_node(State(state): State<ServeState>, AxPath(id): AxPath<String>) -> Response {
     let snap = state.snapshot();
-    match snap.parsed.nodes.iter().find(|n| n.id == id) {
+    // Through the adjacency index's `id_to_idx`, not a linear scan. The map was
+    // already being built for traverse/path; looking one node up by walking all
+    // 162k of them was an O(V) answer to an O(1) question, and the node panel
+    // fires one of these per selection.
+    let adj = snap.adj.get_or_init(|| build_adj(&snap.parsed));
+    match adj.id_to_idx.get(&id).map(|&i| &snap.parsed.nodes[i]) {
         Some(n) => match serde_json::to_string(n) {
             Ok(s) => ok_json(s),
             Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &format!("encode: {}", e)),
@@ -2817,7 +3168,10 @@ async fn api_traverse(
         if d == k {
             continue;
         }
-        for &nb in &adj.out[idx] {
+        for &ei in &adj.out[idx] {
+            let Some(&nb) = adj.id_to_idx.get(&snap.parsed.edges[ei as usize].target) else {
+                continue;
+            };
             if visited.insert(nb) {
                 distances.insert(nb, d + 1);
                 queue.push_back((nb, d + 1));
@@ -2826,16 +3180,28 @@ async fn api_traverse(
     }
 
     let nodes: Vec<&GraphNode> = visited.iter().map(|&i| &snap.parsed.nodes[i]).collect();
-    let edges: Vec<&GraphEdge> = snap
-        .parsed
-        .edges
+    // Induced edges: both endpoints inside the visited set. Reached through the
+    // visited nodes' own incident lists rather than by filtering the whole edge
+    // list, which is the difference between O(reached degree) and O(edges) —
+    // the latter being three quarters of a million per request on a large repo.
+    // Collected by index and sorted, so the response keeps `graph.json` order
+    // rather than inheriting a HashSet's.
+    let mut edge_idx: Vec<u32> = visited
         .iter()
-        .filter(
-            |e| match (adj.id_to_idx.get(&e.source), adj.id_to_idx.get(&e.target)) {
-                (Some(&si), Some(&ti)) => visited.contains(&si) && visited.contains(&ti),
-                _ => false,
-            },
-        )
+        .flat_map(|&i| adj.incident(i))
+        .filter(|&ei| {
+            let e = &snap.parsed.edges[ei as usize];
+            matches!(
+                (adj.id_to_idx.get(&e.source), adj.id_to_idx.get(&e.target)),
+                (Some(si), Some(ti)) if visited.contains(si) && visited.contains(ti)
+            )
+        })
+        .collect();
+    edge_idx.sort_unstable();
+    edge_idx.dedup();
+    let edges: Vec<&GraphEdge> = edge_idx
+        .iter()
+        .map(|&ei| &snap.parsed.edges[ei as usize])
         .collect();
     let dist_by_id: HashMap<&str, u32> = distances
         .iter()
@@ -2882,7 +3248,10 @@ async fn api_path(State(state): State<ServeState>, Query(params): Query<PathQuer
             found = true;
             break;
         }
-        for &nb in &adj.out[cur] {
+        for &ei in &adj.out[cur] {
+            let Some(&nb) = adj.id_to_idx.get(&snap.parsed.edges[ei as usize].target) else {
+                continue;
+            };
             if !visited[nb] {
                 visited[nb] = true;
                 prev[nb] = Some(cur);
@@ -3146,9 +3515,25 @@ async fn api_capabilities(State(state): State<ServeState>) -> Response {
         })
     });
 
+    // How this project's graph reaches the browser. The page reads `mode` to
+    // decide between downloading `graph.json` and asking the server, so this
+    // block is what switches the two. Its *absence* means local — which is
+    // exactly what a static host answers, and why the published demo needs no
+    // shim change to keep working.
+    let snap = state.snapshot();
+    let graph_bytes = snap.encoded.identity.len();
+    let graph_info = serde_json::json!({
+        "mode": state.graph_mode.resolve(graph_bytes),
+        "bytes": graph_bytes,
+        "nodes": snap.parsed.nodes.len(),
+        "edges": snap.parsed.edges.len(),
+        "threshold": GRAPH_SERVER_MODE_BYTES,
+    });
+
     let body = serde_json::json!({
         "db_ready": db_ready,
         "embedder_ready": embedder_ready,
+        "graph": graph_info,
         // What the indexer had to leave out. Published because these caps
         // decide what a node's vector can match on at all, and a user who
         // doesn't know them reads a truncated chunk as a search failure.
@@ -5162,6 +5547,9 @@ pub fn print_serve_help() {
     println!("  {C_CYAN}-p, --port{C_RESET} <n>       TCP port (default: 8080)");
     println!("  {C_CYAN}--host{C_RESET} <addr>        Bind address (default: 127.0.0.1)");
     println!("  {C_GREEN}--watch{C_RESET}             Reload graph file when its mtime changes");
+    println!("  {C_CYAN}--graph-mode{C_RESET} <mode>  How the browser gets the graph: auto|local|server");
+    println!("                       (default: auto — `server` at or above 50 MB of graph.json,");
+    println!("                        where the page asks this server instead of downloading it)");
     println!("  {C_CYAN}--repo-root{C_RESET} <path>   Repo root for hybrid-search snippet resolution");
     println!("  {C_CYAN}--base-url{C_RESET} <url>      Embedding/chat base URL (OpenAI-compatible)");
     println!("  {C_CYAN}--api-key{C_RESET} <key>       Embedding/chat API key");
