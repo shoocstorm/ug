@@ -56,7 +56,7 @@ use super::io::die;
 /// that silently opens on an empty canvas — correct behaviour for a large
 /// repo, and a bad first impression for a demo, which is exactly the kind of
 /// change worth a warning at publish time.
-const SOLO_THRESHOLD: usize = 1_000_000;
+const SOLO_THRESHOLD: usize = 200_000;
 
 /// A short hash of everything that decides what the demo *renders*: the
 /// assembled visualization page, the shim wrapped around it, and both

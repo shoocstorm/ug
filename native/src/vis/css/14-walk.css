@@ -197,6 +197,33 @@
             color: var(--accent);
             background: rgba(249, 115, 22, 0.16);
         }
+        .walk-arr {
+            display: inline-flex;
+            gap: 2px;
+            padding: 3px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: rgba(255, 255, 255, 0.02);
+        }
+        .walk-arr-btn {
+            padding: 4px 9px;
+            border-radius: 6px;
+            border: none;
+            background: none;
+            color: var(--text-muted);
+            font-family: inherit;
+            font-size: 10.5px;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            cursor: pointer;
+            transition: color 0.15s, background 0.15s;
+        }
+        .walk-arr-btn:hover { color: var(--text); }
+        .walk-arr-btn.active {
+            color: var(--accent);
+            background: rgba(249, 115, 22, 0.16);
+        }
+
         .walk-reveal-note {
             margin-left: auto;
             font-size: 9.5px;
@@ -286,19 +313,64 @@
             to { transform: rotate(360deg); }
         }
 
-        /* One segment per hop, like the tour deck. */
-        .walk-o-progress { display: flex; gap: 5px; margin-bottom: 10px; flex-shrink: 0; }
+        /* The progress track: an origin dot for the seed, then one segment per
+           hop. The seed is deliberately *not* a segment — it is where the walk
+           starts, not a step it takes, and giving it one made a three-hop walk
+           read as four steps with the first already complete before anything
+           had happened. */
+        .walk-o-progress {
+            display: flex; align-items: center; gap: 6px;
+            margin-bottom: 10px; flex-shrink: 0;
+        }
+        .walk-seed-dot {
+            flex: 0 0 auto; width: 9px; height: 9px; padding: 0;
+            -webkit-appearance: none; appearance: none;
+            border-radius: 50%; cursor: pointer;
+            border: 1.5px solid rgba(255, 61, 0, .5);
+            background: transparent;
+            transition: background .2s, border-color .2s, box-shadow .2s;
+        }
+        /* Filled but quiet once the walk has set off. */
+        .walk-seed-dot.done {
+            background: rgba(255, 61, 0, .6);
+            border-color: rgba(255, 61, 0, .6);
+        }
+        /* Lit and beating while the walk is still sitting on the seed — the
+           one place in the run where nothing is moving, so the marker says so
+           rather than leaving the deck looking stalled. */
+        .walk-seed-dot.active {
+            background: #ff3d00; border-color: #ff3d00;
+            animation: walk-seed-beat 1.7s ease-in-out infinite;
+        }
+        @keyframes walk-seed-beat {
+            0%, 100% { box-shadow: 0 0 0 3px rgba(255, 61, 0, .20); }
+            50%      { box-shadow: 0 0 0 6px rgba(255, 61, 0, .04); }
+        }
+
         .walk-seg {
             height: 3px; flex: 1; border-radius: 2px; cursor: pointer;
-            background: rgba(255, 255, 255, .14); overflow: hidden; position: relative;
+            background: rgba(255, 255, 255, .13); overflow: hidden; position: relative;
             transition: background .2s;
         }
-        .walk-seg.done { background: rgba(249, 115, 22, .6); }
-        .walk-seg.active { background: rgba(249, 115, 22, .28); }
-        .walk-seg.active::after {
+        /* Every segment carries its fill, not just the current one. The fill
+           used to live on `.active` alone, so a hop went back to an empty
+           track the moment it finished igniting — the last hop of a walk sat
+           permanently half-lit at the end of the run. */
+        .walk-seg::after {
             content: ''; position: absolute; inset: 0 auto 0 0; width: var(--seg, 0%);
             background: linear-gradient(90deg, #fb923c, #f97316); border-radius: 2px;
-            transition: width .25s;
+            transition: width .25s ease;
+        }
+        .walk-seg.active { background: rgba(249, 115, 22, .2); }
+        /* Mid-stream: the fill sits part way along and breathes, so an
+           unfinished hop cannot be mistaken for a finished one. */
+        .walk-seg.streaming::after {
+            background: linear-gradient(90deg, rgba(251, 146, 60, .55), #fdba74);
+            animation: walk-seg-stream 1.1s ease-in-out infinite;
+        }
+        @keyframes walk-seg-stream {
+            0%, 100% { opacity: .6; }
+            50%      { opacity: 1; }
         }
 
         #walk-o-stage { overflow-y: auto; min-height: 0; }
@@ -408,15 +480,30 @@
            breadcrumb is hidden fully (not just dimmed) for both modes. */
         body.walk-active #legend,
         body.walk-active #axis-gizmo,
-        body.walk-active #viewbar,
         body.walk-active #sidebar-launcher {
             opacity: .18;
             transition: opacity .35s ease;
         }
         body.walk-active #legend:hover,
         body.walk-active #axis-gizmo:hover,
-        body.walk-active #viewbar:hover,
         body.walk-active #sidebar-launcher:hover { opacity: 1; }
+
+        /* The view bar and the page header go entirely, rather than dimming
+           and coming back on hover like the rest of the chrome.
+           - The view bar is not passive furniture: its buttons re-aim the
+             camera, swap the 2D arrangement and toggle solo, and every one of
+             those fights the walk for control of the same thing the walk is
+             animating. Dimmed-but-live is the worst of both — invisible enough
+             to forget, clickable enough to break the run.
+           - The header is a title block. During a walk the subject is the
+             cascade, the hop headings are painted along the top of the canvas,
+             and the card already carries the counts the header duplicates. */
+        body.walk-active #viewbar,
+        body.walk-active .header {
+            opacity: 0 !important;
+            pointer-events: none !important;
+            transition: opacity .35s ease;
+        }
         body.walk-active #graph-3d::after {
             content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 5;
             background: radial-gradient(ellipse at 50% 45%, transparent 42%, rgba(0, 0, 0, .5) 100%);

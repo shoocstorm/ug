@@ -22,6 +22,15 @@
             // while a plan is still being charted — nothing on screen is the
             // user's doing yet. Pausing hands hovering back to the user.
             if (d && tourState.active && (tourState.playing || !tourState.data)) d = null;
+            // A walk owns the canvas outright, and for the same reason plus
+            // one more. The camera reframes on every hop, so nodes sweep under
+            // a parked pointer and hovers fire that the user never asked for —
+            // but worse, a hover repaints the node and its neighbours in the
+            // hot highlight orange, which is the one thing that can overwrite
+            // a hop colour. The whole point of the reveal is that colour says
+            // *how far out* a node is; a stray hover makes three hops look
+            // like one, and drags a tooltip over the diagram while doing it.
+            if (d && state.walkActive) d = null;
             state._hoverNode = d || null;
             const el = document.getElementById('graph-3d');
             if (el) el.style.cursor = d ? 'pointer' : null;

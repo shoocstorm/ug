@@ -55,6 +55,427 @@
 
         const delay = (ms) => new Promise(r => setTimeout(r, ms));
 
+        // ─── The cascade: laying the walk out so it reads ────
+        //
+        // A walk used to light nodes up wherever the force layout had already
+        // dropped them. That shows you *which* nodes were reached and nothing
+        // else: hop 3 can sit left of hop 1, a caller can sit downstream of the
+        // thing it calls, and the frontier arrives as a scatter of sparks
+        // rather than as an expansion. Every question a walk is actually asked
+        // — how far does this reach, what does it fan out into, which way does
+        // the dependency point — is a question about *arrangement*, and the
+        // arrangement was the one thing the walk did not control.
+        //
+        // So while a walk runs the reached subgraph is re-laid-out from
+        // scratch, on three rules:
+        //
+        //   1. **One column per hop, marching the way the edges point.**
+        //      Distance from the seed is horizontal distance on screen, so
+        //      "three hops out" is something you can see rather than count.
+        //
+        //   2. **Following an edge forward goes right; following one backward
+        //      goes left.** So an arrow always points the way you are reading.
+        //      An outbound walk grows rightward, an inbound walk grows leftward
+        //      into the seed, and a `both` walk splits into two wings around
+        //      it: everything the seed reaches on the right, everything that
+        //      reaches the seed on the left. That one rule is what turns "who
+        //      calls this / what does this call" into a picture.
+        //
+        //   3. **Inside a column, sit next to your parent.** Each node wants
+        //      the average height of whatever reached it; collisions are
+        //      resolved by pushing down, then the column is slid back so it
+        //      stays centred on where its parents wanted it. Ties break by
+        //      relation, so a file's contained symbols read as one tight block
+        //      distinct from the things it calls, and then by the canonical
+        //      type order.
+        //
+        // The whole cascade is computed once, up front, for every hop — the
+        // reveal is temporal, never geometric. Nodes do not shuffle as the walk
+        // advances; they arrive at a place that was already theirs.
+
+        const WALK_COL_GAP = 320;    // clear space between one hop band and the next
+        const WALK_LANE_GAP = 108;   // between the sub-lanes of one wide band
+        const WALK_ROW_GAP = 78;     // between two ordinary nodes in a column
+        // Containment is the one relation where the child is *part of* the
+        // parent rather than something it reached, so contained siblings are
+        // stacked as a compact bracket instead of a fan — a shape you can pick
+        // out of a column without reading a single label.
+        const WALK_ROW_TIGHT = 0.6;
+        // How tall a single lane may get before the band wraps into another
+        // one. Deliberately short: a hop of two hundred nodes stacked in one
+        // line is a mile-high hairline you have to scroll, and the thing that
+        // makes a cascade readable is that it is *wider* than it is tall. A
+        // wide hop therefore grows sideways, into a block of lanes, and the
+        // band it occupies grows with it — see the x cursor in placeWalkColumn.
+        const WALK_COL_MAX_H = 900;
+        const WALK_ROW_MIN = 0.5;    // how far row spacing may be squeezed first
+        const WALK_ROW_PAD = 8;      // clear space between two node discs
+        const WALK_LAYOUT_KEY = 'ug-walk-layout';
+        const WALK_RESTORE_MS = 950; // the morph back to the graph's own layout
+
+        // Vertical banding inside a column. Structure first, then type
+        // hierarchy, then behaviour, then data, then module wiring — the same
+        // order in every column, so the bands read as horizontal stripes
+        // running the length of the cascade.
+        const WALK_REL_BAND = {
+            Contains: 0,
+            Extends: 1, Implements: 1, Overrides: 1,
+            Calls: 2,
+            Uses: 3, References: 3,
+            Imports: 4, Exports: 4,
+            Requires: 5, DependsOn: 5,
+        };
+        const walkRelBand = (rel) => {
+            const b = WALK_REL_BAND[rel];
+            return b === undefined ? 6 : b;
+        };
+
+        function walkCascadeOn() { return state.walkLayout === 'flow'; }
+
+        // Guides are revealed with their hop, not all at once — the cascade
+        // should still be a reveal, not a diagram that was there all along.
+        function walkLaneRevealed(lane) {
+            return lane.hop <= Math.max(walkPlay.index, walkPlay.streaming);
+        }
+
+        // Build the cascade for a whole computed walk.
+        // Returns { pos, lanes } — positions by node id, and one record per
+        // hop column for the on-canvas guides.
+        function computeWalkCascade(layers, seedId) {
+            const pos = new Map();
+            const laneBy = new Map();
+            if (!layers || !layers.length) return { pos, lanes: [] };
+
+            // Which layer each reached node landed in. Every edge a layer
+            // carries joins that layer to the one before it (computeWalk only
+            // records an edge when it reaches a node for the first time), so
+            // this is enough to orient every edge.
+            const hopOf = new Map([[seedId, 0]]);
+            layers.forEach(l => l.ids.forEach(id => hopOf.set(id, l.hop)));
+
+            // id → the edges that reached it, each with the end it came from,
+            // its relation, and whether it was followed forward (+1, the parent
+            // points at this node) or backward (−1, this node points at the
+            // parent).
+            const inbound = new Map();
+            for (let h = 1; h < layers.length; h++) {
+                for (const e of layers[h].edges) {
+                    const sh = hopOf.get(e.source);
+                    const th = hopOf.get(e.target);
+                    let rec = null;
+                    if (th === h && sh === h - 1) rec = { child: e.target, parent: e.source, rel: e.rel, sign: 1 };
+                    else if (sh === h && th === h - 1) rec = { child: e.source, parent: e.target, rel: e.rel, sign: -1 };
+                    if (!rec) continue;
+                    const list = inbound.get(rec.child);
+                    if (list) list.push(rec); else inbound.set(rec.child, [rec]);
+                }
+            }
+
+            // Which wing a node belongs to. The first hop picks its side from
+            // the direction its edge was followed; everything past that
+            // inherits from its parent, so a wing never doubles back on itself
+            // and "further from the seed" always means "further out".
+            const wing = new Map([[seedId, 0]]);
+            for (let h = 1; h < layers.length; h++) {
+                for (const id of layers[h].ids) {
+                    let w = 0;
+                    for (const r of (inbound.get(id) || [])) {
+                        const pw = wing.get(r.parent);
+                        w = pw ? pw : r.sign;
+                        if (w) break;
+                    }
+                    wing.set(id, w || 1);
+                }
+            }
+
+            pos.set(seedId, { x: 0, y: 0, z: 0 });
+            laneBy.set('0:0', {
+                hop: 0, sign: 0, x: 0, x0: 0, x1: 0, top: 0, bottom: 0, count: 1,
+                label: 'SEED', color: walkColorForHop(0),
+            });
+
+            // How far out each wing has been built. Hop bands are laid down
+            // end to end rather than at fixed multiples of a gap, because a
+            // band is as wide as its fan-out needs: pinning hop 3 to 3×gap
+            // would drop it on top of a hop 2 that had spread into six lanes.
+            const cursor = { '-1': 0, '1': 0 };
+            for (let h = 1; h < layers.length; h++) {
+                for (const sign of [-1, 1]) {
+                    const ids = layers[h].ids.filter(id => wing.get(id) === sign);
+                    if (!ids.length) continue;
+                    placeWalkColumn(ids, h, sign, inbound, pos, laneBy, cursor);
+                }
+            }
+
+            const lanes = [...laneBy.values()].sort((a, b) => a.x - b.x);
+            anchorWalkCascade(pos, lanes, seedId);
+            return { pos, lanes };
+        }
+
+        // Move the cascade from the origin, where it was convenient to build
+        // it, to wherever the mounted backend can actually draw it.
+        //
+        //   • a backend with a bounded space (2D) gets it centred in that
+        //     space, scaled down if it does not fit — coordinates outside
+        //     cosmos.gl's `spaceSize` are the documented iOS crash, and they
+        //     also throw off its own screen projection
+        //   • a backend without one (3D) gets it centred on the seed's current
+        //     position, so the diagram unfolds where the seed already was
+        //     rather than teleporting the walk to the origin
+        //
+        // The lane records carry the same transform: they describe the same
+        // geometry and are drawn in the same coordinates.
+        function anchorWalkCascade(pos, lanes, seedId) {
+            const space = rendererSpace();
+            let ox = 0, oy = 0, oz = 0, k = 1;
+            if (space) {
+                let mnx = Infinity, mxx = -Infinity, mny = Infinity, mxy = -Infinity;
+                pos.forEach(p => {
+                    if (p.x < mnx) mnx = p.x;
+                    if (p.x > mxx) mxx = p.x;
+                    if (p.y < mny) mny = p.y;
+                    if (p.y > mxy) mxy = p.y;
+                });
+                if (!Number.isFinite(mnx)) return;
+                const extent = Math.max(mxx - mnx, mxy - mny, 1);
+                // Floored rather than unbounded: shrinking far enough to fit a
+                // truly enormous walk would close the gaps between node discs,
+                // and a cascade you cannot read the nodes of is not a saving.
+                k = Math.min(1, Math.max(0.7, (space.size * 0.9) / extent));
+                ox = space.cx - ((mnx + mxx) / 2) * k;
+                oy = space.cy - ((mny + mxy) / 2) * k;
+            } else {
+                const seed = state.nodeById && state.nodeById.get(seedId);
+                if (!seed || !Number.isFinite(seed.x)) return;
+                ox = seed.x; oy = seed.y; oz = seed.z || 0;
+            }
+            if (k === 1 && !ox && !oy && !oz) return;
+            pos.forEach(p => { p.x = p.x * k + ox; p.y = p.y * k + oy; p.z = p.z * k + oz; });
+            lanes.forEach(l => {
+                l.x = l.x * k + ox;
+                l.x0 = l.x0 * k + ox;
+                l.x1 = l.x1 * k + ox;
+                l.top = l.top * k + oy;
+                l.bottom = l.bottom * k + oy;
+                l.scale = k;
+            });
+        }
+
+        // One hop band of one wing.
+        function placeWalkColumn(ids, hop, sign, inbound, pos, laneBy, cursor) {
+            const items = ids.map(id => {
+                const ins = (inbound.get(id) || []).filter(r => pos.has(r.parent));
+                let want = 0;
+                let band = 9;
+                for (const r of ins) {
+                    want += pos.get(r.parent).y;
+                    band = Math.min(band, walkRelBand(r.rel));
+                }
+                const node = state.nodeById && state.nodeById.get(id);
+                return {
+                    id,
+                    // The barycentre of everything that reached it — a node
+                    // pulled at from two places belongs between them.
+                    want: ins.length ? want / ins.length : 0,
+                    parentKey: ins.length ? ins[0].parent : '',
+                    band: band === 9 ? 6 : band,
+                    tight: band === 0,
+                    rank: node ? nodeTypeRank(node.group) : 99,
+                    name: node ? node.name : id,
+                };
+            });
+
+            const cmp = (a, b) =>
+                a.want - b.want
+                || (a.parentKey < b.parentKey ? -1 : a.parentKey > b.parentKey ? 1 : 0)
+                || a.band - b.band
+                || a.rank - b.rank
+                || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+            items.sort(cmp);
+
+            // Squeeze the row spacing before wrapping — a column of twenty is
+            // still one readable run at tighter spacing, whereas splitting it
+            // costs an edge crossing for every node in the second lane.
+            let natural = 0;
+            items.forEach(it => { natural += WALK_ROW_GAP * (it.tight ? WALK_ROW_TIGHT : 1); });
+            const squeeze = natural > WALK_COL_MAX_H
+                ? Math.max(WALK_ROW_MIN, WALK_COL_MAX_H / natural)
+                : 1;
+            const gap = WALK_ROW_GAP * squeeze;
+            // A slot never closes below the discs it has to hold. Squeezing is
+            // a way to fit more of a column on screen; it is not a licence to
+            // overlap nodes, which is the one thing that would make the
+            // arrangement less readable than the layout it replaced.
+            let used = 0;
+            items.forEach(it => {
+                const node = state.nodeById && state.nodeById.get(it.id);
+                const floor = (node ? nodeRadiusFor(node) : 9) * 2 + WALK_ROW_PAD;
+                it.h = Math.max(gap * (it.tight ? WALK_ROW_TIGHT : 1), floor);
+                used += it.h;
+            });
+
+            const laneCount = Math.max(1, Math.ceil(used / WALK_COL_MAX_H));
+            const perLane = Math.ceil(items.length / laneCount);
+            // The band starts a clear gap past wherever the previous hop
+            // finished, and the cursor moves to its last lane.
+            const base = cursor[sign] + sign * WALK_COL_GAP;
+            let top = -Infinity, bottom = Infinity, placed = 0, lastX = base;
+            for (let l = 0; l < laneCount; l++) {
+                const slice = items.slice(l * perLane, (l + 1) * perLane);
+                if (!slice.length) continue;
+                lastX = base + sign * l * WALK_LANE_GAP;
+                const span = layWalkColumn(slice, lastX, pos);
+                top = Math.max(top, span.top);
+                bottom = Math.min(bottom, span.bottom);
+                placed += slice.length;
+            }
+            cursor[sign] = lastX;
+            laneBy.set(sign + ':' + hop, {
+                hop, sign,
+                x: (base + lastX) / 2,
+                x0: Math.min(base, lastX),
+                x1: Math.max(base, lastX),
+                top, bottom, count: placed,
+                label: 'HOP ' + hop,
+                color: walkColorForHop(hop),
+            });
+        }
+
+        // Place one lane's worth of nodes on a vertical line.
+        //
+        // Each node is put at the height its parents want; where that would
+        // overlap the node above, it is pushed down just far enough. Pushing
+        // only ever moves things one way, so the run as a whole drifts — and
+        // then the whole run is slid back by the average drift, which keeps the
+        // column centred on its parents instead of hanging off the bottom of
+        // them. (The priority method from layered graph drawing, in about
+        // fifteen lines: it is not optimal, and for a fan-out from one parent
+        // it is exactly optimal, which is the case that matters here.)
+        function layWalkColumn(slice, x, pos) {
+            const ys = [];
+            let cursor = -Infinity;
+            for (let i = 0; i < slice.length; i++) {
+                const need = i === 0 ? 0 : (slice[i - 1].h + slice[i].h) / 2;
+                const y = Math.max(slice[i].want, cursor + need);
+                ys.push(y);
+                cursor = y;
+            }
+            let drift = 0;
+            for (let i = 0; i < slice.length; i++) drift += ys[i] - slice[i].want;
+            drift /= slice.length;
+            for (let i = 0; i < slice.length; i++) {
+                pos.set(slice[i].id, { x, y: ys[i] - drift, z: 0 });
+            }
+            return { top: ys[ys.length - 1] - drift, bottom: ys[0] - drift };
+        }
+
+        // ── Putting the cascade on the canvas, and taking it off ──
+
+        // Snapshot where the graph's own layout had these nodes, so exiting the
+        // walk can hand them all back. Only ever fills gaps: in solo mode the
+        // view grows as the walk advances, and a node's *pre-walk* position is
+        // the one from the first time we saw it, not from the last.
+        function rememberWalkPositions(ids) {
+            if (!state.walkPosSaved) state.walkPosSaved = new Map();
+            ids.forEach(id => {
+                if (state.walkPosSaved.has(id)) return;
+                const n = state.nodeById && state.nodeById.get(id);
+                if (n && Number.isFinite(n.x)) {
+                    state.walkPosSaved.set(id, { x: n.x, y: n.y, z: n.z || 0 });
+                }
+            });
+        }
+
+        // Struck instantly rather than morphed: at the moment a walk starts the
+        // canvas has already isolated to the seed, so there is nothing on
+        // screen to watch move. Animating an arrangement of invisible nodes
+        // costs a second of the user's attention and buys nothing.
+        function applyWalkCascade(ms) {
+            if (!walkCascadeOn() || !state.walkCascadePos || !nodePositionsSupported()) return;
+            setNodePositions(state.walkCascadePos, ms || 0, {});
+        }
+
+        // The reverse, and this one *is* worth animating: everything is visible
+        // again, so the cascade visibly relaxes back into the graph it was cut
+        // out of — which is the one moment that shows you where the walk was.
+        function restoreWalkPositions() {
+            const saved = state.walkPosSaved;
+            state.walkPosSaved = null;
+            state.walkCascadePos = null;
+            state.walkLanes = [];
+            if (!saved || !saved.size || !nodePositionsSupported()) return;
+            setNodePositions(saved, WALK_RESTORE_MS, { release: true });
+        }
+
+        // How a hop announces itself.
+        //
+        // Off the cascade the frontier really is a shell — hop 2 is everything
+        // at distance 2, in every direction — so a sphere expanding from the
+        // seed touches all of it at once, and that is the effect.
+        //
+        // On the cascade the frontier is a *line*: one column, off to one side.
+        // A sphere grown from the seed until it reached that column would have
+        // engulfed hop 1, the near edge of hop 3 and most of the canvas on the
+        // way, describing a geometry the diagram no longer has. So the wave
+        // becomes a curtain travelling along the flow axis — from the column it
+        // is leaving to the column about to light up, arriving on the beat. A
+        // `both` walk gets one per wing, and watching the two set off in
+        // opposite directions is the clearest statement the walk makes about
+        // what "inbound" and "outbound" mean.
+        function emitWalkBurst(h, colour, ms) {
+            const seed = walkPlay.seedNode;
+            const lanes = state.walkLanes || [];
+            if (!walkCascadeOn() || !state.walkCascadePos || !lanes.length) {
+                const fromR = h === 0 ? 4 : layerReachRadius(seed, h - 1);
+                const toR = h === 0 ? 44 : layerReachRadius(seed, h);
+                emitWalkPulse(seed, colour, fromR, toR, ms);
+                return;
+            }
+            const seedPos = state.walkCascadePos.get(state.walkSeed);
+            // Hop 0 is one node, not a column: there is nothing for a front to
+            // travel between, and a compact flash is what "this is where it
+            // starts" looks like.
+            if (h === 0 || !seedPos) {
+                emitWalkPulse(seedPos ? { ...seedPos } : seed, colour, 4, 44, ms);
+                return;
+            }
+
+            const here = lanes.filter(l => l.hop === h);
+            if (!here.length) { emitWalkPulse({ ...seedPos }, colour, 4, 44, ms); return; }
+
+            // The curtain spans everything revealed so far, so it reads as a
+            // front crossing the whole diagram rather than a bar the height of
+            // one column.
+            let top = -Infinity, bottom = Infinity;
+            for (const l of lanes) {
+                if (l.hop > h) continue;
+                top = Math.max(top, l.top);
+                bottom = Math.min(bottom, l.bottom);
+            }
+            const pad = Math.max((top - bottom) * 0.06, 50);
+            const k = (lanes[0] && lanes[0].scale) || 1;
+
+            let swept = false;
+            for (const lane of here) {
+                const prev = lanes.find(p => p.hop === h - 1 && (p.sign === lane.sign || p.sign === 0));
+                const fromX = prev ? (prev.sign === 0 ? prev.x : prev.x1) : seedPos.x;
+                const dir = lane.x1 >= fromX ? 1 : -1;
+                // Overshoot the column a little: the front should wash *over*
+                // the nodes as they ignite, not stop short at the first lane.
+                const toX = lane.x1 + dir * WALK_COL_GAP * 0.3 * k;
+                swept = emitWalkSweep({
+                    colour,
+                    fromX, toX,
+                    top: top + pad,
+                    bottom: bottom - pad,
+                    z: seedPos.z || 0,
+                    growMs: ms,
+                }) || swept;
+            }
+            // A backend with no sweep still has to mark the beat.
+            if (!swept) emitWalkPulse({ ...seedPos }, colour, 4, 44, ms);
+        }
+
         // ── Playback state ───────────────────────────────────
         // Render-relevant sets live on `state` (read by the graph accessors);
         // this object holds the control state the overlay drives.
@@ -145,6 +566,17 @@
             root.querySelectorAll('.walk-speed-btn').forEach(btn => btn.addEventListener('click', () => {
                 setWalkSpeed(parseFloat(btn.dataset.speed) || 1);
             }));
+            // Arrangement. Remembered across sessions: whether you want a walk
+            // rearranged into a diagram or lit up in place is a reading
+            // preference, not something to re-decide every time.
+            try {
+                const saved = localStorage.getItem(WALK_LAYOUT_KEY);
+                if (saved === 'flow' || saved === 'graph') state.walkLayout = saved;
+            } catch (e) { /* private mode */ }
+            root.querySelectorAll('.walk-arr-btn').forEach(btn => btn.addEventListener('click', () => {
+                setWalkLayout(btn.dataset.arr);
+            }));
+            syncWalkLayoutButtons();
 
             renderWalkEdgeTypes();
 
@@ -162,6 +594,7 @@
             bind('walk-o-close', () => exitWalk());
             bind('walk-o-speed', () => cycleWalkSpeed());
             bind('walk-o-flow', toggleWalkFlow);
+            bind('walk-o-layout', toggleWalkLayout);
             bind('walk-o-info', toggleWalkInfo);
             bind('walk-o-labels', toggleShowLabels);
 
@@ -179,6 +612,7 @@
                 else if (e.key === ' ' || e.key === 'Spacebar') { e.preventDefault(); togglePlayWalk(); }
                 else if (e.key === 's' || e.key === 'S') { e.preventDefault(); cycleWalkSpeed(); }
                 else if (e.key === 'r' || e.key === 'R') { e.preventDefault(); toggleWalkFlow(); }
+                else if (e.key === 'f' || e.key === 'F') { e.preventDefault(); toggleWalkLayout(); }
                 else if (e.key === 'd' || e.key === 'D') { e.preventDefault(); toggleWalkInfo(); }
                 else if (e.key === 'l' || e.key === 'L') { e.preventDefault(); toggleShowLabels(); }
             });
@@ -385,6 +819,23 @@
             state.selectedNode = seedNode;
             document.body.classList.add('walk-active');
 
+            // The cascade is computed for the whole walk before the first hop
+            // is drawn — see computeWalkCascade. It is applied here, while
+            // everything but the seed is still hidden, so the arrangement is
+            // simply the one the walk was always in.
+            state.walkPosSaved = null;
+            state.walkCascadePos = null;
+            state.walkLanes = [];
+            if (walkCascadeOn() && nodePositionsSupported()) {
+                const reachedIds = [];
+                layers.forEach(l => l.ids.forEach(id => reachedIds.push(id)));
+                rememberWalkPositions(reachedIds);
+                const flow = computeWalkCascade(layers, seedNode.id);
+                state.walkCascadePos = flow.pos;
+                state.walkLanes = flow.lanes;
+                applyWalkCascade(0);
+            }
+
             enterWalkImmersive();
             // Pre-fill the details panel with the seed now, so the info
             // button on the card has content to toggle. Suppress history
@@ -397,7 +848,7 @@
             state.suppressHistory = false;
             const walkInfoEl = document.getElementById('info');
             if (walkInfoEl) walkInfoEl.classList.remove('visible');
-            buildWalkSegments(layers.length);
+            buildWalkSegments(layers.length - 1);
             restoreWalkPosition();
             showWalkOverlay();
 
@@ -405,7 +856,7 @@
             // pulse marks the origin the rest of the walk radiates from.
             setWalkStateToHop(0);
             walkPlay.index = 0;
-            emitWalkPulse(seedNode, walkColorForHop(0), 4, 44, 320);
+            emitWalkBurst(0, walkColorForHop(0), 320);
             setOverlayPhase('ignite', 0);
             updateWalkOverlay();
             setWalkPlaying(true);
@@ -417,6 +868,13 @@
         // with nothing beyond. Used for hop 0 setup, rewinds, and jumps.
         function setWalkStateToHop(target) {
             const layers = walkPlay.layers;
+            // Before the restyle, not after it. The hop counter is what the
+            // canvas reads to decide how much of the walk has been revealed
+            // (walkLaneRevealed), so leaving it to the caller to set once this
+            // returns left the guides showing the *previous* hop until some
+            // unrelated restyle happened along.
+            walkPlay.index = target;
+            walkPlay.streaming = -1;
             const reached = new Set([state.walkSeed]);
             const colors = new Map([[state.walkSeed, walkColorForHop(0)]]);
             const edgeKeys = new Set();
@@ -432,9 +890,20 @@
                 plotNodes(Array.from(reached));
                 state._didFit = true;
                 state._boxSettled = true;
+                // Handing the renderer a new view re-runs its own layout over
+                // it, which would undo the cascade a hop at a time.
+                applyWalkCascade(0);
             }
             bumpGraphStyles();
-            frameNodeSet(reached, walkFrameMs());
+            frameWalk(reached);
+        }
+
+        // Framing during a walk. The cascade is a planar diagram, so it is
+        // read straight on — the usual three-quarter framing foreshortens the
+        // hop columns until they no longer line up, which is most of what the
+        // arrangement was for.
+        function frameWalk(ids, ms) {
+            frameNodeSet(ids, ms || walkFrameMs(), { flat: walkCascadeOn() && !!state.walkCascadePos });
         }
 
         // Forward, animated: phase 1 streams edges toward ghost frontier
@@ -457,11 +926,18 @@
                 plotNodes(Array.from(state.walkReached));
                 state._didFit = true;
                 state._boxSettled = true;
+                applyWalkCascade(0);
             }
             bumpGraphStyles();
-            const fromR = layerReachRadius(walkPlay.seedNode, h - 1);
-            const toR = layerReachRadius(walkPlay.seedNode, h);
-            emitWalkPulse(walkPlay.seedNode, colour, fromR, toR, walkIgniteMs());
+            // Open the frame at the *start* of the stream, over the same
+            // window the wavefront takes to cross. The camera used to widen
+            // only once the frontier had ignited, which was fine for a sphere
+            // — you watched it swell past the edge of the view — but a front
+            // travelling to a column you cannot see yet is a front travelling
+            // to nowhere. Now the view opens as the front sets off, and both
+            // arrive together.
+            frameWalk(state.walkReached, walkIgniteMs());
+            emitWalkBurst(h, colour, walkIgniteMs());
             setOverlayPhase('stream', h);
             updateWalkOverlay();
 
@@ -479,10 +955,11 @@
             // The wavefront (started in advanceToHop) arrives here as these
             // nodes light up — no new pulse; the synchronisation is the point.
             layer.ids.forEach(id => state.walkColors.set(id, colour));
-            bumpGraphStyles();
-            frameNodeSet(state.walkReached, walkFrameMs());
-            pingPipelineBox();
+            // Ahead of the restyle: see setWalkStateToHop.
             walkPlay.index = h;
+            bumpGraphStyles();
+            frameWalk(state.walkReached);
+            pingPipelineBox();
             setOverlayPhase('ignite', h);
             updateWalkOverlay();
             scheduleAutoAdvance();
@@ -585,6 +1062,62 @@
             setWalkFlow(!state.lineFlow);
         }
 
+        // Cascade on/off, live. Switching mid-walk does not disturb the reveal
+        // — the hop you are on stays the hop you are on; only the geometry
+        // under it changes, and it changes by morphing so you can see which
+        // node went where. That is the comparison the toggle is *for*: the
+        // diagram tells you the shape of the reach, the graph's own layout
+        // tells you where that reach lives in the codebase.
+        function setWalkLayout(name) {
+            const next = name === 'flow' ? 'flow' : 'graph';
+            const changed = next !== state.walkLayout;
+            state.walkLayout = next;
+            try { localStorage.setItem(WALK_LAYOUT_KEY, next); } catch (e) { /* private mode */ }
+            syncWalkLayoutButtons();
+            if (!changed || !walkPlay.active || !walkPlay.layers || !nodePositionsSupported()) return;
+
+            if (next === 'flow') {
+                const reachedIds = [];
+                walkPlay.layers.forEach(l => l.ids.forEach(id => reachedIds.push(id)));
+                rememberWalkPositions(reachedIds);
+                const flow = computeWalkCascade(walkPlay.layers, state.walkSeed);
+                state.walkCascadePos = flow.pos;
+                state.walkLanes = flow.lanes;
+                setNodePositions(flow.pos, WALK_RESTORE_MS, {});
+            } else {
+                state.walkCascadePos = null;
+                state.walkLanes = [];
+                // `walkPosSaved` is kept: exitWalk still has to hand every
+                // node back, and a second identical restore costs nothing.
+                if (state.walkPosSaved && state.walkPosSaved.size) {
+                    setNodePositions(state.walkPosSaved, WALK_RESTORE_MS, {});
+                }
+            }
+            bumpGraphStyles();
+            // After the morph, not before it. Framing reads the nodes' current
+            // coordinates, and at the moment a morph starts those are still the
+            // arrangement being left behind — so an immediate fit frames the
+            // old shape and then watches the new one shrink inside it.
+            setTimeout(() => {
+                if (walkPlay.active) frameWalk(state.walkReached);
+            }, WALK_RESTORE_MS);
+        }
+
+        function toggleWalkLayout() {
+            setWalkLayout(walkCascadeOn() ? 'graph' : 'flow');
+        }
+
+        function syncWalkLayoutButtons() {
+            const on = walkCascadeOn();
+            document.querySelectorAll('.walk-arr-btn').forEach(b =>
+                b.classList.toggle('active', (b.dataset.arr === 'flow') === on));
+            const btn = walkEl('walk-o-layout');
+            if (btn) {
+                btn.classList.toggle('active', on);
+                btn.setAttribute('aria-pressed', String(on));
+            }
+        }
+
         // Show/hide the (already populated) details panel while a walk is live.
         function toggleWalkInfo() {
             const info = document.getElementById('info');
@@ -618,7 +1151,15 @@
                 // Keep the walked neighbourhood on the canvas as an ordinary
                 // selection the user can keep exploring.
                 if (state.soloOnly && reached.size) plotNodes(Array.from(reached));
+                // …but hand the geometry back. A walk borrows the layout; it
+                // does not get to keep it, or every walk would leave the graph
+                // rearranged behind it.
+                restoreWalkPositions();
                 bumpGraphStyles();
+            } else {
+                state.walkPosSaved = null;
+                state.walkCascadePos = null;
+                state.walkLanes = [];
             }
             if (!quiet) {
                 const status = document.getElementById('walk-status');
@@ -637,22 +1178,42 @@
                 seedEl.textContent = truncateName(walkPlay.seedNode.name);
                 seedEl.title = walkPlay.seedNode.id;
             }
-            buildWalkSegments(walkPlay.layers.length);
+            buildWalkSegments(walkPlay.layers.length - 1);
+            syncWalkLayoutButtons();
+            // A backend without a position seam cannot hold a prescribed
+            // arrangement, so the control would be a lie rather than a choice.
+            const layoutBtn = walkEl('walk-o-layout');
+            if (layoutBtn) layoutBtn.hidden = !nodePositionsSupported();
         }
         function hideWalkOverlay() {
             const ovl = walkEl('walk-overlay');
             if (ovl) ovl.classList.remove('visible');
         }
 
-        function buildWalkSegments(count) {
+        // The progress track: a dot for the seed, then one segment per hop.
+        //
+        // The seed used to be a segment like any other, which made a
+        // three-hop walk read as a four-step one and — worse — lit a whole
+        // segment before the walk had gone anywhere. It is not a step the walk
+        // takes; it is where the walk starts. So it gets an origin dot at the
+        // head of the track and the segments are the hops, which is what the
+        // counter beside them has always said.
+        function buildWalkSegments(hops) {
             const bar = walkEl('walk-o-progress');
             if (!bar) return;
             bar.innerHTML = '';
-            for (let h = 0; h < count; h++) {
+            const dot = document.createElement('button');
+            dot.type = 'button';
+            dot.className = 'walk-seed-dot';
+            dot.title = 'Back to the seed';
+            dot.setAttribute('aria-label', 'Seed');
+            dot.addEventListener('click', () => jumpToHop(0));
+            bar.appendChild(dot);
+            for (let h = 1; h <= hops; h++) {
                 const seg = document.createElement('div');
                 seg.className = 'walk-seg';
                 seg.dataset.hop = h;
-                seg.title = h === 0 ? 'Seed' : `Hop ${h}`;
+                seg.title = `Hop ${h}`;
                 seg.addEventListener('click', () => jumpToHop(h));
                 bar.appendChild(seg);
             }
@@ -671,35 +1232,56 @@
             const layers = walkPlay.layers;
             if (!layers) return;
             const idx = walkPlay.index;
+            const streaming = walkPlay.streaming;
             const last = layers.length - 1;
+            // The hop the card is describing. While edges are in flight that
+            // is the hop *arriving*, not the one behind it: the canvas has
+            // already revealed its nodes as ghosts and is streaming its edges,
+            // so a card still reading "Hop 1" was describing the beat before
+            // the one you were watching.
+            const cur = streaming > 0 ? streaming : idx;
 
             // Counter.
             const counter = walkEl('walk-o-counter');
-            if (counter) counter.textContent = last > 0 ? `${idx}/${last}` : '';
+            if (counter) counter.textContent = last > 0 ? `${cur}/${last}` : '';
 
-            // Segments — done up to index, active for streaming/index.
+            // The track: origin dot, then one segment per hop.
             const bar = walkEl('walk-o-progress');
             if (bar) {
-                const focus = walkPlay.streaming > 0 ? walkPlay.streaming : idx;
+                const dot = bar.querySelector('.walk-seed-dot');
+                if (dot) {
+                    // Lit and beating while the walk is still sitting on the
+                    // seed; filled but quiet once it has set off.
+                    dot.classList.toggle('active', idx === 0 && streaming < 0);
+                    dot.classList.toggle('done', idx > 0 || streaming > 0);
+                }
                 bar.querySelectorAll('.walk-seg').forEach(seg => {
                     const h = parseInt(seg.dataset.hop, 10);
-                    seg.classList.toggle('done', h < focus || (h === focus && walkPlay.streaming < 0));
-                    seg.classList.toggle('active', h === focus);
-                    seg.style.setProperty('--seg',
-                        (h === focus && walkPlay.streaming > 0) ? '50%' : (h < focus ? '100%' : '0%'));
+                    const inFlight = streaming === h;
+                    // An ignited hop is a *full* segment. The old rule left
+                    // the hop you had just arrived at on an empty track,
+                    // because the fill was only painted while a segment was
+                    // mid-stream.
+                    const done = h <= idx;
+                    seg.classList.toggle('done', done);
+                    seg.classList.toggle('streaming', inFlight);
+                    // Exactly one segment is ever the current step — the hop
+                    // in flight if there is one, otherwise the last ignited.
+                    seg.classList.toggle('active', h === cur);
+                    seg.style.setProperty('--seg', done ? '100%' : (inFlight ? '55%' : '0%'));
                 });
             }
 
             // Hop title + phase tag handled by setOverlayPhase; edges for current layer.
             const hopEl = walkEl('walk-o-hop');
             if (hopEl) {
-                hopEl.textContent = idx === 0 ? 'Seed' : `Hop ${idx}`;
+                hopEl.textContent = cur === 0 ? 'Seed' : `Hop ${cur}`;
             }
             const edgesEl = walkEl('walk-o-edges');
             if (edgesEl) {
-                const tally = idx === 0 ? {} : (layers[idx].tally || {});
+                const tally = cur === 0 ? {} : (layers[cur].tally || {});
                 const entries = Object.entries(tally).sort((a, b) => b[1] - a[1]);
-                edgesEl.innerHTML = idx === 0
+                edgesEl.innerHTML = cur === 0
                     ? `<span class="walk-o-empty">the starting node</span>`
                     : entries.length
                         ? entries.map(([r, c]) => `<span class="walk-o-edge">${escapeHtml(r)} ×${c}</span>`).join('')
@@ -721,22 +1303,27 @@
                 }
             }
 
-            // Totals up to the current index.
+            // Totals for everything on the canvas, in-flight hop included —
+            // its nodes are already drawn (as ghosts) and its edges are
+            // already streaming, so counting them keeps the numbers in step
+            // with the segment beside them.
             const totals = walkEl('walk-o-totals');
             if (totals) {
-                const reachedSoFar = layers.reduce((a, l, i) => i <= idx ? a + l.ids.length : a, 0);
-                const edgesSoFar = layers.reduce((a, l, i) => i <= idx ? a + l.edges.length : a, 0);
+                const reachedSoFar = layers.reduce((a, l, i) => i <= cur ? a + l.ids.length : a, 0);
+                const edgesSoFar = layers.reduce((a, l, i) => i <= cur ? a + l.edges.length : a, 0);
                 totals.innerHTML =
                     `<span><b>${reachedSoFar}</b> nodes</span>`
                     + `<span><b>${edgesSoFar}</b> edges</span>`
-                    + `<span><b>${idx}</b> of <b>${last}</b> hops</span>`;
+                    + `<span><b>${cur}</b> of <b>${last}</b> hops</span>`;
             }
 
-            // Transport disabled state at the ends.
+            // Transport disabled state at the ends. Keyed to the *committed*
+            // hop, not `cur`: while the last hop is still streaming, Next is
+            // what completes it, so it has to stay live.
             const prev = walkEl('walk-o-prev');
             const next = walkEl('walk-o-next');
-            if (prev) prev.disabled = idx <= 0 && walkPlay.streaming < 0;
-            if (next) next.disabled = idx >= last && walkPlay.streaming < 0;
+            if (prev) prev.disabled = idx <= 0 && streaming < 0;
+            if (next) next.disabled = idx >= last && streaming < 0;
         }
 
         // ── Immersive: collapse sidebar / details, restore on exit ──

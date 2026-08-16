@@ -725,6 +725,72 @@
             syncLayoutButtons();
         }
 
+        // Prescribed positions from outside the renderer — the Graph Walk
+        // cascade. Same mechanism as a static layout (positions are a buffer,
+        // `render(alpha, ms)` tweens it on the GPU), but the geometry comes
+        // from the caller rather than from COSMOS_LAYOUTS, and only the named
+        // nodes move: everything else holds the spot it already had.
+        function cosmosSetNodePositions(pos, ms) {
+            if (!cosmos || !cosmosBuf) return;
+            // A morph in flight would fight this one, and the opening's staged
+            // timers would land on top of it.
+            cosmosClearIntro();
+            _cosmosIntroDone = true;
+            const dur = Math.max(0, ms || 0);
+            const buf = cosmosBuf.positions;
+
+            // Re-read the GPU first. `cosmosBuf.positions` is only ever what
+            // was last *uploaded*; the simulation and dragging both move points
+            // afterwards without writing back, so starting from the stale
+            // buffer would snap every untouched node to where it used to be.
+            const live = cosmos.getPointPositions();
+            if (live && live.length >= buf.length) {
+                for (let k = 0; k < buf.length; k++) {
+                    if (Number.isFinite(live[k])) buf[k] = live[k];
+                }
+            }
+            for (let i = 0; i < cosmosNodes.length; i++) {
+                const p = pos.get(cosmosNodes[i].id);
+                if (!p) continue;
+                buf[i * 2] = p.x;
+                buf[i * 2 + 1] = p.y;
+                // The page treats n.x/n.y as the truth — framing, the tooltip,
+                // the overlay's strands and the next visibility change all read
+                // them — and with the simulation off there are no ticks to sync
+                // from. Published now rather than when the tween lands, because
+                // an unhide arriving mid-morph reads them to decide where the
+                // node comes back.
+                cosmosNodes[i].x = p.x;
+                cosmosNodes[i].y = p.y;
+                cosmosNodes[i].z = 0;
+            }
+            // A prescribed arrangement and a running simulation are the same
+            // contradiction the static layouts have: whoever writes the
+            // positions last wins, every tick.
+            cosmos.setConfigPartial({ enableSimulation: false });
+            cosmosApplyVisibilityInto(buf);
+            cosmos.setPointPositions(buf);
+            cosmos.render(undefined, dur);
+
+            // Restyles arriving mid-tween would upload at zero duration and
+            // cancel it, so `restyle()` parks them in `_cosmosRestylePending`
+            // — and something has to let them out again. Exiting a walk
+            // restyles the instant it starts the morph home, and without this
+            // the whole canvas would stay in walk colours until the next hover
+            // happened to shake it loose.
+            const flush = () => {
+                if (!_cosmosRestylePending) return;
+                _cosmosRestylePending = false;
+                bumpGraphStyles();
+            };
+            if (dur) {
+                _cosmosMorphUntil = performance.now() + dur;
+                _cosmosAnimTimers.push(setTimeout(flush, dur));
+            } else {
+                flush();
+            }
+        }
+
         // Re-apply the NaN holes for hidden nodes over a freshly built layout,
         // which knows nothing about what is filtered out.
         function cosmosApplyVisibilityInto(positions) {
@@ -1046,11 +1112,21 @@
             // are hidden by caps, but the 1–6 keyboard shortcuts still land here.
             setView(_id, ms) { if (cosmos) cosmos.fitView(ms, 0.15); },
 
+            // `opts.flat` is a 3D notion (which way the camera points); a plane
+            // is already flat, so the fit is the same either way.
             frameNodes(ids, ms) {
                 if (!cosmos) return;
                 const idx = cosmosIndicesFor(ids);
                 if (!idx.length) return;
                 cosmos.fitViewByPointIndices(idx, ms, 0.2);
+            },
+
+            setNodePositions(pos, ms) { cosmosSetNodePositions(pos, ms); },
+
+            // Everything here lives in cosmos.gl's simulation space, so a
+            // layout computed around the origin has to be moved into it.
+            space() {
+                return { cx: COSMOS_SPACE / 2, cy: COSMOS_SPACE / 2, cz: 0, size: COSMOS_SPACE };
             },
 
             focusNode(n) {
@@ -1101,10 +1177,12 @@
             layouts: COSMOS_LAYOUTS,
             setLayout(name, ms) { cosmosSetLayout(name, ms); },
 
-            // The walk's ignition burst is drawn by the 2D FX overlay.
+            // The walk's ignition effects are drawn by the 2D FX overlay.
             emitPulse(node, colour, fromR, toR, growMs) {
                 overlayEmitPulse(node, colour, fromR, toR, growMs);
             },
+
+            emitSweep(spec) { overlayEmitSweep(spec); },
 
             screenPos(n) {
                 if (!cosmos || !n || !Number.isFinite(n.x)) return null;

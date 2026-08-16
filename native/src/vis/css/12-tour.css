@@ -408,7 +408,6 @@
            collapsed outright (JS restores whatever was open before). */
         body.tour-active #legend,
         body.tour-active #axis-gizmo,
-        body.tour-active #viewbar,
         body.tour-active #navbar,
         body.tour-active #sidebar-launcher {
             opacity: .18;
@@ -416,9 +415,21 @@
         }
         body.tour-active #legend:hover,
         body.tour-active #axis-gizmo:hover,
-        body.tour-active #viewbar:hover,
         body.tour-active #navbar:hover,
         body.tour-active #sidebar-launcher:hover { opacity: 1; }
+
+        /* The view bar goes entirely, as it does during a walk (see
+           14-walk.css). It is not passive furniture: its buttons re-aim the
+           camera, swap the 2D arrangement and toggle solo — and a tour is a
+           scripted camera move through a chosen route, so every one of those
+           fights it for control of the thing it is in the middle of doing.
+           Dimmed-but-live was the worst of both: invisible enough to forget,
+           clickable enough to derail the run. */
+        body.tour-active #viewbar {
+            opacity: 0 !important;
+            pointer-events: none !important;
+            transition: opacity .35s ease;
+        }
         /* A vignette that pulls the eye to the middle of the canvas. */
         body.tour-active #graph-3d::after {
             content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 5;

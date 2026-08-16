@@ -437,7 +437,37 @@
 
         function setView(id, ms = 600) { whenRendererReady(r => r.setView(id, ms)); }
 
-        function frameNodeSet(ids, ms = 700) { whenRendererReady(r => r.frameNodes(ids, ms)); }
+        // `opts.flat` asks for a straight-on framing rather than the usual
+        // three-quarter one — what a prescribed, planar arrangement (the Graph
+        // Walk cascade) wants, and meaningless to a backend without a camera.
+        function frameNodeSet(ids, ms = 700, opts) { whenRendererReady(r => r.frameNodes(ids, ms, opts || {})); }
+
+        // Prescribed positions: hand the backend an arrangement it must hold,
+        // overriding whatever its simulation would otherwise do.
+        //
+        // This is the seam a *computed* layout needs and `setLayout` cannot
+        // provide: setLayout picks one of the backend's own catalogue entries
+        // and only the 2D one has a catalogue at all. Here the caller owns the
+        // geometry and the backend only has to make it stick — which is what
+        // lets the Graph Walk draw the same cascade in 2D and in 3D.
+        //
+        //   pos     — Map<id, {x, y, z}>. Nodes absent from it hold still.
+        //   opts.release — when the tween lands, hand the nodes back to the
+        //                  simulation (the 3D backend pins them while a
+        //                  prescribed layout is in force).
+        function setNodePositions(pos, ms = 0, opts) {
+            if (R && R.setNodePositions) R.setNodePositions(pos, ms, opts || {});
+        }
+
+        function nodePositionsSupported() { return !!(R && R.setNodePositions); }
+
+        // The coordinate box a prescribed layout has to live inside, or null
+        // for a backend that has no opinion. Only the 2D one does: cosmos.gl
+        // simulates and draws inside a fixed `spaceSize`, and coordinates
+        // outside it are the documented route to a crash on iOS. A layout
+        // computed around the origin therefore has to be moved into the middle
+        // of that box and, if it is bigger than the box, shrunk to fit.
+        function rendererSpace() { return (R && R.space) ? R.space() : null; }
 
         function focusNode(n) { if (n != null) whenRendererReady(r => r.focusNode(n)); }
 
@@ -453,6 +483,18 @@
 
         function emitWalkPulse(seedNode, colour, fromR, toR, growMs) {
             if (R) R.emitPulse(seedNode, colour, fromR, toR, growMs);
+        }
+
+        // The cascade's wavefront: a front travelling along the flow axis
+        // rather than a shell expanding from the seed. `spec` is
+        // { colour, fromX, toX, top, bottom, z, growMs } in world coordinates.
+        // Returns false when the mounted backend has no sweep, so the caller
+        // can fall back to the radial burst rather than the hop passing
+        // silently unmarked.
+        function emitWalkSweep(spec) {
+            if (!R || !R.emitSweep) return false;
+            R.emitSweep(spec);
+            return true;
         }
 
         // Where a node sits on screen, in page pixels — the tooltip and the

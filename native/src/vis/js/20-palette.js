@@ -23,7 +23,8 @@
             { group: 'Guided tour', keys: 'Esc', action: 'Exit the tour' },
             { group: 'Graph walk', keys: 'Space', action: 'Play / pause' },
             { group: 'Graph walk', keys: '← / →', action: 'Previous / next hop' },
-            { group: 'Graph walk', keys: 'S / R / D', action: 'Speed / rotate / details' },
+            { group: 'Graph walk', keys: 'S / R / D', action: 'Speed / edge flow / details' },
+            { group: 'Graph walk', keys: 'F / L', action: 'Cascade layout / labels' },
             { group: 'Graph walk', keys: 'Esc', action: 'Exit the walk' },
         ];
 

@@ -21,7 +21,16 @@
         // is what makes the filters, the tour and "light up … in graph" fall out
         // of the same code path.
 
-        const SOLO_THRESHOLD = 1000000;   // max(nodes, edges) above this → solo mode
+        // max(nodes, edges) above this → solo mode.
+        //
+        // This is the 2D renderer's ceiling, and it is about legibility rather
+        // than frame rate: cosmos.gl will happily instance a million points,
+        // but a million points is not a picture of anything. Past a couple of
+        // hundred thousand the canvas is a solid wash whichever layout is
+        // running, and every interaction on it — hover, filter, restyle —
+        // is paying full price for pixels nobody can read. A neighbourhood at
+        // a time is both faster and more use.
+        const SOLO_THRESHOLD = 200000;
         const SOLO_MAX_NODES = 1500;      // hard render budget for one view
         const SOLO_MAX_NEIGHBORS = 300;   // per-seed 1-hop cap, so a hub can't blow the budget
 

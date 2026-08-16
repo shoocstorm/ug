@@ -440,7 +440,11 @@
         function clearNavHistory() {
             state.history = [];
             state.historyIndex = -1;
+            // `exitFocus` only flips the state — the dimming itself is paint,
+            // applied on the next restyle, so both halves always travel together
+            // (see `clearSelection`).
             exitFocus();
+            bumpGraphStyles();
         }
 
         // Drag the history bar anywhere. It defaults to the very top, which is
@@ -593,9 +597,9 @@
         }
 
         // Node name labels. The control appears twice — in the viewbar and on
-        // the walk card, because during a walk the viewbar is behind the
-        // immersive dimming — so the state lives here and both buttons are
-        // rendered from it rather than each keeping its own idea of it.
+        // the walk card, because a walk hides the viewbar outright — so the
+        // state lives here and both buttons are rendered from it rather than
+        // each keeping its own idea of it. They carry the same mark, too.
         function syncLabelButtons() {
             ['toggle-labels', 'walk-o-labels'].forEach(id => {
                 const btn = document.getElementById(id);

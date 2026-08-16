@@ -23,6 +23,7 @@
 
         let fxCanvas = null, fxCtx = null, fxRunning = false, fxFrame = 0;
         let fxPulses = [];
+        let fxSweeps = [];
 
         // Above this, an effect stops being read as a set and starts being
         // read as noise — and stops being cheap. Hover on a hub node is the
@@ -48,6 +49,7 @@
         function overlayStop() {
             fxRunning = false;
             fxPulses = [];
+            fxSweeps = [];
             if (fxCanvas) {
                 fxCanvas.hidden = true;
                 if (fxCtx) fxCtx.clearRect(0, 0, fxCanvas.width, fxCanvas.height);
@@ -118,12 +120,14 @@
 
             if (state.showBoundary) fxDrawBoundary();
             fxDrawClusterLabels();
+            fxDrawWalkLanes();
             fxDrawWalkEdges();
             fxDrawFlow();
             const hot = fxHotNodes();
             fxDrawHalos(hot);
             fxDrawSelection();
             fxDrawPulses();
+            fxDrawSweeps();
             fxDrawLabels();
 
             // The legend counts what is actually on the canvas — during a walk
@@ -249,6 +253,124 @@
             ctx.restore();
         }
 
+        // ── Graph Walk: the hop lanes ──────────────────────────
+        //
+        // The cascade arranges the walk into one column per hop, marching the
+        // way the edges point (see computeWalkCascade). Drawn on its own
+        // that is a suggestive shape; with the columns named it is a diagram
+        // you can read distances off.
+        //
+        // So each revealed hop gets a banded lane, a heading with its
+        // population, and a chevron on the gap to the next one — the arrow is
+        // the part that says *which way this is going*, which is the whole
+        // claim the arrangement is making. Everything is drawn behind the
+        // strands and the nodes, at low alpha: these are gridlines, not ink.
+        //
+        // At most a handful of lanes, so this is free.
+        function fxDrawWalkLanes() {
+            const lanes = state.walkActive && state.walkLanes ? state.walkLanes : [];
+            if (!lanes.length) return;
+            const shown = lanes.filter(walkLaneRevealed);
+            if (!shown.length) return;
+
+            // One vertical span shared by every lane, so the bands line up
+            // instead of each stopping wherever its own column happens to.
+            let top = -Infinity, bottom = Infinity;
+            for (const l of shown) {
+                if (l.top > top) top = l.top;
+                if (l.bottom < bottom) bottom = l.bottom;
+            }
+            const pad = Math.max((top - bottom) * 0.06, 50);
+            const a = cosmos.spaceToScreenPosition([0, top + pad]);
+            const b = cosmos.spaceToScreenPosition([0, bottom - pad]);
+            if (!a || !b) return;
+            const yTop = Math.min(a[1], b[1]);
+            const yBot = Math.max(a[1], b[1]);
+
+            const ctx = fxCtx;
+            ctx.save();
+            ctx.font = '600 10.5px "JetBrains Mono", monospace';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'bottom';
+            for (const lane of shown) {
+                const p = cosmos.spaceToScreenPosition([lane.x, 0]);
+                if (!p) continue;
+                const x = p[0];
+                // A wide hop spreads into a block of lanes, and the band has to
+                // cover the block — a fixed-width stripe on the centre would
+                // leave the outer lanes sitting outside their own hop.
+                const halfW = Math.max(
+                    cosmos.spaceToScreenRadius(
+                        (lane.x1 - lane.x0) / 2 + WALK_COL_GAP * 0.32 * (lane.scale || 1)) || 0,
+                    8
+                );
+                if (x < -halfW * 2 || x > width + halfW * 2) continue;
+                const [r, g, bl] = cosmosRgb(lane.color);
+                const rgb = `${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(bl * 255)}`;
+
+                // The band: a wash that fades out top and bottom, so it reads
+                // as a lane rather than as a rectangle drawn over the graph.
+                const grad = ctx.createLinearGradient(0, yTop, 0, yBot);
+                grad.addColorStop(0, `rgba(${rgb},0)`);
+                grad.addColorStop(0.16, `rgba(${rgb},0.055)`);
+                grad.addColorStop(0.84, `rgba(${rgb},0.055)`);
+                grad.addColorStop(1, `rgba(${rgb},0)`);
+                ctx.fillStyle = grad;
+                ctx.fillRect(x - halfW, yTop, halfW * 2, yBot - yTop);
+
+                // The rule. A single-lane hop gets it down its axis; a hop that
+                // spread into a block gets its two edges instead, because a
+                // line through the middle of a block of nodes is a line through
+                // the middle of a block of nodes.
+                ctx.strokeStyle = `rgba(${rgb},0.22)`;
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                if (lane.x1 - lane.x0 < 1) {
+                    ctx.moveTo(x, yTop);
+                    ctx.lineTo(x, yBot);
+                } else {
+                    ctx.moveTo(x - halfW, yTop); ctx.lineTo(x - halfW, yBot);
+                    ctx.moveTo(x + halfW, yTop); ctx.lineTo(x + halfW, yBot);
+                }
+                ctx.stroke();
+
+                const label = lane.label + (lane.count > 1 ? '  ×' + lane.count : '');
+                const ly = Math.max(yTop - 7, 16);
+                ctx.strokeStyle = 'rgba(13,13,16,0.9)';
+                ctx.lineWidth = 3.5;
+                ctx.strokeText(label, x, ly);
+                ctx.fillStyle = `rgba(${rgb},0.9)`;
+                ctx.fillText(label, x, ly);
+            }
+
+            // Direction chevrons, one per gap, pointing the way the walk went.
+            // Drawn between the lanes rather than on them, because what they
+            // describe is the step, not the column.
+            const mid = (yTop + yBot) / 2;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            for (let i = 1; i < shown.length; i++) {
+                const prev = shown[i - 1], cur = shown[i];
+                const pa = cosmos.spaceToScreenPosition([prev.x, 0]);
+                const pb = cosmos.spaceToScreenPosition([cur.x, 0]);
+                if (!pa || !pb) continue;
+                const cx = (pa[0] + pb[0]) / 2;
+                if (cx < 0 || cx > width) continue;
+                const dir = pb[0] >= pa[0] ? 1 : -1;
+                const s = Math.min(9, Math.abs(pb[0] - pa[0]) * 0.12);
+                if (s < 3) continue;
+                const [r, g, bl] = cosmosRgb(cur.color);
+                ctx.strokeStyle = `rgba(${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(bl * 255)},0.45)`;
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(cx - dir * s * 0.6, mid - s);
+                ctx.lineTo(cx + dir * s * 0.6, mid);
+                ctx.lineTo(cx - dir * s * 0.6, mid + s);
+                ctx.stroke();
+            }
+            ctx.restore();
+        }
+
         // ── Graph Walk: the travelled edges ────────────────────
         //
         // The edges the walk actually crossed, drawn as glowing strands in
@@ -264,6 +386,15 @@
         function fxDrawWalkEdges() {
             if (!state.walkActive || !state.walkEdgeKeys || !state.walkEdgeKeys.size) return;
             const ctx = fxCtx;
+            // Additive strokes stack. Twenty of them read as a route; a
+            // thousand read as a floodlight, and every node underneath is
+            // gone. The glow is calibrated for a frontier of a few dozen
+            // edges, so past that the whole layer is faded in proportion —
+            // and the wide soft pass, which is most of the accumulated light,
+            // is dropped entirely rather than merely dimmed.
+            const bulk = Math.min(state.walkEdgeKeys.size, FX_MAX_FLOW_LINKS);
+            const k = Math.max(0.16, Math.min(1, 90 / Math.max(1, bulk)));
+            const wideGlow = k > 0.5;
             ctx.save();
             ctx.globalCompositeOperation = 'lighter';
             ctx.lineCap = 'round';
@@ -287,10 +418,12 @@
                 ctx.beginPath();
                 ctx.moveTo(a.x, a.y);
                 ctx.lineTo(b.x, b.y);
-                ctx.strokeStyle = `rgba(${rgb},0.20)`;
-                ctx.lineWidth = 5;
-                ctx.stroke();
-                ctx.strokeStyle = `rgba(${rgb},0.85)`;
+                if (wideGlow) {
+                    ctx.strokeStyle = `rgba(${rgb},${(0.20 * k).toFixed(3)})`;
+                    ctx.lineWidth = 5;
+                    ctx.stroke();
+                }
+                ctx.strokeStyle = `rgba(${rgb},${(0.85 * k).toFixed(3)})`;
                 ctx.lineWidth = 1.4;
                 ctx.stroke();
             }
@@ -322,6 +455,11 @@
             const to = Math.max((toR || 0) + 18, from + 24, R * 0.16);
             fxPulses.push({
                 node: seedNode,
+                // Where it went off, in space coords. The cascade fires each
+                // hop's burst from the centre of the column that is igniting,
+                // which is a bare position and not a node at all — and fxPos()
+                // can only answer for something in the point index.
+                at: [seedNode.x, seedNode.y],
                 colour,
                 fromR: from,
                 toR: to,
@@ -348,8 +486,12 @@
                 const env = t <= p.grow
                     ? Math.min(1, pr / 0.25)
                     : Math.max(0, 1 - (t - p.grow) / p.fade);
-                const at = fxPos(p.node);
-                if (!at) return true;
+                let at = fxPos(p.node);
+                if (!at) {
+                    const sp = cosmos.spaceToScreenPosition(p.at);
+                    if (!sp) return true;
+                    at = { x: sp[0], y: sp[1] };
+                }
                 const spaceR = p.fromR + (p.toR - p.fromR) * e;
                 const r = cosmos.spaceToScreenRadius(spaceR) || 0;
                 if (r <= 0) return true;
@@ -384,6 +526,131 @@
                     ctx.arc(at.x + s.dx * d, at.y + s.dy * d, 1.7, 0, Math.PI * 2);
                     ctx.fill();
                 }
+                return true;
+            });
+            ctx.restore();
+        }
+
+        // ── Graph Walk: the travelling wavefront ───────────────
+        //
+        // The flat version of the 3D curtain (threeEmitSweep), and the
+        // cascade's replacement for the ignition ring. A ring is the right
+        // shape for a frontier that is a shell; once the walk is laid out as
+        // columns the frontier is a *line*, and a ring big enough to reach it
+        // has already swallowed everything nearer. So the front travels along
+        // the flow instead: a bright vertical bar sweeping from the column it
+        // left to the column about to ignite, with a lit wake behind it.
+        function overlayEmitSweep(spec) {
+            if (!spec || !Number.isFinite(spec.fromX) || !Number.isFinite(spec.toX)) return;
+            const grow = Math.max(160, spec.growMs || 420);
+            const sparks = [];
+            for (let i = 0; i < 34; i++) {
+                sparks.push({
+                    at: Math.random(),               // where across the curtain
+                    lag: Math.random() * 0.22,       // trails the front
+                });
+            }
+            fxSweeps.push({
+                ...spec,
+                grow,
+                fade: Math.min(560, Math.max(220, grow * 0.75)),
+                t0: performance.now(),
+                sparks,
+            });
+        }
+
+        // Vertical falloff, drawn as a stack of slices. A single fillRect with
+        // a horizontal gradient is one call but leaves the curtain with hard
+        // ends; the graph is additive here, so the taper cannot be painted on
+        // afterwards and has to be baked into the alpha as it goes down.
+        const FX_SWEEP_SLICES = 12;
+        function fxSweepBand(ctx, x0, x1, yTop, yBot, rgb, alpha, wake) {
+            const h = (yBot - yTop) / FX_SWEEP_SLICES;
+            for (let i = 0; i < FX_SWEEP_SLICES; i++) {
+                // Smoothstep in from both ends over the outer sixth.
+                const u = (i + 0.5) / FX_SWEEP_SLICES;
+                const d = Math.min(u, 1 - u) / 0.16;
+                const ends = d >= 1 ? 1 : d * d * (3 - 2 * d);
+                const a = alpha * ends;
+                if (a < 0.004) continue;
+                const g = ctx.createLinearGradient(x0, 0, x1, 0);
+                if (wake) {
+                    g.addColorStop(0, `rgba(${rgb},0)`);
+                    g.addColorStop(0.72, `rgba(${rgb},${(a * 0.45).toFixed(3)})`);
+                    g.addColorStop(1, `rgba(${rgb},${a.toFixed(3)})`);
+                } else {
+                    g.addColorStop(0, `rgba(${rgb},0)`);
+                    g.addColorStop(0.5, `rgba(${rgb},${a.toFixed(3)})`);
+                    g.addColorStop(1, `rgba(${rgb},0)`);
+                }
+                ctx.fillStyle = g;
+                ctx.fillRect(Math.min(x0, x1), yTop + i * h, Math.abs(x1 - x0), h + 1);
+            }
+        }
+
+        function fxDrawSweeps() {
+            if (!fxSweeps.length) return;
+            const ctx = fxCtx;
+            const now = performance.now();
+            ctx.save();
+            ctx.globalCompositeOperation = 'lighter';
+            fxSweeps = fxSweeps.filter(s => {
+                const t = now - s.t0;
+                if (t >= s.grow + s.fade || !state.walkActive) return false;
+                const p = Math.min(1, t / s.grow);
+                const e = 1 - Math.pow(1 - p, 3);
+                const env = t <= s.grow
+                    ? Math.min(1, p / 0.22)
+                    : Math.max(0, 1 - (t - s.grow) / s.fade);
+                const x = s.fromX + (s.toX - s.fromX) * e;
+                const a = cosmos.spaceToScreenPosition([x, s.top]);
+                const b = cosmos.spaceToScreenPosition([x, s.bottom]);
+                const o = cosmos.spaceToScreenPosition([s.fromX, s.top]);
+                if (!a || !b || !o) return true;
+                const yTop = Math.min(a[1], b[1]);
+                const yBot = Math.max(a[1], b[1]);
+                if (yBot - yTop < 2) return true;
+                const [cr, cg, cb] = cosmosRgb(s.colour);
+                const rgb = `${Math.round(cr * 255)},${Math.round(cg * 255)},${Math.round(cb * 255)}`;
+
+                // The wake: everything the front has already passed over.
+                if (Math.abs(a[0] - o[0]) > 2) {
+                    fxSweepBand(ctx, o[0], a[0], yTop, yBot, rgb, 0.16 * env, true);
+                }
+                // The front's own glow, then a crisp near-white leading edge —
+                // the bar is what reads as a wave arriving rather than a
+                // gradient that happens to be moving.
+                const halo = Math.max(14, Math.abs(a[0] - o[0]) * 0.06);
+                fxSweepBand(ctx, a[0] - halo, a[0] + halo, yTop, yBot, rgb, 0.5 * env, false);
+
+                const edge = ctx.createLinearGradient(0, yTop, 0, yBot);
+                edge.addColorStop(0, 'rgba(255,243,232,0)');
+                edge.addColorStop(0.18, `rgba(255,243,232,${(0.85 * env).toFixed(3)})`);
+                edge.addColorStop(0.82, `rgba(255,243,232,${(0.85 * env).toFixed(3)})`);
+                edge.addColorStop(1, 'rgba(255,243,232,0)');
+                ctx.strokeStyle = edge;
+                ctx.lineWidth = Math.max(1.4, 2.4 * env);
+                ctx.beginPath();
+                ctx.moveTo(a[0], yTop);
+                ctx.lineTo(a[0], yBot);
+                ctx.stroke();
+
+                // Debris riding the front, as short streaks pointing back the
+                // way it came.
+                ctx.strokeStyle = `rgba(${rgb},${(0.9 * env).toFixed(3)})`;
+                ctx.lineWidth = 1.6;
+                ctx.lineCap = 'round';
+                const dir = s.toX >= s.fromX ? 1 : -1;
+                ctx.beginPath();
+                for (const sp of s.sparks) {
+                    const bp = Math.max(0, e - sp.lag);
+                    const sx = cosmos.spaceToScreenPosition(
+                        [s.fromX + (s.toX - s.fromX) * bp, s.bottom + (s.top - s.bottom) * sp.at]);
+                    if (!sx) continue;
+                    ctx.moveTo(sx[0] - dir * 7, sx[1]);
+                    ctx.lineTo(sx[0], sx[1]);
+                }
+                ctx.stroke();
                 return true;
             });
             ctx.restore();

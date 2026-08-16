@@ -28,7 +28,7 @@
                 // more shade of it. Green also reads as "executable" next to
                 // the passive blues of data. Paired with a hexagon in 2D, so it
                 // is separable by shape as well as by hue.
-                Function: '#34d399',
+                Function: '#8ac926',
                 Class: '#2f5f96',
                 Dependency: '#fb923c',
                 Config: '#f59e0b',
@@ -165,7 +165,20 @@
             walkEdgeTypes: null,    // Set of edge rels to follow, or null = all
             walkReached: new Set(), // node ids reached so far (progressive reveal)
             walkColors: new Map(),  // id → hop hex colour (drives nodeColorFor)
-            walkEdgeKeys: new Set() // unordered "src|tgt" keys of walked edges
+            walkEdgeKeys: new Set(),// unordered "src|tgt" keys of walked edges
+            // How the walked subgraph is *arranged* while a walk runs.
+            //
+            //   'flow'  — the nodes are re-laid-out as a directional cascade:
+            //             one column per hop, marching the way the edges
+            //             point, so the expansion reads as a flow diagram
+            //             rather than as a hairball lighting up in place
+            //   'graph' — leave every node where the force layout put it
+            //
+            // See computeWalkCascade in 18-walk.js.
+            walkLayout: 'flow',
+            walkCascadePos: null,      // Map<id, {x,y,z}> the cascade assigned
+            walkPosSaved: null,     // Map<id, {x,y,z}> pre-walk positions, put back on exit
+            walkLanes: []           // per-hop column bounds, for the on-canvas guides
         };
 
         // Canvas palette. Everything that has to sit *against* the 3D

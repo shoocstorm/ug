@@ -488,7 +488,14 @@
         // Fit the camera around an arbitrary set of node ids — used when solo
         // mode leaves only a neighbourhood on screen. (`threeFrameRoute` does the
         // same for a tour route, with its own route-specific guards.)
-        function threeFrameNodes(ids, ms = 700) {
+        //
+        // `opts.flat` swaps the three-quarter offset for a straight-on one and
+        // fits the actual bounding box rather than a bounding sphere. A
+        // prescribed planar arrangement — the Graph Walk cascade — is a
+        // *diagram*, and a diagram read from an angle is a diagram with
+        // foreshortening: the hop columns stop lining up and the whole point
+        // of laying them out in a row is lost.
+        function threeFrameNodes(ids, ms = 700, opts) {
             if (!Graph) return;
             const pts = [];
             ids.forEach(id => {
@@ -496,6 +503,7 @@
                 if (n) pts.push({ x: +n.x || 0, y: +n.y || 0, z: +n.z || 0 });
             });
             if (!pts.length) return;
+            if (opts && opts.flat) { threeFrameFlat(pts, ms); return; }
             const centre = pts.reduce(
                 (a, p) => ({ x: a.x + p.x / pts.length, y: a.y + p.y / pts.length, z: a.z + p.z / pts.length }),
                 { x: 0, y: 0, z: 0 }
@@ -513,6 +521,144 @@
                 centre,
                 ms
             );
+        }
+
+        // Straight-on fit of a bounding box: the camera sits on the +Z axis
+        // through the box's centre, far enough back that the box fits both the
+        // vertical and the horizontal field of view. A cascade is much wider
+        // than it is tall, so fitting a bounding *sphere* here would park the
+        // camera a long way past what the height needs.
+        function threeFrameFlat(pts, ms) {
+            let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, sumZ = 0;
+            for (const p of pts) {
+                if (p.x < minX) minX = p.x;
+                if (p.x > maxX) maxX = p.x;
+                if (p.y < minY) minY = p.y;
+                if (p.y > maxY) maxY = p.y;
+                sumZ += p.z;
+            }
+            const centre = { x: (minX + maxX) / 2, y: (minY + maxY) / 2, z: sumZ / pts.length };
+            const fov = ((Graph.camera().fov || 50) * Math.PI) / 180;
+            const aspect = (width && height) ? width / height : 1.6;
+            // Half-extents plus a margin, so nodes at the rim keep their labels
+            // and halos inside the frame.
+            // Vertical margin runs wider than horizontal: the walk's hop
+            // headings sit above the top of the node box, and a fit computed
+            // from node positions alone would frame them out.
+            //
+            // The floor on the half-extents is what keeps a *small* set
+            // sensible. A walk sitting on its seed is one node, and fitting a
+            // box that size puts the camera inside the sticker — the node
+            // fills the screen and the diagram it belongs to is nowhere. The
+            // floor frames a lone node at roughly the distance a plain focus
+            // would, so stepping back to the seed reads as zooming to it
+            // rather than falling into it.
+            const halfW = Math.max((maxX - minX) / 2, 150) * 1.14;
+            const halfH = Math.max((maxY - minY) / 2, 150) * 1.32;
+            const dist = Math.max(
+                halfH / Math.tan(fov / 2),
+                halfW / (Math.tan(fov / 2) * aspect),
+                200
+            );
+            Graph.cameraPosition({ x: centre.x, y: centre.y, z: centre.z + dist }, centre, ms);
+        }
+
+        // ── Prescribed positions ───────────────────────────────
+        //
+        // Somebody outside the renderer has computed where the nodes go (the
+        // Graph Walk cascade) and this makes it stick.
+        //
+        // The mechanism is d3-force's own pinning: `fx/fy/fz` are read *after*
+        // every force has had its say, so a pinned node cannot be pushed
+        // anywhere no matter what the simulation is doing. Every node in the
+        // view is pinned, not just the moved ones — the alternative is a
+        // prescribed arrangement floating in a graph that is still settling
+        // around it, which reads as the layout being fought over.
+        //
+        // The awkward part is that three-forcegraph only copies node
+        // coordinates onto the scene objects *while the engine is running*
+        // (`tickFrame` guards the whole sync on `engineRunning`). So a morph
+        // has to keep the engine alive for its duration, which is what the
+        // reheats below are for. With every node pinned, a reheat cannot
+        // disturb anything: alpha only matters to nodes that are free to move.
+        let _threePosAnim = null;
+        let _threeUnpinTimer = null;
+
+        function threeCancelPosAnim() {
+            if (_threePosAnim) { cancelAnimationFrame(_threePosAnim); _threePosAnim = null; }
+            if (_threeUnpinTimer) { clearTimeout(_threeUnpinTimer); _threeUnpinTimer = null; }
+        }
+
+        function threeSetNodePositions(pos, ms, opts) {
+            if (!Graph) return;
+            threeCancelPosAnim();
+            const o = opts || {};
+            const nodes = (Graph.graphData() || {}).nodes || [];
+            const items = [];
+            for (const n of nodes) {
+                const p = pos.get(n.id);
+                const x0 = +n.x || 0, y0 = +n.y || 0, z0 = +n.z || 0;
+                items.push({
+                    n, x0, y0, z0,
+                    x1: p ? p.x : x0,
+                    y1: p ? p.y : y0,
+                    z1: p ? (p.z || 0) : z0,
+                });
+            }
+            if (!items.length) return;
+
+            const apply = (k) => {
+                const e = k >= 1 ? 1 : 1 - Math.pow(1 - k, 3);
+                for (const it of items) {
+                    const x = it.x0 + (it.x1 - it.x0) * e;
+                    const y = it.y0 + (it.y1 - it.y0) * e;
+                    const z = it.z0 + (it.z1 - it.z0) * e;
+                    it.n.x = x; it.n.y = y; it.n.z = z;
+                    it.n.fx = x; it.n.fy = y; it.n.fz = z;
+                }
+            };
+
+            // Unpinning is deliberately late. The reheats leave alpha high, and
+            // releasing a whole graph into a hot simulation would re-settle it
+            // — the walk would end by shuffling the graph the user came back
+            // to. A couple of seconds pinned is all it takes for alpha to decay
+            // and the engine to stop, and after that a release moves nothing.
+            const release = () => {
+                if (!o.release) return;
+                _threeUnpinTimer = setTimeout(() => {
+                    _threeUnpinTimer = null;
+                    for (const it of items) {
+                        it.n.fx = undefined; it.n.fy = undefined; it.n.fz = undefined;
+                    }
+                }, 2200);
+            };
+
+            const dur = Math.max(0, ms || 0);
+            if (!dur) {
+                apply(1);
+                // One tick's worth of engine, purely so the scene objects pick
+                // the new coordinates up — nothing can move while pinned.
+                Graph.d3ReheatSimulation();
+                release();
+                return;
+            }
+
+            const t0 = performance.now();
+            apply(0);
+            Graph.d3ReheatSimulation();
+            let lastHeat = t0;
+            const step = () => {
+                const now = performance.now();
+                const k = Math.min(1, (now - t0) / dur);
+                apply(k);
+                // cooldownTicks(100) is ~1.6s of frames; a longer morph would
+                // otherwise freeze half way through when the engine quits.
+                if (now - lastHeat > 900) { lastHeat = now; Graph.d3ReheatSimulation(); }
+                if (k < 1) { _threePosAnim = requestAnimationFrame(step); return; }
+                _threePosAnim = null;
+                release();
+            };
+            _threePosAnim = requestAnimationFrame(step);
         }
 
         // Centre the camera on the node at a consistent, comfortable distance.
@@ -1127,6 +1273,93 @@
             });
         }
 
+        // ─── Graph Walk: hop lane markers ──────────────────────
+        //
+        // The cascade puts one column of nodes per hop, marching the way the
+        // edges point. That is only self-explanatory once you already know it,
+        // so each revealed column gets a rule down its axis and a heading —
+        // the same guides the 2D overlay paints (fxDrawWalkLanes), built here
+        // as scene objects because there is no overlay running in 3D.
+        //
+        // Rebuilt only when the revealed set changes, not on every restyle: a
+        // hover must not cost a sprite-texture upload.
+        let walkLaneGroup = null;
+        let _walkLaneSig = '';
+
+        function disposeWalkLanes() {
+            if (!walkLaneGroup || !Graph) { walkLaneGroup = null; _walkLaneSig = ''; return; }
+            Graph.scene().remove(walkLaneGroup);
+            walkLaneGroup.traverse(o => {
+                if (o.geometry) o.geometry.dispose();
+                if (o.material) {
+                    if (o.material.map) o.material.map.dispose();
+                    o.material.dispose();
+                }
+            });
+            walkLaneGroup = null;
+            _walkLaneSig = '';
+        }
+
+        function threeUpdateWalkLanes() {
+            if (!Graph) return;
+            const lanes = (state.walkActive && state.walkLanes) ? state.walkLanes : [];
+            const shown = lanes.filter(walkLaneRevealed);
+            const sig = shown.map(l => l.hop + ':' + l.sign + ':' + l.count).join(',');
+            if (sig === _walkLaneSig) return;
+            disposeWalkLanes();
+            _walkLaneSig = sig;
+            if (!shown.length) return;
+
+            // One vertical span for every column, so the rules line up rather
+            // than each ending wherever its own column happens to.
+            let top = -Infinity, bottom = Infinity;
+            for (const l of shown) {
+                if (l.top > top) top = l.top;
+                if (l.bottom < bottom) bottom = l.bottom;
+            }
+            const pad = Math.max((top - bottom) * 0.06, 50);
+            top += pad; bottom -= pad;
+
+            const group = new THREE.Group();
+            for (const lane of shown) {
+                const colour = new THREE.Color(lane.color);
+                const mat = new THREE.LineBasicMaterial({
+                    color: colour, transparent: true, opacity: 0.16, depthWrite: false, fog: false,
+                });
+                // A hop that fanned out into a block of lanes is bracketed on
+                // both edges; one that fits in a single line gets its axis.
+                const pad = WALK_COL_GAP * 0.32 * (lane.scale || 1);
+                const rules = lane.x1 - lane.x0 < 1
+                    ? [lane.x]
+                    : [lane.x0 - pad * lane.sign, lane.x1 + pad * lane.sign];
+                for (const rx of rules) {
+                    const geo = new THREE.BufferGeometry().setFromPoints([
+                        new THREE.Vector3(rx, bottom, 0),
+                        new THREE.Vector3(rx, top, 0),
+                    ]);
+                    group.add(new THREE.Line(geo, mat));
+                }
+
+                const text = new SpriteText(lane.label + (lane.count > 1 ? '  ×' + lane.count : ''));
+                text.color = lane.color;
+                text.fontFace = 'JetBrains Mono, monospace';
+                text.fontWeight = '600';
+                text.textHeight = Math.max(14, (top - bottom) * 0.026);
+                text.material.depthWrite = false;
+                text.material.fog = false;
+                if (text.material.map) {
+                    text.material.map.generateMipmaps = false;
+                    text.material.map.minFilter = THREE.LinearFilter;
+                    text.material.map.needsUpdate = true;
+                }
+                text.position.set(lane.x, top + text.textHeight * 0.9, 0);
+                group.add(text);
+            }
+            group.renderOrder = -1;
+            walkLaneGroup = group;
+            Graph.scene().add(group);
+        }
+
         // ─── Graph Walk ignition pulse ─────────────────────────
         //
         // Four additive-blended layers bloom against the dark canvas:
@@ -1269,6 +1502,159 @@
             requestAnimationFrame(step);
         }
 
+        // ─── Graph Walk: the travelling wavefront ──────────────
+        //
+        // The cascade's answer to the ignition sphere.
+        //
+        // A sphere is the right shape for a frontier that really is a shell:
+        // hop 2 is everything at radius 2, in every direction, so a wave
+        // expanding from the seed touches all of it at once. Laid out as
+        // columns that is no longer true — hop 2 is a *line*, and a sphere
+        // grown from the seed until it reaches that line has already swallowed
+        // hop 1, hop 3's near edge and most of the canvas on the way. It
+        // describes a geometry the diagram no longer has.
+        //
+        // So in a cascade the wavefront is a curtain: a bright vertical front
+        // that travels along the flow axis from the column it left to the
+        // column that is about to ignite, dragging a lit wake behind it and a
+        // spray of debris riding along. Same beat, same colour, same timing —
+        // it arrives exactly as the frontier lights up — but now the motion
+        // and the layout agree about which way the walk is going.
+        const _sweepVert = () => `
+            varying vec3 vPos;
+            void main() {
+                vPos = position;
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            }`;
+        // uWake 0 → the front itself; 1 → the lit wake dragged behind it. Both
+        // taper at the top and bottom so the curtain has ends rather than
+        // being a rectangle laid over the graph, and both taper across their
+        // travel axis: a flat bar of additive white is a light source, not a
+        // wavefront, and it erases everything it passes over. Only the very
+        // centre of the front goes hot; the rest keeps the hop's own colour,
+        // so the wave still reads as belonging to the frontier it announces.
+        const _sweepFrag = () => `
+            varying vec3 vPos;
+            uniform vec3 uColor; uniform vec3 uCore;
+            uniform float uOpacity; uniform float uWake;
+            void main() {
+                float ends = 1.0 - smoothstep(0.34, 0.5, abs(vPos.y));
+                float bar = 1.0 - smoothstep(0.0, 0.5, abs(vPos.x));
+                float wake = pow(vPos.x + 0.5, 2.4);
+                float body = mix(bar, wake, uWake);
+                float hot = mix(pow(bar, 3.0), 0.0, uWake);
+                vec3 c = mix(uColor, uCore, hot);
+                gl_FragColor = vec4(c, ends * body * uOpacity);
+            }`;
+
+        function threeEmitSweep(spec) {
+            if (!Graph || !spec || !Number.isFinite(spec.fromX) || !Number.isFinite(spec.toX)) return;
+            const scene = Graph.scene();
+            const height = Math.max(spec.top - spec.bottom, 40);
+            const cy = (spec.top + spec.bottom) / 2;
+            const cz = spec.z || 0;
+            const dir = spec.toX >= spec.fromX ? 1 : -1;
+            const span = Math.abs(spec.toX - spec.fromX) || 1;
+            // Some body in z so the curtain still reads as a sheet when the
+            // camera is orbited off the diagram's plane.
+            const depth = Math.max(height * 0.12, 60);
+            const grow = Math.max(160, spec.growMs || 420);
+            const fade = Math.min(560, Math.max(220, grow * 0.75));
+            const total = grow + fade;
+            const t0 = performance.now();
+
+            const group = new THREE.Group();
+            scene.add(group);
+            const disposables = [];
+
+            const makeCurtain = (wake) => {
+                const mat = new THREE.ShaderMaterial({
+                    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+                    fog: false, side: THREE.DoubleSide,
+                    uniforms: {
+                        uColor: { value: new THREE.Color(spec.colour) },
+                        uCore: { value: new THREE.Color('#fff3e8') },
+                        uOpacity: { value: 0 },
+                        uWake: { value: wake },
+                    },
+                    vertexShader: _sweepVert(),
+                    fragmentShader: _sweepFrag(),
+                });
+                const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), mat);
+                mesh.renderOrder = 500;
+                group.add(mesh);
+                disposables.push(mesh.geometry, mat);
+                return { mesh, mat };
+            };
+            const wake = makeCurtain(1);
+            const front = makeCurtain(0);
+            // The wake is oriented so its local +x is the direction of travel;
+            // the shader's `along` ramp then brightens toward the front.
+            wake.mesh.scale.set(1, height, depth);
+            wake.mesh.rotation.y = dir > 0 ? 0 : Math.PI;
+            // Wide enough for the soft profile to have somewhere to fall off.
+            front.mesh.scale.set(Math.max(span * 0.05, 18), height, depth * 1.02);
+
+            // Debris riding the front, scattered across the curtain rather
+            // than exploding from a point — it is a wave passing, not a blast.
+            const N = 72;
+            const positions = new Float32Array(N * 3);
+            const bits = [];
+            for (let i = 0; i < N; i++) {
+                bits.push({
+                    y: cy + (Math.random() - 0.5) * height * 0.92,
+                    z: cz + (Math.random() - 0.5) * depth,
+                    lag: Math.random() * 0.22,               // trails the front
+                    jitter: (Math.random() - 0.5) * span * 0.05,
+                });
+            }
+            const pGeo = new THREE.BufferGeometry();
+            pGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            const pMat = new THREE.PointsMaterial({
+                color: new THREE.Color(spec.colour), size: 3.2, transparent: true, opacity: 0,
+                depthWrite: false, blending: THREE.AdditiveBlending, sizeAttenuation: true, fog: false,
+            });
+            const points = new THREE.Points(pGeo, pMat);
+            points.renderOrder = 502;
+            group.add(points);
+            disposables.push(pGeo, pMat);
+
+            const step = () => {
+                const t = performance.now() - t0;
+                if (t >= total || !state.walkActive) {
+                    scene.remove(group);
+                    disposables.forEach(d => d.dispose());
+                    return;
+                }
+                const p = Math.min(1, t / grow);
+                const e = 1 - Math.pow(1 - p, 3);   // decelerate into the frontier
+                const x = spec.fromX + (spec.toX - spec.fromX) * e;
+                const travelled = Math.max(Math.abs(x - spec.fromX), 1);
+
+                wake.mesh.scale.x = travelled;
+                wake.mesh.position.set(spec.fromX + dir * travelled / 2, cy, cz);
+                front.mesh.position.set(x, cy, cz);
+
+                const fadeIn = Math.min(1, p / 0.22);
+                const env = t <= grow ? fadeIn : Math.max(0, 1 - (t - grow) / fade);
+                front.mat.uniforms.uOpacity.value = 0.72 * env;
+                wake.mat.uniforms.uOpacity.value = 0.26 * env;
+                pMat.opacity = 0.85 * env;
+
+                const arr = pGeo.attributes.position.array;
+                for (let i = 0; i < N; i++) {
+                    const b = bits[i];
+                    const bp = Math.max(0, e - b.lag);
+                    arr[i * 3] = spec.fromX + (spec.toX - spec.fromX) * bp + b.jitter;
+                    arr[i * 3 + 1] = b.y;
+                    arr[i * 3 + 2] = b.z;
+                }
+                pGeo.attributes.position.needsUpdate = true;
+                requestAnimationFrame(step);
+            };
+            requestAnimationFrame(step);
+        }
+
         // ─── Restyle ───────────────────────────────────────────
 
         // Custom node objects own their material, so recolour them directly.
@@ -1276,6 +1662,7 @@
         // few hundred nodes per hover and a hundred thousand.
         function threeRestyle() {
             if (!Graph) return;
+            threeUpdateWalkLanes();
             state.view.nodes.forEach(n => {
                 if (n.__nodeMat) n.__nodeMat.color.set(nodeColorFor(n));
                 const sel = state.selectedNode && n.id === state.selectedNode.id;
@@ -1353,7 +1740,8 @@
 
             frameAll(ms) { threeSetView('3d', ms); },
             setView(id, ms) { threeSetView(id, ms); },
-            frameNodes(ids, ms) { threeFrameNodes(ids, ms); },
+            frameNodes(ids, ms, opts) { threeFrameNodes(ids, ms, opts); },
+            setNodePositions(pos, ms, opts) { threeSetNodePositions(pos, ms, opts); },
             focusNode(n) { threeFocusNode(n); },
             zoomBy(f) { threeZoomBy(f); },
             flyToStop(stop, opts) { threeFlyToStop(stop, opts); },
@@ -1375,6 +1763,8 @@
                 threeEmitPulse(node, colour, fromR, toR, growMs);
             },
 
+            emitSweep(spec) { threeEmitSweep(spec); },
+
             // Project a node into page pixels via the live camera.
             screenPos(n) {
                 if (!Graph || !n || !Number.isFinite(n.x)) return null;
@@ -1389,6 +1779,8 @@
             dispose() {
                 window.removeEventListener('mousemove', threeTrackMouse);
                 threeGen += 1;
+                threeCancelPosAnim();
+                disposeWalkLanes();
                 disposeBoundaryCube();
                 if (Graph) {
                     try { Graph._destructor && Graph._destructor(); } catch (err) { console.error(err); }

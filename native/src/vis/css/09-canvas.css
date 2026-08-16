@@ -554,6 +554,17 @@
             font-size: 14px;
         }
 
+        /* Most of these glyphs are characters; the labels toggle carries the
+           same drawn mark as its twin on the walk card. Boxed a little larger
+           than the 14px type so the two match optically — the mark's ink fills
+           barely a third of its viewBox, where a glyph fills most of its em. */
+        #viewbar .vtoggle .vt-ico svg {
+            display: block;
+            width: 19px;
+            height: 19px;
+            margin: -2px 0;
+        }
+
         #viewbar .vtoggle .vt-lbl {
             font-size: 8px;
             letter-spacing: 0.6px;

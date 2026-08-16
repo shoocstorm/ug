@@ -473,6 +473,19 @@
                                 <path d="M2 16c3.5-4 6.5 4 10 0s6.5 4 10 0" />
                             </svg>
                         </button>
+                        <!-- The cascade: one column per hop, marching the way
+                             the edges point. Switchable live, because the two
+                             arrangements answer different questions — the
+                             diagram shows the shape of the reach, the graph's
+                             own layout shows where that reach lives. -->
+                        <button class="walk-icon" id="walk-o-layout" title="Cascade layout — one column per hop, in the direction of travel (F)" aria-pressed="true" type="button">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                                stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M4 6v12M11 8v8M18 10v4" />
+                                <path d="M6 12h3M13 12h3" />
+                                <path d="M19.6 12h1.9m-1.4-1.4L21.5 12l-1.4 1.4" />
+                            </svg>
+                        </button>
                         <!-- The viewbar's Names toggle, repeated here: during a
                              walk the card is where your hands are, and the
                              viewbar is behind the immersive dimming. Same
@@ -638,7 +651,10 @@
             <div class="vsep"></div>
             <!-- Node names. Off by default: on anything past a few hundred
                  nodes a full set of labels is a wall of text, not a map. -->
-            <button class="vtoggle" id="toggle-labels" aria-pressed="false" title="Show / hide node name labels"><span class="vt-ico">Aa</span><span class="vt-lbl">Names</span></button>
+            <!-- Same mark as the walk card's labels button (#walk-o-labels):
+                 it is the same control, and two glyphs for one feature read
+                 as two features. -->
+            <button class="vtoggle" id="toggle-labels" aria-pressed="false" title="Show / hide node name labels"><span class="vt-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17V8m0 0 4 9m-4-9 4 0" /><path d="M14 17V9m0 0h3.5a2.5 2.5 0 0 1 0 5H14" /></svg></span><span class="vt-lbl">Names</span></button>
             <button class="vtoggle" id="toggle-box" title="Show / hide the boundary box, corners & face labels"><span class="vt-ico">▦</span><span class="vt-lbl">Box</span></button>
             <button class="vtoggle" id="toggle-spin" title="Toggle auto-rotation"><span class="vt-ico">⟳</span><span class="vt-lbl">Spin</span></button>
             <button class="vtoggle" id="toggle-solo" aria-pressed="false" title="Solo the selected node — show only it and everything it connects to (select a node first)"><span class="vt-ico">◎</span><span class="vt-lbl">Solo</span></button>
@@ -1088,10 +1104,12 @@
                         <p class="walk-blurb"><strong>Watch the graph walk.</strong> Pick a seed node, choose a
                             hop radius and direction, and the canvas isolates to the BFS frontier
                             <span class="kw">one hop at a time</span> — edges stream outward first, then each
-                            frontier ignites in its own colour with a ripple from the seed. Everything off the
-                            walk is hidden, so the expansion is all you see. Slow it down with the speed
-                            control. This is the same N-hop walk behind the <code>graph</code> channel of
-                            hybrid search.</p>
+                            frontier ignites in its own colour. The walk is re-laid-out as it goes:
+                            <span class="kw">one column per hop</span>, marching the way the edges point, so
+                            following an edge forward reads left→right and a caller sits upstream of what it
+                            calls. Everything off the walk is hidden, so the expansion is all you see. Slow it
+                            down with the speed control. This is the same N-hop walk behind the
+                            <code>graph</code> channel of hybrid search.</p>
 
                         <!-- Seed picker -->
                         <div class="walk-seed-wrap">
@@ -1133,6 +1151,18 @@
                                 <button class="walk-speed-btn" data-speed="2" type="button" title="Fast">2×</button>
                             </div>
                             <span class="walk-reveal-note">edges stream → frontier ignites, one beat per hop</span>
+                        </div>
+
+                        <!-- Arrangement -->
+                        <div class="walk-row">
+                            <span class="walk-field-label">Layout</span>
+                            <div class="walk-arr">
+                                <button class="walk-arr-btn active" data-arr="flow" type="button"
+                                    title="Re-lay the walk out as a cascade: one column per hop, marching the way the edges point">Cascade</button>
+                                <button class="walk-arr-btn" data-arr="graph" type="button"
+                                    title="Light the walk up where the graph's own layout already put it">In place</button>
+                            </div>
+                            <span class="walk-reveal-note">cascade: hop = distance across, arrows = reading direction</span>
                         </div>
 
                         <!-- Edge-type filters -->
