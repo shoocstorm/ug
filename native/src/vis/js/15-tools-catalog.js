@@ -706,7 +706,29 @@
             }
         }
 
-        function findPath(sourceId, targetId) {
+        async function findPath(sourceId, targetId) {
+            // The one traversal here that is genuinely unbounded — it can walk
+            // the entire graph before deciding two nodes are unconnected — so
+            // in server mode it goes to the server outright rather than pulling
+            // the graph through the edge cache one frontier at a time.
+            //
+            // `GET /api/graph/path` is an exact match, not an approximation:
+            // it is forward-only BFS, which is precisely what the loop below
+            // does (see the `!== cur` guard).
+            if (state.graphMode === 'server') {
+                const qs = `?source=${encodeURIComponent(sourceId)}&target=${encodeURIComponent(targetId)}`;
+                const res = await fetch(`/api/graph/path${qs}`);
+                if (!res.ok) throw new Error(await readErr(res));
+                const data = await res.json();
+                if (!data.found) return { found: false };
+                return {
+                    found: true,
+                    ids: data.path,
+                    path: data.path.map(id => truncateName(id)),
+                    hops: data.length,
+                };
+            }
+
             const queue = [[sourceId, [sourceId]]];
             const visited = new Set();
             let found = null;

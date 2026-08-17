@@ -114,9 +114,16 @@
             showPathResult('');
         }
 
-        function runFindPathTo(targetId) {
+        async function runFindPathTo(targetId) {
             if (!state.pathSource || !targetId) return;
-            const result = findPath(state.pathSource, targetId);
+            showPathResult('Searching for a path…');
+            let result;
+            try {
+                result = await findPath(state.pathSource, targetId);
+            } catch (err) {
+                showPathResult(`Path search failed — ${err.message || err}`, false);
+                return;
+            }
             const info = document.getElementById('info');
             const hint = info.querySelector('.path-hint');
             if (result.found) {

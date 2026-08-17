@@ -179,6 +179,28 @@ impl GraphSnapshot {
     fn raw_json(&self) -> &str {
         std::str::from_utf8(&self.encoded.identity).unwrap_or("{}")
     }
+
+    /// Identifies *this* snapshot, so a client that split one graph across
+    /// several requests can tell whether they all came from the same one.
+    ///
+    /// Size plus node/edge counts plus mtime: cheap to compute per request and
+    /// certain to change when the graph is regenerated. Not a hash of the
+    /// content — hashing 346 MB per `/api/capabilities` call would cost more
+    /// than the problem.
+    fn token(&self) -> String {
+        let mtime = self
+            .mtime
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        format!(
+            "{}-{}-{}-{}",
+            self.encoded.identity.len(),
+            self.parsed.nodes.len(),
+            self.parsed.edges.len(),
+            mtime
+        )
+    }
 }
 
 /// Adjacency built once per snapshot. `id_to_idx` maps a node's string id to
@@ -416,6 +438,10 @@ fn build_slim_index(graph: &GraphData) -> String {
         "v": 1,
         "n": n,
         "edgeCount": graph.edges.len(),
+        // Not `snap.token()` — this builder only sees the parsed graph. The
+        // client compares against the token in `/api/capabilities`, and the
+        // two agree because both are derived from the same snapshot.
+        "nodeCount": n,
         "ids": ids,
         "names": names,
         "types": type_names,
@@ -3069,7 +3095,7 @@ async fn api_hydrate(State(state): State<ServeState>, Json(body): Json<HydrateBo
         .iter()
         .filter_map(|&i| snap.parsed.nodes.get(i as usize))
         .collect();
-    match serde_json::to_string(&serde_json::json!({ "ids": body.ids, "nodes": nodes, "n": n })) {
+    match serde_json::to_string(&serde_json::json!({ "ids": body.ids, "nodes": nodes, "n": n, "token": snap.token() })) {
         Ok(s) => ok_json(s),
         Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &format!("encode: {}", e)),
     }
@@ -3153,6 +3179,7 @@ async fn api_edges(State(state): State<ServeState>, Json(body): Json<EdgesBody>)
             // withholds edges that leave the set, so marking its ids complete
             // would cache a half-answer as a whole one.
             "complete": if induced { Vec::new() } else { body.ids.clone() },
+            "token": snap.token(),
         })
         .to_string(),
     )
@@ -3644,6 +3671,13 @@ async fn api_capabilities(State(state): State<ServeState>) -> Response {
         "nodes": snap.parsed.nodes.len(),
         "edges": snap.parsed.edges.len(),
         "threshold": GRAPH_SERVER_MODE_BYTES,
+        // Which snapshot the page is talking to. Server mode splits one graph
+        // across many requests, so a `ug gen` landing mid-session would mix a
+        // slim index from the old graph with edges from the new one — node
+        // indices are positional, so that is not a stale answer but a
+        // scrambled one. Every server-mode response carries this; a mismatch
+        // means "reload", which is a thing the user can act on.
+        "token": snap.token(),
     });
 
     let body = serde_json::json!({

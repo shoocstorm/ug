@@ -319,6 +319,10 @@
 
                 if (mode === 'server') {
                     setPhase('Loading node index…', 0);
+                    // Remembered so every later server-mode response can be
+                    // checked against the snapshot this page was built from.
+                    const caps = await getCapabilities();
+                    state.graphToken = (caps && caps.graph && caps.graph.token) || null;
                     const res = await fetch('/api/graph/nodes');
                     if (!res.ok) throw new Error(`Server answered ${res.status} ${res.statusText}`);
                     setPhase('Building graph…', 100);

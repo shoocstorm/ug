@@ -189,6 +189,67 @@ Budgets: `SOLO_MAX_NODES` 1500 per view, `SOLO_MAX_NEIGHBORS` 300 per seed.
 `demo.rs` mirrors `SOLO_THRESHOLD`, and `the_solo_threshold_matches_the_renderer`
 fails if the two drift.
 
+### 3.6 Where the graph comes from — local vs server mode
+
+Solo mode bounds what is *drawn*. Past about 50 MB of `graph.json` the problem is
+what is *held*: the download, the `JSON.parse` and the retained object graph cost
+more than every interaction performed on them. Measured on a 346 MB index, the
+whole-file path retains ~295 MB of JS heap against ~66 MB for the slim index.
+
+So the page has two ways of getting its graph. The server decides which and says
+so in `/api/capabilities`:
+
+```json
+"graph": { "mode": "server", "bytes": 346266017,
+           "nodes": 161725, "edges": 745964,
+           "threshold": 52428800, "token": "…" }
+```
+
+| | `local` | `server` |
+|---|---|---|
+| graph arrives as | `GET /graph.json`, whole | `GET /api/graph/nodes`, the slim index |
+| `state.graph.nodes` | every node, every field | every node, **without** docstring/signature/metrics/calls |
+| `state.graph.edges` | every edge | **empty** |
+| solo mode | above the threshold | **always** |
+
+`ug serve --graph-mode <auto|local|server>` sets the policy; `auto` compares
+`bytes` against `threshold`. `?gm=local|server` overrides per page load, which is
+how server mode gets exercised on a small repo. **A missing `graph` block means
+local**, which is what a static host answers — so the published demo is untouched
+and `demo-shim.js` needs no entry for any of this.
+
+**The slim index** (`build_slim_index`, `serve.rs`) is columnar with `node_type`
+and `file` dictionary-coded, and **a node's position in those columns is its
+identity** for every other server-mode request — which is what lets edge endpoints
+travel as integers instead of 141-character ids.
+
+**`state.adj` becomes a cache.** In local mode `buildAdjacency` fills it from every
+edge and `state.adjCompleteAll` is true. In server mode it fills on demand from
+`POST /api/graph/edges`, and `state.adjComplete` tracks *whose list is whole*:
+
+- `incident` — every edge touching an id; marks those ids complete
+- `induced` — only edges with both ends in the set; marks **nothing** complete
+
+That distinction is the one thing in this design that cannot be got wrong. An
+`induced` result deliberately withholds the edges that leave the set, so caching
+it as complete would render a node with a fraction of its edges and no error.
+`edgesOf` warns and self-repairs on a read of an id that is not complete;
+`knownEdgesOf` is the deliberate no-opinion read, used only by `setSoloView`,
+which legitimately walks incomplete neighbours.
+
+`rebuildSoloView` is the async boundary — four callers, none using a return value,
+against `handleClick`'s eighteen — so `soloViewIds`, `setSoloView`, `neighborsOf`
+and `edgesOf` all stay synchronous and local mode is byte-for-byte unchanged.
+
+Per-node detail arrives from `POST /api/graph/nodes/hydrate` and is written **into
+the existing node objects**, so a hydrated node is hydrated everywhere at once;
+`_slim` says which is which.
+
+`token` identifies the snapshot. Server mode splits one graph across many requests
+and refers to nodes positionally, so a `ug gen` landing mid-session would not give
+stale answers but scrambled ones — a mismatched token drops the response and tells
+the user to reload.
+
 ---
 
 ## 4. The shared style contract

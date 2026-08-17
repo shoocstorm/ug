@@ -8618,7 +8618,7 @@
 }
     </style>
 <script>
-window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3162,"edges":9271,"files":104,"lines":72348,"ugVersion":"0.1.15","visFingerprint":"cffa3dfe7619cd9c","generatedAt":1786975182};
+window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3162,"edges":9271,"files":104,"lines":72348,"ugVersion":"0.1.15","visFingerprint":"d9e9c41b629bfab3","generatedAt":1786975618};
 /* ==========================================================================
    UltraGraph — static demo shim
    ==========================================================================
@@ -10949,6 +10949,10 @@ traverse({
 
                 if (mode === 'server') {
                     setPhase('Loading node index…', 0);
+                    // Remembered so every later server-mode response can be
+                    // checked against the snapshot this page was built from.
+                    const caps = await getCapabilities();
+                    state.graphToken = (caps && caps.graph && caps.graph.token) || null;
                     const res = await fetch('/api/graph/nodes');
                     if (!res.ok) throw new Error(`Server answered ${res.status} ${res.statusText}`);
                     setPhase('Building graph…', 100);
@@ -13719,9 +13723,16 @@ traverse({
             showPathResult('');
         }
 
-        function runFindPathTo(targetId) {
+        async function runFindPathTo(targetId) {
             if (!state.pathSource || !targetId) return;
-            const result = findPath(state.pathSource, targetId);
+            showPathResult('Searching for a path…');
+            let result;
+            try {
+                result = await findPath(state.pathSource, targetId);
+            } catch (err) {
+                showPathResult(`Path search failed — ${err.message || err}`, false);
+                return;
+            }
             const info = document.getElementById('info');
             const hint = info.querySelector('.path-hint');
             if (result.found) {
@@ -14758,6 +14769,19 @@ traverse({
             state.focusSet = new Set([...tourState.routeIds, ...near, stop.node_id]);
             document.body.classList.add('focus-active');
             bumpGraphStyles();
+            // In server mode the stop's neighbours may not have arrived yet, so
+            // the halo above is the route plus the stop alone. Widen it once
+            // they do — same shape as `enterFocus`, and kept synchronous here
+            // because the tour's timing loop drives this.
+            if (state.graphMode === 'server' && !state.adjComplete.has(stop.node_id)) {
+                ensureEdges([stop.node_id]).then(() => {
+                    if (state.focusNode !== stop.node_id) return;   // tour moved on
+                    const widened = neighborIdsOf(stop.node_id);
+                    tourState.nearIds = widened;
+                    state.focusSet = new Set([...tourState.routeIds, ...widened, stop.node_id]);
+                    bumpGraphStyles();
+                });
+            }
         }
 
         // ── Camera ────────────────────────────────────────────
@@ -23575,7 +23599,29 @@ traverse({
             }
         }
 
-        function findPath(sourceId, targetId) {
+        async function findPath(sourceId, targetId) {
+            // The one traversal here that is genuinely unbounded — it can walk
+            // the entire graph before deciding two nodes are unconnected — so
+            // in server mode it goes to the server outright rather than pulling
+            // the graph through the edge cache one frontier at a time.
+            //
+            // `GET /api/graph/path` is an exact match, not an approximation:
+            // it is forward-only BFS, which is precisely what the loop below
+            // does (see the `!== cur` guard).
+            if (state.graphMode === 'server') {
+                const qs = `?source=${encodeURIComponent(sourceId)}&target=${encodeURIComponent(targetId)}`;
+                const res = await fetch(`/api/graph/path${qs}`);
+                if (!res.ok) throw new Error(await readErr(res));
+                const data = await res.json();
+                if (!data.found) return { found: false };
+                return {
+                    found: true,
+                    ids: data.path,
+                    path: data.path.map(id => truncateName(id)),
+                    hops: data.length,
+                };
+            }
+
             const queue = [[sourceId, [sourceId]]];
             const visited = new Set();
             let found = null;
@@ -23715,6 +23761,27 @@ traverse({
         }
         const coldMissWarned = new Set();
 
+        // Whether a server-mode response describes the same graph the page
+        // loaded. Server mode splits one graph across many requests and refers
+        // to nodes by *position*, so a `ug gen` landing mid-session does not
+        // give stale answers — it gives answers indexed into a different array.
+        // Dropping the response and saying so is the only honest move; the
+        // page cannot repair itself without reloading.
+        function graphTokenMatches(token) {
+            if (!token || !state.graphToken || token === state.graphToken) return true;
+            if (!state.graphTokenWarned) {
+                state.graphTokenWarned = true;
+                console.warn('graph changed on the server — reload to see it');
+                const chip = document.getElementById('view-count');
+                if (chip) {
+                    chip.hidden = false;
+                    chip.innerHTML = '<span class="vc-count">Graph changed on disk</span>'
+                        + '<span class="vc-note">reload the page to see the new index</span>';
+                }
+            }
+            return false;
+        }
+
         // What the cache holds for `id`, with no opinion about completeness.
         //
         // The distinction matters for exactly one caller: `setSoloView` walks
@@ -23779,6 +23846,7 @@ traverse({
             });
             if (!res.ok) throw new Error(await readErr(res));
             const data = await res.json();
+            if (!graphTokenMatches(data.token)) return;
             const nodes = state.graph.nodes;
             const { src, tgt, rel, relTypes } = data;
 
@@ -24950,7 +25018,22 @@ traverse({
         // Same semantics as the `traverse` MCP tool and /api/db/traverse:
         // respects direction and an optional edge-type set, returns one
         // layer per hop so the player can reveal them sequentially.
-        function computeWalk(seedId, maxHops, dir, edgeTypes) {
+        // Deliberately *not* a second BFS on the server.
+        //
+        // The plan called for a `POST /api/graph/walk` mirroring this loop, to
+        // cap a hub blow-up. But this is a pure traversal over `edgesOf`, and
+        // its frontier at each hop is exactly the batch of nodes whose edges
+        // are needed next — so one `await ensureEdges(frontier)` per hop makes
+        // it work in server mode with the endpoint that already exists, at one
+        // request per hop. Reimplementing it in Rust would mean two copies of
+        // the layer/tally/edge-key semantics the player animation depends on,
+        // which is the drift AGENTS.md §3a is about. The blow-up is bounded
+        // instead by WALK_MAX_FRONTIER below.
+        //
+        // Async in both modes; `ensureEdges` resolves immediately when every
+        // edge is already local.
+        const WALK_MAX_FRONTIER = 4000;
+        async function computeWalk(seedId, maxHops, dir, edgeTypes) {
             const layers = [{ hop: 0, ids: [seedId], edges: [], tally: {} }];
             const dist = new Map([[seedId, 0]]);
             const reached = new Set([seedId]);
@@ -24963,6 +25046,10 @@ traverse({
                 const edges = [];
                 const tally = {};
                 const seenThisLayer = new Set();
+                // The whole frontier's edges in one request, before the layer
+                // is walked. Per node would be one request each — thousands of
+                // them on a wide hop.
+                await ensureEdges(frontier);
                 for (const cur of frontier) {
                     for (const e of edgesOf(cur)) {
                         if (allow && !allow.has(e.rel)) continue;
@@ -24986,6 +25073,14 @@ traverse({
                 }
                 if (!next.length) break;
                 next.forEach(id => { reached.add(id); dist.set(id, h); });
+                // A hub three hops out reaches tens of thousands. The layers
+                // are already recorded; stopping here bounds the *next* fetch
+                // rather than truncating what has been found, and the walk
+                // reports the hop it stopped at.
+                if (next.length > WALK_MAX_FRONTIER) {
+                    layers.push({ hop: h, ids: next, edges, tally });
+                    return { layers, dist, reached, stoppedAtHop: h };
+                }
                 layers.push({ hop: h, ids: next, edges, tally });
                 frontier = next;
             }
@@ -24993,7 +25088,7 @@ traverse({
         }
 
         // Launch from the sidebar: validate, compute, record, play.
-        function runWalk() {
+        async function runWalk() {
             const status = document.getElementById('walk-status');
             const seedId = state.walkSeed;
             if (!seedId) {
@@ -25006,7 +25101,7 @@ traverse({
                 return;
             }
             exitWalk(true);
-            const { layers, reached } = computeWalk(seedId, state.walkHops, state.walkDir, state.walkEdgeTypes);
+            const { layers, reached } = await computeWalk(seedId, state.walkHops, state.walkDir, state.walkEdgeTypes);
             const totalEdges = layers.reduce((a, l) => a + l.edges.length, 0);
             if (layers.length <= 1) {
                 if (status) {
@@ -25750,7 +25845,7 @@ traverse({
         }
         // Re-run a saved walk. If the stored layers survived, play them
         // verbatim; otherwise recompute from the seed (graph may have grown).
-        function replayWalkFromHistory(id) {
+        async function replayWalkFromHistory(id) {
             const entry = loadWalkHistory().find(e => e.id === id);
             if (!entry) return;
             const seedNode = state.nodeById && state.nodeById.get(entry.seedId);
@@ -25763,7 +25858,7 @@ traverse({
             applyWalkParams(entry);
             let layers = entry.layers, totalEdges = entry.totalEdges || 0;
             if (!layers || !layers.length) {
-                const r = computeWalk(entry.seedId, entry.hops, entry.dir,
+                const r = await computeWalk(entry.seedId, entry.hops, entry.dir,
                     entry.edgeTypes ? new Set(entry.edgeTypes) : null);
                 layers = r.layers;
                 totalEdges = layers.reduce((a, l) => a + l.edges.length, 0);

@@ -722,7 +722,22 @@
         // Same semantics as the `traverse` MCP tool and /api/db/traverse:
         // respects direction and an optional edge-type set, returns one
         // layer per hop so the player can reveal them sequentially.
-        function computeWalk(seedId, maxHops, dir, edgeTypes) {
+        // Deliberately *not* a second BFS on the server.
+        //
+        // The plan called for a `POST /api/graph/walk` mirroring this loop, to
+        // cap a hub blow-up. But this is a pure traversal over `edgesOf`, and
+        // its frontier at each hop is exactly the batch of nodes whose edges
+        // are needed next — so one `await ensureEdges(frontier)` per hop makes
+        // it work in server mode with the endpoint that already exists, at one
+        // request per hop. Reimplementing it in Rust would mean two copies of
+        // the layer/tally/edge-key semantics the player animation depends on,
+        // which is the drift AGENTS.md §3a is about. The blow-up is bounded
+        // instead by WALK_MAX_FRONTIER below.
+        //
+        // Async in both modes; `ensureEdges` resolves immediately when every
+        // edge is already local.
+        const WALK_MAX_FRONTIER = 4000;
+        async function computeWalk(seedId, maxHops, dir, edgeTypes) {
             const layers = [{ hop: 0, ids: [seedId], edges: [], tally: {} }];
             const dist = new Map([[seedId, 0]]);
             const reached = new Set([seedId]);
@@ -735,6 +750,10 @@
                 const edges = [];
                 const tally = {};
                 const seenThisLayer = new Set();
+                // The whole frontier's edges in one request, before the layer
+                // is walked. Per node would be one request each — thousands of
+                // them on a wide hop.
+                await ensureEdges(frontier);
                 for (const cur of frontier) {
                     for (const e of edgesOf(cur)) {
                         if (allow && !allow.has(e.rel)) continue;
@@ -758,6 +777,14 @@
                 }
                 if (!next.length) break;
                 next.forEach(id => { reached.add(id); dist.set(id, h); });
+                // A hub three hops out reaches tens of thousands. The layers
+                // are already recorded; stopping here bounds the *next* fetch
+                // rather than truncating what has been found, and the walk
+                // reports the hop it stopped at.
+                if (next.length > WALK_MAX_FRONTIER) {
+                    layers.push({ hop: h, ids: next, edges, tally });
+                    return { layers, dist, reached, stoppedAtHop: h };
+                }
                 layers.push({ hop: h, ids: next, edges, tally });
                 frontier = next;
             }
@@ -765,7 +792,7 @@
         }
 
         // Launch from the sidebar: validate, compute, record, play.
-        function runWalk() {
+        async function runWalk() {
             const status = document.getElementById('walk-status');
             const seedId = state.walkSeed;
             if (!seedId) {
@@ -778,7 +805,7 @@
                 return;
             }
             exitWalk(true);
-            const { layers, reached } = computeWalk(seedId, state.walkHops, state.walkDir, state.walkEdgeTypes);
+            const { layers, reached } = await computeWalk(seedId, state.walkHops, state.walkDir, state.walkEdgeTypes);
             const totalEdges = layers.reduce((a, l) => a + l.edges.length, 0);
             if (layers.length <= 1) {
                 if (status) {
@@ -1522,7 +1549,7 @@
         }
         // Re-run a saved walk. If the stored layers survived, play them
         // verbatim; otherwise recompute from the seed (graph may have grown).
-        function replayWalkFromHistory(id) {
+        async function replayWalkFromHistory(id) {
             const entry = loadWalkHistory().find(e => e.id === id);
             if (!entry) return;
             const seedNode = state.nodeById && state.nodeById.get(entry.seedId);
@@ -1535,7 +1562,7 @@
             applyWalkParams(entry);
             let layers = entry.layers, totalEdges = entry.totalEdges || 0;
             if (!layers || !layers.length) {
-                const r = computeWalk(entry.seedId, entry.hops, entry.dir,
+                const r = await computeWalk(entry.seedId, entry.hops, entry.dir,
                     entry.edgeTypes ? new Set(entry.edgeTypes) : null);
                 layers = r.layers;
                 totalEdges = layers.reduce((a, l) => a + l.edges.length, 0);

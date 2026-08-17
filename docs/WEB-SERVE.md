@@ -6,7 +6,7 @@ A self-contained Axum-based web server that serves the visualization UI plus a f
 
 - Replace the "spin up `python -m http.server`" step in the dev loop with a single `ug serve` command.
 - Serve `visualization.html`, `threejs-vis.bundle.js` (three.js + 3d-force-graph), and `graph.json` from one process so users only need the `ug` binary at runtime.
-- Pre-load `graph.json` into memory and serve pre-compressed (br + gzip) bytes so the UI loads fast even on remote machines or large graphs.
+- Pre-load `graph.json` into memory and serve pre-compressed (br + gzip) bytes so the UI loads fast even on remote machines. **Past ~50 MB compression stops being the answer** — the cost is the browser's parse and retained heap, not the transfer — so above that the page is served a slim node index and asks this server for edges and detail instead. See Phase 4.
 - Provide a clean foundation for read-only HTTP API endpoints (search, BFS, centrality, semantic / hybrid search) without needing a second server.
 
 ## Non-goals
@@ -111,6 +111,53 @@ Implementation choices that mattered:
 - BFS and path build a forward-adjacency index (`HashMap<id, idx>` + `Vec<Vec<idx>>`) lazily on first call via `OnceLock<AdjIndex>` per snapshot. Invalidated automatically on `--watch` reload.
 - Centrality and cycles still use the lib functions but cache the result string in `OnceLock<String>` per snapshot — first call eats the parse + algorithm, subsequent calls are constant-time.
 - Wildcard segments (`/*id`) are required because node ids contain slashes (`function:tools/foo.py:42:bar`). A plain `/:id` would 404.
+
+---
+
+## Phase 4 — server-mode graph delivery (large repos)  ✅ shipped
+
+The browser used to answer every question from a local copy of the whole graph.
+On a 161,725-node / 745,964-edge index that is a 346 MB download and ~295 MB of
+retained JS heap, which is why walk, tour and plain node browsing all felt slow
+at once — GC pressure, not any one slow function.
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/api/graph/nodes` | Slim node index: columnar, `node_type` and `file` dictionary-coded, no edges. **34 MB identity / 2.8 MB brotli** against 346 MB. Built once per snapshot in a `OnceLock`, on a blocking thread |
+| POST | `/api/graph/edges` | `{ids:[indices], scope:"incident"\|"induced"}` → columnar edges. The one primitive behind solo expansion, focus, the Related tab, walk and tour |
+| POST | `/api/graph/nodes/hydrate` | `{ids:[indices]}` → the full `GraphNode`s, i.e. exactly the fields the slim index drops |
+
+`/api/capabilities` gains a `graph` block (`mode`, `bytes`, `nodes`, `edges`,
+`threshold`, `token`); `ug serve --graph-mode <auto|local|server>` overrides the
+policy. A missing block means local, so a static host — the published demo —
+keeps today's behaviour with no shim change.
+
+Implementation choices that mattered:
+
+- **`AdjIndex` holds edge indices, not neighbour indices.** It used to store
+  neighbours, which threw `edge_type` away, so `api_traverse` rediscovered it by
+  scanning all 745,964 edges *per request*. Storing edge indices (plus an inbound
+  side, since "one hop away" is undirected) took a hub traverse from **89 ms to
+  0.41 ms**. Without that, a batch neighbourhood endpoint would not have been
+  usable at all.
+- **Position is identity.** A node's index in the slim index is how every later
+  request names it. That is what lets edge endpoints travel as `int32` rather
+  than as 141-character ids — the difference between ~4 MB and ~200 KB for a
+  1,500-node neighbourhood.
+- **`incident` and `induced` are not interchangeable.** Only `incident` may
+  report an id as complete; `induced` withholds the edges that leave the set by
+  design. Measured on a real hub: an induced fetch gave a neighbour some of its
+  edges, while that neighbour's own query returned 6, of which **5 were never
+  sent**. Marking it complete would have drawn it with one sixth of its edges and
+  no error.
+- **`api_node` used a linear scan** over all nodes despite `adj.id_to_idx`
+  sitting next to it — one O(V) walk per selection. Now O(1).
+- The **graph walk is not reimplemented server-side.** Its BFS frontier per hop
+  is exactly the batch to fetch, so one `await ensureEdges(frontier)` per hop
+  reuses `/api/graph/edges`. A second copy of the layer/tally semantics in Rust
+  is the drift §3a warns about. `findPath` *does* go to the server — it is
+  unbounded — and `GET /api/graph/path` already matched it exactly, being
+  forward-only.
 
 ---
 

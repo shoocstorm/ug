@@ -108,6 +108,27 @@
         }
         const coldMissWarned = new Set();
 
+        // Whether a server-mode response describes the same graph the page
+        // loaded. Server mode splits one graph across many requests and refers
+        // to nodes by *position*, so a `ug gen` landing mid-session does not
+        // give stale answers — it gives answers indexed into a different array.
+        // Dropping the response and saying so is the only honest move; the
+        // page cannot repair itself without reloading.
+        function graphTokenMatches(token) {
+            if (!token || !state.graphToken || token === state.graphToken) return true;
+            if (!state.graphTokenWarned) {
+                state.graphTokenWarned = true;
+                console.warn('graph changed on the server — reload to see it');
+                const chip = document.getElementById('view-count');
+                if (chip) {
+                    chip.hidden = false;
+                    chip.innerHTML = '<span class="vc-count">Graph changed on disk</span>'
+                        + '<span class="vc-note">reload the page to see the new index</span>';
+                }
+            }
+            return false;
+        }
+
         // What the cache holds for `id`, with no opinion about completeness.
         //
         // The distinction matters for exactly one caller: `setSoloView` walks
@@ -172,6 +193,7 @@
             });
             if (!res.ok) throw new Error(await readErr(res));
             const data = await res.json();
+            if (!graphTokenMatches(data.token)) return;
             const nodes = state.graph.nodes;
             const { src, tgt, rel, relTypes } = data;
 
