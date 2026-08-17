@@ -277,6 +277,85 @@ async fn the_slim_index_describes_the_same_graph_as_graph_json() {
     assert_eq!(v["edgeTypeCounts"]["Calls"], serde_json::json!(1));
 }
 
+/// The two scopes differ in exactly one way, and getting it wrong is the
+/// failure mode the whole three-state client cache exists to prevent: an
+/// `induced` answer must not be mistakable for a complete one.
+///
+/// Graph: `file --Contains--> {alpha, beta}`, `alpha --Calls--> beta`.
+/// Indices: 0 = file, 1 = alpha, 2 = beta.
+#[tokio::test]
+async fn edges_incident_completes_a_node_and_induced_does_not() {
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+    let app = router_for(&tmp, "demo", &sample_graph()).await;
+
+    // Incident on alpha: both the Contains edge coming in and the Calls edge
+    // going out, and alpha is now complete.
+    let (status, body) = post(&app, "/api/graph/edges", serde_json::json!({ "ids": [1] })).await;
+    assert_eq!(status, StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["src"], serde_json::json!([0, 1]), "{body}");
+    assert_eq!(v["tgt"], serde_json::json!([1, 2]), "{body}");
+    assert_eq!(v["complete"], serde_json::json!([1]), "incident completes its ids: {body}");
+    let rels: Vec<&str> = v["relTypes"].as_array().unwrap().iter().map(|r| r.as_str().unwrap()).collect();
+    assert_eq!(rels, vec!["Contains", "Calls"], "{body}");
+
+    // Induced over {alpha, beta}: the Calls edge between them, but *not* the
+    // Contains edge from the file, which leaves the set.
+    let (_, body) = post(        &app,
+        "/api/graph/edges",
+        serde_json::json!({ "ids": [1, 2], "scope": "induced" }),
+    )
+    .await;
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["src"], serde_json::json!([1]), "only the within-set edge: {body}");
+    assert_eq!(v["tgt"], serde_json::json!([2]), "{body}");
+    assert_eq!(
+        v["complete"],
+        serde_json::json!([]),
+        "induced withholds edges leaving the set, so it may never mark an id complete — \
+         a client that cached this as complete would render a partial neighbourhood \
+         with no error: {body}"
+    );
+
+    // Out-of-range indices are ignored rather than panicking the handler.
+    let (status, body) = post(&app, "/api/graph/edges", serde_json::json!({ "ids": [99] })).await;
+    assert_eq!(status, StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["src"], serde_json::json!([]), "{body}");
+}
+
+/// Hydration returns the *whole* node, which is the half the slim index drops.
+#[tokio::test]
+async fn hydrate_returns_full_nodes_for_indices() {
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+    let mut graph = sample_graph();
+    graph.nodes[1].docstring = Some("what alpha does".into());
+    graph.nodes[1].calls = vec!["beta".into()];
+    let app = router_for(&tmp, "demo", &graph).await;
+
+    let (status, body) = post(&app, "/api/graph/nodes/hydrate", serde_json::json!({ "ids": [1] })).await;
+    assert_eq!(status, StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let nodes = v["nodes"].as_array().unwrap();
+    assert_eq!(nodes.len(), 1, "{body}");
+    assert_eq!(nodes[0]["id"], serde_json::json!("function:src/a.rs:1:alpha"), "{body}");
+    assert_eq!(
+        nodes[0]["docstring"],
+        serde_json::json!("what alpha does"),
+        "the docstring is exactly what the slim index omits: {body}"
+    );
+    assert_eq!(nodes[0]["calls"], serde_json::json!(["beta"]), "{body}");
+
+    // Out-of-range indices are dropped, not fatal — the client may hold a
+    // stale index across a snapshot reload.
+    let (status, body) = post(&app, "/api/graph/nodes/hydrate", serde_json::json!({ "ids": [0, 99] })).await;
+    assert_eq!(status, StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["nodes"].as_array().unwrap().len(), 1, "{body}");
+}
+
 /// The one bit of the handshake the page keys off. A graph under the threshold
 /// must keep today's behaviour, and `--graph-mode` must be able to say
 /// otherwise — that override is how the server path gets tested at all without

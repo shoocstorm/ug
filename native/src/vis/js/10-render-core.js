@@ -274,7 +274,10 @@
         // the full `state.graph`, not the (possibly empty solo) view.
         function autoRendererName() {
             const nodes = state.graph && state.graph.nodes ? state.graph.nodes.length : 0;
-            const edges = state.graph && state.graph.edges ? state.graph.edges.length : 0;
+            // `state.edgeCount`, not `state.graph.edges.length`: in server mode
+            // the local edge array is empty and reading it would pick three.js
+            // for a graph far past what three.js can hold.
+            const edges = state.edgeCount || 0;
             return Math.max(nodes, edges) <= THREE_D_MAX_ELEMENTS ? 'three' : 'cosmos';
         }
 

@@ -34,11 +34,49 @@
         const SOLO_MAX_NODES = 1500;      // hard render budget for one view
         const SOLO_MAX_NEIGHBORS = 300;   // per-seed 1-hop cap, so a hub can't blow the budget
 
+        // Whether the renderer must be handed neighbourhoods rather than the
+        // whole graph. The two places that decide this — `initialize()` and
+        // `applySoloMode()` — must agree, and both got it wrong for server mode
+        // when they compared node and edge counts directly: there are no edges
+        // locally in that mode, so `max(161725, 0)` reads as *under* the
+        // threshold and the "draw everything" branch hands the renderer 162k
+        // nodes with nothing connecting them.
+        //
+        // In server mode solo is not a threshold decision at all. It is the only
+        // correct view, because the edges to draw anything else are on the
+        // server.
+        function soloRequired(limit) {
+            if (state.graphMode === 'server') return true;
+            return Math.max(state.graph.nodes.length, state.edgeCount) > (limit || SOLO_THRESHOLD);
+        }
+
         // Adjacency over the *full* graph, built once. Before this, every
         // selection scanned all edges (neighborIdsOf) — the second-worst hot
         // path on a large repo after the restyle loop.
+        // In server mode this starts empty and fills on demand — `state.adj`
+        // becomes a cache of the neighbourhoods fetched so far rather than a
+        // complete index. `state.adjComplete` is what tells the two apart, and
+        // it is the single most important thing in this file:
+        //
+        //   in state.adj only        → *some* of this node's edges are here,
+        //                              because a neighbour's fetch brought them
+        //   in state.adjComplete     → *all* of this node's edges are here
+        //
+        // Without that distinction `edgesOf` cannot tell "this node has no
+        // edges" from "nobody has asked yet", and both answer `[]`. The first
+        // is a fact; the second is a wrong picture drawn with no error.
+        // `state.adjCompleteAll` short-circuits it in local mode, where every
+        // edge is known up front and every id is trivially complete.
         function buildAdjacency() {
             const adj = new Map();
+            state.adjComplete = new Set();
+            state.adjCompleteAll = false;
+            if (state.graphMode === 'server') {
+                state.adj = adj;
+                state.adjPending = new Map();
+                return;
+            }
+            state.adjCompleteAll = true;
             const push = (id, e) => {
                 const list = adj.get(id);
                 if (list) list.push(e);
@@ -54,7 +92,116 @@
         }
 
         function edgesOf(id) {
+            // A cold read in server mode is a bug in the caller — some entry
+            // point forgot to `await ensureEdges` — and the damage is a node
+            // drawn as isolated rather than an error anyone would notice. So
+            // say so, and repair it: fetch the neighbourhood and redraw once it
+            // lands. The answer is late instead of wrong.
+            if (!state.adjCompleteAll && !state.adjComplete.has(id)) {
+                if (!coldMissWarned.has(id)) {
+                    coldMissWarned.add(id);
+                    console.warn(`edgesOf(${id}) before its edges were fetched — repairing`);
+                }
+                ensureEdges([id]).then(() => { rebuildSoloView(); bumpGraphStyles(); });
+            }
+            return knownEdgesOf(id);
+        }
+        const coldMissWarned = new Set();
+
+        // What the cache holds for `id`, with no opinion about completeness.
+        //
+        // The distinction matters for exactly one caller: `setSoloView` walks
+        // every id in the view looking for edges *between* them, and the
+        // induced fetch has already supplied precisely those. The neighbours
+        // are legitimately incomplete there — asking `edgesOf` would report a
+        // cold miss on every one of them and re-enter the rebuild forever.
+        function knownEdgesOf(id) {
             return (state.adj && state.adj.get(id)) || [];
+        }
+
+        // Fetch the edges around `ids` into `state.adj`, skipping whatever is
+        // already known. Resolves immediately in local mode, where every edge
+        // arrived with the graph.
+        //
+        // Two scopes, and the difference is the whole correctness story:
+        //
+        //   'incident' — every edge touching each id. Marks those ids complete.
+        //   'induced'  — only edges with *both* ends in the set. Fills in the
+        //                cross-links between nodes already on the canvas, and
+        //                marks nothing complete, because it deliberately
+        //                withheld the edges that leave the set.
+        //
+        // In-flight requests are shared through `state.adjPending` so a burst of
+        // clicks on the same node makes one request, not one per click.
+        async function ensureEdges(ids, scope = 'incident') {
+            if (state.adjCompleteAll || state.graphMode !== 'server') return;
+            const idx = state.slimIndexOf;
+            if (!idx) return;
+
+            // Deduped and sorted before the key is built: callers routinely
+            // pass overlapping sets (`[...viewSeeds, ...viewExpanded]` names
+            // most ids twice), and without this the same node is requested
+            // twice under two different keys, defeating the in-flight sharing
+            // immediately below.
+            const want = [];
+            const seen = new Set();
+            for (const id of ids) {
+                if (seen.has(id)) continue;
+                seen.add(id);
+                if (scope === 'incident' && state.adjComplete.has(id)) continue;
+                const i = idx.get(id);
+                if (i !== undefined) want.push(i);
+            }
+            if (!want.length) return;
+            want.sort((a, b) => a - b);
+
+            const key = scope + ':' + want.join(',');
+            let pending = state.adjPending.get(key);
+            if (!pending) {
+                pending = fetchEdges(want, scope).finally(() => state.adjPending.delete(key));
+                state.adjPending.set(key, pending);
+            }
+            await pending;
+        }
+
+        async function fetchEdges(indices, scope) {
+            const res = await fetch('/api/graph/edges', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ids: indices, scope }),
+            });
+            if (!res.ok) throw new Error(await readErr(res));
+            const data = await res.json();
+            const nodes = state.graph.nodes;
+            const { src, tgt, rel, relTypes } = data;
+
+            for (let k = 0; k < src.length; k++) {
+                const s = nodes[src[k]];
+                const t = nodes[tgt[k]];
+                if (!s || !t) continue;
+                // One object per edge, pushed into both endpoints' lists —
+                // `setSoloView` dedupes by object identity (`seen.has(e)`), so
+                // two objects for one edge would draw two strands.
+                const edge = { source: s.id, target: t.id, rel: relTypes[rel[k]] || null };
+                pushEdge(s.id, edge);
+                if (t.id !== s.id) pushEdge(t.id, edge);
+            }
+            for (const id of data.complete || []) {
+                const node = nodes[id];
+                if (node) state.adjComplete.add(node.id);
+            }
+        }
+
+        // Append without duplicating: a node's list is filled by several
+        // fetches (its own incident query, plus induced queries from every
+        // neighbourhood it appears in), and the same edge can arrive twice.
+        function pushEdge(id, edge) {
+            let list = state.adj.get(id);
+            if (!list) { state.adj.set(id, [edge]); return; }
+            for (const e of list) {
+                if (e.source === edge.source && e.target === edge.target && e.rel === edge.rel) return;
+            }
+            list.push(edge);
         }
 
         // The end of `e` that isn't `id`. Handles both shapes: edges the
@@ -128,7 +275,12 @@
             const edges = [];
             const seen = new Set();
             ids.forEach(id => {
-                for (const e of edgesOf(id)) {
+                // `knownEdgesOf`, not `edgesOf`: this wants the edges *between*
+                // the view's nodes, which the induced fetch has already
+                // supplied. Most of these ids are neighbours whose full lists
+                // were deliberately not fetched, and demanding completeness
+                // here would report a cold miss on every one of them.
+                for (const e of knownEdgesOf(id)) {
                     if (seen.has(e)) continue;   // every edge is in two adjacency lists
                     seen.add(e);
                     const s = e.source.id || e.source;
@@ -170,8 +322,7 @@
         // Returns true if the mode changed. Safe to call before a renderer is
         // mounted: it leaves `state.view` correct for whoever mounts next.
         function applySoloMode(limit) {
-            const total = Math.max(state.graph.nodes.length, state.graph.edges.length);
-            const want = total > (limit || SOLO_THRESHOLD);
+            const want = soloRequired(limit);
             if (want === state.soloOnly) return false;
             state.soloOnly = want;
             document.body.classList.toggle('solo-only', want);
@@ -187,8 +338,10 @@
                     state.viewExpanded.add(state.selectedNode.id);
                 }
                 setupSoloEmptyState();
-                const { ids, truncated } = soloViewIds(state.viewSeeds, state.viewExpanded);
-                setSoloView(ids, truncated);
+                // Fire and forget, like every other `rebuildSoloView` caller:
+                // this returns a boolean about the *mode*, and the view it
+                // leaves behind is repainted whenever its edges land.
+                rebuildSoloView();
             } else {
                 // Back to the whole graph.
                 state.view = state.graph;
@@ -208,9 +361,37 @@
         }
 
         // Re-derive the view from the current seeds under the current filters.
-        function rebuildSoloView() {
+        //
+        // This is the async boundary for the whole server-mode design, and it
+        // was chosen because it is the *narrow* one: four callers, none of which
+        // uses a return value, against `handleClick`'s eighteen. So it became
+        // async and every caller fires and forgets — `soloViewIds`,
+        // `setSoloView`, `neighborsOf` and `edgesOf` stay synchronous and
+        // unchanged, which is what keeps local mode identical.
+        //
+        // Two fetches, in this order, both bounded:
+        //
+        //   1. the seeds' *incident* edges — needed to know who the neighbours
+        //      even are, bounded by seed degree
+        //   2. the resulting set's *induced* edges — the cross-links between
+        //      neighbours, without which the picture is a star rather than a
+        //      neighbourhood. Bounded by SOLO_MAX_NODES.
+        //
+        // A monotonic token drops stale responses: clicking three nodes quickly
+        // must leave the canvas showing the third, not whichever fetch happened
+        // to finish last.
+        let soloRebuildToken = 0;
+        async function rebuildSoloView() {
             if (!state.soloOnly) return;
+            const token = ++soloRebuildToken;
+
+            await ensureEdges([...state.viewSeeds, ...state.viewExpanded]);
+            if (token !== soloRebuildToken) return;
+
             const { ids, truncated } = soloViewIds(state.viewSeeds, state.viewExpanded);
+            await ensureEdges([...ids], 'induced');
+            if (token !== soloRebuildToken) return;
+
             setSoloView(ids, truncated);
         }
 
@@ -330,12 +511,17 @@
         }
 
         // The most-connected nodes, as somewhere to start when you have no
-        // particular name in mind. Read off the adjacency map rather than
+        // particular name in mind. Read off `state.degreeOf` rather than
         // `metrics.degree_centrality`, which only exists on enriched graphs.
+        //
+        // Not off `state.adj`: in server mode that map is a *cache* of the
+        // neighbourhoods fetched so far, so ranking it would rank whatever
+        // happened to have been clicked — and rank it highest on the very first
+        // screen, where nothing has been clicked at all.
         function topHubs(n) {
-            if (!state.adj) return [];
-            const ranked = [];
-            state.adj.forEach((edges, id) => ranked.push([id, edges.length]));
+            const degree = state.degreeOf;
+            if (!degree || !degree.size) return [];
+            const ranked = [...degree.entries()];
             ranked.sort((a, b) => b[1] - a[1]);
             const out = [];
             for (const [id] of ranked) {

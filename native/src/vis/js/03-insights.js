@@ -447,17 +447,18 @@
             height = container.clientHeight;
 
             const nodeCount = state.graph.nodes.length;
-            const edgeCount = state.graph.edges.length;
-            const totalElements = Math.max(nodeCount, edgeCount);
+            // Not `state.graph.edges.length` — in server mode that array is
+            // empty by design and the real count came down with the index.
+            const edgeCount = state.edgeCount || 0;
             state.nodeById = new Map(state.graph.nodes.map(n => [n.id, n]));
             buildAdjacency();
 
             // Past the threshold the whole graph is never drawn. `state.graph`
-            // still holds all of it — search, filters, stats and path-finding
-            // read it — but the renderer is handed `state.view`, which starts
-            // empty and only ever holds one neighbourhood at a time. Below the
-            // threshold the two are the same object, so nothing changes.
-            state.soloOnly = totalElements > SOLO_THRESHOLD;
+            // still holds every node — search, filters, stats and presence
+            // checks read it — but the renderer is handed `state.view`, which
+            // starts empty and only ever holds one neighbourhood at a time.
+            // Below the threshold, in local mode, the two are the same object.
+            state.soloOnly = soloRequired();
             state.view = state.soloOnly ? { nodes: [], edges: [] } : state.graph;
             document.body.classList.toggle('solo-only', state.soloOnly);
 

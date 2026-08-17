@@ -189,11 +189,12 @@
         }
 
         function buildEdgeFilterChips() {
-            const counts = {};
-            state.graph.edges.forEach(e => {
-                const r = e.rel || 'default';
-                counts[r] = (counts[r] || 0) + 1;
-            });
+            // Counted by whichever loader ran — from the edge list in local
+            // mode, off the index in server mode. Rebuilding them here from
+            // `state.graph.edges` gave an empty chip row in server mode, which
+            // reads as "this graph has no edge types" and, worse, leaves
+            // `state.edgeFilters` empty so the edge filter matches everything.
+            const counts = { ...(state.edgeTypeCounts || {}) };
             const container = document.getElementById('edge-filter');
             container.innerHTML = '';
             Object.entries(counts).sort((a, b) => b[1] - a[1]).forEach(([type, count]) => {
@@ -273,6 +274,20 @@
             const set = neighborIdsOf(d.id);
             set.add(d.id);
             state.focusSet = set;
+            // In server mode the neighbours may not have arrived yet, and this
+            // runs inside the synchronous `handleClick` (18 call sites — not a
+            // function to make async). So focus lands on the node alone and
+            // widens a beat later, the same shape as `enrichFromDb`. The
+            // guard in `edgesOf` has already started the fetch.
+            if (state.graphMode === 'server' && !state.adjComplete.has(d.id)) {
+                ensureEdges([d.id]).then(() => {
+                    if (state.focusNode !== d.id) return;   // moved on since
+                    const widened = neighborIdsOf(d.id);
+                    widened.add(d.id);
+                    state.focusSet = widened;
+                    bumpGraphStyles();
+                });
+            }
             document.body.classList.add('focus-active');
             // Solo, if on, follows the new anchor rather than stranding the
             // view on the previous node's neighbourhood.

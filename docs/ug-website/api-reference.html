@@ -665,6 +665,8 @@ function:native/src/indexer.rs:index_with_cache           <span class="c-num">16
       <tr><td><code>POST</code></td><td><code>/api/config</code></td><td>Update the persisted chat config</td><td>—</td></tr>
       <tr><td><code>GET</code></td><td><code>/api/graph/stats</code></td><td>Node/edge counts, file stats</td><td>No graph</td></tr>
       <tr><td><code>GET</code></td><td><code>/api/graph/nodes</code></td><td><strong>Slim node index</strong> — every node's id/name/type/file/lines in columnar form, no edges. What the page loads instead of <code>graph.json</code> when <code>capabilities.graph.mode</code> is <code>server</code></td><td>No graph</td></tr>
+      <tr><td><code>POST</code></td><td><code>/api/graph/edges</code></td><td><strong>Batch neighbourhood</strong> — <code>{ids, scope:"incident"|"induced"}</code> → columnar edges by node index. Server mode's one graph primitive</td><td>No graph</td></tr>
+      <tr><td><code>POST</code></td><td><code>/api/graph/nodes/hydrate</code></td><td><strong>Batch node detail</strong> — the docstring/signature/metrics/calls fields the slim index omits, for the nodes the panel is showing</td><td>No graph</td></tr>
       <tr><td><code>GET</code></td><td><code>/api/graph/node/*id</code></td><td>Get one node by id</td><td>No graph / not found</td></tr>
       <tr><td><code>GET</code></td><td><code>/api/graph/search</code></td><td>Keyword search over node names</td><td>No graph</td></tr>
       <tr><td><code>GET</code></td><td><code>/api/graph/traverse/*id</code></td><td>K-hop BFS from a node seed</td><td>No graph</td></tr>

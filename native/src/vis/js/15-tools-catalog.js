@@ -8,13 +8,11 @@
         function renderStartHere() {
             const box = document.getElementById('start-here');
             if (!box) return;
-            const degree = new Map();
-            state.graph.edges.forEach(e => {
-                const s = e.source.id || e.source;
-                const t = e.target.id || e.target;
-                degree.set(s, (degree.get(s) || 0) + 1);
-                degree.set(t, (degree.get(t) || 0) + 1);
-            });
+            // `state.degreeOf` is populated by both loaders — counted from the
+            // edge list locally, read off the slim index in server mode, where
+            // there are no local edges to count. This also stops the boot path
+            // walking every edge a second time just to rank five nodes.
+            const degree = state.degreeOf || new Map();
             const top = [...degree.entries()]
                 .sort((a, b) => b[1] - a[1])
                 .slice(0, 5)
@@ -41,10 +39,34 @@
             });
         }
 
-        function showCentrality() {
+        async function showCentrality() {
             const degEl = document.getElementById('degree-centrality');
             const betEl = document.getElementById('betweenness-centrality');
             degEl.innerHTML = ''; betEl.innerHTML = '';
+
+            // In server mode `metrics` only exists on nodes that have been
+            // hydrated, so ranking the local copies would rank whatever has
+            // been clicked. The server computes this over the whole graph and
+            // caches it per snapshot — betweenness is Brandes, so the first
+            // call on a large repo is slow and the wait is announced rather
+            // than left as a blank panel.
+            if (state.graphMode === 'server') {
+                degEl.innerHTML = '<div style="font-size:11px;color:var(--text-dim)">Computing centrality over the whole graph…</div>';
+                try {
+                    const res = await fetch('/api/graph/centrality');
+                    if (!res.ok) throw new Error(await readErr(res));
+                    const data = await res.json();
+                    const toList = (obj) => Object.entries(obj || {})
+                        .map(([id, value]) => ({ node: state.nodeById.get(id), value }))
+                        .filter(e => e.node);
+                    degEl.innerHTML = '';
+                    renderCentrality(degEl, toList(data.degree_centrality), '#f97316');
+                    renderCentrality(betEl, toList(data.betweenness_centrality), '#5b8fc9');
+                } catch (err) {
+                    degEl.innerHTML = `<div style="font-size:11px;color:var(--text-dim)">Centrality unavailable — ${escapeHtml(err.message || String(err))}</div>`;
+                }
+                return;
+            }
 
             const degree = state.graph.nodes
                 .filter(n => n.metrics && n.metrics.degree_centrality !== undefined)
@@ -230,6 +252,12 @@
         // state.graph (containsMaps is reset there too).
         function buildCatalogTree() {
             if (state.catalogTree && state.catalogTreeForGraph === state.graph) {
+                // Auto-expand is re-checked on the cached path too: in server
+                // mode the first build runs before the roots' edges exist, so
+                // the only chance to expand comes on a later call, once they
+                // have landed. Returning early here left the tree collapsed
+                // for the session.
+                maybeAutoExpand(state.catalogTree);
                 return state.catalogTree;
             }
             const { childrenOf, parentOf } = getContainsMaps();
@@ -245,20 +273,29 @@
                 return n && n.group === 'File';
             };
 
+            // In server mode the roots came down with the slim index, computed
+            // by the same Folder/File-parent test as below. Deriving them here
+            // instead would ask every one of 162k nodes for its parents — a
+            // whole-graph question the cache cannot answer, and 162k cold-miss
+            // repairs if it tried.
             const roots = [];
-            const seen = new Set();
-            state.graph.nodes.forEach(n => {
-                if (n.group !== 'Folder' && n.group !== 'File') return;
-                const parents = parentOf.get(n.id) || [];
-                const hasContainerParent = parents.some(p => {
-                    const pn = nodeById.get(p);
-                    return pn && (pn.group === 'Folder' || pn.group === 'File');
+            if (state.catalogRootIds) {
+                roots.push(...state.catalogRootIds);
+            } else {
+                const seen = new Set();
+                state.graph.nodes.forEach(n => {
+                    if (n.group !== 'Folder' && n.group !== 'File') return;
+                    const parents = parentOf.get(n.id) || [];
+                    const hasContainerParent = parents.some(p => {
+                        const pn = nodeById.get(p);
+                        return pn && (pn.group === 'Folder' || pn.group === 'File');
+                    });
+                    if (!hasContainerParent && !seen.has(n.id)) {
+                        seen.add(n.id);
+                        roots.push(n.id);
+                    }
                 });
-                if (!hasContainerParent && !seen.has(n.id)) {
-                    seen.add(n.id);
-                    roots.push(n.id);
-                }
-            });
+            }
 
             const sortIds = ids => {
                 return ids.slice().sort((a, b) => {
@@ -280,7 +317,21 @@
             };
 
             // Build adjacency restricted to whatever the catalog should show.
+            //
+            // A node whose edges have not arrived answers "no children" for
+            // now and *records itself*; `renderCatalog` fetches the whole
+            // pass's worth in one request and renders again. Fetching per node
+            // here instead — the obvious version — issues one request and one
+            // full re-render per cold node, which on a tree with a couple of
+            // hundred auto-expanded folders never settles.
+            //
+            // Batching this way converges in one round per level of depth
+            // rather than one per node.
             const buildKids = (id) => {
+                if (!edgesKnownComplete(id)) {
+                    catalogColdIds.add(id);
+                    return [];
+                }
                 const kids = childrenOf.get(id) || [];
                 return sortIds(kids.filter(k => nodeById.has(k)));
             };
@@ -290,17 +341,35 @@
             state.catalogExpanded = state.catalogExpanded || new Set();
 
             // Auto-expand top two levels on first build for any given graph.
-            if (!state.catalogAutoExpanded) {
-                state.catalogAutoExpanded = true;
-                state.catalogExpanded.clear();
-                state.catalogTree.roots.forEach(r => {
-                    state.catalogExpanded.add(r);
-                    state.catalogTree.buildKids(r).forEach(k => {
-                        if (state.catalogTree.isFolder(k)) state.catalogExpanded.add(k);
-                    });
-                });
-            }
+            // Held back until the roots' edges are in: running it against a
+            // cold cache would expand nothing and then latch
+            // `catalogAutoExpanded`, so the tree would open collapsed and stay
+            // that way for the session.
+            maybeAutoExpand(state.catalogTree);
             return state.catalogTree;
+        }
+
+        // Open the top two levels, once per graph — but only once the roots'
+        // edges are actually available. Running it against a cold cache would
+        // expand nothing and still latch `catalogAutoExpanded`, leaving the
+        // tree shut for the session.
+        function maybeAutoExpand(tree) {
+            if (state.catalogAutoExpanded) return;
+            state.catalogExpanded = state.catalogExpanded || new Set();
+            if (!tree.roots.every(edgesKnownComplete)) {
+                // `buildKids` records cold ids; the flush at the end of
+                // `renderCatalog` fetches them and we get called again.
+                tree.roots.forEach(r => catalogColdIds.add(r));
+                return;
+            }
+            state.catalogAutoExpanded = true;
+            state.catalogExpanded.clear();
+            tree.roots.forEach(r => {
+                state.catalogExpanded.add(r);
+                tree.buildKids(r).forEach(k => {
+                    if (tree.isFolder(k)) state.catalogExpanded.add(k);
+                });
+            });
         }
 
         function setAllCatalogExpanded(expand) {
@@ -311,12 +380,37 @@
                 renderCatalog();
                 return;
             }
-            const stack = tree.roots.slice();
-            while (stack.length) {
-                const id = stack.pop();
-                state.catalogExpanded.add(id);
-                tree.buildKids(id).forEach(k => stack.push(k));
+            expandCatalogFrom(tree, tree.roots.slice());
+        }
+
+        // Expand-all, breadth-first and level-batched.
+        //
+        // Depth-first with `buildKids` per node was fine when every edge was
+        // already local; in server mode it would ask the server for one node at
+        // a time, thousands of times, and expand nothing while it waited. A
+        // level is one request. `CATALOG_EXPAND_MAX` stops "expand all" on a
+        // 162k-node repo from being a request to render 162k rows — the count
+        // is reported rather than silently truncated.
+        const CATALOG_EXPAND_MAX = 5000;
+        async function expandCatalogFrom(tree, level) {
+            let expanded = 0;
+            let truncated = 0;
+            while (level.length) {
+                await ensureEdges(level);
+                const next = [];
+                for (const id of level) {
+                    if (expanded >= CATALOG_EXPAND_MAX) { truncated++; continue; }
+                    state.catalogExpanded.add(id);
+                    expanded++;
+                    for (const k of tree.buildKids(id)) next.push(k);
+                }
+                if (expanded >= CATALOG_EXPAND_MAX) { truncated += next.length; break; }
+                level = next;
             }
+            // Reported through `renderCatalog`, which owns the subtitle —
+            // writing it here would be overwritten by the render on the very
+            // next line.
+            state.catalogExpandTruncated = truncated;
             renderCatalog();
         }
 
@@ -332,7 +426,12 @@
             const repoLabel = (state.stats && state.stats.repoRoot)
                 ? state.stats.repoRoot.split('/').filter(Boolean).pop() || state.stats.repoRoot
                 : '';
-            subtitle.textContent = repoLabel ? `· ${repoLabel}` : '';
+            const capped = state.catalogExpandTruncated
+                ? ` · expand stopped at ${formatNumber(CATALOG_EXPAND_MAX)}, `
+                  + `${formatNumber(state.catalogExpandTruncated)} more below`
+                : '';
+            subtitle.textContent = (repoLabel ? `· ${repoLabel}` : '') + capped;
+            subtitle.hidden = !subtitle.textContent;
 
             const counters = { folders: 0, files: 0, symbols: 0, shown: 0 };
 
@@ -452,6 +551,38 @@
                 chips.push(`<span class="catalog-metric"><b>${counters.symbols}</b><span>Symbol${counters.symbols === 1 ? '' : 's'}</span></span>`);
             }
             stats.innerHTML = chips.join('');
+            flushCatalogWarm();
+        }
+
+        // Nodes this render pass wanted children for but whose edges had not
+        // arrived. Fetched as one batch, then one more render — see `buildKids`.
+        const catalogColdIds = new Set();
+        let catalogWarming = false;
+
+        // One round per level of depth, driven here rather than by letting each
+        // render schedule the next. Relying on the re-render to chain was
+        // non-deterministic: whether the next level got recorded depended on
+        // the order `maybeAutoExpand` and the flush happened to run in, and it
+        // would sometimes stop one level down.
+        //
+        // `catalogWarming` also stops the `renderCatalog` at the end of each
+        // round from re-entering this.
+        const CATALOG_WARM_ROUNDS = 12;
+        async function flushCatalogWarm() {
+            if (catalogWarming || !catalogColdIds.size) return;
+            catalogWarming = true;
+            try {
+                for (let round = 0; round < CATALOG_WARM_ROUNDS && catalogColdIds.size; round++) {
+                    const ids = [...catalogColdIds];
+                    catalogColdIds.clear();
+                    await ensureEdges(ids);
+                    renderCatalog();
+                }
+            } catch (err) {
+                console.error('catalog warm failed:', err);
+            } finally {
+                catalogWarming = false;
+            }
         }
 
         function wireCatalogRows(body) {
@@ -519,6 +650,24 @@
             const lines = [];
             const repo = state.stats && state.stats.repoRoot ? state.stats.repoRoot : 'Repository';
             lines.push(`# Catalog — ${repo}`, '');
+
+            // The recursion below reads the Contains tree synchronously, so in
+            // server mode the whole tree has to be resident first. Warm it
+            // breadth-first, one request per level, capped the same way
+            // expand-all is — a markdown dump of 162k lines is not a thing
+            // anyone pastes anywhere.
+            if (state.graphMode === 'server') {
+                let level = tree.roots.slice();
+                let warmed = 0;
+                while (level.length && warmed < CATALOG_EXPAND_MAX) {
+                    await ensureEdges(level);
+                    warmed += level.length;
+                    const next = [];
+                    for (const id of level) for (const k of tree.buildKids(id)) next.push(k);
+                    level = next;
+                }
+                if (level.length) lines.push(`_Truncated at ${formatNumber(CATALOG_EXPAND_MAX)} entries._`, '');
+            }
 
             const walk = (id, depth) => {
                 const n = tree.nodeById.get(id);

@@ -637,12 +637,11 @@
 
         function renderWalkEdgeTypes() {
             const box = document.getElementById('walk-edge-types');
-            if (!box || !state.graph.edges.length) return;
-            const counts = new Map();
-            state.graph.edges.forEach(e => {
-                const r = e.rel || 'other';
-                counts.set(r, (counts.get(r) || 0) + 1);
-            });
+            // Off `state.edgeTypeCounts`, which both loaders populate — counted
+            // from the edge list locally, read off the index in server mode
+            // where there is no local edge list to count.
+            const counts = new Map(Object.entries(state.edgeTypeCounts || {}));
+            if (!box || !counts.size) return;
             const types = [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([t]) => t);
             box.innerHTML = '';
             const all = document.createElement('button');

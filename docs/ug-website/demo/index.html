@@ -8618,7 +8618,7 @@
 }
     </style>
 <script>
-window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3162,"edges":9271,"files":104,"lines":72348,"ugVersion":"0.1.15","visFingerprint":"c8b7730b186d8685","generatedAt":1786878322};
+window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3162,"edges":9271,"files":104,"lines":72348,"ugVersion":"0.1.15","visFingerprint":"cffa3dfe7619cd9c","generatedAt":1786975182};
 /* ==========================================================================
    UltraGraph — static demo shim
    ==========================================================================
@@ -10929,6 +10929,36 @@ traverse({
             };
 
             try {
+                // Which of the two graphs this page is getting. The server
+                // decides from `graph.json`'s size and says so in
+                // `capabilities.graph.mode`; `?gm=` overrides for testing. No
+                // `graph` block — a static host, an older server, no server at
+                // all — means local, which is what every release before this
+                // did unconditionally.
+                //
+                // The branch lives here rather than at `loadGraph`'s six call
+                // sites, and `?file=` still wins outright: an explicitly named
+                // graph file is a request for that file.
+                const gmOverride = params.get('gm');
+                let mode = 'local';
+                if (!params.get('file')) {
+                    const caps = await getCapabilities();
+                    mode = (caps && caps.graph && caps.graph.mode) || 'local';
+                }
+                if (gmOverride === 'local' || gmOverride === 'server') mode = gmOverride;
+
+                if (mode === 'server') {
+                    setPhase('Loading node index…', 0);
+                    const res = await fetch('/api/graph/nodes');
+                    if (!res.ok) throw new Error(`Server answered ${res.status} ${res.statusText}`);
+                    setPhase('Building graph…', 100);
+                    transformSlim(await res.json());
+                    initialize();
+                    graphInitialized = true;
+                    applyUrlState(readUrlState());
+                    return;
+                }
+
                 const response = await fetch(file, { headers: { 'Accept-Encoding': 'identity' } });
                 if (!response.ok) throw new Error(`Server answered ${response.status} ${response.statusText}`);
 
@@ -11725,7 +11755,6 @@ traverse({
             }
 
             state.graph = { nodes: Array.from(nodeMap.values()), edges };
-            state.containsMaps = null;
             state.stats = data.stats || null;
             // The repo-root folder node (shallowest depth) carries the
             // per-language file counts the indexer computed — the same fact
@@ -11740,6 +11769,105 @@ traverse({
                     state.languages = f.languageBreakdown;
                 }
             });
+            state.catalogTree = null;
+            state.catalogExpanded = null;
+            state.catalogAutoExpanded = false;
+            state.graphMode = 'local';
+            state.edgeCount = edges.length;
+            // Degree, for the "start here" strip and the solo empty state's top
+            // hubs. Both used to compute this themselves — one by scanning every
+            // edge, one by ranking the whole adjacency map — for a top-5 list.
+            state.degreeOf = new Map();
+            for (const e of edges) {
+                state.degreeOf.set(e.source, (state.degreeOf.get(e.source) || 0) + 1);
+                if (e.target !== e.source) {
+                    state.degreeOf.set(e.target, (state.degreeOf.get(e.target) || 0) + 1);
+                }
+            }
+            state.edgeTypeCounts = {};
+            for (const e of edges) {
+                const r = e.rel || 'other';
+                state.edgeTypeCounts[r] = (state.edgeTypeCounts[r] || 0) + 1;
+            }
+            state.catalogRootIds = null;   // local mode derives these from Contains
+        }
+
+        // The server-mode counterpart of `transformData`: the same `state.graph`
+        // shape, built from `/api/graph/nodes` instead of from `graph.json`.
+        //
+        // The payload is columnar and dictionary-coded (see `build_slim_index`
+        // in serve.rs), which matters in two ways here. Node type and file
+        // strings are *shared references* into the dictionaries rather than one
+        // string per node — on a 162k-node repo that is the difference between
+        // ~32 MB of duplicate file paths and ~1.8 MB. And every node is built by
+        // assigning the same properties in the same order, so V8 gives the whole
+        // graph one hidden class instead of a shape per field combination.
+        //
+        // `state.graph.edges` is empty and stays empty: edges arrive per
+        // neighbourhood, on demand, into `state.adj`.
+        function transformSlim(payload) {
+            const { ids, names, types, typeIdx, files, fileIdx, startLine, endLine } = payload;
+            const n = payload.n;
+            const boundarySet = new Set(payload.boundary || []);
+            const cx = window.innerWidth / 2 || 800;
+            const cy = window.innerHeight / 2 || 600;
+
+            const nodes = new Array(n);
+            // id → wire index. Position is identity in the server-mode
+            // protocol: every request about a node names its index in these
+            // columns, not its 141-character id.
+            const indexOf = new Map();
+            for (let i = 0; i < n; i++) {
+                const angle = (i / n) * Math.PI * 2;
+                const radius = 100 + Math.random() * 150;
+                const fi = fileIdx[i];
+                // Property order is fixed and matches `transformData`'s node
+                // literal — do not reorder, it is what keeps the hidden class
+                // shared with locally-built nodes.
+                const node = {
+                    id: ids[i],
+                    name: names[i] || ids[i],
+                    group: types[typeIdx[i]] || 'Default',
+                    file: fi >= 0 ? files[fi] : null,
+                    startLine: startLine[i] || null,
+                    endLine: endLine[i] || null,
+                    docstring: null,
+                    metrics: null,
+                    signature: null,
+                    imports: [],
+                    exports: [],
+                    extends: [],
+                    implements: [],
+                    calls: [],
+                    isBoundary: boundarySet.has(i),
+                    boundaries: [],
+                    x: cx + Math.cos(angle) * radius,
+                    y: cy + Math.sin(angle) * radius,
+                    // Everything above `id`/`name`/`group`/`file`/lines/boundary
+                    // is a placeholder until `hydrateNodes` fills it from the
+                    // server. `_slim` says which is which, so a panel can tell
+                    // "no docstring" from "not fetched yet".
+                    _slim: true,
+                };
+                nodes[i] = node;
+                indexOf.set(node.id, i);
+            }
+
+            state.graph = { nodes, edges: [] };
+            state.slimIndexOf = indexOf;
+            state.graphMode = 'server';
+            state.edgeCount = payload.edgeCount || 0;
+            state.stats = payload.stats || null;
+            state.languages = payload.languages || null;
+            state.edgeTypeCounts = payload.edgeTypeCounts || {};
+            state.catalogRootIds = (payload.catalogRoots || []).map(i => ids[i]);
+            // Degree comes off the wire — it is a whole-graph fact and there are
+            // no edges here to recount it from.
+            state.degreeOf = new Map();
+            const deg = payload.deg || [];
+            for (let i = 0; i < n; i++) {
+                if (deg[i]) state.degreeOf.set(ids[i], deg[i]);
+            }
             state.catalogTree = null;
             state.catalogExpanded = null;
             state.catalogAutoExpanded = false;
@@ -11838,34 +11966,70 @@ traverse({
             `).join('');
         }
 
+        // The Contains hierarchy, read off the adjacency index one node at a
+        // time.
+        //
+        // This used to be two whole-graph Maps built by scanning every edge —
+        // 273,100 Contains edges on a large repo, ~30 MB of Maps, for questions
+        // that are always about one node. It was also a *second* index over
+        // information `state.adj` already holds, which is one index too many:
+        // in server mode there is no local edge list to scan, so the maps came
+        // out empty and every hierarchy view silently reported nothing.
+        //
+        // `known` reads only what the cache already has and never reports a
+        // miss — for walking *other* nodes' children (siblings, grandchildren)
+        // where incompleteness is expected and self-healing.
+        function containsChildrenOf(id, known) {
+            const out = [];
+            for (const e of (known ? knownEdgesOf(id) : edgesOf(id))) {
+                if (e.rel !== 'Contains') continue;
+                if ((e.source.id || e.source) === id) out.push(e.target.id || e.target);
+            }
+            return out;
+        }
+
+        function containsParentsOf(id, known) {
+            const out = [];
+            for (const e of (known ? knownEdgesOf(id) : edgesOf(id))) {
+                if (e.rel !== 'Contains') continue;
+                if ((e.target.id || e.target) === id) out.push(e.source.id || e.source);
+            }
+            return out;
+        }
+
+        /// Whether `id`'s edge list is known to be whole.
+        function edgesKnownComplete(id) {
+            return state.adjCompleteAll || (state.adjComplete && state.adjComplete.has(id));
+        }
+
+        // Lazy stand-ins for the two Maps this used to materialise, so callers
+        // that already spoke `childrenOf.get(id)` keep working unchanged.
         function getContainsMaps() {
-            if (state.containsMaps) return state.containsMaps;
-            const childrenOf = new Map();
-            const parentOf = new Map();
-            state.graph.edges.forEach(e => {
-                if (e.rel !== 'Contains') return;
-                const sId = e.source.id || e.source;
-                const tId = e.target.id || e.target;
-                if (!childrenOf.has(sId)) childrenOf.set(sId, []);
-                childrenOf.get(sId).push(tId);
-                if (!parentOf.has(tId)) parentOf.set(tId, []);
-                parentOf.get(tId).push(sId);
-            });
-            state.containsMaps = { childrenOf, parentOf };
-            return state.containsMaps;
+            return {
+                childrenOf: { get: (id) => containsChildrenOf(id, true) },
+                parentOf: { get: (id) => containsParentsOf(id, true) },
+            };
         }
 
         function getContainsCounts(nodeId) {
-            const { childrenOf, parentOf } = getContainsMaps();
-            const directChildren = (childrenOf.get(nodeId) || []).length;
-            const parents = parentOf.get(nodeId) || [];
-            const siblingSet = new Set();
-            parents.forEach(p => {
-                (childrenOf.get(p) || []).forEach(c => {
-                    if (c !== nodeId) siblingSet.add(c);
+            const directChildren = containsChildrenOf(nodeId).length;
+            const parents = containsParentsOf(nodeId);
+            // Siblings are a two-hop question — the parents' *other* children —
+            // so they need the parents' edges as well. Reporting 0 while those
+            // are still in flight would read as "an only child", which is a
+            // different and wrong answer, so report null and let the caller
+            // leave the line out until it is true.
+            let siblings = null;
+            if (parents.every(edgesKnownComplete)) {
+                const set = new Set();
+                parents.forEach(p => {
+                    containsChildrenOf(p, true).forEach(c => { if (c !== nodeId) set.add(c); });
                 });
-            });
-            return { directChildren, siblings: siblingSet.size, parents: parents.length };
+                siblings = set.size;
+            } else {
+                ensureEdges(parents);
+            }
+            return { directChildren, siblings, parents: parents.length };
         }
 
         // ─── Node type icons ────────────────────────────────
@@ -12644,17 +12808,18 @@ traverse({
             height = container.clientHeight;
 
             const nodeCount = state.graph.nodes.length;
-            const edgeCount = state.graph.edges.length;
-            const totalElements = Math.max(nodeCount, edgeCount);
+            // Not `state.graph.edges.length` — in server mode that array is
+            // empty by design and the real count came down with the index.
+            const edgeCount = state.edgeCount || 0;
             state.nodeById = new Map(state.graph.nodes.map(n => [n.id, n]));
             buildAdjacency();
 
             // Past the threshold the whole graph is never drawn. `state.graph`
-            // still holds all of it — search, filters, stats and path-finding
-            // read it — but the renderer is handed `state.view`, which starts
-            // empty and only ever holds one neighbourhood at a time. Below the
-            // threshold the two are the same object, so nothing changes.
-            state.soloOnly = totalElements > SOLO_THRESHOLD;
+            // still holds every node — search, filters, stats and presence
+            // checks read it — but the renderer is handed `state.view`, which
+            // starts empty and only ever holds one neighbourhood at a time.
+            // Below the threshold, in local mode, the two are the same object.
+            state.soloOnly = soloRequired();
             state.view = state.soloOnly ? { nodes: [], edges: [] } : state.graph;
             document.body.classList.toggle('solo-only', state.soloOnly);
 
@@ -12750,6 +12915,27 @@ traverse({
 
         // ─── Capabilities probe ─────────────────────────────
 
+        // `/api/capabilities`, fetched at most once per page load.
+        //
+        // It used to be read only here, from `initialize()`. It is now also
+        // read by `loadGraph`, *before* the graph exists, because its `graph`
+        // block is what decides whether the graph arrives as `graph.json` or as
+        // the slim index. Two fetches would be two chances to disagree with
+        // each other, so both callers share this promise.
+        //
+        // Never rejects: every caller's honest fallback for "no answer" is the
+        // same as its fallback for "no server", and on a static host there
+        // genuinely is no server. `null` says so.
+        let capabilitiesPromise = null;
+        function getCapabilities() {
+            if (!capabilitiesPromise) {
+                capabilitiesPromise = fetch('/api/capabilities')
+                    .then(res => (res.ok ? res.json() : null))
+                    .catch(() => null);
+            }
+            return capabilitiesPromise;
+        }
+
         async function probeCapabilities() {
             const chatSection = document.getElementById('section-chat');
             const tourSection = document.getElementById('section-tour');
@@ -12775,9 +12961,8 @@ traverse({
             };
 
             try {
-                const res = await fetch('/api/capabilities');
-                if (!res.ok) throw new Error('HTTP ' + res.status);
-                const caps = await res.json();
+                const caps = await getCapabilities();
+                if (!caps) throw new Error('capabilities unavailable');
                 state.capabilities = caps;
 
                 if (caps.search_ready) {
@@ -16167,11 +16352,12 @@ traverse({
         }
 
         function buildEdgeFilterChips() {
-            const counts = {};
-            state.graph.edges.forEach(e => {
-                const r = e.rel || 'default';
-                counts[r] = (counts[r] || 0) + 1;
-            });
+            // Counted by whichever loader ran — from the edge list in local
+            // mode, off the index in server mode. Rebuilding them here from
+            // `state.graph.edges` gave an empty chip row in server mode, which
+            // reads as "this graph has no edge types" and, worse, leaves
+            // `state.edgeFilters` empty so the edge filter matches everything.
+            const counts = { ...(state.edgeTypeCounts || {}) };
             const container = document.getElementById('edge-filter');
             container.innerHTML = '';
             Object.entries(counts).sort((a, b) => b[1] - a[1]).forEach(([type, count]) => {
@@ -16251,6 +16437,20 @@ traverse({
             const set = neighborIdsOf(d.id);
             set.add(d.id);
             state.focusSet = set;
+            // In server mode the neighbours may not have arrived yet, and this
+            // runs inside the synchronous `handleClick` (18 call sites — not a
+            // function to make async). So focus lands on the node alone and
+            // widens a beat later, the same shape as `enrichFromDb`. The
+            // guard in `edgesOf` has already started the fetch.
+            if (state.graphMode === 'server' && !state.adjComplete.has(d.id)) {
+                ensureEdges([d.id]).then(() => {
+                    if (state.focusNode !== d.id) return;   // moved on since
+                    const widened = neighborIdsOf(d.id);
+                    widened.add(d.id);
+                    state.focusSet = widened;
+                    bumpGraphStyles();
+                });
+            }
             document.body.classList.add('focus-active');
             // Solo, if on, follows the new anchor rather than stranding the
             // view on the previous node's neighbourhood.
@@ -17268,7 +17468,10 @@ traverse({
         // the full `state.graph`, not the (possibly empty solo) view.
         function autoRendererName() {
             const nodes = state.graph && state.graph.nodes ? state.graph.nodes.length : 0;
-            const edges = state.graph && state.graph.edges ? state.graph.edges.length : 0;
+            // `state.edgeCount`, not `state.graph.edges.length`: in server mode
+            // the local edge array is empty and reading it would pick three.js
+            // for a graph far past what three.js can hold.
+            const edges = state.edgeCount || 0;
             return Math.max(nodes, edges) <= THREE_D_MAX_ELEMENTS ? 'three' : 'cosmos';
         }
 
@@ -21686,6 +21889,13 @@ traverse({
                     </div>
                     <div class="related-list" id="related-list"></div>
                     <div class="hier-empty" id="related-empty" style="display:none">No related nodes match the filters.</div>`;
+            } else if (state.graphMode === 'server' && !state.adjComplete.has(d.id)) {
+                // "Isolated" is a claim about the graph. Until this node's
+                // edges have actually arrived it is a claim about the cache,
+                // and the two look identical from here — so say the true one.
+                // `edgesOf` above has already kicked off the fetch; the
+                // follow-up below re-renders when it lands.
+                html += `<div class="hier-empty" id="related-pending">Loading related nodes…</div>`;
             } else {
                 html += `<div class="hier-empty">No edges touch this node — it is isolated in the graph.</div>`;
             }
@@ -21836,9 +22046,87 @@ traverse({
             if (!state.suppressHistory) pushUrlState();
 
             enrichFromDb(d.id);
+            // Server mode: the Related tab was rendered from whatever edges
+            // were cached at click time. Re-render it once this node's own are
+            // in — the same async-follow-up shape as `enrichFromDb`, and the
+            // reason `handleClick` itself does not need to be async.
+            if (state.graphMode === 'server' && !state.adjComplete.has(d.id)) {
+                ensureEdges([d.id]).then(() => {
+                    if (state.selectedNode && state.selectedNode.id === d.id) handleClick(null, d);
+                });
+            }
+        }
+
+        // Fill in the fields the slim index leaves out — docstring, signature,
+        // metrics, imports/exports/calls/extends/implements, boundary detail —
+        // on the node objects themselves.
+        //
+        // Mutating in place rather than replacing the objects is what makes
+        // this cheap: the renderer, `state.nodeById` and every view already
+        // hold these exact objects, so a hydrated node is hydrated everywhere
+        // at once and stays that way. `_slim` flips to false, which is how a
+        // panel tells "this node has no docstring" from "not fetched yet".
+        //
+        // A no-op in local mode, where `graph.json` brought all of it.
+        //
+        // Returns whether anything actually changed. Callers re-render on the
+        // strength of that and nothing else: re-rendering unconditionally
+        // means the re-render calls `enrichFromDb` again, which calls this
+        // again, which changes nothing and re-renders again — an unbreakable
+        // loop that on a hub with 8,680 related rows locks the tab solid.
+        async function hydrateNodes(ids) {
+            if (state.graphMode !== 'server' || !state.slimIndexOf) return false;
+            const want = [];
+            const seen = new Set();
+            for (const id of ids) {
+                if (seen.has(id)) continue;
+                seen.add(id);
+                const node = state.nodeById && state.nodeById.get(id);
+                if (!node || node._slim === false) continue;
+                const i = state.slimIndexOf.get(id);
+                if (i !== undefined) want.push(i);
+            }
+            if (!want.length) return false;
+
+            const res = await fetch('/api/graph/nodes/hydrate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ids: want }),
+            });
+            if (!res.ok) throw new Error(await readErr(res));
+            const data = await res.json();
+            for (const full of data.nodes || []) {
+                const node = state.nodeById.get(full.id);
+                if (!node) continue;
+                node.docstring = full.docstring || null;
+                node.metrics = full.metrics || null;
+                node.signature = full.signature || null;
+                node.imports = full.imports || [];
+                node.exports = full.exports || [];
+                node.extends = full.extends || [];
+                node.implements = full.implements || [];
+                node.calls = full.calls || [];
+                node.boundaries = full.boundaries || [];
+                node.isBoundary = !!(full.boundaries && full.boundaries.length);
+                node._slim = false;
+            }
+            return true;
         }
 
         async function enrichFromDb(id) {
+            // Hydration first, and unconditionally: it comes from the graph
+            // snapshot, not the knowledge store, so it must not be gated on
+            // `db_ready` the way the chunk/preview enrichment below is.
+            if (state.graphMode === 'server') {
+                try {
+                    const changed = await hydrateNodes([id]);
+                    if (changed && state.selectedNode && state.selectedNode.id === id) {
+                        handleClick(null, state.selectedNode);
+                    }
+                } catch (err) {
+                    console.error('hydrate failed:', err);
+                }
+            }
             if (!state.capabilities || !state.capabilities.db_ready) return;
             const requestedId = id;
             try {
@@ -22589,13 +22877,11 @@ traverse({
         function renderStartHere() {
             const box = document.getElementById('start-here');
             if (!box) return;
-            const degree = new Map();
-            state.graph.edges.forEach(e => {
-                const s = e.source.id || e.source;
-                const t = e.target.id || e.target;
-                degree.set(s, (degree.get(s) || 0) + 1);
-                degree.set(t, (degree.get(t) || 0) + 1);
-            });
+            // `state.degreeOf` is populated by both loaders — counted from the
+            // edge list locally, read off the slim index in server mode, where
+            // there are no local edges to count. This also stops the boot path
+            // walking every edge a second time just to rank five nodes.
+            const degree = state.degreeOf || new Map();
             const top = [...degree.entries()]
                 .sort((a, b) => b[1] - a[1])
                 .slice(0, 5)
@@ -22622,10 +22908,34 @@ traverse({
             });
         }
 
-        function showCentrality() {
+        async function showCentrality() {
             const degEl = document.getElementById('degree-centrality');
             const betEl = document.getElementById('betweenness-centrality');
             degEl.innerHTML = ''; betEl.innerHTML = '';
+
+            // In server mode `metrics` only exists on nodes that have been
+            // hydrated, so ranking the local copies would rank whatever has
+            // been clicked. The server computes this over the whole graph and
+            // caches it per snapshot — betweenness is Brandes, so the first
+            // call on a large repo is slow and the wait is announced rather
+            // than left as a blank panel.
+            if (state.graphMode === 'server') {
+                degEl.innerHTML = '<div style="font-size:11px;color:var(--text-dim)">Computing centrality over the whole graph…</div>';
+                try {
+                    const res = await fetch('/api/graph/centrality');
+                    if (!res.ok) throw new Error(await readErr(res));
+                    const data = await res.json();
+                    const toList = (obj) => Object.entries(obj || {})
+                        .map(([id, value]) => ({ node: state.nodeById.get(id), value }))
+                        .filter(e => e.node);
+                    degEl.innerHTML = '';
+                    renderCentrality(degEl, toList(data.degree_centrality), '#f97316');
+                    renderCentrality(betEl, toList(data.betweenness_centrality), '#5b8fc9');
+                } catch (err) {
+                    degEl.innerHTML = `<div style="font-size:11px;color:var(--text-dim)">Centrality unavailable — ${escapeHtml(err.message || String(err))}</div>`;
+                }
+                return;
+            }
 
             const degree = state.graph.nodes
                 .filter(n => n.metrics && n.metrics.degree_centrality !== undefined)
@@ -22811,6 +23121,12 @@ traverse({
         // state.graph (containsMaps is reset there too).
         function buildCatalogTree() {
             if (state.catalogTree && state.catalogTreeForGraph === state.graph) {
+                // Auto-expand is re-checked on the cached path too: in server
+                // mode the first build runs before the roots' edges exist, so
+                // the only chance to expand comes on a later call, once they
+                // have landed. Returning early here left the tree collapsed
+                // for the session.
+                maybeAutoExpand(state.catalogTree);
                 return state.catalogTree;
             }
             const { childrenOf, parentOf } = getContainsMaps();
@@ -22826,20 +23142,29 @@ traverse({
                 return n && n.group === 'File';
             };
 
+            // In server mode the roots came down with the slim index, computed
+            // by the same Folder/File-parent test as below. Deriving them here
+            // instead would ask every one of 162k nodes for its parents — a
+            // whole-graph question the cache cannot answer, and 162k cold-miss
+            // repairs if it tried.
             const roots = [];
-            const seen = new Set();
-            state.graph.nodes.forEach(n => {
-                if (n.group !== 'Folder' && n.group !== 'File') return;
-                const parents = parentOf.get(n.id) || [];
-                const hasContainerParent = parents.some(p => {
-                    const pn = nodeById.get(p);
-                    return pn && (pn.group === 'Folder' || pn.group === 'File');
+            if (state.catalogRootIds) {
+                roots.push(...state.catalogRootIds);
+            } else {
+                const seen = new Set();
+                state.graph.nodes.forEach(n => {
+                    if (n.group !== 'Folder' && n.group !== 'File') return;
+                    const parents = parentOf.get(n.id) || [];
+                    const hasContainerParent = parents.some(p => {
+                        const pn = nodeById.get(p);
+                        return pn && (pn.group === 'Folder' || pn.group === 'File');
+                    });
+                    if (!hasContainerParent && !seen.has(n.id)) {
+                        seen.add(n.id);
+                        roots.push(n.id);
+                    }
                 });
-                if (!hasContainerParent && !seen.has(n.id)) {
-                    seen.add(n.id);
-                    roots.push(n.id);
-                }
-            });
+            }
 
             const sortIds = ids => {
                 return ids.slice().sort((a, b) => {
@@ -22861,7 +23186,21 @@ traverse({
             };
 
             // Build adjacency restricted to whatever the catalog should show.
+            //
+            // A node whose edges have not arrived answers "no children" for
+            // now and *records itself*; `renderCatalog` fetches the whole
+            // pass's worth in one request and renders again. Fetching per node
+            // here instead — the obvious version — issues one request and one
+            // full re-render per cold node, which on a tree with a couple of
+            // hundred auto-expanded folders never settles.
+            //
+            // Batching this way converges in one round per level of depth
+            // rather than one per node.
             const buildKids = (id) => {
+                if (!edgesKnownComplete(id)) {
+                    catalogColdIds.add(id);
+                    return [];
+                }
                 const kids = childrenOf.get(id) || [];
                 return sortIds(kids.filter(k => nodeById.has(k)));
             };
@@ -22871,17 +23210,35 @@ traverse({
             state.catalogExpanded = state.catalogExpanded || new Set();
 
             // Auto-expand top two levels on first build for any given graph.
-            if (!state.catalogAutoExpanded) {
-                state.catalogAutoExpanded = true;
-                state.catalogExpanded.clear();
-                state.catalogTree.roots.forEach(r => {
-                    state.catalogExpanded.add(r);
-                    state.catalogTree.buildKids(r).forEach(k => {
-                        if (state.catalogTree.isFolder(k)) state.catalogExpanded.add(k);
-                    });
-                });
-            }
+            // Held back until the roots' edges are in: running it against a
+            // cold cache would expand nothing and then latch
+            // `catalogAutoExpanded`, so the tree would open collapsed and stay
+            // that way for the session.
+            maybeAutoExpand(state.catalogTree);
             return state.catalogTree;
+        }
+
+        // Open the top two levels, once per graph — but only once the roots'
+        // edges are actually available. Running it against a cold cache would
+        // expand nothing and still latch `catalogAutoExpanded`, leaving the
+        // tree shut for the session.
+        function maybeAutoExpand(tree) {
+            if (state.catalogAutoExpanded) return;
+            state.catalogExpanded = state.catalogExpanded || new Set();
+            if (!tree.roots.every(edgesKnownComplete)) {
+                // `buildKids` records cold ids; the flush at the end of
+                // `renderCatalog` fetches them and we get called again.
+                tree.roots.forEach(r => catalogColdIds.add(r));
+                return;
+            }
+            state.catalogAutoExpanded = true;
+            state.catalogExpanded.clear();
+            tree.roots.forEach(r => {
+                state.catalogExpanded.add(r);
+                tree.buildKids(r).forEach(k => {
+                    if (tree.isFolder(k)) state.catalogExpanded.add(k);
+                });
+            });
         }
 
         function setAllCatalogExpanded(expand) {
@@ -22892,12 +23249,37 @@ traverse({
                 renderCatalog();
                 return;
             }
-            const stack = tree.roots.slice();
-            while (stack.length) {
-                const id = stack.pop();
-                state.catalogExpanded.add(id);
-                tree.buildKids(id).forEach(k => stack.push(k));
+            expandCatalogFrom(tree, tree.roots.slice());
+        }
+
+        // Expand-all, breadth-first and level-batched.
+        //
+        // Depth-first with `buildKids` per node was fine when every edge was
+        // already local; in server mode it would ask the server for one node at
+        // a time, thousands of times, and expand nothing while it waited. A
+        // level is one request. `CATALOG_EXPAND_MAX` stops "expand all" on a
+        // 162k-node repo from being a request to render 162k rows — the count
+        // is reported rather than silently truncated.
+        const CATALOG_EXPAND_MAX = 5000;
+        async function expandCatalogFrom(tree, level) {
+            let expanded = 0;
+            let truncated = 0;
+            while (level.length) {
+                await ensureEdges(level);
+                const next = [];
+                for (const id of level) {
+                    if (expanded >= CATALOG_EXPAND_MAX) { truncated++; continue; }
+                    state.catalogExpanded.add(id);
+                    expanded++;
+                    for (const k of tree.buildKids(id)) next.push(k);
+                }
+                if (expanded >= CATALOG_EXPAND_MAX) { truncated += next.length; break; }
+                level = next;
             }
+            // Reported through `renderCatalog`, which owns the subtitle —
+            // writing it here would be overwritten by the render on the very
+            // next line.
+            state.catalogExpandTruncated = truncated;
             renderCatalog();
         }
 
@@ -22913,7 +23295,12 @@ traverse({
             const repoLabel = (state.stats && state.stats.repoRoot)
                 ? state.stats.repoRoot.split('/').filter(Boolean).pop() || state.stats.repoRoot
                 : '';
-            subtitle.textContent = repoLabel ? `· ${repoLabel}` : '';
+            const capped = state.catalogExpandTruncated
+                ? ` · expand stopped at ${formatNumber(CATALOG_EXPAND_MAX)}, `
+                  + `${formatNumber(state.catalogExpandTruncated)} more below`
+                : '';
+            subtitle.textContent = (repoLabel ? `· ${repoLabel}` : '') + capped;
+            subtitle.hidden = !subtitle.textContent;
 
             const counters = { folders: 0, files: 0, symbols: 0, shown: 0 };
 
@@ -23033,6 +23420,38 @@ traverse({
                 chips.push(`<span class="catalog-metric"><b>${counters.symbols}</b><span>Symbol${counters.symbols === 1 ? '' : 's'}</span></span>`);
             }
             stats.innerHTML = chips.join('');
+            flushCatalogWarm();
+        }
+
+        // Nodes this render pass wanted children for but whose edges had not
+        // arrived. Fetched as one batch, then one more render — see `buildKids`.
+        const catalogColdIds = new Set();
+        let catalogWarming = false;
+
+        // One round per level of depth, driven here rather than by letting each
+        // render schedule the next. Relying on the re-render to chain was
+        // non-deterministic: whether the next level got recorded depended on
+        // the order `maybeAutoExpand` and the flush happened to run in, and it
+        // would sometimes stop one level down.
+        //
+        // `catalogWarming` also stops the `renderCatalog` at the end of each
+        // round from re-entering this.
+        const CATALOG_WARM_ROUNDS = 12;
+        async function flushCatalogWarm() {
+            if (catalogWarming || !catalogColdIds.size) return;
+            catalogWarming = true;
+            try {
+                for (let round = 0; round < CATALOG_WARM_ROUNDS && catalogColdIds.size; round++) {
+                    const ids = [...catalogColdIds];
+                    catalogColdIds.clear();
+                    await ensureEdges(ids);
+                    renderCatalog();
+                }
+            } catch (err) {
+                console.error('catalog warm failed:', err);
+            } finally {
+                catalogWarming = false;
+            }
         }
 
         function wireCatalogRows(body) {
@@ -23100,6 +23519,24 @@ traverse({
             const lines = [];
             const repo = state.stats && state.stats.repoRoot ? state.stats.repoRoot : 'Repository';
             lines.push(`# Catalog — ${repo}`, '');
+
+            // The recursion below reads the Contains tree synchronously, so in
+            // server mode the whole tree has to be resident first. Warm it
+            // breadth-first, one request per level, capped the same way
+            // expand-all is — a markdown dump of 162k lines is not a thing
+            // anyone pastes anywhere.
+            if (state.graphMode === 'server') {
+                let level = tree.roots.slice();
+                let warmed = 0;
+                while (level.length && warmed < CATALOG_EXPAND_MAX) {
+                    await ensureEdges(level);
+                    warmed += level.length;
+                    const next = [];
+                    for (const id of level) for (const k of tree.buildKids(id)) next.push(k);
+                    level = next;
+                }
+                if (level.length) lines.push(`_Truncated at ${formatNumber(CATALOG_EXPAND_MAX)} entries._`, '');
+            }
 
             const walk = (id, depth) => {
                 const n = tree.nodeById.get(id);
@@ -23204,11 +23641,49 @@ traverse({
         const SOLO_MAX_NODES = 1500;      // hard render budget for one view
         const SOLO_MAX_NEIGHBORS = 300;   // per-seed 1-hop cap, so a hub can't blow the budget
 
+        // Whether the renderer must be handed neighbourhoods rather than the
+        // whole graph. The two places that decide this — `initialize()` and
+        // `applySoloMode()` — must agree, and both got it wrong for server mode
+        // when they compared node and edge counts directly: there are no edges
+        // locally in that mode, so `max(161725, 0)` reads as *under* the
+        // threshold and the "draw everything" branch hands the renderer 162k
+        // nodes with nothing connecting them.
+        //
+        // In server mode solo is not a threshold decision at all. It is the only
+        // correct view, because the edges to draw anything else are on the
+        // server.
+        function soloRequired(limit) {
+            if (state.graphMode === 'server') return true;
+            return Math.max(state.graph.nodes.length, state.edgeCount) > (limit || SOLO_THRESHOLD);
+        }
+
         // Adjacency over the *full* graph, built once. Before this, every
         // selection scanned all edges (neighborIdsOf) — the second-worst hot
         // path on a large repo after the restyle loop.
+        // In server mode this starts empty and fills on demand — `state.adj`
+        // becomes a cache of the neighbourhoods fetched so far rather than a
+        // complete index. `state.adjComplete` is what tells the two apart, and
+        // it is the single most important thing in this file:
+        //
+        //   in state.adj only        → *some* of this node's edges are here,
+        //                              because a neighbour's fetch brought them
+        //   in state.adjComplete     → *all* of this node's edges are here
+        //
+        // Without that distinction `edgesOf` cannot tell "this node has no
+        // edges" from "nobody has asked yet", and both answer `[]`. The first
+        // is a fact; the second is a wrong picture drawn with no error.
+        // `state.adjCompleteAll` short-circuits it in local mode, where every
+        // edge is known up front and every id is trivially complete.
         function buildAdjacency() {
             const adj = new Map();
+            state.adjComplete = new Set();
+            state.adjCompleteAll = false;
+            if (state.graphMode === 'server') {
+                state.adj = adj;
+                state.adjPending = new Map();
+                return;
+            }
+            state.adjCompleteAll = true;
             const push = (id, e) => {
                 const list = adj.get(id);
                 if (list) list.push(e);
@@ -23224,7 +23699,116 @@ traverse({
         }
 
         function edgesOf(id) {
+            // A cold read in server mode is a bug in the caller — some entry
+            // point forgot to `await ensureEdges` — and the damage is a node
+            // drawn as isolated rather than an error anyone would notice. So
+            // say so, and repair it: fetch the neighbourhood and redraw once it
+            // lands. The answer is late instead of wrong.
+            if (!state.adjCompleteAll && !state.adjComplete.has(id)) {
+                if (!coldMissWarned.has(id)) {
+                    coldMissWarned.add(id);
+                    console.warn(`edgesOf(${id}) before its edges were fetched — repairing`);
+                }
+                ensureEdges([id]).then(() => { rebuildSoloView(); bumpGraphStyles(); });
+            }
+            return knownEdgesOf(id);
+        }
+        const coldMissWarned = new Set();
+
+        // What the cache holds for `id`, with no opinion about completeness.
+        //
+        // The distinction matters for exactly one caller: `setSoloView` walks
+        // every id in the view looking for edges *between* them, and the
+        // induced fetch has already supplied precisely those. The neighbours
+        // are legitimately incomplete there — asking `edgesOf` would report a
+        // cold miss on every one of them and re-enter the rebuild forever.
+        function knownEdgesOf(id) {
             return (state.adj && state.adj.get(id)) || [];
+        }
+
+        // Fetch the edges around `ids` into `state.adj`, skipping whatever is
+        // already known. Resolves immediately in local mode, where every edge
+        // arrived with the graph.
+        //
+        // Two scopes, and the difference is the whole correctness story:
+        //
+        //   'incident' — every edge touching each id. Marks those ids complete.
+        //   'induced'  — only edges with *both* ends in the set. Fills in the
+        //                cross-links between nodes already on the canvas, and
+        //                marks nothing complete, because it deliberately
+        //                withheld the edges that leave the set.
+        //
+        // In-flight requests are shared through `state.adjPending` so a burst of
+        // clicks on the same node makes one request, not one per click.
+        async function ensureEdges(ids, scope = 'incident') {
+            if (state.adjCompleteAll || state.graphMode !== 'server') return;
+            const idx = state.slimIndexOf;
+            if (!idx) return;
+
+            // Deduped and sorted before the key is built: callers routinely
+            // pass overlapping sets (`[...viewSeeds, ...viewExpanded]` names
+            // most ids twice), and without this the same node is requested
+            // twice under two different keys, defeating the in-flight sharing
+            // immediately below.
+            const want = [];
+            const seen = new Set();
+            for (const id of ids) {
+                if (seen.has(id)) continue;
+                seen.add(id);
+                if (scope === 'incident' && state.adjComplete.has(id)) continue;
+                const i = idx.get(id);
+                if (i !== undefined) want.push(i);
+            }
+            if (!want.length) return;
+            want.sort((a, b) => a - b);
+
+            const key = scope + ':' + want.join(',');
+            let pending = state.adjPending.get(key);
+            if (!pending) {
+                pending = fetchEdges(want, scope).finally(() => state.adjPending.delete(key));
+                state.adjPending.set(key, pending);
+            }
+            await pending;
+        }
+
+        async function fetchEdges(indices, scope) {
+            const res = await fetch('/api/graph/edges', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ids: indices, scope }),
+            });
+            if (!res.ok) throw new Error(await readErr(res));
+            const data = await res.json();
+            const nodes = state.graph.nodes;
+            const { src, tgt, rel, relTypes } = data;
+
+            for (let k = 0; k < src.length; k++) {
+                const s = nodes[src[k]];
+                const t = nodes[tgt[k]];
+                if (!s || !t) continue;
+                // One object per edge, pushed into both endpoints' lists —
+                // `setSoloView` dedupes by object identity (`seen.has(e)`), so
+                // two objects for one edge would draw two strands.
+                const edge = { source: s.id, target: t.id, rel: relTypes[rel[k]] || null };
+                pushEdge(s.id, edge);
+                if (t.id !== s.id) pushEdge(t.id, edge);
+            }
+            for (const id of data.complete || []) {
+                const node = nodes[id];
+                if (node) state.adjComplete.add(node.id);
+            }
+        }
+
+        // Append without duplicating: a node's list is filled by several
+        // fetches (its own incident query, plus induced queries from every
+        // neighbourhood it appears in), and the same edge can arrive twice.
+        function pushEdge(id, edge) {
+            let list = state.adj.get(id);
+            if (!list) { state.adj.set(id, [edge]); return; }
+            for (const e of list) {
+                if (e.source === edge.source && e.target === edge.target && e.rel === edge.rel) return;
+            }
+            list.push(edge);
         }
 
         // The end of `e` that isn't `id`. Handles both shapes: edges the
@@ -23298,7 +23882,12 @@ traverse({
             const edges = [];
             const seen = new Set();
             ids.forEach(id => {
-                for (const e of edgesOf(id)) {
+                // `knownEdgesOf`, not `edgesOf`: this wants the edges *between*
+                // the view's nodes, which the induced fetch has already
+                // supplied. Most of these ids are neighbours whose full lists
+                // were deliberately not fetched, and demanding completeness
+                // here would report a cold miss on every one of them.
+                for (const e of knownEdgesOf(id)) {
                     if (seen.has(e)) continue;   // every edge is in two adjacency lists
                     seen.add(e);
                     const s = e.source.id || e.source;
@@ -23340,8 +23929,7 @@ traverse({
         // Returns true if the mode changed. Safe to call before a renderer is
         // mounted: it leaves `state.view` correct for whoever mounts next.
         function applySoloMode(limit) {
-            const total = Math.max(state.graph.nodes.length, state.graph.edges.length);
-            const want = total > (limit || SOLO_THRESHOLD);
+            const want = soloRequired(limit);
             if (want === state.soloOnly) return false;
             state.soloOnly = want;
             document.body.classList.toggle('solo-only', want);
@@ -23357,8 +23945,10 @@ traverse({
                     state.viewExpanded.add(state.selectedNode.id);
                 }
                 setupSoloEmptyState();
-                const { ids, truncated } = soloViewIds(state.viewSeeds, state.viewExpanded);
-                setSoloView(ids, truncated);
+                // Fire and forget, like every other `rebuildSoloView` caller:
+                // this returns a boolean about the *mode*, and the view it
+                // leaves behind is repainted whenever its edges land.
+                rebuildSoloView();
             } else {
                 // Back to the whole graph.
                 state.view = state.graph;
@@ -23378,9 +23968,37 @@ traverse({
         }
 
         // Re-derive the view from the current seeds under the current filters.
-        function rebuildSoloView() {
+        //
+        // This is the async boundary for the whole server-mode design, and it
+        // was chosen because it is the *narrow* one: four callers, none of which
+        // uses a return value, against `handleClick`'s eighteen. So it became
+        // async and every caller fires and forgets — `soloViewIds`,
+        // `setSoloView`, `neighborsOf` and `edgesOf` stay synchronous and
+        // unchanged, which is what keeps local mode identical.
+        //
+        // Two fetches, in this order, both bounded:
+        //
+        //   1. the seeds' *incident* edges — needed to know who the neighbours
+        //      even are, bounded by seed degree
+        //   2. the resulting set's *induced* edges — the cross-links between
+        //      neighbours, without which the picture is a star rather than a
+        //      neighbourhood. Bounded by SOLO_MAX_NODES.
+        //
+        // A monotonic token drops stale responses: clicking three nodes quickly
+        // must leave the canvas showing the third, not whichever fetch happened
+        // to finish last.
+        let soloRebuildToken = 0;
+        async function rebuildSoloView() {
             if (!state.soloOnly) return;
+            const token = ++soloRebuildToken;
+
+            await ensureEdges([...state.viewSeeds, ...state.viewExpanded]);
+            if (token !== soloRebuildToken) return;
+
             const { ids, truncated } = soloViewIds(state.viewSeeds, state.viewExpanded);
+            await ensureEdges([...ids], 'induced');
+            if (token !== soloRebuildToken) return;
+
             setSoloView(ids, truncated);
         }
 
@@ -23500,12 +24118,17 @@ traverse({
         }
 
         // The most-connected nodes, as somewhere to start when you have no
-        // particular name in mind. Read off the adjacency map rather than
+        // particular name in mind. Read off `state.degreeOf` rather than
         // `metrics.degree_centrality`, which only exists on enriched graphs.
+        //
+        // Not off `state.adj`: in server mode that map is a *cache* of the
+        // neighbourhoods fetched so far, so ranking it would rank whatever
+        // happened to have been clicked — and rank it highest on the very first
+        // screen, where nothing has been clicked at all.
         function topHubs(n) {
-            if (!state.adj) return [];
-            const ranked = [];
-            state.adj.forEach((edges, id) => ranked.push([id, edges.length]));
+            const degree = state.degreeOf;
+            if (!degree || !degree.size) return [];
+            const ranked = [...degree.entries()];
             ranked.sort((a, b) => b[1] - a[1]);
             const out = [];
             for (const [id] of ranked) {
@@ -24242,12 +24865,11 @@ traverse({
 
         function renderWalkEdgeTypes() {
             const box = document.getElementById('walk-edge-types');
-            if (!box || !state.graph.edges.length) return;
-            const counts = new Map();
-            state.graph.edges.forEach(e => {
-                const r = e.rel || 'other';
-                counts.set(r, (counts.get(r) || 0) + 1);
-            });
+            // Off `state.edgeTypeCounts`, which both loaders populate — counted
+            // from the edge list locally, read off the index in server mode
+            // where there is no local edge list to count.
+            const counts = new Map(Object.entries(state.edgeTypeCounts || {}));
+            if (!box || !counts.size) return;
             const types = [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([t]) => t);
             box.innerHTML = '';
             const all = document.createElement('button');

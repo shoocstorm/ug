@@ -327,6 +327,13 @@
                     </div>
                     <div class="related-list" id="related-list"></div>
                     <div class="hier-empty" id="related-empty" style="display:none">No related nodes match the filters.</div>`;
+            } else if (state.graphMode === 'server' && !state.adjComplete.has(d.id)) {
+                // "Isolated" is a claim about the graph. Until this node's
+                // edges have actually arrived it is a claim about the cache,
+                // and the two look identical from here — so say the true one.
+                // `edgesOf` above has already kicked off the fetch; the
+                // follow-up below re-renders when it lands.
+                html += `<div class="hier-empty" id="related-pending">Loading related nodes…</div>`;
             } else {
                 html += `<div class="hier-empty">No edges touch this node — it is isolated in the graph.</div>`;
             }
@@ -477,9 +484,87 @@
             if (!state.suppressHistory) pushUrlState();
 
             enrichFromDb(d.id);
+            // Server mode: the Related tab was rendered from whatever edges
+            // were cached at click time. Re-render it once this node's own are
+            // in — the same async-follow-up shape as `enrichFromDb`, and the
+            // reason `handleClick` itself does not need to be async.
+            if (state.graphMode === 'server' && !state.adjComplete.has(d.id)) {
+                ensureEdges([d.id]).then(() => {
+                    if (state.selectedNode && state.selectedNode.id === d.id) handleClick(null, d);
+                });
+            }
+        }
+
+        // Fill in the fields the slim index leaves out — docstring, signature,
+        // metrics, imports/exports/calls/extends/implements, boundary detail —
+        // on the node objects themselves.
+        //
+        // Mutating in place rather than replacing the objects is what makes
+        // this cheap: the renderer, `state.nodeById` and every view already
+        // hold these exact objects, so a hydrated node is hydrated everywhere
+        // at once and stays that way. `_slim` flips to false, which is how a
+        // panel tells "this node has no docstring" from "not fetched yet".
+        //
+        // A no-op in local mode, where `graph.json` brought all of it.
+        //
+        // Returns whether anything actually changed. Callers re-render on the
+        // strength of that and nothing else: re-rendering unconditionally
+        // means the re-render calls `enrichFromDb` again, which calls this
+        // again, which changes nothing and re-renders again — an unbreakable
+        // loop that on a hub with 8,680 related rows locks the tab solid.
+        async function hydrateNodes(ids) {
+            if (state.graphMode !== 'server' || !state.slimIndexOf) return false;
+            const want = [];
+            const seen = new Set();
+            for (const id of ids) {
+                if (seen.has(id)) continue;
+                seen.add(id);
+                const node = state.nodeById && state.nodeById.get(id);
+                if (!node || node._slim === false) continue;
+                const i = state.slimIndexOf.get(id);
+                if (i !== undefined) want.push(i);
+            }
+            if (!want.length) return false;
+
+            const res = await fetch('/api/graph/nodes/hydrate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ids: want }),
+            });
+            if (!res.ok) throw new Error(await readErr(res));
+            const data = await res.json();
+            for (const full of data.nodes || []) {
+                const node = state.nodeById.get(full.id);
+                if (!node) continue;
+                node.docstring = full.docstring || null;
+                node.metrics = full.metrics || null;
+                node.signature = full.signature || null;
+                node.imports = full.imports || [];
+                node.exports = full.exports || [];
+                node.extends = full.extends || [];
+                node.implements = full.implements || [];
+                node.calls = full.calls || [];
+                node.boundaries = full.boundaries || [];
+                node.isBoundary = !!(full.boundaries && full.boundaries.length);
+                node._slim = false;
+            }
+            return true;
         }
 
         async function enrichFromDb(id) {
+            // Hydration first, and unconditionally: it comes from the graph
+            // snapshot, not the knowledge store, so it must not be gated on
+            // `db_ready` the way the chunk/preview enrichment below is.
+            if (state.graphMode === 'server') {
+                try {
+                    const changed = await hydrateNodes([id]);
+                    if (changed && state.selectedNode && state.selectedNode.id === id) {
+                        handleClick(null, state.selectedNode);
+                    }
+                } catch (err) {
+                    console.error('hydrate failed:', err);
+                }
+            }
             if (!state.capabilities || !state.capabilities.db_ready) return;
             const requestedId = id;
             try {

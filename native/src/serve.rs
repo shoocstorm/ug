@@ -1563,6 +1563,8 @@ pub(crate) fn build_router(state: ServeState) -> Router {
         .route("/api/graph/stats", get(api_stats))
         .route("/api/projects/staleness", get(api_projects_staleness))
         .route("/api/graph/nodes", get(api_slim_index))
+        .route("/api/graph/edges", post(api_edges))
+        .route("/api/graph/nodes/hydrate", post(api_hydrate))
         .route("/api/graph/node/*id", get(api_node))
         .route("/api/graph/search", get(api_search))
         .route("/api/graph/traverse/*id", get(api_traverse))
@@ -3040,6 +3042,120 @@ async fn api_stats(State(state): State<ServeState>) -> Response {
             .map(|c| format!("{:?}", c).to_lowercase()),
     });
     ok_json(body.to_string())
+}
+
+#[derive(serde::Deserialize)]
+struct HydrateBody {
+    /// Node indices into the slim index.
+    ids: Vec<u32>,
+}
+
+/// `POST /api/graph/nodes/hydrate` — the heavy fields the slim index omits.
+///
+/// The slim index carries what the page needs *before* you click something:
+/// id, name, type, file, lines, boundary flag. Everything else — docstring,
+/// signature, metrics, imports, calls, extends, implements, the boundary
+/// details — is per-node prose that only the info panel reads, and shipping it
+/// for 162k nodes is most of what made `graph.json` 346 MB.
+///
+/// Batched because a selection asks about one node but a panel full of chips
+/// can ask about dozens, and the singular `/api/graph/node/*id` is one request
+/// each.
+async fn api_hydrate(State(state): State<ServeState>, Json(body): Json<HydrateBody>) -> Response {
+    let snap = state.snapshot();
+    let n = snap.parsed.nodes.len();
+    let nodes: Vec<&GraphNode> = body
+        .ids
+        .iter()
+        .filter_map(|&i| snap.parsed.nodes.get(i as usize))
+        .collect();
+    match serde_json::to_string(&serde_json::json!({ "ids": body.ids, "nodes": nodes, "n": n })) {
+        Ok(s) => ok_json(s),
+        Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &format!("encode: {}", e)),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct EdgesBody {
+    /// Node **indices** into the slim index, not string ids. Position is
+    /// identity in server mode, and a 141-character id per endpoint is what
+    /// this whole protocol exists to avoid sending.
+    ids: Vec<u32>,
+    /// `"incident"` (default) — every edge touching each id, which is what
+    /// makes that id's adjacency list *complete*. `"induced"` — only edges
+    /// whose **both** endpoints are in `ids`, used to fill in the cross-links
+    /// between nodes already on the canvas.
+    #[serde(default)]
+    scope: Option<String>,
+}
+
+/// `POST /api/graph/edges` — the one primitive server mode is built on.
+///
+/// Solo expansion, the Related tab, focus/Tab stepping, the graph walk and the
+/// tour all reduce to "give me the edges around these nodes", so they all come
+/// through here. Answering it is O(sum of degree) rather than O(edges) because
+/// `AdjIndex` holds edge indices — see the note on that struct.
+///
+/// The response is columnar and index-based for the same reason the slim index
+/// is: a 1,500-node neighbourhood is roughly 14,000 edges, which is ~4 MB as id
+/// strings and ~200 KB as integers.
+async fn api_edges(State(state): State<ServeState>, Json(body): Json<EdgesBody>) -> Response {
+    let snap = state.snapshot();
+    let adj = snap.adj.get_or_init(|| build_adj(&snap.parsed));
+    let induced = body.scope.as_deref() == Some("induced");
+
+    let n = snap.parsed.nodes.len();
+    let wanted: HashSet<u32> = body.ids.iter().copied().filter(|&i| (i as usize) < n).collect();
+
+    // Collected by edge index and deduped: an edge incident to two requested
+    // nodes would otherwise be sent twice, and the client stores edge objects
+    // by identity.
+    let mut edge_idx: Vec<u32> = Vec::new();
+    for &i in &wanted {
+        edge_idx.extend(adj.incident(i as usize));
+    }
+    edge_idx.sort_unstable();
+    edge_idx.dedup();
+
+    let mut rel_types: Vec<String> = Vec::new();
+    let mut rel_idx: HashMap<String, u32> = HashMap::new();
+    let (mut src, mut tgt, mut rel) = (Vec::new(), Vec::new(), Vec::new());
+
+    for ei in edge_idx {
+        let e = &snap.parsed.edges[ei as usize];
+        let (Some(&si), Some(&ti)) = (adj.id_to_idx.get(&e.source), adj.id_to_idx.get(&e.target))
+        else {
+            continue;
+        };
+        let (si, ti) = (si as u32, ti as u32);
+        if induced && !(wanted.contains(&si) && wanted.contains(&ti)) {
+            continue;
+        }
+        let name = format!("{:?}", e.edge_type);
+        let next = rel_types.len() as u32;
+        let ri = *rel_idx.entry(name.clone()).or_insert_with(|| {
+            rel_types.push(name);
+            next
+        });
+        src.push(si);
+        tgt.push(ti);
+        rel.push(ri);
+    }
+
+    ok_json(
+        serde_json::json!({
+            "src": src,
+            "tgt": tgt,
+            "rel": rel,
+            "relTypes": rel_types,
+            // Which ids now have their *whole* edge list on the client. Only
+            // an incident query can claim this: an induced query deliberately
+            // withholds edges that leave the set, so marking its ids complete
+            // would cache a half-answer as a whole one.
+            "complete": if induced { Vec::new() } else { body.ids.clone() },
+        })
+        .to_string(),
+    )
 }
 
 /// `GET /api/graph/nodes` — the slim node index (see [`build_slim_index`]).

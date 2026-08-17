@@ -31,6 +31,27 @@
 
         // ─── Capabilities probe ─────────────────────────────
 
+        // `/api/capabilities`, fetched at most once per page load.
+        //
+        // It used to be read only here, from `initialize()`. It is now also
+        // read by `loadGraph`, *before* the graph exists, because its `graph`
+        // block is what decides whether the graph arrives as `graph.json` or as
+        // the slim index. Two fetches would be two chances to disagree with
+        // each other, so both callers share this promise.
+        //
+        // Never rejects: every caller's honest fallback for "no answer" is the
+        // same as its fallback for "no server", and on a static host there
+        // genuinely is no server. `null` says so.
+        let capabilitiesPromise = null;
+        function getCapabilities() {
+            if (!capabilitiesPromise) {
+                capabilitiesPromise = fetch('/api/capabilities')
+                    .then(res => (res.ok ? res.json() : null))
+                    .catch(() => null);
+            }
+            return capabilitiesPromise;
+        }
+
         async function probeCapabilities() {
             const chatSection = document.getElementById('section-chat');
             const tourSection = document.getElementById('section-tour');
@@ -56,9 +77,8 @@
             };
 
             try {
-                const res = await fetch('/api/capabilities');
-                if (!res.ok) throw new Error('HTTP ' + res.status);
-                const caps = await res.json();
+                const caps = await getCapabilities();
+                if (!caps) throw new Error('capabilities unavailable');
                 state.capabilities = caps;
 
                 if (caps.search_ready) {

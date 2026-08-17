@@ -43,6 +43,8 @@ const API_ENDPOINTS: &[(&str, &[ApiEntry])] = &[
         &[
             ApiEntry { method: "GET", path: "/api/graph/stats", desc: "node/edge counts by type", availability: "always (empty if no project active)", cli_equivalent: None },
             ApiEntry { method: "GET", path: "/api/graph/nodes", desc: "slim node index (columnar: every node's id/name/type/file/lines, no edges) — what the page loads instead of graph.json on large graphs", availability: "always (empty if no project active)", cli_equivalent: None },
+            ApiEntry { method: "POST", path: "/api/graph/edges", desc: "batch neighbourhood: edges around the given node indices (scope=incident|induced) — server mode's one graph primitive", availability: "always (empty if no project active)", cli_equivalent: None },
+            ApiEntry { method: "POST", path: "/api/graph/nodes/hydrate", desc: "batch node detail: the docstring/signature/metrics/calls fields the slim index omits", availability: "always (empty if no project active)", cli_equivalent: None },
             ApiEntry { method: "GET", path: "/api/graph/node/:id", desc: "fetch one node by id", availability: "always (empty if no project active)", cli_equivalent: None },
             ApiEntry { method: "GET", path: "/api/graph/search", desc: "keyword search over graph nodes", availability: "always (empty if no project active)", cli_equivalent: Some("ug find_symbols") },
             ApiEntry { method: "GET", path: "/api/graph/traverse/:id", desc: "k-hop BFS traversal from a node", availability: "always (empty if no project active)", cli_equivalent: Some("ug traverse") },

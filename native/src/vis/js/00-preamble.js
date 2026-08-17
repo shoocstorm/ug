@@ -299,6 +299,36 @@
             };
 
             try {
+                // Which of the two graphs this page is getting. The server
+                // decides from `graph.json`'s size and says so in
+                // `capabilities.graph.mode`; `?gm=` overrides for testing. No
+                // `graph` block — a static host, an older server, no server at
+                // all — means local, which is what every release before this
+                // did unconditionally.
+                //
+                // The branch lives here rather than at `loadGraph`'s six call
+                // sites, and `?file=` still wins outright: an explicitly named
+                // graph file is a request for that file.
+                const gmOverride = params.get('gm');
+                let mode = 'local';
+                if (!params.get('file')) {
+                    const caps = await getCapabilities();
+                    mode = (caps && caps.graph && caps.graph.mode) || 'local';
+                }
+                if (gmOverride === 'local' || gmOverride === 'server') mode = gmOverride;
+
+                if (mode === 'server') {
+                    setPhase('Loading node index…', 0);
+                    const res = await fetch('/api/graph/nodes');
+                    if (!res.ok) throw new Error(`Server answered ${res.status} ${res.statusText}`);
+                    setPhase('Building graph…', 100);
+                    transformSlim(await res.json());
+                    initialize();
+                    graphInitialized = true;
+                    applyUrlState(readUrlState());
+                    return;
+                }
+
                 const response = await fetch(file, { headers: { 'Accept-Encoding': 'identity' } });
                 if (!response.ok) throw new Error(`Server answered ${response.status} ${response.statusText}`);
 

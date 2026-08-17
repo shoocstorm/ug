@@ -330,7 +330,6 @@
             }
 
             state.graph = { nodes: Array.from(nodeMap.values()), edges };
-            state.containsMaps = null;
             state.stats = data.stats || null;
             // The repo-root folder node (shallowest depth) carries the
             // per-language file counts the indexer computed — the same fact
@@ -345,6 +344,105 @@
                     state.languages = f.languageBreakdown;
                 }
             });
+            state.catalogTree = null;
+            state.catalogExpanded = null;
+            state.catalogAutoExpanded = false;
+            state.graphMode = 'local';
+            state.edgeCount = edges.length;
+            // Degree, for the "start here" strip and the solo empty state's top
+            // hubs. Both used to compute this themselves — one by scanning every
+            // edge, one by ranking the whole adjacency map — for a top-5 list.
+            state.degreeOf = new Map();
+            for (const e of edges) {
+                state.degreeOf.set(e.source, (state.degreeOf.get(e.source) || 0) + 1);
+                if (e.target !== e.source) {
+                    state.degreeOf.set(e.target, (state.degreeOf.get(e.target) || 0) + 1);
+                }
+            }
+            state.edgeTypeCounts = {};
+            for (const e of edges) {
+                const r = e.rel || 'other';
+                state.edgeTypeCounts[r] = (state.edgeTypeCounts[r] || 0) + 1;
+            }
+            state.catalogRootIds = null;   // local mode derives these from Contains
+        }
+
+        // The server-mode counterpart of `transformData`: the same `state.graph`
+        // shape, built from `/api/graph/nodes` instead of from `graph.json`.
+        //
+        // The payload is columnar and dictionary-coded (see `build_slim_index`
+        // in serve.rs), which matters in two ways here. Node type and file
+        // strings are *shared references* into the dictionaries rather than one
+        // string per node — on a 162k-node repo that is the difference between
+        // ~32 MB of duplicate file paths and ~1.8 MB. And every node is built by
+        // assigning the same properties in the same order, so V8 gives the whole
+        // graph one hidden class instead of a shape per field combination.
+        //
+        // `state.graph.edges` is empty and stays empty: edges arrive per
+        // neighbourhood, on demand, into `state.adj`.
+        function transformSlim(payload) {
+            const { ids, names, types, typeIdx, files, fileIdx, startLine, endLine } = payload;
+            const n = payload.n;
+            const boundarySet = new Set(payload.boundary || []);
+            const cx = window.innerWidth / 2 || 800;
+            const cy = window.innerHeight / 2 || 600;
+
+            const nodes = new Array(n);
+            // id → wire index. Position is identity in the server-mode
+            // protocol: every request about a node names its index in these
+            // columns, not its 141-character id.
+            const indexOf = new Map();
+            for (let i = 0; i < n; i++) {
+                const angle = (i / n) * Math.PI * 2;
+                const radius = 100 + Math.random() * 150;
+                const fi = fileIdx[i];
+                // Property order is fixed and matches `transformData`'s node
+                // literal — do not reorder, it is what keeps the hidden class
+                // shared with locally-built nodes.
+                const node = {
+                    id: ids[i],
+                    name: names[i] || ids[i],
+                    group: types[typeIdx[i]] || 'Default',
+                    file: fi >= 0 ? files[fi] : null,
+                    startLine: startLine[i] || null,
+                    endLine: endLine[i] || null,
+                    docstring: null,
+                    metrics: null,
+                    signature: null,
+                    imports: [],
+                    exports: [],
+                    extends: [],
+                    implements: [],
+                    calls: [],
+                    isBoundary: boundarySet.has(i),
+                    boundaries: [],
+                    x: cx + Math.cos(angle) * radius,
+                    y: cy + Math.sin(angle) * radius,
+                    // Everything above `id`/`name`/`group`/`file`/lines/boundary
+                    // is a placeholder until `hydrateNodes` fills it from the
+                    // server. `_slim` says which is which, so a panel can tell
+                    // "no docstring" from "not fetched yet".
+                    _slim: true,
+                };
+                nodes[i] = node;
+                indexOf.set(node.id, i);
+            }
+
+            state.graph = { nodes, edges: [] };
+            state.slimIndexOf = indexOf;
+            state.graphMode = 'server';
+            state.edgeCount = payload.edgeCount || 0;
+            state.stats = payload.stats || null;
+            state.languages = payload.languages || null;
+            state.edgeTypeCounts = payload.edgeTypeCounts || {};
+            state.catalogRootIds = (payload.catalogRoots || []).map(i => ids[i]);
+            // Degree comes off the wire — it is a whole-graph fact and there are
+            // no edges here to recount it from.
+            state.degreeOf = new Map();
+            const deg = payload.deg || [];
+            for (let i = 0; i < n; i++) {
+                if (deg[i]) state.degreeOf.set(ids[i], deg[i]);
+            }
             state.catalogTree = null;
             state.catalogExpanded = null;
             state.catalogAutoExpanded = false;
@@ -443,34 +541,70 @@
             `).join('');
         }
 
+        // The Contains hierarchy, read off the adjacency index one node at a
+        // time.
+        //
+        // This used to be two whole-graph Maps built by scanning every edge —
+        // 273,100 Contains edges on a large repo, ~30 MB of Maps, for questions
+        // that are always about one node. It was also a *second* index over
+        // information `state.adj` already holds, which is one index too many:
+        // in server mode there is no local edge list to scan, so the maps came
+        // out empty and every hierarchy view silently reported nothing.
+        //
+        // `known` reads only what the cache already has and never reports a
+        // miss — for walking *other* nodes' children (siblings, grandchildren)
+        // where incompleteness is expected and self-healing.
+        function containsChildrenOf(id, known) {
+            const out = [];
+            for (const e of (known ? knownEdgesOf(id) : edgesOf(id))) {
+                if (e.rel !== 'Contains') continue;
+                if ((e.source.id || e.source) === id) out.push(e.target.id || e.target);
+            }
+            return out;
+        }
+
+        function containsParentsOf(id, known) {
+            const out = [];
+            for (const e of (known ? knownEdgesOf(id) : edgesOf(id))) {
+                if (e.rel !== 'Contains') continue;
+                if ((e.target.id || e.target) === id) out.push(e.source.id || e.source);
+            }
+            return out;
+        }
+
+        /// Whether `id`'s edge list is known to be whole.
+        function edgesKnownComplete(id) {
+            return state.adjCompleteAll || (state.adjComplete && state.adjComplete.has(id));
+        }
+
+        // Lazy stand-ins for the two Maps this used to materialise, so callers
+        // that already spoke `childrenOf.get(id)` keep working unchanged.
         function getContainsMaps() {
-            if (state.containsMaps) return state.containsMaps;
-            const childrenOf = new Map();
-            const parentOf = new Map();
-            state.graph.edges.forEach(e => {
-                if (e.rel !== 'Contains') return;
-                const sId = e.source.id || e.source;
-                const tId = e.target.id || e.target;
-                if (!childrenOf.has(sId)) childrenOf.set(sId, []);
-                childrenOf.get(sId).push(tId);
-                if (!parentOf.has(tId)) parentOf.set(tId, []);
-                parentOf.get(tId).push(sId);
-            });
-            state.containsMaps = { childrenOf, parentOf };
-            return state.containsMaps;
+            return {
+                childrenOf: { get: (id) => containsChildrenOf(id, true) },
+                parentOf: { get: (id) => containsParentsOf(id, true) },
+            };
         }
 
         function getContainsCounts(nodeId) {
-            const { childrenOf, parentOf } = getContainsMaps();
-            const directChildren = (childrenOf.get(nodeId) || []).length;
-            const parents = parentOf.get(nodeId) || [];
-            const siblingSet = new Set();
-            parents.forEach(p => {
-                (childrenOf.get(p) || []).forEach(c => {
-                    if (c !== nodeId) siblingSet.add(c);
+            const directChildren = containsChildrenOf(nodeId).length;
+            const parents = containsParentsOf(nodeId);
+            // Siblings are a two-hop question — the parents' *other* children —
+            // so they need the parents' edges as well. Reporting 0 while those
+            // are still in flight would read as "an only child", which is a
+            // different and wrong answer, so report null and let the caller
+            // leave the line out until it is true.
+            let siblings = null;
+            if (parents.every(edgesKnownComplete)) {
+                const set = new Set();
+                parents.forEach(p => {
+                    containsChildrenOf(p, true).forEach(c => { if (c !== nodeId) set.add(c); });
                 });
-            });
-            return { directChildren, siblings: siblingSet.size, parents: parents.length };
+                siblings = set.size;
+            } else {
+                ensureEdges(parents);
+            }
+            return { directChildren, siblings, parents: parents.length };
         }
 
         // ─── Node type icons ────────────────────────────────
