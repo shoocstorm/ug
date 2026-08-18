@@ -3,7 +3,8 @@ use crate::types::{
     GraphData, GraphEdge, GraphEdgeType, GraphNode, GraphNodeFolderMeta, GraphNodeType,
 };
 use petgraph::graph::{DiGraph, NodeIndex};
-use std::collections::{HashMap, HashSet};
+use rayon::prelude::*;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Extension permutations tried when resolving an import path against the
 /// file index. Empty string is included so that imports already carrying an
@@ -1546,135 +1547,247 @@ pub fn calculate_centrality(graph_json: String) -> String {
     calculate_centrality_graph(&graph)
 }
 
+/// Forward adjacency in compressed-sparse-row form, over node *indices*.
+///
+/// Brandes walks the whole adjacency once per source node, so the layout it
+/// reads from is the hot structure in the whole computation: one flat
+/// `targets` array read sequentially beats a `Vec<Vec<_>>` (a pointer chase
+/// per node) and beats petgraph's edge list (a pointer chase per edge).
+struct Csr {
+    /// `offsets[i]..offsets[i + 1]` is node `i`'s slice of `targets`.
+    offsets: Vec<usize>,
+    targets: Vec<u32>,
+}
+
+impl Csr {
+    /// Build forward adjacency, dropping edges whose endpoints aren't nodes.
+    ///
+    /// Parallel edges are collapsed. `build_graph` already dedupes by
+    /// (source, target, type), but two *different* types between the same
+    /// pair — `A Calls B` and `A Uses B` — still arrive as two edges, and to
+    /// a shortest-path count those would read as two distinct routes and
+    /// double σ. One hop between two nodes is one route however many
+    /// relationships it stands for.
+    fn build(graph: &GraphData, id_to_idx: &HashMap<&str, u32>, n: usize) -> Self {
+        let mut lists: Vec<Vec<u32>> = vec![Vec::new(); n];
+        for e in &graph.edges {
+            if let (Some(&s), Some(&t)) = (
+                id_to_idx.get(e.source.as_str()),
+                id_to_idx.get(e.target.as_str()),
+            ) {
+                lists[s as usize].push(t);
+            }
+        }
+
+        let mut offsets = Vec::with_capacity(n + 1);
+        let mut targets = Vec::new();
+        offsets.push(0);
+        for list in lists.iter_mut() {
+            list.sort_unstable();
+            list.dedup();
+            targets.extend_from_slice(list);
+            offsets.push(targets.len());
+        }
+
+        Csr { offsets, targets }
+    }
+
+    #[inline]
+    fn neighbors(&self, i: usize) -> &[u32] {
+        &self.targets[self.offsets[i]..self.offsets[i + 1]]
+    }
+}
+
+/// Per-worker scratch for Brandes, allocated once and reset per source.
+///
+/// The reset is a `fill` (a memset) rather than `n` map insertions, and
+/// `pred`'s inner vectors are `clear`ed so they keep their capacity — after
+/// the first few sources the whole traversal is allocation-free.
+struct BrandesScratch {
+    dist: Vec<i32>,
+    sigma: Vec<f64>,
+    delta: Vec<f64>,
+    pred: Vec<Vec<u32>>,
+    /// Nodes in BFS discovery order. Popping this is what gives the
+    /// non-increasing-distance order the accumulation needs, so no sort.
+    stack: Vec<u32>,
+    queue: VecDeque<u32>,
+    /// Running betweenness for every source this worker has handled.
+    betweenness: Vec<f64>,
+}
+
+impl BrandesScratch {
+    fn new(n: usize) -> Self {
+        BrandesScratch {
+            dist: vec![-1; n],
+            sigma: vec![0.0; n],
+            delta: vec![0.0; n],
+            pred: vec![Vec::new(); n],
+            stack: Vec::with_capacity(n),
+            queue: VecDeque::with_capacity(n),
+            betweenness: vec![0.0; n],
+        }
+    }
+
+    /// One source's contribution, accumulated into `self.betweenness`.
+    fn run_source(&mut self, s: usize, csr: &Csr) {
+        self.dist.fill(-1);
+        self.sigma.fill(0.0);
+        self.delta.fill(0.0);
+        for p in self.pred.iter_mut() {
+            p.clear();
+        }
+        self.stack.clear();
+        self.queue.clear();
+
+        self.sigma[s] = 1.0;
+        self.dist[s] = 0;
+        self.queue.push_back(s as u32);
+
+        while let Some(v) = self.queue.pop_front() {
+            let vi = v as usize;
+            self.stack.push(v);
+            let dv = self.dist[vi];
+            let sigma_v = self.sigma[vi];
+            for &w in csr.neighbors(vi) {
+                let wi = w as usize;
+                // First time seen: this is a shortest path to w by BFS order.
+                if self.dist[wi] < 0 {
+                    self.dist[wi] = dv + 1;
+                    self.queue.push_back(w);
+                }
+                // Re-read `dist[wi]`, never a copy taken before the line
+                // above — reading it once up front is what made the previous
+                // implementation compare against a stale `-1`, so σ never
+                // propagated and every betweenness score came out zero.
+                if self.dist[wi] == dv + 1 {
+                    self.sigma[wi] += sigma_v;
+                    self.pred[wi].push(v);
+                }
+            }
+        }
+
+        // Dependency accumulation, in reverse BFS order. Every node on the
+        // stack was reached, so σ[w] ≥ 1 and the division is safe.
+        while let Some(w) = self.stack.pop() {
+            let wi = w as usize;
+            let coeff = (1.0 + self.delta[wi]) / self.sigma[wi];
+            for &v in &self.pred[wi] {
+                self.delta[v as usize] += self.sigma[v as usize] * coeff;
+            }
+            if wi != s {
+                self.betweenness[wi] += self.delta[wi];
+            }
+        }
+    }
+}
+
 /// Degree + Brandes betweenness centrality over an already-parsed graph.
 ///
+/// Betweenness is directed, counts ordered pairs `(s, t)` with `s != t` and
+/// neither equal to the scored node, and is normalized by `(n-1)(n-2)`.
+///
 /// This is O(V·E) and runs to completion on the calling thread; async callers
-/// must push it onto `spawn_blocking` rather than awaiting it inline.
+/// must push it onto `spawn_blocking` rather than awaiting it inline. Sources
+/// are scored across rayon's pool, so it will use every core it can get.
+///
+/// Everything below indexes nodes by position rather than by id string. The
+/// previous implementation rebuilt four `HashMap<String, _>` covering the
+/// whole graph *per source node* and cloned an id on every edge relaxation —
+/// O(V²) allocations before any arithmetic. See P1.1 in
+/// `docs/dev/PERF-TUNING-JOURNEY.md`.
 pub fn calculate_centrality_graph(graph: &GraphData) -> String {
-    let n = graph.nodes.len() as f64;
-    if n == 0.0 {
+    let n = graph.nodes.len();
+    if n == 0 {
         let result = crate::types::CentralityResult {
             degree_centrality: HashMap::new(),
             betweenness_centrality: HashMap::new(),
         };
         return serde_json::to_string(&result).unwrap_or_default();
     }
+    let nf = n as f64;
 
-    let mut degree_centrality: HashMap<String, f64> = HashMap::new();
-    let mut in_degree: HashMap<String, usize> = HashMap::new();
-    let mut out_degree: HashMap<String, usize> = HashMap::new();
-
-    for node in &graph.nodes {
-        degree_centrality.insert(node.id.clone(), 0.0);
-        in_degree.insert(node.id.clone(), 0);
-        out_degree.insert(node.id.clone(), 0);
+    // Last duplicate id wins, matching what `build_di_graph`'s `collect()`
+    // has always done for a graph that somehow carries two nodes with one id.
+    let mut id_to_idx: HashMap<&str, u32> = HashMap::with_capacity(n);
+    for (i, node) in graph.nodes.iter().enumerate() {
+        id_to_idx.insert(node.id.as_str(), i as u32);
     }
 
-    for edge in &graph.edges {
-        if let Some(c) = degree_centrality.get_mut(&edge.source) {
-            *c += 1.0;
+    // Degree: both endpoints of every edge whose endpoints both resolve.
+    let mut degree: Vec<f64> = vec![0.0; n];
+    for e in &graph.edges {
+        if let Some(&s) = id_to_idx.get(e.source.as_str()) {
+            degree[s as usize] += 1.0;
         }
-        if let Some(c) = degree_centrality.get_mut(&edge.target) {
-            *c += 1.0;
-        }
-        if let Some(c) = out_degree.get_mut(&edge.source) {
-            *c += 1;
-        }
-        if let Some(c) = in_degree.get_mut(&edge.target) {
-            *c += 1;
+        if let Some(&t) = id_to_idx.get(e.target.as_str()) {
+            degree[t as usize] += 1.0;
         }
     }
-
-    for (_, c) in &mut degree_centrality {
-        if n > 1.0 {
-            *c /= n - 1.0;
+    if n > 1 {
+        for d in degree.iter_mut() {
+            *d /= nf - 1.0;
         }
     }
 
-    let mut betweenness: HashMap<String, f64> = HashMap::new();
-    for node in &graph.nodes {
-        betweenness.insert(node.id.clone(), 0.0);
-    }
+    let mut betweenness: Vec<f64> = vec![0.0; n];
+    if n > 1 {
+        let csr = Csr::build(graph, &id_to_idx, n);
 
-    if n > 1.0 {
-    let (di_graph, index_map) = build_di_graph(graph);
-
-    for node in &graph.nodes {
-        let mut pred: HashMap<String, Vec<String>> = HashMap::new();
-        let mut dist: HashMap<String, i32> = HashMap::new();
-        let mut sigma: HashMap<String, usize> = HashMap::new();
-        let mut delta: HashMap<String, f64> = HashMap::new();
-
-        for n in &graph.nodes {
-            pred.insert(n.id.clone(), vec![]);
-            dist.insert(n.id.clone(), -1);
-            sigma.insert(n.id.clone(), 0);
-            delta.insert(n.id.clone(), 0.0);
-        }
-        sigma.insert(node.id.clone(), 1);
-        dist.insert(node.id.clone(), 0);
-
-        let source_idx = *index_map.get(&node.id).unwrap();
-        let mut queue: Vec<NodeIndex> = vec![source_idx];
-
-        while !queue.is_empty() {
-            let v_idx = queue.remove(0);
-            let v_id = graph.nodes[v_idx.index()].id.clone();
-            let v_dist = *dist.get(&v_id).unwrap();
-
-            for w_idx in di_graph.neighbors(v_idx) {
-                let w_id = graph.nodes[w_idx.index()].id.clone();
-                let w_dist = *dist.get(&w_id).unwrap();
-
-                if w_dist == -1 {
-                    *dist.get_mut(&w_id).unwrap() = v_dist + 1;
-                    queue.push(w_idx);
+        // One scratch buffer per worker, reused across every source that
+        // worker handles, so the O(V)-sized allocations happen `threads`
+        // times rather than once per source.
+        //
+        // Partitioned by stride rather than by contiguous block, and *not*
+        // through `par_iter().fold()`: fold builds one accumulator per split
+        // chunk, and rayon chooses how many of those to make, so a scratch
+        // that costs ~8 MB at 162k nodes would be allocated an unbounded
+        // number of times. Striding fixes the count at `threads` while still
+        // spreading the expensive sources — the ones inside a large connected
+        // component — evenly, which a contiguous split would pile onto
+        // whichever worker drew that range.
+        let threads = rayon::current_num_threads().max(1);
+        betweenness = (0..threads)
+            .into_par_iter()
+            .map(|t| {
+                let mut scratch = BrandesScratch::new(n);
+                let mut s = t;
+                while s < n {
+                    scratch.run_source(s, &csr);
+                    s += threads;
                 }
+                scratch.betweenness
+            })
+            .reduce(
+                || vec![0.0; n],
+                |mut acc, part| {
+                    for (a, b) in acc.iter_mut().zip(part) {
+                        *a += b;
+                    }
+                    acc
+                },
+            );
 
-                if v_dist + 1 == w_dist {
-                    let sigma_v = *sigma.get(&v_id).unwrap();
-                    *sigma.get_mut(&w_id).unwrap() += sigma_v;
-                    pred.get_mut(&w_id).unwrap().push(v_id.clone());
-                }
-            }
-        }
-
-        let node_ids: Vec<String> = graph.nodes.iter().map(|n| n.id.clone()).collect();
-        let mut ordered: Vec<String> = node_ids.iter()
-            .filter(|id| *dist.get(*id).unwrap() > 0)
-            .cloned()
-            .collect();
-        ordered.sort_by(|a, b| {
-            dist.get(b).unwrap().cmp(dist.get(a).unwrap())
-        });
-
-        for w in &ordered {
-            for v in pred.get(w).unwrap_or(&vec![]) {
-                let sigma_v = *sigma.get(v).unwrap() as f64;
-                let sigma_w = *sigma.get(w).unwrap() as f64;
-                let delta_v = *delta.get(v).unwrap();
-                if sigma_w > 0.0 {
-                    let contribution = (sigma_v / sigma_w) * (1.0 + delta_v);
-                    *delta.get_mut(w).unwrap() += contribution;
-                }
-            }
-            if w != &node.id {
-                *betweenness.get_mut(w).unwrap() += delta.get(w).unwrap();
+        let normalizer = (nf - 1.0) * (nf - 2.0);
+        if normalizer > 0.0 {
+            for b in betweenness.iter_mut() {
+                *b /= normalizer;
             }
         }
     }
 
-    let normalizer = (n - 1.0) * (n - 2.0);
-    if normalizer > 0.0 {
-        for (_, c) in &mut betweenness {
-            *c /= normalizer;
-        }
-    }
+    // Back to id-keyed maps for the wire format. Duplicate ids collapse with
+    // the last one winning, as they did before.
+    let mut degree_centrality: HashMap<String, f64> = HashMap::with_capacity(n);
+    let mut betweenness_centrality: HashMap<String, f64> = HashMap::with_capacity(n);
+    for (i, node) in graph.nodes.iter().enumerate() {
+        degree_centrality.insert(node.id.clone(), degree[i]);
+        betweenness_centrality.insert(node.id.clone(), betweenness[i]);
     }
 
     let result = crate::types::CentralityResult {
         degree_centrality,
-        betweenness_centrality: betweenness,
+        betweenness_centrality,
     };
     serde_json::to_string(&result).unwrap_or_default()
 }
