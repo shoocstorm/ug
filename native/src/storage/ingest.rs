@@ -106,7 +106,7 @@ impl IngestPlan {
             let n = &graph.nodes[idx];
             rows.push(node_row(
                 n,
-                format!("{:?}", n.node_type),
+                n.node_type.as_str().to_string(),
                 node_text,
                 vector,
                 now,
@@ -168,7 +168,7 @@ pub async fn plan_incremental_ingest(
             .iter()
             .map(|n| NodeKey {
                 id: n.id.clone(),
-                node_type: format!("{:?}", n.node_type),
+                node_type: n.node_type.as_str().to_string(),
             })
             .collect();
         let mut stored: HashMap<String, NodeRow> = store
@@ -520,7 +520,7 @@ fn build_edge_rows(graph: &GraphData) -> Vec<EdgeRow> {
         .edges
         .iter()
         .map(|e| {
-            let edge_type = format!("{:?}", e.edge_type);
+            let edge_type = e.edge_type.as_str().to_string();
             let id = format!("{}|{}|{}", e.source, edge_type, e.target);
             EdgeRow {
                 id,
@@ -605,7 +605,7 @@ mod tests {
         NodeRow {
             id: n.id.clone(),
             name: n.name.clone(),
-            node_type: format!("{:?}", n.node_type),
+            node_type: n.node_type.as_str().to_string(),
             description: n.docstring.clone().unwrap_or_default(),
             file: n.file.clone().unwrap_or_default(),
             start_line: n.start_line.unwrap_or(0),

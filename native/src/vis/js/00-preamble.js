@@ -333,13 +333,34 @@
                     return;
                 }
 
-                const response = await fetch(file, { headers: { 'Accept-Encoding': 'identity' } });
+                const response = await fetch(file);
                 if (!response.ok) throw new Error(`Server answered ${response.status} ${response.statusText}`);
 
                 // Drive the label through the phases with a real byte count
-                // where we know how big the file is. Identity encoding keeps
-                // `Content-Length` exact, so the bar is honest, not decorative.
-                const length = parseInt(response.headers.get('Content-Length') || '0', 10);
+                // where we know how big the file is.
+                //
+                // The denominator is the *uncompressed* size, because the
+                // numerator below counts decoded bytes: `getReader()` hands
+                // back what the browser has already inflated, while
+                // `Content-Length` describes the compressed body. Dividing one
+                // by the other made the bar hit 100% about a tenth of the way
+                // in and stay there.
+                //
+                // This used to request `Accept-Encoding: identity` to make the
+                // two agree. That never worked — `Accept-Encoding` is a
+                // forbidden header name, so `fetch` drops it and the response
+                // arrived brotli-compressed regardless; all it did was
+                // advertise an intent the browser ignored. The bar was broken
+                // either way, and had it *not* been ignored it would have cost
+                // a 10-20× larger download to fix a cosmetic problem.
+                // `Content-Length` remains the fallback for a static host that
+                // does not send ours.
+                const length = parseInt(
+                    response.headers.get('X-Uncompressed-Length')
+                        || response.headers.get('Content-Length')
+                        || '0',
+                    10,
+                );
                 let data;
                 if (response.body && length > 0) {
                     // Decoded as it arrives, so the payload exists once rather

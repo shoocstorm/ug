@@ -32,12 +32,12 @@
 | P1.1 | Brandes betweenness: index-based rewrite | 1 | **Very high** — measured 235× | Low | ✅ |
 | P1.2 | `find_shortest_path`: predecessor array | 1 | High | Low | ⬜ |
 | P1.3 | `run_k_hop_bfs`: real BFS + incident-list induction | 1 | High | Low | ⬜ |
-| P2.1 | Concurrent embedding batches | 2 | **Very high** — ~8× cold ingest | Low | ⬜ |
-| P2.2 | Stop reading + hashing every file twice | 2 | Medium — ~2× cold index I/O | Low | ⬜ |
-| P2.3 | Progress meter: drop the per-file mutex + flush | 2 | Medium (scales with cores) | Very low | ⬜ |
-| P3.1 | Lazy + parallel graph.json compression | 3 | **High** — startup wall clock | Low | ⬜ |
-| P3.2 | Stop requesting `Accept-Encoding: identity` | 3 | **High** — 10–20× transfer | Medium | ⬜ |
-| P3.3 | Cache `/api/graph/stats`; `as_str()` over `{:?}` | 3 | Medium | Low | ⬜ |
+| P2.1 | Concurrent embedding batches | 2 | **Very high** — ~8× cold ingest | Low | ✅ |
+| P2.2 | Stop reading + hashing every file twice | 2 | Medium — ~2× cold index I/O | Low | ✅ |
+| P2.3 | Progress meter: drop the per-file mutex + flush | 2 | Medium (scales with cores) | Very low | ✅ |
+| P3.1 | Lazy graph.json compression | 3 | **High** — measured 21× startup | Low | ✅ |
+| P3.2 | Stop requesting `Accept-Encoding: identity` | 3 | ~~10–20× transfer~~ → correctness fix | Low | ✅ |
+| P3.3 | Cache `/api/graph/stats`; `as_str()` over `{:?}` | 3 | Medium — measured 50× | Low | ✅ |
 | P4.1 | MCP `shortest_path`: stop re-parsing the graph | 4 | High (per tool call) | Low | ⬜ |
 | P4.2 | `mmr_rerank`: hoist relevance, pre-normalize | 4 | Medium | Low | ⬜ |
 | P4.3 | `read_snippet`: per-call file cache | 4 | Medium | Low | ⬜ |
@@ -338,7 +338,46 @@ radius.
 
 **Theme:** the cold path does everything correctly but strictly one at a time.
 
-### ⬜ P2.1 — Concurrent embedding batches
+### ✅ P2.1 — Concurrent embedding batches
+
+**Landed 2026-08-18.** `embed()` now keeps `concurrency` requests in flight
+(default 8, `UG_EMBED_CONCURRENCY` to override; `1` restores sequential).
+
+Two findings changed the shape of the fix:
+
+1. **`cli::ingest` fed `embed()` one batch at a time** (`:132`, `:390`,
+   chunked by `batch_size`), so making `embed` internally concurrent would
+   have done nothing at all for `ug gen` — the win would have existed only on
+   the `ingest_graph` path. Both loops now chunk by a new
+   `EmbedderConfig::embed_chunk()` (`batch_size × concurrency`), which keeps
+   the progress meter while giving `embed` enough work to saturate. Progress
+   granularity coarsens from 32 to 256 nodes; a failure now discards up to a
+   256-node chunk instead of 32, which the next run backfills either way.
+2. **The idiomatic spelling broke unrelated code.** Written as
+   `stream::iter(..).map(|chunk| self.embed_batch(&url, chunk))`, the closure
+   is higher-ranked over the chunk lifetime and the returned future fails
+   `Send` inference — surfacing as 12 errors about `TourOptions` and SSE
+   senders at `serve.rs:5335`, nowhere near embedding. Confirmed self-inflicted
+   by stashing and re-checking. Fixed by collecting the per-batch futures into
+   a `Vec` first so each has a concrete lifetime; `buffered` still polls them
+   lazily.
+
+Error semantics stay **fail-fast** (`try_collect` drops the stream on first
+`Err`, cancelling in-flight requests) — the open question the plan flagged,
+resolved the smaller way, since every caller already degrades by writing nodes
+without vectors.
+
+`LocalEmbedder` deliberately untouched: it runs one `spawn_blocking` over
+fastembed's own rayon pool, where a second concurrent call would contend
+rather than help. It re-batches internally, so the larger chunks are safe.
+
+**Verified by `tests/embed_concurrency_test.rs`** — six cases against a real
+axum server on an ephemeral port that answers *later batches first*, so
+completion order is roughly the reverse of request order. This property is the
+reason the test exists rather than a combinator unit test: callers bind
+`vectors[k]` to `plan.to_embed[k]` positionally, so a reordering bug would
+attach every node's vector to a different node and produce an index that is
+confidently wrong with nothing downstream able to notice.
 
 **Where:** `native/src/storage/embed.rs:270-305`
 
@@ -380,7 +419,24 @@ made. Confirm vector order is preserved by diffing the resulting store.
 
 ---
 
-### ⬜ P2.2 — Stop reading + hashing every file twice
+### ✅ P2.2 — Stop reading + hashing every file twice
+
+**Landed 2026-08-18.** `process_file` split into `process_file` (reads) and
+`process_file_content` (takes bytes + hash); `index_with_cache`'s three phases
+collapse into one parallel pass.
+
+**Deviated from the plan above, deliberately.** The plan proposed handing
+phase 1's contents to phase 3 and flagged the memory risk — peak RSS growing
+by the sum of all source bytes. Instead the single pass reads, hashes, checks
+the cache and parses inside one closure, so **contents drop the moment a
+file's outcome is known** and what is held at once is bounded by rayon worker
+count rather than repo size. That removes the memory concern instead of
+measuring it. A cache hit reports only *that* it hit; a short sequential fold
+drains `prev_files`, since moving ownership out of a map is not something a
+parallel pass can do.
+
+Binary documents keep the read-then-process shape — their extractor opens the
+file itself, so there is nothing to hand it.
 
 **Where:** `native/src/indexer.rs:374` and `native/src/indexer.rs:103-104`
 
@@ -411,7 +467,14 @@ and watch peak RSS alongside wall clock.
 
 ---
 
-### ⬜ P2.3 — Progress meter: drop the per-file mutex + flush
+### ✅ P2.3 — Progress meter: drop the per-file mutex + flush
+
+**Landed 2026-08-18.** The `Mutex` held across `print!` *and* a `stdout` flush
+is replaced by an `AtomicUsize` of the last-printed whole percent, claimed with
+`compare_exchange` — whichever worker wins repaints, the rest return without
+touching stdout. Caps the run at 100 writes however many files there are, with
+no lock on the hot path. Both call sites (`index` and `index_with_cache`)
+updated; the explicit 100% line after the loop still guarantees a clean finish.
 
 **Where:** `native/src/indexer.rs:250-253` and `native/src/indexer.rs:393-399`
 
@@ -446,7 +509,35 @@ still animates smoothly.
 **Theme:** the server does expensive work eagerly that is often never used, and
 the client then declines the one expensive thing it did.
 
-### ⬜ P3.1 — Lazy + parallel graph.json compression
+### ✅ P3.1 — Lazy graph.json compression
+
+**Landed 2026-08-18. Measured on `~/.ug/neo4j` (346 MB): time-to-serve
+6.66 s → 0.32 s (21×), resident 919 MB → 827 MB.**
+
+`EncodedAsset`'s `gzip`/`brotli` became `OnceLock<Bytes>`, built on first
+request; `asset_response` initialises only the encoding the client asked for,
+so the other never exists. Startup now compresses nothing at all — the 6.3 s
+it used to spend was entirely gzip-9 + brotli-9, and the parse it was hiding
+turns out to be only ~0.3 s.
+
+Two knock-ons, both improvements:
+
+- `ProjectContext::approx_bytes` now charges `retained()` — identity plus
+  whatever encodings actually exist — instead of assuming both. The LRU
+  budget becomes an account of real memory rather than of memory we used to
+  allocate unconditionally.
+- The `ug serve ready` log lost its `gzip_bytes` / `brotli_bytes` fields,
+  because by then nothing has been compressed. `encode_secs` is renamed
+  `startup_secs`, which is now what it measures.
+
+**Not done: parallelising the two compressors.** It became pointless — only
+one encoding is ever built, so there is no second one to run alongside it.
+
+**Follow-up.** The first client wanting an encoding pays for it on a runtime
+worker. Bounded in practice: past `GRAPH_SERVER_MODE_BYTES` (50 MB) the page
+uses the slim index and never fetches `graph.json`, so the big graphs skip it
+entirely. Warming it in the background at snapshot load would remove even
+that; not done here because it needs a runtime handle inside `load_snapshot`.
 
 **Where:** `native/src/serve.rs:1072`, `native/src/serve.rs:111-144`
 
@@ -484,7 +575,45 @@ startup if that regression is felt.
 
 ---
 
-### ⬜ P3.2 — Stop requesting `Accept-Encoding: identity`
+### ✅ P3.2 — Stop requesting `Accept-Encoding: identity`
+
+**Landed 2026-08-18 — but the premise in the plan below was wrong, and the
+item is worth less than it was scored.** Recorded rather than quietly
+rewritten, since the estimate is the thing that was mistaken.
+
+The plan required checking whether the header took effect before doing any
+work. It does not: `Accept-Encoding` is a forbidden header name, `fetch`
+drops it, and measurement against a live server confirms the response was
+*already* compressed —
+
+```
+content-length:          11,823,767   (brotli)
+x-uncompressed-length:  346,266,017
+content-encoding:        br
+```
+
+— a 29× ratio. **So there was no 10–20× transfer win to collect; the bytes
+were never going over the wire uncompressed.** What was actually broken is
+the progress bar: `getReader()` yields bytes the browser has already
+inflated, so the numerator counted toward 346 MB while the denominator was
+the 11.8 MB `Content-Length`. It reached 100% at 3.4% of the download and sat
+there for the rest.
+
+Fixed by serving `x-uncompressed-length` (new `UNCOMPRESSED_LENGTH` constant
+in `serve.rs`) and reading it in `00-preamble.js`, falling back to
+`Content-Length` for a static host that does not send it. The misleading
+`Accept-Encoding` header is gone.
+
+Impact reclassified from **High (10–20× transfer)** to a **correctness fix on
+the loading UI**. Risk drops to Low with the premise settled.
+
+**Knock-on:** editing `native/src/vis/js/` invalidated the published demo,
+which is fingerprinted against the vis sources —
+`cli::demo::tests::the_published_demo_page_is_not_stale` caught it. Refreshed
+with `ug demo --page-only -o docs/ug-website/demo` (page only, 1.1 MB;
+`graph.json` untouched). Note the test's own hint prints a bare
+`--page-only`, which fails without `-o` unless run from a directory holding
+`ug-demo/demo.json`.
 
 **Where:** `native/src/vis/js/00-preamble.js:336`
 
@@ -520,7 +649,25 @@ denominator", which is cosmetic. Mark it ❌ in that case and say so.
 
 ---
 
-### ⬜ P3.3 — Cache `/api/graph/stats`; `as_str()` over `{:?}`
+### ✅ P3.3 — Cache `/api/graph/stats`; `as_str()` over `{:?}`
+
+**Landed 2026-08-18. `/api/graph/stats` on the 162k-node graph: 19.8 ms
+first call, 0.4 ms thereafter (50×).**
+
+- `GraphNodeType::as_str` / `GraphEdgeType::as_str` return `&'static str`,
+  replacing `format!("{:?}", ..)` across `serve.rs` (stats, slim index, edge
+  cache, search, filter), `storage/ingest.rs`, `storage/text.rs` and
+  `cli/ingest.rs`. The containers changed key type to `&'static str` rather
+  than re-allocating on insert, and the search/filter paths now
+  `eq_ignore_ascii_case` against the static name instead of building a
+  lowercased `String` per element per request.
+- `GraphSnapshot` gained `stats: OnceLock<String>` next to `centrality`,
+  `cycles` and `slim`; `api_stats` is a memoised `render_stats`.
+
+These names are wire format — stats keys, and the `node_type` / `edge_type`
+columns on every store row — so `tests/enum_names_test.rs` asserts every
+variant's `as_str` is byte-identical to its `Debug` spelling, plus that
+`ALL` is not stale and that serde agrees.
 
 **Where:** `native/src/serve.rs:3031`, `3035`, `3253`, `3460`
 (and the same pattern at `344`, `386`, `390`, `3160`)
@@ -713,6 +860,10 @@ Append one row per landed item. Keep the numbers, not just the verdict.
 | 2026-08-18 | P1.1 | `overgraph` (15k/44k) | — | 17.8 ms | baseline impractical to run |
 | 2026-08-18 | P1.1 | `neo4j` (162k/746k) | never returned | 3,266 ms | first time this graph is scoreable |
 | 2026-08-18 | P1.1 | — | all-zero output | correct | two bugs; see P1.1 §What shipped |
+| 2026-08-18 | P3.1 | `neo4j` serve startup | 6.66 s | 0.32 s | 21×; graph-ready, not just `/healthz` |
+| 2026-08-18 | P3.1 | `neo4j` idle RSS | 919 MB | 827 MB | unbuilt encodings cost nothing |
+| 2026-08-18 | P3.2 | `neo4j` graph.json | already `br` | unchanged | premise wrong — no transfer win; progress bar fixed |
+| 2026-08-18 | P3.3 | `/api/graph/stats` | 19.8 ms | 0.4 ms | 50×, memoised per snapshot |
 
 ---
 

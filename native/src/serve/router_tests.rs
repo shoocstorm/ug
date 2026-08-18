@@ -1038,3 +1038,122 @@ async fn deleting_an_inactive_project_leaves_the_active_one_alone() {
     let (status, _) = get(&app, "/graph.json").await;
     assert_eq!(status, StatusCode::OK);
 }
+
+// ---------- Content negotiation (P3.1 / P3.2) ----------
+
+/// GET `uri` with an `Accept-Encoding`, returning the response headers and the
+/// raw (still-encoded) body length.
+async fn get_encoded(
+    app: &axum::Router,
+    uri: &str,
+    accept_encoding: Option<&str>,
+) -> (StatusCode, axum::http::HeaderMap, usize) {
+    let mut req = Request::builder().uri(uri);
+    if let Some(ae) = accept_encoding {
+        req = req.header("accept-encoding", ae);
+    }
+    let res = app
+        .clone()
+        .oneshot(req.body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let status = res.status();
+    let headers = res.headers().clone();
+    let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (status, headers, bytes.len())
+}
+
+fn header<'a>(h: &'a axum::http::HeaderMap, name: &str) -> Option<&'a str> {
+    h.get(name).and_then(|v| v.to_str().ok())
+}
+
+/// The page sizes its progress bar from `x-uncompressed-length` because
+/// `content-length` describes the *compressed* body while the bytes it counts
+/// come out of the browser already inflated. The two must therefore differ on
+/// a compressed response, and the uncompressed one must be the real size.
+#[tokio::test]
+async fn compressed_response_reports_both_lengths() {
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+    let app = router_for(&tmp, "enc", &sample_graph()).await;
+
+    let (identity_status, identity_headers, identity_len) =
+        get_encoded(&app, "/graph.json", None).await;
+    assert_eq!(identity_status, StatusCode::OK);
+    assert!(header(&identity_headers, "content-encoding").is_none());
+    let uncompressed: usize = header(&identity_headers, "x-uncompressed-length")
+        .expect("identity response carries the header too")
+        .parse()
+        .unwrap();
+    assert_eq!(
+        uncompressed, identity_len,
+        "with no encoding applied the two lengths are the same number"
+    );
+
+    let (status, headers, body_len) = get_encoded(&app, "/graph.json", Some("br")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(header(&headers, "content-encoding"), Some("br"));
+    assert_eq!(
+        header(&headers, "x-uncompressed-length"),
+        Some(uncompressed.to_string().as_str()),
+        "the uncompressed length must not change with the encoding"
+    );
+    let content_length: usize = header(&headers, "content-length").unwrap().parse().unwrap();
+    assert_eq!(content_length, body_len, "content-length describes the wire body");
+    assert!(
+        content_length < uncompressed,
+        "brotli body ({content_length}) should be smaller than the source ({uncompressed})"
+    );
+}
+
+/// gzip is still offered for whatever does not speak brotli.
+#[tokio::test]
+async fn gzip_is_served_when_that_is_all_the_client_takes() {
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+    let app = router_for(&tmp, "enc-gzip", &sample_graph()).await;
+
+    let (status, headers, _) = get_encoded(&app, "/graph.json", Some("gzip")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(header(&headers, "content-encoding"), Some("gzip"));
+}
+
+/// Asking twice must return the same bytes — the encodings are memoized in a
+/// `OnceLock` now, and a stale or half-initialised cell would show up here.
+#[tokio::test]
+async fn repeated_requests_return_identical_encoded_bodies() {
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+    let app = router_for(&tmp, "enc-twice", &sample_graph()).await;
+
+    let (_, h1, len1) = get_encoded(&app, "/graph.json", Some("br")).await;
+    let (_, h2, len2) = get_encoded(&app, "/graph.json", Some("br")).await;
+    assert_eq!(len1, len2);
+    assert_eq!(
+        header(&h1, "content-length"),
+        header(&h2, "content-length"),
+    );
+}
+
+/// `/api/graph/stats` is memoized per snapshot; the second call must be the
+/// same document, not a differently-ordered rendering of it.
+#[tokio::test]
+async fn stats_is_stable_across_calls() {
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+    let app = router_for(&tmp, "stats-cache", &sample_graph()).await;
+
+    let (s1, b1) = get(&app, "/api/graph/stats").await;
+    let (s2, b2) = get(&app, "/api/graph/stats").await;
+    assert_eq!(s1, StatusCode::OK);
+    assert_eq!(s2, StatusCode::OK);
+    assert_eq!(b1, b2);
+
+    // And it still says what it used to: the type histograms are keyed by the
+    // `Debug` spelling of the enum, which `as_str` now produces.
+    let v: serde_json::Value = serde_json::from_str(&b1).unwrap();
+    assert!(v["node_types"]["File"].is_number(), "node_types: {}", v["node_types"]);
+    assert!(v["edge_types"]["Contains"].is_number(), "edge_types: {}", v["edge_types"]);
+}

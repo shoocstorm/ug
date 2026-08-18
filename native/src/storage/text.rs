@@ -144,7 +144,7 @@ pub fn build_node_text_with_comments(
     comments: &str,
     budget: &EmbedBudget,
 ) -> String {
-    let kind = format!("{:?}", node.node_type);
+    let kind = node.node_type.as_str();
 
     // For folders, prefer the full path over the basename so the embedding
     // text disambiguates same-named folders (`tests/components` vs

@@ -100,24 +100,55 @@ const MAX_REQUEST_BODY_BYTES: usize = 4 * 1024 * 1024;
 /// copying, which is what lets a cached asset be handed out of a `OnceLock`
 /// without holding a borrow across an await.
 #[derive(Clone)]
+/// One response body, plus whichever compressed forms have been asked for.
+///
+/// Both encodings are built on first request rather than up front. Eagerly
+/// compressing at construction meant every `graph.json` was gzip-9'd *and*
+/// brotli-9'd before the server would answer anything — minutes of startup CPU
+/// on a 330 MB index, holding four copies of it, to produce two bodies of which
+/// any one client uses at most one. Past `GRAPH_SERVER_MODE_BYTES` the browser
+/// is told to use the slim index and never fetches `graph.json` at all, so on
+/// exactly the graphs where that cost hurt most, all of it was waste.
+///
+/// The trade is that the first client wanting an encoding waits for it on a
+/// runtime worker instead of the process waiting at startup. That is the better
+/// end of the deal — it is paid once, only when something actually wants the
+/// bytes, and the large-graph case skips it — but see the follow-up note in
+/// `docs/dev/PERF-TUNING-JOURNEY.md` about warming it in the background.
 struct EncodedAsset {
     identity: Bytes,
-    gzip: Bytes,
-    brotli: Bytes,
+    gzip: OnceLock<Bytes>,
+    brotli: OnceLock<Bytes>,
     content_type: HeaderValue,
 }
 
 impl EncodedAsset {
+    /// Wrap bytes. **No compression happens here** — see the field comments.
     fn new(raw: Vec<u8>, content_type: &'static str) -> Self {
-        let identity = Bytes::from(raw);
-        let gzip = compress_gzip(&identity);
-        let brotli = compress_brotli(&identity);
         Self {
-            identity,
-            gzip,
-            brotli,
+            identity: Bytes::from(raw),
+            gzip: OnceLock::new(),
+            brotli: OnceLock::new(),
             content_type: HeaderValue::from_static(content_type),
         }
+    }
+
+    fn gzip(&self) -> &Bytes {
+        self.gzip.get_or_init(|| compress_gzip(&self.identity))
+    }
+
+    fn brotli(&self) -> &Bytes {
+        self.brotli.get_or_init(|| compress_brotli(&self.identity))
+    }
+
+    /// Bytes this asset is holding *right now*, for the snapshot cache
+    /// budget. An encoding nobody has asked for costs nothing and is not
+    /// counted — which makes the budget an account of real memory rather
+    /// than of memory we used to allocate unconditionally.
+    fn retained(&self) -> usize {
+        self.identity.len()
+            + self.gzip.get().map_or(0, |b| b.len())
+            + self.brotli.get().map_or(0, |b| b.len())
     }
 }
 
@@ -163,6 +194,14 @@ struct GraphSnapshot {
     /// Built on first request and encoded once, like `centrality` and `cycles`,
     /// because a browser in server mode asks for it exactly once per load.
     slim: OnceLock<EncodedAsset>,
+    /// `/api/graph/stats`, rendered once per snapshot.
+    ///
+    /// Every field of it is derived from this snapshot and none of it can
+    /// change without the snapshot being replaced, yet it was recomputed per
+    /// request — a full pass over both the node and edge lists, which on a
+    /// large repo is ~900k iterations to answer a question whose answer is
+    /// fixed. The UI polls this.
+    stats: OnceLock<String>,
 }
 
 impl GraphSnapshot {
@@ -324,8 +363,8 @@ fn build_slim_index(graph: &GraphData) -> String {
 
     // Dictionaries, in first-seen order so the arrays stay stable between
     // builds of the same graph.
-    let mut type_names: Vec<String> = Vec::new();
-    let mut type_idx: HashMap<String, u32> = HashMap::new();
+    let mut type_names: Vec<&'static str> = Vec::new();
+    let mut type_idx: HashMap<&'static str, u32> = HashMap::new();
     let mut file_names: Vec<&str> = Vec::new();
     let mut file_idx: HashMap<&str, i64> = HashMap::new();
 
@@ -341,9 +380,9 @@ fn build_slim_index(graph: &GraphData) -> String {
         ids.push(&node.id);
         names.push(if node.name.is_empty() { &node.id } else { &node.name });
 
-        let ty = format!("{:?}", node.node_type);
+        let ty = node.node_type.as_str();
         let next = type_names.len() as u32;
-        let ti = *type_idx.entry(ty.clone()).or_insert_with(|| {
+        let ti = *type_idx.entry(ty).or_insert_with(|| {
             type_names.push(ty);
             next
         });
@@ -381,13 +420,13 @@ fn build_slim_index(graph: &GraphData) -> String {
         .enumerate()
         .map(|(i, node)| (node.id.as_str(), i))
         .collect();
-    let mut node_type_counts: BTreeMap<String, usize> = BTreeMap::new();
+    let mut node_type_counts: BTreeMap<&'static str, usize> = BTreeMap::new();
     for node in &graph.nodes {
-        *node_type_counts.entry(format!("{:?}", node.node_type)).or_insert(0) += 1;
+        *node_type_counts.entry(node.node_type.as_str()).or_insert(0) += 1;
     }
-    let mut edge_type_counts: BTreeMap<String, usize> = BTreeMap::new();
+    let mut edge_type_counts: BTreeMap<&'static str, usize> = BTreeMap::new();
     for e in &graph.edges {
-        *edge_type_counts.entry(format!("{:?}", e.edge_type)).or_insert(0) += 1;
+        *edge_type_counts.entry(e.edge_type.as_str()).or_insert(0) += 1;
         let (Some(&si), Some(&ti)) = (idx_of.get(e.source.as_str()), idx_of.get(e.target.as_str()))
         else {
             continue;
@@ -543,17 +582,15 @@ impl ProjectContext {
         let identity = snap.encoded.identity.len();
         identity
             .saturating_mul(3)
-            .saturating_add(identity)
-            .saturating_add(snap.encoded.gzip.len())
-            .saturating_add(snap.encoded.brotli.len())
+            // `retained`, not identity + both encodings: an encoding nobody
+            // has requested has not been built and is costing nothing, so
+            // charging the project for it would evict live snapshots to make
+            // room for memory that was never allocated.
+            .saturating_add(snap.encoded.retained())
             // The slim index is another whole encoded asset once it has been
-            // asked for — ~34 MB identity plus its two compressions on a large
-            // repo. Uncounted, the LRU would hold three of them for free.
-            .saturating_add(
-                snap.slim
-                    .get()
-                    .map_or(0, |s| s.identity.len() + s.gzip.len() + s.brotli.len()),
-            )
+            // asked for — ~34 MB identity plus whatever compressions have been
+            // served. Uncounted, the LRU would hold three of them for free.
+            .saturating_add(snap.slim.get().map_or(0, |s| s.retained()))
     }
 }
 
@@ -810,6 +847,7 @@ fn build_placeholder_context(registry: &Arc<ProjectRegistry>) -> Arc<ProjectCont
         centrality: OnceLock::new(),
         cycles: OnceLock::new(),
         slim: OnceLock::new(),
+        stats: OnceLock::new(),
     });
     let ctx = Arc::new(ProjectContext {
         name: "__none__".to_string(),
@@ -1078,6 +1116,7 @@ fn load_snapshot(path: &PathBuf) -> Result<Arc<GraphSnapshot>, String> {
         centrality: OnceLock::new(),
         cycles: OnceLock::new(),
         slim: OnceLock::new(),
+        stats: OnceLock::new(),
     }))
 }
 
@@ -1358,12 +1397,10 @@ pub fn run_serve(args: &[String]) {
             }
         };
 
-        let (identity_size, gzip_size, brotli_size, nodes, edges) = {
+        let (identity_size, nodes, edges) = {
             let snap = initial_ctx.graph.read().expect("graph state poisoned");
             (
                 snap.encoded.identity.len(),
-                snap.encoded.gzip.len(),
-                snap.encoded.brotli.len(),
                 snap.parsed.nodes.len(),
                 snap.parsed.edges.len(),
             )
@@ -1414,9 +1451,9 @@ pub fn run_serve(args: &[String]) {
             nodes,
             edges,
             identity_bytes = identity_size,
-            gzip_bytes = gzip_size,
-            brotli_bytes = brotli_size,
-            encode_secs = t0.elapsed().as_secs_f32(),
+            // No gzip/brotli sizes here any more: nothing has been compressed
+            // by the time the server is ready, which is the point of P3.1.
+            startup_secs = t0.elapsed().as_secs_f32(),
             addr = %addr,
             db_api = db_api_enabled,
             db_unavailable_reason = db_unavailable.as_deref().unwrap_or(""),
@@ -2920,10 +2957,21 @@ fn pick_encoding(headers: &HeaderMap) -> Encoding {
     }
 }
 
+/// Header carrying the body's size *before* `Content-Encoding` was applied.
+///
+/// `Content-Length` is the compressed size, and a client streaming the body
+/// through `response.body.getReader()` counts **decoded** bytes — the browser
+/// having already inflated them. Dividing one by the other makes a progress
+/// bar that reaches 100% at roughly a tenth of the download and sits there.
+/// There is no standard header for this, so the page reads ours.
+const UNCOMPRESSED_LENGTH: &str = "x-uncompressed-length";
+
 fn asset_response(asset: &EncodedAsset, headers: &HeaderMap) -> Response {
+    // Only the encoding this client asked for is ever built; the other stays
+    // uncomputed for the life of the process if nothing requests it.
     let (bytes, encoding) = match pick_encoding(headers) {
-        Encoding::Brotli => (asset.brotli.clone(), Some("br")),
-        Encoding::Gzip => (asset.gzip.clone(), Some("gzip")),
+        Encoding::Brotli => (asset.brotli().clone(), Some("br")),
+        Encoding::Gzip => (asset.gzip().clone(), Some("gzip")),
         Encoding::Identity => (asset.identity.clone(), None),
     };
     let mut builder = Response::builder()
@@ -2931,7 +2979,8 @@ fn asset_response(asset: &EncodedAsset, headers: &HeaderMap) -> Response {
         .header(header::CONTENT_TYPE, asset.content_type.clone())
         .header(header::CACHE_CONTROL, "no-cache")
         .header(header::VARY, "accept-encoding")
-        .header(header::CONTENT_LENGTH, bytes.len());
+        .header(header::CONTENT_LENGTH, bytes.len())
+        .header(UNCOMPRESSED_LENGTH, asset.identity.len());
     if let Some(e) = encoding {
         builder = builder.header(header::CONTENT_ENCODING, e);
     }
@@ -3026,13 +3075,19 @@ fn parse_csv(s: Option<String>) -> Option<Vec<String>> {
 
 async fn api_stats(State(state): State<ServeState>) -> Response {
     let snap = state.snapshot();
-    let mut node_types: BTreeMap<String, usize> = BTreeMap::new();
+    ok_json(snap.stats.get_or_init(|| render_stats(&snap)).clone())
+}
+
+/// Build the `/api/graph/stats` body. Called once per snapshot — see the
+/// `stats` field on [`GraphSnapshot`].
+fn render_stats(snap: &GraphSnapshot) -> String {
+    let mut node_types: BTreeMap<&'static str, usize> = BTreeMap::new();
     for n in &snap.parsed.nodes {
-        *node_types.entry(format!("{:?}", n.node_type)).or_insert(0) += 1;
+        *node_types.entry(n.node_type.as_str()).or_insert(0) += 1;
     }
-    let mut edge_types: BTreeMap<String, usize> = BTreeMap::new();
+    let mut edge_types: BTreeMap<&'static str, usize> = BTreeMap::new();
     for e in &snap.parsed.edges {
-        *edge_types.entry(format!("{:?}", e.edge_type)).or_insert(0) += 1;
+        *edge_types.entry(e.edge_type.as_str()).or_insert(0) += 1;
     }
     // The repo-root folder node carries the per-language file counts and the
     // code/docs/mixed classification the indexer computed.
@@ -3067,7 +3122,7 @@ async fn api_stats(State(state): State<ServeState>) -> Response {
             .and_then(|f| f.classification.as_ref())
             .map(|c| format!("{:?}", c).to_lowercase()),
     });
-    ok_json(body.to_string())
+    body.to_string()
 }
 
 #[derive(serde::Deserialize)]
@@ -3143,8 +3198,8 @@ async fn api_edges(State(state): State<ServeState>, Json(body): Json<EdgesBody>)
     edge_idx.sort_unstable();
     edge_idx.dedup();
 
-    let mut rel_types: Vec<String> = Vec::new();
-    let mut rel_idx: HashMap<String, u32> = HashMap::new();
+    let mut rel_types: Vec<&'static str> = Vec::new();
+    let mut rel_idx: HashMap<&'static str, u32> = HashMap::new();
     let (mut src, mut tgt, mut rel) = (Vec::new(), Vec::new(), Vec::new());
 
     for ei in edge_idx {
@@ -3157,9 +3212,9 @@ async fn api_edges(State(state): State<ServeState>, Json(body): Json<EdgesBody>)
         if induced && !(wanted.contains(&si) && wanted.contains(&ti)) {
             continue;
         }
-        let name = format!("{:?}", e.edge_type);
+        let name = e.edge_type.as_str();
         let next = rel_types.len() as u32;
-        let ri = *rel_idx.entry(name.clone()).or_insert_with(|| {
+        let ri = *rel_idx.entry(name).or_insert_with(|| {
             rel_types.push(name);
             next
         });
@@ -3250,8 +3305,11 @@ async fn api_search(
         .iter()
         .filter(|n| {
             if let Some(types) = &type_filter {
-                let nt = format!("{:?}", n.node_type).to_lowercase();
-                if !types.contains(&nt) {
+                // `eq_ignore_ascii_case` against the static name, rather than
+                // allocating a lowercased `String` per node per request. The
+                // filter list is already lowercased once by the caller.
+                let nt = n.node_type.as_str();
+                if !types.iter().any(|t| t.eq_ignore_ascii_case(nt)) {
                     return false;
                 }
             }
@@ -3457,8 +3515,8 @@ async fn api_filter(
         .edges
         .iter()
         .filter(|e| {
-            let et = format!("{:?}", e.edge_type).to_lowercase();
-            lowered.iter().any(|t| t == &et)
+            let et = e.edge_type.as_str();
+            lowered.iter().any(|t| t.eq_ignore_ascii_case(et))
         })
         .collect();
 

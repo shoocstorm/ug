@@ -213,7 +213,7 @@ async fn ingest_graph_with_progress(
         .edges
         .iter()
         .map(|e| {
-            let edge_type = format!("{:?}", e.edge_type);
+            let edge_type = e.edge_type.as_str().to_string();
             let id = format!("{}|{}|{}", e.source, edge_type, e.target);
             storage::EdgeRow {
                 id,
@@ -432,7 +432,7 @@ async fn ingest_graph_multi_with_progress(
         .edges
         .iter()
         .map(|e| {
-            let edge_type = format!("{:?}", e.edge_type);
+            let edge_type = e.edge_type.as_str().to_string();
             let id = format!("{}|{}|{}", e.source, edge_type, e.target);
             storage::EdgeRow {
                 id,

@@ -501,6 +501,45 @@ pub enum GraphNodeType {
     Route,
 }
 
+impl GraphNodeType {
+    /// The variant's name, without allocating.
+    ///
+    /// Must stay byte-identical to the `Debug` spelling: these strings reach
+    /// the wire (`/api/graph/stats` keys, the `node_type` column every store
+    /// row carries) and callers used to produce them with `format!("{:?}")`.
+    /// `node_type_names_match_debug` holds the two together.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::File => "File",
+            Self::Folder => "Folder",
+            Self::Function => "Function",
+            Self::Class => "Class",
+            Self::Interface => "Interface",
+            Self::Concept => "Concept",
+            Self::Dependency => "Dependency",
+            Self::Config => "Config",
+            Self::Constant => "Constant",
+            Self::Variable => "Variable",
+            Self::Route => "Route",
+        }
+    }
+
+    /// Every variant, for exhaustiveness tests.
+    pub const ALL: &'static [GraphNodeType] = &[
+        Self::File,
+        Self::Folder,
+        Self::Function,
+        Self::Class,
+        Self::Interface,
+        Self::Concept,
+        Self::Dependency,
+        Self::Config,
+        Self::Constant,
+        Self::Variable,
+        Self::Route,
+    ];
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum GraphEdgeType {
     DependsOn,
@@ -525,6 +564,42 @@ pub enum GraphEdgeType {
     /// also the honest edge for a language where construction reaches no
     /// function at all — a Rust struct literal runs no code.
     Instantiates,
+}
+
+impl GraphEdgeType {
+    /// See [`GraphNodeType::as_str`] — same contract, same reason.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::DependsOn => "DependsOn",
+            Self::Calls => "Calls",
+            Self::Extends => "Extends",
+            Self::Implements => "Implements",
+            Self::References => "References",
+            Self::Contains => "Contains",
+            Self::Imports => "Imports",
+            Self::Exports => "Exports",
+            Self::Requires => "Requires",
+            Self::Uses => "Uses",
+            Self::Overrides => "Overrides",
+            Self::Instantiates => "Instantiates",
+        }
+    }
+
+    /// Every variant, for exhaustiveness tests.
+    pub const ALL: &'static [GraphEdgeType] = &[
+        Self::DependsOn,
+        Self::Calls,
+        Self::Extends,
+        Self::Implements,
+        Self::References,
+        Self::Contains,
+        Self::Imports,
+        Self::Exports,
+        Self::Requires,
+        Self::Uses,
+        Self::Overrides,
+        Self::Instantiates,
+    ];
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
