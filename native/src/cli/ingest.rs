@@ -129,7 +129,14 @@ async fn ingest_graph_with_progress(
         let embedder = embed_mode.embedder().expect("checked above");
         print!("{C_CYAN}▸{C_RESET} Embedding nodes ({})", to_embed);
         let _ = std::io::Write::flush(&mut std::io::stdout());
-        for (i, chunk) in plan.to_embed.chunks(embedder.config().batch_size).enumerate() {
+        // Chunked by `embed_chunk()` (batch_size × concurrency), not by
+        // `batch_size`: the embedder issues `concurrency` requests in
+        // parallel from whatever it is handed, so feeding it one batch at a
+        // time would serialize the whole pipeline and the concurrency setting
+        // would do nothing. This chunk is only the progress-meter granularity
+        // now — the batching that reaches the wire happens inside `embed`.
+        let step = embedder.config().embed_chunk();
+        for (i, chunk) in plan.to_embed.chunks(step).enumerate() {
             let chunk_vec: Vec<String> = chunk.iter().map(|(_, t)| t.clone()).collect();
             match embedder.embed(&chunk_vec).await {
                 Ok(chunk_vectors) => vectors.extend(chunk_vectors),
@@ -138,7 +145,7 @@ async fn ingest_graph_with_progress(
                     break;
                 }
             }
-            let processed = std::cmp::min((i + 1) * embedder.config().batch_size, to_embed);
+            let processed = std::cmp::min((i + 1) * step, to_embed);
             let pct = processed as f32 / to_embed as f32 * 100.0;
             print!(
                 "\r{C_CYAN}▸{C_RESET} Embedding: {C_YELLOW}{:>6.1}%{C_RESET} ({}/{})",
@@ -387,7 +394,9 @@ async fn ingest_graph_multi_with_progress(
             vectors.resize(to_embed, Vec::new());
         }
         Some(embedder) => {
-            for chunk in plan.to_embed.chunks(embedder.config().batch_size) {
+            // See the single-destination path: chunk by `embed_chunk()` so
+            // the embedder can actually run its requests in parallel.
+            for chunk in plan.to_embed.chunks(embedder.config().embed_chunk()) {
                 let chunk_vec: Vec<String> = chunk.iter().map(|(_, t)| t.clone()).collect();
                 match embedder.embed(&chunk_vec).await {
                     Ok(chunk_vectors) => vectors.extend(chunk_vectors),

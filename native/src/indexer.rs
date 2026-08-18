@@ -31,7 +31,6 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
 use tree_sitter::Parser;
 
 /// Extraction-format version, stored in the cache under
@@ -98,10 +97,27 @@ pub fn process_file(path: &Path, repo_root: Option<&str>) -> Option<FileNode> {
         return document::process_document(path, repo_root);
     }
 
-    let indexer = languages::for_extension(&ext)?;
-
     let content = fs::read_to_string(path).ok()?;
     let hash = blake3::hash(content.as_bytes()).to_hex().to_string();
+    process_file_content(path, &ext, content, hash, repo_root)
+}
+
+/// The half of [`process_file`] that runs once the file's bytes and hash are
+/// already in hand.
+///
+/// Split out for `index_with_cache`, which must hash every file to decide
+/// what is stale and would otherwise read and hash each miss a second time
+/// here — the whole repo read twice on a cold run. Callers that have no
+/// content yet should use [`process_file`], which is this with the read in
+/// front of it.
+fn process_file_content(
+    path: &Path,
+    ext: &str,
+    content: String,
+    hash: String,
+    repo_root: Option<&str>,
+) -> Option<FileNode> {
+    let indexer = languages::for_extension(ext)?;
 
     let mut parser = Parser::new();
     parser.set_language(indexer.tree_sitter_language()).ok()?;
@@ -188,15 +204,40 @@ fn annotate_line_metrics(symbols: &mut [Symbol], content: &str, language: &str) 
     }
 }
 
-/// Live single-line progress meter for the index stage. Callers wrap the
-/// call in a `Mutex` guard so parallel workers never interleave the cursor
-/// line — the print itself is not thread-safe across `\r` overwrites.
-fn print_index_progress(done: usize, total: usize) {
+/// Live single-line progress meter for the index stage.
+///
+/// Only repaints when the whole-number percentage actually changes, which
+/// caps the whole run at 100 writes however many files there are. It used to
+/// print on every file behind a `Mutex` held across both the `print!` *and*
+/// the `stdout` flush — a syscall — so every rayon worker serialized on the
+/// meter once per file. A terminal cannot render 50k updates a second anyway,
+/// so nothing is lost visually.
+///
+/// `last_pct` is the caller's record of what is currently on screen.
+/// Whichever worker wins the `compare_exchange` does the printing, and the
+/// rest return without touching stdout, so the `\r` overwrites stay ordered
+/// without a lock.
+fn print_index_progress(done: usize, total: usize, last_pct: &AtomicUsize) {
     let pct = if total == 0 {
         100.0
     } else {
         done as f32 / total as f32 * 100.0
     };
+
+    let whole = pct as usize;
+    let seen = last_pct.load(Ordering::Relaxed);
+    if seen != usize::MAX && whole <= seen {
+        return;
+    }
+    if last_pct
+        .compare_exchange(seen, whole, Ordering::Relaxed, Ordering::Relaxed)
+        .is_err()
+    {
+        // Another worker moved the meter first; its number is at least as
+        // current as ours, so there is nothing to add.
+        return;
+    }
+
     print!(
         "\r{}▸{} Indexing: {}{:>6.1}%{} ({}/{})",
         crate::C_CYAN,
@@ -235,7 +276,7 @@ pub fn index(path: String) -> String {
 
     let total_files = files_paths.len();
     let done = AtomicUsize::new(0);
-    let print_mu = Mutex::new(());
+    let last_pct = AtomicUsize::new(usize::MAX);
 
     // Parse every file in parallel. The tree-sitter parse + symbol extraction
     // is pure CPU work per file with no shared mutable state, so this scales
@@ -248,10 +289,7 @@ pub fn index(path: String) -> String {
         .filter_map(|(i, file_path)| {
             let node = process_file(file_path, Some(&repo_root));
             let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-            {
-                let _g = print_mu.lock().unwrap();
-                print_index_progress(n, total_files);
-            }
+            print_index_progress(n, total_files, &last_pct);
             node.map(|fnode| (i, fnode))
         })
         .collect();
@@ -359,65 +397,102 @@ pub fn index_with_cache(path: String, cache_path: String) -> String {
     let mut new_hashes: HashMap<String, String> = HashMap::new();
 
     let total_files = files_paths.len();
-    let print_mu = Mutex::new(());
 
-    // Phase 1 — hash every file in parallel. `compute_hash` reads the file
-    // and runs blake3; cheap per file but independent, and the reads add up
-    // across a large repo. Scan index is carried through so the final order
-    // matches the single-threaded path.
-    let mut hashed: Vec<(usize, PathBuf, String, String)> = files_paths
+    // Read, hash and (if stale) parse every file in one parallel pass.
+    //
+    // Hashing and parsing used to be two passes, which meant every file that
+    // missed the cache was read off disk and blake3'd twice — once to find
+    // out it was stale, once inside `process_file` to parse it, with the
+    // second hash then thrown away and overwritten by the first. On a cold
+    // run that is the entire repo read twice.
+    //
+    // Doing both here needs no more memory than the old split did: a file's
+    // contents are dropped the moment its outcome is known, so what is held
+    // at once is bounded by the number of rayon workers rather than by the
+    // size of the repo. Holding every file's bytes between two passes — the
+    // obvious alternative — is what would have made this a memory problem.
+    //
+    // `cached_hashes` is read-only here so it shares freely across threads.
+    // `prev_files` needs ownership moved out of it, which is not something a
+    // parallel pass can do, so a hit only reports *that* it hit and the
+    // sequential fold below does the moving.
+    enum Outcome {
+        /// Unchanged since the last run — its `FileNode` is in `prev_files`.
+        Hit(usize, String, String),
+        /// Freshly parsed.
+        Parsed(usize, String, String, FileNode),
+    }
+
+    let done = AtomicUsize::new(0);
+    let last_pct = AtomicUsize::new(usize::MAX);
+    let outcomes: Vec<Outcome> = files_paths
         .par_iter()
         .enumerate()
         .filter_map(|(i, file_path)| {
             let normalized = normalize_path(&file_path.to_string_lossy());
             let relative = common::strip_repo_root(&normalized, &repo_root);
-            let hash = compute_hash(file_path)?;
-            Some((i, file_path.clone(), relative, hash))
-        })
-        .collect();
 
-    // Phase 2 — split cache hits from parse misses, sequentially. A hit
-    // reuses the previous run's FileNode verbatim (no parse, no embed);
-    // only misses reach the expensive phase 3. Sequential here keeps the
-    // large `prev_files` map lock-free on the hot path.
-    let mut by_index: Vec<(usize, FileNode)> = Vec::with_capacity(hashed.len());
-    let mut misses: Vec<(usize, PathBuf, String, String)> = Vec::new();
+            let ext = file_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.to_lowercase());
 
-    for (i, file_path, relative, hash) in hashed.drain(..) {
-        if cached_hashes.get(&relative) == Some(&hash) {
-            if let Some(prev) = prev_files.remove(&relative) {
-                cached += 1;
-                total_symbols += prev.symbols.len();
-                total_lines += prev.lines as u64;
-                new_hashes.insert(relative, hash);
-                by_index.push((i, prev));
-                continue;
-            }
-        }
-        misses.push((i, file_path, relative, hash));
-    }
+            // Binary documents have no tree-sitter grammar and their
+            // extractor opens the file itself, so there is nothing to hand
+            // it — they keep the read-bytes-then-process shape.
+            let is_document = ext.as_deref().is_some_and(document::is_supported_ext);
 
-    // Phase 3 — parse the misses in parallel. This is the tree-sitter work
-    // and the dominant cost on a cold run; on a warm re-run `misses` is
-    // small and this returns quickly. Progress is reported over `misses`
-    // because that is the only phase a user ever waits on.
-    let miss_count = misses.len();
-    let done = AtomicUsize::new(0);
-    let parsed: Vec<(usize, String, String, FileNode)> = misses
-        .par_iter()
-        .filter_map(|(i, file_path, relative, hash)| {
-            let mut fnode = process_file(file_path, Some(&repo_root))?;
-            fnode.hash = hash.clone();
-            let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+            let (hash, content) = if is_document {
+                (compute_hash(file_path)?, None)
+            } else {
+                let bytes = fs::read(file_path).ok()?;
+                let hash = blake3::hash(&bytes).to_hex().to_string();
+                (hash, Some(String::from_utf8(bytes).ok()?))
+            };
+
+            let outcome = if cached_hashes.get(&relative) == Some(&hash)
+                && prev_files.contains_key(&relative)
             {
-                let _g = print_mu.lock().unwrap();
-                print_index_progress(n, miss_count);
-            }
-            Some((*i, relative.clone(), hash.clone(), fnode))
+                // `content` dies here — a hit costs one read and no parse.
+                Outcome::Hit(i, relative, hash)
+            } else {
+                let mut fnode = match content {
+                    Some(text) => process_file_content(
+                        file_path,
+                        ext.as_deref()?,
+                        text,
+                        hash.clone(),
+                        Some(&repo_root),
+                    )?,
+                    None => document::process_document(file_path, Some(&repo_root))?,
+                };
+                fnode.hash = hash.clone();
+                Outcome::Parsed(i, relative, hash, fnode)
+            };
+
+            let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+            print_index_progress(n, total_files, &last_pct);
+            Some(outcome)
         })
         .collect();
 
-    for (i, relative, hash, fnode) in parsed {
+    // Fold sequentially: `prev_files` is drained here, and the counters are
+    // plain accumulators that would only contend if they were shared.
+    let mut by_index: Vec<(usize, FileNode)> = Vec::with_capacity(outcomes.len());
+    for outcome in outcomes {
+        let (i, relative, hash, fnode) = match outcome {
+            Outcome::Hit(i, relative, hash) => match prev_files.remove(&relative) {
+                Some(prev) => {
+                    cached += 1;
+                    (i, relative, hash, prev)
+                }
+                // Only reachable if `prev_files` lost the entry between the
+                // `contains_key` above and here, which nothing does — but
+                // dropping the file entirely would be worse than skipping it.
+                None => continue,
+            },
+            Outcome::Parsed(i, relative, hash, fnode) => (i, relative, hash, fnode),
+        };
         total_symbols += fnode.symbols.len();
         total_lines += fnode.lines as u64;
         new_hashes.insert(relative, hash);

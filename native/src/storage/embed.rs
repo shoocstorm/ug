@@ -14,6 +14,7 @@
 //! `set_dim`) is identical for both, so `ingest.rs` / `query.rs` are
 //! agnostic to the backend.
 
+use futures::stream::{self, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -31,6 +32,28 @@ pub const DEFAULT_API_KEY: &str = "1234";
 /// fallback dim for legacy databases without a `ug-meta.json` sidecar.
 pub const DEFAULT_EMBEDDING_DIM: usize = 384;
 pub const DEFAULT_BATCH_SIZE: usize = 32;
+/// How many embedding requests the remote backend keeps in flight.
+///
+/// A cold ingest of a large repo is thousands of batches, and issued one at
+/// a time the whole run is round-trip latency — at 200 ms RTT, 5,000 batches
+/// is ~17 minutes of waiting on a socket. Eight is deliberately modest: it is
+/// a real speedup against a local inference server without looking like a
+/// denial-of-service to a shared or metered endpoint.
+///
+/// Override with `UG_EMBED_CONCURRENCY` when the endpoint is rate limited
+/// (set it to `1` to restore the old strictly-sequential behaviour).
+pub const DEFAULT_EMBED_CONCURRENCY: usize = 8;
+
+/// `UG_EMBED_CONCURRENCY`, or [`DEFAULT_EMBED_CONCURRENCY`] when unset or
+/// unparseable. Zero is treated as one — no concurrency setting should be
+/// able to stall the pipeline outright.
+fn env_concurrency() -> usize {
+    std::env::var("UG_EMBED_CONCURRENCY")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .map(|v| v.max(1))
+        .unwrap_or(DEFAULT_EMBED_CONCURRENCY)
+}
 
 #[derive(Clone, Debug)]
 pub struct EmbedderConfig {
@@ -39,7 +62,23 @@ pub struct EmbedderConfig {
     pub model: String,
     pub dim: usize,
     pub batch_size: usize,
+    /// Requests in flight at once. Remote backend only — the local one runs
+    /// in a single `spawn_blocking` over fastembed's own thread pool, where a
+    /// second concurrent call would contend rather than help.
+    pub concurrency: usize,
     pub timeout_secs: u64,
+}
+
+impl EmbedderConfig {
+    /// How many texts to hand [`Embedder::embed`] in one call so it has
+    /// enough work to fill `concurrency` requests.
+    ///
+    /// Callers that chunk for their own reasons (a progress meter) should
+    /// chunk by this rather than by `batch_size`: feeding one `batch_size`
+    /// at a time serializes the pipeline no matter what `concurrency` says.
+    pub fn embed_chunk(&self) -> usize {
+        self.batch_size.max(1) * self.concurrency.max(1)
+    }
 }
 
 impl Default for EmbedderConfig {
@@ -50,6 +89,7 @@ impl Default for EmbedderConfig {
             model: DEFAULT_MODEL.to_string(),
             dim: DEFAULT_EMBEDDING_DIM,
             batch_size: DEFAULT_BATCH_SIZE,
+            concurrency: env_concurrency(),
             timeout_secs: 120,
         }
     }
@@ -259,51 +299,94 @@ impl RemoteEmbedder {
         Ok(item.embedding.len())
     }
 
+    /// One batch, one request. `input` borrows the caller's slice — the
+    /// request type takes `&[String]`, so there is nothing to clone.
+    async fn embed_batch(&self, url: &str, chunk: &[String]) -> Result<Vec<Vec<f32>>, EmbedError> {
+        let req = EmbeddingRequest {
+            model: &self.cfg.model,
+            input: chunk,
+        };
+
+        let resp = self
+            .client
+            .post(url)
+            .bearer_auth(&self.cfg.api_key)
+            .json(&req)
+            .send()
+            .await
+            .map_err(EmbedError::Http)?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(EmbedError::BadStatus(status.as_u16(), body));
+        }
+
+        let parsed: EmbeddingResponse = resp.json().await.map_err(EmbedError::Http)?;
+
+        // The endpoint may answer out of order; `index` is what puts a
+        // vector back against its input.
+        let mut items = parsed.data;
+        items.sort_by_key(|i| i.index);
+
+        let mut out = Vec::with_capacity(items.len());
+        for item in items {
+            if item.embedding.len() != self.cfg.dim {
+                return Err(EmbedError::DimensionMismatch {
+                    expected: self.cfg.dim,
+                    got: item.embedding.len(),
+                });
+            }
+            out.push(item.embedding);
+        }
+        Ok(out)
+    }
+
+    /// Embed every text, `concurrency` batches in flight at a time.
+    ///
+    /// `buffered` yields results in **input order** regardless of which
+    /// request finishes first, so the returned vectors line up with `texts`
+    /// exactly as they did when this was a sequential loop — callers index
+    /// the two together and would silently mis-assign every vector otherwise.
+    ///
+    /// Errors are fail-fast, matching the previous behaviour: `try_collect`
+    /// abandons the stream on the first `Err`, which drops the in-flight
+    /// requests and cancels them. The caller (`rows_from_plan`, and the two
+    /// loops in `cli::ingest`) already degrades by writing the remaining
+    /// nodes without vectors, so failing early costs nothing and avoids
+    /// hammering an endpoint that has started refusing.
     pub async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, EmbedError> {
         if texts.is_empty() {
             return Ok(Vec::new());
         }
 
         let url = format!("{}/embeddings", self.cfg.base_url.trim_end_matches('/'));
+        let concurrency = self.cfg.concurrency.max(1);
+
+        // The per-batch futures are built eagerly into a `Vec` rather than
+        // lazily inside `.map(|chunk| ...)`. A closure there would be
+        // higher-ranked over the chunk's lifetime, and the opaque future this
+        // function returns then fails `Send` inference — not here, but at
+        // every `tokio::spawn` that transitively awaits an ingest, with the
+        // useless "implementation of `Send` is not general enough" pointing
+        // at unrelated code in `serve.rs`. Building them up front gives each
+        // one a concrete lifetime tied to this call and the problem vanishes.
+        // Nothing is polled until `buffered` polls it, so this stays lazy in
+        // the way that matters.
+        let pending: Vec<_> = texts
+            .chunks(self.cfg.batch_size.max(1))
+            .map(|chunk| self.embed_batch(&url, chunk))
+            .collect();
+
+        let batches: Vec<Vec<Vec<f32>>> = stream::iter(pending)
+            .buffered(concurrency)
+            .try_collect()
+            .await?;
+
         let mut out: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
-
-        for chunk in texts.chunks(self.cfg.batch_size) {
-            let chunk_vec: Vec<String> = chunk.to_vec();
-            let req = EmbeddingRequest {
-                model: &self.cfg.model,
-                input: &chunk_vec,
-            };
-
-            let resp = self
-                .client
-                .post(&url)
-                .bearer_auth(&self.cfg.api_key)
-                .json(&req)
-                .send()
-                .await
-                .map_err(EmbedError::Http)?;
-
-            let status = resp.status();
-            if !status.is_success() {
-                let body = resp.text().await.unwrap_or_default();
-                return Err(EmbedError::BadStatus(status.as_u16(), body));
-            }
-
-            let parsed: EmbeddingResponse = resp.json().await.map_err(EmbedError::Http)?;
-
-            let mut items = parsed.data;
-            items.sort_by_key(|i| i.index);
-            for item in items {
-                if item.embedding.len() != self.cfg.dim {
-                    return Err(EmbedError::DimensionMismatch {
-                        expected: self.cfg.dim,
-                        got: item.embedding.len(),
-                    });
-                }
-                out.push(item.embedding);
-            }
+        for batch in batches {
+            out.extend(batch);
         }
-
         Ok(out)
     }
 }
