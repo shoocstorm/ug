@@ -189,6 +189,21 @@ async fn seeds_and_dense_ids(
 /// Maximal Marginal Relevance rerank. `lambda` in [0, 1] balances
 /// relevance (vs. query) against diversity (vs. already-picked items).
 /// Uses the stored row vectors so no extra embedding calls are needed.
+///
+/// Output is **bit-identical** to the straightforward form this replaced.
+/// Everything below is caching, not different arithmetic:
+///
+/// * relevance against the query is loop-invariant, and was recomputed for
+///   every candidate on every one of the `k` rounds;
+/// * `cosine` recomputed both vectors' norms on every call, so a candidate's
+///   own norm was recomputed `k · picked` times — the norms are the same sums
+///   either way, summed in the same order, so caching them changes nothing;
+/// * the diversity term rescanned all of `picked` per candidate per round,
+///   which is O(k) work to add one new maximum. A running maximum, extended
+///   by the newly picked item, visits the same similarities and takes the
+///   same max — `max` over finite floats does not care about order.
+///
+/// Together that turns O(k²·n·d) into O(k·n·d).
 pub fn mmr_rerank(
     query_vec: &[f32],
     candidates: Vec<SearchHit>,
@@ -202,45 +217,79 @@ pub fn mmr_rerank(
     let mut picked: Vec<SearchHit> = Vec::new();
 
     let lambda = lambda.clamp(0.0, 1.0);
+    let query_norm = sum_squares(query_vec);
+
+    // All three run parallel to `remaining` and are `swap_remove`d with it,
+    // so index `i` means the same candidate in every one of them.
+    let mut norms: Vec<f32> = remaining.iter().map(|c| sum_squares(&c.node.vector)).collect();
+    let mut rel: Vec<f32> = remaining
+        .iter()
+        .zip(&norms)
+        .map(|(c, &n)| cosine_pre(&c.node.vector, query_vec, n, query_norm))
+        .collect();
+    // Highest similarity to anything already picked. `f32::MIN` is the
+    // "nothing picked yet" sentinel the original used.
+    let mut max_sim: Vec<f32> = vec![f32::MIN; remaining.len()];
 
     while picked.len() < k && !remaining.is_empty() {
         let mut best_idx: usize = 0;
         let mut best_score: f32 = f32::MIN;
 
-        for (i, cand) in remaining.iter().enumerate() {
-            let rel = cosine(&cand.node.vector, query_vec);
-            let div = picked
-                .iter()
-                .map(|p| cosine(&cand.node.vector, &p.node.vector))
-                .fold(f32::MIN, f32::max);
-            let div = if div == f32::MIN { 0.0 } else { div };
-            let score = lambda * rel - (1.0 - lambda) * div;
+        for i in 0..remaining.len() {
+            let div = if max_sim[i] == f32::MIN { 0.0 } else { max_sim[i] };
+            let score = lambda * rel[i] - (1.0 - lambda) * div;
             if score > best_score {
                 best_score = score;
                 best_idx = i;
             }
         }
 
-        picked.push(remaining.swap_remove(best_idx));
+        let chosen = remaining.swap_remove(best_idx);
+        let chosen_norm = norms.swap_remove(best_idx);
+        rel.swap_remove(best_idx);
+        max_sim.swap_remove(best_idx);
+
+        // Fold the new pick into every remaining candidate's running maximum.
+        for i in 0..remaining.len() {
+            let sim = cosine_pre(
+                &remaining[i].node.vector,
+                &chosen.node.vector,
+                norms[i],
+                chosen_norm,
+            );
+            if sim > max_sim[i] {
+                max_sim[i] = sim;
+            }
+        }
+
+        picked.push(chosen);
     }
 
     picked
 }
 
-fn cosine(a: &[f32], b: &[f32]) -> f32 {
+/// `Σ vᵢ²` — the squared L2 norm, accumulated in the same forward order the
+/// original `cosine` used so the cached value is the identical float.
+fn sum_squares(v: &[f32]) -> f32 {
+    let mut n = 0.0f32;
+    for x in v {
+        n += x * x;
+    }
+    n
+}
+
+/// Cosine similarity given both vectors' precomputed squared norms.
+/// Guard conditions and arithmetic match [`cosine`] exactly.
+fn cosine_pre(a: &[f32], b: &[f32], na: f32, nb: f32) -> f32 {
     if a.is_empty() || b.is_empty() || a.len() != b.len() {
         return 0.0;
     }
-    let mut dot = 0.0f32;
-    let mut na = 0.0f32;
-    let mut nb = 0.0f32;
-    for i in 0..a.len() {
-        dot += a[i] * b[i];
-        na += a[i] * a[i];
-        nb += b[i] * b[i];
-    }
     if na == 0.0 || nb == 0.0 {
         return 0.0;
+    }
+    let mut dot = 0.0f32;
+    for i in 0..a.len() {
+        dot += a[i] * b[i];
     }
     dot / (na.sqrt() * nb.sqrt())
 }
@@ -357,6 +406,50 @@ pub fn snippet_for(row: &NodeRow, repo_root: &Path) -> Option<String> {
     read_snippet(repo_root, &row.file, row.start_line, row.end_line)
 }
 
+/// File cache for one `search_kb` call's snippet extraction.
+///
+/// [`read_snippet`] reads and line-scans a whole file to pull out one
+/// symbol's span, so a search returning twenty hits drawn from five files
+/// read those five files twenty times — and symbols cluster by file, so hits
+/// sharing one are the normal case rather than the unlucky one.
+///
+/// Deliberately **per call, not global**: a long-lived cache would keep
+/// serving a snippet from before the user's last edit, and answering from a
+/// stale working tree is the one failure `ug` exists to avoid. Living for the
+/// length of one request buys the dedup without ever outliving the read.
+#[derive(Default)]
+pub struct SnippetCache {
+    files: HashMap<PathBuf, Option<String>>,
+}
+
+impl SnippetCache {
+    /// As [`snippet_for`], reusing any file already read during this call.
+    pub fn snippet_for(&mut self, row: &NodeRow, repo_root: &Path) -> Option<String> {
+        if !row.code.is_empty() {
+            return Some(row.code.clone());
+        }
+        if row.file.is_empty()
+            || row.start_line == 0
+            || row.end_line == 0
+            || row.end_line < row.start_line
+        {
+            return None;
+        }
+        let abs: PathBuf = if Path::new(&row.file).is_absolute() {
+            PathBuf::from(&row.file)
+        } else {
+            repo_root.join(&row.file)
+        };
+        // A file that could not be read caches its failure too, so an
+        // unreadable path is not retried once per hit that mentions it.
+        let entry = self
+            .files
+            .entry(abs)
+            .or_insert_with_key(|p| std::fs::read_to_string(p).ok());
+        slice_lines(entry.as_deref()?, row.start_line, row.end_line)
+    }
+}
+
 pub fn read_snippet(
     repo_root: &Path,
     file: &str,
@@ -372,6 +465,11 @@ pub fn read_snippet(
         repo_root.join(file)
     };
     let content = std::fs::read_to_string(&abs).ok()?;
+    slice_lines(&content, start_line, end_line)
+}
+
+/// Lines `start_line..=end_line` (1-based, inclusive) of `content`.
+fn slice_lines(content: &str, start_line: u32, end_line: u32) -> Option<String> {
     let mut out = String::new();
     for (i, line) in content.lines().enumerate() {
         let n = (i + 1) as u32;
@@ -586,13 +684,14 @@ async fn search_kb_ppr(
 
     let mut items: Vec<ContextItem> = Vec::new();
     let mut total_chars: usize = 0;
+    let mut snippets = SnippetCache::default();
     for id in top_ids.iter() {
         let Some(n) = nodes_by_id.get(id) else {
             continue;
         };
         let score = score_by_id.get(id).copied().unwrap_or(0.0);
         let snippet = if opts.include_snippets {
-            snippet_for(n, opts.repo_root)
+            snippets.snippet_for(n, opts.repo_root)
         } else {
             None
         };
@@ -665,10 +764,11 @@ async fn search_kb_flat(
 
     let mut items: Vec<ContextItem> = Vec::new();
     let mut total_chars: usize = 0;
+    let mut snippets = SnippetCache::default();
     for h in seeds.into_iter() {
         let n = h.node;
         let snippet = if opts.include_snippets {
-            snippet_for(&n, opts.repo_root)
+            snippets.snippet_for(&n, opts.repo_root)
         } else {
             None
         };
@@ -769,11 +869,12 @@ async fn search_kb_mmr(
     // 5. Attach snippets and apply char budget.
     let mut items: Vec<ContextItem> = Vec::new();
     let mut total_chars: usize = 0;
+    let mut snippets = SnippetCache::default();
     for hit in reranked {
         let is_seed = seed_dist.contains_key(&hit.node.id);
         let hop = traversal.distances.get(&hit.node.id).copied().unwrap_or(0);
         let snippet = if opts.include_snippets {
-            snippet_for(&hit.node, opts.repo_root)
+            snippets.snippet_for(&hit.node, opts.repo_root)
         } else {
             None
         };

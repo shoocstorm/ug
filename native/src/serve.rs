@@ -205,20 +205,6 @@ struct GraphSnapshot {
 }
 
 impl GraphSnapshot {
-    /// The graph JSON as text, borrowed from the bytes `/graph.json` already
-    /// serves.
-    ///
-    /// This used to be a separate `raw_json: String` field alongside
-    /// `encoded.identity`, which held a byte-identical copy — a straight
-    /// duplicate of the whole graph (16 MB on a mid-size repo) per loaded
-    /// project. `encoded.identity` is only ever built from a `String`, so the
-    /// UTF-8 check below cannot fail; it is written as a fallback rather than
-    /// an `expect` so a future non-UTF-8 asset source degrades instead of
-    /// taking the server down.
-    fn raw_json(&self) -> &str {
-        std::str::from_utf8(&self.encoded.identity).unwrap_or("{}")
-    }
-
     /// Identifies *this* snapshot, so a client that split one graph across
     /// several requests can tell whether they all came from the same one.
     ///
@@ -2099,7 +2085,6 @@ async fn api_tool(
     let result = ultragraph::agent_tools::run_tool(
         &tool,
         &snap.parsed,
-        snap.raw_json(),
         ultragraph::agent_tools::SourceCtx::new(&indexed, ctx.repo_root.as_path()),
         ctx.graph_path.as_path(),
         args,
@@ -3288,7 +3273,14 @@ async fn api_node(State(state): State<ServeState>, AxPath(id): AxPath<String>) -
 struct SearchParams {
     q: Option<String>,
     types: Option<String>,
+    limit: Option<usize>,
 }
+
+/// Nodes returned by `/api/graph/search` when the caller does not say.
+const SEARCH_DEFAULT_LIMIT: usize = 200;
+/// Ceiling on `?limit=`, so the endpoint cannot be asked to serialise the
+/// whole graph however the query is spelled.
+const SEARCH_MAX_LIMIT: usize = 5_000;
 
 async fn api_search(
     State(state): State<ServeState>,
@@ -3298,36 +3290,50 @@ async fn api_search(
     let needle = params.q.unwrap_or_default().to_lowercase();
     let type_filter: Option<Vec<String>> =
         parse_csv(params.types).map(|v| v.into_iter().map(|t| t.to_lowercase()).collect());
+    let limit = params
+        .limit
+        .unwrap_or(SEARCH_DEFAULT_LIMIT)
+        .min(SEARCH_MAX_LIMIT);
 
-    let matched: Vec<&GraphNode> = snap
-        .parsed
-        .nodes
-        .iter()
-        .filter(|n| {
-            if let Some(types) = &type_filter {
-                // `eq_ignore_ascii_case` against the static name, rather than
-                // allocating a lowercased `String` per node per request. The
-                // filter list is already lowercased once by the caller.
-                let nt = n.node_type.as_str();
-                if !types.iter().any(|t| t.eq_ignore_ascii_case(nt)) {
-                    return false;
-                }
+    // `count` stays the number of *matches*, not the number returned, so a
+    // caller can tell "200 of 162,000" from "200 of 200". Unbounded before
+    // this: an empty `?q=` with no `?types=` matched every node and
+    // serialised all 162k of them, which is neither a useful answer nor one
+    // the page could render.
+    let mut count = 0usize;
+    let mut matched: Vec<&GraphNode> = Vec::new();
+    for n in &snap.parsed.nodes {
+        if let Some(types) = &type_filter {
+            // `eq_ignore_ascii_case` against the static name, rather than
+            // allocating a lowercased `String` per node per request. The
+            // filter list is already lowercased once by the caller.
+            let nt = n.node_type.as_str();
+            if !types.iter().any(|t| t.eq_ignore_ascii_case(nt)) {
+                continue;
             }
-            if needle.is_empty() {
-                return true;
-            }
+        }
+        if !needle.is_empty() {
             let name_match = n.name.to_lowercase().contains(&needle);
             let doc_match = n
                 .docstring
                 .as_ref()
                 .map(|d| d.to_lowercase().contains(&needle))
                 .unwrap_or(false);
-            name_match || doc_match
-        })
-        .collect();
+            if !name_match && !doc_match {
+                continue;
+            }
+        }
+        count += 1;
+        if matched.len() < limit {
+            matched.push(n);
+        }
+    }
 
     let body = serde_json::json!({
-        "count": matched.len(),
+        "count": count,
+        "returned": matched.len(),
+        "truncated": count > matched.len(),
+        "limit": limit,
         "nodes": matched,
     });
     ok_json(body.to_string())
@@ -5192,7 +5198,6 @@ async fn run_chat_tool(
             let out = ultragraph::agent_tools::run_tool(
                 &name,
                 &snap.parsed,
-                snap.raw_json(),
                 ultragraph::agent_tools::SourceCtx::new(&indexed, ctx.repo_root.as_path()),
                 ctx.graph_path.as_path(),
                 args,

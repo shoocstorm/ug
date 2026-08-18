@@ -355,7 +355,16 @@ fn default_ctx() -> ProjectCtx {
 
 struct CachedGraph {
     parsed: Arc<GraphData>,
-    raw: Arc<String>,
+    /// Byte length of the `graph.json` this was parsed from, for cache
+    /// accounting only.
+    ///
+    /// The text itself is deliberately **not** retained. It used to be, as an
+    /// `Arc<String>`, for the sole purpose of handing it to
+    /// `agent_tools::run_tool` so that `shortest_path` could re-parse it —
+    /// which is exactly what P4.1 removed. Keeping it meant every cached
+    /// project held a second full copy of its graph, 346 MB of it on the
+    /// largest index here, that nothing ever read.
+    raw_len: usize,
     mtime: Option<SystemTime>,
 }
 
@@ -364,7 +373,11 @@ impl CachedGraph {
     /// deserialized into, which runs about 3× the text it came from. Same
     /// multiplier `ug serve` uses to size a snapshot (`approx_bytes` there).
     fn approx_bytes(&self) -> usize {
-        self.raw.len().saturating_mul(4)
+        // Still 4×: the parsed graph runs ~3× the text it came from, and the
+        // text was one more. Now that only the parse is retained the true
+        // figure is nearer 3×, but over-estimating only makes the cache more
+        // conservative, and this multiplier is shared with `ug serve`.
+        self.raw_len.saturating_mul(4)
     }
 }
 
@@ -634,13 +647,13 @@ impl Mcp {
 
     /// Parse graph.json (cached by path, invalidated on mtime change, and
     /// bounded by a byte budget — see [`GraphCache`]).
-    fn load_graph(&self, graph_path: &Path) -> Result<(Arc<GraphData>, Arc<String>), String> {
+    fn load_graph(&self, graph_path: &Path) -> Result<Arc<GraphData>, String> {
         let current = mtime_of(graph_path);
         {
             let mut cache = self.graph_cache.lock().unwrap();
             if let Some(hit) = cache.get(graph_path) {
                 if hit.mtime.is_some() && hit.mtime == current {
-                    return Ok((hit.parsed.clone(), hit.raw.clone()));
+                    return Ok(hit.parsed.clone());
                 }
             }
         }
@@ -654,16 +667,17 @@ impl Mcp {
         let parsed: GraphData =
             serde_json::from_str(&raw).map_err(|e| format!("invalid graph.json: {}", e))?;
         let parsed = Arc::new(parsed);
-        let raw = Arc::new(raw);
+        let raw_len = raw.len();
+        drop(raw);
         self.graph_cache.lock().unwrap().insert(
             graph_path.to_path_buf(),
             CachedGraph {
                 parsed: parsed.clone(),
-                raw: raw.clone(),
+                raw_len,
                 mtime: current,
             },
         );
-        Ok((parsed, raw))
+        Ok(parsed)
     }
 
     fn invalidate(&self, graph_path: &Path) {
@@ -674,7 +688,7 @@ impl Mcp {
     /// current mtimes of the files it indexed. Empty string when fresh (or no
     /// graph yet — the tool that needed it raises its own error).
     fn staleness_note(&self, ctx: &ProjectCtx) -> String {
-        let Ok((graph, _)) = self.load_graph(&ctx.graph_path) else {
+        let Ok(graph) = self.load_graph(&ctx.graph_path) else {
             return String::new();
         };
         let Some(built_at) = mtime_of(&ctx.graph_path) else {
@@ -955,7 +969,7 @@ impl Mcp {
     /// still gets its structural answer, with source read from the working
     /// tree if it happens to be there.
     async fn tool_graph(&self, name: &str, ctx: &ProjectCtx, args: Value) -> Result<String, String> {
-        let (graph, raw) = self.load_graph(&ctx.graph_path)?;
+        let graph = self.load_graph(&ctx.graph_path)?;
         let ids = ultragraph::agent_tools::source_node_ids(name, graph.as_ref(), &args);
         let indexed = match self.open_query_store(ctx).await {
             Ok(store) => {
@@ -966,7 +980,6 @@ impl Mcp {
         let output = run_tool(
             name,
             graph.as_ref(),
-            &raw,
             ultragraph::agent_tools::SourceCtx::new(&indexed, &ctx.repo_root),
             &ctx.graph_path,
             args,
@@ -1481,7 +1494,7 @@ mod tests {
                 stats: None,
                 resolution: None,
             }),
-            raw: Arc::new("x".repeat(bytes)),
+            raw_len: bytes,
             mtime: None,
         }
     }

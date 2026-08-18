@@ -92,6 +92,20 @@
             }
         }
 
+        // Open the card for a node the user *picked* rather than hovered. That
+        // is the Graph Walk path: a walk suppresses hover outright, so there
+        // is no `_hoverNode` to read and no hover box to defer to — the click
+        // carries the node and the pointer carries the position.
+        function openNodeMenuAt(node, event) {
+            const m = state._mouse;
+            const at = (v, fallback) => Number.isFinite(v) ? v : fallback;
+            const x = event && Number.isFinite(event.clientX)
+                ? event.clientX : at(m && m.cx, window.innerWidth / 2);
+            const y = event && Number.isFinite(event.clientY)
+                ? event.clientY : at(m && m.cy, window.innerHeight / 2);
+            openNodeMenu(node, x, y);
+        }
+
         function hideNodeMenu() {
             const menu = document.getElementById('node-menu');
             if (menu) menu.hidden = true;
@@ -124,6 +138,19 @@
             return { out, inc, rels };
         }
 
+        // Which hop of the current walk reached this node. While a walk is
+        // running this outranks everything else on the card: the entire point
+        // of the reveal is distance from the seed, and colour alone only says
+        // it to within a shade.
+        function nodeMenuHop(id) {
+            if (!state.walkActive || !walkPlay.layers) return null;
+            if (id === state.walkSeed) return 0;
+            for (const l of walkPlay.layers) {
+                if (l.ids.includes(id)) return l.hop;
+            }
+            return null;
+        }
+
         function renderNodeMenu(node) {
             const menu = document.getElementById('node-menu');
             if (!menu) return;
@@ -132,6 +159,19 @@
                 + `<span class="nm-val">${val}</span></div>`;
 
             const rows = [];
+
+            const hop = nodeMenuHop(node.id);
+            if (hop !== null) {
+                const hopColor = walkColorForHop(hop);
+                rows.push(row('Hop', hop === 0
+                    ? `<span style="color:${hopColor}">seed</span>`
+                    // The number is the step count already, so "2 steps" would
+                    // be the same fact twice — and it is the line that pushes
+                    // the seed name onto a second row.
+                    : `<span style="color:${hopColor}">${hop}</span>`
+                        + `<span class="nm-dim"> · from `
+                        + `${escapeHtml(truncateName((state.nodeById.get(state.walkSeed) || {}).name || state.walkSeed))}</span>`));
+            }
 
             if (node.file) {
                 // PDF and Office nodes carry a page number in `startLine` —
@@ -201,12 +241,17 @@
                 ${doc}
                 <div class="nm-rows">${rows.join('')}</div>
                 <div class="nm-acts">
-                    <button class="nm-act" data-act="details" title="Open the full node panel">Details</button>
+                    ${state.walkActive ? '' : '<button class="nm-act" data-act="details" title="Open the full node panel">Details</button>'}
                     <button class="nm-act" data-act="zoom" title="Fly the camera to this node">Zoom to</button>
                     <button class="nm-act" data-act="copy" title="Copy the node id — command fuel for ug get_code">Copy id</button>
                 </div>`;
 
-            menu.querySelector('[data-act="details"]').addEventListener('click', () => {
+            // No Details during a walk. Opening the panel selects the node,
+            // which rebuilds the solo view and tears the walk down — the very
+            // thing the click guard exists to prevent, so offering it as a
+            // button would just be the same bug behind one more press.
+            const detailsBtn = menu.querySelector('[data-act="details"]');
+            if (detailsBtn) detailsBtn.addEventListener('click', () => {
                 hideNodeMenu();
                 handleClick(null, node);
             });

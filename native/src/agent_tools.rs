@@ -3149,32 +3149,21 @@ pub struct ShortestPathResult {
 /// retried when no forward path exists and the result is flagged `reversed`.
 pub fn shortest_path(
     graph: &GraphData,
-    raw: &str,
     source: &str,
     target: &str,
     strict: bool,
 ) -> ShortestPathResult {
-    let parse = |json: String| -> crate::types::PathResult {
-        serde_json::from_str(&json).unwrap_or(crate::types::PathResult {
-            path: vec![],
-            found: false,
-            length: None,
-        })
-    };
-
+    // Straight onto the parsed graph. This used to take the graph.json *text*
+    // as well and hand it to `crate::find_shortest_path`, which cloned the
+    // whole string, re-parsed it into a second `GraphData`, rebuilt the
+    // adjacency, serialised its answer to JSON — and then this function parsed
+    // that back. The `!found` retry below did the entire thing a second time.
+    // All of it to answer a question about the `graph` already in hand.
     let mut reversed = false;
-    let mut result = parse(crate::find_shortest_path(
-        raw.to_string(),
-        source.to_string(),
-        target.to_string(),
-    ));
+    let mut result = crate::find_shortest_path_graph(graph, source, target);
     if !result.found && !strict {
         reversed = true;
-        result = parse(crate::find_shortest_path(
-            raw.to_string(),
-            target.to_string(),
-            source.to_string(),
-        ));
+        result = crate::find_shortest_path_graph(graph, target, source);
     }
 
     let by_id = by_id_map(graph);
@@ -4083,7 +4072,6 @@ pub fn get_code_source_ids(graph: &GraphData, p: &GetCodeParams) -> Vec<String> 
 pub fn run_tool(
     tool: &str,
     graph: &GraphData,
-    raw: &str,
     src: SourceCtx,
     graph_path: &Path,
     params: serde_json::Value,
@@ -4137,7 +4125,7 @@ pub fn run_tool(
             // other id parameter; each must land on exactly one node.
             let source = resolve_single_ref(graph, &p.source)?;
             let target = resolve_single_ref(graph, &p.target)?;
-            let result = shortest_path(graph, raw, &source, &target, p.strict);
+            let result = shortest_path(graph, &source, &target, p.strict);
             Ok(match style {
                 Some(s) => ToolOutput::Text(render_shortest_path(&result, s, p.strict)),
                 None => ToolOutput::Json(

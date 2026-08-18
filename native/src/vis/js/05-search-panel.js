@@ -62,9 +62,23 @@
         }
 
         function handleNodeClick(event, d) {
-            // A walk in progress owns the canvas — clicking through would
-            // rebuild the solo view and tear down the animation, so wait.
-            if (state.walkActive) { if (event) event.stopPropagation(); return; }
+            // A walk in progress owns the canvas — selecting through it would
+            // rebuild the solo view and tear down the animation mid-flight.
+            // But "what *is* that one?" is the question a reveal provokes on
+            // every hop, and until now the canvas answered it with nothing:
+            // the click was swallowed, and hover is suppressed during a walk
+            // too (see handleNodeHover). So the click opens the summary card
+            // instead — it reads state and changes none, which is exactly what
+            // this guard is protecting.
+            if (state.walkActive) {
+                if (event) event.stopPropagation();
+                // Same reasoning as the tour below: someone reading a node is
+                // not someone who wants the next hop to reframe the camera out
+                // from under them. Pausing is one keystroke to undo.
+                if (walkPlay.playing) setWalkPlaying(false);
+                openNodeMenuAt(d, event);
+                return;
+            }
             if (state.pathMode && state.pathSource) {
                 event.stopPropagation();
                 runFindPathTo(d.id);

@@ -1157,3 +1157,60 @@ async fn stats_is_stable_across_calls() {
     assert!(v["node_types"]["File"].is_number(), "node_types: {}", v["node_types"]);
     assert!(v["edge_types"]["Contains"].is_number(), "edge_types: {}", v["edge_types"]);
 }
+
+// ---------- P4.4: bounded search ----------
+
+/// Search is capped, and `count` still reports the true number of matches so
+/// a caller can tell "200 of 162,000" from "200 of 200".
+#[tokio::test]
+async fn search_is_bounded_and_reports_the_full_count() {
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+    let app = router_for(&tmp, "search-limit", &sample_graph()).await;
+
+    // No query and no type filter: matches every node in the graph.
+    let (status, body) = get(&app, "/api/graph/search").await;
+    assert_eq!(status, StatusCode::OK);
+    let all: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let total = all["count"].as_u64().unwrap();
+    assert!(total > 0, "fixture should have nodes");
+    assert_eq!(all["truncated"], serde_json::json!(false));
+    assert_eq!(all["returned"].as_u64().unwrap(), total);
+
+    // Ask for fewer than exist: nodes are cut, count is not.
+    let (_, body) = get(&app, "/api/graph/search?limit=1").await;
+    let one: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(one["count"].as_u64().unwrap(), total, "count is matches, not returned");
+    assert_eq!(one["returned"], serde_json::json!(1));
+    assert_eq!(one["nodes"].as_array().unwrap().len(), 1);
+    assert_eq!(one["truncated"], serde_json::json!(total > 1));
+}
+
+/// `?limit=` cannot be used to ask for the whole graph back.
+#[tokio::test]
+async fn search_limit_is_capped() {
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+    let app = router_for(&tmp, "search-cap", &sample_graph()).await;
+
+    let (status, body) = get(&app, "/api/graph/search?limit=99999999").await;
+    assert_eq!(status, StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["limit"], serde_json::json!(5000), "limit is clamped");
+}
+
+/// The type filter still works, and still matches case-insensitively now that
+/// it compares against the static enum name instead of a lowercased clone.
+#[tokio::test]
+async fn search_type_filter_is_case_insensitive() {
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+    let app = router_for(&tmp, "search-types", &sample_graph()).await;
+
+    let (_, lower) = get(&app, "/api/graph/search?types=file").await;
+    let (_, upper) = get(&app, "/api/graph/search?types=FILE").await;
+    let l: serde_json::Value = serde_json::from_str(&lower).unwrap();
+    let u: serde_json::Value = serde_json::from_str(&upper).unwrap();
+    assert_eq!(l["count"], u["count"]);
+    assert!(l["count"].as_u64().unwrap() > 0, "fixture has a File node");
+}

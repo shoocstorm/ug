@@ -283,15 +283,16 @@ fn cli_tool_runner(
     embedder: std::sync::Arc<Embedder>,
 ) -> impl Fn(&str, serde_json::Value) -> futures::future::BoxFuture<'static, Result<String, String>>
 {
-    let (graph, raw, graph_path) = load_agent_graph(args);
+    let (graph, _raw, graph_path) = load_agent_graph(args);
     let repo_root = agent_repo_root(&graph, &graph_path);
     let graph = std::sync::Arc::new(graph);
-    let raw = std::sync::Arc::new(raw);
+    // The graph.json text is dropped here rather than held for the closure:
+    // `run_tool` stopped needing it when P4.1 removed the re-parse.
+    drop(_raw);
 
     move |name: &str, args: serde_json::Value| {
         let name = name.to_string();
         let graph = graph.clone();
-        let raw = raw.clone();
         let repo_root = repo_root.clone();
         let graph_path = graph_path.clone();
         let store = store.clone();
@@ -322,7 +323,6 @@ fn cli_tool_runner(
                     let out = ultragraph::agent_tools::run_tool(
                         &name,
                         &graph,
-                        &raw,
                         agent_tools::SourceCtx::new(&indexed, repo_root.as_path()),
                         graph_path.as_path(),
                         args,

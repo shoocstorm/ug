@@ -44,7 +44,7 @@ pub use source::{
 };
 pub use ppr::{default_edge_type_weights, run_ppr};
 pub use query::{
-    mmr_rerank, name_search, read_snippet, snippet_for, search_kb, semantic_search,
+    mmr_rerank, name_search, read_snippet, snippet_for, search_kb, semantic_search, SnippetCache,
     semantic_search_w_where, traverse, traverse_filtered, ContextItem, DEFAULT_CONTEXT_CHARS,
     RankStrategy, RankedContext, SearchHit, SearchKbOptions, TraversalResult,
 };

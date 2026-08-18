@@ -165,14 +165,14 @@ pub(crate) fn run_graph_path(args: &[String]) {
         eprintln!("Usage: ug shortest_path <source> <target> [--strict] [-n|--name <project>]");
         std::process::exit(1);
     }
-    let (graph, raw, _path) = load_agent_graph(&load_args);
+    let (graph, _raw, _path) = load_agent_graph(&load_args);
     // The CLI resolves names/paths to ids before handing off; MCP and HTTP
     // pass ids directly.
     let source = resolve_node_ref(&graph, &pos[0]);
     let target = resolve_node_ref(&graph, &pos[1]);
     let strict = has_flag(args, "--strict");
 
-    let result = agent_tools::shortest_path(&graph, &raw, &source, &target, strict);
+    let result = agent_tools::shortest_path(&graph, &source, &target, strict);
     emit_agent_result(
         args,
         &result,

@@ -38,10 +38,10 @@
 | P3.1 | Lazy graph.json compression | 3 | **High** — measured 21× startup | Low | ✅ |
 | P3.2 | Stop requesting `Accept-Encoding: identity` | 3 | ~~10–20× transfer~~ → correctness fix | Low | ✅ |
 | P3.3 | Cache `/api/graph/stats`; `as_str()` over `{:?}` | 3 | Medium — measured 50× | Low | ✅ |
-| P4.1 | MCP `shortest_path`: stop re-parsing the graph | 4 | High (per tool call) | Low | ⬜ |
-| P4.2 | `mmr_rerank`: hoist relevance, pre-normalize | 4 | Medium | Low | ⬜ |
-| P4.3 | `read_snippet`: per-call file cache | 4 | Medium | Low | ⬜ |
-| P4.4 | `api_search`: bound the result set | 4 | Medium (safety) | Low | ⬜ |
+| P4.1 | MCP `shortest_path`: stop re-parsing the graph | 4 | High — + 346 MB freed | Low | ✅ |
+| P4.2 | `mmr_rerank`: hoist relevance, cache norms | 4 | Medium — O(k²nd) → O(knd) | Low | ✅ |
+| P4.3 | `read_snippet`: per-call file cache | 4 | Medium | Low | ✅ |
+| P4.4 | `api_search`: bound the result set | 4 | Medium (safety) | Low | ✅ |
 | P5.1 | Hover: use the adjacency index already built | 5 | **High** — perceived responsiveness | Low | ⬜ |
 | P5.2 | Gizmo: stop rewriting `innerHTML` at 30 Hz | 5 | Low–medium | Very low | ⬜ |
 
@@ -746,7 +746,32 @@ formats change — cover it with a round-trip test over every enum variant.
 
 Smaller, independent wins. P4.1 is gated on P1.2.
 
-### ⬜ P4.1 — MCP `shortest_path`: stop re-parsing the graph
+### ✅ P4.1 — MCP `shortest_path`: stop re-parsing the graph
+
+**Landed 2026-08-18, and it reached further than planned.**
+
+`agent_tools::shortest_path` now calls `find_shortest_path_graph` on the graph
+it was already handed, and its `raw: &str` parameter is gone. That made
+`run_tool`'s own `raw` parameter dead, and removing *that* is where the real
+win turned out to be:
+
+- **`mcp::CachedGraph` was retaining an `Arc<String>` of the entire
+  `graph.json` — a second full copy of every cached project, 346 MB of it on
+  the largest index — solely so it could be handed to `run_tool` for this one
+  tool to re-parse.** It now stores `raw_len: usize` for cache accounting and
+  drops the text after parsing.
+- `cli::chat_cmd` likewise held an `Arc<String>` for the tool closure; dropped.
+- `serve.rs` was cheaper (it borrowed `encoded.identity` rather than copying),
+  but `GraphSnapshot::raw_json` had no callers left and is deleted.
+
+So the item as scoped was "stop re-parsing per tool call"; what it actually
+removed was a whole retained copy of the graph per cached MCP project.
+
+**Follow-up:** `CachedGraph::approx_bytes` still multiplies by 4 (text + ~3×
+parsed). With the text gone the honest figure is nearer 3×, but
+over-estimating only makes the cache more conservative and the multiplier is
+shared with `ug serve`, so it is left alone deliberately rather than
+overlooked.
 
 **Where:** `native/src/agent_tools.rs:3166-3177` — **depends on P1.2**
 
@@ -777,7 +802,23 @@ the `&GraphData` they pass alongside it.
 
 ---
 
-### ⬜ P4.2 — `mmr_rerank`: hoist relevance, pre-normalize
+### ✅ P4.2 — `mmr_rerank`: hoist relevance, cache norms
+
+**Landed 2026-08-18. O(k²·n·d) → O(k·n·d), with bit-identical output.**
+
+Three caches, no changed arithmetic: relevance against the query is
+loop-invariant and was recomputed every round; `cosine` recomputed both
+vectors' norms on every call, so a candidate's own norm was recomputed
+`k · picked` times; and the diversity term rescanned all of `picked` per
+candidate per round where a running maximum extended by the newest pick
+visits the same similarities.
+
+**Deliberately *not* pre-normalizing**, which the plan suggested. It would
+save a little more but changes float association and could flip a tie, and
+this feeds search ranking. Caching the norms — the same sums, accumulated in
+the same order — is free of that risk. `tests/rerank_snippet_test.rs` keeps a
+copy of the naive implementation and asserts identical pick order across 4
+`k` values × 5 `lambda` values, so "bit-identical" is checked, not claimed.
 
 **Where:** `native/src/storage/query.rs:205-224`
 
@@ -799,7 +840,17 @@ pre-normalization — compare with a tolerance, and only assert *order* exactly.
 
 ---
 
-### ⬜ P4.3 — `read_snippet`: per-call file cache
+### ✅ P4.3 — `read_snippet`: per-call file cache
+
+**Landed 2026-08-18.** New `SnippetCache`, threaded through all three
+snippet-attaching loops in `query.rs`. A file is read at most once per
+request, and an unreadable path caches its failure so it is not retried per
+hit. `read_snippet` and `snippet_for` keep their signatures; the line-slicing
+is shared via a new `slice_lines`.
+
+Per call, not global — as the plan required. A long-lived cache would serve a
+snippet from before the user's last edit, which is the specific failure `ug`
+exists to avoid.
 
 **Where:** `native/src/storage/query.rs:360-392`
 
@@ -818,7 +869,17 @@ temporary counter, or just time a 20-hit search.
 
 ---
 
-### ⬜ P4.4 — `api_search`: bound the result set
+### ✅ P4.4 — `api_search`: bound the result set
+
+**Landed 2026-08-18.** `?limit=` (default 200, hard cap 5,000). The response
+gained `returned`, `truncated` and `limit`; **`count` still means matches, not
+returned**, so a caller can distinguish "200 of 162,000" from "200 of 200".
+
+Checked before changing: nothing in `native/src/vis/js/` calls this endpoint —
+it is listed in `cli/api.rs` and reachable by hand, so the contract change is
+safe. The type filter also stopped allocating a lowercased `String` per node
+per request, comparing `eq_ignore_ascii_case` against the static enum name
+instead (P3.3's `as_str`).
 
 **Where:** `native/src/serve.rs:3238-3277`
 
