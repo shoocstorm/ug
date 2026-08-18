@@ -30,8 +30,8 @@
 | # | Item | Phase | Est. impact | Risk | Status |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | P1.1 | Brandes betweenness: index-based rewrite | 1 | **Very high** — measured 235× | Low | ✅ |
-| P1.2 | `find_shortest_path`: predecessor array | 1 | High | Low | ⬜ |
-| P1.3 | `run_k_hop_bfs`: real BFS + incident-list induction | 1 | High | Low | ⬜ |
+| P1.2 | `find_shortest_path`: predecessor array | 1 | High — measured 8.4× | Low | ✅ |
+| P1.3 | `run_k_hop_bfs`: real BFS + incident-list induction | 1 | ~~High~~ → 1.0–2.1×, + correctness | Low | ✅ |
 | P2.1 | Concurrent embedding batches | 2 | **Very high** — ~8× cold ingest | Low | ✅ |
 | P2.2 | Stop reading + hashing every file twice | 2 | Medium — ~2× cold index I/O | Low | ✅ |
 | P2.3 | Progress meter: drop the per-file mutex + flush | 2 | Medium (scales with cores) | Very low | ✅ |
@@ -53,7 +53,8 @@ latency item that does not depend on anything else, so it can be pulled
 forward if the felt slowness matters more than the throughput numbers.
 
 **Hard dependency:** P4.1 needs the `find_shortest_path_graph` entry point
-introduced by P1.2. Everything else is independent.
+introduced by P1.2 — **satisfied as of 2026-08-18**, so P4.1 is unblocked.
+Everything else is independent.
 
 ---
 
@@ -275,7 +276,20 @@ problem before only because the endpoint returned zeros instantly.
 
 ---
 
-### ⬜ P1.2 — `find_shortest_path`: predecessor array
+### ✅ P1.2 — `find_shortest_path`: predecessor array
+
+**Landed 2026-08-18. 8.4× at n=8000 (13.4 ms → 1.6 ms) for a caller that
+already holds a `GraphData`; 2.8× even when both sides pay the JSON parse.**
+
+New `find_shortest_path_graph(&GraphData, &str, &str) -> PathResult`, with the
+`String` wrapper delegating to it — the `_graph` convention `calculate_
+centrality_graph` and `detect_cycles_graph` already follow. BFS with a
+`prev: Vec<Option<usize>>`, `VecDeque` frontier, `visited` marked on enqueue,
+and one path reconstruction at the end, replacing a walk that cloned the whole
+path per edge, dequeued with `Vec::remove(0)`, and re-queued a node once per
+edge pointing at it.
+
+**This unblocks P4.1**, which needed exactly this entry point.
 
 **Where:** `native/src/graph.rs:1499-1526`
 
@@ -310,7 +324,39 @@ must agree: `api_path` is directed/forward-only, and the CLI should stay so.
 
 ---
 
-### ⬜ P1.3 — `run_k_hop_bfs`: real BFS + incident-list induction
+### ✅ P1.3 — `run_k_hop_bfs`: real BFS + incident-list induction
+
+**Landed 2026-08-18 — and the "High" impact estimate below was wrong.**
+Measured 1.0×–2.1× on real fixtures (`neo4j` 1.2×, `hermes` 2.1×, the small
+ones ~1.0×). Recorded rather than quietly restated, since the mis-scoring is
+the useful part.
+
+**Why the estimate missed.** The plan costed the O(V+E) result scan, which is
+real and is gone. But *both* implementations must first build adjacency over
+the whole graph, which is also O(V+E) — so removing one O(V+E) pass out of two
+or three is a constant factor, not a complexity change. On a sparse synthetic
+graph the two are within noise of each other; the new one builds two CSRs
+(out-targets and incident-edges) where the old built one petgraph, which eats
+most of what the faster induction wins back.
+
+**What it is actually worth: the correctness fix.** The old walk used
+`Vec::pop` — LIFO — and marked `visited` when a node came *off* the queue, so
+it was a depth-first walk recording whatever distance it happened to arrive
+with. On `A→B→C→D` plus a direct `A→D`, it descended the long branch and
+recorded D at **distance 3**, then discarded the correct distance 1 because D
+was already marked. Every consumer of `distances` was being told the wrong hop
+count for any node reachable by more than one route — which is most of them in
+a real call graph. `hop_distance_is_the_shortest_not_the_first_found` in
+`tests/traversal_test.rs` pins it.
+
+`run_k_hop_bfs` also became `pub k_hop_bfs_graph`, completing the `_graph`
+family so callers holding a `GraphData` can skip the re-parse.
+
+**Follow-up this exposed.** A 2-hop query on `neo4j` costs ~120 ms, nearly all
+of it rebuilding adjacency from scratch. `serve.rs` already caches this per
+snapshot (`snap.adj`, a `OnceLock`); the lib entry points rebuild per call
+because a free function has nowhere to hang a cache. Giving them one is the
+remaining win here, and is a bigger one than this item delivered.
 
 **Where:** `native/src/graph.rs:1301-1338`
 
@@ -864,6 +910,9 @@ Append one row per landed item. Keep the numbers, not just the verdict.
 | 2026-08-18 | P3.1 | `neo4j` idle RSS | 919 MB | 827 MB | unbuilt encodings cost nothing |
 | 2026-08-18 | P3.2 | `neo4j` graph.json | already `br` | unchanged | premise wrong — no transfer win; progress bar fixed |
 | 2026-08-18 | P3.3 | `/api/graph/stats` | 19.8 ms | 0.4 ms | 50×, memoised per snapshot |
+| 2026-08-18 | P1.2 | synthetic n=8000 (parsed) | 13.4 ms | 1.6 ms | 8.4×; 2.8× when both parse JSON |
+| 2026-08-18 | P1.3 | `neo4j` 2-hop traversal | 146.7 ms | 119.8 ms | 1.2× — estimate was wrong, see P1.3 |
+| 2026-08-18 | P1.3 | — | wrong hop distances | correct | LIFO walk recorded first-found, not shortest |
 
 ---
 

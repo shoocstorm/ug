@@ -1,4 +1,4 @@
-//! Baseline: `calculate_centrality_graph` exactly as it stood at cdc9a2b,
+//! Baselines: the graph entry points exactly as they stood at cdc9a2b,
 //! kept only so the bench can put a real before/after ratio in the results
 //! log. Do not fix anything here — its value is being unchanged.
 //!
@@ -10,7 +10,7 @@
 
 use petgraph::graph::{DiGraph, NodeIndex};
 use std::collections::HashMap;
-use ultragraph::types::GraphData;
+use ultragraph::types::{GraphData, GraphEdge, GraphNode};
 
 fn build_di_graph(graph: &GraphData) -> (DiGraph<(), ()>, HashMap<String, NodeIndex>) {
     let mut di_graph: DiGraph<(), ()> = DiGraph::new();
@@ -162,6 +162,136 @@ pub fn calculate_centrality_baseline(graph: &GraphData) -> String {
     let result = ultragraph::types::CentralityResult {
         degree_centrality,
         betweenness_centrality: betweenness,
+    };
+    serde_json::to_string(&result).unwrap_or_default()
+}
+
+// ---------- P1.2 / P1.3 baselines ----------
+
+pub fn run_k_hop_bfs_baseline(graph: &GraphData, start_node_id: &str, k: u32) -> ultragraph::types::BfsResult {
+    let (di_graph, index_map) = build_di_graph(graph);
+
+    let start_idx = match index_map.get(start_node_id) {
+        Some(idx) => *idx,
+        None => {
+            return ultragraph::types::BfsResult {
+                nodes: vec![],
+                edges: vec![],
+                distances: HashMap::new(),
+            }
+        }
+    };
+
+    let mut distances: HashMap<String, u32> = HashMap::new();
+    let mut queue: Vec<(NodeIndex, u32)> = vec![(start_idx, 0)];
+    let mut visited: HashMap<NodeIndex, bool> = HashMap::new();
+
+    while let Some((node_idx, dist)) = queue.pop() {
+        if dist > k {
+            continue;
+        }
+        if visited.get(&node_idx) == Some(&true) {
+            continue;
+        }
+        visited.insert(node_idx, true);
+
+        let node_id = graph.nodes[node_idx.index()].id.clone();
+        distances.insert(node_id.clone(), dist);
+
+        for neighbor in di_graph.neighbors(node_idx) {
+            if !visited.contains_key(&neighbor) {
+                queue.push((neighbor, dist + 1));
+            }
+        }
+    }
+
+    let result_nodes: Vec<GraphNode> = graph
+        .nodes
+        .iter()
+        .filter(|n| distances.contains_key(&n.id))
+        .cloned()
+        .collect();
+
+    let result_edges: Vec<GraphEdge> = graph
+        .edges
+        .iter()
+        .filter(|e| distances.contains_key(&e.source) && distances.contains_key(&e.target))
+        .cloned()
+        .collect();
+
+    ultragraph::types::BfsResult {
+        nodes: result_nodes,
+        edges: result_edges,
+        distances,
+    }
+}
+
+pub fn find_shortest_path_baseline(graph_json: String, source_id: String, target_id: String) -> String {
+    let graph: GraphData = match serde_json::from_str(&graph_json) {
+        Ok(g) => g,
+        Err(_) => return "{}".to_string(),
+    };
+
+    let (di_graph, index_map) = build_di_graph(&graph);
+
+    let source_idx = match index_map.get(&source_id) {
+        Some(idx) => *idx,
+        None => {
+            let result = ultragraph::types::PathResult {
+                path: vec![],
+                found: false,
+                length: None,
+            };
+            return serde_json::to_string(&result).unwrap_or_default();
+        }
+    };
+
+    let target_idx = match index_map.get(&target_id) {
+        Some(idx) => *idx,
+        None => {
+            let result = ultragraph::types::PathResult {
+                path: vec![],
+                found: false,
+                length: None,
+            };
+            return serde_json::to_string(&result).unwrap_or_default();
+        }
+    };
+
+    let mut queue: Vec<(NodeIndex, Vec<String>)> = vec![(source_idx, vec![source_id.clone()])];
+    let mut visited: HashMap<NodeIndex, bool> = HashMap::new();
+
+    while !queue.is_empty() {
+        let (node_idx, path) = queue.remove(0);
+        if node_idx == target_idx {
+            let path_len = path.len() as u32;
+            let result = ultragraph::types::PathResult {
+                path: path.clone(),
+                found: true,
+                length: Some(path_len - 1),
+            };
+            return serde_json::to_string(&result).unwrap_or_default();
+        }
+
+        if visited.get(&node_idx) == Some(&true) {
+            continue;
+        }
+        visited.insert(node_idx, true);
+
+        for neighbor in di_graph.neighbors(node_idx) {
+            if !visited.contains_key(&neighbor) {
+                let mut new_path = path.clone();
+                let neighbor_id = graph.nodes[neighbor.index()].id.clone();
+                new_path.push(neighbor_id);
+                queue.push((neighbor, new_path));
+            }
+        }
+    }
+
+    let result = ultragraph::types::PathResult {
+        path: vec![],
+        found: false,
+        length: None,
     };
     serde_json::to_string(&result).unwrap_or_default()
 }

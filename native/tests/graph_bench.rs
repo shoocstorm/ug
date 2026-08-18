@@ -8,7 +8,7 @@
 //! belong in that file's results log, with the machine noted — these are
 //! comparative, not absolute.
 
-mod centrality_baseline;
+mod graph_baseline;
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -153,7 +153,7 @@ fn centrality_old_vs_new() {
         let graph = synthetic(n, 3);
 
         let t = Instant::now();
-        let _ = centrality_baseline::calculate_centrality_baseline(&graph);
+        let _ = graph_baseline::calculate_centrality_baseline(&graph);
         let old_ms = t.elapsed().as_secs_f64() * 1_000.0;
 
         let t = Instant::now();
@@ -163,6 +163,142 @@ fn centrality_old_vs_new() {
         println!(
             "  n={n:<8} {old_ms:>10.1} ms {new_ms:>10.1} ms {:>9.0}×",
             old_ms / new_ms
+        );
+    }
+    println!();
+}
+
+/// P1.2 / P1.3 on real fixtures. Both were O(V+E) or worse per call for a
+/// question about one neighbourhood; these are the numbers that say so.
+#[test]
+#[ignore]
+fn traversal_fixtures() {
+    use ultragraph::{find_shortest_path_graph, k_hop_bfs};
+
+    println!("\nk-hop BFS + shortest path — real fixtures");
+    for (name, path) in fixtures() {
+        let Ok(raw) = std::fs::read_to_string(&path) else { continue };
+        let Ok(graph) = serde_json::from_str::<GraphData>(&raw) else { continue };
+        if graph.nodes.is_empty() {
+            continue;
+        }
+        // A node with real outbound degree, so the walk has somewhere to go.
+        let mut best = (0usize, graph.nodes[0].id.clone());
+        let mut degree = std::collections::HashMap::<&str, usize>::new();
+        for e in &graph.edges {
+            *degree.entry(e.source.as_str()).or_insert(0) += 1;
+        }
+        for (id, d) in degree {
+            if d > best.0 {
+                best = (d, id.to_string());
+            }
+        }
+        let start = best.1;
+
+        let t = Instant::now();
+        let bfs = k_hop_bfs(raw.clone(), start.clone(), 2);
+        let bfs_ms = t.elapsed().as_secs_f64() * 1_000.0;
+
+        // Traversal only, old vs new, over the same parsed graph.
+        let t = Instant::now();
+        let _ = graph_baseline::run_k_hop_bfs_baseline(&graph, &start, 2);
+        let old_only = t.elapsed().as_secs_f64() * 1_000.0;
+        let t = Instant::now();
+        let _ = ultragraph::k_hop_bfs_graph(&graph, &start, 2);
+        let new_only = t.elapsed().as_secs_f64() * 1_000.0;
+        let reached: usize = serde_json::from_str::<serde_json::Value>(&bfs)
+            .ok()
+            .and_then(|v| v["nodes"].as_array().map(|a| a.len()))
+            .unwrap_or(0);
+
+        // Pick a target the walk actually reached, so the path search does
+        // real work rather than exhausting the graph and returning not-found.
+        let target = serde_json::from_str::<serde_json::Value>(&bfs)
+            .ok()
+            .and_then(|v| v["nodes"].as_array().and_then(|a| a.last().cloned()))
+            .and_then(|n| n["id"].as_str().map(str::to_string))
+            .unwrap_or_else(|| start.clone());
+
+        let t = Instant::now();
+        let p = find_shortest_path_graph(&graph, &start, &target);
+        let path_ms = t.elapsed().as_secs_f64() * 1_000.0;
+
+        println!(
+            "  {name:<16} V={:>7} E={:>8}  2-hop traversal old {old_only:>8.2} / new {new_only:>7.2} ms  {:>5.1}x  ({reached} reached)   path {path_ms:>7.2} ms (len={:?})",
+            graph.nodes.len(),
+            graph.edges.len(),
+            old_only / new_only,
+            p.length,
+        );
+        let _ = (bfs_ms, p.found);
+    }
+    println!();
+}
+
+/// P1.2 / P1.3 head-to-head against `cdc9a2b`.
+///
+/// Both sides are handed the same raw JSON and pay their own parse, because
+/// the old entry points took a `String` and that is what a caller actually
+/// had. The extra `path (parsed)` column isolates P1.2's other half: callers
+/// holding a `GraphData` no longer have to re-parse it at all.
+#[test]
+#[ignore]
+fn traversal_old_vs_new() {
+    use ultragraph::{find_shortest_path, find_shortest_path_graph, k_hop_bfs, k_hop_bfs_graph};
+
+    println!("\ntraversal — baseline (cdc9a2b) vs current, both from raw JSON");
+    println!(
+        "  {:<10} {:>22} {:>8} {:>22} {:>8} {:>14}",
+        "size", "2-hop old/new (ms)", "", "path old/new (ms)", "", "path (parsed)"
+    );
+    for n in [1_000usize, 2_000, 4_000, 8_000] {
+        let graph = synthetic(n, 3);
+        let raw = serde_json::to_string(&graph).unwrap();
+        let start = graph.nodes[0].id.clone();
+        let target = graph.nodes[n / 2].id.clone();
+
+        let t = Instant::now();
+        {
+            let g: GraphData = serde_json::from_str(&raw).unwrap();
+            let _ = graph_baseline::run_k_hop_bfs_baseline(&g, &start, 2);
+        }
+        let bfs_old = t.elapsed().as_secs_f64() * 1_000.0;
+
+        let t = Instant::now();
+        let _ = k_hop_bfs(raw.clone(), start.clone(), 2);
+        let bfs_new = t.elapsed().as_secs_f64() * 1_000.0;
+
+        // Traversal only, both sides over the same parsed graph — this is
+        // what P1.3 actually changed; the wrappers above are dominated by
+        // `serde_json` on a sparse fixture.
+        let t = Instant::now();
+        let _ = graph_baseline::run_k_hop_bfs_baseline(&graph, &start, 2);
+        let bfs_old_only = t.elapsed().as_secs_f64() * 1_000.0;
+        let t = Instant::now();
+        let _ = k_hop_bfs_graph(&graph, &start, 2);
+        let bfs_new_only = t.elapsed().as_secs_f64() * 1_000.0;
+
+        let t = Instant::now();
+        let _ = graph_baseline::find_shortest_path_baseline(
+            raw.clone(),
+            start.clone(),
+            target.clone(),
+        );
+        let path_old = t.elapsed().as_secs_f64() * 1_000.0;
+
+        let t = Instant::now();
+        let _ = find_shortest_path(raw.clone(), start.clone(), target.clone());
+        let path_new = t.elapsed().as_secs_f64() * 1_000.0;
+
+        let t = Instant::now();
+        let _ = find_shortest_path_graph(&graph, &start, &target);
+        let path_parsed = t.elapsed().as_secs_f64() * 1_000.0;
+
+        println!(
+            "  n={n:<8} {bfs_old:>9.2} / {bfs_new:>8.2} {:>7.1}x {path_old:>10.2} / {path_new:>7.2} {:>7.1}x {path_parsed:>12.2}   | traversal-only 2-hop {bfs_old_only:>7.2} / {bfs_new_only:>6.2} {:>5.1}x",
+            bfs_old / bfs_new,
+            path_old / path_new,
+            bfs_old_only / bfs_new_only,
         );
     }
     println!();

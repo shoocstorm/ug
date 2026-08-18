@@ -504,6 +504,7 @@
             wireDiscoverSubtabs();
             wirePanelTabs();
             wireCatalog();
+            wireNodeMenu();
             wireIngestButtons();
             probeCapabilities();
             startHealthPolling();

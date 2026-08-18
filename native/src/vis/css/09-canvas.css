@@ -102,6 +102,143 @@
             display: none;
         }
 
+        /* ─── Node context menu ─────────────────────────────
+           The right-click card. Deliberately close to .tooltip in weight and
+           colour — it answers the same question the hover box does, one step
+           further in — but it takes the pointer, since half of it is rows you
+           can act on. */
+        .node-menu {
+            position: fixed;
+            z-index: 1001;
+            width: 268px;
+            max-width: calc(100vw - 20px);
+            background: rgba(15, 15, 17, 0.97);
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            box-shadow: 0 14px 46px rgba(0, 0, 0, 0.6);
+            font-size: 11px;
+            overflow: hidden;
+        }
+
+        .node-menu[hidden] { display: none; }
+
+        .nm-head {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            padding: 9px 11px 8px;
+            border-bottom: 1px solid var(--border-soft);
+        }
+
+        .nm-head .node-icon {
+            width: 15px;
+            height: 15px;
+            flex: 0 0 auto;
+        }
+
+        .nm-name {
+            font-family: 'JetBrains Mono', ui-monospace, monospace;
+            font-weight: 600;
+            color: var(--text);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .nm-type {
+            margin-left: auto;
+            flex: 0 0 auto;
+            font-size: 9px;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            padding: 2px 7px;
+            border-radius: 999px;
+        }
+
+        /* One line of the docstring, where there is one. The panel shows the
+           whole thing; here it is only a hint that the thing is documented and
+           roughly what about. */
+        .nm-doc {
+            padding: 7px 11px 0;
+            color: var(--text-muted);
+            line-height: 1.45;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+
+        .nm-rows { padding: 7px 11px 9px; }
+
+        .nm-row {
+            display: flex;
+            gap: 8px;
+            align-items: baseline;
+            padding: 2px 0;
+        }
+
+        .nm-key {
+            flex: 0 0 46px;
+            font-size: 9px;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            color: var(--text-dim);
+        }
+
+        .nm-val {
+            flex: 1 1 auto;
+            min-width: 0;
+            color: var(--text-muted);
+            font-family: 'JetBrains Mono', ui-monospace, monospace;
+            /* Paths are the long value here, and the informative end is the
+               right one — so wrap rather than truncate the file name away. */
+            overflow-wrap: anywhere;
+        }
+
+        .nm-dim { color: var(--text-dim); }
+
+        /* Same two hues as the info panel's boundary tags and the canvas
+           rings: warm for a way in, violet for a way out. */
+        .nm-boundary {
+            display: inline-block;
+            font-size: 9px;
+            font-weight: 600;
+            padding: 0 6px;
+            border-radius: 999px;
+            border: 1px solid currentColor;
+        }
+
+        .nm-boundary.in { color: #fbbf24; }
+        .nm-boundary.out { color: #a78bfa; }
+
+        .nm-acts {
+            display: flex;
+            gap: 1px;
+            border-top: 1px solid var(--border-soft);
+            background: var(--border-soft);
+        }
+
+        .nm-act {
+            flex: 1 1 0;
+            padding: 7px 4px;
+            border: none;
+            background: rgba(15, 15, 17, 0.97);
+            color: var(--text-muted);
+            font-family: inherit;
+            font-size: 10px;
+            cursor: pointer;
+            transition: background 0.12s, color 0.12s;
+        }
+
+        .nm-act:hover {
+            background: var(--bg-elevated);
+            color: var(--text);
+        }
+
+        .nm-act.copied { color: var(--success); }
+
         /* ─── Canvas overlays: legend, gizmo, nav/breadcrumb ─── */
 
         .canvas-overlay {

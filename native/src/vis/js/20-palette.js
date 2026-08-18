@@ -15,6 +15,7 @@
             { group: 'Global', keys: 'Tab / Shift+Tab', action: 'Step to next / previous neighbour' },
             { group: 'Global', keys: 'Esc', action: 'Exit focus / close' },
             { group: 'Global', keys: '1–6', action: 'Face projections · 0 = 3D' },
+            { group: 'Global', keys: 'Right-click a node', action: 'Summary card — details, zoom, copy id' },
             { group: 'Guided tour', keys: 'Space', action: 'Play / pause' },
             { group: 'Guided tour', keys: '← / →', action: 'Previous / next stop' },
             { group: 'Guided tour', keys: 'S', action: 'Playback speed' },

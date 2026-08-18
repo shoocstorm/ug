@@ -1281,61 +1281,239 @@ fn dedupe_edges(edges: &mut Vec<GraphEdge>) {
     });
 }
 
-fn run_k_hop_bfs(graph: &GraphData, start_node_id: &str, k: u32) -> crate::types::BfsResult {
-    let (di_graph, index_map) = build_di_graph(graph);
+/// Node-index adjacency for the traversal entry points, built once per call.
+///
+/// Distinct from [`Csr`], which centrality uses: that one stores *deduped
+/// target node indices*, because two relationships between the same pair are
+/// one route and counting them twice corrupts σ. These traversals need the
+/// opposite — real **edge indices**, so `k`-hop can hand back the actual edge
+/// objects it reached — and they do not care about duplicates, since BFS
+/// visits a node once however many edges point at it.
+struct EdgeAdj<'a> {
+    id_to_idx: HashMap<&'a str, u32>,
+    /// CSR over outgoing *target node indices*, for walking forward.
+    out_offsets: Vec<usize>,
+    out_targets: Vec<u32>,
+    /// CSR over incident (in **and** out) *edge indices*, for reading back
+    /// the edges among a set of reached nodes without touching the rest.
+    inc_offsets: Vec<usize>,
+    inc_edges: Vec<u32>,
+}
 
-    let start_idx = match index_map.get(start_node_id) {
-        Some(idx) => *idx,
-        None => {
-            return crate::types::BfsResult {
-                nodes: vec![],
-                edges: vec![],
-                distances: HashMap::new(),
+impl<'a> EdgeAdj<'a> {
+    fn build(graph: &'a GraphData) -> Self {
+        let n = graph.nodes.len();
+        // Last duplicate id wins, matching `build_di_graph`'s `collect()`.
+        let mut id_to_idx: HashMap<&str, u32> = HashMap::with_capacity(n);
+        for (i, node) in graph.nodes.iter().enumerate() {
+            id_to_idx.insert(node.id.as_str(), i as u32);
+        }
+
+        let mut out_lists: Vec<Vec<u32>> = vec![Vec::new(); n];
+        let mut inc_lists: Vec<Vec<u32>> = vec![Vec::new(); n];
+        for (ei, e) in graph.edges.iter().enumerate() {
+            let (Some(&sx), Some(&tx)) = (
+                id_to_idx.get(e.source.as_str()),
+                id_to_idx.get(e.target.as_str()),
+            ) else {
+                // An edge naming something outside the node set — dropped,
+                // exactly as `build_di_graph` dropped it.
+                continue;
+            };
+            out_lists[sx as usize].push(tx);
+            inc_lists[sx as usize].push(ei as u32);
+            if sx != tx {
+                inc_lists[tx as usize].push(ei as u32);
             }
         }
+
+        let flatten = |lists: Vec<Vec<u32>>| {
+            let mut offsets = Vec::with_capacity(n + 1);
+            let mut flat = Vec::new();
+            offsets.push(0);
+            for l in lists {
+                flat.extend_from_slice(&l);
+                offsets.push(flat.len());
+            }
+            (offsets, flat)
+        };
+        let (out_offsets, out_targets) = flatten(out_lists);
+        let (inc_offsets, inc_edges) = flatten(inc_lists);
+
+        EdgeAdj { id_to_idx, out_offsets, out_targets, inc_offsets, inc_edges }
+    }
+
+    #[inline]
+    fn out(&self, i: usize) -> &[u32] {
+        &self.out_targets[self.out_offsets[i]..self.out_offsets[i + 1]]
+    }
+
+    #[inline]
+    fn incident(&self, i: usize) -> &[u32] {
+        &self.inc_edges[self.inc_offsets[i]..self.inc_offsets[i + 1]]
+    }
+}
+
+/// Shortest directed path between two nodes, over an already-parsed graph.
+///
+/// Breadth-first with a predecessor array, reconstructing the path once at
+/// the end. The `String`-in/`String`-out [`find_shortest_path`] wraps this;
+/// callers holding a `GraphData` should use this directly rather than paying
+/// for a second parse of the whole file.
+///
+/// Replaces a BFS that carried a full `Vec<String>` of the path along with
+/// *every queued node* — cloning it per edge — dequeued with
+/// `Vec::remove(0)`, and marked `visited` on dequeue rather than enqueue, so
+/// the same node was queued once per edge pointing at it. This is the shape
+/// `serve::api_path` already used.
+pub fn find_shortest_path_graph(
+    graph: &GraphData,
+    source_id: &str,
+    target_id: &str,
+) -> crate::types::PathResult {
+    let not_found = || crate::types::PathResult { path: vec![], found: false, length: None };
+
+    let adj = EdgeAdj::build(graph);
+    let (Some(&src), Some(&tgt)) = (
+        adj.id_to_idx.get(source_id),
+        adj.id_to_idx.get(target_id),
+    ) else {
+        return not_found();
     };
+    let (src, tgt) = (src as usize, tgt as usize);
 
-    let mut distances: HashMap<String, u32> = HashMap::new();
-    let mut queue: Vec<(NodeIndex, u32)> = vec![(start_idx, 0)];
-    let mut visited: HashMap<NodeIndex, bool> = HashMap::new();
+    let n = graph.nodes.len();
+    let mut prev: Vec<Option<usize>> = vec![None; n];
+    let mut visited: Vec<bool> = vec![false; n];
+    let mut queue: VecDeque<usize> = VecDeque::new();
+    visited[src] = true;
+    queue.push_back(src);
 
-    while let Some((node_idx, dist)) = queue.pop() {
-        if dist > k {
-            continue;
+    let mut found = false;
+    while let Some(cur) = queue.pop_front() {
+        if cur == tgt {
+            found = true;
+            break;
         }
-        if visited.get(&node_idx) == Some(&true) {
-            continue;
-        }
-        visited.insert(node_idx, true);
-
-        let node_id = graph.nodes[node_idx.index()].id.clone();
-        distances.insert(node_id.clone(), dist);
-
-        for neighbor in di_graph.neighbors(node_idx) {
-            if !visited.contains_key(&neighbor) {
-                queue.push((neighbor, dist + 1));
+        for &w in adj.out(cur) {
+            let wi = w as usize;
+            if !visited[wi] {
+                visited[wi] = true;
+                prev[wi] = Some(cur);
+                queue.push_back(wi);
             }
         }
     }
 
-    let result_nodes: Vec<GraphNode> = graph
-        .nodes
-        .iter()
-        .filter(|n| distances.contains_key(&n.id))
-        .cloned()
-        .collect();
+    if !found {
+        return not_found();
+    }
 
-    let result_edges: Vec<GraphEdge> = graph
-        .edges
+    // Walk the predecessors back from the target. Bounded by `n` because
+    // every step moves to a strictly earlier BFS layer.
+    let mut path_idx: Vec<usize> = Vec::new();
+    let mut cur = tgt;
+    loop {
+        path_idx.push(cur);
+        if cur == src {
+            break;
+        }
+        match prev[cur] {
+            Some(p) => cur = p,
+            None => return not_found(),
+        }
+    }
+    path_idx.reverse();
+
+    let path: Vec<String> = path_idx
         .iter()
-        .filter(|e| distances.contains_key(&e.source) && distances.contains_key(&e.target))
-        .cloned()
+        .map(|&i| graph.nodes[i].id.clone())
         .collect();
+    let length = (path.len() as u32).saturating_sub(1);
+
+    crate::types::PathResult { path, found: true, length: Some(length) }
+}
+
+/// Every node within `k` directed hops of `start_node_id`, plus the edges
+/// induced among them.
+///
+/// Was a `Vec::pop` "BFS" — LIFO, with `visited` marked on pop — which made it
+/// a depth-first walk that could record a longer distance for a node it
+/// reached the long way round first. It then selected its results by scanning
+/// the whole node list and the whole edge list, so a 1-hop question cost
+/// O(V + E). Both are fixed the way `serve::api_traverse` already had them:
+/// a real queue marking on enqueue, and edges read off the reached nodes'
+/// incident lists.
+pub fn k_hop_bfs_graph(graph: &GraphData, start_node_id: &str, k: u32) -> crate::types::BfsResult {
+    let empty = || crate::types::BfsResult {
+        nodes: vec![],
+        edges: vec![],
+        distances: HashMap::new(),
+    };
+
+    let adj = EdgeAdj::build(graph);
+    let Some(&start) = adj.id_to_idx.get(start_node_id) else {
+        return empty();
+    };
+
+    let n = graph.nodes.len();
+    let mut dist: Vec<Option<u32>> = vec![None; n];
+    let mut queue: VecDeque<usize> = VecDeque::new();
+    dist[start as usize] = Some(0);
+    queue.push_back(start as usize);
+
+    while let Some(v) = queue.pop_front() {
+        let d = dist[v].expect("queued nodes carry a distance");
+        // Nodes exactly `k` out are part of the answer but are not expanded.
+        if d == k {
+            continue;
+        }
+        for &w in adj.out(v) {
+            let wi = w as usize;
+            if dist[wi].is_none() {
+                dist[wi] = Some(d + 1);
+                queue.push_back(wi);
+            }
+        }
+    }
+
+    let reached: Vec<usize> = (0..n).filter(|&i| dist[i].is_some()).collect();
+
+    // Induced edges: both endpoints reached. Gathered from the reached nodes'
+    // own incident lists rather than by filtering every edge in the graph —
+    // O(reached degree) instead of O(E), which on a large repo is the
+    // difference between a handful of lookups and three quarters of a million.
+    // Collected by index then sorted, so the result keeps `graph.edges` order
+    // rather than inheriting the traversal's.
+    let mut edge_idx: Vec<u32> = reached
+        .iter()
+        .flat_map(|&i| adj.incident(i))
+        .copied()
+        .filter(|&ei| {
+            let e = &graph.edges[ei as usize];
+            matches!(
+                (
+                    adj.id_to_idx.get(e.source.as_str()),
+                    adj.id_to_idx.get(e.target.as_str()),
+                ),
+                (Some(&si), Some(&ti))
+                    if dist[si as usize].is_some() && dist[ti as usize].is_some()
+            )
+        })
+        .collect();
+    edge_idx.sort_unstable();
+    edge_idx.dedup();
 
     crate::types::BfsResult {
-        nodes: result_nodes,
-        edges: result_edges,
-        distances,
+        nodes: reached.iter().map(|&i| graph.nodes[i].clone()).collect(),
+        edges: edge_idx
+            .iter()
+            .map(|&ei| graph.edges[ei as usize].clone())
+            .collect(),
+        distances: reached
+            .iter()
+            .map(|&i| (graph.nodes[i].id.clone(), dist[i].expect("reached")))
+            .collect(),
     }
 }
 
@@ -1355,7 +1533,7 @@ pub fn k_hop_bfs(graph_json: String, start_node_id: String, k: u32) -> String {
         Err(_) => return "{}".to_string(),
     };
 
-    let result = run_k_hop_bfs(&graph, &start_node_id, k);
+    let result = k_hop_bfs_graph(&graph, &start_node_id, k);
     serde_json::to_string(&result).unwrap_or_default()
 }
 
@@ -1464,73 +1642,17 @@ pub fn graph_keyword_search(
     serde_json::to_string(&result).unwrap_or_default()
 }
 
+/// Parse-and-search convenience wrapper over [`find_shortest_path_graph`].
+///
+/// Callers that already hold a `GraphData` should use that function directly —
+/// on a large graph this wrapper's `from_str` dominates, and it throws the
+/// parse away on return.
 pub fn find_shortest_path(graph_json: String, source_id: String, target_id: String) -> String {
     let graph: GraphData = match serde_json::from_str(&graph_json) {
         Ok(g) => g,
         Err(_) => return "{}".to_string(),
     };
-
-    let (di_graph, index_map) = build_di_graph(&graph);
-
-    let source_idx = match index_map.get(&source_id) {
-        Some(idx) => *idx,
-        None => {
-            let result = crate::types::PathResult {
-                path: vec![],
-                found: false,
-                length: None,
-            };
-            return serde_json::to_string(&result).unwrap_or_default();
-        }
-    };
-
-    let target_idx = match index_map.get(&target_id) {
-        Some(idx) => *idx,
-        None => {
-            let result = crate::types::PathResult {
-                path: vec![],
-                found: false,
-                length: None,
-            };
-            return serde_json::to_string(&result).unwrap_or_default();
-        }
-    };
-
-    let mut queue: Vec<(NodeIndex, Vec<String>)> = vec![(source_idx, vec![source_id.clone()])];
-    let mut visited: HashMap<NodeIndex, bool> = HashMap::new();
-
-    while !queue.is_empty() {
-        let (node_idx, path) = queue.remove(0);
-        if node_idx == target_idx {
-            let path_len = path.len() as u32;
-            let result = crate::types::PathResult {
-                path: path.clone(),
-                found: true,
-                length: Some(path_len - 1),
-            };
-            return serde_json::to_string(&result).unwrap_or_default();
-        }
-
-        if visited.get(&node_idx) == Some(&true) {
-            continue;
-        }
-        visited.insert(node_idx, true);
-
-        for neighbor in di_graph.neighbors(node_idx) {
-            if !visited.contains_key(&neighbor) {
-                let mut new_path = path.clone();
-                let neighbor_id = graph.nodes[neighbor.index()].id.clone();
-                new_path.push(neighbor_id);
-                queue.push((neighbor, new_path));
-            }
-        }
-    }
-
-    let result = crate::types::PathResult {
-        path: vec![],
-        found: false,
-        length: None,
-    };
+    let result = find_shortest_path_graph(&graph, &source_id, &target_id);
     serde_json::to_string(&result).unwrap_or_default()
 }
 

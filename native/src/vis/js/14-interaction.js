@@ -13,6 +13,22 @@
             return !!el && !!el.closest('#graph-3d');
         }
 
+        // Is this edge one the canvas is actually drawing right now? Filters,
+        // focus-isolate and a tour's route all hide strands and endpoints, and
+        // the hover's flow particles are driven by the highlight set alone
+        // (linkParticlesFor → the 3D sprites and fxDrawFlow's overlay dots),
+        // never by link visibility. So an unfiltered hover marches dots along
+        // a strand that leads into empty space, pointing at a node that is not
+        // on screen — the one thing the animation is supposed to be showing.
+        function edgeOnCanvas(e, otherId) {
+            if (!linkVisibleFor(e)) return false;
+            // The far endpoint can be hidden while the strand's own predicate
+            // still passes — the two answer to different rules (a node the
+            // filters dropped vs. an edge whose type they kept).
+            const other = state.nodeById && state.nodeById.get(otherId);
+            return !other || nodeVisibleFor(other);
+        }
+
         function handleNodeHover(d, prev) {
             // Suppress hovers raycast from a stale pointer position while the
             // user is actually working in a panel (see pointerOverCanvas).
@@ -38,7 +54,9 @@
 
             // Recompute connected-node / link highlight sets. Scoped to the
             // view: the highlight sets are compared against the edge objects
-            // the renderer holds, and off-screen edges have nothing to light up.
+            // the renderer holds, and off-screen edges have nothing to light
+            // up — and, within the view, to what is currently drawn (see
+            // edgeOnCanvas).
             state.highlightNodes.clear();
             state.highlightLinks.clear();
             state.highlightLinkDir.clear();
@@ -48,6 +66,8 @@
                 state.view.edges.forEach(e => {
                     const sId = e.source.id || e.source;
                     const tId = e.target.id || e.target;
+                    if (sId !== d.id && tId !== d.id) return;
+                    if (!edgeOnCanvas(e, sId === d.id ? tId : sId)) return;
                     if (sId === d.id) {
                         state.highlightNodes.add(tId);
                         state.highlightLinks.add(e);
