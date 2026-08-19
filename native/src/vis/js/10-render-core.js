@@ -267,8 +267,17 @@
         // hover, so this is an order of magnitude below what the 2D renderer
         // manages. It does double duty: the size at which 3D stops being the
         // default, and the size above which 3D is handed one neighbourhood at a
-        // time instead (see applySoloMode).
+        // time instead (see applySoloMode). The fallback for the configurable
+        // `vis.three_d_max_elements` below.
         const THREE_D_MAX_ELEMENTS = 3000;
+
+        // The `vis.three_d_max_elements` config key from ~/.ug/config.json,
+        // surfaced here via /api/capabilities. Absent/invalid → the constant.
+        function threeDMaxElements() {
+            const raw = state.capabilities && state.capabilities.vis && state.capabilities.vis.three_d_max_elements;
+            const n = parseInt(raw, 10);
+            return Number.isFinite(n) && n > 0 ? n : THREE_D_MAX_ELEMENTS;
+        }
 
         // The graph-size default: 3D under the threshold, 2D above it. Reads
         // the full `state.graph`, not the (possibly empty solo) view.
@@ -278,7 +287,7 @@
             // the local edge array is empty and reading it would pick three.js
             // for a graph far past what three.js can hold.
             const edges = state.edgeCount || 0;
-            return Math.max(nodes, edges) <= THREE_D_MAX_ELEMENTS ? 'three' : 'cosmos';
+            return Math.max(nodes, edges) <= threeDMaxElements() ? 'three' : 'cosmos';
         }
 
         // The `vis.renderer` config key from ~/.ug/config.json, surfaced here

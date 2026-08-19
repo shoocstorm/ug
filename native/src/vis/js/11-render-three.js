@@ -1755,8 +1755,9 @@
             caps: { threeD: true, faceViews: true, autoSpin: true, boundaryCube: true },
             // Past this it is handed one neighbourhood at a time — a Group of
             // five objects per node does not scale, which is what solo mode
-            // was built for in the first place.
-            soloThreshold: THREE_D_MAX_ELEMENTS,
+            // was built for in the first place. Follows the configurable
+            // `vis.three_d_max_elements` (see 10-render-core.js).
+            soloThreshold: threeDMaxElements(),
 
             async mount(el, view) {
                 ({ ForceGraph3D, THREE, SpriteText } = await import('./threejs-vis.bundle.js'));

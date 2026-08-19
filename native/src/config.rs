@@ -62,8 +62,9 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
     ConfigKey { name: "embed.api_key", section: "embed", field: "apiKey", flag: "--api-key", kind: Kind::Str, secret: true, desc: "API key for the embeddings endpoint" },
     ConfigKey { name: "embed.dim", section: "embed", field: "dim", flag: "--embedding-dim", kind: Kind::U32, secret: false, desc: "embedding dimension override (normally auto-probed)" },
     ConfigKey { name: "embed.section_cap", section: "embed", field: "sectionCap", flag: "--section-cap", kind: Kind::U32, secret: false, desc: "chars of a node's description to embed (default: derived from the model's token window)" },
-    ConfigKey { name: "vis.renderer", section: "vis", field: "renderer", flag: "", kind: Kind::Enum(&["auto", "three", "cosmos"]), secret: false, desc: "preferred rendering engine: auto (three below 3,000 elements, cosmos above), three, or cosmos" },
-    ConfigKey { name: "vis.solo_threshold", section: "vis", field: "soloThreshold", flag: "", kind: Kind::U32, secret: false, desc: "nodes/edges past which the page opens in solo mode (the 3D engine caps its own view at 3,000)" },
+    ConfigKey { name: "vis.renderer", section: "vis", field: "renderer", flag: "", kind: Kind::Enum(&["auto", "three", "cosmos"]), secret: false, desc: "preferred rendering engine: auto (three below three_d_max_elements, cosmos above), three, or cosmos" },
+    ConfigKey { name: "vis.three_d_max_elements", section: "vis", field: "threeDMaxElements", flag: "", kind: Kind::U32, secret: false, desc: "max nodes/edges the 3D engine draws whole; above it auto switches to the 2D engine and 3D solo-passes neighbourhoods" },
+    ConfigKey { name: "vis.solo_threshold", section: "vis", field: "soloThreshold", flag: "", kind: Kind::U32, secret: false, desc: "nodes/edges past which the page opens in solo mode (the 2D engine's ceiling)" },
 ];
 
 /// Look up a registry entry by dotted name. Accepts `-` for `_` and is
@@ -238,8 +239,10 @@ pub(crate) fn default_for(key: &ConfigKey) -> Option<String> {
         "chat.timeout_secs" => Some(crate::chat::DEFAULT_TIMEOUT_SECS.to_string()),
         "embed.model" => Some(ultragraph::storage::DEFAULT_MODEL.to_string()),
         "vis.renderer" => Some("auto".to_string()),
-        // Mirrors SOLO_THRESHOLD in native/src/vis/js/16-solo-view.js — a
-        // display value only; the page falls back to that constant when unset.
+        // Mirrors THREE_D_MAX_ELEMENTS in native/src/vis/js/10-render-core.js —
+        // display values only; the page falls back to those constants when unset.
+        "vis.three_d_max_elements" => Some("3000".to_string()),
+        // Mirrors SOLO_THRESHOLD in native/src/vis/js/16-solo-view.js.
         "vis.solo_threshold" => Some("200000".to_string()),
         _ => None,
     }

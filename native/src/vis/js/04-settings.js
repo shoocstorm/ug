@@ -351,6 +351,9 @@
             unsets: new Set(), // key names marked "clear on save"
         };
 
+        // Which settings sections the user has collapsed, per browser.
+        const COLLAPSED_KEY = 'ug-settings-collapsed';
+
         const SETTINGS_SECTIONS = {
             chat: {
                 title: 'Chat',
@@ -390,12 +393,17 @@
                     three: 'Three.js — 3D',
                     cosmos: 'Cosmos — 2D (scale)',
                 },
-                hint: 'Three.js draws in 3D, with depth, effects and one styling pass per node — pleasant on a small repo, unusable past a few thousand nodes. Cosmos draws in 2D, on the GPU, and holds graphs far too big for 3D. Auto adjusts by graph size: picks three below 3,000 elements and cosmos above it — the point (THREE_D_MAX_ELEMENTS) where 3D stops being readable and the 2D engine takes over.',
+                hint: 'Three.js draws in 3D, with depth, effects and one styling pass per node — pleasant on a small repo, unusable past a few thousand nodes. Cosmos draws in 2D, on the GPU, and holds graphs far too big for 3D. Auto adjusts by graph size: picks three below the 3D element budget and cosmos above it.',
+            },
+            'vis.three_d_max_elements': {
+                label: '3D element budget',
+                hint: 'How much the 3D engine is asked to draw whole. Above this many nodes or edges, auto switches to the 2D engine — and if you force 3D, solo mode takes over instead of rendering the whole graph. Raised, three.js gets more on screen and slower hovers; lowered, the 2D engine becomes the default sooner.',
+                num: { step: '100', min: '100', max: '1000000' },
             },
             'vis.solo_threshold': {
                 label: 'Solo mode threshold',
-                hint: 'Past this many nodes or edges the page never draws the whole graph — it opens in solo mode and shows one neighbourhood at a time. Lower it to isolate large repos earlier, higher to attempt whole-graph render for longer. The 3D engine keeps its own hard ceiling of 3,000 elements, so this threshold governs the 2D engine.',
-                num: { step: '1', min: '1', max: '10000000' },
+                hint: 'Past this many nodes or edges the page never draws the whole graph — it opens in solo mode and shows one neighbourhood at a time. Lower it to isolate large repos earlier, higher to attempt whole-graph render for longer. Governs the 2D engine; the 3D engine solos past its own element budget above.',
+                num: { step: '1000', min: '1', max: '10000000' },
             },
         };
 
@@ -446,20 +454,52 @@
                 if (!keys || !keys.length) continue;
                 const group = document.createElement('div');
                 group.className = 'settings-group';
-                const head = document.createElement('div');
+                const head = document.createElement('button');
+                head.type = 'button';
                 head.className = 'settings-group-head';
+                head.title = 'Click to collapse / expand';
                 head.innerHTML =
                     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + meta.icon + '</svg>' +
                     '<span class="settings-group-title">' + escapeHtml(meta.title) + '</span>' +
                     '<span class="settings-group-sub">' + escapeHtml(meta.sub) + '</span>' +
-                    '<span class="settings-apply-badge ' + meta.badge[0] + '">' + escapeHtml(meta.badge[1]) + '</span>';
+                    '<span class="settings-apply-badge ' + meta.badge[0] + '">' + escapeHtml(meta.badge[1]) + '</span>' +
+                    '<span class="settings-caret" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg></span>';
                 group.appendChild(head);
                 const rows = document.createElement('div');
                 rows.className = 'settings-rows';
                 for (const k of keys) rows.appendChild(renderSettingsRow(k));
                 group.appendChild(rows);
+                applySettingsCollapsed(group, sec);
+                head.addEventListener('click', () => toggleSettingsCollapsed(group, sec));
                 body.appendChild(group);
             }
+        }
+
+        // Per-section collapse state, remembered across opens so a fat modal
+        // reopens on the sections the user actually uses. Stored in
+        // localStorage (a browser preference, not a server setting).
+        function collapsedSections() {
+            try {
+                const raw = localStorage.getItem(COLLAPSED_KEY);
+                return raw ? new Set(JSON.parse(raw)) : new Set();
+            } catch (err) { return new Set(); }
+        }
+
+        function applySettingsCollapsed(group, sec) {
+            if (!collapsedSections().has(sec)) return;
+            group.classList.add('collapsed');
+            const rows = group.querySelector('.settings-rows');
+            if (rows) rows.hidden = true;
+        }
+
+        function toggleSettingsCollapsed(group, sec) {
+            const closed = !group.classList.contains('collapsed');
+            group.classList.toggle('collapsed', closed);
+            const rows = group.querySelector('.settings-rows');
+            if (rows) rows.hidden = closed;
+            const set = collapsedSections();
+            if (closed) set.add(sec); else set.delete(sec);
+            try { localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...set])); } catch (err) { /* private mode */ }
         }
 
         function renderSettingsRow(k) {

@@ -251,6 +251,14 @@
             const ctx = fxCtx;
             const now = performance.now();
             let drawn = 0;
+            // Every particle is two arcs when it glows and one when it does
+            // not, and there are up to three per strand — so on a wide
+            // frontier the bloom alone is thousands of paths a frame. It is
+            // the flourish, so it is what goes.
+            const hot = state.walkActive
+                ? (state.walkEdgeKeys ? state.walkEdgeKeys.size : 0)
+                : state.highlightLinks.size;
+            const glowDots = hot <= 160;
             ctx.save();
             ctx.globalCompositeOperation = 'lighter';
             for (const e of cosmosEdges) {
@@ -264,19 +272,34 @@
                 if (!a || !b) continue;
                 // Rim to rim, like the strands they run along: a dot drawn
                 // over a node disc reads as something sitting on the node
-                // rather than as something arriving at it.
-                const seg = fxTrimSegment(a, b, fxRadius(s), fxRadius(t));
+                // rather than as something arriving at it. During a walk every
+                // particle-bearing edge is a walk strand, and those end at an
+                // arrowhead — so the dots stop where it begins rather than
+                // riding over the top of it.
+                const seg = fxTrimSegment(a, b, fxRadius(s), fxRadius(t) + (state.walkActive ? 9 : 0));
                 if (!seg) continue;
                 const [r, g, bl] = cosmosRgb(linkParticleColorFor(e));
-                ctx.fillStyle = `rgba(${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(bl * 255)},0.95)`;
+                const rgb = `${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(bl * 255)}`;
                 for (let i = 0; i < count; i++) {
                     // Evenly spaced along the strand, all sliding source→target
                     // at the same rate, so direction of travel is readable.
-                    const phase = ((now * 0.0004) + i / count) % 1;
+                    // Unhurried on purpose: at the old rate a frontier of them
+                    // read as static, which is a busier picture than motion.
+                    const phase = ((now * 0.00026) + i / count) % 1;
                     const x = seg.ax + (seg.bx - seg.ax) * phase;
                     const y = seg.ay + (seg.by - seg.ay) * phase;
+                    // Two passes: a wide, nearly transparent bloom and a small
+                    // core. A single hard dot is a pixel travelling; this is a
+                    // light travelling, which is what the strand is made of.
+                    if (glowDots) {
+                        ctx.fillStyle = `rgba(${rgb},0.14)`;
+                        ctx.beginPath();
+                        ctx.arc(x, y, 3, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                    ctx.fillStyle = `rgba(${rgb},0.62)`;
                     ctx.beginPath();
-                    ctx.arc(x, y, 1.7, 0, Math.PI * 2);
+                    ctx.arc(x, y, 1.25, 0, Math.PI * 2);
                     ctx.fill();
                 }
             }
@@ -416,17 +439,20 @@
         function fxDrawWalkEdges() {
             if (!state.walkActive || !state.walkEdgeKeys || !state.walkEdgeKeys.size) return;
             const ctx = fxCtx;
-            // Additive strokes stack. Twenty of them read as a route; a
-            // thousand read as a floodlight, and every node underneath is
-            // gone. The glow is calibrated for a frontier of a few dozen
-            // edges, so past that the whole layer is faded in proportion —
-            // and the wide soft pass, which is most of the accumulated light,
-            // is dropped entirely rather than merely dimmed.
+            // How crowded the frontier is, as one factor every part of a
+            // strand answers to. Twenty strands read as a route; a thousand
+            // read as a floodlight with the graph lost inside it, so the layer
+            // thins as it fills.
             const bulk = Math.min(state.walkEdgeKeys.size, FX_MAX_FLOW_LINKS);
             const k = Math.max(0.16, Math.min(1, 90 / Math.max(1, bulk)));
-            const wideGlow = k > 0.5;
+            // Sparse enough that a few overlapping strands are still
+            // countable. Two things ride on it, and both for the same reason:
+            // the bloom is the pass that stacks into a white sheet, and the
+            // per-strand gradient is the pass that costs — one
+            // `createLinearGradient` each, sixty times a second, exactly when
+            // there are most of them.
+            const sparse = k > 0.45;
             ctx.save();
-            ctx.globalCompositeOperation = 'lighter';
             ctx.lineCap = 'round';
             let drawn = 0;
             for (const e of cosmosEdges) {
@@ -447,64 +473,118 @@
                 const hex = state.walkColors.get(tId) || state.walkColors.get(sId) || '#f97316';
                 const [r, g, bl] = cosmosRgb(hex);
                 const rgb = `${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(bl * 255)}`;
+
+                // The head is measured before anything is drawn, because the
+                // strand has to stop where it starts. Running the line under
+                // the head left its darker edges showing through a shape that
+                // is meant to read as solid — the seam you see on a cheap
+                // diagram, and the reason arrowheads look pasted on.
+                const head = fxArrowSpec(a, b, fxRadius(t), k);
+                const endX = head ? head.baseX : seg.bx;
+                const endY = head ? head.baseY : seg.by;
+
+                // Alpha along the strand: nearly gone where it leaves, full
+                // where it arrives. A flat line states a connection; a line
+                // that gathers toward its target says which end the walk was
+                // moving to, quietly enough that the arrowhead is still the
+                // thing that answers it outright.
+                const core = Math.min(0.66, 0.24 + 0.42 * k);
+                let stroke;
+                if (sparse) {
+                    stroke = ctx.createLinearGradient(seg.ax, seg.ay, endX, endY);
+                    stroke.addColorStop(0, `rgba(${rgb},${(core * 0.22).toFixed(3)})`);
+                    stroke.addColorStop(1, `rgba(${rgb},${core.toFixed(3)})`);
+                } else {
+                    // Crowded: the taper is invisible under five hundred
+                    // overlapping strands anyway, so it is dropped rather than
+                    // paid for. At the *average* of the alphas it replaces,
+                    // not the peak — a flat strand at the gradient's arrival
+                    // strength lays down three times the ink over the whole
+                    // length, which is a haze across the columns.
+                    stroke = `rgba(${rgb},${(core * 0.55).toFixed(3)})`;
+                }
+
                 ctx.beginPath();
                 ctx.moveTo(seg.ax, seg.ay);
-                ctx.lineTo(seg.bx, seg.by);
-                if (wideGlow) {
-                    ctx.strokeStyle = `rgba(${rgb},${(0.20 * k).toFixed(3)})`;
-                    ctx.lineWidth = 5;
+                ctx.lineTo(endX, endY);
+                if (sparse) {
+                    // Additive, and only this pass: light that sums is what
+                    // makes a handful of strands glow, and what makes a
+                    // thousand of them a white sheet.
+                    ctx.globalCompositeOperation = 'lighter';
+                    ctx.strokeStyle = `rgba(${rgb},${(0.09 * k).toFixed(3)})`;
+                    ctx.lineWidth = 6;
                     ctx.stroke();
+                    ctx.globalCompositeOperation = 'source-over';
                 }
-                ctx.strokeStyle = `rgba(${rgb},${(0.85 * k).toFixed(3)})`;
-                ctx.lineWidth = 1.4;
+                ctx.strokeStyle = stroke;
+                ctx.lineWidth = 1.1;
                 ctx.stroke();
-                // Which way the relationship points, said by the line itself.
-                // The flow particles say it too, but flow is a toggle (R on
-                // the walk bar) and it is off in every still — and a cascade
-                // that cannot tell a caller from a callee is a picture of
-                // connectivity, not of dependency, which is the one thing a
-                // walk is asked for. Note this is the *edge's* direction, not
-                // the direction the traversal happened to follow: an inbound
-                // walk crosses edges backwards, and drawing the head the way
-                // the frontier moved would invert the meaning of the graph.
-                fxArrowHead(ctx, a, b, fxRadius(t), rgb, k);
+
+                // Which way the relationship points, said without the
+                // animation. The flow particles say it too, but flow is a
+                // toggle (R on the walk bar) and it is off in every still —
+                // and a cascade that cannot tell a caller from a callee is a
+                // picture of connectivity, not of dependency, which is the one
+                // thing a walk is asked for. Note this is the *edge's*
+                // direction, not the direction the traversal happened to
+                // follow: an inbound walk crosses edges backwards, and drawing
+                // the head the way the frontier moved would invert the meaning
+                // of the graph.
+                if (head) fxArrowHead(ctx, head, `rgba(${rgb},${core.toFixed(3)})`);
             }
             ctx.restore();
         }
 
-        // A filled head pointing along a→b, set back from b by `inset` pixels
-        // so it lands on the rim of the target disc rather than under it.
+        // Where a head pointing along a→b would sit: tip set back from `b` by
+        // `inset` pixels so it lands on the rim of the target disc, base one
+        // head-length behind it. Returns null when there is nothing to point
+        // — a self-loop, two nodes on top of each other, or a strand so short
+        // the head would be most of it.
+        //
+        // Separate from the drawing because the strand needs the base point
+        // before anything is painted: the line stops there, so the head sits
+        // on the diagram rather than on top of the line.
         //
         // `k` is the crowding factor the strands are drawn at, and the head
-        // takes it too, in both size and alpha. It keeps a floor — a direction
-        // mark that fades to nothing has stopped saying the one thing it is
-        // for — but it must not keep full strength either: five hundred bright
-        // wedges over threads faded to 0.14 would make the heads the diagram
-        // and the edges the background.
-        function fxArrowHead(ctx, a, b, inset, rgb, k) {
+        // takes it too. Sized down as the frontier fills, because five hundred
+        // wedges over threads this fine would make the heads the diagram and
+        // the edges the background.
+        function fxArrowSpec(a, b, inset, k) {
             const dx = b.x - a.x;
             const dy = b.y - a.y;
             const len = Math.hypot(dx, dy);
-            // No direction to draw (a self-loop, or two nodes on top of each
-            // other), or a strand so short the head would be most of it.
-            if (!len || len < inset + 12) return;
+            const size = Math.max(5, Math.min(8.5, len * 0.11)) * (0.72 + 0.28 * k);
+            if (!len || len < inset + size + 6) return null;
             const ux = dx / len;
             const uy = dy / len;
             const tipX = b.x - ux * inset;
             const tipY = b.y - uy * inset;
-            // Scaled to the strand so short hops don't get a head bigger than
-            // the gap they cross, and clamped so long ones stay a mark rather
-            // than a wedge.
-            const size = Math.max(6, Math.min(11, len * 0.14)) * (0.7 + 0.3 * k);
-            const wing = size * 0.5;
-            const baseX = tipX - ux * size;
-            const baseY = tipY - uy * size;
+            return {
+                tipX, tipY,
+                baseX: tipX - ux * size,
+                baseY: tipY - uy * size,
+                // Perpendicular half-width. A narrow head reads as a direction
+                // mark; a wide one reads as a shape in its own right, which at
+                // several hundred of them is a texture over the diagram.
+                wx: -uy * size * 0.4,
+                wy: ux * size * 0.4,
+                ux, uy, size,
+            };
+        }
+
+        // The head itself: a dart rather than a triangle. The concave base
+        // gives it a soft edge where it meets the strand, so the join reads as
+        // a taper instead of as two shapes butted together.
+        function fxArrowHead(ctx, h, fill) {
             ctx.beginPath();
-            ctx.moveTo(tipX, tipY);
-            ctx.lineTo(baseX - uy * wing, baseY + ux * wing);
-            ctx.lineTo(baseX + uy * wing, baseY - ux * wing);
+            ctx.moveTo(h.tipX, h.tipY);
+            ctx.lineTo(h.baseX + h.wx, h.baseY + h.wy);
+            ctx.quadraticCurveTo(
+                h.baseX + h.ux * h.size * 0.34, h.baseY + h.uy * h.size * 0.34,
+                h.baseX - h.wx, h.baseY - h.wy);
             ctx.closePath();
-            ctx.fillStyle = `rgba(${rgb},${Math.max(0.3, 0.95 * k).toFixed(3)})`;
+            ctx.fillStyle = fill;
             ctx.fill();
         }
 
@@ -516,7 +596,7 @@
             if (!seedNode || !Number.isFinite(seedNode.x)) return;
             const grow = Math.max(160, growMs || 420);
             const sparks = [];
-            for (let i = 0; i < 48; i++) {
+            for (let i = 0; i < 30; i++) {
                 const ang = Math.random() * Math.PI * 2;
                 sparks.push({ dx: Math.cos(ang), dy: Math.sin(ang), spd: 0.55 + Math.random() * 0.7 });
             }
@@ -579,8 +659,11 @@
                 // The shell: a bright rim with a hot falloff inward.
                 const g = ctx.createRadialGradient(at.x, at.y, r * 0.55, at.x, at.y, r);
                 g.addColorStop(0, `rgba(${rgb},0)`);
-                g.addColorStop(0.75, `rgba(${rgb},${(0.30 * env).toFixed(3)})`);
-                g.addColorStop(1, `rgba(255,243,232,${(0.95 * env).toFixed(3)})`);
+                g.addColorStop(0.75, `rgba(${rgb},${(0.18 * env).toFixed(3)})`);
+                // Tinted, not white. A near-white rim on a hop-coloured shell
+                // blows out to a flashbulb over a dense column and takes the
+                // colour — the one thing the ring is carrying — with it.
+                g.addColorStop(1, `rgba(${rgb},${(0.55 * env).toFixed(3)})`);
                 ctx.fillStyle = g;
                 ctx.beginPath();
                 ctx.arc(at.x, at.y, r, 0, Math.PI * 2);
@@ -590,18 +673,19 @@
                 // reads as a glow that happens to be getting bigger; an actual
                 // travelling circle reads as a front sweeping outward, which is
                 // the thing the walk is trying to show.
-                ctx.strokeStyle = `rgba(255,243,232,${(0.75 * env).toFixed(3)})`;
-                ctx.lineWidth = Math.max(1, 2.2 * env);
+                ctx.strokeStyle = `rgba(255,238,222,${(0.4 * env).toFixed(3)})`;
+                ctx.lineWidth = Math.max(0.8, 1.5 * env);
                 ctx.beginPath();
                 ctx.arc(at.x, at.y, r, 0, Math.PI * 2);
                 ctx.stroke();
 
-                // The debris.
-                ctx.fillStyle = `rgba(${rgb},${(0.95 * env).toFixed(3)})`;
+                // The debris. Fine and dim: it is the texture on the front,
+                // not a second event happening alongside it.
+                ctx.fillStyle = `rgba(${rgb},${(0.45 * env).toFixed(3)})`;
                 for (const s of p.sparks) {
                     const d = r * s.spd;
                     ctx.beginPath();
-                    ctx.arc(at.x + s.dx * d, at.y + s.dy * d, 1.7, 0, Math.PI * 2);
+                    ctx.arc(at.x + s.dx * d, at.y + s.dy * d, 1.15, 0, Math.PI * 2);
                     ctx.fill();
                 }
                 return true;
@@ -622,7 +706,7 @@
             if (!spec || !Number.isFinite(spec.fromX) || !Number.isFinite(spec.toX)) return;
             const grow = Math.max(160, spec.growMs || 420);
             const sparks = [];
-            for (let i = 0; i < 34; i++) {
+            for (let i = 0; i < 22; i++) {
                 sparks.push({
                     at: Math.random(),               // where across the curtain
                     lag: Math.random() * 0.22,       // trails the front
@@ -693,21 +777,24 @@
 
                 // The wake: everything the front has already passed over.
                 if (Math.abs(a[0] - o[0]) > 2) {
-                    fxSweepBand(ctx, o[0], a[0], yTop, yBot, rgb, 0.16 * env, true);
+                    fxSweepBand(ctx, o[0], a[0], yTop, yBot, rgb, 0.10 * env, true);
                 }
                 // The front's own glow, then a crisp near-white leading edge —
                 // the bar is what reads as a wave arriving rather than a
                 // gradient that happens to be moving.
-                const halo = Math.max(14, Math.abs(a[0] - o[0]) * 0.06);
-                fxSweepBand(ctx, a[0] - halo, a[0] + halo, yTop, yBot, rgb, 0.5 * env, false);
+                // Wider and dimmer than it was: the same amount of light
+                // spread over more of the sweep reads as a front arriving
+                // rather than as a strip light being switched on.
+                const halo = Math.max(20, Math.abs(a[0] - o[0]) * 0.09);
+                fxSweepBand(ctx, a[0] - halo, a[0] + halo, yTop, yBot, rgb, 0.3 * env, false);
 
                 const edge = ctx.createLinearGradient(0, yTop, 0, yBot);
-                edge.addColorStop(0, 'rgba(255,243,232,0)');
-                edge.addColorStop(0.18, `rgba(255,243,232,${(0.85 * env).toFixed(3)})`);
-                edge.addColorStop(0.82, `rgba(255,243,232,${(0.85 * env).toFixed(3)})`);
-                edge.addColorStop(1, 'rgba(255,243,232,0)');
+                edge.addColorStop(0, 'rgba(255,238,222,0)');
+                edge.addColorStop(0.18, `rgba(255,238,222,${(0.5 * env).toFixed(3)})`);
+                edge.addColorStop(0.82, `rgba(255,238,222,${(0.5 * env).toFixed(3)})`);
+                edge.addColorStop(1, 'rgba(255,238,222,0)');
                 ctx.strokeStyle = edge;
-                ctx.lineWidth = Math.max(1.4, 2.4 * env);
+                ctx.lineWidth = Math.max(1, 1.6 * env);
                 ctx.beginPath();
                 ctx.moveTo(a[0], yTop);
                 ctx.lineTo(a[0], yBot);
@@ -715,8 +802,8 @@
 
                 // Debris riding the front, as short streaks pointing back the
                 // way it came.
-                ctx.strokeStyle = `rgba(${rgb},${(0.9 * env).toFixed(3)})`;
-                ctx.lineWidth = 1.6;
+                ctx.strokeStyle = `rgba(${rgb},${(0.42 * env).toFixed(3)})`;
+                ctx.lineWidth = 1.1;
                 ctx.lineCap = 'round';
                 const dir = s.toX >= s.fromX ? 1 : -1;
                 ctx.beginPath();

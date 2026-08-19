@@ -3764,6 +3764,7 @@ async fn api_capabilities(State(state): State<ServeState>) -> Response {
         // the fetch it already makes in that window.
         "vis": serde_json::json!({
             "renderer": crate::config::get("vis.renderer"),
+            "three_d_max_elements": crate::config::get("vis.three_d_max_elements"),
             "solo_threshold": crate::config::get("vis.solo_threshold"),
         }),
         // Back-compat: existing UI reads `db_node_count` for the primary.
