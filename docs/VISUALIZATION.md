@@ -153,9 +153,15 @@ changes `vis_fingerprint()` and therefore requires a demo re-publish.
 ### 3.4 Which one runs
 
 In order of authority: an explicit choice this session → `?r=` on the URL →
-`localStorage` → **graph size**. Under `THREE_D_MAX_ELEMENTS` (3000
-`max(nodes, edges)`) the default is 3D, where the extra dimension and in-scene
-effects are still readable; above it, 2D.
+`localStorage` → **`vis.renderer`** (the config key, or "auto") → **graph size**.
+Under `THREE_D_MAX_ELEMENTS` (3000 `max(nodes, edges)`) the default is 3D, where
+the extra dimension and in-scene effects are still readable; above it, 2D.
+
+`vis.renderer` (settable as `ug config set vis.renderer auto|three|cosmos` or in
+the settings panel's Visualization section) forces a specific engine, or `auto`
+defers to the size rule. The canvas's engine toggle writes `localStorage`, so its
+per-browser choice still outranks the config file; the config is the preference
+an operator can persist for every browser.
 
 The viewbar's `◫ 2D/3D` button switches at runtime: the old backend is disposed,
 the mount element emptied, the new one mounted, and the current styling
@@ -177,7 +183,14 @@ node — and the renderer is handed `state.view`, one neighbourhood at a time.
 | Renderer | Threshold |
 |---|---|
 | 3D | `THREE_D_MAX_ELEMENTS` = 3 000 |
-| 2D | `SOLO_THRESHOLD` = 200 000 |
+| 2D | `vis.solo_threshold` (default `SOLO_THRESHOLD` = 200 000) |
+
+`vis.solo_threshold` overrides the 2D engine's threshold — `ug config set
+vis.solo_threshold 50000`, or the Visualization section in settings. **Only the
+2D engine consults it**: the 3D engine keeps its own 3 000 ceiling, so a
+(mis)setting can never hand three.js more than it can draw. The page reads both
+from `/api/capabilities` (`vis` block) before its first render; changes apply on
+the next page load.
 
 `applySoloMode(backend.soloThreshold)` runs in `createGraph()` *before* mount, so
 switching renderers re-decides: a 50k-node graph that renders whole in 2D drops

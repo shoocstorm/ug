@@ -660,9 +660,9 @@ function:native/src/indexer.rs:index_with_cache           <span class="c-num">16
   <div class="table-wrap">
     <table>
       <tr><th>Method</th><th>Path</th><th>What it does</th><th>503 when</th></tr>
-      <tr><td><code>GET</code></td><td><code>/api/capabilities</code></td><td>Server capabilities matrix: backends, models, features</td><td>—</td></tr>
-      <tr><td><code>GET</code></td><td><code>/api/config</code></td><td>Persisted + effective settings, with per-key source (flag/env/config/default)</td><td>—</td></tr>
-      <tr><td><code>POST</code></td><td><code>/api/config</code></td><td>Update the persisted chat config</td><td>—</td></tr>
+      <tr><td><code>GET</code></td><td><code>/api/capabilities</code></td><td>Server capabilities matrix: backends, models, features, plus a <code>vis</code> block with the resolved rendering-engine and solo-threshold prefs</td><td>—</td></tr>
+      <tr><td><code>GET</code></td><td><code>/api/config</code></td><td>Persisted + effective settings, with per-key source (flag/env/config/default) and <code>kind</code> — <code>enum</code> keys carry their <code>choices</code> for a dropdown</td><td>—</td></tr>
+      <tr><td><code>POST</code></td><td><code>/api/config</code></td><td>Persist settings to <code>~/.ug/config.json</code>. Chat applies immediately, embed after restart, vis on the next page load</td><td>—</td></tr>
       <tr><td><code>GET</code></td><td><code>/api/graph/stats</code></td><td>Node/edge counts, file stats</td><td>No graph</td></tr>
       <tr><td><code>GET</code></td><td><code>/api/graph/nodes</code></td><td><strong>Slim node index</strong> — every node's id/name/type/file/lines in columnar form, no edges. What the page loads instead of <code>graph.json</code> when <code>capabilities.graph.mode</code> is <code>server</code></td><td>No graph</td></tr>
       <tr><td><code>POST</code></td><td><code>/api/graph/edges</code></td><td><strong>Batch neighbourhood</strong> — <code>{ids, scope:"incident"|"induced"}</code> → columnar edges by node index. Server mode's one graph primitive</td><td>No graph</td></tr>

@@ -28,7 +28,22 @@ apply to the running server immediately — no restart.
 
 **Known keys:** `chat.model`, `chat.base_url`, `chat.api_key`,
 `chat.temperature`, `chat.max_tokens`, `chat.timeout_secs`, `embed.model`,
-`embed.base_url`, `embed.api_key`, `embed.dim`.
+`embed.base_url`, `embed.api_key`, `embed.dim`, `vis.renderer`,
+`vis.solo_threshold`.
+
+Visualization keys (`vis.*`) shape how the web graph is drawn. They are read at
+page load (the settings panel's Visualization section marks them "applies on
+reload"):
+
+- `vis.renderer` — `auto` (default), `three`, or `cosmos`. `auto` renders with
+  three.js under 3,000 elements and cosmos above it; the other two force that
+  engine regardless of size. A per-browser `ug-renderer` choice from the
+  canvas's engine toggle still outranks this, as does `?r=three|cosmos` on the
+  URL.
+- `vis.solo_threshold` — nodes/edges past which the page never draws the whole
+  graph, opening in solo mode (one neighbourhood at a time) instead. Defaults
+  to 200,000. The 3D engine keeps its own hard ceiling of 3,000 elements, so
+  this governs the 2D engine.
 
 ## Precedence
 

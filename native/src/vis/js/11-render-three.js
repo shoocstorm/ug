@@ -337,7 +337,11 @@
                 .linkDirectionalParticleWidth(1.6)
                 .linkDirectionalParticleSpeed(0.012)
                 .linkDirectionalParticleColor(linkParticleColorFor)
-                .enableNodeDrag(true)
+                // Off — see the cosmos backend's `enableDrag` for why: a
+                // click on a node and a drag of it start with the same
+                // gesture, so picking one could move it by accident, and a
+                // moved node misreports the layout with no way back.
+                .enableNodeDrag(false)
                 .onNodeHover(handleNodeHover)
                 .onNodeClick((n, evt) => handleNodeClick(evt, n))
                 .onBackgroundClick(() => clearSelection())

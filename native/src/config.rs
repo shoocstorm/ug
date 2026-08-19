@@ -29,6 +29,9 @@ pub(crate) enum Kind {
     F32,
     U32,
     U64,
+    /// One of a fixed set of spellings, validated and normalized to the
+    /// canonical form (e.g. `vis.renderer` accepts only auto/three/cosmos).
+    Enum(&'static [&'static str]),
 }
 
 /// One persistable setting: its dotted CLI name, where it lives in the
@@ -59,6 +62,8 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
     ConfigKey { name: "embed.api_key", section: "embed", field: "apiKey", flag: "--api-key", kind: Kind::Str, secret: true, desc: "API key for the embeddings endpoint" },
     ConfigKey { name: "embed.dim", section: "embed", field: "dim", flag: "--embedding-dim", kind: Kind::U32, secret: false, desc: "embedding dimension override (normally auto-probed)" },
     ConfigKey { name: "embed.section_cap", section: "embed", field: "sectionCap", flag: "--section-cap", kind: Kind::U32, secret: false, desc: "chars of a node's description to embed (default: derived from the model's token window)" },
+    ConfigKey { name: "vis.renderer", section: "vis", field: "renderer", flag: "", kind: Kind::Enum(&["auto", "three", "cosmos"]), secret: false, desc: "preferred rendering engine: auto (three below 3,000 elements, cosmos above), three, or cosmos" },
+    ConfigKey { name: "vis.solo_threshold", section: "vis", field: "soloThreshold", flag: "", kind: Kind::U32, secret: false, desc: "nodes/edges past which the page opens in solo mode (the 3D engine caps its own view at 3,000)" },
 ];
 
 /// Look up a registry entry by dotted name. Accepts `-` for `_` and is
@@ -133,6 +138,19 @@ pub(crate) fn value_set(cfg: &mut Value, key: &ConfigKey, raw: &str) -> Result<(
         Kind::U64 => {
             let n: u64 = raw.parse().map_err(|_| format!("{} expects a non-negative integer, got '{}'", key.name, raw))?;
             Value::Number(n.into())
+        }
+        Kind::Enum(allowed) => {
+            // Case-insensitive so `vis.renderer THREE` works, but stored
+            // under the canonical spelling so the UI dropdown matches.
+            let canon = raw.trim().to_ascii_lowercase();
+            let Some(&hit) = allowed.iter().find(|a| **a == canon) else {
+                return Err(format!(
+                    "{} must be one of: {}",
+                    key.name,
+                    allowed.join(", ")
+                ));
+            };
+            Value::String(hit.to_string())
         }
     };
     if !cfg.is_object() {
@@ -219,6 +237,10 @@ pub(crate) fn default_for(key: &ConfigKey) -> Option<String> {
         "chat.max_tokens" => Some(crate::chat::DEFAULT_MAX_TOKENS.to_string()),
         "chat.timeout_secs" => Some(crate::chat::DEFAULT_TIMEOUT_SECS.to_string()),
         "embed.model" => Some(ultragraph::storage::DEFAULT_MODEL.to_string()),
+        "vis.renderer" => Some("auto".to_string()),
+        // Mirrors SOLO_THRESHOLD in native/src/vis/js/16-solo-view.js — a
+        // display value only; the page falls back to that constant when unset.
+        "vis.solo_threshold" => Some("200000".to_string()),
         _ => None,
     }
 }
@@ -319,6 +341,30 @@ mod tests {
         assert!(value_set(&mut cfg, key("chat.temperature"), "warm").is_err());
         assert!(value_set(&mut cfg, key("chat.max_tokens"), "-5").is_err());
         assert!(value_set(&mut cfg, key("embed.dim"), "3.5").is_err());
+    }
+
+    #[test]
+    fn enum_keys_validate_and_normalize() {
+        let mut cfg = Value::Object(Default::default());
+        // Canonical value saved as-is.
+        value_set(&mut cfg, key("vis.renderer"), "cosmos").unwrap();
+        assert_eq!(value_get(&cfg, key("vis.renderer")).as_deref(), Some("cosmos"));
+        // Case-insensitive on input, canonical on output.
+        value_set(&mut cfg, key("vis.renderer"), "THREE").unwrap();
+        assert_eq!(value_get(&cfg, key("vis.renderer")).as_deref(), Some("three"));
+        // Anything outside the allowed set is rejected.
+        let err = value_set(&mut cfg, key("vis.renderer"), "vulkan").unwrap_err();
+        assert!(err.contains("one of"), "{err}");
+        assert!(value_set(&mut cfg, key("vis.renderer"), "").is_err());
+    }
+
+    #[test]
+    fn solo_threshold_is_a_positive_integer() {
+        let mut cfg = Value::Object(Default::default());
+        value_set(&mut cfg, key("vis.solo_threshold"), "50000").unwrap();
+        assert!(cfg["vis"]["soloThreshold"].is_number());
+        assert!(value_set(&mut cfg, key("vis.solo_threshold"), "zero").is_err());
+        assert!(value_set(&mut cfg, key("vis.solo_threshold"), "-1").is_err());
     }
 
     #[test]

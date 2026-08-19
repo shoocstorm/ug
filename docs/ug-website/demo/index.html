@@ -4824,7 +4824,8 @@
             gap: 6px;
         }
 
-        .settings-input-wrap input {
+        .settings-input-wrap input,
+        .settings-input-wrap select {
             flex: 1;
             min-width: 0;
             background: var(--bg-elevated);
@@ -4838,7 +4839,18 @@
             transition: border-color 0.15s, box-shadow 0.15s;
         }
 
-        .settings-input-wrap input:focus {
+        .settings-input-wrap select {
+            appearance: none;
+            -webkit-appearance: none;
+            background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23999' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 10px center;
+            padding-right: 26px;
+            cursor: pointer;
+        }
+
+        .settings-input-wrap input:focus,
+        .settings-input-wrap select:focus {
             border-color: var(--accent);
             box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.15);
         }
@@ -4847,7 +4859,8 @@
             color: var(--text-dim);
         }
 
-        .settings-row.dirty .settings-input-wrap input {
+        .settings-row.dirty .settings-input-wrap input,
+        .settings-row.dirty .settings-input-wrap select {
             border-color: rgba(249, 115, 22, 0.55);
         }
 
@@ -4900,7 +4913,8 @@
             padding: 0 4px;
         }
 
-        .settings-row.pending-unset .settings-input-wrap input {
+        .settings-row.pending-unset .settings-input-wrap input,
+        .settings-row.pending-unset .settings-input-wrap select {
             text-decoration: line-through;
             opacity: 0.55;
         }
@@ -8208,6 +8222,189 @@
         .walk-mcp-code .k { color: #8fb8dd; }
         .walk-mcp-code .s { color: #fbbf24; }
         .walk-mcp-code .c { color: var(--text-dim); }
+
+        /* ─── Reached-nodes list ─────────────────────────────
+           The cascade answers "what shape is the reach"; this answers "which
+           nodes". Floated over the canvas rather than docked, because it is
+           consulted and dismissed — the diagram behind it is still the
+           subject, and the walk card at the bottom stays reachable. */
+        .walk-nodes {
+            position: fixed;
+            top: 64px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: min(760px, 92vw);
+            max-height: min(62vh, 620px);
+            display: flex;
+            flex-direction: column;
+            z-index: 60;
+            background: rgba(16, 14, 13, 0.97);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.09);
+            border-radius: 12px;
+            box-shadow: 0 24px 70px rgba(0, 0, 0, 0.62);
+            overflow: hidden;
+        }
+
+        .walk-nodes[hidden] { display: none; }
+
+        .wn-head {
+            display: flex;
+            align-items: baseline;
+            gap: 9px;
+            padding: 11px 13px 9px;
+            border-bottom: 1px solid var(--border-soft);
+        }
+        .wn-title { font-size: 12px; font-weight: 700; color: var(--text); }
+        .wn-sub { font-size: 10.5px; color: var(--text-dim); font-family: var(--mono, monospace); }
+        .wn-close {
+            margin-left: auto;
+            border: none;
+            background: none;
+            color: var(--text-dim);
+            font-size: 13px;
+            line-height: 1;
+            cursor: pointer;
+            padding: 2px 4px;
+            border-radius: 6px;
+        }
+        .wn-close:hover { color: var(--text); background: rgba(255, 255, 255, 0.08); }
+
+        .wn-filters {
+            display: flex;
+            flex-direction: column;
+            gap: 7px;
+            padding: 9px 13px;
+            border-bottom: 1px solid var(--border-soft);
+        }
+        .wn-search {
+            width: 100%;
+            padding: 6px 9px;
+            border-radius: 7px;
+            border: 1px solid var(--border);
+            background: rgba(0, 0, 0, 0.32);
+            color: var(--text);
+            font-family: inherit;
+            font-size: 11px;
+            outline: none;
+        }
+        .wn-search:focus { border-color: var(--accent); }
+
+        .wn-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+
+        .wn-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 2px 8px;
+            border-radius: 999px;
+            border: 1px solid var(--border);
+            background: transparent;
+            color: var(--text-muted);
+            font-family: inherit;
+            font-size: 10px;
+            cursor: pointer;
+            transition: color .12s, border-color .12s, background .12s;
+        }
+        .wn-chip:hover { color: var(--text); border-color: var(--text-dim); }
+        .wn-chip.active { color: #120d08; background: var(--accent); border-color: var(--accent); font-weight: 700; }
+        .wn-chip .wn-count { font-variant-numeric: tabular-nums; opacity: 0.7; }
+        .wn-chip .wn-dot { width: 7px; height: 7px; border-radius: 50%; }
+        /* A hop the walk has planned but not yet revealed. Listing it is the
+           point — the plan is known — but saying so is what stops it reading
+           as something already on the canvas. */
+        .wn-chip.pending { opacity: 0.5; font-style: italic; }
+
+        /* The cap notice. Not a toast and not dismissible: while it applies,
+           the list below is not the whole answer, and that has to stay on
+           screen for as long as that is true. */
+        .wn-note {
+            padding: 6px 13px;
+            font-size: 10.5px;
+            color: #fbbf24;
+            background: rgba(251, 191, 36, 0.09);
+            border-bottom: 1px solid rgba(251, 191, 36, 0.22);
+        }
+        .wn-note[hidden] { display: none; }
+
+        .wn-list { overflow-y: auto; padding-bottom: 6px; }
+
+        .wn-group {
+            position: sticky;
+            top: 0;
+            z-index: 1;
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            padding: 6px 13px;
+            background: rgba(16, 14, 13, 0.97);
+            border-bottom: 1px solid var(--border-soft);
+            font-size: 9.5px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--text-muted);
+        }
+        .wn-group .wn-dot { width: 8px; height: 8px; border-radius: 50%; }
+        .wn-group .wn-gcount { margin-left: auto; color: var(--text-dim); font-weight: 600; letter-spacing: 0; }
+
+        .wn-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            width: 100%;
+            padding: 5px 13px;
+            border: none;
+            background: none;
+            text-align: left;
+            cursor: pointer;
+            font-family: inherit;
+        }
+        .wn-row:hover { background: rgba(255, 255, 255, 0.05); }
+        .wn-row.active { background: rgba(249, 115, 22, 0.13); }
+        /* A node from a hop the walk has not reached yet is on no canvas to
+           fly to, so the row says what it is and stops there. */
+        .wn-row.pending { cursor: default; opacity: 0.55; }
+        .wn-row.pending:hover { background: none; }
+        .wn-row .node-icon { width: 13px; height: 13px; flex: 0 0 auto; }
+
+        .wn-main { min-width: 0; flex: 1 1 auto; }
+        .wn-name {
+            font-family: var(--mono, monospace);
+            font-size: 11px;
+            color: var(--text);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .wn-where {
+            font-size: 9.5px;
+            color: var(--text-dim);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            /* The informative end of a path is the right one. */
+            direction: rtl;
+            text-align: left;
+        }
+        .wn-type {
+            flex: 0 0 auto;
+            font-size: 9px;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            padding: 1px 7px;
+            border-radius: 999px;
+        }
+        .wn-deg {
+            flex: 0 0 auto;
+            font-size: 9.5px;
+            font-family: var(--mono, monospace);
+            color: var(--text-dim);
+            font-variant-numeric: tabular-nums;
+        }
+
+        .wn-empty { padding: 22px 13px; text-align: center; font-size: 11px; color: var(--text-dim); }
 /* ==== 15-enhance.css ==== */
         /* ─── Loading phases, error card, start-here, palette, shortcuts ── */
 
@@ -8755,7 +8952,7 @@
 }
     </style>
 <script>
-window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3162,"edges":9271,"files":104,"lines":72348,"ugVersion":"0.1.15","visFingerprint":"d12b8e7c991a3efb","generatedAt":1787062988};
+window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3162,"edges":9271,"files":104,"lines":72348,"ugVersion":"0.1.15","visFingerprint":"6c38c5600d7b2647","generatedAt":1787143701};
 /* ==========================================================================
    UltraGraph — static demo shim
    ==========================================================================
@@ -9642,6 +9839,16 @@ window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#g
                                 <path d="M14 17V9m0 0h3.5a2.5 2.5 0 0 1 0 5H14" />
                             </svg>
                         </button>
+                        <!-- The reach as a list. The cascade shows its shape;
+                             this answers "which nodes, exactly" — the question
+                             a diagram of three hundred discs cannot. -->
+                        <button class="walk-icon" id="walk-o-list" title="Reached nodes — list every hop (N)" aria-pressed="false" type="button">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                                stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M9 6h11M9 12h11M9 18h11" />
+                                <path d="M4.5 6h.01M4.5 12h.01M4.5 18h.01" />
+                            </svg>
+                        </button>
                         <button class="walk-icon danger" id="walk-o-close" title="Exit walk (Esc)" type="button">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1"
                                 stroke-linecap="round">
@@ -9688,6 +9895,23 @@ window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#g
                     </div>
                 </div>
             </div>
+        </div>
+
+        <!-- Graph Walk: every node the walk reaches, by hop. Built in JS —
+             see 22-walk-nodes.js. -->
+        <div id="walk-nodes" class="walk-nodes" role="dialog" aria-label="Nodes reached by this walk" hidden>
+            <div class="wn-head">
+                <span class="wn-title">Reached nodes</span>
+                <span class="wn-sub" id="wn-sub"></span>
+                <button class="wn-close" id="wn-close" title="Close (Esc)" aria-label="Close" type="button">✕</button>
+            </div>
+            <div class="wn-filters">
+                <input class="wn-search" id="wn-search" type="search" placeholder="Filter by name, type or file…" autocomplete="off" spellcheck="false">
+                <div class="wn-chips" id="wn-hops" role="group" aria-label="Hop"></div>
+                <div class="wn-chips wn-types" id="wn-types" role="group" aria-label="Node type"></div>
+            </div>
+            <div class="wn-note" id="wn-note" hidden></div>
+            <div class="wn-list" id="wn-list"></div>
         </div>
 
         <!-- Navigation / breadcrumb bar (visible while exploring a node) -->
@@ -13032,6 +13256,7 @@ traverse({
             wirePanelTabs();
             wireCatalog();
             wireNodeMenu();
+            wireWalkNodes();
             wireIngestButtons();
             probeCapabilities();
             startHealthPolling();
@@ -13415,6 +13640,12 @@ traverse({
                 badge: ['restart', 'after restart'],
                 icon: '<path d="m12 2 8.5 5v10L12 22l-8.5-5V7L12 2z"/><path d="M12 22v-10"/><path d="m3.5 7 8.5 5 8.5-5"/>',
             },
+            vis: {
+                title: 'Visualization',
+                sub: 'How the graph is drawn — engine & solo mode',
+                badge: ['reload', 'applies on reload'],
+                icon: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>',
+            },
         };
 
         const SETTINGS_FIELDS = {
@@ -13428,6 +13659,20 @@ traverse({
             'embed.base_url': { label: 'Endpoint URL', hint: 'Leave unset to embed locally in-process (no network needed).' },
             'embed.api_key': { label: 'API key', hint: 'Only needed for a remote embeddings endpoint.' },
             'embed.dim': { label: 'Dimension', hint: 'Auto-probed on first ingest — set only to pin it explicitly.', num: { step: '1', min: '1' } },
+            'vis.renderer': {
+                label: 'Rendering engine',
+                selectLabels: {
+                    auto: 'Auto (recommended)',
+                    three: 'Three.js — 3D',
+                    cosmos: 'Cosmos — 2D (scale)',
+                },
+                hint: 'Three.js draws in 3D, with depth, effects and one styling pass per node — pleasant on a small repo, unusable past a few thousand nodes. Cosmos draws in 2D, on the GPU, and holds graphs far too big for 3D. Auto adjusts by graph size: picks three below 3,000 elements and cosmos above it — the point (THREE_D_MAX_ELEMENTS) where 3D stops being readable and the 2D engine takes over.',
+            },
+            'vis.solo_threshold': {
+                label: 'Solo mode threshold',
+                hint: 'Past this many nodes or edges the page never draws the whole graph — it opens in solo mode and shows one neighbourhood at a time. Lower it to isolate large repos earlier, higher to attempt whole-graph render for longer. The 3D engine keeps its own hard ceiling of 3,000 elements, so this threshold governs the 2D engine.',
+                num: { step: '1', min: '1', max: '10000000' },
+            },
         };
 
         function settingsOverlayEl() {
@@ -13530,28 +13775,47 @@ traverse({
 
             const wrap = document.createElement('div');
             wrap.className = 'settings-input-wrap';
-            const input = document.createElement('input');
-            if (k.secret) {
-                input.type = 'password';
-                input.autocomplete = 'new-password';
-            } else if (meta.num) {
-                input.type = 'number';
-                input.step = meta.num.step;
-                if (meta.num.min !== undefined) input.min = meta.num.min;
-                if (meta.num.max !== undefined) input.max = meta.num.max;
+
+            // Enum keys (e.g. the rendering engine) are a `<select>` over the
+            // backend-declared choices; everything else keeps the text/number/
+            // password `<input>`. Both share the value/dirty/clear handling below.
+            const isEnum = k.kind === 'enum' && Array.isArray(k.choices) && k.choices.length > 0;
+            let control;
+            if (isEnum) {
+                control = document.createElement('select');
+                const labels = (meta.selectLabels) || {};
+                const baselineOption = k.saved != null ? String(k.saved) : String(k.default || '');
+                for (const c of k.choices) {
+                    const opt = document.createElement('option');
+                    opt.value = c;
+                    opt.textContent = labels[c] || c;
+                    if (c === baselineOption) opt.selected = true;
+                    control.appendChild(opt);
+                }
             } else {
-                input.type = 'text';
-                input.spellcheck = false;
+                control = document.createElement('input');
+                if (k.secret) {
+                    control.type = 'password';
+                    control.autocomplete = 'new-password';
+                } else if (meta.num) {
+                    control.type = 'number';
+                    control.step = meta.num.step;
+                    if (meta.num.min !== undefined) control.min = meta.num.min;
+                    if (meta.num.max !== undefined) control.max = meta.num.max;
+                } else {
+                    control.type = 'text';
+                    control.spellcheck = false;
+                }
+                // Secrets are never echoed back into the field — the server
+                // only sends a masked preview, shown as the placeholder.
+                if (!k.secret && k.saved != null) control.value = k.saved;
+                if (k.secret) {
+                    control.placeholder = k.saved != null ? 'saved · ' + k.saved + ' — type to replace' : 'not set';
+                } else {
+                    control.placeholder = k.default != null ? 'default: ' + k.default : 'not set';
+                }
             }
-            // Secrets are never echoed back into the field — the server
-            // only sends a masked preview, shown as the placeholder.
-            if (!k.secret && k.saved != null) input.value = k.saved;
-            if (k.secret) {
-                input.placeholder = k.saved != null ? 'saved · ' + k.saved + ' — type to replace' : 'not set';
-            } else {
-                input.placeholder = k.default != null ? 'default: ' + k.default : 'not set';
-            }
-            wrap.appendChild(input);
+            wrap.appendChild(control);
 
             const clearBtn = document.createElement('button');
             clearBtn.type = 'button';
@@ -13574,31 +13838,36 @@ traverse({
             }
             row.appendChild(note);
 
-            input.addEventListener('input', () => {
+            const onDirty = () => {
                 if (settingsUi.unsets.has(k.name)) {
                     settingsUi.unsets.delete(k.name);
                     row.classList.remove('pending-unset');
                 }
-                const val = input.value.trim();
-                const baseline = k.secret ? '' : (k.saved != null ? String(k.saved) : '');
+                const val = control.value.trim();
+                // For a select the shown default *is* a legal choice, so an
+                // unset row baseline is the default rather than '' — leaving
+                // it untouched must not mark it dirty.
+                const baseline = k.secret ? '' : (k.saved != null ? String(k.saved) : (isEnum ? String(k.default || '') : ''));
                 if (val !== baseline) settingsUi.edits.set(k.name, val);
                 else settingsUi.edits.delete(k.name);
                 row.classList.toggle('dirty', settingsUi.edits.has(k.name));
                 updateSettingsFooter();
-            });
+            };
+            control.addEventListener('input', onDirty);
+            control.addEventListener('change', onDirty);
 
             clearBtn.addEventListener('click', () => {
                 if (settingsUi.unsets.has(k.name)) {
                     // Undo the pending clear.
                     settingsUi.unsets.delete(k.name);
                     row.classList.remove('pending-unset');
-                    if (!k.secret && k.saved != null) input.value = k.saved;
+                    if (!k.secret && k.saved != null) control.value = k.saved;
                 } else {
                     settingsUi.unsets.add(k.name);
                     settingsUi.edits.delete(k.name);
                     row.classList.remove('dirty');
                     row.classList.add('pending-unset');
-                    if (!k.secret) input.value = k.saved != null ? k.saved : '';
+                    if (!k.secret) control.value = k.saved != null ? k.saved : (isEnum ? (k.default || '') : '');
                 }
                 updateSettingsFooter();
             });
@@ -13631,7 +13900,9 @@ traverse({
             const set = {};
             for (const [name, val] of settingsUi.edits) set[name] = val;
             const unset = Array.from(settingsUi.unsets);
-            const touchedEmbed = Object.keys(set).concat(unset).some((n) => n.startsWith('embed.'));
+            const touched = Object.keys(set).concat(unset);
+            const touchedEmbed = touched.some((n) => n.startsWith('embed.'));
+            const touchedVis = touched.some((n) => n.startsWith('vis.'));
             saveBtn.disabled = true;
             setSettingsStatus('', 'Saving…');
             try {
@@ -13649,9 +13920,11 @@ traverse({
                 settingsUi.unsets.clear();
                 renderSettings();
                 updateSettingsFooter();
-                setSettingsStatus('ok', touchedEmbed
-                    ? 'Saved ✓ — chat applies now; embedding changes take effect after a server restart'
-                    : 'Saved ✓ — applied immediately');
+                setSettingsStatus('ok', touchedVis
+                    ? 'Saved ✓ — the page picks this up on the next reload'
+                    : (touchedEmbed
+                        ? 'Saved ✓ — chat applies now; embedding changes take effect after a server restart'
+                        : 'Saved ✓ — applied immediately'));
                 // Chat readiness / model pill may have just changed.
                 probeCapabilities();
             } catch (err) {
@@ -17676,11 +17949,20 @@ traverse({
             return Math.max(nodes, edges) <= THREE_D_MAX_ELEMENTS ? 'three' : 'cosmos';
         }
 
+        // The `vis.renderer` config key from ~/.ug/config.json, surfaced here
+        // via /api/capabilities. Only an explicit three/cosmos wins; "auto"
+        // (or an invalid/absent value) defers to the size-based default above.
+        function configRendererName() {
+            const r = state.capabilities && state.capabilities.vis && state.capabilities.vis.renderer;
+            return (r === 'three' || r === 'cosmos') ? r : null;
+        }
+
         function pickRendererName() {
             const candidates = [
                 state.renderer,
                 new URLSearchParams(window.location.search).get('r'),
                 (() => { try { return localStorage.getItem(RENDERER_STORAGE_KEY); } catch (err) { return null; } })(),
+                configRendererName(),
                 autoRendererName(),
             ];
             for (const c of candidates) if (c && RENDERERS[c]) return c;
@@ -18261,7 +18543,11 @@ traverse({
                 .linkDirectionalParticleWidth(1.6)
                 .linkDirectionalParticleSpeed(0.012)
                 .linkDirectionalParticleColor(linkParticleColorFor)
-                .enableNodeDrag(true)
+                // Off — see the cosmos backend's `enableDrag` for why: a
+                // click on a node and a drag of it start with the same
+                // gesture, so picking one could move it by accident, and a
+                // moved node misreports the layout with no way back.
+                .enableNodeDrag(false)
                 .onNodeHover(handleNodeHover)
                 .onNodeClick((n, evt) => handleNodeClick(evt, n))
                 .onBackgroundClick(() => clearSelection())
@@ -20020,6 +20306,20 @@ traverse({
                 colors[i * 4] = r; colors[i * 4 + 1] = g; colors[i * 4 + 2] = b;
                 colors[i * 4 + 3] = opacity;
             }
+            // While a walk runs the overlay redraws every reached edge as a
+            // straight, arrowed, hop-coloured strand (fxDrawWalkEdges). These
+            // links are curved (`curvedLinks`), so leaving them on meant two
+            // lines between the same two nodes, bowing apart — a cascade whose
+            // columns are joined by a thicket rather than by legible strands.
+            // So during a walk the overlay owns the edges and these stand down.
+            //
+            // Not blindly, though: the overlay stops after FX_MAX_FLOW_LINKS
+            // strands, and an edge nothing draws is an edge that does not
+            // exist as far as the diagram is concerned. It walks `cosmosEdges`
+            // in this same order and counts the same way, so counting along
+            // here identifies exactly the edges it will get to.
+            const walkOwnsEdges = state.walkActive && state.walkEdgeKeys && state.walkEdgeKeys.size > 0;
+            let overlayDrawn = 0;
             for (let i = 0; i < cosmosEdges.length; i++) {
                 const e = cosmosEdges[i];
                 const [r, g, b] = cosmosLift(cosmosRgb(linkColorFor(e)));
@@ -20031,7 +20331,22 @@ traverse({
                 // context. Invisible is simply alpha 0 — cosmos.gl has no
                 // per-link visibility accessor.
                 const hot = state.highlightLinks.has(e) || linkParticlesFor(e) > 0;
-                linkColors[i * 4 + 3] = linkVisibleFor(e) ? (hot ? 0.95 : 0.55) : 0;
+                let alpha = linkVisibleFor(e) ? (hot ? 0.95 : 0.55) : 0;
+                if (walkOwnsEdges && alpha > 0) {
+                    const sId = e.source.id || e.source;
+                    const tId = e.target.id || e.target;
+                    if (state.walkEdgeKeys.has(walkEdgeKey(sId, tId))) {
+                        if (++overlayDrawn <= FX_MAX_FLOW_LINKS) alpha = 0;
+                    } else {
+                        // A cross-link between two reached nodes: real, but not
+                        // part of the traversal the cascade is laying out, and
+                        // the columns are only readable if the lines between
+                        // them are the ones that put them there. It comes back
+                        // the moment the walk ends.
+                        alpha = 0;
+                    }
+                }
+                linkColors[i * 4 + 3] = alpha;
                 linkWidths[i] = e.rel === 'Contains' ? 1.4 : 0.7;
             }
         }
@@ -20691,8 +21006,10 @@ traverse({
             // stays live.
             caps: { threeD: false, faceViews: false, autoSpin: false, boundaryCube: true },
             // Instanced points and a GPU simulation, so the whole graph stays
-            // on screen far longer than the 3D renderer manages.
-            soloThreshold: SOLO_THRESHOLD,
+            // on screen far longer than the 3D renderer manages. The threshold
+            // follows `vis.solo_threshold` from config with SOLO_THRESHOLD as
+            // the fallback.
+            soloThreshold: visSoloThreshold(),
 
             async mount(el, view) {
                 CosmosLib = await import('./cosmos-vis.bundle.js');
@@ -20727,7 +21044,15 @@ traverse({
                     focusedPointRingColor: '#ff3d00',
                     outlinedPointRingColor: BOUNDARY_IN_COLOR,
                     hoveredPointCursor: 'pointer',
-                    enableDrag: true,
+                    // Off, and deliberately. A point drag begins on mousedown
+                    // over a node — which is also how every click on a node
+                    // starts — so the smallest movement while picking one
+                    // shoved it somewhere the layout never put it. The graph
+                    // is a diagram of the code, not a canvas to arrange: a
+                    // node that has moved is saying something false about
+                    // where the layout placed it, and nothing offers to undo
+                    // it. Panning and zooming still move the *view*.
+                    enableDrag: false,
                     enableZoom: true,
                     fitViewOnInit: false,
                     // Reproducible layouts: the same graph settles the same way
@@ -21087,6 +21412,31 @@ traverse({
             return Math.max(r || 0, 2);
         }
 
+        // Pull a segment's ends back to the rims of the two discs it joins,
+        // as {ax, ay, bx, by} — or null when the discs overlap and there is no
+        // strand left to draw.
+        //
+        // This overlay is a canvas *over* cosmos.gl's, so anything drawn here
+        // is drawn on top of every node: there is no z-order between the two
+        // layers to hide a line behind a disc. Trimming the ends gives the
+        // picture a single draw list would — edges first, nodes over them —
+        // and it is the ends that matter, because that is where a strand meets
+        // the one thing it must not cross out.
+        function fxTrimSegment(a, b, ra, rb) {
+            const dx = b.x - a.x;
+            const dy = b.y - a.y;
+            const len = Math.hypot(dx, dy);
+            // Leave a little strand rather than trimming to nothing: two
+            // touching discs still need the line between them to exist.
+            if (!len || len <= ra + rb + 2) return null;
+            const ux = dx / len;
+            const uy = dy / len;
+            return {
+                ax: a.x + ux * ra, ay: a.y + uy * ra,
+                bx: b.x - ux * rb, by: b.y - uy * rb,
+            };
+        }
+
         // The bounded set every layer except labels works from.
         function fxHotNodes() {
             const ids = new Set();
@@ -21233,14 +21583,19 @@ traverse({
                 if (!s || !t) continue;
                 const a = fxPos(s), b = fxPos(t);
                 if (!a || !b) continue;
+                // Rim to rim, like the strands they run along: a dot drawn
+                // over a node disc reads as something sitting on the node
+                // rather than as something arriving at it.
+                const seg = fxTrimSegment(a, b, fxRadius(s), fxRadius(t));
+                if (!seg) continue;
                 const [r, g, bl] = cosmosRgb(linkParticleColorFor(e));
                 ctx.fillStyle = `rgba(${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(bl * 255)},0.95)`;
                 for (let i = 0; i < count; i++) {
                     // Evenly spaced along the strand, all sliding source→target
                     // at the same rate, so direction of travel is readable.
                     const phase = ((now * 0.0004) + i / count) % 1;
-                    const x = a.x + (b.x - a.x) * phase;
-                    const y = a.y + (b.y - a.y) * phase;
+                    const x = seg.ax + (seg.bx - seg.ax) * phase;
+                    const y = seg.ay + (seg.by - seg.ay) * phase;
                     ctx.beginPath();
                     ctx.arc(x, y, 1.7, 0, Math.PI * 2);
                     ctx.fill();
@@ -21406,14 +21761,16 @@ traverse({
                 if (!s || !t) continue;
                 const a = fxPos(s), b = fxPos(t);
                 if (!a || !b) continue;
+                const seg = fxTrimSegment(a, b, fxRadius(s), fxRadius(t));
+                if (!seg) continue;
                 // The hop colour of the end being *reached*, so a strand
                 // carries the temperature of the frontier it fed.
                 const hex = state.walkColors.get(tId) || state.walkColors.get(sId) || '#f97316';
                 const [r, g, bl] = cosmosRgb(hex);
                 const rgb = `${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(bl * 255)}`;
                 ctx.beginPath();
-                ctx.moveTo(a.x, a.y);
-                ctx.lineTo(b.x, b.y);
+                ctx.moveTo(seg.ax, seg.ay);
+                ctx.lineTo(seg.bx, seg.by);
                 if (wideGlow) {
                     ctx.strokeStyle = `rgba(${rgb},${(0.20 * k).toFixed(3)})`;
                     ctx.lineWidth = 5;
@@ -21422,8 +21779,54 @@ traverse({
                 ctx.strokeStyle = `rgba(${rgb},${(0.85 * k).toFixed(3)})`;
                 ctx.lineWidth = 1.4;
                 ctx.stroke();
+                // Which way the relationship points, said by the line itself.
+                // The flow particles say it too, but flow is a toggle (R on
+                // the walk bar) and it is off in every still — and a cascade
+                // that cannot tell a caller from a callee is a picture of
+                // connectivity, not of dependency, which is the one thing a
+                // walk is asked for. Note this is the *edge's* direction, not
+                // the direction the traversal happened to follow: an inbound
+                // walk crosses edges backwards, and drawing the head the way
+                // the frontier moved would invert the meaning of the graph.
+                fxArrowHead(ctx, a, b, fxRadius(t), rgb, k);
             }
             ctx.restore();
+        }
+
+        // A filled head pointing along a→b, set back from b by `inset` pixels
+        // so it lands on the rim of the target disc rather than under it.
+        //
+        // `k` is the crowding factor the strands are drawn at, and the head
+        // takes it too, in both size and alpha. It keeps a floor — a direction
+        // mark that fades to nothing has stopped saying the one thing it is
+        // for — but it must not keep full strength either: five hundred bright
+        // wedges over threads faded to 0.14 would make the heads the diagram
+        // and the edges the background.
+        function fxArrowHead(ctx, a, b, inset, rgb, k) {
+            const dx = b.x - a.x;
+            const dy = b.y - a.y;
+            const len = Math.hypot(dx, dy);
+            // No direction to draw (a self-loop, or two nodes on top of each
+            // other), or a strand so short the head would be most of it.
+            if (!len || len < inset + 12) return;
+            const ux = dx / len;
+            const uy = dy / len;
+            const tipX = b.x - ux * inset;
+            const tipY = b.y - uy * inset;
+            // Scaled to the strand so short hops don't get a head bigger than
+            // the gap they cross, and clamped so long ones stay a mark rather
+            // than a wedge.
+            const size = Math.max(6, Math.min(11, len * 0.14)) * (0.7 + 0.3 * k);
+            const wing = size * 0.5;
+            const baseX = tipX - ux * size;
+            const baseY = tipY - uy * size;
+            ctx.beginPath();
+            ctx.moveTo(tipX, tipY);
+            ctx.lineTo(baseX - uy * wing, baseY + ux * wing);
+            ctx.lineTo(baseX + uy * wing, baseY - ux * wing);
+            ctx.closePath();
+            ctx.fillStyle = `rgba(${rgb},${Math.max(0.3, 0.95 * k).toFixed(3)})`;
+            ctx.fill();
         }
 
         // ── Graph Walk ignition ────────────────────────────────
@@ -23962,6 +24365,17 @@ traverse({
         const SOLO_MAX_NODES = 1500;      // hard render budget for one view
         const SOLO_MAX_NEIGHBORS = 300;   // per-seed 1-hop cap, so a hub can't blow the budget
 
+        // The `vis.solo_threshold` config key from ~/.ug/config.json, surfaced
+        // here via /api/capabilities. Absent/invalid → SOLO_THRESHOLD. Only the
+        // 2D engine consults this: the 3D engine keeps its own ceiling
+        // (THREE_D_MAX_ELEMENTS), so a (mis)setting can never hand three.js
+        // more than it can draw.
+        function visSoloThreshold() {
+            const raw = state.capabilities && state.capabilities.vis && state.capabilities.vis.solo_threshold;
+            const n = parseInt(raw, 10);
+            return Number.isFinite(n) && n > 0 ? n : SOLO_THRESHOLD;
+        }
+
         // Whether the renderer must be handed neighbourhoods rather than the
         // whole graph. The two places that decide this — `initialize()` and
         // `applySoloMode()` — must agree, and both got it wrong for server mode
@@ -23975,7 +24389,7 @@ traverse({
         // server.
         function soloRequired(limit) {
             if (state.graphMode === 'server') return true;
-            return Math.max(state.graph.nodes.length, state.edgeCount) > (limit || SOLO_THRESHOLD);
+            return Math.max(state.graph.nodes.length, state.edgeCount) > (limit ?? visSoloThreshold());
         }
 
         // Adjacency over the *full* graph, built once. Before this, every
@@ -25186,6 +25600,7 @@ traverse({
                 else if (e.key === 'f' || e.key === 'F') { e.preventDefault(); toggleWalkLayout(); }
                 else if (e.key === 'd' || e.key === 'D') { e.preventDefault(); toggleWalkInfo(); }
                 else if (e.key === 'l' || e.key === 'L') { e.preventDefault(); toggleShowLabels(); }
+                else if (e.key === 'n' || e.key === 'N') { e.preventDefault(); toggleWalkNodes(); }
             });
 
             // Seed follows the current selection (see syncWalkSeed, wired
@@ -25743,6 +26158,9 @@ traverse({
             if (runBtn) runBtn.disabled = false;
             document.body.classList.remove('walk-active');
             hideWalkOverlay();
+            // The list describes a walk. Without one it is a panel of rows
+            // pointing at a canvas that no longer holds them.
+            closeWalkNodes();
             if (wasActive) {
                 exitWalkImmersive();
                 // Keep the walked neighbourhood on the canvas as an ordinary
@@ -25768,6 +26186,9 @@ traverse({
 
         function showWalkOverlay() {
             walkPlay.active = true;
+            // A filter typed against the last walk's reach is a filter against
+            // a set that no longer exists.
+            resetWalkNodes();
             const ovl = walkEl('walk-overlay');
             if (ovl) ovl.classList.add('visible');
             const seedEl = walkEl('walk-o-seed');
@@ -25921,6 +26342,11 @@ traverse({
             const next = walkEl('walk-o-next');
             if (prev) prev.disabled = idx <= 0 && streaming < 0;
             if (next) next.disabled = idx >= last && streaming < 0;
+
+            // The reached-nodes list marks which hops are still only planned,
+            // and a hop change is precisely what moves that line. No-op when
+            // the panel is closed.
+            refreshWalkNodes();
         }
 
         // ── Immersive: collapse sidebar / details, restore on exit ──
@@ -26418,6 +26844,7 @@ traverse({
             { group: 'Graph walk', keys: '← / →', action: 'Previous / next hop' },
             { group: 'Graph walk', keys: 'S / R / D', action: 'Speed / edge flow / details' },
             { group: 'Graph walk', keys: 'F / L', action: 'Cascade layout / labels' },
+            { group: 'Graph walk', keys: 'N', action: 'Reached nodes — list every hop' },
             { group: 'Graph walk', keys: 'Esc', action: 'Exit the walk' },
         ];
 
@@ -26973,6 +27400,293 @@ traverse({
             const top = Math.min(at.y + 12, window.innerHeight - h - pad);
             menu.style.left = Math.max(pad, left) + 'px';
             menu.style.top = Math.max(pad, top) + 'px';
+        }
+// ==== 22-walk-nodes.js ====
+        // ─── Graph Walk: the reach, as a list ───────────────
+        //
+        // The cascade answers "what shape is this reach" — three hundred discs
+        // in hop columns, which is the right answer to how far and how wide,
+        // and no answer at all to *which* nodes. Past a couple of dozen the
+        // canvas cannot be read node by node: the labels collide, the discs
+        // are five pixels wide, and the only way to inspect one was to find it
+        // with the pointer.
+        //
+        // So: the same set, as rows you can filter. It reads `walkPlay.layers`
+        // — the whole plan, including hops the reveal has not reached yet,
+        // because the plan is computed up front and knowing what is coming is
+        // most of why someone opens this mid-walk. Rows from an unrevealed hop
+        // say so and do not offer to fly to a node that is not on the canvas.
+
+        // The row cap. A three-hop walk off a hub reaches tens of thousands of
+        // nodes, and every row is DOM: at ~200 bytes of layout each, rendering
+        // them all is tens of megabytes and a list that janks on every
+        // keystroke. The cap is on *rendered* rows, applied after filtering,
+        // so narrowing the filter always reaches the rest — and the banner
+        // above the list says so whenever it bites, because a silently
+        // truncated list is a wrong answer rather than a partial one.
+        const WALK_NODES_MAX = 1000;
+
+        // Filter state lives here rather than in the DOM so it survives the
+        // re-render each hop triggers while the panel is open.
+        const wnFilters = { text: '', hop: 'all', types: new Set() };
+        let wnActiveId = null;
+
+        function wnEl(id) { return document.getElementById(id); }
+
+        function wireWalkNodes() {
+            const btn = wnEl('walk-o-list');
+            const panel = wnEl('walk-nodes');
+            if (!btn || !panel) return;
+
+            btn.addEventListener('click', toggleWalkNodes);
+            wnEl('wn-close').addEventListener('click', closeWalkNodes);
+
+            const search = wnEl('wn-search');
+            search.addEventListener('input', () => {
+                wnFilters.text = search.value.trim().toLowerCase();
+                renderWalkNodes({ keepScroll: false });
+            });
+            // Esc inside the box clears the filter before it closes anything —
+            // the same two-stage escape the search field in the sidebar has.
+            search.addEventListener('keydown', e => {
+                if (e.key !== 'Escape' || !search.value) return;
+                e.stopPropagation();
+                search.value = '';
+                wnFilters.text = '';
+                renderWalkNodes({ keepScroll: false });
+            });
+
+            // Capture phase: the walk's own Escape handler exits the walk, and
+            // closing a panel must not tear down the thing it is describing.
+            document.addEventListener('keydown', e => {
+                if (e.key !== 'Escape' || panel.hidden) return;
+                e.stopPropagation();
+                closeWalkNodes();
+            }, true);
+        }
+
+        function toggleWalkNodes() {
+            const panel = wnEl('walk-nodes');
+            if (!panel) return;
+            if (panel.hidden) openWalkNodes(); else closeWalkNodes();
+        }
+
+        function openWalkNodes() {
+            const panel = wnEl('walk-nodes');
+            if (!panel || !walkPlay.layers) return;
+            panel.hidden = false;
+            const btn = wnEl('walk-o-list');
+            if (btn) { btn.classList.add('active'); btn.setAttribute('aria-pressed', 'true'); }
+            renderWalkNodes({ keepScroll: false });
+            const search = wnEl('wn-search');
+            if (search) search.focus();
+        }
+
+        function closeWalkNodes() {
+            const panel = wnEl('walk-nodes');
+            if (!panel) return;
+            panel.hidden = true;
+            const btn = wnEl('walk-o-list');
+            if (btn) { btn.classList.remove('active'); btn.setAttribute('aria-pressed', 'false'); }
+        }
+
+        // A new walk means a new set of nodes, so the filters from the last
+        // one are answers to a question nobody is asking any more. Called from
+        // showWalkOverlay.
+        function resetWalkNodes() {
+            wnFilters.text = '';
+            wnFilters.hop = 'all';
+            wnFilters.types.clear();
+            wnActiveId = null;
+            const search = wnEl('wn-search');
+            if (search) search.value = '';
+        }
+
+        // Called from updateWalkOverlay on every hop change: the panel lists
+        // hops the walk has yet to reveal, and which of them those are is
+        // exactly what a hop changes.
+        function refreshWalkNodes() {
+            const panel = wnEl('walk-nodes');
+            if (!panel || panel.hidden) return;
+            if (!walkPlay.layers) { closeWalkNodes(); return; }
+            renderWalkNodes({ keepScroll: true });
+        }
+
+        // Every planned node, flattened, each tagged with the hop that reaches
+        // it. Built fresh per render: it is bounded by the walk, and a walk
+        // that is still revealing changes which hops count as reached.
+        function wnCollect() {
+            const rows = [];
+            const seen = new Set();
+            for (const layer of walkPlay.layers || []) {
+                const revealed = state.walkReached && layer.ids.some(id => state.walkReached.has(id));
+                for (const id of layer.ids) {
+                    // A node can only be reached once — but the seed is also
+                    // layer 0's only id, and a malformed plan should not put a
+                    // node in the list twice.
+                    if (seen.has(id)) continue;
+                    seen.add(id);
+                    const node = state.nodeById && state.nodeById.get(id);
+                    if (!node) continue;
+                    rows.push({
+                        node,
+                        hop: layer.hop,
+                        // Per node, not per layer: during the streaming phase a
+                        // hop's nodes are already in `walkReached` as ghosts,
+                        // and those *are* on the canvas to fly to.
+                        pending: !(state.walkReached && state.walkReached.has(id)) && !revealed,
+                    });
+                }
+            }
+            return rows;
+        }
+
+        function wnMatches(row) {
+            if (wnFilters.hop !== 'all' && row.hop !== wnFilters.hop) return false;
+            if (wnFilters.types.size && !wnFilters.types.has(row.node.group)) return false;
+            if (!wnFilters.text) return true;
+            const n = row.node;
+            return (n.name || '').toLowerCase().includes(wnFilters.text)
+                || (n.group || '').toLowerCase().includes(wnFilters.text)
+                || (n.file || '').toLowerCase().includes(wnFilters.text)
+                || (n.id || '').toLowerCase().includes(wnFilters.text);
+        }
+
+        function renderWalkNodes(opts) {
+            const panel = wnEl('walk-nodes');
+            if (!panel || panel.hidden || !walkPlay.layers) return;
+            const list = wnEl('wn-list');
+            const scroll = (opts && opts.keepScroll) ? list.scrollTop : 0;
+
+            const all = wnCollect();
+            const matched = all.filter(wnMatches);
+
+            // ── Header: the whole reach, before any filter.
+            const hops = walkPlay.layers.length - 1;
+            wnEl('wn-sub').textContent =
+                `${all.length.toLocaleString()} node${all.length === 1 ? '' : 's'} · `
+                + `${hops} hop${hops === 1 ? '' : 's'}`;
+
+            // ── Hop chips. Counts are of the unfiltered set: a chip that
+            // recounted itself under the current filter could read "0" for a
+            // hop that is full, which is a filter reporting on itself.
+            const byHop = new Map();
+            all.forEach(r => byHop.set(r.hop, (byHop.get(r.hop) || 0) + 1));
+            const hopBox = wnEl('wn-hops');
+            hopBox.innerHTML = `<button class="wn-chip${wnFilters.hop === 'all' ? ' active' : ''}" data-hop="all" type="button">All`
+                + `<span class="wn-count">${all.length.toLocaleString()}</span></button>`
+                + [...byHop.keys()].sort((a, b) => a - b).map(h => {
+                    const pending = all.filter(r => r.hop === h).every(r => r.pending);
+                    const colour = walkColorForHop(h);
+                    return `<button class="wn-chip${wnFilters.hop === h ? ' active' : ''}${pending ? ' pending' : ''}"`
+                        + ` data-hop="${h}" type="button"`
+                        + ` title="${pending ? 'Planned — the walk has not revealed this hop yet' : ''}">`
+                        + `<span class="wn-dot" style="background:${colour}"></span>`
+                        + `${h === 0 ? 'Seed' : 'Hop ' + h}`
+                        + `<span class="wn-count">${byHop.get(h).toLocaleString()}</span></button>`;
+                }).join('');
+            hopBox.querySelectorAll('.wn-chip').forEach(chip => {
+                chip.addEventListener('click', () => {
+                    const raw = chip.dataset.hop;
+                    wnFilters.hop = raw === 'all' ? 'all' : parseInt(raw, 10);
+                    renderWalkNodes({ keepScroll: false });
+                });
+            });
+
+            // ── Type chips, over whatever the hop filter leaves. These narrow
+            // within a hop far more often than across the whole walk.
+            const inHop = all.filter(r => wnFilters.hop === 'all' || r.hop === wnFilters.hop);
+            const byType = new Map();
+            inHop.forEach(r => byType.set(r.node.group, (byType.get(r.node.group) || 0) + 1));
+            const typeBox = wnEl('wn-types');
+            typeBox.innerHTML = [...byType.entries()]
+                .sort((a, b) => b[1] - a[1])
+                .map(([type, n]) => {
+                    const colour = config.getColor(type);
+                    return `<button class="wn-chip${wnFilters.types.has(type) ? ' active' : ''}" data-type="${escapeHtml(type)}" type="button">`
+                        + `<span class="wn-dot" style="background:${colour}"></span>${escapeHtml(type)}`
+                        + `<span class="wn-count">${n.toLocaleString()}</span></button>`;
+                }).join('');
+            typeBox.querySelectorAll('.wn-chip').forEach(chip => {
+                chip.addEventListener('click', () => {
+                    const t = chip.dataset.type;
+                    if (wnFilters.types.has(t)) wnFilters.types.delete(t); else wnFilters.types.add(t);
+                    renderWalkNodes({ keepScroll: false });
+                });
+            });
+
+            // ── The cap, and saying so.
+            const capped = matched.length > WALK_NODES_MAX;
+            const shown = capped ? matched.slice(0, WALK_NODES_MAX) : matched;
+            const note = wnEl('wn-note');
+            note.hidden = !capped;
+            if (capped) {
+                note.textContent = `Showing the first ${WALK_NODES_MAX.toLocaleString()} of `
+                    + `${matched.length.toLocaleString()} matching nodes — narrow the filter to reach the rest.`;
+            }
+
+            if (!shown.length) {
+                list.innerHTML = `<div class="wn-empty">${all.length
+                    ? 'No nodes match these filters.'
+                    : 'This walk has not reached anything yet.'}</div>`;
+                return;
+            }
+
+            // ── Rows, grouped by hop. Within a hop: type first, then name, so
+            // the kinds of thing a hop pulled in read as blocks rather than as
+            // an alphabetical shuffle of everything at once.
+            shown.sort((a, b) => a.hop - b.hop
+                || String(a.node.group).localeCompare(String(b.node.group))
+                || String(a.node.name).localeCompare(String(b.node.name)));
+
+            const parts = [];
+            let lastHop = null;
+            for (const row of shown) {
+                if (row.hop !== lastHop) {
+                    lastHop = row.hop;
+                    const total = byHop.get(row.hop) || 0;
+                    const here = shown.filter(r => r.hop === row.hop).length;
+                    parts.push(`<div class="wn-group">`
+                        + `<span class="wn-dot" style="background:${walkColorForHop(row.hop)}"></span>`
+                        + `${row.hop === 0 ? 'Seed' : 'Hop ' + row.hop}`
+                        + `<span class="wn-gcount">${here === total ? here.toLocaleString()
+                            : here.toLocaleString() + ' of ' + total.toLocaleString()}</span></div>`);
+                }
+                const n = row.node;
+                const colour = config.getColor(n.group);
+                const where = n.file
+                    ? escapeHtml(n.file + (n.startLine ? ':' + n.startLine : ''))
+                    : '';
+                const deg = edgesKnownComplete(n.id) ? knownEdgesOf(n.id).length : null;
+                parts.push(`<button class="wn-row${row.pending ? ' pending' : ''}${wnActiveId === n.id ? ' active' : ''}"`
+                    + ` data-id="${escapeHtml(n.id)}" type="button"`
+                    + ` title="${escapeHtml(row.pending ? 'Planned — not on the canvas yet' : n.id)}">`
+                    + nodeIconSvg(n.group)
+                    + `<span class="wn-main">`
+                    + `<span class="wn-name">${escapeHtml(truncateName(n.name))}</span>`
+                    + (where ? `<span class="wn-where">${where}</span>` : '')
+                    + `</span>`
+                    + (deg === null ? '' : `<span class="wn-deg" title="Edges touching this node">${deg}</span>`)
+                    + `<span class="wn-type" style="background:${colour}20;color:${colour}">${escapeHtml(n.group || '')}</span>`
+                    + `</button>`);
+            }
+            list.innerHTML = parts.join('');
+
+            // A row flies the camera to its node and opens the summary card on
+            // it — the same card a click on the canvas gives, which is what
+            // makes this a way *into* the walk rather than a report about it.
+            list.querySelectorAll('.wn-row:not(.pending)').forEach(el => {
+                el.addEventListener('click', ev => {
+                    const node = state.nodeById.get(el.dataset.id);
+                    if (!node) return;
+                    wnActiveId = node.id;
+                    list.querySelectorAll('.wn-row.active').forEach(r => r.classList.remove('active'));
+                    el.classList.add('active');
+                    focusNode(node);
+                    openNodeMenuAt(node, ev);
+                });
+            });
+            list.scrollTop = scroll;
         }
     </script>
 </body>

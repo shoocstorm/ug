@@ -615,6 +615,7 @@
                 else if (e.key === 'f' || e.key === 'F') { e.preventDefault(); toggleWalkLayout(); }
                 else if (e.key === 'd' || e.key === 'D') { e.preventDefault(); toggleWalkInfo(); }
                 else if (e.key === 'l' || e.key === 'L') { e.preventDefault(); toggleShowLabels(); }
+                else if (e.key === 'n' || e.key === 'N') { e.preventDefault(); toggleWalkNodes(); }
             });
 
             // Seed follows the current selection (see syncWalkSeed, wired
@@ -1172,6 +1173,9 @@
             if (runBtn) runBtn.disabled = false;
             document.body.classList.remove('walk-active');
             hideWalkOverlay();
+            // The list describes a walk. Without one it is a panel of rows
+            // pointing at a canvas that no longer holds them.
+            closeWalkNodes();
             if (wasActive) {
                 exitWalkImmersive();
                 // Keep the walked neighbourhood on the canvas as an ordinary
@@ -1197,6 +1201,9 @@
 
         function showWalkOverlay() {
             walkPlay.active = true;
+            // A filter typed against the last walk's reach is a filter against
+            // a set that no longer exists.
+            resetWalkNodes();
             const ovl = walkEl('walk-overlay');
             if (ovl) ovl.classList.add('visible');
             const seedEl = walkEl('walk-o-seed');
@@ -1350,6 +1357,11 @@
             const next = walkEl('walk-o-next');
             if (prev) prev.disabled = idx <= 0 && streaming < 0;
             if (next) next.disabled = idx >= last && streaming < 0;
+
+            // The reached-nodes list marks which hops are still only planned,
+            // and a hop change is precisely what moves that line. No-op when
+            // the panel is closed.
+            refreshWalkNodes();
         }
 
         // ── Immersive: collapse sidebar / details, restore on exit ──

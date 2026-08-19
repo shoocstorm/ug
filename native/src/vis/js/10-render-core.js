@@ -281,11 +281,20 @@
             return Math.max(nodes, edges) <= THREE_D_MAX_ELEMENTS ? 'three' : 'cosmos';
         }
 
+        // The `vis.renderer` config key from ~/.ug/config.json, surfaced here
+        // via /api/capabilities. Only an explicit three/cosmos wins; "auto"
+        // (or an invalid/absent value) defers to the size-based default above.
+        function configRendererName() {
+            const r = state.capabilities && state.capabilities.vis && state.capabilities.vis.renderer;
+            return (r === 'three' || r === 'cosmos') ? r : null;
+        }
+
         function pickRendererName() {
             const candidates = [
                 state.renderer,
                 new URLSearchParams(window.location.search).get('r'),
                 (() => { try { return localStorage.getItem(RENDERER_STORAGE_KEY); } catch (err) { return null; } })(),
+                configRendererName(),
                 autoRendererName(),
             ];
             for (const c of candidates) if (c && RENDERERS[c]) return c;

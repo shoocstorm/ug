@@ -500,6 +500,16 @@
                                 <path d="M14 17V9m0 0h3.5a2.5 2.5 0 0 1 0 5H14" />
                             </svg>
                         </button>
+                        <!-- The reach as a list. The cascade shows its shape;
+                             this answers "which nodes, exactly" — the question
+                             a diagram of three hundred discs cannot. -->
+                        <button class="walk-icon" id="walk-o-list" title="Reached nodes — list every hop (N)" aria-pressed="false" type="button">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                                stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M9 6h11M9 12h11M9 18h11" />
+                                <path d="M4.5 6h.01M4.5 12h.01M4.5 18h.01" />
+                            </svg>
+                        </button>
                         <button class="walk-icon danger" id="walk-o-close" title="Exit walk (Esc)" type="button">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1"
                                 stroke-linecap="round">
@@ -546,6 +556,23 @@
                     </div>
                 </div>
             </div>
+        </div>
+
+        <!-- Graph Walk: every node the walk reaches, by hop. Built in JS —
+             see 22-walk-nodes.js. -->
+        <div id="walk-nodes" class="walk-nodes" role="dialog" aria-label="Nodes reached by this walk" hidden>
+            <div class="wn-head">
+                <span class="wn-title">Reached nodes</span>
+                <span class="wn-sub" id="wn-sub"></span>
+                <button class="wn-close" id="wn-close" title="Close (Esc)" aria-label="Close" type="button">✕</button>
+            </div>
+            <div class="wn-filters">
+                <input class="wn-search" id="wn-search" type="search" placeholder="Filter by name, type or file…" autocomplete="off" spellcheck="false">
+                <div class="wn-chips" id="wn-hops" role="group" aria-label="Hop"></div>
+                <div class="wn-chips wn-types" id="wn-types" role="group" aria-label="Node type"></div>
+            </div>
+            <div class="wn-note" id="wn-note" hidden></div>
+            <div class="wn-list" id="wn-list"></div>
         </div>
 
         <!-- Navigation / breadcrumb bar (visible while exploring a node) -->

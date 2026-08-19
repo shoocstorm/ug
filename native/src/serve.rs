@@ -3756,6 +3756,16 @@ async fn api_capabilities(State(state): State<ServeState>) -> Response {
         "search_ready": search_ready,
         "chat_ready": chat_ready,
         "chat": chat_info,
+        // Resolved visualization prefs for the page's own rendering. Null
+        // when unset — the page falls back to its built-in defaults (three
+        // under THREE_D_MAX_ELEMENTS, cosmos above; solo past SOLO_THRESHOLD).
+        // Carried here rather than via a separate /api/config fetch because
+        // the page needs them *before* its first render, and capabilities is
+        // the fetch it already makes in that window.
+        "vis": serde_json::json!({
+            "renderer": crate::config::get("vis.renderer"),
+            "solo_threshold": crate::config::get("vis.solo_threshold"),
+        }),
         // Back-compat: existing UI reads `db_node_count` for the primary.
         "db_node_count": primary_count,
         "reason": reason,
@@ -4434,6 +4444,11 @@ fn config_payload(state: &ServeState) -> serde_json::Value {
                     crate::config::Kind::F32 => "f32",
                     crate::config::Kind::U32 => "u32",
                     crate::config::Kind::U64 => "u64",
+                    crate::config::Kind::Enum(_) => "enum",
+                },
+                "choices": match key.kind {
+                    crate::config::Kind::Enum(allowed) => allowed.to_vec(),
+                    _ => Vec::new(),
                 },
                 "secret": key.secret,
                 "saved": saved.as_ref().map(&mask),

@@ -505,6 +505,7 @@
             wirePanelTabs();
             wireCatalog();
             wireNodeMenu();
+            wireWalkNodes();
             wireIngestButtons();
             probeCapabilities();
             startHealthPolling();

@@ -738,3 +738,187 @@
         .walk-mcp-code .k { color: #8fb8dd; }
         .walk-mcp-code .s { color: #fbbf24; }
         .walk-mcp-code .c { color: var(--text-dim); }
+
+        /* ─── Reached-nodes list ─────────────────────────────
+           The cascade answers "what shape is the reach"; this answers "which
+           nodes". Floated over the canvas rather than docked, because it is
+           consulted and dismissed — the diagram behind it is still the
+           subject, and the walk card at the bottom stays reachable. */
+        .walk-nodes {
+            position: fixed;
+            top: 64px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: min(760px, 92vw);
+            max-height: min(62vh, 620px);
+            display: flex;
+            flex-direction: column;
+            z-index: 60;
+            background: rgba(16, 14, 13, 0.97);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.09);
+            border-radius: 12px;
+            box-shadow: 0 24px 70px rgba(0, 0, 0, 0.62);
+            overflow: hidden;
+        }
+
+        .walk-nodes[hidden] { display: none; }
+
+        .wn-head {
+            display: flex;
+            align-items: baseline;
+            gap: 9px;
+            padding: 11px 13px 9px;
+            border-bottom: 1px solid var(--border-soft);
+        }
+        .wn-title { font-size: 12px; font-weight: 700; color: var(--text); }
+        .wn-sub { font-size: 10.5px; color: var(--text-dim); font-family: var(--mono, monospace); }
+        .wn-close {
+            margin-left: auto;
+            border: none;
+            background: none;
+            color: var(--text-dim);
+            font-size: 13px;
+            line-height: 1;
+            cursor: pointer;
+            padding: 2px 4px;
+            border-radius: 6px;
+        }
+        .wn-close:hover { color: var(--text); background: rgba(255, 255, 255, 0.08); }
+
+        .wn-filters {
+            display: flex;
+            flex-direction: column;
+            gap: 7px;
+            padding: 9px 13px;
+            border-bottom: 1px solid var(--border-soft);
+        }
+        .wn-search {
+            width: 100%;
+            padding: 6px 9px;
+            border-radius: 7px;
+            border: 1px solid var(--border);
+            background: rgba(0, 0, 0, 0.32);
+            color: var(--text);
+            font-family: inherit;
+            font-size: 11px;
+            outline: none;
+        }
+        .wn-search:focus { border-color: var(--accent); }
+
+        .wn-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+
+        .wn-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 2px 8px;
+            border-radius: 999px;
+            border: 1px solid var(--border);
+            background: transparent;
+            color: var(--text-muted);
+            font-family: inherit;
+            font-size: 10px;
+            cursor: pointer;
+            transition: color .12s, border-color .12s, background .12s;
+        }
+        .wn-chip:hover { color: var(--text); border-color: var(--text-dim); }
+        .wn-chip.active { color: #120d08; background: var(--accent); border-color: var(--accent); font-weight: 700; }
+        .wn-chip .wn-count { font-variant-numeric: tabular-nums; opacity: 0.7; }
+        .wn-chip .wn-dot { width: 7px; height: 7px; border-radius: 50%; }
+        /* A hop the walk has planned but not yet revealed. Listing it is the
+           point — the plan is known — but saying so is what stops it reading
+           as something already on the canvas. */
+        .wn-chip.pending { opacity: 0.5; font-style: italic; }
+
+        /* The cap notice. Not a toast and not dismissible: while it applies,
+           the list below is not the whole answer, and that has to stay on
+           screen for as long as that is true. */
+        .wn-note {
+            padding: 6px 13px;
+            font-size: 10.5px;
+            color: #fbbf24;
+            background: rgba(251, 191, 36, 0.09);
+            border-bottom: 1px solid rgba(251, 191, 36, 0.22);
+        }
+        .wn-note[hidden] { display: none; }
+
+        .wn-list { overflow-y: auto; padding-bottom: 6px; }
+
+        .wn-group {
+            position: sticky;
+            top: 0;
+            z-index: 1;
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            padding: 6px 13px;
+            background: rgba(16, 14, 13, 0.97);
+            border-bottom: 1px solid var(--border-soft);
+            font-size: 9.5px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--text-muted);
+        }
+        .wn-group .wn-dot { width: 8px; height: 8px; border-radius: 50%; }
+        .wn-group .wn-gcount { margin-left: auto; color: var(--text-dim); font-weight: 600; letter-spacing: 0; }
+
+        .wn-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            width: 100%;
+            padding: 5px 13px;
+            border: none;
+            background: none;
+            text-align: left;
+            cursor: pointer;
+            font-family: inherit;
+        }
+        .wn-row:hover { background: rgba(255, 255, 255, 0.05); }
+        .wn-row.active { background: rgba(249, 115, 22, 0.13); }
+        /* A node from a hop the walk has not reached yet is on no canvas to
+           fly to, so the row says what it is and stops there. */
+        .wn-row.pending { cursor: default; opacity: 0.55; }
+        .wn-row.pending:hover { background: none; }
+        .wn-row .node-icon { width: 13px; height: 13px; flex: 0 0 auto; }
+
+        /* Two stacked lines, so the name reads as the name and the path as
+           where it lives. Both spans need `display: block` — inline ones sit
+           on the same line and the two run together into one string. */
+        .wn-main { min-width: 0; flex: 1 1 auto; }
+        .wn-name,
+        .wn-where {
+            display: block;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .wn-name {
+            font-family: var(--mono, monospace);
+            font-size: 11px;
+            color: var(--text);
+        }
+        .wn-where {
+            font-size: 9.5px;
+            color: var(--text-dim);
+        }
+        .wn-type {
+            flex: 0 0 auto;
+            font-size: 9px;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            padding: 1px 7px;
+            border-radius: 999px;
+        }
+        .wn-deg {
+            flex: 0 0 auto;
+            font-size: 9.5px;
+            font-family: var(--mono, monospace);
+            color: var(--text-dim);
+            font-variant-numeric: tabular-nums;
+        }
+
+        .wn-empty { padding: 22px 13px; text-align: center; font-size: 11px; color: var(--text-dim); }

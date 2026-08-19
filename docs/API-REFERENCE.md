@@ -281,9 +281,9 @@ The HTTP server (`ug serve`) is built on **axum**. All routes listed below.
 
 | Method | Path | What it does | Returns 503 when |
 |--------|------|-------------|-------------------|
-| GET | `/api/capabilities` | Server capabilities matrix: backends, models, features enabled, **plus the `graph` block below** | — |
-| GET | `/api/config` | Persisted + effective settings, with per-key source (flag/env/config/default) | — |
-| POST | `/api/config` | Update the persisted chat config | — |
+| GET | `/api/capabilities` | Server capabilities matrix: backends, models, features enabled, the `graph` block below, and a `vis` block carrying resolved visualization prefs (`renderer`: auto/three/cosmos, `solo_threshold`) — null when unset, so the page falls back to its built-in defaults | — |
+| GET | `/api/config` | Persisted + effective settings, with per-key source (flag/env/config/default) and `kind` (`str`/`f32`/`u32`/`u64`/`enum`); `enum` keys carry their `choices` so the UI can render a dropdown | — |
+| POST | `/api/config` | Persist settings to `~/.ug/config.json` — body `{ "set": {key:value}, "unset": [keys] }`. Chat changes apply immediately; embed changes after a server restart; vis changes on the next page load | — |
 | GET | `/api/graph/stats` | Node/edge counts, file stats | No graph |
 | GET | `/api/graph/nodes` | **Slim node index** — every node's `{id, name, type, file, startLine, endLine}` in columnar form with `node_type` and `file` dictionary-coded, plus undirected `deg`, sparse `boundary`, `catalogRoots` and the per-type counts. No edges. This is what the page loads instead of `graph.json` when `capabilities.graph.mode` is `server`; a node's index in these columns is its identity for every other server-mode request. Built once per snapshot | No graph |
 | POST | `/api/graph/edges` | **Batch neighbourhood** — body `{ids:[node indices], scope:"incident"\|"induced"}` → columnar `{src, tgt, rel, relTypes, complete}`. `incident` returns every edge touching each id and lists them in `complete`; `induced` returns only edges with **both** ends in the set and `complete` is always empty, because it withholds the edges that leave the set. Server mode's one graph primitive: solo expansion, focus, the Related tab, walk and tour all reduce to this | No graph |
@@ -318,6 +318,25 @@ than the transfer.
 
 **A missing `graph` block means `local`.** That is what a static host answers,
 which is why the published demo keeps working with no shim change.
+
+#### Visualization prefs — `capabilities.vis`
+
+The page settles on a renderer and a solo threshold *before* its first render,
+so the resolved values travel in `/api/capabilities` (the fetch it already makes
+in that window) rather than in a second call. Both are `null` when unset, in
+which case the page uses its built-ins:
+
+```json
+"vis": { "renderer": null, "solo_threshold": null }
+```
+
+- `renderer` — `auto` (three below 3,000 elements, cosmos above), `three`, or
+  `cosmos`. The page reads it below the session/`?r=`/`localStorage` choices but
+  above the graph-size default, so it is a persisted preference rather than an
+  override.
+- `solo_threshold` — the 2D engine's solo ceiling; the 3D engine keeps its own
+  3,000. Both are editable from the settings panel (Visualization section) or
+  `ug config set vis.renderer …` / `ug config set vis.solo_threshold …`.
 
 ### 2.6 Agent Tool API (same as MCP tools, over HTTP)
 

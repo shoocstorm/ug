@@ -91,6 +91,31 @@
             return Math.max(r || 0, 2);
         }
 
+        // Pull a segment's ends back to the rims of the two discs it joins,
+        // as {ax, ay, bx, by} — or null when the discs overlap and there is no
+        // strand left to draw.
+        //
+        // This overlay is a canvas *over* cosmos.gl's, so anything drawn here
+        // is drawn on top of every node: there is no z-order between the two
+        // layers to hide a line behind a disc. Trimming the ends gives the
+        // picture a single draw list would — edges first, nodes over them —
+        // and it is the ends that matter, because that is where a strand meets
+        // the one thing it must not cross out.
+        function fxTrimSegment(a, b, ra, rb) {
+            const dx = b.x - a.x;
+            const dy = b.y - a.y;
+            const len = Math.hypot(dx, dy);
+            // Leave a little strand rather than trimming to nothing: two
+            // touching discs still need the line between them to exist.
+            if (!len || len <= ra + rb + 2) return null;
+            const ux = dx / len;
+            const uy = dy / len;
+            return {
+                ax: a.x + ux * ra, ay: a.y + uy * ra,
+                bx: b.x - ux * rb, by: b.y - uy * rb,
+            };
+        }
+
         // The bounded set every layer except labels works from.
         function fxHotNodes() {
             const ids = new Set();
@@ -237,14 +262,19 @@
                 if (!s || !t) continue;
                 const a = fxPos(s), b = fxPos(t);
                 if (!a || !b) continue;
+                // Rim to rim, like the strands they run along: a dot drawn
+                // over a node disc reads as something sitting on the node
+                // rather than as something arriving at it.
+                const seg = fxTrimSegment(a, b, fxRadius(s), fxRadius(t));
+                if (!seg) continue;
                 const [r, g, bl] = cosmosRgb(linkParticleColorFor(e));
                 ctx.fillStyle = `rgba(${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(bl * 255)},0.95)`;
                 for (let i = 0; i < count; i++) {
                     // Evenly spaced along the strand, all sliding source→target
                     // at the same rate, so direction of travel is readable.
                     const phase = ((now * 0.0004) + i / count) % 1;
-                    const x = a.x + (b.x - a.x) * phase;
-                    const y = a.y + (b.y - a.y) * phase;
+                    const x = seg.ax + (seg.bx - seg.ax) * phase;
+                    const y = seg.ay + (seg.by - seg.ay) * phase;
                     ctx.beginPath();
                     ctx.arc(x, y, 1.7, 0, Math.PI * 2);
                     ctx.fill();
@@ -410,14 +440,16 @@
                 if (!s || !t) continue;
                 const a = fxPos(s), b = fxPos(t);
                 if (!a || !b) continue;
+                const seg = fxTrimSegment(a, b, fxRadius(s), fxRadius(t));
+                if (!seg) continue;
                 // The hop colour of the end being *reached*, so a strand
                 // carries the temperature of the frontier it fed.
                 const hex = state.walkColors.get(tId) || state.walkColors.get(sId) || '#f97316';
                 const [r, g, bl] = cosmosRgb(hex);
                 const rgb = `${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(bl * 255)}`;
                 ctx.beginPath();
-                ctx.moveTo(a.x, a.y);
-                ctx.lineTo(b.x, b.y);
+                ctx.moveTo(seg.ax, seg.ay);
+                ctx.lineTo(seg.bx, seg.by);
                 if (wideGlow) {
                     ctx.strokeStyle = `rgba(${rgb},${(0.20 * k).toFixed(3)})`;
                     ctx.lineWidth = 5;

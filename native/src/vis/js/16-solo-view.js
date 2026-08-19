@@ -34,6 +34,17 @@
         const SOLO_MAX_NODES = 1500;      // hard render budget for one view
         const SOLO_MAX_NEIGHBORS = 300;   // per-seed 1-hop cap, so a hub can't blow the budget
 
+        // The `vis.solo_threshold` config key from ~/.ug/config.json, surfaced
+        // here via /api/capabilities. Absent/invalid → SOLO_THRESHOLD. Only the
+        // 2D engine consults this: the 3D engine keeps its own ceiling
+        // (THREE_D_MAX_ELEMENTS), so a (mis)setting can never hand three.js
+        // more than it can draw.
+        function visSoloThreshold() {
+            const raw = state.capabilities && state.capabilities.vis && state.capabilities.vis.solo_threshold;
+            const n = parseInt(raw, 10);
+            return Number.isFinite(n) && n > 0 ? n : SOLO_THRESHOLD;
+        }
+
         // Whether the renderer must be handed neighbourhoods rather than the
         // whole graph. The two places that decide this — `initialize()` and
         // `applySoloMode()` — must agree, and both got it wrong for server mode
@@ -47,7 +58,7 @@
         // server.
         function soloRequired(limit) {
             if (state.graphMode === 'server') return true;
-            return Math.max(state.graph.nodes.length, state.edgeCount) > (limit || SOLO_THRESHOLD);
+            return Math.max(state.graph.nodes.length, state.edgeCount) > (limit ?? visSoloThreshold());
         }
 
         // Adjacency over the *full* graph, built once. Before this, every

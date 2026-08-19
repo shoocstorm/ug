@@ -974,8 +974,10 @@
             // stays live.
             caps: { threeD: false, faceViews: false, autoSpin: false, boundaryCube: true },
             // Instanced points and a GPU simulation, so the whole graph stays
-            // on screen far longer than the 3D renderer manages.
-            soloThreshold: SOLO_THRESHOLD,
+            // on screen far longer than the 3D renderer manages. The threshold
+            // follows `vis.solo_threshold` from config with SOLO_THRESHOLD as
+            // the fallback.
+            soloThreshold: visSoloThreshold(),
 
             async mount(el, view) {
                 CosmosLib = await import('./cosmos-vis.bundle.js');
@@ -1010,7 +1012,15 @@
                     focusedPointRingColor: '#ff3d00',
                     outlinedPointRingColor: BOUNDARY_IN_COLOR,
                     hoveredPointCursor: 'pointer',
-                    enableDrag: true,
+                    // Off, and deliberately. A point drag begins on mousedown
+                    // over a node — which is also how every click on a node
+                    // starts — so the smallest movement while picking one
+                    // shoved it somewhere the layout never put it. The graph
+                    // is a diagram of the code, not a canvas to arrange: a
+                    // node that has moved is saying something false about
+                    // where the layout placed it, and nothing offers to undo
+                    // it. Panning and zooming still move the *view*.
+                    enableDrag: false,
                     enableZoom: true,
                     fitViewOnInit: false,
                     // Reproducible layouts: the same graph settles the same way

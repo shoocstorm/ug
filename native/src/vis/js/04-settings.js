@@ -364,6 +364,12 @@
                 badge: ['restart', 'after restart'],
                 icon: '<path d="m12 2 8.5 5v10L12 22l-8.5-5V7L12 2z"/><path d="M12 22v-10"/><path d="m3.5 7 8.5 5 8.5-5"/>',
             },
+            vis: {
+                title: 'Visualization',
+                sub: 'How the graph is drawn — engine & solo mode',
+                badge: ['reload', 'applies on reload'],
+                icon: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>',
+            },
         };
 
         const SETTINGS_FIELDS = {
@@ -377,6 +383,20 @@
             'embed.base_url': { label: 'Endpoint URL', hint: 'Leave unset to embed locally in-process (no network needed).' },
             'embed.api_key': { label: 'API key', hint: 'Only needed for a remote embeddings endpoint.' },
             'embed.dim': { label: 'Dimension', hint: 'Auto-probed on first ingest — set only to pin it explicitly.', num: { step: '1', min: '1' } },
+            'vis.renderer': {
+                label: 'Rendering engine',
+                selectLabels: {
+                    auto: 'Auto (recommended)',
+                    three: 'Three.js — 3D',
+                    cosmos: 'Cosmos — 2D (scale)',
+                },
+                hint: 'Three.js draws in 3D, with depth, effects and one styling pass per node — pleasant on a small repo, unusable past a few thousand nodes. Cosmos draws in 2D, on the GPU, and holds graphs far too big for 3D. Auto adjusts by graph size: picks three below 3,000 elements and cosmos above it — the point (THREE_D_MAX_ELEMENTS) where 3D stops being readable and the 2D engine takes over.',
+            },
+            'vis.solo_threshold': {
+                label: 'Solo mode threshold',
+                hint: 'Past this many nodes or edges the page never draws the whole graph — it opens in solo mode and shows one neighbourhood at a time. Lower it to isolate large repos earlier, higher to attempt whole-graph render for longer. The 3D engine keeps its own hard ceiling of 3,000 elements, so this threshold governs the 2D engine.',
+                num: { step: '1', min: '1', max: '10000000' },
+            },
         };
 
         function settingsOverlayEl() {
@@ -479,28 +499,47 @@
 
             const wrap = document.createElement('div');
             wrap.className = 'settings-input-wrap';
-            const input = document.createElement('input');
-            if (k.secret) {
-                input.type = 'password';
-                input.autocomplete = 'new-password';
-            } else if (meta.num) {
-                input.type = 'number';
-                input.step = meta.num.step;
-                if (meta.num.min !== undefined) input.min = meta.num.min;
-                if (meta.num.max !== undefined) input.max = meta.num.max;
+
+            // Enum keys (e.g. the rendering engine) are a `<select>` over the
+            // backend-declared choices; everything else keeps the text/number/
+            // password `<input>`. Both share the value/dirty/clear handling below.
+            const isEnum = k.kind === 'enum' && Array.isArray(k.choices) && k.choices.length > 0;
+            let control;
+            if (isEnum) {
+                control = document.createElement('select');
+                const labels = (meta.selectLabels) || {};
+                const baselineOption = k.saved != null ? String(k.saved) : String(k.default || '');
+                for (const c of k.choices) {
+                    const opt = document.createElement('option');
+                    opt.value = c;
+                    opt.textContent = labels[c] || c;
+                    if (c === baselineOption) opt.selected = true;
+                    control.appendChild(opt);
+                }
             } else {
-                input.type = 'text';
-                input.spellcheck = false;
+                control = document.createElement('input');
+                if (k.secret) {
+                    control.type = 'password';
+                    control.autocomplete = 'new-password';
+                } else if (meta.num) {
+                    control.type = 'number';
+                    control.step = meta.num.step;
+                    if (meta.num.min !== undefined) control.min = meta.num.min;
+                    if (meta.num.max !== undefined) control.max = meta.num.max;
+                } else {
+                    control.type = 'text';
+                    control.spellcheck = false;
+                }
+                // Secrets are never echoed back into the field — the server
+                // only sends a masked preview, shown as the placeholder.
+                if (!k.secret && k.saved != null) control.value = k.saved;
+                if (k.secret) {
+                    control.placeholder = k.saved != null ? 'saved · ' + k.saved + ' — type to replace' : 'not set';
+                } else {
+                    control.placeholder = k.default != null ? 'default: ' + k.default : 'not set';
+                }
             }
-            // Secrets are never echoed back into the field — the server
-            // only sends a masked preview, shown as the placeholder.
-            if (!k.secret && k.saved != null) input.value = k.saved;
-            if (k.secret) {
-                input.placeholder = k.saved != null ? 'saved · ' + k.saved + ' — type to replace' : 'not set';
-            } else {
-                input.placeholder = k.default != null ? 'default: ' + k.default : 'not set';
-            }
-            wrap.appendChild(input);
+            wrap.appendChild(control);
 
             const clearBtn = document.createElement('button');
             clearBtn.type = 'button';
@@ -523,31 +562,36 @@
             }
             row.appendChild(note);
 
-            input.addEventListener('input', () => {
+            const onDirty = () => {
                 if (settingsUi.unsets.has(k.name)) {
                     settingsUi.unsets.delete(k.name);
                     row.classList.remove('pending-unset');
                 }
-                const val = input.value.trim();
-                const baseline = k.secret ? '' : (k.saved != null ? String(k.saved) : '');
+                const val = control.value.trim();
+                // For a select the shown default *is* a legal choice, so an
+                // unset row baseline is the default rather than '' — leaving
+                // it untouched must not mark it dirty.
+                const baseline = k.secret ? '' : (k.saved != null ? String(k.saved) : (isEnum ? String(k.default || '') : ''));
                 if (val !== baseline) settingsUi.edits.set(k.name, val);
                 else settingsUi.edits.delete(k.name);
                 row.classList.toggle('dirty', settingsUi.edits.has(k.name));
                 updateSettingsFooter();
-            });
+            };
+            control.addEventListener('input', onDirty);
+            control.addEventListener('change', onDirty);
 
             clearBtn.addEventListener('click', () => {
                 if (settingsUi.unsets.has(k.name)) {
                     // Undo the pending clear.
                     settingsUi.unsets.delete(k.name);
                     row.classList.remove('pending-unset');
-                    if (!k.secret && k.saved != null) input.value = k.saved;
+                    if (!k.secret && k.saved != null) control.value = k.saved;
                 } else {
                     settingsUi.unsets.add(k.name);
                     settingsUi.edits.delete(k.name);
                     row.classList.remove('dirty');
                     row.classList.add('pending-unset');
-                    if (!k.secret) input.value = k.saved != null ? k.saved : '';
+                    if (!k.secret) control.value = k.saved != null ? k.saved : (isEnum ? (k.default || '') : '');
                 }
                 updateSettingsFooter();
             });
@@ -580,7 +624,9 @@
             const set = {};
             for (const [name, val] of settingsUi.edits) set[name] = val;
             const unset = Array.from(settingsUi.unsets);
-            const touchedEmbed = Object.keys(set).concat(unset).some((n) => n.startsWith('embed.'));
+            const touched = Object.keys(set).concat(unset);
+            const touchedEmbed = touched.some((n) => n.startsWith('embed.'));
+            const touchedVis = touched.some((n) => n.startsWith('vis.'));
             saveBtn.disabled = true;
             setSettingsStatus('', 'Saving…');
             try {
@@ -598,9 +644,11 @@
                 settingsUi.unsets.clear();
                 renderSettings();
                 updateSettingsFooter();
-                setSettingsStatus('ok', touchedEmbed
-                    ? 'Saved ✓ — chat applies now; embedding changes take effect after a server restart'
-                    : 'Saved ✓ — applied immediately');
+                setSettingsStatus('ok', touchedVis
+                    ? 'Saved ✓ — the page picks this up on the next reload'
+                    : (touchedEmbed
+                        ? 'Saved ✓ — chat applies now; embedding changes take effect after a server restart'
+                        : 'Saved ✓ — applied immediately'));
                 // Chat readiness / model pill may have just changed.
                 probeCapabilities();
             } catch (err) {
