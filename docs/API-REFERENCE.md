@@ -281,9 +281,9 @@ The HTTP server (`ug serve`) is built on **axum**. All routes listed below.
 
 | Method | Path | What it does | Returns 503 when |
 |--------|------|-------------|-------------------|
-| GET | `/api/capabilities` | Server capabilities matrix: backends, models, features enabled, the `graph` block below, and a `vis` block carrying resolved visualization prefs (`renderer`: auto/three/cosmos, `solo_threshold`) — null when unset, so the page falls back to its built-in defaults | — |
+| GET | `/api/capabilities` | Server capabilities matrix: backends, models, features enabled, the `graph` block below, and a `vis` block carrying resolved visualization prefs (`renderer`: auto/three/cosmos, `three_d_max_elements`, `solo_threshold`) — null when unset, so the page falls back to its built-in defaults | — |
 | GET | `/api/config` | Persisted + effective settings, with per-key source (flag/env/config/default) and `kind` (`str`/`f32`/`u32`/`u64`/`enum`); `enum` keys carry their `choices` so the UI can render a dropdown | — |
-| POST | `/api/config` | Persist settings to `~/.ug/config.json` — body `{ "set": {key:value}, "unset": [keys] }`. Chat changes apply immediately; embed changes after a server restart; vis changes on the next page load | — |
+| POST | `/api/config` | Persist settings to `~/.ug/config.json` — body `{ "set": {key:value}, "unset": [keys] }`. Chat changes apply immediately; embed changes after a server restart; vis and graph-server-mode changes on the next page load | — |
 | GET | `/api/graph/stats` | Node/edge counts, file stats | No graph |
 | GET | `/api/graph/nodes` | **Slim node index** — every node's `{id, name, type, file, startLine, endLine}` in columnar form with `node_type` and `file` dictionary-coded, plus undirected `deg`, sparse `boundary`, `catalogRoots` and the per-type counts. No edges. This is what the page loads instead of `graph.json` when `capabilities.graph.mode` is `server`; a node's index in these columns is its identity for every other server-mode request. Built once per snapshot | No graph |
 | POST | `/api/graph/edges` | **Batch neighbourhood** — body `{ids:[node indices], scope:"incident"\|"induced"}` → columnar `{src, tgt, rel, relTypes, complete}`. `incident` returns every edge touching each id and lists them in `complete`; `induced` returns only edges with **both** ends in the set and `complete` is always empty, because it withholds the edges that leave the set. Server mode's one graph primitive: solo expansion, focus, the Related tab, walk and tour all reduce to this | No graph |
@@ -312,9 +312,12 @@ The HTTP server (`ug serve`) is built on **axum**. All routes listed below.
 
 `ug serve --graph-mode <auto\|local\|server>` sets the policy; `auto` (the
 default) resolves it per project by comparing `bytes` against `threshold`
-(50 MB). The size is `graph.json`'s identity bytes, not its compressed size,
+(50 MB by default, configurable as `graph.server_mode_bytes`). The size is
+`graph.json`'s identity bytes, not its compressed size,
 because what costs the browser is the parse and the retained objects rather
-than the transfer.
+than the transfer. Note the `threshold` in the payload is the *effective*
+value — the configured `graph.server_mode_bytes`, or the 50 MB built-in when
+unset.
 
 **A missing `graph` block means `local`.** That is what a static host answers,
 which is why the published demo keeps working with no shim change.
@@ -327,16 +330,22 @@ in that window) rather than in a second call. Both are `null` when unset, in
 which case the page uses its built-ins:
 
 ```json
-"vis": { "renderer": null, "solo_threshold": null }
+"vis": { "renderer": null, "three_d_max_elements": null, "solo_threshold": null }
 ```
 
-- `renderer` — `auto` (three below 3,000 elements, cosmos above), `three`, or
-  `cosmos`. The page reads it below the session/`?r=`/`localStorage` choices but
-  above the graph-size default, so it is a persisted preference rather than an
-  override.
-- `solo_threshold` — the 2D engine's solo ceiling; the 3D engine keeps its own
-  3,000. Both are editable from the settings panel (Visualization section) or
-  `ug config set vis.renderer …` / `ug config set vis.solo_threshold …`.
+- `renderer` — `auto` (three below `three_d_max_elements` elements, cosmos
+  above), `three`, or `cosmos`. The page reads it below the session/`?r=`/
+  `localStorage` choices but above the graph-size default, so it is a persisted
+  preference rather than an override.
+- `three_d_max_elements` — the 3D engine's whole-graph budget; the size `auto`
+  switches over at. The page falls back to its built-in `THREE_D_MAX_ELEMENTS`
+  (3,000) when null.
+- `solo_threshold` — the 2D engine's solo ceiling; the 3D engine solos past
+  `three_d_max_elements` instead. Both are editable from the settings panel
+  (Visualization section) or `ug config set vis.renderer …` /
+  `ug config set vis.three_d_max_elements …` /
+  `ug config set vis.solo_threshold …`. The threshold above (in the `graph`
+  block) comes from `graph.server_mode_bytes`.
 
 ### 2.6 Agent Tool API (same as MCP tools, over HTTP)
 

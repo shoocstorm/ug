@@ -390,11 +390,14 @@ async fn capabilities_publishes_the_graph_delivery_mode() {
 #[test]
 fn graph_mode_policy_resolves_by_size_only_on_auto() {
     let big = super::GRAPH_SERVER_MODE_BYTES;
-    assert_eq!(GraphModePolicy::Auto.resolve(big), "server");
-    assert_eq!(GraphModePolicy::Auto.resolve(big - 1), "local");
+    // Auto compares against the passed-in cutoff — the resolved
+    // `graph.server_mode_bytes` — not a value read inside the policy.
+    assert_eq!(GraphModePolicy::Auto.resolve(big, big), "server");
+    assert_eq!(GraphModePolicy::Auto.resolve(big - 1, big), "local");
+    assert_eq!(GraphModePolicy::Auto.resolve(big, big - 1), "server");
     // The overrides ignore size in both directions — that is their whole job.
-    assert_eq!(GraphModePolicy::Local.resolve(big), "local");
-    assert_eq!(GraphModePolicy::Server.resolve(0), "server");
+    assert_eq!(GraphModePolicy::Local.resolve(big, big), "local");
+    assert_eq!(GraphModePolicy::Server.resolve(0, big), "server");
     assert_eq!(GraphModePolicy::parse("AUTO"), Some(GraphModePolicy::Auto));
     assert_eq!(GraphModePolicy::parse("nonsense"), None);
 }

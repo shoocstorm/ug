@@ -373,6 +373,12 @@
                 badge: ['reload', 'applies on reload'],
                 icon: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>',
             },
+            graph: {
+                title: 'Graph',
+                sub: 'How the browser gets the graph — whole file or server mode',
+                badge: ['reload', 'applies on reload'],
+                icon: '<circle cx="5" cy="12" r="2"/><circle cx="19" cy="12" r="2"/><circle cx="12" cy="6" r="2"/><circle cx="12" cy="18" r="2"/><path d="M5 12h5"/><path d="M14 12h5"/><path d="m10 7 2 3 4-1"/><path d="m10 17 2-3 4 1"/>',
+            },
         };
 
         const SETTINGS_FIELDS = {
@@ -404,6 +410,11 @@
                 label: 'Solo mode threshold',
                 hint: 'Past this many nodes or edges the page never draws the whole graph — it opens in solo mode and shows one neighbourhood at a time. Lower it to isolate large repos earlier, higher to attempt whole-graph render for longer. Governs the 2D engine; the 3D engine solos past its own element budget above.',
                 num: { step: '1000', min: '1', max: '10000000' },
+            },
+            'graph.server_mode_bytes': {
+                label: 'Server mode threshold (bytes)',
+                hint: 'How the browser gets the graph. Past this size of graph.json the page no longer downloads the file — it loads a slim node index and asks this server for edges and neighbourhoods on demand (server mode). Below it the whole file is served and the browser renders everything itself (local mode). 50 MB out of the box; lower it to keep big files out of the browser tab, raise it for graphs you want fully client-side.',
+                num: { step: '1000000', min: '1024', max: '1000000000' },
             },
         };
 

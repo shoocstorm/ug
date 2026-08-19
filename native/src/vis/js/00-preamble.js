@@ -96,8 +96,13 @@
             // viewbar; honoured by both renderers.
             showLabels: false,
             // Which 2D arrangement is showing. The 2D renderer's answer to the
-            // 3D one's face projections — see COSMOS_LAYOUTS.
-            layout2d: 'folders',
+            // 3D one's face projections — see COSMOS_LAYOUTS. The sunflower is
+            // the default because it makes no claim: every node gets the same
+            // room, so what you read off the opening screen is the graph's
+            // size and its edges, not a grouping the arrangement chose for
+            // you. The folder islands are one keystroke away when that
+            // grouping *is* the question.
+            layout2d: 'spiral',
             // Animated flow along the edges — the hover particles, the tour
             // route and the Graph Walk's travelling strands. Toggled from the
             // walk card, and honoured by both renderers.

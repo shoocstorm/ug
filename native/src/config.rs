@@ -65,6 +65,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
     ConfigKey { name: "vis.renderer", section: "vis", field: "renderer", flag: "", kind: Kind::Enum(&["auto", "three", "cosmos"]), secret: false, desc: "preferred rendering engine: auto (three below three_d_max_elements, cosmos above), three, or cosmos" },
     ConfigKey { name: "vis.three_d_max_elements", section: "vis", field: "threeDMaxElements", flag: "", kind: Kind::U32, secret: false, desc: "max nodes/edges the 3D engine draws whole; above it auto switches to the 2D engine and 3D solo-passes neighbourhoods" },
     ConfigKey { name: "vis.solo_threshold", section: "vis", field: "soloThreshold", flag: "", kind: Kind::U32, secret: false, desc: "nodes/edges past which the page opens in solo mode (the 2D engine's ceiling)" },
+    ConfigKey { name: "graph.server_mode_bytes", section: "graph", field: "serverModeBytes", flag: "", kind: Kind::U64, secret: false, desc: "graph.json bytes at/above which the browser is served the slim node index instead of the whole file (server mode)" },
 ];
 
 /// Look up a registry entry by dotted name. Accepts `-` for `_` and is
@@ -244,6 +245,8 @@ pub(crate) fn default_for(key: &ConfigKey) -> Option<String> {
         "vis.three_d_max_elements" => Some("3000".to_string()),
         // Mirrors SOLO_THRESHOLD in native/src/vis/js/16-solo-view.js.
         "vis.solo_threshold" => Some("200000".to_string()),
+        // Mirrors GRAPH_SERVER_MODE_BYTES in native/src/serve.rs.
+        "graph.server_mode_bytes" => Some("52428800".to_string()),
         _ => None,
     }
 }
@@ -368,6 +371,17 @@ mod tests {
         assert!(cfg["vis"]["soloThreshold"].is_number());
         assert!(value_set(&mut cfg, key("vis.solo_threshold"), "zero").is_err());
         assert!(value_set(&mut cfg, key("vis.solo_threshold"), "-1").is_err());
+    }
+
+    #[test]
+    fn server_mode_bytes_is_a_positive_integer() {
+        let mut cfg = Value::Object(Default::default());
+        value_set(&mut cfg, key("graph.server_mode_bytes"), "104857600").unwrap();
+        assert!(cfg["graph"]["serverModeBytes"].is_number());
+        assert_eq!(value_get(&cfg, key("graph.server_mode_bytes")).as_deref(), Some("104857600"));
+        assert!(value_set(&mut cfg, key("graph.server_mode_bytes"), "lots").is_err());
+        assert!(value_set(&mut cfg, key("graph.server_mode_bytes"), "-1").is_err());
+        assert!(value_set(&mut cfg, key("graph.server_mode_bytes"), "3.5").is_err());
     }
 
     #[test]

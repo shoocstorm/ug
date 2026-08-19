@@ -29,21 +29,37 @@ apply to the running server immediately — no restart.
 **Known keys:** `chat.model`, `chat.base_url`, `chat.api_key`,
 `chat.temperature`, `chat.max_tokens`, `chat.timeout_secs`, `embed.model`,
 `embed.base_url`, `embed.api_key`, `embed.dim`, `vis.renderer`,
-`vis.solo_threshold`.
+`vis.three_d_max_elements`, `vis.solo_threshold`, `graph.server_mode_bytes`.
 
 Visualization keys (`vis.*`) shape how the web graph is drawn. They are read at
 page load (the settings panel's Visualization section marks them "applies on
 reload"):
 
 - `vis.renderer` — `auto` (default), `three`, or `cosmos`. `auto` renders with
-  three.js under 3,000 elements and cosmos above it; the other two force that
-  engine regardless of size. A per-browser `ug-renderer` choice from the
-  canvas's engine toggle still outranks this, as does `?r=three|cosmos` on the
-  URL.
+  three.js below `vis.three_d_max_elements` elements and cosmos above it; the
+  other two force that engine regardless of size. A per-browser `ug-renderer`
+  choice from the canvas's engine toggle still outranks this, as does
+  `?r=three|cosmos` on the URL.
+- `vis.three_d_max_elements` — nodes/edges the 3D engine is asked to draw
+  whole, and the element budget `auto` switches on. Defaults to 3,000. Above it
+  `auto` picks the 2D engine; forcing `three` past it hands the 3D engine one
+  neighbourhood at a time via solo mode rather than the whole graph.
 - `vis.solo_threshold` — nodes/edges past which the page never draws the whole
   graph, opening in solo mode (one neighbourhood at a time) instead. Defaults
-  to 200,000. The 3D engine keeps its own hard ceiling of 3,000 elements, so
-  this governs the 2D engine.
+  to 200,000. Governs the 2D engine; the 3D engine solos past its own
+  `vis.three_d_max_elements` above.
+
+Graph keys (`graph.*`) decide *how the browser gets the graph*, not how it is
+drawn — that is the local/server mode split:
+
+- `graph.server_mode_bytes` — `graph.json`'s size, in bytes, past which the
+  browser no longer downloads the file. Below it the whole file is served and
+  the browser renders everything in the tab (local mode). At or above it the
+  page loads a slim node index (every node, no edges) and asks the server for
+  edges, neighbourhoods and per-node detail on demand (server mode). Defaults
+  to 50 MB (52 428 800). The `--graph-mode` flag sets the *policy* — `auto`
+  (default, resolves per graph against this threshold), `local`, or `server` —
+  while this key sets the cutoff `auto` uses.
 
 ## Precedence
 

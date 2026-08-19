@@ -210,7 +210,8 @@ more than every interaction performed on them. Measured on a 346 MB index, the
 whole-file path retains ~295 MB of JS heap against ~66 MB for the slim index.
 
 So the page has two ways of getting its graph. The server decides which and says
-so in `/api/capabilities`:
+so in `/api/capabilities` (the `threshold` shown is the *effective* cutoff —
+`graph.server_mode_bytes`, or the 50 MB built-in when unset):
 
 ```json
 "graph": { "mode": "server", "bytes": 346266017,
@@ -225,8 +226,9 @@ so in `/api/capabilities`:
 | `state.graph.edges` | every edge | **empty** |
 | solo mode | above the threshold | **always** |
 
-`ug serve --graph-mode <auto|local|server>` sets the policy; `auto` compares
-`bytes` against `threshold`. `?gm=local|server` overrides per page load, which is
+`ug serve --graph-mode <auto|local|server>` sets the *policy*; `auto` (the
+default) compares `bytes` against the `threshold`, which is `graph.server_mode_bytes`
+when set and 50 MB otherwise. `?gm=local|server` overrides per page load, which is
 how server mode gets exercised on a small repo. **A missing `graph` block means
 local**, which is what a static host answers — so the published demo is untouched
 and `demo-shim.js` needs no entry for any of this.

@@ -106,7 +106,8 @@ const MAX_REQUEST_BODY_BYTES: usize = 4 * 1024 * 1024;
 /// compressing at construction meant every `graph.json` was gzip-9'd *and*
 /// brotli-9'd before the server would answer anything — minutes of startup CPU
 /// on a 330 MB index, holding four copies of it, to produce two bodies of which
-/// any one client uses at most one. Past `GRAPH_SERVER_MODE_BYTES` the browser
+/// any one client uses at most one. Past the server-mode cutoff
+/// (`graph.server_mode_bytes`, default `GRAPH_SERVER_MODE_BYTES`) the browser
 /// is told to use the slim index and never fetches `graph.json` at all, so on
 /// exactly the graphs where that cost hurt most, all of it was waste.
 ///
@@ -285,7 +286,19 @@ fn build_adj(graph: &GraphData) -> AdjIndex {
 /// graph together cost more than every interaction the page then performs.
 /// Measured on a 346 MB index, the whole-file path retains ~295 MB of JS heap
 /// against ~66 MB for the slim index.
+///
+/// This is the *default*; the user can override it per machine with
+/// `ug config set graph.server_mode_bytes <bytes>` (the settings panel's
+/// Graph section), which [`server_mode_bytes`] resolves.
 const GRAPH_SERVER_MODE_BYTES: usize = 50 * 1024 * 1024;
+
+/// The effective server-mode cutoff: the persisted `graph.server_mode_bytes`
+/// when set, otherwise the compiled-in default [`GRAPH_SERVER_MODE_BYTES`].
+fn server_mode_bytes() -> usize {
+    crate::config::get("graph.server_mode_bytes")
+        .and_then(|raw| raw.parse::<usize>().ok())
+        .unwrap_or(GRAPH_SERVER_MODE_BYTES)
+}
 
 /// How `ug serve` decides which of the two the browser gets.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -309,12 +322,13 @@ impl GraphModePolicy {
         }
     }
 
-    /// `"local"` or `"server"` for a graph of `bytes`.
-    fn resolve(self, bytes: usize) -> &'static str {
+    /// `"local"` or `"server"` for a graph of `bytes`, given the cutoff the
+    /// caller resolved from `graph.server_mode_bytes` (or its default).
+    fn resolve(self, bytes: usize, server_mode_cutoff: usize) -> &'static str {
         match self {
             Self::Local => "local",
             Self::Server => "server",
-            Self::Auto if bytes >= GRAPH_SERVER_MODE_BYTES => "server",
+            Self::Auto if bytes >= server_mode_cutoff => "server",
             Self::Auto => "local",
         }
     }
@@ -3730,11 +3744,11 @@ async fn api_capabilities(State(state): State<ServeState>) -> Response {
     let snap = state.snapshot();
     let graph_bytes = snap.encoded.identity.len();
     let graph_info = serde_json::json!({
-        "mode": state.graph_mode.resolve(graph_bytes),
+        "mode": state.graph_mode.resolve(graph_bytes, server_mode_bytes()),
         "bytes": graph_bytes,
         "nodes": snap.parsed.nodes.len(),
         "edges": snap.parsed.edges.len(),
-        "threshold": GRAPH_SERVER_MODE_BYTES,
+        "threshold": server_mode_bytes(),
         // Which snapshot the page is talking to. Server mode splits one graph
         // across many requests, so a `ug gen` landing mid-session would mix a
         // slim index from the old graph with edges from the new one — node
@@ -5777,6 +5791,8 @@ pub fn print_serve_help() {
     println!("  {C_CYAN}--host{C_RESET} <addr>        Bind address (default: 127.0.0.1)");
     println!("  {C_GREEN}--watch{C_RESET}             Reload graph file when its mtime changes");
     println!("  {C_CYAN}--graph-mode{C_RESET} <mode>  How the browser gets the graph: auto|local|server");
+    println!("                        auto = whole file under graph.server_mode_bytes");
+    println!("                        (default 50 MB), slim index + server API above");
     println!("                       (default: auto — `server` at or above 50 MB of graph.json,");
     println!("                        where the page asks this server instead of downloading it)");
     println!("  {C_CYAN}--repo-root{C_RESET} <path>   Repo root for hybrid-search snippet resolution");

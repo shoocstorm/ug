@@ -8987,7 +8987,7 @@
 }
     </style>
 <script>
-window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3162,"edges":9271,"files":104,"lines":72348,"ugVersion":"0.1.15","visFingerprint":"08bff37c0234d0ed","generatedAt":1787145670};
+window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3297,"edges":9692,"files":106,"lines":76180,"ugVersion":"0.1.15","visFingerprint":"a61dc1c862a4bb0b","generatedAt":1787146622};
 /* ==========================================================================
    UltraGraph — static demo shim
    ==========================================================================
@@ -10042,9 +10042,9 @@ window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#g
             <!-- The 2D counterpart of the face projections. With no camera to
                  move, what is worth switching is the arrangement itself. Shown
                  only while the 2D renderer is mounted. -->
-            <button class="vbtn lbtn" data-layout="folders" title="By folder — one named island per directory, so the codebase settles into the shape of its own tree"><span class="vn">FD</span><span class="vp">FOLDER</span></button>
-            <button class="vbtn lbtn" data-layout="galaxy" title="Galaxy — three spiral arms around a dense core"><span class="vn">GX</span><span class="vp">GAL</span></button>
             <button class="vbtn lbtn" data-layout="spiral" title="Sunflower — even phyllotaxis disc, equal room for every node"><span class="vn">SP</span><span class="vp">SUN</span></button>
+            <button class="vbtn lbtn" data-layout="galaxy" title="Galaxy — three spiral arms around a dense core"><span class="vn">GX</span><span class="vp">GAL</span></button>
+            <button class="vbtn lbtn" data-layout="folders" title="By folder — one named island per directory, so the codebase settles into the shape of its own tree"><span class="vn">FD</span><span class="vp">FOLDER</span></button>
             <button class="vbtn lbtn" data-layout="grid" title="Grid — a lattice ordered by node type, then name"><span class="vn">GD</span><span class="vp">GRID</span></button>
             <button class="vbtn lbtn" data-layout="rings" title="Rings — one concentric ring per node type, commonest innermost"><span class="vn">RG</span><span class="vp">RING</span></button>
             <button class="vbtn lbtn" data-layout="clusters" title="Clusters — each node type as its own island, sized by population"><span class="vn">CL</span><span class="vp">CLUS</span></button>
@@ -11126,8 +11126,13 @@ traverse({
             // viewbar; honoured by both renderers.
             showLabels: false,
             // Which 2D arrangement is showing. The 2D renderer's answer to the
-            // 3D one's face projections — see COSMOS_LAYOUTS.
-            layout2d: 'folders',
+            // 3D one's face projections — see COSMOS_LAYOUTS. The sunflower is
+            // the default because it makes no claim: every node gets the same
+            // room, so what you read off the opening screen is the graph's
+            // size and its edges, not a grouping the arrangement chose for
+            // you. The folder islands are one keystroke away when that
+            // grouping *is* the question.
+            layout2d: 'spiral',
             // Animated flow along the edges — the hover particles, the tour
             // route and the Graph Walk's travelling strands. Toggled from the
             // walk card, and honoured by both renderers.
@@ -13684,6 +13689,12 @@ traverse({
                 badge: ['reload', 'applies on reload'],
                 icon: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>',
             },
+            graph: {
+                title: 'Graph',
+                sub: 'How the browser gets the graph — whole file or server mode',
+                badge: ['reload', 'applies on reload'],
+                icon: '<circle cx="5" cy="12" r="2"/><circle cx="19" cy="12" r="2"/><circle cx="12" cy="6" r="2"/><circle cx="12" cy="18" r="2"/><path d="M5 12h5"/><path d="M14 12h5"/><path d="m10 7 2 3 4-1"/><path d="m10 17 2-3 4 1"/>',
+            },
         };
 
         const SETTINGS_FIELDS = {
@@ -13715,6 +13726,11 @@ traverse({
                 label: 'Solo mode threshold',
                 hint: 'Past this many nodes or edges the page never draws the whole graph — it opens in solo mode and shows one neighbourhood at a time. Lower it to isolate large repos earlier, higher to attempt whole-graph render for longer. Governs the 2D engine; the 3D engine solos past its own element budget above.',
                 num: { step: '1000', min: '1', max: '10000000' },
+            },
+            'graph.server_mode_bytes': {
+                label: 'Server mode threshold (bytes)',
+                hint: 'How the browser gets the graph. Past this size of graph.json the page no longer downloads the file — it loads a slim node index and asks this server for edges and neighbourhoods on demand (server mode). Below it the whole file is served and the browser renders everything itself (local mode). 50 MB out of the box; lower it to keep big files out of the browser tab, raise it for graphs you want fully client-side.',
+                num: { step: '1000000', min: '1024', max: '1000000000' },
             },
         };
 
@@ -21234,15 +21250,19 @@ traverse({
                 cosmosApplyHighlight();
                 _cosmosIntroDone = false;
 
-                // The opening lands on the folder islands — a computed layout,
-                // so it arrives and holds. cosmosSetLayout owns the rest:
+                // The opening lands on whichever arrangement `state.layout2d`
+                // names — a computed layout, so it arrives and holds. Read
+                // rather than hard-coded: the default belongs with the rest of
+                // the defaults (00-preamble.js), and a literal here silently
+                // outranked it, so changing the documented default changed
+                // nothing anyone could see. cosmosSetLayout owns the rest:
                 // marking the switcher, publishing positions, flushing any
                 // restyle that was deferred during the morph.
                 cosmosPlayIntro((ms) => {
                     _cosmosIntroDone = true;
                     _cosmosEarlyFit = true;
                     state._didFit = true;
-                    cosmosSetLayout('folders', ms);
+                    cosmosSetLayout(state.layout2d || 'spiral', ms);
                 });
 
                 // If the engine never ticks (an empty solo view, say), don't
@@ -21653,10 +21673,40 @@ traverse({
         // directional particles, drawn as dots marching along the on-screen
         // segment. Only hot links have any (hover 4, walk 3, tour route 2), so
         // the loop is bounded by the interaction, not by the graph.
+        // cosmos.gl's curved-link geometry, mirrored here so the overlay can
+        // ride the path its shader draws rather than the chord underneath it.
+        // Both constants are the library's own defaults, which is what our
+        // config leaves them at: a control point half a link-length off the
+        // midpoint, pulled back by a rational-quadratic weight of 0.8.
+        const FX_CURVE_H = 0.5;
+        const FX_CURVE_W = 0.8;
+        // Scratch, because this is evaluated once per particle per frame and
+        // an allocation there is thousands a second for nothing.
+        const fxPt = [0, 0];
+
+        // The same conic the shader computes:
+        //   P(t) = ((1-t)²A + 2(1-t)t·w·C + t²B) / ((1-t)² + 2(1-t)t·w + t²)
+        function fxConicPoint(ax, ay, bx, by, cx, cy, t) {
+            const mt = 1 - t;
+            const w2 = 2 * mt * t * FX_CURVE_W;
+            const d = mt * mt + w2 + t * t;
+            fxPt[0] = (mt * mt * ax + w2 * cx + t * t * bx) / d;
+            fxPt[1] = (mt * mt * ay + w2 * cy + t * t * by) / d;
+            return fxPt;
+        }
+
         function fxDrawFlow() {
             const ctx = fxCtx;
             const now = performance.now();
             let drawn = 0;
+            // Follow the arc while cosmos.gl is drawing arcs — but not during a
+            // walk, where the overlay has taken the edges over and draws them
+            // as straight strands (see fxDrawWalkEdges). A dot sliding along
+            // the chord of a curve it is meant to be travelling sits off its
+            // own strand, furthest adrift at the midpoint, which is exactly
+            // where the eye is following it.
+            const curved = !state.walkActive
+                && !!(cosmos.config && cosmos.config.curvedLinks);
             // Every particle is two arcs when it glows and one when it does
             // not, and there are up to three per strand — so on a wide
             // frontier the bloom alone is thousands of paths a frame. It is
@@ -21682,8 +21732,33 @@ traverse({
                 // particle-bearing edge is a walk strand, and those end at an
                 // arrowhead — so the dots stop where it begins rather than
                 // riding over the top of it.
-                const seg = fxTrimSegment(a, b, fxRadius(s), fxRadius(t) + (state.walkActive ? 9 : 0));
-                if (!seg) continue;
+                //
+                // Trimmed in curve *parameter* rather than in pixels: on an arc
+                // there is no straight segment left to shorten, and over this
+                // bow the two agree to within a dot's width. Screen radii over
+                // the screen chord, so it holds at every zoom.
+                const chord = Math.hypot(b.x - a.x, b.y - a.y);
+                if (chord < 2) continue;
+                const t0 = fxRadius(s) / chord;
+                const t1 = 1 - (fxRadius(t) + (state.walkActive ? 9 : 0)) / chord;
+                if (t1 - t0 < 0.06) continue;
+
+                // The control point in *space* coordinates. It has to be: the
+                // screen projection can mirror y, and a perpendicular measured
+                // after that mirror bows the arc the opposite way from the one
+                // the shader drew.
+                let sp = null, tp = null, cx = 0, cy = 0;
+                if (curved) {
+                    sp = cosmosLivePos(s);
+                    tp = cosmosLivePos(t);
+                    if (!sp || !tp) continue;
+                    const dx = tp[0] - sp[0];
+                    const dy = tp[1] - sp[1];
+                    // normalize(perp) · linkDist · h collapses to perp · h.
+                    cx = (sp[0] + tp[0]) / 2 - dy * FX_CURVE_H;
+                    cy = (sp[1] + tp[1]) / 2 + dx * FX_CURVE_H;
+                }
+
                 const [r, g, bl] = cosmosRgb(linkParticleColorFor(e));
                 const rgb = `${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(bl * 255)}`;
                 for (let i = 0; i < count; i++) {
@@ -21692,18 +21767,34 @@ traverse({
                     // Unhurried on purpose: at the old rate a frontier of them
                     // read as static, which is a busier picture than motion.
                     const phase = ((now * 0.00026) + i / count) % 1;
-                    const x = seg.ax + (seg.bx - seg.ax) * phase;
-                    const y = seg.ay + (seg.by - seg.ay) * phase;
+                    const u = t0 + (t1 - t0) * phase;
+                    let x, y;
+                    if (curved) {
+                        const scr = cosmos.spaceToScreenPosition(
+                            fxConicPoint(sp[0], sp[1], tp[0], tp[1], cx, cy, u));
+                        if (!scr) continue;
+                        x = scr[0];
+                        y = scr[1];
+                    } else {
+                        x = a.x + (b.x - a.x) * u;
+                        y = a.y + (b.y - a.y) * u;
+                    }
+                    // Fade in off the source and out into the target rather
+                    // than appearing and vanishing at full strength. The pop at
+                    // each end was the part that read as an animation looping
+                    // rather than as something flowing.
+                    const env = Math.min(1, Math.min(phase, 1 - phase) / 0.16);
+                    if (env <= 0.02) continue;
                     // Two passes: a wide, nearly transparent bloom and a small
                     // core. A single hard dot is a pixel travelling; this is a
                     // light travelling, which is what the strand is made of.
                     if (glowDots) {
-                        ctx.fillStyle = `rgba(${rgb},0.14)`;
+                        ctx.fillStyle = `rgba(${rgb},${(0.14 * env).toFixed(3)})`;
                         ctx.beginPath();
                         ctx.arc(x, y, 3, 0, Math.PI * 2);
                         ctx.fill();
                     }
-                    ctx.fillStyle = `rgba(${rgb},0.62)`;
+                    ctx.fillStyle = `rgba(${rgb},${(0.62 * env).toFixed(3)})`;
                     ctx.beginPath();
                     ctx.arc(x, y, 1.25, 0, Math.PI * 2);
                     ctx.fill();

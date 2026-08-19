@@ -1117,15 +1117,19 @@
                 cosmosApplyHighlight();
                 _cosmosIntroDone = false;
 
-                // The opening lands on the folder islands — a computed layout,
-                // so it arrives and holds. cosmosSetLayout owns the rest:
+                // The opening lands on whichever arrangement `state.layout2d`
+                // names — a computed layout, so it arrives and holds. Read
+                // rather than hard-coded: the default belongs with the rest of
+                // the defaults (00-preamble.js), and a literal here silently
+                // outranked it, so changing the documented default changed
+                // nothing anyone could see. cosmosSetLayout owns the rest:
                 // marking the switcher, publishing positions, flushing any
                 // restyle that was deferred during the morph.
                 cosmosPlayIntro((ms) => {
                     _cosmosIntroDone = true;
                     _cosmosEarlyFit = true;
                     state._didFit = true;
-                    cosmosSetLayout('folders', ms);
+                    cosmosSetLayout(state.layout2d || 'spiral', ms);
                 });
 
                 // If the engine never ticks (an empty solo view, say), don't

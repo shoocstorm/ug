@@ -247,10 +247,40 @@
         // directional particles, drawn as dots marching along the on-screen
         // segment. Only hot links have any (hover 4, walk 3, tour route 2), so
         // the loop is bounded by the interaction, not by the graph.
+        // cosmos.gl's curved-link geometry, mirrored here so the overlay can
+        // ride the path its shader draws rather than the chord underneath it.
+        // Both constants are the library's own defaults, which is what our
+        // config leaves them at: a control point half a link-length off the
+        // midpoint, pulled back by a rational-quadratic weight of 0.8.
+        const FX_CURVE_H = 0.5;
+        const FX_CURVE_W = 0.8;
+        // Scratch, because this is evaluated once per particle per frame and
+        // an allocation there is thousands a second for nothing.
+        const fxPt = [0, 0];
+
+        // The same conic the shader computes:
+        //   P(t) = ((1-t)²A + 2(1-t)t·w·C + t²B) / ((1-t)² + 2(1-t)t·w + t²)
+        function fxConicPoint(ax, ay, bx, by, cx, cy, t) {
+            const mt = 1 - t;
+            const w2 = 2 * mt * t * FX_CURVE_W;
+            const d = mt * mt + w2 + t * t;
+            fxPt[0] = (mt * mt * ax + w2 * cx + t * t * bx) / d;
+            fxPt[1] = (mt * mt * ay + w2 * cy + t * t * by) / d;
+            return fxPt;
+        }
+
         function fxDrawFlow() {
             const ctx = fxCtx;
             const now = performance.now();
             let drawn = 0;
+            // Follow the arc while cosmos.gl is drawing arcs — but not during a
+            // walk, where the overlay has taken the edges over and draws them
+            // as straight strands (see fxDrawWalkEdges). A dot sliding along
+            // the chord of a curve it is meant to be travelling sits off its
+            // own strand, furthest adrift at the midpoint, which is exactly
+            // where the eye is following it.
+            const curved = !state.walkActive
+                && !!(cosmos.config && cosmos.config.curvedLinks);
             // Every particle is two arcs when it glows and one when it does
             // not, and there are up to three per strand — so on a wide
             // frontier the bloom alone is thousands of paths a frame. It is
@@ -276,8 +306,33 @@
                 // particle-bearing edge is a walk strand, and those end at an
                 // arrowhead — so the dots stop where it begins rather than
                 // riding over the top of it.
-                const seg = fxTrimSegment(a, b, fxRadius(s), fxRadius(t) + (state.walkActive ? 9 : 0));
-                if (!seg) continue;
+                //
+                // Trimmed in curve *parameter* rather than in pixels: on an arc
+                // there is no straight segment left to shorten, and over this
+                // bow the two agree to within a dot's width. Screen radii over
+                // the screen chord, so it holds at every zoom.
+                const chord = Math.hypot(b.x - a.x, b.y - a.y);
+                if (chord < 2) continue;
+                const t0 = fxRadius(s) / chord;
+                const t1 = 1 - (fxRadius(t) + (state.walkActive ? 9 : 0)) / chord;
+                if (t1 - t0 < 0.06) continue;
+
+                // The control point in *space* coordinates. It has to be: the
+                // screen projection can mirror y, and a perpendicular measured
+                // after that mirror bows the arc the opposite way from the one
+                // the shader drew.
+                let sp = null, tp = null, cx = 0, cy = 0;
+                if (curved) {
+                    sp = cosmosLivePos(s);
+                    tp = cosmosLivePos(t);
+                    if (!sp || !tp) continue;
+                    const dx = tp[0] - sp[0];
+                    const dy = tp[1] - sp[1];
+                    // normalize(perp) · linkDist · h collapses to perp · h.
+                    cx = (sp[0] + tp[0]) / 2 - dy * FX_CURVE_H;
+                    cy = (sp[1] + tp[1]) / 2 + dx * FX_CURVE_H;
+                }
+
                 const [r, g, bl] = cosmosRgb(linkParticleColorFor(e));
                 const rgb = `${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(bl * 255)}`;
                 for (let i = 0; i < count; i++) {
@@ -286,18 +341,34 @@
                     // Unhurried on purpose: at the old rate a frontier of them
                     // read as static, which is a busier picture than motion.
                     const phase = ((now * 0.00026) + i / count) % 1;
-                    const x = seg.ax + (seg.bx - seg.ax) * phase;
-                    const y = seg.ay + (seg.by - seg.ay) * phase;
+                    const u = t0 + (t1 - t0) * phase;
+                    let x, y;
+                    if (curved) {
+                        const scr = cosmos.spaceToScreenPosition(
+                            fxConicPoint(sp[0], sp[1], tp[0], tp[1], cx, cy, u));
+                        if (!scr) continue;
+                        x = scr[0];
+                        y = scr[1];
+                    } else {
+                        x = a.x + (b.x - a.x) * u;
+                        y = a.y + (b.y - a.y) * u;
+                    }
+                    // Fade in off the source and out into the target rather
+                    // than appearing and vanishing at full strength. The pop at
+                    // each end was the part that read as an animation looping
+                    // rather than as something flowing.
+                    const env = Math.min(1, Math.min(phase, 1 - phase) / 0.16);
+                    if (env <= 0.02) continue;
                     // Two passes: a wide, nearly transparent bloom and a small
                     // core. A single hard dot is a pixel travelling; this is a
                     // light travelling, which is what the strand is made of.
                     if (glowDots) {
-                        ctx.fillStyle = `rgba(${rgb},0.14)`;
+                        ctx.fillStyle = `rgba(${rgb},${(0.14 * env).toFixed(3)})`;
                         ctx.beginPath();
                         ctx.arc(x, y, 3, 0, Math.PI * 2);
                         ctx.fill();
                     }
-                    ctx.fillStyle = `rgba(${rgb},0.62)`;
+                    ctx.fillStyle = `rgba(${rgb},${(0.62 * env).toFixed(3)})`;
                     ctx.beginPath();
                     ctx.arc(x, y, 1.25, 0, Math.PI * 2);
                     ctx.fill();

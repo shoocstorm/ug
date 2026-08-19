@@ -3,11 +3,11 @@
   "project": "src",
   "install": "/#get-started",
   "source": "https://github.com/shoocstorm/ug",
-  "nodes": 3162,
-  "edges": 9271,
-  "files": 104,
-  "lines": 72348,
+  "nodes": 3297,
+  "edges": 9692,
+  "files": 106,
+  "lines": 76180,
   "ugVersion": "0.1.15",
-  "visFingerprint": "08bff37c0234d0ed",
-  "generatedAt": 1787145670
+  "visFingerprint": "a61dc1c862a4bb0b",
+  "generatedAt": 1787146622
 }

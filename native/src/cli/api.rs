@@ -33,7 +33,7 @@ const API_ENDPOINTS: &[(&str, &[ApiEntry])] = &[
             ApiEntry { method: "GET", path: "/api/generate/status", desc: "poll a generation job's progress/log", availability: "multi-project mode only", cli_equivalent: None },
             ApiEntry { method: "POST", path: "/api/ingest", desc: "re-embed an already-indexed project (UI Ingest now button); poll via /api/generate/status", availability: "always", cli_equivalent: Some("ug ingest") },
             ApiEntry { method: "GET", path: "/api/browse-dir", desc: "list subdirectories of a path (KB wizard folder picker)", availability: "always", cli_equivalent: None },
-            ApiEntry { method: "GET", path: "/api/capabilities", desc: "db/embedder/chat readiness, the indexing caps that shaped the store, and the resolved vis prefs (renderer / solo threshold)", availability: "always", cli_equivalent: Some("ug doctor (similar info)") },
+            ApiEntry { method: "GET", path: "/api/capabilities", desc: "db/embedder/chat readiness, the indexing caps that shaped the store, and the resolved graph/vis prefs (server-mode threshold, renderer / solo threshold)", availability: "always", cli_equivalent: Some("ug doctor (similar info)") },
             ApiEntry { method: "GET", path: "/api/config", desc: "persisted + effective settings with per-key source (flag/env/config/default)", availability: "always", cli_equivalent: Some("ug config list") },
             ApiEntry { method: "POST", path: "/api/config", desc: "persist settings to ~/.ug/config.json (chat changes apply immediately)", availability: "always", cli_equivalent: Some("ug config set") },
         ],
