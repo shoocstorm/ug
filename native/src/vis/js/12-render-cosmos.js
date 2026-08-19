@@ -274,6 +274,20 @@
                 colors[i * 4] = r; colors[i * 4 + 1] = g; colors[i * 4 + 2] = b;
                 colors[i * 4 + 3] = opacity;
             }
+            // While a walk runs the overlay redraws every reached edge as a
+            // straight, arrowed, hop-coloured strand (fxDrawWalkEdges). These
+            // links are curved (`curvedLinks`), so leaving them on meant two
+            // lines between the same two nodes, bowing apart — a cascade whose
+            // columns are joined by a thicket rather than by legible strands.
+            // So during a walk the overlay owns the edges and these stand down.
+            //
+            // Not blindly, though: the overlay stops after FX_MAX_FLOW_LINKS
+            // strands, and an edge nothing draws is an edge that does not
+            // exist as far as the diagram is concerned. It walks `cosmosEdges`
+            // in this same order and counts the same way, so counting along
+            // here identifies exactly the edges it will get to.
+            const walkOwnsEdges = state.walkActive && state.walkEdgeKeys && state.walkEdgeKeys.size > 0;
+            let overlayDrawn = 0;
             for (let i = 0; i < cosmosEdges.length; i++) {
                 const e = cosmosEdges[i];
                 const [r, g, b] = cosmosLift(cosmosRgb(linkColorFor(e)));
@@ -285,7 +299,22 @@
                 // context. Invisible is simply alpha 0 — cosmos.gl has no
                 // per-link visibility accessor.
                 const hot = state.highlightLinks.has(e) || linkParticlesFor(e) > 0;
-                linkColors[i * 4 + 3] = linkVisibleFor(e) ? (hot ? 0.95 : 0.55) : 0;
+                let alpha = linkVisibleFor(e) ? (hot ? 0.95 : 0.55) : 0;
+                if (walkOwnsEdges && alpha > 0) {
+                    const sId = e.source.id || e.source;
+                    const tId = e.target.id || e.target;
+                    if (state.walkEdgeKeys.has(walkEdgeKey(sId, tId))) {
+                        if (++overlayDrawn <= FX_MAX_FLOW_LINKS) alpha = 0;
+                    } else {
+                        // A cross-link between two reached nodes: real, but not
+                        // part of the traversal the cascade is laying out, and
+                        // the columns are only readable if the lines between
+                        // them are the ones that put them there. It comes back
+                        // the moment the walk ends.
+                        alpha = 0;
+                    }
+                }
+                linkColors[i * 4 + 3] = alpha;
                 linkWidths[i] = e.rel === 'Contains' ? 1.4 : 0.7;
             }
         }

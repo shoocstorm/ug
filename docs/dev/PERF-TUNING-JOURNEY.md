@@ -11,7 +11,8 @@
 | **Baseline commit** | `cdc9a2b` |
 | **Version** | 0.1.15 |
 | **Scope** | Rust core (`native/src`), web server, browser client |
-| **Method** | Static audit of hot paths; no profiler run yet (see [Measurement](#measurement)) |
+| **Method** | Static audit of hot paths, then measured per item (see each item and the [Results log](#results-log)) |
+| **Status** | All 15 items landed 2026-08-18; suite 871/871 |
 
 ## Status legend
 
@@ -42,8 +43,8 @@
 | P4.2 | `mmr_rerank`: hoist relevance, cache norms | 4 | Medium — O(k²nd) → O(knd) | Low | ✅ |
 | P4.3 | `read_snippet`: per-call file cache | 4 | Medium | Low | ✅ |
 | P4.4 | `api_search`: bound the result set | 4 | Medium (safety) | Low | ✅ |
-| P5.1 | Hover: use the adjacency index already built | 5 | **High** — perceived responsiveness | Low | ⬜ |
-| P5.2 | Gizmo: stop rewriting `innerHTML` at 30 Hz | 5 | Low–medium | Very low | ⬜ |
+| P5.1 | Hover: index the *view* edges | 5 | **High** — O(E) → O(degree) per hover | Low | ✅ |
+| P5.2 | Gizmo: stop rewriting `innerHTML` at 30 Hz | 5 | Low–medium | Very low | ✅ |
 
 **Sequencing rationale.** Phase 1 first: the largest single win, entirely
 self-contained in one file, in a well-tested area. Phase 2 next because it owns
@@ -903,7 +904,36 @@ unbounded form.
 
 ## Phase 5 — Frontend interaction
 
-### ⬜ P5.1 — Hover: use the adjacency index already built
+### ✅ P5.1 — Hover: index the *view* edges
+
+**Landed 2026-08-18. O(edges) → O(degree) per hover.**
+
+**The fix prescribed below — "swap the scan for `edgesOf(d.id)`" — is wrong,
+and would have broken highlighting outright.** Two reasons, both silent:
+
+1. In solo mode `setSoloView` (`16-solo-view.js:297-313`) builds **fresh edge
+   objects** (`{source, target, rel}`) rather than reusing the ones in
+   `state.adj`, and the renderer matches `state.highlightLinks` by object
+   identity. Adjacency edges would have highlighted nothing at all — no error,
+   just a hover that stopped working on the large graphs this was meant to
+   speed up.
+2. The tooltip's "→ N out / ← N in" is documented as the key to the two link
+   colours *lit on the canvas*. Full-graph degree would make that legend
+   describe edges that are not on screen.
+
+So the index is built over `state.view.edges` — what is actually drawn — and
+cached against the array it came from, keyed on identity **and** length. All
+three `state.view` assignment sites (`03-insights.js:462`,
+`16-solo-view.js:316`, `16-solo-view.js:369`) assign whole objects and nothing
+mutates `edges` in place, so identity is a sound cache key; the length check
+covers an in-place append if one is ever added.
+
+Result: same edge objects, same order within a node, same counts — a hover
+after a view change pays one pass to build the index, every hover after it is
+O(degree). Previously *every* hover was a full pass, with no throttle, and was
+immediately followed by a full `restyle()`.
+
+Self-loops stay counted once, as before (the index adds them to one list).
 
 **Where:** `native/src/vis/js/14-interaction.js:48`
 
@@ -938,7 +968,23 @@ the server-mode case the note above covers.
 
 ---
 
-### ⬜ P5.2 — Gizmo: stop rewriting `innerHTML` at 30 Hz
+### ✅ P5.2 — Gizmo: stop rewriting `innerHTML` at 30 Hz
+
+**Landed 2026-08-18.** The orientation triad now repaints only when the camera
+quaternion has actually changed, compared component-wise against the last
+painted orientation with a 1e-4 threshold — well under one screen pixel of
+movement on a 26 px triad, so nothing visible is ever skipped. A parked camera
+now costs nothing where it used to rebuild and reparse the markup every other
+frame, forever.
+
+Took the cheaper of the two options in the plan (skip when unchanged) rather
+than rebuilding the SVG as persistent elements: it is a handful of lines
+against a restructure, and an idle canvas is the case that matters.
+
+Verified by extracting the assembled page's inline script and running
+`node --check` on it as a module — the vis sources are fragments concatenated
+by `build.rs`, so no individual file is standalone-parseable and per-file
+linting would give a false failure.
 
 **Where:** `native/src/vis/js/11-render-three.js:1216-1234`
 
@@ -974,6 +1020,9 @@ Append one row per landed item. Keep the numbers, not just the verdict.
 | 2026-08-18 | P1.2 | synthetic n=8000 (parsed) | 13.4 ms | 1.6 ms | 8.4×; 2.8× when both parse JSON |
 | 2026-08-18 | P1.3 | `neo4j` 2-hop traversal | 146.7 ms | 119.8 ms | 1.2× — estimate was wrong, see P1.3 |
 | 2026-08-18 | P1.3 | — | wrong hop distances | correct | LIFO walk recorded first-found, not shortest |
+| 2026-08-18 | P4.1 | MCP cached project | +346 MB retained | 0 | second full copy of graph.json, freed |
+| 2026-08-18 | P4.2 | `mmr_rerank` | O(k²·n·d) | O(k·n·d) | output bit-identical, asserted vs reference |
+| 2026-08-18 | P5.1 | hover, graph drawn whole | O(edges) each | O(degree) each | index built once per view change |
 
 ---
 

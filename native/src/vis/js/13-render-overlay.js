@@ -426,8 +426,54 @@
                 ctx.strokeStyle = `rgba(${rgb},${(0.85 * k).toFixed(3)})`;
                 ctx.lineWidth = 1.4;
                 ctx.stroke();
+                // Which way the relationship points, said by the line itself.
+                // The flow particles say it too, but flow is a toggle (R on
+                // the walk bar) and it is off in every still — and a cascade
+                // that cannot tell a caller from a callee is a picture of
+                // connectivity, not of dependency, which is the one thing a
+                // walk is asked for. Note this is the *edge's* direction, not
+                // the direction the traversal happened to follow: an inbound
+                // walk crosses edges backwards, and drawing the head the way
+                // the frontier moved would invert the meaning of the graph.
+                fxArrowHead(ctx, a, b, fxRadius(t), rgb, k);
             }
             ctx.restore();
+        }
+
+        // A filled head pointing along a→b, set back from b by `inset` pixels
+        // so it lands on the rim of the target disc rather than under it.
+        //
+        // `k` is the crowding factor the strands are drawn at, and the head
+        // takes it too, in both size and alpha. It keeps a floor — a direction
+        // mark that fades to nothing has stopped saying the one thing it is
+        // for — but it must not keep full strength either: five hundred bright
+        // wedges over threads faded to 0.14 would make the heads the diagram
+        // and the edges the background.
+        function fxArrowHead(ctx, a, b, inset, rgb, k) {
+            const dx = b.x - a.x;
+            const dy = b.y - a.y;
+            const len = Math.hypot(dx, dy);
+            // No direction to draw (a self-loop, or two nodes on top of each
+            // other), or a strand so short the head would be most of it.
+            if (!len || len < inset + 12) return;
+            const ux = dx / len;
+            const uy = dy / len;
+            const tipX = b.x - ux * inset;
+            const tipY = b.y - uy * inset;
+            // Scaled to the strand so short hops don't get a head bigger than
+            // the gap they cross, and clamped so long ones stay a mark rather
+            // than a wedge.
+            const size = Math.max(6, Math.min(11, len * 0.14)) * (0.7 + 0.3 * k);
+            const wing = size * 0.5;
+            const baseX = tipX - ux * size;
+            const baseY = tipY - uy * size;
+            ctx.beginPath();
+            ctx.moveTo(tipX, tipY);
+            ctx.lineTo(baseX - uy * wing, baseY + ux * wing);
+            ctx.lineTo(baseX + uy * wing, baseY - ux * wing);
+            ctx.closePath();
+            ctx.fillStyle = `rgba(${rgb},${Math.max(0.3, 0.95 * k).toFixed(3)})`;
+            ctx.fill();
         }
 
         // ── Graph Walk ignition ────────────────────────────────

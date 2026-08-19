@@ -20,6 +20,53 @@
         // never by link visibility. So an unfiltered hover marches dots along
         // a strand that leads into empty space, pointing at a node that is not
         // on screen — the one thing the animation is supposed to be showing.
+        // Adjacency over `state.view.edges`, keyed by node id.
+        //
+        // Hover used to scan the whole view edge list on every raycast hit —
+        // no throttle, and immediately followed by a full `restyle()`. On a
+        // graph drawn whole that is one pass over every edge per pointer move.
+        //
+        // Deliberately built over the *view*, not over `state.adj`, even
+        // though `state.adj` is a ready-made full-graph index. Two reasons,
+        // both of which would be silent bugs:
+        //
+        //  1. In solo mode `setSoloView` builds fresh edge objects rather than
+        //     reusing the ones in `state.adj`, and the renderer matches
+        //     `state.highlightLinks` by object identity. Adjacency edges would
+        //     highlight nothing at all.
+        //  2. The tooltip's "N out / N in" is the key to the two link colours
+        //     *lit on the canvas*, so it has to count drawn edges. Full-graph
+        //     degree would make the legend describe something not on screen.
+        //
+        // Cached against the array it was built from, so it survives every
+        // hover and rebuilds only when the view is replaced (`state.view` is
+        // always assigned whole — nothing mutates `edges` in place). Length is
+        // checked too, so an in-place append would still invalidate it.
+        let _viewAdj = null;
+        let _viewAdjFor = null;
+        let _viewAdjLen = -1;
+
+        function viewEdgesOf(id) {
+            const edges = (state.view && state.view.edges) || [];
+            if (_viewAdjFor !== edges || _viewAdjLen !== edges.length) {
+                const adj = new Map();
+                for (const e of edges) {
+                    const s = e.source.id || e.source;
+                    const t = e.target.id || e.target;
+                    const sl = adj.get(s);
+                    if (sl) sl.push(e); else adj.set(s, [e]);
+                    if (t !== s) {
+                        const tl = adj.get(t);
+                        if (tl) tl.push(e); else adj.set(t, [e]);
+                    }
+                }
+                _viewAdj = adj;
+                _viewAdjFor = edges;
+                _viewAdjLen = edges.length;
+            }
+            return _viewAdj.get(id) || [];
+        }
+
         function edgeOnCanvas(e, otherId) {
             if (!linkVisibleFor(e)) return false;
             // The far endpoint can be hidden while the strand's own predicate
@@ -63,7 +110,9 @@
             let outCount = 0, inCount = 0;
             if (d) {
                 state.highlightNodes.add(d.id);
-                state.view.edges.forEach(e => {
+                // O(degree) through the view index, not O(edges) — same
+                // objects, same order within a node, same counts.
+                viewEdgesOf(d.id).forEach(e => {
                     const sId = e.source.id || e.source;
                     const tId = e.target.id || e.target;
                     if (sId !== d.id && tId !== d.id) return;

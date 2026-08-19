@@ -1,0 +1,82 @@
+{
+    "tools": [
+        {
+            "name": "project_overview",
+            "summary": "Orient in the codebase: stats, biggest files, most depended-upon symbols.",
+            "path": "/api/tools/project_overview",
+            "method": "POST",
+            "example": "{}"
+        },
+        {
+            "name": "context",
+            "summary": "Everything about one symbol in a budgeted bundle: code, callers, tests, deps, docs.",
+            "path": "/api/tools/context",
+            "method": "POST",
+            "example": "{\"node_id\": \"run_gen\", \"max_chars\": 12000}"
+        },
+        {
+            "name": "find_symbols",
+            "summary": "Symbol lookup by name or wildcard — returns node ids for the other tools.",
+            "path": "/api/tools/find_symbols",
+            "method": "POST",
+            "example": "{\"name\": \"handle_*\", \"node_types\": [\"Function\"], \"file_prefix\": \"src/**\"}"
+        },
+        {
+            "name": "file_outline",
+            "summary": "Every indexed symbol in a file, in line order; takes a path glob.",
+            "path": "/api/tools/file_outline",
+            "method": "POST",
+            "example": "{\"file\": \"src/**/*.ts\", \"max_files\": 20}"
+        },
+        {
+            "name": "get_code",
+            "summary": "Read source for a symbol (id, name or wildcard), or a file/line range.",
+            "path": "/api/tools/get_code",
+            "method": "POST",
+            "example": "{\"node_id\": \"render_*\", \"max_chars\": 20000}"
+        },
+        {
+            "name": "find_usages",
+            "summary": "Who uses this symbol — inbound callers/importers, with call sites.",
+            "path": "/api/tools/find_usages",
+            "method": "POST",
+            "example": "{\"node_id\": \"validate_*\", \"hops\": 1, \"edge_types\": [\"calls\"]}"
+        },
+        {
+            "name": "traverse",
+            "summary": "N-hop walk from seed symbols, filtered by edge type and direction.",
+            "path": "/api/tools/traverse",
+            "method": "POST",
+            "example": "{\"node_id\": [\"handle_*\"], \"hops\": 2, \"direction\": \"inbound\"}"
+        },
+        {
+            "name": "shortest_path",
+            "summary": "Shortest directed edge path between two symbols.",
+            "path": "/api/tools/shortest_path",
+            "method": "POST",
+            "example": "{\"source\": \"run_gen\", \"target\": \"run_ingest\"}"
+        },
+        {
+            "name": "graph_schema",
+            "summary": "Node & edge types present in this graph, with counts.",
+            "path": "/api/tools/graph_schema",
+            "method": "POST",
+            "example": "{}"
+        },
+        {
+            "name": "analyze",
+            "summary": "Whole-repo statistics, distributions and blast radius — a named preset or a raw GQL query over the indexed store.",
+            "path": "/api/tools/analyze",
+            "method": "POST",
+            "example": "{\"preset\": \"long_functions\", \"args\": {\"min_loc\": 100}}",
+            "note": "Store-backed: needs the indexed database (503 otherwise). The analyze preset catalog lives at GET /api/presets."
+        }
+    ],
+    "params": "Canonical snake_case, same as the CLI flags and MCP tool params. Legacy camelCase spellings are accepted.",
+    "project": "Optional `project` field targets another indexed project without changing the server's active one.",
+    "wildcards": {
+        "syntax": "* any run of chars, ? one char, [abc]/[a-z] a set or range, [!ab] negated, {a,b} alternatives, \\* a literal star; patterns match the whole name, and in paths * stops at / while **/ crosses directories",
+        "where": "Anywhere a symbol or file is named: find_symbols.name / .node_types / .file_prefix, file_outline.file, and the node_id of get_code, find_usages, traverse and shortest_path — which also accept a plain symbol name instead of an id.",
+        "expansion": "In the id-taking tools a name or pattern expands to at most 25 symbols; hitting that cap is reported in the result, never silent."
+    }
+}

@@ -1200,11 +1200,40 @@
             { v: [0, 0, 1], color: '#5d9dff', label: 'Z' },
         ];
 
+        // Whether the camera has turned enough since the last gizmo repaint to
+        // be worth redrawing. The threshold is well below one screen pixel of
+        // movement on a 26px triad, so nothing visible is ever skipped.
+        //
+        // Declared outside the loop so the state survives, and reset whenever
+        // the renderer is remounted (`gz` is re-created with the closure).
+        function gizmoMovedFactory() {
+            let last = null;
+            return function gizmoMoved(cam) {
+                const q = cam.quaternion;
+                if (last
+                    && Math.abs(q.x - last.x) < 1e-4
+                    && Math.abs(q.y - last.y) < 1e-4
+                    && Math.abs(q.z - last.z) < 1e-4
+                    && Math.abs(q.w - last.w) < 1e-4) {
+                    return false;
+                }
+                last = { x: q.x, y: q.y, z: q.z, w: q.w };
+                return true;
+            };
+        }
+
         function startOverlayLoop() {
             const gen = threeGen;
             const svg = document.getElementById('gizmo-svg');
             let frame = 0;
             const v = new THREE.Vector3();
+            // Last orientation the gizmo was drawn for. Rebuilding its markup
+            // is a string concat plus an `innerHTML` parse — cheap once, but
+            // it ran 30 times a second forever, including while the camera sat
+            // perfectly still, which is most of the time anyone spends reading
+            // the graph. Comparing the quaternion first makes an idle canvas
+            // cost nothing.
+            const gizmoMoved = gizmoMovedFactory();
             const tick = () => {
                 if (gen !== threeGen) return;
                 requestAnimationFrame(tick);
@@ -1214,7 +1243,7 @@
                 frame++;
                 // Gizmo: rotate the world axes into the camera's view frame so the
                 // little triad mirrors how the graph is oriented on screen.
-                if (svg && frame % 2 === 0) {
+                if (svg && frame % 2 === 0 && gizmoMoved(cam)) {
                     cam.updateMatrixWorld();
                     const q = cam.quaternion.clone().invert();
                     const R = 26;

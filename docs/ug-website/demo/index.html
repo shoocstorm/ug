@@ -5467,6 +5467,143 @@
             display: none;
         }
 
+        /* ─── Node context menu ─────────────────────────────
+           The right-click card. Deliberately close to .tooltip in weight and
+           colour — it answers the same question the hover box does, one step
+           further in — but it takes the pointer, since half of it is rows you
+           can act on. */
+        .node-menu {
+            position: fixed;
+            z-index: 1001;
+            width: 268px;
+            max-width: calc(100vw - 20px);
+            background: rgba(15, 15, 17, 0.97);
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            box-shadow: 0 14px 46px rgba(0, 0, 0, 0.6);
+            font-size: 11px;
+            overflow: hidden;
+        }
+
+        .node-menu[hidden] { display: none; }
+
+        .nm-head {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            padding: 9px 11px 8px;
+            border-bottom: 1px solid var(--border-soft);
+        }
+
+        .nm-head .node-icon {
+            width: 15px;
+            height: 15px;
+            flex: 0 0 auto;
+        }
+
+        .nm-name {
+            font-family: 'JetBrains Mono', ui-monospace, monospace;
+            font-weight: 600;
+            color: var(--text);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .nm-type {
+            margin-left: auto;
+            flex: 0 0 auto;
+            font-size: 9px;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            padding: 2px 7px;
+            border-radius: 999px;
+        }
+
+        /* One line of the docstring, where there is one. The panel shows the
+           whole thing; here it is only a hint that the thing is documented and
+           roughly what about. */
+        .nm-doc {
+            padding: 7px 11px 0;
+            color: var(--text-muted);
+            line-height: 1.45;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+
+        .nm-rows { padding: 7px 11px 9px; }
+
+        .nm-row {
+            display: flex;
+            gap: 8px;
+            align-items: baseline;
+            padding: 2px 0;
+        }
+
+        .nm-key {
+            flex: 0 0 46px;
+            font-size: 9px;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            color: var(--text-dim);
+        }
+
+        .nm-val {
+            flex: 1 1 auto;
+            min-width: 0;
+            color: var(--text-muted);
+            font-family: 'JetBrains Mono', ui-monospace, monospace;
+            /* Paths are the long value here, and the informative end is the
+               right one — so wrap rather than truncate the file name away. */
+            overflow-wrap: anywhere;
+        }
+
+        .nm-dim { color: var(--text-dim); }
+
+        /* Same two hues as the info panel's boundary tags and the canvas
+           rings: warm for a way in, violet for a way out. */
+        .nm-boundary {
+            display: inline-block;
+            font-size: 9px;
+            font-weight: 600;
+            padding: 0 6px;
+            border-radius: 999px;
+            border: 1px solid currentColor;
+        }
+
+        .nm-boundary.in { color: #fbbf24; }
+        .nm-boundary.out { color: #a78bfa; }
+
+        .nm-acts {
+            display: flex;
+            gap: 1px;
+            border-top: 1px solid var(--border-soft);
+            background: var(--border-soft);
+        }
+
+        .nm-act {
+            flex: 1 1 0;
+            padding: 7px 4px;
+            border: none;
+            background: rgba(15, 15, 17, 0.97);
+            color: var(--text-muted);
+            font-family: inherit;
+            font-size: 10px;
+            cursor: pointer;
+            transition: background 0.12s, color 0.12s;
+        }
+
+        .nm-act:hover {
+            background: var(--bg-elevated);
+            color: var(--text);
+        }
+
+        .nm-act.copied { color: var(--success); }
+
         /* ─── Canvas overlays: legend, gizmo, nav/breadcrumb ─── */
 
         .canvas-overlay {
@@ -8618,7 +8755,7 @@
 }
     </style>
 <script>
-window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3162,"edges":9271,"files":104,"lines":72348,"ugVersion":"0.1.15","visFingerprint":"99e9d55e3f4f551a","generatedAt":1787058102};
+window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3162,"edges":9271,"files":104,"lines":72348,"ugVersion":"0.1.15","visFingerprint":"d12b8e7c991a3efb","generatedAt":1787062988};
 /* ==========================================================================
    UltraGraph — static demo shim
    ==========================================================================
@@ -10624,6 +10761,10 @@ traverse({
             <div class="tooltip-stats"></div>
             <div class="tooltip-dirs"></div>
         </div>
+
+        <!-- Right-click card for a node: the short version of the info panel,
+             built entirely in JS (see wireNodeMenu). -->
+        <div class="node-menu" id="node-menu" role="dialog" aria-label="Node summary" hidden></div>
     </div>
 
     <script type="module">
@@ -12890,6 +13031,7 @@ traverse({
             wireDiscoverSubtabs();
             wirePanelTabs();
             wireCatalog();
+            wireNodeMenu();
             wireIngestButtons();
             probeCapabilities();
             startHealthPolling();
@@ -13692,9 +13834,23 @@ traverse({
         }
 
         function handleNodeClick(event, d) {
-            // A walk in progress owns the canvas — clicking through would
-            // rebuild the solo view and tear down the animation, so wait.
-            if (state.walkActive) { if (event) event.stopPropagation(); return; }
+            // A walk in progress owns the canvas — selecting through it would
+            // rebuild the solo view and tear down the animation mid-flight.
+            // But "what *is* that one?" is the question a reveal provokes on
+            // every hop, and until now the canvas answered it with nothing:
+            // the click was swallowed, and hover is suppressed during a walk
+            // too (see handleNodeHover). So the click opens the summary card
+            // instead — it reads state and changes none, which is exactly what
+            // this guard is protecting.
+            if (state.walkActive) {
+                if (event) event.stopPropagation();
+                // Same reasoning as the tour below: someone reading a node is
+                // not someone who wants the next hop to reframe the camera out
+                // from under them. Pausing is one keystroke to undo.
+                if (walkPlay.playing) setWalkPlaying(false);
+                openNodeMenuAt(d, event);
+                return;
+            }
             if (state.pathMode && state.pathSource) {
                 event.stopPropagation();
                 runFindPathTo(d.id);
@@ -18968,11 +19124,40 @@ traverse({
             { v: [0, 0, 1], color: '#5d9dff', label: 'Z' },
         ];
 
+        // Whether the camera has turned enough since the last gizmo repaint to
+        // be worth redrawing. The threshold is well below one screen pixel of
+        // movement on a 26px triad, so nothing visible is ever skipped.
+        //
+        // Declared outside the loop so the state survives, and reset whenever
+        // the renderer is remounted (`gz` is re-created with the closure).
+        function gizmoMovedFactory() {
+            let last = null;
+            return function gizmoMoved(cam) {
+                const q = cam.quaternion;
+                if (last
+                    && Math.abs(q.x - last.x) < 1e-4
+                    && Math.abs(q.y - last.y) < 1e-4
+                    && Math.abs(q.z - last.z) < 1e-4
+                    && Math.abs(q.w - last.w) < 1e-4) {
+                    return false;
+                }
+                last = { x: q.x, y: q.y, z: q.z, w: q.w };
+                return true;
+            };
+        }
+
         function startOverlayLoop() {
             const gen = threeGen;
             const svg = document.getElementById('gizmo-svg');
             let frame = 0;
             const v = new THREE.Vector3();
+            // Last orientation the gizmo was drawn for. Rebuilding its markup
+            // is a string concat plus an `innerHTML` parse — cheap once, but
+            // it ran 30 times a second forever, including while the camera sat
+            // perfectly still, which is most of the time anyone spends reading
+            // the graph. Comparing the quaternion first makes an idle canvas
+            // cost nothing.
+            const gizmoMoved = gizmoMovedFactory();
             const tick = () => {
                 if (gen !== threeGen) return;
                 requestAnimationFrame(tick);
@@ -18982,7 +19167,7 @@ traverse({
                 frame++;
                 // Gizmo: rotate the world axes into the camera's view frame so the
                 // little triad mirrors how the graph is oriented on screen.
-                if (svg && frame % 2 === 0) {
+                if (svg && frame % 2 === 0 && gizmoMoved(cam)) {
                     cam.updateMatrixWorld();
                     const q = cam.quaternion.clone().invert();
                     const R = 26;
@@ -21620,6 +21805,69 @@ traverse({
             return !!el && !!el.closest('#graph-3d');
         }
 
+        // Is this edge one the canvas is actually drawing right now? Filters,
+        // focus-isolate and a tour's route all hide strands and endpoints, and
+        // the hover's flow particles are driven by the highlight set alone
+        // (linkParticlesFor → the 3D sprites and fxDrawFlow's overlay dots),
+        // never by link visibility. So an unfiltered hover marches dots along
+        // a strand that leads into empty space, pointing at a node that is not
+        // on screen — the one thing the animation is supposed to be showing.
+        // Adjacency over `state.view.edges`, keyed by node id.
+        //
+        // Hover used to scan the whole view edge list on every raycast hit —
+        // no throttle, and immediately followed by a full `restyle()`. On a
+        // graph drawn whole that is one pass over every edge per pointer move.
+        //
+        // Deliberately built over the *view*, not over `state.adj`, even
+        // though `state.adj` is a ready-made full-graph index. Two reasons,
+        // both of which would be silent bugs:
+        //
+        //  1. In solo mode `setSoloView` builds fresh edge objects rather than
+        //     reusing the ones in `state.adj`, and the renderer matches
+        //     `state.highlightLinks` by object identity. Adjacency edges would
+        //     highlight nothing at all.
+        //  2. The tooltip's "N out / N in" is the key to the two link colours
+        //     *lit on the canvas*, so it has to count drawn edges. Full-graph
+        //     degree would make the legend describe something not on screen.
+        //
+        // Cached against the array it was built from, so it survives every
+        // hover and rebuilds only when the view is replaced (`state.view` is
+        // always assigned whole — nothing mutates `edges` in place). Length is
+        // checked too, so an in-place append would still invalidate it.
+        let _viewAdj = null;
+        let _viewAdjFor = null;
+        let _viewAdjLen = -1;
+
+        function viewEdgesOf(id) {
+            const edges = (state.view && state.view.edges) || [];
+            if (_viewAdjFor !== edges || _viewAdjLen !== edges.length) {
+                const adj = new Map();
+                for (const e of edges) {
+                    const s = e.source.id || e.source;
+                    const t = e.target.id || e.target;
+                    const sl = adj.get(s);
+                    if (sl) sl.push(e); else adj.set(s, [e]);
+                    if (t !== s) {
+                        const tl = adj.get(t);
+                        if (tl) tl.push(e); else adj.set(t, [e]);
+                    }
+                }
+                _viewAdj = adj;
+                _viewAdjFor = edges;
+                _viewAdjLen = edges.length;
+            }
+            return _viewAdj.get(id) || [];
+        }
+
+        function edgeOnCanvas(e, otherId) {
+            if (!linkVisibleFor(e)) return false;
+            // The far endpoint can be hidden while the strand's own predicate
+            // still passes — the two answer to different rules (a node the
+            // filters dropped vs. an edge whose type they kept).
+            const other = state.nodeById && state.nodeById.get(otherId);
+            return !other || nodeVisibleFor(other);
+        }
+
         function handleNodeHover(d, prev) {
             // Suppress hovers raycast from a stale pointer position while the
             // user is actually working in a panel (see pointerOverCanvas).
@@ -21645,16 +21893,22 @@ traverse({
 
             // Recompute connected-node / link highlight sets. Scoped to the
             // view: the highlight sets are compared against the edge objects
-            // the renderer holds, and off-screen edges have nothing to light up.
+            // the renderer holds, and off-screen edges have nothing to light
+            // up — and, within the view, to what is currently drawn (see
+            // edgeOnCanvas).
             state.highlightNodes.clear();
             state.highlightLinks.clear();
             state.highlightLinkDir.clear();
             let outCount = 0, inCount = 0;
             if (d) {
                 state.highlightNodes.add(d.id);
-                state.view.edges.forEach(e => {
+                // O(degree) through the view index, not O(edges) — same
+                // objects, same order within a node, same counts.
+                viewEdgesOf(d.id).forEach(e => {
                     const sId = e.source.id || e.source;
                     const tId = e.target.id || e.target;
+                    if (sId !== d.id && tId !== d.id) return;
+                    if (!edgeOnCanvas(e, sId === d.id ? tId : sId)) return;
                     if (sId === d.id) {
                         state.highlightNodes.add(tId);
                         state.highlightLinks.add(e);
@@ -26153,6 +26407,7 @@ traverse({
             { group: 'Global', keys: 'Tab / Shift+Tab', action: 'Step to next / previous neighbour' },
             { group: 'Global', keys: 'Esc', action: 'Exit focus / close' },
             { group: 'Global', keys: '1–6', action: 'Face projections · 0 = 3D' },
+            { group: 'Global', keys: 'Right-click a node', action: 'Summary card — details, zoom, copy id' },
             { group: 'Guided tour', keys: 'Space', action: 'Play / pause' },
             { group: 'Guided tour', keys: '← / →', action: 'Previous / next stop' },
             { group: 'Guided tour', keys: 'S', action: 'Playback speed' },
@@ -26424,6 +26679,301 @@ traverse({
         }, true);
 
         wirePalette();
+// ==== 21-node-menu.js ====
+        // ─── Node context menu ──────────────────────────────
+        //
+        // Right-click a node for the short version of what the info panel
+        // says. Selecting a node is a commitment: it re-anchors focus, moves
+        // the camera, opens a panel over a third of the canvas and pushes a
+        // history entry. But much of the time the question is only "what is
+        // this one?", asked of three nodes in a row while reading a cluster —
+        // and answering that should cost nothing that has to be undone.
+        //
+        // The node comes from `state._hoverNode` rather than from a library
+        // right-click callback. The 3D backend has `onNodeRightClick` and
+        // cosmos.gl has nothing like it, and one path that works on both
+        // beats a more direct one that works on half the app. The pointer has
+        // to be over the node for the menu to be about that node anyway, so
+        // the hover the canvas already tracked is the same answer either
+        // library would give — and it inherits hover's own suppressions, so
+        // no card appears mid-walk or mid-tour, where the canvas is not the
+        // user's to poke at.
+
+        function wireNodeMenu() {
+            const canvas = document.getElementById('graph-3d');
+            const menu = document.getElementById('node-menu');
+            if (!canvas || !menu) return;
+
+            // Right-drag orbits the 3D camera and pans the 2D one, and a drag
+            // ends with a `contextmenu` event exactly like a press does. Only
+            // a press that stayed put is a request for the menu.
+            let downX = 0, downY = 0;
+            canvas.addEventListener('mousedown', e => {
+                if (e.button !== 2) return;
+                downX = e.clientX;
+                downY = e.clientY;
+            });
+
+            canvas.addEventListener('contextmenu', e => {
+                // The browser's own menu over a WebGL canvas offers Back,
+                // Reload and Save Image As — nothing about the graph.
+                e.preventDefault();
+                if (Math.abs(e.clientX - downX) + Math.abs(e.clientY - downY) > 4) return;
+                const node = state._hoverNode;
+                if (!node) { hideNodeMenu(); return; }
+                openNodeMenu(node, e.clientX, e.clientY);
+            });
+
+            // Anything else the user does dismisses it. A press outside is the
+            // obvious one; a wheel is the necessary one, because zooming moves
+            // the node out from under a card that is pinned to the viewport.
+            document.addEventListener('mousedown', e => {
+                if (!menu.hidden && !menu.contains(e.target)) hideNodeMenu();
+            }, true);
+            window.addEventListener('wheel', () => { if (!menu.hidden) hideNodeMenu(); }, { passive: true });
+
+            // Capture phase, and it has to be: the global Escape handler in
+            // 17-info-drag.js is bound on `document` and runs first otherwise,
+            // and it clears the selection — so closing a card would also throw
+            // away the node the user was reading about.
+            document.addEventListener('keydown', e => {
+                if (e.key !== 'Escape' || menu.hidden) return;
+                e.stopPropagation();
+                hideNodeMenu();
+            }, true);
+        }
+
+        function openNodeMenu(node, x, y) {
+            state._menuNode = node;
+            state._menuAt = { x, y };
+            renderNodeMenu(node);
+
+            // The hover tooltip says a subset of what the card says, in the
+            // same corner of the screen. Two boxes overlapping is worse than
+            // either. (Moving onto the card takes the pointer off the canvas,
+            // which suppresses the tooltip from then on — this only has to
+            // deal with the frame where the pointer has not moved yet.)
+            const tooltip = document.getElementById('tooltip');
+            if (tooltip) tooltip.classList.remove('visible');
+
+            // Server mode hands out a slim index: no docstring, metrics or
+            // boundaries until a node is hydrated, and no edges until they are
+            // asked for. Both fills re-render the card in place if it is still
+            // showing the same node — the same late-but-right shape the info
+            // panel uses, rather than a card that quietly reports "no metrics"
+            // for a node that has them.
+            if (state.graphMode === 'server' && node._slim !== false) {
+                hydrateNodes([node.id])
+                    .then(changed => { if (changed) refreshNodeMenu(node.id); })
+                    .catch(err => console.error('node menu hydrate failed:', err));
+            }
+            if (!edgesKnownComplete(node.id)) {
+                ensureEdges([node.id])
+                    .then(() => refreshNodeMenu(node.id))
+                    .catch(err => console.error('node menu edges failed:', err));
+            }
+        }
+
+        // Open the card for a node the user *picked* rather than hovered. That
+        // is the Graph Walk path: a walk suppresses hover outright, so there
+        // is no `_hoverNode` to read and no hover box to defer to — the click
+        // carries the node and the pointer carries the position.
+        function openNodeMenuAt(node, event) {
+            const m = state._mouse;
+            const at = (v, fallback) => Number.isFinite(v) ? v : fallback;
+            const x = event && Number.isFinite(event.clientX)
+                ? event.clientX : at(m && m.cx, window.innerWidth / 2);
+            const y = event && Number.isFinite(event.clientY)
+                ? event.clientY : at(m && m.cy, window.innerHeight / 2);
+            openNodeMenu(node, x, y);
+        }
+
+        function hideNodeMenu() {
+            const menu = document.getElementById('node-menu');
+            if (menu) menu.hidden = true;
+            state._menuNode = null;
+        }
+
+        // Re-render only if the card is still open on that node — an async fill
+        // that lands after the user has closed it, or moved on, has nothing to
+        // say.
+        function refreshNodeMenu(id) {
+            const menu = document.getElementById('node-menu');
+            if (!menu || menu.hidden) return;
+            if (!state._menuNode || state._menuNode.id !== id) return;
+            renderNodeMenu(state._menuNode);
+        }
+
+        // In and out degree, plus the edge types they run over. Read off the
+        // adjacency index rather than the view's edges: the card is about the
+        // node in the graph, not about how much of it happens to be drawn.
+        function nodeMenuDegree(id) {
+            let out = 0, inc = 0;
+            const rels = new Map();
+            knownEdgesOf(id).forEach(e => {
+                const sId = e.source.id || e.source;
+                const tId = e.target.id || e.target;
+                if (sId === id) out++; else inc++;
+                const rel = e.rel || 'other';
+                rels.set(rel, (rels.get(rel) || 0) + 1);
+            });
+            return { out, inc, rels };
+        }
+
+        // Which hop of the current walk reached this node. While a walk is
+        // running this outranks everything else on the card: the entire point
+        // of the reveal is distance from the seed, and colour alone only says
+        // it to within a shade.
+        function nodeMenuHop(id) {
+            if (!state.walkActive || !walkPlay.layers) return null;
+            if (id === state.walkSeed) return 0;
+            for (const l of walkPlay.layers) {
+                if (l.ids.includes(id)) return l.hop;
+            }
+            return null;
+        }
+
+        function renderNodeMenu(node) {
+            const menu = document.getElementById('node-menu');
+            if (!menu) return;
+            const color = config.getColor(node.group);
+            const row = (key, val) => `<div class="nm-row"><span class="nm-key">${key}</span>`
+                + `<span class="nm-val">${val}</span></div>`;
+
+            const rows = [];
+
+            const hop = nodeMenuHop(node.id);
+            if (hop !== null) {
+                const hopColor = walkColorForHop(hop);
+                rows.push(row('Hop', hop === 0
+                    ? `<span style="color:${hopColor}">seed</span>`
+                    // The number is the step count already, so "2 steps" would
+                    // be the same fact twice — and it is the line that pushes
+                    // the seed name onto a second row.
+                    : `<span style="color:${hopColor}">${hop}</span>`
+                        + `<span class="nm-dim"> · from `
+                        + `${escapeHtml(truncateName((state.nodeById.get(state.walkSeed) || {}).name || state.walkSeed))}</span>`));
+            }
+
+            if (node.file) {
+                // PDF and Office nodes carry a page number in `startLine` —
+                // the info panel makes the same distinction, and labelling a
+                // page as a line is a small straight lie.
+                const isPaged = /\.(pdf|docx?|xlsx?|pptx?|odt|ods|odp|rtf)$/i.test(node.file);
+                let where = escapeHtml(node.file);
+                if (node.startLine) {
+                    const span = node.endLine && node.endLine !== node.startLine
+                        ? `${node.startLine}–${node.endLine}` : `${node.startLine}`;
+                    where += `<span class="nm-dim">${isPaged ? ' · p.' : ':'}${span}</span>`;
+                }
+                rows.push(row('Where', where));
+            }
+
+            if (edgesKnownComplete(node.id)) {
+                const { out, inc, rels } = nodeMenuDegree(node.id);
+                if (out || inc) {
+                    // Same two colours the hover highlight paints the strands
+                    // in, so the card is a key for what is lit on the canvas
+                    // behind it.
+                    const parts = [];
+                    if (out) parts.push(`<span style="color:${CANVAS.linkOut}">→ ${out} out</span>`);
+                    if (inc) parts.push(`<span style="color:${CANVAS.linkIn}">← ${inc} in</span>`);
+                    rows.push(row('Links', parts.join('<span class="nm-dim"> · </span>')));
+                    // The two commonest edge types: "12 links" says how
+                    // connected, this says connected *how*.
+                    const top = [...rels.entries()].sort((a, b) => b[1] - a[1]).slice(0, 2)
+                        .map(([rel, n]) => `<span style="color:${config.getRelColor(rel)}">${escapeHtml(rel)}</span>`
+                            + `<span class="nm-dim"> ${n}</span>`);
+                    if (top.length) rows.push(row('Via', top.join('<span class="nm-dim"> · </span>')));
+                } else {
+                    rows.push(row('Links', '<span class="nm-dim">none — isolated</span>'));
+                }
+            } else {
+                rows.push(row('Links', '<span class="nm-dim">loading…</span>'));
+            }
+
+            if (node.metrics) {
+                const m = node.metrics;
+                const nest = m.maxNesting ?? m.max_nesting ?? '–';
+                rows.push(row('Size', `LOC ${m.loc ?? '–'}<span class="nm-dim"> · </span>`
+                    + `Params ${m.params ?? '–'}<span class="nm-dim"> · </span>Nest ${nest}`));
+            }
+
+            if (node.boundaries && node.boundaries.length) {
+                const tags = node.boundaries.slice(0, 3).map(b => {
+                    const dir = b.direction === 'Inbound' ? 'in' : 'out';
+                    return `<span class="nm-boundary ${dir}">${escapeHtml(b.kind)}</span>`;
+                }).join(' ');
+                rows.push(row('Edge of', tags));
+            }
+
+            // One line of prose, when the node has any. Enough to tell a
+            // documented node from an undocumented one and roughly what it is
+            // about; the panel is where the whole thing lives.
+            const doc = node.docstring
+                ? `<div class="nm-doc">${escapeHtml(String(node.docstring).replace(/\s+/g, ' ').trim().slice(0, 180))}</div>`
+                : '';
+
+            menu.innerHTML = `
+                <div class="nm-head">
+                    ${nodeIconSvg(node.group)}
+                    <span class="nm-name" title="${escapeHtml(node.name)}">${escapeHtml(truncateName(node.name))}</span>
+                    <span class="nm-type" style="background:${color}20;color:${color}">${escapeHtml(node.group || '')}</span>
+                </div>
+                ${doc}
+                <div class="nm-rows">${rows.join('')}</div>
+                <div class="nm-acts">
+                    ${state.walkActive ? '' : '<button class="nm-act" data-act="details" title="Open the full node panel">Details</button>'}
+                    <button class="nm-act" data-act="zoom" title="Fly the camera to this node">Zoom to</button>
+                    <button class="nm-act" data-act="copy" title="Copy the node id — command fuel for ug get_code">Copy id</button>
+                </div>`;
+
+            // No Details during a walk. Opening the panel selects the node,
+            // which rebuilds the solo view and tears the walk down — the very
+            // thing the click guard exists to prevent, so offering it as a
+            // button would just be the same bug behind one more press.
+            const detailsBtn = menu.querySelector('[data-act="details"]');
+            if (detailsBtn) detailsBtn.addEventListener('click', () => {
+                hideNodeMenu();
+                handleClick(null, node);
+            });
+            menu.querySelector('[data-act="zoom"]').addEventListener('click', () => {
+                hideNodeMenu();
+                focusNode(node);
+            });
+            const copyBtn = menu.querySelector('[data-act="copy"]');
+            copyBtn.addEventListener('click', async () => {
+                try {
+                    await navigator.clipboard.writeText(node.id);
+                    copyBtn.classList.add('copied');
+                    copyBtn.textContent = 'Copied';
+                } catch { /* clipboard blocked — nothing useful to fall back to here */ }
+                setTimeout(() => {
+                    copyBtn.classList.remove('copied');
+                    copyBtn.textContent = 'Copy id';
+                }, 1200);
+            });
+
+            positionNodeMenu();
+        }
+
+        // Anchored at the pointer, nudged back inside the viewport. Re-run on
+        // every render because an async fill changes the card's height, and a
+        // card that grew downward off the bottom of the screen is the one the
+        // user cannot read.
+        function positionNodeMenu() {
+            const menu = document.getElementById('node-menu');
+            const at = state._menuAt;
+            if (!menu || !at) return;
+            menu.hidden = false;
+            const pad = 10;
+            const w = menu.offsetWidth;
+            const h = menu.offsetHeight;
+            const left = Math.min(at.x + 12, window.innerWidth - w - pad);
+            const top = Math.min(at.y + 12, window.innerHeight - h - pad);
+            menu.style.left = Math.max(pad, left) + 'px';
+            menu.style.top = Math.max(pad, top) + 'px';
+        }
     </script>
 </body>
 
