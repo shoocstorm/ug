@@ -8987,7 +8987,7 @@
 }
     </style>
 <script>
-window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3297,"edges":9692,"files":106,"lines":76180,"ugVersion":"0.1.15","visFingerprint":"a61dc1c862a4bb0b","generatedAt":1787146622};
+window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3297,"edges":9692,"files":106,"lines":76180,"ugVersion":"0.1.15","visFingerprint":"85c919fd44396801","generatedAt":1787185715};
 /* ==========================================================================
    UltraGraph — static demo shim
    ==========================================================================
@@ -11358,10 +11358,7 @@ traverse({
                     // checked against the snapshot this page was built from.
                     const caps = await getCapabilities();
                     state.graphToken = (caps && caps.graph && caps.graph.token) || null;
-                    const res = await fetch('/api/graph/nodes');
-                    if (!res.ok) throw new Error(`Server answered ${res.status} ${res.statusText}`);
-                    setPhase('Building graph…', 100);
-                    transformSlim(await res.json());
+                    await loadNodeIndex(setPhase);
                     initialize();
                     graphInitialized = true;
                     applyUrlState(readUrlState());
@@ -11449,6 +11446,130 @@ traverse({
                 console.error('Failed to load graph:', err);
                 showFailure(err.message || String(err));
             }
+        }
+
+        // ─── The server-mode node index ────────────────────
+        //
+        // Three ways to get the same index, in descending order of what they
+        // cost the tab:
+        //
+        //   1. the binary frame, decoded in a Worker — nothing on the main
+        //      thread but taking views over a buffer that was handed over
+        //   2. the binary frame, decoded here — a Worker is unavailable
+        //   3. the JSON index — the server is too old to serve the frame
+        //
+        // The fallbacks are not defensive padding: (3) is what an existing
+        // deployment gets until it is upgraded, and it is the encoding the
+        // binary frame is tested against.
+        async function loadNodeIndex(setPhase) {
+            try {
+                const decoded = await fetchNodeIndexInWorker();
+                if (decoded) {
+                    setPhase('Building graph…', 100);
+                    installNodeIndex(decodeNodeIndexFrame(decoded.buffer), decoded.slots);
+                    return;
+                }
+            } catch (err) {
+                // A worker that failed to *start* is worth one line; a worker
+                // that failed to fetch is about to fail again below, loudly.
+                console.warn('node index worker unavailable, decoding inline:', err && err.message);
+            }
+
+            const bin = await fetch('/api/graph/nodes.bin');
+            if (bin.ok) {
+                setPhase('Building graph…', 100);
+                try {
+                    transformSlimBinary(await bin.arrayBuffer());
+                    return;
+                } catch (err) {
+                    console.warn('binary node index rejected, falling back to JSON:', err && err.message);
+                }
+            } else if (bin.status !== 404) {
+                throw new Error(`Server answered ${bin.status} ${bin.statusText}`);
+            }
+
+            const res = await fetch('/api/graph/nodes');
+            if (!res.ok) throw new Error(`Server answered ${res.status} ${res.statusText}`);
+            setPhase('Building graph…', 100);
+            transformSlim(await res.json());
+        }
+
+        // The worker's whole job: fetch the frame and build the `id → index`
+        // hash table, then hand both buffers over as transferables.
+        //
+        // The table is the only part of the load that is real main-thread work
+        // once the frame is binary — 500k probe-and-insert steps over a 4 MB
+        // `Int32Array`. Everything else is a typed-array view, which is free.
+        //
+        // Inlined as a Blob URL because the page ships as a single assembled
+        // HTML file (see build.rs): there is no sibling .js file for a Worker
+        // to point at, and `ug gen` output is opened straight from disk.
+        const NODE_INDEX_WORKER_SRC = `
+self.onmessage = async (ev) => {
+  try {
+    const res = await fetch(ev.data.url);
+    if (!res.ok) { self.postMessage({ ok: false, error: 'HTTP ' + res.status }); return; }
+    const buffer = await res.arrayBuffer();
+    const dv = new DataView(buffer);
+    const count = dv.getUint32(12, true);
+    let hashOff = -1, hashLen = 0, metaOff = -1, metaLen = 0;
+    for (let slot = 0; slot < count; slot++) {
+      const at = 16 + slot * 12;
+      const kind = dv.getUint32(at, true);
+      if (kind === 12) { hashOff = dv.getUint32(at + 4, true); hashLen = dv.getUint32(at + 8, true); }
+      if (kind === 13) { metaOff = dv.getUint32(at + 4, true); metaLen = dv.getUint32(at + 8, true); }
+    }
+    if (hashOff < 0 || metaOff < 0) { self.postMessage({ ok: false, error: 'frame is missing a section' }); return; }
+    const meta = JSON.parse(new TextDecoder('utf-8').decode(new Uint8Array(buffer, metaOff, metaLen)));
+    const n = meta.n;
+    const idHash = new Uint32Array(buffer, hashOff, hashLen / 4);
+    let cap = 1024;
+    while (cap < n * 2) cap *= 2;
+    const mask = cap - 1;
+    const slots = new Int32Array(cap).fill(-1);
+    for (let i = 0; i < n; i++) {
+      let k = idHash[i] & mask;
+      while (slots[k] !== -1) k = (k + 1) & mask;
+      slots[k] = i;
+    }
+    self.postMessage({ ok: true, buffer: buffer, slots: slots.buffer }, [buffer, slots.buffer]);
+  } catch (e) {
+    self.postMessage({ ok: false, error: String((e && e.message) || e) });
+  }
+};
+`;
+
+        // Resolves to `{ buffer, slots }`, or `null` if this environment has no
+        // Worker to run it in (a headless harness, a locked-down embed) — which
+        // is a reason to decode inline, not a reason to fail.
+        function fetchNodeIndexInWorker() {
+            if (typeof Worker !== 'function' || typeof Blob !== 'function' || !window.URL || !URL.createObjectURL) {
+                return Promise.resolve(null);
+            }
+            return new Promise((resolve, reject) => {
+                let url = null;
+                let worker = null;
+                const done = (fn, arg) => {
+                    if (worker) worker.terminate();
+                    if (url) URL.revokeObjectURL(url);
+                    fn(arg);
+                };
+                try {
+                    url = URL.createObjectURL(new Blob([NODE_INDEX_WORKER_SRC], { type: 'text/javascript' }));
+                    worker = new Worker(url);
+                } catch (err) {
+                    if (url) URL.revokeObjectURL(url);
+                    resolve(null);
+                    return;
+                }
+                worker.onmessage = (ev) => {
+                    const d = ev.data || {};
+                    if (d.ok) done(resolve, { buffer: d.buffer, slots: new Int32Array(d.slots) });
+                    else done(reject, new Error(d.error || 'node index worker failed'));
+                };
+                worker.onerror = (e) => done(reject, new Error(e.message || 'node index worker errored'));
+                worker.postMessage({ url: new URL('/api/graph/nodes.bin', window.location.href).toString() });
+            });
         }
 
         function formatBytes(n) {
@@ -12203,7 +12324,20 @@ traverse({
             state.catalogExpanded = null;
             state.catalogAutoExpanded = false;
             state.graphMode = 'local';
+            // Null in local mode, and that is what every `if (state.nodeStore)`
+            // branch keys off: the columns only exist when the server sent them.
+            state.nodeStore = null;
+            state.nodeCount = state.graph.nodes.length;
             state.edgeCount = edges.length;
+            // Counted once here rather than four times over in the chips, the
+            // legend, `presentNodeTypes` and `syncLegend` — server mode gets the
+            // same two facts off the wire, so both modes answer from one place.
+            state.nodeTypeCounts = {};
+            state.boundaryCount = 0;
+            for (const n of state.graph.nodes) {
+                state.nodeTypeCounts[n.group] = (state.nodeTypeCounts[n.group] || 0) + 1;
+                if (n.isBoundary) state.boundaryCount++;
+            }
             // Degree, for the "start here" strip and the solo empty state's top
             // hubs. Both used to compute this themselves — one by scanning every
             // edge, one by ranking the whole adjacency map — for a top-5 list.
@@ -12222,55 +12356,247 @@ traverse({
             state.catalogRootIds = null;   // local mode derives these from Contains
         }
 
-        // The server-mode counterpart of `transformData`: the same `state.graph`
-        // shape, built from `/api/graph/nodes` instead of from `graph.json`.
+        // ─── Server mode: the node index ───────────────────
         //
-        // The payload is columnar and dictionary-coded (see `build_slim_index`
-        // in serve.rs), which matters in two ways here. Node type and file
-        // strings are *shared references* into the dictionaries rather than one
-        // string per node — on a 162k-node repo that is the difference between
-        // ~32 MB of duplicate file paths and ~1.8 MB. And every node is built by
-        // assigning the same properties in the same order, so V8 gives the whole
-        // graph one hidden class instead of a shape per field combination.
+        // In server mode the page is handed every node's *identity* and nothing
+        // else; edges, docstrings, metrics and boundaries arrive per
+        // neighbourhood, on demand. On a 500k-node graph that index is the
+        // largest thing the tab ever holds, so how it is held is the whole
+        // memory story — see §Round 2 of docs/dev/PERF-TUNING-JOURNEY.md.
         //
-        // `state.graph.edges` is empty and stays empty: edges arrive per
-        // neighbourhood, on demand, into `state.adj`.
-        function transformSlim(payload) {
-            const { ids, names, types, typeIdx, files, fileIdx, startLine, endLine } = payload;
-            const n = payload.n;
-            const boundarySet = new Set(payload.boundary || []);
-            const cx = window.innerWidth / 2 || 800;
-            const cy = window.innerHeight / 2 || 600;
+        // What it used to be: 500k node objects, each with six distinct empty
+        // arrays as placeholders, plus three 500k-entry Maps keyed by the same
+        // 141-character id strings. Measured 379 MB peak, 331 MB retained.
+        //
+        // What it is now: typed-array columns viewed straight over the response
+        // buffer, front-coded id/name blobs that never become JS strings, and
+        // node objects materialised only for what the user actually touches.
 
-            const nodes = new Array(n);
-            // id → wire index. Position is identity in the server-mode
-            // protocol: every request about a node names its index in these
-            // columns, not its 141-character id.
-            const indexOf = new Map();
-            for (let i = 0; i < n; i++) {
+        // One frozen array shared by every unhydrated node's imports / exports /
+        // extends / implements / calls / boundaries.
+        //
+        // At 500k nodes the old six-arrays-per-node cost 3 million array objects
+        // whose only job was to be empty. Sharing is safe because `hydrateNodes`
+        // *assigns* these slots rather than mutating them — nothing anywhere
+        // pushes into a node's list — and freezing turns a future mistake about
+        // that into a thrown error rather than a graph where every node suddenly
+        // imports the same thing.
+        const EMPTY_LIST = Object.freeze([]);
+
+        // FNV-1a, 32-bit, over the UTF-8 bytes. Must stay byte-identical to
+        // `fnv1a32` in serve.rs — `nidx_hash_matches_the_client` pins them
+        // together, because a divergence is not an error, it is a lookup table
+        // that quietly answers "no such node" for every id.
+        const NIDX_ENCODER = typeof TextEncoder !== 'undefined' ? new TextEncoder() : null;
+        function fnv1a32(str) {
+            // ASCII fast path. For a string with no code unit above 127 the
+            // UTF-8 bytes *are* the char codes, so this is the same hash — and
+            // it avoids `TextEncoder.encode`, which allocates a fresh
+            // `Uint8Array` per call. That allocation was the single most
+            // expensive thing in an id lookup: 11 µs against ~1 µs, on a path
+            // the solo view walks once per node it puts on the canvas.
+            //
+            // The first non-ASCII code unit bails to the encoder and starts
+            // over. Node ids are file paths and symbol names, so that is rare
+            // — and it has to be correct rather than close, which is what
+            // `the_client_decodes_every_id_this_encoder_writes` checks with a
+            // deliberately non-ASCII id.
+            let h = 2166136261;
+            for (let i = 0; i < str.length; i++) {
+                const c = str.charCodeAt(i);
+                if (c > 127) return fnv1a32Utf8(str);
+                h ^= c;
+                h = Math.imul(h, 16777619);
+            }
+            return h >>> 0;
+        }
+
+        function fnv1a32Utf8(str) {
+            let h = 2166136261;
+            if (NIDX_ENCODER) {
+                const bytes = NIDX_ENCODER.encode(str);
+                for (let i = 0; i < bytes.length; i++) {
+                    h ^= bytes[i];
+                    h = Math.imul(h, 16777619);
+                }
+                return h >>> 0;
+            }
+            // No TextEncoder at all (no browser this ships to, but a harness
+            // might): encode the code points by hand rather than hash the
+            // wrong bytes and silently lose every non-ASCII id.
+            for (const ch of str) {
+                let cp = ch.codePointAt(0);
+                const buf = cp < 0x80 ? [cp]
+                    : cp < 0x800 ? [0xc0 | (cp >> 6), 0x80 | (cp & 0x3f)]
+                    : cp < 0x10000 ? [0xe0 | (cp >> 12), 0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f)]
+                    : [0xf0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3f), 0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f)];
+                for (const byte of buf) {
+                    h ^= byte;
+                    h = Math.imul(h, 16777619);
+                }
+            }
+            return h >>> 0;
+        }
+
+        // A string column that is already an array of JS strings — the JSON
+        // index's shape, and the fallback when the binary frame is unavailable.
+        function arrayStringColumn(arr) {
+            return { at: i => (arr[i] == null ? '' : arr[i]), length: arr.length };
+        }
+
+        // A front-coded string column: record `i` is `blob[off[i]..off[i+1]]`,
+        // one byte of shared-prefix length followed by the suffix, restarting
+        // every `block` entries. See `front_code` in serve.rs.
+        //
+        // The point is that the bytes stay bytes: 500k ids cost ~26 MB of
+        // ArrayBuffer here against ~80 MB of individually-allocated JS strings,
+        // and none of it is on the JS heap where the GC has to walk it.
+        function frontCodedColumn(blob, off, block) {
+            const decoder = new TextDecoder('utf-8');
+            const n = off.length - 1;
+            // One scratch buffer, grown on demand. Reconstruction is at most
+            // `block` records, so this never sees a surprise size.
+            let scratch = new Uint8Array(256);
+            // Grows by *copying* — the bytes already in it are the shared
+            // prefix the next record builds on, so a bare reallocation silently
+            // returns an id with its head cut off. Which is not an error
+            // anywhere: it is a lookup that answers "no such node".
+            const ensure = (need) => {
+                if (scratch.length < need) {
+                    let cap = scratch.length;
+                    while (cap < need) cap *= 2;
+                    const grown = new Uint8Array(cap);
+                    grown.set(scratch);
+                    scratch = grown;
+                }
+            };
+            return {
+                length: n,
+                at(i) {
+                    if (i < 0 || i >= n) return '';
+                    const first = i - (i % block);
+                    let len = 0;
+                    for (let k = first; k <= i; k++) {
+                        const s = off[k];
+                        const e = off[k + 1];
+                        const shared = blob[s];
+                        const suffix = e - s - 1;
+                        ensure(shared + suffix);
+                        // `shared` bytes of what we already built stay put;
+                        // everything after them comes from this record.
+                        scratch.set(blob.subarray(s + 1, e), shared);
+                        len = shared + suffix;
+                    }
+                    return decoder.decode(scratch.subarray(0, len));
+                },
+            };
+        }
+
+        // How many node objects may sit in the pool before the ones nobody is
+        // looking at are dropped. Generous on purpose: a node costs ~130 bytes,
+        // so this is ~6 MB, and the alternative — evicting something the
+        // renderer is holding — loses its position and breaks identity.
+        const NODE_POOL_SOFT_CAP = 50000;
+
+        // The `id → index` memo. Bounded for the same reason and cleared
+        // wholesale rather than evicted one at a time: it is a pure cache of a
+        // pure function, so throwing all of it away costs one re-probe.
+        const NODE_INDEX_CACHE_CAP = 100000;
+
+        // Everything `state.nodeById` has ever been asked for, over the columns.
+        //
+        // This object *is* `state.nodeById`. That is deliberate and it is what
+        // kept this change to 24 files instead of 60: the Map surface
+        // (`get`/`has`/`size`/`keys`/`values`/`entries`/`forEach`) is
+        // implemented here, so every call site that looks a node up by id —
+        // the tour's `stop.node_id`, chat citations, the URL state, the
+        // catalog, the renderers — is untouched and does not know the nodes it
+        // gets back were built a microsecond ago.
+        function makeNodeStore(ix, prebuiltSlots) {
+            const n = ix.n;
+            const byIndex = new Map();   // index → node object
+            const byId = new Map();      // node.id → the same object
+            const idxCache = new Map();  // id → index (or -1), memoised
+
+            // Open addressing, linear probing, at ≤50% load. `slots` holds node
+            // indices; `idHash` is the per-node hash the server sent, so
+            // building this is pure integer work — no id is ever decoded here.
+            //
+            // The worker builds it when there is one (see
+            // `fetchNodeIndexInWorker`), which is the last piece of the load
+            // that would otherwise block the main thread. The capacity check is
+            // not paranoia: a table sized for a different `n` would probe past
+            // its own entries and answer "no such node" for real ids.
+            let cap = 1024;
+            while (cap < n * 2) cap *= 2;
+            const mask = cap - 1;
+            const idHash = ix.idHash;
+            let slots;
+            if (prebuiltSlots && prebuiltSlots.length === cap) {
+                slots = prebuiltSlots;
+            } else {
+                slots = new Int32Array(cap).fill(-1);
+                for (let i = 0; i < n; i++) {
+                    let k = idHash[i] & mask;
+                    while (slots[k] !== -1) k = (k + 1) & mask;
+                    slots[k] = i;
+                }
+            }
+
+            const cx = (typeof window !== 'undefined' && window.innerWidth / 2) || 800;
+            const cy = (typeof window !== 'undefined' && window.innerHeight / 2) || 600;
+
+            function indexOf(id) {
+                if (typeof id !== 'string') return -1;
+                const memo = idxCache.get(id);
+                if (memo !== undefined) return memo;
+                const h = fnv1a32(id);
+                let k = h & mask;
+                let found = -1;
+                while (slots[k] !== -1) {
+                    const cand = slots[k];
+                    // The hash check is what keeps this cheap: a full id is
+                    // decoded only on a hash collision, which at 32 bits over
+                    // 500k entries is a handful of nodes in the whole graph.
+                    if (idHash[cand] === h && ix.idCol.at(cand) === id) { found = cand; break; }
+                    k = (k + 1) & mask;
+                }
+                // Misses are memoised too. `findNodeByName` and the catalog ask
+                // about strings that are not ids at all, repeatedly.
+                if (idxCache.size >= NODE_INDEX_CACHE_CAP) idxCache.clear();
+                idxCache.set(id, found);
+                return found;
+            }
+
+            function nodeAt(i) {
+                if (i < 0 || i >= n) return undefined;
+                const held = byIndex.get(i);
+                if (held) return held;
+                if (byIndex.size >= NODE_POOL_SOFT_CAP) trimPool();
+                const id = ix.idCol.at(i);
+                const fi = ix.fileIdx[i];
                 const angle = (i / n) * Math.PI * 2;
                 const radius = 100 + Math.random() * 150;
-                const fi = fileIdx[i];
                 // Property order is fixed and matches `transformData`'s node
                 // literal — do not reorder, it is what keeps the hidden class
                 // shared with locally-built nodes.
                 const node = {
-                    id: ids[i],
-                    name: names[i] || ids[i],
-                    group: types[typeIdx[i]] || 'Default',
-                    file: fi >= 0 ? files[fi] : null,
-                    startLine: startLine[i] || null,
-                    endLine: endLine[i] || null,
+                    id,
+                    name: ix.nameCol.at(i) || id,
+                    group: ix.typeNames[ix.typeIdx[i]] || 'Default',
+                    file: fi >= 0 ? ix.fileNames[fi] : null,
+                    startLine: ix.startLine[i] || null,
+                    endLine: ix.endLine[i] || null,
                     docstring: null,
                     metrics: null,
                     signature: null,
-                    imports: [],
-                    exports: [],
-                    extends: [],
-                    implements: [],
-                    calls: [],
-                    isBoundary: boundarySet.has(i),
-                    boundaries: [],
+                    imports: EMPTY_LIST,
+                    exports: EMPTY_LIST,
+                    extends: EMPTY_LIST,
+                    implements: EMPTY_LIST,
+                    calls: EMPTY_LIST,
+                    isBoundary: !!ix.boundary[i],
+                    boundaries: EMPTY_LIST,
                     x: cx + Math.cos(angle) * radius,
                     y: cy + Math.sin(angle) * radius,
                     // Everything above `id`/`name`/`group`/`file`/lines/boundary
@@ -12278,29 +12604,377 @@ traverse({
                     // server. `_slim` says which is which, so a panel can tell
                     // "no docstring" from "not fetched yet".
                     _slim: true,
+                    // Its position in the columns. Saves the round trip back
+                    // through the hash table everywhere the server protocol
+                    // wants an index — hydrate, the edge fetches, the catalog.
+                    _i: i,
                 };
-                nodes[i] = node;
-                indexOf.set(node.id, i);
+                byIndex.set(i, node);
+                byId.set(id, node);
+                return node;
             }
 
-            state.graph = { nodes, edges: [] };
-            state.slimIndexOf = indexOf;
-            state.graphMode = 'server';
-            state.edgeCount = payload.edgeCount || 0;
-            state.stats = payload.stats || null;
-            state.languages = payload.languages || null;
-            state.edgeTypeCounts = payload.edgeTypeCounts || {};
-            state.catalogRootIds = (payload.catalogRoots || []).map(i => ids[i]);
-            // Degree comes off the wire — it is a whole-graph fact and there are
-            // no edges here to recount it from.
-            state.degreeOf = new Map();
-            const deg = payload.deg || [];
-            for (let i = 0; i < n; i++) {
-                if (deg[i]) state.degreeOf.set(ids[i], deg[i]);
+            // Drop what nothing is looking at. A node currently on the canvas
+            // keeps its object: the renderers mutate `x`/`y` on it and match
+            // highlight sets by object identity, so re-materialising one mid-view
+            // would reset its position and silently break highlighting. A
+            // hydrated node is kept too — throwing it away would re-fetch it.
+            function trimPool() {
+                const keep = state.viewIds instanceof Set ? state.viewIds : null;
+                const selected = state.selectedNode && state.selectedNode.id;
+                for (const [i, node] of byIndex) {
+                    if (node._slim === false) continue;
+                    if (node.id === selected) continue;
+                    if (keep && keep.has(node.id)) continue;
+                    byIndex.delete(i);
+                    byId.delete(node.id);
+                }
             }
+
+            const store = {
+                // ── the columns, for whoever wants them without an object ──
+                columns: ix,
+                nodeCount: n,
+                indexOf,
+                nodeAt,
+                // Record an `id → index` a caller already knows, so the next
+                // `get`/`has` for it is a map hit rather than a hash probe.
+                // `fetchEdges` knows the index of every endpoint it decodes.
+                noteIndex(id, i) {
+                    if (idxCache.size >= NODE_INDEX_CACHE_CAP) idxCache.clear();
+                    idxCache.set(id, i);
+                },
+                idAt: i => ix.idCol.at(i),
+                nameAt: i => ix.nameCol.at(i),
+                groupAt: i => ix.typeNames[ix.typeIdx[i]] || 'Default',
+                degAt: i => ix.deg[i] || 0,
+                isBoundaryAt: i => !!ix.boundary[i],
+
+                // ── the Map surface `state.nodeById` is read through ──
+                get(id) {
+                    const held = byId.get(id);
+                    if (held) return held;
+                    const i = indexOf(id);
+                    return i >= 0 ? nodeAt(i) : undefined;
+                },
+                has(id) {
+                    return byId.has(id) || indexOf(id) >= 0;
+                },
+                get size() { return n; },
+                // Materialise-as-you-go, so a stray whole-graph iteration is
+                // merely slow rather than a lie. Nothing in the app does this —
+                // `grep -n 'state.graph.nodes'` is the check — and anything that
+                // starts to should use the columns instead.
+                *keys() { for (let i = 0; i < n; i++) yield ix.idCol.at(i); },
+                *values() { for (let i = 0; i < n; i++) yield nodeAt(i); },
+                *entries() { for (let i = 0; i < n; i++) yield [ix.idCol.at(i), nodeAt(i)]; },
+                forEach(fn) { for (let i = 0; i < n; i++) fn(nodeAt(i), ix.idCol.at(i), store); },
+                [Symbol.iterator]() { return store.entries(); },
+            };
+            return store;
+        }
+
+        // The most-connected nodes, in either mode. Server mode reads the degree
+        // column (a `Uint32Array`, no id strings involved); local mode ranks the
+        // `degreeOf` map the edge walk filled in.
+        //
+        // A partial selection rather than a sort: ranking 500k entries to show
+        // five was the old shape, and it allocated an array of every node with
+        // any edge at all to do it.
+        function topByDegree(k) {
+            const store = state.nodeStore;
+            if (store) {
+                const deg = store.columns.deg;
+                const n = store.nodeCount;
+                const best = [];   // indices, ascending by degree, at most k
+                let floor = 0;
+                for (let i = 0; i < n; i++) {
+                    const d = deg[i];
+                    if (d <= floor && best.length >= k) continue;
+                    let at = best.length;
+                    while (at > 0 && deg[best[at - 1]] < d) at--;
+                    best.splice(at, 0, i);
+                    if (best.length > k) best.pop();
+                    if (best.length >= k) floor = deg[best[best.length - 1]];
+                }
+                return best.map(i => store.nodeAt(i)).filter(Boolean);
+            }
+            const degree = state.degreeOf;
+            if (!degree || !degree.size) return [];
+            return [...degree.entries()]
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, k)
+                .map(([id]) => state.nodeById && state.nodeById.get(id))
+                .filter(Boolean);
+        }
+
+        // Undirected degree of one node, in either mode. Server mode reads the
+        // column through the node's own wire index; local mode reads the map the
+        // edge walk built.
+        function degreeOfNode(node) {
+            if (!node) return 0;
+            if (state.nodeStore && typeof node._i === 'number') return state.nodeStore.degAt(node._i);
+            return (state.degreeOf && state.degreeOf.get(node.id)) || 0;
+        }
+
+        // ─── Name search, in both modes ────────────────────
+        //
+        // One implementation for the three places that search by name — the
+        // sidebar's suggestion box, the command palette and the Graph Walk's
+        // seed picker. All three used to hold their own copy of the same
+        // `filter().sort().slice()` over every node in the graph.
+        //
+        // Locally that is a scan, bounded so the sort never sees more than
+        // `SEARCH_SCAN_CAP` candidates. In server mode it is a request:
+        // `/api/graph/search` has the real strings, and the client has a
+        // front-coded name column that would have to be decoded half a million
+        // times per keystroke to answer the same question badly.
+        //
+        // Always a promise, in both modes, so the callers have one shape.
+
+        // How many matches are ranked before the cut. The display shows fifty;
+        // "light up … in graph" takes at most SOLO_MAX_NODES. Anything past
+        // this cannot reach the screen, and collecting it is what made an empty
+        // query allocate an array of every node in the graph.
+        const SEARCH_SCAN_CAP = 4000;
+
+        async function searchNodes(query, opts = {}) {
+            const q = (query || '').trim().toLowerCase();
+            const limit = opts.limit || 50;
+            const types = opts.types && opts.types.size ? opts.types : null;
+            const boundaryOnly = !!opts.boundary;
+
+            if (state.nodeStore) return searchNodesOnServer(q, limit, types, boundaryOnly);
+
+            const cap = Math.max(limit, SEARCH_SCAN_CAP);
+            const scored = [];
+            let total = 0;
+            for (const n of state.graph.nodes) {
+                if (types && !types.has(n.group)) continue;
+                if (boundaryOnly && !n.isBoundary) continue;
+                let rank = 0;
+                if (q) {
+                    const ln = n.name.toLowerCase();
+                    rank = ln.indexOf(q);
+                    if (rank < 0) {
+                        if (!n.id.toLowerCase().includes(q)) continue;
+                        // Matched on the qualified id rather than the name:
+                        // still a hit, but it sorts after every name match.
+                        rank = Number.MAX_SAFE_INTEGER;
+                    }
+                }
+                total++;
+                // The lowercased name is computed once here, not twice per
+                // comparison inside the sort, which is where the old version
+                // spent most of a keystroke.
+                if (scored.length < cap) scored.push({ n, rank, len: n.name.length });
+            }
+            if (q) scored.sort((a, b) => (a.rank - b.rank) || (a.len - b.len));
+            return {
+                nodes: scored.slice(0, limit).map(s => s.n),
+                total,
+                truncated: total > scored.length,
+            };
+        }
+
+        async function searchNodesOnServer(q, limit, types, boundaryOnly) {
+            if (!q) {
+                // Nothing is displayed for an empty query in any of the three
+                // callers — only the count, which the index already carries.
+                const counts = nodeTypeCountsAll();
+                let total = 0;
+                if (types) types.forEach(t => { total += counts[t] || 0; });
+                else total = state.nodeCount || 0;
+                return { nodes: [], total, truncated: false };
+            }
+            const qs = new URLSearchParams({ q, limit: String(limit) });
+            if (types) qs.set('types', [...types].join(','));
+            let data;
+            try {
+                const res = await fetch(`/api/graph/search?${qs}`);
+                if (!res.ok) throw new Error(await readErr(res));
+                data = await res.json();
+            } catch (err) {
+                console.warn('node search failed:', err && err.message);
+                return { nodes: [], total: 0, truncated: false };
+            }
+            // Hits come back as whole node rows; what the canvas and the panels
+            // need is *the* node object for each id, so they go through the
+            // store. A hit already on screen keeps its position and identity.
+            const nodes = [];
+            for (const row of data.nodes || []) {
+                if (boundaryOnly && !(row.boundaries && row.boundaries.length)) continue;
+                const node = state.nodeById.get(row.id);
+                if (node) nodes.push(node);
+            }
+            nodes.sort((a, b) => {
+                const ai = a.name.toLowerCase().indexOf(q);
+                const bi = b.name.toLowerCase().indexOf(q);
+                const ar = ai < 0 ? Number.MAX_SAFE_INTEGER : ai;
+                const br = bi < 0 ? Number.MAX_SAFE_INTEGER : bi;
+                return (ar - br) || (a.name.length - b.name.length);
+            });
+            return { nodes, total: data.count || nodes.length, truncated: !!data.truncated };
+        }
+
+        // Node-type histogram over the *whole* graph.
+        //
+        // Server mode reads what the index already carried; local mode counts.
+        // Four call sites used to recount this from every node on every call —
+        // the filter chips, the legend, `presentNodeTypes` and `syncLegend` —
+        // which on a large graph is four full passes to draw a row of numbers
+        // that cannot have changed.
+        function nodeTypeCountsAll() {
+            if (state.nodeTypeCounts) return state.nodeTypeCounts;
+            const counts = {};
+            state.graph.nodes.forEach(n => { counts[n.group] = (counts[n.group] || 0) + 1; });
+            state.nodeTypeCounts = counts;
+            return counts;
+        }
+
+        function boundaryCountAll() {
+            if (typeof state.boundaryCount === 'number') return state.boundaryCount;
+            state.boundaryCount = state.graph.nodes.filter(n => n.isBoundary).length;
+            return state.boundaryCount;
+        }
+
+        // Install a decoded index (from either encoding) as the page's graph.
+        //
+        // `state.graph.nodes` is deliberately left **empty** in server mode.
+        // Every whole-graph reader was moved onto the columns or onto the
+        // counts above; anything that still reaches for it is a bug, and an
+        // empty array makes it show up as a zero rather than as 500k
+        // materialised objects.
+        function installNodeIndex(ix, prebuiltSlots) {
+            const store = makeNodeStore(ix, prebuiltSlots);
+            state.graph = { nodes: [], edges: [] };
+            state.nodeStore = store;
+            state.nodeById = store;
+            state.nodeCount = ix.n;
+            state.graphMode = 'server';
+            state.edgeCount = ix.edgeCount || 0;
+            state.stats = ix.stats || null;
+            state.languages = ix.languages || null;
+            state.edgeTypeCounts = ix.edgeTypeCounts || {};
+            state.nodeTypeCounts = ix.nodeTypeCounts || {};
+            state.boundaryCount = ix.boundaryCount || 0;
+            // Roots are the one place a bounded set of ids is worth decoding up
+            // front: the catalog opens on them, and there are thousands, not
+            // hundreds of thousands.
+            state.catalogRootIds = Array.from(ix.catalogRoots || [], i => ix.idCol.at(i));
+            state.degreeOf = null;   // server mode ranks off the degree column
             state.catalogTree = null;
             state.catalogExpanded = null;
             state.catalogAutoExpanded = false;
+        }
+
+        // The JSON index (`/api/graph/nodes`), kept as the fallback for a server
+        // too old to serve the binary frame — and as the thing the binary frame
+        // is tested against.
+        function transformSlim(payload) {
+            const n = payload.n;
+            const boundary = new Uint8Array(n);
+            for (const i of payload.boundary || []) boundary[i] = 1;
+            const ids = payload.ids || [];
+            const idHash = new Uint32Array(n);
+            for (let i = 0; i < n; i++) idHash[i] = fnv1a32(ids[i] || '');
+            installNodeIndex({
+                n,
+                edgeCount: payload.edgeCount || 0,
+                idCol: arrayStringColumn(ids),
+                nameCol: arrayStringColumn(payload.names || []),
+                idHash,
+                typeNames: payload.types || [],
+                typeIdx: Uint8Array.from(payload.typeIdx || []),
+                fileNames: payload.files || [],
+                fileIdx: Int32Array.from(payload.fileIdx || []),
+                startLine: Uint32Array.from(payload.startLine || []),
+                endLine: Uint32Array.from(payload.endLine || []),
+                deg: Uint32Array.from(payload.deg || []),
+                boundary,
+                boundaryCount: (payload.boundary || []).length,
+                catalogRoots: payload.catalogRoots || [],
+                nodeTypeCounts: payload.nodeTypeCounts || {},
+                edgeTypeCounts: payload.edgeTypeCounts || {},
+                stats: payload.stats || null,
+                languages: payload.languages || null,
+            });
+        }
+
+        // ─── The binary frame (`/api/graph/nodes.bin`) ─────
+        //
+        // Layout is defined by `build_binary_index` in serve.rs. Decoding is
+        // taking views over the buffer that arrived: no copy, no parse, and the
+        // id/name bytes are never turned into JS strings.
+
+        const NIDX_MAGIC = 'UGNIDX\0\0';
+        const NIDX_KIND = {
+            TYPE_IDX: 1, FILE_IDX: 2, START_LINE: 3, END_LINE: 4, DEG: 5,
+            BOUNDARY: 6, CATALOG_ROOTS: 7, ID_BLOB: 8, ID_OFF: 9,
+            NAME_BLOB: 10, NAME_OFF: 11, ID_HASH: 12, META: 13,
+        };
+
+        // Frame → the `ix` shape `installNodeIndex` wants. Throws on anything
+        // it does not recognise so `loadGraph` can fall back to the JSON index
+        // rather than render a graph decoded from garbage.
+        function decodeNodeIndexFrame(buffer) {
+            const bytes = new Uint8Array(buffer);
+            if (bytes.length < 16) throw new Error('node index frame is truncated');
+            for (let i = 0; i < 8; i++) {
+                if (bytes[i] !== NIDX_MAGIC.charCodeAt(i)) throw new Error('not a node index frame');
+            }
+            const head = new DataView(buffer);
+            const version = head.getUint32(8, true);
+            if (version !== 1) throw new Error(`node index version ${version} is not supported`);
+            const count = head.getUint32(12, true);
+            const sec = new Map();
+            for (let slot = 0; slot < count; slot++) {
+                const at = 16 + slot * 12;
+                const kind = head.getUint32(at, true);
+                const off = head.getUint32(at + 4, true);
+                const len = head.getUint32(at + 8, true);
+                if (off + len > bytes.length) throw new Error(`node index section ${kind} overruns the frame`);
+                sec.set(kind, [off, len]);
+            }
+            const need = (kind) => {
+                const s = sec.get(kind);
+                if (!s) throw new Error(`node index is missing section ${kind}`);
+                return s;
+            };
+            const u8 = (kind) => { const [o, l] = need(kind); return bytes.subarray(o, o + l); };
+            // Views, not copies — which is why every section is 4-byte aligned
+            // on the server side.
+            const u32 = (kind) => { const [o, l] = need(kind); return new Uint32Array(buffer, o, l / 4); };
+            const i32 = (kind) => { const [o, l] = need(kind); return new Int32Array(buffer, o, l / 4); };
+
+            const meta = JSON.parse(new TextDecoder('utf-8').decode(u8(NIDX_KIND.META)));
+            const n = meta.n;
+            const block = meta.block || 16;
+            return {
+                n,
+                edgeCount: meta.edgeCount || 0,
+                idCol: frontCodedColumn(u8(NIDX_KIND.ID_BLOB), u32(NIDX_KIND.ID_OFF), block),
+                nameCol: frontCodedColumn(u8(NIDX_KIND.NAME_BLOB), u32(NIDX_KIND.NAME_OFF), block),
+                idHash: u32(NIDX_KIND.ID_HASH),
+                typeNames: meta.types || [],
+                typeIdx: u8(NIDX_KIND.TYPE_IDX),
+                fileNames: meta.files || [],
+                fileIdx: i32(NIDX_KIND.FILE_IDX),
+                startLine: u32(NIDX_KIND.START_LINE),
+                endLine: u32(NIDX_KIND.END_LINE),
+                deg: u32(NIDX_KIND.DEG),
+                boundary: u8(NIDX_KIND.BOUNDARY),
+                boundaryCount: meta.boundaryCount || 0,
+                catalogRoots: u32(NIDX_KIND.CATALOG_ROOTS),
+                nodeTypeCounts: meta.nodeTypeCounts || {},
+                edgeTypeCounts: meta.edgeTypeCounts || {},
+                stats: meta.stats || null,
+                languages: meta.languages || null,
+            };
+        }
+
+        function transformSlimBinary(buffer) {
+            installNodeIndex(decodeNodeIndexFrame(buffer));
         }
 
         function formatNumber(n) {
@@ -13237,11 +13911,15 @@ traverse({
             width = container.clientWidth;
             height = container.clientHeight;
 
-            const nodeCount = state.graph.nodes.length;
-            // Not `state.graph.edges.length` — in server mode that array is
-            // empty by design and the real count came down with the index.
+            // Not `state.graph.nodes.length` — in server mode that array is
+            // empty by design (the nodes live in `state.nodeStore`'s columns
+            // and are built on demand), and the real count came down with the
+            // index. Same for edges.
+            const nodeCount = state.nodeCount || 0;
             const edgeCount = state.edgeCount || 0;
-            state.nodeById = new Map(state.graph.nodes.map(n => [n.id, n]));
+            // Server mode installed its `NodeStore` as `state.nodeById` when the
+            // index landed — it is the lookup, not a copy of one.
+            if (!state.nodeStore) state.nodeById = new Map(state.graph.nodes.map(n => [n.id, n]));
             buildAdjacency();
 
             // Past the threshold the whole graph is never drawn. `state.graph`
@@ -16863,8 +17541,9 @@ traverse({
         // ─── Filter chips ───────────────────────────────────
 
         function buildNodeFilterChips() {
-            const counts = {};
-            state.graph.nodes.forEach(n => { counts[n.group] = (counts[n.group] || 0) + 1; });
+            // Off the whole-graph histogram both loaders publish, not a fresh
+            // pass over every node — see `nodeTypeCountsAll`.
+            const counts = nodeTypeCountsAll();
             const container = document.getElementById('node-filter');
             container.innerHTML = '';
             Object.entries(counts).sort((a, b) => b[1] - a[1]).forEach(([type, count]) => {
@@ -16894,7 +17573,7 @@ traverse({
             // world can reach". Appended after the type chips (and only when
             // the graph has boundaries) so it reads as an additional filter
             // rather than as another node type.
-            const boundaryCount = state.graph.nodes.filter(n => n.isBoundary).length;
+            const boundaryCount = boundaryCountAll();
             if (!boundaryCount) return;
 
             const chip = document.createElement('div');
@@ -16960,12 +17639,29 @@ traverse({
             const edgeMatches = e =>
                 state.edgeFilters.size === 0 || state.edgeFilters.has(e.rel);
 
-            const byId = state.nodeById || new Map(state.graph.nodes.map(n => [n.id, n]));
-            // Predicates consumed by the graph's nodeVisibility / linkVisibility
-            // accessors, and by the solo view builder. Filtered-out elements
-            // are hidden entirely rather than dimmed — WebGL skips them.
-            state.nodeHidden = n => !nodeMatches(n);
-            state.linkHidden = e => {
+            // `initialize()` sets this before anything can call in here, in both
+            // modes. Rebuilding it as a fallback allocated a 500k-entry map to
+            // paper over an invariant that was already broken.
+            const byId = state.nodeById;
+            // With nothing filtered these predicates cannot answer true, so say
+            // so without looking anything up.
+            //
+            // Not a micro-optimisation: `linkHidden` resolves *both* endpoints
+            // of every edge it is asked about, and `neighborsOf` asks about
+            // every edge of the node being expanded. On a node of degree 8,680
+            // — the real maximum in `~/.ug/neo4j` — that is 17k lookups to
+            // evaluate a predicate whose answer is fixed. In server mode each
+            // of those lookups also *builds* a node object, so the unfiltered
+            // case was materialising the entire neighbourhood to decide it was
+            // showing all of it.
+            const noNodeFilter = state.nodeFilters.size === 0 && !state.boundaryFilter;
+            const noEdgeFilter = state.edgeFilters.size === 0;
+            // Read by `neighborsOf`, which has to skip the *lookup* and not
+            // just the predicate: resolving a node only to ask a question whose
+            // answer is fixed is what the short-circuit above cannot save.
+            state.nodeFilterActive = !noNodeFilter;
+            state.nodeHidden = noNodeFilter ? () => false : n => !nodeMatches(n);
+            state.linkHidden = (noNodeFilter && noEdgeFilter) ? () => false : e => {
                 const sourceNode = byId.get(e.source.id || e.source);
                 const targetNode = byId.get(e.target.id || e.target);
                 if (sourceNode && !nodeMatches(sourceNode)) return true;
@@ -17378,8 +18074,7 @@ traverse({
             const body = document.getElementById('legend-body');
             const head = document.getElementById('legend-head');
             if (!body) return;
-            const counts = new Map();
-            state.graph.nodes.forEach(n => counts.set(n.group, (counts.get(n.group) || 0) + 1));
+            const counts = new Map(Object.entries(nodeTypeCountsAll()));
             // Canonical type order (NODE_TYPE_ORDER), matching the Rings layout
             // and the rest of the type orderings — so the legend reads top to
             // bottom the way the rings read inside out, and the two can be
@@ -17398,7 +18093,7 @@ traverse({
             // boundary nodes needs an entry here or it is an unexplained
             // decoration. Appended below the types and marked as a separate
             // axis — it filters alongside them, not instead of them.
-            const boundaryCount = state.graph.nodes.filter(n => n.isBoundary).length;
+            const boundaryCount = boundaryCountAll();
             if (boundaryCount) {
                 body.insertAdjacentHTML('beforeend',
                     `<div class="legend-row legend-row-boundary" data-boundary="1"
@@ -17442,7 +18137,7 @@ traverse({
         const NODE_FILTER_NONE = ' none';
 
         function presentNodeTypes() {
-            return [...new Set(state.graph.nodes.map(n => n.group))];
+            return Object.keys(nodeTypeCountsAll());
         }
 
         // The types actually showing, resolving both special cases.
@@ -17564,12 +18259,8 @@ traverse({
             };
 
             if (!ids) {
-                const counts = new Map();
-                let boundary = 0;
-                state.graph.nodes.forEach(n => {
-                    counts.set(n.group, (counts.get(n.group) || 0) + 1);
-                    if (n.isBoundary) boundary++;
-                });
+                const counts = new Map(Object.entries(nodeTypeCountsAll()));
+                const boundary = boundaryCountAll();
                 rows.forEach(row => {
                     if (row === boundaryRow) return;
                     row.querySelector('.count').textContent = counts.get(row.dataset.type) || 0;
@@ -17636,32 +18327,32 @@ traverse({
             });
         }
 
-        function refreshSuggestions(query) {
+        // The suggestion box, off the shared `searchNodes` (02-dialogs.js).
+        //
+        // Async because in server mode the answer comes from the server — the
+        // page has no name column it can afford to scan. A monotonic token
+        // drops stale responses, so typing quickly leaves the box showing the
+        // last query rather than whichever request finished last.
+        let suggestToken = 0;
+        async function refreshSuggestions(query) {
             const container = document.getElementById('search-suggestions');
             const meta = document.getElementById('search-meta-count');
             const q = query.trim().toLowerCase();
             state.searchQuery = q;
             const filterActive = state.nodeFilters.size > 0;
+            const token = ++suggestToken;
 
-            const candidates = state.graph.nodes.filter(n => {
-                if (filterActive && !state.nodeFilters.has(n.group)) return false;
-                if (!q) return true;
-                return n.name.toLowerCase().includes(q) || n.id.toLowerCase().includes(q);
+            // Fifty are shown; "light up … in graph" draws from the rest, so the
+            // request covers both in one pass instead of two.
+            const found = await searchNodes(q, {
+                limit: q ? Math.max(50, SOLO_MAX_NODES) : 50,
+                types: filterActive ? state.nodeFilters : null,
             });
+            if (token !== suggestToken) return;
 
-            const sorted = q
-                ? candidates.sort((a, b) => {
-                    const ai = a.name.toLowerCase().indexOf(q);
-                    const bi = b.name.toLowerCase().indexOf(q);
-                    if (ai !== bi) return ai - bi;
-                    return a.name.length - b.name.length;
-                })
-                : candidates;
-
+            const sorted = found.nodes;
             const display = sorted.slice(0, 50);
             state.currentSuggestions = display;
-            // The full match set, not just the fifty shown: "light up … in graph"
-            // draws from this.
             state.searchMatches = q ? sorted : [];
             state.suggestionIndex = -1;
 
@@ -17699,12 +18390,12 @@ traverse({
                 }
             }
 
-            const total = candidates.length;
+            const total = found.total;
             if (q || filterActive) {
                 meta.textContent = `${Math.min(display.length, total)} of ${total}` +
                     (filterActive ? ` · ${state.nodeFilters.size} type filter(s)` : '');
             } else {
-                meta.textContent = `${state.graph.nodes.length} nodes`;
+                meta.textContent = `${state.nodeCount || 0} nodes`;
             }
 
             syncPlotAllButton(document.getElementById('search-plot-all'), state.searchMatches);
@@ -18041,7 +18732,7 @@ traverse({
         // The graph-size default: 3D under the threshold, 2D above it. Reads
         // the full `state.graph`, not the (possibly empty solo) view.
         function autoRendererName() {
-            const nodes = state.graph && state.graph.nodes ? state.graph.nodes.length : 0;
+            const nodes = state.nodeCount || 0;
             // `state.edgeCount`, not `state.graph.edges.length`: in server mode
             // the local edge array is empty and reading it would pick three.js
             // for a graph far past what three.js can hold.
@@ -23040,7 +23731,7 @@ traverse({
         // again, which changes nothing and re-renders again — an unbreakable
         // loop that on a hub with 8,680 related rows locks the tab solid.
         async function hydrateNodes(ids) {
-            if (state.graphMode !== 'server' || !state.slimIndexOf) return false;
+            if (state.graphMode !== 'server' || !state.nodeStore) return false;
             const want = [];
             const seen = new Set();
             for (const id of ids) {
@@ -23048,8 +23739,8 @@ traverse({
                 seen.add(id);
                 const node = state.nodeById && state.nodeById.get(id);
                 if (!node || node._slim === false) continue;
-                const i = state.slimIndexOf.get(id);
-                if (i !== undefined) want.push(i);
+                const i = typeof node._i === 'number' ? node._i : state.nodeStore.indexOf(id);
+                if (i >= 0) want.push(i);
             }
             if (!want.length) return false;
 
@@ -23590,6 +24281,21 @@ traverse({
         function findNodeByName(name) {
             if (!state.nodeById) return null;
             if (state.nodeById.has(name)) return state.nodeById.get(name);
+
+            // Server mode has no local name column to scan — decoding half a
+            // million front-coded names to linkify a row of chips is exactly
+            // the cost this mode exists to avoid. So the *server* answers it,
+            // once per distinct name, and the panel re-renders when the answers
+            // land. Chips that have not resolved yet render unlinked, which is
+            // what they rendered as before for any unresolvable name anyway.
+            if (state.nodeStore) {
+                if (!state._nameMemo) state._nameMemo = new Map();
+                const memo = state._nameMemo.get(name);
+                if (memo !== undefined) return memo ? state.nodeById.get(memo) : null;
+                queueNameProbe(name);
+                return null;
+            }
+
             if (!state._nameIndex) {
                 state._nameIndex = new Map();
                 state.graph.nodes.forEach(n => {
@@ -23599,6 +24305,53 @@ traverse({
                 });
             }
             return state._nameIndex.get(name) || null;
+        }
+
+        // Ask the server what `name` resolves to, batching everything one render
+        // asked for into a single pass and re-rendering the panel once at the
+        // end.
+        //
+        // Termination is the thing to get right here, and it is the same shape
+        // `hydrateNodes` documents: every probe writes a memo entry — **misses
+        // included, as null** — so the re-render finds every name already
+        // answered, queues nothing, and stops. Without memoising the misses this
+        // is an infinite render loop.
+        let nameProbeQueue = null;
+        function queueNameProbe(name) {
+            if (!nameProbeQueue) {
+                nameProbeQueue = new Set();
+                Promise.resolve().then(runNameProbes);
+            }
+            nameProbeQueue.add(name);
+        }
+
+        async function runNameProbes() {
+            const names = nameProbeQueue;
+            nameProbeQueue = null;
+            if (!names || !names.size) return;
+            let resolved = 0;
+            await Promise.all([...names].map(async (name) => {
+                if (state._nameMemo.has(name)) return;
+                let hit = null;
+                try {
+                    const res = await fetch(`/api/graph/search?q=${encodeURIComponent(name)}&limit=25`);
+                    if (res.ok) {
+                        const data = await res.json();
+                        // Exact name first, then the trailing segment — the same
+                        // two keys the local index stored, in the same order.
+                        const short = n => String(n.name || '').split('/').pop();
+                        const nodes = data.nodes || [];
+                        const exact = nodes.find(n => n.name === name) || nodes.find(n => short(n) === name);
+                        if (exact) hit = exact.id;
+                    }
+                } catch { /* offline or a dead endpoint — memoise the miss */ }
+                state._nameMemo.set(name, hit);
+                if (hit) resolved++;
+            }));
+            // Only when something actually became clickable. A render that
+            // changes nothing is a render that costs a hub's related list for
+            // no reason.
+            if (resolved && state.selectedNode) handleClick(null, state.selectedNode);
         }
 
         // Fills the right-panel "Preview" tab with the *actual* source content of
@@ -23842,16 +24595,12 @@ traverse({
         function renderStartHere() {
             const box = document.getElementById('start-here');
             if (!box) return;
-            // `state.degreeOf` is populated by both loaders — counted from the
-            // edge list locally, read off the slim index in server mode, where
-            // there are no local edges to count. This also stops the boot path
-            // walking every edge a second time just to rank five nodes.
-            const degree = state.degreeOf || new Map();
-            const top = [...degree.entries()]
-                .sort((a, b) => b[1] - a[1])
-                .slice(0, 5)
-                .map(([id]) => state.nodeById.get(id))
-                .filter(Boolean);
+            // Both loaders can answer this — local mode from the map the edge
+            // walk built, server mode from the degree column that came down with
+            // the index. `topByDegree` is a partial selection rather than a
+            // sort, so ranking 500k nodes to show five does not allocate an
+            // array of all of them first.
+            const top = topByDegree(5);
             if (top.length < 2) {
                 box.closest('.section').style.display = 'none';
                 return;
@@ -23862,11 +24611,11 @@ traverse({
                 const item = document.createElement('button');
                 item.type = 'button';
                 item.className = 'start-here-item';
-                item.title = `Focus ${escapeHtml(n.name)} (${degree.get(n.id)} edges)`;
+                item.title = `Focus ${escapeHtml(n.name)} (${degreeOfNode(n)} edges)`;
                 item.innerHTML = `
                     ${nodeIconSvg(n.group)}
                     <span class="name">${escapeHtml(truncateName(n.name))}</span>
-                    <span class="deg">${degree.get(n.id)}</span>
+                    <span class="deg">${degreeOfNode(n)}</span>
                 `;
                 item.addEventListener('click', () => { handleClick(null, n); focusNode(n); });
                 box.appendChild(item);
@@ -24095,8 +24844,10 @@ traverse({
                 return state.catalogTree;
             }
             const { childrenOf, parentOf } = getContainsMaps();
-            const nodeById = state.nodeById || new Map(state.graph.nodes.map(n => [n.id, n]));
-            state.nodeById = nodeById;
+            // Set by `initialize()` in both modes — a NodeStore in server mode,
+            // a plain Map locally. Rebuilding one here as a fallback allocated a
+            // 500k-entry map to cover an invariant that was already broken.
+            const nodeById = state.nodeById;
 
             const isFolder = id => {
                 const n = nodeById.get(id);
@@ -24652,7 +25403,7 @@ traverse({
         // server.
         function soloRequired(limit) {
             if (state.graphMode === 'server') return true;
-            return Math.max(state.graph.nodes.length, state.edgeCount) > (limit ?? visSoloThreshold());
+            return Math.max(state.nodeCount || 0, state.edgeCount) > (limit ?? visSoloThreshold());
         }
 
         // Adjacency over the *full* graph, built once. Before this, every
@@ -24678,9 +25429,11 @@ traverse({
             state.adjCompleteAll = false;
             if (state.graphMode === 'server') {
                 state.adj = adj;
+                state.adjKeys = new Map();
                 state.adjPending = new Map();
                 return;
             }
+            state.adjKeys = null;   // local mode never re-pushes the same edge
             state.adjCompleteAll = true;
             const push = (id, e) => {
                 const list = adj.get(id);
@@ -24761,8 +25514,8 @@ traverse({
         // clicks on the same node makes one request, not one per click.
         async function ensureEdges(ids, scope = 'incident') {
             if (state.adjCompleteAll || state.graphMode !== 'server') return;
-            const idx = state.slimIndexOf;
-            if (!idx) return;
+            const store = state.nodeStore;
+            if (!store) return;
 
             // Deduped and sorted before the key is built: callers routinely
             // pass overlapping sets (`[...viewSeeds, ...viewExpanded]` names
@@ -24775,8 +25528,8 @@ traverse({
                 if (seen.has(id)) continue;
                 seen.add(id);
                 if (scope === 'incident' && state.adjComplete.has(id)) continue;
-                const i = idx.get(id);
-                if (i !== undefined) want.push(i);
+                const i = store.indexOf(id);
+                if (i >= 0) want.push(i);
             }
             if (!want.length) return;
             want.sort((a, b) => a - b);
@@ -24799,36 +25552,82 @@ traverse({
             if (!res.ok) throw new Error(await readErr(res));
             const data = await res.json();
             if (!graphTokenMatches(data.token)) return;
-            const nodes = state.graph.nodes;
+            // The wire speaks positions, and what the adjacency cache stores is
+            // *ids* — so this resolves indices to ids, not to node objects.
+            //
+            // That distinction is worth a lot on a hub. A node of degree 8,680
+            // brings back 8,680 edges, of which the canvas will draw at most
+            // `SOLO_MAX_NEIGHBORS`; materialising a node object for every
+            // endpoint built ~8.7k objects to throw ~8.4k of them away, and the
+            // garbage showed up as a pause on the *next* await. `setSoloView`
+            // materialises the few hundred that actually get drawn, through the
+            // store, as it always did.
+            //
+            // The ids are memoised per response so that a hub appearing in
+            // 8,680 edges yields one string rather than 8,680 copies of the
+            // same 141 characters — the adjacency lists and the view compare
+            // these, and identical strings compare by pointer first.
+            const store = state.nodeStore;
             const { src, tgt, rel, relTypes } = data;
+            const idMemo = new Map();
+            const idOf = (i) => {
+                let v = idMemo.get(i);
+                if (v === undefined) {
+                    v = i >= 0 && i < store.nodeCount ? store.idAt(i) : null;
+                    idMemo.set(i, v);
+                    // The store would otherwise have to hash this id back to
+                    // the index we already have, the first time anything looks
+                    // the node up.
+                    if (v !== null) store.noteIndex(v, i);
+                }
+                return v;
+            };
 
             for (let k = 0; k < src.length; k++) {
-                const s = nodes[src[k]];
-                const t = nodes[tgt[k]];
+                const s = idOf(src[k]);
+                const t = idOf(tgt[k]);
                 if (!s || !t) continue;
                 // One object per edge, pushed into both endpoints' lists —
                 // `setSoloView` dedupes by object identity (`seen.has(e)`), so
                 // two objects for one edge would draw two strands.
-                const edge = { source: s.id, target: t.id, rel: relTypes[rel[k]] || null };
-                pushEdge(s.id, edge);
-                if (t.id !== s.id) pushEdge(t.id, edge);
+                const edge = { source: s, target: t, rel: relTypes[rel[k]] || null };
+                // The dedupe key is built from the *wire indices*, not the ids.
+                // Same identity, ~20 characters instead of ~290: on a node of
+                // degree 8,680 that is 17k short strings to hash rather than
+                // 17k long ones, which is most of what filling a hub's
+                // adjacency costs.
+                const key = src[k] + '|' + tgt[k] + '|' + rel[k];
+                pushEdge(s, edge, key);
+                if (t !== s) pushEdge(t, edge, key);
             }
-            for (const id of data.complete || []) {
-                const node = nodes[id];
-                if (node) state.adjComplete.add(node.id);
+            for (const i of data.complete || []) {
+                const id = idOf(i);
+                if (id) state.adjComplete.add(id);
             }
         }
 
         // Append without duplicating: a node's list is filled by several
         // fetches (its own incident query, plus induced queries from every
         // neighbourhood it appears in), and the same edge can arrive twice.
-        function pushEdge(id, edge) {
-            let list = state.adj.get(id);
-            if (!list) { state.adj.set(id, [edge]); return; }
-            for (const e of list) {
-                if (e.source === edge.source && e.target === edge.target && e.rel === edge.rel) return;
+        //
+        // Through a `Set` of keys, not a scan of the list. The scan was O(d) per
+        // edge and therefore O(d²) to fill one node's adjacency — and `d` is not
+        // small: the real `~/.ug/neo4j` graph has a node of degree 8,680, so one
+        // click on it compared 141-character strings roughly 38 million times,
+        // on the main thread, before anything was drawn.
+        function pushEdge(id, edge, key) {
+            let seen = state.adjKeys && state.adjKeys.get(id);
+            if (!seen && state.adjKeys) {
+                seen = new Set();
+                state.adjKeys.set(id, seen);
             }
-            list.push(edge);
+            if (seen) {
+                if (seen.has(key)) return;
+                seen.add(key);
+            }
+            const list = state.adj.get(id);
+            if (list) list.push(edge);
+            else state.adj.set(id, [edge]);
         }
 
         // The end of `e` that isn't `id`. Handles both shapes: edges the
@@ -24847,7 +25646,7 @@ traverse({
                 if (opts.filtered && state.linkHidden && state.linkHidden(e)) continue;
                 const other = otherEnd(e, id);
                 if (other === id) continue;
-                if (opts.filtered && state.nodeHidden) {
+                if (opts.filtered && state.nodeFilterActive && state.nodeHidden) {
                     const n = state.nodeById && state.nodeById.get(other);
                     if (n && state.nodeHidden(n)) continue;
                 }
@@ -25079,7 +25878,7 @@ traverse({
         function updateSoloHud() {
             if (!state.soloOnly) return;
             const shown = state.view ? state.view.nodes.length : 0;
-            const total = state.graph.nodes.length;
+            const total = state.nodeCount || 0;
 
             const chip = document.getElementById('view-count');
             if (chip) {
@@ -25107,7 +25906,7 @@ traverse({
             empty.dataset.wired = '1';
 
             const countEl = empty.querySelector('.ce-count');
-            if (countEl) countEl.textContent = formatNumber(state.graph.nodes.length);
+            if (countEl) countEl.textContent = formatNumber(state.nodeCount || 0);
 
             const search = empty.querySelector('.ce-search-btn');
             if (search) search.addEventListener('click', focusSearchInput);
@@ -25146,17 +25945,7 @@ traverse({
         // happened to have been clicked — and rank it highest on the very first
         // screen, where nothing has been clicked at all.
         function topHubs(n) {
-            const degree = state.degreeOf;
-            if (!degree || !degree.size) return [];
-            const ranked = [...degree.entries()];
-            ranked.sort((a, b) => b[1] - a[1]);
-            const out = [];
-            for (const [id] of ranked) {
-                const node = state.nodeById.get(id);
-                if (node) out.push(node);
-                if (out.length >= n) break;
-            }
-            return out;
+            return topByDegree(n);
         }
 
         // Put the cursor in the keyword search box. The button in the empty
@@ -25749,21 +26538,22 @@ traverse({
             const sugBox = document.getElementById('walk-seed-suggestions');
             let sugIndex = -1;
 
-            const refreshSeedSuggestions = () => {
+            // Same shared search the sidebar box uses — see `searchNodes` in
+            // 02-dialogs.js. Async, with a token, because in server mode the
+            // ranking happens on the server.
+            let seedToken = 0;
+            const refreshSeedSuggestions = async () => {
                 const q = input.value.trim().toLowerCase();
                 sugIndex = -1;
                 if (!q) { sugBox.classList.remove('open'); sugBox.innerHTML = ''; return; }
                 const filterActive = state.nodeFilters.size > 0;
-                const hits = state.graph.nodes
-                    .filter(n => !filterActive || state.nodeFilters.has(n.group))
-                    .filter(n => n.name.toLowerCase().includes(q) || n.id.toLowerCase().includes(q))
-                    .sort((a, b) => {
-                        const ai = a.name.toLowerCase().indexOf(q);
-                        const bi = b.name.toLowerCase().indexOf(q);
-                        if (ai !== bi) return ai - bi;
-                        return a.name.length - b.name.length;
-                    })
-                    .slice(0, 8);
+                const token = ++seedToken;
+                const found = await searchNodes(q, {
+                    limit: 8,
+                    types: filterActive ? state.nodeFilters : null,
+                });
+                if (token !== seedToken) return;
+                const hits = found.nodes;
                 sugBox.innerHTML = '';
                 if (!hits.length) {
                     sugBox.innerHTML = '<div class="walk-seed-sug" style="cursor:default;color:var(--text-dim)">No matching nodes</div>';
@@ -27165,7 +27955,7 @@ traverse({
             { name: 'Collapse sidebar', run: () => { const b = document.getElementById('sidebar-collapse'); if (b) b.click(); } },
         ];
 
-        function buildPaletteItems(raw) {
+        async function buildPaletteItems(raw) {
             const q = (raw || '').trim().toLowerCase();
             let prefix = null;
             if (q.startsWith('>')) prefix = 'action';
@@ -27175,16 +27965,12 @@ traverse({
 
             const items = [];
             if (!prefix || prefix === 'node') {
-                let nodes = state.graph.nodes;
-                if (query) {
-                    nodes = nodes.filter(n =>
-                        (n.name || '').toLowerCase().includes(query) ||
-                        (n.id || '').toLowerCase().includes(query));
-                    nodes = [...nodes].sort((a, b) =>
-                        (a.name.toLowerCase().indexOf(query) - b.name.toLowerCase().indexOf(query)) ||
-                        a.name.localeCompare(b.name));
-                }
-                nodes.slice(0, 25).forEach(n => items.push({
+                // Through the shared `searchNodes` (02-dialogs.js): a scan
+                // locally, the server's answer in server mode. An unqualified
+                // palette open lists no nodes, same as before — the actions and
+                // insights below are what an empty query is for.
+                const nodes = query ? (await searchNodes(query, { limit: 25 })).nodes : [];
+                nodes.forEach(n => items.push({
                     kind: 'node',
                     label: truncateName(n.name),
                     group: n.group,
@@ -27225,10 +28011,14 @@ traverse({
         }
 
         let paletteCursor = -1;
-        function renderPalette(raw) {
+        let paletteToken = 0;
+        async function renderPalette(raw) {
             const box = document.getElementById('palette-results');
             const empty = document.getElementById('palette-empty');
-            const items = buildPaletteItems(raw);
+            const token = ++paletteToken;
+            const items = await buildPaletteItems(raw);
+            // A slower earlier keystroke must not repaint over a later one.
+            if (token !== paletteToken) return;
             paletteCursor = -1;
             empty.hidden = items.length > 0;
             box.innerHTML = '';
@@ -27303,9 +28093,10 @@ traverse({
                 else if (e.key === 'ArrowUp') { e.preventDefault(); paletteMove(-1); }
                 else if (e.key === 'Enter') {
                     e.preventDefault();
-                    const items = buildPaletteItems(input.value);
-                    const idx = paletteCursor >= 0 ? paletteCursor : 0;
-                    if (items[idx]) runPaletteItem(items[idx]);
+                    const at = paletteCursor >= 0 ? paletteCursor : 0;
+                    buildPaletteItems(input.value).then(items => {
+                        if (items[at]) runPaletteItem(items[at]);
+                    });
                 } else if (e.key === 'Escape') {
                     e.preventDefault();
                     closePalette();

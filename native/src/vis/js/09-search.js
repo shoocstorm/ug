@@ -29,32 +29,32 @@
             });
         }
 
-        function refreshSuggestions(query) {
+        // The suggestion box, off the shared `searchNodes` (02-dialogs.js).
+        //
+        // Async because in server mode the answer comes from the server — the
+        // page has no name column it can afford to scan. A monotonic token
+        // drops stale responses, so typing quickly leaves the box showing the
+        // last query rather than whichever request finished last.
+        let suggestToken = 0;
+        async function refreshSuggestions(query) {
             const container = document.getElementById('search-suggestions');
             const meta = document.getElementById('search-meta-count');
             const q = query.trim().toLowerCase();
             state.searchQuery = q;
             const filterActive = state.nodeFilters.size > 0;
+            const token = ++suggestToken;
 
-            const candidates = state.graph.nodes.filter(n => {
-                if (filterActive && !state.nodeFilters.has(n.group)) return false;
-                if (!q) return true;
-                return n.name.toLowerCase().includes(q) || n.id.toLowerCase().includes(q);
+            // Fifty are shown; "light up … in graph" draws from the rest, so the
+            // request covers both in one pass instead of two.
+            const found = await searchNodes(q, {
+                limit: q ? Math.max(50, SOLO_MAX_NODES) : 50,
+                types: filterActive ? state.nodeFilters : null,
             });
+            if (token !== suggestToken) return;
 
-            const sorted = q
-                ? candidates.sort((a, b) => {
-                    const ai = a.name.toLowerCase().indexOf(q);
-                    const bi = b.name.toLowerCase().indexOf(q);
-                    if (ai !== bi) return ai - bi;
-                    return a.name.length - b.name.length;
-                })
-                : candidates;
-
+            const sorted = found.nodes;
             const display = sorted.slice(0, 50);
             state.currentSuggestions = display;
-            // The full match set, not just the fifty shown: "light up … in graph"
-            // draws from this.
             state.searchMatches = q ? sorted : [];
             state.suggestionIndex = -1;
 
@@ -92,12 +92,12 @@
                 }
             }
 
-            const total = candidates.length;
+            const total = found.total;
             if (q || filterActive) {
                 meta.textContent = `${Math.min(display.length, total)} of ${total}` +
                     (filterActive ? ` · ${state.nodeFilters.size} type filter(s)` : '');
             } else {
-                meta.textContent = `${state.graph.nodes.length} nodes`;
+                meta.textContent = `${state.nodeCount || 0} nodes`;
             }
 
             syncPlotAllButton(document.getElementById('search-plot-all'), state.searchMatches);

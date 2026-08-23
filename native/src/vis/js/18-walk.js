@@ -501,21 +501,22 @@
             const sugBox = document.getElementById('walk-seed-suggestions');
             let sugIndex = -1;
 
-            const refreshSeedSuggestions = () => {
+            // Same shared search the sidebar box uses — see `searchNodes` in
+            // 02-dialogs.js. Async, with a token, because in server mode the
+            // ranking happens on the server.
+            let seedToken = 0;
+            const refreshSeedSuggestions = async () => {
                 const q = input.value.trim().toLowerCase();
                 sugIndex = -1;
                 if (!q) { sugBox.classList.remove('open'); sugBox.innerHTML = ''; return; }
                 const filterActive = state.nodeFilters.size > 0;
-                const hits = state.graph.nodes
-                    .filter(n => !filterActive || state.nodeFilters.has(n.group))
-                    .filter(n => n.name.toLowerCase().includes(q) || n.id.toLowerCase().includes(q))
-                    .sort((a, b) => {
-                        const ai = a.name.toLowerCase().indexOf(q);
-                        const bi = b.name.toLowerCase().indexOf(q);
-                        if (ai !== bi) return ai - bi;
-                        return a.name.length - b.name.length;
-                    })
-                    .slice(0, 8);
+                const token = ++seedToken;
+                const found = await searchNodes(q, {
+                    limit: 8,
+                    types: filterActive ? state.nodeFilters : null,
+                });
+                if (token !== seedToken) return;
+                const hits = found.nodes;
                 sugBox.innerHTML = '';
                 if (!hits.length) {
                     sugBox.innerHTML = '<div class="walk-seed-sug" style="cursor:default;color:var(--text-dim)">No matching nodes</div>';

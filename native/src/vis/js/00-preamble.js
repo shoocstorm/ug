@@ -328,10 +328,7 @@
                     // checked against the snapshot this page was built from.
                     const caps = await getCapabilities();
                     state.graphToken = (caps && caps.graph && caps.graph.token) || null;
-                    const res = await fetch('/api/graph/nodes');
-                    if (!res.ok) throw new Error(`Server answered ${res.status} ${res.statusText}`);
-                    setPhase('Building graph…', 100);
-                    transformSlim(await res.json());
+                    await loadNodeIndex(setPhase);
                     initialize();
                     graphInitialized = true;
                     applyUrlState(readUrlState());
@@ -419,6 +416,130 @@
                 console.error('Failed to load graph:', err);
                 showFailure(err.message || String(err));
             }
+        }
+
+        // ─── The server-mode node index ────────────────────
+        //
+        // Three ways to get the same index, in descending order of what they
+        // cost the tab:
+        //
+        //   1. the binary frame, decoded in a Worker — nothing on the main
+        //      thread but taking views over a buffer that was handed over
+        //   2. the binary frame, decoded here — a Worker is unavailable
+        //   3. the JSON index — the server is too old to serve the frame
+        //
+        // The fallbacks are not defensive padding: (3) is what an existing
+        // deployment gets until it is upgraded, and it is the encoding the
+        // binary frame is tested against.
+        async function loadNodeIndex(setPhase) {
+            try {
+                const decoded = await fetchNodeIndexInWorker();
+                if (decoded) {
+                    setPhase('Building graph…', 100);
+                    installNodeIndex(decodeNodeIndexFrame(decoded.buffer), decoded.slots);
+                    return;
+                }
+            } catch (err) {
+                // A worker that failed to *start* is worth one line; a worker
+                // that failed to fetch is about to fail again below, loudly.
+                console.warn('node index worker unavailable, decoding inline:', err && err.message);
+            }
+
+            const bin = await fetch('/api/graph/nodes.bin');
+            if (bin.ok) {
+                setPhase('Building graph…', 100);
+                try {
+                    transformSlimBinary(await bin.arrayBuffer());
+                    return;
+                } catch (err) {
+                    console.warn('binary node index rejected, falling back to JSON:', err && err.message);
+                }
+            } else if (bin.status !== 404) {
+                throw new Error(`Server answered ${bin.status} ${bin.statusText}`);
+            }
+
+            const res = await fetch('/api/graph/nodes');
+            if (!res.ok) throw new Error(`Server answered ${res.status} ${res.statusText}`);
+            setPhase('Building graph…', 100);
+            transformSlim(await res.json());
+        }
+
+        // The worker's whole job: fetch the frame and build the `id → index`
+        // hash table, then hand both buffers over as transferables.
+        //
+        // The table is the only part of the load that is real main-thread work
+        // once the frame is binary — 500k probe-and-insert steps over a 4 MB
+        // `Int32Array`. Everything else is a typed-array view, which is free.
+        //
+        // Inlined as a Blob URL because the page ships as a single assembled
+        // HTML file (see build.rs): there is no sibling .js file for a Worker
+        // to point at, and `ug gen` output is opened straight from disk.
+        const NODE_INDEX_WORKER_SRC = `
+self.onmessage = async (ev) => {
+  try {
+    const res = await fetch(ev.data.url);
+    if (!res.ok) { self.postMessage({ ok: false, error: 'HTTP ' + res.status }); return; }
+    const buffer = await res.arrayBuffer();
+    const dv = new DataView(buffer);
+    const count = dv.getUint32(12, true);
+    let hashOff = -1, hashLen = 0, metaOff = -1, metaLen = 0;
+    for (let slot = 0; slot < count; slot++) {
+      const at = 16 + slot * 12;
+      const kind = dv.getUint32(at, true);
+      if (kind === 12) { hashOff = dv.getUint32(at + 4, true); hashLen = dv.getUint32(at + 8, true); }
+      if (kind === 13) { metaOff = dv.getUint32(at + 4, true); metaLen = dv.getUint32(at + 8, true); }
+    }
+    if (hashOff < 0 || metaOff < 0) { self.postMessage({ ok: false, error: 'frame is missing a section' }); return; }
+    const meta = JSON.parse(new TextDecoder('utf-8').decode(new Uint8Array(buffer, metaOff, metaLen)));
+    const n = meta.n;
+    const idHash = new Uint32Array(buffer, hashOff, hashLen / 4);
+    let cap = 1024;
+    while (cap < n * 2) cap *= 2;
+    const mask = cap - 1;
+    const slots = new Int32Array(cap).fill(-1);
+    for (let i = 0; i < n; i++) {
+      let k = idHash[i] & mask;
+      while (slots[k] !== -1) k = (k + 1) & mask;
+      slots[k] = i;
+    }
+    self.postMessage({ ok: true, buffer: buffer, slots: slots.buffer }, [buffer, slots.buffer]);
+  } catch (e) {
+    self.postMessage({ ok: false, error: String((e && e.message) || e) });
+  }
+};
+`;
+
+        // Resolves to `{ buffer, slots }`, or `null` if this environment has no
+        // Worker to run it in (a headless harness, a locked-down embed) — which
+        // is a reason to decode inline, not a reason to fail.
+        function fetchNodeIndexInWorker() {
+            if (typeof Worker !== 'function' || typeof Blob !== 'function' || !window.URL || !URL.createObjectURL) {
+                return Promise.resolve(null);
+            }
+            return new Promise((resolve, reject) => {
+                let url = null;
+                let worker = null;
+                const done = (fn, arg) => {
+                    if (worker) worker.terminate();
+                    if (url) URL.revokeObjectURL(url);
+                    fn(arg);
+                };
+                try {
+                    url = URL.createObjectURL(new Blob([NODE_INDEX_WORKER_SRC], { type: 'text/javascript' }));
+                    worker = new Worker(url);
+                } catch (err) {
+                    if (url) URL.revokeObjectURL(url);
+                    resolve(null);
+                    return;
+                }
+                worker.onmessage = (ev) => {
+                    const d = ev.data || {};
+                    if (d.ok) done(resolve, { buffer: d.buffer, slots: new Int32Array(d.slots) });
+                    else done(reject, new Error(d.error || 'node index worker failed'));
+                };
+                worker.onerror = (e) => done(reject, new Error(e.message || 'node index worker errored'));
+                worker.postMessage({ url: new URL('/api/graph/nodes.bin', window.location.href).toString() });
+            });
         }
 
         function formatBytes(n) {

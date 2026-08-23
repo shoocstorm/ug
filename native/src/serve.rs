@@ -195,6 +195,11 @@ struct GraphSnapshot {
     /// Built on first request and encoded once, like `centrality` and `cycles`,
     /// because a browser in server mode asks for it exactly once per load.
     slim: OnceLock<EncodedAsset>,
+    /// The binary form of the same index, served at `/api/graph/nodes.bin`.
+    /// Separate `OnceLock` from `slim` because a page asks for exactly one of
+    /// the two and building the other would be pure waste on the graphs where
+    /// this matters most.
+    slim_bin: OnceLock<EncodedAsset>,
     /// `/api/graph/stats`, rendered once per snapshot.
     ///
     /// Every field of it is derived from this snapshot and none of it can
@@ -358,7 +363,35 @@ impl GraphModePolicy {
 ///
 /// `boundary` is a sparse list of indices, not a column: on a 161,725-node
 /// graph exactly 170 nodes carry one.
-fn build_slim_index(graph: &GraphData) -> String {
+/// The columns behind both encodings of the slim index.
+///
+/// Extracted so `build_slim_index` (JSON) and `build_binary_index` (the
+/// `.bin` frame) cannot drift: they are two serialisations of *this*, built by
+/// one pass over the graph. `slim_index_encodings_describe_the_same_graph` in
+/// `tests/slim_index_test.rs` is what holds them to it.
+struct SlimColumns<'a> {
+    n: usize,
+    edge_count: usize,
+    ids: Vec<&'a str>,
+    names: Vec<&'a str>,
+    type_names: Vec<&'static str>,
+    types: Vec<u32>,
+    file_names: Vec<&'a str>,
+    files: Vec<i64>,
+    start: Vec<u32>,
+    end: Vec<u32>,
+    /// Indices of the nodes carrying at least one boundary. Sparse on purpose:
+    /// on a 161,725-node graph exactly 170 nodes carry one.
+    boundary: Vec<u32>,
+    deg: Vec<u32>,
+    catalog_roots: Vec<u32>,
+    node_type_counts: BTreeMap<&'static str, usize>,
+    edge_type_counts: BTreeMap<&'static str, usize>,
+    languages: Option<HashMap<String, u32>>,
+    kb_type: Option<String>,
+}
+
+fn build_slim_columns(graph: &GraphData) -> SlimColumns<'_> {
     let n = graph.nodes.len();
 
     // Dictionaries, in first-seen order so the arrays stay stable between
@@ -473,36 +506,248 @@ fn build_slim_index(graph: &GraphData) -> String {
         .filter_map(|node| node.folder.as_ref())
         .min_by_key(|f| f.depth);
 
+    SlimColumns {
+        n,
+        edge_count: graph.edges.len(),
+        ids,
+        names,
+        type_names,
+        types,
+        file_names,
+        files,
+        start,
+        end,
+        boundary,
+        deg,
+        catalog_roots,
+        node_type_counts,
+        edge_type_counts,
+        languages: root_folder.map(|f| f.language_breakdown.clone()),
+        kb_type: root_folder
+            .and_then(|f| f.classification.as_ref())
+            .map(|c| format!("{:?}", c).to_lowercase()),
+    }
+}
+
+fn build_slim_index(graph: &GraphData) -> String {
+    let c = build_slim_columns(graph);
     serde_json::json!({
         "v": 1,
-        "n": n,
-        "edgeCount": graph.edges.len(),
+        "n": c.n,
+        "edgeCount": c.edge_count,
         // Not `snap.token()` — this builder only sees the parsed graph. The
         // client compares against the token in `/api/capabilities`, and the
         // two agree because both are derived from the same snapshot.
-        "nodeCount": n,
-        "ids": ids,
-        "names": names,
-        "types": type_names,
-        "typeIdx": types,
-        "files": file_names,
-        "fileIdx": files,
-        "startLine": start,
-        "endLine": end,
-        "boundary": boundary,
-        "deg": deg,
-        "catalogRoots": catalog_roots,
-        "nodeTypeCounts": node_type_counts,
-        "edgeTypeCounts": edge_type_counts,
+        "nodeCount": c.n,
+        "ids": c.ids,
+        "names": c.names,
+        "types": c.type_names,
+        "typeIdx": c.types,
+        "files": c.file_names,
+        "fileIdx": c.files,
+        "startLine": c.start,
+        "endLine": c.end,
+        "boundary": c.boundary,
+        "deg": c.deg,
+        "catalogRoots": c.catalog_roots,
+        "nodeTypeCounts": c.node_type_counts,
+        "edgeTypeCounts": c.edge_type_counts,
         // Verbatim, because `IndexStats` already serialises to the camelCase
         // shape `transformData` reads — the page needs no translation layer.
         "stats": graph.stats,
-        "languages": root_folder.map(|f| f.language_breakdown.clone()),
-        "kbType": root_folder
-            .and_then(|f| f.classification.as_ref())
-            .map(|c| format!("{:?}", c).to_lowercase()),
+        "languages": c.languages,
+        "kbType": c.kb_type,
     })
     .to_string()
+}
+
+// ---------- Binary slim index (`/api/graph/nodes.bin`) ----------
+//
+// The JSON index above is 99.7 MB on a 500k-node graph, and 90 MB of that is
+// two arrays of half a million separate strings. `JSON.parse` on it costs the
+// tab 236 MB of heap before a single node is drawn — see
+// `docs/dev/PERF-TUNING-JOURNEY.md` §Round 2 for the measurement.
+//
+// This is the same data as a flat buffer the client can take typed-array views
+// over: nothing to parse, and the id/name bytes never become JS strings at all.
+
+/// Magic + version. Bumped only for an incompatible layout change; the client
+/// refuses a frame it does not recognise and falls back to the JSON index,
+/// so an old page against a new server degrades rather than breaks.
+const NIDX_MAGIC: &[u8; 8] = b"UGNIDX\0\0";
+const NIDX_VERSION: u32 = 1;
+
+/// Front-coding restart interval. Every 16th entry is stored whole, so
+/// `idAt(i)` on the client reconstructs from at most 16 records — the trade
+/// between blob size (a longer block shares more) and lookup cost. Measured on
+/// the real `~/.ug/neo4j` ids: 21.8 MB raw → 8.4 MB at 16, 7.8 MB at 64. The
+/// extra 0.6 MB is not worth quadrupling the walk.
+const NIDX_BLOCK: usize = 16;
+
+/// Section kinds. Numbers are wire format — append, never renumber.
+mod nidx {
+    pub const TYPE_IDX: u32 = 1;
+    pub const FILE_IDX: u32 = 2;
+    pub const START_LINE: u32 = 3;
+    pub const END_LINE: u32 = 4;
+    pub const DEG: u32 = 5;
+    pub const BOUNDARY: u32 = 6;
+    pub const CATALOG_ROOTS: u32 = 7;
+    pub const ID_BLOB: u32 = 8;
+    pub const ID_OFF: u32 = 9;
+    pub const NAME_BLOB: u32 = 10;
+    pub const NAME_OFF: u32 = 11;
+    pub const ID_HASH: u32 = 12;
+    pub const META: u32 = 13;
+}
+
+/// FNV-1a over the UTF-8 bytes. Duplicated in `00-preamble.js` as `fnv1a32`;
+/// `nidx_hash_matches_the_client` pins the two together, because a divergence
+/// here is a lookup table that silently answers "no such node".
+fn fnv1a32(bytes: &[u8]) -> u32 {
+    let mut h: u32 = 2166136261;
+    for &b in bytes {
+        h ^= b as u32;
+        h = h.wrapping_mul(16777619);
+    }
+    h
+}
+
+/// Front-code `values` into a blob plus `values.len() + 1` byte offsets.
+///
+/// Record `i` occupies `blob[off[i]..off[i + 1]]` and is one byte of
+/// shared-prefix length followed by the suffix — the suffix length is the
+/// record's extent, so it needs no field of its own. Every `NIDX_BLOCK`th
+/// record restarts with a shared length of 0.
+fn front_code(values: &[&str]) -> (Vec<u8>, Vec<u32>) {
+    let mut blob: Vec<u8> = Vec::with_capacity(values.len() * 24);
+    let mut off: Vec<u32> = Vec::with_capacity(values.len() + 1);
+    off.push(0);
+    let mut prev: &[u8] = b"";
+    for (i, v) in values.iter().enumerate() {
+        let b = v.as_bytes();
+        let shared = if i % NIDX_BLOCK == 0 {
+            0
+        } else {
+            // Capped at 255 because the field is one byte, and at the shorter
+            // of the two strings.
+            let max = prev.len().min(b.len()).min(255);
+            let mut k = 0;
+            while k < max && prev[k] == b[k] {
+                k += 1;
+            }
+            k
+        };
+        blob.push(shared as u8);
+        blob.extend_from_slice(&b[shared..]);
+        off.push(blob.len() as u32);
+        prev = b;
+    }
+    (blob, off)
+}
+
+/// One section's bytes, ready to be placed in the frame.
+enum Section {
+    Bytes(Vec<u8>),
+}
+
+fn u32_section(v: &[u32]) -> Section {
+    let mut out = Vec::with_capacity(v.len() * 4);
+    for x in v {
+        out.extend_from_slice(&x.to_le_bytes());
+    }
+    Section::Bytes(out)
+}
+
+fn i32_section(v: &[i64]) -> Section {
+    let mut out = Vec::with_capacity(v.len() * 4);
+    for x in v {
+        out.extend_from_slice(&(*x as i32).to_le_bytes());
+    }
+    Section::Bytes(out)
+}
+
+/// The `.bin` frame:
+///
+/// ```text
+/// "UGNIDX\0\0"  u32 version  u32 sectionCount
+/// sectionCount × (u32 kind, u32 offset, u32 len)      // offsets from frame start
+/// payload, each section padded to a 4-byte boundary
+/// ```
+///
+/// The padding is what lets the client take an `Int32Array`/`Uint32Array` view
+/// straight over the response buffer instead of copying each column out.
+fn build_binary_index(graph: &GraphData) -> Vec<u8> {
+    let c = build_slim_columns(graph);
+    let n = c.n;
+
+    let (id_blob, id_off) = front_code(&c.ids);
+    let (name_blob, name_off) = front_code(&c.names);
+    let id_hash: Vec<u32> = c.ids.iter().map(|s| fnv1a32(s.as_bytes())).collect();
+
+    // Boundary travels as a flag column rather than the JSON encoding's sparse
+    // index list: the client wants `isBoundary(i)` per node, and one byte each
+    // is both smaller than a `Set` of indices in the browser and O(1) to read.
+    let mut boundary_flags = vec![0u8; n];
+    for &i in &c.boundary {
+        boundary_flags[i as usize] = 1;
+    }
+
+    let meta = serde_json::json!({
+        "v": NIDX_VERSION,
+        "n": n,
+        "nodeCount": n,
+        "edgeCount": c.edge_count,
+        "block": NIDX_BLOCK,
+        "types": c.type_names,
+        "files": c.file_names,
+        "nodeTypeCounts": c.node_type_counts,
+        "edgeTypeCounts": c.edge_type_counts,
+        "boundaryCount": c.boundary.len(),
+        "stats": graph.stats,
+        "languages": c.languages,
+        "kbType": c.kb_type,
+    })
+    .to_string();
+
+    let sections: Vec<(u32, Section)> = vec![
+        (nidx::TYPE_IDX, Section::Bytes(c.types.iter().map(|&t| t as u8).collect())),
+        (nidx::FILE_IDX, i32_section(&c.files)),
+        (nidx::START_LINE, u32_section(&c.start)),
+        (nidx::END_LINE, u32_section(&c.end)),
+        (nidx::DEG, u32_section(&c.deg)),
+        (nidx::BOUNDARY, Section::Bytes(boundary_flags)),
+        (nidx::CATALOG_ROOTS, u32_section(&c.catalog_roots)),
+        (nidx::ID_BLOB, Section::Bytes(id_blob)),
+        (nidx::ID_OFF, u32_section(&id_off)),
+        (nidx::NAME_BLOB, Section::Bytes(name_blob)),
+        (nidx::NAME_OFF, u32_section(&name_off)),
+        (nidx::ID_HASH, u32_section(&id_hash)),
+        (nidx::META, Section::Bytes(meta.into_bytes())),
+    ];
+
+    let header_len = 8 + 4 + 4 + sections.len() * 12;
+    let mut out: Vec<u8> = Vec::with_capacity(header_len + n * 32);
+    out.extend_from_slice(NIDX_MAGIC);
+    out.extend_from_slice(&NIDX_VERSION.to_le_bytes());
+    out.extend_from_slice(&(sections.len() as u32).to_le_bytes());
+    // Reserve the table; the offsets are only known as the payload is laid out.
+    out.resize(header_len, 0);
+
+    for (slot, (kind, section)) in sections.iter().enumerate() {
+        while out.len() % 4 != 0 {
+            out.push(0);
+        }
+        let Section::Bytes(bytes) = section;
+        let offset = out.len() as u32;
+        let len = bytes.len() as u32;
+        out.extend_from_slice(bytes);
+        let at = 16 + slot * 12;
+        out[at..at + 4].copy_from_slice(&kind.to_le_bytes());
+        out[at + 4..at + 8].copy_from_slice(&offset.to_le_bytes());
+        out[at + 8..at + 12].copy_from_slice(&len.to_le_bytes());
+    }
+    out
 }
 
 /// One or more backends `ug serve` is wired up to. Populated when
@@ -847,6 +1092,7 @@ fn build_placeholder_context(registry: &Arc<ProjectRegistry>) -> Arc<ProjectCont
         centrality: OnceLock::new(),
         cycles: OnceLock::new(),
         slim: OnceLock::new(),
+            slim_bin: OnceLock::new(),
         stats: OnceLock::new(),
     });
     let ctx = Arc::new(ProjectContext {
@@ -1116,6 +1362,7 @@ fn load_snapshot(path: &PathBuf) -> Result<Arc<GraphSnapshot>, String> {
         centrality: OnceLock::new(),
         cycles: OnceLock::new(),
         slim: OnceLock::new(),
+            slim_bin: OnceLock::new(),
         stats: OnceLock::new(),
     }))
 }
@@ -1626,6 +1873,7 @@ pub(crate) fn build_router(state: ServeState) -> Router {
         .route("/api/graph/stats", get(api_stats))
         .route("/api/projects/staleness", get(api_projects_staleness))
         .route("/api/graph/nodes", get(api_slim_index))
+        .route("/api/graph/nodes.bin", get(api_slim_index_bin))
         .route("/api/graph/edges", post(api_edges))
         .route("/api/graph/nodes/hydrate", post(api_hydrate))
         .route("/api/graph/node/*id", get(api_node))
@@ -3267,6 +3515,32 @@ async fn api_slim_index(State(state): State<ServeState>, headers: HeaderMap) -> 
     }
 }
 
+/// `GET /api/graph/nodes.bin` — the same index as [`build_binary_index`].
+///
+/// Cached and served exactly like the JSON one. Content type is
+/// `application/octet-stream` so nothing between here and the page tries to
+/// re-encode it; the compression middleware still applies, and the frame
+/// gzips to roughly a tenth of its size because the columns are far more
+/// regular than the JSON was.
+async fn api_slim_index_bin(State(state): State<ServeState>, headers: HeaderMap) -> Response {
+    let snap = state.snapshot();
+    let built = tokio::task::spawn_blocking(move || {
+        snap.slim_bin
+            .get_or_init(|| {
+                EncodedAsset::new(build_binary_index(&snap.parsed), "application/octet-stream")
+            })
+            .clone()
+    })
+    .await;
+    match built {
+        Ok(asset) => asset_response(&asset, &headers),
+        Err(e) => err_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("binary index task failed: {}", e),
+        ),
+    }
+}
+
 async fn api_node(State(state): State<ServeState>, AxPath(id): AxPath<String>) -> Response {
     let snap = state.snapshot();
     // Through the adjacency index's `id_to_idx`, not a linear scan. The map was
@@ -3296,6 +3570,49 @@ const SEARCH_DEFAULT_LIMIT: usize = 200;
 /// whole graph however the query is spelled.
 const SEARCH_MAX_LIMIT: usize = 5_000;
 
+/// Reduce a match list to the best `limit` of it, in order.
+///
+/// The sort key is `(where the needle appears in the name, name length,
+/// position)`, so a prefix match beats a mid-word one and the shorter of two
+/// equals wins. Only the kept prefix is ordered: on a query matching most of a
+/// 485k-node graph, fully sorting it to return 200 rows would be the whole cost
+/// of the request.
+fn keep_best_matches(ranked: &mut Vec<(usize, usize, usize)>, limit: usize) {
+    let count = ranked.len();
+    let keep = limit.min(count);
+    if keep == 0 {
+        // Not just an optimisation: `select_nth_unstable(0)` panics on an
+        // empty slice, and a query that matches nothing is routine.
+        ranked.clear();
+        return;
+    }
+    if keep < count {
+        ranked.select_nth_unstable(keep - 1);
+        ranked.truncate(keep);
+    }
+    ranked.sort_unstable();
+}
+
+/// Rank name matches the way the search box does, and keep only the best
+/// `limit` of them. Returns positions into `names`.
+///
+/// Split out of `api_search` so the ordering — which decides what the page
+/// shows when a query matches more nodes than it can return — is testable
+/// without a snapshot.
+#[cfg(test)]
+fn rank_search_matches(names: &[&str], needle: &str, limit: usize) -> Vec<usize> {
+    let mut ranked: Vec<(usize, usize, usize)> = names
+        .iter()
+        .enumerate()
+        .filter_map(|(i, n)| {
+            let lower = n.to_lowercase();
+            lower.find(needle).map(|at| (at, n.len(), i))
+        })
+        .collect();
+    keep_best_matches(&mut ranked, limit);
+    ranked.into_iter().map(|(_, _, i)| i).collect()
+}
+
 async fn api_search(
     State(state): State<ServeState>,
     Query(params): Query<SearchParams>,
@@ -3314,9 +3631,15 @@ async fn api_search(
     // this: an empty `?q=` with no `?types=` matched every node and
     // serialised all 162k of them, which is neither a useful answer nor one
     // the page could render.
-    let mut count = 0usize;
-    let mut matched: Vec<&GraphNode> = Vec::new();
-    for n in &snap.parsed.nodes {
+    // Ranked, not first-come. The `limit` cut used to fall on whichever
+    // matches appeared earliest in the node list, which was fine while this
+    // endpoint was only reachable by hand — but in server mode it *is* the
+    // page's search box, and "the 200 that happen to be first" is a different
+    // answer from "the best 200". The key is the one the box has always
+    // sorted by: where the needle appears in the name, then the shorter name.
+    // A match on the id or the docstring only sorts after every name match.
+    let mut ranked: Vec<(usize, usize, usize)> = Vec::new();
+    for (i, n) in snap.parsed.nodes.iter().enumerate() {
         if let Some(types) = &type_filter {
             // `eq_ignore_ascii_case` against the static name, rather than
             // allocating a lowercased `String` per node per request. The
@@ -3326,22 +3649,34 @@ async fn api_search(
                 continue;
             }
         }
+        let mut rank = 0usize;
         if !needle.is_empty() {
-            let name_match = n.name.to_lowercase().contains(&needle);
+            let lower = n.name.to_lowercase();
+            let at = lower.find(&needle);
+            let name_match = at.is_some();
+            rank = at.unwrap_or(usize::MAX);
+            // The qualified id too. In server mode this endpoint *is* the
+            // page's search box (the client has no name column it can afford
+            // to scan — see §Round 2 of docs/dev/PERF-TUNING-JOURNEY.md), and
+            // the box has always matched the id as well as the name. Without
+            // this, searching for a path fragment silently stopped working on
+            // exactly the large graphs server mode exists for.
+            let id_match = !name_match && n.id.to_lowercase().contains(&needle);
             let doc_match = n
                 .docstring
                 .as_ref()
                 .map(|d| d.to_lowercase().contains(&needle))
                 .unwrap_or(false);
-            if !name_match && !doc_match {
+            if !name_match && !id_match && !doc_match {
                 continue;
             }
         }
-        count += 1;
-        if matched.len() < limit {
-            matched.push(n);
-        }
+        ranked.push((rank, n.name.len(), i));
     }
+
+    let count = ranked.len();
+    keep_best_matches(&mut ranked, limit);
+    let matched: Vec<&GraphNode> = ranked.iter().map(|&(_, _, i)| &snap.parsed.nodes[i]).collect();
 
     let body = serde_json::json!({
         "count": count,
@@ -5837,6 +6172,10 @@ pub fn print_serve_help() {
 
 #[cfg(test)]
 mod router_tests;
+
+#[cfg(test)]
+#[path = "serve/nidx_tests.rs"]
+mod nidx_tests;
 
 #[cfg(test)]
 mod tests {

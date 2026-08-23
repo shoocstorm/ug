@@ -84,7 +84,7 @@
             { name: 'Collapse sidebar', run: () => { const b = document.getElementById('sidebar-collapse'); if (b) b.click(); } },
         ];
 
-        function buildPaletteItems(raw) {
+        async function buildPaletteItems(raw) {
             const q = (raw || '').trim().toLowerCase();
             let prefix = null;
             if (q.startsWith('>')) prefix = 'action';
@@ -94,16 +94,12 @@
 
             const items = [];
             if (!prefix || prefix === 'node') {
-                let nodes = state.graph.nodes;
-                if (query) {
-                    nodes = nodes.filter(n =>
-                        (n.name || '').toLowerCase().includes(query) ||
-                        (n.id || '').toLowerCase().includes(query));
-                    nodes = [...nodes].sort((a, b) =>
-                        (a.name.toLowerCase().indexOf(query) - b.name.toLowerCase().indexOf(query)) ||
-                        a.name.localeCompare(b.name));
-                }
-                nodes.slice(0, 25).forEach(n => items.push({
+                // Through the shared `searchNodes` (02-dialogs.js): a scan
+                // locally, the server's answer in server mode. An unqualified
+                // palette open lists no nodes, same as before — the actions and
+                // insights below are what an empty query is for.
+                const nodes = query ? (await searchNodes(query, { limit: 25 })).nodes : [];
+                nodes.forEach(n => items.push({
                     kind: 'node',
                     label: truncateName(n.name),
                     group: n.group,
@@ -144,10 +140,14 @@
         }
 
         let paletteCursor = -1;
-        function renderPalette(raw) {
+        let paletteToken = 0;
+        async function renderPalette(raw) {
             const box = document.getElementById('palette-results');
             const empty = document.getElementById('palette-empty');
-            const items = buildPaletteItems(raw);
+            const token = ++paletteToken;
+            const items = await buildPaletteItems(raw);
+            // A slower earlier keystroke must not repaint over a later one.
+            if (token !== paletteToken) return;
             paletteCursor = -1;
             empty.hidden = items.length > 0;
             box.innerHTML = '';
@@ -222,9 +222,10 @@
                 else if (e.key === 'ArrowUp') { e.preventDefault(); paletteMove(-1); }
                 else if (e.key === 'Enter') {
                     e.preventDefault();
-                    const items = buildPaletteItems(input.value);
-                    const idx = paletteCursor >= 0 ? paletteCursor : 0;
-                    if (items[idx]) runPaletteItem(items[idx]);
+                    const at = paletteCursor >= 0 ? paletteCursor : 0;
+                    buildPaletteItems(input.value).then(items => {
+                        if (items[at]) runPaletteItem(items[at]);
+                    });
                 } else if (e.key === 'Escape') {
                     e.preventDefault();
                     closePalette();

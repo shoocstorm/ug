@@ -1003,6 +1003,541 @@ disappear from the flame chart entirely.
 
 ---
 
+---
+
+# Round 2 — Large-graph client memory (500k nodes)
+
+> Opened 2026-08-19. Round 1 (P1–P5) fixed the server and the per-interaction
+> work. This round is about the one thing it deliberately left alone: **what the
+> browser tab holds**. Round 1's own measurement note said "the browser heap is
+> [the bottleneck]" and then went and optimised everything else, because that is
+> where the cheap wins were. They are spent now.
+>
+> Scope is the 500k-node case — roughly 3× `~/.ug/neo4j`, which is the size a
+> monorepo index reaches.
+
+| Field | Value |
+| :--- | :--- |
+| **Opened** | 2026-08-19 |
+| **Baseline commit** | `d5ed699` |
+| **Scope** | `native/src/vis/js` (client), `native/src/serve.rs` (slim index wire) |
+| **Method** | V8 heap measurement (`node --expose-gc`) on a synthetic 500k index built from the real `~/.ug/neo4j` distributions |
+| **Status** | Phases 0–3 landed 2026-08-20; suite 881/881 |
+
+## The measurement this round starts from
+
+Synthetic 500k-node slim index, built from the real distributions in
+`~/.ug/neo4j` (161,725 nodes — **avg id 141 chars**, avg name 42, 8,910 distinct
+files scaled to 27k, max degree 8,680), run through the actual `transformSlim`
+code in V8.
+
+**Wire** (`build_slim_index`, `serve.rs`):
+
+| payload | raw | gzip |
+| :--- | ---: | ---: |
+| current slim index | 99.7 MB | 20.1 MB |
+| ↳ `ids` column alone | 68.5 MB | 11.8 MB |
+| ↳ `names` column alone | 21.8 MB | 6.9 MB |
+| everything else | 9.5 MB | 1.3 MB |
+
+**Heap**, on the `transformSlim` path:
+
+| stage | heap |
+| :--- | ---: |
+| response text | 103 MB |
+| after `JSON.parse` | 236 MB |
+| after `transformSlim` + `nodeById` | **379 MB (peak)** |
+| steady state, payload freed | **331 MB (retained for the session)** |
+
+Two facts fall out, and they set the whole plan:
+
+1. **The renderer is not the problem.** Solo mode caps drawing at
+   `SOLO_MAX_NODES` (1500) already. The cost is the 500k-object index the page
+   keeps forever, plus three 500k-entry string-keyed `Map`s over it
+   (`slimIndexOf`, `nodeById`, `degreeOf`).
+2. **90% of the payload is string identity**, and it arrives as a JSON array of
+   500k separate strings — which is both the download and the parse peak.
+
+### Why the obvious fix is not the one taken
+
+The cheapest thing to write would be "stop sending ids; make the wire index the
+node's identity". It measures beautifully — 331 MB → **18 MB**. It is also
+wrong for this codebase: **60+ call sites take a node id that came from a server
+response** — `stop.node_id` in the tour, `c.id` in chat citations, `u.n` in the
+URL state, semantic/hybrid hits, `/api/graph/path` results — and every one of
+them speaks the real qualified id. Index identity means a translation layer at
+eight protocol boundaries and a resolve round trip on every deep link.
+
+So identity stays the qualified id, and the plan attacks the *representation*
+instead: keep every id, but never as 500k separate JS strings. See
+[P9.2](#p92--deferred-index-identity) for what was left on the table and why.
+
+## Scoreboard
+
+| # | Item | Phase | Est. impact | Risk | Status |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| P6.1 | `transformSlim`: shared empty arrays, typed degrees | 0 | Medium — 331 → 215 MB | Very low | ✅ |
+| P6.2 | `refreshSuggestions`: stop scanning + sorting 500k per keystroke | 0 | **High** — a stall per keystroke | Low | ✅ |
+| P6.3 | `pushEdge`: O(degree²) → O(degree) dedupe | 0 | **High** — a hub click was seconds | Low | ✅ |
+| P6.4 | Stop rebuilding `new Map(nodes.map(…))` per call | 0 | Medium | Very low | ✅ |
+| P7.1 | Binary columnar node index (`/api/graph/nodes.bin`) | 1 | **High** — 99.7 → 36 MB wire, no JSON parse | Medium | ✅ |
+| P7.2 | Front-coded id/name blobs | 1 | High — 2.6× on the dominant column | Low | ✅ |
+| P8.1 | `NodeStore`: columnar typed arrays + lazy materialisation | 2 | **Very high** — the 331 MB | Medium | ✅ |
+| P8.2 | Column-backed counts, search and name index | 2 | Medium | Low | ✅ |
+| P9.1 | Decode the index in a Worker, transfer the buffers | 3 | Medium — removes the last main-thread block | Low | ✅ |
+| P6.5 | Short-circuit the filter predicates when nothing is filtered | 0 | **High** — 17k lookups per hub expansion | Very low | ✅ |
+| P8.3 | Rank `/api/graph/search` before applying `limit` | 2 | Correctness — the box's top hit | Low | ✅ |
+| P9.2 | Index identity (drop ids from the wire entirely) | — | Would reach 18 MB | High | ⏭️ |
+
+**Sequencing.** Phase 0 is independent of everything and lands first because two
+of its four items are user-visible stalls, not memory. Phase 1 (wire) and Phase 2
+(client store) are one change split in two — the binary frame is useless without
+a reader and the store cannot be fed by the JSON index — so they land together
+and are measured together. Phase 3 sits on top of a working Phase 1+2 and cannot
+be done before them.
+
+---
+
+## Phase 0 — Client fixes with no protocol change
+
+**Theme:** four independent things the client does per-node or per-edge that it
+does not need to do at all. None of them touches the wire, so each is
+individually revertible.
+
+### P6.1 — `transformSlim`: shared empty arrays, typed degrees
+
+**Where:** `native/src/vis/js/02-dialogs.js` (`transformSlim`)
+
+**Evidence.** Every node is built with six *distinct* empty arrays
+(`imports`, `exports`, `extends`, `implements`, `calls`, `boundaries`) as
+placeholders until hydrate fills them. At 500k nodes that is **3 million array
+objects** whose only job is to be empty. Alongside it `state.degreeOf` is a
+`Map<string, number>` — 500k entries keyed by the same 141-char strings the
+nodes already hold.
+
+**Fix.** One frozen module-level `EMPTY` array shared by every placeholder slot
+(hydrate *replaces* the slot rather than mutating it, so sharing is safe — this
+is checked, not assumed). `degreeOf` becomes a `Uint32Array` indexed by wire
+position, read through the index the store already has.
+
+**Verify.** Heap measurement before/after on the 500k fixture.
+
+**Risk:** Very low. The one hazard is a mutation of a placeholder array in
+place; `hydrateNodes` assigns, and there is no other writer.
+
+### P6.2 — `refreshSuggestions`: stop scanning + sorting 500k per keystroke
+
+**Where:** `native/src/vis/js/09-search.js`
+
+**Evidence.** Per keystroke: `state.graph.nodes.filter(…)` materialises a new
+array (with an empty query, that is a **500k-element array of every node**),
+then `.sort()` over the full match set with `toLowerCase()` called twice per
+comparison. Measured 41 ms and ~3 MB of garbage per keystroke at 500k — and
+that is the *cheap* case, a query matching few nodes. Fifty results are
+displayed.
+
+**Fix.** A bounded scan: walk the nodes once, keep only what the display needs
+plus a capped match set for "light up … in graph", and never materialise the
+unfiltered case at all (an empty query has always rendered nothing). Precompute
+the lowercased name once per candidate instead of twice per comparison.
+
+**Verify.** Time 5 keystroke scans on the 500k fixture; garbage per keystroke.
+
+### P6.3 — `pushEdge`: O(degree²) → O(degree) dedupe
+
+**Where:** `native/src/vis/js/16-solo-view.js`
+
+**Evidence.**
+
+```js
+function pushEdge(id, edge) {
+    let list = state.adj.get(id);
+    if (!list) { state.adj.set(id, [edge]); return; }
+    for (const e of list) {                       // linear scan, per edge
+        if (e.source === edge.source && e.target === edge.target && e.rel === edge.rel) return;
+    }
+    list.push(edge);
+}
+```
+
+The real `~/.ug/neo4j` graph has a **max degree of 8,680**; at 500k scale expect
+~25k. Filling one hub's adjacency list is `d²/2` comparisons of 141-char
+strings — hundreds of millions, on the main thread, for one click.
+
+**Fix.** Carry a `Set` of `source\0target\0rel` keys alongside each list.
+
+**Verify.** Time `ensureEdges` on the highest-degree node of `~/.ug/neo4j`.
+
+### P6.4 — Stop rebuilding `new Map(nodes.map(…))` per call
+
+**Where:** `03-insights.js`, `08-sidebar-nav.js`, `15-tools-catalog.js`
+
+**Evidence.** Three sites build `new Map(state.graph.nodes.map(n => [n.id, n]))`
+as a fallback when `state.nodeById` is missing. Each one allocates 500k
+two-element arrays plus a 500k-entry map. `initialize()` sets `state.nodeById`
+before any of them can run, so the fallback is dead weight that fires only if
+the invariant is already broken.
+
+**Fix.** Read `state.nodeById` and treat its absence as the bug it is.
+
+---
+
+## Phase 1 — The wire
+
+### P7.1 — Binary columnar node index
+
+**Where:** `native/src/serve.rs`, `native/src/vis/js/00-preamble.js`
+
+**Evidence.** `/api/graph/nodes` is JSON, and its two largest members are arrays
+of 500k strings. `JSON.parse` on that is 100 MB of text in and 236 MB of heap
+out — the single largest allocation the page ever makes, on the main thread,
+before anything is drawn.
+
+**Fix.** A second representation of the same index, served at
+`GET /api/graph/nodes.bin`: a magic header, a section table, and then columns as
+raw little-endian typed arrays with the string columns front-coded (P7.2). The
+client fetches it with `arrayBuffer()` and creates typed-array views **over the
+buffer it already has** — no parse, no per-node allocation, and the string bytes
+stay out of the JS heap entirely (they are `external` memory).
+
+The JSON endpoint stays exactly as it is. It is what the API reference documents
+and what the tests exercise, and keeping both is what makes the binary path
+revertible with one line in `00-preamble.js`.
+
+**Layout.** `UGNIDX\0` + `u32 version` + `u32 sectionCount`, then
+`sectionCount × (u32 kind, u32 offset, u32 len)`, then the payload. Every
+section is 4-byte aligned so a typed-array view can be taken without copying.
+The tail section is a small JSON object for everything that is not a column —
+dictionaries, counts, stats, languages, token.
+
+**Risk:** Medium — a new binary format is a new place for an off-by-one. Bounded
+by a round-trip test asserting the binary index and the JSON index describe
+byte-identical graphs, and by the JSON path staying available.
+
+### P7.2 — Front-coded id/name blobs
+
+**Evidence.** Measured on the real `~/.ug/neo4j` ids: 21.8 MB raw, **8.4 MB**
+front-coded with a 16-entry restart block (2.6×). Node ids are qualified names
+(`path/to/file.rs::module::Symbol`), so consecutive ids share long prefixes.
+Names: 6.5 MB → 3.3 MB.
+
+**Fix.** Per entry, one `u8` of shared-prefix length with the previous entry,
+then the suffix bytes; the entry's extent comes from the offsets column, so no
+length field is needed. Restart (shared = 0) every 16 entries, which bounds
+`idAt(i)` to 16 steps.
+
+Alongside it the server sends a `u32` FNV-1a hash per id, so the client can
+build its lookup table with pure integer work rather than decoding 500k strings
+to hash them. `tests/` pins the Rust and JS hashes against each other.
+
+---
+
+## Phase 2 — The client store
+
+### P8.1 — `NodeStore`: columnar typed arrays + lazy materialisation
+
+**Where:** `native/src/vis/js/02-dialogs.js` (new store), and every reader of
+`state.graph.nodes`
+
+**Evidence.** The 331 MB. 500k node objects at ~130 bytes each, 500k id strings
+at ~160 bytes each, 500k name strings, and three 500k-entry `Map`s over them.
+
+**Fix.** In server mode `state.graph.nodes` **stops existing** (it becomes an
+empty array). In its place, a `NodeStore` holding the columns as typed-array
+views over the P7.1 buffer, an open-addressed `Int32Array` hash table over the
+id hashes for `id → index`, and a `Map` pool of node objects **materialised only
+when something asks for one**.
+
+The critical design constraint: `state.nodeById` is read at 60+ call sites, most
+of which take an id that came from a server response. So the store *is*
+`state.nodeById` — it implements `get`/`has`/`size`/`keys`/`values`/`entries`/
+`forEach`, and every one of those call sites is untouched. Only the sites that
+*iterate all nodes* had to change, and there are 24 of them.
+
+Materialised nodes are never evicted while they are in the view (the renderer
+mutates `x`/`y` on the object and matches by identity, so a re-materialised node
+would lose its position). The pool is bounded by what the user has touched, not
+by graph size.
+
+**Risk:** Medium. `state.graph.nodes` becoming empty in server mode is a silent
+degradation at any site that still reads it — a legend that counts zero rather
+than an error. Enumerated exhaustively rather than trusted:
+`grep -rn 'state\.graph\.nodes'`.
+
+### P8.2 — Column-backed counts, search and name index
+
+The 24 whole-graph readers, by what they actually wanted:
+
+- **Counts** (`buildNodeFilterChips`, `buildLegend`, `syncLegend`,
+  `presentNodeTypes`) — already on the wire as `nodeTypeCounts`, and recomputed
+  from 500k nodes anyway. Plus a new `boundaryCount`.
+- **Search** (`refreshSuggestions`, the palette) — scans the type/name columns
+  directly, materialising only the ≤50 rows displayed.
+- **`_nameIndex`** (`findNodeByName`) — built from the name column on first use,
+  storing indices rather than node objects.
+- **`nodeCount`** — `state.nodeCount`.
+
+---
+
+## Phase 3 — Off the main thread
+
+### P9.1 — Decode the index in a Worker
+
+**Where:** `native/src/vis/js/00-preamble.js`, new worker source
+
+**Evidence.** With Phase 1+2 the main-thread cost of loading the index is one
+`arrayBuffer()` plus the hash-table build — the latter is 500k integer
+insertions, tens of milliseconds, and it is the only remaining block.
+
+**Fix.** Fetch and decode in a Worker created from a `Blob` URL (the vis is a
+single assembled HTML file — there is no second script to point a `Worker` at),
+and `postMessage` the buffers back as **transferables**, so nothing is copied.
+The main thread receives an `ArrayBuffer` it can take views over directly.
+
+**Risk:** Low, with a synchronous fallback if `Worker` or `Blob` URLs are
+unavailable (they are not, in any browser this ships to, but a headless harness
+is a different matter).
+
+### P9.2 — Deferred: index identity
+
+**Status: ⏭️ deferred, deliberately.** Dropping ids from the wire entirely and
+making the wire index the node's identity measures 331 MB → **18 MB** and
+99.7 MB → 9.5 MB. It is the biggest remaining win by a wide margin.
+
+It is deferred because identity is not a client-side detail here. Eight
+endpoints return real qualified ids (`/api/graph/search`, `/api/graph/path`,
+`/api/graph/traverse`, `/api/graph/filter`, `/api/db/node`, `/api/chat`,
+`/api/tour`, `/api/search/*`), the URL deep-link format is a real id, and 60+
+client call sites pass ids around opaquely. Doing it properly means an
+`id ↔ index` translation at every one of those boundaries plus a resolve
+endpoint for cold deep links — a change with a much larger blast radius than
+everything in this round combined, for a graph size nobody has hit yet.
+
+Revisit when a real 500k index exists to test against.
+
+
+---
+
+---
+
+## Round 2 — what shipped, and what it measures
+
+### The fixture
+
+Everything below is on a **485,175-node / 2,237,892-edge** graph, built by
+replicating `~/.ug/neo4j` three times with suffixed ids — 806 MB of
+`graph.json`, comfortably into server mode. It keeps the real distributions
+that matter: avg id 141 chars, avg name 42, **max degree 8,680**.
+
+Rebuild it with a streaming writer (holding two copies of an 806 MB document in
+a `node` heap is its own experiment), then serve it:
+
+```js
+// mkgraph.js — 3x ~/.ug/neo4j into ~/.ug/scale500k/graph.json
+const fs = require('fs');
+const src = JSON.parse(fs.readFileSync(process.env.HOME + '/.ug/neo4j/graph.json', 'utf8'));
+const out = fs.createWriteStream(process.env.HOME + '/.ug/scale500k/graph.json');
+const w = s => new Promise(r => out.write(s) ? r() : out.once('drain', r));
+const sfx = r => r === 0 ? '' : '#r' + r;
+(async () => {
+  await w('{"nodes":[');
+  let first = true;
+  for (let r = 0; r < 3; r++) for (const n of src.nodes) {
+    const o = { id: n.id + sfx(r), name: n.name, node_type: n.node_type };
+    if (n.folder) o.folder = n.folder;
+    await w((first ? '' : ',') + JSON.stringify(o)); first = false;
+  }
+  await w('],"edges":['); first = true;
+  for (let r = 0; r < 3; r++) for (const e of src.edges) {
+    await w((first ? '' : ',') + JSON.stringify(
+      { source: e.source + sfx(r), target: e.target + sfx(r), edge_type: e.edge_type }));
+    first = false;
+  }
+  await w(']' + (src.stats ? ',"stats":' + JSON.stringify(src.stats) : '') + '}');
+  out.end();
+})();
+```
+
+```
+node --max-old-space-size=12000 mkgraph.js
+ug serve -i ~/.ug/scale500k/graph.json --no-db --port 8099 --graph-mode server
+```
+
+It is not left on disk between rounds — 806 MB, and it shows up in the project
+switcher as a project nobody wants.
+
+Two harnesses, because they answer different questions:
+
+- **V8 heap** (`node --expose-gc`), with the store source sliced straight out of
+  `02-dialogs.js` and evaluated, so it cannot drift from what ships. This is
+  the controlled before/after on the index alone.
+- **The real page in headless Chrome**, driven through a same-origin proxy that
+  appends a probe to the assembled HTML and has it POST its findings back. This
+  is the whole tab: renderer, adjacency cache, DOM and all. `HEAD` and this
+  branch, same machine, same probe, n=8.
+
+> **Do not time this code inside a `vm` context.** An early attempt measured
+> `fnv1a32` at 9.7 µs per id and sent this round chasing a hash that was not
+> slow; the same function in the harness's own realm is **0.48 µs**. The `vm`
+> boundary defeats JIT specialisation by ~20×. Heap numbers from a `vm` are
+> fine; timings are not.
+
+### What the index costs the tab
+
+| | HEAD | Round 2 |
+| :--- | ---: | ---: |
+| `/api/graph/nodes` identity bytes | 98.2 MB | — |
+| `/api/graph/nodes.bin` identity bytes | — | **51.7 MB** |
+| …the same, gzipped on the wire | 7.1 MB | 9.7 MB |
+| response text on the JS heap | 97 MB | 0 |
+| after parse | 226 MB | 0 |
+| **peak while building the index** | **426 MB** | **58 MB** |
+| **retained for the session** | **338 MB** | **58 MB** (3 MB heap + 55 MB external) |
+| main-thread time to build it | 393 ms | 7 ms |
+
+**The gzip row is a real regression and it is the deliberate trade.** Front
+coding removes exactly the redundancy gzip was feeding on, so the frame
+compresses worse even though it is half the size uncompressed. `ug serve` binds
+to loopback and is documented as local-only, where 2.6 MB of extra transfer is
+nothing and 47 MB of resident memory is everything. On a graph reached over a
+network the JSON index is still there and still smaller compressed.
+
+### What the whole tab costs
+
+Chrome, `--enable-precise-memory-info`, median of 8 runs [min–max]:
+
+| | HEAD | Round 2 | |
+| :--- | ---: | ---: | ---: |
+| `performance.memory.usedJSHeapSize` | 280 MB [275–291] | **95 MB** [87–122] | **2.9×** |
+| `totalJSHeapSize` | 328 MB [328–333] | **132 MB** [103–133] | 2.5× |
+| load → interactive | 2,485 ms [2,361–3,234] | **1,531 ms** [1,518–2,123] | 1.6× |
+| cold click on the degree-8,680 hub | 69 ms | **38 ms** | 1.8× |
+| keyword search | 77 ms | 82 ms | — |
+| `state.graph.nodes.length` | 485,175 | **0** | |
+
+Behaviour is identical where it should be: same 301 nodes and 312 edges in the
+view, same 1,809 search matches, same top hit, same top hubs, zero console
+errors. Local mode (`~/.ug/ug`, 4,221 nodes) is unchanged — same top hubs, same
+counts, whole graph drawn.
+
+**Search did not get faster, and that is the point.** 77 ms of scanning
+485k nodes *on the main thread* became 82 ms of waiting for a server that
+answers in under 1 ms — during which the page is responsive. The old number
+was a frozen tab; the new one is not.
+
+### The cold-click bimodality, and why it is not a regression
+
+Measured immediately after load, the first click on the biggest hub was
+*slower* than HEAD — 144 ms against 66 — and stubbornly bimodal: half the runs
+came in at ~57 ms, half at ~145 ms. Three things were ruled out before the
+cause was found:
+
+- **Not the server.** `curl` against `/api/graph/edges` with the same 301-index
+  induced body: 0.9 ms on both builds, eight runs each.
+- **Not the store.** Phase timing put the gap in the induced round trip, whose
+  client code is byte-identical between the builds — and a *plain `fetch` to
+  the same endpoint*, written in the probe, showed the same 6 ms → 62 ms split.
+- **Not the hash or the front coding.** See the `vm` note above.
+
+It is a **one-off post-load GC** — the 51 MB `ArrayBuffer` is external memory,
+and V8 collects shortly after the load burst. Whichever `await` follows absorbs
+the pause. Inserting a 2.5 s idle before the first click removes it entirely
+and the ordering inverts:
+
+| cold click, per run (ms, sorted) | |
+| :--- | :--- |
+| HEAD | 67, 68, 68, 69, 69, 70, 146, 166 |
+| Round 2 | 33, 38, 38, 38, 38, 38, 45, 86 |
+
+So: **one** interaction in the first couple of seconds after load may absorb a
+GC pause it would not have absorbed before; every interaction after that is
+roughly twice as fast. Worth knowing, not worth trading 185 MB for.
+
+### Bugs this found
+
+Three, none of which any Rust-side test could have caught:
+
+1. **The front-coded decoder lost its prefix on buffer growth.** `ensure()`
+   reallocated the scratch buffer without copying what was in it — which is
+   precisely the accumulated shared prefix the next record builds on. Ids that
+   crossed a growth boundary came back with their head replaced by NUL bytes,
+   hashed to something else, and became unfindable. **Nothing threw.** Caught by
+   sweeping all 485,175 ids through `indexOf` and demanding each resolve to its
+   own index.
+   Now pinned by `the_client_decodes_every_id_this_encoder_writes`, which runs
+   the real client decoder under `node` against a frame this encoder produced —
+   and whose fixture is built specifically to force a growth mid-block, because
+   the first version of that test passed against the broken decoder.
+2. **Local mode was broken for a while and said nothing.** `transformData` has
+   no `nodes` binding — its nodes live in a `nodeMap` — so the new counting
+   pass threw a `ReferenceError` that `loadGraph`'s `catch` turned into the
+   "Could not load the graph" card. Server mode was fine throughout, because it
+   does not go through `transformData` at all. Only found by running the small
+   graph through the browser harness.
+3. **`select_nth_unstable(0)` panics on an empty slice** — reachable from
+   `/api/graph/search` with any query that matches nothing, which is routine.
+
+### Phase notes
+
+**P6.1–P6.4** landed as planned. `EMPTY_LIST` is shared by every unhydrated
+node; `degreeOf` is a `Uint32Array` column in server mode and `topByDegree` is
+a partial selection rather than a sort of every node with an edge; `pushEdge`
+dedupes through a `Set` keyed by **wire indices** (~20 characters, not the ~290
+two ids cost); the three `new Map(nodes.map(…))` fallbacks are gone.
+
+**P6.5 was not in the plan.** `applyFilters` builds `linkHidden`, which
+resolves *both* endpoints of every edge it is asked about — and `neighborsOf`
+asks about every edge of the node being expanded. With no filters active that
+is 17,000 lookups on a hub to evaluate a predicate that cannot answer true, and
+in server mode each lookup also *builds* a node. Both predicates now
+short-circuit to `() => false` when nothing is filtered, and `neighborsOf`
+skips the lookup as well as the predicate (`state.nodeFilterActive`) — skipping
+only the predicate leaves the materialisation, which is the whole cost.
+Worth 2.9 ms → 1.2 ms on `soloViewIds`, *better than HEAD*, and it helps local
+mode too.
+
+**P7.1/P7.2.** `build_slim_columns` is now the single source both encodings
+serialise from, so `slim_index_encodings_describe_the_same_graph` can hold them
+together. Front coding measured 2.6× on the real `~/.ug/neo4j` ids (21.8 MB →
+8.4 MB at a 16-entry restart; 64 saves a further 0.6 MB and quadruples the
+walk, so 16 it is).
+
+**P8.1.** The `NodeStore` *is* `state.nodeById`, which is what kept this to 24
+files instead of 60 — every call site that resolves a node id from a server
+response (the tour's `stop.node_id`, chat citations, the URL state, the
+catalog) is untouched. `fetchEdges` resolves endpoints to **ids, not node
+objects**: a hub brings back 8,680 edges of which at most a few hundred are
+drawn, and materialising every endpoint built ~8.7k objects to discard ~8.4k of
+them. It memoises ids per response (so a hub appearing 8,680 times yields one
+string, not 8,680 copies) and tells the store the index it already knows, so
+the first lookup of each is a map hit rather than a hash probe.
+
+**P8.2.** `searchNodes` is one implementation for the sidebar box, the command
+palette and the walk's seed picker — a bounded scan locally, a request in
+server mode. All three are now async with a monotonic token so a slow earlier
+keystroke cannot repaint over a later one. `findNodeByName` resolves through
+the server, memoising **misses as well as hits**, which is what makes the
+re-render terminate.
+
+**P8.3 was not in the plan, and is a behaviour fix.** `/api/graph/search`
+truncated at `limit` in graph order. That was fine while the endpoint was only
+reachable by hand; it is not fine now that it *is* the page's search box,
+because "the 200 that happen to be first" is a different answer from "the best
+200" — and it showed up immediately as a different top hit between the two
+builds. Matches are now ranked (needle position in the name, then name length)
+before the cut, and the endpoint matches qualified **ids** as well as names,
+which is what the box has always done locally.
+
+**P9.1.** The worker is created from a `Blob` URL because the page ships as one
+assembled HTML file — there is no sibling `.js` for a `Worker` to point at, and
+`ug gen` output is opened straight from disk. It fetches the frame and builds
+the `id → index` table (500k probe-and-insert steps, the only real main-thread
+work left once the frame is binary) and transfers both buffers back. The main
+thread re-derives the table's capacity and **checks it against the one it was
+handed** — a table sized for a different `n` would probe past its own entries
+and answer "no such node" for real ids.
+
+
 ## Results log
 
 Append one row per landed item. Keep the numbers, not just the verdict.
@@ -1023,6 +1558,15 @@ Append one row per landed item. Keep the numbers, not just the verdict.
 | 2026-08-18 | P4.1 | MCP cached project | +346 MB retained | 0 | second full copy of graph.json, freed |
 | 2026-08-18 | P4.2 | `mmr_rerank` | O(k²·n·d) | O(k·n·d) | output bit-identical, asserted vs reference |
 | 2026-08-18 | P5.1 | hover, graph drawn whole | O(edges) each | O(degree) each | index built once per view change |
+| 2026-08-20 | P6–P9 | 485k nodes, Chrome tab | 280 MB heap | 95 MB heap | 2.9×; median of 8, `usedJSHeapSize` |
+| 2026-08-20 | P6–P9 | 485k nodes, index only (V8) | 426 MB peak / 338 MB held | 58 MB both | 7.3× peak; build 393 ms → 7 ms |
+| 2026-08-20 | P7.1 | 485k node index, wire | 98.2 MB (7.1 MB gz) | 51.7 MB (9.7 MB gz) | half the bytes held, 2.6 MB more transferred |
+| 2026-08-20 | P7.2 | `neo4j` ids, front-coded | 21.8 MB | 8.4 MB | 2.6×, 16-entry restart |
+| 2026-08-20 | P6–P9 | 485k nodes, load → interactive | 2,485 ms | 1,531 ms | 1.6× |
+| 2026-08-20 | P6.5 | hub expansion (`soloViewIds`) | 2.9 ms | 1.2 ms | beats HEAD; 17k needless lookups removed |
+| 2026-08-20 | P6–P9 | cold click, degree-8,680 hub | 69 ms | 38 ms | 1.8×, once the post-load GC has settled |
+| 2026-08-20 | P8.2 | keyword search, 485k nodes | 77 ms on the main thread | 82 ms, none of it on it | same wall clock, responsive tab |
+| 2026-08-20 | — | client front-coding decoder | silently wrong ids | correct | scratch grew without copying; see §Bugs |
 
 ---
 
@@ -1034,4 +1578,5 @@ them — so the next audit does not re-propose them.
 | Item | Why |
 | :--- | :--- |
 | Storage layer / PPR / vector index tuning | Measured 2026-08-16: not the bottleneck at 162k nodes. `/api/graph/cycles` over 746k edges runs in 0.33 s. Do not go looking here again. |
+| Index identity for server mode (P9.2) | Would take the 485k index from 58 MB to ~18 MB and the wire from 51.7 MB to 9.5 MB — the biggest remaining win by far. Deferred because identity is not a client-side detail: eight endpoints return real qualified ids, the deep-link URL format is one, and 60+ client call sites pass them around opaquely. Revisit when a real 500k index exists to test against. |
 | Chat retrieval latency | Measured 2026-08-16: wall time is entirely local-LLM tokens (~83 tok/s decode). Tool execution was 0.1 s across 4 calls. |

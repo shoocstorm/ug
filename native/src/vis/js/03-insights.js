@@ -446,11 +446,15 @@
             width = container.clientWidth;
             height = container.clientHeight;
 
-            const nodeCount = state.graph.nodes.length;
-            // Not `state.graph.edges.length` — in server mode that array is
-            // empty by design and the real count came down with the index.
+            // Not `state.graph.nodes.length` — in server mode that array is
+            // empty by design (the nodes live in `state.nodeStore`'s columns
+            // and are built on demand), and the real count came down with the
+            // index. Same for edges.
+            const nodeCount = state.nodeCount || 0;
             const edgeCount = state.edgeCount || 0;
-            state.nodeById = new Map(state.graph.nodes.map(n => [n.id, n]));
+            // Server mode installed its `NodeStore` as `state.nodeById` when the
+            // index landed — it is the lookup, not a copy of one.
+            if (!state.nodeStore) state.nodeById = new Map(state.graph.nodes.map(n => [n.id, n]));
             buildAdjacency();
 
             // Past the threshold the whole graph is never drawn. `state.graph`

@@ -582,7 +582,7 @@
         // again, which changes nothing and re-renders again — an unbreakable
         // loop that on a hub with 8,680 related rows locks the tab solid.
         async function hydrateNodes(ids) {
-            if (state.graphMode !== 'server' || !state.slimIndexOf) return false;
+            if (state.graphMode !== 'server' || !state.nodeStore) return false;
             const want = [];
             const seen = new Set();
             for (const id of ids) {
@@ -590,8 +590,8 @@
                 seen.add(id);
                 const node = state.nodeById && state.nodeById.get(id);
                 if (!node || node._slim === false) continue;
-                const i = state.slimIndexOf.get(id);
-                if (i !== undefined) want.push(i);
+                const i = typeof node._i === 'number' ? node._i : state.nodeStore.indexOf(id);
+                if (i >= 0) want.push(i);
             }
             if (!want.length) return false;
 
@@ -1132,6 +1132,21 @@
         function findNodeByName(name) {
             if (!state.nodeById) return null;
             if (state.nodeById.has(name)) return state.nodeById.get(name);
+
+            // Server mode has no local name column to scan — decoding half a
+            // million front-coded names to linkify a row of chips is exactly
+            // the cost this mode exists to avoid. So the *server* answers it,
+            // once per distinct name, and the panel re-renders when the answers
+            // land. Chips that have not resolved yet render unlinked, which is
+            // what they rendered as before for any unresolvable name anyway.
+            if (state.nodeStore) {
+                if (!state._nameMemo) state._nameMemo = new Map();
+                const memo = state._nameMemo.get(name);
+                if (memo !== undefined) return memo ? state.nodeById.get(memo) : null;
+                queueNameProbe(name);
+                return null;
+            }
+
             if (!state._nameIndex) {
                 state._nameIndex = new Map();
                 state.graph.nodes.forEach(n => {
@@ -1141,6 +1156,53 @@
                 });
             }
             return state._nameIndex.get(name) || null;
+        }
+
+        // Ask the server what `name` resolves to, batching everything one render
+        // asked for into a single pass and re-rendering the panel once at the
+        // end.
+        //
+        // Termination is the thing to get right here, and it is the same shape
+        // `hydrateNodes` documents: every probe writes a memo entry — **misses
+        // included, as null** — so the re-render finds every name already
+        // answered, queues nothing, and stops. Without memoising the misses this
+        // is an infinite render loop.
+        let nameProbeQueue = null;
+        function queueNameProbe(name) {
+            if (!nameProbeQueue) {
+                nameProbeQueue = new Set();
+                Promise.resolve().then(runNameProbes);
+            }
+            nameProbeQueue.add(name);
+        }
+
+        async function runNameProbes() {
+            const names = nameProbeQueue;
+            nameProbeQueue = null;
+            if (!names || !names.size) return;
+            let resolved = 0;
+            await Promise.all([...names].map(async (name) => {
+                if (state._nameMemo.has(name)) return;
+                let hit = null;
+                try {
+                    const res = await fetch(`/api/graph/search?q=${encodeURIComponent(name)}&limit=25`);
+                    if (res.ok) {
+                        const data = await res.json();
+                        // Exact name first, then the trailing segment — the same
+                        // two keys the local index stored, in the same order.
+                        const short = n => String(n.name || '').split('/').pop();
+                        const nodes = data.nodes || [];
+                        const exact = nodes.find(n => n.name === name) || nodes.find(n => short(n) === name);
+                        if (exact) hit = exact.id;
+                    }
+                } catch { /* offline or a dead endpoint — memoise the miss */ }
+                state._nameMemo.set(name, hit);
+                if (hit) resolved++;
+            }));
+            // Only when something actually became clickable. A render that
+            // changes nothing is a render that costs a hub's related list for
+            // no reason.
+            if (resolved && state.selectedNode) handleClick(null, state.selectedNode);
         }
 
         // Fills the right-panel "Preview" tab with the *actual* source content of

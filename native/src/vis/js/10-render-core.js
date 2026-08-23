@@ -282,7 +282,7 @@
         // The graph-size default: 3D under the threshold, 2D above it. Reads
         // the full `state.graph`, not the (possibly empty solo) view.
         function autoRendererName() {
-            const nodes = state.graph && state.graph.nodes ? state.graph.nodes.length : 0;
+            const nodes = state.nodeCount || 0;
             // `state.edgeCount`, not `state.graph.edges.length`: in server mode
             // the local edge array is empty and reading it would pick three.js
             // for a graph far past what three.js can hold.

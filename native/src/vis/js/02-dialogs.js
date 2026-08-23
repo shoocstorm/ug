@@ -348,7 +348,20 @@
             state.catalogExpanded = null;
             state.catalogAutoExpanded = false;
             state.graphMode = 'local';
+            // Null in local mode, and that is what every `if (state.nodeStore)`
+            // branch keys off: the columns only exist when the server sent them.
+            state.nodeStore = null;
+            state.nodeCount = state.graph.nodes.length;
             state.edgeCount = edges.length;
+            // Counted once here rather than four times over in the chips, the
+            // legend, `presentNodeTypes` and `syncLegend` — server mode gets the
+            // same two facts off the wire, so both modes answer from one place.
+            state.nodeTypeCounts = {};
+            state.boundaryCount = 0;
+            for (const n of state.graph.nodes) {
+                state.nodeTypeCounts[n.group] = (state.nodeTypeCounts[n.group] || 0) + 1;
+                if (n.isBoundary) state.boundaryCount++;
+            }
             // Degree, for the "start here" strip and the solo empty state's top
             // hubs. Both used to compute this themselves — one by scanning every
             // edge, one by ranking the whole adjacency map — for a top-5 list.
@@ -367,55 +380,247 @@
             state.catalogRootIds = null;   // local mode derives these from Contains
         }
 
-        // The server-mode counterpart of `transformData`: the same `state.graph`
-        // shape, built from `/api/graph/nodes` instead of from `graph.json`.
+        // ─── Server mode: the node index ───────────────────
         //
-        // The payload is columnar and dictionary-coded (see `build_slim_index`
-        // in serve.rs), which matters in two ways here. Node type and file
-        // strings are *shared references* into the dictionaries rather than one
-        // string per node — on a 162k-node repo that is the difference between
-        // ~32 MB of duplicate file paths and ~1.8 MB. And every node is built by
-        // assigning the same properties in the same order, so V8 gives the whole
-        // graph one hidden class instead of a shape per field combination.
+        // In server mode the page is handed every node's *identity* and nothing
+        // else; edges, docstrings, metrics and boundaries arrive per
+        // neighbourhood, on demand. On a 500k-node graph that index is the
+        // largest thing the tab ever holds, so how it is held is the whole
+        // memory story — see §Round 2 of docs/dev/PERF-TUNING-JOURNEY.md.
         //
-        // `state.graph.edges` is empty and stays empty: edges arrive per
-        // neighbourhood, on demand, into `state.adj`.
-        function transformSlim(payload) {
-            const { ids, names, types, typeIdx, files, fileIdx, startLine, endLine } = payload;
-            const n = payload.n;
-            const boundarySet = new Set(payload.boundary || []);
-            const cx = window.innerWidth / 2 || 800;
-            const cy = window.innerHeight / 2 || 600;
+        // What it used to be: 500k node objects, each with six distinct empty
+        // arrays as placeholders, plus three 500k-entry Maps keyed by the same
+        // 141-character id strings. Measured 379 MB peak, 331 MB retained.
+        //
+        // What it is now: typed-array columns viewed straight over the response
+        // buffer, front-coded id/name blobs that never become JS strings, and
+        // node objects materialised only for what the user actually touches.
 
-            const nodes = new Array(n);
-            // id → wire index. Position is identity in the server-mode
-            // protocol: every request about a node names its index in these
-            // columns, not its 141-character id.
-            const indexOf = new Map();
-            for (let i = 0; i < n; i++) {
+        // One frozen array shared by every unhydrated node's imports / exports /
+        // extends / implements / calls / boundaries.
+        //
+        // At 500k nodes the old six-arrays-per-node cost 3 million array objects
+        // whose only job was to be empty. Sharing is safe because `hydrateNodes`
+        // *assigns* these slots rather than mutating them — nothing anywhere
+        // pushes into a node's list — and freezing turns a future mistake about
+        // that into a thrown error rather than a graph where every node suddenly
+        // imports the same thing.
+        const EMPTY_LIST = Object.freeze([]);
+
+        // FNV-1a, 32-bit, over the UTF-8 bytes. Must stay byte-identical to
+        // `fnv1a32` in serve.rs — `nidx_hash_matches_the_client` pins them
+        // together, because a divergence is not an error, it is a lookup table
+        // that quietly answers "no such node" for every id.
+        const NIDX_ENCODER = typeof TextEncoder !== 'undefined' ? new TextEncoder() : null;
+        function fnv1a32(str) {
+            // ASCII fast path. For a string with no code unit above 127 the
+            // UTF-8 bytes *are* the char codes, so this is the same hash — and
+            // it avoids `TextEncoder.encode`, which allocates a fresh
+            // `Uint8Array` per call. That allocation was the single most
+            // expensive thing in an id lookup: 11 µs against ~1 µs, on a path
+            // the solo view walks once per node it puts on the canvas.
+            //
+            // The first non-ASCII code unit bails to the encoder and starts
+            // over. Node ids are file paths and symbol names, so that is rare
+            // — and it has to be correct rather than close, which is what
+            // `the_client_decodes_every_id_this_encoder_writes` checks with a
+            // deliberately non-ASCII id.
+            let h = 2166136261;
+            for (let i = 0; i < str.length; i++) {
+                const c = str.charCodeAt(i);
+                if (c > 127) return fnv1a32Utf8(str);
+                h ^= c;
+                h = Math.imul(h, 16777619);
+            }
+            return h >>> 0;
+        }
+
+        function fnv1a32Utf8(str) {
+            let h = 2166136261;
+            if (NIDX_ENCODER) {
+                const bytes = NIDX_ENCODER.encode(str);
+                for (let i = 0; i < bytes.length; i++) {
+                    h ^= bytes[i];
+                    h = Math.imul(h, 16777619);
+                }
+                return h >>> 0;
+            }
+            // No TextEncoder at all (no browser this ships to, but a harness
+            // might): encode the code points by hand rather than hash the
+            // wrong bytes and silently lose every non-ASCII id.
+            for (const ch of str) {
+                let cp = ch.codePointAt(0);
+                const buf = cp < 0x80 ? [cp]
+                    : cp < 0x800 ? [0xc0 | (cp >> 6), 0x80 | (cp & 0x3f)]
+                    : cp < 0x10000 ? [0xe0 | (cp >> 12), 0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f)]
+                    : [0xf0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3f), 0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f)];
+                for (const byte of buf) {
+                    h ^= byte;
+                    h = Math.imul(h, 16777619);
+                }
+            }
+            return h >>> 0;
+        }
+
+        // A string column that is already an array of JS strings — the JSON
+        // index's shape, and the fallback when the binary frame is unavailable.
+        function arrayStringColumn(arr) {
+            return { at: i => (arr[i] == null ? '' : arr[i]), length: arr.length };
+        }
+
+        // A front-coded string column: record `i` is `blob[off[i]..off[i+1]]`,
+        // one byte of shared-prefix length followed by the suffix, restarting
+        // every `block` entries. See `front_code` in serve.rs.
+        //
+        // The point is that the bytes stay bytes: 500k ids cost ~26 MB of
+        // ArrayBuffer here against ~80 MB of individually-allocated JS strings,
+        // and none of it is on the JS heap where the GC has to walk it.
+        function frontCodedColumn(blob, off, block) {
+            const decoder = new TextDecoder('utf-8');
+            const n = off.length - 1;
+            // One scratch buffer, grown on demand. Reconstruction is at most
+            // `block` records, so this never sees a surprise size.
+            let scratch = new Uint8Array(256);
+            // Grows by *copying* — the bytes already in it are the shared
+            // prefix the next record builds on, so a bare reallocation silently
+            // returns an id with its head cut off. Which is not an error
+            // anywhere: it is a lookup that answers "no such node".
+            const ensure = (need) => {
+                if (scratch.length < need) {
+                    let cap = scratch.length;
+                    while (cap < need) cap *= 2;
+                    const grown = new Uint8Array(cap);
+                    grown.set(scratch);
+                    scratch = grown;
+                }
+            };
+            return {
+                length: n,
+                at(i) {
+                    if (i < 0 || i >= n) return '';
+                    const first = i - (i % block);
+                    let len = 0;
+                    for (let k = first; k <= i; k++) {
+                        const s = off[k];
+                        const e = off[k + 1];
+                        const shared = blob[s];
+                        const suffix = e - s - 1;
+                        ensure(shared + suffix);
+                        // `shared` bytes of what we already built stay put;
+                        // everything after them comes from this record.
+                        scratch.set(blob.subarray(s + 1, e), shared);
+                        len = shared + suffix;
+                    }
+                    return decoder.decode(scratch.subarray(0, len));
+                },
+            };
+        }
+
+        // How many node objects may sit in the pool before the ones nobody is
+        // looking at are dropped. Generous on purpose: a node costs ~130 bytes,
+        // so this is ~6 MB, and the alternative — evicting something the
+        // renderer is holding — loses its position and breaks identity.
+        const NODE_POOL_SOFT_CAP = 50000;
+
+        // The `id → index` memo. Bounded for the same reason and cleared
+        // wholesale rather than evicted one at a time: it is a pure cache of a
+        // pure function, so throwing all of it away costs one re-probe.
+        const NODE_INDEX_CACHE_CAP = 100000;
+
+        // Everything `state.nodeById` has ever been asked for, over the columns.
+        //
+        // This object *is* `state.nodeById`. That is deliberate and it is what
+        // kept this change to 24 files instead of 60: the Map surface
+        // (`get`/`has`/`size`/`keys`/`values`/`entries`/`forEach`) is
+        // implemented here, so every call site that looks a node up by id —
+        // the tour's `stop.node_id`, chat citations, the URL state, the
+        // catalog, the renderers — is untouched and does not know the nodes it
+        // gets back were built a microsecond ago.
+        function makeNodeStore(ix, prebuiltSlots) {
+            const n = ix.n;
+            const byIndex = new Map();   // index → node object
+            const byId = new Map();      // node.id → the same object
+            const idxCache = new Map();  // id → index (or -1), memoised
+
+            // Open addressing, linear probing, at ≤50% load. `slots` holds node
+            // indices; `idHash` is the per-node hash the server sent, so
+            // building this is pure integer work — no id is ever decoded here.
+            //
+            // The worker builds it when there is one (see
+            // `fetchNodeIndexInWorker`), which is the last piece of the load
+            // that would otherwise block the main thread. The capacity check is
+            // not paranoia: a table sized for a different `n` would probe past
+            // its own entries and answer "no such node" for real ids.
+            let cap = 1024;
+            while (cap < n * 2) cap *= 2;
+            const mask = cap - 1;
+            const idHash = ix.idHash;
+            let slots;
+            if (prebuiltSlots && prebuiltSlots.length === cap) {
+                slots = prebuiltSlots;
+            } else {
+                slots = new Int32Array(cap).fill(-1);
+                for (let i = 0; i < n; i++) {
+                    let k = idHash[i] & mask;
+                    while (slots[k] !== -1) k = (k + 1) & mask;
+                    slots[k] = i;
+                }
+            }
+
+            const cx = (typeof window !== 'undefined' && window.innerWidth / 2) || 800;
+            const cy = (typeof window !== 'undefined' && window.innerHeight / 2) || 600;
+
+            function indexOf(id) {
+                if (typeof id !== 'string') return -1;
+                const memo = idxCache.get(id);
+                if (memo !== undefined) return memo;
+                const h = fnv1a32(id);
+                let k = h & mask;
+                let found = -1;
+                while (slots[k] !== -1) {
+                    const cand = slots[k];
+                    // The hash check is what keeps this cheap: a full id is
+                    // decoded only on a hash collision, which at 32 bits over
+                    // 500k entries is a handful of nodes in the whole graph.
+                    if (idHash[cand] === h && ix.idCol.at(cand) === id) { found = cand; break; }
+                    k = (k + 1) & mask;
+                }
+                // Misses are memoised too. `findNodeByName` and the catalog ask
+                // about strings that are not ids at all, repeatedly.
+                if (idxCache.size >= NODE_INDEX_CACHE_CAP) idxCache.clear();
+                idxCache.set(id, found);
+                return found;
+            }
+
+            function nodeAt(i) {
+                if (i < 0 || i >= n) return undefined;
+                const held = byIndex.get(i);
+                if (held) return held;
+                if (byIndex.size >= NODE_POOL_SOFT_CAP) trimPool();
+                const id = ix.idCol.at(i);
+                const fi = ix.fileIdx[i];
                 const angle = (i / n) * Math.PI * 2;
                 const radius = 100 + Math.random() * 150;
-                const fi = fileIdx[i];
                 // Property order is fixed and matches `transformData`'s node
                 // literal — do not reorder, it is what keeps the hidden class
                 // shared with locally-built nodes.
                 const node = {
-                    id: ids[i],
-                    name: names[i] || ids[i],
-                    group: types[typeIdx[i]] || 'Default',
-                    file: fi >= 0 ? files[fi] : null,
-                    startLine: startLine[i] || null,
-                    endLine: endLine[i] || null,
+                    id,
+                    name: ix.nameCol.at(i) || id,
+                    group: ix.typeNames[ix.typeIdx[i]] || 'Default',
+                    file: fi >= 0 ? ix.fileNames[fi] : null,
+                    startLine: ix.startLine[i] || null,
+                    endLine: ix.endLine[i] || null,
                     docstring: null,
                     metrics: null,
                     signature: null,
-                    imports: [],
-                    exports: [],
-                    extends: [],
-                    implements: [],
-                    calls: [],
-                    isBoundary: boundarySet.has(i),
-                    boundaries: [],
+                    imports: EMPTY_LIST,
+                    exports: EMPTY_LIST,
+                    extends: EMPTY_LIST,
+                    implements: EMPTY_LIST,
+                    calls: EMPTY_LIST,
+                    isBoundary: !!ix.boundary[i],
+                    boundaries: EMPTY_LIST,
                     x: cx + Math.cos(angle) * radius,
                     y: cy + Math.sin(angle) * radius,
                     // Everything above `id`/`name`/`group`/`file`/lines/boundary
@@ -423,29 +628,377 @@
                     // server. `_slim` says which is which, so a panel can tell
                     // "no docstring" from "not fetched yet".
                     _slim: true,
+                    // Its position in the columns. Saves the round trip back
+                    // through the hash table everywhere the server protocol
+                    // wants an index — hydrate, the edge fetches, the catalog.
+                    _i: i,
                 };
-                nodes[i] = node;
-                indexOf.set(node.id, i);
+                byIndex.set(i, node);
+                byId.set(id, node);
+                return node;
             }
 
-            state.graph = { nodes, edges: [] };
-            state.slimIndexOf = indexOf;
-            state.graphMode = 'server';
-            state.edgeCount = payload.edgeCount || 0;
-            state.stats = payload.stats || null;
-            state.languages = payload.languages || null;
-            state.edgeTypeCounts = payload.edgeTypeCounts || {};
-            state.catalogRootIds = (payload.catalogRoots || []).map(i => ids[i]);
-            // Degree comes off the wire — it is a whole-graph fact and there are
-            // no edges here to recount it from.
-            state.degreeOf = new Map();
-            const deg = payload.deg || [];
-            for (let i = 0; i < n; i++) {
-                if (deg[i]) state.degreeOf.set(ids[i], deg[i]);
+            // Drop what nothing is looking at. A node currently on the canvas
+            // keeps its object: the renderers mutate `x`/`y` on it and match
+            // highlight sets by object identity, so re-materialising one mid-view
+            // would reset its position and silently break highlighting. A
+            // hydrated node is kept too — throwing it away would re-fetch it.
+            function trimPool() {
+                const keep = state.viewIds instanceof Set ? state.viewIds : null;
+                const selected = state.selectedNode && state.selectedNode.id;
+                for (const [i, node] of byIndex) {
+                    if (node._slim === false) continue;
+                    if (node.id === selected) continue;
+                    if (keep && keep.has(node.id)) continue;
+                    byIndex.delete(i);
+                    byId.delete(node.id);
+                }
             }
+
+            const store = {
+                // ── the columns, for whoever wants them without an object ──
+                columns: ix,
+                nodeCount: n,
+                indexOf,
+                nodeAt,
+                // Record an `id → index` a caller already knows, so the next
+                // `get`/`has` for it is a map hit rather than a hash probe.
+                // `fetchEdges` knows the index of every endpoint it decodes.
+                noteIndex(id, i) {
+                    if (idxCache.size >= NODE_INDEX_CACHE_CAP) idxCache.clear();
+                    idxCache.set(id, i);
+                },
+                idAt: i => ix.idCol.at(i),
+                nameAt: i => ix.nameCol.at(i),
+                groupAt: i => ix.typeNames[ix.typeIdx[i]] || 'Default',
+                degAt: i => ix.deg[i] || 0,
+                isBoundaryAt: i => !!ix.boundary[i],
+
+                // ── the Map surface `state.nodeById` is read through ──
+                get(id) {
+                    const held = byId.get(id);
+                    if (held) return held;
+                    const i = indexOf(id);
+                    return i >= 0 ? nodeAt(i) : undefined;
+                },
+                has(id) {
+                    return byId.has(id) || indexOf(id) >= 0;
+                },
+                get size() { return n; },
+                // Materialise-as-you-go, so a stray whole-graph iteration is
+                // merely slow rather than a lie. Nothing in the app does this —
+                // `grep -n 'state.graph.nodes'` is the check — and anything that
+                // starts to should use the columns instead.
+                *keys() { for (let i = 0; i < n; i++) yield ix.idCol.at(i); },
+                *values() { for (let i = 0; i < n; i++) yield nodeAt(i); },
+                *entries() { for (let i = 0; i < n; i++) yield [ix.idCol.at(i), nodeAt(i)]; },
+                forEach(fn) { for (let i = 0; i < n; i++) fn(nodeAt(i), ix.idCol.at(i), store); },
+                [Symbol.iterator]() { return store.entries(); },
+            };
+            return store;
+        }
+
+        // The most-connected nodes, in either mode. Server mode reads the degree
+        // column (a `Uint32Array`, no id strings involved); local mode ranks the
+        // `degreeOf` map the edge walk filled in.
+        //
+        // A partial selection rather than a sort: ranking 500k entries to show
+        // five was the old shape, and it allocated an array of every node with
+        // any edge at all to do it.
+        function topByDegree(k) {
+            const store = state.nodeStore;
+            if (store) {
+                const deg = store.columns.deg;
+                const n = store.nodeCount;
+                const best = [];   // indices, ascending by degree, at most k
+                let floor = 0;
+                for (let i = 0; i < n; i++) {
+                    const d = deg[i];
+                    if (d <= floor && best.length >= k) continue;
+                    let at = best.length;
+                    while (at > 0 && deg[best[at - 1]] < d) at--;
+                    best.splice(at, 0, i);
+                    if (best.length > k) best.pop();
+                    if (best.length >= k) floor = deg[best[best.length - 1]];
+                }
+                return best.map(i => store.nodeAt(i)).filter(Boolean);
+            }
+            const degree = state.degreeOf;
+            if (!degree || !degree.size) return [];
+            return [...degree.entries()]
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, k)
+                .map(([id]) => state.nodeById && state.nodeById.get(id))
+                .filter(Boolean);
+        }
+
+        // Undirected degree of one node, in either mode. Server mode reads the
+        // column through the node's own wire index; local mode reads the map the
+        // edge walk built.
+        function degreeOfNode(node) {
+            if (!node) return 0;
+            if (state.nodeStore && typeof node._i === 'number') return state.nodeStore.degAt(node._i);
+            return (state.degreeOf && state.degreeOf.get(node.id)) || 0;
+        }
+
+        // ─── Name search, in both modes ────────────────────
+        //
+        // One implementation for the three places that search by name — the
+        // sidebar's suggestion box, the command palette and the Graph Walk's
+        // seed picker. All three used to hold their own copy of the same
+        // `filter().sort().slice()` over every node in the graph.
+        //
+        // Locally that is a scan, bounded so the sort never sees more than
+        // `SEARCH_SCAN_CAP` candidates. In server mode it is a request:
+        // `/api/graph/search` has the real strings, and the client has a
+        // front-coded name column that would have to be decoded half a million
+        // times per keystroke to answer the same question badly.
+        //
+        // Always a promise, in both modes, so the callers have one shape.
+
+        // How many matches are ranked before the cut. The display shows fifty;
+        // "light up … in graph" takes at most SOLO_MAX_NODES. Anything past
+        // this cannot reach the screen, and collecting it is what made an empty
+        // query allocate an array of every node in the graph.
+        const SEARCH_SCAN_CAP = 4000;
+
+        async function searchNodes(query, opts = {}) {
+            const q = (query || '').trim().toLowerCase();
+            const limit = opts.limit || 50;
+            const types = opts.types && opts.types.size ? opts.types : null;
+            const boundaryOnly = !!opts.boundary;
+
+            if (state.nodeStore) return searchNodesOnServer(q, limit, types, boundaryOnly);
+
+            const cap = Math.max(limit, SEARCH_SCAN_CAP);
+            const scored = [];
+            let total = 0;
+            for (const n of state.graph.nodes) {
+                if (types && !types.has(n.group)) continue;
+                if (boundaryOnly && !n.isBoundary) continue;
+                let rank = 0;
+                if (q) {
+                    const ln = n.name.toLowerCase();
+                    rank = ln.indexOf(q);
+                    if (rank < 0) {
+                        if (!n.id.toLowerCase().includes(q)) continue;
+                        // Matched on the qualified id rather than the name:
+                        // still a hit, but it sorts after every name match.
+                        rank = Number.MAX_SAFE_INTEGER;
+                    }
+                }
+                total++;
+                // The lowercased name is computed once here, not twice per
+                // comparison inside the sort, which is where the old version
+                // spent most of a keystroke.
+                if (scored.length < cap) scored.push({ n, rank, len: n.name.length });
+            }
+            if (q) scored.sort((a, b) => (a.rank - b.rank) || (a.len - b.len));
+            return {
+                nodes: scored.slice(0, limit).map(s => s.n),
+                total,
+                truncated: total > scored.length,
+            };
+        }
+
+        async function searchNodesOnServer(q, limit, types, boundaryOnly) {
+            if (!q) {
+                // Nothing is displayed for an empty query in any of the three
+                // callers — only the count, which the index already carries.
+                const counts = nodeTypeCountsAll();
+                let total = 0;
+                if (types) types.forEach(t => { total += counts[t] || 0; });
+                else total = state.nodeCount || 0;
+                return { nodes: [], total, truncated: false };
+            }
+            const qs = new URLSearchParams({ q, limit: String(limit) });
+            if (types) qs.set('types', [...types].join(','));
+            let data;
+            try {
+                const res = await fetch(`/api/graph/search?${qs}`);
+                if (!res.ok) throw new Error(await readErr(res));
+                data = await res.json();
+            } catch (err) {
+                console.warn('node search failed:', err && err.message);
+                return { nodes: [], total: 0, truncated: false };
+            }
+            // Hits come back as whole node rows; what the canvas and the panels
+            // need is *the* node object for each id, so they go through the
+            // store. A hit already on screen keeps its position and identity.
+            const nodes = [];
+            for (const row of data.nodes || []) {
+                if (boundaryOnly && !(row.boundaries && row.boundaries.length)) continue;
+                const node = state.nodeById.get(row.id);
+                if (node) nodes.push(node);
+            }
+            nodes.sort((a, b) => {
+                const ai = a.name.toLowerCase().indexOf(q);
+                const bi = b.name.toLowerCase().indexOf(q);
+                const ar = ai < 0 ? Number.MAX_SAFE_INTEGER : ai;
+                const br = bi < 0 ? Number.MAX_SAFE_INTEGER : bi;
+                return (ar - br) || (a.name.length - b.name.length);
+            });
+            return { nodes, total: data.count || nodes.length, truncated: !!data.truncated };
+        }
+
+        // Node-type histogram over the *whole* graph.
+        //
+        // Server mode reads what the index already carried; local mode counts.
+        // Four call sites used to recount this from every node on every call —
+        // the filter chips, the legend, `presentNodeTypes` and `syncLegend` —
+        // which on a large graph is four full passes to draw a row of numbers
+        // that cannot have changed.
+        function nodeTypeCountsAll() {
+            if (state.nodeTypeCounts) return state.nodeTypeCounts;
+            const counts = {};
+            state.graph.nodes.forEach(n => { counts[n.group] = (counts[n.group] || 0) + 1; });
+            state.nodeTypeCounts = counts;
+            return counts;
+        }
+
+        function boundaryCountAll() {
+            if (typeof state.boundaryCount === 'number') return state.boundaryCount;
+            state.boundaryCount = state.graph.nodes.filter(n => n.isBoundary).length;
+            return state.boundaryCount;
+        }
+
+        // Install a decoded index (from either encoding) as the page's graph.
+        //
+        // `state.graph.nodes` is deliberately left **empty** in server mode.
+        // Every whole-graph reader was moved onto the columns or onto the
+        // counts above; anything that still reaches for it is a bug, and an
+        // empty array makes it show up as a zero rather than as 500k
+        // materialised objects.
+        function installNodeIndex(ix, prebuiltSlots) {
+            const store = makeNodeStore(ix, prebuiltSlots);
+            state.graph = { nodes: [], edges: [] };
+            state.nodeStore = store;
+            state.nodeById = store;
+            state.nodeCount = ix.n;
+            state.graphMode = 'server';
+            state.edgeCount = ix.edgeCount || 0;
+            state.stats = ix.stats || null;
+            state.languages = ix.languages || null;
+            state.edgeTypeCounts = ix.edgeTypeCounts || {};
+            state.nodeTypeCounts = ix.nodeTypeCounts || {};
+            state.boundaryCount = ix.boundaryCount || 0;
+            // Roots are the one place a bounded set of ids is worth decoding up
+            // front: the catalog opens on them, and there are thousands, not
+            // hundreds of thousands.
+            state.catalogRootIds = Array.from(ix.catalogRoots || [], i => ix.idCol.at(i));
+            state.degreeOf = null;   // server mode ranks off the degree column
             state.catalogTree = null;
             state.catalogExpanded = null;
             state.catalogAutoExpanded = false;
+        }
+
+        // The JSON index (`/api/graph/nodes`), kept as the fallback for a server
+        // too old to serve the binary frame — and as the thing the binary frame
+        // is tested against.
+        function transformSlim(payload) {
+            const n = payload.n;
+            const boundary = new Uint8Array(n);
+            for (const i of payload.boundary || []) boundary[i] = 1;
+            const ids = payload.ids || [];
+            const idHash = new Uint32Array(n);
+            for (let i = 0; i < n; i++) idHash[i] = fnv1a32(ids[i] || '');
+            installNodeIndex({
+                n,
+                edgeCount: payload.edgeCount || 0,
+                idCol: arrayStringColumn(ids),
+                nameCol: arrayStringColumn(payload.names || []),
+                idHash,
+                typeNames: payload.types || [],
+                typeIdx: Uint8Array.from(payload.typeIdx || []),
+                fileNames: payload.files || [],
+                fileIdx: Int32Array.from(payload.fileIdx || []),
+                startLine: Uint32Array.from(payload.startLine || []),
+                endLine: Uint32Array.from(payload.endLine || []),
+                deg: Uint32Array.from(payload.deg || []),
+                boundary,
+                boundaryCount: (payload.boundary || []).length,
+                catalogRoots: payload.catalogRoots || [],
+                nodeTypeCounts: payload.nodeTypeCounts || {},
+                edgeTypeCounts: payload.edgeTypeCounts || {},
+                stats: payload.stats || null,
+                languages: payload.languages || null,
+            });
+        }
+
+        // ─── The binary frame (`/api/graph/nodes.bin`) ─────
+        //
+        // Layout is defined by `build_binary_index` in serve.rs. Decoding is
+        // taking views over the buffer that arrived: no copy, no parse, and the
+        // id/name bytes are never turned into JS strings.
+
+        const NIDX_MAGIC = 'UGNIDX\0\0';
+        const NIDX_KIND = {
+            TYPE_IDX: 1, FILE_IDX: 2, START_LINE: 3, END_LINE: 4, DEG: 5,
+            BOUNDARY: 6, CATALOG_ROOTS: 7, ID_BLOB: 8, ID_OFF: 9,
+            NAME_BLOB: 10, NAME_OFF: 11, ID_HASH: 12, META: 13,
+        };
+
+        // Frame → the `ix` shape `installNodeIndex` wants. Throws on anything
+        // it does not recognise so `loadGraph` can fall back to the JSON index
+        // rather than render a graph decoded from garbage.
+        function decodeNodeIndexFrame(buffer) {
+            const bytes = new Uint8Array(buffer);
+            if (bytes.length < 16) throw new Error('node index frame is truncated');
+            for (let i = 0; i < 8; i++) {
+                if (bytes[i] !== NIDX_MAGIC.charCodeAt(i)) throw new Error('not a node index frame');
+            }
+            const head = new DataView(buffer);
+            const version = head.getUint32(8, true);
+            if (version !== 1) throw new Error(`node index version ${version} is not supported`);
+            const count = head.getUint32(12, true);
+            const sec = new Map();
+            for (let slot = 0; slot < count; slot++) {
+                const at = 16 + slot * 12;
+                const kind = head.getUint32(at, true);
+                const off = head.getUint32(at + 4, true);
+                const len = head.getUint32(at + 8, true);
+                if (off + len > bytes.length) throw new Error(`node index section ${kind} overruns the frame`);
+                sec.set(kind, [off, len]);
+            }
+            const need = (kind) => {
+                const s = sec.get(kind);
+                if (!s) throw new Error(`node index is missing section ${kind}`);
+                return s;
+            };
+            const u8 = (kind) => { const [o, l] = need(kind); return bytes.subarray(o, o + l); };
+            // Views, not copies — which is why every section is 4-byte aligned
+            // on the server side.
+            const u32 = (kind) => { const [o, l] = need(kind); return new Uint32Array(buffer, o, l / 4); };
+            const i32 = (kind) => { const [o, l] = need(kind); return new Int32Array(buffer, o, l / 4); };
+
+            const meta = JSON.parse(new TextDecoder('utf-8').decode(u8(NIDX_KIND.META)));
+            const n = meta.n;
+            const block = meta.block || 16;
+            return {
+                n,
+                edgeCount: meta.edgeCount || 0,
+                idCol: frontCodedColumn(u8(NIDX_KIND.ID_BLOB), u32(NIDX_KIND.ID_OFF), block),
+                nameCol: frontCodedColumn(u8(NIDX_KIND.NAME_BLOB), u32(NIDX_KIND.NAME_OFF), block),
+                idHash: u32(NIDX_KIND.ID_HASH),
+                typeNames: meta.types || [],
+                typeIdx: u8(NIDX_KIND.TYPE_IDX),
+                fileNames: meta.files || [],
+                fileIdx: i32(NIDX_KIND.FILE_IDX),
+                startLine: u32(NIDX_KIND.START_LINE),
+                endLine: u32(NIDX_KIND.END_LINE),
+                deg: u32(NIDX_KIND.DEG),
+                boundary: u8(NIDX_KIND.BOUNDARY),
+                boundaryCount: meta.boundaryCount || 0,
+                catalogRoots: u32(NIDX_KIND.CATALOG_ROOTS),
+                nodeTypeCounts: meta.nodeTypeCounts || {},
+                edgeTypeCounts: meta.edgeTypeCounts || {},
+                stats: meta.stats || null,
+                languages: meta.languages || null,
+            };
+        }
+
+        function transformSlimBinary(buffer) {
+            installNodeIndex(decodeNodeIndexFrame(buffer));
         }
 
         function formatNumber(n) {

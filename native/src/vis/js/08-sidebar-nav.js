@@ -135,8 +135,9 @@
         // ─── Filter chips ───────────────────────────────────
 
         function buildNodeFilterChips() {
-            const counts = {};
-            state.graph.nodes.forEach(n => { counts[n.group] = (counts[n.group] || 0) + 1; });
+            // Off the whole-graph histogram both loaders publish, not a fresh
+            // pass over every node — see `nodeTypeCountsAll`.
+            const counts = nodeTypeCountsAll();
             const container = document.getElementById('node-filter');
             container.innerHTML = '';
             Object.entries(counts).sort((a, b) => b[1] - a[1]).forEach(([type, count]) => {
@@ -166,7 +167,7 @@
             // world can reach". Appended after the type chips (and only when
             // the graph has boundaries) so it reads as an additional filter
             // rather than as another node type.
-            const boundaryCount = state.graph.nodes.filter(n => n.isBoundary).length;
+            const boundaryCount = boundaryCountAll();
             if (!boundaryCount) return;
 
             const chip = document.createElement('div');
@@ -232,12 +233,29 @@
             const edgeMatches = e =>
                 state.edgeFilters.size === 0 || state.edgeFilters.has(e.rel);
 
-            const byId = state.nodeById || new Map(state.graph.nodes.map(n => [n.id, n]));
-            // Predicates consumed by the graph's nodeVisibility / linkVisibility
-            // accessors, and by the solo view builder. Filtered-out elements
-            // are hidden entirely rather than dimmed — WebGL skips them.
-            state.nodeHidden = n => !nodeMatches(n);
-            state.linkHidden = e => {
+            // `initialize()` sets this before anything can call in here, in both
+            // modes. Rebuilding it as a fallback allocated a 500k-entry map to
+            // paper over an invariant that was already broken.
+            const byId = state.nodeById;
+            // With nothing filtered these predicates cannot answer true, so say
+            // so without looking anything up.
+            //
+            // Not a micro-optimisation: `linkHidden` resolves *both* endpoints
+            // of every edge it is asked about, and `neighborsOf` asks about
+            // every edge of the node being expanded. On a node of degree 8,680
+            // — the real maximum in `~/.ug/neo4j` — that is 17k lookups to
+            // evaluate a predicate whose answer is fixed. In server mode each
+            // of those lookups also *builds* a node object, so the unfiltered
+            // case was materialising the entire neighbourhood to decide it was
+            // showing all of it.
+            const noNodeFilter = state.nodeFilters.size === 0 && !state.boundaryFilter;
+            const noEdgeFilter = state.edgeFilters.size === 0;
+            // Read by `neighborsOf`, which has to skip the *lookup* and not
+            // just the predicate: resolving a node only to ask a question whose
+            // answer is fixed is what the short-circuit above cannot save.
+            state.nodeFilterActive = !noNodeFilter;
+            state.nodeHidden = noNodeFilter ? () => false : n => !nodeMatches(n);
+            state.linkHidden = (noNodeFilter && noEdgeFilter) ? () => false : e => {
                 const sourceNode = byId.get(e.source.id || e.source);
                 const targetNode = byId.get(e.target.id || e.target);
                 if (sourceNode && !nodeMatches(sourceNode)) return true;
@@ -650,8 +668,7 @@
             const body = document.getElementById('legend-body');
             const head = document.getElementById('legend-head');
             if (!body) return;
-            const counts = new Map();
-            state.graph.nodes.forEach(n => counts.set(n.group, (counts.get(n.group) || 0) + 1));
+            const counts = new Map(Object.entries(nodeTypeCountsAll()));
             // Canonical type order (NODE_TYPE_ORDER), matching the Rings layout
             // and the rest of the type orderings — so the legend reads top to
             // bottom the way the rings read inside out, and the two can be
@@ -670,7 +687,7 @@
             // boundary nodes needs an entry here or it is an unexplained
             // decoration. Appended below the types and marked as a separate
             // axis — it filters alongside them, not instead of them.
-            const boundaryCount = state.graph.nodes.filter(n => n.isBoundary).length;
+            const boundaryCount = boundaryCountAll();
             if (boundaryCount) {
                 body.insertAdjacentHTML('beforeend',
                     `<div class="legend-row legend-row-boundary" data-boundary="1"
@@ -714,7 +731,7 @@
         const NODE_FILTER_NONE = ' none';
 
         function presentNodeTypes() {
-            return [...new Set(state.graph.nodes.map(n => n.group))];
+            return Object.keys(nodeTypeCountsAll());
         }
 
         // The types actually showing, resolving both special cases.
@@ -836,12 +853,8 @@
             };
 
             if (!ids) {
-                const counts = new Map();
-                let boundary = 0;
-                state.graph.nodes.forEach(n => {
-                    counts.set(n.group, (counts.get(n.group) || 0) + 1);
-                    if (n.isBoundary) boundary++;
-                });
+                const counts = new Map(Object.entries(nodeTypeCountsAll()));
+                const boundary = boundaryCountAll();
                 rows.forEach(row => {
                     if (row === boundaryRow) return;
                     row.querySelector('.count').textContent = counts.get(row.dataset.type) || 0;

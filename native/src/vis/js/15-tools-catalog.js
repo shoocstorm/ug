@@ -8,16 +8,12 @@
         function renderStartHere() {
             const box = document.getElementById('start-here');
             if (!box) return;
-            // `state.degreeOf` is populated by both loaders — counted from the
-            // edge list locally, read off the slim index in server mode, where
-            // there are no local edges to count. This also stops the boot path
-            // walking every edge a second time just to rank five nodes.
-            const degree = state.degreeOf || new Map();
-            const top = [...degree.entries()]
-                .sort((a, b) => b[1] - a[1])
-                .slice(0, 5)
-                .map(([id]) => state.nodeById.get(id))
-                .filter(Boolean);
+            // Both loaders can answer this — local mode from the map the edge
+            // walk built, server mode from the degree column that came down with
+            // the index. `topByDegree` is a partial selection rather than a
+            // sort, so ranking 500k nodes to show five does not allocate an
+            // array of all of them first.
+            const top = topByDegree(5);
             if (top.length < 2) {
                 box.closest('.section').style.display = 'none';
                 return;
@@ -28,11 +24,11 @@
                 const item = document.createElement('button');
                 item.type = 'button';
                 item.className = 'start-here-item';
-                item.title = `Focus ${escapeHtml(n.name)} (${degree.get(n.id)} edges)`;
+                item.title = `Focus ${escapeHtml(n.name)} (${degreeOfNode(n)} edges)`;
                 item.innerHTML = `
                     ${nodeIconSvg(n.group)}
                     <span class="name">${escapeHtml(truncateName(n.name))}</span>
-                    <span class="deg">${degree.get(n.id)}</span>
+                    <span class="deg">${degreeOfNode(n)}</span>
                 `;
                 item.addEventListener('click', () => { handleClick(null, n); focusNode(n); });
                 box.appendChild(item);
@@ -261,8 +257,10 @@
                 return state.catalogTree;
             }
             const { childrenOf, parentOf } = getContainsMaps();
-            const nodeById = state.nodeById || new Map(state.graph.nodes.map(n => [n.id, n]));
-            state.nodeById = nodeById;
+            // Set by `initialize()` in both modes — a NodeStore in server mode,
+            // a plain Map locally. Rebuilding one here as a fallback allocated a
+            // 500k-entry map to cover an invariant that was already broken.
+            const nodeById = state.nodeById;
 
             const isFolder = id => {
                 const n = nodeById.get(id);

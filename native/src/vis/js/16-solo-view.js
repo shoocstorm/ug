@@ -58,7 +58,7 @@
         // server.
         function soloRequired(limit) {
             if (state.graphMode === 'server') return true;
-            return Math.max(state.graph.nodes.length, state.edgeCount) > (limit ?? visSoloThreshold());
+            return Math.max(state.nodeCount || 0, state.edgeCount) > (limit ?? visSoloThreshold());
         }
 
         // Adjacency over the *full* graph, built once. Before this, every
@@ -84,9 +84,11 @@
             state.adjCompleteAll = false;
             if (state.graphMode === 'server') {
                 state.adj = adj;
+                state.adjKeys = new Map();
                 state.adjPending = new Map();
                 return;
             }
+            state.adjKeys = null;   // local mode never re-pushes the same edge
             state.adjCompleteAll = true;
             const push = (id, e) => {
                 const list = adj.get(id);
@@ -167,8 +169,8 @@
         // clicks on the same node makes one request, not one per click.
         async function ensureEdges(ids, scope = 'incident') {
             if (state.adjCompleteAll || state.graphMode !== 'server') return;
-            const idx = state.slimIndexOf;
-            if (!idx) return;
+            const store = state.nodeStore;
+            if (!store) return;
 
             // Deduped and sorted before the key is built: callers routinely
             // pass overlapping sets (`[...viewSeeds, ...viewExpanded]` names
@@ -181,8 +183,8 @@
                 if (seen.has(id)) continue;
                 seen.add(id);
                 if (scope === 'incident' && state.adjComplete.has(id)) continue;
-                const i = idx.get(id);
-                if (i !== undefined) want.push(i);
+                const i = store.indexOf(id);
+                if (i >= 0) want.push(i);
             }
             if (!want.length) return;
             want.sort((a, b) => a - b);
@@ -205,36 +207,82 @@
             if (!res.ok) throw new Error(await readErr(res));
             const data = await res.json();
             if (!graphTokenMatches(data.token)) return;
-            const nodes = state.graph.nodes;
+            // The wire speaks positions, and what the adjacency cache stores is
+            // *ids* — so this resolves indices to ids, not to node objects.
+            //
+            // That distinction is worth a lot on a hub. A node of degree 8,680
+            // brings back 8,680 edges, of which the canvas will draw at most
+            // `SOLO_MAX_NEIGHBORS`; materialising a node object for every
+            // endpoint built ~8.7k objects to throw ~8.4k of them away, and the
+            // garbage showed up as a pause on the *next* await. `setSoloView`
+            // materialises the few hundred that actually get drawn, through the
+            // store, as it always did.
+            //
+            // The ids are memoised per response so that a hub appearing in
+            // 8,680 edges yields one string rather than 8,680 copies of the
+            // same 141 characters — the adjacency lists and the view compare
+            // these, and identical strings compare by pointer first.
+            const store = state.nodeStore;
             const { src, tgt, rel, relTypes } = data;
+            const idMemo = new Map();
+            const idOf = (i) => {
+                let v = idMemo.get(i);
+                if (v === undefined) {
+                    v = i >= 0 && i < store.nodeCount ? store.idAt(i) : null;
+                    idMemo.set(i, v);
+                    // The store would otherwise have to hash this id back to
+                    // the index we already have, the first time anything looks
+                    // the node up.
+                    if (v !== null) store.noteIndex(v, i);
+                }
+                return v;
+            };
 
             for (let k = 0; k < src.length; k++) {
-                const s = nodes[src[k]];
-                const t = nodes[tgt[k]];
+                const s = idOf(src[k]);
+                const t = idOf(tgt[k]);
                 if (!s || !t) continue;
                 // One object per edge, pushed into both endpoints' lists —
                 // `setSoloView` dedupes by object identity (`seen.has(e)`), so
                 // two objects for one edge would draw two strands.
-                const edge = { source: s.id, target: t.id, rel: relTypes[rel[k]] || null };
-                pushEdge(s.id, edge);
-                if (t.id !== s.id) pushEdge(t.id, edge);
+                const edge = { source: s, target: t, rel: relTypes[rel[k]] || null };
+                // The dedupe key is built from the *wire indices*, not the ids.
+                // Same identity, ~20 characters instead of ~290: on a node of
+                // degree 8,680 that is 17k short strings to hash rather than
+                // 17k long ones, which is most of what filling a hub's
+                // adjacency costs.
+                const key = src[k] + '|' + tgt[k] + '|' + rel[k];
+                pushEdge(s, edge, key);
+                if (t !== s) pushEdge(t, edge, key);
             }
-            for (const id of data.complete || []) {
-                const node = nodes[id];
-                if (node) state.adjComplete.add(node.id);
+            for (const i of data.complete || []) {
+                const id = idOf(i);
+                if (id) state.adjComplete.add(id);
             }
         }
 
         // Append without duplicating: a node's list is filled by several
         // fetches (its own incident query, plus induced queries from every
         // neighbourhood it appears in), and the same edge can arrive twice.
-        function pushEdge(id, edge) {
-            let list = state.adj.get(id);
-            if (!list) { state.adj.set(id, [edge]); return; }
-            for (const e of list) {
-                if (e.source === edge.source && e.target === edge.target && e.rel === edge.rel) return;
+        //
+        // Through a `Set` of keys, not a scan of the list. The scan was O(d) per
+        // edge and therefore O(d²) to fill one node's adjacency — and `d` is not
+        // small: the real `~/.ug/neo4j` graph has a node of degree 8,680, so one
+        // click on it compared 141-character strings roughly 38 million times,
+        // on the main thread, before anything was drawn.
+        function pushEdge(id, edge, key) {
+            let seen = state.adjKeys && state.adjKeys.get(id);
+            if (!seen && state.adjKeys) {
+                seen = new Set();
+                state.adjKeys.set(id, seen);
             }
-            list.push(edge);
+            if (seen) {
+                if (seen.has(key)) return;
+                seen.add(key);
+            }
+            const list = state.adj.get(id);
+            if (list) list.push(edge);
+            else state.adj.set(id, [edge]);
         }
 
         // The end of `e` that isn't `id`. Handles both shapes: edges the
@@ -253,7 +301,7 @@
                 if (opts.filtered && state.linkHidden && state.linkHidden(e)) continue;
                 const other = otherEnd(e, id);
                 if (other === id) continue;
-                if (opts.filtered && state.nodeHidden) {
+                if (opts.filtered && state.nodeFilterActive && state.nodeHidden) {
                     const n = state.nodeById && state.nodeById.get(other);
                     if (n && state.nodeHidden(n)) continue;
                 }
@@ -485,7 +533,7 @@
         function updateSoloHud() {
             if (!state.soloOnly) return;
             const shown = state.view ? state.view.nodes.length : 0;
-            const total = state.graph.nodes.length;
+            const total = state.nodeCount || 0;
 
             const chip = document.getElementById('view-count');
             if (chip) {
@@ -513,7 +561,7 @@
             empty.dataset.wired = '1';
 
             const countEl = empty.querySelector('.ce-count');
-            if (countEl) countEl.textContent = formatNumber(state.graph.nodes.length);
+            if (countEl) countEl.textContent = formatNumber(state.nodeCount || 0);
 
             const search = empty.querySelector('.ce-search-btn');
             if (search) search.addEventListener('click', focusSearchInput);
@@ -552,17 +600,7 @@
         // happened to have been clicked — and rank it highest on the very first
         // screen, where nothing has been clicked at all.
         function topHubs(n) {
-            const degree = state.degreeOf;
-            if (!degree || !degree.size) return [];
-            const ranked = [...degree.entries()];
-            ranked.sort((a, b) => b[1] - a[1]);
-            const out = [];
-            for (const [id] of ranked) {
-                const node = state.nodeById.get(id);
-                if (node) out.push(node);
-                if (out.length >= n) break;
-            }
-            return out;
+            return topByDegree(n);
         }
 
         // Put the cursor in the keyword search box. The button in the empty

@@ -286,10 +286,11 @@ The HTTP server (`ug serve`) is built on **axum**. All routes listed below.
 | POST | `/api/config` | Persist settings to `~/.ug/config.json` — body `{ "set": {key:value}, "unset": [keys] }`. Chat changes apply immediately; embed changes after a server restart; vis and graph-server-mode changes on the next page load | — |
 | GET | `/api/graph/stats` | Node/edge counts, file stats | No graph |
 | GET | `/api/graph/nodes` | **Slim node index** — every node's `{id, name, type, file, startLine, endLine}` in columnar form with `node_type` and `file` dictionary-coded, plus undirected `deg`, sparse `boundary`, `catalogRoots` and the per-type counts. No edges. This is what the page loads instead of `graph.json` when `capabilities.graph.mode` is `server`; a node's index in these columns is its identity for every other server-mode request. Built once per snapshot | No graph |
+| GET | `/api/graph/nodes.bin` | **The same index as a binary frame** — what the page actually loads in `server` mode; `/api/graph/nodes` is the fallback for an older client. Magic `UGNIDX\0\0`, `u32` version, a section table of `(kind, offset, len)`, then the columns as little-endian typed arrays, 4-byte aligned so the client can view them in place. Ids and names are front-coded (one `u8` of shared-prefix length per entry, restarting every 16) and travel with a `u32` FNV-1a hash column so the client builds its `id → index` table without decoding any of them. The tail section is JSON for everything that is not a column. Built once per snapshot | No graph |
 | POST | `/api/graph/edges` | **Batch neighbourhood** — body `{ids:[node indices], scope:"incident"\|"induced"}` → columnar `{src, tgt, rel, relTypes, complete}`. `incident` returns every edge touching each id and lists them in `complete`; `induced` returns only edges with **both** ends in the set and `complete` is always empty, because it withholds the edges that leave the set. Server mode's one graph primitive: solo expansion, focus, the Related tab, walk and tour all reduce to this | No graph |
 | POST | `/api/graph/nodes/hydrate` | **Batch node detail** — body `{ids:[node indices]}` → the full `GraphNode` for each: docstring, signature, metrics, imports/exports/calls/extends/implements, boundary detail. Exactly the fields `/api/graph/nodes` omits, fetched only for what the info panel is showing. Out-of-range indices are dropped, not fatal | No graph |
 | GET | `/api/graph/node/*id` | Get one node by id | No graph / not found |
-| GET | `/api/graph/search` | Keyword search over node names (query params: `?q=`) | No graph |
+| GET | `/api/graph/search` | Keyword search over node **names, qualified ids and docstrings** (`?q=`, `?types=`, `?limit=` — default 200, cap 5,000). Results are **ranked** — by where the query appears in the name, then by name length — before `limit` is applied, so the cut keeps the best matches rather than the first ones in graph order. `count` is the number of matches, `returned` the number sent. This is the page's search box in `server` mode | No graph |
 | GET | `/api/graph/traverse/*id` | K-hop BFS from a node seed | No graph |
 | GET | `/api/graph/path` | Shortest path between two nodes (query: `?source=&target=`) | No graph |
 | GET | `/api/graph/filter` | Filter edges by type/endpoint | No graph |
@@ -308,7 +309,7 @@ The HTTP server (`ug serve`) is built on **axum**. All routes listed below.
 | `mode` | What the page does |
 |---|---|
 | `local` | Downloads `/graph.json` whole and answers everything in the browser. What every release before this did, and still the default for graphs under the threshold. |
-| `server` | Loads `/api/graph/nodes` instead — every node, no edges — and asks this server for edges, neighbourhoods and per-node detail. |
+| `server` | Loads `/api/graph/nodes.bin` instead — every node, no edges — and asks this server for edges, neighbourhoods, per-node detail and search. The page holds the index as typed-array columns rather than as node objects and builds a node only when something asks for one, so what it retains is set by what you touch, not by how big the graph is. Falls back to `/api/graph/nodes` (JSON) if the binary frame is unavailable. |
 
 `ug serve --graph-mode <auto\|local\|server>` sets the policy; `auto` (the
 default) resolves it per project by comparing `bytes` against `threshold`
