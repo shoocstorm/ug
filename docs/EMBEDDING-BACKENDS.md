@@ -327,7 +327,8 @@ Three consequences that are easy to get wrong:
    later inside `embed()`, which exits with `hybrid search failed: ...`.
    Fallback and unreachable-backend are therefore *different* failure modes.
 3. **Vectors must exist in the database.** A working embedder is not enough if
-   ingest skipped them: after `--no-embed` (what the git hooks run) the affected
+   ingest skipped them, and embedding is **opt-in**: after any run without
+   `--with-embed` (the default, and what the git hooks run) the affected
    nodes have no vectors, and the semantic channel silently returns less until
    `ug ingest -n <project>` catches up. The MCP layer appends a
    "Some nodes have no vectors yet" note when it detects this.

@@ -323,7 +323,7 @@ fn print_embedder_fallback_note() {
     println!("  {C_BOLD}Hard dependencies{C_RESET} {C_DIM}(no fallback anywhere):{C_RESET}");
     println!("  {C_DIM}·{C_RESET} {C_CYAN}ug chat{C_RESET} · {C_CYAN}ug tour{C_RESET} — exit if the embedder cannot be built");
     println!("  {C_DIM}·{C_RESET} the MCP {C_BOLD}search{C_RESET} tool and {C_CYAN}POST /api/search/*{C_RESET} — error / 503");
-    println!("  {C_DIM}·{C_RESET} vectors must be {C_BOLD}in{C_RESET} the db: a {C_CYAN}--no-embed{C_RESET} run ingests without them, so the");
+    println!("  {C_DIM}·{C_RESET} vectors must be {C_BOLD}in{C_RESET} the db: without {C_CYAN}--with-embed{C_RESET} a run ingests no vectors, so the");
     println!("    semantic channel stays empty until {C_CYAN}ug ingest{C_RESET} catches up");
     println!();
     println!("  {C_DIM}Embeddings-free alternatives: {C_RESET}{C_CYAN}ug find_symbols{C_RESET}{C_DIM} (exact names, wildcards),");

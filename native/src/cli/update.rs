@@ -3,17 +3,17 @@
 //! `ug gen` re-runs the whole pipeline, which is the right hammer for "the
 //! repo drifted". `ug update` is the focused version an agent reaches for
 //! after an edit burst: name the file(s) you touched, and it re-indexes,
-//! re-resolves cross-file edges, re-embeds the changed nodes, and tells you
+//! re-resolves cross-file edges, re-ingests the changed nodes, and tells you
 //! exactly what landed for those files.
 //!
-//! Two flags shorten the run, and they are not interchangeable:
-//! `--no-embed` still ingests into the db — nodes, edges, facts and keyword
-//! statistics all land, only the vectors are skipped (and no embedding model
-//! is loaded, which is most of a small run's wall clock), so `ug analyze` and
-//! blast radius stay exact. `--no-ingest` writes nothing to the db at all, so
-//! everything it backs — `ug analyze` included — keeps answering from the
-//! previous ingest. `skip_flags_help` in `gen` is the one place that
-//! difference is spelled out for users.
+//! By default it writes no vectors — nodes, edges, facts and keyword
+//! statistics all land, so `ug analyze` and blast radius stay exact, but no
+//! embedding model is loaded, which is most of a small run's wall clock.
+//! `--with-embed` adds the vectors to the same run. Do not confuse either
+//! with `--no-ingest`, which writes nothing to the db at all, leaving
+//! everything it backs — `ug analyze` included — answering from the previous
+//! ingest. `skip_flags_help` in `gen` is the one place that difference is
+//! spelled out for users.
 //!
 //! The cross-file edge graph is re-resolved over the whole repo on every run,
 //! not spliced in place. That is the cost of correctness: an edge into the
@@ -154,10 +154,10 @@ pub(crate) fn run_update(args: &[String]) {
         rel_targets.len(),
         if no_ingest {
             " (graph.json only — nothing written to the db, --no-ingest)"
-        } else if has_flag(args, "--no-embed") {
-            " (db written without vectors, --no-embed)"
+        } else if super::gen::wants_embeddings(args) {
+            " (db written with vectors, --with-embed)"
         } else {
-            ""
+            " (db written without vectors — add --with-embed for semantic search)"
         }
     );
 
@@ -233,7 +233,7 @@ pub(crate) fn run_update(args: &[String]) {
             "  ingest: {C_RESET}{C_CYAN}ug analyze{C_RESET}{C_DIM} statistics and blast radius, {C_RESET}{C_CYAN}search{C_RESET}{C_DIM}, {C_RESET}{C_CYAN}chat{C_RESET}{C_DIM}."
         );
         println!(
-            "  Use {C_RESET}{C_CYAN}--no-embed{C_RESET}{C_DIM} instead to keep the db current except for vectors.{C_RESET}"
+            "  Drop {C_RESET}{C_CYAN}--no-ingest{C_RESET}{C_DIM} to keep the db current except for vectors.{C_RESET}"
         );
         println!("Updated {C_BOLD}{}{C_RESET} in {C_BOLD}{:?}{C_RESET}", name, start.elapsed());
         return;
@@ -244,7 +244,7 @@ pub(crate) fn run_update(args: &[String]) {
         Ok(out) => {
             if out.vectors_skipped > 0 {
                 println!(
-                    "  {C_GREEN}✓{C_RESET} {} nodes, {} edges written; {C_YELLOW}{} awaiting vectors{C_RESET} {C_DIM}(--no-embed){C_RESET}",
+                    "  {C_GREEN}✓{C_RESET} {} nodes, {} edges written; {C_YELLOW}{} awaiting vectors{C_RESET} {C_DIM}(embedding is opt-in — --with-embed){C_RESET}",
                     out.nodes, out.edges, out.vectors_skipped
                 );
                 println!(
@@ -362,9 +362,10 @@ fn print_update_help() {
     println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
     println!();
     println!("  The focused counterpart to {C_CYAN}ug gen{C_RESET}: name the file(s) you edited and");
-    println!("  this re-indexes, re-resolves cross-file edges, and re-embeds the changed");
+    println!("  this re-indexes, re-resolves cross-file edges, and re-ingests the changed");
     println!("  nodes. Incremental via the blake3 parse cache and the ingest diff, so");
-    println!("  unchanged files are neither re-parsed nor re-embedded.");
+    println!("  unchanged files are neither re-parsed nor re-embedded. Vectors are opt-in");
+    println!("  ({C_CYAN}--with-embed{C_RESET}) — the model load is most of a small run's wall clock.");
     println!();
     println!("  Built for a live editing session: call it after an edit burst so the");
     println!("  structural and statistical tools ({C_CYAN}find_usages{C_RESET}, {C_CYAN}ug analyze{C_RESET}, …) reflect what");
@@ -375,15 +376,15 @@ fn print_update_help() {
     println!();
     println!("{C_BOLD}Options:{C_RESET}");
     println!("  {C_CYAN}-n, --name{C_RESET} <project>   Project to update (default: the active one)");
-    println!("  {C_CYAN}--no-embed{C_RESET}              Ingest into the db, without vectors {C_DIM}(what git hooks use){C_RESET}");
+    println!("  {C_GREEN}--with-embed{C_RESET}            Also build vectors {C_DIM}(off by default — git hooks never do){C_RESET}");
     println!("  {C_CYAN}--no-ingest{C_RESET}             Write nothing to the db; refresh graph.json only");
-    println!("      {C_DIM}The two are explained side by side below — they are often confused.{C_RESET}");
+    println!("      {C_DIM}These are explained side by side below — they are often confused.{C_RESET}");
     println!("      {C_DIM}…plus every {C_RESET}{C_CYAN}ug gen{C_RESET}{C_DIM} embedder flag — see {C_RESET}{C_CYAN}ug gen -h{C_RESET}");
     println!();
     println!("{C_BOLD}Examples:{C_RESET}");
     println!("  {C_CYAN}ug update{C_RESET} native/src/agent_tools.rs");
     println!("  {C_CYAN}ug update{C_RESET} src/a.ts src/b.ts -n myrepo");
-    println!("  {C_CYAN}ug update{C_RESET} native/src/cli/mod.rs --no-embed   {C_DIM}# db current except vectors{C_RESET}");
+    println!("  {C_CYAN}ug update{C_RESET} native/src/cli/mod.rs --with-embed {C_DIM}# …and embed them right away{C_RESET}");
     println!("  {C_CYAN}ug update{C_RESET} native/src/cli/mod.rs --no-ingest  {C_DIM}# graph.json only, db untouched{C_RESET}");
     println!();
     print!("{}", super::gen::skip_flags_help());

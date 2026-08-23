@@ -664,11 +664,10 @@ fn spawn_update(
         .arg("update")
         .arg("-n")
         .arg(project)
-        // Vectors are the slow part and the least urgent: skipping them keeps
-        // graph.json and the store's structure current — which is what blast
-        // radius reads — in a fraction of the time. `ug ingest` catches the
-        // embeddings up. See `ug hook -h`.
-        .arg("--no-embed")
+        // No `--with-embed`: vectors are the slow part and the least urgent,
+        // and skipping them keeps graph.json and the store's structure
+        // current — which is what blast radius reads — in a fraction of the
+        // time. `ug ingest` catches the embeddings up. See `ug hook -h`.
         .args(paths)
         .env("UG_QUIET_LOGO", "1")
         .output()
@@ -832,9 +831,9 @@ pub(crate) fn hook_help_text() -> String {
     line!("  {C_CYAN}core.hooksPath{C_RESET} is honoured, so husky and lefthook repos work.");
     line!("");
     line!("{C_BOLD}Fast on purpose — vectors are the one thing left behind:{C_RESET}");
-    line!("  Hook runs pass {C_CYAN}--no-embed{C_RESET}, which {C_BOLD}still ingests into the db{C_RESET} — nodes,");
-    line!("  edges, facts and keyword statistics all land, only the vectors are");
-    line!("  skipped, and no embedding model is loaded (most of a small run).");
+    line!("  Hook runs never pass {C_CYAN}--with-embed{C_RESET}, so they {C_BOLD}still ingest into the db{C_RESET} —");
+    line!("  nodes, edges, facts and keyword statistics all land, only the vectors");
+    line!("  are skipped, and no embedding model is loaded (most of a small run).");
     line!("  So {C_BOLD}find_usages, ug analyze, diff_impact and blast radius stay exact{C_RESET}.");
     line!("  {C_DIM}(Not to be confused with {C_RESET}{C_CYAN}--no-ingest{C_RESET}{C_DIM}, which writes nothing to the db at");
     line!("  all and would leave ug analyze stale too. See {C_RESET}{C_CYAN}ug update -h{C_RESET}{C_DIM}.){C_RESET}");
@@ -994,7 +993,7 @@ mod tests {
         let block = hook_block(Hook::PostCommit, "/bin/ug", "demo");
         assert!(block.contains("hook run post-commit"));
         assert!(
-            hook_help_text().contains("--no-embed") || hook_help_text().contains("ug ingest"),
+            hook_help_text().contains("--with-embed") || hook_help_text().contains("ug ingest"),
             "`ug hook -h` must say how to catch the vectors up"
         );
     }

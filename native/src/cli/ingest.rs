@@ -9,7 +9,7 @@ use ultragraph::storage::{
     self, open_store, Embedder, KnowledgeStore, StoreError, StoreSet, StoreSpec,
 };
 use ultragraph::types::GraphData;
-use ultragraph::{C_BOLD, C_CYAN, C_GREEN, C_RESET, C_YELLOW};
+use ultragraph::{C_BOLD, C_CYAN, C_DIM, C_GREEN, C_RESET, C_YELLOW};
 
 use crate::project;
 
@@ -122,7 +122,7 @@ async fn ingest_graph_with_progress(
         vectors_skipped = to_embed;
         vectors.resize(to_embed, Vec::new());
         println!(
-            "{C_CYAN}▸{C_RESET} Embedding: {C_YELLOW}✓ skipped (--no-embed){C_RESET} — {} node(s) written without vectors",
+            "{C_CYAN}▸{C_RESET} Embedding: {C_YELLOW}✓ skipped{C_RESET} {C_DIM}(opt in with --with-embed){C_RESET} — {} node(s) written without vectors",
             to_embed
         );
     } else {
@@ -595,8 +595,8 @@ pub(crate) fn run_ingest(args: &[String]) {
                     dest_label.join(", "),
                     start_total.elapsed()
                 );
-                // This is the command that pays off `--no-embed`, so it is
-                // also the one that clears the debt.
+                // This is the command that pays off a run without
+                // `--with-embed`, so it is also the one that clears the debt.
                 if out.embedding_error.is_none() {
                     project::set_pending_vectors(
                         &project::project_dir(&project_name),

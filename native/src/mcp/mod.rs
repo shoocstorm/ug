@@ -160,8 +160,8 @@ struct ProjectCtx {
 }
 
 /// Warning appended to the vector-backed tools when the project has nodes
-/// that were written without vectors (a `--no-embed` run, which is what the
-/// git hooks do).
+/// that were written without vectors (any run without `--with-embed`, which
+/// is the default and what the git hooks do).
 ///
 /// Those nodes are in the graph and in every structural answer, but they are
 /// invisible to a vector search — so a semantic result set can be quietly
@@ -179,7 +179,8 @@ fn vectors_note(ctx: &ProjectCtx) -> String {
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
     format!(
-        "\n\n⚠ Some nodes have no vectors yet (a --no-embed refresh, e.g. from the git hooks), \
+        "\n\n⚠ Some nodes have no vectors yet (embedding is opt-in — a refresh without \
+         --with-embed, e.g. from the git hooks), \
          so this ranking may be missing recently-changed code. Structural tools (find_usages, \
          analyze) are unaffected. Run `ug ingest -n {}` to backfill.",
         project

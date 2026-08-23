@@ -174,10 +174,15 @@
                             </div>
                         </label>
                         <label class="kb-checkbox">
-                            <input type="checkbox" id="kb-no-ingest" checked>
-                            <span>Skip embedding ingest (faster; disables semantic/hybrid search &amp; chat)</span>
+                            <input type="checkbox" id="kb-with-embed">
+                            <span>Build embeddings too (slower; enables semantic/hybrid search, chat &amp; tours)</span>
                         </label>
-                        <p class="kb-checkbox-note">When ticked, generated/indexed data is stored as plain files only — it is <em>not</em> embedded &amp; ingested into the vector/graph OverGraph DB. Semantic search, the guided tour, and chat will be disabled.</p>
+                        <p class="kb-checkbox-note">Off by default: the knowledge graph — symbols, edges, facts, keyword search, blast radius — needs no vectors, and loading the embedding model is most of the run time. Tick this to embed now, or leave it off and click <em>Ingest now</em> later to backfill.</p>
+                        <label class="kb-checkbox">
+                            <input type="checkbox" id="kb-no-ingest">
+                            <span>Skip the database entirely (graph files only)</span>
+                        </label>
+                        <p class="kb-checkbox-note">When ticked, generated/indexed data is stored as plain files only — nothing is written to the OverGraph DB, so <em>ug analyze</em> statistics and blast radius keep answering from the previous ingest as well.</p>
                         <div class="kb-form-actions">
                             <button type="submit" id="kb-generate-btn">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"

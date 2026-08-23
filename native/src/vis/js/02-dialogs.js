@@ -211,6 +211,9 @@
                 const path = document.getElementById('kb-path-input').value.trim();
                 const name = document.getElementById('kb-name-input').value.trim();
                 const noIngest = document.getElementById('kb-no-ingest').checked;
+                // Embedding is opt-in, exactly as on the CLI: the default run
+                // writes structure and no vectors, and "Ingest now" backfills.
+                const withEmbed = document.getElementById('kb-with-embed').checked;
                 if (!path) return;
 
                 document.getElementById('kb-generate-btn').disabled = true;
@@ -224,7 +227,7 @@
                     const res = await fetch('/api/generate', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ path, name: name || undefined, no_ingest: noIngest }),
+                        body: JSON.stringify({ path, name: name || undefined, no_ingest: noIngest, with_embed: withEmbed }),
                     });
                     if (!res.ok) {
                         const err = await res.json().catch(() => ({}));

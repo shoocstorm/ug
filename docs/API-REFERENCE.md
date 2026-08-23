@@ -20,28 +20,34 @@
 
 | Command | Aliases | What it does | Data sources | Key flags |
 |---------|---------|-------------|--------------|-----------|
-| `ug gen` | — | **End-to-end pipeline**: index → graph → visualization → OverGraph ingest. The primary entry point. With no input path named, re-runs the resolved project (`-n` → active → cwd basename) from the repo root recorded in its `project.json` — incremental, unchanged files are skipped. | Repo source → index.json → graph.json → ugdb/ | `-i <path>` input dir, `-o <dir>` output, `-n <name>` project name, `-c <dir>` cache, `--no-cache`, `--no-ingest`, `--no-embed`, `--no-prune`, `--serve`, `-d <dir>` db path, `--model`, `--base-url`, `--api-key`, `--embedding-dim` |
+| `ug gen` | — | **End-to-end pipeline**: index → graph → visualization → OverGraph ingest. The primary entry point. With no input path named, re-runs the resolved project (`-n` → active → cwd basename) from the repo root recorded in its `project.json` — incremental, unchanged files are skipped. | Repo source → index.json → graph.json → ugdb/ | `-i <path>` input dir, `-o <dir>` output, `-n <name>` project name, `-c <dir>` cache, `--no-cache`, `--no-ingest`, `--with-embed`, `--no-prune`, `--serve`, `-d <dir>` db path, `--model`, `--base-url`, `--api-key`, `--embedding-dim` |
 | `ug index` | — | Index a directory: parse source files into `FileNode`s with symbols, imports, exports. Writes `indexed-tree.json`. | Repo source → writes index.json | `-i <path>` input (default `.`), `-o <file>` output, `-n <name>`, `-c <dir>` cache |
 | `ug graph` | — | Build graph from indexed tree: resolve cross-file imports, create `GraphData` with nodes + edges. Writes `graph.json`. | index.json → writes graph.json | `-i <file>` input index.json, `-o <file>` output graph.json, `-n <name>` |
 | `ug ingest` | — | Embed graph nodes and write to one or more knowledge stores (OverGraph/Neo4j). Defaults resolve from active project (`ug active <name>`), else cwd basename; reads `~/.ug/<name>/graph.json`, writes `~/.ug/<name>/ugdb`. | graph.json → writes to ugdb/ or Neo4j | `-n <name>` project name, `-i <file>` input graph.json, `-o <dir>` output, `--dest <kind>` (overgraph\|neo4j, comma-separated), `--neo4j-*`, `--prune`, `--model`, `--base-url`, `--api-key`, `--embedding-dim` |
 | `ug demo` | — | **Publish** a repo as a static web demo: index → graph → a folder any static host can serve. Stops after `build_graph` — no db, no vectors, no project registered under `~/.ug`. Writes `graph.json` next to the visualization page wrapped in a static stand-in for the server (`native/src/vis/demo-shim.js`), so the page works with no backend; semantic search, chat, tours, statistics and source preview are off and say so in the UI. Local absolute paths (repo root, home directory) are scrubbed out of the published graph. Warns when the graph exceeds the renderer's 100,000-element limit, past which the page opens in solo mode. | Repo source → writes `<out>/graph.json`, `index.html`, `threejs-vis.bundle.js`, `favicon.svg`, `demo.json`, `README.md` | `-i <path>` input (default `.`), `-o <dir>` output (default `docs/ug-website/demo` when that folder exists, else `./ug-demo`), `--label <text>`, `--source-url <url>`, `--site <url>` (base for the "Install ug" links, default `/`), `--page-only` |
 | `ug demo --page-only` | — | Rebuild an already-published demo's `index.html` from this binary and leave `graph.json` alone. **What to run after editing `native/src/vis/`** — the published page is a copy and goes stale silently. `demo.json` carries a `visFingerprint` (hash of the assembled page + shim) so the `the_published_demo_page_is_not_stale` test catches the drift; a full re-publish would rewrite 2.7 MB of `graph.json` on every CSS tweak, which is why this path exists. | `<out>/demo.json` → rewrites `index.html`, `demo.json`, `threejs-vis.bundle.js`, `favicon.svg`, `README.md` | `-o <dir>`, `--label`, `--site` |
 
-#### `--no-embed` vs `--no-ingest`
+#### Embedding is opt-in — `--with-embed` vs `--no-ingest`
 
-Accepted by `ug gen` and `ug update`. They are commonly confused,
-and the difference decides whether `ug analyze` (statistics, `diff_impact`,
-blast radius) can be trusted after the run:
+`ug gen` and `ug update` build **no vectors** unless `--with-embed` asks for
+them: nothing structural reads a vector, and loading the embedding model is most
+of a run's wall clock. Do not confuse that with `--no-ingest`, which skips the
+database altogether — the difference decides whether `ug analyze` (statistics,
+`diff_impact`, blast radius) can be trusted after the run:
 
-| Flag | Written to the OverGraph db | Current after the run | Answering from the *previous* ingest |
+| `ug gen` / `ug update` | Written to the OverGraph db | Current after the run | Answering from the *previous* ingest |
 |---|---|---|---|
-| `--no-embed` | nodes, edges, facts and keyword/BM25 statistics — **everything except the vectors**. No embedding model is loaded, which is most of a small run's wall clock. | the graph.json tools **and `ug analyze`** — statistics, `diff_impact`, `boundary_impact`, blast radius, `traverse --dest` | `search`, `chat` — they miss the changed nodes until the vectors are backfilled |
+| *(default)* | nodes, edges, facts and keyword/BM25 statistics — **everything except the vectors**. No embedding model is loaded, which is most of a small run's wall clock. | the graph.json tools **and `ug analyze`** — statistics, `diff_impact`, `boundary_impact`, blast radius, `traverse --dest` | `search`, `chat` — they miss the changed nodes until the vectors are backfilled |
+| `--with-embed` | all of the above **plus the vectors**. Loads the embedding model (local fastembed, or a remote `--base-url` endpoint). | everything, semantic search included | — |
 | `--no-ingest` | **nothing** — no nodes, no edges, no vectors; the db is never opened. Only `graph.json` is rebuilt. | the graph.json tools only: `find_symbols`, `file_outline`, `get_code`, `find_usages`, `shortest_path`, `project_overview`, `graph_schema` | **everything the db backs** — `ug analyze` statistics and blast radius as well as `search`, `chat` |
 
-`ug ingest -n <project>` catches the db up in either case; it embeds only the
-nodes still owed a vector. A `--no-embed` run records the debt in
+`ug ingest -n <project>` catches the db up whenever you like; it embeds only the
+nodes still owed a vector. A run without `--with-embed` records the debt in
 `project.json` (`pendingVectorsSince`), which is what `ug hook status` and the
 `search` warning line report.
+
+`--no-embed`, the former opt-out, is still accepted for compatibility — it is
+the default now, and it wins if combined with `--with-embed`.
 
 ### 1.2 Graph Analysis Commands (graph.json-backed, offline, in-memory)
 
@@ -139,8 +145,8 @@ stdout.
 | `ug active` | — | View or set the active project (default for `ug mcp`). | Sets with `<name>` positional |
 | `ug rename` | `rn`, `mv` | Rename a project's data directory and its `project.json` name; the active marker follows it. One positional renames the current (active, else cwd) project; two rename `<old> <new>`. | `<new>` or `<old> <new>` positionals, `-n <old>` |
 | `ug rm` | — | Delete a project's data directory. | `<name>` positional |
-| `ug update` | — | Refresh the graph for the files that just changed (focused re-run): re-index, re-resolve cross-file edges, re-embed changed nodes. Built for a live editing session. A named path that no longer exists but *is* in the index is treated as a deletion; one the index never held is still an error. | `<file>...` positionals, `-n <name>`, `--no-embed`, `--no-ingest`, plus `ug gen` embedder flags |
-| `ug hook` | — | Install git hooks (`post-commit`, `post-merge`, `post-checkout`, `post-rewrite`) that run `ug update --no-embed` on the paths each event touched, so the graph never lags the working tree. Appends to an existing hook of the same name behind `# >>> ug hook >>>` markers, honours `core.hooksPath` (husky/lefthook), never fails the git command, and logs each run to `~/.ug/<project>/hook.log`. That log's header records the run's whole provenance — which hook fired, timestamp, project, repo root, data dir, `ug` binary and version, the files handed over, and the child's exit code — so a failed refresh can be diagnosed without reconstructing it from shell history. `UG_HOOK_DISABLE=1` skips it for one command. Because hook runs skip embedding, `status` reports how long vectors have been owed — `ug ingest -n <project>` backfills them. | `install` / `uninstall` / `status` (default) subcommands, `-n <name>` |
+| `ug update` | — | Refresh the graph for the files that just changed (focused re-run): re-index, re-resolve cross-file edges, re-ingest changed nodes (no vectors unless `--with-embed`). Built for a live editing session. A named path that no longer exists but *is* in the index is treated as a deletion; one the index never held is still an error. | `<file>...` positionals, `-n <name>`, `--with-embed`, `--no-ingest`, plus `ug gen` embedder flags |
+| `ug hook` | — | Install git hooks (`post-commit`, `post-merge`, `post-checkout`, `post-rewrite`) that run `ug update` (without `--with-embed`) on the paths each event touched, so the graph never lags the working tree. Appends to an existing hook of the same name behind `# >>> ug hook >>>` markers, honours `core.hooksPath` (husky/lefthook), never fails the git command, and logs each run to `~/.ug/<project>/hook.log`. That log's header records the run's whole provenance — which hook fired, timestamp, project, repo root, data dir, `ug` binary and version, the files handed over, and the child's exit code — so a failed refresh can be diagnosed without reconstructing it from shell history. `UG_HOOK_DISABLE=1` skips it for one command. Because hook runs skip embedding, `status` reports how long vectors have been owed — `ug ingest -n <project>` backfills them. | `install` / `uninstall` / `status` (default) subcommands, `-n <name>` |
 | `ug upgrade` | — | Check GitHub for a new release and self-update. The downloaded archive is verified against the release's published `.sha256` before it is unpacked and executed. | `--check` (report only, no update), `--allow-unverified` (install when a release publishes no checksum) |
 | `ug uninstall` | — | Delete ALL indexed projects and uninstall ug itself. | — |
 | `ug config` | — | View/persist defaults (chat model, endpoints, etc.) in `~/.ug/config.json`. | `set <key> <value>`, `get <key>`, `list` |
@@ -272,8 +278,8 @@ The HTTP server (`ug serve`) is built on **axum**. All routes listed below.
 
 | Method | Path | What it does | Data source |
 |--------|------|-------------|--------------|
-| POST | `/api/generate` | Kick off `ug gen` as a background job. Body: `{ "inputDir", "projectName", "model", "baseUrl", "apiKey" }` | Spawns subprocess, streams log lines via SSE |
-| GET | `/api/generate/status` | Check status of a gen job. Query: `?id=<uuid>` | In-memory `GenJobs` map |
+| POST | `/api/generate` | Kick off `ug gen` as a background job (multi-project mode only). Body: `{ "path": "<dir>", "name": "<project>"?, "no_ingest": false, "with_embed": false }`. **`with_embed` is opt-in**, mirroring the CLI: omitted, the job indexes structure into the db and builds no vectors — much faster — and `/api/ingest` backfills them later. `no_ingest` skips the db entirely. Returns `{ "jobId" }`. | Spawns `ug gen`, buffers its log lines |
+| GET | `/api/generate/status` | Check status of a gen or ingest job. Query: `?job=<id>`. Returns `{ "status": "running"\|"done"\|"error", "log", "projectName", "error" }`. | In-memory `GenJobs` map |
 | POST | `/api/ingest` | Re-embed an already-indexed project (the UI's "Ingest now" button). Body: `{ "name": "<project>" }` — defaults to the active project. Spawns `ug ingest`, poll with `/api/generate/status`. Reopens the active project's stores on success so the new vectors are live without a restart. A store that can't be opened (stale format or corrupt on-disk manifest) is wiped and rebuilt automatically. | Spawns subprocess |
 | GET | `/api/browse-dir` | List subdirectories of a path (KB Manager folder picker). Query: `?path=<path>` | Filesystem |
 

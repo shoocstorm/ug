@@ -1,6 +1,10 @@
-//! `ug gen` — the one-command pipeline (index → graph → ingest → embed),
-//! for both a first run against a path and a re-run of an existing project
-//! (whose recorded repo root is used when no path is named).
+//! `ug gen` — the one-command pipeline (index → graph → ingest), for both a
+//! first run against a path and a re-run of an existing project (whose
+//! recorded repo root is used when no path is named).
+//!
+//! Embedding is a fourth, optional stage: it is off unless `--with-embed`
+//! asks for it, because a knowledge graph is structure and none of the
+//! structural tools read a vector. See `wants_embeddings`.
 
 use std::env;
 use std::fs;
@@ -297,7 +301,7 @@ pub(crate) fn run_gen(args: &[String]) {
             "  {C_DIM}That is more than skipping embedding: {C_RESET}{C_CYAN}ug analyze{C_RESET}{C_DIM} statistics and blast radius"
         );
         println!(
-            "  need the db too. {C_RESET}{C_CYAN}--no-embed{C_RESET}{C_DIM} ingests without vectors if that is what you wanted.{C_RESET}"
+            "  need the db too. {C_RESET}{C_DIM}Drop the flag to ingest without vectors, which is the default.{C_RESET}"
         );
         // Make the path forward explicit before the serve line buries it.
         // Without this the user gets "Run 'ug serve'" and learns only after
@@ -321,7 +325,7 @@ pub(crate) fn run_gen(args: &[String]) {
     let ingest_outcome = match run_gen_ingest(&graph, &db_path, args) {
         Ok(out) if out.vectors_skipped > 0 => {
             println!(
-                "  {C_GREEN}✓ {} nodes, {} edges{C_RESET} written in {C_BOLD}{:?}{C_RESET}; {C_YELLOW}{} awaiting vectors{C_RESET} {C_DIM}(--no-embed){C_RESET}",
+                "  {C_GREEN}✓ {} nodes, {} edges{C_RESET} written in {C_BOLD}{:?}{C_RESET}; {C_YELLOW}{} awaiting vectors{C_RESET} {C_DIM}(embedding is opt-in — --with-embed){C_RESET}",
                 out.nodes,
                 out.edges,
                 t3.elapsed(),
@@ -388,6 +392,9 @@ pub(crate) fn run_gen(args: &[String]) {
             println!("       {C_CYAN}ug serve{C_RESET}  →  {C_CYAN}http://127.0.0.1:8080{C_RESET}");
             println!("  2. Or re-run ingest from another terminal:");
             println!("       {C_CYAN}ug ingest -n {}{C_RESET}", project_name);
+            println!(
+                "  3. Or ask for them up front next time: {C_CYAN}ug gen --with-embed{C_RESET}"
+            );
         }
     }
     println!("Total time: {C_BOLD}{:?}{C_RESET}", start_total.elapsed());
@@ -430,6 +437,9 @@ fn print_embeddings_missing_next_steps(project_name: &str, chain_serve: bool) {
     );
     println!();
     println!("{C_BOLD}Get embeddings:{C_RESET}");
+    println!(
+        "  • Re-run with {C_CYAN}--with-embed{C_RESET} to build them as part of the pipeline."
+    );
     if chain_serve {
         // Server is starting in-process; no need to suggest `ug serve`.
         println!(
@@ -498,12 +508,12 @@ pub(crate) fn run_gen_ingest(
     // the case where several inputs deliberately share one project dir.
     let prune = !has_flag(args, "--no-prune");
 
-    // `--no-embed` is the fast path a git hook takes: it never builds an
-    // embedder, because loading the local model is the single most expensive
-    // thing in an otherwise sub-second incremental run. Everything else —
-    // structure, facts, keyword statistics, pruning — still happens, so only
-    // semantic search lags, and `ug ingest` backfills it.
-    if has_flag(args, "--no-embed") {
+    // No vectors unless they were asked for. Loading the embedding model is
+    // the single most expensive thing in an otherwise sub-second run, and
+    // everything else — structure, facts, keyword statistics, pruning — is
+    // what the graph is for, so only semantic search lags and `ug ingest`
+    // backfills it. See `wants_embeddings`.
+    if !wants_embeddings(args) {
         let (dim, model) = store_dim_and_model(db_path, args);
         let budget = EmbedBudget::resolve(&model, section_cap_override(args));
         let rt = tokio_runtime();
@@ -538,28 +548,35 @@ pub(crate) fn run_gen_ingest(
     })
 }
 
-/// The one help block that explains `--no-embed` vs `--no-ingest`.
+/// The one help block that explains the default, `--with-embed` and
+/// `--no-ingest`.
 ///
-/// Shared by `ug gen -h` and `ug update -h` rather than
-/// re-worded per command, because the difference is the thing people get
-/// wrong: both read as "skip the slow part", and only one of them leaves
-/// `ug analyze` — statistics, `diff_impact`, blast radius — answering from the
-/// previous ingest.
+/// Shared by `ug gen -h` and `ug update -h` rather than re-worded per
+/// command, because the distinction is the thing people get wrong: "no
+/// vectors" and "no database" both read as "skip the slow part", and only
+/// one of them leaves `ug analyze` — statistics, `diff_impact`, blast
+/// radius — answering from the previous ingest.
 pub(crate) fn skip_flags_help() -> String {
     let mut o = String::new();
     macro_rules! line {
         ($($arg:tt)*) => { o.push_str(&format!("{}\n", format_args!($($arg)*))) };
     }
-    line!("{C_BOLD}The two skip flags are NOT the same thing:{C_RESET}");
+    line!("{C_BOLD}Vectors are opt-in — and \"no vectors\" is NOT \"no database\":{C_RESET}");
     line!("");
-    line!("  {C_CYAN}--no-embed{C_RESET}   {C_BOLD}Ingest into the db, without vectors.{C_RESET}");
+    line!("  {C_BOLD}(default){C_RESET}    {C_BOLD}Ingest into the db, without vectors.{C_RESET}");
     line!("               Nodes and edges {C_BOLD}are{C_RESET} written — facts and keyword statistics too.");
     line!("               Only the embedding is skipped, and no embedding model is");
     line!("               loaded, which is most of a small run's wall clock.");
     line!("               {C_GREEN}Current:{C_RESET} the graph.json tools {C_BOLD}and{C_RESET} {C_CYAN}ug analyze{C_RESET} — statistics,");
     line!("                        {C_CYAN}diff_impact{C_RESET}, blast radius, {C_CYAN}traverse --dest{C_RESET}.");
-    line!("               {C_YELLOW}Behind:{C_RESET}  {C_CYAN}search{C_RESET} / {C_CYAN}chat{C_RESET} miss the changed");
+    line!("               {C_YELLOW}Behind:{C_RESET}  {C_CYAN}search{C_RESET} / {C_CYAN}chat{C_RESET} / {C_CYAN}tour{C_RESET} miss the changed");
     line!("                        nodes until the vectors are backfilled.");
+    line!("");
+    line!("  {C_CYAN}--with-embed{C_RESET} {C_BOLD}Also build the vectors, in the same run.{C_RESET}");
+    line!("               Loads the embedding model and embeds every changed node,");
+    line!("               so {C_CYAN}search{C_RESET}, {C_CYAN}chat{C_RESET} and {C_CYAN}tour{C_RESET} are live the moment the run ends.");
+    line!("               Ask for it when you want semantic search now; otherwise");
+    line!("               {C_CYAN}ug ingest -n <project>{C_RESET} backfills it later, at your convenience.");
     line!("");
     line!("  {C_CYAN}--no-ingest{C_RESET}  {C_BOLD}Write nothing to the db at all.{C_RESET}");
     line!("               No nodes, no edges, no vectors — the db is not opened.");
@@ -571,8 +588,9 @@ pub(crate) fn skip_flags_help() -> String {
     line!("                        blast radius as well as {C_CYAN}search{C_RESET} / {C_CYAN}chat{C_RESET}");
     line!("                        keep answering from the {C_BOLD}previous{C_RESET} ingest.");
     line!("");
-    line!("  Either way, {C_CYAN}ug ingest -n <project>{C_RESET} catches the db up — it embeds only");
-    line!("  the nodes still owed a vector.");
+    line!("  Without {C_CYAN}--with-embed{C_RESET}, {C_CYAN}ug ingest -n <project>{C_RESET} catches the db up — it embeds");
+    line!("  only the nodes still owed a vector.");
+    line!("  {C_DIM}(The old {C_RESET}{C_CYAN}--no-embed{C_RESET}{C_DIM} is still accepted; it is the default now.){C_RESET}");
     o
 }
 
@@ -605,7 +623,24 @@ fn gen_specs(args: &[String], db_path: &str, dim: u32) -> Vec<StoreSpec> {
     store_specs_from_args(&pinned, dim)
 }
 
-/// The embedding dim and model to plan a `--no-embed` run against.
+/// Whether this invocation should build vectors.
+///
+/// Embedding is **opt-in**. A knowledge graph is structure — nodes, edges,
+/// facts, keyword statistics — and none of it needs a vector: `find_symbols`,
+/// `find_usages`, `traverse`, `ug analyze`, blast radius and `diff_impact`
+/// all read the graph, not the embedding space. Vectors buy `search`, `chat`
+/// and tours, and they cost most of the wall clock of a run, so `--with-embed`
+/// asks for them and `ug ingest -n <project>` backfills them afterwards.
+///
+/// `--no-embed` is still accepted. It was the old opt-out and is now the
+/// default, so installed git hooks and scripts that pass it keep working and
+/// keep meaning exactly what they meant; passing it alongside `--with-embed`
+/// wins, on the rule that the flag naming a *skip* is the conservative one.
+pub(crate) fn wants_embeddings(args: &[String]) -> bool {
+    has_flag(args, "--with-embed") && !has_flag(args, "--no-embed")
+}
+
+/// The embedding dim and model to plan a vector-less run against.
 ///
 /// Both normally come from the loaded embedder, which is exactly what this
 /// path refuses to load — so they come off the store instead. That is also
@@ -678,7 +713,7 @@ fn print_gen_help() {
         "  {C_CYAN}-d, --db{C_RESET} <dir>           OverGraph directory (default: <output-dir>/ugdb)"
     );
     println!("  {C_YELLOW}--no-ingest{C_RESET}              {C_BOLD}Skip the whole db step.{C_RESET} See below.");
-    println!("  {C_YELLOW}--no-embed{C_RESET}               {C_BOLD}Ingest, minus the vectors.{C_RESET} See below.");
+    println!("  {C_GREEN}--with-embed{C_RESET}             {C_BOLD}Also build vectors{C_RESET} {C_DIM}(off by default).{C_RESET} See below.");
     println!("  {C_GREEN}--serve{C_RESET}                  Chain into 'ug serve' on the generated outputs");
     println!(
         "                            (inherits -p/--port, --host, --watch, --repo-root, embedder flags)"
@@ -701,6 +736,9 @@ fn print_gen_help() {
         "  {C_MAGENTA}ug gen{C_RESET} -n myrepo                   {C_YELLOW}# re-run that project from its recorded root{C_RESET}"
     );
     println!("  {C_MAGENTA}ug gen{C_RESET} -i ./src -n myrepo           {C_YELLOW}# ~/.ug/myrepo/{C_RESET}");
+    println!(
+        "  {C_MAGENTA}ug gen{C_RESET} --with-embed                 {C_YELLOW}# …and build vectors too (slower){C_RESET}"
+    );
     println!("  {C_MAGENTA}ug gen{C_RESET} -i ./src --no-ingest --serve");
 }
 
@@ -713,6 +751,32 @@ mod tests {
         let home = tempfile::tempdir().expect("tempdir");
         std::env::set_var("UG_HOME", home.path());
         home
+    }
+
+    /// Embedding is opt-in. The whole point of the default is that a run
+    /// that says nothing about vectors loads no embedding model, so this is
+    /// the assertion that keeps `ug gen` and every git hook fast.
+    #[test]
+    fn vectors_are_opt_in() {
+        let arg = |a: &str| vec![a.to_string()];
+        assert!(!wants_embeddings(&[]), "a bare run builds no vectors");
+        assert!(!wants_embeddings(&arg("--no-ingest")));
+        assert!(wants_embeddings(&arg("--with-embed")));
+        // The old opt-out is still accepted and still means "no vectors",
+        // so an installed hook or a script that passes it keeps working.
+        assert!(!wants_embeddings(&arg("--no-embed")));
+        assert!(
+            !wants_embeddings(&["--with-embed".to_string(), "--no-embed".to_string()]),
+            "an explicit skip wins over an explicit ask"
+        );
+    }
+
+    /// The help must name the flag that turns vectors on, or nobody finds it.
+    #[test]
+    fn the_help_names_the_opt_in() {
+        let help = skip_flags_help();
+        assert!(help.contains("--with-embed"));
+        assert!(help.contains("ug ingest -n <project>"));
     }
 
     /// No existing project: gen indexes the cwd, exactly as it did before

@@ -179,9 +179,10 @@ remote `--base-url` endpoint always builds, so an unreachable one fails the quer
 outright. And the keyword/FTS channel is **not** the fallback; it lives *inside*
 the RRF fusion on the embedder-backed path, so losing the embedder loses it too.
 
-Vectors must also be **in** the db: after a `--no-embed` run (what the git hooks
-do) the semantic channel is empty for the changed nodes until `ug ingest` catches
-up, even with a working embedder.
+Vectors must also be **in** the db, and embedding is **opt-in**: after any run
+without `--with-embed` (the default, and what the git hooks do) the semantic
+channel is empty for the changed nodes until `ug ingest` catches up, even with a
+working embedder.
 
 So an embedding problem is never a dead end — but degraded `search` output is a
 name match wearing search's clothes. When you see `"matched_by": "name"`, reach
@@ -316,7 +317,7 @@ reports both for your repo):
 | Drift | Affects | What you see | Fix |
 |---|---|---|---|
 | **Index behind the tree** — files edited since last `gen`/`update` | every structural command | `⚠ index is behind the tree …` on stderr, naming files | `ug update <file>...` |
-| **Vectors owed** — `--no-embed` nodes (what the hooks do) | `search`/`chat`/`tour` only | `⚠ Some nodes have no vectors yet …` | `ug ingest -n <project>` |
+| **Vectors owed** — nodes ingested without `--with-embed` (the default, and what the hooks do) | `search`/`chat`/`tour` only | `⚠ Some nodes have no vectors yet …` | `ug ingest -n <project>` |
 
 `ug get_code` sits outside both — it reads the live tree and flags drift per
 slice, so source and line numbers are never silently wrong. Neither warning is
@@ -333,17 +334,20 @@ that is why it answers "how does X work" better than grep. `--no-expand` (CLI) /
 disambiguation or a filtered inventory via `--filter`/`whereClause`. The old
 `semantic_search` command and tool were exactly that, and still work as aliases.
 
-**`--no-embed` vs `--no-ingest`** — the difference decides whether `ug analyze`
-is trustworthy:
+**Embedding is opt-in, and "no vectors" is not "no database".** The difference
+decides whether `ug analyze` is trustworthy:
 
-| Flag | Written to the db | Current | Behind |
+| `ug gen` / `ug update` | Written to the db | Current | Behind |
 |---|---|---|---|
-| `--no-embed` | nodes + edges + facts + keyword stats, **no vectors** | graph.json tools **and** `ug analyze` — stats, `diff_impact`, blast radius | `search`/`chat` miss the changed nodes |
+| *(default)* | nodes + edges + facts + keyword stats, **no vectors** | graph.json tools **and** `ug analyze` — stats, `diff_impact`, blast radius | `search`/`chat` miss the changed nodes |
+| `--with-embed` | all of the above **plus vectors** | everything | — |
 | `--no-ingest` | **nothing** — db not opened | graph.json tools only | **everything db-backed**, incl. `analyze`, answers from the *previous* ingest |
 
-Use `--no-embed` for speed with counts and blast radius (what the hooks do);
-`--no-ingest` only for a structure-only first pass with no embedder.
-`ug ingest -n <project>` catches the db up either way.
+The default is the fast path — counts and blast radius without loading an
+embedding model (what the hooks do). Add `--with-embed` when you want semantic
+search live at the end of the run, or let `ug ingest -n <project>` catch the db
+up afterwards. Use `--no-ingest` only for a structure-only first pass.
+*(The old `--no-embed` still works; it is the default now.)*
 
 **Persistent connection for many calls.** Each `ug` CLI call is a fresh
 process. For a session of dozens, `ug serve` keeps graph + db cached in one

@@ -377,27 +377,37 @@
   <div class="table-wrap">
     <table>
       <tr><th>Command</th><th>Aliases</th><th>What it does</th><th>Key flags</th></tr>
-      <tr><td><code>ug gen</code></td><td>—</td><td>End-to-end pipeline: index → graph → ingest. Primary entry point. With no input path named, re-runs the resolved project (<code>-n</code> → active → cwd basename) from the repo root recorded in its metadata. <strong>Incremental</strong>: unchanged files are skipped via content hashes, so it's cheap after a few edits.</td><td><code>-i</code> <code>-o</code> <code>-n</code> <code>-c</code> <code>--no-embed</code> <code>--no-ingest</code> <code>--serve</code> <code>--model</code> <code>--base-url</code></td></tr>
+      <tr><td><code>ug gen</code></td><td>—</td><td>End-to-end pipeline: index → graph → ingest. Primary entry point. With no input path named, re-runs the resolved project (<code>-n</code> → active → cwd basename) from the repo root recorded in its metadata. <strong>Incremental</strong>: unchanged files are skipped via content hashes, so it's cheap after a few edits.</td><td><code>-i</code> <code>-o</code> <code>-n</code> <code>-c</code> <code>--with-embed</code> <code>--model</code> <code>--base-url</code> <code>--no-ingest</code> </td></tr>
       <tr><td><code>ug index</code></td><td>—</td><td>Index a directory: parse source files into <code>FileNode</code>s. Writes <code>indexed-tree.json</code>.</td><td><code>-i</code> <code>-o</code> <code>-n</code> <code>-c</code></td></tr>
       <tr><td><code>ug graph</code></td><td>—</td><td>Build graph from indexed tree: resolve cross-file imports. Writes <code>graph.json</code>.</td><td><code>-i</code> <code>-o</code> <code>-n</code></td></tr>
-      <tr><td><code>ug ingest</code></td><td>—</td><td>Embed graph nodes and write to knowledge stores (OverGraph / Neo4j). Defaults resolve from active project (`<code>ug active</code>`), else cwd basename.</td><td><code>-n</code> <code>-i</code> <code>-o</code> <code>--dest</code> <code>--prune</code> <code>--model</code></td></tr>
+      <tr><td><code>ug ingest</code></td><td>—</td><td>Embed graph nodes and write to knowledge stores (OverGraph / Neo4j). Defaults resolve from active project (`<code>ug active</code>`), else cwd basename.</td><td><code>-i</code> <code>-o</code> <code>-n</code> <code>--dest</code> <code>--prune</code> <code>--model</code></td></tr>
       <tr><td><code>ug demo</code></td><td>—</td><td><strong>Publish</strong> a repo as a static web demo — index → graph → a folder any static host serves. Stops after the graph: no db, no vectors, no project under <code>~/.ug</code>. Writes <code>graph.json</code> beside the visualization page, wrapped so it needs no backend; features that read the local index (semantic search, chat, tours, statistics, source preview) are off and say so in the UI. Local absolute paths are scrubbed from the published graph. Powers <a href="demo/">the live demo</a>.</td><td><code>-i</code> <code>-o</code> <code>--label</code> <code>--source-url</code> <code>--site</code> <code>--page-only</code></td></tr>
       <tr><td><code>ug demo --page-only</code></td><td>—</td><td>Rebuild a published demo's page from this binary, leaving <code>graph.json</code> alone. Run it after editing the visualization: the published page is a <em>copy</em>, so it keeps serving the old one until re-published, and nothing else fails to say so. <code>demo.json</code> carries a fingerprint of the page so a test catches the drift.</td><td><code>-o</code> <code>--label</code> <code>--site</code></td></tr>
     </table>
   </div>
 
-  <h3><code>--no-embed</code> vs <code>--no-ingest</code></h3>
-  <p>Accepted by <code>ug gen</code> and <code>ug update</code>. They are commonly
-  confused, and the difference decides whether <code>ug analyze</code> — statistics,
-  <code>diff_impact</code>, blast radius — can be trusted after the run.</p>
+  <h3>Embedding is opt-in: <code>--with-embed</code> vs <code>--no-ingest</code></h3>
+  <p><code>ug gen</code> and <code>ug update</code> build <strong>no vectors</strong> unless
+  <code>--with-embed</code> asks for them. Nothing structural reads a vector — symbols, edges,
+  facts, keyword search and blast radius are all graph — and loading the embedding model is
+  most of a run's wall clock, so the default run is the fast one. Do not confuse that with
+  <code>--no-ingest</code>, which skips the database altogether: the difference decides whether
+  <code>ug analyze</code> — statistics, <code>diff_impact</code>, blast radius — can be trusted
+  after the run.</p>
   <div class="table-wrap">
     <table>
-      <tr><th>Flag</th><th>Written to the db</th><th>Current after the run</th><th>Answering from the <em>previous</em> ingest</th></tr>
+      <tr><th><code>ug gen</code> / <code>ug update</code></th><th>Written to the db</th><th>Current after the run</th><th>Answering from the <em>previous</em> ingest</th></tr>
       <tr>
-        <td><code>--no-embed</code></td>
+        <td><em>(default)</em></td>
         <td>nodes, edges, facts and keyword statistics — <strong>everything except the vectors</strong>. No embedding model is loaded, which is most of a small run's wall clock.</td>
         <td>the graph.json tools <strong>and <code>ug analyze</code></strong>: statistics, <code>diff_impact</code>, <code>boundary_impact</code>, blast radius</td>
         <td><code>search</code>, <code>chat</code> — they miss the changed nodes until the vectors are backfilled</td>
+      </tr>
+      <tr>
+        <td><code>--with-embed</code></td>
+        <td>all of the above <strong>plus the vectors</strong>. Loads the embedding model (local by default, remote with <code>--base-url</code>).</td>
+        <td>everything, semantic <code>search</code>, <code>chat</code> and tours included</td>
+        <td>—</td>
       </tr>
       <tr>
         <td><code>--no-ingest</code></td>
@@ -407,8 +417,9 @@
       </tr>
     </table>
   </div>
-  <p><code>ug ingest -n &lt;project&gt;</code> catches the db up either way — it embeds only the nodes
-  still owed a vector.</p>
+  <p><code>ug ingest -n &lt;project&gt;</code> catches the db up whenever you like — it embeds only
+  the nodes still owed a vector. <code>--no-embed</code>, the former opt-out, is still accepted:
+  it is the default now.</p>
 
   <h2>1.2 Structural Analysis (graph.json only — no database needed)</h2>
   <p>All accept: <code>-n &lt;name&gt;</code>, <code>-i &lt;file&gt;</code>, <code>--json</code>, <code>-o &lt;file&gt;</code>.</p>
@@ -534,8 +545,8 @@ function:native/src/indexer.rs:index_with_cache           <span class="c-num">16
       <tr><td><code>ug active</code></td><td>View or set the active project.</td><td><code>&lt;name&gt;</code></td></tr>
       <tr><td><code>ug rename</code></td><td>Rename a project's data directory and its <code>project.json</code> name; the active marker follows it. One positional renames the current (active, else cwd) project; two rename <code>&lt;old&gt; &lt;new&gt;</code>. Aliases: <code>rn</code>, <code>mv</code>.</td><td><code>&lt;new&gt;</code> or <code>&lt;old&gt; &lt;new&gt;</code> <code>-n &lt;old&gt;</code></td></tr>
       <tr><td><code>ug rm</code></td><td>Delete a project's data directory.</td><td><code>&lt;name&gt;</code></td></tr>
-      <tr><td><code>ug update</code></td><td>Refresh the graph for the files that just changed (focused re-run): re-index, re-resolve cross-file edges, re-embed changed nodes. <code>--no-embed</code> writes the store without vectors and loads no embedding model, which is most of the run time.</td><td><code>&lt;file&gt;...</code> <code>-n</code> <code>--no-embed</code> <code>--no-ingest</code></td></tr>
-      <tr><td><code>ug hook</code></td><td>Install git hooks (<code>post-commit</code>, <code>post-merge</code>, <code>post-checkout</code>, <code>post-rewrite</code>) that run <code>ug update --no-embed</code> on the paths each event touched, so the graph never lags the working tree. Keeps an existing hook of the same name, honours <code>core.hooksPath</code>, and never fails the git command. <code>UG_HOOK_DISABLE=1</code> skips it once. Each run is logged to <code>~/.ug/&lt;project&gt;/hook.log</code>, whose header records the whole provenance — hook, timestamp, project, repo root, data dir, <code>ug</code> binary and version, the files handed over, and the child's exit code. Vectors are the one thing left behind — <code>ug hook status</code> says how far, <code>ug ingest -n &lt;project&gt;</code> backfills them.</td><td><code>install</code> <code>uninstall</code> <code>status</code> <code>-n</code></td></tr>
+      <tr><td><code>ug update</code></td><td>Refresh the graph for the files that just changed (focused re-run): re-index, re-resolve cross-file edges, re-ingest changed nodes. Writes the store <em>without</em> vectors by default, loading no embedding model — most of the run time; <code>--with-embed</code> builds them in the same run.</td><td><code>&lt;file&gt;...</code> <code>-n</code> <code>--with-embed</code> <code>--no-ingest</code></td></tr>
+      <tr><td><code>ug hook</code></td><td>Install git hooks (<code>post-commit</code>, <code>post-merge</code>, <code>post-checkout</code>, <code>post-rewrite</code>) that run <code>ug update</code> (never <code>--with-embed</code>) on the paths each event touched, so the graph never lags the working tree. Keeps an existing hook of the same name, honours <code>core.hooksPath</code>, and never fails the git command. <code>UG_HOOK_DISABLE=1</code> skips it once. Each run is logged to <code>~/.ug/&lt;project&gt;/hook.log</code>, whose header records the whole provenance — hook, timestamp, project, repo root, data dir, <code>ug</code> binary and version, the files handed over, and the child's exit code. Vectors are the one thing left behind — <code>ug hook status</code> says how far, <code>ug ingest -n &lt;project&gt;</code> backfills them.</td><td><code>install</code> <code>uninstall</code> <code>status</code> <code>-n</code></td></tr>
       <tr><td><code>ug upgrade</code></td><td>Check GitHub for a new release and self-update.</td><td><code>--check</code></td></tr>
       <tr><td><code>ug uninstall</code></td><td>Delete ALL indexed projects and uninstall ug.</td><td>—</td></tr>
       <tr><td><code>ug config</code></td><td>View / persist defaults in <code>~/.ug/config.json</code>.</td><td><code>set</code> <code>get</code> <code>list</code></td></tr>
@@ -649,8 +660,8 @@ function:native/src/indexer.rs:index_with_cache           <span class="c-num">16
   <div class="table-wrap">
     <table>
       <tr><th>Method</th><th>Path</th><th>What it does</th></tr>
-      <tr><td><code>POST</code></td><td><code>/api/generate</code></td><td>Kick off <code>ug gen</code> as a background job. Streams log via SSE.</td></tr>
-      <tr><td><code>GET</code></td><td><code>/api/generate/status</code></td><td>Check status of a gen job.</td></tr>
+      <tr><td><code>POST</code></td><td><code>/api/generate</code></td><td>Kick off <code>ug gen</code> as a background job (multi-project mode only). Body <code>{ path, name?, no_ingest?, with_embed? }</code> — <code>with_embed</code> is opt-in, exactly as on the CLI, so the default job indexes structure and builds no vectors. Returns a <code>jobId</code>.</td></tr>
+      <tr><td><code>GET</code></td><td><code>/api/generate/status</code></td><td>Check status of a gen or ingest job: <code>?job=&lt;id&gt;</code>.</td></tr>
       <tr><td><code>POST</code></td><td><code>/api/ingest</code></td><td>Re-embed an indexed project (UI "Ingest now"). Poll with <code>/api/generate/status</code>. A store that can't be opened is wiped and rebuilt automatically.</td></tr>
       <tr><td><code>GET</code></td><td><code>/api/browse-dir</code></td><td>List subdirectories of a path (KB Manager folder picker).</td></tr>
     </table>

@@ -150,8 +150,8 @@ pub(crate) struct IngestOutcome {
     /// Set when nodes were written without vectors because embedding
     /// failed. Semantic search will miss them until the next run.
     pub(crate) embedding_error: Option<String>,
-    /// How many nodes were written without vectors because the run was
-    /// asked to skip embedding (`--no-embed`). Distinct from
+    /// How many nodes were written without vectors because the run did not
+    /// ask for embedding (no `--with-embed`). Distinct from
     /// `embedding_error`: nothing went wrong, the vectors are simply owed —
     /// `ug ingest` backfills exactly these.
     pub(crate) vectors_skipped: usize,

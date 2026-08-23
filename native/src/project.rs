@@ -160,7 +160,7 @@ pub(crate) struct ProjectMeta {
     pub doc_nodes: usize,
     #[serde(default)]
     pub code_nodes: usize,
-    /// When the oldest still-unpaid `--no-embed` run happened (epoch
+    /// When the oldest still-unpaid vector-less run happened (epoch
     /// seconds), or 0 when the store's vectors are current.
     ///
     /// A run that skips embedding writes real structure and no vectors, so

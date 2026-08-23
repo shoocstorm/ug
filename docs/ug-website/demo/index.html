@@ -8999,7 +8999,7 @@
 }
     </style>
 <script>
-window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3297,"edges":9692,"files":106,"lines":76180,"ugVersion":"0.1.15","visFingerprint":"9dc7419d3585bc19","generatedAt":1787448842};
+window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3297,"edges":9692,"files":106,"lines":76180,"ugVersion":"0.1.15","visFingerprint":"a18d5b3327e19dbc","generatedAt":1787452831};
 /* ==========================================================================
    UltraGraph — static demo shim
    ==========================================================================
@@ -9560,10 +9560,15 @@ window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#g
                             </div>
                         </label>
                         <label class="kb-checkbox">
-                            <input type="checkbox" id="kb-no-ingest" checked>
-                            <span>Skip embedding ingest (faster; disables semantic/hybrid search &amp; chat)</span>
+                            <input type="checkbox" id="kb-with-embed">
+                            <span>Build embeddings too (slower; enables semantic/hybrid search, chat &amp; tours)</span>
                         </label>
-                        <p class="kb-checkbox-note">When ticked, generated/indexed data is stored as plain files only — it is <em>not</em> embedded &amp; ingested into the vector/graph OverGraph DB. Semantic search, the guided tour, and chat will be disabled.</p>
+                        <p class="kb-checkbox-note">Off by default: the knowledge graph — symbols, edges, facts, keyword search, blast radius — needs no vectors, and loading the embedding model is most of the run time. Tick this to embed now, or leave it off and click <em>Ingest now</em> later to backfill.</p>
+                        <label class="kb-checkbox">
+                            <input type="checkbox" id="kb-no-ingest">
+                            <span>Skip the database entirely (graph files only)</span>
+                        </label>
+                        <p class="kb-checkbox-note">When ticked, generated/indexed data is stored as plain files only — nothing is written to the OverGraph DB, so <em>ug analyze</em> statistics and blast radius keep answering from the previous ingest as well.</p>
                         <div class="kb-form-actions">
                             <button type="submit" id="kb-generate-btn">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
@@ -12199,6 +12204,9 @@ self.onmessage = async (ev) => {
                 const path = document.getElementById('kb-path-input').value.trim();
                 const name = document.getElementById('kb-name-input').value.trim();
                 const noIngest = document.getElementById('kb-no-ingest').checked;
+                // Embedding is opt-in, exactly as on the CLI: the default run
+                // writes structure and no vectors, and "Ingest now" backfills.
+                const withEmbed = document.getElementById('kb-with-embed').checked;
                 if (!path) return;
 
                 document.getElementById('kb-generate-btn').disabled = true;
@@ -12212,7 +12220,7 @@ self.onmessage = async (ev) => {
                     const res = await fetch('/api/generate', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ path, name: name || undefined, no_ingest: noIngest }),
+                        body: JSON.stringify({ path, name: name || undefined, no_ingest: noIngest, with_embed: withEmbed }),
                     });
                     if (!res.ok) {
                         const err = await res.json().catch(() => ({}));

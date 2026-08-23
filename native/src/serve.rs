@@ -2698,6 +2698,11 @@ struct GenerateBody {
     name: Option<String>,
     #[serde(default)]
     no_ingest: bool,
+    /// Build vectors as part of the run. Opt-in, mirroring the CLI: the
+    /// wizard's fast path indexes structure only, and semantic search /
+    /// chat / tours are backfilled later by `/api/ingest` ("Ingest now").
+    #[serde(default, alias = "withEmbed")]
+    with_embed: bool,
 }
 
 /// POST /api/generate — KB Manager wizard entry point. Spawns `ug gen`
@@ -2750,6 +2755,9 @@ async fn api_generate(State(state): State<ServeState>, Json(body): Json<Generate
     }
     if body.no_ingest {
         cmd.arg("--no-ingest");
+    }
+    if body.with_embed {
+        cmd.arg("--with-embed");
     }
     // Quiet the ASCII-art banner `main()` prints on every invocation —
     // it would otherwise dominate the wizard's log viewer.

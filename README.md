@@ -32,17 +32,20 @@ ug            # bare `ug` == `ug serve`: visualization + REST API at :8080
 
 - **`ug gen`** runs the full pipeline on the current directory. Output goes to
   `~/.ug/<project-name>/` (name = directory basename; override with `-n/--name`).
-  Add `--no-embed` to write the database without vectors (no embedding model is
-  loaded — much faster; only `search`/`chat` lag), or
-  `--no-ingest` to skip the database entirely (`ug analyze` statistics and blast
-  radius lag too). See [`--no-embed` vs `--no-ingest`](#--no-embed-vs---no-ingest).
+  **Embedding is opt-in**: by default the run writes the graph and the database
+  without vectors — no embedding model is loaded, which is most of the wall
+  clock — so everything structural is live immediately and only `search`/`chat`
+  lag. Add `--with-embed` to build vectors in the same run, or `--no-ingest` to
+  skip the database entirely (`ug analyze` statistics and blast radius lag too).
+  See [Embedding is opt-in](#embedding-is-opt-in).
 - **`ug serve`** (or bare `ug`) without `-i` runs in **multi-project mode**:
   discovers every project under `~/.ug` and adds a UI project switcher. With zero
   projects it shows the KB Manager wizard instead of erroring — so `ug` alone is
   always safe to run first.
 
 ```bash
-ug gen -i ~/code/other-repo -n other --no-embed   # index another repo, no vectors yet
+ug gen -i ~/code/other-repo -n other              # index another repo (no vectors)
+ug gen --with-embed                               # …and build the vectors too
 ```
 
 `ug -h` lists every command; `ug <command> -h` prints its full flags. From a
@@ -108,7 +111,7 @@ The native `ug` binary is the primary CLI. `ug -h` lists every command;
 | :--- | :--- |
 | `ug gen` | Full pipeline: index → graph → visualization → OverGraph ingest. With no path named, re-runs an already-generated project from its recorded repo root — incremental. |
 | `ug update <file>...` | Refresh the graph for just the files you changed — the focused counterpart to `gen`, built for a live editing session |
-| `ug hook install` | Hang that refresh off git: hooks on commit, merge, checkout and rebase re-index the paths each event touched, so blast-radius answers never lag the working tree. Hook runs pass `--no-embed` — no embedding model is loaded, which is most of the run time — so vectors alone lag; `ug hook status` says how far and `ug ingest -n <project>` backfills them. `ug hook uninstall`; `UG_HOOK_DISABLE=1` skips one command. |
+| `ug hook install` | Hang that refresh off git: hooks on commit, merge, checkout and rebase re-index the paths each event touched, so blast-radius answers never lag the working tree. Hook runs never pass `--with-embed` — no embedding model is loaded, which is most of the run time — so vectors alone lag; `ug hook status` says how far and `ug ingest -n <project>` backfills them. `ug hook uninstall`; `UG_HOOK_DISABLE=1` skips one command. |
 | `ug serve` / `ug app` | Serve the viz + REST API (multi-project); `app` wraps it in a native Tauri window |
 | `ug index` / `graph` / `ingest` | The individual pipeline stages `gen` runs for you. Unlisted in `ug -h` — `gen --no-ingest` covers the usual reason to want one. |
 | `ug search "<query>"` | GraphRAG: semantic search → graph expansion → ranked context. `--no-expand` returns just what matched, no graph walk (this replaced the separate `ug semantic_search`, which still works as an alias) |
@@ -174,28 +177,39 @@ not a keyword search mode. Three things worth knowing before relying on it:
   default local ONNX embedder fails at construction (missing model, failed
   download) and falls back cleanly. A remote `--base-url` endpoint always
   constructs, so an unreachable one fails the query outright instead.
-- **Vectors have to be in the database too.** After a `--no-embed` run the
-  semantic channel is empty for the changed nodes even with a working embedder,
-  until `ug ingest` catches up. See the next section.
+- **Vectors have to be in the database too.** Embedding is opt-in, so after a
+  run without `--with-embed` the semantic channel is empty for the changed nodes
+  even with a working embedder, until `ug ingest` catches up. See the next
+  section.
 
 When you land on the fallback, `ug find_symbols` (exact, wildcards), `ug analyze`
 (statistics, blast radius) and `ug traverse` (edge walks) answer the same
 questions without embeddings at all.
 
-### `--no-embed` vs `--no-ingest`
+### Embedding is opt-in
 
-Both are accepted by `ug gen` and `ug update`, and they are not the
-same thing. The row above tells you why the difference matters: `ug analyze` —
-statistics, `diff_impact`, blast radius — needs `ugdb/`, but not an embedder.
+A knowledge graph is structure, and none of the structural tools read a vector:
+`find_symbols`, `find_usages`, `traverse`, `ug analyze` — statistics,
+`diff_impact`, blast radius — all need `ugdb/`, but not an embedder. So `ug gen`
+and `ug update` build **no vectors unless you ask**, which is what makes them
+fast. Vectors buy `search`, `chat` and tours; `--with-embed` builds them in the
+same run.
 
-| Flag | Written to `ugdb/` | Current after the run | Answering from the *previous* ingest |
+Do not confuse "no vectors" with "no database" — the row above tells you why the
+difference matters:
+
+| `ug gen` / `ug update` | Written to `ugdb/` | Current after the run | Answering from the *previous* ingest |
 | :--- | :--- | :--- | :--- |
-| `--no-embed` | nodes, edges, facts, keyword statistics — **everything but the vectors**. No embedding model is loaded, which is most of a small run's wall clock. | the `graph.json` tools **and `ug analyze`** | `search`, `chat` |
+| *(default)* | nodes, edges, facts, keyword statistics — **everything but the vectors**. No embedding model is loaded, which is most of a small run's wall clock. | the `graph.json` tools **and `ug analyze`** | `search`, `chat` |
+| `--with-embed` | all of the above **plus the vectors**. Loads the embedding model. | everything | — |
 | `--no-ingest` | **nothing** — the database is never opened; only `graph.json` is rebuilt. | the `graph.json` tools only | **everything `ugdb/` backs**, including `ug analyze` |
 
-`ug ingest -n <project>` catches the database up either way — it embeds only the
-nodes still owed a vector. This is why the git hooks use `--no-embed`: blast
-radius stays exact while the vectors arrive on your schedule.
+`ug ingest -n <project>` catches the database up whenever you like — it embeds
+only the nodes still owed a vector. This is why the git hooks never pass
+`--with-embed`: blast radius stays exact while the vectors arrive on your
+schedule.
+
+*(`--no-embed`, the old opt-out, is still accepted — it is the default now.)*
 
 ## Configuration
 

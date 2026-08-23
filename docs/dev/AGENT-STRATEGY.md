@@ -87,7 +87,7 @@ Scenarios where it's **redundant or inferior**:
 
 Sharper framing: **for an agent, `find_symbols` + `traverse` + `find_usages` + `analyze` (all embedder-free) already cover 80%+ of needs.** `search` / `semantic_search` are the remaining 20%, and `semantic_search` (pure dense, no graph) is the least valuable of all — it's just a local vector DB, which agents increasingly have natively.
 
-The `--no-embed` hook path is the first production evidence for this split, and
+The vector-less hook path is the first production evidence for this split, and
 it points the same way. Git-hook refreshes deliberately skip the embedder
 because loading the model costs more than the entire structural refresh, and the
 result is a graph where every safety answer is exact and only vector recall
@@ -121,8 +121,9 @@ they refreshed, and log the detail — hook, project, repo, data dir, binary
 version, file list, exit code — to `~/.ug/<project>/hook.log`;
 `UG_HOOK_DISABLE=1` skips one command.
 
-Hook runs pass `--no-embed`: loading the embedding model costs more than the
-whole structural refresh (~1 s of a ~1.5 s run on this repo), so they write the
+Hook runs never pass `--with-embed` — and since the flag is opt-in, `ug gen`
+and `ug update` do not either unless asked: loading the embedding model costs
+more than the whole structural refresh (~1 s of a ~1.5 s run on this repo), so they write the
 graph, the facts and the keyword statistics and leave the changed nodes without
 vectors. Everything the safety story depends on — `find_usages`, `analyze`,
 `diff_impact` — stays exact; only vector recall lags, the store records the debt

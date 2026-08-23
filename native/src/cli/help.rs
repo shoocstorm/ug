@@ -153,8 +153,10 @@ pub(crate) fn print_help() {
     group("Manage projects", "");
     cmd("list", "Projects under ~/.ug: nodes, size on disk, how stale each one is");
     cmd("active", "The project commands default to when run outside an indexed repo");
-    cmd("rename · rm", "Rename a project (aliases: rn, mv) · delete its data directory");
-    cmd("doctor · config", "Show how every setting resolved · view and persist defaults");
+    cmd("rename", "Rename a project (aliases: rn, mv)");
+    cmd("rm", "Delete a project's data directory");
+    cmd("doctor", "Show how every setting resolved");
+    cmd("config", "View and persist defaults");
     cmd("upgrade", "Check GitHub for a new release and self-update; --check only reports");
     cmd("uninstall", "Delete ALL indexed projects and remove ug itself");
     cmd("api", "List every HTTP endpoint `ug serve` exposes");
