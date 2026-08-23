@@ -467,6 +467,18 @@
             height: 12px;
         }
 
+        /* Unit dropdown beside a scaled threshold input (B/KB/MB/GB,
+           ×1/×1K/×1M): fixed width so the number input takes the rest. */
+        .settings-input-wrap select.settings-unit {
+            flex: 0 0 auto;
+            width: 72px;
+        }
+
+        /* Live "server mode overrides this" marker on the solo threshold row. */
+        .settings-row-note.settings-force-note {
+            color: var(--accent);
+        }
+
         .settings-row-note {
             margin-top: 5px;
             font-size: 10.5px;

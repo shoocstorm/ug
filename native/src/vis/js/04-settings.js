@@ -408,15 +408,59 @@
             },
             'vis.solo_threshold': {
                 label: 'Solo mode threshold',
-                hint: 'Past this many nodes or edges the page never draws the whole graph — it opens in solo mode and shows one neighbourhood at a time. Lower it to isolate large repos earlier, higher to attempt whole-graph render for longer. Governs the 2D engine; the 3D engine solos past its own element budget above.',
+                hint: 'Past this many nodes or edges the page never draws the whole graph — it opens in solo mode and shows one neighbourhood at a time. Lower it to isolate large repos earlier, higher to attempt whole-graph render for longer. Governs the 2D engine; the 3D engine solos past its own element budget above. Server mode (Graph section) always opens in solo view, whatever this is set to.',
                 num: { step: '1000', min: '1', max: '10000000' },
+                unit: 'count',
             },
             'graph.server_mode_bytes': {
-                label: 'Server mode threshold (bytes)',
-                hint: 'How the browser gets the graph. Past this size of graph.json the page no longer downloads the file — it loads a slim node index and asks this server for edges and neighbourhoods on demand (server mode). Below it the whole file is served and the browser renders everything itself (local mode). 50 MB out of the box; lower it to keep big files out of the browser tab, raise it for graphs you want fully client-side.',
+                label: 'Server mode threshold',
+                hint: 'How the browser gets the graph. Past this size of graph.json the page no longer downloads the file — it loads a slim node index and asks this server for edges and neighbourhoods on demand (server mode). Below it the whole file is served and the browser renders everything itself (local mode). 50 MB out of the box; lower it to keep big files out of the browser tab, raise it for graphs you want fully client-side. A graph served this way always opens in solo view (Visualization section), whatever the solo threshold says — its edges live on the server.',
                 num: { step: '1000000', min: '1024', max: '1000000000' },
+                unit: 'bytes',
             },
         };
+
+        // ── Unit-scaled thresholds ─────────────────────────
+        // Byte and element-count thresholds are stored as raw integers but
+        // typed as "50 MB" / "200 K": a unit dropdown sits next to the
+        // number input, and every read/write converts through `factor`.
+        // `opt` labels the dropdown, `short` labels prose like the
+        // "default: 50 MB" placeholder.
+        const SETTINGS_UNITS = {
+            bytes: [
+                { opt: 'B', short: 'B', factor: 1 },
+                { opt: 'KB', short: 'KB', factor: 1024 },
+                { opt: 'MB', short: 'MB', factor: 1024 * 1024 },
+                { opt: 'GB', short: 'GB', factor: 1024 * 1024 * 1024 },
+            ],
+            count: [
+                { opt: '×1', short: '', factor: 1 },
+                { opt: '×1K', short: 'K', factor: 1000 },
+                { opt: '×1M', short: 'M', factor: 1000000 },
+            ],
+        };
+
+        // Largest unit the raw value still fills at least once — so a
+        // saved 52428800 presents as "50 MB", and 200000 as "200 ×1K".
+        function pickSettingsUnit(kind, raw) {
+            let best = SETTINGS_UNITS[kind][0];
+            for (const u of SETTINGS_UNITS[kind]) if (raw >= u.factor) best = u;
+            return best;
+        }
+
+        // toPrecision(10) keeps the round-trip through Math.round exact
+        // for any double-width integer, so re-displaying a saved value
+        // never marks the row dirty on open.
+        function scaledSettingsThreshold(raw, unit) {
+            return Number((raw / unit.factor).toPrecision(10));
+        }
+
+        function formatSettingsThreshold(kind, raw) {
+            if (!Number.isFinite(raw) || raw < 0) return String(raw);
+            const u = pickSettingsUnit(kind, raw);
+            const v = scaledSettingsThreshold(raw, u);
+            return u.short ? v + ' ' + u.short : String(v);
+        }
 
         function settingsOverlayEl() {
             return document.getElementById('settings-overlay');
@@ -555,6 +599,33 @@
             // backend-declared choices; everything else keeps the text/number/
             // password `<input>`. Both share the value/dirty/clear handling below.
             const isEnum = k.kind === 'enum' && Array.isArray(k.choices) && k.choices.length > 0;
+            // Unit-scaled fields get a unit dropdown beside the number;
+            // the stored value stays the raw integer.
+            const units = !isEnum && meta.unit ? SETTINGS_UNITS[meta.unit] : null;
+            let unitSel = null;
+            if (units) {
+                unitSel = document.createElement('select');
+                unitSel.className = 'settings-unit';
+                unitSel.title = 'Unit';
+                for (const u of units) {
+                    const opt = document.createElement('option');
+                    opt.value = String(u.factor);
+                    opt.textContent = u.opt;
+                    unitSel.appendChild(opt);
+                }
+            }
+            // Set a unit field from a raw stored value (saved, default or
+            // the clear-button restore): pick the unit that presents it
+            // best and write the scaled number into the input.
+            const setUnitField = (raw) => {
+                if (Number.isFinite(raw) && raw >= 0) {
+                    const u = pickSettingsUnit(meta.unit, raw);
+                    unitSel.value = String(u.factor);
+                    control.value = String(scaledSettingsThreshold(raw, u));
+                } else {
+                    control.value = '';
+                }
+            };
             let control;
             if (isEnum) {
                 control = document.createElement('select');
@@ -574,9 +645,14 @@
                     control.autocomplete = 'new-password';
                 } else if (meta.num) {
                     control.type = 'number';
-                    control.step = meta.num.step;
-                    if (meta.num.min !== undefined) control.min = meta.num.min;
-                    if (meta.num.max !== undefined) control.max = meta.num.max;
+                    // With a unit dropdown the min/max would have to be
+                    // rescaled per unit — skip them and let the server
+                    // validate the raw value instead.
+                    control.step = units ? 'any' : meta.num.step;
+                    if (!units) {
+                        if (meta.num.min !== undefined) control.min = meta.num.min;
+                        if (meta.num.max !== undefined) control.max = meta.num.max;
+                    }
                 } else {
                     control.type = 'text';
                     control.spellcheck = false;
@@ -587,10 +663,22 @@
                 if (k.secret) {
                     control.placeholder = k.saved != null ? 'saved · ' + k.saved + ' — type to replace' : 'not set';
                 } else {
-                    control.placeholder = k.default != null ? 'default: ' + k.default : 'not set';
+                    control.placeholder = k.default != null
+                        ? 'default: ' + (units ? formatSettingsThreshold(meta.unit, Number(k.default)) : k.default)
+                        : 'not set';
+                }
+                if (units && !k.secret) {
+                    if (k.saved != null) {
+                        setUnitField(Number(k.saved));
+                    } else if (k.default != null && Number.isFinite(Number(k.default))) {
+                        // No saved value — pre-select the default's unit so a
+                        // typed number pairs with a sensible unit out of the box.
+                        unitSel.value = String(pickSettingsUnit(meta.unit, Number(k.default)).factor);
+                    }
                 }
             }
             wrap.appendChild(control);
+            if (unitSel) wrap.appendChild(unitSel);
 
             const clearBtn = document.createElement('button');
             clearBtn.type = 'button';
@@ -613,12 +701,29 @@
             }
             row.appendChild(note);
 
+            // Server mode outranks the solo threshold at runtime — when the
+            // page actually loaded in server mode, say so on the row whose
+            // value is being overridden.
+            if (k.name === 'vis.solo_threshold' && state.graphMode === 'server') {
+                const forced = document.createElement('div');
+                forced.className = 'settings-row-note settings-force-note';
+                forced.textContent = 'This graph is being served in server mode — the page opens in solo view whatever this threshold says.';
+                row.appendChild(forced);
+            }
+
             const onDirty = () => {
                 if (settingsUi.unsets.has(k.name)) {
                     settingsUi.unsets.delete(k.name);
                     row.classList.remove('pending-unset');
                 }
-                const val = control.value.trim();
+                let val = control.value.trim();
+                if (units) {
+                    // Raw integer = displayed number × selected factor.
+                    const n = parseFloat(val);
+                    val = val !== '' && Number.isFinite(n)
+                        ? String(Math.round(n * Number(unitSel.value)))
+                        : '';
+                }
                 // For a select the shown default *is* a legal choice, so an
                 // unset row baseline is the default rather than '' — leaving
                 // it untouched must not mark it dirty.
@@ -630,19 +735,26 @@
             };
             control.addEventListener('input', onDirty);
             control.addEventListener('change', onDirty);
+            if (unitSel) unitSel.addEventListener('change', onDirty);
 
             clearBtn.addEventListener('click', () => {
                 if (settingsUi.unsets.has(k.name)) {
                     // Undo the pending clear.
                     settingsUi.unsets.delete(k.name);
                     row.classList.remove('pending-unset');
-                    if (!k.secret && k.saved != null) control.value = k.saved;
+                    if (!k.secret && k.saved != null) {
+                        if (units) setUnitField(Number(k.saved));
+                        else control.value = k.saved;
+                    }
                 } else {
                     settingsUi.unsets.add(k.name);
                     settingsUi.edits.delete(k.name);
                     row.classList.remove('dirty');
                     row.classList.add('pending-unset');
-                    if (!k.secret) control.value = k.saved != null ? k.saved : (isEnum ? (k.default || '') : '');
+                    if (!k.secret) {
+                        if (units) setUnitField(k.saved != null ? Number(k.saved) : NaN);
+                        else control.value = k.saved != null ? k.saved : (isEnum ? (k.default || '') : '');
+                    }
                 }
                 updateSettingsFooter();
             });
