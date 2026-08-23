@@ -4,6 +4,12 @@ version = "0.1.15"
 edition = "2021"
 authors = ["Aldrick Wan"]
 description = "High-Performance Graph-Based Knowledge Base Generator & Visualizer"
+# One test binary, not one per file in `tests/`. See the module comment in
+# `tests/all.rs`: 25 separate links of the same statically linked dependency
+# code cost ~10s of rustc and ~58s of macOS Gatekeeper scanning *each*, and any
+# edit under `src/` relinks all of them. The `[[test]]` below names the single
+# harness; `autotests = false` stops Cargo re-adding the other 24.
+autotests = false
 
 [lib]
 crate-type = ["rlib"]
@@ -11,6 +17,10 @@ crate-type = ["rlib"]
 [[bin]]
 name = "ug"
 path = "src/main.rs"
+
+[[test]]
+name = "all"
+path = "tests/all.rs"
 
 [[bin]]
 name = "ug-app"

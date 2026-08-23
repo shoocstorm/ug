@@ -8,7 +8,9 @@
 //! belong in that file's results log, with the machine noted — these are
 //! comparative, not absolute.
 
-mod graph_baseline;
+// `graph_baseline` is declared by the `tests/all.rs` harness root; this file
+// is one of its modules, so it reaches the helpers through the crate root.
+use crate::graph_baseline;
 
 use std::path::PathBuf;
 use std::time::Instant;

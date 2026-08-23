@@ -124,9 +124,9 @@ format), stream only the final answer, and show every call to the user as it hap
 ### Rust Tests (Native Code)
 - Run `cd native && cargo nextest run` to execute all Rust tests
 - **Use `cargo nextest run`, not `cargo test`.** `cargo test -- --test-threads=N`
-  only parallelizes within a single test binary, and this workspace has 22 of
-  them, so the big ones serialize against each other and most of the machine
-  sits idle. nextest schedules every test across all binaries in one pool.
+  only parallelizes within a single test binary, so the big ones serialize
+  against each other and most of the machine sits idle. nextest schedules every
+  test across all binaries in one pool, one process per test.
   Measured on the 18-core dev machine, warm, same 809 tests: `cargo test`
   12.3s, `cargo test -- --test-threads=15` 12.4s (i.e. the flag buys nothing),
   `cargo nextest run` 5.0s.
@@ -138,10 +138,42 @@ format), stream only the final answer, and show every call to the user as it hap
   genuinely unavailable, `cargo test -- --test-threads=15` is the fallback.
 - Tests are in `native/tests/`: `indexer_test.rs`, `graph_test.rs`, `search_test.rs`,
   `storage_test.rs`, `rust_indexer_test.rs`, `pdf_indexer_test.rs`, `storage_bench.rs`,
-  and the `#[ignore]`-gated `neo4j_smoke.rs` / `neo4j_write_smoke.rs`
+  and the `#[ignore]`-gated `neo4j_smoke.rs` / `neo4j_write_smoke.rs`. They compile
+  into **one** binary via `tests/all.rs` — a new file there needs a `mod` line in
+  that harness or it is silently not built. See its module comment for why.
 - **Run these tests after every code change in the native folder**
 - If adding new functionality, add corresponding test cases to the test files
 - Ensure all tests pass before completing a phase
+
+### Running Less Than Everything
+
+A full `cargo nextest run` after touching `src/` is ~2 minutes, and almost none
+of that is testing — the 885 tests execute in 4.3 seconds. The rest is linking
+and, on macOS, `syspolicyd`/`XprotectService` scanning each freshly linked
+binary. So the way to a fast loop is to relink fewer binaries, not to run fewer
+tests:
+
+```bash
+cargo check --bins                 # 0.2s warm — does it compile? use this while editing
+cargo nextest run --bin ug         # only the CLI/serve/mcp/tour/project tests
+cargo nextest run --test all       # only the integration tests
+cargo nextest run -E 'test(/^search_test::/)'   # one former test file
+```
+
+`--bin ug` matters more than it looks: `cli`, `serve`, `chat`, `tour`, and
+`project` are declared in `main.rs`, not `lib.rs`, so their tests live in the
+`ug` binary and no `--test` flag can reach them. **After any change under
+`src/vis/` (html/css/js)** the two that must pass are both in that binary:
+
+```bash
+cargo nextest run --bin ug \
+  -E 'test(the_published_demo_page_is_not_stale) + test(the_solo_threshold_matches_the_renderer)'
+```
+
+If you are on macOS and have not added your terminal's host app (VS Code,
+Ghostty, Terminal) to System Settings → Privacy & Security → Developer Tools,
+do that once — it exempts everything the app spawns from the Gatekeeper
+assessment that dominates the numbers above.
 
 ### Verification Checklist
 ```
