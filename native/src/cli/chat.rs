@@ -16,7 +16,7 @@ use super::agent::{agent_repo_root, load_agent_graph};
 use super::args::{first_positional, flag_value, has_flag, multi_flag};
 use super::embed::{embedder_from_chat_args, tokio_runtime};
 use super::io::{write_file, write_or_print};
-use super::store::single_store_spec_from_args;
+use super::dest::single_store_spec_from_args;
 
 pub(crate) fn chat_client_from_args(args: &[String]) -> chat::ChatClient {
     let cfg = chat_config_from_args(args);

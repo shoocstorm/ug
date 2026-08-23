@@ -44,15 +44,16 @@ pub(crate) fn store_specs_from_args(args: &[String], embedding_dim: u32) -> Vec<
         project::default_read_db_path_with_origin()
     };
 
-    let neo4j_uri = flag_value(args, &["--neo4j-uri"]).or_else(|| std::env::var("UG_NEO4J_URI").ok());
+    let neo4j_uri =
+        flag_value(args, &["--neo4j-uri"]).or_else(|| std::env::var("UG_NEO4J_URI").ok());
     let neo4j_user = flag_value(args, &["--neo4j-user"])
         .or_else(|| std::env::var("UG_NEO4J_USER").ok())
         .unwrap_or_else(|| "neo4j".to_string());
     let neo4j_password = flag_value(args, &["--neo4j-password"])
         .or_else(|| std::env::var("UG_NEO4J_PASSWORD").ok())
         .unwrap_or_default();
-    let neo4j_database = flag_value(args, &["--neo4j-database"])
-        .or_else(|| std::env::var("UG_NEO4J_DATABASE").ok());
+    let neo4j_database =
+        flag_value(args, &["--neo4j-database"]).or_else(|| std::env::var("UG_NEO4J_DATABASE").ok());
 
     let mut specs: Vec<StoreSpec> = Vec::new();
     for kind in dest.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
@@ -71,9 +72,7 @@ pub(crate) fn store_specs_from_args(args: &[String], embedding_dim: u32) -> Vec<
             }
             "neo4j" | "neo" => {
                 let uri = neo4j_uri.clone().unwrap_or_else(|| {
-                    eprintln!(
-                        "Error: --dest neo4j requires --neo4j-uri (or UG_NEO4J_URI env var)"
-                    );
+                    eprintln!("Error: --dest neo4j requires --neo4j-uri (or UG_NEO4J_URI env var)");
                     std::process::exit(2);
                 });
                 if neo4j_password.is_empty() {

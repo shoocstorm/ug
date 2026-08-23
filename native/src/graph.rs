@@ -3,6 +3,7 @@ use crate::types::{
     GraphData, GraphEdge, GraphEdgeType, GraphNode, GraphNodeFolderMeta, GraphNodeType,
 };
 use petgraph::graph::{DiGraph, NodeIndex};
+use serde::{Deserialize, Serialize};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -1354,24 +1355,22 @@ impl<'a> EdgeAdj<'a> {
     }
 }
 
-/// Shortest directed path between two nodes, over an already-parsed graph.
+/// Shortest directed path between two nodes.
 ///
 /// Breadth-first with a predecessor array, reconstructing the path once at
-/// the end. The `String`-in/`String`-out [`find_shortest_path`] wraps this;
-/// callers holding a `GraphData` should use this directly rather than paying
-/// for a second parse of the whole file.
+/// the end.
 ///
 /// Replaces a BFS that carried a full `Vec<String>` of the path along with
 /// *every queued node* — cloning it per edge — dequeued with
 /// `Vec::remove(0)`, and marked `visited` on dequeue rather than enqueue, so
 /// the same node was queued once per edge pointing at it. This is the shape
 /// `serve::api_path` already used.
-pub fn find_shortest_path_graph(
+pub fn find_shortest_path(
     graph: &GraphData,
     source_id: &str,
     target_id: &str,
-) -> crate::types::PathResult {
-    let not_found = || crate::types::PathResult { path: vec![], found: false, length: None };
+) -> PathResult {
+    let not_found = || PathResult { path: vec![], found: false, length: None };
 
     let adj = EdgeAdj::build(graph);
     let (Some(&src), Some(&tgt)) = (
@@ -1431,7 +1430,7 @@ pub fn find_shortest_path_graph(
         .collect();
     let length = (path.len() as u32).saturating_sub(1);
 
-    crate::types::PathResult { path, found: true, length: Some(length) }
+    PathResult { path, found: true, length: Some(length) }
 }
 
 /// Every node within `k` directed hops of `start_node_id`, plus the edges
@@ -1444,8 +1443,8 @@ pub fn find_shortest_path_graph(
 /// O(V + E). Both are fixed the way `serve::api_traverse` already had them:
 /// a real queue marking on enqueue, and edges read off the reached nodes'
 /// incident lists.
-pub fn k_hop_bfs_graph(graph: &GraphData, start_node_id: &str, k: u32) -> crate::types::BfsResult {
-    let empty = || crate::types::BfsResult {
+pub fn k_hop_bfs(graph: &GraphData, start_node_id: &str, k: u32) -> BfsResult {
+    let empty = || BfsResult {
         nodes: vec![],
         edges: vec![],
         distances: HashMap::new(),
@@ -1504,7 +1503,7 @@ pub fn k_hop_bfs_graph(graph: &GraphData, start_node_id: &str, k: u32) -> crate:
     edge_idx.sort_unstable();
     edge_idx.dedup();
 
-    crate::types::BfsResult {
+    BfsResult {
         nodes: reached.iter().map(|&i| graph.nodes[i].clone()).collect(),
         edges: edge_idx
             .iter()
@@ -1525,16 +1524,6 @@ pub fn build_graph(index_json: String) -> String {
 
     let graph = build_graph_from_index(&index_result);
     serde_json::to_string(&graph).unwrap_or_default()
-}
-
-pub fn k_hop_bfs(graph_json: String, start_node_id: String, k: u32) -> String {
-    let graph: GraphData = match serde_json::from_str(&graph_json) {
-        Ok(g) => g,
-        Err(_) => return "{}".to_string(),
-    };
-
-    let result = k_hop_bfs_graph(&graph, &start_node_id, k);
-    serde_json::to_string(&result).unwrap_or_default()
 }
 
 fn build_di_graph(graph: &GraphData) -> (DiGraph<(), ()>, HashMap<String, NodeIndex>) {
@@ -1580,7 +1569,7 @@ pub fn filter_edges_by_type(graph_json: String, edge_types: Vec<String>) -> Stri
         .cloned()
         .collect();
 
-    let result = crate::types::FilteredEdgesResult {
+    let result = FilteredEdgesResult {
         count: filtered.len(),
         edges: filtered,
     };
@@ -1635,38 +1624,11 @@ pub fn graph_keyword_search(
         .cloned()
         .collect();
 
-    let result = crate::types::SearchResult {
+    let result = SearchResult {
         count: matched.len(),
         nodes: matched,
     };
     serde_json::to_string(&result).unwrap_or_default()
-}
-
-/// Parse-and-search convenience wrapper over [`find_shortest_path_graph`].
-///
-/// Callers that already hold a `GraphData` should use that function directly —
-/// on a large graph this wrapper's `from_str` dominates, and it throws the
-/// parse away on return.
-pub fn find_shortest_path(graph_json: String, source_id: String, target_id: String) -> String {
-    let graph: GraphData = match serde_json::from_str(&graph_json) {
-        Ok(g) => g,
-        Err(_) => return "{}".to_string(),
-    };
-    let result = find_shortest_path_graph(&graph, &source_id, &target_id);
-    serde_json::to_string(&result).unwrap_or_default()
-}
-
-/// Parse-and-score convenience wrapper over [`calculate_centrality_graph`].
-///
-/// Callers that already hold a `GraphData` should use that function directly —
-/// on a large graph this wrapper's `from_str` is the dominant cost, and it
-/// throws the parse away on return.
-pub fn calculate_centrality(graph_json: String) -> String {
-    let graph: GraphData = match serde_json::from_str(&graph_json) {
-        Ok(g) => g,
-        Err(_) => return "{}".to_string(),
-    };
-    calculate_centrality_graph(&graph)
 }
 
 /// Forward adjacency in compressed-sparse-row form, over node *indices*.
@@ -1818,14 +1780,13 @@ impl BrandesScratch {
 /// whole graph *per source node* and cloned an id on every edge relaxation —
 /// O(V²) allocations before any arithmetic. See P1.1 in
 /// `docs/dev/PERF-TUNING-JOURNEY.md`.
-pub fn calculate_centrality_graph(graph: &GraphData) -> String {
+pub fn calculate_centrality(graph: &GraphData) -> CentralityResult {
     let n = graph.nodes.len();
     if n == 0 {
-        let result = crate::types::CentralityResult {
+        return CentralityResult {
             degree_centrality: HashMap::new(),
             betweenness_centrality: HashMap::new(),
         };
-        return serde_json::to_string(&result).unwrap_or_default();
     }
     let nf = n as f64;
 
@@ -1907,27 +1868,16 @@ pub fn calculate_centrality_graph(graph: &GraphData) -> String {
         betweenness_centrality.insert(node.id.clone(), betweenness[i]);
     }
 
-    let result = crate::types::CentralityResult {
+    CentralityResult {
         degree_centrality,
         betweenness_centrality,
-    };
-    serde_json::to_string(&result).unwrap_or_default()
-}
-
-/// Parse-and-detect convenience wrapper over [`detect_cycles_graph`]. See the
-/// note on [`calculate_centrality`] about the cost of the parse.
-pub fn detect_cycles(graph_json: String) -> String {
-    let graph: GraphData = match serde_json::from_str(&graph_json) {
-        Ok(g) => g,
-        Err(_) => return "{}".to_string(),
-    };
-    detect_cycles_graph(&graph)
+    }
 }
 
 /// Cycle detection over an already-parsed graph. Like
-/// [`calculate_centrality_graph`], this is CPU-bound and must not be awaited
+/// [`calculate_centrality`], this is CPU-bound and must not be awaited
 /// inline on an async runtime thread.
-pub fn detect_cycles_graph(graph: &GraphData) -> String {
+pub fn detect_cycles(graph: &GraphData) -> CycleResult {
     let (di_graph, index_map) = build_di_graph(graph);
     let mut visited: HashMap<String, bool> = HashMap::new();
     let mut rec_stack: HashMap<String, bool> = HashMap::new();
@@ -1955,11 +1905,10 @@ pub fn detect_cycles_graph(graph: &GraphData) -> String {
         .into_iter()
         .collect();
 
-    let result = crate::types::CycleResult {
+    CycleResult {
         has_cycles: !unique_cycles.is_empty(),
         cycles: unique_cycles,
-    };
-    serde_json::to_string(&result).unwrap_or_default()
+    }
 }
 
 fn detect_cycles_dfs(
@@ -2028,3 +1977,51 @@ fn __bench_probe_8() -> u32 { 8 }
 
 #[allow(dead_code)]
 fn __bench_probe_9() -> u32 { 9 }
+
+// ---------------------------------------------------------------------------
+// Algorithm results
+// ---------------------------------------------------------------------------
+//
+// The return shapes of the functions above. They live beside the algorithms
+// that build them rather than in `types.rs`, which describes the *graph* —
+// nodes, edges, the indexer output — not what querying it produces.
+// `lib.rs` re-exports them, so `ultragraph::BfsResult` still resolves.
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BfsResult {
+    pub nodes: Vec<GraphNode>,
+    pub edges: Vec<GraphEdge>,
+    pub distances: std::collections::HashMap<String, u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PathResult {
+    pub path: Vec<String>,
+    pub found: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub length: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CentralityResult {
+    pub degree_centrality: std::collections::HashMap<String, f64>,
+    pub betweenness_centrality: std::collections::HashMap<String, f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CycleResult {
+    pub has_cycles: bool,
+    pub cycles: Vec<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FilteredEdgesResult {
+    pub edges: Vec<GraphEdge>,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchResult {
+    pub nodes: Vec<GraphNode>,
+    pub count: usize,
+}

@@ -7,8 +7,9 @@
 
 use std::collections::HashMap;
 use ultragraph::{
-    find_shortest_path, find_shortest_path_graph, k_hop_bfs,
-    types::{BfsResult, GraphData, PathResult},
+    find_shortest_path, k_hop_bfs,
+    types::GraphData,
+    BfsResult,
 };
 
 fn graph(ids: &[&str], edges: &[(&str, &str)]) -> GraphData {
@@ -23,12 +24,8 @@ fn graph(ids: &[&str], edges: &[(&str, &str)]) -> GraphData {
     serde_json::from_value(serde_json::json!({ "nodes": nodes, "edges": edges })).unwrap()
 }
 
-fn json(g: &GraphData) -> String {
-    serde_json::to_string(g).unwrap()
-}
-
 fn bfs(g: &GraphData, start: &str, k: u32) -> BfsResult {
-    serde_json::from_str(&k_hop_bfs(json(g), start.to_string(), k)).unwrap()
+    k_hop_bfs(g, start, k)
 }
 
 // ---------- P1.2: shortest path ----------
@@ -36,7 +33,7 @@ fn bfs(g: &GraphData, start: &str, k: u32) -> BfsResult {
 #[test]
 fn path_follows_the_chain() {
     let g = graph(&["A", "B", "C", "D"], &[("A", "B"), ("B", "C"), ("C", "D")]);
-    let r = find_shortest_path_graph(&g, "A", "D");
+    let r = find_shortest_path(&g, "A", "D");
     assert!(r.found);
     assert_eq!(r.path, vec!["A", "B", "C", "D"]);
     assert_eq!(r.length, Some(3));
@@ -52,7 +49,7 @@ fn path_takes_the_shorter_of_two_routes() {
         &["A", "B", "C", "D"],
         &[("A", "B"), ("B", "C"), ("C", "D"), ("A", "D")],
     );
-    let r = find_shortest_path_graph(&g, "A", "D");
+    let r = find_shortest_path(&g, "A", "D");
     assert!(r.found);
     assert_eq!(r.path, vec!["A", "D"]);
     assert_eq!(r.length, Some(1));
@@ -62,9 +59,9 @@ fn path_takes_the_shorter_of_two_routes() {
 #[test]
 fn path_does_not_walk_edges_backwards() {
     let g = graph(&["A", "B", "C"], &[("A", "B"), ("B", "C")]);
-    assert!(find_shortest_path_graph(&g, "A", "C").found);
+    assert!(find_shortest_path(&g, "A", "C").found);
 
-    let r = find_shortest_path_graph(&g, "C", "A");
+    let r = find_shortest_path(&g, "C", "A");
     assert!(!r.found);
     assert!(r.path.is_empty());
     assert_eq!(r.length, None);
@@ -74,7 +71,7 @@ fn path_does_not_walk_edges_backwards() {
 #[test]
 fn path_from_a_node_to_itself_is_zero_length() {
     let g = graph(&["A", "B"], &[("A", "B")]);
-    let r = find_shortest_path_graph(&g, "A", "A");
+    let r = find_shortest_path(&g, "A", "A");
     assert!(r.found);
     assert_eq!(r.path, vec!["A"]);
     assert_eq!(r.length, Some(0));
@@ -84,7 +81,7 @@ fn path_from_a_node_to_itself_is_zero_length() {
 fn path_to_an_unknown_node_is_not_found() {
     let g = graph(&["A", "B"], &[("A", "B")]);
     for (s, t) in [("A", "GHOST"), ("GHOST", "A"), ("GHOST", "OTHER")] {
-        let r = find_shortest_path_graph(&g, s, t);
+        let r = find_shortest_path(&g, s, t);
         assert!(!r.found, "{s} -> {t} should not be found");
     }
 }
@@ -97,28 +94,13 @@ fn path_through_a_diamond_is_a_real_two_hop_route() {
         &["A", "B", "C", "D"],
         &[("A", "B"), ("A", "C"), ("B", "D"), ("C", "D")],
     );
-    let r = find_shortest_path_graph(&g, "A", "D");
+    let r = find_shortest_path(&g, "A", "D");
     assert!(r.found);
     assert_eq!(r.length, Some(2));
     assert_eq!(r.path.len(), 3);
     assert_eq!(r.path[0], "A");
     assert_eq!(r.path[2], "D");
     assert!(r.path[1] == "B" || r.path[1] == "C", "via {}", r.path[1]);
-}
-
-/// The `String` wrapper must agree with the entry point it now delegates to.
-#[test]
-fn the_json_wrapper_matches_the_graph_entry_point() {
-    let g = graph(
-        &["A", "B", "C", "D"],
-        &[("A", "B"), ("B", "C"), ("C", "D"), ("A", "D")],
-    );
-    let direct = find_shortest_path_graph(&g, "A", "D");
-    let via_json: PathResult =
-        serde_json::from_str(&find_shortest_path(json(&g), "A".into(), "D".into())).unwrap();
-    assert_eq!(direct.found, via_json.found);
-    assert_eq!(direct.path, via_json.path);
-    assert_eq!(direct.length, via_json.length);
 }
 
 // ---------- P1.3: k-hop BFS ----------

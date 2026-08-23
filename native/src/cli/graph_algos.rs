@@ -20,9 +20,9 @@ use ultragraph::agent_tools::{
     self, by_id_map, node_loc, node_type_str, strip_file_id_prefix, Render,
 };
 use ultragraph::types::{GraphData, GraphNode, GraphNodeType};
+use ultragraph::CentralityResult;
 use ultragraph::{
-    calculate_centrality_graph, detect_cycles_graph, C_BOLD, C_CYAN, C_DIM, C_GREEN, C_RESET,
-    C_YELLOW,
+    calculate_centrality, detect_cycles, C_BOLD, C_CYAN, C_DIM, C_GREEN, C_RESET, C_YELLOW,
 };
 
 use super::agent::{emit_agent_result, load_agent_graph, print_wildcard_help};
@@ -185,25 +185,21 @@ pub(crate) fn run_graph_path(args: &[String]) {
 /// Rows behind the centrality report: one per node, both scores joined.
 fn centrality_rows<'a>(
     graph: &'a GraphData,
-    centrality_json: &str,
+    centrality: &CentralityResult,
     types: &[String],
     file_prefix: Option<&str>,
 ) -> Vec<(&'a GraphNode, f64, f64)> {
-    let parsed: serde_json::Value =
-        serde_json::from_str(centrality_json).unwrap_or_else(|_| serde_json::json!({}));
-    let degree = parsed.get("degree_centrality").cloned().unwrap_or_else(|| serde_json::json!({}));
-    let between = parsed
-        .get("betweenness_centrality")
-        .cloned()
-        .unwrap_or_else(|| serde_json::json!({}));
-    let score = |v: &serde_json::Value, id: &str| -> f64 {
-        v.get(id).and_then(|x| x.as_f64()).unwrap_or(0.0)
-    };
     graph
         .nodes
         .iter()
         .filter(|n| node_passes(n, types, file_prefix))
-        .map(|n| (n, score(&degree, &n.id), score(&between, &n.id)))
+        .map(|n| {
+            (
+                n,
+                centrality.degree_centrality.get(&n.id).copied().unwrap_or(0.0),
+                centrality.betweenness_centrality.get(&n.id).copied().unwrap_or(0.0),
+            )
+        })
         .collect()
 }
 
@@ -218,13 +214,11 @@ pub(crate) fn run_graph_centrality(args: &[String]) {
     let top = limit_or(args, &["--top", "-l", "--limit"], 20);
 
     let (graph, _raw, _path) = load_agent_graph(&load_args);
-    // Score off the graph we already parsed — the String overload would parse
-    // the whole file a second time just to throw the result away.
-    let centrality = calculate_centrality_graph(&graph);
+    let centrality = calculate_centrality(&graph);
 
     // Raw output keeps the lib's shape so existing consumers of
     // analysis.json keep working.
-    if emit_raw(args, &centrality, "centrality") {
+    if emit_raw(args, &serde_json::to_string(&centrality).unwrap_or_default(), "centrality") {
         return;
     }
 
@@ -263,13 +257,7 @@ pub(crate) fn run_graph_cycles(args: &[String]) {
 
     let (graph, _raw, _path) = load_agent_graph(&load_args);
     let by_id = by_id_map(&graph);
-    let cycles_json = detect_cycles_graph(&graph);
-    let parsed: serde_json::Value =
-        serde_json::from_str(&cycles_json).unwrap_or_else(|_| serde_json::json!({}));
-    let all: Vec<Vec<String>> = parsed
-        .get("cycles")
-        .and_then(|c| serde_json::from_value(c.clone()).ok())
-        .unwrap_or_default();
+    let all = detect_cycles(&graph).cycles;
 
     let cycles: Vec<&Vec<String>> = all
         .iter()

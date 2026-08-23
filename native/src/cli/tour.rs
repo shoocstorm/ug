@@ -10,10 +10,10 @@ use ultragraph::{C_BOLD, C_CYAN, C_DIM, C_GREEN, C_MAGENTA, C_RESET, C_YELLOW};
 use crate::tour;
 
 use super::args::{first_positional, flag_value, has_flag, multi_flag};
-use super::chat_cmd::chat_client_from_args;
+use super::chat::chat_client_from_args;
 use super::embed::{embedder_from_chat_args, tokio_runtime};
 use super::io::{write_file, write_or_print};
-use super::store::{open_store_or_exit, single_store_spec_from_args};
+use super::dest::{open_store_or_exit, single_store_spec_from_args};
 
 pub(crate) fn run_tour(args: &[String]) {
     if has_flag(args, "-h") || has_flag(args, "--help") {

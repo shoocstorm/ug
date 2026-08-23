@@ -10,7 +10,7 @@ use ultragraph::{C_BOLD, C_CYAN, C_DIM, C_RESET, C_YELLOW};
 
 use super::args::{first_positional, flag_value, has_flag, multi_flag};
 use super::embed::tokio_runtime;
-use super::store::{open_store_or_exit, single_store_spec_from_args};
+use super::dest::{open_store_or_exit, single_store_spec_from_args};
 
 /// `ug analyze` — whole-repo statistics, the CLI half of the `analyze`
 /// MCP tool.

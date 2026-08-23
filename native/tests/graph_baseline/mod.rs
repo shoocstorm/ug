@@ -40,7 +40,7 @@ fn build_di_graph(graph: &GraphData) -> (DiGraph<(), ()>, HashMap<String, NodeIn
 pub fn calculate_centrality_baseline(graph: &GraphData) -> String {
     let n = graph.nodes.len() as f64;
     if n == 0.0 {
-        let result = ultragraph::types::CentralityResult {
+        let result = ultragraph::CentralityResult {
             degree_centrality: HashMap::new(),
             betweenness_centrality: HashMap::new(),
         };
@@ -159,7 +159,7 @@ pub fn calculate_centrality_baseline(graph: &GraphData) -> String {
     }
     }
 
-    let result = ultragraph::types::CentralityResult {
+    let result = ultragraph::CentralityResult {
         degree_centrality,
         betweenness_centrality: betweenness,
     };
@@ -168,13 +168,13 @@ pub fn calculate_centrality_baseline(graph: &GraphData) -> String {
 
 // ---------- P1.2 / P1.3 baselines ----------
 
-pub fn run_k_hop_bfs_baseline(graph: &GraphData, start_node_id: &str, k: u32) -> ultragraph::types::BfsResult {
+pub fn run_k_hop_bfs_baseline(graph: &GraphData, start_node_id: &str, k: u32) -> ultragraph::BfsResult {
     let (di_graph, index_map) = build_di_graph(graph);
 
     let start_idx = match index_map.get(start_node_id) {
         Some(idx) => *idx,
         None => {
-            return ultragraph::types::BfsResult {
+            return ultragraph::BfsResult {
                 nodes: vec![],
                 edges: vec![],
                 distances: HashMap::new(),
@@ -219,7 +219,7 @@ pub fn run_k_hop_bfs_baseline(graph: &GraphData, start_node_id: &str, k: u32) ->
         .cloned()
         .collect();
 
-    ultragraph::types::BfsResult {
+    ultragraph::BfsResult {
         nodes: result_nodes,
         edges: result_edges,
         distances,
@@ -237,7 +237,7 @@ pub fn find_shortest_path_baseline(graph_json: String, source_id: String, target
     let source_idx = match index_map.get(&source_id) {
         Some(idx) => *idx,
         None => {
-            let result = ultragraph::types::PathResult {
+            let result = ultragraph::PathResult {
                 path: vec![],
                 found: false,
                 length: None,
@@ -249,7 +249,7 @@ pub fn find_shortest_path_baseline(graph_json: String, source_id: String, target
     let target_idx = match index_map.get(&target_id) {
         Some(idx) => *idx,
         None => {
-            let result = ultragraph::types::PathResult {
+            let result = ultragraph::PathResult {
                 path: vec![],
                 found: false,
                 length: None,
@@ -265,7 +265,7 @@ pub fn find_shortest_path_baseline(graph_json: String, source_id: String, target
         let (node_idx, path) = queue.remove(0);
         if node_idx == target_idx {
             let path_len = path.len() as u32;
-            let result = ultragraph::types::PathResult {
+            let result = ultragraph::PathResult {
                 path: path.clone(),
                 found: true,
                 length: Some(path_len - 1),
@@ -288,7 +288,7 @@ pub fn find_shortest_path_baseline(graph_json: String, source_id: String, target
         }
     }
 
-    let result = ultragraph::types::PathResult {
+    let result = ultragraph::PathResult {
         path: vec![],
         found: false,
         length: None,

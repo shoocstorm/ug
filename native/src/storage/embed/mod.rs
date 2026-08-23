@@ -14,11 +14,15 @@
 //! `set_dim`) is identical for both, so `ingest.rs` / `query.rs` are
 //! agnostic to the backend.
 
+
+/// The local ONNX embedder — same trait, no HTTP involved.
+pub mod local;
+
 use futures::stream::{self, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-use crate::storage::embed_local::LocalEmbedder;
+use self::local::LocalEmbedder;
 
 /// Default model. Resolved against fastembed's catalog for the local
 /// backend, and passed verbatim as the `model` field for the remote

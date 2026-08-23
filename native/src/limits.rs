@@ -349,12 +349,12 @@ pub fn all(budget: &EmbedBudget) -> Vec<Limit> {
 /// because the tokenizer applies it silently.
 ///
 /// Values are the model cards' published max sequence length, keyed by the
-/// same aliases [`crate::storage::embed_local`] resolves. Unknown or remote
+/// same aliases [`crate::storage::embed::local`] resolves. Unknown or remote
 /// models return `None`: reporting a guess would be worse than reporting
 /// nothing, since the whole point is to tell a user where their text stops
 /// counting.
 ///
-/// Keep in sync with `resolve_model` in `storage/embed_local.rs` when adding
+/// Keep in sync with `resolve_model` in `storage/embed/local.rs` when adding
 /// a model there.
 pub fn model_token_window(model: &str) -> Option<u32> {
     let lowered = model.trim().to_ascii_lowercase();

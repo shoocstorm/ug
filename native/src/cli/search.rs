@@ -12,11 +12,11 @@ use ultragraph::storage::{
 use ultragraph::{C_BOLD, C_CYAN, C_DIM, C_RESET, C_YELLOW};
 
 use super::agent::{emit_agent_result, load_agent_graph, print_node_ref_help, print_wildcard_help};
-use super::analysis::resolve_node_ref;
+use super::graph_algos::resolve_node_ref;
 use super::args::{first_positional, flag_value, has_flag, multi_flag, positionals};
 use super::embed::{tokio_runtime, try_embedder_from_args};
 use super::io::{die, write_or_print};
-use super::store::{open_store_or_exit, single_store_spec_from_args};
+use super::dest::{open_store_or_exit, single_store_spec_from_args};
 
 /// Retired subcommand, kept as an alias so muscle memory and existing
 /// scripts keep working: `ug semantic_search <q>` is `ug search <q>

@@ -11,7 +11,7 @@
 //! normalized by `(n-1)(n-2)`.
 
 use std::collections::HashMap;
-use ultragraph::{calculate_centrality, types::CentralityResult};
+use ultragraph::{calculate_centrality, types::GraphData, CentralityResult};
 
 /// Build graph JSON from ids and directed `Calls` edges. Node type is
 /// irrelevant to centrality — every node is `Function` so the fixture stays
@@ -29,8 +29,9 @@ fn graph_json(ids: &[&str], edges: &[(&str, &str)]) -> String {
 }
 
 fn centrality(ids: &[&str], edges: &[(&str, &str)]) -> CentralityResult {
-    let json = calculate_centrality(graph_json(ids, edges));
-    serde_json::from_str(&json).expect("centrality result parses")
+    let graph: GraphData =
+        serde_json::from_str(&graph_json(ids, edges)).expect("fixture graph parses");
+    calculate_centrality(&graph)
 }
 
 /// Compare a full betweenness map against hand-computed values.

@@ -3,20 +3,23 @@
 //! Module layout:
 //!   - `text`            - shape per-node embedding text + sparse keyword vectors
 //!   - `embed`           - HTTP client to OpenAI-compatible /v1/embeddings
+//!   - `embed::local`    - local ONNX embedder (no HTTP involved)
 //!   - `db`              - OverGraph engine wrapper (also implements `KnowledgeStore`)
 //!   - `backends::neo4j` - Neo4j driver wrapper implementing `KnowledgeStore`
 //!   - `store`           - the `KnowledgeStore` trait + portable types + `open_store`
-//!   - `analyze`           - semantic / hybrid / traversal queries (over `&dyn KnowledgeStore`)
+//!   - `query`           - semantic / hybrid / traversal queries (over `&dyn KnowledgeStore`)
 //!   - `ingest`          - graph -> embed -> upsert pipeline (single + multi destination)
 //!   - `ppr`             - thin wrapper around `KnowledgeStore::personalized_pagerank`
 //!   - `facts`           - per-node queryable facts (loc, degrees, is_test, ...)
+//!   - `comments`        - prose extraction from source comments
+//!   - `source`          - capturing indexed source text + snippets into the store
+//!   - `sparse_stats`    - corpus-wide keyword statistics for sparse scoring
 //!   - `types_registry`  - canonical string labels for OverGraph nodes and edges
 
 pub mod backends;
 pub mod comments;
 pub mod db;
 pub mod embed;
-pub mod embed_local;
 pub mod facts;
 pub mod ingest;
 pub mod ppr;
@@ -32,7 +35,7 @@ pub use embed::{
     Embedder, EmbedderConfig, RemoteEmbedder, DEFAULT_BASE_URL, DEFAULT_EMBEDDING_DIM,
     DEFAULT_MODEL,
 };
-pub use embed_local::LocalEmbedder;
+pub use embed::local::LocalEmbedder;
 pub use ingest::{
     build_texts, capture_for_graph, graph_id_set, ingest_graph, plan_incremental_ingest, prune_to_graph,
     refresh_sparse_stats, IngestPlan, IngestStats,

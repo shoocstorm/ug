@@ -17,7 +17,7 @@ use super::args::{flag_value, has_flag};
 use super::embed::{budget_from_args, embedder_from_args, tokio_runtime};
 use super::io::die;
 use super::scope;
-use super::store::{IngestOutcome, announce_destinations, store_specs_from_args};
+use super::dest::{IngestOutcome, announce_destinations, store_specs_from_args};
 
 /// What an ingest run should do about vectors.
 ///

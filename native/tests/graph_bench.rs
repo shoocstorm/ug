@@ -14,7 +14,7 @@ use crate::graph_baseline;
 
 use std::path::PathBuf;
 use std::time::Instant;
-use ultragraph::{calculate_centrality_graph, types::GraphData};
+use ultragraph::{calculate_centrality, types::GraphData};
 
 /// Deterministic synthetic graph: `n` nodes, roughly `avg_degree · n` edges,
 /// wired by a cheap LCG so the shape is reproducible across runs and machines
@@ -61,13 +61,16 @@ fn report(label: &str, graph: &GraphData, elapsed_ms: f64) {
 #[test]
 #[ignore]
 fn centrality_synthetic() {
-    println!("\ncalculate_centrality_graph — synthetic, avg degree 3");
+    println!("\ncalculate_centrality — synthetic, avg degree 3");
     for n in [500usize, 1_000, 2_000, 4_000, 8_000] {
         let graph = synthetic(n, 3);
         let t = Instant::now();
-        let out = calculate_centrality_graph(&graph);
+        let out = calculate_centrality(&graph);
         let ms = t.elapsed().as_secs_f64() * 1_000.0;
-        assert!(out.len() > 2, "produced no result at n={n}");
+        assert!(
+            !out.degree_centrality.is_empty(),
+            "produced no result at n={n}"
+        );
         report(&format!("n={n}"), &graph, ms);
     }
     println!();
@@ -112,7 +115,7 @@ fn centrality_fixtures() {
         return;
     }
 
-    println!("\ncalculate_centrality_graph — real fixtures");
+    println!("\ncalculate_centrality — real fixtures");
     for (name, path) in found {
         let Ok(raw) = std::fs::read_to_string(&path) else {
             continue;
@@ -131,9 +134,12 @@ fn centrality_fixtures() {
             continue;
         }
         let t = Instant::now();
-        let out = calculate_centrality_graph(&graph);
+        let out = calculate_centrality(&graph);
         let ms = t.elapsed().as_secs_f64() * 1_000.0;
-        assert!(out.len() > 2, "produced no result for {name}");
+        assert!(
+            !out.degree_centrality.is_empty(),
+            "produced no result for {name}"
+        );
         report(&name, &graph, ms);
     }
     println!();
@@ -149,8 +155,11 @@ fn centrality_fixtures() {
 #[test]
 #[ignore]
 fn centrality_old_vs_new() {
-    println!("\ncalculate_centrality_graph — baseline (cdc9a2b) vs current");
-    println!("  {:<10} {:>12} {:>12} {:>10}", "size", "baseline", "current", "speedup");
+    println!("\ncalculate_centrality — baseline (cdc9a2b) vs current");
+    println!(
+        "  {:<10} {:>12} {:>12} {:>10}",
+        "size", "baseline", "current", "speedup"
+    );
     for n in [200usize, 400, 800, 1_600] {
         let graph = synthetic(n, 3);
 
@@ -159,7 +168,7 @@ fn centrality_old_vs_new() {
         let old_ms = t.elapsed().as_secs_f64() * 1_000.0;
 
         let t = Instant::now();
-        let _ = calculate_centrality_graph(&graph);
+        let _ = calculate_centrality(&graph);
         let new_ms = t.elapsed().as_secs_f64() * 1_000.0;
 
         println!(
@@ -175,12 +184,16 @@ fn centrality_old_vs_new() {
 #[test]
 #[ignore]
 fn traversal_fixtures() {
-    use ultragraph::{find_shortest_path_graph, k_hop_bfs};
+    use ultragraph::{find_shortest_path, k_hop_bfs};
 
     println!("\nk-hop BFS + shortest path — real fixtures");
     for (name, path) in fixtures() {
-        let Ok(raw) = std::fs::read_to_string(&path) else { continue };
-        let Ok(graph) = serde_json::from_str::<GraphData>(&raw) else { continue };
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(graph) = serde_json::from_str::<GraphData>(&raw) else {
+            continue;
+        };
         if graph.nodes.is_empty() {
             continue;
         }
@@ -197,32 +210,25 @@ fn traversal_fixtures() {
         }
         let start = best.1;
 
-        let t = Instant::now();
-        let bfs = k_hop_bfs(raw.clone(), start.clone(), 2);
-        let bfs_ms = t.elapsed().as_secs_f64() * 1_000.0;
-
         // Traversal only, old vs new, over the same parsed graph.
         let t = Instant::now();
         let _ = graph_baseline::run_k_hop_bfs_baseline(&graph, &start, 2);
         let old_only = t.elapsed().as_secs_f64() * 1_000.0;
         let t = Instant::now();
-        let _ = ultragraph::k_hop_bfs_graph(&graph, &start, 2);
+        let bfs = k_hop_bfs(&graph, &start, 2);
         let new_only = t.elapsed().as_secs_f64() * 1_000.0;
-        let reached: usize = serde_json::from_str::<serde_json::Value>(&bfs)
-            .ok()
-            .and_then(|v| v["nodes"].as_array().map(|a| a.len()))
-            .unwrap_or(0);
+        let reached = bfs.nodes.len();
 
         // Pick a target the walk actually reached, so the path search does
         // real work rather than exhausting the graph and returning not-found.
-        let target = serde_json::from_str::<serde_json::Value>(&bfs)
-            .ok()
-            .and_then(|v| v["nodes"].as_array().and_then(|a| a.last().cloned()))
-            .and_then(|n| n["id"].as_str().map(str::to_string))
+        let target = bfs
+            .nodes
+            .last()
+            .map(|n| n.id.clone())
             .unwrap_or_else(|| start.clone());
 
         let t = Instant::now();
-        let p = find_shortest_path_graph(&graph, &start, &target);
+        let p = find_shortest_path(&graph, &start, &target);
         let path_ms = t.elapsed().as_secs_f64() * 1_000.0;
 
         println!(
@@ -232,26 +238,26 @@ fn traversal_fixtures() {
             old_only / new_only,
             p.length,
         );
-        let _ = (bfs_ms, p.found);
+        let _ = p.found;
     }
     println!();
 }
 
 /// P1.2 / P1.3 head-to-head against `cdc9a2b`.
 ///
-/// Both sides are handed the same raw JSON and pay their own parse, because
-/// the old entry points took a `String` and that is what a caller actually
-/// had. The extra `path (parsed)` column isolates P1.2's other half: callers
-/// holding a `GraphData` no longer have to re-parse it at all.
+/// The baseline entry points took raw JSON and paid their own parse; the
+/// current ones take the parsed graph, so the current side times parse +
+/// traversal separately — the parse is what the old shape forced on every
+/// caller, the traversal-only column is what the rewrite changed.
 #[test]
 #[ignore]
 fn traversal_old_vs_new() {
-    use ultragraph::{find_shortest_path, find_shortest_path_graph, k_hop_bfs, k_hop_bfs_graph};
+    use ultragraph::{find_shortest_path, k_hop_bfs};
 
-    println!("\ntraversal — baseline (cdc9a2b) vs current, both from raw JSON");
+    println!("\ntraversal — baseline (cdc9a2b, raw JSON in) vs current (parsed graph in)");
     println!(
-        "  {:<10} {:>22} {:>8} {:>22} {:>8} {:>14}",
-        "size", "2-hop old/new (ms)", "", "path old/new (ms)", "", "path (parsed)"
+        "  {:<10} {:>26} {:>26} {:>24}",
+        "size", "2-hop old/new (ms)", "path old/new (ms)", "traversal-only (ms)"
     );
     for n in [1_000usize, 2_000, 4_000, 8_000] {
         let graph = synthetic(n, 3);
@@ -267,37 +273,30 @@ fn traversal_old_vs_new() {
         let bfs_old = t.elapsed().as_secs_f64() * 1_000.0;
 
         let t = Instant::now();
-        let _ = k_hop_bfs(raw.clone(), start.clone(), 2);
+        let _ = k_hop_bfs(&graph, &start, 2);
         let bfs_new = t.elapsed().as_secs_f64() * 1_000.0;
 
+        let t = Instant::now();
+        let _ =
+            graph_baseline::find_shortest_path_baseline(raw.clone(), start.clone(), target.clone());
+        let path_old = t.elapsed().as_secs_f64() * 1_000.0;
+
+        let t = Instant::now();
+        let _ = find_shortest_path(&graph, &start, &target);
+        let path_new = t.elapsed().as_secs_f64() * 1_000.0;
+
         // Traversal only, both sides over the same parsed graph — this is
-        // what P1.3 actually changed; the wrappers above are dominated by
+        // what P1.3 actually changed; the rows above are dominated by
         // `serde_json` on a sparse fixture.
         let t = Instant::now();
         let _ = graph_baseline::run_k_hop_bfs_baseline(&graph, &start, 2);
         let bfs_old_only = t.elapsed().as_secs_f64() * 1_000.0;
         let t = Instant::now();
-        let _ = k_hop_bfs_graph(&graph, &start, 2);
+        let _ = k_hop_bfs(&graph, &start, 2);
         let bfs_new_only = t.elapsed().as_secs_f64() * 1_000.0;
 
-        let t = Instant::now();
-        let _ = graph_baseline::find_shortest_path_baseline(
-            raw.clone(),
-            start.clone(),
-            target.clone(),
-        );
-        let path_old = t.elapsed().as_secs_f64() * 1_000.0;
-
-        let t = Instant::now();
-        let _ = find_shortest_path(raw.clone(), start.clone(), target.clone());
-        let path_new = t.elapsed().as_secs_f64() * 1_000.0;
-
-        let t = Instant::now();
-        let _ = find_shortest_path_graph(&graph, &start, &target);
-        let path_parsed = t.elapsed().as_secs_f64() * 1_000.0;
-
         println!(
-            "  n={n:<8} {bfs_old:>9.2} / {bfs_new:>8.2} {:>7.1}x {path_old:>10.2} / {path_new:>7.2} {:>7.1}x {path_parsed:>12.2}   | traversal-only 2-hop {bfs_old_only:>7.2} / {bfs_new_only:>6.2} {:>5.1}x",
+            "  n={n:<8} {bfs_old:>11.2} / {bfs_new:>8.2} {:>6.1}x {path_old:>11.2} / {path_new:>7.2} {:>6.1}x   2-hop {bfs_old_only:>7.2} / {bfs_new_only:>6.2} {:>5.1}x",
             bfs_old / bfs_new,
             path_old / path_new,
             bfs_old_only / bfs_new_only,

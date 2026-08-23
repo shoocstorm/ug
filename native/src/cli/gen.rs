@@ -25,7 +25,7 @@ use super::embed::{budget_from_args, embedder_from_args, tokio_runtime};
 use super::ingest::{ingest_with_specs, EmbedMode};
 use super::io::die;
 use super::scope;
-use super::store::{IngestOutcome, announce_destinations, store_specs_from_args};
+use super::dest::{IngestOutcome, announce_destinations, store_specs_from_args};
 
 /// Decide which directory `ug gen` should use as its incremental parse
 /// cache: `None` disables caching and forces a full re-parse.

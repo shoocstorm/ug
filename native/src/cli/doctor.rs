@@ -156,7 +156,7 @@ pub(crate) fn run_doctor(args: &[String]) {
     println!();
 
     println!("{C_BOLD}Model cache{C_RESET} (ONNX weights for the local embedder)");
-    println!("  {}", ultragraph::storage::embed_local::local_model_cache_dir().display());
+    println!("  {}", ultragraph::storage::embed::local::local_model_cache_dir().display());
     println!("  resolution: $UG_MODEL_CACHE → $XDG_CACHE_HOME/ug/models → platform cache dir → temp dir");
 }
 

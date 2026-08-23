@@ -389,7 +389,7 @@ async fn capabilities_publishes_the_graph_delivery_mode() {
 
 #[test]
 fn graph_mode_policy_resolves_by_size_only_on_auto() {
-    let big = super::GRAPH_SERVER_MODE_BYTES;
+    let big = super::snapshot::GRAPH_SERVER_MODE_BYTES;
     // Auto compares against the passed-in cutoff — the resolved
     // `graph.server_mode_bytes` — not a value read inside the policy.
     assert_eq!(GraphModePolicy::Auto.resolve(big, big), "server");

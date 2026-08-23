@@ -5,19 +5,19 @@
 //! this CLI and keeping it beside the flag parsing it describes is the only
 //! way the two stay in step. Shared machinery lives in [`args`] (flag and
 //! positional parsing), [`io`] (writing results, exiting with a message),
-//! [`embed`] (embedder + runtime construction) and [`store`] (resolving
+//! [`embed`] (embedder + runtime construction) and [`dest`] (resolving
 //! `--dest` into stores).
 //!
 //! [`run`] is the whole entry point: everything below `fn main` starts here.
 
 pub(crate) mod agent;
-pub(crate) mod analysis;
+pub(crate) mod graph_algos;
 pub(crate) mod api;
 pub(crate) mod app;
-pub(crate) mod analyze_cmd;
+pub(crate) mod analyze;
 pub(crate) mod args;
-pub(crate) mod chat_cmd;
-pub(crate) mod config_cmd;
+pub(crate) mod chat;
+pub(crate) mod config;
 pub(crate) mod connect;
 pub(crate) mod demo;
 pub(crate) mod doctor;
@@ -25,14 +25,14 @@ pub(crate) mod embed;
 pub(crate) mod gen;
 pub(crate) mod help;
 pub(crate) mod hook;
-pub(crate) mod index_cmd;
+pub(crate) mod index;
 pub(crate) mod ingest;
 pub(crate) mod io;
 pub(crate) mod projects;
 pub(crate) mod scope;
 pub(crate) mod search;
-pub(crate) mod store;
-pub(crate) mod tour_cmd;
+pub(crate) mod dest;
+pub(crate) mod tour;
 pub(crate) mod update;
 pub(crate) mod upgrade;
 
@@ -40,7 +40,7 @@ use std::env;
 
 use ultragraph::{C_BOLD, C_CYAN, C_RESET};
 
-use crate::serve;
+use crate::{mcp, serve};
 
 /// Parse the process arguments and run the requested command.
 ///
@@ -119,15 +119,15 @@ fn dispatch(cmd: &str, cmd_args: &[String]) {
         "api" => api::run_api(cmd_args),
         "demo" => demo::run_demo(cmd_args),
         // Pipeline steps `gen` runs for you.
-        "index" => index_cmd::run_index(cmd_args),
-        "graph" => index_cmd::run_graph(cmd_args),
+        "index" => index::run_index(cmd_args),
+        "graph" => index::run_graph(cmd_args),
         "ingest" => ingest::run_ingest(cmd_args),
         // Structural analysis. What is left here is what nothing else
         // can do: betweenness centrality needs all-pairs shortest paths,
         // and cycle detection needs an unbounded DFS — neither is
         // expressible as a query.
-        "graph_centrality" => analysis::run_graph_centrality(cmd_args),
-        "graph_cycles" => analysis::run_graph_cycles(cmd_args),
+        "graph_centrality" => graph_algos::run_graph_centrality(cmd_args),
+        "graph_cycles" => graph_algos::run_graph_cycles(cmd_args),
         // Agent tools (graph.json-backed, for AI coding agents). Names match
         // the MCP tools one-for-one.
         "context" => agent::run_context(cmd_args),
@@ -136,15 +136,15 @@ fn dispatch(cmd: &str, cmd_args: &[String]) {
         "get_code" => agent::run_get_code(cmd_args),
         "find_usages" => agent::run_find_usages(cmd_args),
         "project_overview" => agent::run_project_overview(cmd_args),
-        "shortest_path" => analysis::run_graph_path(cmd_args),
+        "shortest_path" => graph_algos::run_graph_path(cmd_args),
         "graph_schema" => agent::run_graph_schema(cmd_args),
-        "analyze" => analyze_cmd::run_analyze(cmd_args),
+        "analyze" => analyze::run_analyze(cmd_args),
         // Retrieval (OverGraph-backed).
         "semantic_search" => search::run_semantic_search(cmd_args),
         "search" => search::run_hybrid_search(cmd_args),
         "traverse" => search::run_traverse(cmd_args),
-        "chat" => chat_cmd::run_chat(cmd_args),
-        "tour" => tour_cmd::run_tour(cmd_args),
+        "chat" => chat::run_chat(cmd_args),
+        "tour" => tour::run_tour(cmd_args),
         // Project management.
         // `list` is the command; `list_projects` stays because it is the MCP
         // tool's name, and the agent-tool commands are documented as taking
@@ -155,11 +155,13 @@ fn dispatch(cmd: &str, cmd_args: &[String]) {
         "rm" => projects::run_rm(cmd_args),
         "uninstall" => projects::run_uninstall(cmd_args),
         "upgrade" => upgrade::run_upgrade(cmd_args),
-        "config" => config_cmd::run_config(cmd_args),
+        "config" => config::run_config(cmd_args),
         "doctor" => doctor::run_doctor(cmd_args),
         "connect" => connect::run_connect(cmd_args),
         "disconnect" => connect::run_disconnect(cmd_args),
-        "mcp" => connect::run_mcp(cmd_args),
+        // The MCP server itself: a primary entry point, dispatched straight
+        // to the module rather than forwarded through `connect`.
+        "mcp" => mcp::run(cmd_args),
         "help" | "-h" | "--help" => help::print_help(),
         _ => {
             eprintln!("Unknown command: {}", cmd);

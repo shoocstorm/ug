@@ -1,20 +1,12 @@
-//! `ug connect` / `ug disconnect` / `ug mcp` — wiring ug into an AI
-//! coding agent, as a CLI skill, an MCP server, or both.
+//! `ug connect` / `ug disconnect` — wiring ug into an AI coding agent,
+//! as a CLI skill, an MCP server, or both. (`ug mcp` itself dispatches
+//! straight to [`crate::mcp`].)
 
 use ultragraph::{C_BOLD, C_CYAN, C_DIM, C_GREEN, C_RESET, C_YELLOW};
 
 use crate::mcp;
 
 use super::args::has_flag;
-
-/// `ug mcp [...]` — the native MCP server and its install/uninstall/call/list
-/// subcommands. Bare `ug mcp` becomes a long-running stdio JSON-RPC server
-/// (stdio is the transport, so the startup logo is suppressed for that mode —
-/// see `is_mcp_server_mode` in `main`). This replaces the old Node.js `cli.mjs`
-/// server: every tool now runs the same Rust code the CLI and HTTP API use.
-pub(crate) fn run_mcp(args: &[String]) {
-    mcp::run(args);
-}
 
 /// `ug connect` — the front door for wiring ug into an AI agent.
 ///

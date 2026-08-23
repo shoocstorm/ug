@@ -2,7 +2,8 @@ use std::fs;
 use tempfile::TempDir;
 use ultragraph::{
     build_graph, graph_keyword_search, index,
-    types::{GraphData, GraphEdge, GraphEdgeType, GraphNode, GraphNodeType, SearchResult},
+    types::{GraphData, GraphEdge, GraphEdgeType, GraphNode, GraphNodeType},
+    SearchResult,
 };
 
 fn build_test_graph_from_ts(files: &[(&str, &str)]) -> String {

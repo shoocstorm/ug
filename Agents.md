@@ -427,7 +427,7 @@ macOS makes this fire constantly: `/tmp` → `/private/tmp`, `/var` →
 `/private/var`, so every `TempDir` and anything under `/var/folders/…` trips
 it. It has bitten `ug` at least three times — `indexer.rs` (`strip_repo_root`
 stripped nothing, leaving absolute paths in qualified names; see the comment at
-`indexer.rs:202`), and `serve.rs` `file_from_disk` (every file preview 403'd as
+`indexer.rs:202`), and `serve/db_api.rs` `file_from_disk` (every file preview 403'd as
 "path escapes repo root" when `repo_root` came from a non-canonical source).
 
 Rules:
