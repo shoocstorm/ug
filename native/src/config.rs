@@ -36,13 +36,16 @@ pub(crate) enum Kind {
 
 /// One persistable setting: its dotted CLI name, where it lives in the
 /// JSON file (`section` + camelCase `field`), the flag that overrides it,
-/// and how to validate it.
+/// and how to validate it. `min` is the inclusive lower bound for the
+/// numeric kinds — the same bound the settings panel enforces client-side,
+/// so a value the UI would reject never reaches the file.
 pub(crate) struct ConfigKey {
     pub name: &'static str,
     pub section: &'static str,
     pub field: &'static str,
     pub flag: &'static str,
     pub kind: Kind,
+    pub min: u64,
     pub secret: bool,
     pub desc: &'static str,
 }
@@ -51,21 +54,21 @@ pub(crate) struct ConfigKey {
 /// make a new setting persistable — the list/get/set/unset commands and
 /// the resolver are all registry-driven.
 pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
-    ConfigKey { name: "chat.model", section: "chat", field: "model", flag: "--chat-model", kind: Kind::Str, secret: false, desc: "chat completion model (ug chat / POST /api/chat)" },
-    ConfigKey { name: "chat.base_url", section: "chat", field: "baseUrl", flag: "--chat-base-url", kind: Kind::Str, secret: false, desc: "OpenAI-compatible chat endpoint base URL" },
-    ConfigKey { name: "chat.api_key", section: "chat", field: "apiKey", flag: "--chat-api-key", kind: Kind::Str, secret: true, desc: "API key for the chat endpoint" },
-    ConfigKey { name: "chat.temperature", section: "chat", field: "temperature", flag: "--temperature", kind: Kind::F32, secret: false, desc: "chat sampling temperature" },
-    ConfigKey { name: "chat.max_tokens", section: "chat", field: "maxTokens", flag: "--max-tokens", kind: Kind::U32, secret: false, desc: "chat completion max tokens" },
-    ConfigKey { name: "chat.timeout_secs", section: "chat", field: "timeoutSecs", flag: "--chat-timeout", kind: Kind::U64, secret: false, desc: "chat request timeout (seconds)" },
-    ConfigKey { name: "embed.model", section: "embed", field: "model", flag: "--model", kind: Kind::Str, secret: false, desc: "embedding model (local alias or remote model name)" },
-    ConfigKey { name: "embed.base_url", section: "embed", field: "baseUrl", flag: "--base-url", kind: Kind::Str, secret: false, desc: "remote /v1/embeddings base URL (unset = local in-process)" },
-    ConfigKey { name: "embed.api_key", section: "embed", field: "apiKey", flag: "--api-key", kind: Kind::Str, secret: true, desc: "API key for the embeddings endpoint" },
-    ConfigKey { name: "embed.dim", section: "embed", field: "dim", flag: "--embedding-dim", kind: Kind::U32, secret: false, desc: "embedding dimension override (normally auto-probed)" },
-    ConfigKey { name: "embed.section_cap", section: "embed", field: "sectionCap", flag: "--section-cap", kind: Kind::U32, secret: false, desc: "chars of a node's description to embed (default: derived from the model's token window)" },
-    ConfigKey { name: "vis.renderer", section: "vis", field: "renderer", flag: "", kind: Kind::Enum(&["auto", "three", "cosmos"]), secret: false, desc: "preferred rendering engine: auto (three below three_d_max_elements, cosmos above), three, or cosmos" },
-    ConfigKey { name: "vis.three_d_max_elements", section: "vis", field: "threeDMaxElements", flag: "", kind: Kind::U32, secret: false, desc: "max nodes/edges the 3D engine draws whole; above it auto switches to the 2D engine and 3D solo-passes neighbourhoods" },
-    ConfigKey { name: "vis.solo_threshold", section: "vis", field: "soloThreshold", flag: "", kind: Kind::U32, secret: false, desc: "nodes/edges past which the page opens in solo mode (the 2D engine's ceiling)" },
-    ConfigKey { name: "graph.server_mode_bytes", section: "graph", field: "serverModeBytes", flag: "", kind: Kind::U64, secret: false, desc: "graph.json bytes at/above which the browser is served the slim node index instead of the whole file (server mode)" },
+    ConfigKey { name: "chat.model", section: "chat", field: "model", flag: "--chat-model", kind: Kind::Str, min: 0, secret: false, desc: "chat completion model (ug chat / POST /api/chat)" },
+    ConfigKey { name: "chat.base_url", section: "chat", field: "baseUrl", flag: "--chat-base-url", kind: Kind::Str, min: 0, secret: false, desc: "OpenAI-compatible chat endpoint base URL" },
+    ConfigKey { name: "chat.api_key", section: "chat", field: "apiKey", flag: "--chat-api-key", kind: Kind::Str, min: 0, secret: true, desc: "API key for the chat endpoint" },
+    ConfigKey { name: "chat.temperature", section: "chat", field: "temperature", flag: "--temperature", kind: Kind::F32, min: 0, secret: false, desc: "chat sampling temperature" },
+    ConfigKey { name: "chat.max_tokens", section: "chat", field: "maxTokens", flag: "--max-tokens", kind: Kind::U32, min: 1, secret: false, desc: "chat completion max tokens" },
+    ConfigKey { name: "chat.timeout_secs", section: "chat", field: "timeoutSecs", flag: "--chat-timeout", kind: Kind::U64, min: 1, secret: false, desc: "chat request timeout (seconds)" },
+    ConfigKey { name: "embed.model", section: "embed", field: "model", flag: "--model", kind: Kind::Str, min: 0, secret: false, desc: "embedding model (local alias or remote model name)" },
+    ConfigKey { name: "embed.base_url", section: "embed", field: "baseUrl", flag: "--base-url", kind: Kind::Str, min: 0, secret: false, desc: "remote /v1/embeddings base URL (unset = local in-process)" },
+    ConfigKey { name: "embed.api_key", section: "embed", field: "apiKey", flag: "--api-key", kind: Kind::Str, min: 0, secret: true, desc: "API key for the embeddings endpoint" },
+    ConfigKey { name: "embed.dim", section: "embed", field: "dim", flag: "--embedding-dim", kind: Kind::U32, min: 1, secret: false, desc: "embedding dimension override (normally auto-probed)" },
+    ConfigKey { name: "embed.section_cap", section: "embed", field: "sectionCap", flag: "--section-cap", kind: Kind::U32, min: 1, secret: false, desc: "chars of a node's description to embed (default: derived from the model's token window)" },
+    ConfigKey { name: "vis.renderer", section: "vis", field: "renderer", flag: "", kind: Kind::Enum(&["auto", "three", "cosmos"]), min: 0, secret: false, desc: "preferred rendering engine: auto (three below three_d_max_elements, cosmos above), three, or cosmos" },
+    ConfigKey { name: "vis.three_d_max_elements", section: "vis", field: "threeDMaxElements", flag: "", kind: Kind::U32, min: 100, secret: false, desc: "max nodes/edges the 3D engine draws whole; above it auto switches to the 2D engine and 3D solo-passes neighbourhoods" },
+    ConfigKey { name: "vis.solo_threshold", section: "vis", field: "soloThreshold", flag: "", kind: Kind::U32, min: 1, secret: false, desc: "nodes/edges past which the page opens in solo mode (the 2D engine's ceiling)" },
+    ConfigKey { name: "graph.server_mode_bytes", section: "graph", field: "serverModeBytes", flag: "", kind: Kind::U64, min: 1024, secret: false, desc: "graph.json bytes at/above which the browser is served the slim node index instead of the whole file (server mode)" },
 ];
 
 /// Look up a registry entry by dotted name. Accepts `-` for `_` and is
@@ -135,10 +138,16 @@ pub(crate) fn value_set(cfg: &mut Value, key: &ConfigKey, raw: &str) -> Result<(
         }
         Kind::U32 => {
             let n: u32 = raw.parse().map_err(|_| format!("{} expects a non-negative integer, got '{}'", key.name, raw))?;
+            if (n as u64) < key.min {
+                return Err(format!("{} must be at least {}", key.name, key.min));
+            }
             Value::Number(n.into())
         }
         Kind::U64 => {
             let n: u64 = raw.parse().map_err(|_| format!("{} expects a non-negative integer, got '{}'", key.name, raw))?;
+            if n < key.min {
+                return Err(format!("{} must be at least {}", key.name, key.min));
+            }
             Value::Number(n.into())
         }
         Kind::Enum(allowed) => {
@@ -371,6 +380,7 @@ mod tests {
         assert!(cfg["vis"]["soloThreshold"].is_number());
         assert!(value_set(&mut cfg, key("vis.solo_threshold"), "zero").is_err());
         assert!(value_set(&mut cfg, key("vis.solo_threshold"), "-1").is_err());
+        assert!(value_set(&mut cfg, key("vis.solo_threshold"), "0").is_err());
     }
 
     #[test]
@@ -382,6 +392,20 @@ mod tests {
         assert!(value_set(&mut cfg, key("graph.server_mode_bytes"), "lots").is_err());
         assert!(value_set(&mut cfg, key("graph.server_mode_bytes"), "-1").is_err());
         assert!(value_set(&mut cfg, key("graph.server_mode_bytes"), "3.5").is_err());
+        // Below the 1 KB floor — a threshold that small would put every
+        // graph, however tiny, into server mode by accident.
+        assert!(value_set(&mut cfg, key("graph.server_mode_bytes"), "1023").is_err());
+        assert!(value_set(&mut cfg, key("graph.server_mode_bytes"), "1024").is_ok());
+    }
+
+    #[test]
+    fn numeric_keys_enforce_their_minimums() {
+        let mut cfg = Value::Object(Default::default());
+        assert!(value_set(&mut cfg, key("vis.three_d_max_elements"), "99").is_err());
+        assert!(value_set(&mut cfg, key("vis.three_d_max_elements"), "100").is_ok());
+        assert!(value_set(&mut cfg, key("chat.max_tokens"), "0").is_err());
+        assert!(value_set(&mut cfg, key("chat.timeout_secs"), "0").is_err());
+        assert!(value_set(&mut cfg, key("embed.dim"), "0").is_err());
     }
 
     #[test]

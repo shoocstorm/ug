@@ -4939,6 +4939,44 @@
             color: var(--accent);
         }
 
+        /* Live "what this page is doing now" note on threshold rows: the
+           resolved mode word carries the colour so the outcome, not the
+           stored number, is what the eye picks up. */
+        .settings-row-note.settings-live-note strong {
+            font-weight: 600;
+        }
+
+        .settings-live-note .mode-server {
+            color: var(--accent);
+        }
+
+        .settings-live-note .mode-local {
+            color: var(--success);
+        }
+
+        /* A row whose current edit breaks its rule: outlined input, the
+           rule stated beneath, Save held back. */
+        .settings-row.invalid .settings-input-wrap input,
+        .settings-row.invalid .settings-input-wrap select {
+            border-color: var(--danger);
+        }
+
+        .settings-row.invalid .settings-input-wrap input:focus,
+        .settings-row.invalid .settings-input-wrap select:focus {
+            box-shadow: 0 0 0 2px rgba(248, 113, 113, 0.15);
+        }
+
+        .settings-row-error {
+            margin-top: 4px;
+            font-size: 10.5px;
+            line-height: 1.4;
+            color: var(--danger);
+        }
+
+        .settings-row-error:empty {
+            display: none;
+        }
+
         .settings-row-note {
             margin-top: 5px;
             font-size: 10.5px;
@@ -5031,6 +5069,19 @@
 
         .settings-btn.primary:hover:not(:disabled) {
             opacity: 0.9;
+        }
+
+        /* Offered after a save that only takes effect on the next page
+           load (vis.* / graph.* rows) — accented so it reads as the
+           suggested next step, quiet enough not to compete with Save. */
+        .settings-btn.ghost {
+            background: rgba(249, 115, 22, 0.1);
+            border: 1px solid rgba(249, 115, 22, 0.4);
+            color: var(--accent);
+        }
+
+        .settings-btn.ghost:hover:not(:disabled) {
+            background: rgba(249, 115, 22, 0.18);
         }
 
         .settings-btn:disabled {
@@ -8999,7 +9050,7 @@
 }
     </style>
 <script>
-window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3297,"edges":9692,"files":106,"lines":76180,"ugVersion":"0.1.15","visFingerprint":"a18d5b3327e19dbc","generatedAt":1787452831};
+window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3401,"edges":9962,"files":107,"lines":78259,"ugVersion":"0.1.15","visFingerprint":"023927439efbc237","generatedAt":1787466276};
 /* ==========================================================================
    UltraGraph — static demo shim
    ==========================================================================
@@ -9676,6 +9727,7 @@ window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#g
             </div>
             <div class="settings-foot">
                 <span class="settings-status" id="settings-status"></span>
+                <button type="button" class="settings-btn ghost" id="settings-reload" hidden title="This setting is read at page load — reload to apply it">Reload page</button>
                 <button type="button" class="settings-btn secondary" id="settings-revert" disabled>Revert</button>
                 <button type="button" class="settings-btn primary" id="settings-save" disabled>
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
@@ -11308,6 +11360,48 @@ traverse({
             return downloadFromGraphFile(d => ({ nodes: d.nodes, edges: d.edges }), 'graph.json');
         }
 
+        // Trailing debounce, shared by every live search input (sidebar
+        // search, walk seed, palette). In local mode a keystroke scans
+        // in-memory arrays; in server mode it is an HTTP request to
+        // /api/graph/search, so per-keystroke firing means a request per
+        // character. `flush()` runs a pending call immediately — wired to
+        // Enter, where the user has said "now" and the 200 ms wait would
+        // race the pick.
+        function debounceTrailing(fn, ms) {
+            let timer = null, lastArgs = null;
+            const debounced = (...args) => {
+                lastArgs = args;
+                if (timer !== null) clearTimeout(timer);
+                timer = setTimeout(() => {
+                    timer = null;
+                    const a = lastArgs;
+                    lastArgs = null;
+                    fn(...a);
+                }, ms);
+            };
+            debounced.flush = () => {
+                if (timer === null) return;
+                clearTimeout(timer);
+                timer = null;
+                const a = lastArgs;
+                lastArgs = null;
+                fn(...a);
+            };
+            // Drop a pending call without running it — for code that
+            // replaces the input state outright (clear buttons, Escape).
+            debounced.cancel = () => {
+                if (timer === null) return;
+                clearTimeout(timer);
+                timer = null;
+                lastArgs = null;
+            };
+            return debounced;
+        }
+
+        // How long a live search input waits for the typing to pause
+        // before asking. Matches the URL-state sync's window.
+        const SEARCH_DEBOUNCE_MS = 400;
+
         async function loadGraph() {
             const params = new URLSearchParams(window.location.search);
             const file = params.get('file') || 'graph.json';
@@ -11363,7 +11457,14 @@ traverse({
                 // graph file is a request for that file.
                 const gmOverride = params.get('gm');
                 let mode = 'local';
-                if (!params.get('file')) {
+                // `?file=` names a graph file to load outright. But the
+                // URL-state sync used to write the *default* ('graph.json')
+                // back into the URL, and this branch read that as an
+                // explicit choice — pinning every reload of an interacted
+                // page to local mode, whatever the server had resolved.
+                // The default is not a choice; only a non-default file is.
+                const fileParam = params.get('file');
+                if (!fileParam || fileParam === 'graph.json') {
                     const caps = await getCapabilities();
                     mode = (caps && caps.graph && caps.graph.mode) || 'local';
                 }
@@ -13926,17 +14027,22 @@ self.onmessage = async (ev) => {
         }
 
 
+        // The title's job is to say not just how big the graph is but, in
+        // solo view, *why* — the reason names the setting that controls it.
+        // Re-run whenever the solo decision flips (applySoloMode).
+        function updateGraphTitle() {
+            const el = document.getElementById('graph-title');
+            if (!el) return;
+            el.textContent =
+                `${formatNumber(state.nodeCount || 0)} nodes, ${formatNumber(state.edgeCount || 0)} edges` +
+                (state.soloOnly ? ' · solo view — ' + soloReasonText() : '');
+        }
+
         function initialize() {
             const container = document.getElementById('container');
             width = container.clientWidth;
             height = container.clientHeight;
 
-            // Not `state.graph.nodes.length` — in server mode that array is
-            // empty by design (the nodes live in `state.nodeStore`'s columns
-            // and are built on demand), and the real count came down with the
-            // index. Same for edges.
-            const nodeCount = state.nodeCount || 0;
-            const edgeCount = state.edgeCount || 0;
             // Server mode installed its `NodeStore` as `state.nodeById` when the
             // index landed — it is the lookup, not a copy of one.
             if (!state.nodeStore) state.nodeById = new Map(state.graph.nodes.map(n => [n.id, n]));
@@ -13950,10 +14056,7 @@ self.onmessage = async (ev) => {
             state.soloOnly = soloRequired();
             state.view = state.soloOnly ? { nodes: [], edges: [] } : state.graph;
             document.body.classList.toggle('solo-only', state.soloOnly);
-
-            document.getElementById('graph-title').textContent =
-                `${nodeCount} nodes, ${edgeCount} edges` +
-                (state.soloOnly ? ' · solo mode' : '');
+            updateGraphTitle();
 
             buildNodeFilterChips();
             buildEdgeFilterChips();
@@ -14360,9 +14463,10 @@ self.onmessage = async (ev) => {
         // so nothing about the resolution is silent.
 
         const settingsUi = {
-            data: null,        // last /api/config payload
-            edits: new Map(),  // key name → new raw string value
-            unsets: new Set(), // key names marked "clear on save"
+            data: null,          // last /api/config payload
+            edits: new Map(),    // key name → new raw string value
+            unsets: new Set(),   // key names marked "clear on save"
+            invalid: new Map(),  // key name → validation error on the current edit
         };
 
         // Which settings sections the user has collapsed, per browser.
@@ -14421,13 +14525,13 @@ self.onmessage = async (ev) => {
                 num: { step: '100', min: '100', max: '1000000' },
             },
             'vis.solo_threshold': {
-                label: 'Solo mode threshold',
-                hint: 'Past this many nodes or edges the page never draws the whole graph — it opens in solo mode and shows one neighbourhood at a time. Lower it to isolate large repos earlier, higher to attempt whole-graph render for longer. Governs the 2D engine; the 3D engine solos past its own element budget above. Server mode (Graph section) always opens in solo view, whatever this is set to.',
+                label: 'Solo mode threshold (2D engine)',
+                hint: 'Past this many nodes or edges the page never draws the whole graph — it opens in solo mode and shows one neighbourhood at a time. Lower it to isolate large repos earlier, higher to attempt whole-graph render for longer. Governs the 2D engine only; the 3D engine solos past its own element budget above.',
                 num: { step: '1000', min: '1', max: '10000000' },
                 unit: 'count',
             },
             'graph.server_mode_bytes': {
-                label: 'Server mode threshold',
+                label: 'Server mode threshold (graph.json size)',
                 hint: 'How the browser gets the graph. Past this size of graph.json the page no longer downloads the file — it loads a slim node index and asks this server for edges and neighbourhoods on demand (server mode). Below it the whole file is served and the browser renders everything itself (local mode). 50 MB out of the box; lower it to keep big files out of the browser tab, raise it for graphs you want fully client-side. A graph served this way always opens in solo view (Visualization section), whatever the solo threshold says — its edges live on the server.',
                 num: { step: '1000000', min: '1024', max: '1000000000' },
                 unit: 'bytes',
@@ -14476,6 +14580,44 @@ self.onmessage = async (ev) => {
             return u.short ? v + ' ' + u.short : String(v);
         }
 
+        // The same value as prose: 2 decimals, not 10. The input-field
+        // formatter above keeps full precision so re-displaying a saved
+        // value never marks the row dirty; notes want "4.57 MB", not
+        // "4.571556091 MB".
+        function formatSettingsThresholdHuman(kind, raw) {
+            if (!Number.isFinite(raw) || raw < 0) return String(raw);
+            const u = pickSettingsUnit(kind, raw);
+            const r = Math.round(scaledSettingsThreshold(raw, u) * 100) / 100;
+            return u.short ? r + ' ' + u.short : String(r);
+        }
+
+        // ── Numeric row validation ────────────────────────
+        // The `<input type=number>` bounds never fire here — Save is a
+        // button, not a form submit — so the rules in `meta.num` are
+        // enforced by hand. `rawVal` is already in stored units (the
+        // number shown × the unit factor), and these bounds are too, so
+        // the comparison needs no rescaling. They mirror the server's
+        // write-time validation; an error here means the POST would have
+        // been rejected anyway, but the row says why at the keystroke
+        // instead of after it.
+        function settingsNumError(meta, rawVal) {
+            if (!meta.num || rawVal === '') return null;
+            const n = Number(rawVal);
+            if (!Number.isFinite(n)) return 'Enter a number.';
+            const num = meta.num;
+            if (num.min !== undefined && n < Number(num.min)) {
+                return 'Must be at least ' + (meta.unit
+                    ? formatSettingsThreshold(meta.unit, Number(num.min))
+                    : num.min) + '.';
+            }
+            if (num.max !== undefined && n > Number(num.max)) {
+                return 'Must be at most ' + (meta.unit
+                    ? formatSettingsThreshold(meta.unit, Number(num.max))
+                    : num.max) + '.';
+            }
+            return null;
+        }
+
         function settingsOverlayEl() {
             return document.getElementById('settings-overlay');
         }
@@ -14493,6 +14635,9 @@ self.onmessage = async (ev) => {
             const body = document.getElementById('settings-body');
             settingsUi.edits.clear();
             settingsUi.unsets.clear();
+            settingsUi.invalid.clear();
+            const reloadBtn = document.getElementById('settings-reload');
+            if (reloadBtn) reloadBtn.hidden = true;
             setSettingsStatus('', '');
             body.innerHTML = '<div class="settings-loading">Loading configuration…</div>';
             try {
@@ -14715,15 +14860,93 @@ self.onmessage = async (ev) => {
             }
             row.appendChild(note);
 
-            // Server mode outranks the solo threshold at runtime — when the
-            // page actually loaded in server mode, say so on the row whose
-            // value is being overridden.
-            if (k.name === 'vis.solo_threshold' && state.graphMode === 'server') {
-                const forced = document.createElement('div');
-                forced.className = 'settings-row-note settings-force-note';
-                forced.textContent = 'This graph is being served in server mode — the page opens in solo view whatever this threshold says.';
-                row.appendChild(forced);
+            // ── Live "what this page is doing now" notes ──────
+            // Both thresholds govern decisions the page already made, so
+            // each row shows the decision's outcome for *this* graph — and,
+            // while the value is edited, the outcome the typed value would
+            // have. This is what stops the two standing confusions: editing
+            // a threshold that server mode (or the other engine) has made
+            // irrelevant, and reading solo view as "the server-mode
+            // threshold didn't work" — the two are independent settings,
+            // and the notes cross-reference each other when both matter.
+            const capsGraph = state.capabilities && state.capabilities.graph;
+            let updateLiveNote = null;
+            // The value the row is currently pointing at: the typed edit if
+            // there is one, else the saved value, else the default (which is
+            // also what a pending clear restores).
+            const rowCutoff = () => {
+                if (settingsUi.unsets.has(k.name)) return Number(k.default);
+                const v = settingsUi.edits.get(k.name);
+                if (v != null && v !== '' && Number.isFinite(Number(v))) return Number(v);
+                return k.saved != null ? Number(k.saved) : Number(k.default);
+            };
+            if (k.name === 'vis.solo_threshold' && capsGraph) {
+                const live = document.createElement('div');
+                live.className = 'settings-row-note settings-live-note';
+                row.appendChild(live);
+                const elements = Math.max(capsGraph.nodes || 0, capsGraph.edges || 0);
+                updateLiveNote = () => {
+                    if (state.graphMode === 'server') {
+                        live.classList.add('settings-force-note');
+                        live.textContent = 'This graph is served in server mode — the page opens in solo view whatever this threshold says. Raise the server-mode threshold (Graph section) above the graph\'s size to make this setting matter.';
+                        return;
+                    }
+                    live.classList.remove('settings-force-note');
+                    const cutoff = rowCutoff();
+                    const solo = Number.isFinite(cutoff) && elements > cutoff;
+                    live.innerHTML = 'This page is ' + (state.soloOnly ? 'in solo view' : 'drawing the whole graph')
+                        + '. This graph has ' + formatNumber(elements) + ' elements (nodes or edges, whichever is more)'
+                        + ' — with a threshold of <strong>' + formatNumber(cutoff) + '</strong> it '
+                        + (solo
+                            ? '<strong class="mode-server">opens in solo view</strong> on the next reload'
+                            : '<strong class="mode-local">draws the whole graph</strong> on the next reload')
+                        + '.';
+                };
+                updateLiveNote();
             }
+            if (k.name === 'graph.server_mode_bytes' && capsGraph && typeof capsGraph.bytes === 'number') {
+                const live = document.createElement('div');
+                live.className = 'settings-row-note settings-live-note';
+                row.appendChild(live);
+                const size = formatSettingsThresholdHuman('bytes', capsGraph.bytes);
+                updateLiveNote = () => {
+                    const c = rowCutoff();
+                    const server = Number.isFinite(c) && capsGraph.bytes >= c;
+                    const pageServer = state.graphMode === 'server';
+                    let html = 'This graph is <strong>' + size + '</strong> — with a threshold of <strong>'
+                        + (Number.isFinite(c) ? formatSettingsThresholdHuman('bytes', c) : '?')
+                        + '</strong> it loads <strong class="' + (server ? 'mode-server' : 'mode-local') + '">'
+                        + (server ? 'server' : 'local') + ' mode</strong>'
+                        + (server
+                            ? ' (a slim node index; edges arrive from this server on demand)'
+                            : ' (the whole file, rendered in the browser)')
+                        + ' on the next reload';
+                    if (server !== pageServer) {
+                        html += ' — this page now: ' + (pageServer ? 'server' : 'local') + '; reload to switch';
+                    }
+                    html += '.';
+                    if (!server && state.soloOnly) {
+                        html += ' The page still opens in solo view — that is the solo threshold (Visualization section), a separate setting.';
+                    }
+                    live.innerHTML = html;
+                };
+                updateLiveNote();
+            }
+
+            // Validation message slot, filled by onDirty. Only numeric
+            // rows can populate it, so only they carry the element.
+            let rowError = null;
+            if (meta.num) {
+                rowError = document.createElement('div');
+                rowError.className = 'settings-row-error';
+                row.appendChild(rowError);
+            }
+
+            const clearInvalid = () => {
+                settingsUi.invalid.delete(k.name);
+                row.classList.remove('invalid');
+                if (rowError) rowError.textContent = '';
+            };
 
             const onDirty = () => {
                 if (settingsUi.unsets.has(k.name)) {
@@ -14738,6 +14961,16 @@ self.onmessage = async (ev) => {
                         ? String(Math.round(n * Number(unitSel.value)))
                         : '';
                 }
+                // A value the server would reject is caught here, at the
+                // row, with the rule stated — not after Save round-trips.
+                const err = settingsNumError(meta, val);
+                if (err && !settingsUi.unsets.has(k.name)) {
+                    settingsUi.invalid.set(k.name, err);
+                    row.classList.add('invalid');
+                    if (rowError) rowError.textContent = err;
+                } else {
+                    clearInvalid();
+                }
                 // For a select the shown default *is* a legal choice, so an
                 // unset row baseline is the default rather than '' — leaving
                 // it untouched must not mark it dirty.
@@ -14745,6 +14978,7 @@ self.onmessage = async (ev) => {
                 if (val !== baseline) settingsUi.edits.set(k.name, val);
                 else settingsUi.edits.delete(k.name);
                 row.classList.toggle('dirty', settingsUi.edits.has(k.name));
+                if (updateLiveNote) updateLiveNote();
                 updateSettingsFooter();
             };
             control.addEventListener('input', onDirty);
@@ -14770,6 +15004,10 @@ self.onmessage = async (ev) => {
                         else control.value = k.saved != null ? k.saved : (isEnum ? (k.default || '') : '');
                     }
                 }
+                // Whatever the clear restored is a saved value or a blank —
+                // both legal by construction.
+                clearInvalid();
+                if (updateLiveNote) updateLiveNote();
                 updateSettingsFooter();
             });
 
@@ -14784,10 +15022,17 @@ self.onmessage = async (ev) => {
 
         function updateSettingsFooter() {
             const count = settingsUi.edits.size + settingsUi.unsets.size;
-            document.getElementById('settings-save').disabled = count === 0;
+            const invalid = settingsUi.invalid.size;
+            // An invalid edit is still an edit — Revert stays available so
+            // the user can back out of it — but Save waits until every rule
+            // passes, and the status line says what is blocking.
+            document.getElementById('settings-save').disabled = count === 0 || invalid > 0;
             document.getElementById('settings-revert').disabled = count === 0;
             const status = document.getElementById('settings-status');
-            if (count > 0) {
+            if (invalid > 0) {
+                const [first] = settingsUi.invalid.values();
+                setSettingsStatus('err', first);
+            } else if (count > 0) {
                 setSettingsStatus('', count + ' unsaved change' + (count === 1 ? '' : 's'));
             } else if (!status.classList.contains('ok') && !status.classList.contains('err')) {
                 // Only clear neutral "N unsaved changes" text — keep a
@@ -14797,13 +15042,17 @@ self.onmessage = async (ev) => {
         }
 
         async function saveSettings() {
+            if (settingsUi.invalid.size) return;   // footer keeps Save disabled; guard anyway
             const saveBtn = document.getElementById('settings-save');
             const set = {};
             for (const [name, val] of settingsUi.edits) set[name] = val;
             const unset = Array.from(settingsUi.unsets);
             const touched = Object.keys(set).concat(unset);
             const touchedEmbed = touched.some((n) => n.startsWith('embed.'));
-            const touchedVis = touched.some((n) => n.startsWith('vis.'));
+            // Both a vis.* drawing pref and a graph.* delivery pref are read
+            // once at page load — the honest next step after saving one is a
+            // reload, so offer the button right there.
+            const touchedReload = touched.some((n) => n.startsWith('vis.') || n.startsWith('graph.'));
             saveBtn.disabled = true;
             setSettingsStatus('', 'Saving…');
             try {
@@ -14821,7 +15070,9 @@ self.onmessage = async (ev) => {
                 settingsUi.unsets.clear();
                 renderSettings();
                 updateSettingsFooter();
-                setSettingsStatus('ok', touchedVis
+                const reloadBtn = document.getElementById('settings-reload');
+                if (reloadBtn) reloadBtn.hidden = !touchedReload;
+                setSettingsStatus('ok', touchedReload
                     ? 'Saved ✓ — the page picks this up on the next reload'
                     : (touchedEmbed
                         ? 'Saved ✓ — chat applies now; embedding changes take effect after a server restart'
@@ -14849,11 +15100,14 @@ self.onmessage = async (ev) => {
             document.getElementById('settings-revert').addEventListener('click', () => {
                 settingsUi.edits.clear();
                 settingsUi.unsets.clear();
+                settingsUi.invalid.clear();
                 renderSettings();
                 updateSettingsFooter();
                 setSettingsStatus('', '');
             });
             document.getElementById('settings-save').addEventListener('click', saveSettings);
+            const reloadBtn = document.getElementById('settings-reload');
+            if (reloadBtn) reloadBtn.addEventListener('click', () => window.location.reload());
             overlay.addEventListener('click', (e) => {
                 if (e.target === overlay) closeSettings();
             });
@@ -18434,9 +18688,12 @@ self.onmessage = async (ev) => {
             const input = document.getElementById('search');
             const clear = document.getElementById('search-clear');
 
+            // Debounced: in server mode every refresh is a round-trip
+            // (see `refreshSuggestions` below). Focus is a single event,
+            // so it stays immediate.
             input.addEventListener('input', e => {
                 clear.classList.toggle('visible', !!e.target.value);
-                refreshSuggestions(e.target.value);
+                refreshSuggestionsDebounced(e.target.value);
             });
             input.addEventListener('focus', () => refreshSuggestions(input.value));
             input.addEventListener('keydown', handleSearchKey);
@@ -18444,6 +18701,7 @@ self.onmessage = async (ev) => {
             clear.addEventListener('click', () => {
                 input.value = '';
                 clear.classList.remove('visible');
+                refreshSuggestionsDebounced.cancel();
                 refreshSuggestions('');
                 input.focus();
             });
@@ -18464,8 +18722,11 @@ self.onmessage = async (ev) => {
         // Async because in server mode the answer comes from the server — the
         // page has no name column it can afford to scan. A monotonic token
         // drops stale responses, so typing quickly leaves the box showing the
-        // last query rather than whichever request finished last.
+        // last query rather than whichever request finished last; the
+        // debounced wrapper (below) keeps the request count down to one per
+        // pause in typing rather than one per keystroke.
         let suggestToken = 0;
+        const refreshSuggestionsDebounced = debounceTrailing(refreshSuggestions, SEARCH_DEBOUNCE_MS);
         async function refreshSuggestions(query) {
             const container = document.getElementById('search-suggestions');
             const meta = document.getElementById('search-meta-count');
@@ -18534,6 +18795,10 @@ self.onmessage = async (ev) => {
             writeUrlState();
         }
 
+        // Enter needs the suggestions for *exactly* what is in the box,
+        // not the pre-debounce prefix, so a pending refresh is flushed
+        // first. `refreshSuggestionsDebounced` is in scope because this
+        // and `wireSearch` share the module scope.
         function handleSearchKey(e) {
             const items = document.querySelectorAll('.suggestion-item');
             if (e.key === 'ArrowDown') {
@@ -18546,6 +18811,7 @@ self.onmessage = async (ev) => {
                 updateSuggestionHighlight();
             } else if (e.key === 'Enter') {
                 e.preventDefault();
+                refreshSuggestionsDebounced.flush();
                 const idx = state.suggestionIndex >= 0 ? state.suggestionIndex : 0;
                 if (state.currentSuggestions[idx]) {
                     selectSearchResult(state.currentSuggestions[idx], e);
@@ -18553,6 +18819,7 @@ self.onmessage = async (ev) => {
             } else if (e.key === 'Escape') {
                 document.getElementById('search').value = '';
                 document.getElementById('search-clear').classList.remove('visible');
+                refreshSuggestionsDebounced.cancel();
                 refreshSuggestions('');
                 document.getElementById('search').blur();
             }
@@ -25538,6 +25805,19 @@ self.onmessage = async (ev) => {
             return Math.max(state.nodeCount || 0, state.edgeCount) > (limit ?? visSoloThreshold());
         }
 
+        // Short human phrase for *why* solo view is on. The graph title
+        // shows it, because "solo view" with no reason reads as a bug
+        // rather than a decision, and the reason is the one fact that
+        // tells the user which setting to touch: server mode is the Graph
+        // section's threshold; an engine ceiling is the Visualization
+        // section's.
+        function soloReasonText() {
+            if (state.graphMode === 'server') return 'server mode: edges live on the server';
+            const three = state.renderer === 'three';
+            const limit = three ? threeDMaxElements() : visSoloThreshold();
+            return `past the ${three ? "3D engine's element budget" : "2D engine's solo threshold"} of ${formatNumber(limit)} elements`;
+        }
+
         // Adjacency over the *full* graph, built once. Before this, every
         // selection scanned all edges (neighborIdsOf) — the second-worst hot
         // path on a large repo after the restyle loop.
@@ -25913,6 +26193,7 @@ self.onmessage = async (ev) => {
             state._didFit = false;
             state._boxSettled = false;
             updateSoloHud();
+            updateGraphTitle();
             refreshModeLegend();
             syncSoloButton();
             return true;
@@ -26672,7 +26953,9 @@ self.onmessage = async (ev) => {
 
             // Same shared search the sidebar box uses — see `searchNodes` in
             // 02-dialogs.js. Async, with a token, because in server mode the
-            // ranking happens on the server.
+            // ranking happens on the server; debounced because in that mode
+            // every keystroke is a round-trip. Focus is a single event and
+            // stays immediate.
             let seedToken = 0;
             const refreshSeedSuggestions = async () => {
                 const q = input.value.trim().toLowerCase();
@@ -26710,14 +26993,25 @@ self.onmessage = async (ev) => {
                     it.classList.toggle('active', i === sugIndex));
             };
 
-            input.addEventListener('input', refreshSeedSuggestions);
+            const refreshSeedDebounced = debounceTrailing(refreshSeedSuggestions, SEARCH_DEBOUNCE_MS);
+            input.addEventListener('input', refreshSeedDebounced);
             input.addEventListener('focus', refreshSeedSuggestions);
             input.addEventListener('blur', () => setTimeout(() => sugBox.classList.remove('open'), 140));
             input.addEventListener('keydown', e => {
                 const items = sugBox.querySelectorAll('.walk-seed-sug[data-index]');
                 if (e.key === 'ArrowDown') { e.preventDefault(); sugIndex = Math.min(sugIndex + 1, items.length - 1); updateSugHighlight(); }
                 else if (e.key === 'ArrowUp') { e.preventDefault(); sugIndex = Math.max(sugIndex - 1, 0); updateSugHighlight(); }
-                else if (e.key === 'Enter') { e.preventDefault(); const pick = items[sugIndex] || items[0]; if (pick) pick.dispatchEvent(new Event('mousedown')); }
+                else if (e.key === 'Enter') {
+                    e.preventDefault();
+                    // Pick what is in the box now — a pending debounced
+                    // refresh would otherwise race the pick with a
+                    // stale-prefix list. The mousedown dispatch below is
+                    // async-safe: it runs only once the (flushed) list has
+                    // the row.
+                    refreshSeedDebounced.flush();
+                    const pick = items[sugIndex] || items[0];
+                    if (pick) pick.dispatchEvent(new Event('mousedown'));
+                }
                 else if (e.key === 'Escape') { sugBox.classList.remove('open'); input.blur(); }
             });
 
@@ -27849,13 +28143,17 @@ self.onmessage = async (ev) => {
             return out;
         }
 
-        // The mapped subset of `state` as query params. `file` and `p` are
-        // carried along even though they aren't mutations, so a single-file
-        // serve (`?file=graph.json`) and a project deep link keep working
-        // after the first URL rewrite.
+        // The mapped subset of `state` as query params. A non-default
+        // `file` and `p` are carried along so a single-file serve
+        // (`?file=other.json`) and a project deep link keep working after
+        // the first URL rewrite. The *default* file is deliberately not
+        // written: `loadGraph` treats a `?file=` as an explicit request
+        // that skips the server/local mode decision, so writing
+        // `file=graph.json` back into the URL pinned every reload to local
+        // mode — the exact "server-mode threshold does nothing" symptom.
         function urlStateParams() {
             const p = new URLSearchParams();
-            if (state.graphFile) p.set('file', state.graphFile);
+            if (state.graphFile && state.graphFile !== 'graph.json') p.set('file', state.graphFile);
             if (state.activeProject) p.set('p', state.activeProject);
             const n = state.selectedNode && state.selectedNode.id;
             if (n) p.set('n', n);
@@ -28040,6 +28338,9 @@ self.onmessage = async (ev) => {
             // is a no-op.
             loadInsights();
             input.value = '';
+            // A debounced refresh still pending from the previous session
+            // would repaint the old query over the fresh empty list.
+            renderPaletteDebounced.cancel();
             renderPalette('');
             input.focus();
         }
@@ -28144,6 +28445,7 @@ self.onmessage = async (ev) => {
 
         let paletteCursor = -1;
         let paletteToken = 0;
+        const renderPaletteDebounced = debounceTrailing(renderPalette, SEARCH_DEBOUNCE_MS);
         async function renderPalette(raw) {
             const box = document.getElementById('palette-results');
             const empty = document.getElementById('palette-empty');
@@ -28219,7 +28521,11 @@ self.onmessage = async (ev) => {
 
         function wirePalette() {
             const input = document.getElementById('palette-input');
-            input.addEventListener('input', () => renderPalette(input.value));
+            // Debounced: an unqualified palette query hits `searchNodes`,
+            // a server round-trip in server mode (see buildPaletteItems).
+            // Enter below re-runs the query directly, so a pick never
+            // depends on the debounced render having landed.
+            input.addEventListener('input', () => renderPaletteDebounced(input.value));
             input.addEventListener('keydown', (e) => {
                 if (e.key === 'ArrowDown') { e.preventDefault(); paletteMove(1); }
                 else if (e.key === 'ArrowUp') { e.preventDefault(); paletteMove(-1); }

@@ -4,9 +4,12 @@
             const input = document.getElementById('search');
             const clear = document.getElementById('search-clear');
 
+            // Debounced: in server mode every refresh is a round-trip
+            // (see `refreshSuggestions` below). Focus is a single event,
+            // so it stays immediate.
             input.addEventListener('input', e => {
                 clear.classList.toggle('visible', !!e.target.value);
-                refreshSuggestions(e.target.value);
+                refreshSuggestionsDebounced(e.target.value);
             });
             input.addEventListener('focus', () => refreshSuggestions(input.value));
             input.addEventListener('keydown', handleSearchKey);
@@ -14,6 +17,7 @@
             clear.addEventListener('click', () => {
                 input.value = '';
                 clear.classList.remove('visible');
+                refreshSuggestionsDebounced.cancel();
                 refreshSuggestions('');
                 input.focus();
             });
@@ -34,8 +38,11 @@
         // Async because in server mode the answer comes from the server — the
         // page has no name column it can afford to scan. A monotonic token
         // drops stale responses, so typing quickly leaves the box showing the
-        // last query rather than whichever request finished last.
+        // last query rather than whichever request finished last; the
+        // debounced wrapper (below) keeps the request count down to one per
+        // pause in typing rather than one per keystroke.
         let suggestToken = 0;
+        const refreshSuggestionsDebounced = debounceTrailing(refreshSuggestions, SEARCH_DEBOUNCE_MS);
         async function refreshSuggestions(query) {
             const container = document.getElementById('search-suggestions');
             const meta = document.getElementById('search-meta-count');
@@ -104,6 +111,10 @@
             writeUrlState();
         }
 
+        // Enter needs the suggestions for *exactly* what is in the box,
+        // not the pre-debounce prefix, so a pending refresh is flushed
+        // first. `refreshSuggestionsDebounced` is in scope because this
+        // and `wireSearch` share the module scope.
         function handleSearchKey(e) {
             const items = document.querySelectorAll('.suggestion-item');
             if (e.key === 'ArrowDown') {
@@ -116,6 +127,7 @@
                 updateSuggestionHighlight();
             } else if (e.key === 'Enter') {
                 e.preventDefault();
+                refreshSuggestionsDebounced.flush();
                 const idx = state.suggestionIndex >= 0 ? state.suggestionIndex : 0;
                 if (state.currentSuggestions[idx]) {
                     selectSearchResult(state.currentSuggestions[idx], e);
@@ -123,6 +135,7 @@
             } else if (e.key === 'Escape') {
                 document.getElementById('search').value = '';
                 document.getElementById('search-clear').classList.remove('visible');
+                refreshSuggestionsDebounced.cancel();
                 refreshSuggestions('');
                 document.getElementById('search').blur();
             }

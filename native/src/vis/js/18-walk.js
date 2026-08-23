@@ -503,7 +503,9 @@
 
             // Same shared search the sidebar box uses — see `searchNodes` in
             // 02-dialogs.js. Async, with a token, because in server mode the
-            // ranking happens on the server.
+            // ranking happens on the server; debounced because in that mode
+            // every keystroke is a round-trip. Focus is a single event and
+            // stays immediate.
             let seedToken = 0;
             const refreshSeedSuggestions = async () => {
                 const q = input.value.trim().toLowerCase();
@@ -541,14 +543,25 @@
                     it.classList.toggle('active', i === sugIndex));
             };
 
-            input.addEventListener('input', refreshSeedSuggestions);
+            const refreshSeedDebounced = debounceTrailing(refreshSeedSuggestions, SEARCH_DEBOUNCE_MS);
+            input.addEventListener('input', refreshSeedDebounced);
             input.addEventListener('focus', refreshSeedSuggestions);
             input.addEventListener('blur', () => setTimeout(() => sugBox.classList.remove('open'), 140));
             input.addEventListener('keydown', e => {
                 const items = sugBox.querySelectorAll('.walk-seed-sug[data-index]');
                 if (e.key === 'ArrowDown') { e.preventDefault(); sugIndex = Math.min(sugIndex + 1, items.length - 1); updateSugHighlight(); }
                 else if (e.key === 'ArrowUp') { e.preventDefault(); sugIndex = Math.max(sugIndex - 1, 0); updateSugHighlight(); }
-                else if (e.key === 'Enter') { e.preventDefault(); const pick = items[sugIndex] || items[0]; if (pick) pick.dispatchEvent(new Event('mousedown')); }
+                else if (e.key === 'Enter') {
+                    e.preventDefault();
+                    // Pick what is in the box now — a pending debounced
+                    // refresh would otherwise race the pick with a
+                    // stale-prefix list. The mousedown dispatch below is
+                    // async-safe: it runs only once the (flushed) list has
+                    // the row.
+                    refreshSeedDebounced.flush();
+                    const pick = items[sugIndex] || items[0];
+                    if (pick) pick.dispatchEvent(new Event('mousedown'));
+                }
                 else if (e.key === 'Escape') { sugBox.classList.remove('open'); input.blur(); }
             });
 

@@ -441,17 +441,22 @@
         }
 
 
+        // The title's job is to say not just how big the graph is but, in
+        // solo view, *why* — the reason names the setting that controls it.
+        // Re-run whenever the solo decision flips (applySoloMode).
+        function updateGraphTitle() {
+            const el = document.getElementById('graph-title');
+            if (!el) return;
+            el.textContent =
+                `${formatNumber(state.nodeCount || 0)} nodes, ${formatNumber(state.edgeCount || 0)} edges` +
+                (state.soloOnly ? ' · solo view — ' + soloReasonText() : '');
+        }
+
         function initialize() {
             const container = document.getElementById('container');
             width = container.clientWidth;
             height = container.clientHeight;
 
-            // Not `state.graph.nodes.length` — in server mode that array is
-            // empty by design (the nodes live in `state.nodeStore`'s columns
-            // and are built on demand), and the real count came down with the
-            // index. Same for edges.
-            const nodeCount = state.nodeCount || 0;
-            const edgeCount = state.edgeCount || 0;
             // Server mode installed its `NodeStore` as `state.nodeById` when the
             // index landed — it is the lookup, not a copy of one.
             if (!state.nodeStore) state.nodeById = new Map(state.graph.nodes.map(n => [n.id, n]));
@@ -465,10 +470,7 @@
             state.soloOnly = soloRequired();
             state.view = state.soloOnly ? { nodes: [], edges: [] } : state.graph;
             document.body.classList.toggle('solo-only', state.soloOnly);
-
-            document.getElementById('graph-title').textContent =
-                `${nodeCount} nodes, ${edgeCount} edges` +
-                (state.soloOnly ? ' · solo mode' : '');
+            updateGraphTitle();
 
             buildNodeFilterChips();
             buildEdgeFilterChips();

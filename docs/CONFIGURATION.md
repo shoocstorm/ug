@@ -30,6 +30,10 @@ apply to the running server immediately — no restart.
 `chat.temperature`, `chat.max_tokens`, `chat.timeout_secs`, `embed.model`,
 `embed.base_url`, `embed.api_key`, `embed.dim`, `vis.renderer`,
 `vis.three_d_max_elements`, `vis.solo_threshold`, `graph.server_mode_bytes`.
+Numeric keys are validated at write time (`ug config set` and `POST /api/config`
+both reject values below the key's floor, e.g. `graph.server_mode_bytes` ≥ 1024,
+`vis.three_d_max_elements` ≥ 100) — the settings panel enforces the same rules
+client-side, at the keystroke.
 
 Visualization keys (`vis.*`) shape how the web graph is drawn. They are read at
 page load (the settings panel's Visualization section marks them "applies on
@@ -46,8 +50,10 @@ reload"):
   neighbourhood at a time via solo mode rather than the whole graph.
 - `vis.solo_threshold` — nodes/edges past which the page never draws the whole
   graph, opening in solo mode (one neighbourhood at a time) instead. Defaults
-  to 200,000. Governs the 2D engine; the 3D engine solos past its own
-  `vis.three_d_max_elements` above.
+  to 200,000, minimum 1. Governs the 2D engine; the 3D engine solos past its
+  own `vis.three_d_max_elements` above. A graph in server mode opens in solo
+  view regardless — the settings panel says so on the row when that is the
+  state of the page you have open.
 
 Graph keys (`graph.*`) decide *how the browser gets the graph*, not how it is
 drawn — that is the local/server mode split:
@@ -57,9 +63,11 @@ drawn — that is the local/server mode split:
   the browser renders everything in the tab (local mode). At or above it the
   page loads a slim node index (every node, no edges) and asks the server for
   edges, neighbourhoods and per-node detail on demand (server mode). Defaults
-  to 50 MB (52 428 800). The `--graph-mode` flag sets the *policy* — `auto`
-  (default, resolves per graph against this threshold), `local`, or `server` —
-  while this key sets the cutoff `auto` uses.
+  to 50 MB (52 428 800), minimum 1 KB. The `--graph-mode` flag sets the
+  *policy* — `auto` (default, resolves per graph against this threshold),
+  `local`, or `server` — while this key sets the cutoff `auto` uses. The
+  settings panel shows the graph's actual size and which mode it resolved to
+  on the row itself.
 
 ## Precedence
 

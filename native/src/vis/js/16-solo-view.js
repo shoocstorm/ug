@@ -61,6 +61,19 @@
             return Math.max(state.nodeCount || 0, state.edgeCount) > (limit ?? visSoloThreshold());
         }
 
+        // Short human phrase for *why* solo view is on. The graph title
+        // shows it, because "solo view" with no reason reads as a bug
+        // rather than a decision, and the reason is the one fact that
+        // tells the user which setting to touch: server mode is the Graph
+        // section's threshold; an engine ceiling is the Visualization
+        // section's.
+        function soloReasonText() {
+            if (state.graphMode === 'server') return 'server mode: edges live on the server';
+            const three = state.renderer === 'three';
+            const limit = three ? threeDMaxElements() : visSoloThreshold();
+            return `past the ${three ? "3D engine's element budget" : "2D engine's solo threshold"} of ${formatNumber(limit)} elements`;
+        }
+
         // Adjacency over the *full* graph, built once. Before this, every
         // selection scanned all edges (neighborIdsOf) — the second-worst hot
         // path on a large repo after the restyle loop.
@@ -436,6 +449,7 @@
             state._didFit = false;
             state._boxSettled = false;
             updateSoloHud();
+            updateGraphTitle();
             refreshModeLegend();
             syncSoloButton();
             return true;

@@ -150,3 +150,51 @@ fn the_insights_pane_survives_assembly() {
         assert!(page.contains(probe), "assembled page is missing {probe:?}");
     }
 }
+
+/// The settings panel's threshold guidance spans four parts — markup (the
+/// reload button), behaviour (row validation, live notes, the solo
+/// reason), and styling (invalid rows, mode words). A part that stops
+/// being picked up removes the guidance silently, which is how the two
+/// threshold settings came to look dead in the first place.
+#[test]
+fn the_settings_threshold_guidance_survives_assembly() {
+    let page = assembled();
+    for probe in [
+        r#"id="settings-reload""#,             // footer reload button
+        "function settingsNumError",           // write-time-mirroring validation
+        "settings-row-error",                  // row-level error slot + style
+        "settings-live-note",                  // live "this page now" notes + style
+        "formatSettingsThresholdHuman",        // prose-size formatter (4.57 MB)
+        "updateLiveNote",                      // notes re-project as the value is typed
+        "function soloReasonText",             // why solo is on, for the title
+        "function updateGraphTitle",           // title carries the solo reason
+        // The default graph file must never pin the delivery mode: the URL
+        // sync must not write it, and the loader must ignore it. One side
+        // regressing re-creates "the server-mode threshold does nothing".
+        "state.graphFile !== 'graph.json'",    // urlStateParams: default not written
+        "fileParam === 'graph.json'",          // loadGraph: default not an override
+    ] {
+        assert!(page.contains(probe), "assembled page is missing {probe:?}");
+    }
+}
+
+/// Every live search input must go through the shared debounce: in server
+/// mode an un-debounced keystroke is an HTTP request per character. Enter
+/// and the clear paths must not race the debounce — flush where a pick
+/// reads the current list, cancel where the state is replaced outright.
+#[test]
+fn the_live_search_inputs_are_debounced() {
+    let page = assembled();
+    for probe in [
+        "function debounceTrailing",             // the shared helper
+        "SEARCH_DEBOUNCE_MS",                    // one shared window
+        "refreshSuggestionsDebounced",           // sidebar search
+        "refreshSeedDebounced",                  // walk seed
+        "renderPaletteDebounced",                // ⌘K palette
+        "refreshSuggestionsDebounced.flush",     // Enter picks what is in the box
+        "refreshSeedDebounced.flush",            // same for the walk seed
+        ".cancel()",                             // clear/Esc/reopen drop pending calls
+    ] {
+        assert!(page.contains(probe), "assembled page is missing {probe:?}");
+    }
+}

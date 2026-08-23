@@ -35,13 +35,17 @@
             return out;
         }
 
-        // The mapped subset of `state` as query params. `file` and `p` are
-        // carried along even though they aren't mutations, so a single-file
-        // serve (`?file=graph.json`) and a project deep link keep working
-        // after the first URL rewrite.
+        // The mapped subset of `state` as query params. A non-default
+        // `file` and `p` are carried along so a single-file serve
+        // (`?file=other.json`) and a project deep link keep working after
+        // the first URL rewrite. The *default* file is deliberately not
+        // written: `loadGraph` treats a `?file=` as an explicit request
+        // that skips the server/local mode decision, so writing
+        // `file=graph.json` back into the URL pinned every reload to local
+        // mode — the exact "server-mode threshold does nothing" symptom.
         function urlStateParams() {
             const p = new URLSearchParams();
-            if (state.graphFile) p.set('file', state.graphFile);
+            if (state.graphFile && state.graphFile !== 'graph.json') p.set('file', state.graphFile);
             if (state.activeProject) p.set('p', state.activeProject);
             const n = state.selectedNode && state.selectedNode.id;
             if (n) p.set('n', n);

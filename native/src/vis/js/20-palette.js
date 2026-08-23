@@ -37,6 +37,9 @@
             // is a no-op.
             loadInsights();
             input.value = '';
+            // A debounced refresh still pending from the previous session
+            // would repaint the old query over the fresh empty list.
+            renderPaletteDebounced.cancel();
             renderPalette('');
             input.focus();
         }
@@ -141,6 +144,7 @@
 
         let paletteCursor = -1;
         let paletteToken = 0;
+        const renderPaletteDebounced = debounceTrailing(renderPalette, SEARCH_DEBOUNCE_MS);
         async function renderPalette(raw) {
             const box = document.getElementById('palette-results');
             const empty = document.getElementById('palette-empty');
@@ -216,7 +220,11 @@
 
         function wirePalette() {
             const input = document.getElementById('palette-input');
-            input.addEventListener('input', () => renderPalette(input.value));
+            // Debounced: an unqualified palette query hits `searchNodes`,
+            // a server round-trip in server mode (see buildPaletteItems).
+            // Enter below re-runs the query directly, so a pick never
+            // depends on the debounced render having landed.
+            input.addEventListener('input', () => renderPaletteDebounced(input.value));
             input.addEventListener('keydown', (e) => {
                 if (e.key === 'ArrowDown') { e.preventDefault(); paletteMove(1); }
                 else if (e.key === 'ArrowUp') { e.preventDefault(); paletteMove(-1); }

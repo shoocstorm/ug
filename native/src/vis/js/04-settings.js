@@ -346,9 +346,10 @@
         // so nothing about the resolution is silent.
 
         const settingsUi = {
-            data: null,        // last /api/config payload
-            edits: new Map(),  // key name → new raw string value
-            unsets: new Set(), // key names marked "clear on save"
+            data: null,          // last /api/config payload
+            edits: new Map(),    // key name → new raw string value
+            unsets: new Set(),   // key names marked "clear on save"
+            invalid: new Map(),  // key name → validation error on the current edit
         };
 
         // Which settings sections the user has collapsed, per browser.
@@ -407,13 +408,13 @@
                 num: { step: '100', min: '100', max: '1000000' },
             },
             'vis.solo_threshold': {
-                label: 'Solo mode threshold',
-                hint: 'Past this many nodes or edges the page never draws the whole graph — it opens in solo mode and shows one neighbourhood at a time. Lower it to isolate large repos earlier, higher to attempt whole-graph render for longer. Governs the 2D engine; the 3D engine solos past its own element budget above. Server mode (Graph section) always opens in solo view, whatever this is set to.',
+                label: 'Solo mode threshold (2D engine)',
+                hint: 'Past this many nodes or edges the page never draws the whole graph — it opens in solo mode and shows one neighbourhood at a time. Lower it to isolate large repos earlier, higher to attempt whole-graph render for longer. Governs the 2D engine only; the 3D engine solos past its own element budget above.',
                 num: { step: '1000', min: '1', max: '10000000' },
                 unit: 'count',
             },
             'graph.server_mode_bytes': {
-                label: 'Server mode threshold',
+                label: 'Server mode threshold (graph.json size)',
                 hint: 'How the browser gets the graph. Past this size of graph.json the page no longer downloads the file — it loads a slim node index and asks this server for edges and neighbourhoods on demand (server mode). Below it the whole file is served and the browser renders everything itself (local mode). 50 MB out of the box; lower it to keep big files out of the browser tab, raise it for graphs you want fully client-side. A graph served this way always opens in solo view (Visualization section), whatever the solo threshold says — its edges live on the server.',
                 num: { step: '1000000', min: '1024', max: '1000000000' },
                 unit: 'bytes',
@@ -462,6 +463,44 @@
             return u.short ? v + ' ' + u.short : String(v);
         }
 
+        // The same value as prose: 2 decimals, not 10. The input-field
+        // formatter above keeps full precision so re-displaying a saved
+        // value never marks the row dirty; notes want "4.57 MB", not
+        // "4.571556091 MB".
+        function formatSettingsThresholdHuman(kind, raw) {
+            if (!Number.isFinite(raw) || raw < 0) return String(raw);
+            const u = pickSettingsUnit(kind, raw);
+            const r = Math.round(scaledSettingsThreshold(raw, u) * 100) / 100;
+            return u.short ? r + ' ' + u.short : String(r);
+        }
+
+        // ── Numeric row validation ────────────────────────
+        // The `<input type=number>` bounds never fire here — Save is a
+        // button, not a form submit — so the rules in `meta.num` are
+        // enforced by hand. `rawVal` is already in stored units (the
+        // number shown × the unit factor), and these bounds are too, so
+        // the comparison needs no rescaling. They mirror the server's
+        // write-time validation; an error here means the POST would have
+        // been rejected anyway, but the row says why at the keystroke
+        // instead of after it.
+        function settingsNumError(meta, rawVal) {
+            if (!meta.num || rawVal === '') return null;
+            const n = Number(rawVal);
+            if (!Number.isFinite(n)) return 'Enter a number.';
+            const num = meta.num;
+            if (num.min !== undefined && n < Number(num.min)) {
+                return 'Must be at least ' + (meta.unit
+                    ? formatSettingsThreshold(meta.unit, Number(num.min))
+                    : num.min) + '.';
+            }
+            if (num.max !== undefined && n > Number(num.max)) {
+                return 'Must be at most ' + (meta.unit
+                    ? formatSettingsThreshold(meta.unit, Number(num.max))
+                    : num.max) + '.';
+            }
+            return null;
+        }
+
         function settingsOverlayEl() {
             return document.getElementById('settings-overlay');
         }
@@ -479,6 +518,9 @@
             const body = document.getElementById('settings-body');
             settingsUi.edits.clear();
             settingsUi.unsets.clear();
+            settingsUi.invalid.clear();
+            const reloadBtn = document.getElementById('settings-reload');
+            if (reloadBtn) reloadBtn.hidden = true;
             setSettingsStatus('', '');
             body.innerHTML = '<div class="settings-loading">Loading configuration…</div>';
             try {
@@ -701,15 +743,93 @@
             }
             row.appendChild(note);
 
-            // Server mode outranks the solo threshold at runtime — when the
-            // page actually loaded in server mode, say so on the row whose
-            // value is being overridden.
-            if (k.name === 'vis.solo_threshold' && state.graphMode === 'server') {
-                const forced = document.createElement('div');
-                forced.className = 'settings-row-note settings-force-note';
-                forced.textContent = 'This graph is being served in server mode — the page opens in solo view whatever this threshold says.';
-                row.appendChild(forced);
+            // ── Live "what this page is doing now" notes ──────
+            // Both thresholds govern decisions the page already made, so
+            // each row shows the decision's outcome for *this* graph — and,
+            // while the value is edited, the outcome the typed value would
+            // have. This is what stops the two standing confusions: editing
+            // a threshold that server mode (or the other engine) has made
+            // irrelevant, and reading solo view as "the server-mode
+            // threshold didn't work" — the two are independent settings,
+            // and the notes cross-reference each other when both matter.
+            const capsGraph = state.capabilities && state.capabilities.graph;
+            let updateLiveNote = null;
+            // The value the row is currently pointing at: the typed edit if
+            // there is one, else the saved value, else the default (which is
+            // also what a pending clear restores).
+            const rowCutoff = () => {
+                if (settingsUi.unsets.has(k.name)) return Number(k.default);
+                const v = settingsUi.edits.get(k.name);
+                if (v != null && v !== '' && Number.isFinite(Number(v))) return Number(v);
+                return k.saved != null ? Number(k.saved) : Number(k.default);
+            };
+            if (k.name === 'vis.solo_threshold' && capsGraph) {
+                const live = document.createElement('div');
+                live.className = 'settings-row-note settings-live-note';
+                row.appendChild(live);
+                const elements = Math.max(capsGraph.nodes || 0, capsGraph.edges || 0);
+                updateLiveNote = () => {
+                    if (state.graphMode === 'server') {
+                        live.classList.add('settings-force-note');
+                        live.textContent = 'This graph is served in server mode — the page opens in solo view whatever this threshold says. Raise the server-mode threshold (Graph section) above the graph\'s size to make this setting matter.';
+                        return;
+                    }
+                    live.classList.remove('settings-force-note');
+                    const cutoff = rowCutoff();
+                    const solo = Number.isFinite(cutoff) && elements > cutoff;
+                    live.innerHTML = 'This page is ' + (state.soloOnly ? 'in solo view' : 'drawing the whole graph')
+                        + '. This graph has ' + formatNumber(elements) + ' elements (nodes or edges, whichever is more)'
+                        + ' — with a threshold of <strong>' + formatNumber(cutoff) + '</strong> it '
+                        + (solo
+                            ? '<strong class="mode-server">opens in solo view</strong> on the next reload'
+                            : '<strong class="mode-local">draws the whole graph</strong> on the next reload')
+                        + '.';
+                };
+                updateLiveNote();
             }
+            if (k.name === 'graph.server_mode_bytes' && capsGraph && typeof capsGraph.bytes === 'number') {
+                const live = document.createElement('div');
+                live.className = 'settings-row-note settings-live-note';
+                row.appendChild(live);
+                const size = formatSettingsThresholdHuman('bytes', capsGraph.bytes);
+                updateLiveNote = () => {
+                    const c = rowCutoff();
+                    const server = Number.isFinite(c) && capsGraph.bytes >= c;
+                    const pageServer = state.graphMode === 'server';
+                    let html = 'This graph is <strong>' + size + '</strong> — with a threshold of <strong>'
+                        + (Number.isFinite(c) ? formatSettingsThresholdHuman('bytes', c) : '?')
+                        + '</strong> it loads <strong class="' + (server ? 'mode-server' : 'mode-local') + '">'
+                        + (server ? 'server' : 'local') + ' mode</strong>'
+                        + (server
+                            ? ' (a slim node index; edges arrive from this server on demand)'
+                            : ' (the whole file, rendered in the browser)')
+                        + ' on the next reload';
+                    if (server !== pageServer) {
+                        html += ' — this page now: ' + (pageServer ? 'server' : 'local') + '; reload to switch';
+                    }
+                    html += '.';
+                    if (!server && state.soloOnly) {
+                        html += ' The page still opens in solo view — that is the solo threshold (Visualization section), a separate setting.';
+                    }
+                    live.innerHTML = html;
+                };
+                updateLiveNote();
+            }
+
+            // Validation message slot, filled by onDirty. Only numeric
+            // rows can populate it, so only they carry the element.
+            let rowError = null;
+            if (meta.num) {
+                rowError = document.createElement('div');
+                rowError.className = 'settings-row-error';
+                row.appendChild(rowError);
+            }
+
+            const clearInvalid = () => {
+                settingsUi.invalid.delete(k.name);
+                row.classList.remove('invalid');
+                if (rowError) rowError.textContent = '';
+            };
 
             const onDirty = () => {
                 if (settingsUi.unsets.has(k.name)) {
@@ -724,6 +844,16 @@
                         ? String(Math.round(n * Number(unitSel.value)))
                         : '';
                 }
+                // A value the server would reject is caught here, at the
+                // row, with the rule stated — not after Save round-trips.
+                const err = settingsNumError(meta, val);
+                if (err && !settingsUi.unsets.has(k.name)) {
+                    settingsUi.invalid.set(k.name, err);
+                    row.classList.add('invalid');
+                    if (rowError) rowError.textContent = err;
+                } else {
+                    clearInvalid();
+                }
                 // For a select the shown default *is* a legal choice, so an
                 // unset row baseline is the default rather than '' — leaving
                 // it untouched must not mark it dirty.
@@ -731,6 +861,7 @@
                 if (val !== baseline) settingsUi.edits.set(k.name, val);
                 else settingsUi.edits.delete(k.name);
                 row.classList.toggle('dirty', settingsUi.edits.has(k.name));
+                if (updateLiveNote) updateLiveNote();
                 updateSettingsFooter();
             };
             control.addEventListener('input', onDirty);
@@ -756,6 +887,10 @@
                         else control.value = k.saved != null ? k.saved : (isEnum ? (k.default || '') : '');
                     }
                 }
+                // Whatever the clear restored is a saved value or a blank —
+                // both legal by construction.
+                clearInvalid();
+                if (updateLiveNote) updateLiveNote();
                 updateSettingsFooter();
             });
 
@@ -770,10 +905,17 @@
 
         function updateSettingsFooter() {
             const count = settingsUi.edits.size + settingsUi.unsets.size;
-            document.getElementById('settings-save').disabled = count === 0;
+            const invalid = settingsUi.invalid.size;
+            // An invalid edit is still an edit — Revert stays available so
+            // the user can back out of it — but Save waits until every rule
+            // passes, and the status line says what is blocking.
+            document.getElementById('settings-save').disabled = count === 0 || invalid > 0;
             document.getElementById('settings-revert').disabled = count === 0;
             const status = document.getElementById('settings-status');
-            if (count > 0) {
+            if (invalid > 0) {
+                const [first] = settingsUi.invalid.values();
+                setSettingsStatus('err', first);
+            } else if (count > 0) {
                 setSettingsStatus('', count + ' unsaved change' + (count === 1 ? '' : 's'));
             } else if (!status.classList.contains('ok') && !status.classList.contains('err')) {
                 // Only clear neutral "N unsaved changes" text — keep a
@@ -783,13 +925,17 @@
         }
 
         async function saveSettings() {
+            if (settingsUi.invalid.size) return;   // footer keeps Save disabled; guard anyway
             const saveBtn = document.getElementById('settings-save');
             const set = {};
             for (const [name, val] of settingsUi.edits) set[name] = val;
             const unset = Array.from(settingsUi.unsets);
             const touched = Object.keys(set).concat(unset);
             const touchedEmbed = touched.some((n) => n.startsWith('embed.'));
-            const touchedVis = touched.some((n) => n.startsWith('vis.'));
+            // Both a vis.* drawing pref and a graph.* delivery pref are read
+            // once at page load — the honest next step after saving one is a
+            // reload, so offer the button right there.
+            const touchedReload = touched.some((n) => n.startsWith('vis.') || n.startsWith('graph.'));
             saveBtn.disabled = true;
             setSettingsStatus('', 'Saving…');
             try {
@@ -807,7 +953,9 @@
                 settingsUi.unsets.clear();
                 renderSettings();
                 updateSettingsFooter();
-                setSettingsStatus('ok', touchedVis
+                const reloadBtn = document.getElementById('settings-reload');
+                if (reloadBtn) reloadBtn.hidden = !touchedReload;
+                setSettingsStatus('ok', touchedReload
                     ? 'Saved ✓ — the page picks this up on the next reload'
                     : (touchedEmbed
                         ? 'Saved ✓ — chat applies now; embedding changes take effect after a server restart'
@@ -835,11 +983,14 @@
             document.getElementById('settings-revert').addEventListener('click', () => {
                 settingsUi.edits.clear();
                 settingsUi.unsets.clear();
+                settingsUi.invalid.clear();
                 renderSettings();
                 updateSettingsFooter();
                 setSettingsStatus('', '');
             });
             document.getElementById('settings-save').addEventListener('click', saveSettings);
+            const reloadBtn = document.getElementById('settings-reload');
+            if (reloadBtn) reloadBtn.addEventListener('click', () => window.location.reload());
             overlay.addEventListener('click', (e) => {
                 if (e.target === overlay) closeSettings();
             });

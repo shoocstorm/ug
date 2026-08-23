@@ -479,6 +479,44 @@
             color: var(--accent);
         }
 
+        /* Live "what this page is doing now" note on threshold rows: the
+           resolved mode word carries the colour so the outcome, not the
+           stored number, is what the eye picks up. */
+        .settings-row-note.settings-live-note strong {
+            font-weight: 600;
+        }
+
+        .settings-live-note .mode-server {
+            color: var(--accent);
+        }
+
+        .settings-live-note .mode-local {
+            color: var(--success);
+        }
+
+        /* A row whose current edit breaks its rule: outlined input, the
+           rule stated beneath, Save held back. */
+        .settings-row.invalid .settings-input-wrap input,
+        .settings-row.invalid .settings-input-wrap select {
+            border-color: var(--danger);
+        }
+
+        .settings-row.invalid .settings-input-wrap input:focus,
+        .settings-row.invalid .settings-input-wrap select:focus {
+            box-shadow: 0 0 0 2px rgba(248, 113, 113, 0.15);
+        }
+
+        .settings-row-error {
+            margin-top: 4px;
+            font-size: 10.5px;
+            line-height: 1.4;
+            color: var(--danger);
+        }
+
+        .settings-row-error:empty {
+            display: none;
+        }
+
         .settings-row-note {
             margin-top: 5px;
             font-size: 10.5px;
@@ -571,6 +609,19 @@
 
         .settings-btn.primary:hover:not(:disabled) {
             opacity: 0.9;
+        }
+
+        /* Offered after a save that only takes effect on the next page
+           load (vis.* / graph.* rows) — accented so it reads as the
+           suggested next step, quiet enough not to compete with Save. */
+        .settings-btn.ghost {
+            background: rgba(249, 115, 22, 0.1);
+            border: 1px solid rgba(249, 115, 22, 0.4);
+            color: var(--accent);
+        }
+
+        .settings-btn.ghost:hover:not(:disabled) {
+            background: rgba(249, 115, 22, 0.18);
         }
 
         .settings-btn:disabled {

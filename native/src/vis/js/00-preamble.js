@@ -261,6 +261,48 @@
             return downloadFromGraphFile(d => ({ nodes: d.nodes, edges: d.edges }), 'graph.json');
         }
 
+        // Trailing debounce, shared by every live search input (sidebar
+        // search, walk seed, palette). In local mode a keystroke scans
+        // in-memory arrays; in server mode it is an HTTP request to
+        // /api/graph/search, so per-keystroke firing means a request per
+        // character. `flush()` runs a pending call immediately — wired to
+        // Enter, where the user has said "now" and the 200 ms wait would
+        // race the pick.
+        function debounceTrailing(fn, ms) {
+            let timer = null, lastArgs = null;
+            const debounced = (...args) => {
+                lastArgs = args;
+                if (timer !== null) clearTimeout(timer);
+                timer = setTimeout(() => {
+                    timer = null;
+                    const a = lastArgs;
+                    lastArgs = null;
+                    fn(...a);
+                }, ms);
+            };
+            debounced.flush = () => {
+                if (timer === null) return;
+                clearTimeout(timer);
+                timer = null;
+                const a = lastArgs;
+                lastArgs = null;
+                fn(...a);
+            };
+            // Drop a pending call without running it — for code that
+            // replaces the input state outright (clear buttons, Escape).
+            debounced.cancel = () => {
+                if (timer === null) return;
+                clearTimeout(timer);
+                timer = null;
+                lastArgs = null;
+            };
+            return debounced;
+        }
+
+        // How long a live search input waits for the typing to pause
+        // before asking. Matches the URL-state sync's window.
+        const SEARCH_DEBOUNCE_MS = 400;
+
         async function loadGraph() {
             const params = new URLSearchParams(window.location.search);
             const file = params.get('file') || 'graph.json';
@@ -316,7 +358,14 @@
                 // graph file is a request for that file.
                 const gmOverride = params.get('gm');
                 let mode = 'local';
-                if (!params.get('file')) {
+                // `?file=` names a graph file to load outright. But the
+                // URL-state sync used to write the *default* ('graph.json')
+                // back into the URL, and this branch read that as an
+                // explicit choice — pinning every reload of an interacted
+                // page to local mode, whatever the server had resolved.
+                // The default is not a choice; only a non-default file is.
+                const fileParam = params.get('file');
+                if (!fileParam || fileParam === 'graph.json') {
                     const caps = await getCapabilities();
                     mode = (caps && caps.graph && caps.graph.mode) || 'local';
                 }
