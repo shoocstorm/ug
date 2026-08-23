@@ -353,9 +353,9 @@ pub(crate) async fn build_project_context(
         .or_else(|| {
             graph_path
                 .parent()
-                .and_then(|dir| crate::project::read_meta(dir))
+                .and_then(crate::project::read_meta)
                 .map(|m| PathBuf::from(m.repo_root))
-                .filter(|p| p.as_os_str().len() > 0)
+                .filter(|p| !p.as_os_str().is_empty())
         })
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
     // Canonicalize here so the invariant holds no matter which caller supplied

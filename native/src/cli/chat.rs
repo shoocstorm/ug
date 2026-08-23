@@ -4,7 +4,6 @@
 
 use std::path::PathBuf;
 
-use ultragraph::agent_tools;
 use ultragraph::storage::{
     open_store, DEFAULT_CONTEXT_CHARS, Direction, Embedder, KnowledgeStore, RankStrategy,
 };
@@ -298,44 +297,18 @@ fn cli_tool_runner(
         let store = store.clone();
         let embedder = embedder.clone();
         Box::pin(async move {
-            let mut args = args;
-            crate::mcp::tools::normalize_args(&name, &mut args);
-            match name.as_str() {
-                // `search` (and its retired `semantic_search` alias) need
-                // the vector store; everything else answers from the loaded
-                // graph.
-                "search" | "semantic_search" => {
-                    chat::run_search_tool(&name, &args, &*store, Some(&embedder), repo_root.as_path())
-                        .await
-                }
-                // Statistics come from the store's indexed properties, not the
-                // graph — the one advertised tool `run_tool` cannot answer.
-                "analyze" => crate::mcp::run_analyze_json(&*store, &args).await,
-                _ => {
-                    crate::mcp::tools::reject_if_store_backed(&name)?;
-                    // Chat already holds this project's store open, so the
-                    // source pre-fetch is one lookup rather than another open.
-                    let indexed = agent_tools::IndexedSource::load(
-                        &*store,
-                        &agent_tools::source_node_ids(&name, &graph, &args),
-                    )
-                    .await;
-                    let out = ultragraph::agent_tools::run_tool(
-                        &name,
-                        &graph,
-                        agent_tools::SourceCtx::new(&indexed, repo_root.as_path()),
-                        graph_path.as_path(),
-                        args,
-                        Some(ultragraph::agent_tools::Render::Markdown),
-                    )?;
-                    Ok(match out {
-                        ultragraph::agent_tools::ToolOutput::Text(t) => t,
-                        ultragraph::agent_tools::ToolOutput::Json(v) => {
-                            serde_json::to_string_pretty(&v).unwrap_or_default()
-                        }
-                    })
-                }
-            }
+            // Dispatch is shared with `POST /api/chat` — see
+            // `chat::run_chat_tool`. Only the handles differ.
+            chat::run_chat_tool(
+                &name,
+                args,
+                &graph,
+                graph_path.as_path(),
+                repo_root.as_path(),
+                &*store,
+                Some(&embedder),
+            )
+            .await
         }) as futures::future::BoxFuture<'static, Result<String, String>>
     }
 }

@@ -33,7 +33,7 @@ fn is_github_asset_url(url: &str) -> bool {
         .next()
         .unwrap_or_default()
         .split('@') // no userinfo smuggling a different host past us
-        .last()
+        .next_back()
         .unwrap_or_default()
         .split(':')
         .next()

@@ -206,7 +206,7 @@ pub fn extract_docstring(node: &Node, source: &[u8]) -> Option<String> {
                 let parts: Vec<&str> = line.splitn(2, '-').collect();
                 Some(format!(
                     "param: {}",
-                    parts.get(0).unwrap_or(&line).trim().replace("@param", "")
+                    parts.first().unwrap_or(&line).trim().replace("@param", "")
                 ))
             } else if line.starts_with("@return") || line.starts_with("@returns") {
                 Some(format!(

@@ -180,7 +180,7 @@ pub(crate) fn build_binary_index(graph: &GraphData) -> Vec<u8> {
     out.resize(header_len, 0);
 
     for (slot, (kind, section)) in sections.iter().enumerate() {
-        while out.len() % 4 != 0 {
+        while !out.len().is_multiple_of(4) {
             out.push(0);
         }
         let Section::Bytes(bytes) = section;

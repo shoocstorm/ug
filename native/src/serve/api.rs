@@ -1051,7 +1051,7 @@ pub(crate) async fn api_capabilities(State(state): State<ServeState>) -> Respons
             let count: Option<usize> = if let (Some(store), Some(cell)) = (store.as_ref(), cell) {
                 let store_inner = store.clone();
                 let name_for_log = name.clone();
-                cell.get_or_init(|| async move {
+                *cell.get_or_init(|| async move {
                     match store_inner.count_nodes().await {
                         Ok(n) => Some(n),
                         Err(e) => {
@@ -1061,7 +1061,6 @@ pub(crate) async fn api_capabilities(State(state): State<ServeState>) -> Respons
                     }
                 })
                 .await
-                .clone()
             } else {
                 None
             };

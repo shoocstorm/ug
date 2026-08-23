@@ -107,7 +107,7 @@ pure printer of it. `ug api` output verified byte-identical in a smoke run.)
       AGENTS.md, docs/API-REFERENCE.md §1.x, api-reference.html #tab-cli,
       index.html, possibly install.sh — full §7.2 sync. Do as its own change.
 
-## Final gate (all batches)
+## Gate — batches 1-7 (passed 2026-08-23)
 - [x] `cd native && cargo check --all-targets` — clean, no warnings
 - [x] `cd native && cargo nextest run --lib` — 607/607
 - [x] `cd native && cargo nextest run --test integration` — 280/280 (+14 ignored)
@@ -125,3 +125,154 @@ pure printer of it. `ug api` output verified byte-identical in a smoke run.)
       497 stale pruned); `style.rs` + `serve/endpoints.rs` resolve.
 - [x] AGENTS.md path references — one stale ref fixed (`serve.rs`
       `file_from_disk` -> `serve/db_api.rs`).
+
+---
+
+# Round 2 — comprehension pass (batches 9-12)
+
+Batches 1-8 were about *file placement*. These are about what is still hard to
+read once the files are in the right place. Found by surveying the post-refactor
+tree: longest pure-code files, longest real functions, and duplicated dispatch.
+Ordered cheapest-first so each lands independently; same verify loop as batch 1.
+
+### 9. Delete the dead `__bench_probe_*` scaffolding  — DONE
+(9 removed. Confirmed nothing referenced them first.)
+- [x] `graph.rs:1955-1979` — nine `#[allow(dead_code)] fn __bench_probe_N() ->
+      u32 { N }`, leftovers from the incremental-rebuild timing work. The only
+      other hit repo-wide is `docs/ug-website/demo/graph.json`, which merely
+      *indexed* them as symbols; nothing calls them. Free deletion.
+- Note: the demo graph.json will still list them until it is regenerated. It
+      is a committed fixture, not live data — leave it.
+- Verify: `cargo check --all-targets` + `cargo nextest run --lib`.
+
+### 10. graph.rs (2,028 lines) → graph/ directory  — DONE
+(build.rs 1,343 / algos.rs ~700 / mod.rs 30. `build_graph_from_index` became
+`pub(super)` so mod.rs can call it; build.rs exports nothing else public, so
+mod.rs re-exports only `algos::*` and the lib.rs list is unchanged.)
+Two disjoint halves sharing a file, with NO shared state across the seam:
+- [x] `graph/build.rs` — construction: `FILE_RESOLVE_EXT_CANDIDATES`, the
+      `MAX_*` caps, `QualifiedIndex`, `build_graph_from_index`,
+      `resolve_qualified_import`, `build_file_indexes`,
+      `resolve_import_to_file_id`, `lookup_with_extensions`, `lookup_basename`,
+      `shared_prefix_len`, `symbol_node_ids`, `simple_name`,
+      `parse_heading_level`, `dependency_root`, `edge_for_call`,
+      `resolve_symbol`, `pick_best`, `dedupe_edges`.  (src lines 1-1292)
+- [x] `graph/algos.rs` — querying: `EdgeAdj`, `find_shortest_path`,
+      `k_hop_bfs`, `build_di_graph`, `filter_edges_by_type`,
+      `graph_keyword_search`, `Csr`, `BrandesScratch`, `calculate_centrality`,
+      `detect_cycles`, `detect_cycles_dfs`, + the `Algorithm results` structs
+      moved here in batch 6.  (src lines 1293-1979 + 1981-2028)
+- [x] `graph/mod.rs` — module doc explaining the build/query split, the two
+      `mod` lines, and `pub use` of both so `crate::graph::X` and the
+      `lib.rs` re-export list keep resolving unchanged.
+- [x] `build_graph` (the JSON String entry point) stays in `mod.rs`: it spans
+      both halves (parse -> build -> serialize).
+- Why: `cli/graph_algos.rs` has for a while had a clearer name than the thing
+      it fronts. This makes the lib side match.
+- Verify: `cargo check --all-targets`, `cargo nextest run --lib` AND
+      `--test integration` (graph_test/traversal_test/centrality_test all
+      import these paths).
+
+### 11. `build_graph_from_index` (739 lines) → a `GraphBuilder` struct  — DONE
+(Landed as `GraphAccum` + free pass functions rather than a builder with
+methods: `for x in &self.index...` while `self.nodes.push(..)` is a borrow
+conflict, whereas `fn pass(index: &IndexResult, acc: &mut GraphAccum)` with a
+`let GraphAccum { nodes, edges, .. } = acc;` destructure at the top has none
+AND lets every pass body stay byte-identical to the original.
+
+VERIFIED FAITHFUL by diffing the extracted bodies against
+`git show HEAD:native/src/graph.rs`: 458 significant statements before, 458
+after, in the same order, zero differences except the intended `route_ids`
+relocation. NOTE: a graph.json hash comparison does NOT work as the proof here
+— this repo indexes itself, so adding the new functions changes the output for
+reasons unrelated to behaviour. Diff the statements, not the artifact.
+
+Two things the extraction surfaced that the 739-line version hid:
+  - `route_ids` never leaves pass 3 (it is a dedup guard read via the bool
+    that `HashSet::insert` returns), so it is a local now, not shared state.
+  - `resolution` is touched ONLY by `resolve_call_edges` — call resolution is
+    the one step that can be confidently right, guessing, or give up.)
+The single biggest real function left. It is already written as five labelled
+sequential passes, so the seams are self-documented:
+- [x] `struct GraphBuilder` owning the seven accumulators that thread through
+      every pass: `nodes`, `edges`, `symbol_id_map`, `qualified`, `route_ids`,
+      `constant_ids`, `resolution`.
+- [x] one method per pass, renamed to say what it does rather than what order
+      it runs in — the current labels are `Pass -1 / 0 / 1 / 2 / 3`, and a
+      pass numbered -1 is the tell that they were prepended over time:
+      - `Pass -1` -> `add_dependency_nodes`      (~16 lines)
+      - `Pass 0`  -> `add_folder_nodes`          (~65)
+      - `Pass 1`  -> `add_file_and_symbol_nodes` (~313)
+      - `Pass 2`  -> `resolve_call_edges`        (~222)
+      - `Pass 3`  -> `resolve_import_edges`      (~110)
+- [x] `build_graph_from_index` becomes the ~10-line sequence of those calls,
+      so the pipeline is readable at a glance and each pass is unit-testable.
+- [x] keep pass ORDER and semantics byte-identical — pass 2 depends on the
+      `symbol_id_map` pass 1 fills, pass 3 on the file index. This is a pure
+      extraction; any behaviour change is a bug.
+- Verify: as batch 10. `graph_test`/`indexer_test` cover the built graph;
+      a diff of `ug gen` output before/after is the real proof.
+
+### 12. De-duplicate the chat tool dispatcher  — DONE
+(`chat::run_chat_tool` is now the single dispatcher; `cli/chat.rs`'s closure
+and `serve/chat_api.rs::run_chat_tool` both delegate, supplying only their own
+handles. Put in chat.rs beside `run_search_tool` and `run_tool_rounds`, which
+is where the rest of the chat tool machinery already lives.
+DRIFT FIXED: the CLI path now enforces `CHAT_TOOL_DENYLIST` too.)
+`cli/chat.rs` (the closure at ~296) and `serve/chat_api.rs::run_chat_tool` are
+structurally identical: `normalize_args` -> guard -> match
+`search`/`semantic_search` -> `analyze` -> default arm doing
+`reject_if_store_backed` + `IndexedSource::load` + `run_tool` + `ToolOutput`
+unwrap. ~45 lines each, differing ONLY in where graph/store/repo_root come from.
+- [x] They have already drifted: `serve/chat_api.rs:871` enforces
+      `CHAT_TOOL_DENYLIST`, `cli/chat.rs` does not. Impact is a worse error
+      message, not a hole — `run_tool`'s fallback arm rejects unknown names
+      with "Expected one of: ...", and the denylist also filters
+      `openai_tool_schemas()` so denied tools are never advertised. Fixing the
+      drift is the point; the duplication is what caused it.
+- [x] extract one dispatcher parameterized over its state source (graph +
+      store + embedder + repo_root + graph_path), and have both call sites use
+      it. Put it beside `chat::run_search_tool`, which both already share.
+- Verify: as batch 10, plus `cargo nextest run --lib` covers
+      `mcp::tools` denylist tests.
+
+## Gate — batches 9-12  — PASSED 2026-08-23
+- [x] `cargo check --all-targets` — clean, no warnings
+- [x] `cargo nextest run --lib` — 607/607
+- [x] `cargo nextest run --test integration` — 280/280 (+14 ignored)
+- [x] `cargo clippy --all-targets` — 72 diagnostics, DOWN from the 106 baseline.
+      The split briefly added 7 `needless_borrow` (the destructure makes
+      `symbol_id_map` a `&mut`, so `&symbol_id_map` is a `&&mut`); fixed.
+      Only remaining lint under graph/ is a pre-existing `too_many_arguments`
+      on `graph_keyword_search`.
+- [x] `ug help`, `ug api`, `ug gen -n ug` smoke — all fine
+- [x] index refreshed; `GraphAccum`, `add_file_and_symbol_nodes` and both
+      `run_chat_tool`s resolve
+- [x] AGENTS.md / tracking-doc path references still correct
+
+### Scope note — `cargo clippy --fix` ran wider than these batches
+Fixing the 7 `needless_borrow` was done with `cargo clippy --fix --lib`, which
+also applied safe mechanical fixes in 10 files OUTSIDE batches 9-12:
+cli/{doctor,projects,scope,upgrade}.rs, indexer/{common,languages/python}.rs,
+serve/{api,host_guard,nidx}.rs, storage/query.rs — 13 insertions, 15 deletions.
+All semantics-preserving (`% n == 0` -> `is_multiple_of`, `.get(0)` -> `.first()`,
+`.last()` -> `.next_back()`, closure -> fn reference, format-literal inlining).
+The two that touched user-visible format strings (doctor.rs, projects.rs) were
+checked by hand and produce byte-identical output. Revert them if these batches
+need to stay surgical; they are unrelated to the refactor.
+      `rtk proxy` or the hook hands you an empty list)
+- [ ] `./native/target/debug/ug help` + `ug gen -n ug` smoke
+- [ ] AGENTS.md / tracking-doc path references still correct
+
+## Surveyed and deliberately NOT doing
+- **The four language indexers** (java/typescript/rust/python, ~6k lines).
+  Expected copy-paste; found the opposite. `indexer/languages.rs` defines a
+  tight `LanguageIndexer` trait, stateless `&'static dyn` singletons, and a
+  5-step "adding a new language" recipe in the module doc. The bulk is
+  irreducible tree-sitter extraction. Leave it alone.
+  (Only nit: `for_extension` is a hand-maintained if-else chain the module doc
+  tells you to edit; it could iterate a slice. Not worth a batch.)
+- **Transport param-mapping duplication.** Already consolidated — everything
+  funnels through `run_tool`. Only `cli/agent.rs` + `cli/search.rs` build typed
+  params directly, and that is the CLI flag-parsing path, which legitimately
+  differs from a JSON transport.

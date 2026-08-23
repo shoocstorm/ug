@@ -658,7 +658,7 @@ async fn search_kb_ppr(
     let take = (opts.k * 4).max(opts.k.max(1));
     let seed_strings: Vec<String> = seed_mass.keys().cloned().collect();
     let edge_types_owned: Option<Vec<String>> =
-        opts.edge_types.map(|v| v.iter().cloned().collect());
+        opts.edge_types.map(|v| v.to_vec());
     let ranked_pairs = run_ppr(
         store,
         &seed_strings,

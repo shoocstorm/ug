@@ -227,7 +227,7 @@ fn extract_imports_via_regex(source: &[u8]) -> Vec<ImportInfo> {
                 import_lookup.entry(path.clone()).or_insert_with(|| ImportInfo {
                     path: path.clone(),
                     imported: vec![ImportedItem {
-                        name: path.split('.').last().unwrap_or(&path).to_string(),
+                        name: path.split('.').next_back().unwrap_or(&path).to_string(),
                         alias: None,
                     }],
                 });

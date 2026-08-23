@@ -107,8 +107,8 @@ pub(crate) fn run_list(args: &[String]) {
     let w_status = rows.iter().map(|r| r.status().0.len()).max().unwrap_or(6).max(6);
 
     println!(
-        "  {C_BOLD}{:<w_name$}  {:>w_nodes$}  {:>w_edges$}  {:>w_size$}  {:<w_status$}  {:<19}  {}{C_RESET}",
-        "NAME", "NODES", "EDGES", "SIZE", "STATUS", "UPDATED", "REPO"
+        "  {C_BOLD}{:<w_name$}  {:>w_nodes$}  {:>w_edges$}  {:>w_size$}  {:<w_status$}  {:<19}  REPO{C_RESET}",
+        "NAME", "NODES", "EDGES", "SIZE", "STATUS", "UPDATED"
     );
 
     for row in &rows {
@@ -234,7 +234,7 @@ fn commas(n: usize) -> String {
     let digits = n.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
     for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(c);

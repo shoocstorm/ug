@@ -107,7 +107,7 @@ pub(crate) async fn guard_host(req: Request, next: Next) -> Response {
         let allowed = origin
             .split("://")
             .nth(1)
-            .is_some_and(|authority| is_allowed_host(authority));
+            .is_some_and(is_allowed_host);
         if !allowed {
             tracing::warn!(%origin, "rejected request with a cross-site Origin header");
             return err_json(StatusCode::FORBIDDEN, "cross-site Origin is not allowed");

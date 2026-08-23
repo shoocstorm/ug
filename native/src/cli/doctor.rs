@@ -63,9 +63,8 @@ pub(crate) fn run_doctor(args: &[String]) {
     println!("  project dir:  {} ({})", project_dir.display(), dir_status);
 
     println!(
-        "  active proj:  {}  [{}]",
-        project::get_active_project().unwrap_or_else(|| "(none)".to_string()),
-        "ug active — default for `ug mcp` when no $UG_PROJECT / cwd match"
+        "  active proj:  {}  [ug active — default for `ug mcp` when no $UG_PROJECT / cwd match]",
+        project::get_active_project().unwrap_or_else(|| "(none)".to_string())
     );
 
     let db_flag = flag_value(args, &["-d", "--db"]);

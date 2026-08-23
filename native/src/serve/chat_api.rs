@@ -533,9 +533,9 @@ pub(crate) fn api_chat_stream(
         };
 
         let t_ret = std::time::Instant::now();
-        let emit_ctx = emit.clone();
-        let emit_tool = emit.clone();
-        let emit_delta = emit.clone();
+        let emit_ctx = emit;
+        let emit_tool = emit;
+        let emit_delta = emit;
         let outcome = chat::run_chat_rag_stream(
             &*db,
             &embedder,
@@ -854,10 +854,8 @@ pub(crate) async fn api_chat_config(State(state): State<ServeState>) -> Response
 /// turn should read the graph, not reshape it.
 /// Run one tool against the server's live state.
 ///
-/// Graph tools go through the same `agent_tools::run_tool` the MCP server
-/// and `/api/tools/:tool` use; the two search tools need the vector store
-/// and embedder, so they're wired here to the already-open handles rather
-/// than opening their own.
+/// The dispatch itself is [`chat::run_chat_tool`], shared with `ug chat`; this
+/// only supplies the server's already-open graph snapshot and store handles.
 async fn run_chat_tool(
     state: ServeState,
     db: Arc<dyn KnowledgeStore>,
@@ -865,54 +863,18 @@ async fn run_chat_tool(
     name: String,
     args: serde_json::Value,
 ) -> Result<String, String> {
-    // Undo the model's stringified arrays/numbers before anything reads them.
-    let mut args = args;
-    crate::mcp::tools::normalize_args(&name, &mut args);
-    if crate::mcp::tools::CHAT_TOOL_DENYLIST.contains(&name.as_str()) {
-        return Err(format!("{} is not available from chat", name));
-    }
-
-    match name.as_str() {
-        "search" | "semantic_search" => {
-            chat::run_search_tool(
-                &name,
-                &args,
-                &*db,
-                embedder.as_deref(),
-                state.repo_root().as_path(),
-            )
-            .await
-        }
-        // Statistics come from the store's indexed properties, not the graph —
-        // the one advertised tool `agent_tools::run_tool` cannot answer.
-        "analyze" => crate::mcp::run_analyze_json(&*db, &args).await,
-        _ => {
-            crate::mcp::tools::reject_if_store_backed(&name)?;
-            let snap = state.snapshot();
-            let ctx = state.active();
-            // The chat path already holds an open store, so the source
-            // pre-fetch costs one lookup rather than another open.
-            let indexed = ultragraph::agent_tools::IndexedSource::load(
-                &*db,
-                &ultragraph::agent_tools::source_node_ids(&name, &snap.parsed, &args),
-            )
-            .await;
-            let out = ultragraph::agent_tools::run_tool(
-                &name,
-                &snap.parsed,
-                ultragraph::agent_tools::SourceCtx::new(&indexed, ctx.repo_root.as_path()),
-                ctx.graph_path.as_path(),
-                args,
-                Some(ultragraph::agent_tools::Render::Markdown),
-            )?;
-            Ok(match out {
-                ultragraph::agent_tools::ToolOutput::Text(t) => t,
-                ultragraph::agent_tools::ToolOutput::Json(v) => {
-                    serde_json::to_string_pretty(&v).unwrap_or_default()
-                }
-            })
-        }
-    }
+    let snap = state.snapshot();
+    let ctx = state.active();
+    chat::run_chat_tool(
+        &name,
+        args,
+        &snap.parsed,
+        ctx.graph_path.as_path(),
+        ctx.repo_root.as_path(),
+        &*db,
+        embedder.as_deref(),
+    )
+    .await
 }
 
 // ---------- Guided tour (/api/tour) ----------

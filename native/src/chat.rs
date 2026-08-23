@@ -755,6 +755,69 @@ pub struct ToolBox<'a> {
 /// store, so both were carrying their own copy of this — the arrangement that
 /// let `analyze` work over MCP and fail in chat. Graph-backed tools stay
 /// with their caller, which is where the graph lives.
+/// Run one chat-advertised tool and return its Markdown.
+///
+/// `ug chat` and `POST /api/chat` both land here, so a tool call answers the
+/// same way in the terminal and the browser. They differ only in where the
+/// graph and store come from, which is why those arrive as parameters.
+///
+/// The order matters: coerce the model's stringified arrays/numbers first,
+/// then refuse anything chat is not allowed to reach, and only then dispatch.
+/// The two search tools and `analyze` need the vector store, so they are wired
+/// to the caller's already-open handles; everything else answers from the
+/// loaded graph via `agent_tools::run_tool`.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_chat_tool(
+    name: &str,
+    args: Value,
+    graph: &ultragraph::types::GraphData,
+    graph_path: &std::path::Path,
+    repo_root: &std::path::Path,
+    store: &dyn KnowledgeStore,
+    embedder: Option<&Embedder>,
+) -> Result<String, String> {
+    use ultragraph::agent_tools;
+
+    let mut args = args;
+    crate::mcp::tools::normalize_args(name, &mut args);
+    if crate::mcp::tools::CHAT_TOOL_DENYLIST.contains(&name) {
+        return Err(format!("{} is not available from chat", name));
+    }
+
+    match name {
+        "search" | "semantic_search" => {
+            run_search_tool(name, &args, store, embedder, repo_root).await
+        }
+        // Statistics come from the store's indexed properties, not the graph —
+        // the one thing `agent_tools::run_tool` cannot answer.
+        "analyze" => crate::mcp::run_analyze_json(store, &args).await,
+        _ => {
+            crate::mcp::tools::reject_if_store_backed(name)?;
+            // Chat already holds this project's store open, so the source
+            // pre-fetch is one lookup rather than another open.
+            let indexed = agent_tools::IndexedSource::load(
+                store,
+                &agent_tools::source_node_ids(name, graph, &args),
+            )
+            .await;
+            let out = agent_tools::run_tool(
+                name,
+                graph,
+                agent_tools::SourceCtx::new(&indexed, repo_root),
+                graph_path,
+                args,
+                Some(agent_tools::Render::Markdown),
+            )?;
+            Ok(match out {
+                agent_tools::ToolOutput::Text(t) => t,
+                agent_tools::ToolOutput::Json(v) => {
+                    serde_json::to_string_pretty(&v).unwrap_or_default()
+                }
+            })
+        }
+    }
+}
+
 pub async fn run_search_tool(
     name: &str,
     args: &Value,
@@ -1577,7 +1640,7 @@ where
         }
     }
     if let Some(tb) = toolbox {
-        let rounds = run_tool_rounds(chat, tb, messages, |e| on_tool(e)).await?;
+        let rounds = run_tool_rounds(chat, tb, messages, on_tool).await?;
         messages = rounds.messages;
         tool_usage = rounds.usage;
         tool_calls = rounds.calls;

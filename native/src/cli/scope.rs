@@ -57,7 +57,7 @@ fn emit(key: String, line: String) {
     // list is a plain Vec of strings and cannot be left inconsistent, so
     // recovering beats taking the whole command down over a banner.
     let mut seen = ANNOUNCED.lock().unwrap_or_else(|e| e.into_inner());
-    if seen.iter().any(|k| *k == key) {
+    if seen.contains(&key) {
         return;
     }
     seen.push(key);
