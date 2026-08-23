@@ -227,6 +227,57 @@ The `nodeId` parameters also accept a plain **symbol name**, so
 
 ---
 
+## Node IDs
+
+Every result prints the id of what it found, and every `nodeId` / `sourceId` /
+`targetId` parameter takes one back. The shape is three colon-separated parts —
+**no line numbers**:
+
+```
+<syntactic-kind>:<repo-relative-path>:<symbol-name>
+
+function:native/src/serve.rs:run_serve
+enum:native/src/storage/store.rs:StoreSpec
+trait:native/src/storage/store.rs:KnowledgeStore
+function:native/src/storage/store.rs:StoreSpec::embedding_dim
+constant:native/src/mcp/install.rs:SKILL_MD
+method_definition:native/src/vis/js/07-tour.js:buildTourRoute
+heading:docs/MCP-SERVE.md:Knowledge Base Types
+file:native/src/serve.rs
+folder:.
+```
+
+Ids are stable across re-indexing as long as the symbol keeps its name and file,
+which is why they carry no line number — moving a function within its file does
+not change its id.
+
+**Do not synthesize an id — copy it, or pass the name instead.** The kind prefix
+is the *language's own* construct name as the parser saw it (`struct`, `enum`,
+`trait`, `type_alias`, `function_declaration`, `method_definition`), which is
+deliberately **not** the normalized `node_type` shown in results and accepted by
+`nodeTypes` filters (`Function`, `Class`, `Constant`, `File`, `Variable`,
+`Interface`, `Concept`, `Folder`). A Rust `struct` and a Rust `enum` both display
+as `Class`, so `class:...` is never a valid id here. Guessing the prefix is the
+most common way to turn an O(1) lookup into a miss.
+
+Since every `nodeId` parameter also accepts a bare symbol name and a wildcard,
+`{"nodeId": "run_serve"}` is the normal way to call these tools by hand. Reach
+for the full id when a name is ambiguous, or when you already have the id from a
+previous result and want the O(1) path.
+
+`file:` and `folder:` nodes have only two parts — there is no symbol name to add.
+`heading:` nodes come from Markdown and PDF documents, where the "symbol" is the
+heading text. A method carries its owner in the name part —
+`function:native/src/storage/store.rs:StoreSpec::embedding_dim` — so `Type::method`
+is the string to match, not the bare method name.
+
+For a worked example of getting this wrong: `StoreSpec` above *looks* like a struct
+and is not, so `struct:native/src/storage/store.rs:StoreSpec` resolves to nothing
+while `enum:...` resolves fine. `find_symbols: { name: "StoreSpec" }` would have
+answered in one call.
+
+---
+
 ## Available Tools
 
 ### 1. `search` - Primary Knowledge-Base Search
@@ -302,17 +353,20 @@ Use `'outbound'` to see what the seed depends on; `'inbound'` to see who depends
 
 **Example usage:**
 ```
-traverse: { nodeId: "func-123", hops: 2, edgeTypes: ["calls", "imports"] }
+traverse: { nodeId: "run_serve", hops: 1 }                 // by name — usually enough
 
-traverse: { nodeId: "class-456", hops: 1, direction: "outbound" }
+traverse: { nodeId: "function:native/src/serve.rs:run_serve", hops: 2,
+            edgeTypes: ["calls", "imports"] }              // by id, copied from a result
 
-traverse: { nodeId: ["func-789", "class-101"], hops: 2, direction: "both" }
+traverse: { nodeId: "enum:native/src/storage/store.rs:StoreSpec", hops: 1,
+            direction: "outbound" }
 
-traverse: { nodeId: "run_serve", hops: 1 }                 // by name
+traverse: { nodeId: ["run_serve", "run_gen"], hops: 2, direction: "both" }
 
 traverse: { nodeId: "handle_*", direction: "inbound" }     // one merged walk
 
-traverse: { nodeId: "file-202", hops: 3, edgeTypes: ["contains", "imports"] }
+traverse: { nodeId: "file:native/src/serve.rs", hops: 3,
+            edgeTypes: ["contains", "imports"] }
 ```
 
 ---
@@ -336,13 +390,13 @@ Each direct caller carries the lines that mention the symbol (`file:line` plus t
 
 **Example usage:**
 ```
-find_usages: { nodeId: "func-123", hops: 1 }
+find_usages: { nodeId: "function:native/src/serve.rs:build_router", hops: 1 }
 
 find_usages: { nodeId: "connect" }                     // by name, no id lookup first
 
 find_usages: { nodeId: "validate_*" }                  // blast radius of a whole family
 
-find_usages: { nodeId: "class-456", hops: 2 }
+find_usages: { nodeId: "trait:native/src/storage/store.rs:KnowledgeStore", hops: 2 }
 
 find_usages: { nodeId: "*Repository", edgeTypes: ["implements"] }
 ```
@@ -371,7 +425,7 @@ find_usages: { nodeId: "*Repository", edgeTypes: ["implements"] }
 
 ```
 find_symbols: { name: "install_config" }
-find_symbols: { nodeId: "function:native/src/mcp/install.rs:412:install_config" }
+find_symbols: { nodeId: "function:native/src/mcp/install.rs:install_config" }
 find_symbols: { name: "config", nodeTypes: ["Class"], filePrefix: "native/src/" }
 find_symbols: { name: "handle_*" }                              // every handler
 find_symbols: { name: "*Controller", nodeTypes: ["Class"] }
@@ -388,7 +442,7 @@ find_symbols: { name: "*", filePrefix: "src/auth/**", limit: 100 }  // a whole s
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `nodeId` | string \| string[] | ❌* | Direct File node id lookup — O(1) when you already have the File node id. |
-| `file` | string \| string[] | ❌* | Repo-relative path (`native/src/main.rs`), unique suffix (`main.rs`), File node id, or glob (`src/**/*.ts`). Array of up to 10 outlines several in one call. |
+| `file` | string \| string[] | ❌* | Repo-relative path (`native/src/serve.rs`), unique suffix (`serve.rs`), File node id, or glob (`src/**/*.ts`). Array of up to 10 outlines several in one call. |
 | `maxFiles` | integer (1-200) | ❌ | Files a single glob may outline (default 20). Beyond the cap the remaining paths are listed by name, so nothing is hidden. |
 
 *One of `nodeId` or `file` is required.
@@ -419,7 +473,7 @@ file_outline: { file: "**/test_*.py" }                     // by naming conventi
 *One of `nodeId` or `file` is required.
 
 ```
-get_code: { nodeId: "function:native/src/mcp/install.rs:412:install_config" }
+get_code: { nodeId: "function:native/src/mcp/install.rs:install_config" }
 get_code: { nodeId: "install_config" }        // by name
 get_code: { nodeId: "render_*" }              // every renderer in one call
 get_code: { file: "native/src/serve.rs", startLine: 100, endLine: 180 }
@@ -497,7 +551,7 @@ Each endpoint takes a node id, an exact symbol name, or a wildcard — but must 
 | `targetId` | string | ✅ | End point: node id, exact name, or a wildcard matching one symbol. |
 
 ```
-shortest_path: { sourceId: "file:native/src/mcp/install.rs", targetId: "function:native/src/main.rs:2874:run_mcp" }
+shortest_path: { sourceId: "file:native/src/mcp/install.rs", targetId: "function:native/src/cli/connect.rs:run_mcp" }
 ```
 
 ---
@@ -616,9 +670,17 @@ With `files`, the result appends a per-file line giving the symbol count each pa
 
 ---
 
-### 13. `ping_embedder` - Health Check
+### 13. `ping_embedder` - Health Check *(dispatchable, not advertised)*
 
 **Probe the configured embedding endpoint.** Returns 'ok' on success or throws with the upstream error.
+
+> **It will not appear in `tools/list` or `ug mcp list`** — deliberately, and pinned
+> by a test (`ping_embedder_known_but_unlisted` in `native/src/mcp/tools.rs`). It is
+> a troubleshooting probe, not something an agent should be choosing between on every
+> turn, so it stays dispatchable while the advertised set stays at thirteen. Call it by
+> name and it works. `semantic_search` is unlisted for the same mechanism but a
+> different reason: it folded into `search` as `expand: false` and stays dispatchable
+> only so a cached tool list keeps working — use `search`.
 
 Call this when `search` fails with an embedding-related error, or as a one-off health check before kicking off a batch of queries.
 
@@ -678,17 +740,19 @@ search: { query: "auth middleware", k: 5, expand: false, whereClause: "node_type
 # Name search
 find_symbols: { name: "authenticateUser" }
 # Direct nodeId lookup (O(1) when you already have the id)
-find_symbols: { nodeId: "function:src/auth.ts:42:authenticateUser" }
+find_symbols: { nodeId: "function:src/auth.ts:authenticateUser" }
 
 # File path lookup
 file_outline: { file: "src/auth.ts" }
 # Direct nodeId lookup for File nodes (O(1))
 file_outline: { nodeId: "file:src/auth.ts" }
 
-traverse: { nodeId: "func-123", hops: 2, edgeTypes: ["calls", "imports"] }
+traverse: { nodeId: "function:src/auth.ts:authenticateUser", hops: 2,
+            edgeTypes: ["calls", "imports"] }
 
-find_usages: { nodeId: "func-123", hops: 1 }
+find_usages: { nodeId: "authenticateUser", hops: 1 }   # by name — no id needed
 
+# Unlisted, but dispatchable by name (see tool 13)
 ping_embedder: {}
 ```
 

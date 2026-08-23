@@ -5,10 +5,12 @@ edition = "2021"
 authors = ["Aldrick Wan"]
 description = "High-Performance Graph-Based Knowledge Base Generator & Visualizer"
 # One test binary, not one per file in `tests/`. See the module comment in
-# `tests/all.rs`: 25 separate links of the same statically linked dependency
-# code cost ~10s of rustc and ~58s of macOS Gatekeeper scanning *each*, and any
-# edit under `src/` relinks all of them. The `[[test]]` below names the single
-# harness; `autotests = false` stops Cargo re-adding the other 24.
+# `tests/integration.rs`: 25 separate links of the same statically linked
+# dependency code cost ~10s of rustc and ~58s of macOS Gatekeeper scanning
+# *each*, and any edit under `src/` relinks all of them. The `[[test]]` below
+# names the single harness; `autotests = false` stops Cargo re-adding the other
+# 24 — and, because discovery is off, is what makes that declaration load-bearing
+# rather than decorative.
 autotests = false
 
 [lib]
@@ -17,10 +19,20 @@ crate-type = ["rlib"]
 [[bin]]
 name = "ug"
 path = "src/main.rs"
+# `src/main.rs` is a shim over `ultragraph::cli::run`; every module it used to
+# own now lives in the library, so a `--test` build of this target would link
+# a second ~64 MB Mach-O to run zero tests. The CLI/server unit tests moved
+# with their modules and run in the lib test binary.
+test = false
 
+# `name` is not cosmetic: it is what you type in `--test integration` and what
+# prefixes every test id nextest prints (`ultragraph::integration search_test::x`).
+# These are integration tests in Cargo's sense — a separate crate that sees only
+# the library's public API — which is why the name is that and not `all`; the 607
+# unit tests inside `src/` are not in here.
 [[test]]
-name = "all"
-path = "tests/all.rs"
+name = "integration"
+path = "tests/integration.rs"
 
 [[bin]]
 name = "ug-app"
@@ -100,9 +112,10 @@ lto = "thin"
 codegen-units = 16
 panic = "abort"
 
-# Debug info is the single largest input to link time, and linking the two
-# binaries plus 21 test harnesses is where an incremental `cargo test` spends
-# most of its wall clock. `line-tables-only` keeps what is actually read day
+# Debug info is the single largest input to link time, and linking the three
+# Mach-Os an edit under `src/` produces — `ug`, the lib test harness, the
+# integration harness — is where an incremental `cargo test` spends most of
+# its wall clock. `line-tables-only` keeps what is actually read day
 # to day — backtraces with file and line — and drops the variable/type DWARF
 # that only an interactive debugger consumes. Dependencies drop it entirely:
 # stepping into `tokio` is rare enough to be worth an explicit

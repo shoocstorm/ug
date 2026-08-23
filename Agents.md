@@ -139,7 +139,7 @@ format), stream only the final answer, and show every call to the user as it hap
 - Tests are in `native/tests/`: `indexer_test.rs`, `graph_test.rs`, `search_test.rs`,
   `storage_test.rs`, `rust_indexer_test.rs`, `pdf_indexer_test.rs`, `storage_bench.rs`,
   and the `#[ignore]`-gated `neo4j_smoke.rs` / `neo4j_write_smoke.rs`. They compile
-  into **one** binary via `tests/all.rs` — a new file there needs a `mod` line in
+  into **one** binary via `tests/integration.rs` — a new file there needs a `mod` line in
   that harness or it is silently not built. See its module comment for why.
 - **Run these tests after every code change in the native folder**
 - If adding new functionality, add corresponding test cases to the test files
@@ -155,25 +155,39 @@ tests:
 
 ```bash
 cargo check --bins                 # 0.2s warm — does it compile? use this while editing
-cargo nextest run --bin ug         # only the CLI/serve/mcp/tour/project tests
-cargo nextest run --test all       # only the integration tests
+cargo nextest run --lib            # unit tests: CLI/serve/mcp/tour/project + the library
+cargo nextest run --test integration   # only the integration tests
 cargo nextest run -E 'test(/^search_test::/)'   # one former test file
 ```
 
-`--bin ug` matters more than it looks: `cli`, `serve`, `chat`, `tour`, and
-`project` are declared in `main.rs`, not `lib.rs`, so their tests live in the
-`ug` binary and no `--test` flag can reach them. **After any change under
-`src/vis/` (html/css/js)** the two that must pass are both in that binary:
+`--lib` covers more than the name suggests. `cli`, `serve`, `chat`, `tour`, and
+`project` are modules of the *library* (`src/main.rs` is a shim over
+`ultragraph::cli::run`), so their unit tests are in the lib harness and no
+`--test` flag reaches them. **After any change under `src/vis/` (html/css/js)**
+the two that must pass are both there:
 
 ```bash
-cargo nextest run --bin ug \
+cargo nextest run --lib \
   -E 'test(the_published_demo_page_is_not_stale) + test(the_solo_threshold_matches_the_renderer)'
 ```
 
 If you are on macOS and have not added your terminal's host app (VS Code,
 Ghostty, Terminal) to System Settings → Privacy & Security → Developer Tools,
 do that once — it exempts everything the app spawns from the Gatekeeper
-assessment that dominates the numbers above.
+assessment that dominates the numbers above. **Quit and relaunch the app after
+granting it**: TCC resolves against the responsible process, so an app that was
+already running keeps the pre-grant decision for every shell under it. The grant
+follows the app, not the directory — build from two terminals and both need it.
+
+`native/target/.metadata_never_index` keeps Spotlight out of the build tree.
+Without it `mds`/`mds_stores`/`corespotlightd` re-index every `.rcgu.o` object
+file cargo rewrites. `cargo clean` deletes the marker along with `target/`, so
+`touch native/target/.metadata_never_index` again afterwards.
+
+Do not bother shrinking the binaries to reduce scan time: `strip -S` on the test
+harness takes it from 58.3 MB to 56.5 MB. Only 3% is debug info — `debug =
+"line-tables-only"` plus `debug = false` for dependencies (see `Cargo.toml`)
+already squeezed that dry, and the rest is genuine statically linked code.
 
 ### Verification Checklist
 ```

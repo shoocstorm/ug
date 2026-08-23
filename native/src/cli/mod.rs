@@ -47,7 +47,7 @@ use crate::serve;
 /// Everything that has to happen before any subcommand sees an argument —
 /// the colour gate, `.env` loading, the global flags that no subcommand's
 /// parser should ever see as a positional — happens here, once.
-pub(crate) fn run() {
+pub fn run() {
     io::install_panic_hook();
 
     // Colour gate, resolved once before any command runs. `Render::Ansi`
