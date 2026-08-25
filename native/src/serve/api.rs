@@ -11,7 +11,7 @@ use ultragraph::{calculate_centrality as lib_centrality, detect_cycles as lib_de
 use super::encoding::asset_response;
 use super::nidx::build_binary_index;
 use super::registry::{ctx_indexed_source, resolve_ctx};
-use super::snapshot::{build_adj, build_slim_index, server_mode_bytes};
+use super::snapshot::{build_adj, build_slim_index, server_mode_bytes, SearchMemo};
 use super::*;
 use ultragraph::types::{GraphEdge, GraphNode};
 
@@ -363,7 +363,7 @@ pub(crate) fn render_stats(snap: &GraphSnapshot) -> String {
         "edges": snap.parsed.edges.len(),
         "node_types": node_types,
         "edge_types": edge_types,
-        "graph_bytes": snap.encoded.identity.len(),
+        "graph_bytes": snap.graph_bytes,
         // Indexer-side counts (files, lines, timing). Present in graph.json
         // all along; surfaced here so the UI can show what was scanned, not
         // just what ended up in the graph.
@@ -477,11 +477,11 @@ pub(crate) async fn api_edges(
 
     for ei in edge_idx {
         let e = &snap.parsed.edges[ei as usize];
-        let (Some(&si), Some(&ti)) = (adj.id_to_idx.get(&e.source), adj.id_to_idx.get(&e.target))
-        else {
+        // Endpoints resolved once when the index was built, not hashed again
+        // per edge — a hub click asks about 8,680 of them.
+        let (Some(si), Some(ti)) = (adj.src_of(ei), adj.tgt_of(ei)) else {
             continue;
         };
-        let (si, ti) = (si as u32, ti as u32);
         if induced && !(wanted.contains(&si) && wanted.contains(&ti)) {
             continue;
         }
@@ -597,6 +597,16 @@ pub(crate) struct SearchParams {
     q: Option<String>,
     types: Option<String>,
     limit: Option<usize>,
+    /// `fields=id` trims each hit to what the page actually reads.
+    ///
+    /// The default shape is the whole `GraphNode` — metrics, signature,
+    /// docstring, imports, calls, annotations — which is what the endpoint was
+    /// built for and what a hand-driven caller still wants. The search box
+    /// reads two things per hit: the id, to resolve through the node store,
+    /// and whether the node has any boundaries. On a large graph that is
+    /// 133 KB serialised per keystroke against ~30 KB of answer. See P10.9 in
+    /// docs/dev/PERF-TUNING-JOURNEY.md.
+    fields: Option<String>,
 }
 
 /// Nodes returned by `/api/graph/search` when the caller does not say.
@@ -673,8 +683,41 @@ pub(crate) async fn api_search(
     // answer from "the best 200". The key is the one the box has always
     // sorted by: where the needle appears in the name, then the shorter name.
     // A match on the id or the docstring only sorts after every name match.
+    //
+    // Scanned over the previous needle's matches when this one extends it,
+    // rather than over every node — see [`GraphSnapshot::search_memo`]. The
+    // candidate set is the only thing that changes: every node it yields runs
+    // through the identical filter, match and rank below, so the answer is the
+    // same set in the same order.
+    let narrowed: Option<Arc<Vec<u32>>> = if needle.is_empty() {
+        None
+    } else {
+        snap.search_memo
+            .lock()
+            .ok()
+            .and_then(|g| match g.as_ref() {
+                Some(m) if !m.needle.is_empty() && needle.starts_with(&m.needle) => {
+                    Some(Arc::clone(&m.hits))
+                }
+                _ => None,
+            })
+    };
+
+    // Every node examined that matched the needle, in graph order — what the
+    // *next* keystroke narrows to. Recorded before the type filter, which is
+    // not part of the memo's key.
+    let mut hits: Vec<u32> = Vec::new();
     let mut ranked: Vec<(usize, usize, usize)> = Vec::new();
-    for (i, n) in snap.parsed.nodes.iter().enumerate() {
+
+    let candidates: Box<dyn Iterator<Item = (usize, &GraphNode)>> = match &narrowed {
+        Some(prev) => Box::new(
+            prev.iter()
+                .map(|&i| (i as usize, &snap.parsed.nodes[i as usize])),
+        ),
+        None => Box::new(snap.parsed.nodes.iter().enumerate()),
+    };
+
+    for (i, n) in candidates {
         if let Some(types) = &type_filter {
             // `eq_ignore_ascii_case` against the static name, rather than
             // allocating a lowercased `String` per node per request. The
@@ -705,8 +748,23 @@ pub(crate) async fn api_search(
             if !name_match && !id_match && !doc_match {
                 continue;
             }
+            hits.push(i as u32);
         }
         ranked.push((rank, n.name.len(), i));
+    }
+
+    // Only an *unfiltered* request may record the memo. The type filter runs
+    // before the match above, so a filtered request never even tests the nodes
+    // its `?types=` excluded — `hits` is a subset of the needle's true matches,
+    // and storing it would silently under-answer the next request that omits
+    // the filter. Reading is always safe: what is stored is always unfiltered.
+    if !needle.is_empty() && type_filter.is_none() {
+        if let Ok(mut g) = snap.search_memo.lock() {
+            *g = Some(SearchMemo {
+                needle: needle.clone(),
+                hits: Arc::new(hits),
+            });
+        }
     }
 
     let count = ranked.len();
@@ -716,13 +774,29 @@ pub(crate) async fn api_search(
         .map(|&(_, _, i)| &snap.parsed.nodes[i])
         .collect();
 
-    let body = serde_json::json!({
-        "count": count,
-        "returned": matched.len(),
-        "truncated": count > matched.len(),
-        "limit": limit,
-        "nodes": matched,
-    });
+    // Columnar when trimmed, matching `/api/graph/edges` — parallel arrays
+    // rather than 200 objects with one field each.
+    let body = if params.fields.as_deref() == Some("id") {
+        serde_json::json!({
+            "count": count,
+            "returned": matched.len(),
+            "truncated": count > matched.len(),
+            "limit": limit,
+            "ids": matched.iter().map(|n| &n.id).collect::<Vec<_>>(),
+            "boundary": matched
+                .iter()
+                .map(|n| !n.boundaries.is_empty())
+                .collect::<Vec<_>>(),
+        })
+    } else {
+        serde_json::json!({
+            "count": count,
+            "returned": matched.len(),
+            "truncated": count > matched.len(),
+            "limit": limit,
+            "nodes": matched,
+        })
+    };
     ok_json(body.to_string())
 }
 
@@ -762,8 +836,8 @@ pub(crate) async fn api_traverse(
         if d == k {
             continue;
         }
-        for &ei in &adj.out[idx] {
-            let Some(&nb) = adj.id_to_idx.get(&snap.parsed.edges[ei as usize].target) else {
+        for ei in adj.outgoing(idx) {
+            let Some(nb) = adj.tgt_of(ei).map(|t| t as usize) else {
                 continue;
             };
             if visited.insert(nb) {
@@ -786,7 +860,7 @@ pub(crate) async fn api_traverse(
         .filter(|&ei| {
             let e = &snap.parsed.edges[ei as usize];
             matches!(
-                (adj.id_to_idx.get(&e.source), adj.id_to_idx.get(&e.target)),
+                (adj.id_to_idx.get(&*e.source), adj.id_to_idx.get(&*e.target)),
                 (Some(si), Some(ti)) if visited.contains(si) && visited.contains(ti)
             )
         })
@@ -845,8 +919,8 @@ pub(crate) async fn api_path(
             found = true;
             break;
         }
-        for &ei in &adj.out[cur] {
-            let Some(&nb) = adj.id_to_idx.get(&snap.parsed.edges[ei as usize].target) else {
+        for ei in adj.outgoing(cur) {
+            let Some(nb) = adj.tgt_of(ei).map(|t| t as usize) else {
                 continue;
             };
             if !visited[nb] {
@@ -1125,7 +1199,7 @@ pub(crate) async fn api_capabilities(State(state): State<ServeState>) -> Respons
     // exactly what a static host answers, and why the published demo needs no
     // shim change to keep working.
     let snap = state.snapshot();
-    let graph_bytes = snap.encoded.identity.len();
+    let graph_bytes = snap.graph_bytes;
     let graph_info = serde_json::json!({
         "mode": state.graph_mode.resolve(graph_bytes, server_mode_bytes()),
         "bytes": graph_bytes,

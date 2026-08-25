@@ -92,8 +92,8 @@ fn synthetic_graph_json() -> String {
         },
     ];
     let edges: Vec<GraphEdge> = vec![GraphEdge {
-        source: "file:src/handler.ts".to_string(),
-        target: "function:loadConfig".to_string(),
+        source: "file:src/handler.ts".into(),
+        target: "function:loadConfig".into(),
         edge_type: GraphEdgeType::Contains,
     }];
     let graph = GraphData {

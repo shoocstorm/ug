@@ -51,8 +51,8 @@ fn sample_graph() -> GraphData {
         ..Default::default()
     };
     let edge = |source: &str, target: &str, edge_type: GraphEdgeType| GraphEdge {
-        source: source.to_string(),
-        target: target.to_string(),
+        source: source.into(),
+        target: target.into(),
         edge_type,
     };
 
@@ -491,6 +491,34 @@ async fn graph_json_round_trips_through_the_encoded_asset() {
     assert_eq!(status, StatusCode::OK);
     let parsed: GraphData = serde_json::from_str(&body).expect("served graph is valid JSON");
     assert_eq!(parsed.nodes.len(), 3);
+}
+
+/// Above the server-mode cutoff the bytes are not retained (P10.5), so
+/// `/graph.json` has to re-read the file. It must still answer, and answer
+/// with exactly what is on disk — the page does not ask for this, but `?gm=local`
+/// and a hand-driven caller both still can.
+#[tokio::test]
+async fn graph_json_is_served_from_disk_when_the_buffer_is_not_retained() {
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+    // Force the un-retained path by putting the server-mode cutoff below this
+    // fixture, so `load_snapshot` drops the bytes exactly as it does on a
+    // real 330 MB graph.
+    std::env::set_var("UG_SERVE_GRAPH_BYTES", "1");
+    let app = router_with_mode(&tmp, "from-disk", &sample_graph(), GraphModePolicy::Server).await;
+    std::env::remove_var("UG_SERVE_GRAPH_BYTES");
+
+    let (status, body) = get(&app, "/graph.json").await;
+    assert_eq!(status, StatusCode::OK);
+
+    let on_disk =
+        std::fs::read_to_string(tmp.path().join("ug_home").join("from-disk").join("graph.json"))
+            .unwrap();
+    assert_eq!(body, on_disk, "served bytes must match the file");
+
+    // And it is stable across repeats — a re-read must not be a one-shot.
+    let (_, again) = get(&app, "/graph.json").await;
+    assert_eq!(again, on_disk);
 }
 
 #[tokio::test]
@@ -1200,6 +1228,103 @@ async fn search_limit_is_capped() {
     assert_eq!(status, StatusCode::OK);
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(v["limit"], serde_json::json!(5000), "limit is clamped");
+}
+
+// ---------- P10.2: prefix-narrowed search ----------
+
+/// The prefix memo changes which nodes are *examined*, never which ones
+/// match. Every prefix of a query, typed in order, must report exactly the
+/// count a cold snapshot would — so this asserts the whole chain against a
+/// fresh server per query.
+#[tokio::test]
+async fn search_prefix_chain_matches_a_cold_snapshot() {
+    let _guard = ENV_GUARD.lock().await;
+    let queries = ["a", "al", "alp", "alph", "alpha"];
+
+    // Cold: one server per query, so no memo can exist.
+    let mut cold = Vec::new();
+    for q in queries {
+        let tmp = TempDir::new().unwrap();
+        let app = router_for(&tmp, "search-cold", &sample_graph()).await;
+        let (_, body) = get(&app, &format!("/api/graph/search?q={q}")).await;
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        cold.push((v["count"].clone(), v["nodes"].clone()));
+    }
+
+    // Warm: one server, queries typed in order, each narrowing from the last.
+    let tmp = TempDir::new().unwrap();
+    let app = router_for(&tmp, "search-warm", &sample_graph()).await;
+    for (i, q) in queries.iter().enumerate() {
+        let (_, body) = get(&app, &format!("/api/graph/search?q={q}")).await;
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["count"], cold[i].0, "count for {q:?} after narrowing");
+        assert_eq!(v["nodes"], cold[i].1, "nodes for {q:?} after narrowing");
+    }
+    assert!(
+        cold[0].0.as_u64().unwrap() >= cold[4].0.as_u64().unwrap(),
+        "the fixture must actually narrow for this test to mean anything"
+    );
+}
+
+/// Typed backwards — deleting characters — the memo must decline to narrow.
+/// `alp` does not start with `alpha`, so the shorter query has to rescan.
+#[tokio::test]
+async fn search_narrows_only_when_the_needle_extends_the_memo() {
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+    let app = router_for(&tmp, "search-reverse", &sample_graph()).await;
+
+    let (_, long) = get(&app, "/api/graph/search?q=alpha").await;
+    let long: serde_json::Value = serde_json::from_str(&long).unwrap();
+    // Now ask for a *shorter* needle, which matches at least as much.
+    let (_, short) = get(&app, "/api/graph/search?q=a").await;
+    let short: serde_json::Value = serde_json::from_str(&short).unwrap();
+
+    assert!(
+        short["count"].as_u64().unwrap() >= long["count"].as_u64().unwrap(),
+        "a shorter needle cannot match less: {} then {}",
+        long["count"],
+        short["count"]
+    );
+
+    // And the un-narrowed answer is the cold one.
+    let tmp2 = TempDir::new().unwrap();
+    let cold = router_for(&tmp2, "search-reverse-cold", &sample_graph()).await;
+    let (_, c) = get(&cold, "/api/graph/search?q=a").await;
+    let c: serde_json::Value = serde_json::from_str(&c).unwrap();
+    assert_eq!(short["count"], c["count"]);
+    assert_eq!(short["nodes"], c["nodes"]);
+}
+
+/// A `?types=`-filtered request never tests the nodes its filter excluded, so
+/// its match list is a subset of the needle's true matches. Recording that
+/// under the bare needle would under-answer the next request that omits the
+/// filter — this pins that it does not.
+#[tokio::test]
+async fn search_type_filter_does_not_poison_the_memo() {
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+    let app = router_for(&tmp, "search-memo-types", &sample_graph()).await;
+
+    // Unfiltered answer, from a cold snapshot.
+    let tmp2 = TempDir::new().unwrap();
+    let cold = router_for(&tmp2, "search-memo-types-cold", &sample_graph()).await;
+    let (_, expected) = get(&cold, "/api/graph/search?q=a").await;
+    let expected: serde_json::Value = serde_json::from_str(&expected).unwrap();
+
+    // A filtered request first — it must not become the memo for "a".
+    let (_, filtered) = get(&app, "/api/graph/search?q=a&types=Function").await;
+    let filtered: serde_json::Value = serde_json::from_str(&filtered).unwrap();
+    assert!(
+        filtered["count"].as_u64().unwrap() < expected["count"].as_u64().unwrap(),
+        "the filter must actually exclude something for this test to mean anything"
+    );
+
+    // …then the same needle without the filter.
+    let (_, after) = get(&app, "/api/graph/search?q=a").await;
+    let after: serde_json::Value = serde_json::from_str(&after).unwrap();
+    assert_eq!(after["count"], expected["count"], "filtered request poisoned the memo");
+    assert_eq!(after["nodes"], expected["nodes"]);
 }
 
 /// The type filter still works, and still matches case-insensitively now that

@@ -524,8 +524,8 @@ fn build_edge_rows(graph: &GraphData) -> Vec<EdgeRow> {
             let id = format!("{}|{}|{}", e.source, edge_type, e.target);
             EdgeRow {
                 id,
-                source: e.source.clone(),
-                target: e.target.clone(),
+                source: e.source.to_string(),
+                target: e.target.to_string(),
                 edge_type,
                 properties: String::new(),
             }

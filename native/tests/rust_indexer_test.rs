@@ -471,8 +471,8 @@ pub trait C { fn m(&self); }
             .unwrap_or_else(|| panic!("symbol node {} missing", sym_name));
         let has_contains = graph.edges.iter().any(|e| {
             matches!(e.edge_type, GraphEdgeType::Contains)
-                && e.source == file_node.id
-                && e.target == sym_node.id
+                && &*e.source == file_node.id.as_str()
+                && &*e.target == sym_node.id.as_str()
         });
         assert!(
             has_contains,

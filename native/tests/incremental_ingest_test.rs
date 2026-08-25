@@ -111,8 +111,8 @@ fn sample_graph() -> GraphData {
             node("function:c", "gamma", Some("does gamma things"), 40),
         ],
         vec![GraphEdge {
-            source: "function:a".to_string(),
-            target: "function:b".to_string(),
+            source: "function:a".into(),
+            target: "function:b".into(),
             edge_type: GraphEdgeType::Calls,
         }],
     )
@@ -232,8 +232,8 @@ async fn new_edge_re_embeds_both_endpoints() {
     // `build_node_text` folds in neighbour names, so adding an edge
     // changes the text on both ends — and only on both ends.
     g.edges.push(GraphEdge {
-        source: "function:b".to_string(),
-        target: "function:c".to_string(),
+        source: "function:b".into(),
+        target: "function:c".into(),
         edge_type: GraphEdgeType::Calls,
     });
     let texts = texts_for(&g);
@@ -340,8 +340,8 @@ async fn planning_warms_the_id_cache_for_skipped_nodes() {
             let edge_type = format!("{:?}", e.edge_type);
             ultragraph::storage::db::EdgeRow {
                 id: format!("{}|{}|{}", e.source, edge_type, e.target),
-                source: e.source.clone(),
-                target: e.target.clone(),
+                source: e.source.to_string(),
+                target: e.target.to_string(),
                 edge_type,
                 properties: String::new(),
             }

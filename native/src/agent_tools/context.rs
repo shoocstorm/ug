@@ -417,13 +417,13 @@ pub fn context(graph: &GraphData, src: SourceCtx, p: &ContextParams) -> ContextR
         let mut seen_ids: Vec<&str> = vec![target_id.as_str()];
         for e in &graph.edges {
             let et = edge_type_str(&e.edge_type);
-            let other = if e.source == target_id {
-                e.target.as_str()
-            } else if e.target == target_id {
+            let other = if &*e.source == target_id.as_str() {
+                &*e.target
+            } else if &*e.target == target_id.as_str() {
                 // Inbound edges are the callers' business, except that a
                 // Concept pointing *at* this symbol is documentation of it —
                 // which is the direction doc links actually run.
-                e.source.as_str()
+                &*e.source
             } else {
                 continue;
             };
@@ -436,7 +436,7 @@ pub fn context(graph: &GraphData, src: SourceCtx, p: &ContextParams) -> ContextR
             if matches!(node.node_type, GraphNodeType::Concept) {
                 seen_ids.push(node.id.as_str());
                 docs.push((node, et));
-            } else if e.source == target_id
+            } else if &*e.source == target_id.as_str()
                 // `Contains` is structure, not dependence: the file that holds
                 // a function is not something the function relies on.
                 && !matches!(e.edge_type, GraphEdgeType::Contains)

@@ -46,8 +46,8 @@ fn sample_node(id: &str, name: &str, kind: &str, seed: f32) -> NodeRow {
 fn sample_edge(src: &str, tgt: &str, kind: &str) -> EdgeRow {
     EdgeRow {
         id: format!("{}|{}|{}", src, kind, tgt),
-        source: src.to_string(),
-        target: tgt.to_string(),
+        source: (*src).into(),
+        target: (*tgt).into(),
         edge_type: kind.to_string(),
         properties: String::new(),
     }

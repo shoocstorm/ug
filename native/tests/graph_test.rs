@@ -637,7 +637,7 @@ fn a_handler_passed_as_a_value_gets_a_references_edge() {
 
     for target in ["saveSettings", "makeNode"] {
         let has_edge = graph.edges.iter().any(|e| {
-            e.edge_type == GraphEdgeType::References && e.target == by_name(target)
+            e.edge_type == GraphEdgeType::References && &*e.target == by_name(target).as_str()
         });
         assert!(has_edge, "{target} passed as a value should get a References edge");
     }
@@ -695,7 +695,7 @@ fn a_rust_route_handler_passed_as_a_value_gets_a_references_edge() {
         graph
             .edges
             .iter()
-            .any(|e| e.edge_type == GraphEdgeType::References && e.target == api_chat),
+            .any(|e| e.edge_type == GraphEdgeType::References && &*e.target == api_chat.as_str()),
         "api_chat passed as a value should get a References edge"
     );
 }

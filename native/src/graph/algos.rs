@@ -47,8 +47,8 @@ impl<'a> EdgeAdj<'a> {
         let mut inc_lists: Vec<Vec<u32>> = vec![Vec::new(); n];
         for (ei, e) in graph.edges.iter().enumerate() {
             let (Some(&sx), Some(&tx)) = (
-                id_to_idx.get(e.source.as_str()),
-                id_to_idx.get(e.target.as_str()),
+                id_to_idx.get(&*e.source),
+                id_to_idx.get(&*e.target),
             ) else {
                 // An edge naming something outside the node set — dropped,
                 // exactly as `build_di_graph` dropped it.
@@ -225,8 +225,8 @@ pub fn k_hop_bfs(graph: &GraphData, start_node_id: &str, k: u32) -> BfsResult {
             let e = &graph.edges[ei as usize];
             matches!(
                 (
-                    adj.id_to_idx.get(e.source.as_str()),
-                    adj.id_to_idx.get(e.target.as_str()),
+                    adj.id_to_idx.get(&*e.source),
+                    adj.id_to_idx.get(&*e.target),
                 ),
                 (Some(&si), Some(&ti))
                     if dist[si as usize].is_some() && dist[ti as usize].is_some()
@@ -264,8 +264,8 @@ fn build_di_graph(graph: &GraphData) -> (DiGraph<(), ()>, HashMap<String, NodeIn
 
     for edge in &graph.edges {
         if let (Some(&src_idx), Some(&tgt_idx)) = (
-            index_map.get(&edge.source),
-            index_map.get(&edge.target),
+            index_map.get(&*edge.source),
+            index_map.get(&*edge.target),
         ) {
             di_graph.add_edge(src_idx, tgt_idx, ());
         }
@@ -283,11 +283,15 @@ pub fn filter_edges_by_type(graph_json: String, edge_types: Vec<String>) -> Stri
     let filtered: Vec<GraphEdge> = graph
         .edges
         .iter()
+        // `as_str()` against the static name, and the requested types
+        // lowercased once by the caller above — this allocated two `String`s
+        // per (edge × requested type), which on a large graph is millions of
+        // allocations to compare a handful of fixed names. The same fix P3.3
+        // made to `/api/graph/stats`. See P10.10 in
+        // docs/dev/PERF-TUNING-JOURNEY.md.
         .filter(|e| {
-            edge_types.iter().any(|t| {
-                let et_str = format!("{:?}", e.edge_type);
-                et_str.to_lowercase() == t.to_lowercase()
-            })
+            let et = e.edge_type.as_str();
+            edge_types.iter().any(|t| t.eq_ignore_ascii_case(et))
         })
         .cloned()
         .collect();
@@ -325,8 +329,10 @@ pub fn graph_keyword_search(
         .iter()
         .filter(|n| {
             if let Some(types) = &type_filter {
-                let nt = format!("{:?}", n.node_type).to_lowercase();
-                if !types.contains(&nt) {
+                // As in `filter_edges_by_type`: the static name, not a
+                // `Debug`-formatted clone per node.
+                let nt = n.node_type.as_str();
+                if !types.iter().any(|t| t.eq_ignore_ascii_case(nt)) {
                     return false;
                 }
             }
@@ -379,8 +385,8 @@ impl Csr {
         let mut lists: Vec<Vec<u32>> = vec![Vec::new(); n];
         for e in &graph.edges {
             if let (Some(&s), Some(&t)) = (
-                id_to_idx.get(e.source.as_str()),
-                id_to_idx.get(e.target.as_str()),
+                id_to_idx.get(&*e.source),
+                id_to_idx.get(&*e.target),
             ) {
                 lists[s as usize].push(t);
             }
@@ -523,10 +529,10 @@ pub fn calculate_centrality(graph: &GraphData) -> CentralityResult {
     // Degree: both endpoints of every edge whose endpoints both resolve.
     let mut degree: Vec<f64> = vec![0.0; n];
     for e in &graph.edges {
-        if let Some(&s) = id_to_idx.get(e.source.as_str()) {
+        if let Some(&s) = id_to_idx.get(&*e.source) {
             degree[s as usize] += 1.0;
         }
-        if let Some(&t) = id_to_idx.get(e.target.as_str()) {
+        if let Some(&t) = id_to_idx.get(&*e.target) {
             degree[t as usize] += 1.0;
         }
     }

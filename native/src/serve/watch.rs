@@ -55,7 +55,7 @@ pub(crate) async fn refresh_snapshot_if_stale(ctx: &Arc<ProjectContext>) {
     let loaded = tokio::task::spawn_blocking(move || load_snapshot(&path)).await;
     match loaded {
         Ok(Ok(snap)) => {
-            let bytes = snap.encoded.identity.len();
+            let bytes = snap.graph_bytes;
             let nodes = snap.parsed.nodes.len();
             let edges = snap.parsed.edges.len();
             if let Ok(mut w) = ctx.graph.write() {

@@ -58,7 +58,9 @@ tower = { version = "0.4", features = ["util"] }
 rayon = "1.10"
 ignore = "0.4"
 blake3 = "1"
-serde = { version = "1", features = ["derive"] }
+# `rc` so `GraphEdge`'s endpoints can be `Arc<str>`: 745k edges name 161k
+# distinct nodes, and interning them at parse time is ~200 MB on a large repo.
+serde = { version = "1", features = ["derive", "rc"] }
 # `preserve_order` keeps existing keys in place when we read → mutate → write
 # an MCP client's JSON config (`ug mcp install`), instead of alphabetizing it.
 serde_json = { version = "1", features = ["preserve_order"] }
@@ -87,6 +89,10 @@ sha2 = "0.10"
 hex = "0.4"
 axum = "0.7"
 tower-http = { version = "0.5", features = ["compression-br", "compression-gzip", "trace", "cors", "limit"] }
+# `graph.json` is memory-mapped rather than read, so a 330 MB index parses at
+# `from_slice` speed without the process ever allocating a 330 MB buffer for
+# bytes it is only going to walk once. Already in the tree via fastembed.
+memmap2 = "0.9"
 flate2 = "1"
 brotli = "8"
 tracing = "0.1"

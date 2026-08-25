@@ -187,8 +187,8 @@ async fn seeded_store(tmp: &TempDir) -> Db {
         .iter()
         .map(|(s, t, kind)| EdgeRow {
             id: format!("{s}->{t}"),
-            source: s.to_string(),
-            target: t.to_string(),
+            source: (*s).into(),
+            target: (*t).into(),
             edge_type: kind.to_string(),
             properties: String::new(),
         })

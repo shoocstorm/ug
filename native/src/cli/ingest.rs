@@ -217,8 +217,8 @@ async fn ingest_graph_with_progress(
             let id = format!("{}|{}|{}", e.source, edge_type, e.target);
             storage::EdgeRow {
                 id,
-                source: e.source.clone(),
-                target: e.target.clone(),
+                source: e.source.to_string(),
+                target: e.target.to_string(),
                 edge_type,
                 properties: String::new(),
             }
@@ -436,8 +436,8 @@ async fn ingest_graph_multi_with_progress(
             let id = format!("{}|{}|{}", e.source, edge_type, e.target);
             storage::EdgeRow {
                 id,
-                source: e.source.clone(),
-                target: e.target.clone(),
+                source: e.source.to_string(),
+                target: e.target.to_string(),
                 edge_type,
                 properties: String::new(),
             }

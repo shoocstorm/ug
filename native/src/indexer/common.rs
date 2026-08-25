@@ -69,6 +69,20 @@ pub fn is_build_output_dir(path: &Path) -> bool {
     descriptors.iter().any(|d| parent.join(d).exists())
 }
 
+/// A node's source text, **borrowed** from `source`.
+///
+/// [`get_node_text`] copies; use this wherever the text is only read. The
+/// difference matters in the per-symbol callers, where the copy is the whole
+/// body of the function being described.
+pub fn node_str<'a>(node: Node, source: &'a [u8]) -> Option<&'a str> {
+    let (start, end) = (node.start_byte(), node.end_byte());
+    if start < end {
+        std::str::from_utf8(source.get(start..end)?).ok()
+    } else {
+        None
+    }
+}
+
 /// Read a node's source text as UTF-8, returning `None` if the byte range is
 /// invalid or the slice is not valid UTF-8.
 pub fn get_node_text(node: Option<Node>, source: &[u8]) -> Option<String> {
@@ -306,9 +320,12 @@ pub fn extract_return_type(node: &Node, source: &[u8]) -> Option<String> {
         }
     }
 
-    let node_text = get_node_text(Some(*node), source)?;
-    let return_re = regex::Regex::new(r"\)\s*:\s*([^\s{]+)").ok()?;
-    let cap = return_re.captures(&node_text)?;
+    // Borrowed, and the pattern compiled once. This ran per *function*: it
+    // copied the entire body of every function in the repo onto the heap so a
+    // regex could look at its first line, and compiled that regex each time.
+    // See P10.8 in docs/dev/PERF-TUNING-JOURNEY.md.
+    let node_text = node_str(*node, source)?;
+    let cap = return_type_regex().captures(node_text)?;
     let return_match = cap.get(1)?;
     let return_type = return_match.as_str().to_string();
     if return_type.is_empty() {
@@ -326,6 +343,25 @@ pub fn extract_return_type(node: &Node, source: &[u8]) -> Option<String> {
 // it can, the type the call dispatches on; see `indexer/scope.rs` and each
 // language module's `collect_calls`.
 
+/// `): T` — the TypeScript-flavoured return annotation
+/// [`extract_return_type`] falls back to. Compiled once: that function runs
+/// per symbol, not per file.
+fn return_type_regex() -> &'static regex::Regex {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| {
+        regex::Regex::new(r"\)\s*:\s*([^\s{]+)").expect("return-type pattern is a literal")
+    })
+}
+
+/// A loose `name: type` reader for [`extract_params_from_signature`].
+/// Compiled once, for the same reason.
+fn signature_param_regex() -> &'static regex::Regex {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| {
+        regex::Regex::new(r"(\w+)\s*(?::\s*([^\s,=]+))?").expect("param pattern is a literal")
+    })
+}
+
 /// Regex-based parameter extraction used as a fallback when the AST didn't
 /// yield any parameters (e.g. a malformed file or a grammar quirk). Reads the
 /// first `( ... )` group from the function source.
@@ -342,12 +378,7 @@ pub fn extract_params_from_signature(node_text: &str) -> Vec<Param> {
     };
     let args = &node_text[open + 1..open + close];
 
-    let re = match regex::Regex::new(r"(\w+)\s*(?::\s*([^\s,=]+))?") {
-        Ok(r) => r,
-        Err(_) => return params,
-    };
-
-    for cap in re.captures_iter(args.trim()) {
+    for cap in signature_param_regex().captures_iter(args.trim()) {
         if let Some(name_match) = cap.get(1) {
             let name = name_match.as_str().to_string();
             // Skip language keywords that the loose regex would otherwise

@@ -229,9 +229,9 @@ fn walk_usages(graph: &GraphData, p: &FindUsagesParams) -> FindUsagesResult {
         let et = edge_type_str(&e.edge_type);
         if edge_types.contains(&et.to_lowercase()) {
             inbound
-                .entry(e.target.as_str())
+                .entry(&*e.target)
                 .or_default()
-                .push((e.source.as_str(), et));
+                .push((&*e.source, et));
         }
     }
 

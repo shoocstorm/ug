@@ -5949,6 +5949,7 @@ dependencies = [
  "futures",
  "hex",
  "ignore",
+ "memmap2",
  "neo4rs",
  "overgraph",
  "pdf-extract",

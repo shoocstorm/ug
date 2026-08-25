@@ -41,11 +41,12 @@ mod serve;
 mod tour;
 
 pub use graph::{
-    build_graph, calculate_centrality, detect_cycles, filter_edges_by_type, find_shortest_path,
-    graph_keyword_search, k_hop_bfs, BfsResult, CentralityResult, CycleResult,
-    FilteredEdgesResult, PathResult, SearchResult,
+    build_graph, build_graph_from_index, calculate_centrality, detect_cycles,
+    filter_edges_by_type, find_shortest_path, graph_keyword_search, k_hop_bfs, BfsResult,
+    CentralityResult, CycleResult, FilteredEdgesResult, PathResult, SearchResult,
 };
-pub use indexer::{index, index_with_cache};
+pub use indexer::{index, index_typed, index_with_cache, index_with_cache_typed};
+pub(crate) use indexer::write_json_file_checked;
 // `C_*`, the `color` gate and `Render` used to live here; keeping the glob
 // means `ultragraph::C_CYAN` / `ultragraph::color::set` still resolve.
 pub use style::*;

@@ -59,11 +59,11 @@ pub fn graph_schema(graph: &GraphData, graph_path: &Path) -> GraphSchemaResult {
         let et = edge_type_str(&e.edge_type);
         *edge_counts.entry(et).or_insert(0) += 1;
         let st = by_id
-            .get(e.source.as_str())
+            .get(&*e.source)
             .map(|n| node_type_str(&n.node_type))
             .unwrap_or("?");
         let tt = by_id
-            .get(e.target.as_str())
+            .get(&*e.target)
             .map(|n| node_type_str(&n.node_type))
             .unwrap_or("?");
         *edge_shapes.entry((et, st, tt)).or_insert(0) += 1;

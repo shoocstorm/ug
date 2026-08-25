@@ -158,6 +158,30 @@ fn collect_annotated_attrs(node: Node, source: &[u8], out: &mut HashMap<String, 
     }
 }
 
+
+/// `from foo.bar import (a, b)` / `from foo import a, b as c`. Compiled once —
+/// this runs per file. See the call site for why the name lists are written
+/// the way they are.
+fn from_import_regex() -> &'static regex::Regex {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| {
+        regex::Regex::new(
+            r#"(?m)^[ \t]*from\s+(\.[^ ]+|[a-zA-Z_][a-zA-Z0-9_.]*)\s+import\s+(?:\(([^)]+)\)|([a-zA-Z_][a-zA-Z0-9_, \t]*))"#,
+        )
+        .expect("from-import pattern is a literal")
+    })
+}
+
+/// `import foo` / `import foo.bar`, anchored so it cannot re-match the tail
+/// of a `from … import …` line.
+fn plain_import_regex() -> &'static regex::Regex {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| {
+        regex::Regex::new(r#"(?m)^[ \t]*import\s+([a-zA-Z_][a-zA-Z0-9_.]*)"#)
+            .expect("import pattern is a literal")
+    })
+}
+
 /// Aggregate `from … import …` and bare `import …` statements by source path.
 fn extract_imports_via_regex(source: &[u8]) -> Vec<ImportInfo> {
     let source_str = match std::str::from_utf8(source) {
@@ -176,10 +200,8 @@ fn extract_imports_via_regex(source: &[u8]) -> Vec<ImportInfo> {
     // `def run` recorded an imported name of `"Store\n\n\ndef run"`. That was
     // invisible while imports only drew file-to-file edges; it is not
     // invisible now that they decide which `save` a call means.
-    if let Ok(re) = regex::Regex::new(
-        r#"(?m)^[ \t]*from\s+(\.[^ ]+|[a-zA-Z_][a-zA-Z0-9_.]*)\s+import\s+(?:\(([^)]+)\)|([a-zA-Z_][a-zA-Z0-9_, \t]*))"#,
-    ) {
-        for cap in re.captures_iter(source_str) {
+    {
+        for cap in from_import_regex().captures_iter(source_str) {
             let path = cap
                 .get(1)
                 .map(|m| m.as_str().to_string())
@@ -217,8 +239,8 @@ fn extract_imports_via_regex(source: &[u8]) -> Vec<ImportInfo> {
     // also produced `path: "Store"`, and the alias table then resolved
     // `Store` to `Store.Store`. The old `!path.contains("from")` guard could
     // never have caught it: it inspects the captured path, not the line.
-    if let Ok(re) = regex::Regex::new(r#"(?m)^[ \t]*import\s+([a-zA-Z_][a-zA-Z0-9_.]*)"#) {
-        for cap in re.captures_iter(source_str) {
+    {
+        for cap in plain_import_regex().captures_iter(source_str) {
             let path = cap
                 .get(1)
                 .map(|m| m.as_str().to_string())

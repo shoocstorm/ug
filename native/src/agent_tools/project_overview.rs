@@ -99,7 +99,7 @@ pub fn project_overview(
         // Contains is pure structure (folder→file→symbol); skipping it makes
         // inbound degree mean "how much code depends on this".
         if !matches!(e.edge_type, GraphEdgeType::Contains) {
-            *in_degree.entry(e.target.as_str()).or_insert(0) += 1;
+            *in_degree.entry(&*e.target).or_insert(0) += 1;
         }
     }
 

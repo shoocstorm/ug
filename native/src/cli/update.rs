@@ -26,9 +26,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use ultragraph::types::GraphData;
 use ultragraph::{
-    build_graph, index_with_cache, C_BOLD, C_CYAN, C_DIM, C_GREEN, C_RESET, C_YELLOW,
+    build_graph_from_index, C_BOLD, C_CYAN, C_DIM, C_GREEN, C_RESET, C_YELLOW,
 };
 
 use crate::project;
@@ -161,35 +160,37 @@ pub(crate) fn run_update(args: &[String]) {
         }
     );
 
+    // Typed end to end, and the tree written before the build so the index
+    // can be moved into it rather than cloned — same seam `ug gen` had; see
+    // P10.3 in docs/dev/PERF-TUNING-JOURNEY.md.
     let cache = resolve_gen_cache(args, &output_dir);
     let index_result = match cache {
-        Some(c) => index_with_cache(repo_root_str.clone(), c),
-        None => ultragraph::index(repo_root_str.clone()),
+        Some(c) => ultragraph::index_with_cache_typed(repo_root_str.clone(), c),
+        None => ultragraph::index_typed(repo_root_str.clone()),
     };
+
+    let tree_path = format!("{}/indexed-tree.json", output_dir);
+    if let Err(e) = ultragraph::write_json_file_checked(Path::new(&tree_path), &index_result) {
+        die(1, format!("failed to write {tree_path}: {e}"));
+    }
 
     let t = std::time::Instant::now();
     println!("{C_CYAN}▸{C_RESET} Building graph");
-    let graph_json = build_graph(index_result.clone());
+    let graph = build_graph_from_index(&index_result);
+    drop(index_result);
     println!("  {C_GREEN}✓ done{C_RESET} in {C_BOLD}{:?}{C_RESET}", t.elapsed());
 
-    let parsed: Option<GraphData> = serde_json::from_str(&graph_json).ok();
-    let (nodes_count, edges_count) = parsed
-        .as_ref()
-        .map(|g| (g.nodes.len(), g.edges.len()))
-        .unwrap_or((0, 0));
+    let (nodes_count, edges_count) = (graph.nodes.len(), graph.edges.len());
 
     // Persist the rebuilt outputs so the next command — `ug find_symbols`,
     // the server, `ug gen` — reads the refreshed graph.
     let graph_path = format!("{}/graph.json", output_dir);
-    fs::write(&graph_path, &graph_json)
-        .unwrap_or_else(|e| die(1, format!("failed to write {graph_path}: {e}")));
-    fs::write(format!("{}/indexed-tree.json", output_dir), &index_result)
-        .unwrap_or_else(|e| die(1, format!("failed to write {output_dir}/indexed-tree.json: {e}")));
+    if let Err(e) = ultragraph::write_json_file_checked(Path::new(&graph_path), &graph) {
+        die(1, format!("failed to write {graph_path}: {e}"));
+    }
     let mut new_meta = project::ProjectMeta::new(&name, &repo_root_str, nodes_count, edges_count)
         .carrying_pending_vectors(Path::new(&output_dir));
-    if let Some(g) = parsed.as_ref() {
-        new_meta = new_meta.with_graph_index(g);
-    }
+    new_meta = new_meta.with_graph_index(&graph);
     if let Err(e) = project::write_meta(Path::new(&output_dir), &new_meta) {
         eprintln!("⚠ failed to write project.json: {}", e);
     }
@@ -199,15 +200,11 @@ pub(crate) fn run_update(args: &[String]) {
     // actually landed, not what the parse produced.
     println!();
     for rel in &rel_targets {
-        let symbols = parsed
-            .as_ref()
-            .map(|g| {
-                g.nodes
-                    .iter()
-                    .filter(|n| n.file.as_deref() == Some(rel.as_str()))
-                    .count()
-            })
-            .unwrap_or(0);
+        let symbols = graph
+            .nodes
+            .iter()
+            .filter(|n| n.file.as_deref() == Some(rel.as_str()))
+            .count();
         if symbols == 0 && !repo_root.join(rel).exists() {
             println!("  {C_GREEN}✓{C_RESET} {:<50} deleted — dropped from the index", rel);
         } else if symbols == 0 {
@@ -240,7 +237,7 @@ pub(crate) fn run_update(args: &[String]) {
     }
 
     println!();
-    match run_gen_ingest(&graph_json, &db_path, args) {
+    match run_gen_ingest(&graph, &db_path, args) {
         Ok(out) => {
             if out.vectors_skipped > 0 {
                 println!(

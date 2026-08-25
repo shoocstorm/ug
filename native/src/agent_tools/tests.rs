@@ -32,8 +32,8 @@ fn node(
 
 fn edge(source: &str, target: &str, edge_type: GraphEdgeType) -> GraphEdge {
     GraphEdge {
-        source: source.to_string(),
-        target: target.to_string(),
+        source: source.into(),
+        target: target.into(),
         edge_type,
     }
 }

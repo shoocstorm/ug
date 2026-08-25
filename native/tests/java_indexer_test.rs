@@ -70,7 +70,7 @@ fn has_edge(graph: &GraphData, source: &str, target: &str, edge_type: GraphEdgeT
     graph
         .edges
         .iter()
-        .any(|e| e.source == s && e.target == t && e.edge_type == edge_type)
+        .any(|e| &*e.source == s.as_str() && &*e.target == t.as_str() && e.edge_type == edge_type)
 }
 
 /// Display names of everything `source` points at over `edge_type`.
@@ -84,8 +84,8 @@ fn targets(graph: &GraphData, source: &str, edge_type: GraphEdgeType) -> HashSet
     graph
         .edges
         .iter()
-        .filter(|e| e.source == s && e.edge_type == edge_type)
-        .filter_map(|e| by_id.get(e.target.as_str()).map(|n| n.to_string()))
+        .filter(|e| &*e.source == s.as_str() && e.edge_type == edge_type)
+        .filter_map(|e| by_id.get(&*e.target).map(|n| n.to_string()))
         .collect()
 }
 
@@ -234,7 +234,7 @@ fn an_import_of_a_type_that_is_not_in_the_repo_adds_no_edge() {
     let outgoing: Vec<&GraphEdgeType> = graph
         .edges
         .iter()
-        .filter(|e| e.source == file_id && e.edge_type != GraphEdgeType::Contains)
+        .filter(|e| &*e.source == file_id.as_str() && e.edge_type != GraphEdgeType::Contains)
         .map(|e| &e.edge_type)
         .collect();
     assert!(outgoing.is_empty(), "unexpected edges: {outgoing:?}");

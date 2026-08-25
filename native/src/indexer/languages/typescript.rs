@@ -219,6 +219,28 @@ fn annotated_type(node: &Node, source: &[u8]) -> Option<String> {
     (!bare.is_empty()).then(|| bare.to_string())
 }
 
+/// `import { a, b as c } from 'x'`, `import * as ns from 'x'`,
+/// `import x from 'y'`. Compiled once — this runs per file.
+fn import_regex() -> &'static regex::Regex {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| {
+        regex::Regex::new(
+            r#"import\s+(?:\{([^}]+)\}|\*\s+as\s+(\w+)|(\w+))\s+from\s+['"]([^'"]+)['"]"#,
+        )
+        .expect("import pattern is a literal")
+    })
+}
+
+/// `import type { X } from 'y'`. Overlaps [`import_regex`] intentionally:
+/// that one does not match the type-only form.
+fn type_import_regex() -> &'static regex::Regex {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| {
+        regex::Regex::new(r#"import\s+type\s+\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]"#)
+            .expect("type-import pattern is a literal")
+    })
+}
+
 /// Aggregate every `import` / `import type` statement in the file by source
 /// path. The two regexes overlap intentionally: the second catches the
 /// type-only form which the first won't match.
@@ -231,10 +253,8 @@ fn extract_imports_via_regex(source: &[u8]) -> Vec<ImportInfo> {
 
     // `import { a, b as c } from 'x'`, `import * as ns from 'x'`,
     // `import x from 'y'`.
-    if let Ok(re) = regex::Regex::new(
-        r#"import\s+(?:\{([^}]+)\}|\*\s+as\s+(\w+)|(\w+))\s+from\s+['"]([^'"]+)['"]"#,
-    ) {
-        for cap in re.captures_iter(source_str) {
+    {
+        for cap in import_regex().captures_iter(source_str) {
             let names = if let Some(matched) = cap.get(1) {
                 // Named imports: split the brace contents on commas.
                 matched
@@ -272,8 +292,8 @@ fn extract_imports_via_regex(source: &[u8]) -> Vec<ImportInfo> {
     }
 
     // `import type { X } from 'y'`.
-    if let Ok(re) = regex::Regex::new(r#"import\s+type\s+\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]"#) {
-        for cap in re.captures_iter(source_str) {
+    {
+        for cap in type_import_regex().captures_iter(source_str) {
             let names = cap
                 .get(1)
                 .map(|m| {

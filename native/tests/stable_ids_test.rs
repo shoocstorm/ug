@@ -143,8 +143,8 @@ fn edges_still_resolve_to_the_new_ids() {
     let ids: std::collections::HashSet<&str> = g.nodes.iter().map(|n| n.id.as_str()).collect();
     assert!(!g.edges.is_empty(), "fixture produced no edges");
     for e in &g.edges {
-        assert!(ids.contains(e.source.as_str()), "dangling source: {}", e.source);
-        assert!(ids.contains(e.target.as_str()), "dangling target: {}", e.target);
+        assert!(ids.contains(&*e.source), "dangling source: {}", e.source);
+        assert!(ids.contains(&*e.target), "dangling target: {}", e.target);
     }
 }
 

@@ -227,8 +227,8 @@ fn pdf_pages_become_concept_nodes_with_contains_edge_in_graph() {
     // Verify the structural edge from the file to its page exists.
     let has_contains = graph.edges.iter().any(|e| {
         e.edge_type == GraphEdgeType::Contains
-            && e.source == file_node.id
-            && e.target == concept_node.id
+            && &*e.source == file_node.id.as_str()
+            && &*e.target == concept_node.id.as_str()
     });
     assert!(
         has_contains,

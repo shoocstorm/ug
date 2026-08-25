@@ -49,8 +49,8 @@ fn make_node(i: usize) -> NodeRow {
 fn make_edge(src: usize, tgt: usize) -> EdgeRow {
     EdgeRow {
         id: format!("e:{}:{}", src, tgt),
-        source: format!("function:src/mod{}.ts:1:fn_{}", src / 10, src),
-        target: format!("function:src/mod{}.ts:1:fn_{}", tgt / 10, tgt),
+        source: format!("function:src/mod{}.ts:1:fn_{}", src / 10, src).into(),
+        target: format!("function:src/mod{}.ts:1:fn_{}", tgt / 10, tgt).into(),
         edge_type: "Calls".into(),
         properties: String::new(),
     }

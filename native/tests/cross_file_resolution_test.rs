@@ -62,8 +62,8 @@ fn targets(graph: &GraphData, source: &str, edge_type: GraphEdgeType) -> HashSet
     graph
         .edges
         .iter()
-        .filter(|e| e.source == src.id && e.edge_type == edge_type)
-        .filter_map(|e| by_id.get(e.target.as_str()).map(|s| s.to_string()))
+        .filter(|e| &*e.source == src.id.as_str() && e.edge_type == edge_type)
+        .filter_map(|e| by_id.get(&*e.target).map(|s| s.to_string()))
         .collect()
 }
 
@@ -327,8 +327,8 @@ fn rust_an_import_disambiguates_a_name_two_files_declare() {
     let landed: Vec<&str> = graph
         .edges
         .iter()
-        .filter(|e| e.source == run_node.id && e.edge_type == GraphEdgeType::Calls)
-        .map(|e| e.target.as_str())
+        .filter(|e| &*e.source == run_node.id.as_str() && e.edge_type == GraphEdgeType::Calls)
+        .map(|e| &*e.target)
         .collect();
     assert_eq!(
         landed,
@@ -402,8 +402,8 @@ impl Store for Mem {
         .find(|n| n.name == "src/store.rs")
         .expect("store.rs file node");
     assert!(
-        graph.edges.iter().any(|e| e.source == importer.id
-            && e.target == store_file.id
+        graph.edges.iter().any(|e| &*e.source == importer.id.as_str()
+            && &*e.target == store_file.id.as_str()
             && e.edge_type == GraphEdgeType::Imports),
         "a `use crate::store::Store` should link the two files"
     );
@@ -474,8 +474,8 @@ fn ts_a_named_import_resolves_the_call_to_that_module() {
     let landed: Vec<&str> = graph
         .edges
         .iter()
-        .filter(|e| e.source == run_node.id && e.edge_type == GraphEdgeType::Calls)
-        .map(|e| e.target.as_str())
+        .filter(|e| &*e.source == run_node.id.as_str() && e.edge_type == GraphEdgeType::Calls)
+        .map(|e| &*e.target)
         .collect();
     assert_eq!(landed, vec![util_helper.id.as_str()], "the import decides");
 }
@@ -595,8 +595,8 @@ fn py_a_from_import_resolves_the_call_to_that_module() {
     let landed: Vec<&str> = graph
         .edges
         .iter()
-        .filter(|e| e.source == run_node.id && e.edge_type == GraphEdgeType::Calls)
-        .map(|e| e.target.as_str())
+        .filter(|e| &*e.source == run_node.id.as_str() && e.edge_type == GraphEdgeType::Calls)
+        .map(|e| &*e.target)
         .collect();
     assert_eq!(landed, vec![util_helper.id.as_str()]);
 }
@@ -745,8 +745,8 @@ fn a_declared_package_becomes_a_node_its_importers_depend_on() {
         .find(|n| n.name == "src/main.ts")
         .expect("main.ts file node");
     assert!(
-        graph.edges.iter().any(|e| e.source == importer.id
-            && e.target == dep.id
+        graph.edges.iter().any(|e| &*e.source == importer.id.as_str()
+            && &*e.target == dep.id.as_str()
             && e.edge_type == GraphEdgeType::DependsOn),
         "the importing file depends on the package"
     );

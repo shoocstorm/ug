@@ -166,6 +166,52 @@ impl QualifiedIndex {
     }
 }
 
+/// The edge list under construction, plus the pool that keeps its endpoint
+/// ids from being allocated twice.
+///
+/// A large repo pushes 745,964 edges naming 161,725 distinct nodes, so roughly
+/// nine in ten pushes name an id some earlier edge already named. Interning
+/// *here*, as each edge is added, turns those into a hash lookup and a
+/// refcount bump instead of an allocate-and-copy — cheaper than the copy it
+/// replaces, and the duplicates never exist to be freed later. Interning
+/// afterwards does not work: by then every copy has been allocated, and
+/// dropping them frees memory the allocator does not return (measured: no
+/// change in peak, +1.6 s). See P10.4 in docs/dev/PERF-TUNING-JOURNEY.md.
+#[derive(Default)]
+struct EdgeSink {
+    edges: Vec<GraphEdge>,
+    pool: HashSet<std::sync::Arc<str>>,
+}
+
+impl EdgeSink {
+    fn intern(&mut self, s: &str) -> std::sync::Arc<str> {
+        if let Some(existing) = self.pool.get(s) {
+            return std::sync::Arc::clone(existing);
+        }
+        let a: std::sync::Arc<str> = std::sync::Arc::from(s);
+        self.pool.insert(std::sync::Arc::clone(&a));
+        a
+    }
+
+    fn add(&mut self, source: impl AsRef<str>, target: impl AsRef<str>, edge_type: GraphEdgeType) {
+        let source = self.intern(source.as_ref());
+        let target = self.intern(target.as_ref());
+        self.edges.push(GraphEdge {
+            source,
+            target,
+            edge_type,
+        });
+    }
+
+    fn len(&self) -> usize {
+        self.edges.len()
+    }
+
+    fn into_vec(self) -> Vec<GraphEdge> {
+        self.edges
+    }
+}
+
 /// The state the five build passes accumulate into.
 ///
 /// Grouped so each pass takes one `&mut` instead of seven, and destructured at
@@ -175,7 +221,7 @@ impl QualifiedIndex {
 #[derive(Default)]
 struct GraphAccum {
     nodes: Vec<GraphNode>,
-    edges: Vec<GraphEdge>,
+    edges: EdgeSink,
     /// Simple name -> every node id with that name. One name can exist in many
     /// files (a helper `parse` in three modules), so resolvers keep every match
     /// and prefer the one in the caller's own file.
@@ -202,7 +248,7 @@ struct FileIndexes {
 /// pass 3 resolves call sites against the `symbol_id_map` and `qualified`
 /// index that pass 2 fills, and pass 4 resolves imports against both those and
 /// the dependency nodes from pass 1. Each pass is otherwise self-contained.
-pub(super) fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData {
+pub fn build_graph_from_index(index_result: &crate::types::IndexResult) -> GraphData {
     let mut acc = GraphAccum::default();
     let (path_index, basename_index) = build_file_indexes(&index_result.files);
     let files = FileIndexes { path: path_index, basename: basename_index };
@@ -213,11 +259,11 @@ pub(super) fn build_graph_from_index(index_result: &crate::types::IndexResult) -
     resolve_call_edges(index_result, &mut acc);
     resolve_import_edges(index_result, &files, &dependency_ids, &mut acc);
 
-    dedupe_edges(&mut acc.edges);
+    dedupe_edges(&mut acc.edges.edges);
 
     GraphData {
         nodes: acc.nodes,
-        edges: acc.edges,
+        edges: acc.edges.into_vec(),
         stats: Some(index_result.stats.clone()),
         resolution: Some(acc.resolution),
     }
@@ -301,11 +347,7 @@ fn add_folder_nodes(
         });
 
         if let Some(pid) = parent_id {
-            edges.push(GraphEdge {
-                source: pid,
-                target: folder_id.clone(),
-                edge_type: GraphEdgeType::Contains,
-            });
+            edges.add(&pid, &folder_id, GraphEdgeType::Contains);
         }
 
         // Wire each immediate file under this folder. We resolve through
@@ -314,11 +356,7 @@ fn add_folder_nodes(
         // instead of leaving a dangling target.
         for child_file_path in &f.child_files {
             if let Some(file_id) = files.path.get(child_file_path) {
-                edges.push(GraphEdge {
-                    source: folder_id.clone(),
-                    target: file_id.clone(),
-                    edge_type: GraphEdgeType::Contains,
-                });
+                edges.add(&folder_id, &file_id, GraphEdgeType::Contains);
             }
         }
     }
@@ -568,16 +606,8 @@ fn add_file_and_symbol_nodes(index_result: &crate::types::IndexResult, acc: &mut
                         ..Default::default()
                     });
                 }
-                edges.push(GraphEdge {
-                    source: file_node_id.clone(),
-                    target: route_id.clone(),
-                    edge_type: GraphEdgeType::Contains,
-                });
-                edges.push(GraphEdge {
-                    source: route_id,
-                    target: sym_node_id.clone(),
-                    edge_type: GraphEdgeType::References,
-                });
+                edges.add(&file_node_id, &route_id, GraphEdgeType::Contains);
+                edges.add(&route_id, &sym_node_id, GraphEdgeType::References);
             }
 
             if let Some(level) = heading_level {
@@ -592,11 +622,7 @@ fn add_file_and_symbol_nodes(index_result: &crate::types::IndexResult, acc: &mut
                     .map(|(_, id)| id.clone())
                     .unwrap_or_else(|| file_node_id.clone());
 
-                edges.push(GraphEdge {
-                    source: parent_id,
-                    target: sym_node_id.clone(),
-                    edge_type: GraphEdgeType::Contains,
-                });
+                edges.add(&parent_id, &sym_node_id, GraphEdgeType::Contains);
 
                 heading_stack.push((level, sym_node_id.clone()));
                 // Heading text is intentionally kept out of `symbol_id_map`:
@@ -621,11 +647,7 @@ fn add_file_and_symbol_nodes(index_result: &crate::types::IndexResult, acc: &mut
                     }
                 }
 
-                edges.push(GraphEdge {
-                    source: file_node_id.clone(),
-                    target: sym_node_id.clone(),
-                    edge_type: GraphEdgeType::Contains,
-                });
+                edges.add(&file_node_id, &sym_node_id, GraphEdgeType::Contains);
 
                 // Members are additionally nested under the type that
                 // declares them. The file edge above is kept so every
@@ -634,11 +656,7 @@ fn add_file_and_symbol_nodes(index_result: &crate::types::IndexResult, acc: &mut
                 // makes "what is on this class" a single hop.
                 if let Some(owner_fqn) = &sym.owner {
                     if let Some(owner_id) = qualified.types.get(owner_fqn) {
-                        edges.push(GraphEdge {
-                            source: owner_id.clone(),
-                            target: sym_node_id.clone(),
-                            edge_type: GraphEdgeType::Contains,
-                        });
+                        edges.add(&owner_id, &sym_node_id, GraphEdgeType::Contains);
                     }
                 }
             }
@@ -673,11 +691,7 @@ fn resolve_call_edges(index_result: &crate::types::IndexResult, acc: &mut GraphA
                     .cloned()
                     .or_else(|| resolve_symbol(symbol_id_map, extended, &normalized_file_path))
                 {
-                    edges.push(GraphEdge {
-                        source: sym_node_id.clone(),
-                        target: target_id,
-                        edge_type: GraphEdgeType::Extends,
-                    });
+                    edges.add(&sym_node_id, &target_id, GraphEdgeType::Extends);
                 }
             }
 
@@ -688,11 +702,7 @@ fn resolve_call_edges(index_result: &crate::types::IndexResult, acc: &mut GraphA
                     .cloned()
                     .or_else(|| resolve_symbol(symbol_id_map, implemented, &normalized_file_path))
                 {
-                    edges.push(GraphEdge {
-                        source: sym_node_id.clone(),
-                        target: target_id,
-                        edge_type: GraphEdgeType::Implements,
-                    });
+                    edges.add(&sym_node_id, &target_id, GraphEdgeType::Implements);
                 }
             }
 
@@ -710,11 +720,7 @@ fn resolve_call_edges(index_result: &crate::types::IndexResult, acc: &mut GraphA
                     for supertype in qualified.supers.get(owner).into_iter().flatten() {
                         if let Some(target_id) = qualified.method(supertype, member, argc) {
                             if target_id != sym_node_id {
-                                edges.push(GraphEdge {
-                                    source: sym_node_id.clone(),
-                                    target: target_id,
-                                    edge_type: GraphEdgeType::Overrides,
-                                });
+                                edges.add(&sym_node_id, &target_id, GraphEdgeType::Overrides);
                             }
                         }
                     }
@@ -732,11 +738,7 @@ fn resolve_call_edges(index_result: &crate::types::IndexResult, acc: &mut GraphA
                 if !constant_ids.contains(target_id) {
                     continue;
                 }
-                edges.push(GraphEdge {
-                    source: sym_node_id.clone(),
-                    target: target_id.clone(),
-                    edge_type: GraphEdgeType::Uses,
-                });
+                edges.add(&sym_node_id, &target_id, GraphEdgeType::Uses);
             }
 
             // Functions passed as values — callbacks, route handlers,
@@ -748,11 +750,7 @@ fn resolve_call_edges(index_result: &crate::types::IndexResult, acc: &mut GraphA
                 let Some(target_id) = qualified.by_qualified.get(referenced) else {
                     continue;
                 };
-                edges.push(GraphEdge {
-                    source: sym_node_id.clone(),
-                    target: target_id.clone(),
-                    edge_type: GraphEdgeType::References,
-                });
+                edges.add(&sym_node_id, &target_id, GraphEdgeType::References);
                 resolution.resolved_qualified += 1;
             }
 
@@ -762,11 +760,7 @@ fn resolve_call_edges(index_result: &crate::types::IndexResult, acc: &mut GraphA
                     if let Some(target_id) =
                         resolve_symbol(symbol_id_map, called, &normalized_file_path)
                     {
-                        edges.push(GraphEdge {
-                            source: sym_node_id.clone(),
-                            target: target_id,
-                            edge_type: GraphEdgeType::Calls,
-                        });
+                        edges.add(&sym_node_id, &target_id, GraphEdgeType::Calls);
                         resolution.resolved_by_name += 1;
                     } else {
                         resolution.dropped_unresolved += 1;
@@ -787,11 +781,7 @@ fn resolve_call_edges(index_result: &crate::types::IndexResult, acc: &mut GraphA
                     // failed both its lookups and produced no edge at all.
                     if let Some(fqn) = &call.qualified {
                         if let Some(target_id) = qualified.by_qualified.get(fqn) {
-                            edges.push(GraphEdge {
-                                source: sym_node_id.clone(),
-                                target: target_id.clone(),
-                                edge_type: edge_for_call(call),
-                            });
+                            edges.add(&sym_node_id, &target_id, edge_for_call(call));
                             resolution.resolved_qualified += 1;
                             resolved = true;
                         }
@@ -799,11 +789,7 @@ fn resolve_call_edges(index_result: &crate::types::IndexResult, acc: &mut GraphA
 
                     if let Some(owner) = &call.owner_type {
                         if let Some(target_id) = qualified.method(owner, &call.name, call.argc) {
-                            edges.push(GraphEdge {
-                                source: sym_node_id.clone(),
-                                target: target_id,
-                                edge_type: edge_for_call(call),
-                            });
+                            edges.add(&sym_node_id, &target_id, edge_for_call(call));
                             resolution.resolved_typed += 1;
                             resolved = true;
                         }
@@ -814,11 +800,7 @@ fn resolve_call_edges(index_result: &crate::types::IndexResult, acc: &mut GraphA
                         // edge lands on the type node itself.
                         if !resolved && call.is_ctor {
                             if let Some(target_id) = qualified.types.get(owner) {
-                                edges.push(GraphEdge {
-                                    source: sym_node_id.clone(),
-                                    target: target_id.clone(),
-                                    edge_type: GraphEdgeType::Instantiates,
-                                });
+                                edges.add(&sym_node_id, &target_id, GraphEdgeType::Instantiates);
                                 resolution.resolved_typed += 1;
                                 resolved = true;
                             }
@@ -834,11 +816,7 @@ fn resolve_call_edges(index_result: &crate::types::IndexResult, acc: &mut GraphA
                                 if let Some(target_id) =
                                     qualified.method(&impl_fqn, &call.name, call.argc)
                                 {
-                                    edges.push(GraphEdge {
-                                        source: sym_node_id.clone(),
-                                        target: target_id,
-                                        edge_type: GraphEdgeType::Calls,
-                                    });
+                                    edges.add(&sym_node_id, &target_id, GraphEdgeType::Calls);
                                     resolution.resolved_typed += 1;
                                     resolved = true;
                                 }
@@ -854,11 +832,7 @@ fn resolve_call_edges(index_result: &crate::types::IndexResult, acc: &mut GraphA
                         if let Some(target_id) =
                             resolve_symbol(symbol_id_map, &call.name, &normalized_file_path)
                         {
-                            edges.push(GraphEdge {
-                                source: sym_node_id.clone(),
-                                target: target_id,
-                                edge_type: edge_for_call(call),
-                            });
+                            edges.add(&sym_node_id, &target_id, edge_for_call(call));
                             resolution.resolved_by_name += 1;
                             resolved = true;
                         }
@@ -902,18 +876,10 @@ fn resolve_import_edges(
             // and it is also exact — no basename near-miss.
             let targets = resolve_qualified_import(qualified, import, &file.language);
             for target_id in &targets {
-                edges.push(GraphEdge {
-                    source: file_node_id.clone(),
-                    target: target_id.clone(),
-                    edge_type: GraphEdgeType::References,
-                });
+                edges.add(&file_node_id, &target_id, GraphEdgeType::References);
                 if let Some(target_file_id) = qualified.file_of.get(target_id) {
                     if target_file_id != &file_node_id {
-                        edges.push(GraphEdge {
-                            source: file_node_id.clone(),
-                            target: target_file_id.clone(),
-                            edge_type: GraphEdgeType::Imports,
-                        });
+                        edges.add(&file_node_id, &target_file_id, GraphEdgeType::Imports);
                     }
                 }
             }
@@ -929,11 +895,7 @@ fn resolve_import_edges(
                     &files.basename,
                 ) {
                     if target_file_id != file_node_id {
-                        edges.push(GraphEdge {
-                            source: file_node_id.clone(),
-                            target: target_file_id,
-                            edge_type: GraphEdgeType::Imports,
-                        });
+                        edges.add(&file_node_id, &target_file_id, GraphEdgeType::Imports);
                     }
                     continue;
                 }
@@ -944,22 +906,14 @@ fn resolve_import_edges(
             // parsed and never used; this is what makes "which files pull in
             // axum" answerable.
             if let Some(dep_id) = dependency_ids.get(dependency_root(&import.path)) {
-                edges.push(GraphEdge {
-                    source: file_node_id.clone(),
-                    target: dep_id.clone(),
-                    edge_type: GraphEdgeType::DependsOn,
-                });
+                edges.add(&file_node_id, &dep_id, GraphEdgeType::DependsOn);
             }
 
             for imp in &import.imported {
                 if let Some(target_sym_id) =
                     resolve_symbol(symbol_id_map, &imp.name, &normalized_file_path)
                 {
-                    edges.push(GraphEdge {
-                        source: file_node_id.clone(),
-                        target: target_sym_id,
-                        edge_type: GraphEdgeType::References,
-                    });
+                    edges.add(&file_node_id, &target_sym_id, GraphEdgeType::References);
                 }
             }
         }
@@ -968,11 +922,7 @@ fn resolve_import_edges(
             if let Some(target_sym_id) =
                 resolve_symbol(symbol_id_map, &exp.name, &normalized_file_path)
             {
-                edges.push(GraphEdge {
-                    source: file_node_id.clone(),
-                    target: target_sym_id,
-                    edge_type: GraphEdgeType::Exports,
-                });
+                edges.add(&file_node_id, &target_sym_id, GraphEdgeType::Exports);
             }
         }
     }
@@ -1350,15 +1300,31 @@ fn pick_best(candidates: Option<&Vec<String>>, caller_file: &str) -> Option<Stri
     }
 }
 
+/// Drop repeated `(source, target, type)` triples, keeping the first of each.
+///
+/// Decided from a borrow. The obvious `retain` closure has to build an owned
+/// key to hash — two `String` clones per edge — which on a large repo is 1.5
+/// million allocations and ~192 MB of copying to answer a boolean. Splitting
+/// the decision from the mutation lets the set borrow the edges it is reading,
+/// and needs no unsafe to do it. See P10.7 in
+/// docs/dev/PERF-TUNING-JOURNEY.md.
 fn dedupe_edges(edges: &mut Vec<GraphEdge>) {
-    let mut seen: HashMap<(String, String, GraphEdgeType), bool> = HashMap::new();
-    edges.retain(|e| {
-        let key = (e.source.clone(), e.target.clone(), e.edge_type.clone());
-        if let std::collections::hash_map::Entry::Vacant(e) = seen.entry(key) {
-            e.insert(true);
-            true
-        } else {
-            false
-        }
-    });
+    let mut seen: HashSet<(&str, &str, &GraphEdgeType)> = HashSet::with_capacity(edges.len());
+    let keep: Vec<bool> = edges
+        .iter()
+        .map(|e| seen.insert((&e.source, &e.target, &e.edge_type)))
+        .collect();
+    drop(seen);
+
+    let mut keep = keep.into_iter();
+    edges.retain(|_| keep.next().unwrap_or(true));
+
+    // No interning pass here, deliberately. Sharing one allocation per
+    // distinct endpoint sounds like the same win `ug serve` gets, but the
+    // builder has already allocated every duplicate by this point — collapsing
+    // them frees memory the allocator does not return, so the peak is
+    // unchanged. Measured on a 330 MB graph: peak 1,415 MB → 1,456 MB (worse,
+    // within noise) for +1.6 s of wall clock, 37% of the whole command. The
+    // serve side interns *as it parses*, which is why it works there.
+    // See P10.4 in docs/dev/PERF-TUNING-JOURNEY.md.
 }

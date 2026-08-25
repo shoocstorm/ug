@@ -27,8 +27,8 @@ fn build_di_graph(graph: &GraphData) -> (DiGraph<(), ()>, HashMap<String, NodeIn
 
     for edge in &graph.edges {
         if let (Some(&src_idx), Some(&tgt_idx)) = (
-            index_map.get(&edge.source),
-            index_map.get(&edge.target),
+            index_map.get(&*edge.source),
+            index_map.get(&*edge.target),
         ) {
             di_graph.add_edge(src_idx, tgt_idx, ());
         }
@@ -58,16 +58,16 @@ pub fn calculate_centrality_baseline(graph: &GraphData) -> String {
     }
 
     for edge in &graph.edges {
-        if let Some(c) = degree_centrality.get_mut(&edge.source) {
+        if let Some(c) = degree_centrality.get_mut(&*edge.source) {
             *c += 1.0;
         }
-        if let Some(c) = degree_centrality.get_mut(&edge.target) {
+        if let Some(c) = degree_centrality.get_mut(&*edge.target) {
             *c += 1.0;
         }
-        if let Some(c) = out_degree.get_mut(&edge.source) {
+        if let Some(c) = out_degree.get_mut(&*edge.source) {
             *c += 1;
         }
-        if let Some(c) = in_degree.get_mut(&edge.target) {
+        if let Some(c) = in_degree.get_mut(&*edge.target) {
             *c += 1;
         }
     }
@@ -215,7 +215,7 @@ pub fn run_k_hop_bfs_baseline(graph: &GraphData, start_node_id: &str, k: u32) ->
     let result_edges: Vec<GraphEdge> = graph
         .edges
         .iter()
-        .filter(|e| distances.contains_key(&e.source) && distances.contains_key(&e.target))
+        .filter(|e| distances.contains_key(&*e.source) && distances.contains_key(&*e.target))
         .cloned()
         .collect();
 

@@ -201,7 +201,7 @@ fn traversal_fixtures() {
         let mut best = (0usize, graph.nodes[0].id.clone());
         let mut degree = std::collections::HashMap::<&str, usize>::new();
         for e in &graph.edges {
-            *degree.entry(e.source.as_str()).or_insert(0) += 1;
+            *degree.entry(&*e.source).or_insert(0) += 1;
         }
         for (id, d) in degree {
             if d > best.0 {

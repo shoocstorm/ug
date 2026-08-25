@@ -106,13 +106,13 @@ pub fn traverse(graph: &GraphData, p: &TraverseParams) -> TraverseResult {
             continue;
         }
         out_adj
-            .entry(e.source.as_str())
+            .entry(&*e.source)
             .or_default()
-            .push((e.target.as_str(), et));
+            .push((&*e.target, et));
         in_adj
-            .entry(e.target.as_str())
+            .entry(&*e.target)
             .or_default()
-            .push((e.source.as_str(), et));
+            .push((&*e.source, et));
     }
 
     let mut missing = Vec::new();

@@ -119,7 +119,23 @@ async fn handle_index(State(state): State<ServeState>, headers: HeaderMap) -> Re
 
 async fn handle_graph(State(state): State<ServeState>, headers: HeaderMap) -> Response {
     let snap = state.snapshot();
-    asset_response(&snap.encoded, &headers)
+    if let Some(asset) = snap.graph_asset.as_ref() {
+        return asset_response(asset, &headers);
+    }
+    // Above the server-mode cutoff the bytes are not held — see
+    // `GraphSnapshot::graph_asset`. Read them back for the caller that asked;
+    // the page in this mode never does.
+    let path = state.active().graph_path.clone();
+    match tokio::fs::read(&path).await {
+        Ok(data) => {
+            let asset = EncodedAsset::new(data, "application/json; charset=utf-8");
+            asset_response(&asset, &headers)
+        }
+        Err(e) => err_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("read {}: {}", path.display(), e),
+        ),
+    }
 }
 
 async fn handle_indexed_tree(State(state): State<ServeState>, headers: HeaderMap) -> Response {

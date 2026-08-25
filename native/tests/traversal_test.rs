@@ -163,7 +163,7 @@ fn induced_edges_are_those_among_reached_nodes_only() {
     let mut got: Vec<(String, String)> = r
         .edges
         .iter()
-        .map(|e| (e.source.clone(), e.target.clone()))
+        .map(|e| (e.source.to_string(), e.target.to_string()))
         .collect();
     let before_dedup = got.len();
     got.sort();
@@ -194,7 +194,7 @@ fn induced_edges_keep_graph_order() {
     let got: Vec<(&str, &str)> = r
         .edges
         .iter()
-        .map(|e| (e.source.as_str(), e.target.as_str()))
+        .map(|e| (&*e.source, &*e.target))
         .collect();
     assert_eq!(got, vec![("A", "B"), ("B", "C"), ("A", "C")]);
 }

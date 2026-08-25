@@ -814,7 +814,11 @@
                 else total = state.nodeCount || 0;
                 return { nodes: [], total, truncated: false };
             }
-            const qs = new URLSearchParams({ q, limit: String(limit) });
+            // `fields=id` because that is all this reads. The full-row shape
+            // ships every hit's metrics, signature, docstring, imports and
+            // calls — 133 KB per keystroke on a large graph against ~30 KB of
+            // answer, all of it parsed and dropped.
+            const qs = new URLSearchParams({ q, limit: String(limit), fields: 'id' });
             if (types) qs.set('types', [...types].join(','));
             let data;
             try {
@@ -825,22 +829,22 @@
                 console.warn('node search failed:', err && err.message);
                 return { nodes: [], total: 0, truncated: false };
             }
-            // Hits come back as whole node rows; what the canvas and the panels
-            // need is *the* node object for each id, so they go through the
-            // store. A hit already on screen keeps its position and identity.
+            // Hits come back as ids; what the canvas and the panels need is
+            // *the* node object for each, so they go through the store. A hit
+            // already on screen keeps its position and identity.
+            //
+            // Kept in the order the server sent. It ranks before it cuts (see
+            // P8.3) by needle position then name length — the identical key
+            // this used to re-sort by on arrival, over rows that were already
+            // in that order.
+            const ids = data.ids || [];
+            const boundary = data.boundary || [];
             const nodes = [];
-            for (const row of data.nodes || []) {
-                if (boundaryOnly && !(row.boundaries && row.boundaries.length)) continue;
-                const node = state.nodeById.get(row.id);
+            for (let i = 0; i < ids.length; i++) {
+                if (boundaryOnly && !boundary[i]) continue;
+                const node = state.nodeById.get(ids[i]);
                 if (node) nodes.push(node);
             }
-            nodes.sort((a, b) => {
-                const ai = a.name.toLowerCase().indexOf(q);
-                const bi = b.name.toLowerCase().indexOf(q);
-                const ar = ai < 0 ? Number.MAX_SAFE_INTEGER : ai;
-                const br = bi < 0 ? Number.MAX_SAFE_INTEGER : bi;
-                return (ar - br) || (a.name.length - b.name.length);
-            });
             return { nodes, total: data.count || nodes.length, truncated: !!data.truncated };
         }
 

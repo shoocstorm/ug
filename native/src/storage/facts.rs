@@ -85,11 +85,11 @@ impl FactContext {
         let mut members: HashMap<String, u32> = HashMap::new();
         for e in &graph.edges {
             if matches!(e.edge_type, GraphEdgeType::Contains) {
-                *members.entry(e.source.clone()).or_insert(0) += 1;
+                *members.entry(e.source.to_string()).or_insert(0) += 1;
                 continue;
             }
-            *in_degree.entry(e.target.clone()).or_insert(0) += 1;
-            *out_degree.entry(e.source.clone()).or_insert(0) += 1;
+            *in_degree.entry(e.target.to_string()).or_insert(0) += 1;
+            *out_degree.entry(e.source.to_string()).or_insert(0) += 1;
         }
         let schema = graph
             .stats

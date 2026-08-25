@@ -413,7 +413,7 @@ pub fn run_serve(args: &[String]) {
         let (identity_size, nodes, edges) = {
             let snap = initial_ctx.graph.read().expect("graph state poisoned");
             (
-                snap.encoded.identity.len(),
+                snap.graph_bytes,
                 snap.parsed.nodes.len(),
                 snap.parsed.edges.len(),
             )

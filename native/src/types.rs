@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Symbol {
@@ -741,16 +742,110 @@ pub struct GraphTypeRef {
     pub generic: Option<String>,
 }
 
+/// One edge, naming its endpoints by node id.
+///
+/// The endpoints are `Arc<str>`, not `String`, and that is a memory decision
+/// rather than an ownership one. A large repo has 745,964 edges naming 161,725
+/// distinct nodes, so the two `String` fields held 1.49 million allocations of
+/// ~141 characters each — ~252 MB — to spell 22.8 MB of distinct text that
+/// `nodes[i].id` already owns. Interned at parse time (see
+/// [`de_edges_interned`]) the same edges cost ~49 MB, and a duplicate is never
+/// allocated in the first place, so the *peak* comes down with the steady
+/// state. See P10.4 in docs/dev/PERF-TUNING-JOURNEY.md.
+///
+/// `Arc<str>` rather than an index into `nodes` because an edge has to keep
+/// meaning something on its own: it is constructed, matched and compared all
+/// over this crate, `graph.json` spells endpoints as ids, and an index form
+/// would need the node table present at every one of those sites.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphEdge {
-    pub source: String,
-    pub target: String,
+    pub source: Arc<str>,
+    pub target: Arc<str>,
     pub edge_type: GraphEdgeType,
+}
+
+impl GraphEdge {
+    /// Build an edge from anything string-shaped, for the call sites that have
+    /// a `&str` or a `String` in hand.
+    pub fn new(
+        source: impl AsRef<str>,
+        target: impl AsRef<str>,
+        edge_type: GraphEdgeType,
+    ) -> Self {
+        Self {
+            source: Arc::from(source.as_ref()),
+            target: Arc::from(target.as_ref()),
+            edge_type,
+        }
+    }
+}
+
+/// Deserialize the edge list, sharing one allocation per distinct endpoint id.
+///
+/// Plain `Deserialize` would hand every edge its own copy of both ids —
+/// exactly the 252 MB this exists to avoid, and it would allocate them before
+/// anything could dedupe them afterwards, so the peak would stay even if the
+/// steady state came down. Interning *as the sequence is read* means a
+/// duplicate never becomes an allocation: the pool answers with an `Arc` clone,
+/// which is a refcount bump.
+fn de_edges_interned<'de, D>(d: D) -> Result<Vec<GraphEdge>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use std::collections::HashSet;
+    use std::fmt;
+
+    /// The wire shape — plain owned strings, one edge at a time, so only a
+    /// single edge's ids are ever un-interned.
+    #[derive(Deserialize)]
+    struct WireEdge {
+        source: String,
+        target: String,
+        edge_type: GraphEdgeType,
+    }
+
+    struct EdgesVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for EdgesVisitor {
+        type Value = Vec<GraphEdge>;
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("a list of graph edges")
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: serde::de::SeqAccess<'de>,
+        {
+            let mut pool: HashSet<Arc<str>> = HashSet::new();
+            let mut intern = |s: String| -> Arc<str> {
+                if let Some(existing) = pool.get(s.as_str()) {
+                    return Arc::clone(existing);
+                }
+                let a: Arc<str> = Arc::from(s);
+                pool.insert(Arc::clone(&a));
+                a
+            };
+
+            let mut out = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+            while let Some(e) = seq.next_element::<WireEdge>()? {
+                out.push(GraphEdge {
+                    source: intern(e.source),
+                    target: intern(e.target),
+                    edge_type: e.edge_type,
+                });
+            }
+            Ok(out)
+        }
+    }
+
+    d.deserialize_seq(EdgesVisitor)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphData {
     pub nodes: Vec<GraphNode>,
+    #[serde(deserialize_with = "de_edges_interned")]
     pub edges: Vec<GraphEdge>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stats: Option<IndexStats>,

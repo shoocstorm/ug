@@ -253,7 +253,17 @@ fn print_index_progress(done: usize, total: usize, last_pct: &AtomicUsize) {
 
 /// Index every supported source file under `path`. Returns a JSON-encoded
 /// [`IndexResult`].
+///
+/// Thin wrapper over [`index_typed`]. In-process callers that are going to
+/// parse the result straight back — which is every caller in this crate —
+/// should take the typed value instead: on a large repo this string is
+/// 162 MB, and serialising it only to parse it again costs both.
 pub fn index(path: String) -> String {
+    serde_json::to_string(&index_typed(path)).unwrap_or_default()
+}
+
+/// [`index`], without the JSON round trip.
+pub fn index_typed(path: String) -> IndexResult {
     let start = std::time::Instant::now();
 
     // Compute canonical repo root first, before scanning files
@@ -331,20 +341,27 @@ pub fn index(path: String) -> String {
         repo_root,
     };
 
-    serde_json::to_string(&IndexResult {
+    IndexResult {
         files,
         folders,
         dependencies,
         stats,
-    })
-    .unwrap_or_default()
+    }
 }
 
 /// Index every supported source file under `path`, skipping files whose
 /// blake3 hash matches the value stored in `<cache_path>/cache.json` from a
 /// previous run. The cache file is rewritten with the latest hashes once
 /// indexing is complete.
+///
+/// Thin wrapper over [`index_with_cache_typed`]; see [`index`] on why an
+/// in-process caller wants the typed one.
 pub fn index_with_cache(path: String, cache_path: String) -> String {
+    serde_json::to_string(&index_with_cache_typed(path, cache_path)).unwrap_or_default()
+}
+
+/// [`index_with_cache`], without the JSON round trip.
+pub fn index_with_cache_typed(path: String, cache_path: String) -> IndexResult {
     let start = std::time::Instant::now();
 
     // Compute canonical repo root first
@@ -539,13 +556,12 @@ pub fn index_with_cache(path: String, cache_path: String) -> String {
         repo_root,
     };
 
-    let json = serde_json::to_string(&IndexResult {
+    let result = IndexResult {
         files,
         folders,
         dependencies,
         stats,
-    })
-    .unwrap_or_default();
+    };
 
     // Snapshot the tree next to cache.json so the *next* run can recover
     // FileNodes for its cache hits. Without this the cache can never hit:
@@ -553,9 +569,25 @@ pub fn index_with_cache(path: String, cache_path: String) -> String {
     // because callers write their tree wherever `-o` points — which usually
     // isn't the cache directory. Keeping the snapshot here makes the cache
     // directory self-contained and independent of where output goes.
-    if !json.is_empty() {
-        let _ = fs::write(Path::new(&cache_path).join("indexed-tree.json"), &json);
-    }
+    //
+    // Streamed rather than serialised to a `String` first: this is 162 MB on
+    // a large repo, and the whole point of the typed path is not to hold it.
+    let _ = write_json_file_checked(&Path::new(&cache_path).join("indexed-tree.json"), &result);
 
-    json
+    result
+}
+
+/// Serialise `value` straight into `path` through a buffered writer.
+///
+/// The obvious `fs::write(path, serde_json::to_string(&v)?)` holds the entire
+/// encoding in memory before the first byte reaches the disk — 330 MB for a
+/// large `graph.json`, on top of the value being encoded.
+pub(crate) fn write_json_file_checked<T: serde::Serialize>(
+    path: &Path,
+    value: &T,
+) -> Result<(), String> {
+    let file = fs::File::create(path).map_err(|e| e.to_string())?;
+    let mut w = std::io::BufWriter::new(file);
+    serde_json::to_writer(&mut w, value).map_err(|e| e.to_string())?;
+    std::io::Write::flush(&mut w).map_err(|e| e.to_string())
 }

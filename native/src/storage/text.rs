@@ -537,13 +537,13 @@ pub fn collect_related_names(graph: &GraphData) -> HashMap<String, Vec<String>> 
 
     let mut out: HashMap<String, Vec<String>> = HashMap::new();
     for edge in &graph.edges {
-        if let Some(target_name) = id_to_name.get(edge.target.as_str()) {
-            out.entry(edge.source.clone())
+        if let Some(target_name) = id_to_name.get(&*edge.target) {
+            out.entry(edge.source.to_string())
                 .or_default()
                 .push(target_name.to_string());
         }
-        if let Some(source_name) = id_to_name.get(edge.source.as_str()) {
-            out.entry(edge.target.clone())
+        if let Some(source_name) = id_to_name.get(&*edge.source) {
+            out.entry(edge.target.to_string())
                 .or_default()
                 .push(source_name.to_string());
         }
@@ -1244,13 +1244,13 @@ mod sparse_tests {
             });
             edges.push(crate::types::GraphEdge {
                 source: "hub".into(),
-                target: format!("n{i}"),
+                target: format!("n{i}").into(),
                 edge_type: crate::types::GraphEdgeType::Contains,
             });
             // A duplicate edge must not produce a duplicate name.
             edges.push(crate::types::GraphEdge {
                 source: "hub".into(),
-                target: format!("n{i}"),
+                target: format!("n{i}").into(),
                 edge_type: crate::types::GraphEdgeType::References,
             });
         }

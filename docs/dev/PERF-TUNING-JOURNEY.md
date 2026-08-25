@@ -1555,7 +1555,7 @@ and answer "no such node" for real ids.
 | **Version** | 0.1.16 |
 | **Scope** | `native/src/cli`, `native/src/serve`, `native/src/graph`, `native/src/indexer` |
 | **Method** | `/usr/bin/time -l` peak RSS and `ps` idle RSS on the real 161,725-node fixture; `curl` medians against a running `ug serve` |
-| **Status** | Audited and measured; nothing landed |
+| **Status** | **All 10 items landed 2026-08-25; suite 891/891.** See [what shipped](#round-3--what-shipped) |
 
 ## The measurement this round starts from
 
@@ -1634,16 +1634,16 @@ client-side finding Round 2 built `NodeStore` for.
 
 | # | Item | Phase | Est. impact | Risk | Status |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| P10.1 | `ug gen`: stop parsing `graph.json` a third time, untyped | 0 | **Very high** — measured 3,378 → 2,250 MB | Very low | ⬜ |
-| P10.2 | `/api/graph/search`: narrow to the previous prefix's matches | 0 | **Very high** — measured 23.3 → 1.5 ms | Low | ⬜ |
-| P10.3 | `ug gen`: drop `index_result.clone()` and the second `IndexResult` | 1 | High — 162 MB clone + a full re-parse | Low | ⬜ |
-| P10.4 | Intern `GraphEdge` endpoints to node indices | 2 | **Very high** — ~246 MB of `ug serve`'s 1,245 | Medium | ⬜ |
-| P10.5 | Drop `encoded.identity` in server mode | 2 | **High** — 346 MB for a request that never comes | Low | ⬜ |
-| P10.6 | `AdjIndex`: CSR rows, borrowed id table | 2 | Medium — 323k `Vec` allocations + 22.8 MB of re-cloned ids | Low | ⬜ |
-| P10.7 | `dedupe_edges`: stop cloning 1.5M strings to key a map | 1 | Medium — ~210 MB of transient churn | Very low | ⬜ |
-| P10.8 | `extract_return_type`: compile the regex once, borrow the source | 1 | Medium — a regex compile + a body copy per function | Very low | ⬜ |
-| P10.9 | `/api/graph/search`: send what the caller reads | 2 | Medium — 133 KB → ~30 KB per keystroke | Low | ⬜ |
-| P10.10 | `graph_keyword_search` / `filter_edges_by_type`: unreachable | 3 | Cleanup — no caller outside tests | Very low | ⬜ |
+| P10.1 | `ug gen`: stop parsing `graph.json` a third time, untyped | 0 | **Very high** — measured 3,378 → 2,250 MB | Very low | ✅ |
+| P10.2 | `/api/graph/search`: narrow to the previous prefix's matches | 0 | **Very high** — measured 23.3 → 1.5 ms | Low | ✅ |
+| P10.3 | `ug gen`: drop `index_result.clone()` and the second `IndexResult` | 1 | High — measured 2,250 → 1,618 MB, and 1.9× wall | Low | ✅ |
+| P10.4 | Intern `GraphEdge` endpoints — `Arc<str>`, not indices | 2 | **Very high** — measured 916 → 730 MB serve, 1,458 → 1,160 MB gen | Medium | ✅ |
+| P10.5 | Drop `encoded.identity` in server mode; mmap the parse | 2 | **High** — measured 1,238 → 916 MB | Low | ✅ |
+| P10.6 | `AdjIndex`: CSR rows + resolved endpoint columns | 2 | Medium — 323k `Vec` allocations gone; no string hash per edge served | Low | ✅ |
+| P10.7 | `dedupe_edges`: stop cloning 1.5M strings to key a map | 1 | Medium — ~192 MB of transient churn | Very low | ✅ |
+| P10.8 | `extract_return_type`: compile the regex once, borrow the source | 1 | Medium — a regex compile + a body copy per function | Very low | ✅ |
+| P10.9 | `/api/graph/search`: send what the caller reads (`?fields=id`) | 2 | Medium — measured 133 KB → 24.8 KB per keystroke | Low | ✅ |
+| P10.10 | `graph_keyword_search` / `filter_edges_by_type`: unreachable | 3 | Defects fixed; the *should they exist* question is open | Very low | ✅ |
 
 **Sequencing.** Phase 0 is two one-file changes with measured numbers already in
 hand and no shape change to anything — land them first. Phase 1 is the rest of
@@ -1662,7 +1662,7 @@ Doing P10.6 first would mean writing the `AdjIndex` twice.
 
 ## Phase 0 — Two measured wins, no shape change
 
-### ⬜ P10.1 — `ug gen`: stop parsing `graph.json` a third time, untyped
+### ✅ P10.1 — `ug gen`: stop parsing `graph.json` a third time, untyped
 
 **Where:** `native/src/cli/gen.rs:236`
 
@@ -1718,7 +1718,7 @@ diff the stdout against the baseline run.
 from a value that is already in scope; the `if let` arms are the same shape.
 
 <a id="p102--prefix-narrowed-search"></a>
-### ⬜ P10.2 — `/api/graph/search`: narrow to the previous prefix's matches
+### ✅ P10.2 — `/api/graph/search`: narrow to the previous prefix's matches
 
 **Where:** `native/src/serve/api.rs:676-709`
 
@@ -1805,7 +1805,7 @@ holding the lock across the scan. Hold an `Arc<Vec<u32>>` instead.
 that both have the typed value in hand. Each seam costs a serialise, a parse,
 and a full second copy of the data.
 
-### ⬜ P10.3 — Drop `index_result.clone()` and the second `IndexResult`
+### ✅ P10.3 — Drop `index_result.clone()` and the second `IndexResult`
 
 **Where:** `native/src/cli/gen.rs:213`, `native/src/graph/mod.rs:20-28`,
 `native/src/cli/update.rs:172`
@@ -1851,7 +1851,7 @@ graph JSON — five materialisations of two logical values.
 entry point beside an existing one. Medium for (3), which changes a public
 signature; it is listed separately so it can be deferred without losing (1).
 
-### ⬜ P10.7 — `dedupe_edges`: stop cloning 1.5M strings to key a map
+### ✅ P10.7 — `dedupe_edges`: stop cloning 1.5M strings to key a map
 
 **Where:** `native/src/graph/build.rs:1353-1364`
 
@@ -1887,7 +1887,7 @@ unsafe and no second `Vec<GraphEdge>`.
 
 **Risk.** Very low. Same predicate, same iteration order, no allocation.
 
-### ⬜ P10.8 — `extract_return_type`: compile the regex once, borrow the source
+### ✅ P10.8 — `extract_return_type`: compile the regex once, borrow the source
 
 **Where:** `native/src/indexer/common.rs:302-319`
 
@@ -1934,7 +1934,7 @@ does; a pattern that does not compile is a build-time bug, not a runtime one.
 
 ## Phase 2 — What `ug serve` holds
 
-### ⬜ P10.4 — Intern `GraphEdge` endpoints to node indices
+### ✅ P10.4 — Intern `GraphEdge` endpoints to node indices
 
 **Where:** `native/src/types.rs:745-749`
 
@@ -1968,7 +1968,7 @@ an error or a sentinel — `build_adj` silently drops those today
 (`snapshot.rs:115`'s `if let (Some(&si), Some(&ti))`), so the sentinel preserves
 behaviour and an error does not.
 
-### ⬜ P10.5 — Drop `encoded.identity` in server mode
+### ✅ P10.5 — Drop `encoded.identity` in server mode
 
 **Where:** `native/src/serve/snapshot.rs:15`, `:406-431`,
 `native/src/serve/encoding.rs:31-36`
@@ -2011,7 +2011,7 @@ file", and `ug serve` already binds to loopback.
 > the only way under the ceiling is to make the snapshot smaller, which is what
 > P10.4 and P10.5 do — together they take the estimate to roughly 750 MB.
 
-### ⬜ P10.6 — `AdjIndex`: CSR rows, borrowed id table
+### ✅ P10.6 — `AdjIndex`: CSR rows, borrowed id table
 
 **Where:** `native/src/serve/snapshot.rs:85-125`
 
@@ -2048,7 +2048,7 @@ median latency (currently 1.0 ms for 2,000 ids). `/api/graph/traverse` and
 **Risk.** Low, and lower after P10.4 — with interned endpoints, `build_adj`
 needs no id table at all for the edge walk. Do these in that order.
 
-### ⬜ P10.9 — `/api/graph/search`: send what the caller reads
+### ✅ P10.9 — `/api/graph/search`: send what the caller reads
 
 **Where:** `native/src/serve/api.rs:719-726`,
 `native/src/vis/js/02-dialogs.js:807-845`
@@ -2086,7 +2086,7 @@ be identical (same 200 nodes, same order).
 
 ## Phase 3 — Bookkeeping
 
-### ⬜ P10.10 — `graph_keyword_search` / `filter_edges_by_type`: unreachable
+### ✅ P10.10 — `graph_keyword_search` / `filter_edges_by_type`: unreachable
 
 **Where:** `native/src/graph/algos.rs:277-354`, exported at `native/src/lib.rs:44-45`
 
@@ -2132,6 +2132,201 @@ reflex.
 
 ---
 
+<a id="round-3--what-shipped"></a>
+## Round 3 — what shipped, and what it measures
+
+All ten items landed 2026-08-25 on the `~/.ug/neo4j` fixture (161,725 nodes,
+745,964 edges, 330 MB `graph.json`). Suite 887 → **891** (four new tests).
+
+### The two processes
+
+**`ug gen -i <neo4j> --no-ingest --no-cache`** — median of 4 runs:
+
+| | HEAD | Round 3 | |
+| :--- | ---: | ---: | ---: |
+| **peak RSS** | 3,378 MB | **1,161 MB** | **2.91×** |
+| wall clock | 5.17 s | **4.18 s** | 1.24× |
+
+**`ug serve --project neo4j`:**
+
+| | HEAD | Round 3 | |
+| :--- | ---: | ---: | ---: |
+| **idle RSS** | 1,245 MB | **730 MB** | **1.70×** |
+| after `/api/graph/nodes.bin` | 1,297 MB | 783 MB | 1.66× |
+| after `/api/graph/edges` | 1,336 MB | 818 MB | 1.63× |
+| startup to graph-ready | 0.31 s | 0.62 s | **0.5× — a regression, see P10.4/P10.5** |
+
+**`/api/graph/search`, typed one character at a time** (`?limit=200`):
+
+| keystroke | matches | HEAD | Round 3 | |
+| :--- | ---: | ---: | ---: | ---: |
+| `n` | 161,721 | 19.0 ms | 24.0 ms | — |
+| `no` | 20,539 | 21.5 ms | **5.0 ms** | 4.3× |
+| `nod` | 8,767 | 22.2 ms | **1.7 ms** | 13× |
+| `node` | 8,704 | 23.3 ms | **1.7 ms** | 14× |
+| `nodep` | 554 | 22.5 ms | **0.49 ms** | 46× |
+| `nodepr` | 338 | 23.8 ms | **0.44 ms** | 54× |
+| response bytes | | 133.0 KB | **24.8 KB** | 5.4× |
+
+`count` is identical to HEAD for every one of those queries. The first
+keystroke is unchanged-to-slightly-worse by design: there is nothing to narrow
+from, and it now also writes the memo.
+
+### Correctness, and how it was checked
+
+`graph.json` is **not byte-reproducible, and never was** — see
+[the reproducibility finding](#graphjson-is-not-reproducible-and-that-is-heads-bug-not-this-rounds).
+So the bar used throughout was semantic equality against a HEAD-built graph:
+the node map (with list-valued fields order-normalised), the edge multiset, and
+`resolution`. All three are equal, on every build in this round.
+
+The `calls:` line is identical on both:
+`543808 resolved (0 by path, 540096 by receiver type, 3712 by name), 286079 unresolved`.
+`GET /graph.json` still `cmp`s clean against the file on disk, in both the
+retained and the re-read path.
+
+### The startup regression, and why it was taken
+
+0.31 s → 0.62 s, all of it in `load_snapshot`, from two deliberate trades:
+
+- **P10.5** stopped reading `graph.json` into a buffer. The first attempt used
+  `serde_json::from_reader` over a `BufReader` and cost **1.33 s** — four times
+  HEAD, most of what P3.1 originally bought. Memory-mapping the file instead
+  gives `from_slice` its contiguous slice at 0.48 s.
+- **P10.4** interns endpoint ids as the edge list is read, which is a hash
+  lookup per endpoint — 1.49 million of them — for another ~0.14 s.
+
+0.31 s of startup for 515 MB of resident memory, on a process that then runs
+for hours, is the right side of that trade. It is worth revisiting if a cheaper
+interning hash (the ids share long path prefixes, which is the worst case for
+a general-purpose hash) ever becomes worth writing.
+
+<a id="graphjson-is-not-reproducible-and-that-is-heads-bug-not-this-rounds"></a>
+### `graph.json` is not reproducible, and that is HEAD's bug, not this round's
+
+Two runs of the **unmodified** HEAD binary over the same repo produce different
+`graph.json` bytes. The content is stable — same node ids, same edge set, same
+`resolution` — but the *order* of the edge list and of some nodes' `imports`
+arrays varies run to run.
+
+This cost real time to establish and is worth recording precisely, because the
+first two samples said the opposite:
+
+| binary | runs compared | nodes equal | edges equal |
+| :--- | :--- | :--- | :--- |
+| HEAD | h1 vs h2 | ✅ | ✅ |
+| HEAD | h1 vs h3, h4, h5 | ❌ | ❌ |
+| Phase 0 (P10.1+P10.3) | two runs | ✅ | ✅ |
+| Phase 0+1 | two runs | ❌ | ❌ |
+
+Two agreeing samples of a coin are not evidence that it has one face. The
+Phase-1 changes were briefly suspected — `dedupe_edges` was reverted and
+re-measured to rule it out, and it was not the cause — before five samples of
+HEAD showed the nondeterminism was already there.
+
+The mechanism is almost certainly `HashMap` iteration order reaching an
+ordered output. Rust's `RandomState` seeds per map from a per-thread counter,
+so which order a given map iterates in depends on how many maps that thread
+built before it — which depends on how rayon distributed files across threads,
+which is timing-dependent. Making the pipeline faster changed the timing and
+made a latent nondeterminism easy to hit.
+
+**Not fixed here** — it is a reproducibility bug, not a performance one, and it
+predates this round. The fix is to make the ordered outputs come from an
+ordered container: `GraphNodeFolderMeta::language_breakdown` and the
+`import_lookup` in each language's `extract_imports_via_regex` are the two
+confirmed sites, and both are `HashMap` where a `BTreeMap` (or a sort before
+emit) would do. Worth its own change, with a test that indexes twice and
+compares bytes.
+
+### Phase notes
+
+**P10.1 / P10.3** turned out to be one finding, not two: the `ug gen` pipeline
+was stitched together with JSON strings between stages that both had the typed
+value in hand. `index()` serialised 162 MB, `build_graph` was handed a *clone*
+of that string and parsed it straight back, serialised 330 MB of graph, and the
+next line parsed *that* back — then a third parse, into an untyped
+`serde_json::Value`, to read four integers already sitting in a struct on the
+stack. `index_typed` / `index_with_cache_typed` / `build_graph_from_index` are
+the typed entry points; the string-in/string-out originals remain as thin
+wrappers for the library API and the tests that drive the pipeline through JSON.
+Both outputs are now streamed with `serde_json::to_writer`, so neither is ever
+held whole. Worth 3,378 → 1,618 MB before anything else landed.
+
+**P10.2** is the one place a measured hypothesis was *wrong* before it was
+right. The first attempt replaced `to_lowercase()` with an allocation-free
+ASCII scan and made the endpoint **slower** — 23.3 → 33.0 ms — because
+`str::find` is a tuned two-way/`memchr` search and the allocation was never
+the expensive half. The scan itself was. Narrowing the candidate set is what
+worked. The sharp edge is the type filter: it runs *before* the match, so a
+`?types=`-filtered request never tests the nodes its filter excluded and its
+hit list is a subset of the needle's true matches. Only unfiltered requests
+write the memo; reading is always safe.
+
+**P10.4 shipped as `Arc<str>`, not as `u32` indices.** The plan called for
+interning endpoints to node indices, which would have reached ~6 MB against
+`Arc<str>`'s ~49 MB. It was not taken: indices need the node table present
+wherever an edge is constructed or read — 41 construction sites and 144 reads
+across `graph`, `serve`, `storage`, `agent_tools`, `mcp` and ten test files —
+and would have meant a two-pass or seeded deserializer for `GraphData`, because
+an edge would stop meaning anything on its own. `Arc<str>` keeps an edge
+self-contained, needs only a `deserialize_with` on the one field, and still
+takes 1.49 million allocations down to 161,725.
+
+Where the interning happens is the whole item. Three placements were measured:
+
+| | serve idle | gen peak | gen wall |
+| :--- | ---: | ---: | ---: |
+| none (`Arc<str>` only) | — | 1,458 MB | 4.05 s |
+| after the fact, in `dedupe_edges` | — | 1,456 MB | 5.6 s |
+| **as each edge is made / read** | **730 MB** | **1,161 MB** | 4.18 s |
+
+Interning *afterwards* is worthless: every duplicate has already been
+allocated, and dropping them frees memory the allocator does not return. This
+is the same trap P10.5 hit independently — see below — and it is the single
+most useful thing this round learned. `EdgeSink` interns at push time for the
+builder; `de_edges_interned` interns as the sequence is read for the server.
+
+**P10.5 was measured wrong twice before it was measured right.** Dropping the
+retained buffer changed idle RSS by 7 MB — 1,245 → 1,238 — because the bytes
+were still *read* first and freed after, and macOS keeps the freed region. Not
+allocating them at all is the only version that shows up: `from_reader`
+(0.31 → 1.33 s startup, rejected) and then `memmap2` (0.48 s, taken). `memmap2`
+was already in the dependency tree via fastembed. `UG_SERVE_GRAPH_BYTES` was
+added as an env override for the cutoff, matching the existing
+`UG_SERVE_CACHE_BYTES` precedent, because the persisted config is read through
+a process-wide `OnceLock` and cannot be varied per test.
+
+**P10.6** also removed the string hash per edge from the three endpoints that
+walk the graph: `AdjIndex` now resolves both endpoints once when it is built
+and hands out `src_of` / `tgt_of`, so `api_edges` no longer hashes two 141-char
+ids per edge it returns, and `api_traverse` / `api_path` no longer hash one per
+neighbour they step to.
+
+**P10.9** also deleted the client-side re-sort. The page was re-ranking the 200
+hits by needle position then name length — the identical key the server had
+already ranked by in P8.3, over rows that arrived in that order.
+
+**P10.10 fixed the defects and left the question open.** `graph_keyword_search`
+and `filter_edges_by_type` still have no caller outside their own tests, but
+they are public API with 20-odd tests behind them, and deleting public API is a
+semver decision rather than a performance one. Both now use `as_str()` and
+`eq_ignore_ascii_case` instead of `format!("{:?}")` plus two `to_lowercase()`
+allocations per comparison. **Whether they should exist at all is still worth
+answering** — the capability exists at `/api/graph/search` and in the MCP tools,
+done better.
+
+### New tests
+
+| test | pins |
+| :--- | :--- |
+| `search_prefix_chain_matches_a_cold_snapshot` | every prefix of a query returns what a fresh snapshot would — count *and* nodes |
+| `search_narrows_only_when_the_needle_extends_the_memo` | typing backwards rescans instead of under-answering |
+| `search_type_filter_does_not_poison_the_memo` | a `?types=` request does not become the memo for its bare needle |
+| `graph_json_is_served_from_disk_when_the_buffer_is_not_retained` | the un-retained path serves the file's exact bytes, repeatably |
+
+---
+
 ## Results log
 
 Append one row per landed item. Keep the numbers, not just the verdict.
@@ -2169,6 +2364,16 @@ Append one row per landed item. Keep the numbers, not just the verdict.
 | 2026-08-24 | P10.2 | `/api/graph/search?q=nodepr` | 23.8 ms | 0.75 ms | 31.7×; widens as the query lengthens |
 | 2026-08-24 | P10.2 | `/api/graph/search?q=n` | 19.0 ms | 18.8 ms | unchanged — the first keystroke has nothing to narrow from |
 | 2026-08-24 | — | `graph.json` edge endpoints | 1.49M `String`s / ~252 MB | — | 161,725 distinct values; 6.0 MB interned (P10.4) |
+| 2026-08-25 | P10.1+P10.3 | `ug gen` neo4j, peak RSS | 3,378 MB | 1,618 MB | 2.09×; typed pipeline, no JSON seams |
+| 2026-08-25 | P10.7+P10.8 | `ug gen` neo4j, wall clock | 4.14 s | 2.72 s | cumulative with P10.1/P10.3; 1.90× on HEAD |
+| 2026-08-25 | P10.4 | `ug serve` neo4j, idle RSS | 916 MB | 730 MB | interned at parse; `Arc<str>`, not indices |
+| 2026-08-25 | P10.4 | `ug gen` neo4j, peak RSS | 1,458 MB | 1,161 MB | interning at *push* time, not after |
+| 2026-08-25 | P10.5 | `ug serve` neo4j, idle RSS | 1,238 MB | 916 MB | mmap; dropping the buffer alone was worth 7 MB |
+| 2026-08-25 | P10.9 | `/api/graph/search?limit=200` | 133.0 KB | 24.8 KB | 5.4×; `?fields=id` |
+| 2026-08-25 | **Round 3 total** | `ug gen` neo4j | 3,378 MB / 5.17 s | **1,161 MB / 4.18 s** | **2.91× peak**, 1.24× wall; output equal |
+| 2026-08-25 | **Round 3 total** | `ug serve` neo4j idle | 1,245 MB | **730 MB** | **1.70×**; startup 0.31 s → 0.62 s |
+| 2026-08-25 | **Round 3 total** | `/api/graph/search?q=nodepr` | 23.8 ms | **0.44 ms** | **54×**; `count` identical |
+| 2026-08-25 | — | `ug gen` reproducibility | non-deterministic | unchanged | pre-existing at HEAD; 5 samples. Not this round's, not fixed |
 
 ---
 
@@ -2182,4 +2387,7 @@ them — so the next audit does not re-propose them.
 | Storage layer / PPR / vector index tuning | Measured 2026-08-16: not the bottleneck at 162k nodes. `/api/graph/cycles` over 746k edges runs in 0.33 s. Do not go looking here again. |
 | Index identity for server mode (P9.2) | Would take the 485k index from 58 MB to ~18 MB and the wire from 51.7 MB to 9.5 MB — the biggest remaining win by far. Deferred because identity is not a client-side detail: eight endpoints return real qualified ids, the deep-link URL format is one, and 60+ client call sites pass them around opaquely. Revisit when a real 500k index exists to test against. |
 | Chat retrieval latency | Measured 2026-08-16: wall time is entirely local-LLM tokens (~83 tok/s decode). Tool execution was 0.1 s across 4 calls. |
+| Interning edge endpoints *after* the build (in `dedupe_edges`) | Measured 2026-08-25: **no change in peak** (1,458 → 1,456 MB) for **+1.6 s** on a 330 MB graph. Every duplicate has already been allocated by then, and freeing them does not return the memory to the OS. Interning has to happen as each edge is made or read — which is what [P10.4](#p104--intern-graphedge-endpoints--arcstr-not-indices) does. |
+| `serde_json::from_reader` for the snapshot parse | Measured 2026-08-25: avoids the 346 MB buffer, but startup **0.31 s → 1.33 s** — four times HEAD, giving back most of what P3.1 bought. `memmap2` gets the same memory at 0.48 s. |
+| `GraphEdge` endpoints as `u32` node indices | Would reach ~6 MB against `Arc<str>`'s ~49 MB, but needs the node table wherever an edge is built or read — 41 construction sites, 144 reads, ten test files — and a seeded or two-pass `Deserialize`, because an edge would stop meaning anything on its own. Revisit only if 49 MB on a 500k-edge graph starts to matter. |
 | Allocation-free lowercase scan in `api_search` | Measured 2026-08-24: **slower**, 23.3 ms → 33.0 ms on the 162k fixture. `to_lowercase()` feeds `str::find`, which is a tuned two-way/`memchr` search; a hand-rolled ASCII byte loop loses to it by more than the allocation costs. The scan was never the allocation — see [P10.2](#p102--prefix-narrowed-search). |

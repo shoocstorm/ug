@@ -14,8 +14,8 @@ use ultragraph::limits::EmbedBudget;
 use ultragraph::storage::StoreSpec;
 use ultragraph::types::GraphData;
 use ultragraph::{
-    build_graph, index, index_with_cache, C_BOLD, C_CYAN, C_DIM, C_GREEN, C_MAGENTA, C_RESET,
-    C_YELLOW,
+    build_graph_from_index, index_typed, index_with_cache_typed, C_BOLD, C_CYAN, C_DIM, C_GREEN,
+    C_MAGENTA, C_RESET, C_YELLOW,
 };
 
 use crate::{project, serve};
@@ -197,33 +197,42 @@ pub(crate) fn run_gen(args: &[String]) {
 
     let _ = fs::create_dir_all(&output_dir);
 
+    // Typed end to end. This pipeline used to be stitched together with JSON
+    // strings between stages that both had the typed value in hand: `index`
+    // serialised 162 MB, `build_graph` was handed a *clone* of that string and
+    // parsed it straight back, serialised 330 MB of graph, and the next line
+    // parsed that back too. Five materialisations of two values, all of them
+    // alive at the peak. See P10.3 in docs/dev/PERF-TUNING-JOURNEY.md.
     let t0 = std::time::Instant::now();
     println!("{C_CYAN}▸{C_RESET} Indexing {C_YELLOW}{}{C_RESET}", input);
     let index_result = match cache {
-        Some(c) => index_with_cache(input, c),
-        None => index(input),
+        Some(c) => index_with_cache_typed(input, c),
+        None => index_typed(input),
     };
     println!(
         "  {C_GREEN}✓ done{C_RESET} in {C_BOLD}{:?}{C_RESET}",
         t0.elapsed()
     );
 
+    // Written before the graph is built so `index_result` can be *moved* into
+    // the builder rather than cloned. Nothing downstream reads this file, and
+    // an interrupted run leaving a valid tree behind is an improvement on one
+    // leaving nothing.
+    let tree_path = format!("{}/indexed-tree.json", output_dir);
+    if let Err(e) = ultragraph::write_json_file_checked(Path::new(&tree_path), &index_result) {
+        die(1, format!("failed to write {tree_path}: {e}"));
+    }
+
     let t1 = std::time::Instant::now();
     println!("{C_CYAN}▸{C_RESET} Building graph");
-    let graph = build_graph(index_result.clone());
+    let graph = build_graph_from_index(&index_result);
+    drop(index_result);
     println!(
         "  {C_GREEN}✓ done{C_RESET} in {C_BOLD}{:?}{C_RESET}",
         t1.elapsed()
     );
 
-    // Parse once, typed. This used to be an untyped `serde_json::Value` parse
-    // that existed only to `.len()` two arrays; the typed graph costs less and
-    // also feeds the file index recorded in project.json below.
-    let parsed_graph: Option<ultragraph::types::GraphData> = serde_json::from_str(&graph).ok();
-    let (nodes_count, edges_count) = parsed_graph
-        .as_ref()
-        .map(|g| (g.nodes.len(), g.edges.len()))
-        .unwrap_or((0, 0));
+    let (nodes_count, edges_count) = (graph.nodes.len(), graph.edges.len());
     println!("  nodes: {}", nodes_count);
     println!("  edges: {}", edges_count);
 
@@ -233,31 +242,36 @@ pub(crate) fn run_gen(args: &[String]) {
     // confident wrong answer. `dropped` is mostly healthy — a call into the
     // standard library belongs there — but a jump in it between two runs of
     // the same repo means resolution regressed.
-    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&graph) {
-        if let Some(r) = v.get("resolution") {
-            let n = |k: &str| r.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
-            let (q, t, b, d) = (
-                n("resolvedQualified"),
-                n("resolvedTyped"),
-                n("resolvedByName"),
-                n("droppedUnresolved"),
-            );
-            println!(
-                "  calls: {} resolved ({} by path, {} by receiver type, {} by name), {} unresolved",
-                q + t + b,
-                q,
-                t,
-                b,
-                d
-            );
-        }
+    //
+    // Read off the graph we just built. This used to re-parse the whole of
+    // `graph` into an untyped `serde_json::Value` to reach four integers —
+    // the most expensive representation serde has, alive at the same time as
+    // the typed parse on the line above it, and so landing squarely on this
+    // command's peak. See P10.1 in docs/dev/PERF-TUNING-JOURNEY.md.
+    if let Some(r) = graph.resolution.as_ref() {
+        let (q, t, b, d) = (
+            u64::from(r.resolved_qualified),
+            u64::from(r.resolved_typed),
+            u64::from(r.resolved_by_name),
+            u64::from(r.dropped_unresolved),
+        );
+        println!(
+            "  calls: {} resolved ({} by path, {} by receiver type, {} by name), {} unresolved",
+            q + t + b,
+            q,
+            t,
+            b,
+            d
+        );
     }
 
+    // Streamed. `fs::write(path, to_string(&graph))` would hold a second full
+    // copy of the graph — 330 MB — while the first byte is still on its way to
+    // the disk.
     let graph_path = format!("{}/graph.json", output_dir);
-    fs::write(&graph_path, &graph)
-        .unwrap_or_else(|e| die(1, format!("failed to write {graph_path}: {e}")));
-    fs::write(format!("{}/indexed-tree.json", output_dir), &index_result)
-        .unwrap_or_else(|e| die(1, format!("failed to write {output_dir}/indexed-tree.json: {e}")));
+    if let Err(e) = ultragraph::write_json_file_checked(Path::new(&graph_path), &graph) {
+        die(1, format!("failed to write {graph_path}: {e}"));
+    }
 
     let t2 = std::time::Instant::now();
     // index.html and the renderer bundles are embedded in `ug serve`
@@ -276,9 +290,7 @@ pub(crate) fn run_gen(args: &[String]) {
             .carrying_pending_vectors(Path::new(&output_dir));
     // Record the indexed file list so `/api/projects/staleness` can stat the
     // tree without re-reading and re-parsing graph.json on every poll.
-    if let Some(g) = parsed_graph.as_ref() {
-        meta = meta.with_graph_index(g);
-    }
+    meta = meta.with_graph_index(&graph);
     if let Err(e) = project::write_meta(Path::new(&output_dir), &meta) {
         eprintln!("⚠ failed to write project.json: {}", e);
     }
@@ -495,13 +507,14 @@ fn chain_to_serve(args: &[String], graph_path: &str, db_path: &str, no_db: bool,
     serve::run_serve(&serve_args);
 }
 
+/// Takes the built graph, not its JSON. `ug gen` has the typed value in hand
+/// by the time it gets here, and parsing a 330 MB string back into the shape
+/// it was just serialised from was one more full copy on the peak.
 pub(crate) fn run_gen_ingest(
-    graph_json: &str,
+    graph: &GraphData,
     db_path: &str,
     args: &[String],
 ) -> Result<IngestOutcome, String> {
-    let graph: GraphData =
-        serde_json::from_str(graph_json).map_err(|e| format!("parse graph: {}", e))?;
     // Ingest upserts, so a node dropped from the source would otherwise
     // linger in the store and keep surfacing in search. Pruning is on by
     // default because `ug gen` indexes a whole repo; `--no-prune` is for
@@ -520,7 +533,7 @@ pub(crate) fn run_gen_ingest(
         return rt.block_on(async {
             let specs = gen_specs(args, db_path, dim);
             announce_destinations(&specs);
-            ingest_with_specs(&specs, &EmbedMode::Skip(model), &graph, prune, &budget).await
+            ingest_with_specs(&specs, &EmbedMode::Skip(model), graph, prune, &budget).await
         });
     }
 
@@ -544,7 +557,7 @@ pub(crate) fn run_gen_ingest(
         // behavior pointed at `db_path`.
         let specs = gen_specs(args, db_path, dim);
         announce_destinations(&specs);
-        ingest_with_specs(&specs, &EmbedMode::Embed(&embedder), &graph, prune, &budget).await
+        ingest_with_specs(&specs, &EmbedMode::Embed(&embedder), graph, prune, &budget).await
     })
 }
 

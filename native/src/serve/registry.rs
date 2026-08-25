@@ -138,14 +138,16 @@ impl ProjectContext {
     /// unbounded growth curve is.
     pub(crate) fn approx_bytes(&self) -> usize {
         let snap = self.graph.read().expect("graph poisoned");
-        let identity = snap.encoded.identity.len();
+        let identity = snap.graph_bytes;
         identity
             .saturating_mul(3)
             // `retained`, not identity + both encodings: an encoding nobody
             // has requested has not been built and is costing nothing, so
             // charging the project for it would evict live snapshots to make
-            // room for memory that was never allocated.
-            .saturating_add(snap.encoded.retained())
+            // room for memory that was never allocated. A snapshot above the
+            // server-mode cutoff holds no `graph_asset` at all, and is charged
+            // only for the parsed graph.
+            .saturating_add(snap.graph_asset.as_ref().map_or(0, |a| a.retained()))
             // The slim index is another whole encoded asset once it has been
             // asked for — ~34 MB identity plus whatever compressions have been
             // served. Uncounted, the LRU would hold three of them for free.
@@ -403,9 +405,11 @@ pub(crate) fn build_placeholder_context(registry: &Arc<ProjectRegistry>) -> Arc<
     };
     let raw_json = serde_json::to_string(&empty_graph)
         .unwrap_or_else(|_| "{\"nodes\":[],\"edges\":[]}".to_string());
+    let graph_bytes = raw_json.len();
     let encoded = EncodedAsset::new(raw_json.into_bytes(), "application/json; charset=utf-8");
     let snapshot = Arc::new(GraphSnapshot {
-        encoded,
+        graph_asset: Some(encoded),
+        graph_bytes,
         parsed: empty_graph,
         // No file behind it, so nothing to check it against.
         mtime: None,
@@ -415,6 +419,7 @@ pub(crate) fn build_placeholder_context(registry: &Arc<ProjectRegistry>) -> Arc<
         slim: OnceLock::new(),
         slim_bin: OnceLock::new(),
         stats: OnceLock::new(),
+        search_memo: std::sync::Mutex::new(None),
     });
     let ctx = Arc::new(ProjectContext {
         name: "__none__".to_string(),
