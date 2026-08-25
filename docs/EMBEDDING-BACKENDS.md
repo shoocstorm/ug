@@ -57,7 +57,7 @@ We kept `--base-url` because:
                                ▼           ▼
                   ┌────────────────────┐  ┌─────────────────────────┐
                   │   LocalEmbedder    │  │     RemoteEmbedder      │
-                  │ embed_local.rs     │  │      embed.rs           │
+                  │ embed/local.rs     │  │      embed.rs           │
                   │                    │  │                         │
                   │ Arc<TextEmbedding> │  │   reqwest::Client       │
                   │     (fastembed)    │  │   /v1/embeddings POST   │
@@ -343,11 +343,11 @@ blast radius, `traverse`/`find_usages` for structure — over the degraded searc
 
 | File                                       | Role                                                |
 |--------------------------------------------|-----------------------------------------------------|
-| `native/src/storage/embed.rs`              | `Embedder` enum, `RemoteEmbedder`, `EmbedderConfig`, defaults |
-| `native/src/storage/embed_local.rs`        | `LocalEmbedder`, alias resolver, cache dir picker   |
+| `native/src/storage/embed/mod.rs`          | `Embedder` enum, `RemoteEmbedder`, `EmbedderConfig`, defaults |
+| `native/src/storage/embed/local.rs`        | `LocalEmbedder`, alias resolver, cache dir picker   |
 | `native/src/storage/mod.rs`                | Module wiring + public re-exports                   |
 | `native/src/storage/napi_bindings.rs`      | NAPI `build_embedder`: branches on `baseUrl`        |
-| `native/src/main.rs`                       | CLI `embedder_from_args`: branches on `--base-url`  |
+| `native/src/cli/embed.rs`                  | CLI `embedder_from_args`: branches on `--base-url`  |
 | `native/Cargo.toml`                        | `fastembed = "4"` (rustls TLS, no OpenSSL), `dirs = "5"` |
 
 ---

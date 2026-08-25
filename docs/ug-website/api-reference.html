@@ -513,16 +513,16 @@
     <pre><span class="c-dim">$</span> ug analyze <span class="c-str">long_functions</span>
 <span class="c-com"># Non-test functions longer than min_loc lines, longest first.</span>
 
-id                                                        <span class="c-dim">loc  nesting</span>
-function:native/src/graph.rs:build_graph_from_index       <span class="c-num">721</span>        <span class="c-num">8</span>
-function:native/src/serve.rs:run_serve                    <span class="c-num">327</span>        <span class="c-num">4</span>
-function:native/src/main.rs:run_upgrade                   <span class="c-num">292</span>        <span class="c-num">3</span>
-function:native/src/main.rs:run_chat                      <span class="c-num">219</span>        <span class="c-num">4</span>
-function:native/src/indexer.rs:index_with_cache           <span class="c-num">162</span>        <span class="c-num">4</span>
+id                                                                       <span class="c-dim">loc  nesting</span>
+function_declaration:native/src/vis/js/14-interaction.js:handleClick     <span class="c-num">399</span>        <span class="c-num">2</span>
+function:native/src/cli/upgrade.rs:run_upgrade                           <span class="c-num">390</span>        <span class="c-num">3</span>
+function:native/src/graph/build.rs:add_file_and_symbol_nodes             <span class="c-num">319</span>        <span class="c-num">5</span>
+function:native/src/serve.rs:run_serve                                   <span class="c-num">314</span>        <span class="c-num">4</span>
+function:native/src/cli/gen.rs:run_gen                                   <span class="c-num">303</span>        <span class="c-num">2</span>
 <span class="c-dim">…</span>
 
-<span class="c-teal">rows 1–20 of 172</span>   <span class="c-dim">next: rerun with range "21-40"</span>
-<span class="c-com">coverage: loc 2919/3048 (96%) · is_test 3032/3048 (99%) · max_nesting 2916/3048 (96%)</span></pre>
+<span class="c-teal">rows 1–20 of 200</span>   <span class="c-dim">next: rerun with range "21-40"</span>
+<span class="c-com">coverage: loc 95% · is_test 99% · max_nesting 95%</span></pre>
   </div>
 
   <h2>1.5 Chat &amp; Tour</h2>
@@ -955,8 +955,8 @@ function:native/src/indexer.rs:index_with_cache           <span class="c-num">16
     <table>
       <tr><th>Module</th><th>File</th><th>What it does</th></tr>
       <tr><td><code>text.rs</code></td><td><code>storage/text.rs</code></td><td>Builds embedding text: name + signature + docstring + snippet</td></tr>
-      <tr><td><code>embed.rs</code></td><td><code>storage/embed.rs</code></td><td>Remote embedder client (OpenAI-compatible), auto-probes dimension</td></tr>
-      <tr><td><code>embed_local.rs</code></td><td><code>storage/embed_local.rs</code></td><td>Local embedder via fastembed-rs (in-process, no external service)</td></tr>
+      <tr><td><code>embed/mod.rs</code></td><td><code>storage/embed/mod.rs</code></td><td>Remote embedder client (OpenAI-compatible), auto-probes dimension</td></tr>
+      <tr><td><code>embed/local.rs</code></td><td><code>storage/embed/local.rs</code></td><td>Local embedder via fastembed-rs (in-process, no external service)</td></tr>
       <tr><td><code>query.rs</code></td><td><code>storage/query.rs</code></td><td>High-level search: <code>search_kb</code>, <code>semantic_search</code>, <code>mmr_rerank</code></td></tr>
       <tr><td><code>ingest.rs</code></td><td><code>storage/ingest.rs</code></td><td>Embedding + write pipeline: <code>ingest_graph</code>, <code>plan_incremental_ingest</code></td></tr>
       <tr><td><code>ppr.rs</code></td><td><code>storage/ppr.rs</code></td><td>Wraps PPR: <code>run_ppr</code>, <code>default_edge_type_weights</code></td></tr>
@@ -1020,7 +1020,7 @@ function:native/src/indexer.rs:index_with_cache           <span class="c-num">16
   <h3>1. Index (<code>indexer.rs</code>)</h3>
   <p>Discovers files with supported extensions via <code>scan_files()</code>. For each file: tree-sitter parse → symbol extraction → import/export resolution. Supported languages: Rust, TypeScript/TSX, JavaScript, Python, Java, Markdown, PDF, Office docs. Cache: blake3 content hashes in <code>cache.json</code>. Output: <code>indexed-tree.json</code>.</p>
 
-  <h3>2. Graph (<code>graph.rs</code>)</h3>
+  <h3>2. Graph (<code>graph/build.rs</code>)</h3>
   <p>Reads <code>IndexResult</code>. Creates folder nodes → file nodes → symbol nodes. Resolves cross-file imports (path joins, extension permutations, basename fallback). Creates edges: Calls, Extends, Implements, References, Contains, Imports, Exports, Requires, Uses, DependsOn. Output: <code>graph.json</code>.</p>
 
   <h3>3. Ingest (<code>storage/ingest.rs</code>)</h3>

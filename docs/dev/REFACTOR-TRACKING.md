@@ -276,3 +276,50 @@ need to stay surgical; they are unrelated to the refactor.
   funnels through `run_tool`. Only `cli/agent.rs` + `cli/search.rs` build typed
   params directly, and that is the CLI flag-parsing path, which legitimately
   differs from a JSON transport.
+
+## Docs & website sync (after batches 9-12)
+User-visible surface did NOT change in batches 1-12 — no CLI command, flag or
+HTTP route moved — so the sync is limited to places the docs name a source path
+or show output that the refactor made wrong.
+
+- [x] `docs/ug-website/index.html` + `api-reference.html` — the two
+      `ug analyze long_functions` showcases were stale in a way that mattered:
+      they led with `graph.rs:build_graph_from_index (721 loc)` and three
+      `main.rs` entries, and none of those exist now. REGENERATED from a real
+      `ug analyze long_functions` run rather than hand-edited. The new output
+      is its own evidence for batch 11: `build_graph_from_index` is off the
+      list entirely, replaced by `add_file_and_symbol_nodes` (319) and
+      `resolve_call_edges` (224). Widened the id column to 73 — the pane
+      already carried an 86-char coverage line, so nothing overflows.
+- [x] `api-reference.html` §4.7 storage table -> `storage/embed/{mod,local}.rs`;
+      §5.4 "2. Graph" -> `graph/build.rs`.
+- [x] `docs/API-REFERENCE.md` storage table -> same embed paths.
+- [x] `docs/EMBEDDING-BACKENDS.md` — ASCII diagram + file table -> embed dir;
+      `embedder_from_args` is in `cli/embed.rs`, not `main.rs`.
+- [x] `docs/WEB-SERVE.md` — `chain_to_serve()` is in `cli/gen.rs`, not `main.rs`.
+- [x] `docs/INDEXING-AND-CHUNKING.md` — `stored_slice` -> `agent_tools/get_code.rs`;
+      whole-file chunk row -> `graph/build.rs`.
+- [x] `docs/dev/AGENT-STRATEGY.md` — three followable `file::symbol` pointers
+      repointed (`agent_tools/get_code.rs::stale_note`, `cli/dest.rs`,
+      `agent_tools/context.rs::context`).
+- [x] `docs/ug-website/demo/` — regenerated with `ug demo -i native/src`. The
+      README says "Generated. Do not edit by hand", and it is a demo OF this
+      engine, so the refactor made it stale by definition. Now shows the
+      `graph/`, `agent_tools/`, `serve/`, `storage/embed/` folders;
+      3424 nodes / 9879 edges, 133 files (was 107), ugVersion 0.1.16.
+- [x] Verified: demo graph.json parses; the three edited pages parse; all four
+      URLs 200 off `python3 -m http.server`.
+
+### Deliberately NOT rewritten
+`docs/dev/PERF-TUNING-JOURNEY.md`, `SESSION-*.md` and `LARGE-GRAPH-SERVING.md`
+cite exact line ranges (`graph.rs:1599-1673`, `agent_tools.rs:3166-3177`).
+Those are point-in-time records; repointing the paths while the line numbers
+stay meaningless would make them look current when they are not. Left as
+history. The line separating them from AGENT-STRATEGY.md above: that one cites
+`file::symbol` with no line numbers, i.e. pointers a reader is meant to follow
+today.
+
+Also left: `src/main.rs` in glob/id-format EXAMPLES (`src/**/*.rs` finds
+`src/main.rs`, `function:native/src/main.rs:35:main`). `main.rs` still exists
+and still defines `main`; only the line number is off, and the examples are
+about pattern/id syntax, not about where code lives.

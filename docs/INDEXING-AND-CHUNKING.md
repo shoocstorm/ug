@@ -48,7 +48,7 @@ content at all.
 | `.md .mdx .markdown` | line scanner (`languages/markdown.rs`) | **one heading section** | Concept | name + **the section's prose** | the section span, *including* subsections |
 | `.pdf` | liteparse + PDFium (`indexer/document.rs`) | **one page** | Concept | name + **the page's full text** | *(nothing — binary)* |
 | Word / Excel / PowerPoint | LibreOffice → PDF → liteparse | **one page** | Concept | name + **the page's full text** | *(nothing — binary)* |
-| any indexed file | `graph.rs` | the whole file | File, or Config when classified as such | path (split into words) | the whole file |
+| any indexed file | `graph/build.rs` | the whole file | File, or Config when classified as such | path (split into words) | the whole file |
 | — (derived) | `indexer/folder.rs` | one directory | Folder | path + classification + language breakdown | *(nothing — not a file)* |
 
 Two things this table is deliberately explicit about:
@@ -423,7 +423,7 @@ store predating that column to stop the fallback reads.
 **Staleness** — `file_hash` makes drift checkable instead of invisible. A line
 range that has merely shifted still *resolves* against a changed file and would
 silently return the wrong lines; `get_code` compares the hash and flags the
-slice instead (`agent_tools.rs`, `stored_slice`). Search results do not
+slice instead (`agent_tools/get_code.rs`, `stored_slice`). Search results do not
 currently carry that flag, but the Indexed tab does.
 
 ### 5.1 BM25 without a second index

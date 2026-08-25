@@ -135,7 +135,7 @@ is never silent.
 **Shipped — per-slice staleness on the read path.** `get_code` compares the live
 file's blake3 against the `file_hash` the node was indexed with and attaches a
 `stale` note to the returned slice
-(`native/src/agent_tools.rs::stale_note`) — "the recorded span may be stale,
+(`native/src/agent_tools/get_code.rs::stale_note`) — "the recorded span may be stale,
 re-run `ug gen`". The read path is honest.
 
 **Shipped — project-level staleness.** `project::staleness`
@@ -161,7 +161,7 @@ contract: one line on **stderr**, deduplicated per project, suppressed by
 
 Two hook points cover all thirteen commands: `load_agent_graph`
 (`native/src/cli/agent.rs`) for the graph.json readers, and
-`single_store_spec_from_args` (`native/src/cli/store.rs`) for the db readers.
+`single_store_spec_from_args` (`native/src/cli/dest.rs`) for the db readers.
 The latter rather than `store_specs_from_args` deliberately — that one is
 shared with `gen` and `ingest`, and warning that the index is stale immediately
 before refreshing it is noise.
@@ -229,7 +229,7 @@ When an agent works on symbol F, it used to assemble context through 4–6 round
 get_code F → find_usages F → traverse F → test_for F → read relevant doc
 ```
 
-`context` (`native/src/agent_tools.rs::context`) is that sequence as one call,
+`context` (`native/src/agent_tools/context.rs::context`) is that sequence as one call,
 on both surfaces — `ug context <symbol>` and the `context` MCP tool. As
 predicted, it needed no new analysis: it is assembly and budgeting over
 `get_code`, `find_usages`, a 1-hop edge scan and the shared `is_test_node`

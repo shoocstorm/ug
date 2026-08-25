@@ -12,7 +12,7 @@
 | **Version** | 0.1.15 |
 | **Scope** | Rust core (`native/src`), web server, browser client |
 | **Method** | Static audit of hot paths, then measured per item (see each item and the [Results log](#results-log)) |
-| **Status** | All 15 items landed 2026-08-18; suite 871/871 |
+| **Status** | Round 1 (15 items) landed 2026-08-18; Round 2 (P6–P9) landed 2026-08-20; **Round 3 opened 2026-08-24 — audited and measured, nothing landed** |
 
 ## Status legend
 
@@ -1538,6 +1538,600 @@ handed** — a table sized for a different `n` would probe past its own entries
 and answer "no such node" for real ids.
 
 
+---
+
+# Round 3 — the process, not the tab
+
+> Rounds 1 and 2 moved the browser: 280 MB → 95 MB of JS heap, 2.5 s → 1.5 s to
+> interactive. Nothing in either round looked at what `ug` itself costs while it
+> does that. This round measures the two processes a user actually waits on —
+> `ug gen` and `ug serve` — on the same `~/.ug/neo4j` fixture, and the finding
+> is uniform: **the time is fine and the memory is not.**
+
+| Field | Value |
+| :--- | :--- |
+| **Opened** | 2026-08-24 |
+| **Baseline commit** | `1525e63` |
+| **Version** | 0.1.16 |
+| **Scope** | `native/src/cli`, `native/src/serve`, `native/src/graph`, `native/src/indexer` |
+| **Method** | `/usr/bin/time -l` peak RSS and `ps` idle RSS on the real 161,725-node fixture; `curl` medians against a running `ug serve` |
+| **Status** | Audited and measured; nothing landed |
+
+## The measurement this round starts from
+
+`~/.ug/neo4j` — 161,725 nodes, 745,964 edges, `graph.json` 330 MB,
+`indexed-tree.json` 162 MB. Same fixture as Round 1.
+
+**`ug gen -i <neo4j> --no-ingest --no-cache`:**
+
+| | |
+| :--- | ---: |
+| wall clock | 5.17 s |
+| CPU | 28.99 s user (5.6× parallel) |
+| **peak RSS** | **3,378 MB** |
+| graph.json written | 330 MB |
+
+**`ug serve --project neo4j`, RSS after each first request:**
+
+| stage | RSS |
+| :--- | ---: |
+| idle, graph parsed | **1,245 MB** |
+| after `/api/graph/stats` | 1,253 MB |
+| after `/api/graph/nodes.bin` | 1,297 MB |
+| after `/api/graph/edges` (builds `AdjIndex`) | 1,336 MB |
+| after `/api/graph/search` | 1,336 MB |
+| after `/api/graph/centrality` | 1,569 MB |
+
+**`ug serve` endpoint medians** (5 runs, `curl -w %{time_total}`):
+
+| endpoint | median |
+| :--- | ---: |
+| `/api/graph/stats` | 0.34 ms |
+| `/api/graph/traverse/<id>?k=2` | 0.36 ms |
+| `/api/graph/edges` (2,000 ids → 90 KB) | 1.0 ms |
+| `/api/graph/cycles` | 1.1 ms |
+| `/api/graph/nodes.bin` | 3.2 ms |
+| `/api/graph/centrality` | 9.6 ms |
+| **`/api/graph/search?q=node`** | **23.3 ms** |
+
+Three facts fall out, and they set the plan:
+
+1. **`ug gen` peaks at 10× the file it writes.** 3,378 MB to produce 330 MB.
+   That is the number that decides whether a large repo indexes at all, and
+   most of it is the same data materialised three and four times over.
+2. **`ug serve` holds 1,245 MB before anyone asks it anything**, of which
+   ~252 MB is 1.49 million copies of 161,725 distinct strings and 346 MB is a
+   buffer the page is explicitly told never to download.
+3. **`/api/graph/search` is 20–70× slower than every other endpoint**, and
+   Round 2 pointed the page's search box at it. The Round 2 write-up asserted
+   this server "answers in under 1 ms"; that is true of an *empty* query
+   (1.8 ms) and wrong by a factor of thirteen for a real one.
+
+### Where the bytes actually are
+
+Measured over the real `graph.json`, counting string content only:
+
+| | content | in memory | interned |
+| :--- | ---: | ---: | ---: |
+| **edge endpoints** (`source` + `target`) | 192.4 MB | **~252 MB** | 6.0 MB |
+| node `id` | 22.8 MB | 22.8 MB | — |
+| node `file` | 15.1 MB | 15.1 MB | 0.8 MB |
+| node `qualifiedName` | 10.6 MB | 10.6 MB | — |
+| node `name` | 6.8 MB | 6.8 MB | — |
+| node `calls` (369,605 elements) | 4.2 MB | 16.0 MB | — |
+| node `docstring` | 2.3 MB | 2.3 MB | — |
+
+`GraphEdge` is `{ source: String, target: String, edge_type }`. Across 745,964
+edges that is 1,491,928 owned `String`s — 192 MB of text plus ~60 MB of headers
+and allocator overhead — holding exactly **161,725 distinct values**, every one
+of which is already sitting in `parsed.nodes[i].id`. This is the single largest
+avoidable allocation in the process, and it is the server-side twin of the
+client-side finding Round 2 built `NodeStore` for.
+
+---
+
+## Scoreboard
+
+| # | Item | Phase | Est. impact | Risk | Status |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| P10.1 | `ug gen`: stop parsing `graph.json` a third time, untyped | 0 | **Very high** — measured 3,378 → 2,250 MB | Very low | ⬜ |
+| P10.2 | `/api/graph/search`: narrow to the previous prefix's matches | 0 | **Very high** — measured 23.3 → 1.5 ms | Low | ⬜ |
+| P10.3 | `ug gen`: drop `index_result.clone()` and the second `IndexResult` | 1 | High — 162 MB clone + a full re-parse | Low | ⬜ |
+| P10.4 | Intern `GraphEdge` endpoints to node indices | 2 | **Very high** — ~246 MB of `ug serve`'s 1,245 | Medium | ⬜ |
+| P10.5 | Drop `encoded.identity` in server mode | 2 | **High** — 346 MB for a request that never comes | Low | ⬜ |
+| P10.6 | `AdjIndex`: CSR rows, borrowed id table | 2 | Medium — 323k `Vec` allocations + 22.8 MB of re-cloned ids | Low | ⬜ |
+| P10.7 | `dedupe_edges`: stop cloning 1.5M strings to key a map | 1 | Medium — ~210 MB of transient churn | Very low | ⬜ |
+| P10.8 | `extract_return_type`: compile the regex once, borrow the source | 1 | Medium — a regex compile + a body copy per function | Very low | ⬜ |
+| P10.9 | `/api/graph/search`: send what the caller reads | 2 | Medium — 133 KB → ~30 KB per keystroke | Low | ⬜ |
+| P10.10 | `graph_keyword_search` / `filter_edges_by_type`: unreachable | 3 | Cleanup — no caller outside tests | Very low | ⬜ |
+
+**Sequencing.** Phase 0 is two one-file changes with measured numbers already in
+hand and no shape change to anything — land them first. Phase 1 is the rest of
+the `ug gen` pipeline, which is self-contained in `cli/gen.rs` and
+`graph/build.rs`. Phase 2 is the `ug serve` representation work; P10.4 is the
+big one and P10.5/P10.6 are cheap once the edge representation is settled, so
+they go together. P10.9 sits in Phase 2 only because it is server-side — it
+depends on nothing and can be pulled forward at any point. Phase 3 is
+bookkeeping.
+
+**Not a dependency, but worth knowing:** P10.4 changes `GraphData`'s in-memory
+shape, which `graph/algos.rs`, `serve/snapshot.rs` and every MCP tool read.
+Doing P10.6 first would mean writing the `AdjIndex` twice.
+
+---
+
+## Phase 0 — Two measured wins, no shape change
+
+### ⬜ P10.1 — `ug gen`: stop parsing `graph.json` a third time, untyped
+
+**Where:** `native/src/cli/gen.rs:236`
+
+**Evidence.** By the time control reaches this line, `graph.json`'s text has
+already been parsed into a typed `GraphData` fifteen lines above:
+
+```rust
+let parsed_graph: Option<ultragraph::types::GraphData> = serde_json::from_str(&graph).ok();
+```
+
+and `GraphData` carries `pub resolution: Option<ResolutionStats>` — the exact
+four numbers the next block wants. It parses the whole 330 MB document a second
+time anyway, into `serde_json::Value`:
+
+```rust
+if let Ok(v) = serde_json::from_str::<serde_json::Value>(&graph) {
+    if let Some(r) = v.get("resolution") {
+        let n = |k: &str| r.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
+```
+
+An untyped `Value` is the most expensive representation serde has — every
+object becomes a `Map<String, Value>`, every number a tagged enum — and this one
+exists to read four `u32`s that are already in a struct on the stack. It is also
+alive at the same time as `parsed_graph`, so it lands squarely on the peak.
+
+**Fix.** Read them off `parsed_graph`:
+
+```rust
+if let Some(r) = parsed_graph.as_ref().and_then(|g| g.resolution.as_ref()) {
+    let (q, t, b, d) = (
+        r.resolved_qualified as u64,
+        r.resolved_typed as u64,
+        r.resolved_by_name as u64,
+        r.dropped_unresolved as u64,
+    );
+```
+
+**Measured**, `ug gen -i <neo4j> --no-ingest --no-cache`:
+
+| | before | after | |
+| :--- | ---: | ---: | ---: |
+| peak RSS | 3,378 MB | **2,250 MB** | **1.50×** |
+| wall clock | 5.17 s | **4.69 s** | 1.10× |
+
+Output is byte-identical — the `calls:` line reads
+`543808 resolved (0 by path, 540096 by receiver type, 3712 by name), 286079 unresolved`
+on both builds.
+
+**Prove it.** `/usr/bin/time -l ug gen -i <neo4j> --no-ingest --no-cache`, and
+diff the stdout against the baseline run.
+
+**Risk.** Very low. One expression replaced by another reading the same data
+from a value that is already in scope; the `if let` arms are the same shape.
+
+<a id="p102--prefix-narrowed-search"></a>
+### ⬜ P10.2 — `/api/graph/search`: narrow to the previous prefix's matches
+
+**Where:** `native/src/serve/api.rs:676-709`
+
+**Evidence.** Every request walks all 161,725 nodes and, per node, allocates a
+lowercased copy of the name (42 chars average) and of the qualified id (141
+chars average) to run a substring test on:
+
+```rust
+let lower = n.name.to_lowercase();
+let at = lower.find(&needle);
+…
+let id_match = !name_match && n.id.to_lowercase().contains(&needle);
+let doc_match = n.docstring.as_ref().map(|d| d.to_lowercase().contains(&needle)).unwrap_or(false);
+```
+
+That is ~30 MB of text scanned and copied per request. Round 2's P8.2 made this
+endpoint the page's search box in server mode and fires it per keystroke, so the
+cost is paid once per character typed. Measured, `?limit=200`:
+
+| query | median |
+| :--- | ---: |
+| `q=` (empty) | 1.8 ms |
+| `q=n` | 17.1 ms |
+| `q=node` | 23.3 ms |
+| `q=getNode` | 23.2 ms |
+
+The empty query is the control: it takes the same walk and pushes the same
+`ranked` entries, and skips only the matching. So **21.5 of the 23.3 ms is the
+match**, and none of it is the walk.
+
+> **The obvious fix is the wrong one, and it was measured.** Replacing both
+> `to_lowercase()` calls with an allocation-free ASCII case-insensitive scan
+> made the endpoint **slower**: 23.3 ms → 33.0 ms. `str::find` is a tuned
+> two-way/`memchr` search and a hand-rolled byte loop does not come close;
+> the allocation was never the expensive half. Recorded in
+> [Rejected / deferred](#rejected--deferred) so it is not re-proposed.
+
+**Fix.** Stop rescanning the graph. A search box is typed one character at a
+time, and substring containment is monotone under prefix: if `nod` is a prefix
+of `node`, then every node matching `node` in some field already matched `nod`
+in that field. So memoise the last `(needle, matching node indices)` on the
+snapshot, and when the incoming needle starts with the memoised one, iterate
+that index list instead of `parsed.nodes`.
+
+The memo is one `Mutex<Option<(String, Vec<u32>)>>` on `GraphSnapshot`, bounded
+by the node count (647 KB at its worst — a single-letter query matches almost
+everything, because the ids are long paths). It is invalidated for free by
+snapshot replacement, since it lives on the snapshot.
+
+**Measured**, typing `nodepr` one character at a time:
+
+| keystroke | matches | before | after | |
+| :--- | ---: | ---: | ---: | ---: |
+| `n` | 161,721 | 19.0 ms | 18.8 ms | — (nothing to narrow from) |
+| `no` | 20,539 | 21.5 ms | **4.3 ms** | 5.0× |
+| `nod` | 8,767 | 22.2 ms | **1.6 ms** | 13.9× |
+| `node` | 8,704 | 23.3 ms | **1.5 ms** | 15.5× |
+| `nodep` | 554 | 22.5 ms | **0.76 ms** | 29.6× |
+| `nodepr` | 338 | 23.8 ms | **0.75 ms** | 31.7× |
+
+`count` is identical on both builds for all six queries, so the ranking and the
+truncation flag are unchanged.
+
+**Prove it.** The `count` for a set of queries must match the baseline exactly —
+that is the whole correctness argument, since the memo changes only which nodes
+are *examined*. Add a test that issues a prefix chain (`n`, `no`, `nod`, `node`)
+and a second that issues them in the reverse order, and assert both produce the
+same counts as a fresh snapshot per query.
+
+**Risk.** Low, with one sharp edge: the type filter runs *before* the match, so
+the memo must record the matches of the **needle alone**, not of
+`needle + types`, or a request with a narrower `?types=` will poison the memo
+for the next request without one. Key the memo on the needle and apply the type
+filter to the narrowed candidates, exactly as the un-narrowed path does.
+
+The prototype cloned the memo `Vec` per request (647 KB at worst) to avoid
+holding the lock across the scan. Hold an `Arc<Vec<u32>>` instead.
+
+---
+
+## Phase 1 — The rest of the `ug gen` pipeline
+
+**Theme:** the pipeline is stitched together with JSON strings between stages
+that both have the typed value in hand. Each seam costs a serialise, a parse,
+and a full second copy of the data.
+
+### ⬜ P10.3 — Drop `index_result.clone()` and the second `IndexResult`
+
+**Where:** `native/src/cli/gen.rs:213`, `native/src/graph/mod.rs:20-28`,
+`native/src/cli/update.rs:172`
+
+**Evidence.** `index()` returns a **JSON string** (162 MB on this fixture), not
+an `IndexResult`. `build_graph` takes that string **by value**, so the caller —
+which needs it again at `gen.rs:259` to write `indexed-tree.json` — clones it:
+
+```rust
+let graph = build_graph(index_result.clone());   // +162 MB
+```
+
+and `build_graph` then parses it back into the struct it was serialised from:
+
+```rust
+pub fn build_graph(index_json: String) -> String {
+    let index_result: crate::types::IndexResult = serde_json::from_str(&index_json)…;
+    let graph = build::build_graph_from_index(&index_result);
+    serde_json::to_string(&graph).unwrap_or_default()
+}
+```
+
+So at the peak the process holds: the index JSON, a clone of the index JSON, an
+`IndexResult` parsed from it, the `GraphData` built from that, and the 330 MB
+graph JSON — five materialisations of two logical values.
+
+**Fix.** Three independent steps, in increasing order of blast radius:
+
+1. Write `indexed-tree.json` *before* `build_graph`, then move
+   `index_result` in rather than cloning it. One line moved; kills 162 MB.
+2. Give `build_graph` a borrowed sibling — `build_graph_from_index` is already
+   `pub(crate)` and takes `&IndexResult`. `build_graph(String) -> String` stays
+   as the library-facing wrapper.
+3. Make `index()` return the typed `IndexResult` and serialise at the one place
+   that writes the file. This is the real fix and the one that removes the seam
+   rather than working around it; it touches `cli/index.rs`, `cli/update.rs`
+   and `cli/demo.rs` as well.
+
+**Prove it.** Peak RSS on the same `ug gen` command, cumulative with P10.1.
+`graph.json` and `indexed-tree.json` must be byte-identical to the baseline.
+
+**Risk.** Low for (1) and (2) — the ordering of two `fs::write` calls and a new
+entry point beside an existing one. Medium for (3), which changes a public
+signature; it is listed separately so it can be deferred without losing (1).
+
+### ⬜ P10.7 — `dedupe_edges`: stop cloning 1.5M strings to key a map
+
+**Where:** `native/src/graph/build.rs:1353-1364`
+
+**Evidence.**
+
+```rust
+fn dedupe_edges(edges: &mut Vec<GraphEdge>) {
+    let mut seen: HashMap<(String, String, GraphEdgeType), bool> = HashMap::new();
+    edges.retain(|e| {
+        let key = (e.source.clone(), e.target.clone(), e.edge_type.clone());
+```
+
+Two owned `String`s per edge, allocated to be hashed and dropped. On this
+fixture that is 1,491,928 allocations totalling ~192 MB of copying, in a
+function whose entire job is to decide a boolean. The `HashMap<_, bool>` is a
+`HashSet` with a wasted byte and its padding per entry.
+
+**Fix.** Decide the keep-set from a borrow, then apply it:
+
+```rust
+let mut seen: HashSet<(&str, &str, &GraphEdgeType)> = HashSet::with_capacity(edges.len());
+let keep: Vec<bool> = edges.iter().map(|e| seen.insert((&e.source, &e.target, &e.edge_type))).collect();
+let mut it = keep.into_iter();
+edges.retain(|_| it.next().unwrap_or(true));
+```
+
+The borrow and the mutation are in separate statements, so this needs no
+unsafe and no second `Vec<GraphEdge>`.
+
+**Prove it.** Edge count after `build_graph` must be unchanged (745,964), and
+`graph.json` byte-identical. Peak RSS on `ug gen`, and a `--release` timing of
+`build_graph_from_index` alone in `native/tests/graph_bench.rs`.
+
+**Risk.** Very low. Same predicate, same iteration order, no allocation.
+
+### ⬜ P10.8 — `extract_return_type`: compile the regex once, borrow the source
+
+**Where:** `native/src/indexer/common.rs:302-319`
+
+**Evidence.** Called once per function node by `rust.rs:277`, `typescript.rs:435`
+and `python.rs:317`. When the grammar has no `return_type` field to offer — a
+Rust `fn` with no `-> T`, an unannotated Python `def`, which is the common case —
+it falls through to:
+
+```rust
+let node_text = get_node_text(Some(*node), source)?;      // copies the whole function body
+let return_re = regex::Regex::new(r"\)\s*:\s*([^\s{]+)").ok()?;   // compiles a regex
+```
+
+Both per function. `get_node_text` (`common.rs:74`) is
+`String::from_utf8(source[start..end].to_vec())` — it copies the entire body of
+every function in the repo onto the heap so a regex can look at its first line.
+
+The same shape is in `typescript.rs:234` and `:275` and `python.rs:179` and
+`:220`, compiled once per *file* rather than per function.
+`markdown.rs:248` already does it correctly and is the model:
+
+```rust
+fn link_regex() -> &'static regex::Regex {
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    RE.get_or_init(|| regex::Regex::new(…).expect("…"))
+}
+```
+
+**Fix.** A `static OnceLock<Regex>` per pattern, following `link_regex`. And
+give `common.rs` a `node_str(node, source) -> Option<&str>` that returns
+`std::str::from_utf8(&source[start..end]).ok()` — a borrow, no copy — for the
+read-only callers. `extract_return_type` becomes allocation-free except for the
+capture it actually returns.
+
+**Prove it.** `ug gen --no-ingest --no-cache` wall clock and peak RSS on a
+Python- or TypeScript-heavy repo (the neo4j fixture is Java, and `java.rs` does
+not call `extract_return_type` at all — pick a fixture that exercises the path).
+The graph must be byte-identical.
+
+**Risk.** Very low. `expect` on a literal pattern is what `link_regex` already
+does; a pattern that does not compile is a build-time bug, not a runtime one.
+
+---
+
+## Phase 2 — What `ug serve` holds
+
+### ⬜ P10.4 — Intern `GraphEdge` endpoints to node indices
+
+**Where:** `native/src/types.rs:745-749`
+
+**Evidence.** See [Where the bytes actually are](#where-the-bytes-actually-are):
+745,964 edges × 2 owned `String`s = ~252 MB resident, holding 161,725 distinct
+values that `parsed.nodes[i].id` already owns. Interned to `u32` that is 6.0 MB —
+**~246 MB, a fifth of `ug serve`'s 1,245 MB idle RSS**, and it comes off
+`ug gen`'s peak as well.
+
+It is also load-bearing for latency in three places that currently re-derive
+what interning would make free: `build_adj` hashes 1.49M strings to build the
+index (`snapshot.rs:115`), `api_edges` hashes two more per edge it returns
+(`api.rs:480`), and `dedupe_edges` clones 1.49M of them (P10.7).
+
+**Fix.** Keep `GraphEdge`'s **wire** shape exactly as it is — `graph.json` is a
+published format that the MCP tools, the agent tools and every older client
+read. Change only the in-memory representation, behind a serde adapter:
+`GraphData` deserialises endpoints through the node-id table it is already
+building, storing `src: u32, tgt: u32`, and serialises them back out as strings
+by indexing `nodes`.
+
+**Prove it.** `ug serve --project neo4j` idle RSS, which is a single `ps` read.
+`graph.json` round-trips byte-identically — parse it, re-serialise it, `cmp`.
+The full suite: this touches every reader of `e.source`.
+
+**Risk.** Medium, and it is the reason this is Phase 2 rather than Phase 0. The
+node-id table has to exist before the first edge is deserialised, which means
+either a two-pass deserialiser or a `DeserializeSeed`. An edge naming a node
+that does not exist is currently representable and would have to become either
+an error or a sentinel — `build_adj` silently drops those today
+(`snapshot.rs:115`'s `if let (Some(&si), Some(&ti))`), so the sentinel preserves
+behaviour and an error does not.
+
+### ⬜ P10.5 — Drop `encoded.identity` in server mode
+
+**Where:** `native/src/serve/snapshot.rs:15`, `:406-431`,
+`native/src/serve/encoding.rs:31-36`
+
+**Evidence.** `GraphSnapshot` holds `encoded: EncodedAsset`, whose `identity:
+Bytes` is the entire `graph.json` text — 346 MB here — for the life of the
+snapshot, to serve `GET /graph.json`.
+
+In server mode the page never asks for it. That is the entire point of server
+mode: `snapshot.rs:139` puts the cutoff at 50 MB, and `00-preamble.js:374`
+branches to `loadNodeIndex` and never touches the file. So on exactly the graphs
+where this buffer is large, it is dead weight — and it is 28% of idle RSS.
+
+Worse if anyone *does* request it: `EncodedAsset::brotli()` would compress 346 MB
+and retain the result in a second `OnceLock`, forever.
+
+**Fix.** When the resolved mode is `server`, don't retain the identity bytes.
+`GET /graph.json` re-reads from disk and streams the file — `mtime` is already
+on the snapshot to validate against, and this is a request the page is
+documented not to make. `EncodedAsset` keeps its current form for the assets
+where it earns its keep (the HTML and the renderer bundles, which are small,
+hot, and have no file behind them).
+
+Two consequences to handle: `GraphSnapshot::token()` reads
+`self.encoded.identity.len()` — keep the length as a `usize` field. And
+`ProjectContext::approx_bytes()` (`registry.rs:139`) is `identity * 3 +
+retained`; with the identity gone the estimate needs a different basis.
+
+**Prove it.** `ug serve --project neo4j` idle RSS. `curl -o - /graph.json | cmp`
+against the file, in both modes, with and without `Accept-Encoding`.
+
+**Risk.** Low. One request path changes from "serve a buffer" to "stream a
+file", and `ug serve` already binds to loopback.
+
+> **Note on the cache budget.** `snapshot_cache_budget()` is 512 MiB and
+> `approx_bytes()` estimates this snapshot at 346 × 3 + 346 = **1,384 MB**
+> against a measured 1,245 MB — the estimator is well calibrated and this is
+> not a bug. But it means one neo4j project is already 2.7× the entire budget,
+> and `evict_over_budget` never evicts the active project. On a graph this size
+> the only way under the ceiling is to make the snapshot smaller, which is what
+> P10.4 and P10.5 do — together they take the estimate to roughly 750 MB.
+
+### ⬜ P10.6 — `AdjIndex`: CSR rows, borrowed id table
+
+**Where:** `native/src/serve/snapshot.rs:85-125`
+
+**Evidence.**
+
+```rust
+pub(crate) struct AdjIndex {
+    pub(crate) id_to_idx: HashMap<String, usize>,
+    pub(crate) out: Vec<Vec<u32>>,
+    pub(crate) inc: Vec<Vec<u32>>,
+}
+```
+
+Two problems, both measured at 39 MB combined on this fixture (the
+`/api/graph/edges` step of the RSS table above):
+
+1. `out` and `inc` are 323,450 separately-allocated `Vec`s — 24 bytes of header
+   each plus whatever the doubling growth strategy overshot — to hold 1.49M
+   `u32`s that are pushed in a single known pass. `graph/algos.rs:357` already
+   has the right structure for this and says so in its own doc comment: *"one
+   flat"* CSR. Two counting passes give exact capacity and one allocation.
+2. `id_to_idx` clones every node id (`snapshot.rs:107`) — a third copy of the
+   22.8 MB of id text, after `parsed.nodes` and `encoded.identity`.
+
+**Fix.** Flatten `out`/`inc` to `offsets: Vec<u32>` + `flat: Vec<u32>`;
+`incident()` keeps its signature and returns two slices chained. For the id
+table, do what the client's `NodeStore` does (P9.1): a probe table of `u32`
+indices, hashing through `nodes[i].id` rather than owning a key.
+
+**Prove it.** RSS delta across the first `/api/graph/edges` request, and its
+median latency (currently 1.0 ms for 2,000 ids). `/api/graph/traverse` and
+`/api/graph/edges` results must be unchanged.
+
+**Risk.** Low, and lower after P10.4 — with interned endpoints, `build_adj`
+needs no id table at all for the edge walk. Do these in that order.
+
+### ⬜ P10.9 — `/api/graph/search`: send what the caller reads
+
+**Where:** `native/src/serve/api.rs:719-726`,
+`native/src/vis/js/02-dialogs.js:807-845`
+
+**Evidence.** The endpoint serialises whole `GraphNode` rows — metrics,
+signature, docstring, imports, exports, calls, annotations, boundaries.
+`?q=node&limit=200` is **133 KB**. The one caller reads two things out of each
+row:
+
+```js
+for (const row of data.nodes || []) {
+    if (boundaryOnly && !(row.boundaries && row.boundaries.length)) continue;
+    const node = state.nodeById.get(row.id);
+    if (node) nodes.push(node);
+}
+```
+
+`row.id`, and whether `row.boundaries` is non-empty. Everything else is parsed
+and dropped, per keystroke.
+
+The client then **re-sorts by name**, reproducing the ranking the server did in
+P8.3 — the same comparison, on the same 200 rows, twice.
+
+**Fix.** A projection: `?fields=id` returns `{"ids": [...], "boundary": [...]}`
+with the counts unchanged, and the full-row shape stays the default for the
+hand-driven callers the endpoint was built for. Drop the client-side re-sort and
+document that the server's order is the order — it already is, since P8.3.
+
+**Prove it.** Response bytes at `limit=200`, and the rendered result list must
+be identical (same 200 nodes, same order).
+
+**Risk.** Low. Additive parameter; the existing shape is untouched.
+
+---
+
+## Phase 3 — Bookkeeping
+
+### ⬜ P10.10 — `graph_keyword_search` / `filter_edges_by_type`: unreachable
+
+**Where:** `native/src/graph/algos.rs:277-354`, exported at `native/src/lib.rs:44-45`
+
+**Evidence.** Neither has a caller in `cli/`, `serve/`, `mcp/` or
+`agent_tools/`. The only references outside their own definitions are
+`native/tests/search_test.rs` and `native/tests/graph_test.rs` — they are
+public API that nothing but its own tests uses. Both also carry the exact
+defects the earlier rounds fixed elsewhere:
+
+- `filter_edges_by_type` runs `format!("{:?}", e.edge_type)` **and** two
+  `to_lowercase()` calls per (edge × requested type) — 4.5M allocations for
+  three types over this fixture — the pattern P3.3 removed from
+  `/api/graph/stats`.
+- `graph_keyword_search` does the same `format!("{:?}")` per node
+  (`algos.rs:328`), re-parses the whole graph from a JSON string like the
+  `shortest_path` that P4.1 fixed, and `.cloned()`s an unbounded result set
+  like the `api_search` that P4.4 bounded.
+
+**Fix.** Decide which they are. If they are API, give them the P3.3/P4.1/P4.4
+treatment and a caller. If they are not, delete them and their tests; the
+capability exists at `/api/graph/search` and in the MCP tools, better done.
+
+**Prove it.** `cargo build` after deletion, and the suite.
+
+**Risk.** Very low either way. Worth resolving before anyone optimises them by
+reflex.
+
+### Smaller things found in the same pass, not worth their own item
+
+- `load_snapshot` (`snapshot.rs:412-415`) does `fs::read` → `String::from_utf8`
+  → `serde_json::from_str`, which validates 346 MB of UTF-8 twice.
+  `serde_json::from_slice` does it once, and the bytes go to `EncodedAsset`
+  either way.
+- `api_edges` (`api.rs:509`) does `body.ids.clone()` to fill the `complete`
+  field. `body` is owned and dead after this; move it.
+- `project.json` for this fixture is **892 KB**, almost all of it the indexed
+  file list. It is read whole for anything that wants the node count. Worth
+  checking what `/api/projects` and the staleness poll actually deserialise
+  before this grows further.
+- `MCP`'s `evict_over_budget` (`mcp/mod.rs:457`) uses `Vec::remove(0)` — the
+  pattern P1.1 removed from Brandes — but over an LRU list a handful of entries
+  long. Correct as written; noted so it is not flagged again.
+
+---
+
 ## Results log
 
 Append one row per landed item. Keep the numbers, not just the verdict.
@@ -1567,6 +2161,14 @@ Append one row per landed item. Keep the numbers, not just the verdict.
 | 2026-08-20 | P6–P9 | cold click, degree-8,680 hub | 69 ms | 38 ms | 1.8×, once the post-load GC has settled |
 | 2026-08-20 | P8.2 | keyword search, 485k nodes | 77 ms on the main thread | 82 ms, none of it on it | same wall clock, responsive tab |
 | 2026-08-20 | — | client front-coding decoder | silently wrong ids | correct | scratch grew without copying; see §Bugs |
+| 2026-08-24 | — | `ug gen` neo4j, peak RSS | 3,378 MB | — | baseline for Round 3; 10× the 330 MB it writes |
+| 2026-08-24 | — | `ug serve` neo4j, idle RSS | 1,245 MB | — | baseline; before any request is served |
+| 2026-08-24 | P10.1 | `ug gen` neo4j, peak RSS | 3,378 MB | 2,250 MB | 1.50×; one redundant `Value` parse, output identical |
+| 2026-08-24 | P10.1 | `ug gen` neo4j, wall clock | 5.17 s | 4.69 s | 1.10× |
+| 2026-08-24 | P10.2 | `/api/graph/search?q=node` | 23.3 ms | 1.5 ms | 15.5×; prefix-narrowed, `count` identical |
+| 2026-08-24 | P10.2 | `/api/graph/search?q=nodepr` | 23.8 ms | 0.75 ms | 31.7×; widens as the query lengthens |
+| 2026-08-24 | P10.2 | `/api/graph/search?q=n` | 19.0 ms | 18.8 ms | unchanged — the first keystroke has nothing to narrow from |
+| 2026-08-24 | — | `graph.json` edge endpoints | 1.49M `String`s / ~252 MB | — | 161,725 distinct values; 6.0 MB interned (P10.4) |
 
 ---
 
@@ -1580,3 +2182,4 @@ them — so the next audit does not re-propose them.
 | Storage layer / PPR / vector index tuning | Measured 2026-08-16: not the bottleneck at 162k nodes. `/api/graph/cycles` over 746k edges runs in 0.33 s. Do not go looking here again. |
 | Index identity for server mode (P9.2) | Would take the 485k index from 58 MB to ~18 MB and the wire from 51.7 MB to 9.5 MB — the biggest remaining win by far. Deferred because identity is not a client-side detail: eight endpoints return real qualified ids, the deep-link URL format is one, and 60+ client call sites pass them around opaquely. Revisit when a real 500k index exists to test against. |
 | Chat retrieval latency | Measured 2026-08-16: wall time is entirely local-LLM tokens (~83 tok/s decode). Tool execution was 0.1 s across 4 calls. |
+| Allocation-free lowercase scan in `api_search` | Measured 2026-08-24: **slower**, 23.3 ms → 33.0 ms on the 162k fixture. `to_lowercase()` feeds `str::find`, which is a tuned two-way/`memchr` search; a hand-rolled ASCII byte loop loses to it by more than the allocation costs. The scan was never the allocation — see [P10.2](#p102--prefix-narrowed-search). |

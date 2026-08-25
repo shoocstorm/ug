@@ -308,7 +308,7 @@ ug gen -i ./src --serve --watch              # also watches the graph.json it ju
 
 Inherits from the original `gen` invocation: `-p`/`--port`, `--host`, `--watch`, `--repo-root`, and the embedder flags (`--base-url`, `--api-key`, `--model`). Sets `-i <generated_graph_path>` and `-d <db_path>` automatically. When `--no-ingest` is set, also passes `--no-db` so Phase 3 routes 503 cleanly instead of crashing on a missing DB.
 
-Internally implemented by a `chain_to_serve()` helper in `main.rs` that builds a synthetic args vec and hands off to `serve::run_serve(...)` (which never returns).
+Internally implemented by a `chain_to_serve()` helper in `cli/gen.rs` that builds a synthetic args vec and hands off to `serve::run_serve(...)` (which never returns).
 
 ---
 
