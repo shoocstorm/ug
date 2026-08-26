@@ -403,7 +403,7 @@ changelog on every bump, and keep engine calls behind the `KnowledgeStore`
 trait (`native/src/storage/store.rs`) so upgrades stay confined to
 `native/src/storage/db.rs`.
 
-## 9. Two bugs this codebase keeps re-introducing
+## 9. Three bugs this codebase keeps re-introducing
 
 Both are invisible in review, silent at runtime, and have each already shipped
 here more than once. Check for them by reflex.
@@ -439,6 +439,40 @@ Rules:
   Resolve it before comparing it to anything.
 - Any check of the form "is A inside B" needs a test with a symlinked path.
   A `TempDir` on macOS is that test for free.
+
+### 9c. A `HashMap` whose iteration order reaches an ordered output
+
+Rust seeds each `HashMap`'s hasher per instance, so iteration order differs
+between runs of the same binary on the same input. If that order decides what
+gets written, `ug gen` stops being reproducible — and it fails *silently*: the
+content is right, only the order moves, so tests pass and diffs look like noise.
+
+Three shapes, all of which have shipped here:
+
+```rust
+map.into_values().collect()          // → a Vec whose order is now arbitrary
+#[serde(...)] field: HashMap<..>     // → JSON key order moves between runs
+vec.sort_unstable_by(score); truncate(n)   // → ties broken arbitrarily
+```
+
+The third is the nastiest and took two passes to find. Sorting by a score that
+**ties** and then truncating keeps a *different subset* each run — so
+`graph.json` can be byte-reproducible while the keyword index built from it is
+not. Every `sort_unstable_by` followed by a `truncate` needs a total order:
+`.then_with(|| a.id.cmp(&b.id))`.
+
+It also hides behind partial fixes. `java.rs` sorted its imports years ago with
+a comment naming this exact failure; the other four extractors never got it, so
+the bug looked fixed for Java repos and lived on everywhere else. When you fix
+one instance, **put the fix in the shared helper every caller already goes
+through** (`indexer::common::imports_in_stable_order`) rather than at the site.
+
+Rules:
+- Deriving an ordered output? Use `BTreeMap`/`BTreeSet`, or sort before emit.
+- `sort_unstable_*` + `truncate` ⇒ break ties on a stable key.
+- The test is two runs compared, not one run inspected. And **two agreeing
+  samples prove nothing** — the first two runs of an affected binary agreed,
+  which sent an investigation down the wrong path for half an hour. Take five.
 
 ### 9b. No unbounded work inside `async fn`
 
@@ -479,6 +513,97 @@ And note the CPU-bound helpers take `&GraphData`, not `String`
 (`calculate_centrality_graph`, `detect_cycles_graph`). The `String` overloads
 re-parse the graph from scratch; never call those when a parsed graph is in
 scope.
+
+## 10. Measuring performance without fooling yourself
+
+**Every number in `docs/dev/PERF-TUNING-JOURNEY.md` was produced this way, and
+each rule below is there because breaking it produced a wrong number that got
+published before it was caught.**
+
+### 10a. Measure `--release`, always
+
+A debug build is not "the same thing, slower". `Cargo.toml` sets
+`[profile.dev.package."*"] opt-level = 2`, so **dependencies are optimized and
+`ultragraph` itself is not**. Phases that are our code run 3–5× slower; phases
+that are pure OverGraph run at **1.0×**. Measured on one input: `Writing nodes`
+1,382 ms debug vs 258 ms release, while `Building query indexes` was 2,105 vs
+2,082 ms.
+
+So a debug profile does not scale the phase table — it *reshapes* it, and will
+point you at the wrong phase. `target/debug/ug gen` on a large repo reads 3.5×
+slower overall and blames entirely the wrong stage.
+
+### 10b. Units — the one that has already burned us
+
+| Source | Unit |
+|---|---|
+| `/usr/bin/time -l` → `maximum resident set size` | **bytes** on macOS (KB on Linux) |
+| `ps -o rss=` | **KB** |
+
+Divide the first by `1e6` for MB; the second by `1024` gives **MiB**. Mixing
+them silently inflated a reported win by 2× (a "−470 MB" that was really −245,
+and on remeasurement was really 0). Pick MB (10⁶), state it, and convert at the
+point of capture — not in your head later.
+
+### 10c. Take medians of ≥5, and know your noise floor
+
+Peak RSS on a 5 GB workload varies **~100 MB run to run**; wall clock on a 20 s
+command varies ~0.5 s. A single sample each side cannot resolve anything
+smaller. Before claiming a win, check the gap exceeds the spread *within* one
+side — that check is what turned a claimed 245 MB memory win into "noise, but a
+real 0.32 s CPU win".
+
+### 10d. Allocation churn is a CPU cost, not a memory one
+
+Two related facts, learned the hard way:
+
+- **On macOS, freeing does not return memory to the OS.** Allocate-then-free
+  leaves RSS where it was. Only *not allocating* moves peak.
+- **Therefore short-lived allocations never appear in peak RSS at all.**
+  Removing ~4.5M `String` allocations moved peak by 15 MB against a 113 MB
+  spread — nothing. It was worth 0.32 s of CPU, and that is the only claim it
+  should carry.
+
+Peak RSS is set by the largest **simultaneous live set**. If you want peak to
+move, shrink what is alive at once (intern at parse time, stream rows per batch,
+mmap instead of read) — not how many allocations happen.
+
+### 10e. Attribute before optimizing
+
+Time the phases first, then pick. Twice this round the phase under discussion
+was not the expensive one: `build_texts` was assumed to be the cost and was
+4.2% of the command, while an un-suspected helper next to it was larger. Cheap
+attribution beats a good guess:
+
+```bash
+/usr/bin/time -l target/release/ug gen …      # peak RSS, bytes
+# 0.2s `ps -o rss=` sampling for a curve; temporary Instant probes for phases —
+# revert the probes before landing.
+```
+
+## 11. Record what you learn, here, without being asked
+
+When you find something that would cost the next agent an hour — a measurement
+trap, a footgun that looks like correct behaviour, a fix that has to go in a
+shared helper or it will be re-broken — **add it to this file in the same
+change**, in the style of §9 and §10: the concrete incident, then the rule.
+
+This is a standing instruction of the same kind as §7.2. Do not file it as
+follow-up work and do not wait to be told.
+
+Where things go:
+- **`Agents.md`** — how to work in this repo: traps, invariants, rules of
+  thumb. Durable, and true regardless of which task you are on.
+- **`docs/dev/PERF-TUNING-JOURNEY.md`** — performance specifically: the
+  measurement, the number, and what was rejected with the number that killed it.
+  Its Rejected/deferred table exists so the next audit does not re-propose a
+  measured dead end.
+- **A code comment** — when the reason lives at one site and would be deleted
+  by anyone who did not know it (`java.rs`'s import sort was exactly this, and
+  four other extractors needed the same thing).
+
+Prefer the shared helper over the comment: §9c shipped five times because the
+fix sat in one caller instead of the path every caller goes through.
 
 ---
 

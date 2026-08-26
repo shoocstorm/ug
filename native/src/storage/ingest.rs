@@ -147,7 +147,7 @@ impl IngestPlan {
 pub struct RowStream<'a> {
     graph: &'a GraphData,
     captured: &'a HashMap<String, CapturedCode>,
-    facts_ctx: FactContext,
+    facts_ctx: FactContext<'a>,
     now: i64,
     remaining: usize,
     reusable: std::vec::IntoIter<NodeRow>,
@@ -617,7 +617,7 @@ pub fn build_texts(
         .nodes
         .iter()
         .map(|n| {
-            let names = related.get(&n.id).map(|v| v.as_slice()).unwrap_or(&[][..]);
+            let names = related.get(n.id.as_str()).map(|v| v.as_slice()).unwrap_or(&[][..]);
             // Only nodes with a real line range get comments. A File node's
             // "span" is the entire file, so letting it participate would
             // hand it every comment in the file and — through the banner
@@ -945,8 +945,9 @@ mod tests {
     /// A fact context over a graph with no edges — every degree is zero.
     /// Enough for the row-comparison tests, which vary node content rather
     /// than topology.
-    fn fctx() -> FactContext {
-        FactContext::new(&graph(vec![], vec![]))
+    fn fctx() -> FactContext<'static> {
+        // See the note on `facts::tests::ctx_of` — leaked for the same reason.
+        FactContext::new(Box::leak(Box::new(graph(vec![], vec![]))))
     }
 
     /// The row a previous ingest would have written for `n`. Facts are
@@ -1286,10 +1287,10 @@ mod tests {
     fn a_new_caller_elsewhere_forces_a_rewrite_even_though_the_node_is_identical() {
         let n = node("a");
         let prev = stored(&n); // ingested when nothing called it
-        let with_caller = FactContext::new(&graph(
+        let with_caller = FactContext::new(Box::leak(Box::new(graph(
             vec![],
             vec![edge("caller", &n.id, GraphEdgeType::Calls)],
-        ));
+        ))));
         assert!(
             !stored_row_matches(&prev, &n, "Function", None, &with_caller),
             "a node that gained a caller must be rewritten"

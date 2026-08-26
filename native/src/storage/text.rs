@@ -121,7 +121,7 @@ fn humanize_identifier(ident: &str) -> Option<String> {
 /// As [`build_node_text_with_comments`] with no comments and the default
 /// budget. Kept for callers that have neither — tests, and the CLI
 /// progress-reporting paths.
-pub fn build_node_text(node: &GraphNode, related_names: &[String]) -> String {
+pub fn build_node_text(node: &GraphNode, related_names: &[&str]) -> String {
     build_node_text_with_comments(node, related_names, "", &EmbedBudget::default())
 }
 
@@ -140,7 +140,7 @@ pub fn build_node_text(node: &GraphNode, related_names: &[String]) -> String {
 /// comment-only edit from zero.
 pub fn build_node_text_with_comments(
     node: &GraphNode,
-    related_names: &[String],
+    related_names: &[&str],
     comments: &str,
     budget: &EmbedBudget,
 ) -> String {
@@ -528,24 +528,25 @@ fn folder_path_from_id(id: &str) -> Option<&str> {
 /// Build a `node_id -> [neighbour names]` map by walking every edge in
 /// `graph`. Both endpoints of an edge contribute to each other so the
 /// embedded text reflects bidirectional context.
-pub fn collect_related_names(graph: &GraphData) -> HashMap<String, Vec<String>> {
+pub fn collect_related_names(graph: &GraphData) -> HashMap<&str, Vec<&str>> {
     let id_to_name: HashMap<&str, &str> = graph
         .nodes
         .iter()
         .map(|n| (n.id.as_str(), n.name.as_str()))
         .collect();
 
-    let mut out: HashMap<String, Vec<String>> = HashMap::new();
+    // Borrowed throughout. Owning the keys and values cost four `String`
+    // allocations per edge — ~3 million on a large repo — and most of them
+    // were a 141-character id allocated only to hash it against an entry that
+    // already existed. Same shape as P10.7 and P11.9. See P11.11 in
+    // docs/dev/PERF-TUNING-JOURNEY.md.
+    let mut out: HashMap<&str, Vec<&str>> = HashMap::new();
     for edge in &graph.edges {
         if let Some(target_name) = id_to_name.get(&*edge.target) {
-            out.entry(edge.source.to_string())
-                .or_default()
-                .push(target_name.to_string());
+            out.entry(&edge.source).or_default().push(target_name);
         }
         if let Some(source_name) = id_to_name.get(&*edge.source) {
-            out.entry(edge.target.to_string())
-                .or_default()
-                .push(source_name.to_string());
+            out.entry(&edge.target).or_default().push(source_name);
         }
     }
 

@@ -227,7 +227,8 @@ fn walk_usages(graph: &GraphData, p: &FindUsagesParams) -> FindUsagesResult {
     let mut inbound: HashMap<&str, Vec<(&str, &'static str)>> = HashMap::new();
     for e in &graph.edges {
         let et = edge_type_str(&e.edge_type);
-        if edge_types.contains(&et.to_lowercase()) {
+        // Allocation-free, as in `traverse` — see P11.12.
+        if edge_types.iter().any(|t| t.eq_ignore_ascii_case(et)) {
             inbound
                 .entry(&*e.target)
                 .or_default()

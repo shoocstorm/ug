@@ -28,7 +28,7 @@ rows, which are Round 2's synthetic 485k-node index (~3× neo4j).
 
 | Surface | Before | Now | |
 | :--- | ---: | ---: | ---: |
-| `ug gen` **cold** (default, with ingest) | 33.87 s / 6,117 MB | **20.12 s / 5,123 MB** | **1.68× / 1.19×** |
+| `ug gen` **cold** (default, with ingest) | 33.87 s / 6,158 MB | **20.23 s / 4,997 MB** | **1.67× / 1.23×** |
 | `ug gen` **warm** (re-index, nothing changed) | 46.01 s / 6,826 MB | **8.05 s / 2,633 MB** | **5.7× / 2.6×** |
 | `ug gen --no-ingest` | 5.17 s / 3,378 MB | **4.18 s / 1,161 MB** | 1.24× / **2.91×** |
 | `ug serve` idle RSS | 1,245 MB | **730 MB** | **1.70×** |
@@ -99,6 +99,18 @@ held since.
   allocating it leaves RSS where it was. Every memory win in Rounds 3–4 had to
   be *not allocating*, never *allocating then releasing*. This cost two
   separate false starts (P10.4, P10.5) before it was understood.
+- **The corollary: allocation *churn* does not show up in peak RSS at all.**
+  Millions of short-lived allocations that are freed promptly never raise the
+  high-water mark, so removing them never lowers it. P11.11 and P11.12 together
+  removed ~4.5M `String` allocations and moved peak RSS by **15 MB against a
+  113 MB run-to-run spread** — nothing. They are worth 0.32 s of CPU, and that
+  is the only claim they should carry. Peak RSS is set by the largest
+  *simultaneous live set*; churn is a CPU cost wearing a memory-shaped mask.
+- **Units: every RSS figure here is MB (10⁶), from `/usr/bin/time -l`'s
+  `maximum resident set size`, which is bytes on macOS.** `ps -o rss=` reports
+  KB, so the 0.2 s sampler's numbers are MiB unless converted — mixing the two
+  silently inflated a reported win by 2× once. Take a median of ≥5; the spread
+  on a 5 GB workload is ~100 MB.
 - **`str::find` beats a hand-rolled scan.** `to_lowercase()` + `find` is a
   tuned two-way/`memchr` search; the allocation is not the expensive half.
 - **`ug gen` output is not reproducible** — see
@@ -325,7 +337,7 @@ memory**.
 | wall clock | **33.87 s** |
 | …of which ingest | **29.62 s (87%)** |
 | CPU | 56.4 s user on 18 cores — **1.7× average parallelism** |
-| **peak RSS** | **6,117 MB** |
+| **peak RSS** | **6,158 MB** |
 | the same command `--no-ingest` | 4.18 s / 1,161 MB |
 
 ### Where the 29.6 s went
@@ -365,14 +377,16 @@ row sets are materialised in full before the first batch is written.
 | P11.4 | `node_rows`: stream instead of materialising every row | node write **10.5 → 7.5 s**, −703 MB | ✅ |
 | P11.5 | `capture_graph_code`: parallel, not a serial loop over 8,910 files | folded into the phase below | ✅ |
 | P11.6 | Skip the edge write when the edge set is unchanged | warm **12.7 → 8.1 s**, −1.7 GB | ✅ |
-| P11.7 | `build_texts`: parallel | **deferred — see below** | ⏭️ |
+| P11.7 | `build_texts`: parallel | **deferred — 3.3% of the command, 1.7% reachable** | ⏭️ |
 | P11.8 | Two silent phases, plus the untimed store open and commit | the 4.71 s mystery is **4.23 s of commit** | ✅ |
 | P11.9 | `graph_id_set`: 161,725 id clones to build a prune set | ~23 MB of transient copies | ✅ |
 | P11.10 | The index's content was not reproducible | **6/6 runs identical**, both fixtures | ✅ |
+| P11.11 | `collect_related_names`: borrow instead of 4 `String`s per edge | ~3M allocations gone | ✅ |
+| P11.12 | Sweep for the same pattern everywhere (`FactContext`, two traversals) | with P11.11: **−0.32 s (1.6%)**, and **no** measurable memory change | ✅ |
 
 | `ug gen -i <neo4j> --no-cache` | before Round 4 | now | |
 | :--- | ---: | ---: | ---: |
-| **cold** — first index | 33.87 s / 6,117 MB | **20.12 s / 5,123 MB** | **1.68× / 1.19×** |
+| **cold** — first index | 33.87 s / 6,158 MB | **20.23 s / 4,997 MB** | **1.67× / 1.23×** |
 | **warm** — re-index, nothing changed | 46.01 s / 6,826 MB | **8.05 s / 2,633 MB** | **5.7× / 2.6×** |
 
 Every phase of an ingest now has a name and a number:
@@ -424,22 +438,88 @@ the returned edge ids so the old ones can be deleted, or delete the graph's
 edges before rewriting, or get edge identity into OverGraph's `EdgeInput`.
 Until then `EdgeRow::id` is ~216 MB of string built per ingest and discarded.
 
-### ⏭️ P11.7 deferred — `build_texts` parallelism changes retrieval semantics
+### ⏭️ P11.7 deferred — measured, not argued
 
-`build_texts` threads a `&mut HashSet` (`seen_banner`) through the whole fold
-so a licence header is indexed once rather than on every node. Two routes to
-parallelising it, and both were rejected on inspection:
+**Status: not done, and the case for doing it got weaker.**
 
-- **Per-file banner sets** would parallelise cleanly but change *attribution*:
-  a header shared by 1,000 files would be indexed 1,000 times instead of once.
-  That is a retrieval-quality change, not a performance one.
+The first deferral was on design grounds without measuring the split inside the
+phase. That was the wrong order. Instrumented, the "Building node texts" phase
+on the neo4j fixture breaks down as — before, and after [P11.11](#p1111) landed
+inside it:
+
+| part | at deferral | now | shared state? |
+| :--- | ---: | ---: | :--- |
+| `collect_related_names` | 371 ms | **230 ms** | no — P11.11 took 141 ms out |
+| `extract_prose_comments` | 258 ms | 250 ms | **yes — `seen_banner`** |
+| `build_node_text_with_comments` | 220 ms | 196 ms | no |
+| **`build_texts` total** | **849 ms** | **677 ms** | |
+| phase total (incl. capture + sparse stats, already parallel) | 1.51 s | **1.32 s** | |
+
+So `build_texts` is now **677 ms of a 20.4 s command — 3.3%** — and 250 ms of
+that is genuinely blocked by `seen_banner`. Parallelising everything that
+*isn't* blocked is worth ~350 ms at the theoretical limit: **1.7%**, for a
+change that touches how the embedding text is built.
+
+That settles it on arithmetic rather than on the design argument, which was
+also true but weaker:
+
+- **Per-file banner sets** parallelise cleanly but change *attribution* — a
+  header shared by 1,000 files would be indexed 1,000 times instead of once.
+  A retrieval-quality change, not a performance one.
 - **Extract in parallel, dedupe serially** does not decompose.
   `extract_prose_comments` interleaves the dedup with a running character
   budget and an early `break`, so a line skipped as a banner does not consume
-  budget — the dedup decides *which* lines are kept and where the cut falls.
+  budget: the dedup decides *which* lines are kept and where the cut falls.
+  Exact equivalence needs an unbounded first pass, which trades the time for
+  memory in a round spent buying memory back.
 
-The phase is now 1.39 s of a 20.1 s command. Not worth changing what the index
-contains to save part of it.
+Not worth changing what the index contains, or holding, for 1.7%. Revisit only
+if `build_texts` ever becomes a large share of the command again — which
+P11.11 made *less* likely, not more.
+
+<a id="p1111"></a>
+### ✅ P11.11 / P11.12 — the clone-to-key sweep, and a corrected claim
+
+Measuring P11.7 turned up that the biggest piece of that phase was not the one
+under discussion. `collect_related_names` walked all 745,964 edges calling
+`edge.source.to_string()` to key a map — a ~141-character id allocated only to
+be hashed against an entry that already exists — twice per edge, plus two more
+for the values. ~3 million allocations.
+
+A scan for the same shape across `native/src` then found three more:
+
+| site | what it did | per |
+| :--- | :--- | :--- |
+| `storage/facts.rs` `FactContext::new` | `e.source.to_string()` / `e.target.to_string()` to key three degree maps — **and it is built twice per ingest** | ~1.5M allocations per call |
+| `agent_tools/traverse.rs` | `et.to_lowercase()` to compare a `&'static str` against an already-lowercased filter | one `String` per edge |
+| `agent_tools/find_usages.rs` | the same | one `String` per edge |
+| `cli/graph_algos.rs` | `node_type_str(..).to_lowercase()` against a lowercased list | one `String` per node |
+
+All now borrow, or compare with `eq_ignore_ascii_case`.
+
+**The result is smaller than first reported, and the correction is the point.**
+Measured properly — five runs each side, medians, one consistent unit:
+
+| | before | after | |
+| :--- | ---: | ---: | ---: |
+| `ug gen` cold, wall | 20.55 s | **20.23 s** | −0.32 s (**1.6%**) |
+| `ug gen` cold, peak RSS | 5,012 MB | 4,997 MB | −15 MB — **noise** |
+
+The time win is real: the gap exceeds the run-to-run spread on the before side
+(0.14 s). The memory win is not: 15 MB against a 113 MB spread.
+
+Two earlier claims for P11.11 — **−470 MB**, then **−245 MB** — were both
+wrong, and wrong for two different reasons worth recording:
+
+1. **Mixed units.** The "before" came from `time -l` bytes ÷ 10⁶ (MB) and the
+   "after" from `ps` KB ÷ 1024 (MiB). Comparing them inflated the gap ~2×.
+2. **Single samples against a ~100 MB spread.** Even in consistent units, one
+   run per side cannot resolve a difference this size.
+
+The underlying reason there is no memory win at all is the corollary in
+[Standing conclusions](#standing-conclusions): ~4.5M allocations that are
+freed promptly never raise the high-water mark, so removing them never lowers
+it. Churn is a CPU cost, not a memory one.
 
 ### What this round taught
 
@@ -513,25 +593,29 @@ One row per landed item or baseline. Keep the numbers, not just the verdict.
 | 2026-08-25 | **Round 3** | `ug serve` neo4j idle | 1,245 MB | **730 MB** | **1.70×**; startup 0.31 s → 0.62 s |
 | 2026-08-25 | **Round 3** | `/api/graph/search?q=nodepr` | 23.8 ms | **0.44 ms** | **54×**; `count` identical |
 | 2026-08-25 | — | `ug gen` reproducibility | non-deterministic | unchanged | pre-existing at HEAD; 5 samples. Not fixed |
-| 2026-08-25 | — | `ug gen` **default** (with ingest) | 33.87 s / 6,117 MB | — | Round 4 baseline; ingest is 87% of the command |
+| 2026-08-25 | — | `ug gen` **default** (with ingest) | 33.87 s / 6,158 MB | — | Round 4 baseline; ingest is 87% of the command |
 | 2026-08-25 | — | …of which `upsert_nodes` | 10.42 s | — | 35% of ingest; inside OverGraph 0.17 |
 | 2026-08-25 | — | …untimed store open + commit | 4.71 s | — | 16% of ingest with no phase name |
 | 2026-08-25 | P11.1 | `refresh_sparse_stats` | 7.23 s | 0.93 s | **7.8×**; equality with the serial pass pinned in-process |
 | 2026-08-25 | P11.1 | "Building node texts" phase | 8.93 s | 2.62 s | 3.4× |
-| 2026-08-25 | P11.3 | `ug gen` cold, peak RSS | 6,117 MB | 5,599 MB | 518 MB; rows built per batch |
+| 2026-08-25 | P11.3 | `ug gen` cold, peak RSS | 6,158 MB | 5,599 MB | 518 MB; rows built per batch |
 | 2026-08-25 | P11.2 | warm re-index, nodes rewritten | 161,725 | **0** | `0 unchanged` → `161725 unchanged` |
 | 2026-08-25 | P11.2 | — | reported "embedded", cleared `pendingVectors` | reports 161,725 owed | bug the change opened; `vectorless_kept` closes it |
 | 2026-08-25 | P11.10 | sparse-index terms, 5 runs, same binary | 84,481–84,519 | — | the index *content* is nondeterministic, not just its order |
-| 2026-08-25 | **Round 4 Ph0** | `ug gen` **cold** | 33.87 s / 6,117 MB | **27.07 s / 5,743 MB** | **1.25×** wall |
+| 2026-08-25 | **Round 4 Ph0** | `ug gen` **cold** | 33.87 s / 6,158 MB | **27.07 s / 5,743 MB** | **1.25×** wall |
 | 2026-08-25 | **Round 4 Ph0** | `ug gen` **warm** | 46.01 s / 6,826 MB | **16.63 s / 4,369 MB** | **2.77× wall, 1.56× peak**; graph.json equal |
 | 2026-08-26 | P11.10 | `graph.json`, 6 runs, ug repo | 6 distinct | **1** | reproducible; four extractors were missing Java's sort |
 | 2026-08-26 | P11.10 | sparse-index terms, 4 runs | 9,340–9,364 | **9,331 ×4** | second cause: tied scores truncated in HashMap order |
 | 2026-08-26 | P11.4 | `Writing nodes` phase | 10.54 s | 7.50 s | streamed; −703 MB peak, and *faster* |
 | 2026-08-26 | P11.8 | the untimed 4.71 s | unnamed | **4.23 s commit** + 0.02 s open | every ingest phase now has a name |
 | 2026-08-26 | P11.6 | warm re-index | 12.68 s / 4,346 MB | **8.05 s / 2,633 MB** | edge write skipped; commit 4.25 s → 0.03 s |
-| 2026-08-26 | **Round 4** | `ug gen` **cold** | 33.87 s / 6,117 MB | **20.12 s / 5,123 MB** | **1.68× / 1.19×** |
+| 2026-08-26 | **Round 4** | `ug gen` **cold** | 33.87 s / 6,158 MB | **20.23 s / 4,997 MB** | **1.67× / 1.23×**; medians of 5 |
 | 2026-08-26 | **Round 4** | `ug gen` **warm** | 46.01 s / 6,826 MB | **8.05 s / 2,633 MB** | **5.7× / 2.6×**; graph.json equal |
 | 2026-08-26 | — | store edge count over 3 re-indexes | 5 → 10 → 15 | unchanged | **bug, not fixed**: edges append, never replace |
+| 2026-08-26 | P11.7 | "Building node texts", split | 371 / 258 / 220 ms | 230 / 250 / 196 ms | related-names / prose-comments / text-build. Phase 1.51 → 1.32 s; deferred at 3.3% of the command |
+| 2026-08-26 | P11.11+P11.12 | `ug gen` cold, wall | 20.55 s | **20.23 s** | −0.32 s (1.6%); medians of 5, gap > before-spread |
+| 2026-08-26 | P11.11+P11.12 | `ug gen` cold, peak RSS | 5,012 MB | 4,997 MB | **−15 MB = noise** (113 MB spread). Churn does not set the peak |
+| 2026-08-26 | — | *retracted* | "−470 MB", then "−245 MB" | 15 MB | mixed MB/MiB, then single samples vs a 100 MB spread |
 
 ---
 
@@ -548,5 +632,5 @@ them — so the next audit does not re-propose them.
 | Allocation-free lowercase scan in `api_search` | Measured 2026-08-24: **slower**, 23.3 → 33.0 ms. `to_lowercase()` feeds `str::find`, a tuned two-way/`memchr` search; a hand-rolled ASCII byte loop loses by more than the allocation costs. The scan was never the allocation. |
 | Interning edge endpoints *after* the build | Measured 2026-08-25: **no change in peak** (1,458 → 1,456 MB) for **+1.6 s**. Every duplicate is already allocated by then, and freeing them does not return the memory. Interning has to happen as each edge is made or read. |
 | `serde_json::from_reader` for the snapshot parse | Measured 2026-08-25: avoids the 346 MB buffer, but startup **0.31 → 1.33 s** — four times HEAD, giving back most of what P3.1 bought. `memmap2` gets the same memory at 0.48 s. |
-| `build_texts` parallelism (P11.7) | Deferred 2026-08-26. `seen_banner` is order-dependent shared state: per-file sets change *attribution* (a header shared by 1,000 files would be indexed 1,000 times), and extract-then-dedupe does not decompose because `extract_prose_comments` interleaves the dedup with a character budget and an early `break`. 1.39 s of a 20.1 s command — not worth changing what the index contains. |
+| `build_texts` parallelism (P11.7) | Deferred 2026-08-26, on arithmetic. Instrumented, `build_texts` is 677 ms of a 20.4 s command (3.3%) and 250 ms of that is blocked by `seen_banner`; parallelising the rest is worth ~350 ms at the limit (1.7%). P11.11 landed *inside* this phase and shrank it further, so the case is weaker now than at deferral. The design objection stands too — per-file banner sets change *attribution*, and extract-then-dedupe does not decompose because `extract_prose_comments` interleaves the dedup with a character budget and an early `break`. Measuring the split first found [P11.11](#p1111), which was the larger piece all along. |
 | `GraphEdge` endpoints as `u32` node indices | Would reach ~6 MB against `Arc<str>`'s ~49 MB, but needs the node table wherever an edge is built or read — 41 construction sites, 144 reads, ten test files — and a seeded or two-pass `Deserialize`, because an edge would stop meaning anything on its own. Revisit only if 49 MB on a 500k-edge graph starts to matter. |

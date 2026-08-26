@@ -47,13 +47,13 @@ pub type Facts = BTreeMap<String, FactValue>;
 /// Graph-wide context needed by facts that are not local to a node.
 ///
 /// Built once per ingest so `compute` stays O(1) per node.
-pub struct FactContext {
+pub struct FactContext<'a> {
     /// Inbound edges excluding `Contains`, i.e. "how much code depends on
     /// this". `Contains` is pure structure (folder→file→symbol) and would
     /// give every symbol an in-degree of 1 for free, drowning the signal.
-    in_degree: HashMap<String, u32>,
+    in_degree: HashMap<&'a str, u32>,
     /// Outbound edges, same exclusion.
-    out_degree: HashMap<String, u32>,
+    out_degree: HashMap<&'a str, u32>,
     /// Outbound `Contains` edges from a type to the members it declares.
     ///
     /// The one place `Contains` is the signal rather than the noise. Only
@@ -61,7 +61,7 @@ pub struct FactContext {
     /// Java has 451 such edges in the bundled sample; Rust has none,
     /// because `impl` blocks sit outside the struct they extend. See
     /// [`compute`] for how that asymmetry is kept honest.
-    members: HashMap<String, u32>,
+    members: HashMap<&'a str, u32>,
     /// Whether this graph was written by a build that records comment
     /// metrics. A graph older than that answers "how many functions have
     /// comments" with zero, which is worse than refusing.
@@ -78,18 +78,23 @@ pub struct FactContext {
     has_boundaries: bool,
 }
 
-impl FactContext {
-    pub fn new(graph: &GraphData) -> Self {
-        let mut in_degree: HashMap<String, u32> = HashMap::new();
-        let mut out_degree: HashMap<String, u32> = HashMap::new();
-        let mut members: HashMap<String, u32> = HashMap::new();
+impl<'a> FactContext<'a> {
+    pub fn new(graph: &'a GraphData) -> Self {
+        // Keys borrowed from the graph. Owning them meant a ~141-character
+        // allocation per edge endpoint — roughly 1.5 million per call, and
+        // this is built twice per ingest (once to plan, once to build rows).
+        // Same shape as P11.11 and P10.7. See P11.12 in
+        // docs/dev/PERF-TUNING-JOURNEY.md.
+        let mut in_degree: HashMap<&'a str, u32> = HashMap::new();
+        let mut out_degree: HashMap<&'a str, u32> = HashMap::new();
+        let mut members: HashMap<&'a str, u32> = HashMap::new();
         for e in &graph.edges {
             if matches!(e.edge_type, GraphEdgeType::Contains) {
-                *members.entry(e.source.to_string()).or_insert(0) += 1;
+                *members.entry(&e.source).or_insert(0) += 1;
                 continue;
             }
-            *in_degree.entry(e.target.to_string()).or_insert(0) += 1;
-            *out_degree.entry(e.source.to_string()).or_insert(0) += 1;
+            *in_degree.entry(&e.target).or_insert(0) += 1;
+            *out_degree.entry(&e.source).or_insert(0) += 1;
         }
         let schema = graph
             .stats
@@ -287,7 +292,7 @@ pub fn compute(n: &GraphNode, ctx: &FactContext) -> Facts {
     // zero that would rank every Rust type as memberless. The coverage
     // line makes the partial population visible.
     if matches!(n.node_type, GraphNodeType::Class | GraphNodeType::Interface) {
-        if let Some(count) = ctx.members.get(&n.id).copied().filter(|c| *c > 0) {
+        if let Some(count) = ctx.members.get(n.id.as_str()).copied().filter(|c| *c > 0) {
             f.insert("members".into(), FactValue::Int(count as i64));
         }
     }
@@ -304,11 +309,11 @@ pub fn compute(n: &GraphNode, ctx: &FactContext) -> Facts {
 
     f.insert(
         "in_degree".into(),
-        FactValue::Int(ctx.in_degree.get(&n.id).copied().unwrap_or(0) as i64),
+        FactValue::Int(ctx.in_degree.get(n.id.as_str()).copied().unwrap_or(0) as i64),
     );
     f.insert(
         "out_degree".into(),
-        FactValue::Int(ctx.out_degree.get(&n.id).copied().unwrap_or(0) as i64),
+        FactValue::Int(ctx.out_degree.get(n.id.as_str()).copied().unwrap_or(0) as i64),
     );
 
     if let Some(q) = n.qualified_name.as_deref().filter(|s| !s.is_empty()) {
@@ -403,18 +408,22 @@ mod tests {
 
     /// A context from a graph with **no** stats block, i.e. one whose
     /// schema version is unknown and therefore pre-v2.
-    fn ctx_of(edges: Vec<GraphEdge>) -> FactContext {
-        FactContext::new(&GraphData {
+    fn ctx_of(edges: Vec<GraphEdge>) -> FactContext<'static> {
+        // Leaked: `FactContext` borrows its keys from the graph now, and these
+        // helpers feed ~50 call sites that would otherwise each have to own
+        // one. Test-only, a handful of edges each, and the process exits.
+        let g: &'static GraphData = Box::leak(Box::new(GraphData {
             nodes: vec![],
             edges,
             stats: None,
             resolution: None,
-        })
+        }));
+        FactContext::new(g)
     }
 
     /// A context from a graph stamped with the given schema version.
-    fn ctx_at_version(version: u32, edges: Vec<GraphEdge>) -> FactContext {
-        FactContext::new(&GraphData {
+    fn ctx_at_version(version: u32, edges: Vec<GraphEdge>) -> FactContext<'static> {
+        let g: &'static GraphData = Box::leak(Box::new(GraphData {
             nodes: vec![],
             edges,
             stats: Some(crate::types::IndexStats {
@@ -429,7 +438,8 @@ mod tests {
                 repo_root: String::new(),
             }),
             resolution: None,
-        })
+        }));
+        FactContext::new(g)
     }
 
     fn with_line_metrics(comment: u32, doc: u32, code: u32) -> Option<SymbolMetrics> {

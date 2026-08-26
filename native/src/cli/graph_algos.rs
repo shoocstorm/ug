@@ -144,7 +144,9 @@ fn node_line(n: &GraphNode) -> String {
 /// Does this node pass the `-t/--type` (node type) and `-f/--file`
 /// (path prefix) filters?
 fn node_passes(n: &GraphNode, types: &[String], file_prefix: Option<&str>) -> bool {
-    if !types.is_empty() && !types.contains(&node_type_str(&n.node_type).to_lowercase()) {
+    // Compared against the static name rather than a lowercased clone of it.
+    let nt = node_type_str(&n.node_type);
+    if !types.is_empty() && !types.iter().any(|t| t.eq_ignore_ascii_case(nt)) {
         return false;
     }
     if let Some(p) = file_prefix {

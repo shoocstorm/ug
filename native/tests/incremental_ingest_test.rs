@@ -58,7 +58,7 @@ fn texts_for(g: &GraphData) -> Vec<String> {
     g.nodes
         .iter()
         .map(|n| {
-            let names = related.get(&n.id).map(|v| v.as_slice()).unwrap_or(&[][..]);
+            let names = related.get(n.id.as_str()).map(|v| v.as_slice()).unwrap_or(&[][..]);
             build_node_text(n, names)
         })
         .collect()

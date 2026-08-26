@@ -102,7 +102,11 @@ pub fn traverse(graph: &GraphData, p: &TraverseParams) -> TraverseResult {
     let mut in_adj: HashMap<&str, Vec<(&str, &'static str)>> = HashMap::new();
     for e in &graph.edges {
         let et = edge_type_str(&e.edge_type);
-        if !edge_filter.is_empty() && !edge_filter.contains(&et.to_lowercase()) {
+        // `eq_ignore_ascii_case` against the static name: `et` is a
+        // `&'static str` and the filter is already lowercased, so the
+        // `to_lowercase()` here allocated a `String` per edge purely to
+        // compare it. See P11.12 in docs/dev/PERF-TUNING-JOURNEY.md.
+        if !edge_filter.is_empty() && !edge_filter.iter().any(|t| t.eq_ignore_ascii_case(et)) {
             continue;
         }
         out_adj
