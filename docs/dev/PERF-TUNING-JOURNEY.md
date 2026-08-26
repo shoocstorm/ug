@@ -63,6 +63,14 @@ ingest, and inside OverGraph 0.17 rather than this crate.
   `println!` — a bench appears to run and report nothing. Wrap the whole
   command in `rtk proxy "..."` for raw output. The same filter mangles long
   `grep` output.
+- **Every number in this file is `target/release/ug`.** A debug build is
+  3–5× slower on this pipeline and *unevenly* so, which makes it worse than
+  merely slow for comparisons: `[profile.dev.package."*"] opt-level = 2`
+  optimizes every dependency and leaves `ultragraph` itself at opt-level 0, so
+  phases that are our code run 3–5.4× slower while phases that are purely
+  OverGraph run at **1.0×**. Measured on the same input: `Building query
+  indexes` 2,105 ms debug vs 2,082 ms release; `Writing nodes` 1,382 vs 258.
+  A debug profile therefore doesn't scale the phase table, it reshapes it.
 - Micro-benches live at `native/tests/graph_bench.rs` and
   `storage_bench.rs`, both `#[ignore]`d, plain `Instant`, no Criterion. Use
   `--release`; a debug build measures rustc's bounds checks. `UG_BENCH_ALL=1`

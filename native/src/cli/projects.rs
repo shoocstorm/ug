@@ -421,13 +421,13 @@ pub(crate) fn run_rename(args: &[String]) {
     }
 }
 
-/// `ug rm [<project>]` — delete a project's data directory under
+/// `ug remove [<project>]` — delete a project's data directory under
 /// `~/.ug` (or `$UG_HOME`). Prompts for confirmation unless `-f/--force`
 /// (or `-y/--yes`) is given; an empty/EOF answer (e.g. non-interactive
 /// stdin) is treated as "no" so this fails closed by default.
-pub(crate) fn run_rm(args: &[String]) {
+pub(crate) fn run_remove(args: &[String]) {
     if has_flag(args, "-h") || has_flag(args, "--help") {
-        println!("Usage: {C_BOLD}ug rm{C_RESET} [<project>] [-n, --name <project>] [-f, --force | -y, --yes]");
+        println!("Usage: {C_BOLD}ug remove{C_RESET} [<project>] [-n, --name <project>] [-f, --force | -y, --yes]");
         println!("  Delete a project's data directory under ~/.ug (or $UG_HOME).");
         println!("  Project defaults to the current directory's basename if omitted.");
         return;
@@ -510,7 +510,7 @@ pub(crate) fn run_rm(args: &[String]) {
 /// skipped and only project data is removed. Prompts for confirmation
 /// unless `-f/--force` (or `-y/--yes`); empty/EOF input (e.g.
 /// non-interactive stdin) reads as "no", same fail-closed default as `ug
-/// rm`.
+/// remove`.
 pub(crate) fn run_uninstall(args: &[String]) {
     if has_flag(args, "-h") || has_flag(args, "--help") {
         println!("Usage: {C_BOLD}ug uninstall{C_RESET} [-f, --force | -y, --yes]");
@@ -639,7 +639,7 @@ fn print_rename_help() {
     println!();
     println!("  Names are sanitized the same way project names always are (chars");
     println!("  outside {C_BOLD}[A-Za-z0-9._-]{C_RESET} become {C_BOLD}-{C_RESET}). Renaming onto an existing project");
-    println!("  is refused — remove it first with {C_CYAN}ug rm{C_RESET}.");
+    println!("  is refused — remove it first with {C_CYAN}ug remove{C_RESET}.");
     println!();
     println!("{C_BOLD}Examples:{C_RESET}");
     println!("  {C_CYAN}ug rename backend-api{C_RESET}          {C_YELLOW}# rename the active project{C_RESET}");

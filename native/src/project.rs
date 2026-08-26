@@ -472,7 +472,7 @@ pub(crate) fn staleness(project_dir: &Path, meta: &ProjectMeta) -> Option<Stalen
 /// Bytes on disk under `dir`, walked recursively.
 ///
 /// What `ug list` reports as a project's size — almost entirely `ugdb/` and
-/// `graph.json`, and the number a user needs before deciding what to `ug rm`.
+/// `graph.json`, and the number a user needs before deciding what to `ug remove`.
 /// Symlinks are counted as the links they are rather than followed: nothing
 /// ug writes into a project dir is one, so a symlink here is not ours to
 /// traverse.
@@ -705,7 +705,7 @@ pub(crate) fn rename_project(old: &str, new: &str) -> std::io::Result<String> {
 
 /// Delete a project's data directory (`graph.json`, `ugdb/`,
 /// `project.json`, etc). Errors with `NotFound` instead of silently
-/// no-op'ing when the directory doesn't exist, so callers (`ug rm`) can
+/// no-op'ing when the directory doesn't exist, so callers (`ug remove`) can
 /// report a clean error rather than a false "removed" message.
 pub(crate) fn remove_project_dir(dir: &Path) -> std::io::Result<()> {
     if !dir.exists() {

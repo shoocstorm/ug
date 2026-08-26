@@ -27,7 +27,7 @@ pub(crate) const API_ENDPOINTS: &[(&str, &[ApiEntry])] = &[
             ApiEntry { method: "GET", path: "/api/projects", desc: "list discovered projects (or the single active one)", availability: "always", cli_equivalent: Some("ug list") },
             ApiEntry { method: "GET", path: "/api/projects/staleness", desc: "per-project staleness report (changed/deleted files vs graph.json mtime)", availability: "always", cli_equivalent: Some("ug list (same scan)") },
             ApiEntry { method: "POST", path: "/api/projects/select", desc: "switch the server's active project", availability: "multi-project mode only", cli_equivalent: None },
-            ApiEntry { method: "POST", path: "/api/projects/delete", desc: "delete a project's data directory", availability: "multi-project mode only", cli_equivalent: Some("ug rm") },
+            ApiEntry { method: "POST", path: "/api/projects/delete", desc: "delete a project's data directory", availability: "multi-project mode only", cli_equivalent: Some("ug remove") },
             ApiEntry { method: "POST", path: "/api/generate", desc: "spawn `ug gen` against a folder, returns a job id", availability: "multi-project mode only", cli_equivalent: Some("ug gen") },
             ApiEntry { method: "GET", path: "/api/generate/status", desc: "poll a generation job's progress/log", availability: "multi-project mode only", cli_equivalent: None },
             ApiEntry { method: "POST", path: "/api/ingest", desc: "re-embed an already-indexed project (UI Ingest now button); poll via /api/generate/status", availability: "always", cli_equivalent: Some("ug ingest") },

@@ -99,7 +99,7 @@ root with `UG_HOME`):
 
 `ug list` shows every project with counts and last-generated times; `ug rename
 <new-name>` renames one (the active project by default — the graph and db move
-with it); `ug rm <project>` deletes one (prompts unless `-f/--force`/`-y/--yes`).
+with it); `ug remove <project>` deletes one (prompts unless `-f/--force`/`-y/--yes`).
 The repo-local `.ug/` folder only holds the `ug` binary, not data.
 
 ## Command Line Interface
@@ -121,8 +121,7 @@ The native `ug` binary is the primary CLI. `ug -h` lists every command;
 | `ug project_overview` / `find_symbols` / `file_outline` / `get_code` / `find_usages` / `shortest_path` / `graph_schema` | Agent tools — same names, params and output as the MCP tools and `POST /api/tools/<name>`. Add `--json` for the machine-readable envelope. |
 | `ug find_symbols 'handle_*'` · `ug file_outline 'src/**/*.ts'` · `ug find_usages 'validate_*'` | Wildcards (`*` `?` `[abc]` `{a,b}`) work anywhere a symbol or file is named — one call instead of a loop. Those commands also take a plain symbol name, not just a node id. See [docs/API-REFERENCE.md](docs/API-REFERENCE.md#wildcards). |
 | `ug analyze <preset>` | Whole-repo statistics: "how many functions over 50 lines", "what breaks if I change this file", "which endpoints a change is visible through", "which folders are worst documented". `ug analyze --list` shows every preset; `--gql` runs a raw query. |
-| `ug list` / `ug rename <new>` / `ug rm <project>` | List projects under `~/.ug`, rename one (the active one by default), or delete one |
-| `ug demo` | Publish a repo's graph as a static web page — index → graph → a folder any static host serves, no database and no server. What powers the [live demo](https://ultra-graph.web.app/demo/); the features that read the local index are off there and say so. |
+| `ug list` / `ug rename <new>` / `ug remove <project>` | List projects under `~/.ug`, rename one (the active one by default), or delete one |
 | `ug doctor` | Print resolved project/db/embedder/chat config and where each value came from |
 | `ug connect [agent]` | Connect an AI agent — CLI skill, MCP server, or both. See [Connecting an AI agent](#connecting-an-ai-agent) |
 | `ug config ...` | Persist defaults — see [Configuration](#configuration) |

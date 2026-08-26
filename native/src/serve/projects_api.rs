@@ -137,7 +137,7 @@ async fn replacement_for_deleted(
 }
 
 /// POST /api/projects/delete — delete a project's on-disk data
-/// directory (mirrors `ug rm`) and drop it from the in-memory registry.
+/// directory (mirrors `ug remove`) and drop it from the in-memory registry.
 /// If the deleted project was active, falls back to another remaining
 /// project, or the zero-project placeholder if none are left, so every
 /// handler always has something to read from.

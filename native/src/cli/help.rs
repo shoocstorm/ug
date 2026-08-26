@@ -121,7 +121,9 @@ pub(crate) fn print_help() {
     // `index` / `graph` / `ingest` are the stages `gen` runs and are still
     // dispatched, but they are not listed: they are internal seams, and
     // `gen --no-ingest` already covers the one reason an end user reached
-    // for them. `ug api` and the docs still name them.
+    // for them. `ug api` and the docs still name them. `demo` is also
+    // unlisted: it exists to publish the website's live demo
+    // (`scripts/gen-demo.sh`), not for end users or agents.
     group("Read the code", "from graph.json — no database needed");
     cmd_hi("context", "Everything about one symbol at once: code, callers, tests, deps, docs");
     cont("one budgeted call instead of get_code + find_usages + traverse + test_for");
@@ -154,13 +156,12 @@ pub(crate) fn print_help() {
     cmd("list", "Projects under ~/.ug: nodes, size on disk, how stale each one is");
     cmd("active", "The project commands default to when run outside an indexed repo");
     cmd("rename", "Rename a project (aliases: rn, mv)");
-    cmd("rm", "Delete a project's data directory");
+    cmd("remove", "Delete a project's data directory");
     cmd("doctor", "Show how every setting resolved");
     cmd("config", "View and persist defaults");
     cmd("upgrade", "Check GitHub for a new release and self-update; --check only reports");
     cmd("uninstall", "Delete ALL indexed projects and remove ug itself");
     cmd("api", "List every HTTP endpoint `ug serve` exposes");
-    cmd("demo", "Publish a repo's graph as a static web page — no server needed");
     cmd("mcp", "Run the MCP stdio server; `mcp call <tool> <json>` runs one by hand");
     cmd("disconnect", "Undo `connect` for an agent");
 

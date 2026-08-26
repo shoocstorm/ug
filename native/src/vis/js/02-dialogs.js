@@ -35,7 +35,7 @@
         }
 
         // Delete the project currently shown in the confirm dialog via
-        // POST /api/projects/delete (server-side mirror of `ug rm`). If
+        // POST /api/projects/delete (server-side mirror of `ug remove`). If
         // it was the active project, the server has already switched
         // active to another project (or the empty placeholder) — resync
         // via a full reload when the 3D scene is already initialized,
