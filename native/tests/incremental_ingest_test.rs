@@ -13,7 +13,7 @@ use tempfile::TempDir;
 use ultragraph::storage::db::{Db, NodeRow};
 use ultragraph::storage::embed::DEFAULT_EMBEDDING_DIM;
 use ultragraph::storage::store::KnowledgeStore;
-use ultragraph::storage::{build_node_text, collect_related_names, plan_incremental_ingest};
+use ultragraph::storage::{build_node_text, collect_related_names, plan_incremental_ingest, VectorPlan};
 use ultragraph::types::{GraphData, GraphEdge, GraphEdgeType, GraphNode, GraphNodeType};
 
 fn unit_vector(seed: usize) -> Vec<f32> {
@@ -97,6 +97,39 @@ async fn seed(db: &Db, g: &GraphData) -> Vec<String> {
     texts
 }
 
+/// Seed the store the way an ingest **without an embedder** does: every row
+/// complete except the vector, which is empty because `--with-embed` was not
+/// asked for.
+///
+/// This is the default `ug gen` writes, and for a long time nothing could
+/// recognise its own output — see R4.2 in docs/dev/PERF-TUNING-JOURNEY.md.
+async fn seed_without_vectors(db: &Db, g: &GraphData) -> Vec<String> {
+    let texts = texts_for(g);
+    let facts_ctx = ultragraph::storage::FactContext::new(g);
+    let rows: Vec<NodeRow> = g
+        .nodes
+        .iter()
+        .zip(texts.iter())
+        .map(|(n, text)| NodeRow {
+            id: n.id.clone(),
+            name: n.name.clone(),
+            node_type: format!("{:?}", n.node_type),
+            description: n.docstring.clone().unwrap_or_default(),
+            file: n.file.clone().unwrap_or_default(),
+            start_line: n.start_line.unwrap_or(0),
+            end_line: n.end_line.unwrap_or(0),
+            last_update_at: 1_700_000_000,
+            node_text: text.clone(),
+            vector: Vec::new(),
+            code: String::new(),
+            file_hash: String::new(),
+            facts: ultragraph::storage::facts::compute(n, &facts_ctx),
+        })
+        .collect();
+    db.upsert_nodes(&rows).await.unwrap();
+    texts
+}
+
 /// These fixtures have no repo on disk, so nothing is captured — the
 /// planner falls back to comparing everything but the source columns.
 fn no_code() -> std::collections::HashMap<String, ultragraph::storage::CapturedCode> {
@@ -125,7 +158,7 @@ async fn first_ingest_embeds_everything() {
     let g = sample_graph();
     let texts = texts_for(&g);
 
-    let plan = plan_incremental_ingest(&db as &dyn KnowledgeStore, &g, &texts, false, &no_code(), None)
+    let plan = plan_incremental_ingest(&db as &dyn KnowledgeStore, &g, &texts, false, &no_code(), None, VectorPlan::Embedding)
         .await
         .unwrap();
 
@@ -141,7 +174,7 @@ async fn unchanged_graph_embeds_and_writes_nothing() {
     let g = sample_graph();
     let texts = seed(&db, &g).await;
 
-    let plan = plan_incremental_ingest(&db as &dyn KnowledgeStore, &g, &texts, false, &no_code(), None)
+    let plan = plan_incremental_ingest(&db as &dyn KnowledgeStore, &g, &texts, false, &no_code(), None, VectorPlan::Embedding)
         .await
         .unwrap();
 
@@ -162,7 +195,7 @@ async fn edited_node_is_the_only_one_re_embedded() {
     g.nodes[2].docstring = Some("now documented differently".to_string());
     let texts = texts_for(&g);
 
-    let plan = plan_incremental_ingest(&db as &dyn KnowledgeStore, &g, &texts, false, &no_code(), None)
+    let plan = plan_incremental_ingest(&db as &dyn KnowledgeStore, &g, &texts, false, &no_code(), None, VectorPlan::Embedding)
         .await
         .unwrap();
 
@@ -185,7 +218,7 @@ async fn moved_node_reuses_its_vector() {
     g.nodes[1].end_line = Some(125);
     let texts = texts_for(&g);
 
-    let plan = plan_incremental_ingest(&db as &dyn KnowledgeStore, &g, &texts, false, &no_code(), None)
+    let plan = plan_incremental_ingest(&db as &dyn KnowledgeStore, &g, &texts, false, &no_code(), None, VectorPlan::Embedding)
         .await
         .unwrap();
 
@@ -213,7 +246,7 @@ async fn new_node_embeds_without_disturbing_the_rest() {
     g.nodes.push(node("function:d", "delta", Some("brand new"), 60));
     let texts = texts_for(&g);
 
-    let plan = plan_incremental_ingest(&db as &dyn KnowledgeStore, &g, &texts, false, &no_code(), None)
+    let plan = plan_incremental_ingest(&db as &dyn KnowledgeStore, &g, &texts, false, &no_code(), None, VectorPlan::Embedding)
         .await
         .unwrap();
 
@@ -238,7 +271,7 @@ async fn new_edge_re_embeds_both_endpoints() {
     });
     let texts = texts_for(&g);
 
-    let plan = plan_incremental_ingest(&db as &dyn KnowledgeStore, &g, &texts, false, &no_code(), None)
+    let plan = plan_incremental_ingest(&db as &dyn KnowledgeStore, &g, &texts, false, &no_code(), None, VectorPlan::Embedding)
         .await
         .unwrap();
 
@@ -257,7 +290,7 @@ async fn always_write_keeps_every_row_for_fan_out() {
 
     // Multi-destination ingest plans against one store but must still
     // write every row to all of them.
-    let plan = plan_incremental_ingest(&db as &dyn KnowledgeStore, &g, &texts, true, &no_code(), None)
+    let plan = plan_incremental_ingest(&db as &dyn KnowledgeStore, &g, &texts, true, &no_code(), None, VectorPlan::Embedding)
         .await
         .unwrap();
 
@@ -277,7 +310,7 @@ async fn finish_assembles_rows_in_plan_order() {
     g.nodes[1].start_line = Some(200);
     let texts = texts_for(&g);
 
-    let plan = plan_incremental_ingest(&db as &dyn KnowledgeStore, &g, &texts, false, &no_code(), None)
+    let plan = plan_incremental_ingest(&db as &dyn KnowledgeStore, &g, &texts, false, &no_code(), None, VectorPlan::Embedding)
         .await
         .unwrap();
     assert_eq!(plan.to_embed.len(), 1);
@@ -303,7 +336,7 @@ async fn finish_rejects_a_vector_count_mismatch() {
     let g = sample_graph();
     let texts = texts_for(&g);
 
-    let plan = plan_incremental_ingest(&db as &dyn KnowledgeStore, &g, &texts, false, &no_code(), None)
+    let plan = plan_incremental_ingest(&db as &dyn KnowledgeStore, &g, &texts, false, &no_code(), None, VectorPlan::Embedding)
         .await
         .unwrap();
     assert_eq!(plan.to_embed.len(), 3);
@@ -326,7 +359,7 @@ async fn planning_warms_the_id_cache_for_skipped_nodes() {
     drop(db);
     let db = Db::open(tmp.path().to_str().unwrap()).await.unwrap();
 
-    let plan = plan_incremental_ingest(&db as &dyn KnowledgeStore, &g, &texts, false, &no_code(), None)
+    let plan = plan_incremental_ingest(&db as &dyn KnowledgeStore, &g, &texts, false, &no_code(), None, VectorPlan::Embedding)
         .await
         .unwrap();
     assert_eq!(plan.unchanged, 3, "nothing to write");
@@ -462,9 +495,7 @@ async fn a_model_switch_forces_a_full_reembed() {
         &g,
         &texts,
         false,
-        &no_code(),
-        Some("bge-small-en-v1.5"),
-    )
+        &no_code(), Some("bge-small-en-v1.5"), VectorPlan::Embedding)
     .await
     .unwrap();
     assert_eq!(plan.unchanged, 3, "same model, same text: no work");
@@ -476,9 +507,7 @@ async fn a_model_switch_forces_a_full_reembed() {
         &g,
         &texts,
         false,
-        &no_code(),
-        Some("all-MiniLM-L6-v2"),
-    )
+        &no_code(), Some("all-MiniLM-L6-v2"), VectorPlan::Embedding)
     .await
     .unwrap();
     assert_eq!(plan.to_embed.len(), 3, "vectors from another model are not reusable");
@@ -501,10 +530,132 @@ async fn an_unrecorded_model_still_allows_reuse() {
         &g,
         &texts,
         false,
-        &no_code(),
-        Some("bge-small-en-v1.5"),
-    )
+        &no_code(), Some("bge-small-en-v1.5"), VectorPlan::Embedding)
     .await
     .unwrap();
     assert_eq!(plan.unchanged, 3, "unknown != mismatched");
+}
+
+
+// ---------- R4.2: a vector-less row is not automatically stale ----------
+
+/// The default `ug gen` does not embed, so every row it writes has an empty
+/// vector. A later run that also is not embedding must recognise those rows as
+/// unchanged rather than rewriting all of them.
+///
+/// Before this, the reuse gate required `prev.vector.len() == dim`, which an
+/// empty vector can never satisfy — so a re-index over a completely unchanged
+/// repo reported `0 unchanged` and rewrote every node, every time.
+#[tokio::test]
+async fn vector_less_rows_are_unchanged_when_this_run_also_skips_embedding() {
+    let tmp = TempDir::new().unwrap();
+    let db = Db::open(tmp.path().to_str().unwrap()).await.unwrap();
+    let g = sample_graph();
+    let texts = seed_without_vectors(&db, &g).await;
+
+    let plan = plan_incremental_ingest(
+        &db as &dyn KnowledgeStore,
+        &g,
+        &texts,
+        false,
+        &no_code(),
+        None,
+        VectorPlan::Skipping,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(plan.unchanged, 3, "nothing changed, so nothing to rewrite");
+    assert_eq!(plan.to_embed.len(), 0);
+    assert_eq!(plan.reusable.len(), 0);
+}
+
+/// The other direction, which is the one that would be dangerous to get wrong:
+/// a row with no vector, on a run that *can* produce one, must be embedded.
+/// Skipping it would leave the node permanently unsearchable, silently.
+#[tokio::test]
+async fn vector_less_rows_are_embedded_when_this_run_can_embed() {
+    let tmp = TempDir::new().unwrap();
+    let db = Db::open(tmp.path().to_str().unwrap()).await.unwrap();
+    let g = sample_graph();
+    let texts = seed_without_vectors(&db, &g).await;
+
+    let plan = plan_incremental_ingest(
+        &db as &dyn KnowledgeStore,
+        &g,
+        &texts,
+        false,
+        &no_code(),
+        None,
+        VectorPlan::Embedding,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        plan.to_embed.len(),
+        3,
+        "a row with no vector must be embedded once an embedder exists"
+    );
+    assert_eq!(plan.unchanged, 0);
+}
+
+
+/// A re-index over a store whose rows have no vectors must still say so.
+///
+/// This is the trap R4.2 opens: once a vector-less row can be recognised as
+/// unchanged, the run embeds nothing *and* skips nothing, so a count of "what
+/// this run declined to embed" reads zero — and `ug gen` would announce a
+/// ready index and clear `pending_vectors` on a store semantic search cannot
+/// use. `vectorless_kept` is the count that stays true.
+#[tokio::test]
+async fn a_reindex_of_an_unembedded_store_still_reports_vectors_owed() {
+    let tmp = TempDir::new().unwrap();
+    let db = Db::open(tmp.path().to_str().unwrap()).await.unwrap();
+    let g = sample_graph();
+    let texts = seed_without_vectors(&db, &g).await;
+
+    let plan = plan_incremental_ingest(
+        &db as &dyn KnowledgeStore,
+        &g,
+        &texts,
+        false,
+        &no_code(),
+        None,
+        VectorPlan::Skipping,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(plan.to_embed.len(), 0, "nothing to embed without an embedder");
+    assert_eq!(plan.unchanged, 3, "and nothing to rewrite");
+    assert_eq!(
+        plan.vectorless_kept, 3,
+        "but all three are still owed a vector"
+    );
+}
+
+/// The same count is zero when the rows really do have vectors, so it cannot
+/// be read as "always report vectors owed".
+#[tokio::test]
+async fn a_reindex_of_an_embedded_store_reports_nothing_owed() {
+    let tmp = TempDir::new().unwrap();
+    let db = Db::open(tmp.path().to_str().unwrap()).await.unwrap();
+    let g = sample_graph();
+    let texts = seed(&db, &g).await;
+
+    let plan = plan_incremental_ingest(
+        &db as &dyn KnowledgeStore,
+        &g,
+        &texts,
+        false,
+        &no_code(),
+        None,
+        VectorPlan::Skipping,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(plan.unchanged, 3);
+    assert_eq!(plan.vectorless_kept, 0, "these rows have real vectors");
 }

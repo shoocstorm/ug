@@ -149,10 +149,16 @@ pub(crate) struct IngestOutcome {
     /// Set when nodes were written without vectors because embedding
     /// failed. Semantic search will miss them until the next run.
     pub(crate) embedding_error: Option<String>,
-    /// How many nodes were written without vectors because the run did not
-    /// ask for embedding (no `--with-embed`). Distinct from
-    /// `embedding_error`: nothing went wrong, the vectors are simply owed —
-    /// `ug ingest` backfills exactly these.
+    /// How many of this graph's nodes have **no vector in the store** now
+    /// that the run is over. Distinct from `embedding_error`: nothing went
+    /// wrong, the vectors are simply owed — `ug ingest` backfills exactly
+    /// these.
+    ///
+    /// This counts the *state of the index*, not what this run declined to
+    /// do. A re-index over an unembedded store embeds nothing and writes
+    /// nothing, and reporting that as "0 skipped" would let the caller
+    /// announce an index that semantic search cannot use. See R4.2 in
+    /// docs/dev/PERF-TUNING-JOURNEY.md.
     pub(crate) vectors_skipped: usize,
 }
 

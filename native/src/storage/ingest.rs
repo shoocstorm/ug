@@ -35,6 +35,7 @@ use crate::limits::EmbedBudget;
 use crate::storage::sparse_stats::SparseStats;
 use crate::storage::text::collect_related_names;
 use crate::types::{GraphData, GraphNode};
+use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -73,6 +74,16 @@ pub struct IngestPlan {
     pub to_embed: Vec<(usize, String)>,
     /// Nodes identical to what's stored, so neither embedded nor written.
     pub unchanged: usize,
+    /// Of the nodes this plan is *not* embedding, how many have no vector in
+    /// the store.
+    ///
+    /// "Did this run skip embedding anything" and "does the index have
+    /// vectors" stopped being the same question once a vector-less row could
+    /// be recognised as unchanged (R4.2): a re-index over an unembedded store
+    /// now skips every node, so counting only what *this* run declined to
+    /// embed reports zero and the caller concludes the index is ready. It is
+    /// not. This is the count that stays true across re-runs.
+    pub vectorless_kept: usize,
 }
 
 impl IngestPlan {
@@ -118,12 +129,51 @@ impl IngestPlan {
     }
 }
 
+/// Whether the run being planned is going to produce vectors.
+///
+/// This decides what a stored row with **no** vector means. Embedding is
+/// opt-in (`--with-embed`), so the default `ug gen` writes every row with an
+/// empty vector on purpose — and a later run that also is not embedding should
+/// read that as "no vector wanted", not as "this row is out of date". Getting
+/// it wrong in that direction re-wrote every node on every run; getting it
+/// wrong in the other would leave nodes permanently without vectors, which is
+/// worse, because `search` and `chat` would silently miss them.
+///
+/// A named type rather than a `bool` because it would sit next to
+/// `always_write` in the argument list, and two adjacent booleans that mean
+/// unrelated things are a transposition waiting to happen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VectorPlan {
+    /// An embedder is present; every node in `to_embed` will get a vector.
+    Embedding,
+    /// No embedder. Rows keep whatever vector they already have — for most
+    /// of them, none.
+    Skipping,
+}
+
+/// Whether `prev`'s stored vector is one this run can carry forward.
+///
+/// Two ways to qualify: it is the width this store expects (a real vector,
+/// still valid because the caller has already established the text matches),
+/// or there is no vector and this run would not have produced one either.
+/// A vector of some *other* width is a legacy row from before a dim change
+/// and has to be redone.
+fn vector_is_reusable(prev: &NodeRow, dim: usize, vectors: VectorPlan) -> bool {
+    if prev.vector.len() == dim {
+        return true;
+    }
+    prev.vector.is_empty() && vectors == VectorPlan::Skipping
+}
+
 /// Diff `graph` (with its pre-built `texts`) against `store`.
 ///
 /// `always_write` forces every node into `reusable`/`to_embed` even when
 /// the stored row is identical, leaving `unchanged` at 0. Multi-destination
 /// ingest needs this: the plan is built against one store, and skipping
 /// writes on that basis would let the *other* destinations drift.
+///
+/// `vectors` says whether this run will embed — see [`VectorPlan`], and R4.2
+/// in docs/dev/PERF-TUNING-JOURNEY.md for what it cost to have it missing.
 ///
 /// A store that errors on read is not fatal — it just means we cannot
 /// prove anything is reusable, so the caller falls back to embedding
@@ -135,11 +185,13 @@ pub async fn plan_incremental_ingest(
     always_write: bool,
     captured: &HashMap<String, CapturedCode>,
     model: Option<&str>,
+    vectors: VectorPlan,
 ) -> Result<IngestPlan, StoreError> {
     let mut plan = IngestPlan {
         reusable: Vec::new(),
         to_embed: Vec::new(),
         unchanged: 0,
+        vectorless_kept: 0,
     };
     let dim = store.embedding_dim() as usize;
     // A stored vector is only reusable if it came out of the same model.
@@ -185,11 +237,17 @@ pub async fn plan_incremental_ingest(
 
             // A stored row is only useful if its embedding text still
             // matches (the vector is then still valid for it) and its
-            // vector is the width this store expects — a legacy row
-            // written before a dim change would otherwise be carried
-            // forward and rejected at upsert.
+            // vector is one this run can carry forward — see
+            // [`vector_is_reusable`].
             match stored.remove(&n.id) {
-                Some(prev) if reuse_vectors && prev.node_text == *text && prev.vector.len() == dim => {
+                Some(prev)
+                    if reuse_vectors
+                        && prev.node_text == *text
+                        && vector_is_reusable(&prev, dim, vectors) =>
+                {
+                    if prev.vector.is_empty() {
+                        plan.vectorless_kept += 1;
+                    }
                     let cap = captured.get(&n.id);
                     if !always_write && stored_row_matches(&prev, n, node_type, cap, &facts_ctx) {
                         plan.unchanged += 1;
@@ -389,10 +447,18 @@ pub fn refresh_sparse_stats(
     captured: &HashMap<String, CapturedCode>,
     graph: &GraphData,
 ) -> Arc<SparseStats> {
+    // Parallel: this is the most expensive phase of an ingest — 7.2 s of a
+    // 29.6 s run on a large repo — and it is a `map` over independent items
+    // in a crate where the indexer that feeds it is already `par_iter`. The
+    // `None` below is the proof the iterations cannot interact: the pass is
+    // forbidden from reading the statistics it is building, so no iteration
+    // can observe another's work. `collect` into a `Vec` keeps node order,
+    // which `SparseStats::from_documents` depends on.
+    // See R4.1 in docs/dev/PERF-TUNING-JOURNEY.md.
     let docs: Vec<Vec<u32>> = graph
         .nodes
-        .iter()
-        .zip(texts)
+        .par_iter()
+        .zip(texts.par_iter())
         .map(|(n, text)| {
             let code = captured.get(&n.id).map(|c| c.code.as_str()).unwrap_or("");
             // `None` here on purpose: this pass exists to *produce* the
@@ -486,8 +552,17 @@ pub async fn ingest_graph(
     let model = embedder.config().model.clone();
     let texts = build_texts(graph, &captured, &budget);
     refresh_sparse_stats(&[store], &texts, &captured, graph);
-    let plan =
-        plan_incremental_ingest(store, graph, &texts, false, &captured, Some(&model)).await?;
+    // This entry point takes an `Embedder` by value, so there is always one.
+    let plan = plan_incremental_ingest(
+        store,
+        graph,
+        &texts,
+        false,
+        &captured,
+        Some(&model),
+        VectorPlan::Embedding,
+    )
+    .await?;
     let unchanged = plan.unchanged;
     let (node_rows, embedded, embedding_error) =
         rows_from_plan(plan, embedder, graph, &captured).await?;
@@ -558,6 +633,117 @@ mod tests {
     };
     use crate::types::{GraphEdge, GraphEdgeType, GraphNodeType};
     use std::sync::Mutex;
+
+    // ---- R4.1: the parallel stats pass must equal the serial one ---------
+
+    /// `refresh_sparse_stats` was made parallel because it is the most
+    /// expensive phase of an ingest (7.2 s of 29.6 s on a large repo). The
+    /// guarantee it has to keep is exact equality with the serial pass, and
+    /// that cannot be checked by re-running `ug gen` and comparing: the term
+    /// count is *already* unstable run to run (R4.10). So both are computed
+    /// here, over the same inputs, in one process.
+    #[test]
+    fn the_parallel_stats_pass_equals_a_serial_one() {
+        let g = crate::types::GraphData {
+            nodes: (0..64)
+                .map(|i| {
+                    let mut n = node(&format!("function:f{i}"));
+                    n.name = format!("handler_{i}");
+                    n.docstring = Some(format!(
+                        "handles request number {i} for the shared parser and writes a record"
+                    ));
+                    n
+                })
+                .collect(),
+            edges: Vec::new(),
+            stats: None,
+            resolution: None,
+        };
+        let captured = HashMap::new();
+        let budget = EmbedBudget::resolve("bge-small-en-v1.5", None);
+        let texts = build_texts(&g, &captured, &budget);
+
+        // The serial form this replaced, spelled out.
+        let serial_docs: Vec<Vec<u32>> = g
+            .nodes
+            .iter()
+            .zip(&texts)
+            .map(|(n, text)| {
+                let code = captured.get(&n.id).map(|c| c.code.as_str()).unwrap_or("");
+                crate::storage::text::build_node_sparse_vector(text, code, None)
+                    .into_iter()
+                    .map(|(dim, _)| dim)
+                    .collect()
+            })
+            .collect();
+        let expected = SparseStats::from_documents(serial_docs.iter().map(|d| d.as_slice()));
+
+        let store = RecordingStore::default();
+        let got = refresh_sparse_stats(&[&store as &dyn KnowledgeStore], &texts, &captured, &g);
+
+        assert_eq!(got.total_docs, expected.total_docs);
+        assert_eq!(got.terms(), expected.terms(), "same number of distinct terms");
+        assert!(got.terms() > 0, "the fixture must produce terms at all");
+        // Every dimension the serial pass saw, with the same document
+        // frequency. `terms()` matching means there are no extras.
+        for doc in &serial_docs {
+            for &dim in doc {
+                assert_eq!(
+                    got.doc_freq(dim),
+                    expected.doc_freq(dim),
+                    "document frequency for dim {dim}"
+                );
+            }
+        }
+    }
+
+    // ---- R4.2: what a stored vector means -------------------------------
+
+    /// A pure-function test, because the case that motivates the width check
+    /// cannot be built through the store: `upsert_nodes` rejects a mis-sized
+    /// vector outright (`BadVector { got, want }`), so a wrong-width row only
+    /// ever arises from a store whose dim changed under rows already written.
+    fn row_with_vector(v: Vec<f32>) -> NodeRow {
+        NodeRow {
+            id: "n".into(),
+            name: "n".into(),
+            node_type: "Function".into(),
+            description: String::new(),
+            file: String::new(),
+            start_line: 0,
+            end_line: 0,
+            last_update_at: 0,
+            node_text: String::new(),
+            vector: v,
+            code: String::new(),
+            file_hash: String::new(),
+            facts: Default::default(),
+        }
+    }
+
+    #[test]
+    fn a_correctly_sized_vector_is_reusable_either_way() {
+        let row = row_with_vector(vec![0.0; 384]);
+        assert!(vector_is_reusable(&row, 384, VectorPlan::Skipping));
+        assert!(vector_is_reusable(&row, 384, VectorPlan::Embedding));
+    }
+
+    #[test]
+    fn no_vector_is_reusable_only_when_this_run_would_not_make_one() {
+        let row = row_with_vector(Vec::new());
+        // The default `ug gen`: no embedder now, none when this row was
+        // written. Nothing to redo.
+        assert!(vector_is_reusable(&row, 384, VectorPlan::Skipping));
+        // `--with-embed`: the row is missing the vector this run can supply.
+        assert!(!vector_is_reusable(&row, 384, VectorPlan::Embedding));
+    }
+
+    #[test]
+    fn a_wrong_width_vector_is_never_reusable() {
+        let row = row_with_vector(vec![0.0; 7]);
+        assert!(!vector_is_reusable(&row, 384, VectorPlan::Skipping));
+        assert!(!vector_is_reusable(&row, 384, VectorPlan::Embedding));
+    }
 
     // ---- fixtures --------------------------------------------------------
 

@@ -57,6 +57,21 @@ impl EmbedMode<'_> {
 }
 
 // ingest graph data into one or more knowledge-store backends.
+/// What this run will do about vectors, for [`plan_incremental_ingest`].
+///
+/// Embedding is opt-in, so `Skipping` is the ordinary case — and telling the
+/// planner so is what lets a re-index over an unchanged repo recognise its own
+/// vector-less rows instead of rewriting every one of them.
+///
+/// [`plan_incremental_ingest`]: ultragraph::storage::plan_incremental_ingest
+fn vector_plan(embed_mode: &EmbedMode<'_>) -> storage::VectorPlan {
+    if embed_mode.embedder().is_some() {
+        storage::VectorPlan::Embedding
+    } else {
+        storage::VectorPlan::Skipping
+    }
+}
+
 // Works against any `KnowledgeStore` impl (OverGraph, Neo4j, …).
 async fn ingest_graph_with_progress(
     store: &dyn KnowledgeStore,
@@ -92,10 +107,22 @@ async fn ingest_graph_with_progress(
     print!("{C_CYAN}▸{C_RESET} Diffing against Graph DB ({})", nodes_count);
     let _ = std::io::Write::flush(&mut std::io::stdout());
     let model = embed_mode.model().to_string();
-    let plan = storage::plan_incremental_ingest(store, graph, &texts, false, &captured, Some(&model))
+    let plan = storage::plan_incremental_ingest(
+        store,
+        graph,
+        &texts,
+        false,
+        &captured,
+        Some(&model),
+        vector_plan(embed_mode),
+    )
         .await
         .map_err(|e| format!("reading existing nodes: {}", e))?;
     let to_embed = plan.to_embed.len();
+    // Rows already in the store with no vector, which this run is leaving as
+    // they are. They are owed a vector just as much as the ones written empty
+    // below, and on a re-index they are *all* of them.
+    let vectorless_kept = plan.vectorless_kept;
     println!(
         "\r{C_CYAN}▸{C_RESET} Diffing against Graph DB: {C_GREEN}✓ done{C_RESET} in {C_BOLD}{:?}{C_RESET} — {} unchanged, {} moved, {} to embed",
         tp.elapsed(),
@@ -209,26 +236,31 @@ async fn ingest_graph_with_progress(
     print!("{C_CYAN}▸{C_RESET} Writing edges to Graph DB");
     let _ = std::io::Write::flush(&mut std::io::stdout());
 
-    let edge_rows: Vec<storage::EdgeRow> = graph
-        .edges
-        .iter()
-        .map(|e| {
-            let edge_type = e.edge_type.as_str().to_string();
-            let id = format!("{}|{}|{}", e.source, edge_type, e.target);
-            storage::EdgeRow {
-                id,
-                source: e.source.to_string(),
-                target: e.target.to_string(),
-                edge_type,
-                properties: String::new(),
-            }
-        })
-        .collect();
-
-    let total_edges = edge_rows.len();
-    for (i, batch) in edge_rows.chunks(write_batch).enumerate() {
+    // Rows are built per batch, not all at once. Each one holds the source id,
+    // the target id, and an `id` that is both of them concatenated — roughly
+    // 580 bytes of text on a repo with long qualified names — and only
+    // `write_batch` of them are ever needed at a time. Materialising all
+    // 745,964 first cost 518 MB of peak, measured; it also spends P10.4's
+    // interning, since `to_string()` copies out of the shared `Arc<str>`.
+    // See R4.3 in docs/dev/PERF-TUNING-JOURNEY.md.
+    let total_edges = graph.edges.len();
+    for (i, edge_batch) in graph.edges.chunks(write_batch).enumerate() {
+        let batch: Vec<storage::EdgeRow> = edge_batch
+            .iter()
+            .map(|e| {
+                let edge_type = e.edge_type.as_str().to_string();
+                let id = format!("{}|{}|{}", e.source, edge_type, e.target);
+                storage::EdgeRow {
+                    id,
+                    source: e.source.to_string(),
+                    target: e.target.to_string(),
+                    edge_type,
+                    properties: String::new(),
+                }
+            })
+            .collect();
         store
-            .upsert_edges(batch)
+            .upsert_edges(&batch)
             .await
             .map_err(|e| format!("upsert edges: {}", e))?;
         let written = std::cmp::min((i + 1) * write_batch, total_edges);
@@ -265,7 +297,11 @@ async fn ingest_graph_with_progress(
     // failed — or was deliberately skipped: the stamp says "these vectors
     // are current for this model", which would be a lie about rows that
     // have no vectors, and would stop the next run from re-embedding them.
-    if embed_error.is_none() && vectors_skipped == 0 {
+    // `vectors_skipped + vectorless_kept`, not `vectors_skipped`: the stamp
+    // must not be written while any node still lacks a vector, and after R4.2
+    // most of those are rows this run left alone rather than rows it wrote.
+    let vectors_missing = vectors_skipped + vectorless_kept;
+    if embed_error.is_none() && vectors_missing == 0 {
         store.record_ingest_model(&model);
     }
 
@@ -273,7 +309,7 @@ async fn ingest_graph_with_progress(
         nodes: nodes_count,
         edges: edges_count,
         embedding_error: embed_error,
-        vectors_skipped,
+        vectors_skipped: vectors_missing,
     })
 }
 
@@ -369,11 +405,19 @@ async fn ingest_graph_multi_with_progress(
         .first()
         .ok_or_else(|| "empty StoreSet".to_string())?;
     let model = embed_mode.model().to_string();
-    let plan =
-        storage::plan_incremental_ingest(first.as_ref(), graph, &texts, true, &captured, Some(&model))
+    let plan = storage::plan_incremental_ingest(
+        first.as_ref(),
+        graph,
+        &texts,
+        true,
+        &captured,
+        Some(&model),
+        vector_plan(embed_mode),
+    )
         .await
         .map_err(|e| format!("reading existing nodes: {}", e))?;
     let to_embed = plan.to_embed.len();
+    let vectorless_kept = plan.vectorless_kept;
     println!(
         "{C_CYAN}▸{C_RESET} Diffing against {}: {C_GREEN}done{C_RESET} in {C_BOLD}{:?}{C_RESET} — {} reusable, {} to embed",
         first.backend_name(),
@@ -483,9 +527,11 @@ async fn ingest_graph_multi_with_progress(
         }
     }
 
+    // See the single-destination path: the index's state, not this run's.
+    let vectors_missing = vectors_skipped + vectorless_kept;
     for store in &set.stores {
         store.ensure_query_indexes();
-        if embed_error.is_none() && vectors_skipped == 0 {
+        if embed_error.is_none() && vectors_missing == 0 {
             store.record_ingest_model(&model);
         }
     }
@@ -494,7 +540,7 @@ async fn ingest_graph_multi_with_progress(
         nodes: nodes_count,
         edges: edges_count,
         embedding_error: embed_error,
-        vectors_skipped,
+        vectors_skipped: vectors_missing,
     })
 }
 
