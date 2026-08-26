@@ -603,13 +603,13 @@ impl KnowledgeStore for Neo4jStore {
 
     async fn prune_nodes_absent_from(
         &self,
-        keep: &std::collections::HashSet<String>,
+        keep: &std::collections::HashSet<&str>,
     ) -> Result<usize, StoreError> {
         // DETACH so the node's edges go with it, matching OverGraph's
         // tombstoning. `keep` is passed whole rather than diffed
         // client-side — Neo4j can do the anti-join far more cheaply than
         // streaming every id back over the bolt connection.
-        let keep_list: Vec<String> = keep.iter().cloned().collect();
+        let keep_list: Vec<String> = keep.iter().map(|s| s.to_string()).collect();
         let cypher = format!(
             "MATCH (n:{}) WHERE NOT n.id IN $keep \
              WITH n, count(*) AS _c DETACH DELETE n RETURN count(*) AS removed",

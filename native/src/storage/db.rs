@@ -77,6 +77,16 @@ struct DbMeta {
     /// existed, which is treated as "unknown", not "mismatched".
     #[serde(skip_serializing_if = "Option::is_none")]
     model: Option<String>,
+    /// blake3 of the edge set this store was last ingested with.
+    ///
+    /// Edges have no derived state — no vector, no facts, no captured code —
+    /// so "has anything changed" is one comparison rather than 745,964. A
+    /// re-index over an unchanged repo used to rewrite every edge row even
+    /// when the node diff had correctly concluded nothing moved. Absent means
+    /// "unknown", which writes them all, so a missing or stale sidecar only
+    /// ever costs work. See P11.6 in docs/dev/PERF-TUNING-JOURNEY.md.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    edges_digest: Option<String>,
 }
 
 fn meta_path(db_path: &Path) -> PathBuf {
@@ -361,6 +371,7 @@ impl Db {
                     store_format: STORE_FORMAT_VERSION,
                     embedding_dim,
                     model: None,
+                    edges_digest: None,
                 },
             )?,
         }
@@ -376,6 +387,21 @@ impl Db {
     /// Stamp the model that just finished ingesting. Preserves the recorded
     /// dim — this rewrites the sidecar, and dropping the dim would make the
     /// next open fall back to the default and mismatch.
+    /// Read the recorded edge-set digest, if any.
+    pub fn recorded_edges_digest(&self) -> Option<String> {
+        read_meta(&self.path).ok().flatten().and_then(|m| m.edges_digest)
+    }
+
+    /// Stamp the edge-set digest. Written *after* the prune, so a run that
+    /// removed nodes leaves no claim about an edge set it may have changed.
+    pub fn record_edges_digest(&self, digest: &str) -> Result<(), DbError> {
+        let mut meta = read_meta(&self.path)?.unwrap_or_default();
+        meta.store_format = STORE_FORMAT_VERSION;
+        meta.embedding_dim = self.embedding_dim;
+        meta.edges_digest = Some(digest.to_string());
+        write_meta(&self.path, &meta)
+    }
+
     pub fn record_model(&self, model: &str) -> Result<(), DbError> {
         let mut meta = read_meta(&self.path)?.unwrap_or_default();
         meta.store_format = STORE_FORMAT_VERSION;
@@ -1064,13 +1090,13 @@ pub async fn nodes_for_upsert(db: &Db, keys: &[NodeKey]) -> Result<Vec<NodeRow>,
 /// [`KnowledgeStore::prune_nodes_absent_from`].
 pub async fn prune_nodes_absent_from(
     db: &Db,
-    keep: &std::collections::HashSet<String>,
+    keep: &std::collections::HashSet<&str>,
 ) -> Result<usize, DbError> {
     let mut removed = 0usize;
     for label in ALL_NODE_LABELS {
         let ids = db.engine.nodes_by_labels(*label)?;
         for rec in db.engine.get_nodes(&ids)?.into_iter().flatten() {
-            if keep.contains(&rec.key) {
+            if keep.contains(rec.key.as_str()) {
                 continue;
             }
             db.engine.delete_node(rec.id)?;
@@ -1174,6 +1200,18 @@ impl KnowledgeStore for Db {
 
     fn ingest_model(&self) -> Option<String> {
         Db::recorded_model(self)
+    }
+
+    fn edges_digest(&self) -> Option<String> {
+        Db::recorded_edges_digest(self)
+    }
+
+    fn record_edges_digest(&self, digest: &str) {
+        if let Err(e) = Db::record_edges_digest(self, digest) {
+            // Losing the stamp costs a redundant edge rewrite next run, not
+            // correctness — never fail an otherwise-good ingest for it.
+            tracing::warn!(error = %e, "could not record edge digest in ug-meta.json");
+        }
     }
 
     fn sparse_stats(&self) -> Option<Arc<SparseStats>> {
@@ -1284,7 +1322,7 @@ impl KnowledgeStore for Db {
 
     async fn prune_nodes_absent_from(
         &self,
-        keep: &std::collections::HashSet<String>,
+        keep: &std::collections::HashSet<&str>,
     ) -> Result<usize, StoreError> {
         prune_nodes_absent_from(self, keep)
             .await

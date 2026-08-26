@@ -202,21 +202,35 @@ async fn ingest_graph_with_progress(
     }
 
     let t2 = std::time::Instant::now();
-    let node_rows = plan.finish(graph, vectors, &captured)?;
+    // Streamed, not materialised. Every `NodeRow` carries `code` — the
+    // symbol's whole body — and `node_text`, both of which are already in
+    // memory in `captured` and `texts`; building one per node before the
+    // first batch reaches the store doubled the largest thing this holds.
+    // See P11.4 in docs/dev/PERF-TUNING-JOURNEY.md.
+    let mut rows = plan.rows(graph, vectors, &captured)?;
 
     let write_batch = 1000;
-    let total = node_rows.len();
+    let total = rows.len();
     if total == 0 {
         println!("{C_CYAN}▸{C_RESET} Writing nodes: {C_GREEN}✓ skipped{C_RESET} (all {} already up to date)", nodes_count);
     } else {
         print!("{C_CYAN}▸{C_RESET} Writing nodes to Graph DB");
         let _ = std::io::Write::flush(&mut std::io::stdout());
-        for (i, batch) in node_rows.chunks(write_batch).enumerate() {
+        // One buffer, refilled — `clear` drops the rows it held and keeps the
+        // allocation, so at most `write_batch` of them exist at a time.
+        let mut batch: Vec<storage::NodeRow> = Vec::with_capacity(write_batch);
+        let mut written = 0usize;
+        loop {
+            batch.clear();
+            batch.extend(rows.by_ref().take(write_batch));
+            if batch.is_empty() {
+                break;
+            }
             store
-                .upsert_nodes(batch)
+                .upsert_nodes(&batch)
                 .await
                 .map_err(|e| format!("upsert nodes: {}", e))?;
-            let written = std::cmp::min((i + 1) * write_batch, total);
+            written += batch.len();
             let pct = written as f32 / total as f32 * 100.0;
             print!(
                 "\r{C_CYAN}▸{C_RESET} Writing nodes: {C_YELLOW}{:>6.1}%{C_RESET} ({}/{})",
@@ -233,6 +247,19 @@ async fn ingest_graph_with_progress(
     }
 
     let t3 = std::time::Instant::now();
+    // Edges carry no derived state — no vector, no facts, no captured code —
+    // so "has anything changed" is one digest comparison rather than 745,964
+    // row writes. Without this, the run that correctly concluded every *node*
+    // was unchanged still rewrote every edge. See P11.6 in
+    // docs/dev/PERF-TUNING-JOURNEY.md.
+    let want_digest = storage::edges_digest(graph);
+    let edges_unchanged = store.edges_digest().as_deref() == Some(want_digest.as_str());
+    if edges_unchanged {
+        println!(
+            "{C_CYAN}▸{C_RESET} Writing edges: {C_GREEN}✓ skipped{C_RESET} (all {} already up to date)",
+            edges_count
+        );
+    } else {
     print!("{C_CYAN}▸{C_RESET} Writing edges to Graph DB");
     let _ = std::io::Write::flush(&mut std::io::stdout());
 
@@ -242,7 +269,7 @@ async fn ingest_graph_with_progress(
     // `write_batch` of them are ever needed at a time. Materialising all
     // 745,964 first cost 518 MB of peak, measured; it also spends P10.4's
     // interning, since `to_string()` copies out of the shared `Arc<str>`.
-    // See R4.3 in docs/dev/PERF-TUNING-JOURNEY.md.
+    // See P11.3 in docs/dev/PERF-TUNING-JOURNEY.md.
     let total_edges = graph.edges.len();
     for (i, edge_batch) in graph.edges.chunks(write_batch).enumerate() {
         let batch: Vec<storage::EdgeRow> = edge_batch
@@ -275,22 +302,50 @@ async fn ingest_graph_with_progress(
         "\r{C_CYAN}▸{C_RESET} Writing edges: {C_GREEN}100.0% ✓ done{C_RESET} in {C_BOLD}{:?}{C_RESET}",
         t3.elapsed()
     );
+    }
 
+    // Both of the next two phases used to run in silence — the prune printed
+    // only when it removed something (so a first ingest showed nothing at all
+    // despite a full scan), and the index build printed nothing ever. Together
+    // they are ~2.6 s of a 30 s command the user watches with no output. See
+    // P11.8 in docs/dev/PERF-TUNING-JOURNEY.md.
+    let mut pruned_any = false;
     if prune {
         let t4 = std::time::Instant::now();
         let removed = storage::prune_to_graph(store, graph)
             .await
             .map_err(|e| format!("prune stale nodes: {}", e))?;
+        pruned_any = removed > 0;
         if removed > 0 {
             println!(
                 "{C_CYAN}▸{C_RESET} Pruning stale nodes: {C_GREEN}✓ removed {}{C_RESET} in {C_BOLD}{:?}{C_RESET}",
                 removed,
                 t4.elapsed()
             );
+        } else {
+            println!(
+                "{C_CYAN}▸{C_RESET} Pruning stale nodes: {C_GREEN}✓ nothing stale{C_RESET} in {C_BOLD}{:?}{C_RESET}",
+                t4.elapsed()
+            );
         }
     }
 
+    // Stamped after the prune, and only when the prune changed nothing: a run
+    // that deleted nodes may have tombstoned edges with them, so it must not
+    // leave a claim that the stored edge set matches this graph. Not stamping
+    // costs one rewrite next run; stamping wrongly costs correctness.
+    if !edges_unchanged && !pruned_any {
+        store.record_edges_digest(&want_digest);
+    }
+
+    let t5 = std::time::Instant::now();
+    print!("{C_CYAN}▸{C_RESET} Building query indexes");
+    let _ = std::io::Write::flush(&mut std::io::stdout());
     store.ensure_query_indexes();
+    println!(
+        "\r{C_CYAN}▸{C_RESET} Building query indexes: {C_GREEN}✓ done{C_RESET} in {C_BOLD}{:?}{C_RESET}",
+        t5.elapsed()
+    );
 
     // Stamp the model last, so a run that died mid-write doesn't claim its
     // vectors all came from this one. Skipped entirely when embedding
@@ -323,6 +378,13 @@ pub(crate) async fn ingest_with_specs(
     prune: bool,
     budget: &EmbedBudget,
 ) -> Result<IngestOutcome, String> {
+    // Opening is timed and announced. It was ~4.7 s of a 30 s ingest with no
+    // phase name at all, which on a large store looks exactly like a hang —
+    // see P11.8 in docs/dev/PERF-TUNING-JOURNEY.md.
+    let t_open = std::time::Instant::now();
+    print!("{C_CYAN}▸{C_RESET} Opening the store");
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+
     // An index written by an older ug can't be opened, and this is the
     // command whose whole job is to replace it — so clear it first rather
     // than failing with "run ug gen" from inside ug gen.
@@ -362,13 +424,39 @@ pub(crate) async fn ingest_with_specs(
         };
         stores.push(store);
     }
+    println!(
+        "\r{C_CYAN}▸{C_RESET} Opening the store: {C_GREEN}✓ done{C_RESET} in {C_BOLD}{:?}{C_RESET}",
+        t_open.elapsed()
+    );
+
+    // The store commits when it drops. That used to happen implicitly as this
+    // function returned — seconds of apparent silence after the last progress
+    // line, which on a large ingest looks like a hang. Dropped explicitly, and
+    // timed.
+    fn announce_commit<T>(store: T) {
+        let t = std::time::Instant::now();
+        print!("{C_CYAN}▸{C_RESET} Committing");
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+        drop(store);
+        println!(
+            "\r{C_CYAN}▸{C_RESET} Committing: {C_GREEN}✓ done{C_RESET} in {C_BOLD}{:?}{C_RESET}",
+            t.elapsed()
+        );
+    }
+
     if stores.len() == 1 {
         let store = stores.into_iter().next().unwrap();
-        ingest_graph_with_progress(store.as_ref(), embed_mode, graph, prune, budget).await
+        let outcome =
+            ingest_graph_with_progress(store.as_ref(), embed_mode, graph, prune, budget).await;
+        announce_commit(store);
+        outcome
     } else {
         let set = StoreSet::new(stores);
         set.validate_dims().map_err(|e| format!("dim mismatch across destinations: {}", e))?;
-        ingest_graph_multi_with_progress(&set, embed_mode, graph, prune, budget).await
+        let outcome =
+            ingest_graph_multi_with_progress(&set, embed_mode, graph, prune, budget).await;
+        announce_commit(set);
+        outcome
     }
 }
 
@@ -471,6 +559,8 @@ async fn ingest_graph_multi_with_progress(
         t1.elapsed()
     );
 
+    // The fan-out path still materialises: `set.upsert_nodes` writes one
+    // slice to every backend, so there is no batch boundary to stream to.
     let node_rows = plan.finish(graph, vectors, &captured)?;
     let edge_rows: Vec<storage::EdgeRow> = graph
         .edges

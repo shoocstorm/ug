@@ -652,10 +652,18 @@ pub fn build_node_sparse_vector(
             Some(s) => w * s.idf(dim),
             None => w,
         };
+        // Ties are broken by dimension, and that is what makes this
+        // reproducible. `weights` is a `HashMap`, so `out` arrives in an
+        // order seeded per map; scores tie heavily (every term seen once
+        // scores `saturate_tf(1.0)`), and an unstable sort followed by a
+        // truncate then keeps a *different subset* of the tied terms on every
+        // run. The graph was reproducible and the keyword index still was
+        // not. See P11.10 in docs/dev/PERF-TUNING-JOURNEY.md.
         out.sort_unstable_by(|a, b| {
             keep_score(b.0, b.1)
                 .partial_cmp(&keep_score(a.0, a.1))
                 .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.0.cmp(&b.0))
         });
         out.truncate(MAX_SPARSE_DIMS);
     }
@@ -790,6 +798,59 @@ fn fnv1a_u32(bytes: &[u8]) -> u32 {
 #[cfg(test)]
 mod sparse_tests {
     use super::*;
+
+    // ---- P11.10: the truncation must not depend on HashMap order --------
+
+    /// Over `MAX_SPARSE_DIMS` terms the vector is sorted by score and cut, and
+    /// the scores tie heavily — every term seen once scores the same. Without
+    /// a deterministic tie-break, *which* tied terms survive depends on the
+    /// order a `HashMap` happened to yield, so the same node produced a
+    /// different keyword vector on every run.
+    ///
+    /// Built here from many distinct single-occurrence tokens, which is the
+    /// all-ties worst case.
+    #[test]
+    fn an_over_cap_vector_truncates_to_the_same_terms_every_time() {
+        let text: String = (0..MAX_SPARSE_DIMS * 3)
+            .map(|i| format!("term{i} "))
+            .collect();
+
+        let first = build_node_sparse_vector(&text, "", None);
+        assert_eq!(first.len(), MAX_SPARSE_DIMS, "the fixture must exceed the cap");
+
+        // Same input, repeatedly: a fresh `HashMap` each time, so a fresh
+        // iteration order each time.
+        for _ in 0..8 {
+            assert_eq!(
+                build_node_sparse_vector(&text, "", None),
+                first,
+                "truncation picked a different subset of the tied terms"
+            );
+        }
+    }
+
+    /// The same, with the corpus statistics in play — `keep_score` changes,
+    /// the tie-break must still hold.
+    #[test]
+    fn the_tie_break_holds_with_idf_weighting_too() {
+        let text: String = (0..MAX_SPARSE_DIMS * 2)
+            .map(|i| format!("term{i} "))
+            .collect();
+        let docs: Vec<Vec<u32>> = (0..4)
+            .map(|_| {
+                build_node_sparse_vector(&text, "", None)
+                    .into_iter()
+                    .map(|(d, _)| d)
+                    .collect()
+            })
+            .collect();
+        let stats = SparseStats::from_documents(docs.iter().map(|d| d.as_slice()));
+
+        let first = build_node_sparse_vector(&text, "", Some(&stats));
+        for _ in 0..8 {
+            assert_eq!(build_node_sparse_vector(&text, "", Some(&stats)), first);
+        }
+    }
 
     #[test]
     fn tokenizer_lowercases_and_splits() {
@@ -1370,7 +1431,7 @@ mod sparse_tests {
                 classification: None,
                 readme: None,
                 total_files: 3,
-                language_breakdown: HashMap::new(),
+                language_breakdown: std::collections::BTreeMap::new(),
                 summary: None,
             }),
             ..Default::default()

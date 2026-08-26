@@ -2,8 +2,7 @@
 
 use crate::indexer::common::{
     annotation_args, calculate_nesting, extract_docstring, extract_params_from_signature,
-    extract_return_type, first_string_arg, get_node_text,
-};
+    extract_return_type, first_string_arg, get_node_text, imports_in_stable_order};
 use crate::indexer::languages::{FileContext, LanguageIndexer};
 use crate::indexer::scope::{
     base_type_name, looks_like_constant, looks_like_type, module_path, ImportScope, TypeEnv,
@@ -257,7 +256,7 @@ fn extract_imports_via_regex(source: &[u8]) -> Vec<ImportInfo> {
         }
     }
 
-    import_lookup.into_values().collect()
+    imports_in_stable_order(import_lookup)
 }
 
 /// Decorators applied to a `def` or `class`, in source order.

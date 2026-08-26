@@ -16,7 +16,7 @@
 
 use crate::indexer::languages;
 use crate::types::{FolderClassification, FolderNode};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
 /// File names (case-insensitive) treated as the README/landing doc for the
@@ -64,12 +64,12 @@ pub fn extract_folders_relative(repo_root: &str) -> Vec<FolderNode> {
     let mut child_files: HashMap<String, Vec<String>> = HashMap::new();
     let mut child_folders: HashMap<String, Vec<String>> = HashMap::new();
     let mut total_files: HashMap<String, u32> = HashMap::new();
-    let mut lang_breakdown: HashMap<String, HashMap<String, u32>> = HashMap::new();
+    let mut lang_breakdown: HashMap<String, BTreeMap<String, u32>> = HashMap::new();
     for folder in &folder_paths {
         child_files.insert(folder.clone(), Vec::new());
         child_folders.insert(folder.clone(), Vec::new());
         total_files.insert(folder.clone(), 0);
-        lang_breakdown.insert(folder.clone(), HashMap::new());
+        lang_breakdown.insert(folder.clone(), BTreeMap::new());
     }
 
     for folder in &folder_paths {
@@ -191,9 +191,7 @@ fn is_readme(file_path: &str) -> bool {
 /// language breakdown: an all-markdown folder is documentation, an all-code
 /// folder is source, anything else is mixed. Returns `None` only for empty
 /// folders that contain neither files nor recognised subfolder names.
-fn classify_folder(
-    path: &str,
-    breakdown: &HashMap<String, u32>,
+fn classify_folder(path: &str, breakdown: &BTreeMap<String, u32>,
     total: u32,
 ) -> Option<FolderClassification> {
     let lower = path.to_lowercase();

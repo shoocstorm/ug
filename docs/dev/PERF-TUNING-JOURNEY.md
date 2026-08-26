@@ -15,7 +15,7 @@
 | **Opened** | 2026-08-18 |
 | **Version** | 0.1.16 |
 | **Primary fixture** | `~/.ug/neo4j` — 161,725 nodes / 745,964 edges / 330 MB `graph.json` |
-| **Status** | Rounds 1–3 landed; Round 4 Phase 0 landed. Suite **899/899**. P11.4–P11.10 open |
+| **Status** | Rounds 1–3 landed; Round 4 complete bar P11.7 (deferred). Suite **908/908** |
 
 **Status marks:** ✅ landed and verified · ⬜ open · ⏭️ deferred · ❌ rejected by measurement
 
@@ -28,8 +28,8 @@ rows, which are Round 2's synthetic 485k-node index (~3× neo4j).
 
 | Surface | Before | Now | |
 | :--- | ---: | ---: | ---: |
-| `ug gen` **cold** (default, with ingest) | 33.87 s / 6,117 MB | **27.07 s / 5,743 MB** | 1.25× |
-| `ug gen` **warm** (re-index, nothing changed) | 46.01 s / 6,826 MB | **16.63 s / 4,369 MB** | **2.77× / 1.56×** |
+| `ug gen` **cold** (default, with ingest) | 33.87 s / 6,117 MB | **20.12 s / 5,123 MB** | **1.68× / 1.19×** |
+| `ug gen` **warm** (re-index, nothing changed) | 46.01 s / 6,826 MB | **8.05 s / 2,633 MB** | **5.7× / 2.6×** |
 | `ug gen --no-ingest` | 5.17 s / 3,378 MB | **4.18 s / 1,161 MB** | 1.24× / **2.91×** |
 | `ug serve` idle RSS | 1,245 MB | **730 MB** | **1.70×** |
 | `ug serve` startup to graph-ready | 6.66 s | **0.62 s** | 10.7× |
@@ -38,10 +38,13 @@ rows, which are Round 2's synthetic 485k-node index (~3× neo4j).
 | `/api/graph/search` per keystroke | 23.8 ms / 133 KB | **0.44 ms / 24.8 KB** | **54× / 5.4×** |
 | `ug graph centrality` | never returned | **3.3 s** | — |
 
-**The largest remaining numbers**, all in the ingest path: `upsert_nodes` at
-10.5 s (inside OverGraph 0.17, 46% of a cold ingest) and a ~5.7 GB peak that
-[P11.4](#p114--node_rows-materialised-in-full-each-carrying-a-copy-of-its-source)
-is aimed at.
+**The largest remaining number** is `upsert_nodes` at 7.5 s — 37% of a cold
+ingest, and inside OverGraph 0.17 rather than this crate.
+
+> ⚠️ **`ug gen` duplicates every edge in the store on each re-index.** Found
+> while verifying P11.6 and **not fixed** — it is a correctness bug in the
+> write path, not a performance one. See
+> [Edges are appended, never replaced](#edges-are-appended-never-replaced).
 
 ---
 
@@ -344,225 +347,120 @@ parallelises; everything after it does not.
 store-write path, and two contributors are ours rather than OverGraph's — both
 row sets are materialised in full before the first batch is written.
 
-## Landed — Phase 0
+## What landed
 
 | # | Item | Measured | |
 | :--- | :--- | :--- | :--- |
 | P11.1 | `refresh_sparse_stats`: use the other 17 cores | **7.23 → 0.93 s (7.8×)**, three lines | ✅ |
-| P11.2 | The incremental path can never hit without `--with-embed` | warm re-index 46.0 → 16.6 s, −2.46 GB | ✅ |
-| P11.3 | `edge_rows`: build per batch, not all 745,964 up front | **−518 MB**, estimate said ~550 | ✅ |
+| P11.2 | The incremental path could never hit without `--with-embed` | warm re-index rewrote 161,725 nodes → **0** | ✅ |
+| P11.3 | `edge_rows`: build per batch, not all 745,964 up front | **−518 MB** | ✅ |
+| P11.4 | `node_rows`: stream instead of materialising every row | node write **10.5 → 7.5 s**, −703 MB | ✅ |
+| P11.5 | `capture_graph_code`: parallel, not a serial loop over 8,910 files | folded into the phase below | ✅ |
+| P11.6 | Skip the edge write when the edge set is unchanged | warm **12.7 → 8.1 s**, −1.7 GB | ✅ |
+| P11.7 | `build_texts`: parallel | **deferred — see below** | ⏭️ |
+| P11.8 | Two silent phases, plus the untimed store open and commit | the 4.71 s mystery is **4.23 s of commit** | ✅ |
+| P11.9 | `graph_id_set`: 161,725 id clones to build a prune set | ~23 MB of transient copies | ✅ |
+| P11.10 | The index's content was not reproducible | **6/6 runs identical**, both fixtures | ✅ |
 
-| `ug gen` | before | after | |
+| `ug gen -i <neo4j> --no-cache` | before Round 4 | now | |
 | :--- | ---: | ---: | ---: |
-| **cold** — first index | 33.87 s / 6,117 MB | **27.07 s / 5,743 MB** | 1.25× |
-| **warm** — re-index, nothing changed | 46.01 s / 6,826 MB | **16.63 s / 4,369 MB** | **2.77× / 1.56×** |
-| nodes rewritten on a warm run | 161,725 | **0** | |
+| **cold** — first index | 33.87 s / 6,117 MB | **20.12 s / 5,123 MB** | **1.68× / 1.19×** |
+| **warm** — re-index, nothing changed | 46.01 s / 6,826 MB | **8.05 s / 2,633 MB** | **5.7× / 2.6×** |
 
-`graph.json` unchanged: node map, edge multiset and `resolution` all equal.
-
-### P11.2 — the item, and the bug it opened
-
-**A second `ug gen` over an unchanged repo did no incremental work at all.** It
-reported `0 unchanged, 0 moved, 161725 to embed` — zero unchanged out of
-161,725 byte-for-byte identical nodes.
-
-Two lines a hundred apart that could not both hold. With embedding off — the
-default — rows are written with an empty vector on purpose. The reuse gate
-required a vector of exactly the store's width. 0 ≠ 384, forever, so
-`stored_row_matches` (which compares facts, code and file hash with real care)
-was unreachable on the default path.
-
-The gate now distinguishes *no vector* from *wrong-width vector*, via a named
-`VectorPlan` enum rather than a bool — it would have sat next to an existing
-`always_write: bool` in a seven-argument function.
-
-**Then the fix opened a worse bug, in the direction that was flagged as
-dangerous.** `ug gen` decides what to tell the user by branching on "how many
-nodes did *this run* write without a vector". That was a fine proxy only while
-every run rewrote everything. Once a vector-less row can be recognised as
-unchanged, a warm re-index embeds nothing *and writes nothing*, so the count
-reads zero and the success branch fires:
+Every phase of an ingest now has a name and a number:
 
 ```
-✓ 161725 nodes, 745964 edges embedded in 12.69s
+▸ Opening the store:      ✓ done in    20 ms
+▸ Building node texts:    ✓ done in  1.39 s
+▸ Diffing against the DB: ✓ done in   148 ms
+▸ Writing nodes:          ✓ done in  7.50 s
+▸ Writing edges:          ✓ done in  1.78 s
+▸ Pruning stale nodes:    ✓ nothing stale in 611 ms
+▸ Building query indexes: ✓ done in  1.77 s
+▸ Committing:             ✓ done in  4.23 s
 ```
 
-Nothing was embedded. Worse than the wrong sentence: that branch clears
-`pendingVectors` and returns `EmbeddingsOutcome::Ready`, so the project would
-have recorded a vectorless index as search-ready, and the ingest model would
-have been stamped onto it.
+`graph.json` is unchanged throughout: node map, edge multiset and `resolution`
+all equal to a pre-Round-3 build.
 
-Fixed by reporting **the state of the index** rather than the delta of the run:
-`IngestPlan` carries `vectorless_kept`, and both ingest paths report
-`vectors_skipped + vectorless_kept`. The warm run now says `161725 awaiting
-vectors` and keeps its `pendingVectorsSince` stamp.
+<a id="edges-are-appended-never-replaced"></a>
+### ⚠️ Found, not fixed: edges are appended, never replaced
 
-### What Phase 0 taught
+**Every `ug gen` over an already-ingested store adds a complete duplicate copy
+of the edge set.** Three runs over an unchanged repo:
 
-- **A validation can be blocked by a bug in a different item.** P11.1 cannot be
-  checked by re-running `ug gen` and comparing, because P11.10 means the term
-  count is already unstable — 84,481 to 84,519 across five runs of the same
-  binary. The test computes both the serial and parallel forms over the same
-  inputs **in one process** and compares `total_docs`, `terms()` and every
-  dimension's document frequency. That is the check the instability cannot
-  reach.
-- **The store rejects a mis-sized vector at upsert** (`BadVector { got: 7,
-  want: 384 }`), so the case the width check defends against cannot be
-  constructed through the store's API at all — it only arises from a store
-  whose dim changed under rows already written. That is why `vector_is_reusable`
-  is a pure function with unit tests rather than an integration test.
-- **A proxy metric survives only as long as its assumption.** `vectors_skipped`
-  was correct for exactly as long as every run rewrote everything.
+| run | store edge counts | `graph.json` says |
+| :--- | :--- | :--- |
+| 1 | 3 Calls / 5 Contains | 3 / 5 |
+| 2 | 6 Calls / 10 Contains | 3 / 5 |
+| 3 | 9 Calls / 15 Contains | 3 / 5 |
 
-## Open
+`EdgeRow` carries an `id` (`source|type|target`) built for all 745,964 edges,
+and `Db::upsert_edges` **never passes it to the engine** — OverGraph's
+`EdgeInput` has no identity field at all (`from`, `to`, `label`, `props`,
+`weight`, `valid_from`, `valid_to`), so `batch_upsert_edges` has nothing to
+deduplicate on and appends. The node prune removes *nodes*; nothing removes
+edges.
 
-### ⬜ P11.4 — `node_rows` materialised in full, each carrying a copy of its source
-<a id="p114--node_rows-materialised-in-full-each-carrying-a-copy-of-its-source"></a>
+Confirmed pre-existing: a control where **both** runs wrote edges, with no
+P11.6 skip involved, duplicates identically. On the neo4j fixture that is
++745,964 edges per re-index.
 
-**Where:** `native/src/storage/ingest.rs` (`IngestPlan::finish`),
-`native/src/cli/ingest.rs` (the node write loop).
+**P11.6 masks this in the common case and that is a hazard worth stating
+plainly.** An unchanged re-index no longer duplicates, because it no longer
+writes — but any run that *does* change something still doubles down. The
+change is strictly an improvement over rewriting every time; it is not a fix.
 
-`plan.finish` returns a `Vec<NodeRow>` for **every** node before the first
-batch is written, and `NodeRow.code` is the symbol's whole body — already in
-memory once, in `captured`, which is held across the phase. So every symbol's
-source exists twice at the peak, and nested symbols mean a class's copy
-contains its methods' copies again. `node_text` is likewise already in `texts`.
+The fix needs a design decision this round did not have room for: either track
+the returned edge ids so the old ones can be deleted, or delete the graph's
+edges before rewriting, or get edge identity into OverGraph's `EdgeInput`.
+Until then `EdgeRow::id` is ~216 MB of string built per ingest and discarded.
 
-Same shape as P11.3, and the RSS curve says it is the larger half: 1,585 MB
-before the phase, 3,009 MB by the time the node writes finish.
+### ⏭️ P11.7 deferred — `build_texts` parallelism changes retrieval semantics
 
-**Fix.** Produce rows per batch. The awkward part is that `reusable` and
-`to_embed` are two lists that together cover the node set, so batching has to
-walk both — an iterator or a `finish_chunk(range)` rather than a plain
-`chunks()`.
+`build_texts` threads a `&mut HashSet` (`seen_banner`) through the whole fold
+so a licence header is indexed once rather than on every node. Two routes to
+parallelising it, and both were rejected on inspection:
 
-**Prove it.** Peak RSS, and row-for-row equality of what reaches
-`upsert_nodes`. **Risk:** low. Do it after P11.2, which changes which bucket
-most nodes land in.
+- **Per-file banner sets** would parallelise cleanly but change *attribution*:
+  a header shared by 1,000 files would be indexed 1,000 times instead of once.
+  That is a retrieval-quality change, not a performance one.
+- **Extract in parallel, dedupe serially** does not decompose.
+  `extract_prose_comments` interleaves the dedup with a running character
+  budget and an early `break`, so a line skipped as a banner does not consume
+  budget — the dedup decides *which* lines are kept and where the cut falls.
 
-### ⬜ P11.5 — `capture_graph_code`: the repo's second full read and blake3
+The phase is now 1.39 s of a 20.1 s command. Not worth changing what the index
+contains to save part of it.
 
-**Where:** `native/src/storage/source.rs`.
+### What this round taught
 
-Every source file in the repo, read and blake3-hashed — for the **second time
-in the same `ug gen` run**. `indexer::process_file` already did exactly this
-and stored the result as `FileNode::hash`. **P2.2 in Round 1 was "stop reading
-+ hashing every file twice"** and fixed the duplicate *inside the indexer*;
-this one is three stages later, so it was never in that item's blast radius.
-It is also a serial loop over 8,910 independent files.
+- **A validation can be blocked by a bug in a different item.** P11.1 could not
+  be checked by re-running `ug gen` and comparing, because P11.10 meant the
+  term count was already unstable. Its test computes the serial and parallel
+  forms over the same inputs **in one process** — the check the instability
+  cannot reach. Fixing P11.10 first, as planned, was right.
+- **A proxy metric survives only as long as its assumption.** P11.2's fix broke
+  the "did this run skip embedding" check, which had been correct only while
+  every run rewrote everything. It briefly made `ug gen` announce a vectorless
+  index as search-ready. `IngestPlan::vectorless_kept` reports the state of the
+  index instead of the delta of the run.
+- **The store rejects a mis-sized vector at upsert**, so the case the old width
+  check defended against cannot be constructed through the store's API — which
+  is why `vector_is_reusable` is a pure function with unit tests.
+- **Java had already fixed P11.10, in one extractor.** `java.rs` sorted its
+  imports with a comment naming the exact failure; the other four languages
+  never got the same treatment. The fix now lives in one shared helper so a
+  sixth language cannot miss it.
+- **Two independent causes wore the same symptom.** Making `graph.json`
+  reproducible did *not* make the keyword index reproducible: the second cause
+  was `build_node_sparse_vector` draining a `HashMap` and then
+  `sort_unstable_by` + `truncate` over heavily tied scores, so a different
+  subset of tied terms survived each run. Fixed by breaking ties on dimension.
+- **Verifying a perf change found a correctness bug.** The edge duplication
+  above was invisible until P11.6 required checking that the store still agreed
+  with `graph.json`.
 
-**Fix.** Two independent halves: `par_iter` over the per-file work, and carry
-`FileNode::hash` forward so the rehash goes away (the read stays — the slices
-need the content).
-
-**Prove it.** Phase timing, and `file_hash` equality for every node — they hash
-the same bytes, so they must be identical. **Risk:** low.
-
-### ⬜ P11.6 — Edges are rewritten in full on every run, always
-
-**Where:** `native/src/cli/ingest.rs` (the edge write loop).
-
-There is no incremental plan for edges. Nodes get a careful diff; edges get an
-unconditional upsert of all 745,964 rows every run — including the run where
-the node diff correctly reports everything unchanged. In the P11.2 measurement
-the run that skipped the node write entirely still spent 3.39 s here.
-
-**Fix.** An edge is `(source, target, type)` with no derived state — no vector,
-no facts, no captured code — so "has the edge set changed" is a set comparison.
-A digest of the sorted triples, stored alongside the ingest model: equal
-digest, skip the phase.
-
-**Prove it.** Ingest twice, assert the second writes no edges and `traverse`
-answers identically; then delete one edge and assert it does write.
-**Risk:** medium — a stale skip leaves the store disagreeing with `graph.json`,
-which is a failure mode nothing else here has. A prune must invalidate it.
-
-### ⬜ P11.7 — `build_texts`: serial, and it runs before the diff
-
-**Where:** `native/src/storage/ingest.rs`.
-
-The order is capture → build texts → **then** diff, so 1.24 s of text building
-is paid in full even on a run that will conclude nothing changed. It has to be,
-in part — the diff compares `prev.node_text == *text`, so the text is the diff
-key — but that argues for making it cheap, not for leaving it serial.
-
-Not the one-liner P11.1 was: `seen_banner` is a `&mut HashSet` threaded through
-the whole fold, deliberately, so a licence header is indexed once per file
-rather than once per node. The natural shape is per-file parallelism with a
-per-file banner set, which is closer to what the dedup means anyway.
-
-**Prove it.** Texts byte-identical to the serial build, including which node
-won each banner. **Risk:** low-to-medium, entirely because of `seen_banner`.
-
-### ⬜ P11.8 — Two phases the progress meter never mentions
-
-**Where:** `native/src/cli/ingest.rs`, after the edge write.
-
-`prune_to_graph` is timed but only *prints* when it removed something, so a
-first ingest reports nothing despite a full scan. `ensure_query_indexes()` has
-no timing and no output ever. Measured **0.94 s** and **1.69 s** — 2.6 s of a
-29.6 s command the user watches in silence. A further **4.71 s** is inside
-`ingest_with_specs` with no phase name at all: store open,
-`reset_stale_format_stores`, and the commit that happens on drop.
-
-**Fix.** Print both unconditionally in the established `▸ … ✓ done in {:?}`
-shape — "nothing stale" is a useful thing to have said. Time the store open and
-the commit; the commit especially, because it is where a large ingest appears
-to hang. **Risk:** very low. It is output.
-
-### ⬜ P11.9 — `graph_id_set`: 161,725 id clones to build a prune set
-
-**Where:** `native/src/storage/ingest.rs`.
-
-~23 MB of transient copies of ids that `graph.nodes` already owns, to build a
-set the callee only reads. `prune_nodes_absent_from` takes `&HashSet<String>`,
-so this is a signature question rather than a body one. **Risk:** very low,
-bounded by whether the trait method can change shape.
-
-<a id="p1110--the-indexs-content-is-not-reproducible-either"></a>
-### ⬜ P11.10 — The index's *content* is not reproducible either
-
-Extends [the Round 3 finding](#graphjson-is-not-reproducible), which is about
-ordering. The keyword-term count over five runs of the same binary against the
-same unchanged repo:
-
-```
-84,481   84,488   84,515   84,518   84,519
-```
-
-Round 3 established that `graph.json`'s **order** varies and its content was
-stable. This is worse: the number of distinct terms in the sparse index differs
-by run, so the **BM25 statistics and the stored sparse vectors are not the same
-index twice**. Two developers indexing the same commit get keyword search that
-ranks differently.
-
-The likely path is the same `HashMap` iteration order — `seen_banner` in
-`build_texts` decides which node a file-level comment is attributed to, and a
-different attribution changes which terms that node contributes.
-
-**Fix.** Ordered containers where an ordered output is derived, plus a test
-that indexes the same fixture twice and compares `SparseStats`, not just the
-graph bytes.
-
-**Risk:** low to fix, and **it should be fixed before P11.7 lands** — a
-parallel pass over data whose serial result is already unstable is much harder
-to validate and much easier to blame. P11.1 already had to work around it.
-
-### Smaller things found in the same pass
-
-- `upsert_nodes` is **10.42 s**, the largest single phase, and it is inside
-  OverGraph 0.17 rather than this crate. The one lever on our side is
-  `write_batch = 1000`, never swept. Worth one experiment at 200 / 1,000 /
-  5,000 / 20,000 before concluding the cost is the store's.
-- `plan_incremental_ingest` builds its `NodeKey` list with an id clone and a
-  type `to_string()` per node per chunk — the same shape as P11.9.
-- `EdgeRow::id` is `source|type|target`, a third copy of both ids (~290 chars)
-  per edge. If the store can key an edge on the triple rather than a
-  concatenation, that is another ~216 MB off P11.3's number.
-- `graph_keyword_search` and `filter_edges_by_type` still have no caller
-  outside their own ~20 tests (P10.10 fixed their defects but not this).
-  Deleting public API is a semver decision, not a performance one — but the
-  capability exists at `/api/graph/search` and in the MCP tools, done better.
 
 ---
 
@@ -618,6 +516,14 @@ One row per landed item or baseline. Keep the numbers, not just the verdict.
 | 2026-08-25 | P11.10 | sparse-index terms, 5 runs, same binary | 84,481–84,519 | — | the index *content* is nondeterministic, not just its order |
 | 2026-08-25 | **Round 4 Ph0** | `ug gen` **cold** | 33.87 s / 6,117 MB | **27.07 s / 5,743 MB** | **1.25×** wall |
 | 2026-08-25 | **Round 4 Ph0** | `ug gen` **warm** | 46.01 s / 6,826 MB | **16.63 s / 4,369 MB** | **2.77× wall, 1.56× peak**; graph.json equal |
+| 2026-08-26 | P11.10 | `graph.json`, 6 runs, ug repo | 6 distinct | **1** | reproducible; four extractors were missing Java's sort |
+| 2026-08-26 | P11.10 | sparse-index terms, 4 runs | 9,340–9,364 | **9,331 ×4** | second cause: tied scores truncated in HashMap order |
+| 2026-08-26 | P11.4 | `Writing nodes` phase | 10.54 s | 7.50 s | streamed; −703 MB peak, and *faster* |
+| 2026-08-26 | P11.8 | the untimed 4.71 s | unnamed | **4.23 s commit** + 0.02 s open | every ingest phase now has a name |
+| 2026-08-26 | P11.6 | warm re-index | 12.68 s / 4,346 MB | **8.05 s / 2,633 MB** | edge write skipped; commit 4.25 s → 0.03 s |
+| 2026-08-26 | **Round 4** | `ug gen` **cold** | 33.87 s / 6,117 MB | **20.12 s / 5,123 MB** | **1.68× / 1.19×** |
+| 2026-08-26 | **Round 4** | `ug gen` **warm** | 46.01 s / 6,826 MB | **8.05 s / 2,633 MB** | **5.7× / 2.6×**; graph.json equal |
+| 2026-08-26 | — | store edge count over 3 re-indexes | 5 → 10 → 15 | unchanged | **bug, not fixed**: edges append, never replace |
 
 ---
 
@@ -634,4 +540,5 @@ them — so the next audit does not re-propose them.
 | Allocation-free lowercase scan in `api_search` | Measured 2026-08-24: **slower**, 23.3 → 33.0 ms. `to_lowercase()` feeds `str::find`, a tuned two-way/`memchr` search; a hand-rolled ASCII byte loop loses by more than the allocation costs. The scan was never the allocation. |
 | Interning edge endpoints *after* the build | Measured 2026-08-25: **no change in peak** (1,458 → 1,456 MB) for **+1.6 s**. Every duplicate is already allocated by then, and freeing them does not return the memory. Interning has to happen as each edge is made or read. |
 | `serde_json::from_reader` for the snapshot parse | Measured 2026-08-25: avoids the 346 MB buffer, but startup **0.31 → 1.33 s** — four times HEAD, giving back most of what P3.1 bought. `memmap2` gets the same memory at 0.48 s. |
+| `build_texts` parallelism (P11.7) | Deferred 2026-08-26. `seen_banner` is order-dependent shared state: per-file sets change *attribution* (a header shared by 1,000 files would be indexed 1,000 times), and extract-then-dedupe does not decompose because `extract_prose_comments` interleaves the dedup with a character budget and an early `break`. 1.39 s of a 20.1 s command — not worth changing what the index contains. |
 | `GraphEdge` endpoints as `u32` node indices | Would reach ~6 MB against `Arc<str>`'s ~49 MB, but needs the node table wherever an edge is built or read — 41 construction sites, 144 reads, ten test files — and a seeded or two-pass `Deserialize`, because an edge would stop meaning anything on its own. Revisit only if 49 MB on a 500k-edge graph starts to matter. |

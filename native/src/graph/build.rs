@@ -203,10 +203,6 @@ impl EdgeSink {
         });
     }
 
-    fn len(&self) -> usize {
-        self.edges.len()
-    }
-
     fn into_vec(self) -> Vec<GraphEdge> {
         self.edges
     }

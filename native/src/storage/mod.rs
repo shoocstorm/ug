@@ -37,7 +37,7 @@ pub use embed::{
 };
 pub use embed::local::LocalEmbedder;
 pub use ingest::{
-    build_texts, capture_for_graph, graph_id_set, ingest_graph, plan_incremental_ingest, prune_to_graph,
+    build_texts, capture_for_graph, edges_digest, graph_id_set, ingest_graph, plan_incremental_ingest, prune_to_graph,
     VectorPlan,
     refresh_sparse_stats, IngestPlan, IngestStats,
 };

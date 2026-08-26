@@ -9,6 +9,7 @@
 use crate::types::{ImportInfo, Param, Symbol};
 use ignore::overrides::OverrideBuilder;
 use ignore::WalkBuilder;
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tree_sitter::Node;
@@ -94,6 +95,27 @@ pub fn get_node_text(node: Option<Node>, source: &[u8]) -> Option<String> {
     } else {
         None
     }
+}
+
+/// Drain a per-path import map into the `Vec<ImportInfo>` an extractor
+/// returns, in a **deterministic** order.
+///
+/// Every language builds its imports in a `HashMap` keyed by source path, and
+/// a `HashMap`'s iteration order is seeded per map — so draining one straight
+/// into a `Vec` makes the output shuffle between runs over an unchanged file.
+/// That is not cosmetic: the graph builder walks this list to emit `Imports`
+/// and `References` edges, so the edge list reorders too, and the embedding
+/// text is built from it and then *truncated to a budget* — so a different
+/// order changes which terms survive the cut and the keyword index itself
+/// stops being reproducible.
+///
+/// Java found this first and sorted locally; this is that fix, in the one
+/// place every extractor already goes through, so a sixth language cannot
+/// miss it. See P11.10 in docs/dev/PERF-TUNING-JOURNEY.md.
+pub fn imports_in_stable_order(map: HashMap<String, ImportInfo>) -> Vec<ImportInfo> {
+    let mut out: Vec<ImportInfo> = map.into_values().collect();
+    out.sort_by(|a, b| a.path.cmp(&b.path));
+    out
 }
 
 /// Truncate `s` to at most `cap` bytes on a char boundary, appending `…`
@@ -592,5 +614,56 @@ pub fn resolve_import_refs(symbols: &mut [Symbol], imports: &[ImportInfo]) {
                 }
             }
         }
+    }
+}
+
+
+#[cfg(test)]
+mod stable_order_tests {
+    use super::*;
+    use crate::types::ImportedItem;
+
+    fn info(path: &str) -> ImportInfo {
+        ImportInfo {
+            path: path.to_string(),
+            imported: vec![ImportedItem {
+                name: "x".to_string(),
+                alias: None,
+            }],
+        }
+    }
+
+    /// Every language extractor builds its imports in a `HashMap` and drains
+    /// it through this. A `HashMap`'s iteration order is seeded per map, so
+    /// draining straight into a `Vec` made `graph.json` differ between two
+    /// runs over an unchanged repo — and, because the embedding text is built
+    /// from this list and then truncated to a budget, made the keyword index
+    /// differ too. See P11.10 in docs/dev/PERF-TUNING-JOURNEY.md.
+    #[test]
+    fn imports_come_out_sorted_by_path_whatever_order_they_went_in() {
+        let paths = ["zeta", "alpha", "mid", "beta", "yankee", "delta"];
+        let expected: Vec<String> = {
+            let mut p: Vec<String> = paths.iter().map(|s| s.to_string()).collect();
+            p.sort();
+            p
+        };
+
+        // Fresh map each time — a fresh iteration order each time.
+        for _ in 0..16 {
+            let mut m: HashMap<String, ImportInfo> = HashMap::new();
+            for p in paths {
+                m.insert(p.to_string(), info(p));
+            }
+            let got: Vec<String> = imports_in_stable_order(m)
+                .into_iter()
+                .map(|i| i.path)
+                .collect();
+            assert_eq!(got, expected);
+        }
+    }
+
+    #[test]
+    fn an_empty_map_yields_an_empty_list() {
+        assert!(imports_in_stable_order(HashMap::new()).is_empty());
     }
 }

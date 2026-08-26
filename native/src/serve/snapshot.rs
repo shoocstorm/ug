@@ -375,7 +375,7 @@ pub(crate) struct SlimColumns<'a> {
     pub(crate) catalog_roots: Vec<u32>,
     pub(crate) node_type_counts: BTreeMap<&'static str, usize>,
     pub(crate) edge_type_counts: BTreeMap<&'static str, usize>,
-    pub(crate) languages: Option<HashMap<String, u32>>,
+    pub(crate) languages: Option<BTreeMap<String, u32>>,
     pub(crate) kb_type: Option<String>,
 }
 

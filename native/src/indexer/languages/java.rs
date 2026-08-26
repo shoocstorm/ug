@@ -51,8 +51,7 @@
 
 use crate::indexer::common::{
     calculate_nesting, extract_params_from_signature, first_string_arg, get_node_text,
-    truncate_chars,
-};
+    truncate_chars, imports_in_stable_order};
 use crate::indexer::languages::{FileContext, LanguageIndexer};
 use crate::indexer::scope::CTOR;
 use crate::types::{
@@ -96,11 +95,9 @@ impl LanguageIndexer for JavaIndexer {
                     imported: vec![item],
                 });
         }
-        let mut out: Vec<ImportInfo> = by_path.into_values().collect();
-        // Deterministic order — the graph builder walks these to emit edges,
-        // and a HashMap's iteration order would make the output shuffle
-        // between runs over an otherwise unchanged file.
-        out.sort_by(|a, b| a.path.cmp(&b.path));
+        // The shared helper now carries the sort — and the reason. Java
+        // found this first; every other language needed it too.
+        let out = imports_in_stable_order(by_path);
         out
     }
 

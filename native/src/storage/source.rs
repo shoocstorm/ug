@@ -20,6 +20,7 @@
 
 use crate::storage::store::KnowledgeStore;
 use crate::types::GraphData;
+use rayon::prelude::*;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -133,46 +134,55 @@ pub fn capture_graph_code(graph: &GraphData, repo_root: &Path) -> HashMap<String
         }
     }
 
-    let mut out: HashMap<String, CapturedCode> = HashMap::new();
-    for (file, indices) in by_file {
-        let abs: PathBuf = if Path::new(file).is_absolute() {
-            PathBuf::from(file)
-        } else {
-            repo_root.join(file)
-        };
-        let Ok(bytes) = std::fs::read(&abs) else {
-            continue;
-        };
-        let file_hash = blake3::hash(&bytes).to_hex().to_string();
-        let Ok(content) = String::from_utf8(bytes) else {
-            // Binary (PDF, image). The indexer may still have produced
-            // nodes for it via the document extractor, but there is no
-            // meaningful text span to slice.
-            continue;
-        };
-        let lines: Vec<&str> = content.lines().collect();
-
-        for i in indices {
-            let n = &graph.nodes[i];
-            // No range means the node *is* the file (File/Config nodes),
-            // so its code is the whole thing.
-            let code = match (n.start_line, n.end_line) {
-                (Some(s), Some(e)) => slice_lines(&lines, s, e),
-                _ => content.clone(),
+    // One file per task. The work is a read, a hash and a slice per node —
+    // pure per-file work sharing nothing — in a crate whose indexer already
+    // walks the same tree with `par_iter`. This phase was the one serial
+    // stage between two parallel ones. See P11.5 in
+    // docs/dev/PERF-TUNING-JOURNEY.md.
+    let by_file: Vec<(&str, Vec<usize>)> = by_file.into_iter().collect();
+    by_file
+        .into_par_iter()
+        .flat_map_iter(|(file, indices)| {
+            let abs: PathBuf = if Path::new(file).is_absolute() {
+                PathBuf::from(file)
+            } else {
+                repo_root.join(file)
             };
-            if code.is_empty() {
-                continue;
+            let mut captured: Vec<(String, CapturedCode)> = Vec::new();
+            let Ok(bytes) = std::fs::read(&abs) else {
+                return captured.into_iter();
+            };
+            let file_hash = blake3::hash(&bytes).to_hex().to_string();
+            let Ok(content) = String::from_utf8(bytes) else {
+                // Binary (PDF, image). The indexer may still have produced
+                // nodes for it via the document extractor, but there is no
+                // meaningful text span to slice.
+                return captured.into_iter();
+            };
+            let lines: Vec<&str> = content.lines().collect();
+
+            for i in indices {
+                let n = &graph.nodes[i];
+                // No range means the node *is* the file (File/Config nodes),
+                // so its code is the whole thing.
+                let code = match (n.start_line, n.end_line) {
+                    (Some(s), Some(e)) => slice_lines(&lines, s, e),
+                    _ => content.clone(),
+                };
+                if code.is_empty() {
+                    continue;
+                }
+                captured.push((
+                    n.id.clone(),
+                    CapturedCode {
+                        code,
+                        file_hash: file_hash.clone(),
+                    },
+                ));
             }
-            out.insert(
-                n.id.clone(),
-                CapturedCode {
-                    code,
-                    file_hash: file_hash.clone(),
-                },
-            );
-        }
-    }
-    out
+            captured.into_iter()
+        })
+        .collect()
 }
 
 /// Join `start..=end` (1-indexed, inclusive) back into a string.

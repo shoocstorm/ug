@@ -21,8 +21,7 @@
 //! crate / module segment.
 
 use crate::indexer::common::{
-    annotation_args, calculate_nesting, extract_return_type, first_string_arg, get_node_text,
-};
+    annotation_args, calculate_nesting, extract_return_type, first_string_arg, get_node_text, imports_in_stable_order};
 use crate::indexer::languages::{FileContext, LanguageIndexer};
 use crate::indexer::scope::{
     base_type_name, looks_like_constant, looks_like_type, module_path, ImportScope, TypeEnv,
@@ -53,7 +52,7 @@ impl LanguageIndexer for RustIndexer {
     fn extract_imports(&self, source: &[u8], root: Node) -> Vec<ImportInfo> {
         let mut imports: HashMap<String, ImportInfo> = HashMap::new();
         walk_for_imports(root, source, &mut imports);
-        imports.into_values().collect()
+        imports_in_stable_order(imports)
     }
 
     fn extract_exports(&self, _source: &[u8], _root: Node) -> Vec<ExportInfo> {

@@ -361,6 +361,19 @@ pub trait KnowledgeStore: Send + Sync {
     /// place to keep it no-op.
     fn record_ingest_model(&self, _model: &str) {}
 
+    /// blake3 of the edge set this store was last ingested with, if it keeps
+    /// one. `None` means "unknown" and makes the caller write every edge —
+    /// the safe direction, since a wrong "unchanged" would leave the store
+    /// disagreeing with `graph.json`. See P11.6 in
+    /// docs/dev/PERF-TUNING-JOURNEY.md.
+    fn edges_digest(&self) -> Option<String> {
+        None
+    }
+
+    /// Stamp the edge-set digest. Backends without a place to keep it no-op,
+    /// which simply means they never skip the edge write.
+    fn record_edges_digest(&self, _digest: &str) {}
+
     /// Corpus statistics backing BM25 weighting of the keyword channel.
     /// `None` means the caller should fall back to unweighted term
     /// frequency — a store ingested before the sidecar existed, or a
@@ -474,7 +487,7 @@ pub trait KnowledgeStore: Send + Sync {
     /// from a backend that *does* prune, so implement it where you can.
     async fn prune_nodes_absent_from(
         &self,
-        _keep: &std::collections::HashSet<String>,
+        _keep: &std::collections::HashSet<&str>,
     ) -> Result<usize, StoreError> {
         Ok(0)
     }

@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -368,8 +368,12 @@ pub struct FolderNode {
     pub child_folders: Vec<String>,
     #[serde(rename = "totalFiles")]
     pub total_files: u32,
+    /// `BTreeMap`, not `HashMap`: this serialises straight into `graph.json`,
+    /// and a `HashMap`'s key order is seeded per map — so the same repo
+    /// indexed twice produced different bytes here. See P11.10 in
+    /// docs/dev/PERF-TUNING-JOURNEY.md.
     #[serde(rename = "languageBreakdown", default)]
-    pub language_breakdown: HashMap<String, u32>,
+    pub language_breakdown: BTreeMap<String, u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
 }
@@ -692,12 +696,13 @@ pub struct GraphNodeFolderMeta {
     pub readme: Option<String>,
     #[serde(rename = "totalFiles")]
     pub total_files: u32,
+    /// `BTreeMap` for the same reason as [`FolderNode::language_breakdown`].
     #[serde(
         rename = "languageBreakdown",
         default,
-        skip_serializing_if = "HashMap::is_empty"
+        skip_serializing_if = "BTreeMap::is_empty"
     )]
-    pub language_breakdown: HashMap<String, u32>,
+    pub language_breakdown: BTreeMap<String, u32>,
     /// Filled by the Semantic Enrichment phase. When present, the storage
     /// layer prefers this over the synthesized description for folder
     /// embeddings.

@@ -1603,7 +1603,7 @@ pub async fn run_chat_rag_stream<C, F, T>(
     opts: ChatRagOptions<'_>,
     toolbox: Option<&ToolBox<'_>>,
     mut on_context: C,
-    mut on_tool: T,
+    on_tool: T,
     mut on_delta: F,
 ) -> Result<ChatRagOutcome, Box<dyn std::error::Error + Send + Sync>>
 where

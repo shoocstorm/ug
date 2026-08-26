@@ -102,6 +102,24 @@ impl IngestPlan {
         vectors: Vec<Vec<f32>>,
         captured: &HashMap<String, CapturedCode>,
     ) -> Result<Vec<NodeRow>, String> {
+        Ok(self.rows(graph, vectors, captured)?.collect())
+    }
+
+    /// The same rows, produced one at a time.
+    ///
+    /// `NodeRow` carries `code` — the symbol's whole body — and `node_text`,
+    /// both of which already exist elsewhere in memory, so materialising a row
+    /// per node before the first batch reaches the store doubles the largest
+    /// thing the ingest holds. The writer only ever needs `write_batch` of
+    /// them at once. See P11.4 in docs/dev/PERF-TUNING-JOURNEY.md.
+    ///
+    /// `finish` remains for callers that genuinely want the whole vector.
+    pub fn rows<'a>(
+        self,
+        graph: &'a GraphData,
+        vectors: Vec<Vec<f32>>,
+        captured: &'a HashMap<String, CapturedCode>,
+    ) -> Result<RowStream<'a>, String> {
         if vectors.len() != self.to_embed.len() {
             return Err(format!(
                 "embedder returned {} vectors for {} nodes",
@@ -109,23 +127,69 @@ impl IngestPlan {
                 self.to_embed.len()
             ));
         }
-        let now = current_unix_secs();
-        let facts_ctx = FactContext::new(graph);
-        let mut rows = self.reusable;
-        rows.reserve(vectors.len());
-        for ((idx, node_text), vector) in self.to_embed.into_iter().zip(vectors) {
-            let n = &graph.nodes[idx];
-            rows.push(node_row(
-                n,
-                n.node_type.as_str().to_string(),
-                node_text,
-                vector,
-                now,
-                captured.get(&n.id),
-                &facts_ctx,
-            ));
+        Ok(RowStream {
+            graph,
+            captured,
+            facts_ctx: FactContext::new(graph),
+            now: current_unix_secs(),
+            remaining: self.reusable.len() + self.to_embed.len(),
+            reusable: self.reusable.into_iter(),
+            to_embed: self.to_embed.into_iter().zip(vectors),
+        })
+    }
+}
+
+/// The node rows an [`IngestPlan`] resolves to, yielded lazily — see
+/// [`IngestPlan::rows`].
+///
+/// Order is the reusable rows first, then the freshly embedded ones, which is
+/// exactly what [`IngestPlan::finish`] produced.
+pub struct RowStream<'a> {
+    graph: &'a GraphData,
+    captured: &'a HashMap<String, CapturedCode>,
+    facts_ctx: FactContext,
+    now: i64,
+    remaining: usize,
+    reusable: std::vec::IntoIter<NodeRow>,
+    to_embed: std::iter::Zip<std::vec::IntoIter<(usize, String)>, std::vec::IntoIter<Vec<f32>>>,
+}
+
+impl RowStream<'_> {
+    /// How many rows are still to come. Known up front, so a caller can render
+    /// a progress meter without draining the stream to count it.
+    pub fn len(&self) -> usize {
+        self.remaining
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.remaining == 0
+    }
+}
+
+impl Iterator for RowStream<'_> {
+    type Item = NodeRow;
+
+    fn next(&mut self) -> Option<NodeRow> {
+        if let Some(row) = self.reusable.next() {
+            self.remaining -= 1;
+            return Some(row);
         }
-        Ok(rows)
+        let ((idx, node_text), vector) = self.to_embed.next()?;
+        self.remaining -= 1;
+        let n = &self.graph.nodes[idx];
+        Some(node_row(
+            n,
+            n.node_type.as_str().to_string(),
+            node_text,
+            vector,
+            self.now,
+            self.captured.get(&n.id),
+            &self.facts_ctx,
+        ))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
     }
 }
 
@@ -395,11 +459,40 @@ fn repo_root_of(graph: &GraphData) -> Option<std::path::PathBuf> {
     Some(std::path::PathBuf::from(root))
 }
 
+/// blake3 of the edge set, for [`KnowledgeStore::edges_digest`].
+///
+/// Order-dependent, deliberately. The graph builder emits edges in a
+/// deterministic order (P11.10), so a stable set hashes stably — and if that
+/// ever stops being true, a reordering shows up as "changed" and costs a
+/// rewrite. That is the safe direction: a false *unchanged* would leave the
+/// store disagreeing with `graph.json`, which is a failure mode nothing else
+/// in this pipeline has.
+///
+/// The node count is folded in as well, so a run that pruned nodes cannot
+/// match a digest taken before the prune.
+pub fn edges_digest(graph: &GraphData) -> String {
+    let mut h = blake3::Hasher::new();
+    h.update(&(graph.nodes.len() as u64).to_le_bytes());
+    h.update(&(graph.edges.len() as u64).to_le_bytes());
+    for e in &graph.edges {
+        h.update(e.source.as_bytes());
+        h.update(b"\x00");
+        h.update(e.edge_type.as_str().as_bytes());
+        h.update(b"\x00");
+        h.update(e.target.as_bytes());
+        h.update(b"\x00");
+    }
+    h.finalize().to_hex().to_string()
+}
+
 /// The complete id set of `graph`, for [`prune_nodes_absent_from`].
 ///
 /// [`prune_nodes_absent_from`]: KnowledgeStore::prune_nodes_absent_from
-pub fn graph_id_set(graph: &GraphData) -> HashSet<String> {
-    graph.nodes.iter().map(|n| n.id.clone()).collect()
+/// Borrowed, not cloned: the callee only reads this set, and cloning every
+/// id to build it copied ~23 MB of strings `graph.nodes` already owns. See
+/// P11.9 in docs/dev/PERF-TUNING-JOURNEY.md.
+pub fn graph_id_set(graph: &GraphData) -> HashSet<&str> {
+    graph.nodes.iter().map(|n| n.id.as_str()).collect()
 }
 
 /// Drop store rows that the incoming graph no longer contains.
@@ -697,6 +790,79 @@ mod tests {
         }
     }
 
+    // ---- P11.6: the edge-set digest -------------------------------------
+
+    fn graph_of(edges: Vec<GraphEdge>) -> GraphData {
+        GraphData {
+            nodes: vec![node("function:a"), node("function:b"), node("function:c")],
+            edges,
+            stats: None,
+            resolution: None,
+        }
+    }
+
+    #[test]
+    fn the_same_edge_set_digests_the_same() {
+        let g = graph_of(vec![
+            GraphEdge::new("function:a", "function:b", GraphEdgeType::Calls),
+            GraphEdge::new("function:b", "function:c", GraphEdgeType::Calls),
+        ]);
+        assert_eq!(edges_digest(&g), edges_digest(&g));
+    }
+
+    #[test]
+    fn a_removed_edge_changes_the_digest() {
+        let full = graph_of(vec![
+            GraphEdge::new("function:a", "function:b", GraphEdgeType::Calls),
+            GraphEdge::new("function:b", "function:c", GraphEdgeType::Calls),
+        ]);
+        let fewer = graph_of(vec![GraphEdge::new(
+            "function:a",
+            "function:b",
+            GraphEdgeType::Calls,
+        )]);
+        assert_ne!(edges_digest(&full), edges_digest(&fewer));
+    }
+
+    #[test]
+    fn changing_only_the_edge_type_changes_the_digest() {
+        let calls = graph_of(vec![GraphEdge::new(
+            "function:a",
+            "function:b",
+            GraphEdgeType::Calls,
+        )]);
+        let uses = graph_of(vec![GraphEdge::new(
+            "function:a",
+            "function:b",
+            GraphEdgeType::References,
+        )]);
+        assert_ne!(edges_digest(&calls), edges_digest(&uses));
+    }
+
+    /// Endpoints are separated in the hash, so two different edge sets cannot
+    /// collide by concatenating to the same bytes.
+    #[test]
+    fn endpoints_cannot_run_together_into_a_collision() {
+        let a = graph_of(vec![GraphEdge::new("ab", "c", GraphEdgeType::Calls)]);
+        let b = graph_of(vec![GraphEdge::new("a", "bc", GraphEdgeType::Calls)]);
+        assert_ne!(edges_digest(&a), edges_digest(&b));
+    }
+
+    /// A prune removes *nodes*, which can tombstone edges with them. Folding
+    /// the node count in means a digest taken before a prune cannot match the
+    /// graph after one.
+    #[test]
+    fn dropping_a_node_changes_the_digest_even_with_the_same_edges() {
+        let edges = vec![GraphEdge::new(
+            "function:a",
+            "function:b",
+            GraphEdgeType::Calls,
+        )];
+        let mut fewer_nodes = graph_of(edges.clone());
+        fewer_nodes.nodes.pop();
+        assert_ne!(edges_digest(&graph_of(edges)), edges_digest(&fewer_nodes));
+    }
+
     // ---- R4.2: what a stored vector means -------------------------------
 
     /// A pure-function test, because the case that motivates the width check
@@ -826,9 +992,12 @@ mod tests {
         }
         async fn prune_nodes_absent_from(
             &self,
-            keep: &HashSet<String>,
+            keep: &HashSet<&str>,
         ) -> Result<usize, StoreError> {
-            self.pruned.lock().unwrap().push(keep.clone());
+            self.pruned
+                .lock()
+                .unwrap()
+                .push(keep.iter().map(|s| s.to_string()).collect());
             Ok(keep.len())
         }
         async fn upsert_nodes(&self, _rows: &[NodeRow]) -> Result<(), StoreError> {
@@ -962,7 +1131,8 @@ mod tests {
         assert_eq!(pruned, 2);
         let calls = store.pruned.lock().unwrap();
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0], graph_id_set(&g));
+        let expected: HashSet<String> = graph_id_set(&g).iter().map(|s| s.to_string()).collect();
+        assert_eq!(calls[0], expected);
     }
 
     // ---- build_edge_rows -------------------------------------------------

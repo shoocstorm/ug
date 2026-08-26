@@ -21,6 +21,7 @@
 
 use crate::indexer::common::truncate_chars;
 use crate::indexer::languages::{FileContext, LanguageIndexer};
+use super::super::common::imports_in_stable_order;
 use crate::types::{ExportInfo, ImportInfo, ImportedItem, Symbol};
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -301,7 +302,7 @@ fn extract_local_links(source: &[u8]) -> Vec<ImportInfo> {
             });
     }
 
-    by_path.into_values().collect()
+    imports_in_stable_order(by_path)
 }
 
 /// True if the link target points at something inside the project. Anything
