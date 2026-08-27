@@ -403,9 +403,9 @@ changelog on every bump, and keep engine calls behind the `KnowledgeStore`
 trait (`native/src/storage/store.rs`) so upgrades stay confined to
 `native/src/storage/db.rs`.
 
-## 9. Three bugs this codebase keeps re-introducing
+## 9. Five bugs this codebase keeps re-introducing
 
-Both are invisible in review, silent at runtime, and have each already shipped
+All are invisible in review, silent at runtime, and have each already shipped
 here more than once. Check for them by reflex.
 
 ### 9a. Canonicalize *both* sides of a path comparison
@@ -514,6 +514,65 @@ And note the CPU-bound helpers take `&GraphData`, not `String`
 re-parse the graph from scratch; never call those when a parsed graph is in
 scope.
 
+### 9d. A collapsed UI section that is still in the DOM
+
+**If collapsing is done by CSS, every row has to be rendered — so the render
+is sized by the repository, not by what is on screen.**
+
+`renderCatalog`'s `renderNode` recursed into a row's children unconditionally
+and let `.cat-node.expanded + .cat-children { display: block }` decide what was
+visible; `toggleCatalogRow` only flipped that class. On a 485k-node graph that
+put **417,870 rows and 9.17M elements** into a panel the user had not opened,
+and the process held **5,367 MB** while `usedJSHeapSize` read a reassuring
+341 MB (§10f). Nothing looked wrong: the markup was correct, the panel was
+correct, and the only symptom was that everything else in the tab felt slow.
+
+It cost a second time, one layer down. `buildKids` records any id whose edges
+have not arrived and `flushCatalogWarm` fetches them a level at a time — so a
+render that walks every node *fetches* every node, pulling 2.76M edge objects
+into `state.adj` in the mode that exists precisely so the client does not hold
+edges. **A render pass that touches every node will drag the whole data layer
+in behind it**, however carefully the data layer was made lazy.
+
+Rules:
+- Recurse into a subtree only when it is actually open. Make the toggle
+  re-render (and restore the container's `scrollTop`) rather than unhide.
+- Any counter fed by "once per rendered row" becomes wrong the moment rows stop
+  being universal — and it was probably already wrong. The catalog's chips
+  counted a node once per Contains parent, reporting 4,592 symbols for 4,224.
+  Count the *set*, not the render.
+- The check is `Performance.getMetrics → Nodes`, not a screenshot. A page that
+  looks right can be holding ten million elements.
+
+### 9e. Config read before it is loaded, and then never re-read
+
+**A value fetched asynchronously and consumed synchronously at startup is read
+as its fallback — and if the consumer latches, the real value never arrives.**
+
+`state.capabilities` was assigned only inside `probeCapabilities()`, which runs
+at the *end* of `initialize()`. But `initialize()` decides solo mode and picks
+the renderer near its start, and both read `vis.*` off `state.capabilities`. So
+every `vis.*` key was compared against its hardcoded fallback: a user who set
+`vis.solo_threshold` to 10,000,000 still got solo view on a 162k-node graph,
+because the decision ran against the built-in 200,000. `applySoloMode` then
+early-returns when the answer has not changed, so the correct value landing a
+moment later changed nothing for the rest of the session.
+
+The tell is a state that disagrees with its own inputs: `soloRequired()`
+returned `false` while `state.soloOnly` was `true`. If you can evaluate the
+predicate in the console and get the opposite of the stored answer, you are
+looking at this bug, not at the predicate.
+
+Rules:
+- Publish a fetched config **where it is fetched**, not where it is first
+  displayed — `getCapabilities()` now assigns `state.capabilities` itself, so
+  there is one place that can be late instead of two.
+- `await` it before anything reads it. `loadGraph` awaits capabilities
+  unconditionally now, including on paths that do not need the answer, because
+  one cached request is cheaper than an ordering rule nobody can see.
+- A settings key is not verified by reading the code that consumes it. Set it
+  to an extreme value and check the behaviour actually changes.
+
 ## 10. Measuring performance without fooling yourself
 
 **Every number in `docs/dev/PERF-TUNING-JOURNEY.md` was produced this way, and
@@ -580,6 +639,32 @@ attribution beats a good guess:
 # 0.2s `ps -o rss=` sampling for a curve; temporary Instant probes for phases —
 # revert the probes before landing.
 ```
+
+### 10f. In the browser, the JS heap is not the tab
+
+`performance.memory.usedJSHeapSize` measures V8's heap. Blink's DOM, its event
+listeners and its layout tree are **not in it**. On 2026-08-27 a page reading a
+comfortable 118 MB of heap was sitting inside a **1,958 MB** renderer process,
+because `renderCatalog` had put 3,057,743 elements and 139,578 listeners into a
+panel that was not even open. Rounds 1–4 of the perf journey had only ever
+measured the heap, so this cost was invisible for four rounds.
+
+Take all four numbers, every time:
+
+```js
+performance.memory.usedJSHeapSize                 // V8 only — the 6%
+```
+```
+CDP Performance.getMetrics → Nodes, JSEventListeners, Documents
+ps -eo rss=,command= | grep -- '--type=renderer'  // the process actually holding it
+```
+
+Sample the RSS **with the tab still open and settled** — a fixed-delay sample
+taken while the page is still building reported 173 MB for a page that ended at
+5,363 MB. And when a client-side fix needs a number before anyone rebuilds, put
+a reverse proxy in front of `ug serve` that `String.replace`s the patch into
+the served HTML; the same proxy is how you reach module scope, by injecting
+`window.__ug = { state, … }` before the page's last `</script>`.
 
 ## 11. Record what you learn, here, without being asked
 

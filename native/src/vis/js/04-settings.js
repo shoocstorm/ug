@@ -42,11 +42,24 @@
         // Never rejects: every caller's honest fallback for "no answer" is the
         // same as its fallback for "no server", and on a static host there
         // genuinely is no server. `null` says so.
+        // It also *publishes* what it fetched. `state.capabilities` used to be
+        // assigned only by `probeCapabilities()`, which runs at the very end of
+        // `initialize()` — after the solo-mode and renderer decisions have
+        // already been taken. So every `vis.*` config key was read against its
+        // built-in fallback and then ignored for the rest of the session:
+        // `vis.solo_threshold` raised to 10,000,000 still put a 162k-node graph
+        // into solo view, because the decision compared against the hardcoded
+        // 200,000. Nothing re-runs that decision once the real value lands.
+        // See P12.6 in docs/dev/PERF-TUNING-JOURNEY.md.
         let capabilitiesPromise = null;
         function getCapabilities() {
             if (!capabilitiesPromise) {
                 capabilitiesPromise = fetch('/api/capabilities')
                     .then(res => (res.ok ? res.json() : null))
+                    .then(caps => {
+                        if (caps) state.capabilities = caps;
+                        return caps;
+                    })
                     .catch(() => null);
             }
             return capabilitiesPromise;

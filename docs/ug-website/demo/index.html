@@ -9050,7 +9050,7 @@
 }
     </style>
 <script>
-window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3424,"edges":9879,"files":133,"lines":78725,"ugVersion":"0.1.16","visFingerprint":"5bd6e3833879aca9","generatedAt":1787749623};
+window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3424,"edges":9879,"files":133,"lines":78725,"ugVersion":"0.1.16","visFingerprint":"2f18eca70c741ed0","generatedAt":1787834591};
 /* ==========================================================================
    UltraGraph — static demo shim
    ==========================================================================
@@ -11464,8 +11464,15 @@ traverse({
                 // page to local mode, whatever the server had resolved.
                 // The default is not a choice; only a non-default file is.
                 const fileParam = params.get('file');
+                // Awaited unconditionally, even when `?file=` has already
+                // settled the mode: this is also what populates
+                // `state.capabilities`, and `initialize()` reads `vis.*` off it
+                // to pick the renderer and decide solo mode. Fetching it only
+                // on the default path left an explicitly-named graph file
+                // deciding both against the built-in fallbacks. One cached
+                // request either way.
+                const caps = await getCapabilities();
                 if (!fileParam || fileParam === 'graph.json') {
-                    const caps = await getCapabilities();
                     mode = (caps && caps.graph && caps.graph.mode) || 'local';
                 }
                 if (gmOverride === 'local' || gmOverride === 'server') mode = gmOverride;
@@ -11474,7 +11481,6 @@ traverse({
                     setPhase('Loading node index…', 0);
                     // Remembered so every later server-mode response can be
                     // checked against the snapshot this page was built from.
-                    const caps = await getCapabilities();
                     state.graphToken = (caps && caps.graph && caps.graph.token) || null;
                     await loadNodeIndex(setPhase);
                     initialize();
@@ -14163,11 +14169,24 @@ self.onmessage = async (ev) => {
         // Never rejects: every caller's honest fallback for "no answer" is the
         // same as its fallback for "no server", and on a static host there
         // genuinely is no server. `null` says so.
+        // It also *publishes* what it fetched. `state.capabilities` used to be
+        // assigned only by `probeCapabilities()`, which runs at the very end of
+        // `initialize()` — after the solo-mode and renderer decisions have
+        // already been taken. So every `vis.*` config key was read against its
+        // built-in fallback and then ignored for the rest of the session:
+        // `vis.solo_threshold` raised to 10,000,000 still put a 162k-node graph
+        // into solo view, because the decision compared against the hardcoded
+        // 200,000. Nothing re-runs that decision once the real value lands.
+        // See P12.6 in docs/dev/PERF-TUNING-JOURNEY.md.
         let capabilitiesPromise = null;
         function getCapabilities() {
             if (!capabilitiesPromise) {
                 capabilitiesPromise = fetch('/api/capabilities')
                     .then(res => (res.ok ? res.json() : null))
+                    .then(caps => {
+                        if (caps) state.capabilities = caps;
+                        return caps;
+                    })
                     .catch(() => null);
             }
             return capabilitiesPromise;
@@ -25421,7 +25440,10 @@ self.onmessage = async (ev) => {
             subtitle.textContent = (repoLabel ? `· ${repoLabel}` : '') + capped;
             subtitle.hidden = !subtitle.textContent;
 
-            const counters = { folders: 0, files: 0, symbols: 0, shown: 0 };
+            // Rows actually written to the DOM. Only used for the empty state —
+            // the footer chips describe what the catalog *contains*, which is
+            // not the same thing now that collapsed subtrees are not rendered.
+            const counters = { shown: 0 };
 
             const matches = (node) => {
                 if (!filter) return true;
@@ -25475,9 +25497,6 @@ self.onmessage = async (ev) => {
                 const isExpanded = expanded.has(id) || (filter && hasChildren);
                 const color = config.getColor(n.group);
 
-                if (n.group === 'Folder') counters.folders++;
-                else if (n.group === 'File') counters.files++;
-                else counters.symbols++;
                 counters.shown++;
 
                 const meta = [];
@@ -25508,7 +25527,21 @@ self.onmessage = async (ev) => {
                 </div>`);
 
                 html.push(`<div class="cat-children">`);
-                if (hasChildren) {
+                // Only descend into a row that is actually open. This used to
+                // recurse unconditionally and let CSS hide the closed subtrees,
+                // which meant the *entire* repository was in the DOM at all
+                // times: 417,870 rows and 9.17M elements on a 485k-node graph,
+                // in a panel that had not been opened. It cost twice over,
+                // because `buildKids` records every id whose edges have not
+                // arrived and `flushCatalogWarm` then fetches them — walking
+                // every node pulled 2.76M edge objects into `state.adj`, in the
+                // mode that exists so the client does not hold edges.
+                // See P12.1 in docs/dev/PERF-TUNING-JOURNEY.md.
+                //
+                // `isExpanded` is already true for every matched row while a
+                // filter is running, so a filtered view still renders its whole
+                // matched subtree and keeps collapsing by CSS alone.
+                if (hasChildren && isExpanded) {
                     visibleKids.forEach(k => renderNode(k, depth + 1));
                 }
                 html.push(`</div>`);
@@ -25532,11 +25565,45 @@ self.onmessage = async (ev) => {
                 }
             }
 
+            // The chips describe what the catalog holds, never what happens to
+            // be unfolded — collapsing a folder must not make the repository
+            // look smaller. They used to be a tally of rendered rows, which was
+            // only ever right because every row was rendered.
+            //
+            // Unfiltered, that is the whole graph's type census, which both
+            // modes already carry and which costs no edges to read. Filtered,
+            // it is the kept set, whose walk has happened anyway. Both count
+            // *distinct nodes*, where the old per-row tally counted a node once
+            // per Contains parent — 4,592 symbols reported for 4,224 on this
+            // repo. See P12.1 in docs/dev/PERF-TUNING-JOURNEY.md.
+            const tally = { folders: 0, files: 0, symbols: 0 };
+            const countGroup = (group) => {
+                if (group === 'Folder') tally.folders++;
+                else if (group === 'File') tally.files++;
+                else tally.symbols++;
+            };
+            if (filter) {
+                keepSet.forEach(id => {
+                    const n = tree.nodeById.get(id);
+                    if (n) countGroup(n.group);
+                });
+            } else {
+                Object.entries(state.nodeTypeCounts || {}).forEach(([group, n]) => {
+                    if (group === 'Folder') tally.folders += n;
+                    else if (group === 'File') tally.files += n;
+                    else tally.symbols += n;
+                });
+            }
+
             const chips = [];
-            chips.push(`<span class="catalog-metric"><b>${counters.folders}</b><span>Folder${counters.folders === 1 ? '' : 's'}</span></span>`);
-            chips.push(`<span class="catalog-metric"><b>${counters.files}</b><span>File${counters.files === 1 ? '' : 's'}</span></span>`);
+            // `toLocaleString`, not `formatNumber`: these are now repo-scale
+            // (449,330 symbols on the 485k fixture) and a chip that reads "449k"
+            // has thrown away the fact it exists to state. Same treatment counts
+            // get in the walk panel.
+            chips.push(`<span class="catalog-metric"><b>${tally.folders.toLocaleString()}</b><span>Folder${tally.folders === 1 ? '' : 's'}</span></span>`);
+            chips.push(`<span class="catalog-metric"><b>${tally.files.toLocaleString()}</b><span>File${tally.files === 1 ? '' : 's'}</span></span>`);
             if (includeSymbols) {
-                chips.push(`<span class="catalog-metric"><b>${counters.symbols}</b><span>Symbol${counters.symbols === 1 ? '' : 's'}</span></span>`);
+                chips.push(`<span class="catalog-metric"><b>${tally.symbols.toLocaleString()}</b><span>Symbol${tally.symbols === 1 ? '' : 's'}</span></span>`);
             }
             stats.innerHTML = chips.join('');
             flushCatalogWarm();
@@ -25621,6 +25688,25 @@ self.onmessage = async (ev) => {
                 row.classList.add('expanded');
                 state.catalogExpanded.add(id);
             }
+            // A closed row's children are no longer sitting in the DOM behind a
+            // CSS rule, so opening one has to build them — the class flip above
+            // is now only the instant feedback. Not while a filter is running:
+            // there every matched subtree is rendered already, and re-rendering
+            // would immediately re-expand the row just clicked shut, because
+            // `isExpanded` is unconditional under a filter.
+            if (!filterIsActive()) {
+                // `#catalog-body` is the scroll container, and replacing its
+                // children drops the scroll position — which on a toggle halfway
+                // down a long tree throws the row you clicked off screen.
+                const body = document.getElementById('catalog-body');
+                const scrollTop = body ? body.scrollTop : 0;
+                renderCatalog();
+                if (body) body.scrollTop = scrollTop;
+            }
+        }
+
+        function filterIsActive() {
+            return !!(state.catalogFilter || '').trim();
         }
 
         function highlight(text, needle) {

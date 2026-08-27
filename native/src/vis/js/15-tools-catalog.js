@@ -431,7 +431,10 @@
             subtitle.textContent = (repoLabel ? `· ${repoLabel}` : '') + capped;
             subtitle.hidden = !subtitle.textContent;
 
-            const counters = { folders: 0, files: 0, symbols: 0, shown: 0 };
+            // Rows actually written to the DOM. Only used for the empty state —
+            // the footer chips describe what the catalog *contains*, which is
+            // not the same thing now that collapsed subtrees are not rendered.
+            const counters = { shown: 0 };
 
             const matches = (node) => {
                 if (!filter) return true;
@@ -485,9 +488,6 @@
                 const isExpanded = expanded.has(id) || (filter && hasChildren);
                 const color = config.getColor(n.group);
 
-                if (n.group === 'Folder') counters.folders++;
-                else if (n.group === 'File') counters.files++;
-                else counters.symbols++;
                 counters.shown++;
 
                 const meta = [];
@@ -518,7 +518,21 @@
                 </div>`);
 
                 html.push(`<div class="cat-children">`);
-                if (hasChildren) {
+                // Only descend into a row that is actually open. This used to
+                // recurse unconditionally and let CSS hide the closed subtrees,
+                // which meant the *entire* repository was in the DOM at all
+                // times: 417,870 rows and 9.17M elements on a 485k-node graph,
+                // in a panel that had not been opened. It cost twice over,
+                // because `buildKids` records every id whose edges have not
+                // arrived and `flushCatalogWarm` then fetches them — walking
+                // every node pulled 2.76M edge objects into `state.adj`, in the
+                // mode that exists so the client does not hold edges.
+                // See P12.1 in docs/dev/PERF-TUNING-JOURNEY.md.
+                //
+                // `isExpanded` is already true for every matched row while a
+                // filter is running, so a filtered view still renders its whole
+                // matched subtree and keeps collapsing by CSS alone.
+                if (hasChildren && isExpanded) {
                     visibleKids.forEach(k => renderNode(k, depth + 1));
                 }
                 html.push(`</div>`);
@@ -542,11 +556,45 @@
                 }
             }
 
+            // The chips describe what the catalog holds, never what happens to
+            // be unfolded — collapsing a folder must not make the repository
+            // look smaller. They used to be a tally of rendered rows, which was
+            // only ever right because every row was rendered.
+            //
+            // Unfiltered, that is the whole graph's type census, which both
+            // modes already carry and which costs no edges to read. Filtered,
+            // it is the kept set, whose walk has happened anyway. Both count
+            // *distinct nodes*, where the old per-row tally counted a node once
+            // per Contains parent — 4,592 symbols reported for 4,224 on this
+            // repo. See P12.1 in docs/dev/PERF-TUNING-JOURNEY.md.
+            const tally = { folders: 0, files: 0, symbols: 0 };
+            const countGroup = (group) => {
+                if (group === 'Folder') tally.folders++;
+                else if (group === 'File') tally.files++;
+                else tally.symbols++;
+            };
+            if (filter) {
+                keepSet.forEach(id => {
+                    const n = tree.nodeById.get(id);
+                    if (n) countGroup(n.group);
+                });
+            } else {
+                Object.entries(state.nodeTypeCounts || {}).forEach(([group, n]) => {
+                    if (group === 'Folder') tally.folders += n;
+                    else if (group === 'File') tally.files += n;
+                    else tally.symbols += n;
+                });
+            }
+
             const chips = [];
-            chips.push(`<span class="catalog-metric"><b>${counters.folders}</b><span>Folder${counters.folders === 1 ? '' : 's'}</span></span>`);
-            chips.push(`<span class="catalog-metric"><b>${counters.files}</b><span>File${counters.files === 1 ? '' : 's'}</span></span>`);
+            // `toLocaleString`, not `formatNumber`: these are now repo-scale
+            // (449,330 symbols on the 485k fixture) and a chip that reads "449k"
+            // has thrown away the fact it exists to state. Same treatment counts
+            // get in the walk panel.
+            chips.push(`<span class="catalog-metric"><b>${tally.folders.toLocaleString()}</b><span>Folder${tally.folders === 1 ? '' : 's'}</span></span>`);
+            chips.push(`<span class="catalog-metric"><b>${tally.files.toLocaleString()}</b><span>File${tally.files === 1 ? '' : 's'}</span></span>`);
             if (includeSymbols) {
-                chips.push(`<span class="catalog-metric"><b>${counters.symbols}</b><span>Symbol${counters.symbols === 1 ? '' : 's'}</span></span>`);
+                chips.push(`<span class="catalog-metric"><b>${tally.symbols.toLocaleString()}</b><span>Symbol${tally.symbols === 1 ? '' : 's'}</span></span>`);
             }
             stats.innerHTML = chips.join('');
             flushCatalogWarm();
@@ -631,6 +679,25 @@
                 row.classList.add('expanded');
                 state.catalogExpanded.add(id);
             }
+            // A closed row's children are no longer sitting in the DOM behind a
+            // CSS rule, so opening one has to build them — the class flip above
+            // is now only the instant feedback. Not while a filter is running:
+            // there every matched subtree is rendered already, and re-rendering
+            // would immediately re-expand the row just clicked shut, because
+            // `isExpanded` is unconditional under a filter.
+            if (!filterIsActive()) {
+                // `#catalog-body` is the scroll container, and replacing its
+                // children drops the scroll position — which on a toggle halfway
+                // down a long tree throws the row you clicked off screen.
+                const body = document.getElementById('catalog-body');
+                const scrollTop = body ? body.scrollTop : 0;
+                renderCatalog();
+                if (body) body.scrollTop = scrollTop;
+            }
+        }
+
+        function filterIsActive() {
+            return !!(state.catalogFilter || '').trim();
         }
 
         function highlight(text, needle) {

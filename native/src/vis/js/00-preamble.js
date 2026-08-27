@@ -365,8 +365,15 @@
                 // page to local mode, whatever the server had resolved.
                 // The default is not a choice; only a non-default file is.
                 const fileParam = params.get('file');
+                // Awaited unconditionally, even when `?file=` has already
+                // settled the mode: this is also what populates
+                // `state.capabilities`, and `initialize()` reads `vis.*` off it
+                // to pick the renderer and decide solo mode. Fetching it only
+                // on the default path left an explicitly-named graph file
+                // deciding both against the built-in fallbacks. One cached
+                // request either way.
+                const caps = await getCapabilities();
                 if (!fileParam || fileParam === 'graph.json') {
-                    const caps = await getCapabilities();
                     mode = (caps && caps.graph && caps.graph.mode) || 'local';
                 }
                 if (gmOverride === 'local' || gmOverride === 'server') mode = gmOverride;
@@ -375,7 +382,6 @@
                     setPhase('Loading node index…', 0);
                     // Remembered so every later server-mode response can be
                     // checked against the snapshot this page was built from.
-                    const caps = await getCapabilities();
                     state.graphToken = (caps && caps.graph && caps.graph.token) || null;
                     await loadNodeIndex(setPhase);
                     initialize();

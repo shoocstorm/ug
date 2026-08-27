@@ -3,8 +3,8 @@
 > The shared ledger for performance work on `ug`. One section per round, each
 > with the baseline it started from, what landed with its measured number, and
 > what the round taught that would otherwise be re-learned. Items are numbered
-> `P<group>.<n>` continuously across rounds — Round 1 opened at P1, Round 4
-> closed at P11.
+> `P<group>.<n>` continuously across rounds — Round 1 opened at P1, Round 5
+> opened at P12.
 >
 > **Two standing rules.** Nothing lands without a measurement, and nothing is
 > deleted when it fails — it moves to [Rejected / deferred](#rejected--deferred)
@@ -15,7 +15,7 @@
 | **Opened** | 2026-08-18 |
 | **Version** | 0.1.16 |
 | **Primary fixture** | `~/.ug/neo4j` — 161,725 nodes / 745,964 edges / 330 MB `graph.json` |
-| **Status** | Rounds 1–3 landed; Round 4 complete bar P11.7 (deferred). Suite **908/908** |
+| **Status** | Rounds 1–4 landed (bar P11.7, deferred). Round 5 open: **P12.1 + P12.6 landed**, P12.2–P12.5 audited. Suite **912/912** |
 
 **Status marks:** ✅ landed and verified · ⬜ open · ⏭️ deferred · ❌ rejected by measurement
 
@@ -33,8 +33,9 @@ rows, which are Round 2's synthetic 485k-node index (~3× neo4j).
 | `ug gen --no-ingest` | 5.17 s / 3,378 MB | **4.18 s / 1,161 MB** | 1.24× / **2.91×** |
 | `ug serve` idle RSS | 1,245 MB | **730 MB** | **1.70×** |
 | `ug serve` startup to graph-ready | 6.66 s | **0.62 s** | 10.7× |
-| Browser tab, 485k nodes | 280 MB heap | **95 MB** | **2.9×** |
-| …load → interactive | 2,485 ms | **1,531 ms** | 1.6× |
+| Browser tab, 485k nodes | 280 MB heap | **62 MB** | **4.5×** |
+| …load → interactive | 2,485 ms | **1,105 ms** | 2.2× |
+| Browser **renderer process**, 485k | 5,367 MB | **314 MB** | **17.1×** |
 | `/api/graph/search` per keystroke | 23.8 ms / 133 KB | **0.44 ms / 24.8 KB** | **54× / 5.4×** |
 | `ug graph centrality` | never returned | **3.3 s** | — |
 
@@ -55,6 +56,7 @@ ingest, and inside OverGraph 0.17 rather than this crate.
 | `~/.ug/ug` | 4.6 MB | ~4,400 nodes — the local-mode case |
 | `~/.ug/overgraph` | 16 MB | Mid-size |
 | `~/.ug/neo4j` | 330 MB | 161,725 nodes / 745,964 edges — the stress case |
+| `~/.ug/big500k` | 1,049 MB | 485,175 / 2,237,892 — `~/.ug/neo4j` tripled with a 2-char id shard prefix, so string lengths and degrees stay real and only the count scales. The 500k target, and what P9.2/P12.5 were waiting for |
 
 - `cargo` root is `native/`; the suite runs via `cargo nextest run` (thread
   count lives in `.config/nextest.toml` — do not pass `-j`).
@@ -77,6 +79,18 @@ ingest, and inside OverGraph 0.17 rather than this crate.
 - Browser heap: `node --expose-gc`, run the structure, drop the payload,
   `gc()` three times, read `heapUsed`. Node's V8 is the page's engine. Tab
   totals via Chrome `--enable-precise-memory-info`, median of 8.
+- **`usedJSHeapSize` is not the tab.** Blink's DOM is outside the JS heap, so
+  a page of 9M elements reads 341 MB of heap inside a 5,367 MB renderer
+  process. Take `Performance.getMetrics` → `Nodes` and `JSEventListeners`
+  alongside it, and the RSS of the process matching `--type=renderer`.
+- The browser harness is: headless Chrome over CDP (`WebSocket` + `fetch`, no
+  puppeteer, `--enable-unsafe-swiftshader`), behind a small reverse proxy in
+  front of `ug serve` that injects `window.__ug = { state, … }` before the
+  page's last `</script>` — module scope is unreachable from
+  `Runtime.evaluate` otherwise. The same proxy can `String.replace` a patch
+  into the served page, which is how a client-side fix gets a number before
+  anyone rebuilds. Wait for the `#loading` element to *exist* before reading
+  its `display`, or the probe reports a load time of 0 ms.
 - Peak RSS: `/usr/bin/time -l`. Phase attribution: 0.2 s `ps` sampling, or
   temporary `Instant` probes reverted before landing.
 - `ug demo --page-only` must be re-run from the repo root after any
@@ -112,9 +126,15 @@ held since.
   on a 5 GB workload is ~100 MB.
 - **`str::find` beats a hand-rolled scan.** `to_lowercase()` + `find` is a
   tuned two-way/`memchr` search; the allocation is not the expensive half.
-- **`ug gen` output is not reproducible** — see
-  [P11.10](#p1110--the-indexs-content-is-not-reproducible-either). Correctness
-  checks compare the node map, edge multiset and `resolution`, not bytes.
+- **`ug gen` output is reproducible as of P11.10**, and was not before it —
+  see [P11.10](#p1110--the-indexs-content-is-not-reproducible-either) for the
+  two independent causes. Correctness checks still compare the node map, edge
+  multiset and `resolution` rather than bytes.
+- **The GPU is not the constraint in the vis layer and never has been.** Solo
+  mode caps what any renderer is handed at 1,500 nodes past 200k elements, and
+  the full GPU-side payload below that is ~40 B per point and ~28 B per link.
+  Every cost measured in the browser has been CPU, JS heap or DOM — see
+  [Round 5](#round-5--the-vis-layer).
 
 ---
 
@@ -579,6 +599,336 @@ it. Churn is a CPU cost, not a memory one.
 
 ---
 
+# Round 5 — The vis layer
+
+**2026-08-27 · baseline `3e8f441` · 6 items, P12.1 and P12.6 landed · suite 912/912**
+
+Scope was the browser: WebGL, wasm, worker threads, GPU-friendly data
+structures, and what stands between `ug` and a 500k-node graph. Round 2 took
+the tab's **JS heap** from 280 MB to 95 MB at that size and concluded the
+renderer was never the problem. Both halves of that are still true. Both
+missed what the tab actually costs.
+
+**The fixture the deferred items were waiting for now exists:**
+`~/.ug/big500k` — 485,175 nodes / 2,237,892 edges / 1,049 MB, built by
+tripling `~/.ug/neo4j` with a 2-char shard prefix on every id, so the real
+string-length and degree distributions are preserved and only the count
+scales. Same dimensions as Round 2's synthetic index, so its numbers compare.
+
+## The four questions, answered
+
+**WebGL — yes, twice, and it is not the constraint.** `12-render-cosmos.js`
+drives cosmos.gl: force simulation *and* drawing in WebGL2 shaders, one
+instanced draw call for all points, and the data handed to it is already a
+struct-of-arrays of `Float32Array` columns (`positions`, `colors`, `sizes`,
+`shapes`, `imageIdx`, `imageSizes`, `links`, `linkColors`, `linkWidths`).
+`11-render-three.js` is the opposite by design — `makeNodeObject` builds a
+`THREE.Group` of 2–4 `Sprite`s per node with a **per-node `SpriteMaterial`**,
+so nothing instances and nothing shares. That is why `THREE_D_MAX_ELEMENTS`
+is 3,000, and it is the right trade for the graphs it draws.
+
+**wasm — none, and the audit found no candidate.** Every hot loop is either a
+typed-array pass that is already at memory bandwidth, or string/`Map` work
+whose data would have to be copied across the wasm boundary to be operated on.
+The one shape that would suit it — building the 485k-entry `id → index` hash
+table — is already in a Worker and already costs 7 ms. Filed under
+[Rejected / deferred](#rejected--deferred) so the next audit does not
+re-propose it.
+
+**Worker threads — one, and it is the right one.** `NODE_INDEX_WORKER_SRC`
+fetches the binary node frame and builds the hash table off-thread, then hands
+both buffers over as transferables (P9.1). Layout does not need a worker: it
+runs on the GPU in cosmos and is bounded to 3,000 elements in three. The
+remaining main-thread work is DOM and JSON — and a worker cannot help with
+JSON, because the parsed result would have to be structured-cloned back.
+That is an argument for making the data binary, not for adding a thread; see
+P12.2.
+
+**GPU-friendly data — yes, and it never gets to matter.** Past 200,000
+elements `soloRequired()` hands the renderer a *neighbourhood* of at most
+`SOLO_MAX_NODES` = 1,500. Even at the top of the full-draw band the entire
+GPU-side payload is ~40 B per point and ~28 B per link — 7 MB at 40k nodes and
+200k links. **VRAM has never been the limit and is not on the path to 500k.**
+
+## What the tab actually costs
+
+`ug serve --graph-mode server`, boot to settled, **nothing clicked**, canvas
+empty. `heap` is `performance.memory.usedJSHeapSize`; `renderer` is the RSS of
+the Chrome renderer process holding the page.
+
+| fixture | renderer | heap | DOM nodes | listeners | catalog rows | edges in `state.adj` |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `neo4j` 161,725 | **1,958 MB** | 118 MB | 3,057,743 | 139,578 | 139,290 | 919,575 |
+| `big500k` 485,175 | **5,367 MB** | 341 MB | 9,166,074 | 418,158 | 417,870 | 2,758,725 |
+
+**The JS heap is not the tab.** Blink's DOM lives outside it, so the number
+Round 2 optimised reads 118 MB while the process holds 1,958 MB. Every
+browser figure in this file before today measured the 6%.
+
+| # | Item | Measured | |
+| :--- | :--- | :--- | :--- |
+| P12.1 | The catalog renders the whole repository into the DOM at boot | **1,958 → 245 MB** on neo4j; **5,367 → 314 MB** at 485k | ✅ |
+| P12.2 | File mode dies at ~250k nodes, and says "Invalid string length" | hard wall, reproduced in Chrome | ⬜ |
+| P12.3 | Every hover repaints the whole view | ≥4.9 ms per pointer move at 40k/190k | ⬜ |
+| P12.4 | Server-mode session memory has no ceiling | unmeasured; no eviction anywhere | ⬜ |
+| P12.5 | P9.2 — index identity, now that a 500k fixture exists | would reach 18 MB from 58 | ⬜ |
+| P12.6 | Every `vis.*` config key was read before it was loaded, then never re-read | `solo_threshold` 10,000,000 had no effect at all | ✅ |
+
+<a id="p121"></a>
+### ✅ P12.1 — the catalog renders the whole repository into the DOM at boot
+
+`renderCatalog`'s `renderNode` recurses into `visibleKids` **unconditionally**
+— it never consults `isExpanded`. The entire Contains hierarchy is serialised
+into `body.innerHTML` on every render and shown or hidden with CSS
+(`.cat-node.expanded + .cat-children`), because `toggleCatalogRow` only adds
+and removes a class and never re-renders. So the whole tree *has* to be in the
+DOM for expansion to work at all.
+
+That is 417,870 rows and 9.17M DOM elements at 485k nodes, on a panel that is
+not open, before anything is clicked.
+
+It costs a second time. `buildKids` records every id whose edges have not
+arrived, and `flushCatalogWarm` fetches them a level at a time —
+`CATALOG_WARM_ROUNDS` = 12. Because the render walks every node, the warm
+walks every node too: 12 escalating requests ending in an 851 KB body of ids,
+which pull **2,758,725 edge objects** and the same number of `adjKeys`
+strings into `state.adj`. Server mode exists precisely so the client does not
+hold edges. It holds most of them before the user has done anything.
+
+**Landed as three changes**, all in `15-tools-catalog.js`:
+
+- `renderNode` descends only into a row that is actually expanded. Under a
+  filter `isExpanded` is already unconditional, so a filtered view still
+  renders its whole matched subtree and keeps collapsing by CSS alone.
+- `toggleCatalogRow` re-renders, because the subtree is no longer sitting in
+  the DOM behind a CSS rule. It restores `#catalog-body`'s `scrollTop` across
+  the render — that is the scroll container, and replacing its children would
+  otherwise throw the row you just clicked off screen. Skipped while a filter
+  is running, where re-rendering would re-expand the row just clicked shut.
+- The footer chips stop being a tally of rendered rows. See below.
+
+| | neo4j 161,725 | | big500k 485,175 | |
+| :--- | ---: | ---: | ---: | ---: |
+| | before | after | before | after |
+| renderer RSS | 1,958 MB | **245 MB** | 5,367 MB | **314 MB** |
+| JS heap | 118 MB | **26 MB** | 341 MB | **62 MB** |
+| DOM nodes | 3,057,743 | **5,206** | 9,166,074 | **8,441** |
+| event listeners | 139,578 | **365** | 418,158 | **519** |
+| catalog rows | 139,290 | **77** | 417,870 | **231** |
+| edges in `state.adj` | 919,575 | **382** | 2,758,725 | **1,146** |
+
+**8.0× and 17.1×**, and the rows that remain are exactly the two levels
+`maybeAutoExpand` opens.
+
+**The chips had to change with it.** They were `counters.folders/files/symbols`
+incremented once per rendered row, which was only ever right because every row
+was rendered; collapsing a folder would now make the repository look smaller.
+They are the whole graph's type census when unfiltered (`state.nodeTypeCounts`,
+carried by both modes, and free of edges) and the kept set when filtered. Both
+count **distinct nodes**, where the old tally counted a node once per Contains
+parent — 4,592 symbols reported for 4,224 on `~/.ug/ug`. Rendered with
+`toLocaleString()` rather than `formatNumber`, because "449k Symbols" throws
+away the fact the chip exists to state.
+
+**Verified through the DOM, not by reading the diff.** Every row below is a
+real event dispatched at the page:
+
+| | `~/.ug/ug` (local) | `~/.ug/neo4j` (server) |
+| :--- | :--- | :--- |
+| rows at boot | 21 | 77 |
+| expand a collapsed folder | 21 → 31, row marked expanded | 77 → 79 |
+| …its children resolve past the cold miss | 10 of 10 get toggles | 2 of 2 |
+| collapse it again | back to 21 | back to 77 |
+| `scrollTop` across a toggle | 40 → 40 | 40 → 40 |
+| filter, then clear it | 838 rows → 31 | 42,371 → 79 |
+| chips follow the filter | 20/59/691, then 25/192/4,224 | 1,057/1,841/24,595, then 3,128/8,910/149,687 |
+| Collapse all / Expand all | 1 row / **4,809** | 1 / 21,558 |
+| console errors | none | none |
+
+The 4,809 that "Expand all" reaches on `~/.ug/ug` is exactly what the page
+used to render at boot — the whole tree is still reachable, it is just no
+longer the default. On neo4j "Expand all" is bounded by `CATALOG_EXPAND_MAX`
+(5,000 expanded nodes) rather than by the repo, so it lands at 21,558 rows
+instead of 139,290.
+
+**A cold expand costs no extra round trip.** `buildKids` runs for every
+*rendered* row, including collapsed ones, so the tree is always warmed one
+level ahead of what is open — 77 rows pull 382 edges on neo4j. A child whose
+own edges have not landed renders as a leaf, `flushCatalogWarm` fetches it, and
+the re-render gives it its toggle.
+
+**The lesson is the measurement, not the bug.** A JS-heap-only reading
+declared this tab healthy at 118 MB while the process held 1,958 MB. Chrome's
+`Performance.getMetrics` (`Nodes`, `JSEventListeners`) and the renderer
+process's RSS are the honest numbers for anything that builds DOM.
+
+<a id="p122"></a>
+### ⬜ P12.2 — file mode dies at ~250k nodes, and blames the file
+
+`loadGraph`'s local-mode branch accumulates the response into one string
+(`text += decoder.decode(…)`) and then `JSON.parse`s it. V8's maximum string
+length is **536,870,888 characters**; the concatenation throws
+`RangeError: Invalid string length` at 535.8 MB. `loadGraph`'s `catch` turns
+that into the generic failure card. Confirmed against a real page, not
+inferred:
+
+```
+Could not load the graph
+Invalid string length
+graph.json
+```
+
+At neo4j's density (2,141 bytes of `graph.json` per node) the wall is
+**~250,700 nodes** — half way to the target. The `Response.json()` fallback
+hits the same ceiling; so would a streaming parser, one step later, because
+the parsed result is the real cost:
+
+| file mode, retained after load | nodes / edges | held |
+| :--- | :--- | ---: |
+| `~/.ug/neo4j` | 161,725 / 745,964 | **319 MB** (1,151 MB peak during parse) |
+| `~/.ug/big500k` | 485,175 / 2,237,892 | **837 MB** |
+
+Server mode is unaffected — `graph.server_mode_bytes` sends anything large
+down the columnar path, and 485k costs 62 MB of heap there. But three routes
+reach file mode regardless of size: `--graph-mode local`, `?gm=local`, and —
+the one that matters — **a page with no server at all**, where the
+capabilities probe 404s and `mode` falls back to `'local'` unconditionally.
+
+Two fixes, and they are not alternatives:
+
+1. **Say what happened.** A graph past the ceiling should name the wall and
+   point at `ug serve`, not report "Invalid string length" against
+   `graph.json` as though the file were corrupt. Small, and correct whatever
+   else is decided.
+2. **Give the static artifact the columnar path.** `nodes.bin` already exists;
+   the missing half is edges. A CSR blob — `Uint32Array` offsets plus endpoint
+   indices — is ~20 MB for 2.2M edges against 837 MB of JS objects, and it is
+   a transferable, so it decodes in the Worker that already exists. This is
+   also the only route by which a worker helps the load path at all.
+
+<a id="p123"></a>
+### ⬜ P12.3 — every hover repaints the whole view
+
+`onHover` → `bumpGraphStyles()` → `R.restyle()` → `cosmosPaint()`, which walks
+every node *and every link* in the view rebuilding the colour and width
+buffers, then `cosmosApplyVisibility()` walks every node again. There is no
+throttle and no dirty set. A hover changes at most `1 + degree` nodes and
+`degree` links.
+
+Solo mode hides this above 200,000 elements — the view is 1,500 nodes. Below
+it the whole graph is the view. A JS-loop bench (node, with the style rules
+*stubbed cheaper* than the real ones):
+
+| view | per restyle |
+| :--- | ---: |
+| 4,432 nodes / 11,977 links (`~/.ug/ug`) | 0.35 ms |
+| 11,550 / 13,038 (`~/.ug/hermes`) | 0.58 ms |
+| 40,000 / 190,000 | **4.92 ms** |
+| 161,725 / 200,000 | **9.01 ms** |
+
+The real `nodeColorFor` / `linkColorFor` are long conditional chains over
+selection, walk, tour and focus state, and `nodeLightingFor`,
+`linkVisibleFor` and `linkParticlesFor` run alongside them, so Chrome's number
+will be several times these. At 60 Hz a pointer move has 16 ms.
+
+The fix is a dirty-set restyle: repaint the union of the previous and current
+highlight sets when only the hover changed, and keep the full repaint for the
+things that really do change every element — filters, walk, tour, focus,
+theme. `cosmos.setPointColors` re-uploads the whole texture either way; that
+is ~1 ms and not the part worth chasing.
+
+<a id="p124"></a>
+### ⬜ P12.4 — server-mode session memory has no ceiling
+
+Nothing in server mode evicts. `state.adj` (edge objects), `state.adjKeys` (a
+`Set` of `source|target|rel` strings per node), `state.adjComplete` and
+`state.adjPending` only ever grow, for the life of the tab. `NodeStore`'s
+object pool *does* trim at `NODE_POOL_SOFT_CAP` = 50,000 — but `trimPool`
+skips any node that has been hydrated (`node._slim === false`), so every node
+whose detail panel was ever opened is kept forever with its docstring,
+metrics, signature and lists.
+
+None of this is measured yet. P12.1 currently masks it — the catalog fills
+`state.adj` with most of the graph before a session has a chance to. Worth
+measuring *after* P12.1 lands, by walking a scripted session of a few hundred
+hub expansions and sampling the renderer RSS, so the shape of the growth is
+known before anything is capped.
+
+<a id="p125"></a>
+### ⬜ P12.5 — P9.2, unblocked
+
+Deferred in Round 2 with "revisit when a real 500k index exists to test
+against". One now does. The item is unchanged — index identity would take the
+485k index from 58 MB to ~18 MB and the wire from 51.7 to 9.5 MB — and so is
+the objection: eight endpoints speak real qualified ids and 60+ client call
+sites pass them around opaquely. It is now measurable rather than estimated,
+which is the only thing that had to change.
+
+Sequenced last deliberately. It is worth ~40 MB of heap; P12.1 is worth
+1.7 GB of process.
+
+<a id="p126"></a>
+### ✅ P12.6 — every `vis.*` config key was read before it was loaded
+
+Reported from a real session: `vis.solo_threshold` raised to 10,000,000, and a
+162k-node graph still opened in solo view saying "too many to draw at once".
+
+`state.capabilities` was assigned in exactly one place — inside
+`probeCapabilities()`, which runs at the **end** of `initialize()`. But
+`initialize()` decides solo mode at its top and calls `createGraph()` (which
+picks the renderer) well before that. Both read `vis.*` off
+`state.capabilities`, so both ran against `undefined` and fell back to the
+hardcoded constants: `SOLO_THRESHOLD` 200,000 and `THREE_D_MAX_ELEMENTS` 3,000.
+`max(161725, 745964) > 200000`, so solo engaged. `applySoloMode` early-returns
+when the answer has not changed, so the real value arriving a moment later
+changed nothing for the rest of the session. `vis.renderer` was equally dead;
+it only *looked* to work because `auto` and the size-based default agree.
+
+**The tell was a state that disagreed with its own inputs.** Evaluated in the
+page after load, `soloRequired()` returned `false` while `state.soloOnly` was
+`true` — the predicate was never wrong, the moment it ran was.
+
+Two changes. `getCapabilities()` — the single fetch-and-cache point — now
+assigns `state.capabilities` itself, so there is one place that can be late
+rather than two. And `loadGraph` awaits it unconditionally, including on the
+`?file=<non-default>` path that had already settled the mode without it: one
+cached request is cheaper than an ordering rule nobody can see.
+
+| `~/.ug/neo4j`, 161,725 / 745,964 | before | after |
+| :--- | :--- | :--- |
+| `vis.soloThreshold` = 10,000,000 | solo view, `state.view` empty | **whole graph**, `state.view` 161,725 / 745,964 |
+| default config, forced local | solo view | solo view — the 200,000 fallback still engages |
+| default config, auto | server mode → solo | unchanged |
+
+**What full draw actually costs at 161k**, now that it is reachable: renderer
+**958 MB**, heap 356 MB, load 2.0 s — and a restyle median of **62 ms**, which
+is four dropped frames on every pointer move. That is [P12.3](#p123) arriving
+in practice rather than in theory: `cosmosPaint` walks all 161,725 nodes and
+745,964 links on every hover. The 62 ms was measured under software WebGL
+(swiftshader), so treat it as an upper bound on the GPU half; the JS half alone
+benched at ~9 ms with *cheaper-than-real* style rules. Either way it is over a
+frame, and raising the threshold is what makes it the dominant interaction cost.
+
+### What the round taught
+
+- **The JS heap is not the tab.** 118 MB of heap sat inside a 1,958 MB
+  renderer process. Every browser number in this file before today measured
+  the 6% and called it the tab. `Performance.getMetrics` → `Nodes` and
+  `JSEventListeners`, plus the renderer process's RSS, are the honest ones.
+- **Two features were each individually reasonable.** Server mode fetches
+  edges on demand. The catalog warms cold ids in batches rather than one at a
+  time. Composed, they fetch most of the graph at boot. Neither file is wrong
+  on its own reading, which is why nothing caught it.
+- **The cheap diagnostic was not the fix.** Setting `CATALOG_WARM_ROUNDS = 0`
+  reproduced the whole win (240 MB / 307 MB) and would have shipped a broken
+  catalog. It was worth doing as a *bisect* — it proved which of the two
+  suspects held the memory before either was touched.
+- **A wall can look like a corrupt file.** The 512 MB string ceiling surfaces
+  as "Invalid string length" attributed to `graph.json`. The first instinct on
+  seeing that card is to re-run `ug gen`, which cannot help.
+
+---
+
 ## Results log
 
 One row per landed item or baseline. Keep the numbers, not just the verdict.
@@ -647,6 +997,22 @@ One row per landed item or baseline. Keep the numbers, not just the verdict.
 | 2026-08-26 | P11.13 | a call deleted from a body | stale edge kept forever | removed | `prune_edges_to_graph`; both endpoints survive, so nothing tombstoned it |
 | 2026-08-26 | P11.13 | `ug gen` cold, neo4j | 20.23 s / 4,997 MB | 18.99 s / 5,318 MB | edge identity is a batch lookup, not per-edge |
 | 2026-08-26 | — | 6 *forced* edge rewrites, small fixture | — | 5 live edges, 72 KB, flat | growth seen at 746k scale is segment churn, not live duplicates |
+| 2026-08-27 | — | fixture `~/.ug/big500k` | — | 485,175 / 2,237,892 / 1,049 MB | neo4j tripled; the 500k target finally testable |
+| 2026-08-27 | — | `ug serve` server mode, neo4j, boot | 118 MB heap | — | …inside a **1,958 MB** renderer process. The heap was never the tab |
+| 2026-08-27 | — | …DOM at boot, nothing clicked | 3,057,743 nodes / 139,578 listeners | — | 139,290 catalog rows, panel closed |
+| 2026-08-27 | — | …edges pulled into `state.adj` at boot | 919,575 | — | in the mode whose purpose is not holding edges |
+| 2026-08-27 | P12.1 | neo4j, renderer RSS | 1,958 MB | **245 MB** | **8.0×** landed; DOM 3,057,743 → 5,206, rows 139,290 → 77 |
+| 2026-08-27 | P12.1 | big500k, renderer RSS | 5,367 MB | **314 MB** | **17.1×** landed; DOM 9,166,074 → 8,441, heap 341 → 62 MB |
+| 2026-08-27 | P12.1 | edges in `state.adj` at boot, big500k | 2,758,725 | **1,146** | the tree is warmed one level ahead of what is open, no further |
+| 2026-08-27 | P12.1 | `~/.ug/ug`, rows at boot / on Expand all | 4,809 / 4,809 | **21** / 4,809 | the whole tree is still reachable, just no longer the default |
+| 2026-08-27 | P12.1 | catalog chips, `~/.ug/ug` symbols | 4,592 | **4,224** | the old tally counted a node once per Contains parent |
+| 2026-08-27 | P12.1 | expand / collapse / scroll / filter | — | all verified through dispatched DOM events | `scrollTop` 40 → 40 across a toggle; no console errors |
+| 2026-08-27 | P12.6 | `vis.soloThreshold` = 10,000,000, neo4j | solo view, `state.view` empty | **whole graph**, 161,725 / 745,964 | caps were assigned after the decision that reads them |
+| 2026-08-27 | P12.6 | default config, forced local | solo | solo | the 200,000 fallback still engages — only the config path changed |
+| 2026-08-27 | P12.3 | neo4j **full draw**, restyle per hover | — | **62 ms** median (software WebGL) | 4 dropped frames per pointer move; renderer 958 MB, heap 356 MB |
+| 2026-08-27 | P12.2 | file mode, `graph.json` > 512 MB | — | `RangeError: Invalid string length` | V8 caps a string at 536,870,888; wall at ~250,700 nodes |
+| 2026-08-27 | P12.2 | file mode retained, neo4j / big500k | 319 MB / **837 MB** | — | vs 62 MB of heap for the same graph in server mode |
+| 2026-08-27 | P12.3 | `cosmosPaint` per hover, 40k/190k | 4.92 ms | — | JS-loop bench with the style rules stubbed *cheaper* than real |
 
 ---
 
@@ -664,4 +1030,6 @@ them — so the next audit does not re-propose them.
 | Interning edge endpoints *after* the build | Measured 2026-08-25: **no change in peak** (1,458 → 1,456 MB) for **+1.6 s**. Every duplicate is already allocated by then, and freeing them does not return the memory. Interning has to happen as each edge is made or read. |
 | `serde_json::from_reader` for the snapshot parse | Measured 2026-08-25: avoids the 346 MB buffer, but startup **0.31 → 1.33 s** — four times HEAD, giving back most of what P3.1 bought. `memmap2` gets the same memory at 0.48 s. |
 | `build_texts` parallelism (P11.7) | Deferred 2026-08-26, on arithmetic. Instrumented, `build_texts` is 677 ms of a 20.4 s command (3.3%) and 250 ms of that is blocked by `seen_banner`; parallelising the rest is worth ~350 ms at the limit (1.7%). P11.11 landed *inside* this phase and shrank it further, so the case is weaker now than at deferral. The design objection stands too — per-file banner sets change *attribution*, and extract-then-dedupe does not decompose because `extract_prose_comments` interleaves the dedup with a character budget and an early `break`. Measuring the split first found [P11.11](#p1111), which was the larger piece all along. |
+| WebAssembly anywhere in the vis layer | Audited 2026-08-27, no candidate found. Every hot loop is either a typed-array pass already at memory bandwidth, or string/`Map` work whose data would have to be copied across the wasm boundary to be touched. The one shape that would suit it — the 485k-entry `id → index` hash table — is already in a Worker and already costs 7 ms. The vis layer's measured costs are DOM ([P12.1](#p121)), a JSON parse ([P12.2](#p122)) and an un-dirtied repaint ([P12.3](#p123)); wasm addresses none of the three. |
+| Raising `SOLO_MAX_NODES` above 1,500 | Not a performance question. cosmos.gl will instance far more and the GPU-side payload is ~40 B per point, so the budget is not what stops it — a couple of hundred thousand points is a solid wash whichever layout runs, and every hover, filter and restyle then pays full price for pixels nobody can read. Revisit only behind a *different* picture (density/aggregate overview), not by moving the number. |
 | `GraphEdge` endpoints as `u32` node indices | Would reach ~6 MB against `Arc<str>`'s ~49 MB, but needs the node table wherever an edge is built or read — 41 construction sites, 144 reads, ten test files — and a seeded or two-pass `Deserialize`, because an edge would stop meaning anything on its own. Revisit only if 49 MB on a 500k-edge graph starts to matter. |
