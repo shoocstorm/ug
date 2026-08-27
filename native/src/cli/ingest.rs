@@ -315,6 +315,20 @@ async fn ingest_graph_with_progress(
         let removed = storage::prune_to_graph(store, graph)
             .await
             .map_err(|e| format!("prune stale nodes: {}", e))?;
+        // Edges too, but only when the edge set actually moved: an unchanged
+        // digest means every stored edge is one this graph still has, and the
+        // sweep would enumerate 746k of them to delete none. See P11.13.
+        if !edges_unchanged {
+            let removed_edges = storage::prune_edges_to_graph(store, graph)
+                .await
+                .map_err(|e| format!("prune stale edges: {}", e))?;
+            if removed_edges > 0 {
+                println!(
+                    "{C_CYAN}▸{C_RESET} Pruning stale edges: {C_GREEN}✓ removed {}{C_RESET}",
+                    removed_edges
+                );
+            }
+        }
         pruned_any = removed > 0;
         if removed > 0 {
             println!(

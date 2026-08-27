@@ -501,6 +501,25 @@ pub fn graph_id_set(graph: &GraphData) -> HashSet<&str> {
 /// index, so an empty node list means indexing produced nothing (a bad
 /// path, a failed parse) rather than "the repo is now empty" — and pruning
 /// against it would erase the whole store.
+/// The edge-set counterpart of [`prune_to_graph`].
+///
+/// Refuses on an empty graph for the same reason: an empty edge list means
+/// indexing produced nothing, not that the repo has no edges.
+pub async fn prune_edges_to_graph(
+    store: &dyn KnowledgeStore,
+    graph: &GraphData,
+) -> Result<usize, StoreError> {
+    if graph.nodes.is_empty() {
+        return Ok(0);
+    }
+    let keep: HashSet<(&str, &str, &str)> = graph
+        .edges
+        .iter()
+        .map(|e| (&*e.source, &*e.target, e.edge_type.as_str()))
+        .collect();
+    store.prune_edges_absent_from(&keep).await
+}
+
 pub async fn prune_to_graph(
     store: &dyn KnowledgeStore,
     graph: &GraphData,

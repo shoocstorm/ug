@@ -41,9 +41,8 @@ rows, which are Round 2's synthetic 485k-node index (~3× neo4j).
 **The largest remaining number** is `upsert_nodes` at 7.5 s — 37% of a cold
 ingest, and inside OverGraph 0.17 rather than this crate.
 
-> ⚠️ **`ug gen` duplicates every edge in the store on each re-index.** Found
-> while verifying P11.6 and **not fixed** — it is a correctness bug in the
-> write path, not a performance one. See
+> **Fixed 2026-08-26 (P11.13):** `ug gen` used to duplicate every edge in the
+> store on each re-index, and never delete one that had gone. See
 > [Edges are appended, never replaced](#edges-are-appended-never-replaced).
 
 ---
@@ -383,6 +382,7 @@ row sets are materialised in full before the first batch is written.
 | P11.10 | The index's content was not reproducible | **6/6 runs identical**, both fixtures | ✅ |
 | P11.11 | `collect_related_names`: borrow instead of 4 `String`s per edge | ~3M allocations gone | ✅ |
 | P11.12 | Sweep for the same pattern everywhere (`FactContext`, two traversals) | with P11.11: **−0.32 s (1.6%)**, and **no** measurable memory change | ✅ |
+| P11.13 | Edges: `edge_uniqueness` + an edge prune | **correctness** — the store now matches `graph.json` after any re-index | ✅ |
 
 | `ug gen -i <neo4j> --no-cache` | before Round 4 | now | |
 | :--- | ---: | ---: | ---: |
@@ -406,37 +406,64 @@ Every phase of an ingest now has a name and a number:
 all equal to a pre-Round-3 build.
 
 <a id="edges-are-appended-never-replaced"></a>
-### ⚠️ Found, not fixed: edges are appended, never replaced
+### ✅ P11.13 — edges are appended, never replaced
 
-**Every `ug gen` over an already-ingested store adds a complete duplicate copy
-of the edge set.** Three runs over an unchanged repo:
+Found while verifying P11.6. Three runs over an **unchanged** repo:
 
-| run | store edge counts | `graph.json` says |
+| run | store | `graph.json` says |
 | :--- | :--- | :--- |
 | 1 | 3 Calls / 5 Contains | 3 / 5 |
 | 2 | 6 Calls / 10 Contains | 3 / 5 |
 | 3 | 9 Calls / 15 Contains | 3 / 5 |
 
-`EdgeRow` carries an `id` (`source|type|target`) built for all 745,964 edges,
-and `Db::upsert_edges` **never passes it to the engine** — OverGraph's
-`EdgeInput` has no identity field at all (`from`, `to`, `label`, `props`,
-`weight`, `valid_from`, `valid_to`), so `batch_upsert_edges` has nothing to
-deduplicate on and appends. The node prune removes *nodes*; nothing removes
-edges.
+**Two bugs wearing one symptom**, and fixing the first exposed the second.
 
-Confirmed pre-existing: a control where **both** runs wrote edges, with no
-P11.6 skip involved, duplicates identically. On the neo4j fixture that is
-+745,964 edges per re-index.
+**1. Nothing identified an edge.** `NodeInput` carries a `key` the engine
+dedupes on; `EdgeInput` has no such field, so every `batch_upsert_edges`
+*created*. The `EdgeRow::id` we build for all 745,964 edges was never passed to
+the engine at all.
 
-**P11.6 masks this in the common case and that is a hazard worth stating
-plainly.** An unchanged re-index no longer duplicates, because it no longer
-writes — but any run that *does* change something still doubles down. The
-change is strictly an improvement over rewriting every time; it is not a fix.
+The fix was not the workaround it looked like. OverGraph supports edge identity
+— `DbOptions::edge_uniqueness`, **default `false`** — and
+`plan_batch_upsert_edges` honours it properly, resolving a whole batch against
+existing triples in one `find_existing_edges_batch` rather than a lookup per
+edge. Reading the engine source settled that; the API reference only documents
+the flag against the *singular* `upsert_edge`.
 
-The fix needs a design decision this round did not have room for: either track
-the returned edge ids so the old ones can be deleted, or delete the graph's
-edges before rewriting, or get edge identity into OverGraph's `EdgeInput`.
-Until then `EdgeRow::id` is ~216 MB of string built per ingest and discarded.
+`DbOptions` is persisted into the manifest on **first open** and later opens
+ignore what they pass, so an existing store keeps duplicating forever however
+new the binary is — hence `STORE_FORMAT_VERSION` 3 → **4**. A v3 store is also
+already wrong (it holds one copy of the edge set per `ug gen` that ever ran),
+so this is the quiet-wrongness case the version gate exists for.
+
+**2. Nothing deleted an edge that had gone.** `edge_uniqueness` stops an edge
+being written twice; it does nothing about one that no longer exists. Deleting
+a *node* takes its edges with it via tombstoning — but a call removed from a
+body leaves both endpoints alive, so nothing tombstoned it and the store kept
+answering `find_usages` with a caller that no longer calls. `prune_edges_to_graph`
+is the edge counterpart of the node prune, gated on P11.6's digest so an
+unchanged run does not enumerate 746k edges to delete none.
+
+**Verified** by walking a fixture through every state, comparing the store
+against `graph.json` at each:
+
+| | store | `graph.json` |
+| :--- | :--- | :--- |
+| two functions, one call | Calls 1 / Contains 4 | Calls 1 / Contains 4 |
+| add a function (edges grow) | Calls 3 / Contains 5 | Calls 3 / Contains 5 |
+| delete it *and* a call (edges shrink) | Contains 4 | Contains 4 |
+| restore the call | Calls 1 / Contains 4 | Calls 1 / Contains 4 |
+
+Six *forced* rewrites of the same graph leave the live count at exactly 5 and
+the store at 72 KB — no growth at all.
+
+**One observation, not a regression.** At the 746k-edge scale, repeatedly
+forcing the edge write (stripping the digest) grows the store on disk —
+937 MB → 2.7 GB over five. The live edge set is correct throughout; this is
+segment and WAL churn awaiting compaction, and the small-fixture run above
+shows compaction keeping up when the data is small. It also cannot happen in
+normal use: P11.6 skips the edge write entirely when nothing changed. Worth
+knowing before anyone bypasses the digest in a loop.
 
 ### ⏭️ P11.7 deferred — measured, not argued
 
@@ -616,6 +643,10 @@ One row per landed item or baseline. Keep the numbers, not just the verdict.
 | 2026-08-26 | P11.11+P11.12 | `ug gen` cold, wall | 20.55 s | **20.23 s** | −0.32 s (1.6%); medians of 5, gap > before-spread |
 | 2026-08-26 | P11.11+P11.12 | `ug gen` cold, peak RSS | 5,012 MB | 4,997 MB | **−15 MB = noise** (113 MB spread). Churn does not set the peak |
 | 2026-08-26 | — | *retracted* | "−470 MB", then "−245 MB" | 15 MB | mixed MB/MiB, then single samples vs a 100 MB spread |
+| 2026-08-26 | P11.13 | store edge count over 3 re-indexes | 5 → 10 → 15 | **5 → 5 → 5** | `edge_uniqueness` (OverGraph default is off); STORE_FORMAT 3 → 4 |
+| 2026-08-26 | P11.13 | a call deleted from a body | stale edge kept forever | removed | `prune_edges_to_graph`; both endpoints survive, so nothing tombstoned it |
+| 2026-08-26 | P11.13 | `ug gen` cold, neo4j | 20.23 s / 4,997 MB | 18.99 s / 5,318 MB | edge identity is a batch lookup, not per-edge |
+| 2026-08-26 | — | 6 *forced* edge rewrites, small fixture | — | 5 live edges, 72 KB, flat | growth seen at 746k scale is segment churn, not live duplicates |
 
 ---
 

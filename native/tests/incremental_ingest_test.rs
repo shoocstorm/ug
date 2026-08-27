@@ -659,3 +659,144 @@ async fn a_reindex_of_an_embedded_store_reports_nothing_owed() {
     assert_eq!(plan.unchanged, 3);
     assert_eq!(plan.vectorless_kept, 0, "these rows have real vectors");
 }
+
+
+// ---------- P11.13: edges are replaced, and stale ones removed ----------
+
+/// How many edges the store actually holds.
+///
+/// Not `count_edges` — that is a deliberate stub on this backend ("is the
+/// table populated", returning 0 or 1). This asks the query engine, which is
+/// the same thing `ug analyze` reports to a user.
+async fn edge_count(db: &Db) -> usize {
+    let page = db
+        .execute_query(
+            "MATCH (a)-[r]->(b) RETURN count(*) AS n",
+            &ultragraph::storage::QueryParams::default(),
+            &ultragraph::storage::QueryLimits::default(),
+        )
+        .await
+        .expect("count query runs");
+    page.rows
+        .first()
+        .and_then(|r| r.first())
+        .and_then(|v| format!("{v:?}").chars().filter(|c| c.is_ascii_digit()).collect::<String>().parse().ok())
+        .unwrap_or(0)
+}
+
+/// `EdgeInput` has no identity field, so before `edge_uniqueness` was enabled
+/// every `upsert_edges` **created** rather than updated — a re-index appended
+/// a complete duplicate copy of the edge set, and three runs over an unchanged
+/// repo left three. Nodes were never affected: `NodeInput` has a `key`.
+#[tokio::test]
+async fn re_upserting_the_same_edges_does_not_duplicate_them() {
+    let tmp = TempDir::new().unwrap();
+    let db = Db::open(tmp.path().to_str().unwrap()).await.unwrap();
+    let g = sample_graph();
+    seed(&db, &g).await;
+
+    let rows: Vec<ultragraph::storage::EdgeRow> = g
+        .edges
+        .iter()
+        .map(|e| ultragraph::storage::EdgeRow {
+            id: format!("{}|{}|{}", e.source, e.edge_type.as_str(), e.target),
+            source: e.source.to_string(),
+            target: e.target.to_string(),
+            edge_type: e.edge_type.as_str().to_string(),
+            properties: String::new(),
+        })
+        .collect();
+
+    for _ in 0..3 {
+        db.upsert_edges(&rows).await.unwrap();
+        assert_eq!(
+            edge_count(&db).await,
+            g.edges.len(),
+            "each re-upsert must update in place, not append a second copy"
+        );
+    }
+}
+
+/// The other half. `edge_uniqueness` stops an edge being written twice; it
+/// does nothing about one that no longer exists. A call deleted from a body
+/// leaves both endpoints alive, so there is nothing for the node prune to
+/// tombstone — and `find_usages` kept reporting a caller that no longer calls.
+#[tokio::test]
+async fn pruning_removes_an_edge_whose_endpoints_both_survive() {
+    let tmp = TempDir::new().unwrap();
+    let db = Db::open(tmp.path().to_str().unwrap()).await.unwrap();
+    let g = sample_graph();
+    seed(&db, &g).await;
+    let rows: Vec<ultragraph::storage::EdgeRow> = g
+        .edges
+        .iter()
+        .map(|e| ultragraph::storage::EdgeRow {
+            id: format!("{}|{}|{}", e.source, e.edge_type.as_str(), e.target),
+            source: e.source.to_string(),
+            target: e.target.to_string(),
+            edge_type: e.edge_type.as_str().to_string(),
+            properties: String::new(),
+        })
+        .collect();
+    db.upsert_edges(&rows).await.unwrap();
+    assert_eq!(edge_count(&db).await, g.edges.len());
+
+    // The call goes away; both `a` and `b` are still in the graph.
+    let mut without_call = g.clone();
+    without_call.edges.clear();
+
+    let removed =
+        ultragraph::storage::prune_edges_to_graph(&db as &dyn KnowledgeStore, &without_call)
+            .await
+            .unwrap();
+    assert_eq!(removed, g.edges.len(), "the vanished edge must be deleted");
+    assert_eq!(edge_count(&db).await, 0);
+}
+
+/// A prune must not take edges the graph still has.
+#[tokio::test]
+async fn pruning_keeps_the_edges_the_graph_still_declares() {
+    let tmp = TempDir::new().unwrap();
+    let db = Db::open(tmp.path().to_str().unwrap()).await.unwrap();
+    let g = sample_graph();
+    seed(&db, &g).await;
+    let rows: Vec<ultragraph::storage::EdgeRow> = g
+        .edges
+        .iter()
+        .map(|e| ultragraph::storage::EdgeRow {
+            id: format!("{}|{}|{}", e.source, e.edge_type.as_str(), e.target),
+            source: e.source.to_string(),
+            target: e.target.to_string(),
+            edge_type: e.edge_type.as_str().to_string(),
+            properties: String::new(),
+        })
+        .collect();
+    db.upsert_edges(&rows).await.unwrap();
+
+    let removed = ultragraph::storage::prune_edges_to_graph(&db as &dyn KnowledgeStore, &g)
+        .await
+        .unwrap();
+    assert_eq!(removed, 0, "nothing changed, so nothing may be removed");
+    assert_eq!(edge_count(&db).await, g.edges.len());
+}
+
+/// Refuses on an empty graph, like the node prune — an empty index means
+/// indexing produced nothing, not that the repo has no edges.
+#[tokio::test]
+async fn edge_pruning_refuses_an_empty_graph() {
+    let tmp = TempDir::new().unwrap();
+    let db = Db::open(tmp.path().to_str().unwrap()).await.unwrap();
+    let g = sample_graph();
+    seed(&db, &g).await;
+
+    let empty = GraphData {
+        nodes: vec![],
+        edges: vec![],
+        stats: None,
+        resolution: None,
+    };
+    let removed = ultragraph::storage::prune_edges_to_graph(&db as &dyn KnowledgeStore, &empty)
+        .await
+        .unwrap();
+    assert_eq!(removed, 0, "must refuse rather than erase the store");
+}

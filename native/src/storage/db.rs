@@ -18,7 +18,7 @@ use crate::storage::store::{
     QueryValue, StoreError, TraversalNode, TraversalPage,
 };
 use crate::storage::facts::{FactValue, Facts};
-use crate::storage::types_registry::{edge_label, node_label, ALL_NODE_LABELS};
+use crate::storage::types_registry::{edge_label, node_label, ALL_EDGE_LABELS, ALL_NODE_LABELS};
 use async_trait::async_trait;
 pub use overgraph::EngineError;
 use overgraph::{
@@ -55,9 +55,16 @@ const META_FILE: &str = "ug-meta.json";
 /// when the store was written. That is the quiet-wrongness case below, not
 /// an unreadability one, and a reindex is what resolves it.
 ///
+/// Bumped to 4 for `edge_uniqueness`. OverGraph persists its `DbOptions` into
+/// the manifest on **first open** and ignores what later opens pass, so a
+/// store created without the flag keeps duplicating edges forever however new
+/// the binary is. The data in a v3 store is also already wrong — it holds one
+/// copy of the edge set per `ug gen` that ever ran against it — so this is the
+/// quiet-wrongness case, and a reindex is the only thing that fixes it.
+///
 /// Bump this whenever the stored encoding changes in a way that makes an
 /// older directory unreadable or, worse, quietly wrong.
-const STORE_FORMAT_VERSION: u32 = 3;
+const STORE_FORMAT_VERSION: u32 = 4;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -417,6 +424,20 @@ impl Db {
             }
         }
         let opts = DbOptions {
+            // At most one edge per `(from, to, label)`. OverGraph defaults
+            // this **off**, which means every `batch_upsert_edges` creates new
+            // edges rather than updating matching ones — so each `ug gen` over
+            // an already-ingested repo appended a complete duplicate copy of
+            // the edge set (5 → 10 → 15 over three runs on a fixture whose
+            // graph.json says 5). Nodes were never affected: `NodeInput` has a
+            // `key` the engine dedupes on, and `EdgeInput` has no such field,
+            // so the `EdgeRow::id` we build is not what identifies an edge —
+            // this flag is. See P11.13 in docs/dev/PERF-TUNING-JOURNEY.md.
+            //
+            // `plan_batch_upsert_edges` resolves the whole batch against
+            // existing triples in one `find_existing_edges_batch`, so this
+            // stays a batch operation rather than becoming a lookup per edge.
+            edge_uniqueness: true,
             dense_vector: Some(DenseVectorConfig {
                 dimension: embedding_dim,
                 metric: DenseMetric::Cosine,
@@ -1107,6 +1128,46 @@ pub async fn prune_nodes_absent_from(
     Ok(removed)
 }
 
+/// Delete every stored edge whose `(source, target, label)` triple is absent
+/// from `keep`.
+///
+/// The edge half of [`prune_nodes_absent_from`], and needed for the same
+/// reason. `edge_uniqueness` stops an edge being written *twice*; nothing
+/// stops one that no longer exists from staying. Deleting a function whose
+/// callers vanished takes its edges with it via OverGraph's tombstoning, but
+/// an edge deleted *between two nodes that both still exist* — a call removed
+/// from a body — has nothing to tombstone it, and lingered forever. The store
+/// then answers `find_usages` with a caller that no longer calls.
+///
+/// Sweeps per edge label, as the node prune sweeps per node label. Endpoints
+/// come back as OverGraph ids, so they are resolved to the project's string
+/// keys before comparing. An edge whose endpoints cannot be resolved is left
+/// alone: it belongs to a node this graph does not describe, and the node
+/// prune owns that case.
+///
+/// See P11.13 in docs/dev/PERF-TUNING-JOURNEY.md.
+pub async fn prune_edges_absent_from(
+    db: &Db,
+    keep: &std::collections::HashSet<(&str, &str, &str)>,
+) -> Result<usize, DbError> {
+    let mut removed = 0usize;
+    for label in ALL_EDGE_LABELS {
+        let ids = db.engine.edges_by_label(label)?;
+        if ids.is_empty() {
+            continue;
+        }
+        for edge in db.engine.get_edges(&ids)?.into_iter().flatten() {
+            let (src, tgt) = (db.key_for(edge.from), db.key_for(edge.to));
+            if keep.contains(&(src.as_str(), tgt.as_str(), edge.label.as_str())) {
+                continue;
+            }
+            db.engine.delete_edge(edge.id)?;
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
 /// Helper used by Phase D's `query::traverse_filtered` retarget — wraps
 /// the OverGraph traversal and rehydrates results into the project's
 /// (string-id, EdgeRow) wire format.
@@ -1316,6 +1377,15 @@ impl KnowledgeStore for Db {
 
     async fn nodes_for_upsert(&self, keys: &[NodeKey]) -> Result<Vec<NodeRow>, StoreError> {
         nodes_for_upsert(self, keys)
+            .await
+            .map_err(StoreError::from)
+    }
+
+    async fn prune_edges_absent_from(
+        &self,
+        keep: &std::collections::HashSet<(&str, &str, &str)>,
+    ) -> Result<usize, StoreError> {
+        prune_edges_absent_from(self, keep)
             .await
             .map_err(StoreError::from)
     }

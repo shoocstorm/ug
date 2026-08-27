@@ -37,7 +37,7 @@ pub use embed::{
 };
 pub use embed::local::LocalEmbedder;
 pub use ingest::{
-    build_texts, capture_for_graph, edges_digest, graph_id_set, ingest_graph, plan_incremental_ingest, prune_to_graph,
+    build_texts, capture_for_graph, edges_digest, graph_id_set, prune_edges_to_graph, ingest_graph, plan_incremental_ingest, prune_to_graph,
     VectorPlan,
     refresh_sparse_stats, IngestPlan, IngestStats,
 };
@@ -53,7 +53,7 @@ pub use query::{
     RankStrategy, RankedContext, SearchHit, SearchKbOptions, TraversalResult,
 };
 pub use store::{
-    open_store, Direction, KnowledgeStore, NodeFilter, StoreError, StoreSet, StoreSpec,
-    TraversalNode, TraversalPage,
+    open_store, Direction, KnowledgeStore, NodeFilter, QueryLimits, QueryParams, StoreError,
+    StoreSet, StoreSpec, TraversalNode, TraversalPage,
 };
 pub use text::{build_node_text, collect_related_names};

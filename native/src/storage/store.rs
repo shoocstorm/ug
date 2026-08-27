@@ -485,6 +485,16 @@ pub trait KnowledgeStore: Send + Sync {
     /// The default implementation prunes nothing and reports 0, for backends
     /// that cannot enumerate their key space. That is a silent divergence
     /// from a backend that *does* prune, so implement it where you can.
+    /// Delete every stored edge whose `(source, target, label)` triple is
+    /// absent from `keep`. Backends that cannot enumerate their edges no-op,
+    /// which leaves them with stale edges — implement it where you can.
+    async fn prune_edges_absent_from(
+        &self,
+        _keep: &std::collections::HashSet<(&str, &str, &str)>,
+    ) -> Result<usize, StoreError> {
+        Ok(0)
+    }
+
     async fn prune_nodes_absent_from(
         &self,
         _keep: &std::collections::HashSet<&str>,
