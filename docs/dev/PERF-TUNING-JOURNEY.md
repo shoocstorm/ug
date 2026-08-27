@@ -15,7 +15,7 @@
 | **Opened** | 2026-08-18 |
 | **Version** | 0.1.16 |
 | **Primary fixture** | `~/.ug/neo4j` — 161,725 nodes / 745,964 edges / 330 MB `graph.json` |
-| **Status** | Rounds 1–4 landed (bar P11.7, deferred). Round 5 open: **P12.1 + P12.6 landed**, P12.2–P12.5 audited. Suite **912/912** |
+| **Status** | Rounds 1–4 landed (bar P11.7, deferred). Round 5 open: **P12.1, P12.3, P12.6 landed**; P12.2, P12.4, P12.5 audited. Suite **912/912** |
 
 **Status marks:** ✅ landed and verified · ⬜ open · ⏭️ deferred · ❌ rejected by measurement
 
@@ -601,7 +601,7 @@ it. Churn is a CPU cost, not a memory one.
 
 # Round 5 — The vis layer
 
-**2026-08-27 · baseline `3e8f441` · 6 items, P12.1 and P12.6 landed · suite 912/912**
+**2026-08-27 · baseline `3e8f441` · 6 items, P12.1 / P12.3 / P12.6 landed · suite 912/912**
 
 Scope was the browser: WebGL, wasm, worker threads, GPU-friendly data
 structures, and what stands between `ug` and a 500k-node graph. Round 2 took
@@ -669,7 +669,7 @@ browser figure in this file before today measured the 6%.
 | :--- | :--- | :--- | :--- |
 | P12.1 | The catalog renders the whole repository into the DOM at boot | **1,958 → 245 MB** on neo4j; **5,367 → 314 MB** at 485k | ✅ |
 | P12.2 | File mode dies at ~250k nodes, and says "Invalid string length" | hard wall, reproduced in Chrome | ⬜ |
-| P12.3 | Every hover repaints the whole view | ≥4.9 ms per pointer move at 40k/190k | ⬜ |
+| P12.3 | Every hover repaints the whole view | **71.2 → 27.3 ms** per hover at 161k/746k | ✅ |
 | P12.4 | Server-mode session memory has no ceiling | unmeasured; no eviction anywhere | ⬜ |
 | P12.5 | P9.2 — index identity, now that a 500k fixture exists | would reach 18 MB from 58 | ⬜ |
 | P12.6 | Every `vis.*` config key was read before it was loaded, then never re-read | `solo_threshold` 10,000,000 had no effect at all | ✅ |
@@ -807,7 +807,7 @@ Two fixes, and they are not alternatives:
    also the only route by which a worker helps the load path at all.
 
 <a id="p123"></a>
-### ⬜ P12.3 — every hover repaints the whole view
+### ✅ P12.3 — every hover repaints the whole view
 
 `onHover` → `bumpGraphStyles()` → `R.restyle()` → `cosmosPaint()`, which walks
 every node *and every link* in the view rebuilding the colour and width
@@ -831,11 +831,69 @@ selection, walk, tour and focus state, and `nodeLightingFor`,
 `linkVisibleFor` and `linkParticlesFor` run alongside them, so Chrome's number
 will be several times these. At 60 Hz a pointer move has 16 ms.
 
-The fix is a dirty-set restyle: repaint the union of the previous and current
-highlight sets when only the hover changed, and keep the full repaint for the
-things that really do change every element — filters, walk, tour, focus,
-theme. `cosmos.setPointColors` re-uploads the whole texture either way; that
-is ~1 ms and not the part worth chasing.
+**Attributed before touching anything, and the guess was half wrong.**
+Instrumented on the 161,725-node / 745,964-link canvas, one restyle splits into
+`paint` **40 ms (59%)**, `render` **27 ms (40%)**, and everything else — the
+three buffer setters, `cosmosApplyVisibility`, `cosmosApplyHighlight` — under
+1 ms combined. The setters were never a cost: they only flag the buffers dirty,
+and the upload happens inside `render`.
+
+**What landed.** `restyle(scope)` takes an optional
+`{ nodes: <ids>, links: <edge objects> }` naming the only things whose
+appearance can have changed. `cosmosPaint` split into `cosmosPaintNode(i)` and
+`cosmosPaintLink(i)`, so a scoped pass writes exactly what the full pass would.
+`onHover` passes the union of the **previous and current** highlight sets — the
+set leaving needs reverting as much as the set arriving. Link buffer slots are
+stamped on the edge (`__ci`); a Map would cost ~50 MB at 746k edges to serve a
+dozen lookups per hover.
+
+Three things a scoped pass skips, and one it refuses:
+
+- `setLinkWidths` — widths are structural (`Contains` or not), never style.
+- `cosmosApplyVisibility` — visibility *is* appearance, and the scope is a
+  promise that nothing outside it changed appearance.
+- A **walk** forces the full pass whatever the caller says: its branch counts
+  along the whole ordered edge list to stay in step with the overlay's
+  `FX_MAX_FLOW_LINKS` budget, so one link's alpha there is not a function of
+  that link alone.
+
+The 3D backend ignores the hint — bounded to 3,000 elements, so scoping it
+would buy a branch rather than time.
+
+| per hover, median of 21 | neo4j 161,725 / 745,964 | `~/.ug/ug` 4,459 / 12,033 |
+| :--- | ---: | ---: |
+| before | 71.2 ms | — |
+| **after** | **27.3 ms** | 1.2 ms |
+| full restyle (filters, tour, theme) | 73.8 ms — unchanged by design | 1.7 ms |
+
+**2.6×**, on the real GPU (headless Chrome with `--use-angle=metal`, an M5 Max
+— not swiftshader, which doubles it).
+
+**Correctness is an equality test, not an eyeball.** Drive N real hovers
+through the scoped path, snapshot `colors` / `linkColors` / `linkWidths`, then
+force one full repaint of the same state and count differing floats. **Zero**,
+on both fixtures, after 1 hover and after 40.
+
+That test had to be broken on purpose before it was worth trusting:
+
+| injected bug | caught? |
+| :--- | :--- |
+| scoped pass skips links entirely | **yes** — 16 floats after 1 hover, 40 after 40 |
+| scope omits the *leaving* highlight set | **only after 40** — 1,800 node + 2,256 link floats, and **0 after one hover** |
+| *(the test's own first version)* built a scope but never moved the highlight sets | compared two identical no-op paints and reported 0 |
+
+A single-hover test passes against a renderer that never un-highlights
+anything, because there is nothing yet to leave behind.
+
+**Where the remaining 27 ms is, and why it stops here.** It is
+`cosmos.render()`. cosmos.gl re-uploads a whole buffer when one entry changes —
+`subData` appears **zero** times in the vendored bundle, so there is no
+partial-update path through its public API. At 745,964 links that is an 11.9 MB
+link-colour texture plus 2.6 MB of point colours on every hover, however few
+entries moved. Going below this means vendoring a partial upload into
+cosmos.gl, which is a change to the library rather than to `ug`; it is in
+[Rejected / deferred](#rejected--deferred) with this number rather than
+attempted here.
 
 <a id="p124"></a>
 ### ⬜ P12.4 — server-mode session memory has no ceiling
@@ -1010,6 +1068,11 @@ One row per landed item or baseline. Keep the numbers, not just the verdict.
 | 2026-08-27 | P12.6 | `vis.soloThreshold` = 10,000,000, neo4j | solo view, `state.view` empty | **whole graph**, 161,725 / 745,964 | caps were assigned after the decision that reads them |
 | 2026-08-27 | P12.6 | default config, forced local | solo | solo | the 200,000 fallback still engages — only the config path changed |
 | 2026-08-27 | P12.3 | neo4j **full draw**, restyle per hover | — | **62 ms** median (software WebGL) | 4 dropped frames per pointer move; renderer 958 MB, heap 356 MB |
+| 2026-08-27 | P12.3 | restyle attribution, 161k/746k | — | paint 40 ms (59%), render 27 ms (40%), rest <1 ms | the buffer setters only flag dirty; the upload is inside `render` |
+| 2026-08-27 | P12.3 | hover restyle, neo4j, **real GPU (Metal)** | 71.2 ms | **27.3 ms** | **2.6×**; full restyle unchanged at 73.8 ms, by design |
+| 2026-08-27 | P12.3 | hover restyle, `~/.ug/ug` 4,459/12,033 | — | 1.2 ms | small graphs were never the problem; no regression |
+| 2026-08-27 | P12.3 | scoped vs full buffers, 1 and 40 hovers | — | **0 differing floats** ×3 buffers, both fixtures | and it catches injected bugs — see the table in P12.3 |
+| 2026-08-27 | — | a one-hover equality test | passes against a renderer that never un-highlights | — | the leaving set only exists from the second hover on |
 | 2026-08-27 | P12.2 | file mode, `graph.json` > 512 MB | — | `RangeError: Invalid string length` | V8 caps a string at 536,870,888; wall at ~250,700 nodes |
 | 2026-08-27 | P12.2 | file mode retained, neo4j / big500k | 319 MB / **837 MB** | — | vs 62 MB of heap for the same graph in server mode |
 | 2026-08-27 | P12.3 | `cosmosPaint` per hover, 40k/190k | 4.92 ms | — | JS-loop bench with the style rules stubbed *cheaper* than real |
@@ -1030,6 +1093,7 @@ them — so the next audit does not re-propose them.
 | Interning edge endpoints *after* the build | Measured 2026-08-25: **no change in peak** (1,458 → 1,456 MB) for **+1.6 s**. Every duplicate is already allocated by then, and freeing them does not return the memory. Interning has to happen as each edge is made or read. |
 | `serde_json::from_reader` for the snapshot parse | Measured 2026-08-25: avoids the 346 MB buffer, but startup **0.31 → 1.33 s** — four times HEAD, giving back most of what P3.1 bought. `memmap2` gets the same memory at 0.48 s. |
 | `build_texts` parallelism (P11.7) | Deferred 2026-08-26, on arithmetic. Instrumented, `build_texts` is 677 ms of a 20.4 s command (3.3%) and 250 ms of that is blocked by `seen_banner`; parallelising the rest is worth ~350 ms at the limit (1.7%). P11.11 landed *inside* this phase and shrank it further, so the case is weaker now than at deferral. The design objection stands too — per-file banner sets change *attribution*, and extract-then-dedupe does not decompose because `extract_prose_comments` interleaves the dedup with a character budget and an early `break`. Measuring the split first found [P11.11](#p1111), which was the larger piece all along. |
+| Partial GPU buffer uploads in cosmos.gl | Measured 2026-08-27, after [P12.3](#p123). The scoped restyle removed the JS repaint; the remaining **27.3 ms** per hover is `cosmos.render()` re-uploading a whole buffer because one entry changed — 11.9 MB of link colours plus 2.6 MB of point colours at 745,964 links. `subData` appears **zero** times in the vendored bundle, so there is no partial-update path through the public API. Reaching below 27 ms means vendoring one in — a change to the library, not to `ug`. |
 | WebAssembly anywhere in the vis layer | Audited 2026-08-27, no candidate found. Every hot loop is either a typed-array pass already at memory bandwidth, or string/`Map` work whose data would have to be copied across the wasm boundary to be touched. The one shape that would suit it — the 485k-entry `id → index` hash table — is already in a Worker and already costs 7 ms. The vis layer's measured costs are DOM ([P12.1](#p121)), a JSON parse ([P12.2](#p122)) and an un-dirtied repaint ([P12.3](#p123)); wasm addresses none of the three. |
 | Raising `SOLO_MAX_NODES` above 1,500 | Not a performance question. cosmos.gl will instance far more and the GPU-side payload is ~40 B per point, so the budget is not what stops it — a couple of hundred thousand points is a solid wash whichever layout runs, and every hover, filter and restyle then pays full price for pixels nobody can read. Revisit only behind a *different* picture (density/aggregate overview), not by moving the number. |
 | `GraphEdge` endpoints as `u32` node indices | Would reach ~6 MB against `Arc<str>`'s ~49 MB, but needs the node table wherever an edge is built or read — 41 construction sites, 144 reads, ten test files — and a seeded or two-pass `Deserialize`, because an edge would stop meaning anything on its own. Revisit only if 49 MB on a 500k-edge graph starts to matter. |

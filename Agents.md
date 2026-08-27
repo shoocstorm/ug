@@ -8,6 +8,37 @@ Before implementing:
 - If a simpler approach exists, say so. Push back when warranted.
 - If something is unclear, stop. Name what's confusing. Ask.
 
+### 1a. Performance is a requirement here, not a follow-up
+
+**`ug` is pointed at repositories of hundreds of thousands of nodes. A change
+that is correct and slow is not done.** Treat cost as part of the design, at
+the time you design it — the same way you treat correctness.
+
+Before writing a function that runs per node, per edge, per row, per frame or
+per keystroke, answer two questions:
+
+1. **What is it O(of)?** Not "is it fast on my repo" — what does it scale with?
+   `~/.ug/neo4j` is 161,725 nodes / 745,964 edges and `~/.ug/big500k` is
+   485,175 / 2,237,892. If the answer is "the whole graph" and the trigger is
+   an interaction, that is a design problem, not a tuning problem.
+2. **What triggers it?** Whole-graph work at load is a cost. The same work on
+   hover, on keystroke or on every frame is a stall, 60 times a second.
+
+**If the honest answer is that it hurts, say so and get agreement before
+implementing it.** A short "this walks every edge on every hover — worth it, or
+should I scope it?" is always cheaper than the round trip after it ships. The
+cases in §9d and §9e both looked correct in review and were found only by
+measurement, months later.
+
+What this does *not* license: speculative optimization, caches nothing has
+asked for, or hand-rolled cleverness where the plain version measures fine
+(`str::find` beat a hand-rolled scan — see the perf journey's Rejected table).
+The rule is to **know** the cost, not to pre-emptively fight it.
+
+Measure it with §10, record it in `docs/dev/PERF-TUNING-JOURNEY.md`, and read
+that file's Rejected/deferred table before proposing an optimization — it exists
+so measured dead ends are not re-proposed.
+
 ## 2. Simplicity First
 
 **Minimum code that solves the problem. Nothing speculative.**
@@ -658,6 +689,12 @@ performance.memory.usedJSHeapSize                 // V8 only — the 6%
 CDP Performance.getMetrics → Nodes, JSEventListeners, Documents
 ps -eo rss=,command= | grep -- '--type=renderer'  // the process actually holding it
 ```
+
+Headless Chrome will use the **real GPU** — drop the swiftshader flags for
+`--use-angle=metal --enable-gpu` and check
+`gl.getParameter(WEBGL_debug_renderer_info.UNMASKED_RENDERER_WEBGL)` says so.
+Under swiftshader a canvas measurement is software rasterisation and can be
+double the real cost: a hover restyle read 62 ms there and 27 ms on Metal.
 
 Sample the RSS **with the tab still open and settled** — a fixed-delay sample
 taken while the page is still building reported 173 MB for a page that ended at

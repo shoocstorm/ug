@@ -1768,6 +1768,10 @@
                 if (Graph) Graph.graphData({ nodes: view.nodes, links: view.edges });
             },
 
+            // The `scope` hint is deliberately ignored: this backend is capped
+            // at THREE_D_MAX_ELEMENTS (3,000) and is handed one neighbourhood
+            // at a time above that, so a full restyle is already bounded and
+            // scoping it would buy a branch rather than time.
             restyle() { threeRestyle(); },
 
             resize(w, h) { if (Graph) Graph.width(w).height(h); },

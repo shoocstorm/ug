@@ -104,6 +104,13 @@
             // the renderer holds, and off-screen edges have nothing to light
             // up — and, within the view, to what is currently drawn (see
             // edgeOnCanvas).
+            // What the *previous* hover lit, kept so the restyle below can be
+            // told the whole of what changed: the set leaving needs repainting
+            // back to its resting colour just as much as the set arriving.
+            // Both are `1 + degree` entries, so copying them is nothing against
+            // the whole-graph repaint it replaces.
+            const wasNodes = [...state.highlightNodes];
+            const wasLinks = [...state.highlightLinks];
             state.highlightNodes.clear();
             state.highlightLinks.clear();
             state.highlightLinkDir.clear();
@@ -130,7 +137,16 @@
                     }
                 });
             }
-            bumpGraphStyles();
+            // A hover moves nothing but these two sets — `nodeColorFor` and
+            // `linkColorFor` are the only style rules that read them, and
+            // neither `nodeLightingFor` nor `linkVisibleFor` does — so the
+            // renderer is told exactly that. Unscoped, this re-evaluated the
+            // style rules for every node and link on the canvas on every
+            // pointer move. See P12.3 in docs/dev/PERF-TUNING-JOURNEY.md.
+            bumpGraphStyles({
+                nodes: wasNodes.concat([...state.highlightNodes]),
+                links: wasLinks.concat([...state.highlightLinks]),
+            });
 
             if (!d) {
                 tooltip.classList.remove('visible');

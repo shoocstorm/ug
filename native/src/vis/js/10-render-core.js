@@ -447,7 +447,16 @@
 
         // Re-evaluate the style accessors after a selection / highlight / filter
         // change, without rebuilding the whole scene.
-        function bumpGraphStyles() { if (R) R.restyle(); }
+        // Re-ask the style rules for every node and link the backend is drawing.
+        //
+        // `scope` is an optional hint — `{ nodes: <ids>, links: <edge objects> }`
+        // — naming the only things whose appearance can have changed. It is a
+        // promise the caller makes, not a filter the backend applies for
+        // safety: pass it only when nothing outside those two lists moved.
+        // A hover is the case it exists for (one node and its edges, against a
+        // whole graph), and a backend is free to ignore it — the 3D one does,
+        // being bounded to 3,000 elements anyway.
+        function bumpGraphStyles(scope) { if (R) R.restyle(scope); }
 
         function setGraphData(view) { if (R) R.setData(view); }
 

@@ -232,6 +232,13 @@
             const links = new Float32Array(keep.length * 2);
             keep.forEach((ei, i) => { links[i * 2] = src[ei * 2]; links[i * 2 + 1] = src[ei * 2 + 1]; });
             cosmosEdges = keep.map(i => edges[i]);
+            // Buffer slot stamped on the edge itself, so a scoped restyle can
+            // find it without a Map of 746k entries (~50 MB) that would exist
+            // only to be read a dozen at a time on hover. Rewritten on every
+            // build, and `cosmosPaintScoped` re-checks `cosmosEdges[i] === e`
+            // before trusting it — a stale stamp from a previous view must
+            // repaint nothing rather than repaint the wrong strand.
+            for (let i = 0; i < cosmosEdges.length; i++) cosmosEdges[i].__ci = i;
 
             cosmosBuf = {
                 positions, colors, sizes, shapes, imageIdx, imageSizes, links,
@@ -265,15 +272,37 @@
         // Refresh the colour/width buffers from the shared style rules. Alpha
         // is where the dimming lives: cosmos.gl has no per-node material to
         // fade, so "lowlit" is simply a smaller colour alpha.
+        // One node's colour and alpha, written into the shared buffer. Split out
+        // of `cosmosPaint` so a scoped restyle can repaint the handful of
+        // entries a hover changed instead of all 161,725 of them — see the
+        // `scope` argument on `restyle`.
+        function cosmosPaintNode(i) {
+            const { colors } = cosmosBuf;
+            const n = cosmosNodes[i];
+            const [r, g, b] = cosmosRgb(nodeColorFor(n));
+            const { opacity } = nodeLightingFor(n);
+            colors[i * 4] = r; colors[i * 4 + 1] = g; colors[i * 4 + 2] = b;
+            colors[i * 4 + 3] = opacity;
+        }
+
+        // One link's colour and alpha, *before* the walk override below. The
+        // 3D renderer applies a flat 0.38 and lets fog and depth do the rest.
+        // Flat on a plane there is neither, so opacity has to carry the
+        // hierarchy itself: a walked or hovered edge is the subject and reads
+        // at full strength, everything else is context. Invisible is simply
+        // alpha 0 — cosmos.gl has no per-link visibility accessor.
+        function cosmosPaintLink(i) {
+            const { linkColors } = cosmosBuf;
+            const e = cosmosEdges[i];
+            const [r, g, b] = cosmosLift(cosmosRgb(linkColorFor(e)));
+            linkColors[i * 4] = r; linkColors[i * 4 + 1] = g; linkColors[i * 4 + 2] = b;
+            const hot = state.highlightLinks.has(e) || linkParticlesFor(e) > 0;
+            linkColors[i * 4 + 3] = linkVisibleFor(e) ? (hot ? 0.95 : 0.55) : 0;
+        }
+
         function cosmosPaint() {
-            const { colors, linkColors, linkWidths } = cosmosBuf;
-            for (let i = 0; i < cosmosNodes.length; i++) {
-                const n = cosmosNodes[i];
-                const [r, g, b] = cosmosRgb(nodeColorFor(n));
-                const { opacity } = nodeLightingFor(n);
-                colors[i * 4] = r; colors[i * 4 + 1] = g; colors[i * 4 + 2] = b;
-                colors[i * 4 + 3] = opacity;
-            }
+            const { linkColors, linkWidths } = cosmosBuf;
+            for (let i = 0; i < cosmosNodes.length; i++) cosmosPaintNode(i);
             // While a walk runs the overlay redraws every reached edge as a
             // straight, arrowed, hop-coloured strand (fxDrawWalkEdges). These
             // links are curved (`curvedLinks`), so leaving them on meant two
@@ -289,33 +318,46 @@
             const walkOwnsEdges = state.walkActive && state.walkEdgeKeys && state.walkEdgeKeys.size > 0;
             let overlayDrawn = 0;
             for (let i = 0; i < cosmosEdges.length; i++) {
+                cosmosPaintLink(i);
                 const e = cosmosEdges[i];
-                const [r, g, b] = cosmosLift(cosmosRgb(linkColorFor(e)));
-                linkColors[i * 4] = r; linkColors[i * 4 + 1] = g; linkColors[i * 4 + 2] = b;
-                // The 3D renderer applies a flat 0.38 and lets fog and depth do
-                // the rest. Flat on a plane there is neither, so opacity has to
-                // carry the hierarchy itself: a walked or hovered edge is the
-                // subject and reads at full strength, everything else is
-                // context. Invisible is simply alpha 0 — cosmos.gl has no
-                // per-link visibility accessor.
-                const hot = state.highlightLinks.has(e) || linkParticlesFor(e) > 0;
-                let alpha = linkVisibleFor(e) ? (hot ? 0.95 : 0.55) : 0;
-                if (walkOwnsEdges && alpha > 0) {
+                if (walkOwnsEdges && linkColors[i * 4 + 3] > 0) {
                     const sId = e.source.id || e.source;
                     const tId = e.target.id || e.target;
                     if (state.walkEdgeKeys.has(walkEdgeKey(sId, tId))) {
-                        if (++overlayDrawn <= FX_MAX_FLOW_LINKS) alpha = 0;
+                        if (++overlayDrawn <= FX_MAX_FLOW_LINKS) linkColors[i * 4 + 3] = 0;
                     } else {
                         // A cross-link between two reached nodes: real, but not
                         // part of the traversal the cascade is laying out, and
                         // the columns are only readable if the lines between
                         // them are the ones that put them there. It comes back
                         // the moment the walk ends.
-                        alpha = 0;
+                        linkColors[i * 4 + 3] = 0;
                     }
                 }
-                linkColors[i * 4 + 3] = alpha;
                 linkWidths[i] = e.rel === 'Contains' ? 1.4 : 0.7;
+            }
+        }
+
+        // Repaint only what a caller says changed. `scope.nodes` is node ids,
+        // `scope.links` is edge objects — the two highlight sets, before and
+        // after, when a hover moves.
+        //
+        // The contract is narrow on purpose: **a scoped restyle asserts that
+        // nothing outside these two lists changed appearance**, which is why it
+        // also skips `cosmosApplyVisibility` (visibility is appearance, and a
+        // hover cannot change it). Anything that touches filters, focus, a
+        // tour, a walk or the theme must restyle unscoped.
+        //
+        // Link widths are structural (`Contains` or not), never style, so a
+        // scoped pass leaves them and the buffer they were last written into.
+        function cosmosPaintScoped(scope) {
+            for (const id of scope.nodes) {
+                const i = cosmosIndexOf.get(id);
+                if (i !== undefined) cosmosPaintNode(i);
+            }
+            for (const e of scope.links) {
+                const i = e && e.__ci;
+                if (i !== undefined && cosmosEdges[i] === e) cosmosPaintLink(i);
             }
         }
 
@@ -1162,17 +1204,33 @@
                 cosmos.start(1);
             },
 
-            restyle() {
+            // `scope`, when given, names the only nodes and links whose
+            // appearance can have changed — see `cosmosPaintScoped` for the
+            // contract. Without it every node and link is repainted, which on
+            // a graph drawn whole is 161,725 + 745,964 style evaluations per
+            // pointer move: measured at 40 ms of a 68 ms restyle, four dropped
+            // frames on every hover. See P12.3 in
+            // docs/dev/PERF-TUNING-JOURNEY.md.
+            //
+            // A walk forces the full pass whatever the caller says: the walk
+            // branch in `cosmosPaint` counts along the whole ordered edge list
+            // to stay in step with the overlay's `FX_MAX_FLOW_LINKS` budget, so
+            // one link's alpha there is not a function of that link alone.
+            restyle(scope) {
                 if (!cosmos || !cosmosBuf) return;
                 if (!_cosmosIntroDone || performance.now() < _cosmosMorphUntil) {
                     _cosmosRestylePending = true;
                     return;
                 }
-                cosmosPaint();
+                const scoped = scope && !state.walkActive;
+                if (scoped) cosmosPaintScoped(scope);
+                else cosmosPaint();
                 cosmos.setPointColors(cosmosBuf.colors);
                 cosmos.setLinkColors(cosmosBuf.linkColors);
-                cosmos.setLinkWidths(cosmosBuf.linkWidths);
-                cosmosApplyVisibility();
+                if (!scoped) {
+                    cosmos.setLinkWidths(cosmosBuf.linkWidths);
+                    cosmosApplyVisibility();
+                }
                 cosmosApplyHighlight();
                 // Snap rather than animate: a restyle is a response to a hover
                 // or a filter, and an 800 ms colour tween reads as lag.
