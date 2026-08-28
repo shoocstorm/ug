@@ -267,6 +267,7 @@
             cosmos.setLinks(links);
             cosmos.setLinkColors(cosmosBuf.linkColors);
             cosmos.setLinkWidths(cosmosBuf.linkWidths);
+            cosmosHitInvalidate();
         }
 
         // Refresh the colour/width buffers from the shared style rules. Alpha
@@ -408,6 +409,7 @@
                 }
             }
             cosmos.setPointPositions(positions);
+            cosmosHitInvalidate();
             return true;
         }
 
@@ -447,6 +449,7 @@
                 cosmosNodes[i].y = y;
                 cosmosNodes[i].z = 0;
             }
+            cosmosHitInvalidate();
         }
 
         // ─── The opening morph: galaxy → sunflower → force ─────
@@ -809,6 +812,7 @@
                     cosmosNodes[i].y = pos[i * 2 + 1];
                     cosmosNodes[i].z = 0;
                 }
+                cosmosHitInvalidate();
                 // A restyle that arrived mid-morph was deferred rather than
                 // allowed to cancel the transition; apply it now.
                 if (_cosmosRestylePending) {
@@ -865,6 +869,7 @@
             cosmosApplyVisibilityInto(buf);
             cosmos.setPointPositions(buf);
             cosmos.render(undefined, dur);
+            cosmosHitInvalidate();
 
             // Restyles arriving mid-tween would upload at zero duration and
             // cancel it, so `restyle()` parks them in `_cosmosRestylePending`
@@ -1039,6 +1044,294 @@
             return out;
         }
 
+        // ─── Hit testing on the CPU ────────────────────────────
+        //
+        // cosmos.gl picks the point under the pointer on the GPU: it redraws
+        // every point into an offscreen index buffer, then reads a small
+        // window of that buffer back with `readPixels` + `getBufferSubData`.
+        // The readback cannot return until the GPU has finished the frame it
+        // is queued behind, and on a canvas drawing 745,964 links that frame
+        // is most of a tenth of a second. The cost is not work — through the
+        // whole stall the CPU sits ~59% idle — so it does not show up as a
+        // busy page. It shows up as a pointer skating ahead of its own
+        // highlight.
+        //
+        // Measured on the 161,725-node neo4j index (P12.8):
+        //
+        //   pointer parked on a node    8.3 ms/frame,  0 of 481 over 16.7 ms
+        //   pointer moving            115.3 ms/frame, 40 of  54 over
+        //   moving, a quarter of the events  114.8 ms  ← per *move*, not per event
+        //
+        // So: stop asking the GPU. A uniform grid over the point positions
+        // answers "what is under this pixel" in microseconds, and its cost
+        // scales with the points *near the cursor*, not with the size of the
+        // scene — which is the property the GPU pick did not have.
+        //
+        // What this deliberately does **not** do is take over cosmos.gl's
+        // event plumbing. `Graph.onClick` decides point-vs-background by
+        // reading `store.hoveredPoint`; the hover ring is drawn from
+        // `store.hoveredPoint.index`; the cursor follows it too. So this
+        // replaces the *picker* and still hands the result to cosmos.gl's own
+        // `processHoverResult` — clicks, the ring, the cursor and the
+        // mouseover/mouseout callbacks all behave exactly as before. Only the
+        // readback is gone. See cosmosInstallCpuPicking.
+
+        // Cells per axis. ~4 points per cell on a 160k graph, and the grid
+        // costs the same 173 KB of Int32Array however the points are spread.
+        const HIT_GRID_DIM = 208;
+        // Screen-space forgiveness, in *device* pixels.
+        //
+        // Not a taste call: cosmos.gl reads a 9×9 window of the picking
+        // framebuffer around the cursor and takes the nearest covered pixel
+        // in it, so its own pick already forgives ±4 device pixels on top of
+        // whatever the point draws. Matching that number is what makes a node
+        // that used to be catchable still catchable — measured, it is the
+        // difference between 71% and 99% agreement with the GPU pick on a
+        // 400-point sweep. Converted to CSS pixels per `devicePixelRatio`,
+        // and capped at one node radius below so it can never reach across
+        // empty canvas at a wide zoom.
+        const HIT_SLOP_DEVICE_PX = 4;
+        // How long a cached canvas rect is trusted. The hit test runs once per
+        // frame, and `getBoundingClientRect` is the one part of it that can
+        // force layout.
+        const HIT_RECT_TTL = 500;
+
+        let hitStart = null;    // Int32Array(cells + 1): CSR cell offsets
+        let hitItems = null;    // Int32Array: point indices, cell by cell
+        let hitCellOf = null;   // Int32Array scratch: point → cell, reused
+        let hitOx = 0, hitOy = 0, hitCell = 1, hitMaxR = 0;
+        let hitDirty = true;
+        let hitRect = null, hitRectAt = 0;
+
+        // Positions moved, the point set changed, or something was hidden.
+        // Cheap: the grid is rebuilt on the next hit test, not here, so a
+        // burst of changes costs one rebuild rather than one each.
+        function cosmosHitInvalidate() { hitDirty = true; hitRect = null; }
+
+        function hitCellIndex(x, y) {
+            let cx = ((x - hitOx) / hitCell) | 0;
+            let cy = ((y - hitOy) / hitCell) | 0;
+            if (cx < 0) cx = 0; else if (cx >= HIT_GRID_DIM) cx = HIT_GRID_DIM - 1;
+            if (cy < 0) cy = 0; else if (cy >= HIT_GRID_DIM) cy = HIT_GRID_DIM - 1;
+            return cy * HIT_GRID_DIM + cx;
+        }
+
+        // Counting sort into a CSR grid: one pass to count, a prefix sum, one
+        // pass to place. No per-cell arrays — 43k of them would be exactly the
+        // allocation churn the rest of this file exists to avoid — and the
+        // three typed arrays are reused across rebuilds, which matters because
+        // a running simulation invalidates this every 400 ms (cosmosSync).
+        function cosmosHitBuild() {
+            hitDirty = false;
+            hitStart = null;
+            const n = cosmosNodes.length;
+            if (!n || !cosmosBuf || !cosmosHidden) return;
+            const sizes = cosmosBuf.sizes;
+
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            let maxR = 0;
+            for (let i = 0; i < n; i++) {
+                // Hidden points are NaN in the position buffer, which is how
+                // they are already excluded from the forces and from the GPU
+                // pick. Leaving them out here keeps that true.
+                if (cosmosHidden[i]) continue;
+                const nd = cosmosNodes[i];
+                const x = nd.x, y = nd.y;
+                if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+                if (x < minX) minX = x;
+                if (x > maxX) maxX = x;
+                if (y < minY) minY = y;
+                if (y > maxY) maxY = y;
+                if (sizes[i] > maxR) maxR = sizes[i];
+            }
+            if (!Number.isFinite(minX)) return;   // nothing visible to hit
+
+            const span = Math.max(maxX - minX, maxY - minY);
+            hitOx = minX;
+            hitOy = minY;
+            // A degenerate span — one visible node, or a layout that stacked
+            // them — would divide by zero. Falling back to a positive cell
+            // puts everything in cell 0, which is correct and merely slow.
+            hitCell = span > 0 ? span / HIT_GRID_DIM : 1;
+            hitMaxR = maxR;
+
+            const cells = HIT_GRID_DIM * HIT_GRID_DIM;
+            if (!hitCellOf || hitCellOf.length < n) hitCellOf = new Int32Array(n);
+            if (!hitItems || hitItems.length < n) hitItems = new Int32Array(n);
+            const start = new Int32Array(cells + 1);
+            const cellOf = hitCellOf;
+            const items = hitItems;
+
+            for (let i = 0; i < n; i++) {
+                const nd = cosmosNodes[i];
+                if (cosmosHidden[i] || !Number.isFinite(nd.x) || !Number.isFinite(nd.y)) {
+                    cellOf[i] = -1;
+                    continue;
+                }
+                const c = hitCellIndex(nd.x, nd.y);
+                cellOf[i] = c;
+                start[c + 1]++;
+            }
+            for (let c = 0; c < cells; c++) start[c + 1] += start[c];
+            const cursor = start.slice(0, cells);
+            for (let i = 0; i < n; i++) {
+                const c = cellOf[i];
+                if (c >= 0) items[cursor[c]++] = i;
+            }
+            hitStart = start;
+        }
+
+        // The canvas rect, cached. Read once per frame otherwise.
+        function hitCanvasRect() {
+            const now = performance.now();
+            if (hitRect && now - hitRectAt < HIT_RECT_TTL) return hitRect;
+            const canvas = cosmos && (cosmos.canvas || document.querySelector('#graph-3d canvas'));
+            if (!canvas) return null;
+            hitRect = canvas.getBoundingClientRect();
+            hitRectAt = now;
+            return hitRect;
+        }
+
+        // The point under a client-space pixel, in cosmos.gl's own pick shape
+        // (`{index, position}`) so it can be handed straight to
+        // `processHoverResult`. Null when the pointer is over empty canvas.
+        function cosmosHitTest(clientX, clientY) {
+            if (!cosmos || !cosmos.isReady || !cosmosBuf) return null;
+            // Mid-morph the node objects and the GPU disagree *by design*: the
+            // position buffer is being tweened and `n.x`/`n.y` hold one end of
+            // it. Hovering against either lights up the wrong node, so during
+            // a transition nothing is hovered — which is also what the old GPU
+            // pick did (`findHoveredItem` bails while a transition is active).
+            if (!_cosmosIntroDone || performance.now() < _cosmosMorphUntil) return null;
+            if (hitDirty) cosmosHitBuild();
+            if (!hitStart || !hitItems) return null;
+
+            const rect = hitCanvasRect();
+            if (!rect) return null;
+            const sp = cosmos.screenToSpacePosition([clientX - rect.left, clientY - rect.top]);
+            if (!sp || !Number.isFinite(sp[0]) || !Number.isFinite(sp[1])) return null;
+
+            // One space unit is this many CSS pixels at the current zoom —
+            // `scalePointsOnZoom` is on, so a node's radius is a constant in
+            // space and the slop is what has to be converted.
+            const scale = cosmos.spaceToScreenRadius(1) || 1;
+            const slopPx = HIT_SLOP_DEVICE_PX / (window.devicePixelRatio || 1);
+            const slop = Math.min(slopPx / scale, hitMaxR);
+            const reach = hitMaxR + slop;
+
+            const dim = HIT_GRID_DIM;
+            let x0 = Math.floor((sp[0] - reach - hitOx) / hitCell);
+            let x1 = Math.floor((sp[0] + reach - hitOx) / hitCell);
+            let y0 = Math.floor((sp[1] - reach - hitOy) / hitCell);
+            let y1 = Math.floor((sp[1] + reach - hitOy) / hitCell);
+            if (x1 < 0 || y1 < 0 || x0 >= dim || y0 >= dim) return null;
+            if (x0 < 0) x0 = 0;
+            if (y0 < 0) y0 = 0;
+            if (x1 >= dim) x1 = dim - 1;
+            if (y1 >= dim) y1 = dim - 1;
+
+            const sizes = cosmosBuf.sizes;
+            const px = sp[0], py = sp[1];
+            let best = -1, bestD2 = Infinity;
+            for (let cy = y0; cy <= y1; cy++) {
+                const row = cy * dim;
+                for (let cx = x0; cx <= x1; cx++) {
+                    const c = row + cx;
+                    const end = hitStart[c + 1];
+                    for (let k = hitStart[c]; k < end; k++) {
+                        const i = hitItems[k];
+                        const nd = cosmosNodes[i];
+                        const dx = nd.x - px, dy = nd.y - py;
+                        const d2 = dx * dx + dy * dy;
+                        if (d2 >= bestD2) continue;
+                        // Inside the disc it draws, plus the slop.
+                        const t = sizes[i] + slop;
+                        if (d2 > t * t) continue;
+                        // Nearest *centre* wins where two discs overlap.
+                        //
+                        // Reasoning said rim distance: cosmos.gl scans its
+                        // readback window for the covered pixel nearest the
+                        // cursor, which sounds like nearest surface. Measured
+                        // against the GPU pick over 245 sampled pixels it is
+                        // the other way round — centre 97.6% agreement, rim
+                        // 95.5% — because the picking pass is depth-tested and
+                        // the depth is not the rule the scan implies. Do not
+                        // "fix" this back without re-running scratch/equal.
+                        bestD2 = d2;
+                        best = i;
+                    }
+                }
+            }
+            if (best < 0) return null;
+            const hit = cosmosNodes[best];
+            return { index: best, position: [hit.x, hit.y] };
+        }
+
+        // Swap cosmos.gl's GPU picker for the grid above.
+        //
+        // Two methods are replaced, on the *instance* rather than the
+        // prototype, so nothing else sharing the class is touched:
+        //
+        //   findHoveredItem(force)   runs once per frame from `renderFrame`,
+        //                            and synchronously on pointerdown so a
+        //                            click knows what it landed on. Ours does
+        //                            the grid lookup and hands the result to
+        //                            cosmos.gl's own `processHoverResult` —
+        //                            which is what sets `store.hoveredPoint`,
+        //                            fires onPointMouseOver / onPointMouseOut
+        //                            and updates the cursor.
+        //   resolvePendingPick()     collects a readback we now never issue.
+        //
+        // Run every frame rather than only when the pointer moves, because
+        // panning and zooming slide nodes under a stationary pointer and the
+        // GPU pick re-ran for exactly that reason. It is affordable now:
+        // `processHoverResult` fires callbacks only when the picked index
+        // actually changes, so a repeat costs the lookup and nothing else.
+        //
+        // These are minified-bundle internals. This checks they are there and
+        // leaves cosmos.gl's own picking alone if a re-vendor renames them —
+        // slow hover is a far better failure than no hover. Re-check it when
+        // bumping the pinned version (docs/VISUALIZATION.md §3.3).
+        function cosmosInstallCpuPicking() {
+            if (!cosmos
+                || typeof cosmos.findHoveredItem !== 'function'
+                || typeof cosmos.resolvePendingPick !== 'function'
+                || typeof cosmos.processHoverResult !== 'function') {
+                console.warn('[ug] cosmos.gl pick hooks not found — leaving GPU picking on');
+                return false;
+            }
+            cosmos.resolvePendingPick = function () {};
+            cosmos.findHoveredItem = function (force) {
+                if (this._isDestroyed) return;
+                if (!force && !this._isPointerOnCanvas) return;
+                // cosmos.gl tracks the pointer in client coords on every
+                // pointermove and pointerdown; `state._mouse` is our own copy
+                // of the same thing, from the onMouseMove config handler.
+                const m = state._mouse;
+                const x = Number.isFinite(this._lastMouseX) ? this._lastMouseX : (m && m.cx);
+                const y = Number.isFinite(this._lastMouseY) ? this._lastMouseY : (m && m.cy);
+                if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+                this.processHoverResult(cosmosHitTest(x, y), undefined);
+                // **Not optional, and not bookkeeping for its own sake.**
+                //
+                // `shouldKeepRendering()` — the predicate that decides whether
+                // the rAF loop runs another frame — asks `hasPendingHoverWork()`,
+                // which is "has the pointer moved more than 2px since the last
+                // time hover was *checked*". Only the real `findHoveredItem`
+                // advanced `_lastCheckedMouse*`, so leaving it behind pins that
+                // answer at true for as long as the pointer is over the canvas,
+                // and cosmos.gl redraws all 745,964 links every frame forever.
+                // Measured: 8.3 ms/frame → 116 ms/frame while parked on a node,
+                // with the CPU 95% idle — a renderer spinning on the GPU for a
+                // frame nothing asked for.
+                this._lastCheckedMouseX = this._lastMouseX;
+                this._lastCheckedMouseY = this._lastMouseY;
+                this._shouldForceHoverDetection = false;
+                this._findHoveredItemExecutionCount = 0;
+            };
+            return true;
+        }
+
         // ─── The backend ───────────────────────────────────────
 
         RENDERERS.cosmos = () => ({
@@ -1185,6 +1478,7 @@
                 });
 
                 await cosmos.ready;
+                cosmosInstallCpuPicking();
                 cosmosBuild(view);
                 // Snap the first upload into place. The default 800 ms
                 // transition tweens every point from nothing on load, which
@@ -1269,20 +1563,30 @@
                 // Snap rather than animate: a restyle is a response to a hover
                 // or a filter, and an 800 ms colour tween reads as lag.
                 //
-                // A *scoped* restyle skips the explicit render, and can only
-                // because of where it is called from: the profile's stack is
-                // `restyle ← bumpGraphStyles ← handleNodeHover ← onPointMouseOver
-                // ← processHoverResult ← resolvePendingPick ← renderFrame` — a
-                // hover restyle runs *inside* cosmos.gl's own frame, so the
-                // very next one applies the buffers the setters just flagged.
-                // Forcing a synchronous render there instead re-ran
-                // `update()` — a whole-buffer colour upload plus
-                // `_createAdjacencyLists` over 745,964 links — 14% of all time
-                // spent while the pointer moved, for a frame that was coming
-                // anyway. An unscoped restyle has no such guarantee (a filter
-                // or a theme change arrives from a DOM event, not from a
-                // frame), so it still asks. See P12.7.
-                if (!scoped) cosmos.render(undefined, 0);
+                // **Always, including a scoped restyle.** P12.7 skipped this
+                // for scoped restyles on the reasoning that a hover restyle
+                // runs inside cosmos.gl's own frame (`restyle ← bumpGraphStyles
+                // ← handleNodeHover ← onPointMouseOver ← processHoverResult ←
+                // findHoveredItem ← renderFrame`) and ahead of that frame's
+                // draw, so the draw would pick up the buffers the setters just
+                // flagged. It does not. `setPointColors` only sets
+                // `inputPointColors` and `isPointColorUpdateNeeded`; the
+                // `bufferSubData` that actually uploads lives in `create()`,
+                // which only `render()` reaches. `Points.draw()` calls
+                // `updateColor()` only when the buffer does not exist yet.
+                //
+                // The result was silent: hovering a node with 8,680 links
+                // changed **zero pixels** of canvas outside the tooltip, while
+                // every buffer in memory held the right colours. Buffer
+                // equality could not see it; a screenshot diff could. See
+                // P12.8, and scratch/paint.mjs.
+                //
+                // And it costs nothing to be correct here. Measured on the
+                // 161,725-node canvas, one full redraw is ~163 ms whether or
+                // not the 14.5 MB of colour buffers are uploaded first
+                // (160.5 ms with, 162.6 ms without). The redraw is the price;
+                // the upload is noise beside it.
+                cosmos.render(undefined, 0);
             },
 
             // The canvas is sized by CSS (100% of #graph-3d), so cosmos.gl
@@ -1394,5 +1698,10 @@
                 cosmosNodes = [];
                 cosmosEdges = [];
                 cosmosIndexOf = new Map();
+                hitStart = null;
+                hitItems = null;
+                hitCellOf = null;
+                hitRect = null;
+                hitDirty = true;
             },
         });

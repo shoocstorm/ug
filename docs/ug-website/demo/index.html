@@ -9050,7 +9050,7 @@
 }
     </style>
 <script>
-window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3424,"edges":9879,"files":133,"lines":78725,"ugVersion":"0.1.16","visFingerprint":"83ec1270803bda2c","generatedAt":1787921123};
+window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3424,"edges":9879,"files":133,"lines":78725,"ugVersion":"0.1.16","visFingerprint":"ca606e6ebb22ff5d","generatedAt":1787926062};
 /* ==========================================================================
    UltraGraph — static demo shim
    ==========================================================================
@@ -22060,6 +22060,7 @@ self.onmessage = async (ev) => {
             cosmosBuf.positions.set(pos);
             cosmosApplyVisibilityInto(cosmosBuf.positions);
             cosmos.setPointPositions(cosmosBuf.positions);
+            cosmosMotion(dur);
             cosmos.render(undefined, dur);
             cosmos.fitView(dur, 0.16);
             // The page treats n.x/n.y as the truth, and with the simulation off
@@ -22127,6 +22128,7 @@ self.onmessage = async (ev) => {
             cosmos.setConfigPartial({ enableSimulation: false });
             cosmosApplyVisibilityInto(buf);
             cosmos.setPointPositions(buf);
+            cosmosMotion(dur);
             cosmos.render(undefined, dur);
             cosmosHitInvalidate();
 
@@ -22189,6 +22191,8 @@ self.onmessage = async (ev) => {
             // Frame it immediately — the whole point is that something
             // deliberate is on screen from the first frame.
             cosmos.fitView(0, 0.24);
+            // The whole opening, in one declaration: hold, spiral, land.
+            cosmosMotion(INTRO_HOLD_MS + INTRO_MORPH_MS * 2);
             // The simulation never runs here, so there are no ticks to release
             // the loading overlay — it has to be done explicitly or it would
             // sit over the whole animation.
@@ -22196,6 +22200,7 @@ self.onmessage = async (ev) => {
 
             _cosmosAnimTimers.push(setTimeout(() => {
                 cosmos.setPointPositions(sunflower);
+                cosmosMotion(INTRO_MORPH_MS);
                 cosmos.render(undefined, INTRO_MORPH_MS);
                 cosmos.fitView(INTRO_MORPH_MS, 0.16);
             }, INTRO_HOLD_MS));
@@ -22303,6 +22308,76 @@ self.onmessage = async (ev) => {
             return out;
         }
 
+        // ─── Level of detail while the scene is moving ─────────
+        //
+        // Links are ~85% of every frame, and no link *setting* recovers it.
+        // Measured on the 161,725-node / 745,964-link neo4j index, median
+        // cost of one full redraw:
+        //
+        //   full (curved links, arrows, blending)     164–208 ms
+        //   curvedLinkSegments 19 → 5                     170 ms
+        //   linkBlending off                              154 ms
+        //   arrows off                                    183 ms
+        //   arrows off *and* straight links               130 ms
+        //   **links not drawn at all**                     37 ms
+        //
+        // So the rule is: while something is moving, don't draw them. A camera
+        // flight over this graph ran at **3.7 fps** with links and **120 fps**
+        // without, and it lands on an identical picture either way — the links
+        // come back the moment the motion stops. This is the whole of what
+        // made animation feel broken at this size; it is not hover, and it was
+        // never the restyle.
+        //
+        // Deadline-based rather than a nesting count: every animation declares
+        // how long it will take, a later one extends the deadline, and one
+        // timer puts the links back. Nothing has to pair its own begin with
+        // its own end — which is what would eventually strand a graph with no
+        // links in it, and would be a far worse bug than the one this fixes.
+        //
+        // Below MOTION_LINK_LIMIT this does nothing at all: a small graph
+        // redraws inside a frame anyway, so links blinking out would be a
+        // flicker bought for no gain.
+        const MOTION_LINK_LIMIT = 60000;
+        // A beat past the animation's own end — for the frame that lands on
+        // the final position, and for a settle that overruns its nominal
+        // duration.
+        const MOTION_TAIL_MS = 120;
+
+        let _motionUntil = 0;
+        let _motionTimer = null;
+        let _motionHiding = false;
+
+        // "Something is about to move for `ms`." Safe from anywhere, including
+        // with 0 — a continuous motion (a zoom gesture, a simulation tick)
+        // just keeps re-arming the tail.
+        function cosmosMotion(ms) {
+            if (!cosmos || cosmosEdges.length < MOTION_LINK_LIMIT) return;
+            const until = performance.now() + Math.max(0, ms || 0) + MOTION_TAIL_MS;
+            if (until > _motionUntil) _motionUntil = until;
+            if (!_motionHiding) {
+                _motionHiding = true;
+                // Config only — no render, no transition reset (setConfigPartial
+                // just merges and re-reads state). The next frame, whoever asks
+                // for it, draws points alone.
+                cosmos.setConfigPartial({ renderLinks: false });
+            }
+            if (_motionTimer) clearTimeout(_motionTimer);
+            _motionTimer = setTimeout(cosmosMotionEnd, Math.max(0, _motionUntil - performance.now()));
+        }
+
+        function cosmosMotionEnd() {
+            if (_motionTimer) { clearTimeout(_motionTimer); _motionTimer = null; }
+            _motionUntil = 0;
+            if (!_motionHiding) return;
+            _motionHiding = false;
+            if (!cosmos) return;
+            cosmos.setConfigPartial({ renderLinks: true });
+            // The config change only flags; this is the frame that actually
+            // puts the links back on screen. Same reason `restyle` renders —
+            // cosmos.gl's frame loop does not upload or re-read on its own.
+            cosmos.render(undefined, 0);
+        }
+
         // ─── Hit testing on the CPU ────────────────────────────
         //
         // cosmos.gl picks the point under the pointer on the GPU: it redraws
@@ -22338,11 +22413,18 @@ self.onmessage = async (ev) => {
         // Cells per axis. ~4 points per cell on a 160k graph, and the grid
         // costs the same 173 KB of Int32Array however the points are spread.
         const HIT_GRID_DIM = 208;
-        // Screen-space forgiveness, in CSS pixels. Zoomed out, a node is a
-        // pixel or two across and cosmos.gl's own pick wanted the pointer
-        // inside the disc; this makes the small ones catchable. Capped at one
-        // node radius below, so it can never reach across empty canvas.
-        const HIT_SLOP_PX = 3;
+        // Screen-space forgiveness, in *device* pixels.
+        //
+        // Not a taste call: cosmos.gl reads a 9×9 window of the picking
+        // framebuffer around the cursor and takes the nearest covered pixel
+        // in it, so its own pick already forgives ±4 device pixels on top of
+        // whatever the point draws. Matching that number is what makes a node
+        // that used to be catchable still catchable — measured, it is the
+        // difference between 71% and 99% agreement with the GPU pick on a
+        // 400-point sweep. Converted to CSS pixels per `devicePixelRatio`,
+        // and capped at one node radius below so it can never reach across
+        // empty canvas at a wide zoom.
+        const HIT_SLOP_DEVICE_PX = 4;
         // How long a cached canvas rect is trusted. The hit test runs once per
         // frame, and `getBoundingClientRect` is the one part of it that can
         // force layout.
@@ -22467,7 +22549,8 @@ self.onmessage = async (ev) => {
             // `scalePointsOnZoom` is on, so a node's radius is a constant in
             // space and the slop is what has to be converted.
             const scale = cosmos.spaceToScreenRadius(1) || 1;
-            const slop = Math.min(HIT_SLOP_PX / scale, hitMaxR);
+            const slopPx = HIT_SLOP_DEVICE_PX / (window.devicePixelRatio || 1);
+            const slop = Math.min(slopPx / scale, hitMaxR);
             const reach = hitMaxR + slop;
 
             const dim = HIT_GRID_DIM;
@@ -22495,12 +22578,19 @@ self.onmessage = async (ev) => {
                         const dx = nd.x - px, dy = nd.y - py;
                         const d2 = dx * dx + dy * dy;
                         if (d2 >= bestD2) continue;
-                        // Inside the disc it draws, plus the slop. Nearest
-                        // centre wins where discs overlap; the GPU pick took
-                        // the one drawn last, which is not a rule anyone can
-                        // see, and nearest is the one they expect.
+                        // Inside the disc it draws, plus the slop.
                         const t = sizes[i] + slop;
                         if (d2 > t * t) continue;
+                        // Nearest *centre* wins where two discs overlap.
+                        //
+                        // Reasoning said rim distance: cosmos.gl scans its
+                        // readback window for the covered pixel nearest the
+                        // cursor, which sounds like nearest surface. Measured
+                        // against the GPU pick over 245 sampled pixels it is
+                        // the other way round — centre 97.6% agreement, rim
+                        // 95.5% — because the picking pass is depth-tested and
+                        // the depth is not the rule the scan implies. Do not
+                        // "fix" this back without re-running scratch/equal.
                         bestD2 = d2;
                         best = i;
                     }
@@ -22556,6 +22646,22 @@ self.onmessage = async (ev) => {
                 const y = Number.isFinite(this._lastMouseY) ? this._lastMouseY : (m && m.cy);
                 if (!Number.isFinite(x) || !Number.isFinite(y)) return;
                 this.processHoverResult(cosmosHitTest(x, y), undefined);
+                // **Not optional, and not bookkeeping for its own sake.**
+                //
+                // `shouldKeepRendering()` — the predicate that decides whether
+                // the rAF loop runs another frame — asks `hasPendingHoverWork()`,
+                // which is "has the pointer moved more than 2px since the last
+                // time hover was *checked*". Only the real `findHoveredItem`
+                // advanced `_lastCheckedMouse*`, so leaving it behind pins that
+                // answer at true for as long as the pointer is over the canvas,
+                // and cosmos.gl redraws all 745,964 links every frame forever.
+                // Measured: 8.3 ms/frame → 116 ms/frame while parked on a node,
+                // with the CPU 95% idle — a renderer spinning on the GPU for a
+                // frame nothing asked for.
+                this._lastCheckedMouseX = this._lastMouseX;
+                this._lastCheckedMouseY = this._lastMouseY;
+                this._shouldForceHoverDetection = false;
+                this._findHoveredItemExecutionCount = 0;
             };
             return true;
         }
@@ -22665,6 +22771,13 @@ self.onmessage = async (ev) => {
                     // already follows the dragged node through tracked
                     // positions, so this only has to settle the bookkeeping.
                     onDragEnd: () => cosmosSync(),
+                    // Panning and zooming are the motion the user drives by
+                    // hand, and where 3.7 fps is least forgivable. `cosmosMotion(0)`
+                    // re-arms the tail while the gesture continues; the links
+                    // land back a beat after it stops. Camera *flights* pass
+                    // through here too and simply extend the deadline their
+                    // caller already set.
+                    onZoom: () => cosmosMotion(0),
                     onMouseMove: (_i, _p, event) => {
                         if (!event) return;
                         state._mouse = {
@@ -22672,7 +22785,12 @@ self.onmessage = async (ev) => {
                             cx: event.clientX, cy: event.clientY,
                         };
                     },
+                    // Every tick moves every point and the links follow them —
+                    // that is the frame this cannot afford. Re-armed rather than
+                    // held, so a simulation that stops without firing
+                    // `onSimulationEnd` still gets its links back.
                     onSimulationTick: () => {
+                        cosmosMotion(0);
                         if (!state._graphRevealed) {
                             requestAnimationFrame(() => requestAnimationFrame(graphReveal));
                         }
@@ -22684,6 +22802,7 @@ self.onmessage = async (ev) => {
                         if (!_cosmosEarlyFit && cosmosHasPoints()
                             && performance.now() - _cosmosStartedAt > 220) {
                             _cosmosEarlyFit = true;
+                            cosmosMotion(220);
                             cosmos.fitView(220, 0.15);
                         }
                         // Throttled: a full position readback is a GPU stall,
@@ -22694,10 +22813,12 @@ self.onmessage = async (ev) => {
                         cosmosSync();
                     },
                     onSimulationEnd: () => {
+                        cosmosMotionEnd();
                         cosmosSync();
                         state._boxSettled = true;
                         if (!state._didFit && cosmosHasPoints()) {
                             state._didFit = true;
+                            cosmosMotion(350);
                             cosmos.fitView(350, 0.15);
                         }
                         refreshModeLegend();
@@ -22791,20 +22912,30 @@ self.onmessage = async (ev) => {
                 // Snap rather than animate: a restyle is a response to a hover
                 // or a filter, and an 800 ms colour tween reads as lag.
                 //
-                // A *scoped* restyle skips the explicit render, and can only
-                // because of where it is called from: the profile's stack is
-                // `restyle ← bumpGraphStyles ← handleNodeHover ← onPointMouseOver
-                // ← processHoverResult ← resolvePendingPick ← renderFrame` — a
-                // hover restyle runs *inside* cosmos.gl's own frame, so the
-                // very next one applies the buffers the setters just flagged.
-                // Forcing a synchronous render there instead re-ran
-                // `update()` — a whole-buffer colour upload plus
-                // `_createAdjacencyLists` over 745,964 links — 14% of all time
-                // spent while the pointer moved, for a frame that was coming
-                // anyway. An unscoped restyle has no such guarantee (a filter
-                // or a theme change arrives from a DOM event, not from a
-                // frame), so it still asks. See P12.7.
-                if (!scoped) cosmos.render(undefined, 0);
+                // **Always, including a scoped restyle.** P12.7 skipped this
+                // for scoped restyles on the reasoning that a hover restyle
+                // runs inside cosmos.gl's own frame (`restyle ← bumpGraphStyles
+                // ← handleNodeHover ← onPointMouseOver ← processHoverResult ←
+                // findHoveredItem ← renderFrame`) and ahead of that frame's
+                // draw, so the draw would pick up the buffers the setters just
+                // flagged. It does not. `setPointColors` only sets
+                // `inputPointColors` and `isPointColorUpdateNeeded`; the
+                // `bufferSubData` that actually uploads lives in `create()`,
+                // which only `render()` reaches. `Points.draw()` calls
+                // `updateColor()` only when the buffer does not exist yet.
+                //
+                // The result was silent: hovering a node with 8,680 links
+                // changed **zero pixels** of canvas outside the tooltip, while
+                // every buffer in memory held the right colours. Buffer
+                // equality could not see it; a screenshot diff could. See
+                // P12.8, and scratch/paint.mjs.
+                //
+                // And it costs nothing to be correct here. Measured on the
+                // 161,725-node canvas, one full redraw is ~163 ms whether or
+                // not the 14.5 MB of colour buffers are uploaded first
+                // (160.5 ms with, 162.6 ms without). The redraw is the price;
+                // the upload is noise beside it.
+                cosmos.render(undefined, 0);
             },
 
             // The canvas is sized by CSS (100% of #graph-3d), so cosmos.gl
@@ -22814,11 +22945,11 @@ self.onmessage = async (ev) => {
             // Both fits are reachable with an empty canvas — Reset and the 1–6
             // keys are live in solo mode before a node has been picked — and
             // fitting a camera to no points is fatal (see cosmosHasPoints).
-            frameAll(ms) { if (cosmosHasPoints()) cosmos.fitView(ms, 0.15); },
+            frameAll(ms) { if (cosmosHasPoints()) { cosmosMotion(ms); cosmos.fitView(ms, 0.15); } },
 
             // Every face projection collapses to the same 2D fit. The buttons
             // are hidden by caps, but the 1–6 keyboard shortcuts still land here.
-            setView(_id, ms) { if (cosmosHasPoints()) cosmos.fitView(ms, 0.15); },
+            setView(_id, ms) { if (cosmosHasPoints()) { cosmosMotion(ms); cosmos.fitView(ms, 0.15); } },
 
             // `opts.flat` is a 3D notion (which way the camera points); a plane
             // is already flat, so the fit is the same either way.
@@ -22826,6 +22957,7 @@ self.onmessage = async (ev) => {
                 if (!cosmos) return;
                 const idx = cosmosIndicesFor(ids);
                 if (!idx.length) return;
+                cosmosMotion(ms);
                 cosmos.fitViewByPointIndices(idx, ms, 0.2);
             },
 
@@ -22843,13 +22975,17 @@ self.onmessage = async (ev) => {
                 if (i === undefined || cosmosHidden[i]) return;
                 // Wait one frame so any panel toggles (info open/close) commit
                 // their layout before the view moves.
-                requestAnimationFrame(() => cosmos.zoomToPointByIndex(i, 800, 4));
+                requestAnimationFrame(() => {
+                    cosmosMotion(800);
+                    cosmos.zoomToPointByIndex(i, 800, 4);
+                });
             },
 
             zoomBy(factor) {
                 if (!cosmos) return;
                 // The 3D renderer's factor scales an orbit *radius*, so <1 is
                 // closer. A zoom level is the reciprocal of that.
+                cosmosMotion(180);
                 cosmos.setZoomLevel(cosmos.getZoomLevel() / factor, 180);
             },
 
@@ -22866,6 +23002,7 @@ self.onmessage = async (ev) => {
                 const idx = cosmosIndicesFor(ids);
                 if (!idx.length) return;
                 requestAnimationFrame(() => {
+                    cosmosMotion(opts.ms || 1100);
                     cosmos.fitViewByPointIndices(idx, opts.ms || 1100, 0.28);
                 });
             },
@@ -22874,6 +23011,7 @@ self.onmessage = async (ev) => {
                 if (!cosmos || !tourState.data) return;
                 const idx = cosmosIndicesFor(tourState.routeIds);
                 if (idx.length < 2) return;
+                cosmosMotion(ms || 1400);
                 cosmos.fitViewByPointIndices(idx, ms || 1400, 0.2);
             },
 
@@ -22916,6 +23054,10 @@ self.onmessage = async (ev) => {
                 cosmosNodes = [];
                 cosmosEdges = [];
                 cosmosIndexOf = new Map();
+                if (_motionTimer) clearTimeout(_motionTimer);
+                _motionTimer = null;
+                _motionUntil = 0;
+                _motionHiding = false;
                 hitStart = null;
                 hitItems = null;
                 hitCellOf = null;
