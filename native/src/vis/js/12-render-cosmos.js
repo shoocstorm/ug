@@ -985,13 +985,47 @@
             cosmos.trackPointPositionsByIndices(tracked);
         }
 
+        // The tracked-position map, read **once per overlay frame**.
+        //
+        // `getTrackedPointPositionsMap()` is a GPU→CPU readback
+        // (`readPixelsToArrayWebGL`, which the driver services with a
+        // `readPixels` into a pixel buffer and a `getBufferSubData` out of it)
+        // whenever cosmos.gl's positions are not already up to date. It stalls
+        // the pipeline: nothing else can proceed until the GPU has caught up
+        // and handed the bytes back.
+        //
+        // The overlay asked for it once per *call site*, and it has two: once
+        // per node it haloes (up to FX_MAX_HALOS) and **twice** per link it
+        // draws (up to FX_MAX_FLOW_LINKS) — up to ~1,400 readbacks in a single
+        // frame, for one map that cannot change inside that frame. Profiled on
+        // a 161,725-node canvas, that was 45% of all time spent while the
+        // pointer was moving. See P12.7 in docs/dev/PERF-TUNING-JOURNEY.md.
+        // And it is not needed at all once the layout has settled. Tracking
+        // exists so a ring stays glued to a node the *simulation* is still
+        // moving; with the simulation stopped, `n.x`/`n.y` are exactly where
+        // the points are — `onSimulationEnd` syncs them from the same
+        // framebuffer. So a settled canvas skips the readback entirely and
+        // `cosmosLivePos` falls through to the synced coordinates.
+        let _cosmosPosMap = null;
+        function cosmosPositionsThisFrame() {
+            if (!_cosmosPosMap) {
+                _cosmosPosMap = (!cosmos || !cosmos.isSimulationRunning) ? new Map()
+                    : ((cosmos.getTrackedPointPositionsMap && cosmos.getTrackedPointPositionsMap()) || new Map());
+            }
+            return _cosmosPosMap;
+        }
+
+        // Called at the top of every overlay frame. The cache is only ever
+        // valid *within* one frame — a running simulation moves points between
+        // frames, and it is the overlay's job to say when one begins.
+        function cosmosInvalidatePositions() { _cosmosPosMap = null; }
+
         // Live position of a point, in space coords — the tracked value if we
         // asked for it, else the last synced one. Null when the point is absent.
         function cosmosLivePos(node) {
             const i = cosmosIndexOf.get(node.id);
             if (i === undefined) return null;
-            const m = cosmos.getTrackedPointPositionsMap && cosmos.getTrackedPointPositionsMap();
-            const p = m && m.get(i);
+            const p = cosmosPositionsThisFrame().get(i);
             if (p && Number.isFinite(p[0]) && Number.isFinite(p[1])) return p;
             return Number.isFinite(node.x) ? [node.x, node.y] : null;
         }
@@ -1234,7 +1268,21 @@
                 cosmosApplyHighlight();
                 // Snap rather than animate: a restyle is a response to a hover
                 // or a filter, and an 800 ms colour tween reads as lag.
-                cosmos.render(undefined, 0);
+                //
+                // A *scoped* restyle skips the explicit render, and can only
+                // because of where it is called from: the profile's stack is
+                // `restyle ← bumpGraphStyles ← handleNodeHover ← onPointMouseOver
+                // ← processHoverResult ← resolvePendingPick ← renderFrame` — a
+                // hover restyle runs *inside* cosmos.gl's own frame, so the
+                // very next one applies the buffers the setters just flagged.
+                // Forcing a synchronous render there instead re-ran
+                // `update()` — a whole-buffer colour upload plus
+                // `_createAdjacencyLists` over 745,964 links — 14% of all time
+                // spent while the pointer moved, for a frame that was coming
+                // anyway. An unscoped restyle has no such guarantee (a filter
+                // or a theme change arrives from a DOM event, not from a
+                // frame), so it still asks. See P12.7.
+                if (!scoped) cosmos.render(undefined, 0);
             },
 
             // The canvas is sized by CSS (100% of #graph-3d), so cosmos.gl

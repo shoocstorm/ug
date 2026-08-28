@@ -15,7 +15,7 @@
 | **Opened** | 2026-08-18 |
 | **Version** | 0.1.16 |
 | **Primary fixture** | `~/.ug/neo4j` — 161,725 nodes / 745,964 edges / 330 MB `graph.json` |
-| **Status** | Rounds 1–4 landed (bar P11.7, deferred). Round 5 open: **P12.1, P12.3, P12.6 landed**; P12.2, P12.4, P12.5 audited. Suite **912/912** |
+| **Status** | Rounds 1–4 landed (bar P11.7, deferred). Round 5 open: **P12.1, P12.3, P12.6, P12.7 landed**; P12.2, P12.4, P12.5 audited; **P12.8 needs a decision**. Suite **912/912** |
 
 **Status marks:** ✅ landed and verified · ⬜ open · ⏭️ deferred · ❌ rejected by measurement
 
@@ -601,7 +601,7 @@ it. Churn is a CPU cost, not a memory one.
 
 # Round 5 — The vis layer
 
-**2026-08-27 · baseline `3e8f441` · 6 items, P12.1 / P12.3 / P12.6 landed · suite 912/912**
+**2026-08-27 · baseline `3e8f441` · 8 items, P12.1 / P12.3 / P12.6 / P12.7 landed · suite 912/912**
 
 Scope was the browser: WebGL, wasm, worker threads, GPU-friendly data
 structures, and what stands between `ug` and a 500k-node graph. Round 2 took
@@ -673,6 +673,8 @@ browser figure in this file before today measured the 6%.
 | P12.4 | Server-mode session memory has no ceiling | unmeasured; no eviction anywhere | ⬜ |
 | P12.5 | P9.2 — index identity, now that a 500k fixture exists | would reach 18 MB from 58 | ⬜ |
 | P12.6 | Every `vis.*` config key was read before it was loaded, then never re-read | `solo_threshold` 10,000,000 had no effect at all | ✅ |
+| P12.7 | A GPU readback per drawn element per frame, and a synchronous render per hover | our share of CPU while the pointer moves: **31% → 3.3%** | ✅ |
+| P12.8 | The hover stall that is left is cosmos.gl's pick readback | **8.3 ms parked, ~110 ms per pointer move** | ⬜ needs a decision |
 
 <a id="p121"></a>
 ### ✅ P12.1 — the catalog renders the whole repository into the DOM at boot
@@ -967,6 +969,101 @@ in practice rather than in theory: `cosmosPaint` walks all 161,725 nodes and
 benched at ~9 ms with *cheaper-than-real* style rules. Either way it is over a
 frame, and raising the threshold is what makes it the dominant interaction cost.
 
+<a id="p127"></a>
+### ✅ P12.7 — a GPU readback per element per frame, and a render per hover
+
+P12.3 made the hover repaint cheap and the canvas still felt slow, so this time
+the measurement was a **CPU profile of real pointer input** (`Input.dispatchMouseEvent`
+over the canvas, `Profiler` around it, aggregated by *call path* rather than by
+self time). Self time alone had been pointing at the wrong things all round.
+
+| call path, while the pointer moves | before |
+| :--- | ---: |
+| `getBufferSubData ← takePickResult ← renderFrame` | 33.0% |
+| `readPixels ← getTrackedPositionsMap ← cosmosLivePos` | 16.3% |
+| `bufferSubData ← updateColor ← update ← render ← restyle` | 12.3% |
+| `_createAdjacencyLists ← update ← render ← restyle` | 2.6% |
+| *(idle)* | 26.5% |
+
+Two of those were ours.
+
+**The overlay read the GPU once per drawn element, every frame.**
+`getTrackedPointPositionsMap()` is a `readPixelsToArrayWebGL` — a pipeline
+stall. `cosmosLivePos` called it *per call*, and the overlay calls that once
+per halo and **twice per flow link**: up to ~1,400 stalls in one frame for a
+map that cannot change within it. Now read once per frame, invalidated by
+`overlayDraw`. And skipped entirely when the simulation is stopped, which is
+the normal state — tracking exists to follow points the simulation is still
+moving, and `n.x`/`n.y` are exact once `onSimulationEnd` has synced them.
+
+**A scoped restyle forced a synchronous render.** The call path says a hover
+restyle runs *inside* cosmos.gl's own frame
+(`restyle ← bumpGraphStyles ← handleNodeHover ← onPointMouseOver ← processHoverResult
+← resolvePendingPick ← renderFrame`), so the next frame applies whatever the
+setters flagged. Calling `render()` there re-ran `update()` — a whole-buffer
+colour upload plus `_createAdjacencyLists` over 745,964 links — for a frame
+that was coming anyway. An unscoped restyle arrives from a DOM event with no
+such guarantee, so it still renders explicitly.
+
+| | before | after |
+| :--- | ---: | ---: |
+| *(idle)* — CPU with nothing to do | 26.5% | **59.3%** |
+| everything the page itself does | ~31% | **3.3%** |
+| `restyle` and everything under it | 14.9% | **~0.0%** |
+| cosmos.gl's pick readback | 33.0% | 34.8% — untouched |
+
+Buffer equality against a full repaint is still exactly zero after 1 and 40
+hovers, on both fixtures.
+
+<a id="p128"></a>
+### ⬜ P12.8 — the stall that is left belongs to cosmos.gl's picking
+
+**This is the one the user actually feels, and it is not our code.** Frame
+times on the 161,725-node / 745,964-link canvas, measured with no CDP round
+trips inside the loop (one `Runtime.evaluate` per event stalls the renderer and
+invents a long-frame tail of its own):
+
+| | frames | median | p95 | over 16.7 ms |
+| :--- | ---: | ---: | ---: | ---: |
+| pointer off the canvas | 481 in 4 s | 8.3 ms | 8.6 | 0 |
+| **parked on a node, not moving** | 481 in 4 s | **8.3 ms** | 8.6 | **0** |
+| **sweeping the pointer** | 54 in 6 s | **115.3 ms** | 255.4 | 40 of 54 |
+| sweeping 4× more slowly | 53 in 6 s | 114.8 ms | 235.9 | 42 of 53 |
+
+A stationary pointer over a hovered node is **perfectly smooth**. Every pointer
+*move* costs ~110 ms, and sending a quarter as many events does not help — so
+it is per move, and it is a stall rather than work: the CPU profile is 59% idle
+through it.
+
+Four hypotheses tested and **all four rejected**, which is why this needs a
+decision rather than another patch:
+
+| hypothesis | test | result |
+| :--- | :--- | :--- |
+| our restyle | already scoped (P12.3) | `restyle` is ~0.0% of the profile |
+| the colour uploads | skip `setPointColors` / `setLinkColors` on hover | 112 → 116 ms — **no change** |
+| curved link geometry | `curvedLinks: false` | 111.8 → 101.4 ms |
+| link arrows | `linkDefaultArrows: false` | 111.8 → 104.7 ms (both off: 87.8) |
+
+What is left is `getBufferSubData ← poll ← takePickResult ← resolvePendingPick
+← renderFrame`: cosmos.gl re-picks when the pointer moves, and the readback
+cannot return until the GPU has finished drawing 745,964 links. It serialises
+CPU and GPU once per move. Parked, the pick result does not change and no stall
+happens — which is exactly the shape of the measurements above.
+
+Three ways out, none of them small:
+
+1. **Draw fewer links (LoD).** The flush is expensive because the scene is. Cap
+   drawn links, or drop `Contains` edges above a threshold, or fade links out
+   when zoomed past a density. Changes the picture, so it is a product
+   decision, not a tuning one.
+2. **Pick without cosmos.gl.** Keep a CPU-side spatial index and do hit-testing
+   ourselves, then turn cosmos's picking off. No GPU stall at all, and it makes
+   hover independent of scene size — but it is a real subsystem to own.
+3. **Accept it above a size, and put the solo threshold back.** Solo mode
+   exists for exactly this; [P12.6](#p126) made the threshold work, and a user
+   who raises it is choosing this trade knowingly. Cheapest, and honest.
+
 ### What the round taught
 
 - **The JS heap is not the tab.** 118 MB of heap sat inside a 1,958 MB
@@ -1073,6 +1170,12 @@ One row per landed item or baseline. Keep the numbers, not just the verdict.
 | 2026-08-27 | P12.3 | hover restyle, `~/.ug/ug` 4,459/12,033 | — | 1.2 ms | small graphs were never the problem; no regression |
 | 2026-08-27 | P12.3 | scoped vs full buffers, 1 and 40 hovers | — | **0 differing floats** ×3 buffers, both fixtures | and it catches injected bugs — see the table in P12.3 |
 | 2026-08-27 | — | a one-hover equality test | passes against a renderer that never un-highlights | — | the leaving set only exists from the second hover on |
+| 2026-08-27 | P12.7 | `cosmosLivePos` GPU readbacks per frame | up to ~1,400 | **0 while settled**, else 1 | once per halo and *twice* per flow link, for a map fixed within the frame |
+| 2026-08-27 | P12.7 | page's own CPU share while the pointer moves | ~31% | **3.3%** | idle 26.5% → 59.3%; `restyle` and below 14.9% → ~0.0% |
+| 2026-08-27 | P12.8 | frame time, pointer **parked** on a node | — | **8.3 ms**, 0 frames over 16.7 ms | a stationary hover is already perfectly smooth |
+| 2026-08-27 | P12.8 | frame time, pointer **moving** | — | **115.3 ms** | unchanged at 4× fewer events, so per-move and a stall, not work |
+| 2026-08-27 | P12.8 | skip both colour uploads on hover | 112 ms | 116 ms | **rejected** — the uploads are not the stall |
+| 2026-08-27 | P12.8 | `curvedLinks:false` + `linkDefaultArrows:false` | 111.8 ms | 87.8 ms | 21% for a real visual downgrade; **not the answer** |
 | 2026-08-27 | P12.2 | file mode, `graph.json` > 512 MB | — | `RangeError: Invalid string length` | V8 caps a string at 536,870,888; wall at ~250,700 nodes |
 | 2026-08-27 | P12.2 | file mode retained, neo4j / big500k | 319 MB / **837 MB** | — | vs 62 MB of heap for the same graph in server mode |
 | 2026-08-27 | P12.3 | `cosmosPaint` per hover, 40k/190k | 4.92 ms | — | JS-loop bench with the style rules stubbed *cheaper* than real |

@@ -703,6 +703,37 @@ a reverse proxy in front of `ug serve` that `String.replace`s the patch into
 the served HTML; the same proxy is how you reach module scope, by injecting
 `window.__ug = { state, … }` before the page's last `</script>`.
 
+### 10g. Profile by call path, and drive real input
+
+Two mistakes cost most of an afternoon on the vis layer, both while holding a
+profile that looked authoritative.
+
+**Self time names the callee, not the cause.** A profile listing
+`getBufferSubData 29.5%` / `readPixels 15%` says "GPU readback" and nothing
+about who asked for one. Aggregating the same samples by *call path* named the
+two callers immediately — one of them ours, calling a pipeline-stalling
+readback once per drawn element per frame. Build a parent map from
+`Profiler.stop()`'s node tree and print the ancestor chain of the hot leaves;
+self time alone sent two hypotheses to the wrong file.
+
+```js
+// CDP: Profiler.enable → setSamplingInterval → start → …input… → stop
+// nodes[].children gives the tree; invert it and walk up from each hot sample.
+```
+
+**Drive real input, and keep the harness out of the loop.** A benchmark that
+calls the handler directly measures the handler, not the interaction: a hover
+restyle timed at 27 ms while actual frames during pointer movement were 110 ms.
+Dispatch `Input.dispatchMouseEvent` and read frame deltas from a `rAF` loop
+inside the page. But issue **no `Runtime.evaluate` between events** — one CDP
+round trip per event stalls the renderer and manufactures a long-frame tail
+that is entirely the harness's.
+
+And separate *stationary* from *moving*. A pointer parked on a hovered node ran
+at 8.3 ms/frame while moving it cost ~110 ms — that single comparison located
+the cost (a per-move GPU pick readback) after four other hypotheses had been
+measured and rejected.
+
 ## 11. Record what you learn, here, without being asked
 
 When you find something that would cost the next agent an hour — a measurement

@@ -139,6 +139,10 @@
 
         function overlayDraw() {
             if (!fxCanvas || !fxCtx || !cosmos || !cosmos.isReady) return;
+            // One frame, one GPU readback. Everything below asks `cosmosLivePos`
+            // for positions — once per halo and twice per flow link — and each
+            // of those used to stall the pipeline on its own. See P12.7.
+            cosmosInvalidatePositions();
             overlayResize();
             fxCtx.clearRect(0, 0, width, height);
             fxFrame++;
