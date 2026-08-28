@@ -31,16 +31,66 @@
         const FX_MAX_HALOS = 400;
         const FX_MAX_FLOW_LINKS = 600;
 
+        // ── When this canvas is allowed to be still ─────────────
+        //
+        // This loop used to call `overlayDraw()` on every frame of the tab's
+        // life. On a settled graph with nothing selected and nothing hovered
+        // that is a full-canvas `clearRect`, a label pass and a full-viewport
+        // texture upload to the GPU, sixty-plus times a second, producing a
+        // pixel-identical frame each time. Measured on the 161,725-node canvas
+        // sitting untouched: **58.8% of a CPU core** — renderer 36%,
+        // gpu-process 23% — for a picture that was not changing. Gated, the
+        // same idle canvas costs **7.8%**. See P12.10.
+        //
+        // Two conditions let it draw. `overlayLive()` is "something animates
+        // by itself, frame to frame". `fxDirty` is "something changed" — set
+        // by `overlayInvalidate()` from wherever the drawn content can move.
+        // `fxLiveUntil` covers timed motion (a camera flight, a layout morph,
+        // a pan) where neither of the other two fires per frame.
+        //
+        // The one frame that must not be missed is the one *after* the last
+        // live frame — the canvas still holds a selection ring that is now
+        // gone. `fxWasLive` buys exactly that frame.
+        let fxDirty = true;
+        let fxWasLive = false;
+        let fxLiveUntil = 0;
+
+        function overlayLive() {
+            if (fxPulses.length || fxSweeps.length) return true;
+            // The ring spins and breathes; the flow particles march.
+            if (state.selectedNode || state.highlightNodes.size) return true;
+            if (state.walkActive) return true;
+            if (typeof tourState !== 'undefined' && tourState && tourState.active) return true;
+            return performance.now() < fxLiveUntil;
+        }
+
+        // "The drawn content moved, once." Cheap enough to call liberally —
+        // it costs one boolean and at most one frame.
+        function overlayInvalidate() { fxDirty = true; }
+
+        // "The drawn content will keep moving for `ms`." Every camera flight,
+        // layout morph and pan already announces itself to `cosmosMotion`,
+        // which forwards to here — so this needs no call sites of its own.
+        function overlayAnimateFor(ms) {
+            const until = performance.now() + Math.max(0, ms || 0) + 150;
+            if (until > fxLiveUntil) fxLiveUntil = until;
+        }
+
         function overlayStart() {
             fxCanvas = document.getElementById('fx-overlay');
             if (!fxCanvas) return;
             fxCtx = fxCanvas.getContext('2d');
             fxCanvas.hidden = false;
+            overlayInvalidate();
             if (fxRunning) return;
             fxRunning = true;
             const tick = () => {
                 if (!fxRunning) return;
                 requestAnimationFrame(tick);
+                const live = overlayLive();
+                if (!live && !fxDirty && !fxWasLive) return;
+                fxWasLive = live;
+                fxDirty = false;
                 overlayDraw();
             };
             requestAnimationFrame(tick);
@@ -48,6 +98,8 @@
 
         function overlayStop() {
             fxRunning = false;
+            fxLiveUntil = 0;
+            fxWasLive = false;
             fxPulses = [];
             fxSweeps = [];
             if (fxCanvas) {

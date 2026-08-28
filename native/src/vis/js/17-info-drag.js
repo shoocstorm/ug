@@ -13,6 +13,10 @@
             width = document.getElementById('container').clientWidth;
             height = document.getElementById('container').clientHeight;
             resizeRenderer(width, height);
+            // The FX overlay sizes its canvas inside its own draw, and that
+            // draw is now allowed to idle — so a resized window would keep the
+            // old, stretched canvas until something else moved.
+            overlayInvalidate();
         });
 
         document.addEventListener('keydown', e => {

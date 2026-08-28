@@ -574,6 +574,10 @@
         function applyBoundaryVisibility() {
             const r = activeRenderer();
             if (r) r.setBoundaryVisible(state.showBoundary);
+            // The 2D backend's `setBoundaryVisible` is a no-op — the box is
+            // drawn by the FX overlay, which reads `state.showBoundary`
+            // directly and now only redraws when told something changed.
+            overlayInvalidate();
         }
 
         function applyAutoSpin() {

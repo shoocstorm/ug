@@ -116,8 +116,29 @@
             showKbManager(caps);
         }
 
+        // While the manager is up it covers the viewport completely and
+        // opaquely — so everything behind it is being painted for nobody.
+        //
+        // `#container` is 100vw × 100vh of four stacked radial gradients with
+        // `background-attachment: fixed`, and it holds the canvas, the FX
+        // overlay and the blurred sidebar. Chrome re-composites all of it on
+        // every frame the landing screen's animations ask for, which is every
+        // frame. `body.kb-open` takes it out of the paint (see 00-base.css).
+        //
+        // **`visibility: hidden`, not `display: none`.** The manager can also
+        // be opened *over* a live graph, and collapsing the box of a mounted
+        // WebGL canvas resizes it to nothing and back — a resize storm through
+        // cosmos.gl's ResizeObserver for a panel that is merely covering it.
+        // Visibility skips the paint and leaves every box where it was.
         function showKbManager(caps) {
             document.getElementById('kb-manager').classList.add('visible');
+            document.body.classList.add('kb-open');
+            // Says "Loading graph…" while nothing is loading — on the landing
+            // screen `loadGraph()` has not run and `graphReveal()` never will,
+            // so this overlay and its spinning `.loader` would sit there for
+            // the life of the page. `loadGraph` puts it back up itself.
+            const loading = document.getElementById('loading');
+            if (loading) loading.style.display = 'none';
             if (!caps.projects.length) {
                 showKbWizard({ canGoBack: false });
             } else {
@@ -127,6 +148,7 @@
 
         function hideKbManager() {
             document.getElementById('kb-manager').classList.remove('visible');
+            document.body.classList.remove('kb-open');
         }
 
         function showKbList(caps) {

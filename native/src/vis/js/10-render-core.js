@@ -456,9 +456,19 @@
         // A hover is the case it exists for (one node and its edges, against a
         // whole graph), and a backend is free to ignore it — the 3D one does,
         // being bounded to 3,000 elements anyway.
-        function bumpGraphStyles(scope) { if (R) R.restyle(scope); }
+        function bumpGraphStyles(scope) {
+            if (R) R.restyle(scope);
+            // Colours, filters, focus and the hover sets all reach the FX
+            // overlay too (halos, flow, labels, the selection marker), and the
+            // overlay is now allowed to sit still between changes — so a
+            // restyle has to tell it that something moved. See overlayStart.
+            overlayInvalidate();
+        }
 
-        function setGraphData(view) { if (R) R.setData(view); }
+        function setGraphData(view) {
+            if (R) R.setData(view);
+            overlayInvalidate();
+        }
 
         function resizeRenderer(w, h) { if (R) R.resize(w, h); }
 

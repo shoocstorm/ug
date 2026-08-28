@@ -1092,6 +1092,12 @@
         // with 0 — a continuous motion (a zoom gesture, a simulation tick)
         // just keeps re-arming the tail.
         function cosmosMotion(ms) {
+            // Announced to the FX overlay first and unconditionally: it has to
+            // redraw its labels, boundary and rings for the whole of any
+            // motion, and unlike the link budget below that is true at every
+            // graph size. This is the single call site for "something is
+            // moving", which is why the overlay needs none of its own.
+            overlayAnimateFor(ms);
             if (!cosmos || cosmosEdges.length < MOTION_LINK_LIMIT) return;
             const until = performance.now() + Math.max(0, ms || 0) + MOTION_TAIL_MS;
             if (until > _motionUntil) _motionUntil = until;
@@ -1154,18 +1160,34 @@
         // Cells per axis. ~4 points per cell on a 160k graph, and the grid
         // costs the same 173 KB of Int32Array however the points are spread.
         const HIT_GRID_DIM = 208;
-        // Screen-space forgiveness, in *device* pixels.
+        // Screen-space forgiveness — how far outside its disc a point is still
+        // caught. Not a taste call: it is cosmos.gl's own tolerance, and it
+        // takes two constants to arrive at.
         //
-        // Not a taste call: cosmos.gl reads a 9×9 window of the picking
-        // framebuffer around the cursor and takes the nearest covered pixel
-        // in it, so its own pick already forgives ±4 device pixels on top of
-        // whatever the point draws. Matching that number is what makes a node
-        // that used to be catchable still catchable — measured, it is the
-        // difference between 71% and 99% agreement with the GPU pick on a
-        // 400-point sweep. Converted to CSS pixels per `devicePixelRatio`,
-        // and capped at one node radius below so it can never reach across
-        // empty canvas at a wide zoom.
-        const HIT_SLOP_DEVICE_PX = 4;
+        // cosmos.gl reads a **9×9 window** of the picking framebuffer around
+        // the cursor and takes the nearest covered pixel in it, so it forgives
+        // ±4 buffer pixels beyond whatever the point draws. And it renders
+        // that buffer at **half resolution** (`Qu = 0.5` in the vendored
+        // bundle, read back as `pickingFbo.width / screenSize[0]` = 0.5). So
+        // one buffer pixel is two device pixels, and the real tolerance is
+        // `8 / pixelRatio` CSS pixels — twice what the 9×9 window alone
+        // suggests.
+        //
+        // Getting this wrong is not subtle. At 3 CSS px, agreement with the
+        // GPU pick was 71%. At 4 device px it was 97%, and the pixels it still
+        // missed were 8.8 px from a 2.4 px disc — comfortably inside
+        // cosmos.gl's window and outside ours.
+        //
+        // It is a constant number of *screen* pixels at every zoom, which is
+        // what cosmos.gl's window is. An earlier version capped it at one node
+        // radius in space, meaning to bound the cell scan at a wide zoom; what
+        // it actually did was clamp the tolerance back to about half its value
+        // and silently undo the correction above. The scan is bounded by the
+        // grid being finite (worst case: every cell, i.e. one pass over the
+        // points — still microseconds, and far cheaper than the readback this
+        // replaced).
+        const HIT_PICK_WINDOW_PX = 4;      // half of cosmos.gl's 9×9 readback
+        const HIT_PICK_BUFFER_SCALE = 0.5; // it renders that buffer at half res
         // How long a cached canvas rect is trusted. The hit test runs once per
         // frame, and `getBoundingClientRect` is the one part of it that can
         // force layout.
@@ -1290,8 +1312,10 @@
             // `scalePointsOnZoom` is on, so a node's radius is a constant in
             // space and the slop is what has to be converted.
             const scale = cosmos.spaceToScreenRadius(1) || 1;
-            const slopPx = HIT_SLOP_DEVICE_PX / (window.devicePixelRatio || 1);
-            const slop = Math.min(slopPx / scale, hitMaxR);
+            // `pixelRatio` is cosmos.gl's own config default — we never set it.
+            const ratio = (window.devicePixelRatio || 2) * HIT_PICK_BUFFER_SCALE;
+            const slopPx = HIT_PICK_WINDOW_PX / ratio;
+            const slop = slopPx / scale;
             const reach = hitMaxR + slop;
 
             const dim = HIT_GRID_DIM;
@@ -1532,6 +1556,7 @@
                     // `onSimulationEnd` still gets its links back.
                     onSimulationTick: () => {
                         cosmosMotion(0);
+                        overlayInvalidate();
                         if (!state._graphRevealed) {
                             requestAnimationFrame(() => requestAnimationFrame(graphReveal));
                         }

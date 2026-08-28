@@ -32,32 +32,30 @@
             height: 100%;
         }
 
+        /* Struck once, then still.
+           
+           These eighteen circles used to twinkle on a 6 s loop. The frames it
+           cost were not the circles': a *smooth* infinite animation anywhere on
+           the page keeps Chrome compositing at the display's refresh rate for
+           as long as the tab is open, and every one of those frames
+           re-rasterised the full-viewport stack behind this screen. Eighteen
+           of them, forever, for a decoration nobody is looking at — 50.4% of a
+           CPU core and 34% of the GPU process, on a screen where nothing is
+           happening.
+
+           Depth now comes from the varied resting opacities below, which cost
+           nothing after the first paint. See P12.10 in
+           docs/dev/PERF-TUNING-JOURNEY.md. */
         .kb-bg circle {
-            animation: kb-twinkle 6s ease-in-out infinite;
+            opacity: 0.34;
         }
 
         .kb-bg circle:nth-child(3n) {
-            animation-delay: -1.2s;
+            opacity: 0.5;
         }
 
         .kb-bg circle:nth-child(3n+1) {
-            animation-delay: -3.4s;
-        }
-
-        .kb-bg circle:nth-child(3n+2) {
-            animation-delay: -5s;
-        }
-
-        @keyframes kb-twinkle {
-
-            0%,
-            100% {
-                opacity: 0.18;
-            }
-
-            50% {
-                opacity: 0.55;
-            }
+            opacity: 0.22;
         }
 
         .kb-glow {
@@ -145,27 +143,17 @@
             color: var(--text-muted);
         }
 
+        /* Lit, not breathing. A 6px dot easing between two opacities measured
+           at **17.3% of a core** on its own — not because the dot is expensive
+           but because one smooth infinite animation is enough to keep the whole
+           page compositing every frame forever. The glow says "connected"
+           perfectly well standing still. */
         .kb-status-dot {
             width: 6px;
             height: 6px;
             border-radius: 50%;
             background: var(--success);
             box-shadow: 0 0 8px var(--success);
-            animation: kb-pulse 2s ease-in-out infinite;
-        }
-
-        @keyframes kb-pulse {
-
-            0%,
-            100% {
-                opacity: 1;
-                transform: scale(1);
-            }
-
-            50% {
-                opacity: 0.5;
-                transform: scale(0.7);
-            }
         }
 
         /* ─── What's New section ─── */
@@ -539,7 +527,11 @@
             color: var(--warning);
             background: color-mix(in srgb, var(--warning) 10%, transparent);
             border-color: color-mix(in srgb, var(--warning) 28%, transparent);
-            animation: kb-stale-pulse 2.6s ease-in-out infinite;
+            /* A resting halo rather than a 2.6 s pulse. `box-shadow` is a paint
+               property, so animating it repainted the button every frame — and
+               the frames themselves were the cost (P12.10). The tint already
+               marks this as the call to action. */
+            box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 16%, transparent);
         }
 
         .kb-card-reindex svg {
@@ -549,24 +541,6 @@
         .kb-card-reindex:hover svg,
         .kb-card-reindex:focus-visible svg {
             transform: rotate(180deg);
-        }
-
-        @keyframes kb-stale-pulse {
-
-            0%,
-            100% {
-                box-shadow: 0 0 0 0 color-mix(in srgb, var(--warning) 38%, transparent);
-            }
-
-            60% {
-                box-shadow: 0 0 0 4px transparent;
-            }
-        }
-
-        @media (prefers-reduced-motion: reduce) {
-            .kb-card-reindex {
-                animation: none;
-            }
         }
 
         /* Status indicators (Active, KB kind) — one pill vocabulary, tinted

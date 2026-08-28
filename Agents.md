@@ -434,7 +434,7 @@ changelog on every bump, and keep engine calls behind the `KnowledgeStore`
 trait (`native/src/storage/store.rs`) so upgrades stay confined to
 `native/src/storage/db.rs`.
 
-## 9. Seven bugs this codebase keeps re-introducing
+## 9. Eight bugs this codebase keeps re-introducing
 
 All are invisible in review, silent at runtime, and have each already shipped
 here more than once. Check for them by reflex.
@@ -656,6 +656,61 @@ up, and it will not be near your patch. And guard the patch: check the names
 exist and fall back to the library's own behaviour if they do not, so a
 re-vendor degrades to slow rather than to broken.
 
+### 9h. A page that never goes idle
+
+**An animation nobody can see costs exactly as much as one they can, and a
+render loop with no off switch costs it forever.**
+
+Two independent versions of this shipped here at once, and neither was visible
+in review. Idle, with no input at all:
+
+| | was | cause |
+| :--- | ---: | :--- |
+| the landing screen | **50.4%** of a CPU core | 22 infinite CSS animations |
+| the graph view, settled | **58.8%** of a core | a `requestAnimationFrame` loop with no condition |
+
+Three things make this hard to reason about, so measure instead of arguing:
+
+- **The cost is per *frame*, not per animation.** A single 6 px status dot
+  easing between two opacities measured **17.3% of a core** on its own — one
+  smooth infinite animation keeps the compositor producing frames at the
+  display's refresh rate, and every one of those frames re-rasterises whatever
+  is beneath it. Removing 18 of 22 animations bought 6 points; removing the
+  last one bought 16.
+- **It scales with window area** (700×500: 3.8%, 1600×1000: 16.1%), and
+  `will-change` does nothing (17.2% vs 16.1%). It is not a layer-promotion
+  problem, so the usual advice does not apply.
+- **`step-end` is ~4× cheaper than eased**, because it only produces frames at
+  its steps. A blinking cursor is affordable; a breathing dot is not.
+
+And the thing underneath matters as much as the thing animating: `#container`
+is 100vw × 100vh of four stacked radial gradients with
+`background-attachment: fixed`, and it was fully painted underneath an opaque
+full-screen overlay for the whole time the landing screen was up.
+
+**Why:** nothing in the framework tells you a frame happened. There is no
+warning for a rAF loop that draws an identical picture, or for an animation
+under an opaque layer — the code reads as correct, the screen looks right, and
+the only symptom is the fan.
+
+**How to apply:**
+
+- A `requestAnimationFrame` loop needs a predicate: *what can have changed since
+  the last frame?* Split it into "animates by itself" (timed effects, spinning
+  rings, marching particles) and "something changed" (a dirty flag set by the
+  events that move the drawn content). Keep one extra frame after the last live
+  one, or the canvas is left holding a ring that is gone.
+- Anything fully covered should be `visibility: hidden` — not `display: none`
+  if it holds a WebGL canvas, because collapsing its box resizes the context to
+  nothing and back through the library's `ResizeObserver`.
+- Audit `document.getAnimations()` on any screen that sits still. Infinite,
+  eased, and invisible is the combination to look for.
+- **Verify a gated canvas in pixels.** A missed invalidation is
+  indistinguishable from a correct idle frame from the inside — see
+  [§9f](#9f-a-buffer-that-never-leaves-the-cpu). Screenshot, act, screenshot,
+  and assert both directions: that it repaints when it must, *and* that it is
+  byte-stable when it must not.
+
 ## 10. Measuring performance without fooling yourself
 
 **Every number in `docs/dev/PERF-TUNING-JOURNEY.md` was produced this way, and
@@ -793,6 +848,19 @@ graph ran at **3.0 fps**, which no amount of pointer-sweep profiling would ever
 have surfaced, because the harness only ever moved the pointer. Every
 interaction that redraws deserves its own number: hover, click, pan, zoom, the
 layout morph, the opening.
+
+**Benchmark the rest state, not only the busy one.** Every browser number in
+the perf journal up to P12.9 was taken while something was happening — a hover,
+a sweep, a morph. Nobody had measured the page *doing nothing*, and it was
+burning half a core on both screens. Idle is the state an app spends most of
+its life in.
+
+**`%CPU` from `ps` is a lifetime average**, so on a Chrome process that has
+been up for a day it says almost nothing about now. Take CPU-*time* deltas
+(`ps -o time=`) over a fixed window, and take them across the whole browser
+**process tree**: the `--type=gpu-process` is shared by every tab and is
+routinely the largest single consumer, while `usedJSHeapSize`-style
+tab-scoped metrics cannot see it at all.
 
 **Kill leaked headless browsers between A/B runs.** A `proc.kill()` that misses
 its children leaves them resident, and eight of them turned a 22 s benchmark

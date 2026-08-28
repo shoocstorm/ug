@@ -75,6 +75,24 @@
             background-attachment: fixed;
         }
 
+        /* The knowledge-base manager is `position: fixed; inset: 0` with an
+           opaque background, so while it is up nothing behind it can be seen —
+           and everything behind it is still being painted. That is four
+           full-viewport radial gradients (above), a `backdrop-filter: blur(24px)`
+           sidebar and the renderer's canvas, re-composited on every frame the
+           landing screen's own animations ask for.
+
+           Measured on the landing screen, 20 s idle: 50.4% of a core with this
+           rule absent, 3.3% with it and the ambient animations stilled. See
+           P12.10 in docs/dev/PERF-TUNING-JOURNEY.md.
+
+           `visibility`, not `display`: the manager also opens *over* a live
+           graph, and collapsing a mounted WebGL canvas's box resizes it to
+           nothing and back through cosmos.gl's ResizeObserver. */
+        body.kb-open #container {
+            visibility: hidden;
+        }
+
         #graph-3d {
             position: absolute;
             inset: 0;
@@ -3056,32 +3074,30 @@
             height: 100%;
         }
 
+        /* Struck once, then still.
+           
+           These eighteen circles used to twinkle on a 6 s loop. The frames it
+           cost were not the circles': a *smooth* infinite animation anywhere on
+           the page keeps Chrome compositing at the display's refresh rate for
+           as long as the tab is open, and every one of those frames
+           re-rasterised the full-viewport stack behind this screen. Eighteen
+           of them, forever, for a decoration nobody is looking at — 50.4% of a
+           CPU core and 34% of the GPU process, on a screen where nothing is
+           happening.
+
+           Depth now comes from the varied resting opacities below, which cost
+           nothing after the first paint. See P12.10 in
+           docs/dev/PERF-TUNING-JOURNEY.md. */
         .kb-bg circle {
-            animation: kb-twinkle 6s ease-in-out infinite;
+            opacity: 0.34;
         }
 
         .kb-bg circle:nth-child(3n) {
-            animation-delay: -1.2s;
+            opacity: 0.5;
         }
 
         .kb-bg circle:nth-child(3n+1) {
-            animation-delay: -3.4s;
-        }
-
-        .kb-bg circle:nth-child(3n+2) {
-            animation-delay: -5s;
-        }
-
-        @keyframes kb-twinkle {
-
-            0%,
-            100% {
-                opacity: 0.18;
-            }
-
-            50% {
-                opacity: 0.55;
-            }
+            opacity: 0.22;
         }
 
         .kb-glow {
@@ -3169,27 +3185,17 @@
             color: var(--text-muted);
         }
 
+        /* Lit, not breathing. A 6px dot easing between two opacities measured
+           at **17.3% of a core** on its own — not because the dot is expensive
+           but because one smooth infinite animation is enough to keep the whole
+           page compositing every frame forever. The glow says "connected"
+           perfectly well standing still. */
         .kb-status-dot {
             width: 6px;
             height: 6px;
             border-radius: 50%;
             background: var(--success);
             box-shadow: 0 0 8px var(--success);
-            animation: kb-pulse 2s ease-in-out infinite;
-        }
-
-        @keyframes kb-pulse {
-
-            0%,
-            100% {
-                opacity: 1;
-                transform: scale(1);
-            }
-
-            50% {
-                opacity: 0.5;
-                transform: scale(0.7);
-            }
         }
 
         /* ─── What's New section ─── */
@@ -3563,7 +3569,11 @@
             color: var(--warning);
             background: color-mix(in srgb, var(--warning) 10%, transparent);
             border-color: color-mix(in srgb, var(--warning) 28%, transparent);
-            animation: kb-stale-pulse 2.6s ease-in-out infinite;
+            /* A resting halo rather than a 2.6 s pulse. `box-shadow` is a paint
+               property, so animating it repainted the button every frame — and
+               the frames themselves were the cost (P12.10). The tint already
+               marks this as the call to action. */
+            box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 16%, transparent);
         }
 
         .kb-card-reindex svg {
@@ -3573,24 +3583,6 @@
         .kb-card-reindex:hover svg,
         .kb-card-reindex:focus-visible svg {
             transform: rotate(180deg);
-        }
-
-        @keyframes kb-stale-pulse {
-
-            0%,
-            100% {
-                box-shadow: 0 0 0 0 color-mix(in srgb, var(--warning) 38%, transparent);
-            }
-
-            60% {
-                box-shadow: 0 0 0 4px transparent;
-            }
-        }
-
-        @media (prefers-reduced-motion: reduce) {
-            .kb-card-reindex {
-                animation: none;
-            }
         }
 
         /* Status indicators (Active, KB kind) — one pill vocabulary, tinted
@@ -9050,7 +9042,7 @@
 }
     </style>
 <script>
-window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3424,"edges":9879,"files":133,"lines":78725,"ugVersion":"0.1.16","visFingerprint":"ca606e6ebb22ff5d","generatedAt":1787926062};
+window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3424,"edges":9879,"files":133,"lines":78725,"ugVersion":"0.1.16","visFingerprint":"b73d7edbf8c52214","generatedAt":1787931689};
 /* ==========================================================================
    UltraGraph — static demo shim
    ==========================================================================
@@ -11821,8 +11813,29 @@ self.onmessage = async (ev) => {
             showKbManager(caps);
         }
 
+        // While the manager is up it covers the viewport completely and
+        // opaquely — so everything behind it is being painted for nobody.
+        //
+        // `#container` is 100vw × 100vh of four stacked radial gradients with
+        // `background-attachment: fixed`, and it holds the canvas, the FX
+        // overlay and the blurred sidebar. Chrome re-composites all of it on
+        // every frame the landing screen's animations ask for, which is every
+        // frame. `body.kb-open` takes it out of the paint (see 00-base.css).
+        //
+        // **`visibility: hidden`, not `display: none`.** The manager can also
+        // be opened *over* a live graph, and collapsing the box of a mounted
+        // WebGL canvas resizes it to nothing and back — a resize storm through
+        // cosmos.gl's ResizeObserver for a panel that is merely covering it.
+        // Visibility skips the paint and leaves every box where it was.
         function showKbManager(caps) {
             document.getElementById('kb-manager').classList.add('visible');
+            document.body.classList.add('kb-open');
+            // Says "Loading graph…" while nothing is loading — on the landing
+            // screen `loadGraph()` has not run and `graphReveal()` never will,
+            // so this overlay and its spinning `.loader` would sit there for
+            // the life of the page. `loadGraph` puts it back up itself.
+            const loading = document.getElementById('loading');
+            if (loading) loading.style.display = 'none';
             if (!caps.projects.length) {
                 showKbWizard({ canGoBack: false });
             } else {
@@ -11832,6 +11845,7 @@ self.onmessage = async (ev) => {
 
         function hideKbManager() {
             document.getElementById('kb-manager').classList.remove('visible');
+            document.body.classList.remove('kb-open');
         }
 
         function showKbList(caps) {
@@ -18389,6 +18403,10 @@ self.onmessage = async (ev) => {
         function applyBoundaryVisibility() {
             const r = activeRenderer();
             if (r) r.setBoundaryVisible(state.showBoundary);
+            // The 2D backend's `setBoundaryVisible` is a no-op — the box is
+            // drawn by the FX overlay, which reads `state.showBoundary`
+            // directly and now only redraws when told something changed.
+            overlayInvalidate();
         }
 
         function applyAutoSpin() {
@@ -19328,9 +19346,19 @@ self.onmessage = async (ev) => {
         // A hover is the case it exists for (one node and its edges, against a
         // whole graph), and a backend is free to ignore it — the 3D one does,
         // being bounded to 3,000 elements anyway.
-        function bumpGraphStyles(scope) { if (R) R.restyle(scope); }
+        function bumpGraphStyles(scope) {
+            if (R) R.restyle(scope);
+            // Colours, filters, focus and the hover sets all reach the FX
+            // overlay too (halos, flow, labels, the selection marker), and the
+            // overlay is now allowed to sit still between changes — so a
+            // restyle has to tell it that something moved. See overlayStart.
+            overlayInvalidate();
+        }
 
-        function setGraphData(view) { if (R) R.setData(view); }
+        function setGraphData(view) {
+            if (R) R.setData(view);
+            overlayInvalidate();
+        }
 
         function resizeRenderer(w, h) { if (R) R.resize(w, h); }
 
@@ -22351,6 +22379,12 @@ self.onmessage = async (ev) => {
         // with 0 — a continuous motion (a zoom gesture, a simulation tick)
         // just keeps re-arming the tail.
         function cosmosMotion(ms) {
+            // Announced to the FX overlay first and unconditionally: it has to
+            // redraw its labels, boundary and rings for the whole of any
+            // motion, and unlike the link budget below that is true at every
+            // graph size. This is the single call site for "something is
+            // moving", which is why the overlay needs none of its own.
+            overlayAnimateFor(ms);
             if (!cosmos || cosmosEdges.length < MOTION_LINK_LIMIT) return;
             const until = performance.now() + Math.max(0, ms || 0) + MOTION_TAIL_MS;
             if (until > _motionUntil) _motionUntil = until;
@@ -22413,18 +22447,34 @@ self.onmessage = async (ev) => {
         // Cells per axis. ~4 points per cell on a 160k graph, and the grid
         // costs the same 173 KB of Int32Array however the points are spread.
         const HIT_GRID_DIM = 208;
-        // Screen-space forgiveness, in *device* pixels.
+        // Screen-space forgiveness — how far outside its disc a point is still
+        // caught. Not a taste call: it is cosmos.gl's own tolerance, and it
+        // takes two constants to arrive at.
         //
-        // Not a taste call: cosmos.gl reads a 9×9 window of the picking
-        // framebuffer around the cursor and takes the nearest covered pixel
-        // in it, so its own pick already forgives ±4 device pixels on top of
-        // whatever the point draws. Matching that number is what makes a node
-        // that used to be catchable still catchable — measured, it is the
-        // difference between 71% and 99% agreement with the GPU pick on a
-        // 400-point sweep. Converted to CSS pixels per `devicePixelRatio`,
-        // and capped at one node radius below so it can never reach across
-        // empty canvas at a wide zoom.
-        const HIT_SLOP_DEVICE_PX = 4;
+        // cosmos.gl reads a **9×9 window** of the picking framebuffer around
+        // the cursor and takes the nearest covered pixel in it, so it forgives
+        // ±4 buffer pixels beyond whatever the point draws. And it renders
+        // that buffer at **half resolution** (`Qu = 0.5` in the vendored
+        // bundle, read back as `pickingFbo.width / screenSize[0]` = 0.5). So
+        // one buffer pixel is two device pixels, and the real tolerance is
+        // `8 / pixelRatio` CSS pixels — twice what the 9×9 window alone
+        // suggests.
+        //
+        // Getting this wrong is not subtle. At 3 CSS px, agreement with the
+        // GPU pick was 71%. At 4 device px it was 97%, and the pixels it still
+        // missed were 8.8 px from a 2.4 px disc — comfortably inside
+        // cosmos.gl's window and outside ours.
+        //
+        // It is a constant number of *screen* pixels at every zoom, which is
+        // what cosmos.gl's window is. An earlier version capped it at one node
+        // radius in space, meaning to bound the cell scan at a wide zoom; what
+        // it actually did was clamp the tolerance back to about half its value
+        // and silently undo the correction above. The scan is bounded by the
+        // grid being finite (worst case: every cell, i.e. one pass over the
+        // points — still microseconds, and far cheaper than the readback this
+        // replaced).
+        const HIT_PICK_WINDOW_PX = 4;      // half of cosmos.gl's 9×9 readback
+        const HIT_PICK_BUFFER_SCALE = 0.5; // it renders that buffer at half res
         // How long a cached canvas rect is trusted. The hit test runs once per
         // frame, and `getBoundingClientRect` is the one part of it that can
         // force layout.
@@ -22549,8 +22599,10 @@ self.onmessage = async (ev) => {
             // `scalePointsOnZoom` is on, so a node's radius is a constant in
             // space and the slop is what has to be converted.
             const scale = cosmos.spaceToScreenRadius(1) || 1;
-            const slopPx = HIT_SLOP_DEVICE_PX / (window.devicePixelRatio || 1);
-            const slop = Math.min(slopPx / scale, hitMaxR);
+            // `pixelRatio` is cosmos.gl's own config default — we never set it.
+            const ratio = (window.devicePixelRatio || 2) * HIT_PICK_BUFFER_SCALE;
+            const slopPx = HIT_PICK_WINDOW_PX / ratio;
+            const slop = slopPx / scale;
             const reach = hitMaxR + slop;
 
             const dim = HIT_GRID_DIM;
@@ -22791,6 +22843,7 @@ self.onmessage = async (ev) => {
                     // `onSimulationEnd` still gets its links back.
                     onSimulationTick: () => {
                         cosmosMotion(0);
+                        overlayInvalidate();
                         if (!state._graphRevealed) {
                             requestAnimationFrame(() => requestAnimationFrame(graphReveal));
                         }
@@ -23099,16 +23152,66 @@ self.onmessage = async (ev) => {
         const FX_MAX_HALOS = 400;
         const FX_MAX_FLOW_LINKS = 600;
 
+        // ── When this canvas is allowed to be still ─────────────
+        //
+        // This loop used to call `overlayDraw()` on every frame of the tab's
+        // life. On a settled graph with nothing selected and nothing hovered
+        // that is a full-canvas `clearRect`, a label pass and a full-viewport
+        // texture upload to the GPU, sixty-plus times a second, producing a
+        // pixel-identical frame each time. Measured on the 161,725-node canvas
+        // sitting untouched: **58.8% of a CPU core** — renderer 36%,
+        // gpu-process 23% — for a picture that was not changing. Gated, the
+        // same idle canvas costs **7.8%**. See P12.10.
+        //
+        // Two conditions let it draw. `overlayLive()` is "something animates
+        // by itself, frame to frame". `fxDirty` is "something changed" — set
+        // by `overlayInvalidate()` from wherever the drawn content can move.
+        // `fxLiveUntil` covers timed motion (a camera flight, a layout morph,
+        // a pan) where neither of the other two fires per frame.
+        //
+        // The one frame that must not be missed is the one *after* the last
+        // live frame — the canvas still holds a selection ring that is now
+        // gone. `fxWasLive` buys exactly that frame.
+        let fxDirty = true;
+        let fxWasLive = false;
+        let fxLiveUntil = 0;
+
+        function overlayLive() {
+            if (fxPulses.length || fxSweeps.length) return true;
+            // The ring spins and breathes; the flow particles march.
+            if (state.selectedNode || state.highlightNodes.size) return true;
+            if (state.walkActive) return true;
+            if (typeof tourState !== 'undefined' && tourState && tourState.active) return true;
+            return performance.now() < fxLiveUntil;
+        }
+
+        // "The drawn content moved, once." Cheap enough to call liberally —
+        // it costs one boolean and at most one frame.
+        function overlayInvalidate() { fxDirty = true; }
+
+        // "The drawn content will keep moving for `ms`." Every camera flight,
+        // layout morph and pan already announces itself to `cosmosMotion`,
+        // which forwards to here — so this needs no call sites of its own.
+        function overlayAnimateFor(ms) {
+            const until = performance.now() + Math.max(0, ms || 0) + 150;
+            if (until > fxLiveUntil) fxLiveUntil = until;
+        }
+
         function overlayStart() {
             fxCanvas = document.getElementById('fx-overlay');
             if (!fxCanvas) return;
             fxCtx = fxCanvas.getContext('2d');
             fxCanvas.hidden = false;
+            overlayInvalidate();
             if (fxRunning) return;
             fxRunning = true;
             const tick = () => {
                 if (!fxRunning) return;
                 requestAnimationFrame(tick);
+                const live = overlayLive();
+                if (!live && !fxDirty && !fxWasLive) return;
+                fxWasLive = live;
+                fxDirty = false;
                 overlayDraw();
             };
             requestAnimationFrame(tick);
@@ -23116,6 +23219,8 @@ self.onmessage = async (ev) => {
 
         function overlayStop() {
             fxRunning = false;
+            fxLiveUntil = 0;
+            fxWasLive = false;
             fxPulses = [];
             fxSweeps = [];
             if (fxCanvas) {
@@ -27052,6 +27157,10 @@ self.onmessage = async (ev) => {
             width = document.getElementById('container').clientWidth;
             height = document.getElementById('container').clientHeight;
             resizeRenderer(width, height);
+            // The FX overlay sizes its canvas inside its own draw, and that
+            // draw is now allowed to idle — so a resized window would keep the
+            // old, stretched canvas until something else moved.
+            overlayInvalidate();
         });
 
         document.addEventListener('keydown', e => {

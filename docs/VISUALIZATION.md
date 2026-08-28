@@ -511,6 +511,50 @@ backdrop; flat, they sit below the noise floor.
 
 ---
 
+### 5.10 Both screens are allowed to sit still
+
+Idle used to cost about half a CPU core, on either screen, with no input at
+all. Two unrelated causes, both fixed in P12.10 — see
+[the perf journal](dev/PERF-TUNING-JOURNEY.md#p1210).
+
+**The FX overlay draws only when something can have changed.** Its rAF loop
+called `overlayDraw()` on every frame for the life of the tab; on a settled
+canvas that is a full-canvas clear, a label pass and a full-viewport texture
+upload producing a pixel-identical frame, sixty times a second — **58.8% of a
+core, down to 6–7%.** Three gates:
+
+| gate | means | set by |
+| :--- | :--- | :--- |
+| `overlayLive()` | animates by itself | pulses, sweeps, a selection, a hover, a walk, a tour |
+| `overlayInvalidate()` | something changed, once | `bumpGraphStyles`, `setGraphData`, the boundary toggle, window resize |
+| `overlayAnimateFor(ms)` | will keep moving for `ms` | `cosmosMotion` — every flight, morph and pan already announces itself there |
+
+> **Trap worth knowing.** Anything new that changes what the overlay draws must
+> invalidate, and a miss is invisible: a stale overlay looks exactly like a
+> correct idle frame. `fxWasLive` keeps one frame *after* the last live one, or
+> the canvas is left holding a selection ring that is gone. Verify in pixels —
+> `scratch/overlaycheck.mjs` asserts both directions, repaint *and* stability.
+
+**The landing screen does not paint what it covers.** The KB manager is
+`position: fixed; inset: 0` and opaque, so `body.kb-open` takes `#container`
+out of the paint — it is 100vw × 100vh of four stacked radial gradients with
+`background-attachment: fixed`, holding the canvas, this overlay and a blurred
+sidebar. Its ambient animations are struck once and left still, and `#loading`
+(which said "Loading graph…" while nothing loaded, spinner turning behind the
+manager) is hidden until `loadGraph` puts it back. **50.4% → 3%.**
+
+> **Traps worth knowing.**
+>
+> 1. `visibility: hidden`, never `display: none`, for a subtree holding a
+>    mounted WebGL canvas — collapsing its box resizes the context to nothing
+>    and back through cosmos.gl's `ResizeObserver`. The manager opens over a
+>    live graph, so this is a real path, not a hypothetical.
+> 2. **One** smooth infinite CSS animation is enough to pin the compositor at
+>    the display's refresh rate forever: a single 6 px status dot measured
+>    17.3% of a core. It scales with window area and `will-change` does not
+>    help. `step-end` animations are ~4× cheaper — the blinking cursor stays
+>    for that reason.
+
 ## 6. The 3D renderer (`11-render-three.js`)
 
 The original, unchanged in behaviour and now behind the same seam. It owns
@@ -612,6 +656,10 @@ reshapes what is hot).
 >   in memory certified a change that uploaded nothing and drew nothing (see
 >   P12.7/P12.8). Screenshot a patch of canvas *away from the tooltip*, hover,
 >   screenshot again, count changed pixels.
+> * **Measure the idle page too**, as CPU-*time* deltas across the whole
+>   browser process tree (`ps -o time=` over a fixed window). `%CPU` is a
+>   lifetime average, and the `--type=gpu-process` — routinely the largest
+>   consumer — belongs to no tab in particular.
 
 ---
 

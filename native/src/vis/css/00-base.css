@@ -65,6 +65,24 @@
             background-attachment: fixed;
         }
 
+        /* The knowledge-base manager is `position: fixed; inset: 0` with an
+           opaque background, so while it is up nothing behind it can be seen —
+           and everything behind it is still being painted. That is four
+           full-viewport radial gradients (above), a `backdrop-filter: blur(24px)`
+           sidebar and the renderer's canvas, re-composited on every frame the
+           landing screen's own animations ask for.
+
+           Measured on the landing screen, 20 s idle: 50.4% of a core with this
+           rule absent, 3.3% with it and the ambient animations stilled. See
+           P12.10 in docs/dev/PERF-TUNING-JOURNEY.md.
+
+           `visibility`, not `display`: the manager also opens *over* a live
+           graph, and collapsing a mounted WebGL canvas's box resizes it to
+           nothing and back through cosmos.gl's ResizeObserver. */
+        body.kb-open #container {
+            visibility: hidden;
+        }
+
         #graph-3d {
             position: absolute;
             inset: 0;

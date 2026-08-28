@@ -15,7 +15,7 @@
 | **Opened** | 2026-08-18 |
 | **Version** | 0.1.16 |
 | **Primary fixture** | `~/.ug/neo4j` — 161,725 nodes / 745,964 edges / 330 MB `graph.json` |
-| **Status** | Rounds 1–4 landed (bar P11.7, deferred). Round 5: **P12.1, P12.3, P12.6, P12.7, P12.8, P12.9 landed** (P12.7 half-reverted — see its note); P12.2, P12.4, P12.5 audited. Suite **912/912** |
+| **Status** | Rounds 1–4 landed (bar P11.7, deferred). Round 5: **P12.1, P12.3, P12.6, P12.7, P12.8, P12.9, P12.10 landed** (P12.7 half-reverted — see its note); P12.2, P12.4, P12.5 audited. Suite **912/912** |
 
 **Status marks:** ✅ landed and verified · ⬜ open · ⏭️ deferred · ❌ rejected by measurement
 
@@ -675,7 +675,8 @@ browser figure in this file before today measured the 6%.
 | P12.6 | Every `vis.*` config key was read before it was loaded, then never re-read | `solo_threshold` 10,000,000 had no effect at all | ✅ |
 | P12.7 | A GPU readback per drawn element per frame, and a synchronous render per hover | our share of CPU while the pointer moves: **31% → 3.3%** | ⚠️ half-reverted |
 | P12.8 | Hover asks the GPU what is under the cursor, and waits for the whole scene | sweep wall **−27%**, CPU **−41%**, p95 frame **−49%**; 97.6% pick agreement | ✅ |
-| P12.9 | Every animation redraws 745,964 links per frame | **3–4 fps → 111–120 fps** on morphs and camera flights | ✅ |
+| P12.9 | Every animation redraws 745,964 links per frame | **3–4 fps → 120 fps** on morphs and camera flights | ✅ |
+| P12.10 | The page never goes idle — on either screen | idle CPU **50.4% → 3%** (landing), **58.8% → 7%** (graph) | ✅ |
 
 <a id="p121"></a>
 ### ✅ P12.1 — the catalog renders the whole repository into the DOM at boot
@@ -1179,6 +1180,128 @@ It is also neutral for hover, by construction: a pointer sweep triggers no
 motion at all (`motionCalls: 0` across 120 moves), so P12.8's numbers stand
 unchanged.
 
+<a id="p1210"></a>
+### ✅ P12.10 — the page never went idle
+
+Reported, not audited: *"why CPU / GPU usage keep high even if I did not do
+anything but just staying at the project list landing screen? they go down
+until I closed the chrome tab."* The process named was Chrome's shared
+`--type=gpu-process`.
+
+Both screens were burning half a core doing nothing, for two unrelated
+reasons. Measured as **CPU-time deltas across the whole browser process tree**
+over 20 s of no input (`ps -o time=`, walking the launched browser's children —
+`%CPU` on macOS is a lifetime average and useless here):
+
+| idle, 20 s | before | after |
+| :--- | ---: | ---: |
+| **landing screen** (KB manager) | **50.4%** of a core — gpu 34%, renderer 16% | **2.8–3.8%** |
+| **graph view**, settled, nothing selected | **58.8%** of a core — renderer 36%, gpu 23% | **6.0–7.5%** |
+
+#### The graph view: an rAF loop with no off switch
+
+`overlayStart()`'s tick called `overlayDraw()` on every frame for the life of
+the tab. On a settled canvas with nothing selected and nothing hovered that is
+a full-canvas `clearRect`, a label pass and a full-viewport texture upload,
+sixty-plus times a second, producing a pixel-identical frame each time.
+
+It now draws when something can have changed. `overlayLive()` covers what
+animates by itself — pulses, sweeps, a selection ring, flow particles, a walk,
+a tour. `overlayInvalidate()` covers discrete changes (restyle, boundary
+toggle, view swap, window resize). `overlayAnimateFor(ms)` covers timed motion,
+and needs no call sites of its own: `cosmosMotion(ms)` from [P12.9](#p129) is
+already the single place every camera flight, layout morph and pan announces
+itself, so it forwards there.
+
+The frame that must not be missed is the one *after* the last live frame — the
+canvas still holds a selection ring that is now gone. `fxWasLive` buys exactly
+that frame.
+
+#### The landing screen: 22 infinite animations, and a spinner nobody can see
+
+`document.getAnimations()` reported **22 running**: 18 × `kb-twinkle` on the
+SVG constellation, the terminal cursor, the status dot, a stale-card box-shadow
+pulse, and the `#loading` spinner — which was turning **behind** the opaque
+manager, because on this screen `loadGraph()` never runs and `graphReveal()`
+never fires, so the overlay sat there saying "Loading graph…" for the life of
+the page.
+
+The bisect is the interesting part, because it says the intuition is wrong:
+
+| | running | CPU |
+| :--- | ---: | ---: |
+| baseline | 22 | 50.4% |
+| minus the 18 twinkling circles | 4 | 44.6% |
+| minus one stale-card pulse | 21 | 34.3% |
+| **all animations off** | 0 | **1.0%** |
+| only the status dot — a single 6 px circle | 1 | **17.3%** |
+| only the terminal cursor (`step-end`) | 1 | **4.5%** |
+
+**The cost is per *frame*, not per animation.** One smooth infinite animation
+anywhere keeps Chrome compositing at the display's refresh rate forever, and
+each of those frames re-rasterises the full-viewport stack. It scales with
+window area (700×500: 3.8%, 1600×1000: 16.1%) and `will-change` does not touch
+it (17.2% vs 16.1%) — it is not a layer-promotion problem. A `step-end`
+animation is ~4× cheaper because it only produces frames at its steps.
+
+Three fixes, and the user found the third:
+
+1. The ambient animations are now struck once and still — varied resting
+   opacities on the constellation, a lit status dot, a resting halo on the
+   stale card. The blinking cursor stays: it is `step-end`, it is the one
+   animation that means something, and it is the cheapest.
+2. `#loading` is hidden when the manager opens, and `loadGraph()` puts it back.
+3. **`body.kb-open #container { visibility: hidden }`.** *"why the id=container
+   div has to be shown when I was on landing screen?"* — it does not. It is
+   100vw × 100vh of four stacked radial gradients with
+   `background-attachment: fixed`, holding the canvas, the FX overlay and a
+   `backdrop-filter: blur(24px)` sidebar, all fully painted underneath an
+   opaque overlay. `visibility`, not `display`: the manager also opens *over* a
+   live graph, and collapsing a mounted WebGL canvas's box resizes it to
+   nothing and back through cosmos.gl's `ResizeObserver`.
+
+#### And it found a real bug in P12.8's pick tolerance
+
+Re-running the pick-agreement harness after all this showed one pixel where the
+GPU found a node and we did not — **8.76 px from a disc of radius 2.44 px**,
+far outside the ±4 px tolerance P12.8 had reasoned its way to. Two things were
+wrong:
+
+* cosmos.gl renders its picking framebuffer at **half resolution** (`Qu = 0.5`
+  in the bundle; confirmed at runtime as `pickingFbo.width / screenSize[0]`
+  = 0.5). Its 9×9 window is therefore ±4 *buffer* pixels = **8 / pixelRatio CSS
+  pixels**, twice what P12.8 assumed.
+* and the slop was capped at `hitMaxR` — meant to bound the cell scan at a wide
+  zoom, but what it actually did was clamp the corrected tolerance straight
+  back down. Fixing the derivation alone changed *nothing*, which is what
+  exposed the cap.
+
+Agreement went 97.1% (1 miss) → **97.6% with zero misses in either direction**;
+the six remaining are overlapping discs where both answers are a node under the
+cursor.
+
+#### Verified in pixels
+
+A canvas allowed to sit still fails silently — a missed invalidation looks
+exactly like a correct idle frame from the inside. Eight screenshot-diff
+assertions (`scratch/overlaycheck.mjs`), all passing:
+
+| | changed pixels | want |
+| :--- | ---: | :--- |
+| idle canvas over 1.2 s | 0 | stable |
+| hover paints | 36,776 | > 0 |
+| selection ring keeps animating | 3,076 | > 0 |
+| settles back after the hover leaves | 0 | stable |
+| …and the highlight is actually gone | 43,541 | > 0 |
+| zoom repaints the overlay | 311,931 | > 0 |
+| …and settles again | 0 | stable |
+| window resize repaints | 331,685 | > 0 |
+
+Plus `scratch/kbflow.mjs` for the `#container` path that could strand an
+invisible graph: deep link → container painted; manager opened over the live
+graph → hidden, canvas still 1600×913 (no resize storm); project re-picked →
+container painted, canvas byte-identical.
+
 ### What the round taught
 
 - **The JS heap is not the tab.** 118 MB of heap sat inside a 1,958 MB
@@ -1207,7 +1330,18 @@ unchanged.
 - **The user was right about which thing was slow.** Three rounds of hover work
   were correct and none of it was the complaint. "The animation is laggy" named
   a 3 fps camera flight that no amount of hover tuning would have found,
-  because the harness only ever drove the pointer.
+  because the harness only ever drove the pointer. Then *"why is CPU high when
+  I'm doing nothing"* named a third thing again — and *"why does #container
+  have to be shown on the landing screen"* was the fix, handed over.
+- **Nobody had measured the page doing nothing.** Every number in this file up
+  to P12.9 was taken while something was happening: a hover, a sweep, a morph.
+  The idle state was half a core on both screens and it had never been looked
+  at. Benchmark the rest state too — it is the state the app spends most of its
+  life in.
+- **`%CPU` from `ps` is a lifetime average.** On a Chrome process that has been
+  up for 22 hours it says almost nothing about now. Take CPU-*time* deltas
+  (`ps -o time=`) over a fixed window, across the whole process tree — the GPU
+  process is shared and does not belong to the tab you think it does.
 
 ---
 
@@ -1316,6 +1450,14 @@ One row per landed item or baseline. Keep the numbers, not just the verdict.
 | 2026-08-28 | P12.9 | `curvedLinkSegments` 19→5 / `linkBlending:false` / arrows off | 164 ms | 170 / 154 / 183 ms | **all rejected** — no link setting recovers the cost |
 | 2026-08-28 | P12.9 | layout morph / camera flight | 4.0 / 3.0 fps | **120 / 111 fps** | links hidden only while moving; settled picture identical |
 | 2026-08-28 | P12.9 | frames with links hidden while settled | — | **0 of 317** | and 0 of everything on a 12,033-link graph |
+| 2026-08-28 | P12.10 | landing screen, 20 s idle, whole browser tree | **50.4%** of a core | **2.8–3.8%** | 22 infinite CSS animations; gpu-process was 34% of it |
+| 2026-08-28 | P12.10 | graph view, settled, nothing selected | **58.8%** of a core | **6.0–7.5%** | the FX overlay redrew every frame forever |
+| 2026-08-28 | P12.10 | one 6px status dot, alone | — | **17.3%** of a core | the cost is per *frame*: one smooth animation pins the compositor |
+| 2026-08-28 | P12.10 | the same dot, `will-change: transform,opacity` | 16.1% | 17.2% | **rejected** — not a layer-promotion problem |
+| 2026-08-28 | P12.10 | a `step-end` animation vs a smooth one | 17.3% | **4.5%** | stepped animations only produce frames at their steps |
+| 2026-08-28 | P12.10 | same animation, 700×500 vs 1600×1000 window | 3.8% | 16.1% | scales with area — a full-viewport raster per frame |
+| 2026-08-28 | P12.10 | cosmos.gl pick tolerance, corrected for the half-res picking buffer | 97.1%, 1 miss | **97.6%, 0 misses** | `Qu = 0.5`, so the 9×9 window is ±8 CSS px, not ±4 |
+| 2026-08-28 | P12.10 | overlay repaint correctness | — | **8 of 8 pixel assertions** | idle stable, hover/zoom/resize repaint, ring still animates |
 
 ---
 
