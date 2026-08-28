@@ -801,6 +801,7 @@
             cosmosBuf.positions.set(pos);
             cosmosApplyVisibilityInto(cosmosBuf.positions);
             cosmos.setPointPositions(cosmosBuf.positions);
+            cosmosMotion(dur);
             cosmos.render(undefined, dur);
             cosmos.fitView(dur, 0.16);
             // The page treats n.x/n.y as the truth, and with the simulation off
@@ -868,6 +869,7 @@
             cosmos.setConfigPartial({ enableSimulation: false });
             cosmosApplyVisibilityInto(buf);
             cosmos.setPointPositions(buf);
+            cosmosMotion(dur);
             cosmos.render(undefined, dur);
             cosmosHitInvalidate();
 
@@ -930,6 +932,8 @@
             // Frame it immediately — the whole point is that something
             // deliberate is on screen from the first frame.
             cosmos.fitView(0, 0.24);
+            // The whole opening, in one declaration: hold, spiral, land.
+            cosmosMotion(INTRO_HOLD_MS + INTRO_MORPH_MS * 2);
             // The simulation never runs here, so there are no ticks to release
             // the loading overlay — it has to be done explicitly or it would
             // sit over the whole animation.
@@ -937,6 +941,7 @@
 
             _cosmosAnimTimers.push(setTimeout(() => {
                 cosmos.setPointPositions(sunflower);
+                cosmosMotion(INTRO_MORPH_MS);
                 cosmos.render(undefined, INTRO_MORPH_MS);
                 cosmos.fitView(INTRO_MORPH_MS, 0.16);
             }, INTRO_HOLD_MS));
@@ -1042,6 +1047,76 @@
                 if (i !== undefined && !cosmosHidden[i]) out.push(i);
             });
             return out;
+        }
+
+        // ─── Level of detail while the scene is moving ─────────
+        //
+        // Links are ~85% of every frame, and no link *setting* recovers it.
+        // Measured on the 161,725-node / 745,964-link neo4j index, median
+        // cost of one full redraw:
+        //
+        //   full (curved links, arrows, blending)     164–208 ms
+        //   curvedLinkSegments 19 → 5                     170 ms
+        //   linkBlending off                              154 ms
+        //   arrows off                                    183 ms
+        //   arrows off *and* straight links               130 ms
+        //   **links not drawn at all**                     37 ms
+        //
+        // So the rule is: while something is moving, don't draw them. A camera
+        // flight over this graph ran at **3.7 fps** with links and **120 fps**
+        // without, and it lands on an identical picture either way — the links
+        // come back the moment the motion stops. This is the whole of what
+        // made animation feel broken at this size; it is not hover, and it was
+        // never the restyle.
+        //
+        // Deadline-based rather than a nesting count: every animation declares
+        // how long it will take, a later one extends the deadline, and one
+        // timer puts the links back. Nothing has to pair its own begin with
+        // its own end — which is what would eventually strand a graph with no
+        // links in it, and would be a far worse bug than the one this fixes.
+        //
+        // Below MOTION_LINK_LIMIT this does nothing at all: a small graph
+        // redraws inside a frame anyway, so links blinking out would be a
+        // flicker bought for no gain.
+        const MOTION_LINK_LIMIT = 60000;
+        // A beat past the animation's own end — for the frame that lands on
+        // the final position, and for a settle that overruns its nominal
+        // duration.
+        const MOTION_TAIL_MS = 120;
+
+        let _motionUntil = 0;
+        let _motionTimer = null;
+        let _motionHiding = false;
+
+        // "Something is about to move for `ms`." Safe from anywhere, including
+        // with 0 — a continuous motion (a zoom gesture, a simulation tick)
+        // just keeps re-arming the tail.
+        function cosmosMotion(ms) {
+            if (!cosmos || cosmosEdges.length < MOTION_LINK_LIMIT) return;
+            const until = performance.now() + Math.max(0, ms || 0) + MOTION_TAIL_MS;
+            if (until > _motionUntil) _motionUntil = until;
+            if (!_motionHiding) {
+                _motionHiding = true;
+                // Config only — no render, no transition reset (setConfigPartial
+                // just merges and re-reads state). The next frame, whoever asks
+                // for it, draws points alone.
+                cosmos.setConfigPartial({ renderLinks: false });
+            }
+            if (_motionTimer) clearTimeout(_motionTimer);
+            _motionTimer = setTimeout(cosmosMotionEnd, Math.max(0, _motionUntil - performance.now()));
+        }
+
+        function cosmosMotionEnd() {
+            if (_motionTimer) { clearTimeout(_motionTimer); _motionTimer = null; }
+            _motionUntil = 0;
+            if (!_motionHiding) return;
+            _motionHiding = false;
+            if (!cosmos) return;
+            cosmos.setConfigPartial({ renderLinks: true });
+            // The config change only flags; this is the frame that actually
+            // puts the links back on screen. Same reason `restyle` renders —
+            // cosmos.gl's frame loop does not upload or re-read on its own.
+            cosmos.render(undefined, 0);
         }
 
         // ─── Hit testing on the CPU ────────────────────────────
@@ -1437,6 +1512,13 @@
                     // already follows the dragged node through tracked
                     // positions, so this only has to settle the bookkeeping.
                     onDragEnd: () => cosmosSync(),
+                    // Panning and zooming are the motion the user drives by
+                    // hand, and where 3.7 fps is least forgivable. `cosmosMotion(0)`
+                    // re-arms the tail while the gesture continues; the links
+                    // land back a beat after it stops. Camera *flights* pass
+                    // through here too and simply extend the deadline their
+                    // caller already set.
+                    onZoom: () => cosmosMotion(0),
                     onMouseMove: (_i, _p, event) => {
                         if (!event) return;
                         state._mouse = {
@@ -1444,7 +1526,12 @@
                             cx: event.clientX, cy: event.clientY,
                         };
                     },
+                    // Every tick moves every point and the links follow them —
+                    // that is the frame this cannot afford. Re-armed rather than
+                    // held, so a simulation that stops without firing
+                    // `onSimulationEnd` still gets its links back.
                     onSimulationTick: () => {
+                        cosmosMotion(0);
                         if (!state._graphRevealed) {
                             requestAnimationFrame(() => requestAnimationFrame(graphReveal));
                         }
@@ -1456,6 +1543,7 @@
                         if (!_cosmosEarlyFit && cosmosHasPoints()
                             && performance.now() - _cosmosStartedAt > 220) {
                             _cosmosEarlyFit = true;
+                            cosmosMotion(220);
                             cosmos.fitView(220, 0.15);
                         }
                         // Throttled: a full position readback is a GPU stall,
@@ -1466,10 +1554,12 @@
                         cosmosSync();
                     },
                     onSimulationEnd: () => {
+                        cosmosMotionEnd();
                         cosmosSync();
                         state._boxSettled = true;
                         if (!state._didFit && cosmosHasPoints()) {
                             state._didFit = true;
+                            cosmosMotion(350);
                             cosmos.fitView(350, 0.15);
                         }
                         refreshModeLegend();
@@ -1596,11 +1686,11 @@
             // Both fits are reachable with an empty canvas — Reset and the 1–6
             // keys are live in solo mode before a node has been picked — and
             // fitting a camera to no points is fatal (see cosmosHasPoints).
-            frameAll(ms) { if (cosmosHasPoints()) cosmos.fitView(ms, 0.15); },
+            frameAll(ms) { if (cosmosHasPoints()) { cosmosMotion(ms); cosmos.fitView(ms, 0.15); } },
 
             // Every face projection collapses to the same 2D fit. The buttons
             // are hidden by caps, but the 1–6 keyboard shortcuts still land here.
-            setView(_id, ms) { if (cosmosHasPoints()) cosmos.fitView(ms, 0.15); },
+            setView(_id, ms) { if (cosmosHasPoints()) { cosmosMotion(ms); cosmos.fitView(ms, 0.15); } },
 
             // `opts.flat` is a 3D notion (which way the camera points); a plane
             // is already flat, so the fit is the same either way.
@@ -1608,6 +1698,7 @@
                 if (!cosmos) return;
                 const idx = cosmosIndicesFor(ids);
                 if (!idx.length) return;
+                cosmosMotion(ms);
                 cosmos.fitViewByPointIndices(idx, ms, 0.2);
             },
 
@@ -1625,13 +1716,17 @@
                 if (i === undefined || cosmosHidden[i]) return;
                 // Wait one frame so any panel toggles (info open/close) commit
                 // their layout before the view moves.
-                requestAnimationFrame(() => cosmos.zoomToPointByIndex(i, 800, 4));
+                requestAnimationFrame(() => {
+                    cosmosMotion(800);
+                    cosmos.zoomToPointByIndex(i, 800, 4);
+                });
             },
 
             zoomBy(factor) {
                 if (!cosmos) return;
                 // The 3D renderer's factor scales an orbit *radius*, so <1 is
                 // closer. A zoom level is the reciprocal of that.
+                cosmosMotion(180);
                 cosmos.setZoomLevel(cosmos.getZoomLevel() / factor, 180);
             },
 
@@ -1648,6 +1743,7 @@
                 const idx = cosmosIndicesFor(ids);
                 if (!idx.length) return;
                 requestAnimationFrame(() => {
+                    cosmosMotion(opts.ms || 1100);
                     cosmos.fitViewByPointIndices(idx, opts.ms || 1100, 0.28);
                 });
             },
@@ -1656,6 +1752,7 @@
                 if (!cosmos || !tourState.data) return;
                 const idx = cosmosIndicesFor(tourState.routeIds);
                 if (idx.length < 2) return;
+                cosmosMotion(ms || 1400);
                 cosmos.fitViewByPointIndices(idx, ms || 1400, 0.2);
             },
 
@@ -1698,6 +1795,10 @@
                 cosmosNodes = [];
                 cosmosEdges = [];
                 cosmosIndexOf = new Map();
+                if (_motionTimer) clearTimeout(_motionTimer);
+                _motionTimer = null;
+                _motionUntil = 0;
+                _motionHiding = false;
                 hitStart = null;
                 hitItems = null;
                 hitCellOf = null;

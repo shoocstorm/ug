@@ -434,7 +434,7 @@ changelog on every bump, and keep engine calls behind the `KnowledgeStore`
 trait (`native/src/storage/store.rs`) so upgrades stay confined to
 `native/src/storage/db.rs`.
 
-## 9. Five bugs this codebase keeps re-introducing
+## 9. Seven bugs this codebase keeps re-introducing
 
 All are invisible in review, silent at runtime, and have each already shipped
 here more than once. Check for them by reflex.
@@ -604,6 +604,58 @@ Rules:
 - A settings key is not verified by reading the code that consumes it. Set it
   to an extreme value and check the behaviour actually changes.
 
+### 9f. A buffer that never leaves the CPU
+
+**Setting a GPU buffer is not uploading it, and a test that reads the buffer
+back cannot tell the difference.**
+
+The 2D renderer's hover repaint calls `cosmos.setPointColors(...)` /
+`setLinkColors(...)`. Those set an input array and a dirty flag; the
+`bufferSubData` that actually uploads lives in cosmos.gl's `create()`, which
+only `render()` reaches. Skipping the `render()` on the reasoning that "we are
+already inside the frame loop, the next draw will pick it up" left every hover
+correct in memory and **invisible on screen**: hovering a node with 8,680 links
+changed *zero pixels* of canvas outside the tooltip, for two rounds of work.
+
+The equality harness that was supposed to protect this compared the buffers,
+found them identical to a full repaint, and passed — as it would have for a
+renderer that drew nothing at all.
+
+**Why:** every graphics API in use here separates "stage" from "submit", and
+the staging side is the one JS can see. A test written in the language of the
+CPU cannot observe the boundary where the bug lives.
+
+**How to apply:** when you change what is *drawn*, at least one assertion has
+to be made of pixels. Screenshot a patch of canvas away from any tooltip or
+cursor decoration, cause the change, screenshot again, count differing pixels —
+`scratch/paint.mjs` in the perf journal is the pattern. And treat "the frame
+loop will pick it up" as a claim to verify in the library's source, never as
+something the call stack implies.
+
+### 9g. Replacing a method, and dropping its bookkeeping
+
+**A monkey-patch owes everything the original *wrote*, not just what it
+returned.**
+
+`ug` replaces cosmos.gl's GPU hit test with its own (see
+[VISUALIZATION.md §5.4](docs/VISUALIZATION.md)). The replacement returned the
+right node — and cost **14× the frame time**, because the method it replaced
+also advanced `_lastCheckedMouseX/Y`, which `shouldKeepRendering()` reads to
+decide whether the rAF loop can go idle. Left behind, the loop never idled and
+redrew 745,964 links every frame while the pointer sat still: 8.3 ms → 116 ms,
+with the CPU 95% idle the whole time.
+
+**Why:** the observable contract of a method in a minified library is rarely
+its return value alone. Fields it touches are the interface too, and nothing
+declares them.
+
+**How to apply:** before overriding, read the original body and list every
+field it assigns and every helper it calls for effect. Reproduce those. Then
+check who *reads* those fields — that is where the cost of missing one shows
+up, and it will not be near your patch. And guard the patch: check the names
+exist and fall back to the library's own behaviour if they do not, so a
+re-vendor degrades to slow rather than to broken.
+
 ## 10. Measuring performance without fooling yourself
 
 **Every number in `docs/dev/PERF-TUNING-JOURNEY.md` was produced this way, and
@@ -733,6 +785,21 @@ And separate *stationary* from *moving*. A pointer parked on a hovered node ran
 at 8.3 ms/frame while moving it cost ~110 ms — that single comparison located
 the cost (a per-move GPU pick readback) after four other hypotheses had been
 measured and rejected.
+
+**Measure the interaction the user named, not the one your harness can drive.**
+Three rounds went into hover before the user said *"it is the animation slow,
+not the hover / click"* — and they were right. A camera flight over the same
+graph ran at **3.0 fps**, which no amount of pointer-sweep profiling would ever
+have surfaced, because the harness only ever moved the pointer. Every
+interaction that redraws deserves its own number: hover, click, pan, zoom, the
+layout morph, the opening.
+
+**Kill leaked headless browsers between A/B runs.** A `proc.kill()` that misses
+its children leaves them resident, and eight of them turned a 22 s benchmark
+into 31 s — a clean 40% "regression" in the thing under test. Absolute frame
+costs drift between sessions anyway (GPU clock state moves them 130 → 290 ms
+for the same draw), so **quote ratios from a same-session A/B pair** and treat
+milliseconds from different sittings as incomparable.
 
 ## 11. Record what you learn, here, without being asked
 

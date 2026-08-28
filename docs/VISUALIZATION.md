@@ -122,7 +122,7 @@ URL-state restore routinely beats the mount.
 
 **`caps` is what keeps the pair honest.** A control a backend cannot honour is
 *hidden*, not left dead: in 2D the six face projections, the 3D/ISO button, the
-orientation gizmo and Spin all disappear, and the layout switcher (§5.5) takes
+orientation gizmo and Spin all disappear, and the layout switcher (§5.7) takes
 their place. A dead control reads as a bug in the graph rather than a property
 of the renderer.
 
@@ -368,7 +368,69 @@ framing, the tooltip, the walk all read them. So:
   its neighbours — the cheap subset readback — so the selection ring stays glued
   to its node through a drag or a running simulation.
 
-### 5.4 Simulation
+### 5.4 Hover picks on the CPU, not the GPU
+
+cosmos.gl answers "what is under the pointer" by redrawing every point into an
+offscreen index buffer and reading a 9×9 window of it back (`readPixels` +
+`getBufferSubData`). The readback cannot return until the GPU has finished the
+frame it is queued behind, so on a 745,964-link canvas it stalls for most of a
+fifth of a second per pointer move. `ug` replaces it with a uniform grid over
+the point positions — see `cosmosHitTest` and P12.8 in
+[the perf journal](dev/PERF-TUNING-JOURNEY.md#p128).
+
+The replacement is deliberately shallow. `cosmosInstallCpuPicking()` overrides
+exactly two methods **on the instance**, and still hands its answer to
+cosmos.gl's own `processHoverResult`:
+
+| replaced | why it can be |
+| :--- | :--- |
+| `findHoveredItem(force)` | the only caller of the GPU pick; runs once per frame and synchronously on `pointerdown` |
+| `resolvePendingPick()` | collects a readback that is now never issued |
+
+Everything downstream is untouched, because everything downstream reads
+`store.hoveredPoint`: `Graph.onClick` decides point-vs-background from it, the
+hover ring draws from its `.index`, and the cursor follows it.
+
+> **Traps worth knowing.**
+>
+> 1. **The pick tolerance is a measured number, not a taste call.** That 9×9
+>    window means cosmos.gl already forgives ±4 *device* pixels beyond whatever
+>    the point draws. `HIT_SLOP_DEVICE_PX` matches it; a nice-looking 3 CSS px
+>    dropped agreement with the GPU pick from 99% to 71%.
+> 2. **Overlaps break to the nearest *centre*.** Rim distance sounds right and
+>    measures worse (95.5% vs 97.6%) — the picking pass is depth-tested.
+> 3. **A replaced method owes its bookkeeping too.** `shouldKeepRendering()`
+>    asks `hasPendingHoverWork()`, which compares the pointer against
+>    `_lastCheckedMouse*` — advanced only by the real `findHoveredItem`. Not
+>    advancing it pinned the rAF loop on forever, and every frame redrew the
+>    whole scene: 8.3 ms → 116 ms while merely parked on a node.
+> 4. **Re-vendoring can silently undo this.** The install checks all three
+>    names (`findHoveredItem`, `resolvePendingPick`, `processHoverResult`) and
+>    bails to cosmos.gl's own picking if any is missing, so a rename degrades
+>    to slow rather than to broken. Re-run `scratch/equal.mjs` after any bundle
+>    bump (§3.3).
+
+### 5.5 Nothing draws links while the picture is moving
+
+Links are **~85% of every frame**: one full redraw of the 161,725-node /
+745,964-link neo4j index costs ~163–208 ms, of which points alone are 37 ms. No
+link *setting* recovers it — straight links, fewer curve segments, no arrows and
+no blending together buy less than a third. So `cosmosMotion(ms)` turns
+`renderLinks` off for the duration of any animation and back on when it lands:
+camera flights 3.0 fps → 111 fps, layout morphs 4.0 fps → 120 fps, with the
+settled picture unchanged.
+
+It is deadline-based, not a begin/end pair — every animation declares its
+duration, a later one extends the deadline, and a single timer restores. Nothing
+has to remember to undo itself, which is the only way this could ever strand a
+graph with no links in it. Below `MOTION_LINK_LIMIT` (60,000 links) it does
+nothing at all, so small graphs never blink.
+
+Every motion the renderer knows about is wired to it: the opening morph, both
+layout paths, the walk's prescribed positions, all seven camera helpers, the
+simulation ticks, and the user's own pan/zoom via `onZoom`.
+
+### 5.6 Simulation
 
 `simulationDecay` is **a tick count, and lower is faster**. cosmos.gl's own docs
 say the opposite, but alpha decays by `1 - ALPHA_MIN^(1/decay)` per tick, so
@@ -376,7 +438,7 @@ after `decay` ticks it has reached the floor — the default 5000 is ~80 seconds
 60 fps. `ug` uses **300** (~5 s at `start(0.7)`), deliberately close to the 3D
 renderer's `cooldownTicks(100)`, which exists for the same reason.
 
-### 5.5 Layouts
+### 5.7 Layouts
 
 With no camera to move, what is worth switching is the **arrangement**. Seven,
 in the viewbar where the face projections sit in 3D:
@@ -404,7 +466,7 @@ go to an outer ring rather than being forced into a folder they are not in.
 Island centres sit on a phyllotaxis spiral so the biggest folder lands dead
 centre, and the FX overlay labels each one.
 
-### 5.6 The opening
+### 5.8 The opening
 
 Positions are just a buffer, and `render(alpha, duration)` tweens the whole
 buffer on the GPU — so the graph *arrives* rather than being computed in public:
@@ -423,7 +485,7 @@ skips straight to the layout.
 > cosmos.gl auto-rescales incoming positions unless `rescalePositions: false` —
 > which would quietly rewrite every layout's coordinates.
 
-### 5.7 The FX overlay (`13-render-overlay.js`)
+### 5.9 The FX overlay (`13-render-overlay.js`)
 
 One 2D canvas over the WebGL one, `pointer-events: none`, carrying what
 cosmos.gl cannot draw: **labels** (it renders no text at all), **halos** (a point
@@ -536,7 +598,20 @@ to introduce.
 `initialize()` never runs and no `<canvas>` appears — so it needs a real display.
 cosmos.gl is WebGL2 and *does* boot under
 `--use-gl=angle --use-angle=swiftshader`, so the 2D path is the one that can get
-a real end-to-end canvas smoke test.
+a real end-to-end canvas smoke test. On Apple silicon,
+`--headless=new --use-angle=metal --enable-gpu` gets the *real* GPU, which is
+the only way frame-time numbers mean anything (swiftshader is ~2× slower and
+reshapes what is hot).
+
+> **Two traps that cost an afternoon each.**
+>
+> * **In multi-project mode the page always opens the knowledge-base manager**,
+>   so a headless driver that just loads `/` waits forever on "Loading graph…"
+>   and never fetches `/api/graph`. Deep-link the project: `/?p=<name>`.
+> * **A rendering change needs an assertion made of pixels.** Comparing buffers
+>   in memory certified a change that uploaded nothing and drew nothing (see
+>   P12.7/P12.8). Screenshot a patch of canvas *away from the tooltip*, hover,
+>   screenshot again, count changed pixels.
 
 ---
 
