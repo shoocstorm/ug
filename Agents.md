@@ -964,6 +964,51 @@ changed", round both sides or compare through the array. The same applies to
 `Math.fround` guards in tests: a harness that gets this wrong will confidently
 report the opposite of the truth.
 
+### 10j. A slow interaction is often a slow *frame*
+
+**Split an interaction's latency before optimising it.** Chrome's `event`
+performance entries give the split for free — input delay, processing,
+presentation — and they routinely disagree with intuition. A selection that
+"felt slow" and looked like memory pressure measured:
+
+```
+input delay 1 ms   processing 139 ms   presentation 1,308 ms
+```
+
+Nothing in the JS was worth touching. The response *was* a redraw of 745,964
+links across the viewport, and its cost is **pixels**: the same interaction
+measured 320–528 ms at 1600 × 1000 and 888–1,008 ms at 3400 × 2000. Any fix
+aimed at the handler would have been aimed at 10% of the problem.
+
+```js
+new PerformanceObserver(l => { for (const e of l.getEntries())
+  console.log(e.name, Math.round(e.duration),
+    'delay', Math.round(e.processingStart - e.startTime),
+    'proc',  Math.round(e.processingEnd - e.processingStart),
+    'present', Math.round(e.startTime + e.duration - e.processingEnd));
+}).observe({ type: 'event', durationThreshold: 16, buffered: true });
+```
+
+**And check the viewport when a report does not reproduce.** A user on a large
+display at `devicePixelRatio` 1.8 is running a fill-rate test the default
+harness window never runs. Repeat the measurement at their size before
+concluding the difference is in their data or their session.
+
+### 10k. A frightening heap number is usually garbage, not a leak
+
+Chrome's `Nodes` metric went 5,106 → 54,763 across 24 selections and the heap
+sat at 425 MB, which reads as a leak. It was not: `querySelectorAll('*')`
+stayed at ~2,600 the whole time, and a forced `HeapProfiler.collectGarbage`
+took `Nodes` back to 6,481 and the heap to 327 MB. The 55k were the info
+panel's discarded markup waiting to be collected.
+
+**How to apply:** before chasing a leak, (1) force a GC and re-read — if it
+comes back, it was garbage; (2) compare Chrome's `Nodes` against the live count
+from `querySelectorAll('*')`; (3) check whether the *symptom* actually tracks
+the heap. Here it did not — the interaction cost the same at 302 MB and at
+425 MB, because it was bound by pixels. A large heap is a real cost in GC
+pauses, but it is not automatically the cause of the thing being reported.
+
 ## 11. Record what you learn, here, without being asked
 
 When you find something that would cost the next agent an hour — a measurement

@@ -1129,10 +1129,18 @@
                     && _hlOutlined.every((v, k) => v === outlinedArg[k]));
             if (focusIdx !== _hlFocus || !sameOutlined) {
                 _hlFocus = focusIdx;
-                _hlOutlined = outlinedArg;
+                // **Pass the array we pushed last time when the contents match.**
+                // cosmos.gl compares `outlinedPointIndices` by *identity*, and a
+                // difference there re-runs `updatePointStatus()` — a 403×403
+                // rgba32float rewrite over all 161,725 points. Selecting a
+                // different node changes `focusedPointIndex` but not the
+                // boundary set, so handing over a freshly built array of the
+                // same indices paid 2.6 MB per click for nothing: 355 ms of
+                // `texSubImage2D` across a session of selections.
+                if (!sameOutlined) _hlOutlined = outlinedArg;
                 cosmos.setConfigPartial({
                     focusedPointIndex: focusIdx,
-                    outlinedPointIndices: outlinedArg,
+                    outlinedPointIndices: _hlOutlined,
                 });
             }
 

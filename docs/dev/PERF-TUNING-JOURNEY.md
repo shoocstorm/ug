@@ -15,7 +15,7 @@
 | **Opened** | 2026-08-18 |
 | **Version** | 0.1.16 |
 | **Primary fixture** | `~/.ug/neo4j` — 161,725 nodes / 745,964 edges / 330 MB `graph.json` |
-| **Status** | Rounds 1–4 landed (bar P11.7, deferred). Round 5: **P12.1, P12.3, P12.6, P12.7, P12.8, P12.9, P12.10, P12.11, P12.12, P12.13 landed** (P12.7 half-reverted — see its note); P12.2, P12.4, P12.5 audited. Suite **912/912** |
+| **Status** | Rounds 1–4 landed (bar P11.7, deferred). Round 5: **P12.1, P12.3, P12.6, P12.7, P12.8, P12.9, P12.10, P12.11, P12.12, P12.13, P12.14 landed** (P12.7 half-reverted — see its note); P12.2, P12.4, P12.5 audited. Suite **912/912** |
 
 **Status marks:** ✅ landed and verified · ⬜ open · ⏭️ deferred · ❌ rejected by measurement
 
@@ -680,6 +680,7 @@ browser figure in this file before today measured the 6%.
 | P12.11 | Every hover re-uploads *and* re-allocates all 14.5 MB of colour | heap swing per 60 moves **909 → 34 MB**; sweep CPU **10×** | ✅ |
 | P12.12 | A selected node keeps the page working forever | parked with a selection **28.8% → 3.6%** of a core; click **539 → 291 ms** | ✅ |
 | P12.13 | A whole-graph repaint uploaded as though everything changed | repeat selection CPU **−35%**, heap growth **21 MB → 0** | ✅ |
+| P12.14 | INP climbing on selection — presentation, not memory | a 403×403 texture rewrite per click **→ 0**; the rest is pixels | ✅ |
 
 <a id="p121"></a>
 ### ✅ P12.1 — the catalog renders the whole repository into the DOM at boot
@@ -1555,6 +1556,95 @@ something the user asks for — the way the solo/isolate toggle beside it alread
 is. That is a design decision, and the numbers above are what it costs, not an
 argument for making it.
 
+<a id="p1214"></a>
+### ✅ P12.14 — INP on selection is presentation, and presentation is pixels
+
+Reported as INP climbing across a session — 56 ms, then 552, 744, 888, 1,344,
+1,488 — with the suspicion that it was memory pressure. Chrome's own breakdown
+of the worst one:
+
+| phase | ms |
+| :--- | ---: |
+| input delay | 1 |
+| processing | 139 |
+| **presentation delay** | **1,308** |
+
+So the JS is not the problem; the *frame* is. And the frame's cost is pixels.
+Same repeated-selection script, two window sizes:
+
+| worst interaction, by viewport | presentation |
+| :--- | ---: |
+| 1600 × 1000 | 320–528 ms |
+| 3400 × 2000 | **888–1,008 ms** |
+
+Four times the pixels, two and a half times the presentation — which places a
+1,308 ms frame on a large display at `devicePixelRatio` 1.8 exactly where it
+should be. One selection redraws all 745,964 links across the whole viewport,
+and that redraw *is* the interaction's response.
+
+#### It is not memory pressure, and there is no leak
+
+Worth stating plainly because the heap reading is alarming and misleading.
+Across 24 selections:
+
+| | |
+| :--- | :--- |
+| heap | 302 → ~425 MB, **flat from the 8th click**, 327 MB after a forced GC |
+| live DOM (`querySelectorAll('*')`) | 2,405 → 2,626 |
+| `Nodes` (Chrome's metric) | 5,106 → 54,763, and **6,481 after GC** |
+| everything in page state | bounded — `fxPulses` 0, `focusSet` ≤ 24, `adj`/`nodeById` constant |
+
+The 55k nodes are the info panel's discarded markup awaiting collection, not a
+leak; the user's 1.6 GB is a long session's garbage that V8 had not felt the
+need to collect (14 GC events in 13 s). And presentation cost tracks *pixels*,
+not heap — the same click costs the same at 302 MB and at 425 MB.
+
+#### One real waste, fixed
+
+`texSubImage2D` was back in the trace at **355 ms**, under
+`cosmosApplyHighlight → setConfigPartial → updatePointStatus`. P12.12 had
+already stopped pushing config when nothing changed — but selecting a *different*
+node changes `focusedPointIndex`, and the call then carried a freshly built
+`outlinedPointIndices` array too. cosmos.gl compares that one **by identity**,
+so every selection rewrote the 403×403 `rgba32float` point-status texture over
+all 161,725 points to change a ring.
+
+Fixed by passing back the array instance already pushed when the contents
+match. **Six selections: six texture rewrites → zero.**
+
+#### Two things measured and rejected
+
+- **Dropping links for the selection's own frame** (P12.9's motion LoD applied
+  to a click, so the responding frame draws points only). 992 → 1,032 ms: no
+  improvement. The restore frame lands inside the same presentation window.
+- **The FX overlay being kept live by the selection** — the breathing ring
+  redrawing a full-viewport canvas every frame looked like an obvious suspect
+  at 22 megapixels. Removing it: 992 → 1,008 ms. Not it.
+
+#### What would actually move it, and what it costs
+
+At a large viewport the link draw is **fill-rate bound**, and blending is most
+of it. One full redraw at 3400 × 2000:
+
+| | median |
+| :--- | ---: |
+| full — curved links, arrows, blending | **349 ms** |
+| `curvedLinkSegments` 19 → 5 | 348 |
+| arrows off | 309 |
+| arrows off *and* straight links | 290 |
+| **`linkBlending: false`** | **149 ms** |
+| links not drawn at all | 28 |
+
+`linkBlending: false` is a **2.3× cut to every frame** at this resolution —
+against 6% at 1600 × 913, which is why [P12.9](#p129) dismissed it. It is
+viable: zero-alpha instances are still collapsed, so filtered-out links stay
+hidden (**0 pixels differ**). But alpha is ignored at write time, so the dense
+link mass renders flatter and the focus dimming reads differently: **9–11% of
+pixels change**, up to 503/765 on a channel.
+
+That makes it a decision about what the graph should look like at density, not
+a tuning change — the same shape of question as P12.13's focus-on-click.
+
 ### What the round taught
 
 - **The JS heap is not the tab.** 118 MB of heap sat inside a 1,958 MB
@@ -1747,6 +1837,13 @@ One row per landed item or baseline. Keep the numbers, not just the verdict.
 | 2026-08-29 | P12.13 | repeat selection, CPU / heap | 222–263 ms, **+19–21 MB** | **148–157 ms, 0 MB** | partial upload; widths only when a width moved |
 | 2026-08-29 | P12.13 | comparing a double against a `Float32Array` slot | reported **100.0%** of the buffer changed | write first, compare stored | made the same mistake twice, once in the fix itself |
 | 2026-08-29 | P12.13 | selection correctness | — | **6 of 6, identical with the fast path off** | pixels *and* a float-for-float GPU readback at each step |
+| 2026-08-29 | P12.14 | INP breakdown on selection, user's machine | — | delay 1 / **processing 139** / **presentation 1,308** ms | the frame, not the JS |
+| 2026-08-29 | P12.14 | worst interaction by viewport | 320–528 ms at 1600×1000 | **888–1,008 ms at 3400×2000** | presentation tracks pixels, not heap |
+| 2026-08-29 | P12.14 | heap over 24 selections | — | 302 → 425 MB, **flat**, 327 after GC | live DOM 2,405 → 2,626; no leak |
+| 2026-08-29 | P12.14 | `updatePointStatus` per selection | **1** (403×403 texture) | **0** | a fresh `outlinedPointIndices` array compared by identity |
+| 2026-08-29 | P12.14 | links dropped for the selection's own frame | 992 ms | 1,032 ms | **rejected** — the restore lands in the same window |
+| 2026-08-29 | P12.14 | overlay kept live by the selection | 992 ms | 1,008 ms | **rejected** — not the breathing ring |
+| 2026-08-29 | P12.14 | `linkBlending: false`, full redraw at 3400×2000 | 349 ms | **149 ms** | 2.3× — but 9–11% of pixels change; a look decision |
 
 ---
 

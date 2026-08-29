@@ -474,6 +474,14 @@ too, skipping `updateColor`'s extra `new Float32Array(everything)`.
 >    against the whole-array path. Hide `#fx-overlay` for the pixel comparison
 >    — its flow particles are time-based and differ in phase between runs.
 
+> **At a large viewport the link draw is fill-rate bound, and blending is most
+> of it.** One full redraw at 3400 × 2000 costs 349 ms with `linkBlending` on
+> and **149 ms** with it off — against a 6% difference at 1600 × 913, which is
+> why it was dismissed once. It is what sets INP on a selection: the response
+> to a click *is* a full redraw, and its cost is pixels. Not switched off,
+> because alpha is ignored at write time and the dense link mass then reads
+> flatter (9–11% of pixels change); zero-alpha links do stay hidden. See P12.14.
+
 ### 5.7 Simulation
 
 `simulationDecay` is **a tick count, and lower is faster**. cosmos.gl's own docs
@@ -617,7 +625,12 @@ manager) is hidden until `loadGraph` puts it back. **50.4% → 3%.**
 >    mounted WebGL canvas — collapsing its box resizes the context to nothing
 >    and back through cosmos.gl's `ResizeObserver`. The manager opens over a
 >    live graph, so this is a real path, not a hypothetical.
-> 2. **One** smooth infinite CSS animation is enough to pin the compositor at
+> 2. **`outlinedPointIndices` is compared by identity.** Handing cosmos.gl a
+>    freshly built array of the same indices makes it rewrite the 403×403
+>    point-status texture over all 161,725 points — 355 ms across a session of
+>    selections. `cosmosApplyHighlight` passes back the instance it last pushed
+>    when the contents match; keep it that way.
+> 3. **One** smooth infinite CSS animation is enough to pin the compositor at
 >    the display's refresh rate forever: a single 6 px status dot measured
 >    17.3% of a core. It scales with window area and `will-change` does not
 >    help. `step-end` animations are ~4× cheaper — the blinking cursor stays
