@@ -15,7 +15,7 @@
 | **Opened** | 2026-08-18 |
 | **Version** | 0.1.16 |
 | **Primary fixture** | `~/.ug/neo4j` — 161,725 nodes / 745,964 edges / 330 MB `graph.json` |
-| **Status** | Rounds 1–4 landed (bar P11.7, deferred). Round 5: **P12.1, P12.3, P12.6, P12.7, P12.8, P12.9, P12.10, P12.11, P12.12, P12.13, P12.14, P12.15, P12.16 landed** (P12.7 half-reverted — see its note); P12.2, P12.4, P12.5 audited. Suite **912/912** |
+| **Status** | Rounds 1–4 landed (bar P11.7, deferred). Round 5: **P12.1, P12.3, P12.6, P12.7, P12.8, P12.9, P12.10, P12.11, P12.12, P12.13, P12.14, P12.15, P12.16, P12.17 landed** (P12.7 half-reverted — see its note); P12.2, P12.4, P12.5 audited. Suite **912/912** |
 
 **Status marks:** ✅ landed and verified · ⬜ open · ⏭️ deferred · ❌ rejected by measurement
 
@@ -683,6 +683,7 @@ browser figure in this file before today measured the 6%.
 | P12.14 | INP climbing on selection — presentation, not memory | a 403×403 texture rewrite per click **→ 0**; the rest is pixels | ✅ |
 | P12.15 | `vis.link_blending`, for displays where fill rate is the wall | INP p75 **872 → 248 ms** at 3400×2000; 6.9% of pixels change | ✅ |
 | P12.16 | Every node crossed on the way to another was a full hover | hovers per A→B journey **8 → 2**; a hover that changes nothing now costs nothing | ✅ |
+| P12.17 | The walk animation scanned all 745,964 edges twice per frame | **3.0 → 87.0 fps**; median frame **292 → 8.3 ms** | ✅ |
 
 <a id="p121"></a>
 ### ✅ P12.1 — the catalog renders the whole repository into the DOM at boot
@@ -1748,6 +1749,57 @@ for ratios between two configurations, not for deciding something costs nothing.
 What can be stated without hedging is that the work is gone: four times fewer
 hover commits on a realistic journey, and none at all for a node merely crossed.
 
+<a id="p1217"></a>
+### ✅ P12.17 — the walk scanned every edge, twice, every frame
+
+*"Why does it feel so slow when graph walk in neo4j?"* Because the animation was
+running at **3 frames a second**, and none of it was drawing.
+
+The trace, on the 161,725-node / 745,964-link index:
+
+| | |
+| :--- | ---: |
+| `FireAnimationFrame` | 5,880 ms across **22 frames** — 267 ms each |
+| `fxDrawWalkEdges` (self) | **3,073.7 ms — 46.2%** |
+| `linkParticlesFor` (self) | **2,478.3 ms — 37.3%** |
+| `overlayDraw` (self) | 836.0 ms — 12.6% |
+| `GPUTask` | **20.4 ms** |
+| minor GCs | **342** in 6.9 s |
+
+The GPU had nothing to do. Both hot functions were looking for the walk's edges
+by scanning **all 745,964 of them, every frame** — and `fxDrawWalkEdges` built a
+`"a|b"` key string for each one to test membership, which is where the 342 GCs
+came from. The walk being drawn had **252 edges**.
+
+This is the gap [P12.12](#p1212) left on purpose: the flow loop was fixed for
+hover and selection, and walk and tour were left scanning because they decide by
+node-pair key and route membership rather than edge identity, on the grounds
+that both are transient. Transient is not the same as cheap, and a walk is the
+feature people watch.
+
+Both now iterate `fxWalkEdges()` — the walk's edges as objects, in `cosmosEdges`
+order, rebuilt when the walk takes a hop and reused for every frame in between.
+Cached against the Set **and its size**, because a hop grows the same Set rather
+than replacing it and identity alone would never notice.
+
+| a 3-hop walk, 167 nodes reached, 252 edges | before | after |
+| :--- | ---: | ---: |
+| frames in ~10 s | 30 | **853** |
+| frame rate | **3.0 fps** | **87.0 fps** |
+| median frame | 292.4 ms | **8.3 ms** |
+| p95 frame | 700.1 ms | **8.7 ms** |
+| page CPU | 9,809 ms (99% busy) | **3,491 ms** |
+
+Order matters and is preserved: `cosmosPaint`'s walk branch counts along the
+same list to decide which strands fall inside `FX_MAX_FLOW_LINKS`, and the two
+have to agree about which those are. `scratch/walkcheck.mjs` asserts the cached
+list is identical — same length, same order — to a freshly computed scan at
+every sample as the walk grows (0 → 124 → 252 keys), and that the walk is
+actually drawing.
+
+**The tour still scans.** It decides by route membership, and the same treatment
+applies whenever someone measures it.
+
 ### What the round taught
 
 - **The JS heap is not the tab.** 118 MB of heap sat inside a 1,958 MB
@@ -1790,10 +1842,15 @@ hover commits on a realistic journey, and none at all for a node merely crossed.
   always*. It reported 100% of a buffer changing on every click — an answer
   that looks decisive and would have closed the investigation. Write into the
   array first, then compare the stored values.
-- **The same bug, in a different loop.** `fxDrawFlow` scanning every edge each
-  frame to find the few with particles is P5.1 from Round 1, which was the same
-  scan on hover. Fixing a shape once does not fix it everywhere it occurs;
-  "O(everything) to find O(a few)" is worth grepping for, not just remembering.
+- **The same bug, in a different loop — and then again in the loop next to
+  it.** `fxDrawFlow` scanning every edge each frame to find the few with
+  particles is P5.1 from Round 1, which was the same scan on hover. Fixing that
+  one ([P12.12](#p1212)) *deliberately left* the walk and the tour on the scan
+  path, reasoning that both were transient — and the walk turned out to be
+  running at 3 fps for exactly that reason ([P12.17](#p1217)), in a second
+  function doing the identical thing beside it. When you find "O(everything) to
+  find O(a few)", grep for the shape and fix every instance; and be suspicious
+  of the argument that one of them does not matter. Transient is not cheap.
 - **Look past the transaction to the state it leaves behind.** One click cost
   539 ms — and left the page burning 29% of a core for as long as the node
   stayed selected. The steady state *after* an interaction deserves its own
@@ -1952,6 +2009,9 @@ One row per landed item or baseline. Keep the numbers, not just the verdict.
 | 2026-08-29 | P12.15 | what P12.9 thought blending cost at 1600×913 | 164 → 154 ms | **160 → 81 ms** | the old figure came from a sweep flipping several settings at once |
 | 2026-08-29 | P12.16 | hovers applied travelling A→B (40 moves, ~400 ms) | 8 | **2** | and 40 → 10 at slower pacing, CPU 311 → 127 ms |
 | 2026-08-29 | P12.16 | a hover that changes nothing | full clear path + restyle + redraw | **returns immediately** | the branch every crossed node lands in |
+| 2026-08-29 | P12.17 | graph walk, 3 hops, 252 walked edges | **3.0 fps**, median 292 ms | **87.0 fps**, median **8.3 ms** | GPU was idle; 100% of it was the overlay looking for edges |
+| 2026-08-29 | P12.17 | page CPU over a ~10 s walk | 9,809 ms (99% busy) | **3,491 ms** | and 342 minor GCs from per-edge key strings |
+| 2026-08-29 | P12.17 | cached walk-edge list vs a fresh scan | — | **identical, length and order, at every hop** | 0 → 124 → 252 keys |
 
 ---
 

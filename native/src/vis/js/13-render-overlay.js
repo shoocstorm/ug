@@ -98,6 +98,9 @@
 
         function overlayStop() {
             fxRunning = false;
+            _fxWalkEdges = EMPTY_EDGES;
+            _fxWalkEdgesFor = null;
+            _fxWalkEdgesSize = -1;
             fxLiveUntil = 0;
             fxWasLive = false;
             fxPulses = [];
@@ -343,11 +346,53 @@
         // `state.highlightLinks`, and it is the one that persists.
         function fxFlowCandidates() {
             if (!state.lineFlow) return EMPTY_EDGES;
-            if (state.walkActive) return cosmosEdges;
+            if (state.walkActive) return fxWalkEdges();
             if (typeof tourState !== 'undefined' && tourState && tourState.active) return cosmosEdges;
             return state.highlightLinks;
         }
         const EMPTY_EDGES = [];
+
+        // The walk's edges as objects, in `cosmosEdges` order.
+        //
+        // Both the layer below and the flow loop above used to find them by
+        // scanning **all 745,964 edges every frame**, building a `"a|b"` key
+        // string for each one to test membership against `walkEdgeKeys`. In a
+        // trace of a walk on the neo4j graph that was 3,073 ms inside
+        // `fxDrawWalkEdges` and 2,478 ms inside `linkParticlesFor` — 46% and
+        // 37% of a profile whose frames were 267 ms each. Twenty-two frames in
+        // seven seconds, about 3 fps, with the GPU idle the whole time: none of
+        // it was drawing, all of it was looking. The discarded key strings are
+        // also why the same seven seconds logged 342 minor GCs.
+        //
+        // The set only changes when the walk takes a hop, so the list is built
+        // there and reused for every frame in between.
+        //
+        // Order is `cosmosEdges` order and must stay that way: `cosmosPaint`'s
+        // walk branch counts along the same list to decide which strands the
+        // overlay will get to within `FX_MAX_FLOW_LINKS`, and the two have to
+        // agree about which those are.
+        //
+        // Cached against the Set *and* its size — a hop grows the same Set
+        // rather than replacing it, so identity alone would never notice.
+        let _fxWalkEdges = EMPTY_EDGES;
+        let _fxWalkEdgesFor = null;
+        let _fxWalkEdgesSize = -1;
+
+        function fxWalkEdges() {
+            const keys = state.walkEdgeKeys;
+            if (!keys || !keys.size) return EMPTY_EDGES;
+            if (_fxWalkEdgesFor === keys && _fxWalkEdgesSize === keys.size) return _fxWalkEdges;
+            const out = [];
+            for (const e of cosmosEdges) {
+                const sId = e.source.id || e.source;
+                const tId = e.target.id || e.target;
+                if (keys.has(walkEdgeKey(sId, tId))) out.push(e);
+            }
+            _fxWalkEdges = out;
+            _fxWalkEdgesFor = keys;
+            _fxWalkEdgesSize = keys.size;
+            return out;
+        }
 
         function fxDrawFlow() {
             const ctx = fxCtx;
@@ -606,11 +651,9 @@
             ctx.save();
             ctx.lineCap = 'round';
             let drawn = 0;
-            for (const e of cosmosEdges) {
+            for (const e of fxWalkEdges()) {
                 const sId = e.source.id || e.source;
                 const tId = e.target.id || e.target;
-                const key = sId < tId ? sId + '|' + tId : tId + '|' + sId;
-                if (!state.walkEdgeKeys.has(key)) continue;
                 if (++drawn > FX_MAX_FLOW_LINKS) break;
                 const s = state.nodeById.get(sId);
                 const t = state.nodeById.get(tId);

@@ -594,10 +594,19 @@ nothing, and it does not stop: **29% of a core for as long as the selection
 lasts**, against 1.4% with nothing selected. It now iterates
 `state.highlightLinks` directly (**3.6%**).
 
-A walk and a tour still scan, because they decide by node-pair key and by route
-membership rather than by edge identity — both are transient and already
-redrawing for other reasons. If either ever becomes a resting state, it needs
-the same treatment.
+A **tour** still scans, because it decides by route membership rather than edge
+identity. A **walk** does not, any more: `fxWalkEdges()` holds its edges as
+objects in `cosmosEdges` order, rebuilt on a hop and reused for every frame in
+between, and both the flow loop and `fxDrawWalkEdges` iterate that. Scanning
+cost the walk animation **3 fps** — 267 ms a frame, with the GPU idle and 342
+minor GCs from the `"a|b"` key string built per edge per frame — against
+**87 fps** now (P12.17).
+
+> **The order is load-bearing.** `cosmosPaint`'s walk branch counts along the
+> same list to decide which strands the overlay will reach within
+> `FX_MAX_FLOW_LINKS`; the two have to agree. And the cache is keyed on the Set
+> **and its size** — a hop grows the same Set rather than replacing it, so
+> identity alone would never invalidate.
 
 > **Trap worth knowing.** This is [P5.1](dev/PERF-TUNING-JOURNEY.md) again, in
 > a different loop — the original was the same scan on hover. "O(everything) to

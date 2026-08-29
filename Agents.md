@@ -869,6 +869,12 @@ been up for a day it says almost nothing about now. Take CPU-*time* deltas
 routinely the largest single consumer, while `usedJSHeapSize`-style
 tab-scoped metrics cannot see it at all.
 
+**"It is transient" is not a reason to leave a hot loop alone.** A per-frame
+scan over every edge was fixed for hover and selection and deliberately left in
+place for the walk and the tour, because those are short-lived. The walk then
+ran its whole animation at **3 fps** — 267 ms a frame with the GPU idle — for
+exactly that reason. Short-lived work is still work the user is watching.
+
 **Work you removed is not always time you can measure.** Cutting the hover
 commits on a journey from 8 to 2 is unarguable — the work is gone — but the
 frame times did not move in the harness, because cosmos.gl coalesces render
