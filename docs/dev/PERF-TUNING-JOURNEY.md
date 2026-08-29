@@ -15,7 +15,7 @@
 | **Opened** | 2026-08-18 |
 | **Version** | 0.1.16 |
 | **Primary fixture** | `~/.ug/neo4j` — 161,725 nodes / 745,964 edges / 330 MB `graph.json` |
-| **Status** | Rounds 1–4 landed (bar P11.7, deferred). Round 5: **P12.1, P12.3, P12.6, P12.7, P12.8, P12.9, P12.10, P12.11, P12.12, P12.13, P12.14, P12.15, P12.16, P12.17 landed** (P12.7 half-reverted — see its note); P12.2, P12.4, P12.5 audited. Suite **912/912** |
+| **Status** | Rounds 1–4 landed (bar P11.7, deferred). Round 5: **P12.1, P12.3, P12.6, P12.7, P12.8, P12.9, P12.10, P12.11, P12.12, P12.13, P12.14, P12.15, P12.16, P12.17, P12.18 landed** (P12.7 half-reverted — see its note); P12.2, P12.4, P12.5 audited. Suite **912/912** |
 
 **Status marks:** ✅ landed and verified · ⬜ open · ⏭️ deferred · ❌ rejected by measurement
 
@@ -684,6 +684,7 @@ browser figure in this file before today measured the 6%.
 | P12.15 | `vis.link_blending`, for displays where fill rate is the wall | INP p75 **872 → 248 ms** at 3400×2000; 6.9% of pixels change | ✅ |
 | P12.16 | Every node crossed on the way to another was a full hover | hovers per A→B journey **8 → 2**; a hover that changes nothing now costs nothing | ✅ |
 | P12.17 | The walk animation scanned all 745,964 edges twice per frame | **3.0 → 87.0 fps**; median frame **292 → 8.3 ms** | ✅ |
+| P12.18 | The tour did the same, for a route of one edge | **8.2 → 120.2 fps**; CPU over 6 s **6,000 → 265 ms** | ✅ |
 
 <a id="p121"></a>
 ### ✅ P12.1 — the catalog renders the whole repository into the DOM at boot
@@ -1797,8 +1798,49 @@ list is identical — same length, same order — to a freshly computed scan at
 every sample as the walk grows (0 → 124 → 252 keys), and that the walk is
 actually drawing.
 
-**The tour still scans.** It decides by route membership, and the same treatment
-applies whenever someone measures it.
+**The tour still scans** — fixed the same day, in [P12.18](#p1218).
+
+<a id="p1218"></a>
+### ✅ P12.18 — and the tour, which was the same thing again
+
+[P12.17](#p1217) fixed the walk and left the tour scanning, noting it as the
+remaining instance. It is the same bug with the same cost: with a route on the
+canvas, the flow loop asked `linkParticlesFor` about **all 745,964 edges every
+frame**, and each answer built a key string to test against `tourState.routeEdges`.
+
+Measured with a route standing on the canvas — the route built through the
+product's own `buildTourRoute`, from real edges of the loaded graph, with only
+the LLM plan synthesised:
+
+| a route of **1 edge**, on a 745,964-link canvas | before | after |
+| :--- | ---: | ---: |
+| frame rate | **8.2 fps** | **120.2 fps** |
+| median frame | 124.9 ms | **8.3 ms** |
+| p95 frame | 133.4 ms | **9.0 ms** |
+| page CPU over 6 s | 6,000 ms (100% busy) | **265 ms** |
+
+A route of *one edge* cost 125 ms a frame, because finding that one edge meant
+looking at three quarters of a million.
+
+The two now share `fxCachedEdges(cache, keys, keyOf)` — the same list, order and
+invalidation rule, with the key function passed in because the walk's key sorts
+its endpoints and the tour's stores both directions. Identity alone would do for
+the tour, which replaces its Set per route; the size check is there for the
+walk, which grows one.
+
+#### A test that accused the code
+
+The first version of the check re-implemented the tour's key as `a + ' ' + b`,
+compared its own scan against the cache, found nothing, and reported the cache
+wrong. `edgeKey` joins with **`'\x00'`** — and reading the source through the
+shell showed the NUL as a space, which is also why `grep` calls `07-tour.js` a
+binary file. The reference now calls the product's `edgeKey` rather than
+guessing it.
+
+**A test that reconstructs the thing it is testing is testing its own
+reconstruction.** Reach for the real function, and when a check disagrees with
+the code, suspect the check first — here the cache had found exactly the 9 edges
+of a 9-edge route, which was the tell.
 
 ### What the round taught
 
@@ -2012,6 +2054,8 @@ One row per landed item or baseline. Keep the numbers, not just the verdict.
 | 2026-08-29 | P12.17 | graph walk, 3 hops, 252 walked edges | **3.0 fps**, median 292 ms | **87.0 fps**, median **8.3 ms** | GPU was idle; 100% of it was the overlay looking for edges |
 | 2026-08-29 | P12.17 | page CPU over a ~10 s walk | 9,809 ms (99% busy) | **3,491 ms** | and 342 minor GCs from per-edge key strings |
 | 2026-08-29 | P12.17 | cached walk-edge list vs a fresh scan | — | **identical, length and order, at every hop** | 0 → 124 → 252 keys |
+| 2026-08-29 | P12.18 | tour route of 1 edge on a 745,964-link canvas | **8.2 fps**, median 124.9 ms | **120.2 fps**, median **8.3 ms** | CPU over 6 s 6,000 → 265 ms |
+| 2026-08-29 | P12.18 | cached route-edge list vs a fresh scan | — | **identical across two routes**, empty when the tour ends | reference must call the product's `edgeKey`, not guess it |
 
 ---
 

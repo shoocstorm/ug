@@ -594,19 +594,31 @@ nothing, and it does not stop: **29% of a core for as long as the selection
 lasts**, against 1.4% with nothing selected. It now iterates
 `state.highlightLinks` directly (**3.6%**).
 
-A **tour** still scans, because it decides by route membership rather than edge
-identity. A **walk** does not, any more: `fxWalkEdges()` holds its edges as
-objects in `cosmosEdges` order, rebuilt on a hop and reused for every frame in
-between, and both the flow loop and `fxDrawWalkEdges` iterate that. Scanning
-cost the walk animation **3 fps** — 267 ms a frame, with the GPU idle and 342
-minor GCs from the `"a|b"` key string built per edge per frame — against
-**87 fps** now (P12.17).
+Neither a **walk** nor a **tour** scans any more. `fxCachedEdges` holds a mode's
+own edges as objects in `cosmosEdges` order, rebuilt when the mode's key set
+changes and reused for every frame in between; `fxWalkEdges()` and
+`fxTourEdges()` are the two callers, differing only in the key function. Both
+the flow loop and `fxDrawWalkEdges` iterate that.
 
-> **The order is load-bearing.** `cosmosPaint`'s walk branch counts along the
-> same list to decide which strands the overlay will reach within
-> `FX_MAX_FLOW_LINKS`; the two have to agree. And the cache is keyed on the Set
-> **and its size** — a hop grows the same Set rather than replacing it, so
-> identity alone would never invalidate.
+Scanning cost the walk animation **3 fps** — 267 ms a frame, GPU idle, 342 minor
+GCs from the key string built per edge per frame — against **87 fps** now
+(P12.17). For a tour it was **8.2 fps for a route of one edge**, against
+**120 fps** (P12.18).
+
+> **Traps worth knowing.**
+>
+> 1. **The order is load-bearing.** `cosmosPaint`'s walk branch counts along the
+>    same list to decide which strands the overlay will reach within
+>    `FX_MAX_FLOW_LINKS`; the two have to agree.
+> 2. The cache is keyed on the Set **and its size** — a walk hop grows the same
+>    Set rather than replacing it, so identity alone would never invalidate. A
+>    tour replaces its Set per route, so identity would be enough there.
+> 3. **The two key functions are different and neither is guessable.** The walk
+>    sorts its endpoints (`a|b`); the tour joins with a **NUL** (`a\0b`) and
+>    stores both directions. That NUL is why `grep` reports `07-tour.js` as a
+>    binary file — use `grep -a` — and why reading the source through a shell
+>    can show the separator as a space. Pass the real key function; never
+>    re-implement it, in product code or in a test.
 
 > **Trap worth knowing.** This is [P5.1](dev/PERF-TUNING-JOURNEY.md) again, in
 > a different loop — the original was the same scan on hover. "O(everything) to

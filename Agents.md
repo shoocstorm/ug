@@ -869,6 +869,15 @@ been up for a day it says almost nothing about now. Take CPU-*time* deltas
 routinely the largest single consumer, while `usedJSHeapSize`-style
 tab-scoped metrics cannot see it at all.
 
+**A test that reconstructs the thing it is testing is testing its own
+reconstruction.** A check written to validate a cached edge list re-implemented
+the key function as `a + ' ' + b`, found nothing, and reported the code under
+test as broken. The real `edgeKey` joins with a **NUL** — and reading the source
+through a shell displayed that NUL as a space, which is also why `grep` calls
+the file binary. Call the product's function from the test; and when a check
+disagrees with the code, suspect the check first. The tell here was that the
+"wrong" cache had found exactly the 9 edges of a 9-edge route.
+
 **"It is transient" is not a reason to leave a hot loop alone.** A per-frame
 scan over every edge was fixed for hover and selection and deliberately left in
 place for the walk and the tour, because those are short-lived. The walk then

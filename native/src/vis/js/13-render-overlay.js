@@ -98,9 +98,11 @@
 
         function overlayStop() {
             fxRunning = false;
-            _fxWalkEdges = EMPTY_EDGES;
-            _fxWalkEdgesFor = null;
-            _fxWalkEdgesSize = -1;
+            for (const cache of [_fxWalkCache, _fxTourCache]) {
+                cache.list = EMPTY_EDGES;
+                cache.forSet = null;
+                cache.size = -1;
+            }
             fxLiveUntil = 0;
             fxWasLive = false;
             fxPulses = [];
@@ -347,51 +349,68 @@
         function fxFlowCandidates() {
             if (!state.lineFlow) return EMPTY_EDGES;
             if (state.walkActive) return fxWalkEdges();
-            if (typeof tourState !== 'undefined' && tourState && tourState.active) return cosmosEdges;
+            if (typeof tourState !== 'undefined' && tourState && tourState.active) return fxTourEdges();
             return state.highlightLinks;
         }
         const EMPTY_EDGES = [];
 
-        // The walk's edges as objects, in `cosmosEdges` order.
+        // A mode's own edges as objects, in `cosmosEdges` order.
         //
-        // Both the layer below and the flow loop above used to find them by
-        // scanning **all 745,964 edges every frame**, building a `"a|b"` key
-        // string for each one to test membership against `walkEdgeKeys`. In a
-        // trace of a walk on the neo4j graph that was 3,073 ms inside
-        // `fxDrawWalkEdges` and 2,478 ms inside `linkParticlesFor` — 46% and
-        // 37% of a profile whose frames were 267 ms each. Twenty-two frames in
-        // seven seconds, about 3 fps, with the GPU idle the whole time: none of
-        // it was drawing, all of it was looking. The discarded key strings are
-        // also why the same seven seconds logged 342 minor GCs.
+        // The walk and the tour both name their edges by *key* — a string built
+        // from the two endpoint ids — so the only way to turn that into edge
+        // objects is to walk the edge list and test each one. Doing it per
+        // frame is what the overlay used to do, for **all 745,964 of them**,
+        // building a fresh key string for every edge on every frame just to ask
+        // whether it belonged.
         //
-        // The set only changes when the walk takes a hop, so the list is built
-        // there and reused for every frame in between.
+        // Traced on a walk over the neo4j graph: `fxDrawWalkEdges` 3,073 ms
+        // self and `linkParticlesFor` 2,478 ms — 46% and 37% of a profile whose
+        // frames were 267 ms each, twenty-two frames in seven seconds, about
+        // 3 fps, with the GPU idle throughout. None of it was drawing; all of
+        // it was looking. The discarded key strings are also why those seven
+        // seconds logged 342 minor garbage collections. The walk being drawn
+        // had 252 edges.
+        //
+        // A route is fixed for the life of a tour and a walk's set only changes
+        // when it takes a hop, so the list is built then and reused for every
+        // frame in between.
         //
         // Order is `cosmosEdges` order and must stay that way: `cosmosPaint`'s
         // walk branch counts along the same list to decide which strands the
         // overlay will get to within `FX_MAX_FLOW_LINKS`, and the two have to
         // agree about which those are.
         //
-        // Cached against the Set *and* its size — a hop grows the same Set
-        // rather than replacing it, so identity alone would never notice.
-        let _fxWalkEdges = EMPTY_EDGES;
-        let _fxWalkEdgesFor = null;
-        let _fxWalkEdgesSize = -1;
-
-        function fxWalkEdges() {
-            const keys = state.walkEdgeKeys;
+        // Cached against the Set *and* its size. Identity alone is enough for
+        // the tour, which replaces its Set wholesale — but a walk hop *grows*
+        // the same Set, and identity would never notice that.
+        function fxCachedEdges(cache, keys, keyOf) {
             if (!keys || !keys.size) return EMPTY_EDGES;
-            if (_fxWalkEdgesFor === keys && _fxWalkEdgesSize === keys.size) return _fxWalkEdges;
+            if (cache.forSet === keys && cache.size === keys.size) return cache.list;
             const out = [];
             for (const e of cosmosEdges) {
                 const sId = e.source.id || e.source;
                 const tId = e.target.id || e.target;
-                if (keys.has(walkEdgeKey(sId, tId))) out.push(e);
+                if (keys.has(keyOf(sId, tId))) out.push(e);
             }
-            _fxWalkEdges = out;
-            _fxWalkEdgesFor = keys;
-            _fxWalkEdgesSize = keys.size;
+            cache.list = out;
+            cache.forSet = keys;
+            cache.size = keys.size;
             return out;
+        }
+
+        const _fxWalkCache = { list: EMPTY_EDGES, forSet: null, size: -1 };
+        const _fxTourCache = { list: EMPTY_EDGES, forSet: null, size: -1 };
+
+        function fxWalkEdges() {
+            return fxCachedEdges(_fxWalkCache, state.walkEdgeKeys, walkEdgeKey);
+        }
+
+        // The tour's keys are unsorted and stored in both directions, so its
+        // own `edgeKey` is the one that has to be used here — not the walk's,
+        // which sorts.
+        function fxTourEdges() {
+            const t = (typeof tourState !== 'undefined' && tourState) ? tourState : null;
+            return fxCachedEdges(_fxTourCache, t && t.routeEdges, edgeKey);
         }
 
         function fxDrawFlow() {
