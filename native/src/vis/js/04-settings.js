@@ -434,6 +434,12 @@
                 },
                 hint: 'How overlapping links are drawn. On, they add together, so a dense bundle glows and depth reads through the tangle. Off, each strand is drawn opaque over the last — flatter, and the single biggest saving there is at high resolution: a full redraw of a 746k-link graph costs 349 ms blended and 149 ms unblended at 3400×2000, which is most of the delay between clicking a node and seeing the result. It halves the link draw at any size, but on a smaller window that draw is not what you are waiting on, so the interaction barely changes. Filtered-out links stay hidden either way.',
             },
+            'vis.hover_delay_ms': {
+                label: 'Hover delay',
+                hint: 'How long the pointer has to rest on a node before it is hovered. Moving from one node to another crosses everything in between, and each crossing is a highlight recalculation and a redraw of the whole canvas — work for nodes you were only travelling over. A short wait collapses the whole journey into one hover, where you stopped. 0 hovers immediately.',
+                num: { step: '10', min: '0', max: '2000' },
+                unit: 'ms',
+            },
             'graph.server_mode_bytes': {
                 label: 'Server mode threshold (graph.json size)',
                 hint: 'How the browser gets the graph. Past this size of graph.json the page no longer downloads the file — it loads a slim node index and asks this server for edges and neighbourhoods on demand (server mode). Below it the whole file is served and the browser renders everything itself (local mode). 50 MB out of the box; lower it to keep big files out of the browser tab, raise it for graphs you want fully client-side. A graph served this way always opens in solo view (Visualization section), whatever the solo threshold says — its edges live on the server.',

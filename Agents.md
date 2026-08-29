@@ -869,6 +869,14 @@ been up for a day it says almost nothing about now. Take CPU-*time* deltas
 routinely the largest single consumer, while `usedJSHeapSize`-style
 tab-scoped metrics cannot see it at all.
 
+**Work you removed is not always time you can measure.** Cutting the hover
+commits on a journey from 8 to 2 is unarguable — the work is gone — but the
+frame times did not move in the harness, because cosmos.gl coalesces render
+requests into one per frame and a headless redraw is cheap next to the
+pointer's pacing. Report both halves: what was removed, and where the removal
+does and does not show. Claiming a smoothness win you could not measure is how
+a real improvement becomes an unverifiable one.
+
 **Change one setting per measurement.** A sweep that flips several related
 options in sequence will misattribute: turning `linkBlending` off inside such a
 sweep read as a 6% saving and got the option dismissed for a round; a dedicated

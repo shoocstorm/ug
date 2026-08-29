@@ -76,7 +76,82 @@
             return !other || nodeVisibleFor(other);
         }
 
-        function handleNodeHover(d, prev) {
+        // ── Hover, on a short dwell ─────────────────────────
+        //
+        // Moving from one node to another crosses everything in between, and
+        // at 161,725 nodes that is a lot of noding. Each crossing used to be a
+        // full hover: recompute the highlight sets, restyle, and — because a
+        // restyle asks for a frame — **a full redraw of 745,964 links**. On a
+        // large display that is 150–350 ms each, so a single deliberate move
+        // from A to B queued a dozen of them and the pointer arrived long
+        // before the picture did. None of those intermediate hovers was asked
+        // for; the user was travelling, not reading.
+        //
+        // So an arrival waits. `HOVER_DWELL_MS` of the pointer staying on the
+        // same node before anything is drawn, and a new target replaces the
+        // pending one rather than queueing behind it — a sweep of any length
+        // costs exactly one hover, at the end, where the pointer stopped.
+        //
+        // Leaving is *not* delayed: it is already free, because of the guard
+        // below. Nothing was committed while sweeping, so there is nothing to
+        // clear, and the clear returns without touching the renderer. That
+        // also keeps the programmatic clears — a walk starting, a renderer
+        // being disposed — synchronous, which they need to be.
+        //
+        // Short enough not to read as lag: a pointer in transit spends well
+        // under 50 ms on each node it crosses, and a hand that has stopped
+        // does not notice 90. Settable — how long a hover should wait is a
+        // matter of hand and of how expensive a frame is on the display in
+        // front of you. `vis.hover_delay_ms`, 0 to hover immediately.
+        const HOVER_DWELL_DEFAULT_MS = 90;
+
+        function hoverDwellMs() {
+            const raw = state.capabilities && state.capabilities.vis
+                && state.capabilities.vis.hover_delay_ms;
+            const n = parseInt(raw, 10);
+            return Number.isFinite(n) && n >= 0 ? n : HOVER_DWELL_DEFAULT_MS;
+        }
+
+        let _hoverPending = null;
+        let _hoverTimer = null;
+
+        function cancelPendingHover() {
+            if (_hoverTimer === null) return;
+            clearTimeout(_hoverTimer);
+            _hoverTimer = null;
+            _hoverPending = null;
+        }
+
+        function handleNodeHover(d) {
+            cancelPendingHover();
+            // Nothing to do, and saying so is the whole point: during a sweep
+            // this is the branch that every crossed node ends up in, and it is
+            // what makes the intermediate hovers free rather than merely
+            // delayed. Without it, "leave a node you never entered" still ran
+            // a restyle and asked for a redraw.
+            if (applyNodeHoverIsNoop(d)) return;
+            if (!d) { applyNodeHover(null); return; }
+            const dwell = hoverDwellMs();
+            if (dwell <= 0) { applyNodeHover(d); return; }
+            _hoverPending = d;
+            _hoverTimer = setTimeout(() => {
+                _hoverTimer = null;
+                const node = _hoverPending;
+                _hoverPending = null;
+                if (node) applyNodeHover(node);
+            }, dwell);
+        }
+
+        // Would this hover change anything the renderer draws?
+        function applyNodeHoverIsNoop(d) {
+            const cur = state._hoverNode;
+            if (d && cur && d.id === cur.id) return true;
+            if (!d && !cur && state.highlightNodes.size === 0
+                && state.highlightLinks.size === 0) return true;
+            return false;
+        }
+
+        function applyNodeHover(d) {
             // Suppress hovers raycast from a stale pointer position while the
             // user is actually working in a panel (see pointerOverCanvas).
             if (d && !pointerOverCanvas()) d = null;

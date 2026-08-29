@@ -494,6 +494,16 @@ too, skipping `updateColor`'s extra `new Float32Array(everything)`.
 > sweep that changed several link settings in sequence read this as a 6% saving
 > and got it dismissed for a round. See P12.14 / P12.15.
 
+> **Hover waits for the pointer to stop.** `vis.hover_delay_ms` (90 ms
+> default, 0 to hover immediately): a new target replaces the pending one, so
+> travelling from one node to another costs one hover at the end rather than
+> one per node crossed — 8 → 2 on a 400 ms journey. Leaving is *not* delayed,
+> because `handleNodeHover` returns immediately when the hover would change
+> nothing, which is the branch every crossed node lands in; without that guard
+> the intermediate hovers would be delayed rather than removed, and the
+> programmatic clears (a walk starting, a renderer disposed) would stop being
+> synchronous.
+
 ### 5.7 Simulation
 
 `simulationDecay` is **a tick count, and lower is faster**. cosmos.gl's own docs

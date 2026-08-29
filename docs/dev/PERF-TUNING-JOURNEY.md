@@ -15,7 +15,7 @@
 | **Opened** | 2026-08-18 |
 | **Version** | 0.1.16 |
 | **Primary fixture** | `~/.ug/neo4j` — 161,725 nodes / 745,964 edges / 330 MB `graph.json` |
-| **Status** | Rounds 1–4 landed (bar P11.7, deferred). Round 5: **P12.1, P12.3, P12.6, P12.7, P12.8, P12.9, P12.10, P12.11, P12.12, P12.13, P12.14, P12.15 landed** (P12.7 half-reverted — see its note); P12.2, P12.4, P12.5 audited. Suite **912/912** |
+| **Status** | Rounds 1–4 landed (bar P11.7, deferred). Round 5: **P12.1, P12.3, P12.6, P12.7, P12.8, P12.9, P12.10, P12.11, P12.12, P12.13, P12.14, P12.15, P12.16 landed** (P12.7 half-reverted — see its note); P12.2, P12.4, P12.5 audited. Suite **912/912** |
 
 **Status marks:** ✅ landed and verified · ⬜ open · ⏭️ deferred · ❌ rejected by measurement
 
@@ -682,6 +682,7 @@ browser figure in this file before today measured the 6%.
 | P12.13 | A whole-graph repaint uploaded as though everything changed | repeat selection CPU **−35%**, heap growth **21 MB → 0** | ✅ |
 | P12.14 | INP climbing on selection — presentation, not memory | a 403×403 texture rewrite per click **→ 0**; the rest is pixels | ✅ |
 | P12.15 | `vis.link_blending`, for displays where fill rate is the wall | INP p75 **872 → 248 ms** at 3400×2000; 6.9% of pixels change | ✅ |
+| P12.16 | Every node crossed on the way to another was a full hover | hovers per A→B journey **8 → 2**; a hover that changes nothing now costs nothing | ✅ |
 
 <a id="p121"></a>
 ### ✅ P12.1 — the catalog renders the whole repository into the DOM at boot
@@ -1694,6 +1695,59 @@ identically (verified at 0 pixels difference).
 > high resolution. `WIN=3400,2000` in the scratch harness, or a real large
 > display.
 
+<a id="p1216"></a>
+### ✅ P12.16 — hover waits for the pointer to stop
+
+The user's observation, and it is the right one: *"user might move from node a to
+hover node b, but it will go through lots of nodes in between — the hover events
+triggered for those in-between nodes are wasted."*
+
+They are. Each crossing recomputed the highlight sets, restyled, and asked for a
+frame — and on a large display a frame is a redraw of 745,964 links. The nodes
+crossed on the way were never being read; the hand was travelling.
+
+**Two changes, and the smaller one matters as much.**
+
+*A hover that changes nothing now does nothing.* `handleNodeHover(null)` used to
+run the whole clear path — copy the highlight sets, empty them, restyle with the
+union — even when nothing was hovered and the sets were already empty. That is
+the branch every crossed node ends in, so without the guard the intermediate
+hovers would have been merely *delayed*, not removed.
+
+*And an arrival waits for the pointer to settle.* `vis.hover_delay_ms`, default
+**90 ms**, 0 to hover immediately. A new target replaces the pending one rather
+than queueing behind it, so a sweep of any length costs one hover, at the end,
+where the pointer stopped. Leaving is not delayed — it is already free, thanks
+to the guard above, which also keeps the programmatic clears (a walk starting, a
+renderer being disposed) synchronous.
+
+Travelling between two nodes across the dense middle, 40 pointer moves in
+~400 ms — a deliberate hand movement:
+
+| | immediate | 90 ms dwell |
+| :--- | ---: | ---: |
+| hovers actually applied | 8 | **2** |
+| page CPU | 58 ms | 58 ms |
+| frames over 16.7 ms | 9 | 9 |
+
+And with the harness pacing moves more slowly (~85 ms apart, which is what
+waiting for each CDP ack does):
+
+| | immediate | 90 ms dwell |
+| :--- | ---: | ---: |
+| hovers applied | 40 | **10** |
+| page CPU | 311 ms | **127 ms** |
+
+**What is honestly not shown here is a frame-smoothness win.** cosmos.gl's
+`requestRender` coalesces — many restyles inside one frame produce one redraw —
+so in a headless window, where a redraw is cheap relative to the pointer's
+pacing, dropping 8 hovers to 2 does not change the frame times. The saving is
+real where a redraw *is* the frame, which is the large display this came from,
+and that is the same caveat as [§10h](#rejected--deferred)'s: headless is good
+for ratios between two configurations, not for deciding something costs nothing.
+What can be stated without hedging is that the work is gone: four times fewer
+hover commits on a realistic journey, and none at all for a node merely crossed.
+
 ### What the round taught
 
 - **The JS heap is not the tab.** 118 MB of heap sat inside a 1,958 MB
@@ -1893,6 +1947,11 @@ One row per landed item or baseline. Keep the numbers, not just the verdict.
 | 2026-08-29 | P12.14 | links dropped for the selection's own frame | 992 ms | 1,032 ms | **rejected** — the restore lands in the same window |
 | 2026-08-29 | P12.14 | overlay kept live by the selection | 992 ms | 1,008 ms | **rejected** — not the breathing ring |
 | 2026-08-29 | P12.14 | `linkBlending: false`, full redraw at 3400×2000 | 349 ms | **149 ms** | 2.3× — but 9–11% of pixels change; a look decision |
+| 2026-08-29 | P12.15 | `vis.link_blending` off, 3400×2000 | INP p75 872 ms | **248 ms** | full redraw 349 → 149; presentation 840 → 247 |
+| 2026-08-29 | P12.15 | `vis.link_blending` off, 1600×1000 | INP p75 296 ms | 280 ms | full redraw 160 → **81 ms** — half the draw, but not what you wait on |
+| 2026-08-29 | P12.15 | what P12.9 thought blending cost at 1600×913 | 164 → 154 ms | **160 → 81 ms** | the old figure came from a sweep flipping several settings at once |
+| 2026-08-29 | P12.16 | hovers applied travelling A→B (40 moves, ~400 ms) | 8 | **2** | and 40 → 10 at slower pacing, CPU 311 → 127 ms |
+| 2026-08-29 | P12.16 | a hover that changes nothing | full clear path + restyle + redraw | **returns immediately** | the branch every crossed node lands in |
 
 ---
 

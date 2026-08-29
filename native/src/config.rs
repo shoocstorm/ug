@@ -69,6 +69,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
     ConfigKey { name: "vis.three_d_max_elements", section: "vis", field: "threeDMaxElements", flag: "", kind: Kind::U32, min: 100, secret: false, desc: "max nodes/edges the 3D engine draws whole; above it auto switches to the 2D engine and 3D solo-passes neighbourhoods" },
     ConfigKey { name: "vis.solo_threshold", section: "vis", field: "soloThreshold", flag: "", kind: Kind::U32, min: 1, secret: false, desc: "nodes/edges past which the page opens in solo mode (the 2D engine's ceiling)" },
     ConfigKey { name: "vis.link_blending", section: "vis", field: "linkBlending", flag: "", kind: Kind::Enum(&["on", "off"]), min: 0, secret: false, desc: "additive blending for links in the 2D engine: richer where strands overlap, but the single biggest per-frame cost at high resolution (off is ~2.3x cheaper at 3400x2000)" },
+    ConfigKey { name: "vis.hover_delay_ms", section: "vis", field: "hoverDelayMs", flag: "", kind: Kind::U32, min: 0, secret: false, desc: "how long the pointer must rest on a node before it is hovered; collapses the nodes crossed on the way from one to another into no work at all (0 = hover immediately)" },
     ConfigKey { name: "graph.server_mode_bytes", section: "graph", field: "serverModeBytes", flag: "", kind: Kind::U64, min: 1024, secret: false, desc: "graph.json bytes at/above which the browser is served the slim node index instead of the whole file (server mode)" },
 ];
 
@@ -255,6 +256,8 @@ pub(crate) fn default_for(key: &ConfigKey) -> Option<String> {
         "vis.three_d_max_elements" => Some("3000".to_string()),
         // Mirrors SOLO_THRESHOLD in native/src/vis/js/16-solo-view.js.
         "vis.solo_threshold" => Some("200000".to_string()),
+        // Mirrors HOVER_DWELL_DEFAULT_MS in native/src/vis/js/14-interaction.js.
+        "vis.hover_delay_ms" => Some("90".to_string()),
         // Mirrors LINK_BLENDING_DEFAULT in native/src/vis/js/12-render-cosmos.js.
         "vis.link_blending" => Some("on".to_string()),
         // Mirrors GRAPH_SERVER_MODE_BYTES in native/src/serve.rs.
