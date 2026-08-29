@@ -909,6 +909,11 @@ and nothing about the call site says how much it costs. It looks like a setter.
 - Check whether the array is used **by reference** (`pointColors =
   inputPointColors`) or copied and reordered. By reference means index `i` maps
   to a known byte range and a partial write is the same bytes, minus the rest.
+- **A whole-graph repaint is not a whole-graph change.** The paint loop is
+  already visiting every entry, so it costs one comparison each to know what
+  actually moved — and then the same code can take the partial path when little
+  did and the whole-buffer path when a lot did, without knowing anything about
+  *why*. Selecting a second node moved 318 of 907,689 entries.
 - The same applies to *config* setters, not just data ones. Pushing a freshly
   built array of the same indices through cosmos.gl's `setConfigPartial` made
   it rewrite a 403×403 point-status texture — 233 ms — on every restyle,
@@ -925,6 +930,39 @@ and nothing about the call site says how much it costs. It looks like a setter.
 - Watch the heap, not just the clock. Allocation churn of this size shows up as
   a swing of hundreds of MB long before it shows up as a slow frame — see
   [§10d](#10d-allocation-churn-is-a-cpu-cost-not-a-memory-one).
+
+### 10i. `Float32Array` makes "did this change?" lie
+
+**A computed `double` almost never equals the `float32` it was stored as.** So
+the obvious way to ask whether a buffer entry changed —
+
+```js
+if (colors[k] !== r) changed++;          // wrong: 1.4 !== Math.fround(1.4)
+```
+
+— answers *yes* for nearly every finite value, whether or not anything moved.
+Measured that way, one node selection appeared to change **100.0% of both
+colour buffers**, which is exactly the conclusion that stops an investigation:
+"it really does all change, nothing to do here."
+
+Write first and compare the stored values, which is exact and costs nothing:
+
+```js
+const o = colors[k];
+colors[k] = r;
+if (o !== colors[k]) changed++;          // both sides are float32 now
+```
+
+The real answer was 122 of 161,725 point colours and 196 of 745,964 link
+colours. I then made the identical mistake a second time in the same change, in
+a link-width check, where it silently forced every restyle down the slow path —
+found only because instrumentation printed `widths: true` on a click that
+cannot change a width.
+
+**How to apply:** any time a typed array is the source of truth for "what
+changed", round both sides or compare through the array. The same applies to
+`Math.fround` guards in tests: a harness that gets this wrong will confidently
+report the opposite of the truth.
 
 ## 11. Record what you learn, here, without being asked
 

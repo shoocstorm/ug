@@ -280,13 +280,24 @@
         // of `cosmosPaint` so a scoped restyle can repaint the handful of
         // entries a hover changed instead of all 161,725 of them — see the
         // `scope` argument on `restyle`.
+        // Returns whether the entry's four floats actually moved.
+        //
+        // The comparison is made **through the buffer**, not against the
+        // computed doubles. `colors` is a Float32Array, so `colors[k] !== r`
+        // is true for almost every finite double even when nothing changed —
+        // measured that way, a click appeared to alter 100.0% of both buffers,
+        // which is exactly the wrong conclusion. Writing first and comparing
+        // the stored values costs nothing and is exact.
         function cosmosPaintNode(i) {
             const { colors } = cosmosBuf;
             const n = cosmosNodes[i];
             const [r, g, b] = cosmosRgb(nodeColorFor(n));
             const { opacity } = nodeLightingFor(n);
-            colors[i * 4] = r; colors[i * 4 + 1] = g; colors[i * 4 + 2] = b;
-            colors[i * 4 + 3] = opacity;
+            const k = i * 4;
+            const o0 = colors[k], o1 = colors[k + 1], o2 = colors[k + 2], o3 = colors[k + 3];
+            colors[k] = r; colors[k + 1] = g; colors[k + 2] = b; colors[k + 3] = opacity;
+            return o0 !== colors[k] || o1 !== colors[k + 1]
+                || o2 !== colors[k + 2] || o3 !== colors[k + 3];
         }
 
         // One link's colour and alpha, *before* the walk override below. The
@@ -299,14 +310,39 @@
             const { linkColors } = cosmosBuf;
             const e = cosmosEdges[i];
             const [r, g, b] = cosmosLift(cosmosRgb(linkColorFor(e)));
-            linkColors[i * 4] = r; linkColors[i * 4 + 1] = g; linkColors[i * 4 + 2] = b;
             const hot = state.highlightLinks.has(e) || linkParticlesFor(e) > 0;
-            linkColors[i * 4 + 3] = linkVisibleFor(e) ? (hot ? 0.95 : 0.55) : 0;
+            const k = i * 4;
+            const o0 = linkColors[k], o1 = linkColors[k + 1], o2 = linkColors[k + 2], o3 = linkColors[k + 3];
+            linkColors[k] = r; linkColors[k + 1] = g; linkColors[k + 2] = b;
+            linkColors[k + 3] = linkVisibleFor(e) ? (hot ? 0.95 : 0.55) : 0;
+            return o0 !== linkColors[k] || o1 !== linkColors[k + 1]
+                || o2 !== linkColors[k + 2] || o3 !== linkColors[k + 3];
         }
+
+        // What the last full repaint actually moved. A whole-graph repaint is
+        // not the same thing as a whole-graph *change*: selecting a second node
+        // re-evaluates every style rule and moves **122 of 161,725 point
+        // colours and 196 of 745,964 link colours** — 0.03% of the buffer, for
+        // which the unconditional upload sent 17.5 MB. Collected only while it
+        // is still small enough to be worth a partial upload; past that the
+        // whole-buffer path wins anyway and the list would just be litter.
+        const PAINT_TRACK_LIMIT = 4096;
+        let _paintNodes = [];
+        let _paintLinks = [];
+        let _paintOver = false;      // more changed than it is worth tracking
+        let _paintWidths = false;    // a link width moved, so widths need re-sending
 
         function cosmosPaint() {
             const { linkColors, linkWidths } = cosmosBuf;
-            for (let i = 0; i < cosmosNodes.length; i++) cosmosPaintNode(i);
+            _paintNodes.length = 0;
+            _paintLinks.length = 0;
+            _paintOver = false;
+            _paintWidths = false;
+            for (let i = 0; i < cosmosNodes.length; i++) {
+                if (!cosmosPaintNode(i)) continue;
+                if (_paintNodes.length >= PAINT_TRACK_LIMIT) _paintOver = true;
+                else _paintNodes.push(i);
+            }
             // While a walk runs the overlay redraws every reached edge as a
             // straight, arrowed, hop-coloured strand (fxDrawWalkEdges). These
             // links are curved (`curvedLinks`), so leaving them on meant two
@@ -322,11 +358,12 @@
             const walkOwnsEdges = state.walkActive && state.walkEdgeKeys && state.walkEdgeKeys.size > 0;
             let overlayDrawn = 0;
             for (let i = 0; i < cosmosEdges.length; i++) {
-                cosmosPaintLink(i);
+                let moved = cosmosPaintLink(i);
                 const e = cosmosEdges[i];
                 if (walkOwnsEdges && linkColors[i * 4 + 3] > 0) {
                     const sId = e.source.id || e.source;
                     const tId = e.target.id || e.target;
+                    const before = linkColors[i * 4 + 3];
                     if (state.walkEdgeKeys.has(walkEdgeKey(sId, tId))) {
                         if (++overlayDrawn <= FX_MAX_FLOW_LINKS) linkColors[i * 4 + 3] = 0;
                     } else {
@@ -337,8 +374,21 @@
                         // the moment the walk ends.
                         linkColors[i * 4 + 3] = 0;
                     }
+                    // The walk override runs after the paint, so whether it
+                    // moved the alpha has to be folded in here.
+                    if (before !== linkColors[i * 4 + 3]) moved = true;
                 }
+                if (moved) {
+                    if (_paintLinks.length >= PAINT_TRACK_LIMIT) _paintOver = true;
+                    else _paintLinks.push(i);
+                }
+                // Through the buffer, for the same reason the colours are:
+                // `linkWidths` is a Float32Array and 1.4 is not representable,
+                // so comparing against the double reported *every* width as
+                // changed and defeated the tracking entirely.
+                const before2 = linkWidths[i];
                 linkWidths[i] = e.rel === 'Contains' ? 1.4 : 0.7;
+                if (before2 !== linkWidths[i]) _paintWidths = true;
             }
         }
 
@@ -1796,12 +1846,52 @@
                 } else {
                     cosmosPaint();
                 }
-                cosmos.setPointColors(cosmosBuf.colors);
-                cosmos.setLinkColors(cosmosBuf.linkColors);
+
+                // The unscoped path — a filter, a theme, a selection, a walk
+                // step. It re-evaluates every style rule, but re-evaluating
+                // everything is not the same as *changing* everything, and
+                // until now it uploaded as though it were.
+                //
+                // `cosmosPaint` reports what actually moved. Selecting a second
+                // node moves 122 point colours and 196 link colours out of
+                // 907,689 entries; the first selection, which turns focus mode
+                // on and dims the whole graph, moves essentially all of them.
+                // The same code now takes both cases correctly.
+                let visChanged = false;
                 if (!scoped) {
-                    cosmos.setLinkWidths(cosmosBuf.linkWidths);
-                    cosmosApplyVisibility();
+                    visChanged = cosmosApplyVisibility();
+                    const pts = cosmos.points, lns = cosmos.lines;
+                    if (!_paintOver && !_paintWidths && !visChanged && pts && lns
+                        && cosmosWriteColors(pts.targetColorBuffer, cosmosBuf.colors, _paintNodes)
+                        && cosmosWriteColors(lns.targetColorBuffer, cosmosBuf.linkColors, _paintLinks)) {
+                        cosmosApplyHighlight();
+                        cosmos.requestRender();
+                        return;
+                    }
                 }
+
+                // Genuinely global. Write both colour buffers whole, rather
+                // than going through `setPointColors` / `setLinkColors`:
+                // cosmos.gl's `updateColor` sends the same bytes and *also*
+                // keeps `new Float32Array(everything)` as the transition's
+                // previous frame — 14.5 MB of allocation for a picture that is
+                // already decided. Widths only when one moved.
+                const pts = cosmos.points, lns = cosmos.lines;
+                const buffersReady = pts && pts.targetColorBuffer && !pts.targetColorBuffer.destroyed
+                    && lns && lns.targetColorBuffer && !lns.targetColorBuffer.destroyed;
+                if (visChanged) {
+                    // `cosmosApplyVisibility` uploaded positions, and
+                    // `setPointPositions` flags colours as stale along with
+                    // them — so `render()` below will send them anyway. Writing
+                    // here too would send the same 14.5 MB twice.
+                } else if (buffersReady) {
+                    pts.targetColorBuffer.write(cosmosBuf.colors, 0);
+                    lns.targetColorBuffer.write(cosmosBuf.linkColors, 0);
+                } else {
+                    cosmos.setPointColors(cosmosBuf.colors);
+                    cosmos.setLinkColors(cosmosBuf.linkColors);
+                }
+                if (!scoped && _paintWidths) cosmos.setLinkWidths(cosmosBuf.linkWidths);
                 cosmosApplyHighlight();
                 // Snap rather than animate: a restyle is a response to a hover
                 // or a filter, and an 800 ms colour tween reads as lag.

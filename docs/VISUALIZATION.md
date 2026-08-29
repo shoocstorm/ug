@@ -446,8 +446,21 @@ the buffer it falls back to the old whole-array path — a hub node's 8,680 edge
 is that case. See P12.11 in [the perf journal](dev/PERF-TUNING-JOURNEY.md#p1211):
 **909 MB of heap churn per sixty hovers down to 34 MB**, sweep CPU 10× lower.
 
+The **unscoped** path — a filter, a theme, a selection — does the same thing
+one level up. `cosmosPaint` reports which entries it actually moved (it is
+writing them anyway, so a comparison per entry is free), and `restyle` takes
+the partial upload when that list is short. Selecting a second node moves 122
+point colours and 196 link colours out of 907,689; the *first* selection turns
+focus mode on and dims the whole graph, so it really does move all of them and
+correctly takes the whole-buffer path. That path writes the buffers directly
+too, skipping `updateColor`'s extra `new Float32Array(everything)`.
+
 > **Traps worth knowing.**
 >
+> 0. **Never ask "did this change?" by comparing against the computed value** —
+>    `colors[k] !== r` is true for nearly every double, because the slot holds
+>    a float32. It reported 100% of the buffer changing on every click. Write
+>    first, then compare the stored values. (Agents.md §10i.)
 > 1. This is only safe because the arrays are used **by reference** —
 >    `updatePointColor` does `pointColors = inputPointColors`, no copy and no
 >    reorder, so entry `i` is bytes `[i*16, i*16+16)`. Re-check that after any

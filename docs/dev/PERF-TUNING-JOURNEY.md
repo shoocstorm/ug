@@ -15,7 +15,7 @@
 | **Opened** | 2026-08-18 |
 | **Version** | 0.1.16 |
 | **Primary fixture** | `~/.ug/neo4j` — 161,725 nodes / 745,964 edges / 330 MB `graph.json` |
-| **Status** | Rounds 1–4 landed (bar P11.7, deferred). Round 5: **P12.1, P12.3, P12.6, P12.7, P12.8, P12.9, P12.10, P12.11, P12.12 landed** (P12.7 half-reverted — see its note); P12.2, P12.4, P12.5 audited. Suite **912/912** |
+| **Status** | Rounds 1–4 landed (bar P11.7, deferred). Round 5: **P12.1, P12.3, P12.6, P12.7, P12.8, P12.9, P12.10, P12.11, P12.12, P12.13 landed** (P12.7 half-reverted — see its note); P12.2, P12.4, P12.5 audited. Suite **912/912** |
 
 **Status marks:** ✅ landed and verified · ⬜ open · ⏭️ deferred · ❌ rejected by measurement
 
@@ -679,6 +679,7 @@ browser figure in this file before today measured the 6%.
 | P12.10 | The page never goes idle — on either screen | idle CPU **50.4% → 3%** (landing), **58.8% → 7%** (graph) | ✅ |
 | P12.11 | Every hover re-uploads *and* re-allocates all 14.5 MB of colour | heap swing per 60 moves **909 → 34 MB**; sweep CPU **10×** | ✅ |
 | P12.12 | A selected node keeps the page working forever | parked with a selection **28.8% → 3.6%** of a core; click **539 → 291 ms** | ✅ |
+| P12.13 | A whole-graph repaint uploaded as though everything changed | repeat selection CPU **−35%**, heap growth **21 MB → 0** | ✅ |
 
 <a id="p121"></a>
 ### ✅ P12.1 — the catalog renders the whole repository into the DOM at boot
@@ -1452,6 +1453,99 @@ does change. [P12.11](#p1211)'s partial upload deliberately does not apply.
 | deselecting clears the focus ring | `undefined` |
 | and the canvas returns to the unselected picture | **0 px** |
 
+<a id="p1213"></a>
+### ✅ P12.13 — a whole-graph *repaint* is not a whole-graph *change*
+
+A third trace, again of one selection, with [P12.12](#p1212) in. The overlay
+work and the texture upload are gone from it; what is left is a single column:
+
+```
+bufferSubData ← write ← ga ← updateColor ← create ← update ← render
+              ← restyle ← bumpGraphStyles ← handleClick ← onPointClick
+                                                     548.6 ms  (8.5%)
+```
+
+`handleClick` calls `bumpGraphStyles()` with no scope, so the restyle
+re-evaluates every style rule and re-uploads all 17.5 MB. The question is how
+much of that actually needed to move. Instrumented, per click:
+
+| a click changes | point colours | link colours |
+| :--- | ---: | ---: |
+| **first selection** — `enterFocus` dims the whole graph | 161,665 of 161,725 | 745,775 of 745,964 |
+| **moving the selection to another node** | **122** (0.1%) | **196** (0.03%) |
+
+So the first selection genuinely is global, and every one after it uploads
+17.5 MB to change about three hundred entries.
+
+`cosmosPaint` now reports what it actually moved — it is already writing every
+entry, so it costs one comparison per entry to know — and `restyle` takes the
+partial upload when the list is short, the whole-buffer path when it is not.
+The same code covers both cases without knowing anything about selection.
+
+Two smaller things fell out of the same edit. The whole-buffer path now writes
+the two colour buffers directly rather than through `setPointColors` /
+`setLinkColors`, because cosmos.gl's `updateColor` sends the same bytes *and*
+keeps `new Float32Array(everything)` as the transition's previous frame — 14.5 MB
+of allocation for a picture already decided. And link widths are re-sent only
+when a width moved, which is approximately never.
+
+Same build, same machine, partial path forced off vs on:
+
+| | before | after |
+| :--- | ---: | ---: |
+| first selection, CPU | 270 ms | 272 ms — *unchanged, and correctly so* |
+| **second selection, CPU** | 222 ms | **148 ms** |
+| **third selection, CPU** | 263 ms | **157 ms** |
+| heap growth per repeat selection | **+21 MB / +19 MB** | **0 MB** |
+
+#### Two float32 traps, one of which I shipped into the measurement
+
+Comparing a computed `double` against a slot in a `Float32Array` is *almost
+always unequal* — 1.4 is not representable, and neither is most of a colour
+channel. Measured that way, a click appeared to change **100.0%** of both
+buffers, which is precisely the conclusion that would have stopped this work.
+The fix is to write first and compare the stored values, which is exact and
+free. I then made the identical mistake a second time in the link-width check,
+where it silently forced every restyle down the slow path — caught only because
+the instrumentation printed `widths: true` on a click that cannot change a
+width.
+
+#### And a real regression, caught by instrumenting rather than by testing
+
+Restructuring `restyle` around the new fast path, I **deleted the
+`cosmosPaint()` call from the unscoped branch**. The page then uploaded stale
+colours on every filter, theme and selection — the [§9f](#p127) failure again,
+and the third time this round that a rendering change was wrong in a way no
+buffer-level check could see. It was not a screenshot that caught it either: it
+was a counter reading `n: 4096` while the paint's own change count read `0`,
+which is only possible if the paint never ran.
+
+#### Verified
+
+`scratch/selverify.mjs` — pixels *and* a float-for-float GPU readback at every
+step:
+
+| | |
+| :--- | ---: |
+| first selection dims the graph | 119,315 px |
+| GPU matches the arrays after selecting A | 0 / 0 of 3.6M floats |
+| moving the selection repaints | 3,372 px |
+| GPU matches the arrays after selecting B | 0 / 0 |
+| deselecting returns to the undimmed picture | 2,931 px of chrome only |
+| GPU matches the arrays after deselecting | 0 / 0 |
+
+Every one of those numbers is **identical** with the partial path forced off,
+which is the assertion that matters: the two paths draw the same picture.
+
+#### What is left, and it is a product question
+
+The **first** selection still uploads 17.5 MB, because clicking a node calls
+`enterFocus` and dimming the entire graph really does change every colour. No
+amount of upload cleverness touches that. The only way to make the first
+selection as cheap as the rest is to stop dimming the whole graph on a plain
+click — to make focus mode something the user asks for rather than something a
+click does. That is a design decision, not a tuning one.
+
 ### What the round taught
 
 - **The JS heap is not the tab.** 118 MB of heap sat inside a 1,958 MB
@@ -1488,6 +1582,12 @@ does change. [P12.11](#p1211)'s partial upload deliberately does not apply.
   The idle state was half a core on both screens and it had never been looked
   at. Benchmark the rest state too — it is the state the app spends most of its
   life in.
+- **`Float32Array` comparisons are a measurement trap of their own.** A
+  computed double almost never equals the float32 it was stored as, so
+  "did this entry change?" answered by comparing against the input says *yes,
+  always*. It reported 100% of a buffer changing on every click — an answer
+  that looks decisive and would have closed the investigation. Write into the
+  array first, then compare the stored values.
 - **The same bug, in a different loop.** `fxDrawFlow` scanning every edge each
   frame to find the few with particles is P5.1 from Round 1, which was the same
   scan on hover. Fixing a shape once does not fix it everywhere it occurs;
@@ -1634,6 +1734,10 @@ One row per landed item or baseline. Keep the numbers, not just the verdict.
 | 2026-08-29 | P12.12 | one click, CPU over the following 1.2 s | 539 ms | **291 ms** | `texSubImage2D` (233 ms) gone entirely |
 | 2026-08-29 | P12.12 | `setConfigPartial` on every restyle | 403×403 texture rewritten | skipped when unchanged | a fresh array of the same indices counted as a change |
 | 2026-08-29 | P12.12 | selection behaviour | — | **6 of 6 pixel/state assertions** | flow still marches, ring follows, deselect returns 0 px |
+| 2026-08-29 | P12.13 | what a click actually changes, moving the selection | assumed all | **122 point + 196 link colours** of 907,689 | the first selection really is global — `enterFocus` dims everything |
+| 2026-08-29 | P12.13 | repeat selection, CPU / heap | 222–263 ms, **+19–21 MB** | **148–157 ms, 0 MB** | partial upload; widths only when a width moved |
+| 2026-08-29 | P12.13 | comparing a double against a `Float32Array` slot | reported **100.0%** of the buffer changed | write first, compare stored | made the same mistake twice, once in the fix itself |
+| 2026-08-29 | P12.13 | selection correctness | — | **6 of 6, identical with the fast path off** | pixels *and* a float-for-float GPU readback at each step |
 
 ---
 
