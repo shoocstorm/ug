@@ -1540,11 +1540,20 @@ which is the assertion that matters: the two paths draw the same picture.
 #### What is left, and it is a product question
 
 The **first** selection still uploads 17.5 MB, because clicking a node calls
-`enterFocus` and dimming the entire graph really does change every colour. No
-amount of upload cleverness touches that. The only way to make the first
-selection as cheap as the rest is to stop dimming the whole graph on a plain
-click — to make focus mode something the user asks for rather than something a
-click does. That is a design decision, not a tuning one.
+`enterFocus` and dimming the entire graph really does change every colour.
+Measured by taking the dimming out: a click then changes **1–2 point colours
+and 0 links**, and costs 186 ms instead of 399 ms.
+
+No upload cleverness reaches it. Handing the dimming to cosmos.gl's own greyout
+looks like the answer and is not — see the Rejected table: its link greyout is
+driven by an `rgba32float` status texture over *all* links, freshly allocated
+and uploaded at 11.9 MB per change, which is the buffer it would have replaced.
+
+So the only remaining lever is what a click *means*: whether selecting a node
+should dim the rest of the graph automatically, or whether that should be
+something the user asks for — the way the solo/isolate toggle beside it already
+is. That is a design decision, and the numbers above are what it costs, not an
+argument for making it.
 
 ### What the round taught
 
@@ -1755,6 +1764,7 @@ them — so the next audit does not re-propose them.
 | Interning edge endpoints *after* the build | Measured 2026-08-25: **no change in peak** (1,458 → 1,456 MB) for **+1.6 s**. Every duplicate is already allocated by then, and freeing them does not return the memory. Interning has to happen as each edge is made or read. |
 | `serde_json::from_reader` for the snapshot parse | Measured 2026-08-25: avoids the 346 MB buffer, but startup **0.31 → 1.33 s** — four times HEAD, giving back most of what P3.1 bought. `memmap2` gets the same memory at 0.48 s. |
 | `build_texts` parallelism (P11.7) | Deferred 2026-08-26, on arithmetic. Instrumented, `build_texts` is 677 ms of a 20.4 s command (3.3%) and 250 ms of that is blocked by `seen_banner`; parallelising the rest is worth ~350 ms at the limit (1.7%). P11.11 landed *inside* this phase and shrank it further, so the case is weaker now than at deferral. The design objection stands too — per-file banner sets change *attribution*, and extract-then-dedupe does not decompose because `extract_prose_comments` interleaves the dedup with a character budget and an early `break`. Measuring the split first found [P11.11](#p1111), which was the larger piece all along. |
+| Moving focus dimming into cosmos.gl's own greyout | Investigated 2026-08-29, after [P12.13](#p1213) left the *first* selection as the last global upload. The idea: stop expressing focus dimming as alpha in our colour buffers and hand cosmos.gl `highlightedPointIndices` / `highlightedLinkIndices` instead, which are lists proportional to the focus set rather than to the graph. Dead on the link side: `Lines.updateLinkStatus` builds `new Float32Array(ceil(sqrt(linksNumber))² × 4)` and uploads it as an `rgba32float` texture on every change — **11.9 MB at 745,964 links**, allocated fresh each time. That is the same cost as the 11.9 MB colour buffer it would replace, plus a second dimming mechanism to maintain alongside the alpha one that the tour's four-tier gradient and the walk's four states still need. (The earlier objection recorded in `cosmosApplyHighlight` — that it double-dims — is real but secondary; the arithmetic is what kills it.) |
 | ~~Partial GPU buffer uploads in cosmos.gl~~ | **Un-rejected and landed as [P12.11](#p1211) on 2026-08-29.** Rejected twice, wrongly. First on 2026-08-27, because cosmos.gl exposes no partial-update API — true of cosmos.gl, but luma.gl's `Buffer.write(data, byteOffset)` underneath it takes a byte offset. Then again on 2026-08-28, because [P12.9](#p129) measured the upload as free beside the 163 ms draw (160.5 ms with it, 162.6 ms without) — a real measurement, taken on a **headless** browser, that does not hold on the machine that matters: a user's trace put the same upload at 56% of the profile and 909 MB of allocation per sixty hovers. Kept here as a reminder that a rejection is only as good as the machine it was measured on. |
 | Level-of-detail links on a *settled* graph | Considered 2026-08-28 as the answer to slow animation, and unnecessary once measured. Motion-only LoD ([P12.9](#p129)) recovers 3 fps → 120 fps while leaving the still picture exactly as it was, so there is no case for permanently dropping, capping or fading links — and every version of that changes what the graph *says* about the code. |
 | WebAssembly anywhere in the vis layer | Audited 2026-08-27, no candidate found. Every hot loop is either a typed-array pass already at memory bandwidth, or string/`Map` work whose data would have to be copied across the wasm boundary to be touched. The one shape that would suit it — the 485k-entry `id → index` hash table — is already in a Worker and already costs 7 ms. The vis layer's measured costs are DOM ([P12.1](#p121)), a JSON parse ([P12.2](#p122)) and an un-dirtied repaint ([P12.3](#p123)); wasm addresses none of the three. |
