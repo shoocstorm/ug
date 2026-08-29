@@ -15,7 +15,7 @@
 | **Opened** | 2026-08-18 |
 | **Version** | 0.1.16 |
 | **Primary fixture** | `~/.ug/neo4j` — 161,725 nodes / 745,964 edges / 330 MB `graph.json` |
-| **Status** | Rounds 1–4 landed (bar P11.7, deferred). Round 5: **P12.1, P12.3, P12.6, P12.7, P12.8, P12.9, P12.10, P12.11, P12.12, P12.13, P12.14 landed** (P12.7 half-reverted — see its note); P12.2, P12.4, P12.5 audited. Suite **912/912** |
+| **Status** | Rounds 1–4 landed (bar P11.7, deferred). Round 5: **P12.1, P12.3, P12.6, P12.7, P12.8, P12.9, P12.10, P12.11, P12.12, P12.13, P12.14, P12.15 landed** (P12.7 half-reverted — see its note); P12.2, P12.4, P12.5 audited. Suite **912/912** |
 
 **Status marks:** ✅ landed and verified · ⬜ open · ⏭️ deferred · ❌ rejected by measurement
 
@@ -681,6 +681,7 @@ browser figure in this file before today measured the 6%.
 | P12.12 | A selected node keeps the page working forever | parked with a selection **28.8% → 3.6%** of a core; click **539 → 291 ms** | ✅ |
 | P12.13 | A whole-graph repaint uploaded as though everything changed | repeat selection CPU **−35%**, heap growth **21 MB → 0** | ✅ |
 | P12.14 | INP climbing on selection — presentation, not memory | a 403×403 texture rewrite per click **→ 0**; the rest is pixels | ✅ |
+| P12.15 | `vis.link_blending`, for displays where fill rate is the wall | INP p75 **872 → 248 ms** at 3400×2000; 6.9% of pixels change | ✅ |
 
 <a id="p121"></a>
 ### ✅ P12.1 — the catalog renders the whole repository into the DOM at boot
@@ -1635,15 +1636,63 @@ of it. One full redraw at 3400 × 2000:
 | **`linkBlending: false`** | **149 ms** |
 | links not drawn at all | 28 |
 
-`linkBlending: false` is a **2.3× cut to every frame** at this resolution —
-against 6% at 1600 × 913, which is why [P12.9](#p129) dismissed it. It is
-viable: zero-alpha instances are still collapsed, so filtered-out links stay
-hidden (**0 pixels differ**). But alpha is ignored at write time, so the dense
-link mass renders flatter and the focus dimming reads differently: **9–11% of
-pixels change**, up to 503/765 on a channel.
+`linkBlending: false` is a **2.3× cut to every frame** at this resolution.
+It is viable: zero-alpha instances are still collapsed, so filtered-out links
+stay hidden (**0 pixels differ**). But alpha is ignored at write time, so the
+dense link mass renders flatter and the focus dimming reads differently:
+**7–11% of pixels change**, up to 503/765 on a channel. Shipped as a setting in
+[P12.15](#p1215), whose cleaner A/B also corrects what P12.9 thought blending
+cost at a small window.
 
 That makes it a decision about what the graph should look like at density, not
-a tuning change — the same shape of question as P12.13's focus-on-click.
+a tuning change — the same shape of question as P12.13's focus-on-click. It is
+now `vis.link_blending`, defaulting to `on`; see [P12.15](#p1215).
+
+<a id="p1215"></a>
+### ✅ P12.15 — `vis.link_blending`, and what it buys
+
+[P12.14](#p1214) found that at a large viewport the link draw is fill-rate
+bound and additive blending is most of it — but that switching it off changes
+how the dense link mass reads. That is a judgement about the picture, so it is
+a setting rather than a decision made here. `vis.link_blending` = `on` (default)
+or `off`, in the config registry, the capabilities payload and the settings
+panel's Visualization section.
+
+Measured on one page — same layout, same camera, toggled at runtime — with ten
+selections per configuration:
+
+| 161,725 nodes / 745,964 links | blending **on** | blending **off** |
+| :--- | ---: | ---: |
+| **3400 × 2000** — full redraw | 349 ms | **149 ms** |
+| — INP p75 | 872 ms | **248 ms** |
+| — worst interaction | 1,104 ms | **528 ms** |
+| — median presentation delay | 840 ms | **247 ms** |
+| **1600 × 1000** — full redraw | 160 ms | **81 ms** |
+| — INP p75 | 296 ms | 280 ms |
+| — worst interaction | 768 ms | **280 ms** |
+| — median presentation delay | 279 ms | **176 ms** |
+
+**Blending is about half the link draw at either size.** What changes with the
+display is whether that draw is what the user is waiting on: at 3400 × 2000 it
+is nearly all of INP (**872 → 248 ms, 3.5×**); at 1600 × 1000 the typical
+interaction barely moves (296 → 280), though the worst one more than halves.
+
+That is also the correction to a claim made twice in this round — that blending
+was worth "6%". [P12.9](#p129) measured 164 → 154 ms in a sweep that changed
+several link settings in sequence; a dedicated A/B on one page says 160 → 81 ms
+at the same window size. The earlier reading was wrong, not merely
+size-dependent. **Measure one setting at a time.**
+
+What it costs: **6.9% of pixels change** (max channel delta 410 of 765). Alpha
+is ignored at write time, so where strands cross they no longer add together —
+the rim of a dense graph goes from a warm blended halo to the links' own opaque
+colour. Sharper and more literal; less depth in the tangle. Hiding is
+unaffected — zero-alpha links are still collapsed, so filters behave
+identically (verified at 0 pixels difference).
+
+> **Do not re-measure this at a laptop window.** The finding only exists at
+> high resolution. `WIN=3400,2000` in the scratch harness, or a real large
+> display.
 
 ### What the round taught
 

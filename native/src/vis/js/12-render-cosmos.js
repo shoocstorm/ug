@@ -33,6 +33,37 @@
         // circle seeding in transformData lands well inside it.
         const COSMOS_SPACE = 4096;
 
+        // Additive blending for links — richer where strands overlap, and at
+        // high resolution the single biggest cost in every frame.
+        //
+        // A full redraw of the 161,725-node / 745,964-link neo4j index:
+        //
+        //   3400 × 2000    349 ms blended   →   149 ms unblended   (2.3×)
+        //   1600 ×  913    164 ms blended   →   154 ms unblended   (1.06×)
+        //
+        // It is fill-rate bound, so it barely registers at a laptop window and
+        // dominates on a large display — which is why an earlier round measured
+        // it and dismissed it. It is also what sets INP on a selection: the
+        // response to a click *is* a full redraw.
+        //
+        // Off is not free. Alpha is ignored at write time, so the dense link
+        // mass reads flatter and focus dimming reads differently — about a
+        // tenth of the pixels change. Hiding is unaffected: zero-alpha links
+        // are still collapsed, so filters behave identically. Left on by
+        // default and settable per install, because which side of that trade
+        // is right depends on the display it is being read on.
+        //
+        // Mirrors `vis.link_blending` in native/src/config.rs.
+        const LINK_BLENDING_DEFAULT = true;
+
+        function visLinkBlending() {
+            const raw = state.capabilities && state.capabilities.vis
+                && state.capabilities.vis.link_blending;
+            if (raw === 'off' || raw === false) return false;
+            if (raw === 'on' || raw === true) return true;
+            return LINK_BLENDING_DEFAULT;
+        }
+
         // ─── Colour plumbing ───────────────────────────────────
 
         // '#rgb' | '#rrggbb' | 'rgb(…)' | 'rgba(…)' → [r, g, b] in 0..1.
@@ -1635,6 +1666,7 @@
                     linkDefaultArrows: true,
                     linkArrowsSizeScale: 0.8,
                     curvedLinks: true,
+                    linkBlending: visLinkBlending(),
                     // Occlusion culling assumes opaque points; ours carry their
                     // dimming in the alpha channel, so it would drop points
                     // that are meant to show through each other.

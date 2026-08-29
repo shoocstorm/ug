@@ -9042,7 +9042,7 @@
 }
     </style>
 <script>
-window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3424,"edges":9879,"files":133,"lines":78725,"ugVersion":"0.1.16","visFingerprint":"96eefc47d7f91788","generatedAt":1787980504};
+window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3424,"edges":9879,"files":133,"lines":78725,"ugVersion":"0.1.16","visFingerprint":"22897dc7e0cc72af","generatedAt":1787993168};
 /* ==========================================================================
    UltraGraph — static demo shim
    ==========================================================================
@@ -14566,6 +14566,14 @@ self.onmessage = async (ev) => {
                 hint: 'Past this many nodes or edges the page never draws the whole graph — it opens in solo mode and shows one neighbourhood at a time. Lower it to isolate large repos earlier, higher to attempt whole-graph render for longer. Governs the 2D engine only; the 3D engine solos past its own element budget above.',
                 num: { step: '1000', min: '1', max: '10000000' },
                 unit: 'count',
+            },
+            'vis.link_blending': {
+                label: 'Link blending (2D engine)',
+                selectLabels: {
+                    on: 'On — strands blend where they cross',
+                    off: 'Off — faster on a large display',
+                },
+                hint: 'How overlapping links are drawn. On, they add together, so a dense bundle glows and depth reads through the tangle. Off, each strand is drawn opaque over the last — flatter, and the single biggest saving there is at high resolution: a full redraw of a 746k-link graph costs 349 ms blended and 149 ms unblended at 3400×2000, which is most of the delay between clicking a node and seeing the result. It halves the link draw at any size, but on a smaller window that draw is not what you are waiting on, so the interaction barely changes. Filtered-out links stay hidden either way.',
             },
             'graph.server_mode_bytes': {
                 label: 'Server mode threshold (graph.json size)',
@@ -21320,6 +21328,37 @@ self.onmessage = async (ev) => {
         // circle seeding in transformData lands well inside it.
         const COSMOS_SPACE = 4096;
 
+        // Additive blending for links — richer where strands overlap, and at
+        // high resolution the single biggest cost in every frame.
+        //
+        // A full redraw of the 161,725-node / 745,964-link neo4j index:
+        //
+        //   3400 × 2000    349 ms blended   →   149 ms unblended   (2.3×)
+        //   1600 ×  913    164 ms blended   →   154 ms unblended   (1.06×)
+        //
+        // It is fill-rate bound, so it barely registers at a laptop window and
+        // dominates on a large display — which is why an earlier round measured
+        // it and dismissed it. It is also what sets INP on a selection: the
+        // response to a click *is* a full redraw.
+        //
+        // Off is not free. Alpha is ignored at write time, so the dense link
+        // mass reads flatter and focus dimming reads differently — about a
+        // tenth of the pixels change. Hiding is unaffected: zero-alpha links
+        // are still collapsed, so filters behave identically. Left on by
+        // default and settable per install, because which side of that trade
+        // is right depends on the display it is being read on.
+        //
+        // Mirrors `vis.link_blending` in native/src/config.rs.
+        const LINK_BLENDING_DEFAULT = true;
+
+        function visLinkBlending() {
+            const raw = state.capabilities && state.capabilities.vis
+                && state.capabilities.vis.link_blending;
+            if (raw === 'off' || raw === false) return false;
+            if (raw === 'on' || raw === true) return true;
+            return LINK_BLENDING_DEFAULT;
+        }
+
         // ─── Colour plumbing ───────────────────────────────────
 
         // '#rgb' | '#rrggbb' | 'rgb(…)' | 'rgba(…)' → [r, g, b] in 0..1.
@@ -22922,6 +22961,7 @@ self.onmessage = async (ev) => {
                     linkDefaultArrows: true,
                     linkArrowsSizeScale: 0.8,
                     curvedLinks: true,
+                    linkBlending: visLinkBlending(),
                     // Occlusion culling assumes opaque points; ours carry their
                     // dimming in the alpha channel, so it would drop points
                     // that are meant to show through each other.

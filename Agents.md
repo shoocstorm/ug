@@ -869,6 +869,13 @@ been up for a day it says almost nothing about now. Take CPU-*time* deltas
 routinely the largest single consumer, while `usedJSHeapSize`-style
 tab-scoped metrics cannot see it at all.
 
+**Change one setting per measurement.** A sweep that flips several related
+options in sequence will misattribute: turning `linkBlending` off inside such a
+sweep read as a 6% saving and got the option dismissed for a round; a dedicated
+A/B on one page, toggling only that, measured **2×**. If a config sweep is how
+you are exploring, treat its numbers as a shortlist and re-measure the winner
+on its own.
+
 **Headless is good for ratios, not for "this costs nothing".** Two
 configurations compared in the same headless session give a trustworthy
 *ratio*. An absolute conclusion does not travel: "the colour upload is free

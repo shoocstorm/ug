@@ -475,12 +475,24 @@ too, skipping `updateColor`'s extra `new Float32Array(everything)`.
 >    — its flow particles are time-based and differ in phase between runs.
 
 > **At a large viewport the link draw is fill-rate bound, and blending is most
-> of it.** One full redraw at 3400 × 2000 costs 349 ms with `linkBlending` on
-> and **149 ms** with it off — against a 6% difference at 1600 × 913, which is
-> why it was dismissed once. It is what sets INP on a selection: the response
-> to a click *is* a full redraw, and its cost is pixels. Not switched off,
-> because alpha is ignored at write time and the dense link mass then reads
-> flatter (9–11% of pixels change); zero-alpha links do stay hidden. See P12.14.
+> of it** — and it is what sets INP on a selection, because the response to a
+> click *is* a full redraw. `vis.link_blending` (`on` by default, also in the
+> settings panel) is the switch:
+>
+> | 161,725 / 745,964 | on | off |
+> | :--- | ---: | ---: |
+> | full redraw at 3400 × 2000 | 349 ms | **149 ms** |
+> | INP p75 at 3400 × 2000 | 872 ms | **248 ms** |
+> | full redraw at 1600 × 1000 | 160 ms | **81 ms** |
+> | INP p75 at 1600 × 1000 | 296 ms | 280 ms |
+>
+> Blending is about half the link draw at either size; the display decides
+> whether that draw is what you are waiting on. Off costs 6.9% of pixels: alpha is ignored at write time, so crossing strands
+> stop adding together and a dense rim goes from a warm blended halo to the
+> links' own opaque colour. Filters are unaffected — zero-alpha links are still
+> collapsed. **Measure it with a dedicated A/B, one setting at a time** — a
+> sweep that changed several link settings in sequence read this as a 6% saving
+> and got it dismissed for a round. See P12.14 / P12.15.
 
 ### 5.7 Simulation
 

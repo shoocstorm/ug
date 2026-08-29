@@ -1237,6 +1237,7 @@ pub(crate) async fn api_capabilities(State(state): State<ServeState>) -> Respons
             "renderer": crate::config::get("vis.renderer"),
             "three_d_max_elements": crate::config::get("vis.three_d_max_elements"),
             "solo_threshold": crate::config::get("vis.solo_threshold"),
+            "link_blending": crate::config::get("vis.link_blending"),
         }),
         // Back-compat: existing UI reads `db_node_count` for the primary.
         "db_node_count": primary_count,
