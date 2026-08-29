@@ -15,7 +15,7 @@
 | **Opened** | 2026-08-18 |
 | **Version** | 0.1.16 |
 | **Primary fixture** | `~/.ug/neo4j` — 161,725 nodes / 745,964 edges / 330 MB `graph.json` |
-| **Status** | Rounds 1–4 landed (bar P11.7, deferred). Round 5: **P12.1, P12.3, P12.6, P12.7, P12.8, P12.9, P12.10, P12.11 landed** (P12.7 half-reverted — see its note); P12.2, P12.4, P12.5 audited. Suite **912/912** |
+| **Status** | Rounds 1–4 landed (bar P11.7, deferred). Round 5: **P12.1, P12.3, P12.6, P12.7, P12.8, P12.9, P12.10, P12.11, P12.12 landed** (P12.7 half-reverted — see its note); P12.2, P12.4, P12.5 audited. Suite **912/912** |
 
 **Status marks:** ✅ landed and verified · ⬜ open · ⏭️ deferred · ❌ rejected by measurement
 
@@ -678,6 +678,7 @@ browser figure in this file before today measured the 6%.
 | P12.9 | Every animation redraws 745,964 links per frame | **3–4 fps → 120 fps** on morphs and camera flights | ✅ |
 | P12.10 | The page never goes idle — on either screen | idle CPU **50.4% → 3%** (landing), **58.8% → 7%** (graph) | ✅ |
 | P12.11 | Every hover re-uploads *and* re-allocates all 14.5 MB of colour | heap swing per 60 moves **909 → 34 MB**; sweep CPU **10×** | ✅ |
+| P12.12 | A selected node keeps the page working forever | parked with a selection **28.8% → 3.6%** of a core; click **539 → 291 ms** | ✅ |
 
 <a id="p121"></a>
 ### ✅ P12.1 — the catalog renders the whole repository into the DOM at boot
@@ -1378,6 +1379,79 @@ max channel delta 0**.
 > both reasoned from a real measurement, both wrong about the machine that
 > matters.
 
+<a id="p1212"></a>
+### ✅ P12.12 — selecting a node left the page working forever
+
+A second trace, of **one** node selection. Aggregated by call path, three costs
+fell out, and the largest was not the click at all.
+
+| for one selection | |
+| :--- | ---: |
+| `bufferSubData ← ga ← updateColor ← create ← update ← render ← restyle ← bumpGraphStyles ← handleClick` | 532 ms |
+| `texSubImage2D ← updatePointStatus ← updateStateFromConfig ← setConfigPartial ← cosmosApplyHighlight ← restyle` | 233 ms |
+| `linkParticlesFor ← fxDrawFlow ← overlayDraw ← tick` | 131 ms — *and rising for as long as the node stays selected* |
+
+#### The overlay scanned every edge, every frame, to find at most 600
+
+`fxDrawFlow` ran `for (const e of cosmosEdges)` — **all 745,964** — calling
+`linkParticlesFor` on each to find the handful carrying particles. Its
+`FX_MAX_FLOW_LINKS` break only helps if the flowing edges come early in the
+array; with a selection and the pointer away, it scanned the entire list every
+frame and drew nothing.
+
+`linkParticlesFor` answers from one of three sources. A walk decides by
+node-pair key and a tour by route membership, so those still have to be asked —
+both are transient, and both redraw for other reasons anyway. The third is a
+hover or a selection, it is exactly `state.highlightLinks`, and it is the one
+that persists. Iterating that instead:
+
+| parked, a node selected, pointer off the canvas | before | after |
+| :--- | ---: | ---: |
+| CPU | **28.8%** of a core, indefinitely | **3.6%** |
+| `linkParticlesFor` over a 6 s profile | **853 ms** (13.1%) | — |
+| the same page with nothing selected | 1.4% | 1.8% |
+
+This is [P5.1](#p51) again — "hover used to scan the whole view edge list on
+every raycast hit" — in a different loop. An O(edges) pass to find an O(degree)
+set is a shape worth grepping for.
+
+#### A config setter that rewrote a 403×403 texture
+
+`cosmosApplyHighlight` pushed `focusedPointIndex` and `outlinedPointIndices`
+through `setConfigPartial` on **every** restyle, including every hover, where
+neither can have changed. A fresh `outlinedPointIndices` array — even one
+holding the same indices — makes `updateStateFromConfig` call
+`updatePointStatus()`, which rewrites the whole point-status texture: 161,725
+points as a 403×403 `rgba32float` upload, 233 ms in the trace.
+
+Now compared by content and skipped when unchanged, with the memo reset
+wherever the point set is rebuilt. `texSubImage2D` disappears from the profile
+entirely.
+
+| one click | before | after |
+| :--- | ---: | ---: |
+| CPU over the 1.2 s after mousedown | 539 ms | **291 ms** |
+| heap | +14 MB | +9 MB |
+| `texSubImage2D` | 233 ms | **gone** |
+
+What is left in the click is a full repaint — 41 ms of `cosmosPaint` /
+`linkColorFor` and a 102 ms `bufferSubData` — and that one is honest: selecting
+a node re-dims every other node and link in the graph, so every colour really
+does change. [P12.11](#p1211)'s partial upload deliberately does not apply.
+
+#### Verified
+
+`scratch/selcheck.mjs`, in pixels and in state:
+
+| | |
+| :--- | ---: |
+| hover paints | 40,723 px |
+| **flow particles still march** (two frames 420 ms apart) | 7,978 px |
+| selection sets the focus ring | index 17,893 = the clicked node |
+| selection ring keeps animating | 8,041 px |
+| deselecting clears the focus ring | `undefined` |
+| and the canvas returns to the unselected picture | **0 px** |
+
 ### What the round taught
 
 - **The JS heap is not the tab.** 118 MB of heap sat inside a 1,958 MB
@@ -1414,6 +1488,14 @@ max channel delta 0**.
   The idle state was half a core on both screens and it had never been looked
   at. Benchmark the rest state too — it is the state the app spends most of its
   life in.
+- **The same bug, in a different loop.** `fxDrawFlow` scanning every edge each
+  frame to find the few with particles is P5.1 from Round 1, which was the same
+  scan on hover. Fixing a shape once does not fix it everywhere it occurs;
+  "O(everything) to find O(a few)" is worth grepping for, not just remembering.
+- **Look past the transaction to the state it leaves behind.** One click cost
+  539 ms — and left the page burning 29% of a core for as long as the node
+  stayed selected. The steady state *after* an interaction deserves its own
+  measurement, because it is unbounded and the click is not.
 - **A rejection is only as good as the machine it was measured on.** Partial
   colour uploads were rejected twice on real measurements, and the second one —
   "the upload is free beside the draw", 160.5 ms vs 162.6 ms — was taken on a
@@ -1547,6 +1629,11 @@ One row per landed item or baseline. Keep the numbers, not just the verdict.
 | 2026-08-29 | P12.11 | CPU over a 120-move sweep | 3,603 ms | **356 ms** | 10× |
 | 2026-08-29 | P12.11 | GPU buffers vs the arrays, after 16 hovers | — | **0 differing** of 646,900 + 2,983,856 floats | read back with `readSyncWebGL` |
 | 2026-08-29 | P12.11 | rendered hover, partial vs full upload | — | **0 of 591,300 pixels differ** | with the FX overlay hidden — its flow particles differ by phase |
+| 2026-08-29 | P12.12 | parked with a node selected, pointer away | **28.8%** of a core | **3.6%** | `fxDrawFlow` scanned all 745,964 edges every frame |
+| 2026-08-29 | P12.12 | `linkParticlesFor` over a 6 s profile | **853 ms (13.1%)** | — | an O(edges) pass to find an O(degree) set |
+| 2026-08-29 | P12.12 | one click, CPU over the following 1.2 s | 539 ms | **291 ms** | `texSubImage2D` (233 ms) gone entirely |
+| 2026-08-29 | P12.12 | `setConfigPartial` on every restyle | 403×403 texture rewritten | skipped when unchanged | a fresh array of the same indices counted as a change |
+| 2026-08-29 | P12.12 | selection behaviour | — | **6 of 6 pixel/state assertions** | flow still marches, ring follows, deselect returns 0 px |
 
 ---
 

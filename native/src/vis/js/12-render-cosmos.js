@@ -268,6 +268,9 @@
             cosmos.setLinkColors(cosmosBuf.linkColors);
             cosmos.setLinkWidths(cosmosBuf.linkWidths);
             cosmosHitInvalidate();
+            // A new point set: whatever was pushed described the old one.
+            _hlFocus = -2;
+            _hlOutlined = undefined;
         }
 
         // Refresh the colour/width buffers from the shared style rules. Alpha
@@ -1039,6 +1042,12 @@
         // So dimming stays in one place — the alpha channel, shared with the 3D
         // renderer — and this sets only the rings, which add emphasis without
         // taking any away.
+        // What was last pushed to cosmos.gl, so a restyle that changes neither
+        // can stay out of its config entirely. Reset on dispose and on build,
+        // where the point set itself changes underneath both.
+        let _hlFocus = -2;          // -2 is "nothing pushed yet"; undefined is a real value
+        let _hlOutlined;
+
         function cosmosApplyHighlight() {
             const focusIdx = state.selectedNode
                 ? cosmosIndexOf.get(state.selectedNode.id)
@@ -1047,10 +1056,35 @@
             for (let i = 0; i < cosmosNodes.length; i++) {
                 if (cosmosNodes[i].isBoundary) outlined.push(i);
             }
-            cosmos.setConfigPartial({
-                focusedPointIndex: focusIdx,
-                outlinedPointIndices: outlined.length ? outlined : undefined,
-            });
+            const outlinedArg = outlined.length ? outlined : undefined;
+
+            // Only when it actually changed.
+            //
+            // `setConfigPartial` re-derives state from the config, and a new
+            // `outlinedPointIndices` array — even one holding the same indices,
+            // even an empty one where there was an empty one — makes
+            // `updatePointStatus()` rewrite the whole point-status texture:
+            // 161,725 points as a 403×403 rgba32float upload. In a trace of a
+            // single selection that was **233 ms inside `texSubImage2D`**,
+            // under `cosmosApplyHighlight ← restyle`. It also fired on every
+            // hover, where neither value can have changed.
+            //
+            // Compared by content, because the array is rebuilt each call and
+            // identity would always differ. It is boundary nodes, so it moves
+            // when a filter or a walk moves it, and not otherwise.
+            const sameOutlined = _hlOutlined === undefined
+                ? outlinedArg === undefined
+                : (outlinedArg !== undefined
+                    && _hlOutlined.length === outlinedArg.length
+                    && _hlOutlined.every((v, k) => v === outlinedArg[k]));
+            if (focusIdx !== _hlFocus || !sameOutlined) {
+                _hlFocus = focusIdx;
+                _hlOutlined = outlinedArg;
+                cosmos.setConfigPartial({
+                    focusedPointIndex: focusIdx,
+                    outlinedPointIndices: outlinedArg,
+                });
+            }
 
             // Ask cosmos.gl to publish live positions for the handful of points
             // the overlay draws on top of. This is the cheap subset readback —
@@ -1918,6 +1952,8 @@
                 _motionTimer = null;
                 _motionUntil = 0;
                 _motionHiding = false;
+                _hlFocus = -2;
+                _hlOutlined = undefined;
                 hitStart = null;
                 hitItems = null;
                 hitCellOf = null;

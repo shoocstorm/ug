@@ -325,6 +325,30 @@
             return fxPt;
         }
 
+        // Which strands can be carrying particles at all.
+        //
+        // This loop used to run over `cosmosEdges` — **all 745,964 of them,
+        // every frame** — asking `linkParticlesFor` about each one in order to
+        // find the handful that answer yes. With a node selected and the
+        // pointer away, that is an O(edges) scan per frame producing nothing,
+        // for as long as the selection lasts: profiled at **853 ms of a 6 s
+        // window inside `linkParticlesFor` alone**, and 29% of a core against
+        // 1.4% with nothing selected. See P12.12.
+        //
+        // `linkParticlesFor` answers from one of three sources. Two of them —
+        // a walk and a tour — decide by node-pair key and by route membership
+        // rather than by edge identity, so they still have to be asked; both
+        // are transient, and both are already redrawing the canvas for other
+        // reasons. The third is a hover or a selection, it is exactly
+        // `state.highlightLinks`, and it is the one that persists.
+        function fxFlowCandidates() {
+            if (!state.lineFlow) return EMPTY_EDGES;
+            if (state.walkActive) return cosmosEdges;
+            if (typeof tourState !== 'undefined' && tourState && tourState.active) return cosmosEdges;
+            return state.highlightLinks;
+        }
+        const EMPTY_EDGES = [];
+
         function fxDrawFlow() {
             const ctx = fxCtx;
             const now = performance.now();
@@ -347,7 +371,7 @@
             const glowDots = hot <= 160;
             ctx.save();
             ctx.globalCompositeOperation = 'lighter';
-            for (const e of cosmosEdges) {
+            for (const e of fxFlowCandidates()) {
                 const count = linkParticlesFor(e);
                 if (!count) continue;
                 if (++drawn > FX_MAX_FLOW_LINKS) break;

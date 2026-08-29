@@ -542,7 +542,31 @@ backdrop; flat, they sit below the noise floor.
 
 ---
 
-### 5.11 Both screens are allowed to sit still
+### 5.11 The flow loop follows the highlight set, not the edge list
+
+`fxDrawFlow` used to iterate `cosmosEdges` — all 745,964 — asking
+`linkParticlesFor` about each to find the ≤600 that carry particles. With a
+node selected and the pointer away that is an O(edges) scan per frame producing
+nothing, and it does not stop: **29% of a core for as long as the selection
+lasts**, against 1.4% with nothing selected. It now iterates
+`state.highlightLinks` directly (**3.6%**).
+
+A walk and a tour still scan, because they decide by node-pair key and by route
+membership rather than by edge identity — both are transient and already
+redrawing for other reasons. If either ever becomes a resting state, it needs
+the same treatment.
+
+> **Trap worth knowing.** This is [P5.1](dev/PERF-TUNING-JOURNEY.md) again, in
+> a different loop — the original was the same scan on hover. "O(everything) to
+> find O(a few)" is worth grepping for whenever a loop runs per frame.
+
+Relatedly, `cosmosApplyHighlight` compares `focusedPointIndex` and
+`outlinedPointIndices` against what it last pushed and skips `setConfigPartial`
+when neither moved. A *fresh array of the same indices* counts as a change to
+cosmos.gl and makes it rewrite the whole 403×403 point-status texture — 233 ms,
+on every hover.
+
+### 5.12 Both screens are allowed to sit still
 
 Idle used to cost about half a CPU core, on either screen, with no input at
 all. Two unrelated causes, both fixed in P12.10 — see

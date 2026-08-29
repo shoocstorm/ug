@@ -658,6 +658,13 @@ re-vendor degrades to slow rather than to broken.
 
 ### 9h. A page that never goes idle
 
+> **And check what an interaction *leaves behind*.** One node selection cost
+> 539 ms — and then left the page at **29% of a core for as long as the node
+> stayed selected**, because a draw loop scanned all 745,964 edges every frame
+> to find the ≤600 carrying particles. The click was measured; the state after
+> it was not. Measure both: the transaction is bounded, the state is not.
+
+
 **An animation nobody can see costs exactly as much as one they can, and a
 render loop with no off switch costs it forever.**
 
@@ -902,6 +909,11 @@ and nothing about the call site says how much it costs. It looks like a setter.
 - Check whether the array is used **by reference** (`pointColors =
   inputPointColors`) or copied and reordered. By reference means index `i` maps
   to a known byte range and a partial write is the same bytes, minus the rest.
+- The same applies to *config* setters, not just data ones. Pushing a freshly
+  built array of the same indices through cosmos.gl's `setConfigPartial` made
+  it rewrite a 403×403 point-status texture — 233 ms — on every restyle,
+  including every hover, where nothing had changed. Compare by **content**
+  before pushing, because a rebuilt array never compares equal by identity.
 - Coalesce scattered indices into runs before writing — a few unchanged
   entries cost less than another round trip — and keep the whole-array path as
   a fallback past a run count or a fraction of the buffer. Falling back is not

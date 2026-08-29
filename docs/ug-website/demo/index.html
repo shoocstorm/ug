@@ -9042,7 +9042,7 @@
 }
     </style>
 <script>
-window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3424,"edges":9879,"files":133,"lines":78725,"ugVersion":"0.1.16","visFingerprint":"1f0b268d9d4035ec","generatedAt":1787964321};
+window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3424,"edges":9879,"files":133,"lines":78725,"ugVersion":"0.1.16","visFingerprint":"e4e10e2d83fe61a7","generatedAt":1787966800};
 /* ==========================================================================
    UltraGraph — static demo shim
    ==========================================================================
@@ -21555,6 +21555,9 @@ self.onmessage = async (ev) => {
             cosmos.setLinkColors(cosmosBuf.linkColors);
             cosmos.setLinkWidths(cosmosBuf.linkWidths);
             cosmosHitInvalidate();
+            // A new point set: whatever was pushed described the old one.
+            _hlFocus = -2;
+            _hlOutlined = undefined;
         }
 
         // Refresh the colour/width buffers from the shared style rules. Alpha
@@ -22326,6 +22329,12 @@ self.onmessage = async (ev) => {
         // So dimming stays in one place — the alpha channel, shared with the 3D
         // renderer — and this sets only the rings, which add emphasis without
         // taking any away.
+        // What was last pushed to cosmos.gl, so a restyle that changes neither
+        // can stay out of its config entirely. Reset on dispose and on build,
+        // where the point set itself changes underneath both.
+        let _hlFocus = -2;          // -2 is "nothing pushed yet"; undefined is a real value
+        let _hlOutlined;
+
         function cosmosApplyHighlight() {
             const focusIdx = state.selectedNode
                 ? cosmosIndexOf.get(state.selectedNode.id)
@@ -22334,10 +22343,35 @@ self.onmessage = async (ev) => {
             for (let i = 0; i < cosmosNodes.length; i++) {
                 if (cosmosNodes[i].isBoundary) outlined.push(i);
             }
-            cosmos.setConfigPartial({
-                focusedPointIndex: focusIdx,
-                outlinedPointIndices: outlined.length ? outlined : undefined,
-            });
+            const outlinedArg = outlined.length ? outlined : undefined;
+
+            // Only when it actually changed.
+            //
+            // `setConfigPartial` re-derives state from the config, and a new
+            // `outlinedPointIndices` array — even one holding the same indices,
+            // even an empty one where there was an empty one — makes
+            // `updatePointStatus()` rewrite the whole point-status texture:
+            // 161,725 points as a 403×403 rgba32float upload. In a trace of a
+            // single selection that was **233 ms inside `texSubImage2D`**,
+            // under `cosmosApplyHighlight ← restyle`. It also fired on every
+            // hover, where neither value can have changed.
+            //
+            // Compared by content, because the array is rebuilt each call and
+            // identity would always differ. It is boundary nodes, so it moves
+            // when a filter or a walk moves it, and not otherwise.
+            const sameOutlined = _hlOutlined === undefined
+                ? outlinedArg === undefined
+                : (outlinedArg !== undefined
+                    && _hlOutlined.length === outlinedArg.length
+                    && _hlOutlined.every((v, k) => v === outlinedArg[k]));
+            if (focusIdx !== _hlFocus || !sameOutlined) {
+                _hlFocus = focusIdx;
+                _hlOutlined = outlinedArg;
+                cosmos.setConfigPartial({
+                    focusedPointIndex: focusIdx,
+                    outlinedPointIndices: outlinedArg,
+                });
+            }
 
             // Ask cosmos.gl to publish live positions for the handful of points
             // the overlay draws on top of. This is the cheap subset readback —
@@ -23205,6 +23239,8 @@ self.onmessage = async (ev) => {
                 _motionTimer = null;
                 _motionUntil = 0;
                 _motionHiding = false;
+                _hlFocus = -2;
+                _hlOutlined = undefined;
                 hitStart = null;
                 hitItems = null;
                 hitCellOf = null;
@@ -23540,6 +23576,30 @@ self.onmessage = async (ev) => {
             return fxPt;
         }
 
+        // Which strands can be carrying particles at all.
+        //
+        // This loop used to run over `cosmosEdges` — **all 745,964 of them,
+        // every frame** — asking `linkParticlesFor` about each one in order to
+        // find the handful that answer yes. With a node selected and the
+        // pointer away, that is an O(edges) scan per frame producing nothing,
+        // for as long as the selection lasts: profiled at **853 ms of a 6 s
+        // window inside `linkParticlesFor` alone**, and 29% of a core against
+        // 1.4% with nothing selected. See P12.12.
+        //
+        // `linkParticlesFor` answers from one of three sources. Two of them —
+        // a walk and a tour — decide by node-pair key and by route membership
+        // rather than by edge identity, so they still have to be asked; both
+        // are transient, and both are already redrawing the canvas for other
+        // reasons. The third is a hover or a selection, it is exactly
+        // `state.highlightLinks`, and it is the one that persists.
+        function fxFlowCandidates() {
+            if (!state.lineFlow) return EMPTY_EDGES;
+            if (state.walkActive) return cosmosEdges;
+            if (typeof tourState !== 'undefined' && tourState && tourState.active) return cosmosEdges;
+            return state.highlightLinks;
+        }
+        const EMPTY_EDGES = [];
+
         function fxDrawFlow() {
             const ctx = fxCtx;
             const now = performance.now();
@@ -23562,7 +23622,7 @@ self.onmessage = async (ev) => {
             const glowDots = hot <= 160;
             ctx.save();
             ctx.globalCompositeOperation = 'lighter';
-            for (const e of cosmosEdges) {
+            for (const e of fxFlowCandidates()) {
                 const count = linkParticlesFor(e);
                 if (!count) continue;
                 if (++drawn > FX_MAX_FLOW_LINKS) break;
