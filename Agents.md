@@ -862,12 +862,57 @@ been up for a day it says almost nothing about now. Take CPU-*time* deltas
 routinely the largest single consumer, while `usedJSHeapSize`-style
 tab-scoped metrics cannot see it at all.
 
+**Headless is good for ratios, not for "this costs nothing".** Two
+configurations compared in the same headless session give a trustworthy
+*ratio*. An absolute conclusion does not travel: "the colour upload is free
+beside the draw" measured 160.5 ms vs 162.6 ms headless, and was 56% of the
+profile on the user's own machine. Before rejecting an optimisation because it
+measured worthless, ask whether the measurement was taken where the user is.
+
 **Kill leaked headless browsers between A/B runs.** A `proc.kill()` that misses
 its children leaves them resident, and eight of them turned a 22 s benchmark
 into 31 s — a clean 40% "regression" in the thing under test. Absolute frame
 costs drift between sessions anyway (GPU clock state moves them 130 → 290 ms
 for the same draw), so **quote ratios from a same-session A/B pair** and treat
 milliseconds from different sittings as incomparable.
+
+### 10h. Handing a library a whole array to change one entry
+
+**Most "set this data" APIs re-send all of it, and some allocate a copy of all
+of it while they are at it. At a few hundred thousand elements that is the
+whole cost of the interaction.**
+
+The 2D renderer changes `1 + degree` point colours and `degree` link colours on
+every hover. It did that by handing cosmos.gl the whole colour array and asking
+it to render: **2.6 MB + 11.9 MB re-uploaded, and another 14.5 MB allocated**
+per hover, because the helper behind `updateColor` keeps
+`new Float32Array(everything)` as a transition's previous frame. In a user's
+trace that was 56% of the profile inside `bufferSubData` — **with the GPU
+idle** — and a JS heap swinging 338 → 871 MB over five seconds of hovering.
+
+**Why:** the API is shaped for "here is the data", not "here is what changed",
+and nothing about the call site says how much it costs. It looks like a setter.
+
+**How to apply:**
+
+- Before accepting a whole-array setter on a hot path, find out what it does
+  underneath. Read the vendored source: the layer below the one you are calling
+  often *does* take an offset — cosmos.gl has no partial-update API, but
+  luma.gl's `Buffer.write(data, byteOffset)` under it does.
+- Check whether the array is used **by reference** (`pointColors =
+  inputPointColors`) or copied and reordered. By reference means index `i` maps
+  to a known byte range and a partial write is the same bytes, minus the rest.
+- Coalesce scattered indices into runs before writing — a few unchanged
+  entries cost less than another round trip — and keep the whole-array path as
+  a fallback past a run count or a fraction of the buffer. Falling back is not
+  a failure; it is what you were doing unconditionally before.
+- **Prove equivalence two ways.** Read the buffer back and compare it float for
+  float against what you believe you uploaded (`readSyncWebGL`), *and* compare
+  the rendered pixels against the whole-array path. The first catches a wrong
+  offset; only the second catches a wrong assumption about what is drawn.
+- Watch the heap, not just the clock. Allocation churn of this size shows up as
+  a swing of hundreds of MB long before it shows up as a slow frame — see
+  [§10d](#10d-allocation-churn-is-a-cpu-cost-not-a-memory-one).
 
 ## 11. Record what you learn, here, without being asked
 

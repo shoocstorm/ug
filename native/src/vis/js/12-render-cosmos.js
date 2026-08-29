@@ -351,15 +351,87 @@
         //
         // Link widths are structural (`Contains` or not), never style, so a
         // scoped pass leaves them and the buffer they were last written into.
+        // Repaint just the scope, and report which slots it touched — the
+        // upload below needs exactly that list, and walking the scope twice to
+        // rediscover it would be silly.
         function cosmosPaintScoped(scope) {
+            const nodes = [];
+            const links = [];
             for (const id of scope.nodes) {
                 const i = cosmosIndexOf.get(id);
-                if (i !== undefined) cosmosPaintNode(i);
+                if (i !== undefined) { cosmosPaintNode(i); nodes.push(i); }
             }
             for (const e of scope.links) {
                 const i = e && e.__ci;
-                if (i !== undefined && cosmosEdges[i] === e) cosmosPaintLink(i);
+                if (i !== undefined && cosmosEdges[i] === e) { cosmosPaintLink(i); links.push(i); }
             }
+            return { nodes, links };
+        }
+
+        // ── Uploading a handful of colours instead of all of them ──────
+        //
+        // A hover changes `1 + degree` point colours and `degree` link
+        // colours. Handing those to `setPointColors` / `setLinkColors` and
+        // calling `render()` made cosmos.gl re-send **the whole buffer**:
+        // 2.6 MB of point colours and 11.9 MB of link colours at 745,964
+        // links. And `ga()`, the helper behind `updateColor`, does it twice
+        // over — one `bufferSubData` of the full array, plus
+        // `new Float32Array(t)` to keep as the transition's `previous`.
+        //
+        // In a trace of a few seconds of ordinary hovering on the neo4j graph,
+        // that was **1,168 ms inside `bufferSubData`** — 56% of the whole
+        // profile — under `updateColor ← create ← update ← render ← restyle`,
+        // with the GPU itself idle (`GPUTask` totalled 27 ms). The matching
+        // allocation showed up as the JS heap swinging **338 → 871 MB** across
+        // the same five seconds. Both are per hover, and neither is anything
+        // the picture needed.
+        //
+        // The colour arrays we hand cosmos.gl are used **by reference** — 
+        // `updatePointColor` does `pointColors = inputPointColors`, and the
+        // link path the same — and each entry is four floats at its own index,
+        // in the order we built. So slot `i` is bytes `[i*16, i*16+16)` of the
+        // GPU buffer, and writing only the slots that changed is not a
+        // reinterpretation of anything: it is the same bytes, minus the
+        // 14.5 MB either side of them.
+        const COLOR_BYTES = 16;             // four float32 per entry
+        // Merge two runs separated by fewer than this many entries: sending a
+        // few unchanged colours costs less than another driver round trip.
+        const UPLOAD_RUN_GAP = 16;
+        // Past either of these the partial upload has stopped being a saving —
+        // a hub node's 8,680 scattered edges is the case that finds it — and
+        // the whole-buffer path is both simpler and faster. Falling back is
+        // not a failure; it is the same upload we used to do unconditionally.
+        const UPLOAD_MAX_RUNS = 192;
+        const UPLOAD_MAX_FRACTION = 0.25;
+
+        // Write `arr`'s entries at `indices` into `buf`. Returns false when it
+        // judged the whole buffer cheaper, leaving the caller to do that.
+        function cosmosWriteColors(buf, arr, indices) {
+            if (!buf || buf.destroyed) return false;
+            if (!indices.length) return true;
+
+            const sorted = Int32Array.from(indices).sort();
+            const runs = [];
+            let start = sorted[0], end = sorted[0];
+            for (let k = 1; k < sorted.length; k++) {
+                const v = sorted[k];
+                if (v === end) continue;
+                if (v - end <= UPLOAD_RUN_GAP) { end = v; continue; }
+                runs.push(start, end);
+                start = end = v;
+            }
+            runs.push(start, end);
+
+            if (runs.length / 2 > UPLOAD_MAX_RUNS) return false;
+            let bytes = 0;
+            for (let k = 0; k < runs.length; k += 2) bytes += (runs[k + 1] - runs[k] + 1) * COLOR_BYTES;
+            if (bytes > arr.byteLength * UPLOAD_MAX_FRACTION) return false;
+
+            for (let k = 0; k < runs.length; k += 2) {
+                const s = runs[k], e = runs[k + 1];
+                buf.write(arr.subarray(s * 4, (e + 1) * 4), s * COLOR_BYTES);
+            }
+            return true;
         }
 
         // Hidden points are moved to NaN, which cosmos.gl treats as *absent*:
@@ -1666,8 +1738,30 @@
                     return;
                 }
                 const scoped = scope && !state.walkActive;
-                if (scoped) cosmosPaintScoped(scope);
-                else cosmosPaint();
+                if (scoped) {
+                    // The fast path: repaint the scope, push only those slots
+                    // to the GPU, and let the frame we are already inside draw
+                    // them. No whole-buffer upload, no `render()`, and so none
+                    // of `update()` → `create()` → `updateColor()` → `ga()`.
+                    const touched = cosmosPaintScoped(scope);
+                    const pts = cosmos.points, lns = cosmos.lines;
+                    if (pts && lns
+                        && cosmosWriteColors(pts.targetColorBuffer, cosmosBuf.colors, touched.nodes)
+                        && cosmosWriteColors(lns.targetColorBuffer, cosmosBuf.linkColors, touched.links)) {
+                        cosmosApplyHighlight();
+                        // We are normally called from inside cosmos.gl's own
+                        // frame, ahead of its draw — but `handleNodeHover` has
+                        // callers that are not, so ask for a frame rather than
+                        // assume one.
+                        cosmos.requestRender();
+                        return;
+                    }
+                    // Too scattered to be worth it (a hub node's edges), or the
+                    // buffers are not up yet. Fall through to the full upload —
+                    // the colours are already painted, so nothing is lost.
+                } else {
+                    cosmosPaint();
+                }
                 cosmos.setPointColors(cosmosBuf.colors);
                 cosmos.setLinkColors(cosmosBuf.linkColors);
                 if (!scoped) {

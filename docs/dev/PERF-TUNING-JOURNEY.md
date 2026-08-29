@@ -15,7 +15,7 @@
 | **Opened** | 2026-08-18 |
 | **Version** | 0.1.16 |
 | **Primary fixture** | `~/.ug/neo4j` — 161,725 nodes / 745,964 edges / 330 MB `graph.json` |
-| **Status** | Rounds 1–4 landed (bar P11.7, deferred). Round 5: **P12.1, P12.3, P12.6, P12.7, P12.8, P12.9, P12.10 landed** (P12.7 half-reverted — see its note); P12.2, P12.4, P12.5 audited. Suite **912/912** |
+| **Status** | Rounds 1–4 landed (bar P11.7, deferred). Round 5: **P12.1, P12.3, P12.6, P12.7, P12.8, P12.9, P12.10, P12.11 landed** (P12.7 half-reverted — see its note); P12.2, P12.4, P12.5 audited. Suite **912/912** |
 
 **Status marks:** ✅ landed and verified · ⬜ open · ⏭️ deferred · ❌ rejected by measurement
 
@@ -677,6 +677,7 @@ browser figure in this file before today measured the 6%.
 | P12.8 | Hover asks the GPU what is under the cursor, and waits for the whole scene | sweep wall **−27%**, CPU **−41%**, p95 frame **−49%**; 97.6% pick agreement | ✅ |
 | P12.9 | Every animation redraws 745,964 links per frame | **3–4 fps → 120 fps** on morphs and camera flights | ✅ |
 | P12.10 | The page never goes idle — on either screen | idle CPU **50.4% → 3%** (landing), **58.8% → 7%** (graph) | ✅ |
+| P12.11 | Every hover re-uploads *and* re-allocates all 14.5 MB of colour | heap swing per 60 moves **909 → 34 MB**; sweep CPU **10×** | ✅ |
 
 <a id="p121"></a>
 ### ✅ P12.1 — the catalog renders the whole repository into the DOM at boot
@@ -1090,6 +1091,14 @@ says not to change it back without re-running the harness.
 | we found a node and the GPU did not | **0** |
 | both found one, different node (overlapping discs) | 6 of 71 |
 
+> The rate is **zoom-dependent** — 95–98% across cameras, because how many
+> discs overlap under a pixel is a property of the view, not of the algorithm.
+> Pin the camera (`fitView(0, …)` and settle) before comparing two runs, or the
+> number moves on its own. Verified against a control: forcing
+> [P12.11](#p1211)'s partial upload off gives a bit-identical result
+> (95.1%, same 5 disagreements, same single boundary pixel), which is what
+> confirms colours have nothing to do with picking.
+
 **And the patch introduced a bug of its own, which the same harness caught.**
 `shouldKeepRendering()` — the predicate deciding whether the rAF loop runs
 another frame — asks `hasPendingHoverWork()`: "has the pointer moved more than
@@ -1302,6 +1311,73 @@ invisible graph: deep link → container painted; manager opened over the live
 graph → hidden, canvas still 1600×913 (no resize storm); project re-picked →
 container painted, canvas byte-identical.
 
+<a id="p1211"></a>
+### ✅ P12.11 — 14.5 MB uploaded, and 14.5 MB allocated, per hover
+
+Handed a Chrome trace of a few seconds of ordinary hovering on the neo4j
+graph. It reads as a single column:
+
+```
+Animation frame fired                              2,064.8 ms  99.2%
+  renderFrame                                      1,534.7 ms  73.7%
+    cosmos.findHoveredItem → processHoverResult    1,531.1 ms  73.5%
+      onPointMouseOver → handleNodeHover           1,346.2 ms  64.7%
+        bumpGraphStyles → restyle                  1,345.0 ms  64.6%
+          render → update → create → updateColor   1,171.7 ms  56.3%
+            ga → write → bufferSubData             1,168.2 ms  56.1%
+```
+
+**56% of the profile in `bufferSubData`, with the GPU idle** — `GPUTask`
+totalled 27.5 ms across the whole 5.1 s trace. And the same trace's counters
+show the JS heap swinging **338.6 → 871.0 MB**.
+
+Both come from the same place. A hover changes `1 + degree` point colours and
+`degree` link colours; `setPointColors` / `setLinkColors` + `render()` re-sent
+**the whole buffer** — 2.6 MB of point colours and 11.9 MB of link colours at
+745,964 links. And `ga()`, the helper behind `updateColor`, pays it twice: one
+`bufferSubData` of the full array, then `new Float32Array(t)` to keep as the
+transition's `previous`. 14.5 MB uploaded and 14.5 MB allocated, per hover.
+
+**The arrays are used by reference.** `updatePointColor` does
+`pointColors = inputPointColors`; the link path the same. No copy, no reorder —
+entry `i` is bytes `[i*16, i*16+16)` of the GPU buffer, in the order we built
+it. So a scoped restyle now writes only the slots it painted, straight into
+`points.targetColorBuffer` / `lines.targetColorBuffer`, and skips `render()`
+entirely: no `update()`, no `create()`, no `updateColor()`, no `ga()`.
+
+Scattered indices are coalesced into runs (gap ≤ 16 entries — sending a few
+unchanged colours beats another driver round trip), and the whole thing falls
+back to the old full upload past 192 runs or a quarter of the buffer. A hub
+node's 8,680 edges is the case that finds that, and falling back there is not a
+failure: it is the upload we used to do unconditionally.
+
+| 60 pointer moves, 25 landing on a node | full upload | partial |
+| :--- | ---: | ---: |
+| wall clock | 13.0 s | **6.4 s** |
+| JS heap swing | **909 MB** | **34 MB** |
+| peak heap | 1,210 MB | 336 MB |
+| CPU over a 120-move sweep | 3,603 ms | **356 ms** |
+| p95 frame | 116.6 ms | 100.0 ms |
+
+**Verified two ways, because "the same bytes minus the ones either side" is a
+claim about equivalence.** Reading the GPU buffers back after 16 landed hovers
+and comparing float for float against the arrays the page believes it uploaded:
+**0 differing** of 646,900 point floats and 2,983,856 link floats. And the
+rendered picture: with the FX overlay hidden — its flow particles are
+time-based anddiffer in phase between runs — a hover under the partial path and the
+same hover under the full path are **pixel-identical, 0 of 591,300 differing,
+max channel delta 0**.
+
+> This also retires the "[partial GPU buffer uploads](#rejected--deferred)"
+> entry, which had been rejected twice: once because cosmos.gl exposes no
+> partial-update API (true — but luma.gl's `Buffer.write(data, byteOffset)`
+> underneath it does), and once because [P12.9](#p129) measured the upload as
+> free beside the 163 ms draw. That second measurement was taken on a
+> **headless** browser and it does not hold on the user's machine, where the
+> same upload costs 39 ms and half a gigabyte of allocation. Two rejections,
+> both reasoned from a real measurement, both wrong about the machine that
+> matters.
+
 ### What the round taught
 
 - **The JS heap is not the tab.** 118 MB of heap sat inside a 1,958 MB
@@ -1338,6 +1414,13 @@ container painted, canvas byte-identical.
   The idle state was half a core on both screens and it had never been looked
   at. Benchmark the rest state too — it is the state the app spends most of its
   life in.
+- **A rejection is only as good as the machine it was measured on.** Partial
+  colour uploads were rejected twice on real measurements, and the second one —
+  "the upload is free beside the draw", 160.5 ms vs 162.6 ms — was taken on a
+  headless browser and was simply not true of the user's. On theirs the same
+  upload was 56% of the profile. Headless on the real GPU is close enough for
+  *ratios* between two configurations; it is not close enough to conclude that
+  something costs nothing.
 - **`%CPU` from `ps` is a lifetime average.** On a Chrome process that has been
   up for 22 hours it says almost nothing about now. Take CPU-*time* deltas
   (`ps -o time=`) over a fixed window, across the whole process tree — the GPU
@@ -1458,6 +1541,12 @@ One row per landed item or baseline. Keep the numbers, not just the verdict.
 | 2026-08-28 | P12.10 | same animation, 700×500 vs 1600×1000 window | 3.8% | 16.1% | scales with area — a full-viewport raster per frame |
 | 2026-08-28 | P12.10 | cosmos.gl pick tolerance, corrected for the half-res picking buffer | 97.1%, 1 miss | **97.6%, 0 misses** | `Qu = 0.5`, so the 9×9 window is ±8 CSS px, not ±4 |
 | 2026-08-28 | P12.10 | overlay repaint correctness | — | **8 of 8 pixel assertions** | idle stable, hover/zoom/resize repaint, ring still animates |
+| 2026-08-29 | P12.11 | user's Chrome trace, 5.1 s of hovering | `bufferSubData` **1,168 ms (56%)** | — | GPU idle throughout (`GPUTask` 27.5 ms total) |
+| 2026-08-29 | P12.11 | JS heap over 60 pointer moves (25 landing) | swing **909 MB**, peak 1,210 MB | swing **34 MB**, peak 336 MB | `ga()` allocates a full copy per hover as the transition's `previous` |
+| 2026-08-29 | P12.11 | wall clock, same 60 moves | 13.0 s | **6.4 s** | 2.0× |
+| 2026-08-29 | P12.11 | CPU over a 120-move sweep | 3,603 ms | **356 ms** | 10× |
+| 2026-08-29 | P12.11 | GPU buffers vs the arrays, after 16 hovers | — | **0 differing** of 646,900 + 2,983,856 floats | read back with `readSyncWebGL` |
+| 2026-08-29 | P12.11 | rendered hover, partial vs full upload | — | **0 of 591,300 pixels differ** | with the FX overlay hidden — its flow particles differ by phase |
 
 ---
 
@@ -1475,7 +1564,7 @@ them — so the next audit does not re-propose them.
 | Interning edge endpoints *after* the build | Measured 2026-08-25: **no change in peak** (1,458 → 1,456 MB) for **+1.6 s**. Every duplicate is already allocated by then, and freeing them does not return the memory. Interning has to happen as each edge is made or read. |
 | `serde_json::from_reader` for the snapshot parse | Measured 2026-08-25: avoids the 346 MB buffer, but startup **0.31 → 1.33 s** — four times HEAD, giving back most of what P3.1 bought. `memmap2` gets the same memory at 0.48 s. |
 | `build_texts` parallelism (P11.7) | Deferred 2026-08-26, on arithmetic. Instrumented, `build_texts` is 677 ms of a 20.4 s command (3.3%) and 250 ms of that is blocked by `seen_banner`; parallelising the rest is worth ~350 ms at the limit (1.7%). P11.11 landed *inside* this phase and shrank it further, so the case is weaker now than at deferral. The design objection stands too — per-file banner sets change *attribution*, and extract-then-dedupe does not decompose because `extract_prose_comments` interleaves the dedup with a character budget and an early `break`. Measuring the split first found [P11.11](#p1111), which was the larger piece all along. |
-| Partial GPU buffer uploads in cosmos.gl | Proposed 2026-08-27 after [P12.3](#p123), **killed 2026-08-28 by [P12.9](#p129)**: it would have been a real change to the library for no user-visible gain. One full redraw of the 745,964-link scene costs ~163 ms *whether or not* the 14.5 MB of colour buffers are uploaded first — 160.5 ms with, 162.6 ms without. The upload was never the cost; the draw is. Do not re-propose without first re-running the redraw measurement in P12.9. |
+| ~~Partial GPU buffer uploads in cosmos.gl~~ | **Un-rejected and landed as [P12.11](#p1211) on 2026-08-29.** Rejected twice, wrongly. First on 2026-08-27, because cosmos.gl exposes no partial-update API — true of cosmos.gl, but luma.gl's `Buffer.write(data, byteOffset)` underneath it takes a byte offset. Then again on 2026-08-28, because [P12.9](#p129) measured the upload as free beside the 163 ms draw (160.5 ms with it, 162.6 ms without) — a real measurement, taken on a **headless** browser, that does not hold on the machine that matters: a user's trace put the same upload at 56% of the profile and 909 MB of allocation per sixty hovers. Kept here as a reminder that a rejection is only as good as the machine it was measured on. |
 | Level-of-detail links on a *settled* graph | Considered 2026-08-28 as the answer to slow animation, and unnecessary once measured. Motion-only LoD ([P12.9](#p129)) recovers 3 fps → 120 fps while leaving the still picture exactly as it was, so there is no case for permanently dropping, capping or fading links — and every version of that changes what the graph *says* about the code. |
 | WebAssembly anywhere in the vis layer | Audited 2026-08-27, no candidate found. Every hot loop is either a typed-array pass already at memory bandwidth, or string/`Map` work whose data would have to be copied across the wasm boundary to be touched. The one shape that would suit it — the 485k-entry `id → index` hash table — is already in a Worker and already costs 7 ms. The vis layer's measured costs are DOM ([P12.1](#p121)), a JSON parse ([P12.2](#p122)) and an un-dirtied repaint ([P12.3](#p123)); wasm addresses none of the three. |
 | Raising `SOLO_MAX_NODES` above 1,500 | Not a performance question. cosmos.gl will instance far more and the GPU-side payload is ~40 B per point, so the budget is not what stops it — a couple of hundred thousand points is a solid wash whichever layout runs, and every hover, filter and restyle then pays full price for pixels nobody can read. Revisit only behind a *different* picture (density/aggregate overview), not by moving the number. |

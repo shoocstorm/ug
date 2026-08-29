@@ -122,7 +122,7 @@ URL-state restore routinely beats the mount.
 
 **`caps` is what keeps the pair honest.** A control a backend cannot honour is
 *hidden*, not left dead: in 2D the six face projections, the 3D/ISO button, the
-orientation gizmo and Spin all disappear, and the layout switcher (§5.7) takes
+orientation gizmo and Spin all disappear, and the layout switcher (§5.8) takes
 their place. A dead control reads as a bug in the graph rather than a property
 of the renderer.
 
@@ -430,7 +430,38 @@ Every motion the renderer knows about is wired to it: the opening morph, both
 layout paths, the walk's prescribed positions, all seven camera helpers, the
 simulation ticks, and the user's own pan/zoom via `onZoom`.
 
-### 5.6 Simulation
+### 5.6 A hover uploads only the colours it changed
+
+A hover changes `1 + degree` point colours and `degree` link colours. Handing
+those to `setPointColors` / `setLinkColors` and calling `render()` re-sent the
+**whole** buffer — 2.6 MB of points and 11.9 MB of links at 745,964 links — and
+`ga()`, the helper behind cosmos.gl's `updateColor`, also kept
+`new Float32Array(everything)` as the transition's previous frame. 14.5 MB
+uploaded and 14.5 MB allocated, per hover.
+
+`restyle(scope)` now writes just the painted slots into
+`points.targetColorBuffer` / `lines.targetColorBuffer` and skips `render()`.
+Scattered indices are coalesced into runs, and past 192 runs or a quarter of
+the buffer it falls back to the old whole-array path — a hub node's 8,680 edges
+is that case. See P12.11 in [the perf journal](dev/PERF-TUNING-JOURNEY.md#p1211):
+**909 MB of heap churn per sixty hovers down to 34 MB**, sweep CPU 10× lower.
+
+> **Traps worth knowing.**
+>
+> 1. This is only safe because the arrays are used **by reference** —
+>    `updatePointColor` does `pointColors = inputPointColors`, no copy and no
+>    reorder, so entry `i` is bytes `[i*16, i*16+16)`. Re-check that after any
+>    bundle bump (§3.3).
+> 2. **Setting a colour buffer does not upload it** — see
+>    `restyle`'s own note, and P12.7. The
+>    partial path is correct because it does the `bufferSubData` itself; the
+>    fallback is correct because it calls `render()`. Nothing in between is.
+> 3. Prove equivalence in **both** directions: read the buffer back
+>    (`readSyncWebGL`) and compare floats, *and* compare rendered pixels
+>    against the whole-array path. Hide `#fx-overlay` for the pixel comparison
+>    — its flow particles are time-based and differ in phase between runs.
+
+### 5.7 Simulation
 
 `simulationDecay` is **a tick count, and lower is faster**. cosmos.gl's own docs
 say the opposite, but alpha decays by `1 - ALPHA_MIN^(1/decay)` per tick, so
@@ -438,7 +469,7 @@ after `decay` ticks it has reached the floor — the default 5000 is ~80 seconds
 60 fps. `ug` uses **300** (~5 s at `start(0.7)`), deliberately close to the 3D
 renderer's `cooldownTicks(100)`, which exists for the same reason.
 
-### 5.7 Layouts
+### 5.8 Layouts
 
 With no camera to move, what is worth switching is the **arrangement**. Seven,
 in the viewbar where the face projections sit in 3D:
@@ -466,7 +497,7 @@ go to an outer ring rather than being forced into a folder they are not in.
 Island centres sit on a phyllotaxis spiral so the biggest folder lands dead
 centre, and the FX overlay labels each one.
 
-### 5.8 The opening
+### 5.9 The opening
 
 Positions are just a buffer, and `render(alpha, duration)` tweens the whole
 buffer on the GPU — so the graph *arrives* rather than being computed in public:
@@ -485,7 +516,7 @@ skips straight to the layout.
 > cosmos.gl auto-rescales incoming positions unless `rescalePositions: false` —
 > which would quietly rewrite every layout's coordinates.
 
-### 5.9 The FX overlay (`13-render-overlay.js`)
+### 5.10 The FX overlay (`13-render-overlay.js`)
 
 One 2D canvas over the WebGL one, `pointer-events: none`, carrying what
 cosmos.gl cannot draw: **labels** (it renders no text at all), **halos** (a point
@@ -511,7 +542,7 @@ backdrop; flat, they sit below the noise floor.
 
 ---
 
-### 5.10 Both screens are allowed to sit still
+### 5.11 Both screens are allowed to sit still
 
 Idle used to cost about half a CPU core, on either screen, with no input at
 all. Two unrelated causes, both fixed in P12.10 — see
