@@ -869,6 +869,41 @@ been up for a day it says almost nothing about now. Take CPU-*time* deltas
 routinely the largest single consumer, while `usedJSHeapSize`-style
 tab-scoped metrics cannot see it at all.
 
+**The engine and the machine's power state are part of every frame-rate
+number.** The same walk, the same graph, the same display, minutes apart:
+**22.7 fps in `ug app` and 77–83 fps in Chrome**, with the page's own rAF work
+at 1 ms a frame either way. A bare moving `<div>` in the same Tauri window also
+measured 29.8 fps, so the cadence was the webview's and had nothing to do with
+our code — and the machine was on battery with Low Power Mode on, which WebKit
+honours by halving its rendering update rate and Chrome ignores. Before
+attributing a frame time to the page, measure something trivial in the same
+window, and record `pmset -g`'s `powermode` beside the figure — when that
+setting changed under the harness, the same app on the same page went from 33
+to 17 ms a frame with nothing else touched.
+
+**A walk left standing on the canvas costs three quarters of a core.** Settled,
+nothing advancing: 76.5% of a core and 49% GPU, against **4.1% and 20%** for
+the same page once the walk is exited — and the FX overlay's own `overlayDraw()`
+is 0.7 ms of it. The rest is rasterising a full-viewport 2D canvas every frame,
+which WebKit performs in its **GPU process** (66.6% of a core there against
+WebContent's 8.2%), so a profile taken in the renderer will show almost none of
+it. When the JS self time and the machine's CPU disagree by that much, the work
+is in another process — and the lever is the number of frames, not the drawing:
+capping *ambient* motion (particles marching, a ring breathing — redraws with no
+event behind them) at 30 Hz took it to 45.3% with an identical picture. Exempt
+anything with an event behind it, camera moves above all, or the overlay stops
+tracking the canvas underneath it.
+
+**A WKWebView has no CDP, and `ps -o rss=` is not its memory.** To reach into
+`ug app`, the reverse proxy splices a loop that long-polls for JS, runs it in
+module scope through a direct `eval`, and posts the result back; point the
+binary at it with `UG_APP_URL`, not through `ug app`, which builds its own URL.
+Two traps that silently produce wrong numbers: an **occluded window suspends
+rAF completely** — bring it frontmost with `osascript` or every frame figure is
+0 — and `ps -o rss=` reported **4.4 GiB** where `vmmap -summary`'s physical
+footprint, the number Activity Monitor shows, said **2.4 GB**. Quote the
+footprint, or quote `ps` for *both* sides of a comparison and never mix them.
+
 **A test that reconstructs the thing it is testing is testing its own
 reconstruction.** A check written to validate a cached edge list re-implemented
 the key function as `a + ' ' + b`, found nothing, and reported the code under

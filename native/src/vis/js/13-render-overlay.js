@@ -55,6 +55,36 @@
         let fxWasLive = false;
         let fxLiveUntil = 0;
 
+        // ── Ambient motion draws at 30 Hz, not at the display's rate ──
+        //
+        // Flow particles marching and the selection ring breathing are the one
+        // thing on this canvas with no *event* behind them: they redraw
+        // because time passed. There is no reason for that to happen 60 or 120
+        // times a second. A walk left standing on a 3456×1992 canvas cost
+        // **76.5% of a core** — of which `overlayDraw()` itself was 0.7 ms a
+        // frame. The rest is rasterising a full-viewport 2D canvas, which
+        // WebKit performs in its GPU process (66.6% of a core there against
+        // WebContent's 8.2%), so halving the frames halves nearly all of it.
+        // See P12.19 / P12.21.
+        //
+        // Everything with an event behind it is exempt and still draws on the
+        // frame it happens:
+        //   `fxDirty`      something changed — a hop, a hover, a restyle.
+        //   `fxLiveUntil`  a camera flight, a layout morph, a pan or a zoom,
+        //                  where the overlay has to track the canvas beneath
+        //                  it frame for frame or the labels swim.
+        //   the transition into and out of live, which is one frame each way.
+        // The slack matters: without it, a 60 Hz display delivers ambient
+        // frames at 33.4 ms and jitter drops some under the 33.3 ms bar, which
+        // skips them and lands the real rate at 22/s rather than 30. A quarter
+        // of a 60 Hz frame absorbs that and still floors 120 Hz at every
+        // fourth frame — 30/s on any of the three cadences measured (30, 60,
+        // 120 Hz).
+        const FX_AMBIENT_MAX_FPS = 30;
+        const FX_AMBIENT_SLACK_MS = 4;
+        const FX_AMBIENT_MIN_MS = 1000 / FX_AMBIENT_MAX_FPS - FX_AMBIENT_SLACK_MS;
+        let fxLastDraw = 0;
+
         function overlayLive() {
             if (fxPulses.length || fxSweeps.length) return true;
             // The ring spins and breathes; the flow particles march.
@@ -89,9 +119,25 @@
                 requestAnimationFrame(tick);
                 const live = overlayLive();
                 if (!live && !fxDirty && !fxWasLive) return;
+                const now = performance.now();
+                // Ambient only when it is *already* live (the frame that turns
+                // motion on is a transition, not ambient), nothing has changed,
+                // and no camera move is in flight.
+                const ambient = live && fxWasLive && !fxDirty && now >= fxLiveUntil;
+                if (ambient && now - fxLastDraw < FX_AMBIENT_MIN_MS) return;
+                fxLastDraw = now;
                 fxWasLive = live;
                 fxDirty = false;
-                overlayDraw();
+                // Timed only when the HUD is on: two `performance.now()` calls
+                // a frame is nothing, but a frame is exactly where nothing
+                // adds up. See 23-perf-hud.js.
+                if (perfHudActive()) {
+                    const t0 = performance.now();
+                    overlayDraw();
+                    perfHudNoteDraw(performance.now() - t0);
+                } else {
+                    overlayDraw();
+                }
             };
             requestAnimationFrame(tick);
         }

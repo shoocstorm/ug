@@ -311,6 +311,11 @@
              draws all of it in-scene, is mounted. -->
         <canvas id="fx-overlay" hidden></canvas>
 
+        <!-- Performance readout (`vis.perf_hud`, off by default). Frame
+             cadence, the FX overlay's own draw time, and what is on the
+             canvas — populated entirely by 23-perf-hud.js. -->
+        <div id="perf-hud" class="canvas-overlay" hidden aria-hidden="true"></div>
+
         <!-- Guided Tour: cinematic narration overlay (camera flies stop to
              stop). Draggable by its header; the JSON button opens the plan
              the LLM produced. -->

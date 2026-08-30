@@ -70,6 +70,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
     ConfigKey { name: "vis.solo_threshold", section: "vis", field: "soloThreshold", flag: "", kind: Kind::U32, min: 1, secret: false, desc: "nodes/edges past which the page opens in solo mode (the 2D engine's ceiling)" },
     ConfigKey { name: "vis.link_blending", section: "vis", field: "linkBlending", flag: "", kind: Kind::Enum(&["on", "off"]), min: 0, secret: false, desc: "additive blending for links in the 2D engine: richer where strands overlap, but the single biggest per-frame cost at high resolution (off is ~2.3x cheaper at 3400x2000)" },
     ConfigKey { name: "vis.hover_delay_ms", section: "vis", field: "hoverDelayMs", flag: "", kind: Kind::U32, min: 0, secret: false, desc: "how long the pointer must rest on a node before it is hovered; collapses the nodes crossed on the way from one to another into no work at all (0 = hover immediately)" },
+    ConfigKey { name: "vis.perf_hud", section: "vis", field: "perfHud", flag: "", kind: Kind::Enum(&["on", "off"]), min: 0, secret: false, desc: "on-canvas performance readout: the frame cadence the browser is handing the page, the FX overlay's own draw time, and what is on the canvas" },
     ConfigKey { name: "graph.server_mode_bytes", section: "graph", field: "serverModeBytes", flag: "", kind: Kind::U64, min: 1024, secret: false, desc: "graph.json bytes at/above which the browser is served the slim node index instead of the whole file (server mode)" },
 ];
 
@@ -260,6 +261,8 @@ pub(crate) fn default_for(key: &ConfigKey) -> Option<String> {
         "vis.hover_delay_ms" => Some("90".to_string()),
         // Mirrors LINK_BLENDING_DEFAULT in native/src/vis/js/12-render-cosmos.js.
         "vis.link_blending" => Some("on".to_string()),
+        // Mirrors PERF_HUD_DEFAULT in native/src/vis/js/23-perf-hud.js.
+        "vis.perf_hud" => Some("off".to_string()),
         // Mirrors GRAPH_SERVER_MODE_BYTES in native/src/serve.rs.
         "graph.server_mode_bytes" => Some("52428800".to_string()),
         _ => None,

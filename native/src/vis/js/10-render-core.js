@@ -439,6 +439,9 @@
             // needs the overlay canvas. Exactly one of them is ever running.
             if (caps.threeD) overlayStop();
             else overlayStart();
+            // The HUD spans both backends — the overlay is 2D-only, but the
+            // frame cadence is worth seeing whichever one is mounted.
+            perfHudSync();
         }
 
         // ─── Dispatchers ───────────────────────────────────────
@@ -456,7 +459,41 @@
         // A hover is the case it exists for (one node and its edges, against a
         // whole graph), and a backend is free to ignore it — the 3D one does,
         // being bounded to 3,000 elements anyway.
+        // ── Holding restyles across a transaction ──────────────
+        //
+        // One user action can pass through several helpers that each restyle
+        // on their way out, and on a 161,725 / 745,964 graph each of those is
+        // a full-graph pass and a colour upload. Starting a walk did two back
+        // to back — `handleClick` selecting the seed, then
+        // `setWalkStateToHop(0)` painting the walk over the top of it — for
+        // **131 ms + 133 ms**, of which the first was thrown away by the
+        // second a few lines later.
+        //
+        // `coalesceRestyles(fn)` holds them: every `bumpGraphStyles()` inside
+        // `fn` is *recorded*, and one restyle is issued when it returns. The
+        // scope hint is dropped when more than one arrives, because the safe
+        // merge of two promises about what moved is no promise at all.
+        //
+        // Recorded rather than dropped on purpose: if a caller wraps something
+        // it should not have, the failure is a restyle one tick late, not a
+        // canvas that never repaints.
+        let _restyleHold = 0;
+        let _restyleOwed = false;
+        function coalesceRestyles(fn) {
+            _restyleHold++;
+            try {
+                return fn();
+            } finally {
+                _restyleHold--;
+                if (!_restyleHold && _restyleOwed) {
+                    _restyleOwed = false;
+                    bumpGraphStyles();
+                }
+            }
+        }
+
         function bumpGraphStyles(scope) {
+            if (_restyleHold) { _restyleOwed = true; return; }
             if (R) R.restyle(scope);
             // Colours, filters, focus and the hover sets all reach the FX
             // overlay too (halos, flow, labels, the selection marker), and the

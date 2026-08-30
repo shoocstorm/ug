@@ -186,6 +186,10 @@
                 }
                 console.warn('capabilities probe failed:', err);
             }
+            // Capabilities can land after the renderer has already mounted, so
+            // the HUD is synced from both ends — whichever is last wins, and
+            // both are idempotent.
+            perfHudSync();
         }
 
         // Dot a Discover sub-tab whose backend isn't available. The tab stays
@@ -433,6 +437,14 @@
                     off: 'Off — faster on a large display',
                 },
                 hint: 'How overlapping links are drawn. On, they add together, so a dense bundle glows and depth reads through the tangle. Off, each strand is drawn opaque over the last — flatter, and the single biggest saving there is at high resolution: a full redraw of a 746k-link graph costs 349 ms blended and 149 ms unblended at 3400×2000, which is most of the delay between clicking a node and seeing the result. It halves the link draw at any size, but on a smaller window that draw is not what you are waiting on, so the interaction barely changes. Filtered-out links stay hidden either way.',
+            },
+            'vis.perf_hud': {
+                label: 'Performance HUD',
+                selectLabels: {
+                    on: 'On — show the readout on the canvas',
+                    off: 'Off',
+                },
+                hint: 'A small readout in the top-right corner of the canvas: the frame cadence the browser is handing the page (rate, median and p95 interval), what the FX overlay costs to draw and how often it draws, what is on the canvas, and its size in device pixels. The two lines answer different questions — the cadence is set by the display and the engine (WebKit halves it in macOS Low Power Mode, where Chrome does not), while the overlay time is the page\'s own work. Free when off, and about two clock reads a frame when on.',
             },
             'vis.hover_delay_ms': {
                 label: 'Hover delay',
@@ -962,7 +974,10 @@
             // Both a vis.* drawing pref and a graph.* delivery pref are read
             // once at page load — the honest next step after saving one is a
             // reload, so offer the button right there.
-            const touchedReload = touched.some((n) => n.startsWith('vis.') || n.startsWith('graph.'));
+            // `vis.perf_hud` is the exception: it draws a readout and nothing
+            // else reads it, so it is applied below rather than at next load.
+            const touchedReload = touched.some((n) =>
+                (n.startsWith('vis.') || n.startsWith('graph.')) && n !== 'vis.perf_hud');
             saveBtn.disabled = true;
             setSettingsStatus('', 'Saving…');
             try {
@@ -987,6 +1002,15 @@
                     : (touchedEmbed
                         ? 'Saved ✓ — chat applies now; embedding changes take effect after a server restart'
                         : 'Saved ✓ — applied immediately'));
+                if (touched.includes('vis.perf_hud')) {
+                    // `getCapabilities()` memoises its fetch for the session,
+                    // so the page's copy has to be corrected by hand — and the
+                    // HUD read from the value the user just saved either way.
+                    const val = set['vis.perf_hud'];
+                    const on = String(val === undefined ? 'off' : val).toLowerCase() === 'on';
+                    if (state.capabilities && state.capabilities.vis) state.capabilities.vis.perf_hud = on ? 'on' : 'off';
+                    perfHudSync(on);
+                }
                 // Chat readiness / model pill may have just changed.
                 probeCapabilities();
             } catch (err) {

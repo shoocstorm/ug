@@ -12,19 +12,55 @@
 
 | Field | Value |
 | :--- | :--- |
-| **Opened** | 2026-08-18 |
+| **Opened / closed** | 2026-08-18 → 2026-08-30 (**closed for now**; the ledger stays open for the next round) |
 | **Version** | 0.1.16 |
 | **Primary fixture** | `~/.ug/neo4j` — 161,725 nodes / 745,964 edges / 330 MB `graph.json` |
-| **Status** | Rounds 1–4 landed (bar P11.7, deferred). Round 5: **P12.1, P12.3, P12.6, P12.7, P12.8, P12.9, P12.10, P12.11, P12.12, P12.13, P12.14, P12.15, P12.16, P12.17, P12.18 landed** (P12.7 half-reverted — see its note); P12.2, P12.4, P12.5 audited. Suite **912/912** |
+| **Landed** | 5 rounds, 72 items numbered, **65 landed** · suite **912/912** |
+| **Still open** | [What is still open](#what-is-still-open) — 5 items, none of them blocking |
 
 **Status marks:** ✅ landed and verified · ⬜ open · ⏭️ deferred · ❌ rejected by measurement
 
 ---
 
+## The ten biggest wins
+
+Every row is a measured before/after on a real fixture, linked to the item that
+carries the method and the caveats.
+
+| # | What was wrong | Measured | |
+| :--- | :--- | :--- | :--- |
+| 1 | The catalog rendered the whole repository into the DOM at boot — panel closed, nothing clicked | browser **renderer process 5,367 → 314 MB** (17.1×); 9.17M DOM nodes → 8,441 | [P12.1](#p121) |
+| 2 | Every animation redrew all 745,964 links, every frame | camera flight and layout morph **3–4 fps → 120 fps** | [P12.9](#p129) |
+| 3 | The walk and the tour scanned every edge, twice, per frame, to find the few they were drawing | walk **3.0 → 87.0 fps**, tour **8.2 → 120.2 fps** | [P12.17](#p1217) · [P12.18](#p1218) |
+| 4 | The page never went idle — on either screen | idle CPU **50.4% → 2.8%** of a core (landing), **58.8% → 6.0%** (graph) | [P12.10](#p1210) |
+| 5 | Betweenness centrality had never produced a usable number | **235×** (1,166 → 5.0 ms at n=1600); the 162k fixture went from *never returned* to 3.3 s — and correct for the first time | [P1.1](#round-1--rust-hot-paths) |
+| 6 | Re-indexing a repo where nothing had changed did all the work again | warm `ug gen` **46.0 → 8.05 s** (5.7×), peak **6,826 → 2,633 MB** (2.6×) | [Round 4](#round-4--the-ingest-nobody-measured) |
+| 7 | `ug gen` held ten times what it wrote | peak RSS **3,378 → 1,161 MB** (2.91×) on a 330 MB output | [Round 3](#round-3--the-process-not-the-tab) |
+| 8 | `ug serve` compressed the entire graph before it would answer anything | startup to graph-ready **6.66 → 0.62 s** (10.7×); idle RSS 1,245 → **730 MB** | [P3.1](#round-1--rust-hot-paths) · [Round 3](#round-3--the-process-not-the-tab) |
+| 9 | 500k nodes did not fit in a browser tab | JS heap **280 → 62 MB** (4.5×), load → interactive **2.2×**, the node index 426 → **58 MB** | [Round 2](#round-2--large-graph-client-memory) |
+| 10 | Every hover re-uploaded *and* re-allocated all 14.5 MB of colour | allocation over 60 moves **909 → 34 MB**, sweep CPU **10×** | [P12.11](#p1211) |
+
+Close behind: keyword search per keystroke **23.8 ms → 0.44 ms** (54×,
+[P3.3](#round-1--rust-hot-paths) + [P10.9](#round-3--the-process-not-the-tab));
+INP on a large display **872 → 248 ms** ([P12.15](#p1215)); and a click's steady
+state, which used to leave the page burning 29% of a core for as long as the
+node stayed selected ([P12.12](#p1212)); and the walk's two closing items — a
+walk left standing went from **82.0% to 45.3% of a core** ([P12.21](#p1221))
+and starting one from **544 to 269 ms** ([P12.22](#p1222)).
+
+**Three correctness bugs were found by measuring, not by tests** — betweenness
+returning zero for every node of every graph, `run_k_hop_bfs` reporting
+first-found rather than shortest distances, and `ug gen` duplicating every edge
+in the store on each re-index while never deleting one that had gone
+([P11.13](#p1113)). None had a failing test; all three were found by rewriting
+or verifying hot code.
+
+---
+
 ## Where things stand
 
-Against the state before Round 1. On `~/.ug/neo4j` except the two browser
-rows, which are Round 2's synthetic 485k-node index (~3× neo4j).
+Against the state before Round 1. On `~/.ug/neo4j` except the two 485k rows,
+which are Round 2's synthetic index (~3× neo4j).
 
 | Surface | Before | Now | |
 | :--- | ---: | ---: | ---: |
@@ -33,18 +69,39 @@ rows, which are Round 2's synthetic 485k-node index (~3× neo4j).
 | `ug gen --no-ingest` | 5.17 s / 3,378 MB | **4.18 s / 1,161 MB** | 1.24× / **2.91×** |
 | `ug serve` idle RSS | 1,245 MB | **730 MB** | **1.70×** |
 | `ug serve` startup to graph-ready | 6.66 s | **0.62 s** | 10.7× |
+| `/api/graph/search` per keystroke | 23.8 ms / 133 KB | **0.44 ms / 24.8 KB** | **54× / 5.4×** |
+| `ug graph centrality` | never returned | **3.3 s** | — |
 | Browser tab, 485k nodes | 280 MB heap | **62 MB** | **4.5×** |
 | …load → interactive | 2,485 ms | **1,105 ms** | 2.2× |
 | Browser **renderer process**, 485k | 5,367 MB | **314 MB** | **17.1×** |
-| `/api/graph/search` per keystroke | 23.8 ms / 133 KB | **0.44 ms / 24.8 KB** | **54× / 5.4×** |
-| `ug graph centrality` | never returned | **3.3 s** | — |
+| Landing screen, idle | 50.4% of a core | **2.8%** | 18× |
+| Graph on screen, settled, nothing selected | 58.8% of a core | **6.0%** | 9.8× |
+| Camera flight / layout morph, 746k links | 3–4 fps | **120 fps** | 30× |
+| Graph walk, 3 hops (Chrome) | 3.0 fps / 292 ms a frame | **87.0 fps / 8.3 ms** | 29× |
+| Guided tour, a 1-edge route | 8.2 fps | **120.2 fps** | 15× |
+| A node click, and the state it leaves | 539 ms, then 28.8% of a core | **291 ms, then 3.6%** | 1.9× / 8× |
+| Starting a 3-hop walk (`ug app`) | 544 ms | **269 ms** | 2.0× |
+| A walk left standing on the canvas | 82.0% of a core | **45.3%** | 1.8× |
 
-**The largest remaining number** is `upsert_nodes` at 7.5 s — 37% of a cold
-ingest, and inside OverGraph 0.17 rather than this crate.
+**The largest number left** is `upsert_nodes` at 7.5 s — 37% of a cold ingest,
+and inside OverGraph 0.17 rather than this crate.
 
-> **Fixed 2026-08-26 (P11.13):** `ug gen` used to duplicate every edge in the
-> store on each re-index, and never delete one that had gone. See
-> [Edges are appended, never replaced](#edges-are-appended-never-replaced).
+---
+
+## What is still open
+
+Closing the journey does not close these. Each has a section with what is
+known and what it would take.
+
+| | Item | State |
+| :--- | :--- | :--- |
+| [P12.2](#p122) | File mode dies at ~250k nodes and blames `graph.json` | Reproduced, unfixed. V8 caps a string at 536,870,888 bytes; the card says "Invalid string length", which sends the user to re-run `ug gen` |
+| [P12.4](#p124) | Server-mode session memory has no ceiling | Unmeasured; there is no eviction anywhere |
+| [P12.5](#p125) | Index identity (P9.2), now that a 500k fixture exists | Would take the index from 58 MB to ~18 MB — the biggest remaining client win |
+| [P12.19](#p1219) | `GET /api/projects/staleness` costs **1.6–1.9 s** of server CPU every 2 minutes with a page open | Measured, not fixed. TTL-cached, so it is a cheaper check or a longer TTL |
+| [P12.19](#p1219) | Whether an unthrottled WKWebView reaches 120 fps or stops at 60 | The cadence tracks the macOS energy mode (33 ms at `powermode 1`, 17 ms at `2`); the last step is unproven |
+| [P11.7](#round-4--the-ingest-nobody-measured) | `build_texts` parallelism | Deferred on arithmetic — 3.3% of the command, worth ~1.7% at the limit |
+
 
 ---
 
@@ -91,6 +148,20 @@ ingest, and inside OverGraph 0.17 rather than this crate.
   into the served page, which is how a client-side fix gets a number before
   anyone rebuilds. Wait for the `#loading` element to *exist* before reading
   its `display`, or the probe reports a load time of 0 ms.
+- **The `ug app` harness is the same proxy with a poll channel instead of CDP.**
+  A WKWebView exposes no debugging protocol, so the injected bridge carries a
+  loop that long-polls the proxy for JS, runs it through a *direct* `eval` (which
+  sees the module scope the bridge was spliced into), and POSTs the result back;
+  a `ctl.mjs` on the shell side enqueues code and prints what comes out. Point
+  `ug-app` at the proxy by env var — `UG_APP_URL=http://127.0.0.1:7789/?p=neo4j
+  target/release/ug-app` — rather than through `ug app`, which builds its own
+  URL. Three traps: **an occluded window suspends rAF entirely**
+  (`document.visibilityState === 'hidden'`, 0 frames a second — activate it with
+  `osascript … set frontmost` before every measurement); **`ps -o rss=`
+  overstates a WebKit process badly** (4.4 GiB where `vmmap -summary`'s physical
+  footprint, the Activity Monitor number, says 2.4 GB); and **a ProMotion
+  display's cadence is part of the result** — record the machine's power state
+  with any frame-rate figure (see [P12.19](#p1219)).
 - Peak RSS: `/usr/bin/time -l`. Phase attribution: 0.2 s `ps` sampling, or
   temporary `Instant` probes reverted before landing.
 - `ug demo --page-only` must be re-run from the repo root after any
@@ -685,6 +756,10 @@ browser figure in this file before today measured the 6%.
 | P12.16 | Every node crossed on the way to another was a full hover | hovers per A→B journey **8 → 2**; a hover that changes nothing now costs nothing | ✅ |
 | P12.17 | The walk animation scanned all 745,964 edges twice per frame | **3.0 → 87.0 fps**; median frame **292 → 8.3 ms** | ✅ |
 | P12.18 | The tour did the same, for a route of one edge | **8.2 → 120.2 fps**; CPU over 6 s **6,000 → 265 ms** | ✅ |
+| P12.19 | The same walk, in the **desktop app** instead of Chrome | **22.7 fps** vs Chrome's **77–83**, at **1 ms** of page work either way — the webview hands out 30 frames a second | ⬜ measured |
+| P12.20 | The canvas could not report its own frame cost | `vis.perf_hud` — cadence, the overlay's own draw time, and what is drawn, on the canvas | ✅ |
+| P12.21 | Ambient motion redrew the overlay at the display's rate | a settled walk **82.0% → 45.3% of a core**, GPU **51.5% → 34.7%** | ✅ |
+| P12.22 | Starting a walk restyled the whole graph twice | walk start **544 → 269 ms**; restyles 2 → **1**, 0 differing floats | ✅ |
 
 <a id="p121"></a>
 ### ✅ P12.1 — the catalog renders the whole repository into the DOM at boot
@@ -1842,6 +1917,232 @@ reconstruction.** Reach for the real function, and when a check disagrees with
 the code, suspect the check first — here the cache had found exactly the 9 edges
 of a 9-edge route, which was the tell.
 
+<a id="p1219"></a>
+### ⬜ P12.19 — the same walk, in the desktop app
+
+[P12.17](#p1217) fixed the walk in Chrome. `ug app` is a different engine
+(WKWebView, through Tauri 2.11.5 / wry 0.55.1), so none of Round 5's browser
+numbers transfer to it on their own. This is that walk, measured in the app.
+
+**Fixture.** `~/.ug/neo4j` in the app window, full graph drawn — 161,725 nodes
+/ 745,964 links on the canvas, simulation settled, nothing selected. Worth
+stating because it is not the default: this machine's config raises
+`graph.server_mode_bytes` to 400 MB and `vis.solo_threshold` to 10,000,000, so
+the page is in **local mode with the whole graph on the canvas** — a 330 MB
+`graph.json` parsed in the browser, not the slim index of server mode, and no
+solo view. Every memory figure below is that configuration's. Seed
+chosen by the same deterministic rule the Chrome harness uses (highest degree
+under 400): `PageCacheTracer`, degree 395, 3 hops, outbound, flow layout. It
+reaches **167 nodes over 252 edges** — the same walk P12.17 measured.
+
+| a 3-hop walk, 167 nodes, 252 edges | **app** (WKWebView) | **Chrome** |
+| :--- | ---: | ---: |
+| window | 1400×868 @dpr 2 | 1400×781 @dpr 2 |
+| frame rate, walk animating | **22.7 fps** | **77–83 fps** |
+| median frame interval | **33.0 ms** | **8.3 ms** |
+| p95 interval | 40 ms | 9.7 ms |
+| worst frame (the walk starting) | 372–383 ms | 860–1,175 ms |
+| **page's own rAF work, median** | **1 ms** | **0.9 ms** |
+| …at the walk's start | 111–115 ms | 579–620 ms |
+| frame rate, walk settled on screen | **29.9 fps** | **119.7 fps** |
+| CPU while animating (whole process set) | 74–79% of a core | 82% |
+| …renderer / WebContent | 42–48% | 54% |
+| …GPU process | 30% | 27% |
+| CPU while settled | **55%** (GPU process **46%**) | 48% (GPU process 32%) |
+| **CPU per rendered frame, settled** | **18.2 ms** | **4.0 ms** |
+| GPU device utilisation, animating | 23% mean, 47–60% peak | 35% mean, 67% peak |
+| GPU device utilisation, settled | 31% mean | 41% mean |
+
+Three app runs and two Chrome runs, minutes apart on the same machine, same
+display, same page through the same proxy. CPU is `ps -o time=` deltas over the
+window across the whole process set; GPU is the accelerator's own counters
+(`ioreg -c IOAccelerator`, no root), which are **device-wide** — the deltas
+between these states are attributable, the absolute figures are not.
+
+**The 33 ms is not our frame time — it is the whole cadence the webview
+offers.** Every interval lands in the 33/34 ms bucket, animating *and* settled,
+and the page's own rAF callbacks take 1 ms of it. A bare 60×60 px `<div>`
+translating 3 px a frame, in the same Tauri window with no graph anywhere in
+it, measures **29.8 fps / 33 ms** with the same two buckets. Chrome, on the
+same display in the same session, holds 8.3 ms.
+
+The machine was **on battery with Low Power Mode on** (`pmset -g`: `powermode
+1` on battery, `0` on AC; no thermal warning recorded). WebKit reduces its
+rendering update rate in Low Power Mode and Chrome does not honour the setting
+at all, which fits every number here — but the confirming run was not taken.
+**Half-confirmed the same day.** The energy mode changed under the harness
+(`pmset -g` went from `powermode 1` to `powermode 2`) and the same app, same
+page, same walk moved from **33 ms to 17 ms a frame** — 22.7 → **44.2 fps**
+animating, 29.9 → **57.1 fps** settled, with the page's own work still 1 ms.
+So the cadence tracks the macOS energy mode, exactly as the inference said. What
+is still unproven is the last step of it — whether an unthrottled WKWebView
+would reach 120 like Chrome, or stops at WebKit's usual 60. Every app figure in
+the table above was taken at `powermode 1`.
+
+**What is a result, and does not depend on it:** per *rendered* frame the app
+costs **4.6×** what Chrome costs for the same picture (18.2 vs 4.0 ms of CPU
+while the walk sits settled), and almost all of it is in the **WebKit GPU
+process**, not in JS — 46% of a core against WebContent's 7%. Chrome draws four
+times as many frames for 1.35× the GPU utilisation.
+
+**A settled walk is not a resting page.** With the walk finished and nothing
+advancing, the app holds 55% of a core and 31% GPU; exiting the walk drops the
+same page to **12.7% and 15%**, and it was 2.7% (app processes only) before the
+walk started. The flow particles keep marching over the walk's 252 edges, and
+every frame that costs a full-canvas redraw. This is [P12.12](#p1212)'s shape —
+the state an interaction *leaves behind* — for the walk, and it is unbounded:
+it lasts as long as the walk stays on screen.
+
+**Memory.** `vmmap -summary`'s *physical footprint*, which is what Activity
+Monitor shows; `ps -o rss=` says 4.4 GiB for the same process and is not the
+number to quote.
+
+| | after load | after a walk |
+| :--- | ---: | ---: |
+| WebContent | 2.3 GB (peak 2.9 GB) | 2.4 GB, **peak 3.8 GB** |
+| WebKit GPU process | 45.9 MB | 450 MB, **peak 2.6 GB** |
+| Tauri shell (Rust) | 35 MB | 35 MB |
+| `ug serve` behind it | 2.3 GB (peak 2.8 GB) | unchanged |
+
+The shell itself is free; the webview is the tab, exactly as
+[P12.1](#p121) found for Chrome. On the like-for-like metric (`ps -o rss=` for
+both) the app's WebContent is **4.4 GiB against Chrome's 2.4 GiB** for the same
+graph and the same walk — the app holds roughly twice as much for the same
+picture, and a walk transiently costs ~2 GB in the GPU process that Chrome's
+gpu-process (flat at 252 MB) never spends.
+
+`ug serve`'s 2.3 GB is not the 730 MB Round 3 landed: that figure is idle,
+before a client attaches, and this server had answered a local-mode session —
+`graph.json` served whole, plus the query encodings the page's requests built
+on the way.
+
+#### Found on the way: the staleness poll costs 1.7 s of server CPU
+
+With a page open and nobody touching it, `GET /api/projects/staleness` runs
+**every two minutes** and takes **1,613 / 1,721 / 1,736 / 1,852 ms** (four
+consecutive samples, `~/.ug` with 7 projects). It is the only reason `ug serve`
+appears in an idle window at all — 8–14% of a core averaged over the windows it
+lands in, arriving as a 1.7-second spike that will land inside a walk sooner or
+later. Unrelated to the vis layer, and the largest single server cost in a
+session that is otherwise doing nothing.
+
+<a id="p1220"></a>
+### ✅ P12.20 — a readout on the canvas, because the number depends on the machine
+
+[P12.19](#p1219) is the argument for this: two engines, the same page, the same
+walk, **22.7 fps and 77–83 fps** — and *the page's own work was 1 ms a frame in
+both*. A frame rate on its own cannot tell "our code is slow" from "this
+webview is handing out 30 frames a second", and the second one is now known to
+happen on the machine the product ships to.
+
+`vis.perf_hud` (`off` by default, in the settings panel, applies without a
+reload) puts four lines in the canvas's top-right corner:
+
+```
+frame    60 fps · 17.0 ms · p95 18.0
+overlay  0.7 ms · max 1.0 · 60/s
+drawn    162k n · 746k l · walk 252
+canvas   2800×1736 @2 · cosmos
+```
+
+- **`frame`** — the cadence the browser hands the page (rAF intervals, median
+  and p95 over the last 240 frames). Bounded by the display and the engine's
+  frame policy. Green at 55 fps and up, amber to 24, red below.
+- **`overlay`** — the FX layer's own draw, timed around `overlayDraw()`. This
+  one is ours. `idle` means the [P12.10](#p1210) gate is holding and the canvas
+  is genuinely at rest, which is a state worth being able to see.
+- **`drawn`** — nodes and links in the view, plus the walk's or the tour's edge
+  count while one is live.
+- **`canvas`** — device pixels and dpr (what the GPU is actually filling —
+  1400×868 at dpr 2 is 4.9 M pixels a frame), the JS heap where the engine
+  reports one (Chromium only; WebKit does not), and the mounted backend.
+
+It costs two `performance.now()` calls per drawn frame while on, one rAF
+callback, and a DOM write twice a second — deliberately, because
+[P5.2](#round-1--rust-hot-paths) was a gizmo that rewrote `innerHTML` at 30 Hz
+and a readout that costs what it reports is worthless.
+
+**Checked against the harness rather than trusted:** driving a walk through the
+command channel while reading the HUD's own text, the HUD reported 60 fps /
+17.0 ms / p95 18.0 against the harness's independent 17 ms median on the same
+frames, tracked the walk's edge count through **0 → 124 → 252** as the hops
+landed, and showed the restyle frame as an `overlay` spike to 4.8 ms mean / 84
+ms max. The settings toggle was driven end to end in the app in both
+directions: the readout appears and disappears on save, `config.json` carries
+the value, and no reload prompt is offered because none is needed.
+
+<a id="p1221"></a>
+### ✅ P12.21 — ambient motion does not need the display's frame rate
+
+[P12.19](#p1219) left a walk standing on the canvas costing **76.5% of a core**,
+with `overlayDraw()` itself at 0.7 ms a frame. The frames were the cost, not the
+drawing: WebKit rasterises a 2D canvas in its **GPU process**, so a
+full-viewport repaint charges 11 ms of CPU there for 0.7 ms of JS here.
+
+Flow particles marching and the selection ring breathing are the only things on
+this canvas with no *event* behind them — they redraw because time passed.
+Nothing about them reads at 60 or 120 Hz that does not read at 30. The overlay
+tick now draws an **ambient** frame at most every ~30 ms, where ambient means:
+already live, `fxDirty` clear, and no camera move in flight.
+
+Everything with an event behind it is exempt and still lands on its own frame —
+`fxDirty` (a hop, a hover, a restyle), `fxLiveUntil` (a camera flight, a layout
+morph, a pan or a zoom, where the overlay has to track the canvas beneath it or
+the labels swim), and the transitions into and out of live.
+
+Same session, same window (2800×1736 at 60 Hz), a 3-hop walk left settled:
+
+| settled walk, 12 s | before | after |
+| :--- | ---: | ---: |
+| overlay draws | 60/s | **30/s** |
+| total CPU | **82.0% of a core** | **45.3%** |
+| …WebKit GPU process | 71.0% | **38.0%** |
+| …WebContent | 8.7% | 5.6% |
+| GPU device utilisation | 51.5% mean | **34.7%** |
+
+**The exemptions were measured, not assumed**, by reading the HUD's own
+draws-per-second through a walk: **34–61/s while the hops land and the camera
+flies**, a steady **30/s** once settled, **54–60/s** through a `frameAll(1200)`
+flight, and back to 31/s after it. The slack in the throttle is load-bearing:
+without it a 60 Hz display delivers ambient frames at 33.4 ms, jitter drops some
+under a 33.3 ms bar, and the real rate lands at **22/s** rather than 30 — the
+first build measured exactly that. A quarter-frame of slack floors it at 30/s on
+all three cadences seen here (30, 60, 120 Hz).
+
+<a id="p1222"></a>
+### ✅ P12.22 — starting a walk restyled the whole graph twice
+
+`playWalk` calls `handleClick(null, seedNode)` to pre-fill the details panel,
+and then `setWalkStateToHop(0)` to paint the walk. Each ends in a full-graph
+restyle of 161,725 points and 745,964 links, and the first one's result is
+overwritten by the second a few lines later. Attributed in the app, per call:
+
+| walk start | before | after |
+| :--- | ---: | ---: |
+| `runWalk` total, median of 4 | **544 ms** | **269 ms** |
+| `R.restyle` calls | 2 | **1** |
+| time inside restyle | 492 ms | **225 ms** |
+| `handleClick` | 309 ms | **5 ms** |
+| `setWalkStateToHop` | 251 ms | **7 ms** |
+
+`coalesceRestyles(fn)` (10-render-core.js) holds restyles across a transaction:
+every `bumpGraphStyles()` inside `fn` is recorded and **one** is issued when it
+returns, with the scope hint dropped — the safe merge of two promises about what
+moved is no promise at all. Recorded rather than dropped on purpose: a caller
+that wraps something it should not have gets a restyle one tick late, not a
+canvas that never repaints. `playWalk` is its one caller; the seed selection,
+the cascade and the walk's first paint all land on the same frame anyway.
+
+**Equality, not just speed.** Freeze the walk at hop 0, snapshot the point and
+link colour arrays, force the full restyle the old path would have done, and
+compare: **0 differing floats of 3,630,756**, and 0 again with the walk settled
+at hop 2.
+
+> The first version of that check ran *without* freezing auto-advance and
+> reported 496 point and 372 link floats differing — which was the walk taking
+> its next hop between the two snapshots, not a paint bug. A check that races
+> the thing it is checking will accuse the code every time.
+
 ### What the round taught
 
 - **The JS heap is not the tab.** 118 MB of heap sat inside a 1,958 MB
@@ -1904,6 +2205,24 @@ of a 9-edge route, which was the tell.
   upload was 56% of the profile. Headless on the real GPU is close enough for
   *ratios* between two configurations; it is not close enough to conclude that
   something costs nothing.
+- **The frames were the cost, not the drawing.** A settled walk burned 82% of
+  a core while `overlayDraw()` measured 0.7 ms a frame — because WebKit
+  rasterises a 2D canvas in its **GPU process**, where a renderer-side profile
+  cannot see it. When JS self time and the machine's CPU disagree by two orders
+  of magnitude, the work is in another process. Drawing 30 ambient frames a
+  second instead of 60 took nearly half of it away and the picture is identical
+  ([P12.21](#p1221)).
+- **Ask what the transaction does twice.** Starting a walk restyled 161,725
+  points and 745,964 links, then did it again three lines later and threw the
+  first one away — 275 ms, on the frame the user pressed Go on
+  ([P12.22](#p1222)). Neither call was wrong on its own; the pair was.
+- **Every number in this round was Chrome's.** The product also ships as
+  `ug app`, and the same walk there runs at 22.7 fps against Chrome's 77–83 —
+  while the page's own work per frame is 1 ms in both. A bare moving `<div>` in
+  that window measures the same 30 fps, so the figure says nothing about our
+  code and everything about the webview and the machine's power state. Measure
+  the engine the user is actually running, and prove the cadence is yours before
+  you attribute a frame time to the page.
 - **`%CPU` from `ps` is a lifetime average.** On a Chrome process that has been
   up for 22 hours it says almost nothing about now. Take CPU-*time* deltas
   (`ps -o time=`) over a fixed window, across the whole process tree — the GPU
@@ -2056,6 +2375,24 @@ One row per landed item or baseline. Keep the numbers, not just the verdict.
 | 2026-08-29 | P12.17 | cached walk-edge list vs a fresh scan | — | **identical, length and order, at every hop** | 0 → 124 → 252 keys |
 | 2026-08-29 | P12.18 | tour route of 1 edge on a 745,964-link canvas | **8.2 fps**, median 124.9 ms | **120.2 fps**, median **8.3 ms** | CPU over 6 s 6,000 → 265 ms |
 | 2026-08-29 | P12.18 | cached route-edge list vs a fresh scan | — | **identical across two routes**, empty when the tour ends | reference must call the product's `edgeKey`, not guess it |
+| 2026-08-30 | P12.19 | the P12.17 walk, **`ug app`** vs Chrome, same machine/display | 22.7 fps, 33.0 ms median | **77–83 fps, 8.3 ms** | page work 1 ms a frame in both; 3 app runs, 2 Chrome |
+| 2026-08-30 | P12.19 | a bare moving `<div>`, no graph, same Tauri window | — | **29.8 fps, 33 ms** | the cadence is the webview's, not the page's |
+| 2026-08-30 | P12.19 | machine state during all of the above | — | on battery, `powermode 1` | LPM halves WebKit's update rate; **unverified** — plug in and re-measure |
+| 2026-08-30 | P12.19 | CPU per *rendered* frame, walk settled | app 18.2 ms | Chrome 4.0 ms | 4.6×; 46% of a core is the WebKit GPU process, 7% is WebContent |
+| 2026-08-30 | P12.19 | app CPU: walk settled / after exiting / before any walk | 55% of a core | 12.7% / 2.7% | the walk's steady state is unbounded, like P12.12's selection |
+| 2026-08-30 | P12.19 | app memory, physical footprint (`vmmap`) | WebContent 2.3 GB after load | **peak 3.8 GB** over a walk | GPU process 45.9 MB → peak **2.6 GB**; Tauri shell 35 MB |
+| 2026-08-30 | P12.19 | same graph + walk, `ps -o rss=` both engines | app 4.4 GiB | Chrome 2.4 GiB | like-for-like metric; `ps` overstates both |
+| 2026-08-30 | — | `GET /api/projects/staleness`, page open, idle | — | **1,613–1,852 ms** of server CPU, every 2 min | 4 consecutive samples, 7 projects; the only reason `ug serve` shows up idle |
+| 2026-08-30 | P12.19 | same app, same walk, macOS energy mode 1 → 2 | 33 ms / 22.7 fps | **17 ms / 44.2 fps** | 57.1 fps settled; page work still 1 ms. The cadence tracks the energy mode |
+| 2026-08-30 | P12.19 | **walk settled** vs the same page at rest, 60 Hz, 3456×1992 | **76.5% of a core**, GPU 49% | **4.1%**, GPU 20% | WebKit GPU process 66.6% → 0.4%; WebContent 8.2% → 1.9% |
+| 2026-08-30 | P12.19 | …of which the overlay's own `overlayDraw()` | — | **0.7–0.8 ms** a frame | the cost is rasterising a full-viewport 2D canvas, which WebKit runs in the GPU process |
+| 2026-08-30 | P12.20 | HUD vs the harness, same frames | — | **60 fps / 17.0 ms / p95 18.0**, both | tracked walk edges 0 → 124 → 252; restyle frame visible as an overlay spike to 84 ms |
+| 2026-08-30 | P12.21 | settled walk, same session, 2800×1736 @60 Hz | **82.0% of a core**, GPU 51.5% | **45.3%**, GPU 34.7% | overlay draws 60/s → 30/s; WebKit GPU process 71.0% → 38.0% |
+| 2026-08-30 | P12.21 | overlay draws/s through a walk, after the cap | — | **34–61/s** on hops and camera flights, **30/s** settled | the exemptions, measured rather than assumed |
+| 2026-08-30 | P12.21 | the same cap without its slack | — | **22/s**, not 30 | 33.4 ms ambient frames on a 60 Hz clock, jitter under a 33.3 ms bar |
+| 2026-08-30 | P12.22 | `runWalk`, medians of 4, same session | **544 ms** | **269 ms** | restyles 2 → 1; `handleClick` 309 → 5 ms |
+| 2026-08-30 | P12.22 | coalesced restyle vs the full one it replaces | — | **0 differing floats of 3,630,756** | at hop 0 (frozen) and settled at hop 2 |
+| 2026-08-30 | — | the same check *without* freezing auto-advance | reported 496 + 372 floats differing | — | the walk hopped between the snapshots; the check raced what it was checking |
 
 ---
 

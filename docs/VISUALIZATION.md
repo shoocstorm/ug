@@ -504,6 +504,46 @@ too, skipping `updateColor`'s extra `new Float32Array(everything)`.
 > programmatic clears (a walk starting, a renderer disposed) would stop being
 > synchronous.
 
+> **Ambient motion draws at 30 Hz.** Flow particles marching and the selection
+> ring breathing are the only things on the canvas with no event behind them —
+> they redraw because time passed — and a full-viewport 2D repaint is charged to
+> WebKit's GPU process, not to the JS that requested it. The overlay tick draws
+> an *ambient* frame at most every ~30 ms; a settled walk went from **82.0% to
+> 45.3% of a core** with an identical picture. Exempt, and still drawn on the
+> frame they happen: `fxDirty` (a hop, a hover, a restyle), `fxLiveUntil` (a
+> camera flight, morph, pan or zoom — the overlay must track the canvas beneath
+> it or the labels swim), and the transitions in and out of live. See P12.21.
+
+> **One transaction, one restyle.** `coalesceRestyles(fn)` holds every
+> `bumpGraphStyles()` raised inside `fn` and issues one when it returns, with
+> the scope hint dropped. Starting a walk used to restyle the whole graph twice
+> — `handleClick` selecting the seed, then `setWalkStateToHop(0)` painting over
+> it — for **544 ms**; held, it is **269 ms** and paints the same buffers to the
+> float. Restyles are *recorded*, not dropped, so wrapping the wrong thing costs
+> a late repaint rather than a stale canvas. See P12.22.
+
+> **The frame rate on the canvas, from the canvas.** `vis.perf_hud` (`off` by
+> default, also in the settings panel; applies without a reload) puts a
+> four-line readout in the top-right corner:
+>
+> ```
+> frame    60 fps · 17.0 ms · p95 18.0
+> overlay  0.7 ms · max 1.0 · 60/s
+> drawn    162k n · 746k l · walk 252
+> canvas   2800×1736 @2 · cosmos
+> ```
+>
+> The first two lines answer different questions and must not be conflated.
+> **`frame` is the cadence the browser hands the page** — bounded by the
+> display and by the engine's own frame policy, which is not ours: the same
+> walk measured 33 ms a frame in `ug app` under macOS Low Power Mode, 17 ms in
+> high-power mode, and 8.3 ms in Chrome on the same display (P12.19).
+> **`overlay` is the page's own work**, timed around `overlayDraw()` — that
+> one is ours, and it is what a vis-layer change moves. `overlay: idle` is the
+> good state: it means the P12.10 gate is holding and the canvas is genuinely
+> at rest. Costs two `performance.now()` calls per drawn frame while it is on,
+> and nothing at all while it is off.
+
 ### 5.7 Simulation
 
 `simulationDecay` is **a tick count, and lower is faster**. cosmos.gl's own docs

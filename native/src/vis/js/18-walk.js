@@ -846,7 +846,15 @@
         // beat; backward steps rewind instantly. A token invalidates stale
         // scheduled callbacks whenever the user intervenes or the walk exits.
 
+        // Everything here is one transaction as far as the canvas is
+        // concerned — the seed selection, the cascade, and the walk's own
+        // first paint all land on the same frame — so the restyles they would
+        // each do are held and issued once. See `coalesceRestyles`.
         function playWalk(seedNode, layers, totalEdges) {
+            coalesceRestyles(() => playWalkInner(seedNode, layers, totalEdges));
+        }
+
+        function playWalkInner(seedNode, layers, totalEdges) {
             cancelWalkTimers();
             walkPlay.layers = layers;
             walkPlay.totalEdges = totalEdges;

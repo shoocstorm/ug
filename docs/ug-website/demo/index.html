@@ -9040,9 +9040,63 @@
 #axis-gizmo[hidden] {
     display: none;
 }
+/* ==== 17-perf-hud.css ==== */
+/* ─── The performance HUD ──────────────────────────────────────
+   A readout of what the canvas is costing, off unless `vis.perf_hud` is on.
+   Top-right, because every other corner is taken (legend bottom-left, viewbar
+   bottom-centre, navbar top-centre) — and it steps aside for the info panel
+   the same way the viewbar does, since that panel overlays the canvas rather
+   than shrinking it. */
+
+#perf-hud {
+    top: 16px;
+    right: 16px;
+    padding: 7px 9px;
+    /* Never in the way of the thing being measured: it must not take a
+       pointer event, and it must not be what you are looking at. */
+    pointer-events: none;
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 10.5px;
+    line-height: 1.5;
+    color: var(--text-dim);
+    /* Digits that do not shuffle sideways twice a second. */
+    font-variant-numeric: tabular-nums;
+    opacity: 0.92;
+}
+
+#perf-hud[hidden] {
+    display: none;
+}
+
+body:has(#info.visible) #perf-hud {
+    right: calc(var(--info-width, 420px) + 16px);
+}
+
+#perf-hud .ph-row {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    white-space: nowrap;
+}
+
+#perf-hud .ph-k {
+    min-width: 52px;
+    color: var(--text-muted);
+}
+
+#perf-hud .ph-v {
+    color: var(--text);
+}
+
+/* The frame line is the one being watched, so it carries the verdict: green
+   while the page is keeping up, amber when frames are being missed, red when
+   the cadence has collapsed. Thresholds are in 23-perf-hud.js. */
+#perf-hud .ph-v.good { color: #34d399; }
+#perf-hud .ph-v.warn { color: #fbbf24; }
+#perf-hud .ph-v.bad  { color: #f87171; }
     </style>
 <script>
-window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3424,"edges":9879,"files":133,"lines":78725,"ugVersion":"0.1.16","visFingerprint":"bb33c04d2407bcbe","generatedAt":1788001485};
+window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3424,"edges":9879,"files":133,"lines":78725,"ugVersion":"0.1.16","visFingerprint":"463af0d09d0d3dcf","generatedAt":1788074380};
 /* ==========================================================================
    UltraGraph — static demo shim
    ==========================================================================
@@ -9739,6 +9793,11 @@ window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#g
              cosmos.gl cannot draw itself. Hidden while the 3D renderer, which
              draws all of it in-scene, is mounted. -->
         <canvas id="fx-overlay" hidden></canvas>
+
+        <!-- Performance readout (`vis.perf_hud`, off by default). Frame
+             cadence, the FX overlay's own draw time, and what is on the
+             canvas — populated entirely by 23-perf-hud.js. -->
+        <div id="perf-hud" class="canvas-overlay" hidden aria-hidden="true"></div>
 
         <!-- Guided Tour: cinematic narration overlay (camera flies stop to
              stop). Draggable by its header; the JSON button opens the plan
@@ -14327,6 +14386,10 @@ self.onmessage = async (ev) => {
                 }
                 console.warn('capabilities probe failed:', err);
             }
+            // Capabilities can land after the renderer has already mounted, so
+            // the HUD is synced from both ends — whichever is last wins, and
+            // both are idempotent.
+            perfHudSync();
         }
 
         // Dot a Discover sub-tab whose backend isn't available. The tab stays
@@ -14574,6 +14637,14 @@ self.onmessage = async (ev) => {
                     off: 'Off — faster on a large display',
                 },
                 hint: 'How overlapping links are drawn. On, they add together, so a dense bundle glows and depth reads through the tangle. Off, each strand is drawn opaque over the last — flatter, and the single biggest saving there is at high resolution: a full redraw of a 746k-link graph costs 349 ms blended and 149 ms unblended at 3400×2000, which is most of the delay between clicking a node and seeing the result. It halves the link draw at any size, but on a smaller window that draw is not what you are waiting on, so the interaction barely changes. Filtered-out links stay hidden either way.',
+            },
+            'vis.perf_hud': {
+                label: 'Performance HUD',
+                selectLabels: {
+                    on: 'On — show the readout on the canvas',
+                    off: 'Off',
+                },
+                hint: 'A small readout in the top-right corner of the canvas: the frame cadence the browser is handing the page (rate, median and p95 interval), what the FX overlay costs to draw and how often it draws, what is on the canvas, and its size in device pixels. The two lines answer different questions — the cadence is set by the display and the engine (WebKit halves it in macOS Low Power Mode, where Chrome does not), while the overlay time is the page\'s own work. Free when off, and about two clock reads a frame when on.',
             },
             'vis.hover_delay_ms': {
                 label: 'Hover delay',
@@ -15103,7 +15174,10 @@ self.onmessage = async (ev) => {
             // Both a vis.* drawing pref and a graph.* delivery pref are read
             // once at page load — the honest next step after saving one is a
             // reload, so offer the button right there.
-            const touchedReload = touched.some((n) => n.startsWith('vis.') || n.startsWith('graph.'));
+            // `vis.perf_hud` is the exception: it draws a readout and nothing
+            // else reads it, so it is applied below rather than at next load.
+            const touchedReload = touched.some((n) =>
+                (n.startsWith('vis.') || n.startsWith('graph.')) && n !== 'vis.perf_hud');
             saveBtn.disabled = true;
             setSettingsStatus('', 'Saving…');
             try {
@@ -15128,6 +15202,15 @@ self.onmessage = async (ev) => {
                     : (touchedEmbed
                         ? 'Saved ✓ — chat applies now; embedding changes take effect after a server restart'
                         : 'Saved ✓ — applied immediately'));
+                if (touched.includes('vis.perf_hud')) {
+                    // `getCapabilities()` memoises its fetch for the session,
+                    // so the page's copy has to be corrected by hand — and the
+                    // HUD read from the value the user just saved either way.
+                    const val = set['vis.perf_hud'];
+                    const on = String(val === undefined ? 'off' : val).toLowerCase() === 'on';
+                    if (state.capabilities && state.capabilities.vis) state.capabilities.vis.perf_hud = on ? 'on' : 'off';
+                    perfHudSync(on);
+                }
                 // Chat readiness / model pill may have just changed.
                 probeCapabilities();
             } catch (err) {
@@ -19343,6 +19426,9 @@ self.onmessage = async (ev) => {
             // needs the overlay canvas. Exactly one of them is ever running.
             if (caps.threeD) overlayStop();
             else overlayStart();
+            // The HUD spans both backends — the overlay is 2D-only, but the
+            // frame cadence is worth seeing whichever one is mounted.
+            perfHudSync();
         }
 
         // ─── Dispatchers ───────────────────────────────────────
@@ -19360,7 +19446,41 @@ self.onmessage = async (ev) => {
         // A hover is the case it exists for (one node and its edges, against a
         // whole graph), and a backend is free to ignore it — the 3D one does,
         // being bounded to 3,000 elements anyway.
+        // ── Holding restyles across a transaction ──────────────
+        //
+        // One user action can pass through several helpers that each restyle
+        // on their way out, and on a 161,725 / 745,964 graph each of those is
+        // a full-graph pass and a colour upload. Starting a walk did two back
+        // to back — `handleClick` selecting the seed, then
+        // `setWalkStateToHop(0)` painting the walk over the top of it — for
+        // **131 ms + 133 ms**, of which the first was thrown away by the
+        // second a few lines later.
+        //
+        // `coalesceRestyles(fn)` holds them: every `bumpGraphStyles()` inside
+        // `fn` is *recorded*, and one restyle is issued when it returns. The
+        // scope hint is dropped when more than one arrives, because the safe
+        // merge of two promises about what moved is no promise at all.
+        //
+        // Recorded rather than dropped on purpose: if a caller wraps something
+        // it should not have, the failure is a restyle one tick late, not a
+        // canvas that never repaints.
+        let _restyleHold = 0;
+        let _restyleOwed = false;
+        function coalesceRestyles(fn) {
+            _restyleHold++;
+            try {
+                return fn();
+            } finally {
+                _restyleHold--;
+                if (!_restyleHold && _restyleOwed) {
+                    _restyleOwed = false;
+                    bumpGraphStyles();
+                }
+            }
+        }
+
         function bumpGraphStyles(scope) {
+            if (_restyleHold) { _restyleOwed = true; return; }
             if (R) R.restyle(scope);
             // Colours, filters, focus and the hover sets all reach the FX
             // overlay too (halos, flow, labels, the selection marker), and the
@@ -23450,6 +23570,36 @@ self.onmessage = async (ev) => {
         let fxWasLive = false;
         let fxLiveUntil = 0;
 
+        // ── Ambient motion draws at 30 Hz, not at the display's rate ──
+        //
+        // Flow particles marching and the selection ring breathing are the one
+        // thing on this canvas with no *event* behind them: they redraw
+        // because time passed. There is no reason for that to happen 60 or 120
+        // times a second. A walk left standing on a 3456×1992 canvas cost
+        // **76.5% of a core** — of which `overlayDraw()` itself was 0.7 ms a
+        // frame. The rest is rasterising a full-viewport 2D canvas, which
+        // WebKit performs in its GPU process (66.6% of a core there against
+        // WebContent's 8.2%), so halving the frames halves nearly all of it.
+        // See P12.19 / P12.21.
+        //
+        // Everything with an event behind it is exempt and still draws on the
+        // frame it happens:
+        //   `fxDirty`      something changed — a hop, a hover, a restyle.
+        //   `fxLiveUntil`  a camera flight, a layout morph, a pan or a zoom,
+        //                  where the overlay has to track the canvas beneath
+        //                  it frame for frame or the labels swim.
+        //   the transition into and out of live, which is one frame each way.
+        // The slack matters: without it, a 60 Hz display delivers ambient
+        // frames at 33.4 ms and jitter drops some under the 33.3 ms bar, which
+        // skips them and lands the real rate at 22/s rather than 30. A quarter
+        // of a 60 Hz frame absorbs that and still floors 120 Hz at every
+        // fourth frame — 30/s on any of the three cadences measured (30, 60,
+        // 120 Hz).
+        const FX_AMBIENT_MAX_FPS = 30;
+        const FX_AMBIENT_SLACK_MS = 4;
+        const FX_AMBIENT_MIN_MS = 1000 / FX_AMBIENT_MAX_FPS - FX_AMBIENT_SLACK_MS;
+        let fxLastDraw = 0;
+
         function overlayLive() {
             if (fxPulses.length || fxSweeps.length) return true;
             // The ring spins and breathes; the flow particles march.
@@ -23484,9 +23634,25 @@ self.onmessage = async (ev) => {
                 requestAnimationFrame(tick);
                 const live = overlayLive();
                 if (!live && !fxDirty && !fxWasLive) return;
+                const now = performance.now();
+                // Ambient only when it is *already* live (the frame that turns
+                // motion on is a transition, not ambient), nothing has changed,
+                // and no camera move is in flight.
+                const ambient = live && fxWasLive && !fxDirty && now >= fxLiveUntil;
+                if (ambient && now - fxLastDraw < FX_AMBIENT_MIN_MS) return;
+                fxLastDraw = now;
                 fxWasLive = live;
                 fxDirty = false;
-                overlayDraw();
+                // Timed only when the HUD is on: two `performance.now()` calls
+                // a frame is nothing, but a frame is exactly where nothing
+                // adds up. See 23-perf-hud.js.
+                if (perfHudActive()) {
+                    const t0 = performance.now();
+                    overlayDraw();
+                    perfHudNoteDraw(performance.now() - t0);
+                } else {
+                    overlayDraw();
+                }
             };
             requestAnimationFrame(tick);
         }
@@ -28479,7 +28645,15 @@ self.onmessage = async (ev) => {
         // beat; backward steps rewind instantly. A token invalidates stale
         // scheduled callbacks whenever the user intervenes or the walk exits.
 
+        // Everything here is one transaction as far as the canvas is
+        // concerned — the seed selection, the cascade, and the walk's own
+        // first paint all land on the same frame — so the restyles they would
+        // each do are held and issued once. See `coalesceRestyles`.
         function playWalk(seedNode, layers, totalEdges) {
+            coalesceRestyles(() => playWalkInner(seedNode, layers, totalEdges));
+        }
+
+        function playWalkInner(seedNode, layers, totalEdges) {
             cancelWalkTimers();
             walkPlay.layers = layers;
             walkPlay.totalEdges = totalEdges;
@@ -30376,6 +30550,188 @@ self.onmessage = async (ev) => {
                 });
             });
             list.scrollTop = scroll;
+        }
+// ==== 23-perf-hud.js ====
+        // ─── The performance HUD ───────────────────────────────
+        //
+        // What the canvas is costing, on the canvas, while you use it —
+        // `vis.perf_hud`, off out of the box.
+        //
+        // It exists because of what P12.19 measured: the same graph walk runs
+        // at 22.7 fps in `ug app` and 77–83 in Chrome, and in *both* the
+        // page's own work is 1 ms a frame. A frame-rate number alone cannot
+        // tell those apart, so this reports the two separately:
+        //
+        //   frame    the cadence the browser is handing us — rAF interval.
+        //            Bounded by the display and by the engine's own frame
+        //            policy (WebKit halves it in Low Power Mode), so a bad
+        //            number here is not necessarily ours.
+        //   overlay  the FX layer's own draw, timed around `overlayDraw()`.
+        //            This one *is* ours, and on a walk or a tour it runs every
+        //            frame for as long as the walk is on screen.
+        //
+        // Deliberately cheap: one rAF callback that stores two numbers, and a
+        // DOM write twice a second (P5.2 — the gizmo that rewrote innerHTML at
+        // 30 Hz was itself a perf item; a readout that costs what it reports
+        // is worthless).
+        const PERF_HUD_DEFAULT = 'off';   // mirrors vis.perf_hud in native/src/config.rs
+        const PERF_HUD_TEXT_MS = 500;     // how often the numbers are rewritten
+        const PERF_HUD_RING = 240;        // frames kept for the percentiles
+
+        const perfHud = {
+            on: false,
+            el: null,
+            raf: 0,
+            rows: null,          // { key: <span> } for the value cells
+            ivals: new Float32Array(PERF_HUD_RING),
+            count: 0,            // total intervals recorded (ring is count % RING)
+            prevFrame: 0,
+            frames: 0,           // frames since the last text write
+            draws: 0,            // overlay draws since the last text write
+            drawMs: 0,           // their total cost
+            drawMax: 0,
+            windowStart: 0,
+        };
+
+        // Read by the overlay's tick on every frame, so it is a field lookup
+        // and not a capability walk.
+        function perfHudActive() { return perfHud.on; }
+
+        // The FX overlay reports its own draw here. Called only while the HUD
+        // is on — see `overlayStart`'s tick.
+        function perfHudNoteDraw(ms) {
+            perfHud.draws++;
+            perfHud.drawMs += ms;
+            if (ms > perfHud.drawMax) perfHud.drawMax = ms;
+        }
+
+        function perfHudConfigured() {
+            const raw = state.capabilities && state.capabilities.vis
+                && state.capabilities.vis.perf_hud;
+            return String(raw || PERF_HUD_DEFAULT).toLowerCase() === 'on';
+        }
+
+        function perfHudBuild() {
+            perfHud.el = document.getElementById('perf-hud');
+            if (!perfHud.el || perfHud.rows) return;
+            const keys = [
+                ['frame', 'frame'],
+                ['overlay', 'overlay'],
+                ['drawn', 'drawn'],
+                ['canvas', 'canvas'],
+            ];
+            perfHud.el.innerHTML = keys.map(([k, label]) =>
+                `<div class="ph-row"><span class="ph-k">${label}</span><span class="ph-v" data-ph="${k}">—</span></div>`).join('');
+            perfHud.rows = {};
+            perfHud.el.querySelectorAll('[data-ph]').forEach(el => { perfHud.rows[el.dataset.ph] = el; });
+        }
+
+        // A percentile over the ring, which is unsorted and mostly full.
+        function perfHudQuantile(p) {
+            const n = Math.min(perfHud.count, PERF_HUD_RING);
+            if (!n) return 0;
+            const a = Array.prototype.slice.call(perfHud.ivals, 0, n).sort((x, y) => x - y);
+            return a[Math.min(n - 1, Math.floor(n * p))];
+        }
+
+        function perfHudWrite(now) {
+            const elapsed = now - perfHud.windowStart;
+            const fps = elapsed > 0 ? (1000 * perfHud.frames / elapsed) : 0;
+            const median = perfHudQuantile(0.5);
+            const p95 = perfHudQuantile(0.95);
+            const set = (k, text, cls) => {
+                const el = perfHud.rows[k];
+                if (!el) return;
+                if (el.textContent !== text) el.textContent = text;
+                if (cls !== undefined) el.className = 'ph-v' + (cls ? ' ' + cls : '');
+            };
+
+            // 55+ fps is smooth on any panel; below 24 the motion has stopped
+            // reading as motion. The band between is the one worth noticing.
+            const grade = fps >= 55 ? 'good' : (fps >= 24 ? 'warn' : 'bad');
+            set('frame', `${fps.toFixed(0)} fps · ${median.toFixed(1)} ms · p95 ${p95.toFixed(1)}`, grade);
+
+            if (perfHud.draws) {
+                const mean = perfHud.drawMs / perfHud.draws;
+                const rate = elapsed > 0 ? (1000 * perfHud.draws / elapsed) : 0;
+                set('overlay', `${mean.toFixed(1)} ms · max ${perfHud.drawMax.toFixed(1)} · ${rate.toFixed(0)}/s`, '');
+            } else {
+                // Not drawing is the *good* state: the overlay gate (P12.10)
+                // is holding, and the canvas is genuinely at rest.
+                set('overlay', 'idle', '');
+            }
+
+            const nodes = (state.view && state.view.nodes) ? state.view.nodes.length : 0;
+            const links = (state.view && state.view.edges) ? state.view.edges.length : 0;
+            let drawn = `${formatNumber(nodes)} n · ${formatNumber(links)} l`;
+            if (state.walkActive && state.walkEdgeKeys) drawn += ` · walk ${formatNumber(state.walkEdgeKeys.size)}`;
+            else if (typeof tourState !== 'undefined' && tourState && tourState.active && tourState.routeEdges) drawn += ` · tour ${formatNumber(tourState.routeEdges.size)}`;
+            set('drawn', drawn, '');
+
+            // Device pixels, not CSS pixels: what the GPU is actually filling
+            // is the number that explains a slow frame on a retina display —
+            // 1400×868 at dpr 2 is 4.9 million pixels a frame. Heap only where
+            // the engine reports one (Chromium; Safari and WKWebView do not).
+            const dpr = window.devicePixelRatio || 1;
+            // `width`/`height` are set by the renderer's first resize; the HUD
+            // can be up before it, and `Math.round(NaN)` is a readout that
+            // says NaN.
+            const cw = Number.isFinite(width) ? width : 0;
+            const ch = Number.isFinite(height) ? height : 0;
+            let canvas = `${Math.round(cw * dpr)}×${Math.round(ch * dpr)} @${dpr}`;
+            const mem = performance.memory && performance.memory.usedJSHeapSize;
+            if (mem) canvas += ` · heap ${(mem / 1048576).toFixed(0)} MB`;
+            const R_ = activeRenderer();
+            if (R_ && R_.name) canvas += ` · ${R_.name}`;
+            set('canvas', canvas, '');
+
+            perfHud.windowStart = now;
+            perfHud.frames = 0;
+            perfHud.draws = 0;
+            perfHud.drawMs = 0;
+            perfHud.drawMax = 0;
+        }
+
+        function perfHudTick() {
+            if (!perfHud.on) return;
+            perfHud.raf = requestAnimationFrame(perfHudTick);
+            const now = performance.now();
+            if (perfHud.prevFrame) {
+                perfHud.ivals[perfHud.count % PERF_HUD_RING] = now - perfHud.prevFrame;
+                perfHud.count++;
+                perfHud.frames++;
+            }
+            perfHud.prevFrame = now;
+            if (now - perfHud.windowStart >= PERF_HUD_TEXT_MS) perfHudWrite(now);
+        }
+
+        function perfHudStart() {
+            perfHudBuild();
+            if (!perfHud.el || perfHud.on) return;
+            perfHud.on = true;
+            perfHud.el.hidden = false;
+            perfHud.count = 0;
+            perfHud.frames = 0;
+            perfHud.draws = 0;
+            perfHud.drawMs = 0;
+            perfHud.drawMax = 0;
+            perfHud.prevFrame = 0;
+            perfHud.windowStart = performance.now();
+            perfHud.raf = requestAnimationFrame(perfHudTick);
+        }
+
+        function perfHudStop() {
+            perfHud.on = false;
+            if (perfHud.raf) { cancelAnimationFrame(perfHud.raf); perfHud.raf = 0; }
+            if (perfHud.el) perfHud.el.hidden = true;
+        }
+
+        // Called once capabilities have landed, and again whenever the setting
+        // is saved — a readout you have to reload the page to see is a readout
+        // you stop using.
+        function perfHudSync(force) {
+            const want = (force === undefined) ? perfHudConfigured() : !!force;
+            if (want) perfHudStart(); else perfHudStop();
         }
     </script>
 </body>

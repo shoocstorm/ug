@@ -1,0 +1,53 @@
+/* ─── The performance HUD ──────────────────────────────────────
+   A readout of what the canvas is costing, off unless `vis.perf_hud` is on.
+   Top-right, because every other corner is taken (legend bottom-left, viewbar
+   bottom-centre, navbar top-centre) — and it steps aside for the info panel
+   the same way the viewbar does, since that panel overlays the canvas rather
+   than shrinking it. */
+
+#perf-hud {
+    top: 16px;
+    right: 16px;
+    padding: 7px 9px;
+    /* Never in the way of the thing being measured: it must not take a
+       pointer event, and it must not be what you are looking at. */
+    pointer-events: none;
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 10.5px;
+    line-height: 1.5;
+    color: var(--text-dim);
+    /* Digits that do not shuffle sideways twice a second. */
+    font-variant-numeric: tabular-nums;
+    opacity: 0.92;
+}
+
+#perf-hud[hidden] {
+    display: none;
+}
+
+body:has(#info.visible) #perf-hud {
+    right: calc(var(--info-width, 420px) + 16px);
+}
+
+#perf-hud .ph-row {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    white-space: nowrap;
+}
+
+#perf-hud .ph-k {
+    min-width: 52px;
+    color: var(--text-muted);
+}
+
+#perf-hud .ph-v {
+    color: var(--text);
+}
+
+/* The frame line is the one being watched, so it carries the verdict: green
+   while the page is keeping up, amber when frames are being missed, red when
+   the cadence has collapsed. Thresholds are in 23-perf-hud.js. */
+#perf-hud .ph-v.good { color: #34d399; }
+#perf-hud .ph-v.warn { color: #fbbf24; }
+#perf-hud .ph-v.bad  { color: #f87171; }
