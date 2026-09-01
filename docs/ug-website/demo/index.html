@@ -9096,7 +9096,7 @@ body:has(#info.visible) #perf-hud {
 #perf-hud .ph-v.bad  { color: #f87171; }
     </style>
 <script>
-window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3424,"edges":9879,"files":133,"lines":78725,"ugVersion":"0.1.16","visFingerprint":"463af0d09d0d3dcf","generatedAt":1788074380};
+window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3424,"edges":9879,"files":133,"lines":78725,"ugVersion":"0.1.17","visFingerprint":"cd45199e9e5beaa4","generatedAt":1788184053};
 /* ==========================================================================
    UltraGraph — static demo shim
    ==========================================================================
@@ -11453,6 +11453,240 @@ traverse({
         // before asking. Matches the URL-state sync's window.
         const SEARCH_DEBOUNCE_MS = 400;
 
+        // ─── Local mode past the string ceiling ────────────
+        //
+        // V8 caps a string at 536,870,888 characters, and the load below used
+        // to accumulate the whole response into one (`text += …`) before
+        // parsing it — so the *concatenation* threw `RangeError: Invalid
+        // string length` at 535.8 MB. At neo4j's density (2,141 bytes of
+        // `graph.json` per node) that wall stands at ~250,700 nodes, half way
+        // to the 500k target, and it arrived on a card naming `graph.json`,
+        // which reads as a corrupt file rather than a graph that is simply
+        // too big for one string (P12.2).
+        //
+        // Nothing about this document needs to exist as one string.
+        // `graph.json` is a top-level object whose two large members are
+        // arrays of small objects, so this splits the byte stream at element
+        // boundaries and parses a *batch* of elements at a time. No string
+        // ever approaches the cap, and the peak is the parsed result rather
+        // than the result plus a full copy of the text it came from.
+        //
+        // The scan runs over **bytes**, not characters. Every structural
+        // character in JSON is ASCII, and UTF-8 never places a byte below
+        // 0x80 inside a multi-byte sequence, so a chunk can be split anywhere
+        // without a decoder straddling the seam — only whole runs are decoded.
+        //
+        // Batched rather than per-element on purpose. Parsing 3.1M nodes and
+        // edges one at a time replaces a single native `JSON.parse` with 3.1M
+        // of them; cutting at a boundary near GRAPH_PARSE_BATCH_BYTES keeps
+        // the parse native and the strings two orders of magnitude below the
+        // ceiling. See `loadGraphBody` for why this path is not the default.
+        // V8 caps a string at 536,870,888 characters. UTF-8 never yields more
+        // characters than bytes, so a body under this many bytes is safe to
+        // hold as one string, with room to spare — and every graph that fits
+        // keeps the path it has always taken.
+        //
+        // The threshold is a *risk* boundary, not a performance one, and the
+        // measurements say so. In isolation the streaming parse of the 346 MB
+        // neo4j fixture costs 971 ms against one native `JSON.parse`'s 573.
+        // In the page almost all of that disappears into the download it now
+        // overlaps: load-to-revealed is **1,458 ms on the fast path and 1,555
+        // streaming** — medians of 3, same browser, same fixture, the second
+        // forced. 7% is not what keeps the default where it is; leaving the
+        // well-trodden native parse in charge of every graph that has always
+        // worked is.
+        const GRAPH_STRING_SAFE_BYTES = 400 * 1024 * 1024;
+        const GRAPH_PARSE_BATCH_BYTES = 64 * 1024 * 1024;
+
+        function createGraphJsonParser() {
+            const QUOTE = 34, COMMA = 44, COLON = 58, LBRACK = 91,
+                BSLASH = 92, RBRACK = 93, LBRACE = 123, RBRACE = 125;
+            const isWs = (b) => b === 32 || b === 10 || b === 9 || b === 13;
+
+            // Structural states. `SCAN` is not one of them: whenever
+            // `scanning` is set the byte loop is inside a value and the
+            // structural switch does not run at all.
+            const S_START = 0, S_KEY = 1, S_COLON = 2, S_VALUE = 3,
+                S_ELEM = 4, S_AFTER = 5, S_DONE = 6;
+
+            const result = {};
+            const decoder = new TextDecoder('utf-8');
+
+            let st = S_START;
+            let key = '';
+            let target = null;          // the array being filled, or null
+
+            // Value scanner
+            let scanning = false, inStr = false, esc = false, depth = 0;
+            let tokEnd = 0;             // exclusive end of the token just closed
+            let capStart = -1;          // where the captured run starts in this chunk
+            let capParts = null;        // carried pieces when a token spans chunks
+
+            // Array batching
+            let batchParts = [], batchLen = 0, wantCut = false;
+
+            // Consume bytes of the value currently being scanned. Clears
+            // `scanning` and sets `tokEnd` when the value closes.
+            function scan(chunk, i) {
+                const n = chunk.length;
+                while (i < n) {
+                    const b = chunk[i];
+                    if (inStr) {
+                        if (esc) esc = false;
+                        else if (b === BSLASH) esc = true;
+                        else if (b === QUOTE) {
+                            inStr = false;
+                            if (depth === 0) { scanning = false; tokEnd = i + 1; return i + 1; }
+                        }
+                    } else if (depth > 0) {
+                        if (b === QUOTE) inStr = true;
+                        else if (b === LBRACE || b === LBRACK) depth++;
+                        else if (b === RBRACE || b === RBRACK) {
+                            if (--depth === 0) { scanning = false; tokEnd = i + 1; return i + 1; }
+                        }
+                    } else if (b === COMMA || b === RBRACE || b === RBRACK || isWs(b)) {
+                        // a bare scalar — number, true, false, null — ends
+                        // *before* its delimiter, which the caller re-reads
+                        scanning = false; tokEnd = i; return i;
+                    }
+                    i++;
+                }
+                return i;
+            }
+
+            // Open a value at `i`, whatever its type, and return where the
+            // scan should continue from.
+            function begin(chunk, i, capture) {
+                const b = chunk[i];
+                scanning = true; esc = false;
+                if (b === LBRACE || b === LBRACK) { depth = 1; inStr = false; }
+                else if (b === QUOTE) { depth = 0; inStr = true; }
+                else { depth = 0; inStr = false; }
+                capStart = capture ? i : -1;
+                capParts = capture ? null : capParts;
+                return i + 1;
+            }
+
+            // The bytes of the token that just closed, as one array.
+            function taken(chunk) {
+                const tail = chunk.subarray(capStart, tokEnd);
+                if (!capParts) return tail;
+                const parts = capParts; capParts = null;
+                parts.push(tail);
+                let total = 0;
+                for (const p of parts) total += p.length;
+                const buf = new Uint8Array(total);
+                let o = 0;
+                for (const p of parts) { buf.set(p, o); o += p.length; }
+                return buf;
+            }
+
+            // One batch of array elements, wrapped back into an array so the
+            // parse stays native.
+            function flushBatch() {
+                if (!batchLen) { batchParts = []; return; }
+                const buf = new Uint8Array(batchLen + 2);
+                buf[0] = LBRACK;
+                let o = 1;
+                for (const p of batchParts) { buf.set(p, o); o += p.length; }
+                buf[o] = RBRACK;
+                batchParts = []; batchLen = 0;
+                const items = JSON.parse(decoder.decode(buf));
+                for (let k = 0; k < items.length; k++) target.push(items[k]);
+            }
+
+            function addRun(chunk, from, to) {
+                if (to <= from) return;
+                // Copied, not referenced: a run kept across a chunk boundary
+                // outlives the buffer `reader.read()` handed us.
+                const piece = chunk.subarray(from, to);
+                batchParts.push(to === chunk.length ? piece.slice() : piece);
+                batchLen += to - from;
+            }
+
+            function push(chunk) {
+                const n = chunk.length;
+                let i = 0;
+                let segStart = target ? 0 : -1;   // run of array bytes not yet batched
+                if (capStart >= 0 && scanning) capStart = 0;
+
+                while (i < n) {
+                    if (scanning) {
+                        i = scan(chunk, i);
+                        if (scanning) break;      // chunk ended mid-value
+                        if (st === S_KEY) { key = JSON.parse(decoder.decode(taken(chunk))); st = S_COLON; }
+                        else if (st === S_VALUE) { result[key] = JSON.parse(decoder.decode(taken(chunk))); st = S_AFTER; }
+                        else if (st === S_ELEM) {
+                            // element bytes stay in the run; only note whether
+                            // the batch is now big enough to cut at the next
+                            // separator
+                            if (batchLen + (i - (segStart < 0 ? i : segStart)) >= GRAPH_PARSE_BATCH_BYTES) wantCut = true;
+                        }
+                        continue;
+                    }
+
+                    const b = chunk[i];
+                    if (isWs(b)) { i++; continue; }
+
+                    switch (st) {
+                        case S_START:
+                            if (b !== LBRACE) throw new SyntaxError('the graph file is not a JSON object');
+                            st = S_KEY; i++; break;
+                        case S_KEY:
+                            if (b === RBRACE) { st = S_DONE; i++; break; }
+                            if (b !== QUOTE) throw new SyntaxError('expected a property name in the graph object');
+                            i = begin(chunk, i, true); break;
+                        case S_COLON:
+                            if (b !== COLON) throw new SyntaxError(`expected ':' after "${key}"`);
+                            st = S_VALUE; i++; break;
+                        case S_VALUE:
+                            if (b === LBRACK) {
+                                // the one shape this parser exists for
+                                target = result[key] = [];
+                                batchParts = []; batchLen = 0; wantCut = false;
+                                st = S_ELEM; i++; segStart = i;
+                            } else {
+                                i = begin(chunk, i, true);
+                            }
+                            break;
+                        case S_ELEM:
+                            if (b === COMMA) {
+                                i++;
+                                if (wantCut) { addRun(chunk, segStart, i - 1); flushBatch(); wantCut = false; segStart = i; }
+                                break;
+                            }
+                            if (b === RBRACK) {
+                                addRun(chunk, segStart, i);
+                                flushBatch();
+                                target = null; segStart = -1; st = S_AFTER; i++; break;
+                            }
+                            i = begin(chunk, i, false); break;
+                        case S_AFTER:
+                            if (b === COMMA) { st = S_KEY; i++; break; }
+                            if (b === RBRACE) { st = S_DONE; i++; break; }
+                            throw new SyntaxError(`expected ',' or '}' after "${key}"`);
+                        case S_DONE:
+                            i++; break;   // trailing bytes after the document
+                    }
+                }
+
+                // Carry whatever this chunk could not close.
+                if (scanning && capStart >= 0) {
+                    if (!capParts) capParts = [];
+                    capParts.push(chunk.subarray(capStart).slice());
+                }
+                if (target && segStart >= 0) addRun(chunk, segStart, n);
+            }
+
+            function end() {
+                if (scanning) throw new SyntaxError('the graph file ended in the middle of a value');
+                if (st !== S_DONE) throw new SyntaxError('the graph file ended before the object closed');
+                return result;
+            }
+
+            return { push, end };
+        }
+
         async function loadGraph() {
             const params = new URLSearchParams(window.location.search);
             const file = params.get('file') || 'graph.json';
@@ -11569,7 +11803,7 @@ traverse({
                     10,
                 );
                 let data;
-                if (response.body && length > 0) {
+                if (response.body) {
                     // Decoded as it arrives, so the payload exists once rather
                     // than three times over. Keeping every chunk, copying them
                     // into one `Uint8Array`, then decoding *that* to a string
@@ -11578,8 +11812,18 @@ traverse({
                     // enough to show a progress bar, which is the whole set of
                     // repos this branch exists for. `text +=` builds a rope
                     // that is flattened once, at the parse.
+                    //
+                    // That rope has a ceiling, and past it the load does not
+                    // slow down, it throws (P12.2). Where the body is known to
+                    // fit under it the fast path is unchanged; where it is not
+                    // — or where no length was advertised to check against —
+                    // the document is parsed as it arrives instead. The
+                    // streaming path is the newer of the two and slightly
+                    // slower, so the length is consulted rather than ignored.
+                    const streaming = !(length > 0 && length <= GRAPH_STRING_SAFE_BYTES);
                     const reader = response.body.getReader();
                     const decoder = new TextDecoder('utf-8');
+                    const parser = streaming ? createGraphJsonParser() : null;
                     let text = '';
                     let received = 0;
                     setPhase('Downloading…', 0);
@@ -11588,13 +11832,19 @@ traverse({
                         if (done) break;
                         if (value) {
                             received += value.length;
-                            text += decoder.decode(value, { stream: true });
+                            if (streaming) parser.push(value);
+                            else text += decoder.decode(value, { stream: true });
                         }
-                        const pct = Math.min(100, Math.round((received / length) * 100));
-                        setPhase(`Downloading (${formatBytes(received)} of ${formatBytes(length)})…`, pct);
+                        const pct = length > 0 ? Math.min(100, Math.round((received / length) * 100)) : null;
+                        const of = length > 0 ? ` of ${formatBytes(length)}` : '';
+                        setPhase(`Downloading (${formatBytes(received)}${of})…`, pct);
                     }
-                    text += decoder.decode();
-                    data = JSON.parse(text);
+                    if (streaming) {
+                        data = parser.end();
+                    } else {
+                        text += decoder.decode();
+                        data = JSON.parse(text);
+                    }
                 } else {
                     data = await response.json();
                 }
@@ -11619,7 +11869,19 @@ traverse({
                 applyUrlState(readUrlState());
             } catch (err) {
                 console.error('Failed to load graph:', err);
-                showFailure(err.message || String(err));
+                // A graph too large for one page used to arrive as "Invalid
+                // string length" on a card naming `graph.json`, which reads as
+                // a corrupt file and sends people off to re-run `ug gen`. Name
+                // the wall that was actually hit, and the way past it (P12.2).
+                const raw = err && err.message ? err.message : String(err);
+                const tooBig = err instanceof RangeError
+                    || /invalid string length|string longer than|allocation failed|out of memory/i.test(raw);
+                showFailure(!tooBig ? raw : (state.capabilities
+                    ? 'This graph is too large to hold in one page. Let the server stream it '
+                      + 'instead: drop the local graph mode (?gm=local, --graph-mode local), or '
+                      + 'raise graph.server_mode_bytes so a graph this size takes the indexed path.'
+                    : 'This graph is too large to hold in one page. Serve it with `ug serve`, '
+                      + 'which streams a graph this size from an index instead of downloading it.'));
             }
         }
 

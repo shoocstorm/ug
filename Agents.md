@@ -1074,6 +1074,68 @@ the heap. Here it did not — the interaction cost the same at 302 MB and at
 425 MB, because it was bound by pixels. A large heap is a real cost in GC
 pauses, but it is not automatically the cause of the thing being reported.
 
+### 10l. A frame-rate number is a reading of the display and the power state
+
+`ug app` measured **22.7 fps** on a walk that Chrome ran at 77–83, on the same
+machine, the same page and the same display. The conclusion drawn was that the
+webview hands out 30 frames a second and the native shell is a wall. It was
+neither. The laptop was on battery in Low Power Mode, WebKit halves its
+rendering update rate there and Chrome ignores the setting entirely. Plugged
+in, the same walk runs at **60.1 fps** — every frame the panel offers, frame
+for frame with Chrome, and *faster* than Chrome while the walk animates.
+
+Two rules, and the second is the one that actually did the damage:
+
+1. **Record `pmset -g` (`powermode`) and the display's refresh rate with every
+   frame-rate figure**, and never compare two engines across different values
+   of either. `system_profiler SPDisplaysDataType` gives the panel; a MacBook
+   in clamshell on an external monitor is a *different display* from the one
+   last week's numbers came from, and `AppleClamshellState` in `ioreg` says
+   which you are on.
+2. **Never divide by rendered frames across a cadence you did not control.**
+   "CPU per rendered frame" put the app at 4.6× Chrome — but the throttle had
+   halved the denominator, so half of that ratio was the throttle wearing an
+   engine's clothes. At equal cadence it is 1.4×. Normalising by a quantity
+   the variable under test is changing turns one confound into two.
+
+The residue after the confound was removed is still real and is still worth
+knowing: the same 2D overlay costs about **twice** as much to rasterise in
+WebKit's GPU process as in Chrome's, while the app's *page* work is half
+Chrome's. That is the finding the original measurement was reaching for, and
+it survived only because the CPU-by-process breakdown was recorded alongside
+the frame rate.
+
+### 10m. "Too big" is not one limit — find out which ceiling you hit
+
+Local mode died on graphs past ~250k nodes with `RangeError: Invalid string
+length`. The note written at the time reasoned that a streaming parser would
+*"hit the same ceiling, one step later, because the parsed result is the real
+cost"*, and the item sat open for three days on the strength of that sentence.
+It was wrong. The two limits have nothing to do with each other:
+
+| | limit | `big500k` |
+|---|---|---|
+| V8 maximum string length | 536,870,888 **characters, in one string** | 1,049 MB of text — impossible |
+| tab heap | ~4 GB of **many objects** | 837 MB parsed — comfortable |
+
+Nothing had to get smaller. The document had to stop being one string, which
+is a parsing change, not a data change. The fix parses the byte stream at
+element boundaries and never builds the string at all.
+
+**When something fails at scale, name the specific ceiling before designing
+around it.** "The data is too big" is a category, not a diagnosis, and the
+designs implied by *string cap*, *heap*, *GPU buffer* and *wire size* have
+almost nothing in common — [P12.11](docs/dev/PERF-TUNING-JOURNEY.md#p1211) is
+the entry where the same question, asked precisely, found the answer was an
+upload rather than an allocation.
+
+A corollary worth having: **when the reference implementation for a test hits
+the same wall as the code under test, that is a result, not an obstacle.**
+Verifying the 485k parse needed `JSON.parse` as a reference, and `JSON.parse`
+could not hold the array either — so the reference was built in pieces cut at
+element boundaries. Having to do that is the clearest possible statement of
+what the ceiling actually was.
+
 ## 11. Record what you learn, here, without being asked
 
 When you find something that would cost the next agent an hour — a measurement

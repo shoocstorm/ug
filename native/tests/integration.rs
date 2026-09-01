@@ -94,3 +94,4 @@ mod storage_bench;
 mod storage_test;
 mod traversal_test;
 mod vis_assembly_test;
+mod vis_json_stream_test;

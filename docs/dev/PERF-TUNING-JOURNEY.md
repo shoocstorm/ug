@@ -12,11 +12,11 @@
 
 | Field | Value |
 | :--- | :--- |
-| **Opened / closed** | 2026-08-18 → 2026-08-30 (**closed for now**; the ledger stays open for the next round) |
+| **Opened / closed** | 2026-08-18 → 2026-09-01 (**closed for now**; the ledger stays open for the next round) |
 | **Version** | 0.1.16 |
 | **Primary fixture** | `~/.ug/neo4j` — 161,725 nodes / 745,964 edges / 330 MB `graph.json` |
-| **Landed** | 5 rounds, 72 items numbered, **65 landed** · suite **912/912** |
-| **Still open** | [What is still open](#what-is-still-open) — 5 items, none of them blocking |
+| **Landed** | 5 rounds, 73 items numbered, **66 landed** + 1 answered by measurement · suite **913/913** |
+| **Still open** | [What is still open](#what-is-still-open) — 6 items, none of them blocking |
 
 **Status marks:** ✅ landed and verified · ⬜ open · ⏭️ deferred · ❌ rejected by measurement
 
@@ -46,7 +46,12 @@ INP on a large display **872 → 248 ms** ([P12.15](#p1215)); and a click's stea
 state, which used to leave the page burning 29% of a core for as long as the
 node stayed selected ([P12.12](#p1212)); and the walk's two closing items — a
 walk left standing went from **82.0% to 45.3% of a core** ([P12.21](#p1221))
-and starting one from **544 to 269 ms** ([P12.22](#p1222)).
+and starting one from **544 to 269 ms** ([P12.22](#p1222)). And two that
+closed after the ledger did: a 485k-node graph in **file mode**, which used to
+end in `RangeError: Invalid string length` and now loads in **4.2 s**
+([P12.2](#p122)); and the desktop app's frame rate, which turned out never to
+have been the app's — **22.7 → 60.1 fps** on the same walk once the machine
+was on mains power ([P12.23](#p1223)).
 
 **Three correctness bugs were found by measuring, not by tests** — betweenness
 returning zero for every node of every graph, `run_k_hop_bfs` reporting
@@ -72,6 +77,7 @@ which are Round 2's synthetic index (~3× neo4j).
 | `/api/graph/search` per keystroke | 23.8 ms / 133 KB | **0.44 ms / 24.8 KB** | **54× / 5.4×** |
 | `ug graph centrality` | never returned | **3.3 s** | — |
 | Browser tab, 485k nodes | 280 MB heap | **62 MB** | **4.5×** |
+| 485k nodes in **file mode** (no server) | `RangeError` | **loads, 4.2 s** | — |
 | …load → interactive | 2,485 ms | **1,105 ms** | 2.2× |
 | Browser **renderer process**, 485k | 5,367 MB | **314 MB** | **17.1×** |
 | Landing screen, idle | 50.4% of a core | **2.8%** | 18× |
@@ -95,11 +101,12 @@ known and what it would take.
 
 | | Item | State |
 | :--- | :--- | :--- |
-| [P12.2](#p122) | File mode dies at ~250k nodes and blames `graph.json` | Reproduced, unfixed. V8 caps a string at 536,870,888 bytes; the card says "Invalid string length", which sends the user to re-run `ug gen` |
 | [P12.4](#p124) | Server-mode session memory has no ceiling | Unmeasured; there is no eviction anywhere |
 | [P12.5](#p125) | Index identity (P9.2), now that a 500k fixture exists | Would take the index from 58 MB to ~18 MB — the biggest remaining client win |
+| [P12.2](#p122) | File mode holds 2.1–2.5 GB of heap at 485k | The wall is gone ([P12.2](#p122) landed); the *weight* is not. A CSR edge blob beside `nodes.bin` is ~20 MB against 837 MB of JS objects, and decodes in the Worker that already exists |
 | [P12.19](#p1219) | `GET /api/projects/staleness` costs **1.6–1.9 s** of server CPU every 2 minutes with a page open | Measured, not fixed. TTL-cached, so it is a cheaper check or a longer TTL |
-| [P12.19](#p1219) | Whether an unthrottled WKWebView reaches 120 fps or stops at 60 | The cadence tracks the macOS energy mode (33 ms at `powermode 1`, 17 ms at `2`); the last step is unproven |
+| [P12.23](#p1223) | Whether an unthrottled WKWebView reaches **120** fps or stops at 60 | Narrowed, not closed. At `powermode 0` the app matches Chrome frame for frame — but on a **60 Hz** external panel, which cannot tell the two apart. Needs the lid open and the window on the built-in ProMotion display |
+| [P12.23](#p1223) | The FX overlay costs ~2× more in WebKit's GPU process than in Chrome's | 37.8–38.1% of a core against 17.7–18.5%, at equal cadence. ≈2.3 ms a frame at 1400×868, only on frames [P12.21](#p1221)'s cap lets through. Would need the overlay moved onto the graph's own GPU pipeline |
 | [P11.7](#round-4--the-ingest-nobody-measured) | `build_texts` parallelism | Deferred on arithmetic — 3.3% of the command, worth ~1.7% at the limit |
 
 
@@ -739,7 +746,7 @@ browser figure in this file before today measured the 6%.
 | # | Item | Measured | |
 | :--- | :--- | :--- | :--- |
 | P12.1 | The catalog renders the whole repository into the DOM at boot | **1,958 → 245 MB** on neo4j; **5,367 → 314 MB** at 485k | ✅ |
-| P12.2 | File mode dies at ~250k nodes, and says "Invalid string length" | hard wall, reproduced in Chrome | ⬜ |
+| P12.2 | File mode dies at ~250k nodes, and says "Invalid string length" | `big500k` **never loaded → 485,175 nodes in 4.2 s**; +7% on graphs under the ceiling | ✅ |
 | P12.3 | Every hover repaints the whole view | **71.2 → 27.3 ms** per hover at 161k/746k | ✅ |
 | P12.4 | Server-mode session memory has no ceiling | unmeasured; no eviction anywhere | ⬜ |
 | P12.5 | P9.2 — index identity, now that a 500k fixture exists | would reach 18 MB from 58 | ⬜ |
@@ -760,6 +767,7 @@ browser figure in this file before today measured the 6%.
 | P12.20 | The canvas could not report its own frame cost | `vis.perf_hud` — cadence, the overlay's own draw time, and what is drawn, on the canvas | ✅ |
 | P12.21 | Ambient motion redrew the overlay at the display's rate | a settled walk **82.0% → 45.3% of a core**, GPU **51.5% → 34.7%** | ✅ |
 | P12.22 | Starting a walk restyled the whole graph twice | walk start **544 → 269 ms**; restyles 2 → **1**, 0 differing floats | ✅ |
+| P12.23 | P12.19 re-run on **AC power** — the app was never handing out 30 fps | the same walk **22.7 → 60.1 fps**, matching Chrome; CPU per rendered frame 4.6× → **1.4×** | ✅ |
 
 <a id="p121"></a>
 ### ✅ P12.1 — the catalog renders the whole repository into the DOM at boot
@@ -850,7 +858,7 @@ declared this tab healthy at 118 MB while the process held 1,958 MB. Chrome's
 process's RSS are the honest numbers for anything that builds DOM.
 
 <a id="p122"></a>
-### ⬜ P12.2 — file mode dies at ~250k nodes, and blames the file
+### ✅ P12.2 — file mode died at ~250k nodes, and blamed the file
 
 `loadGraph`'s local-mode branch accumulates the response into one string
 (`text += decoder.decode(…)`) and then `JSON.parse`s it. V8's maximum string
@@ -867,8 +875,7 @@ graph.json
 
 At neo4j's density (2,141 bytes of `graph.json` per node) the wall is
 **~250,700 nodes** — half way to the target. The `Response.json()` fallback
-hits the same ceiling; so would a streaming parser, one step later, because
-the parsed result is the real cost:
+hits the same ceiling:
 
 | file mode, retained after load | nodes / edges | held |
 | :--- | :--- | ---: |
@@ -881,17 +888,114 @@ reach file mode regardless of size: `--graph-mode local`, `?gm=local`, and —
 the one that matters — **a page with no server at all**, where the
 capabilities probe 404s and `mode` falls back to `'local'` unconditionally.
 
-Two fixes, and they are not alternatives:
+#### The claim that was wrong, and what it cost
 
-1. **Say what happened.** A graph past the ceiling should name the wall and
-   point at `ug serve`, not report "Invalid string length" against
-   `graph.json` as though the file were corrupt. Small, and correct whatever
-   else is decided.
-2. **Give the static artifact the columnar path.** `nodes.bin` already exists;
-   the missing half is edges. A CSR blob — `Uint32Array` offsets plus endpoint
-   indices — is ~20 MB for 2.2M edges against 837 MB of JS objects, and it is
-   a transferable, so it decodes in the Worker that already exists. This is
-   also the only route by which a worker helps the load path at all.
+The original note said a streaming parser *"would hit the same ceiling, one
+step later, because the parsed result is the real cost"*. That is false, and
+it is worth saying plainly because it is what left the item open for three
+days. The two limits are unrelated: the ceiling is a **cap on one string**,
+and the parsed result is **many small objects**. `big500k` is 1,049 MB of
+text — no string can hold it — and 837 MB of parsed objects, which fits a
+tab's heap with room to spare. Nothing had to be smaller. The document had to
+stop existing as one string.
+
+#### What landed
+
+`createGraphJsonParser()` (`00-preamble.js`) splits the response at JSON
+element boundaries and parses a *batch* of elements at a time. `graph.json` is
+a top-level object whose two large members are arrays of small objects, so no
+string ever approaches the cap and the peak is the parsed result rather than
+the result plus a full copy of the text it came from.
+
+Three things about it are decisions rather than details:
+
+- **It scans bytes, not characters.** Every structural character in JSON is
+  ASCII and UTF-8 never puts a byte below 0x80 inside a multi-byte sequence,
+  so a chunk can be split anywhere without a decoder straddling the seam.
+  Only whole runs are decoded.
+- **It batches.** Parsing 3.1M elements one at a time replaces a single
+  native `JSON.parse` with 3.1M of them. Cutting at an element boundary near
+  `GRAPH_PARSE_BATCH_BYTES` (64 MB) keeps the parse native and the strings two
+  orders of magnitude under the ceiling.
+- **It is not the default.** Under `GRAPH_STRING_SAFE_BYTES` (400 MB) the
+  original path runs unchanged. That threshold is a *risk* boundary, not a
+  performance one — see the numbers below — and it exists so that every graph
+  that has always worked keeps the well-trodden native parse.
+
+And the second half of the item, which was always correct on its own: a body
+past the ceiling now names the wall and the way past it, instead of reporting
+`Invalid string length` on a card headed `graph.json`.
+
+#### Measured
+
+`~/.ug/big500k`, 1,049 MB of `graph.json`, forced into file mode
+(`--graph-mode local`, `?gm=local`), Chrome, load to the loading overlay
+coming down:
+
+| `big500k` in file mode | before | after |
+| :--- | ---: | ---: |
+| outcome | **`RangeError: Invalid string length`** | **485,175 nodes / 2,237,892 edges on the canvas** |
+| load → revealed | never | **4,165 – 4,414 ms** |
+| …of which fetch + parse | — | 2,464 – 2,595 ms |
+| JS heap after load | — | 2,064 – 2,506 MB (limit 4,396) |
+| solo view | — | off — `state.view` is the whole graph |
+
+The before column is the same build with the branch forced to the old path,
+in the same browser minutes earlier, so it is a real reading rather than the
+one recorded in August.
+
+**And the cost to everything else, which is the number that decided the
+threshold.** `~/.ug/neo4j` (346 MB, under it), medians of 3, the second column
+forced onto the streaming path:
+
+| `neo4j` in file mode | fast path | streaming, forced |
+| :--- | ---: | ---: |
+| load → revealed | **1,458 ms** | 1,555 ms |
+| `graph.json` resource duration | 262 ms | 826 ms |
+| JS heap after load | 706 MB | 696 MB |
+
+In isolation the streaming parse is 1.7× the work — 971 ms against one native
+`JSON.parse`'s 573 on the same 346 MB — but in the page almost all of that
+disappears into the download it now overlaps, which is what the resource
+duration shows: the fetch entry grows by roughly what the load does not.
+**7% is not what keeps the default where it is.** New code on the load path
+is.
+
+#### How it is checked
+
+A hand-rolled scanner fails at seams, and every one of those failures produces
+a *wrong graph* rather than an error — a chunk boundary inside a string, an
+escape, or a key silently loses or corrupts elements. So the check is equality
+against the platform's own parser, at every chunk size:
+
+- `tests/js/graph_json_stream.mjs` parses 11 documents at chunk sizes
+  **1, 2, 3, 5, 7, 13, 64 and 4096 bytes** — a one-byte chunk puts a boundary
+  between every pair of bytes in the document — and `deepEqual`s each against
+  `JSON.parse`. 88 parses. Seven malformed documents must throw.
+- The same harness, given real graphs, compares **161,725 + 745,964** elements
+  of `neo4j` and **485,175 + 2,237,892** of `big500k` against `JSON.parse`,
+  element for element. For `big500k` the reference is built in pieces, cut at
+  element boundaries, because no single string can hold the arrays either —
+  the reference has the same ceiling as the thing it is checking, which is the
+  tell that the ceiling was never about the data.
+- `vis_json_stream_test.rs` puts both in the suite; the fixture half is
+  `#[ignore]`d because the graphs are a developer's `~/.ug`.
+
+**The parser is loaded from the part file, not extracted from it.** The whole
+of `00-preamble.js` evaluates in bare Node with no DOM, so the test sources
+the shipping code directly. An extractor would be a second copy of the thing
+under test — [P12.18](#p1218) is the entry about a check that reconstructed
+what it was checking and then accused the code.
+
+#### Still worth doing, and no longer urgent
+
+**Give the static artifact the columnar path.** `nodes.bin` already exists;
+the missing half is edges. A CSR blob — `Uint32Array` offsets plus endpoint
+indices — is ~20 MB for 2.2M edges against 837 MB of JS objects, and it is a
+transferable, so it decodes in the Worker that already exists. That is still
+the only route by which a worker helps the load path at all, and it is what
+would take file mode's 2.1–2.5 GB of heap down to something like server
+mode's. It is now an efficiency item rather than a wall.
 
 <a id="p123"></a>
 ### ✅ P12.3 — every hover repaints the whole view
@@ -1918,7 +2022,14 @@ the code, suspect the check first — here the cache had found exactly the 9 edg
 of a 9-edge route, which was the tell.
 
 <a id="p1219"></a>
-### ⬜ P12.19 — the same walk, in the desktop app
+### ⚠️ P12.19 — the same walk, in the desktop app
+
+> **Superseded in part by [P12.23](#p1223).** Every figure below was taken at
+> `powermode 1` on battery. Re-run on AC power the app reaches **60.1 fps** on
+> this same walk and matches Chrome frame for frame; the 4.6× CPU-per-frame
+> figure falls to **1.4×**. What survives is the *shape* of the residue — the
+> cost is WebKit's GPU process, not the page. Read this section for the method
+> and the memory figures; read P12.23 for the numbers.
 
 [P12.17](#p1217) fixed the walk in Chrome. `ug app` is a different engine
 (WKWebView, through Tauri 2.11.5 / wry 0.55.1), so none of Round 5's browser
@@ -2142,6 +2253,142 @@ at hop 2.
 > reported 496 point and 372 link floats differing — which was the walk taking
 > its next hop between the two snapshots, not a paint bug. A check that races
 > the thing it is checking will accuse the code every time.
+
+<a id="p1223"></a>
+### ✅ P12.23 — the app was never handing out 30 frames a second
+
+[P12.19](#p1219) measured `ug app` at **22.7 fps** against Chrome's 77–83 on
+the same walk, the same machine and the same display, and inferred the cause
+was macOS Low Power Mode rather than WebKit: a bare moving `<div>` in the same
+Tauri window measured the same 33 ms, and when the energy mode changed under
+the harness the whole thing moved to 17 ms. What it could not say was the last
+step — whether an *unthrottled* WKWebView reaches Chrome's rate or stops short
+of it. That was left open, with a one-line instruction: plug in and re-measure.
+
+This is that measurement. **The inference was right, and the conclusion drawn
+from it was too pessimistic.** At the same cadence the app is not 4.6× Chrome's
+cost per frame — it is 1.4× — and on the walk's animation it is *faster* than
+Chrome.
+
+**Machine state**, recorded because P12.19's whole result turned on it: AC
+power, `pmset -g` **`powermode 0`**, no thermal or performance warning recorded.
+
+**One caveat this run cannot remove.** The machine is now in clamshell
+(`AppleClamshellState = Yes`) driving a single external panel — an ASUS
+VG27AQ3A-L at **60.00 Hz**. The built-in ProMotion display, which carried every
+number in P12.19, is off. So this run answers *"does an unthrottled WKWebView
+give the display's full rate?"* and cannot answer *"does it give 120?"* — at
+60 Hz, "WebKit caps at 60" and "the panel is 60" produce the same reading.
+
+#### The cadence, with the graph taken out of it
+
+The same bare 60×60 px `<div>` translating 3 px a frame, in the same Tauri
+window, and in Chrome on the same display. Three runs each, 5 s per run:
+
+| bare `<div>`, no graph | **app** (WKWebView) | **Chrome** | P12.19, `powermode 1` |
+| :--- | ---: | ---: | ---: |
+| frame rate | **60.0 – 60.2 fps** | 60.0 – 60.1 fps | 29.8 fps |
+| median interval | **17 ms** | 16.7 ms | 33 ms |
+| p95 interval | 18 ms | 17.6 ms | — |
+
+Both engines sit on the panel. **The webview does not have a frame policy of
+its own that Chrome escapes** — it had an energy-mode policy, and the energy
+mode was the variable.
+
+#### The P12.17 walk, both engines, same day
+
+Same fixture and same seed as [P12.19](#p1219): `~/.ug/neo4j` in local mode with
+the whole graph on the canvas (161,725 nodes / 745,964 links, `state.view`
+confirmed at both), seed chosen by the same deterministic rule — highest degree
+under 400 — which lands on `PageCacheTracer`, degree **395**, 3 hops, outbound,
+flow layout, reaching **167 nodes over 252 edges**. Two or three runs a phase,
+engines minutes apart, the other one quit so the device-wide GPU counters are
+attributable.
+
+| | **app** (WKWebView) | **Chrome** |
+| :--- | ---: | ---: |
+| window | 1400×868 @dpr 2 | 1400×757 @dpr 2 |
+| **settled, no walk** — frame rate | 60.1 fps | 60.0 fps |
+| …CPU, whole process set | **4.3%** of a core | 5.0% |
+| **walk start** (`runWalk`) | **300 / 307 / 333 ms** | 356 / 360 / 535 ms |
+| **walk animating** — frame rate | **39.9 – 40.6 fps** | 33.7 – 36.6 fps |
+| …median interval | 17 ms | 16.7 ms |
+| …worst frame | **302 – 335 ms** | 415 – 517 ms |
+| …CPU | **85.6%** of a core | 91.1% |
+| **walk settled** — frame rate | 60.1 fps | 60.1 fps |
+| …CPU | 44.1 – 45.7% of a core | **31.0 – 31.3%** |
+| …of which the GPU process | 37.8 – 38.1% | **17.7 – 18.5%** |
+| …of which the page (WebContent / renderer) | **4.8 – 6.0%** | 12.0 – 12.3% |
+| **CPU per rendered frame, settled** | **7.3 – 7.6 ms** | **5.2 ms** |
+| GPU device utilisation, settled | 34.1 – 35.1% | 18.1 – 18.4% |
+
+**What changed against P12.19, and what did not.**
+
+- The headline is gone. **22.7 → 60.1 fps** on the identical walk, and the app
+  now matches Chrome frame for frame in every phase where the display is the
+  limit. The "webview hands out 30 frames a second" reading was Low Power Mode
+  and nothing else.
+- **The 4.6× was mostly the throttle.** P12.19 divided CPU by *rendered* frames
+  while the app rendered half as many, so the denominator carried the throttle
+  into a number that looked like an engine cost. At equal cadence it is
+  **1.4×** (7.5 vs 5.2 ms).
+- **The shape of the remaining 1.4× is the part that is real, and it is not in
+  our code.** The app's *page* is cheaper than Chrome's — 4.8–6.0% of a core
+  against 12.0–12.3% — and the whole difference plus more sits in the WebKit
+  GPU process, at 37.8–38.1% against Chrome's 17.7–18.5%. That is
+  [P12.19](#p1219)'s standing observation surviving intact: rasterising a
+  full-viewport 2D overlay canvas is roughly twice as expensive in WebKit's GPU
+  process as in Chrome's, and no amount of JS work removes it.
+- **On the walk's animation the app wins**, which P12.19 had no way to see:
+  40 fps against 34–37, a worst frame of 302–335 ms against 415–517, and a
+  `runWalk` of 300–333 ms against 356–535. Chrome's renderer is doing more work
+  per animated frame (71.4% of a core against WebContent's 49.8%).
+
+**A cross-check that the harness is measuring the same thing.** The app's
+settled-walk figures here — **44.1–45.7% of a core, GPU device 34.1–35.1%,
+WebKit GPU process 37.8–38.1%** — reproduce [P12.21](#p1221)'s post-fix row
+(45.3%, 34.7%, 38.0%) to within a point, on a different display, a different
+power state and a fresh harness. The overlay cap is holding: **1 `overlayDraw()`
+per 6 s** with the walk settled, at 1–2 ms each.
+
+#### What this closes, and what it costs the case for a native shell
+
+The open question in [What is still open](#what-is-still-open) was posed as a
+performance risk: if a webview structurally cannot reach the display's rate,
+the shell is a wall and the fix is a native one. It is not a wall. At equal
+power state the app renders every frame the panel offers, its page work is
+*cheaper* than Chrome's, and it starts and animates the walk faster.
+
+That removes the only measured argument for replacing the shell. The residue —
+2× in WebKit's GPU-process rasterisation of the FX overlay — is worth
+**≈2.3 ms a frame at 1400×868**, is bounded by [P12.21](#p1221)'s cap to the
+frames that actually need it, and would be bought back only by a rewrite of the
+overlay onto the same GPU pipeline the graph already uses. That is a
+[P12.21](#p1221)-shaped item, not a framework decision.
+
+> **Evaluated the same day and not pursued: GPUI** (Zed's Rust UI framework)
+> as a replacement for the cosmos.gl canvas. It cannot serve this workload, and
+> the reason is structural rather than a matter of tuning. Its renderer accepts
+> exactly one input — a `Scene` of a closed primitive set (`Quad`, `Path`,
+> sprites, `Shadow`, `Underline`, `Surface`); there is no hook for an
+> application shader, vertex buffer or compute pass, and the only escape on
+> macOS is `paint_surface(bounds, CVPixelBuffer)`, i.e. render it yourself
+> elsewhere and hand GPUI a finished image. The scene is **cleared and rebuilt
+> every frame** (`Scene::clear`), and `Quad` is a padding-free 160-byte struct,
+> so 500k points is **80 MB rebuilt and re-uploaded per frame — 4.8 GB/s at 60
+> fps** against cosmos.gl's ~40 B per point uploaded *only when it changes*
+> ([P12.11](#p1211) exists precisely to avoid that upload). There is no line
+> primitive, so 745,964 links become 745,964 CPU-tessellated `Path`s. And it
+> replaces none of cosmos.gl's other half, the force simulation, which runs in
+> WebGL2 shaders today. Recorded in
+> [Rejected / deferred](#rejected--deferred).
+
+**Still open, and now blocked on hardware rather than on effort:** whether
+WKWebView reaches 120 fps or stops at 60. It needs the lid open and the window
+on the built-in ProMotion panel. Nothing in this round's conclusions depends on
+it — the app already matches Chrome at 60, and if WebKit did stop at 60 on a
+120 Hz panel the cost would be a smoothness difference on a settled canvas, not
+the 3× throughput gap P12.19 appeared to show.
 
 ### What the round taught
 
@@ -2393,6 +2640,20 @@ One row per landed item or baseline. Keep the numbers, not just the verdict.
 | 2026-08-30 | P12.22 | `runWalk`, medians of 4, same session | **544 ms** | **269 ms** | restyles 2 → 1; `handleClick` 309 → 5 ms |
 | 2026-08-30 | P12.22 | coalesced restyle vs the full one it replaces | — | **0 differing floats of 3,630,756** | at hop 0 (frozen) and settled at hop 2 |
 | 2026-08-30 | — | the same check *without* freezing auto-advance | reported 496 + 372 floats differing | — | the walk hopped between the snapshots; the check raced what it was checking |
+| 2026-08-31 | P12.23 | machine state for every row below | on battery, `powermode 1` | **AC, `powermode 0`** | no thermal or performance warning; clamshell, one external panel at **60.00 Hz** |
+| 2026-08-31 | P12.23 | a bare moving `<div>`, no graph, same Tauri window | 29.8 fps / 33 ms | **60.0–60.2 fps / 17 ms** | Chrome on the same display: 60.0–60.1 / 16.7 ms. Both sit on the panel |
+| 2026-08-31 | P12.23 | the P12.17 walk in **`ug app`**, 167 nodes / 252 edges | 22.7 fps, 33.0 ms median | **60.1 fps, 17 ms** | same seed (`PageCacheTracer`, deg 395), same full-graph canvas |
+| 2026-08-31 | P12.23 | the same walk **animating**, app vs Chrome | — | app **39.9–40.6 fps**, Chrome 33.7–36.6 | worst frame app 302–335 ms vs Chrome 415–517; `runWalk` 300–333 vs 356–535 |
+| 2026-08-31 | P12.23 | CPU per *rendered* frame, walk settled | app 18.2 ms / Chrome 4.0 (P12.19) | app **7.3–7.6 ms** / Chrome **5.2** | **4.6× → 1.4×** — P12.19 divided by a denominator the throttle had halved |
+| 2026-08-31 | P12.23 | where the residue is, walk settled | — | app GPU process **37.8–38.1%** of a core vs Chrome's **17.7–18.5%** | and the app's *page* is cheaper: 4.8–6.0% vs Chrome's renderer 12.0–12.3% |
+| 2026-08-31 | P12.23 | app settled-walk figures vs [P12.21](#p1221)'s post-fix row | — | **44.1–45.7%** of a core, GPU 34.1–35.1%, WebKit GPU 37.8–38.1% | P12.21 recorded 45.3 / 34.7 / 38.0 — reproduced on a different display and power state |
+| 2026-08-31 | P12.23 | overlay draws with the walk settled, app | 60/s before [P12.21](#p1221) | **1 per 6 s**, 1–2 ms each | the cap holds; the settled cost is rasterisation, not our draw |
+| 2026-09-01 | P12.2 | `big500k` (1,049 MB) in file mode, Chrome | **`RangeError: Invalid string length`** | **485,175 / 2,237,892 on the canvas** | before taken from the same build with the branch forced back, minutes earlier |
+| 2026-09-01 | P12.2 | …load → revealed, 2 clean runs | never | **4,165 / 4,414 ms** | fetch+parse 2,464–2,595 ms; heap 2,064–2,506 MB of a 4,396 limit |
+| 2026-09-01 | P12.2 | `neo4j` (346 MB), fast path vs streaming forced | 1,458 ms | 1,555 ms | medians of 3 — **+7%**, because the parse now overlaps the download it used to follow |
+| 2026-09-01 | P12.2 | the same two parsers in isolation (node, 346 MB) | `JSON.parse` **573 ms** | streaming **971 ms** | 1.7× — the figure the *in-page* measurement contradicts, and the reason both are recorded |
+| 2026-09-01 | P12.2 | streaming parser vs `JSON.parse`, 11 documents × 8 chunk sizes | — | **88 parses, all deep-equal**; 7 malformed rejected | chunk size 1 puts a boundary between every pair of bytes |
+| 2026-09-01 | P12.2 | …and against the real graphs | — | **161,725 + 745,964** and **485,175 + 2,237,892** elements identical | the 485k reference had to be built in pieces — it has the same ceiling as the code under test |
 
 ---
 
@@ -2415,4 +2676,6 @@ them — so the next audit does not re-propose them.
 | Level-of-detail links on a *settled* graph | Considered 2026-08-28 as the answer to slow animation, and unnecessary once measured. Motion-only LoD ([P12.9](#p129)) recovers 3 fps → 120 fps while leaving the still picture exactly as it was, so there is no case for permanently dropping, capping or fading links — and every version of that changes what the graph *says* about the code. |
 | WebAssembly anywhere in the vis layer | Audited 2026-08-27, no candidate found. Every hot loop is either a typed-array pass already at memory bandwidth, or string/`Map` work whose data would have to be copied across the wasm boundary to be touched. The one shape that would suit it — the 485k-entry `id → index` hash table — is already in a Worker and already costs 7 ms. The vis layer's measured costs are DOM ([P12.1](#p121)), a JSON parse ([P12.2](#p122)) and an un-dirtied repaint ([P12.3](#p123)); wasm addresses none of the three. |
 | Raising `SOLO_MAX_NODES` above 1,500 | Not a performance question. cosmos.gl will instance far more and the GPU-side payload is ~40 B per point, so the budget is not what stops it — a couple of hundred thousand points is a solid wash whichever layout runs, and every hover, filter and restyle then pays full price for pixels nobody can read. Revisit only behind a *different* picture (density/aggregate overview), not by moving the number. |
+| **GPUI (Zed's Rust UI framework) as the canvas** | Evaluated 2026-08-31, rejected on architecture and arithmetic. Its renderer accepts one input — a `Scene` of a closed primitive set (`Quad`, `Path`, sprites, `Shadow`, `Underline`, `Surface`) — with no hook for an application shader, vertex buffer or compute pass; the only macOS escape is `paint_surface(bounds, CVPixelBuffer)`, which means rendering it yourself elsewhere and handing GPUI an image. The scene is **cleared and rebuilt every frame** (`Scene::clear`) and `Quad` is a padding-free **160-byte** struct, so 500k points is **80 MB rebuilt and re-uploaded per frame — 4.8 GB/s at 60 fps**, against cosmos.gl's ~40 B per point uploaded only when it changes ([P12.11](#p1211) is the item that removed exactly that upload). No line primitive exists, so 745,964 links become CPU-tessellated `Path`s. And it replaces none of cosmos.gl's other half — the force simulation, which runs in WebGL2 shaders. See [P12.23](#p1223). |
+| **Replacing the WKWebView shell**, on frame-rate grounds | Measured 2026-08-31 ([P12.23](#p1223)): at `powermode 0` the app renders every frame the display offers, matches Chrome frame for frame, runs the walk's animation **faster** than Chrome (40 vs 34–37 fps), and its *page* costs half what Chrome's renderer does. The 22.7 fps and 4.6× that motivated the idea were Low Power Mode. What is left is 2× in WebKit's GPU-process rasterisation of the FX overlay — an overlay item, not a shell one. |
 | `GraphEdge` endpoints as `u32` node indices | Would reach ~6 MB against `Arc<str>`'s ~49 MB, but needs the node table wherever an edge is built or read — 41 construction sites, 144 reads, ten test files — and a seeded or two-pass `Deserialize`, because an edge would stop meaning anything on its own. Revisit only if 49 MB on a 500k-edge graph starts to matter. |
