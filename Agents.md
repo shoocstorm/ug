@@ -244,6 +244,14 @@ today: every ` ``` ` block in `native/src/` is fenced as `text`, so there are
 no doctests to skip. Add a real doctest and you have to run `cargo test --doc`
 alongside nextest to see it.
 
+### Commit to `main`
+
+**Commit straight to `main` unless the task says otherwise.** No feature
+branch, no PR unless one is asked for — this is a single-maintainer repo and a
+branch per change is bookkeeping nobody reads. If a change genuinely wants
+isolating (a spike, something half-finished), say so and branch; the default is
+`main`.
+
 ## 7. Documentation & Website
 
 **The website lives in this repo at `docs/ug-website/`. Updating it is part of
