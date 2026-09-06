@@ -15,7 +15,7 @@
 | **Opened / closed** | 2026-08-18 → 2026-09-01 (**closed for now**; the ledger stays open for the next round) |
 | **Version** | 0.1.17 |
 | **Primary fixture** | `~/.ug/neo4j` — 161,725 nodes / 745,964 edges / 330 MB `graph.json` |
-| **Landed** | 5 rounds, 75 items numbered, **68 landed** + 1 answered by measurement · suite **916/916** |
+| **Landed** | 5 rounds, 76 items numbered, **69 landed** + 1 answered by measurement · suite **916/916** |
 | **Still open** | [What is still open](#what-is-still-open) — 6 items, none of them blocking |
 
 **Status marks:** ✅ landed and verified · ⬜ open · ⏭️ deferred · ❌ rejected by measurement
@@ -85,6 +85,7 @@ which are Round 2's synthetic index (~3× neo4j).
 | Landing screen, idle | 50.4% of a core | **2.8%** | 18× |
 | Graph on screen, settled, nothing selected | 58.8% of a core | **6.0%** | 9.8× |
 | Camera flight / layout morph, 746k links | 3–4 fps | **120 fps** | 30× |
+| **3D**, `~/.ug/ug` whole (4,648 / 12,385) | 10.2 fps | **45.2 fps** | **4.4×** |
 | Graph walk, 3 hops (Chrome) | 3.0 fps / 292 ms a frame | **87.0 fps / 8.3 ms** | 29× |
 | Guided tour, a 1-edge route | 8.2 fps | **120.2 fps** | 15× |
 | A node click, and the state it leaves | 539 ms, then 28.8% of a core | **291 ms, then 3.6%** | 1.9× / 8× |
@@ -2608,6 +2609,135 @@ holds. Server mode already answers this — `NodeStore` carries 485k nodes in
 detail is a fetch away, and file mode has no server to fetch from. Whatever the
 answer is, it is a bigger number than this item was.
 
+<a id="p1226"></a>
+### ✅ P12.26 — the 3D renderer was drawing the graph solo mode had told it not to
+
+Reported as two things — "3D perf is not good, 3–7 fps on `~/.ug/ug`" and "it
+looks so dark with many nodes". They are one bug, and neither is about three.js
+being slow.
+
+**Reproduced first**, on the real GPU rather than swiftshader: headless Chrome
+with `--use-angle=metal`, `~/.ug/ug` (4,648 nodes / 12,385 links) at 1400×757
+on an M5 Max. **10.2 fps, 33,822 draw calls a frame, 2.03M triangles.**
+
+#### The bug
+
+`applySoloMode` decided the 3D engine must not draw this graph — 12,385 links
+against a 3,000-element budget — set `state.soloOnly = true`, and then kicked
+off an **async** `rebuildSoloView()` to replace the view. `createGraph` reads
+`state.view` on the next statement, with no `await` between, so it mounted the
+renderer with the graph solo mode had just rejected: **4,648 nodes and 12,385
+links, against a budget of 3,000.**
+
+The function's own doc comment promised the opposite — "Safe to call before a
+renderer is mounted: it leaves `state.view` correct for whoever mounts next".
+It was true of the branch that turns solo *off* and false of the one that turns
+it on.
+
+**And it was silent, because everything downstream reads `state.view`** — which
+was the empty one the rebuild left behind. So each of these ran over nothing
+while 4,648 nodes were on screen:
+
+- `updateAdaptiveLabels` iterated an empty list and never hid a label, so all
+  **4,648 name sprites stayed visible** — each a canvas and a GPU texture.
+- `computeExtent` returned `null`, so `applyDepthCues` never recalibrated the
+  fog. It stayed at its mount default of **0.001** against a near-black fog
+  colour (`0x0d0d10`). With the camera 2,035 units out, `FogExp2` at that
+  density is `1 − exp(−(0.001 × 2035)²)` ≈ **98% faded to black**.
+
+That is the darkness. It is not a palette choice; it is a depth cue that was
+never given the graph's size.
+
+#### Attribution, before touching anything
+
+Measured by hiding one class of object at a time on a **live scene** — same
+build, same frame, so the deltas are attributable:
+
+| | fps | draw calls | triangles |
+| :--- | ---: | ---: | ---: |
+| everything on | 10.2 | 33,822 | 2,028,182 |
+| labels off | 11.4 | 30,324 | 2,010,423 |
+| + shells off | 12.7 | 26,966 | **425,624** |
+| + halos off | 14.2 | 23,611 | 418,134 |
+| + arrows off | **43.1** | 13,978 | 263,563 |
+| **arrows off, nothing else** | **19.1** | 23,904 | 1,848,211 |
+
+**The arrowheads are the frame.** Turning off only those is **+87%** — more
+than labels, shells and halos together. Each is a cone `Mesh` with its own
+geometry and material that force-graph repositions every frame because it has
+to follow the strand. They are three units long and illegible at any camera
+distance a graph this size is viewed from.
+
+**The shells are the triangles** — 1.6M of the 2.03M — because the
+`radius >= 6` gate meant to pick out "the larger nodes" has been true for
+*every* node since `nodeRadiusFor` started multiplying by 1.6: the smallest
+radius it can return is 9.6. A stale threshold, not a decision.
+
+#### What landed
+
+1. **`applySoloMode` sets `state.view` synchronously** in both branches. The
+   promise in its comment is now load-bearing rather than aspirational.
+2. **A detail budget**, priced in draw calls — the unit the frame is linear in
+   (1.3–1.8 µs per call, measured across four graphs). The base picture is one
+   call per node and one per link and is not negotiable; halo, then shell, then
+   arrows are added while the total stays under **11,000 calls**, the 60 fps
+   line. Small graphs are unchanged; large ones shed ornament in the order the
+   ablation ranked it.
+3. **One shared unit `SphereGeometry`**, scaled per node, at 12 segments
+   instead of 16 — 4,648 buffer geometries became **1**. Plus the shell gate
+   raised to a radius the default size cannot reach.
+4. **Labels are built on first use**, not at mount. `SpriteText` carries its own
+   canvas texture, and the Names toggle is **off by default** — so the old code
+   built 4,648 canvases and 4,648 GPU textures for labels nobody had asked to
+   see.
+5. **The 3D budget counts nodes + edges, not `max`.** Draw calls track the sum
+   to within 1%; `max` put `~/.ug/ug` (17,033 elements, 44 fps) and
+   `~/.ug/hermes` (24,588, 26 fps) within 5% of each other. With the renderer
+   this much cheaper the default rises **3,000 → 25,000**, which is the ~26 fps
+   line — so a repo the size of this one now opens in 3D and stays there.
+
+#### Measured
+
+`~/.ug/ug`, whole graph, stock config, same machine and window:
+
+| | before | after | |
+| :--- | ---: | ---: | ---: |
+| frame rate | 10.2 fps | **45.2 fps** | **4.4×** |
+| median frame | 97.9 ms | **22.1 ms** | |
+| draw calls | 33,822 | **17,085** | 2.0× |
+| triangles | 2,028,182 | **307,562** | 6.6× |
+| GPU geometries | 16,982 | **7** | |
+| GPU textures | 4,644 | **11** | |
+| fog density | 0.001 (never recalibrated) | **0.000171** | |
+| **mean canvas luminance** | **22.3** | **43.0** | **1.9×** |
+| near-black pixels | 69.3% | **48.2%** | |
+
+The luminance pair is the darkness, in pixels rather than in adjectives: same
+build, same frame, only `fog.density` differing between the two readings.
+
+The frame is now linear in draw calls and dominated by what is left — 12,385
+link strands and 4,648 node discs, one call each. Going further means replacing
+force-graph's per-link mesh with merged geometry, which is a different item.
+
+#### Checked in the browser
+
+Every number above is from a real page. Alongside them:
+
+| | `java-demo` (132/341) | `~/.ug/ug` (4,648/12,385) |
+| :--- | :--- | :--- |
+| ornament | halos 132, shells 103, **arrows on** | all off, as budgeted |
+| frame rate | 59.9 fps | 45.2 fps whole-graph |
+| fog recalibrated | 0.00083 (radius 193) | 0.000172 (radius 930) |
+| labels with Names **off** (the default) | **0 built** | **0 built** |
+| …with Names **on** | 9 built, 9 visible | 376 built on zoom, 211 visible; textures 11 → 103 |
+| click → info panel | `Main.java`, 23 related | `12-render-cosmos.js`, 125 related |
+| console errors | none | none |
+
+The 2D renderer was checked on the same graph — it still draws all 4,648 nodes
+whole, `state.view === state.graph`, click and related list unchanged: the
+shared `soloRequired` now asks each renderer for its own element metric rather
+than assuming one answer fits both.
+
 ### What the round taught
 
 - **The JS heap is not the tab.** 118 MB of heap sat inside a 1,958 MB
@@ -2881,6 +3011,11 @@ One row per landed item or baseline. Keep the numbers, not just the verdict.
 | 2026-09-06 | P12.25 | …of the 591.4 MB with no edges at all | **486 MB is node objects** | unchanged | the split, which is the finding: this item was never the larger half |
 | 2026-09-06 | P12.25 | every node's adjacency vs the shape it replaces | — | **1,488,846** (`neo4j`) + **4,466,538** (`big500k`) identical | in node, and again in Chrome against a reference walk of `state.graph.edges` |
 | 2026-09-06 | — | *retracted* | "the store pins 767 MB of parsed edges" | nothing is pinned | `heapUsed` sampled in the same turn as the build; the `WeakRef` that tested it moved the control by the same 767 MB |
+| 2026-09-06 | P12.26 | `~/.ug/ug` in 3D, whole graph, M5 Max @1400×757 | 10.2 fps / 33,822 calls / 2,028k tris | **45.2 fps / 17,085 / 308k** | **4.4×**; solo mode had been bypassed, so 4,648 nodes were drawn against a 3,000 budget |
+| 2026-09-06 | P12.26 | …GPU geometries / textures | 16,982 / 4,644 | **7 / 11** | one shared sphere; labels built on first use, and the Names toggle is off by default |
+| 2026-09-06 | P12.26 | …mean canvas luminance / near-black pixels | 22.3 / 69.3% | **43.0 / 48.2%** | the "too dark" report: fog stuck at 0.001 because `applyDepthCues` saw an empty view |
+| 2026-09-06 | P12.26 | ablation — arrowheads alone, everything else on | 10.2 fps | **19.1 fps** | +87% from one accessor; a cone mesh per link, repositioned every frame |
+| 2026-09-06 | P12.26 | 3D cost vs element count, 4 graphs | — | **1.3–1.8 µs per draw call**, calls ≈ nodes + links ± 1% | which is why the budget counts the sum, not `max` |
 
 ---
 

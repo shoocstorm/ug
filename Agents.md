@@ -434,10 +434,10 @@ changelog on every bump, and keep engine calls behind the `KnowledgeStore`
 trait (`native/src/storage/store.rs`) so upgrades stay confined to
 `native/src/storage/db.rs`.
 
-## 9. Nine bugs this codebase keeps re-introducing
+## 9. Ten bugs this codebase keeps re-introducing
 
-All are invisible in review and silent at runtime, and all but the last have
-already shipped here more than once. Check for them by reflex.
+All are invisible in review and silent at runtime, and most have already
+shipped here more than once. Check for them by reflex.
 
 ### 9a. Canonicalize *both* sides of a path comparison
 
@@ -756,6 +756,41 @@ What to check:
   Pointing `UG_HOME` at one symlinked project per run turned "the scan is slow
   with 7 projects" into "one project is 1.09 s and the other seven are 0.00" —
   a different bug from the one the ledger had written down.
+
+### 9j. A decision that is announced synchronously and applied asynchronously
+
+**If a caller reads the state you just changed on its very next statement, you
+have to have changed it — not scheduled a change to it.**
+
+`applySoloMode` decided the 3D renderer must not draw a 12,385-link graph, set
+`state.soloOnly = true`, and called an `async rebuildSoloView()` to replace
+`state.view`. `createGraph` reads `state.view` on the next line, with no
+`await` between, so the renderer was mounted with the graph that had just been
+rejected — 4,648 nodes against a budget of 3,000, at 10 fps
+([P12.26](docs/dev/PERF-TUNING-JOURNEY.md#p1226)).
+
+The function's own comment said "Safe to call before a renderer is mounted: it
+leaves `state.view` correct for whoever mounts next." That was true of the
+branch that turns the mode *off*, which assigns synchronously, and false of the
+branch that turns it on. **One branch of a two-branch invariant is not the
+invariant.**
+
+What made it cost days rather than minutes is the second half:
+
+- **A flag and the state it describes must move together, or every reader
+  downstream is silently wrong in a way that looks like a different bug.**
+  `state.soloOnly` said "empty view" and `state.view` *was* empty; only the
+  renderer had the real graph. So `updateAdaptiveLabels` iterated nothing and
+  left 4,648 name sprites visible, and `computeExtent` returned `null` so the
+  fog was never recalibrated and buried the graph in the dark. Both were
+  reported as separate complaints — "3D is slow" and "3D is too dark" — and
+  neither pointed at solo mode.
+
+How to check for it: for every `async` call made from a synchronous decision
+path, ask **what the caller reads next**. If the answer is state the async work
+owns, assign it before the call and let the async work refine it. Grep shape:
+an assignment to a shared `state.*` inside an `async function` that a
+non-`await`ed caller depends on.
 
 ## 10. Measuring performance without fooling yourself
 

@@ -66,7 +66,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
     ConfigKey { name: "embed.dim", section: "embed", field: "dim", flag: "--embedding-dim", kind: Kind::U32, min: 1, secret: false, desc: "embedding dimension override (normally auto-probed)" },
     ConfigKey { name: "embed.section_cap", section: "embed", field: "sectionCap", flag: "--section-cap", kind: Kind::U32, min: 1, secret: false, desc: "chars of a node's description to embed (default: derived from the model's token window)" },
     ConfigKey { name: "vis.renderer", section: "vis", field: "renderer", flag: "", kind: Kind::Enum(&["auto", "three", "cosmos"]), min: 0, secret: false, desc: "preferred rendering engine: auto (three below three_d_max_elements, cosmos above), three, or cosmos" },
-    ConfigKey { name: "vis.three_d_max_elements", section: "vis", field: "threeDMaxElements", flag: "", kind: Kind::U32, min: 100, secret: false, desc: "max nodes/edges the 3D engine draws whole; above it auto switches to the 2D engine and 3D solo-passes neighbourhoods" },
+    ConfigKey { name: "vis.three_d_max_elements", section: "vis", field: "threeDMaxElements", flag: "", kind: Kind::U32, min: 100, secret: false, desc: "nodes+edges the 3D engine draws whole (a draw call each, frame time linear in the total); above it auto switches to the 2D engine and 3D solo-passes neighbourhoods" },
     ConfigKey { name: "vis.solo_threshold", section: "vis", field: "soloThreshold", flag: "", kind: Kind::U32, min: 1, secret: false, desc: "nodes/edges past which the page opens in solo mode (the 2D engine's ceiling)" },
     ConfigKey { name: "vis.link_blending", section: "vis", field: "linkBlending", flag: "", kind: Kind::Enum(&["on", "off"]), min: 0, secret: false, desc: "additive blending for links in the 2D engine: richer where strands overlap, but the single biggest per-frame cost at high resolution (off is ~2.3x cheaper at 3400x2000)" },
     ConfigKey { name: "vis.hover_delay_ms", section: "vis", field: "hoverDelayMs", flag: "", kind: Kind::U32, min: 0, secret: false, desc: "how long the pointer must rest on a node before it is hovered; collapses the nodes crossed on the way from one to another into no work at all (0 = hover immediately)" },
@@ -254,7 +254,7 @@ pub(crate) fn default_for(key: &ConfigKey) -> Option<String> {
         "vis.renderer" => Some("auto".to_string()),
         // Mirrors THREE_D_MAX_ELEMENTS in native/src/vis/js/10-render-core.js —
         // display values only; the page falls back to those constants when unset.
-        "vis.three_d_max_elements" => Some("3000".to_string()),
+        "vis.three_d_max_elements" => Some("25000".to_string()),
         // Mirrors SOLO_THRESHOLD in native/src/vis/js/16-solo-view.js.
         "vis.solo_threshold" => Some("200000".to_string()),
         // Mirrors HOVER_DWELL_DEFAULT_MS in native/src/vis/js/14-interaction.js.

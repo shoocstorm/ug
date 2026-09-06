@@ -174,28 +174,159 @@
         // wash — additive glow would vanish against the white paper), a
         // translucent "membrane" shell still wraps the larger cell-like nodes,
         // and an optional text label floats above.
+        // ─── Detail budget ─────────────────────────────────────
+        //
+        // How much ornament a node and a link get, decided from how many of
+        // them the renderer is being handed. Every layer below is decoration
+        // over a disc and a strand, and each one is a draw call per element.
+        //
+        // Measured on `~/.ug/ug` (4,648 nodes / 12,385 links) at 1400×757,
+        // Apple M5 Max through ANGLE/Metal, by hiding one class of object at a
+        // time on a live scene — same build, same frame, so the deltas are
+        // attributable rather than inferred:
+        //
+        //   everything on              10.2 fps   33,822 calls   2,028k tris
+        //   labels off                 11.4       30,324         2,010k
+        //   + shells off               12.7       26,966           426k
+        //   + halos off                14.2       23,611           418k
+        //   + arrows off               43.1       13,978           264k
+        //   arrows off, nothing else   19.1       23,904         1,848k
+        //
+        // Two rows are worth reading twice.
+        //
+        // **The arrowheads are the frame.** Turning off only those — the last
+        // row — is +87% on its own, more than labels, shells and halos put
+        // together. Each is a cone `Mesh` with its own geometry and material
+        // that force-graph repositions every frame because it has to follow
+        // the strand; at 12,385 links that is a per-frame CPU pass over the
+        // whole edge list before a single one is drawn. They are three units
+        // long and stop being legible at the first zoom-out, which is where
+        // any graph this size is viewed from.
+        //
+        // **The shells are the triangles.** 1.6M of the 2.03M, because the
+        // `radius >= 6` gate that was meant to pick out "the larger nodes" has
+        // been true for every node since `nodeRadiusFor` started multiplying
+        // by 1.6 — the smallest radius it can return is 9.6. A stale threshold,
+        // not a design decision.
+        // A shell means "this node is big". Above the default radius
+        // (`nodeRadiusFor` floors at 6 × 1.6 = 9.6), so it picks out the nodes
+        // whose type actually gives them extra size.
+        const SHELL_MIN_RADIUS = 11;
+
+        // The budget is in **draw calls**, because that is the unit the frame
+        // is linear in. Across the four graphs above the cost per call is
+        // 1.3–1.8 µs (17,077 calls → 22.1 ms; 24,425 → 37.9; 43,139 → 79.1;
+        // 58,000 → 104.3), so ~11,000 calls is the 60 fps line on this
+        // machine and every layer below is priced against it.
+        //
+        // Counting in raw nodes or links instead would have taken the arrows
+        // off `~/.ug/MusicBot` (2,214 links, ~6,700 calls with arrows, well
+        // over 100 fps) to save a frame that was never in trouble.
+        const THREE_DETAIL = { calls: 11000 };
+
+        // Which layers this view can afford, priced in the order the ablation
+        // says to keep them.
+        //
+        // The base picture is one call per node disc and one per link strand,
+        // and that is not negotiable — it is the graph. Everything after it is
+        // ornament, added while there is room:
+        //
+        //   halo    +1 per node — the soft rim; first because it is what makes
+        //                         a sparse graph read as lit rather than flat
+        //   shell   +1 per big node — the membrane; only nodes over
+        //                         SHELL_MIN_RADIUS have one, so this
+        //                         over-charges and is deliberately safe
+        //   arrows  +1 per link — last, because it is the most calls for the
+        //                         least meaning: direction is also carried by
+        //                         the flow particles and by the hover tint,
+        //                         and an arrowhead three units long stops
+        //                         being legible at the first zoom-out
+        function computeDetail(view) {
+            const n = (view && view.nodes ? view.nodes.length : 0);
+            const l = (view && view.edges ? view.edges.length : 0);
+            const budget = THREE_DETAIL.calls;
+            const d = { halos: false, shells: false, arrows: false };
+            let calls = n + l;
+            if (calls + n <= budget) { d.halos = true; calls += n; }
+            if (calls + n <= budget) { d.shells = true; calls += n; }
+            if (calls + l <= budget) { d.arrows = true; calls += l; }
+            return d;
+        }
+
+        // Recomputed per mount and per view swap, so a solo view that grows or
+        // shrinks gets the ornament it can afford.
+        let detail = { arrows: true, shells: true, halos: true };
+
+        // One sphere for every shell, scaled per node.
+        //
+        // `new SphereGeometry(radius * 1.65, 16, 16)` per node was 4,648
+        // distinct buffer geometries uploaded to the GPU to draw the same
+        // shape at 4,648 sizes. A unit sphere with the mesh scaled does the
+        // same job with one upload, and 12 segments instead of 16 halves the
+        // triangles of the ones that survive the budget — at the size a shell
+        // is actually seen, that difference is invisible.
+        let _shellGeom = null;
+        function shellGeometry() {
+            if (!_shellGeom) _shellGeom = new THREE.SphereGeometry(1, 12, 12);
+            return _shellGeom;
+        }
+
+        // Build a node's name sprite, on the first frame it is close enough to
+        // be readable rather than at mount.
+        //
+        // A `SpriteText` carries its own canvas texture, so building them up
+        // front cost 4,648 canvases and 4,648 GPU textures for a graph where
+        // `updateAdaptiveLabels` shows the few within `_labelDist` of the
+        // camera. The rest were paid for and never read.
+        function ensureNodeLabel(n) {
+            if (n.__nodeLabel !== undefined) return n.__nodeLabel;
+            const text = truncateName(n.name);
+            if (!text) {
+                n.__nodeLabel = null;
+                return null;
+            }
+            const s = new SpriteText(text);
+            s.color = n.__labelTinted ? CANVAS.labelTour : CANVAS.label;
+            s.fontFace = 'JetBrains Mono, monospace';
+            s.textHeight = 3.5;
+            s.material.depthWrite = false;
+            // Sprite-text labels are NPOT canvas textures; skip mipmaps to
+            // avoid blurry text and unsupported-mipmap paths on some GPUs.
+            if (s.material.map) {
+                s.material.map.generateMipmaps = false;
+                s.material.map.minFilter = THREE.LinearFilter;
+                s.material.map.needsUpdate = true;
+            }
+            s.position.set(0, (n.__nodeRadius || 6) + 6, 0);
+            n.__nodeLabel = s;
+            if (n.__threeGroup) n.__threeGroup.add(s);
+            return s;
+        }
+
         function makeNodeObject(n) {
             const radius = nodeRadiusFor(n);
-            const seg = 16;   // sphere tesselation for the larger nodes' shell
             const group = new THREE.Group();
 
             // Soft tinted radial-gradient halo — reads as the out-of-focus
             // ink bleed around every node in the reference art. Rendered below
             // the sticker (renderOrder) so the glow never washes over the glyph.
-            const halo = new THREE.Sprite(new THREE.SpriteMaterial({
-                map: glowTexture(),
-                color: config.getColor(n.group),
-                transparent: true,
-                opacity: 0.3,
-                depthWrite: false,
-            }));
-            halo.renderOrder = 0;
-            // A modest glow now — the sticker carries the visual weight, so the
-            // halo should read as a soft rim, not a big fuzzy disc around it.
-            n.__haloBase = radius * 2.6;
-            halo.scale.setScalar(n.__haloBase);
-            n.__nodeHalo = halo;
-            group.add(halo);
+            if (detail.halos) {
+                const halo = new THREE.Sprite(new THREE.SpriteMaterial({
+                    map: glowTexture(),
+                    color: config.getColor(n.group),
+                    transparent: true,
+                    opacity: 0.3,
+                    depthWrite: false,
+                }));
+                halo.renderOrder = 0;
+                // A modest glow now — the sticker carries the visual weight,
+                // so the halo should read as a soft rim, not a big fuzzy disc
+                // around it.
+                n.__haloBase = radius * 2.6;
+                halo.scale.setScalar(n.__haloBase);
+                n.__nodeHalo = halo;
+                group.add(halo);
+            }
 
             const mat = new THREE.SpriteMaterial({
                 map: nodeIconTexture(n.group),
@@ -218,15 +349,22 @@
 
             // Larger nodes get a translucent outer shell — the nucleus-
             // inside-a-membrane look the big cells in the reference have.
-            if (radius >= 6) {
+            //
+            // `SHELL_MIN_RADIUS` is above what `nodeRadiusFor` returns for the
+            // default size, which the old `radius >= 6` was not: radii are
+            // scaled by 1.6, so the smallest is 9.6 and every node on the
+            // canvas grew a 512-triangle sphere. That is where 1.6M of this
+            // scene's 2.03M triangles came from.
+            if (detail.shells && radius >= SHELL_MIN_RADIUS) {
                 const shell = new THREE.Mesh(
-                    new THREE.SphereGeometry(radius * 1.65, seg, seg),
+                    shellGeometry(),
                     new THREE.MeshBasicMaterial({
                         color: config.getColor(n.group),
                         transparent: true,
                         opacity: 0.14,
                         depthWrite: false,
                     }));
+                shell.scale.setScalar(radius * 1.65);
                 shell.renderOrder = 1;
                 // Kept on the node so dimming (focus / tour) can fade the
                 // shell too — otherwise big nodes stay visible through it.
@@ -254,24 +392,11 @@
                 group.add(ring);
             }
 
-            const label = truncateName(n.name);
-            if (label) {
-                const s = new SpriteText(label);
-                s.color = CANVAS.label;
-                s.fontFace = 'JetBrains Mono, monospace';
-                s.textHeight = 3.5;
-                s.material.depthWrite = false;
-                // Sprite-text labels are NPOT canvas textures; skip mipmaps to
-                // avoid blurry text and unsupported-mipmap paths on some GPUs.
-                if (s.material.map) {
-                    s.material.map.generateMipmaps = false;
-                    s.material.map.minFilter = THREE.LinearFilter;
-                    s.material.map.needsUpdate = true;
-                }
-                s.position.set(0, radius + 6, 0);
-                n.__nodeLabel = s;
-                group.add(s);
-            }
+            // The name sprite is built by `ensureNodeLabel`, the first time
+            // the node comes within labelling distance of the camera. The
+            // group is kept so it has something to attach to.
+            n.__threeGroup = group;
+            n.__nodeLabel = undefined;
             return group;
         }
 
@@ -306,6 +431,9 @@
         function threeMount(el, view) {
             window.addEventListener('mousemove', threeTrackMouse);
 
+            // Before `graphData`, because `nodeThreeObject` runs against it.
+            detail = computeDetail(view);
+
             Graph = ForceGraph3D({ controlType: 'orbit' })(el)
                 .backgroundColor(CANVAS.bg)
                 // The *view*, not the graph: in solo mode this starts empty and
@@ -331,7 +459,10 @@
                 // reference art; everything else stays a fine strand.
                 .linkWidth(e => e.rel === 'Contains' ? 1.1 : 0.45)
                 .linkVisibility(linkVisibleFor)
-                .linkDirectionalArrowLength(3)
+                // A cone mesh per link, repositioned every frame. The
+                // single most expensive thing in this scene past a couple of
+                // thousand links — see THREE_DETAIL.
+                .linkDirectionalArrowLength(detail.arrows ? 3 : 0)
                 .linkDirectionalArrowRelPos(1)
                 .linkDirectionalParticles(linkParticlesFor)
                 .linkDirectionalParticleWidth(1.6)
@@ -1288,21 +1419,19 @@
             const focusOn = !!state.focusNode;
             const tourOn = tourState.active && tourState.routeIds.size > 0;
             state.view.nodes.forEach(n => {
-                const s = n.__nodeLabel;
+                // Built here rather than at mount: a name sprite is a canvas
+                // and a GPU texture, and only the ones inside `D` are ever
+                // read. A node whose name is empty memoises `null` and is
+                // skipped from then on.
+                const near = !tourOn && !focusOn
+                    && ((n.x || 0) - px) ** 2 + ((n.y || 0) - py) ** 2 + ((n.z || 0) - pz) ** 2 < D2;
+                const wanted = tourOn ? tourState.routeIds.has(n.id)
+                    : (focusOn ? state.focusSet.has(n.id) : near);
+                const s = wanted ? ensureNodeLabel(n) : n.__nodeLabel;
                 if (!s) return;
                 // On a tour only the stops are named — the surrounding
                 // neighbourhood stays present but anonymous.
-                if (tourOn) {
-                    s.visible = tourState.routeIds.has(n.id);
-                    return;
-                }
-                if (focusOn) {
-                    // While focused, always label the neighbourhood; hide the rest.
-                    s.visible = state.focusSet.has(n.id);
-                    return;
-                }
-                const dx = (n.x || 0) - px, dy = (n.y || 0) - py, dz = (n.z || 0) - pz;
-                s.visible = (dx * dx + dy * dy + dz * dz) < D2;
+                s.visible = wanted;
             });
         }
 
@@ -1707,12 +1836,14 @@
                 // Tour stops get their names inked in warm orange so the route
                 // is readable at a glance. Re-tinting rebuilds the sprite
                 // texture, so only do it when the tint actually changes.
-                if (n.__nodeLabel) {
-                    const wantTint = tier === 'current' || tier === 'stop';
-                    if (wantTint !== !!n.__labelTinted) {
-                        n.__nodeLabel.color = wantTint ? CANVAS.labelTour : CANVAS.label;
-                        n.__labelTinted = wantTint;
-                    }
+                // Recorded on the node, not only on the sprite: labels are
+                // built on demand now, so a tour stop whose name sprite does
+                // not exist yet still has to remember that it wants the warm
+                // ink for when `ensureNodeLabel` does build it.
+                const wantTint = tier === 'current' || tier === 'stop';
+                if (wantTint !== !!n.__labelTinted) {
+                    n.__labelTinted = wantTint;
+                    if (n.__nodeLabel) n.__nodeLabel.color = wantTint ? CANVAS.labelTour : CANVAS.label;
                 }
                 if (n.__nodeShell) {
                     const base = n.__shellBase || 0.14;
@@ -1753,9 +1884,9 @@
         RENDERERS.three = () => ({
             name: 'three',
             caps: { threeD: true, faceViews: true, autoSpin: true, boundaryCube: true },
-            // Past this it is handed one neighbourhood at a time — a Group of
-            // five objects per node does not scale, which is what solo mode
-            // was built for in the first place. Follows the configurable
+            // Past this it is handed one neighbourhood at a time — an object
+            // per node and another per link does not scale, which is what solo
+            // mode was built for in the first place. Follows the configurable
             // `vis.three_d_max_elements` (see 10-render-core.js).
             soloThreshold: threeDMaxElements(),
 
@@ -1765,11 +1896,20 @@
             },
 
             setData(view) {
-                if (Graph) Graph.graphData({ nodes: view.nodes, links: view.edges });
+                if (!Graph) return;
+                // Solo view hands this a different-sized graph on every click,
+                // so the ornament has to be re-decided with it. Node objects
+                // are rebuilt by force-graph for whatever is new here, and
+                // they read `detail` as they are built.
+                const next = computeDetail(view);
+                const arrowsChanged = next.arrows !== detail.arrows;
+                detail = next;
+                if (arrowsChanged) Graph.linkDirectionalArrowLength(detail.arrows ? 3 : 0);
+                Graph.graphData({ nodes: view.nodes, links: view.edges });
             },
 
-            // The `scope` hint is deliberately ignored: this backend is capped
-            // at THREE_D_MAX_ELEMENTS (3,000) and is handed one neighbourhood
+            // The `scope` hint is deliberately ignored: this backend is
+            // capped at THREE_D_MAX_ELEMENTS and is handed one neighbourhood
             // at a time above that, so a full restyle is already bounded and
             // scoping it would buy a branch rather than time.
             restyle() { threeRestyle(); },

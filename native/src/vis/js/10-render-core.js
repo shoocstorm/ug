@@ -262,14 +262,23 @@
         // takes over, because the per-node object cost that makes 3D pleasant
         // on a small graph is the same cost that makes a big one unusable.
         const RENDERER_STORAGE_KEY = 'ug-renderer';
-        // max(nodes, edges) the 3D renderer can draw whole. It builds a
-        // THREE.Group of ~5 objects per node and restyles all of them on every
-        // hover, so this is an order of magnitude below what the 2D renderer
-        // manages. It does double duty: the size at which 3D stops being the
-        // default, and the size above which 3D is handed one neighbourhood at a
-        // time instead (see applySoloMode). The fallback for the configurable
+        // Nodes + edges the 3D renderer can draw whole. It builds a
+        // THREE.Group per node and a mesh per link and restyles the nodes on
+        // every hover, so this stays well below what the 2D renderer manages.
+        // It does double duty: the size at which 3D stops being the default,
+        // and the size above which 3D is handed one neighbourhood at a time
+        // instead (see applySoloMode). The fallback for the configurable
         // `vis.three_d_max_elements` below.
-        const THREE_D_MAX_ELEMENTS = 3000;
+        // Nodes **plus** links, because that is what the 3D engine's frame
+        // time is linear in — one draw call each. See `soloElementCount` in
+        // 16-solo-view.js for the four-graph measurement, and THREE_DETAIL in
+        // 11-render-three.js for what was removed to make this number as high
+        // as it is: at 3,000 it predated a scene that cost 33,822 draw calls
+        // and 2.03M triangles for 4,648 nodes.
+        //
+        // 25,000 is the ~26 fps line on an M5 Max — `~/.ug/hermes` (24,588)
+        // renders whole and `~/.ug/MemOS` (43,290) does not.
+        const THREE_D_MAX_ELEMENTS = 25000;
 
         // The `vis.three_d_max_elements` config key from ~/.ug/config.json,
         // surfaced here via /api/capabilities. Absent/invalid → the constant.
@@ -287,7 +296,8 @@
             // the local edge array is empty and reading it would pick three.js
             // for a graph far past what three.js can hold.
             const edges = state.edgeCount || 0;
-            return Math.max(nodes, edges) <= threeDMaxElements() ? 'three' : 'cosmos';
+            // The sum, not the max — see `soloElementCount`.
+            return nodes + edges <= threeDMaxElements() ? 'three' : 'cosmos';
         }
 
         // The `vis.renderer` config key from ~/.ug/config.json, surfaced here
@@ -364,7 +374,7 @@
             // can hold. Done before mount so the backend is handed the view it
             // is actually going to render, rather than the whole graph followed
             // by a correction.
-            applySoloMode(backend.soloThreshold);
+            applySoloMode(backend.soloThreshold, name === 'three');
             // A backend's teardown disposes its GPU context but not its
             // <canvas> — three's `_destructor()` leaves its element in #graph-3d,
             // so the new backend would mount *underneath* a dead frame that keeps

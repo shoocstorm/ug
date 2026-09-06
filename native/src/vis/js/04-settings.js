@@ -417,11 +417,11 @@
                     three: 'Three.js — 3D',
                     cosmos: 'Cosmos — 2D (scale)',
                 },
-                hint: 'Three.js draws in 3D, with depth, effects and one styling pass per node — pleasant on a small repo, unusable past a few thousand nodes. Cosmos draws in 2D, on the GPU, and holds graphs far too big for 3D. Auto adjusts by graph size: picks three below the 3D element budget and cosmos above it.',
+                hint: 'Three.js draws in 3D, with depth, effects and one styling pass per node — pleasant on a small repo, and past its element budget it shows one neighbourhood at a time rather than the whole graph. Cosmos draws in 2D, on the GPU, and holds graphs far too big for 3D. Auto adjusts by graph size: picks three below the 3D element budget and cosmos above it.',
             },
             'vis.three_d_max_elements': {
                 label: '3D element budget',
-                hint: 'How much the 3D engine is asked to draw whole. Above this many nodes or edges, auto switches to the 2D engine — and if you force 3D, solo mode takes over instead of rendering the whole graph. Raised, three.js gets more on screen and slower hovers; lowered, the 2D engine becomes the default sooner.',
+                hint: 'How much the 3D engine is asked to draw whole, counted as nodes plus edges — it costs a draw call for each, and its frame time is linear in the total. Above this, auto switches to the 2D engine; force 3D and solo mode takes over instead. The default of 25,000 is roughly the 26 fps line on a fast laptop. Raised, three.js gets more on screen and a slower frame; lowered, the 2D engine becomes the default sooner.',
                 num: { step: '100', min: '100', max: '1000000' },
             },
             'vis.solo_threshold': {

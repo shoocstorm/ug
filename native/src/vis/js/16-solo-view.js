@@ -56,9 +56,34 @@
         // In server mode solo is not a threshold decision at all. It is the only
         // correct view, because the edges to draw anything else are on the
         // server.
-        function soloRequired(limit) {
+        function soloRequired(limit, three) {
             if (state.graphMode === 'server') return true;
-            return Math.max(state.nodeCount || 0, state.edgeCount) > (limit ?? visSoloThreshold());
+            const is3d = three === undefined ? state.renderer === 'three' : three;
+            return soloElementCount(is3d) > (limit ?? visSoloThreshold());
+        }
+
+        // What "one element" costs — which is not the same question for the
+        // two renderers, and answering it with one formula is how a real
+        // difference got hidden.
+        //
+        // cosmos.gl uploads points and links as typed-array buffers and draws
+        // each set in one instanced call, so what bounds it is the larger of
+        // the two. three.js builds an object per node *and* an object per
+        // link and submits a draw call for each; measured across four real
+        // graphs on an M5 Max, its frame time is linear in that **total**:
+        //
+        //   ~/.ug/ug         4,648 + 12,385 → 17,077 draw calls   44.4 fps
+        //   ~/.ug/hermes    11,550 + 13,038 → 24,425              26.4
+        //   ~/.ug/MemOS     12,789 + 30,501 → 43,139              12.6
+        //   ~/.ug/overgraph 15,143 + 43,831 → 58,000               9.6
+        //
+        // `max` predicted none of it. It puts `ug` at 12,385 and `hermes` at
+        // 13,038 — within 5% of each other, for graphs that run at 44 and 26
+        // fps. The sum is within 1% of the draw-call count every time.
+        function soloElementCount(is3d) {
+            const n = state.nodeCount || 0;
+            const e = state.edgeCount || 0;
+            return is3d ? n + e : Math.max(n, e);
         }
 
         // Short human phrase for *why* solo view is on. The graph title
@@ -426,9 +451,11 @@
         // tab stops responding.
         //
         // Returns true if the mode changed. Safe to call before a renderer is
-        // mounted: it leaves `state.view` correct for whoever mounts next.
-        function applySoloMode(limit) {
-            const want = soloRequired(limit);
+        // mounted, and that safety is load-bearing rather than incidental:
+        // `createGraph` mounts with `state.view` on the next statement, so
+        // both branches below set it **synchronously** before returning.
+        function applySoloMode(limit, three) {
+            const want = soloRequired(limit, three);
             if (want === state.soloOnly) return false;
             state.soloOnly = want;
             document.body.classList.toggle('solo-only', want);
@@ -444,6 +471,27 @@
                     state.viewExpanded.add(state.selectedNode.id);
                 }
                 setupSoloEmptyState();
+                // The view has to be right *now*, not when the rebuild lands.
+                //
+                // `createGraph` calls this and then, with no `await` between,
+                // reads `state.view` to mount the renderer with — while
+                // `rebuildSoloView` below is `async` and does not touch
+                // `state.view` until its first microtask. So the renderer was
+                // handed the graph solo mode had just decided it must not
+                // draw: on `~/.ug/ug`, three.js mounted all 4,648 nodes and
+                // 12,385 links against a 3,000-element budget, at 10 fps.
+                //
+                // And silently, because everything downstream reads
+                // `state.view` and therefore saw the empty one it was left
+                // with: `updateAdaptiveLabels` iterated nothing and left all
+                // 4,648 name sprites visible, and `computeExtent` returned
+                // null so `applyDepthCues` never recalibrated the fog — which
+                // stayed at its mount default of 0.001 against a near-black
+                // fog colour, and buried the graph in the dark at any camera
+                // distance past a few hundred units.
+                state.view = { nodes: [], edges: [] };
+                state.viewIds = new Set();
+                state.viewTruncated = 0;
                 // Fire and forget, like every other `rebuildSoloView` caller:
                 // this returns a boolean about the *mode*, and the view it
                 // leaves behind is repainted whenever its edges land.
