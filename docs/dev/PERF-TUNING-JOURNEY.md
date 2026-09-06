@@ -13,9 +13,9 @@
 | Field | Value |
 | :--- | :--- |
 | **Opened / closed** | 2026-08-18 → 2026-09-01 (**closed for now**; the ledger stays open for the next round) |
-| **Version** | 0.1.16 |
+| **Version** | 0.1.17 |
 | **Primary fixture** | `~/.ug/neo4j` — 161,725 nodes / 745,964 edges / 330 MB `graph.json` |
-| **Landed** | 5 rounds, 73 items numbered, **66 landed** + 1 answered by measurement · suite **913/913** |
+| **Landed** | 5 rounds, 75 items numbered, **68 landed** + 1 answered by measurement · suite **916/916** |
 | **Still open** | [What is still open](#what-is-still-open) — 6 items, none of them blocking |
 
 **Status marks:** ✅ landed and verified · ⬜ open · ⏭️ deferred · ❌ rejected by measurement
@@ -75,8 +75,10 @@ which are Round 2's synthetic index (~3× neo4j).
 | `ug serve` idle RSS | 1,245 MB | **730 MB** | **1.70×** |
 | `ug serve` startup to graph-ready | 6.66 s | **0.62 s** | 10.7× |
 | `/api/graph/search` per keystroke | 23.8 ms / 133 KB | **0.44 ms / 24.8 KB** | **54× / 5.4×** |
+| `/api/projects/staleness`, cold poll (8 projects) | 1.15 s | **0.019 s** | **61×** |
 | `ug graph centrality` | never returned | **3.3 s** | — |
 | Browser tab, 485k nodes | 280 MB heap | **62 MB** | **4.5×** |
+| 485k nodes in **file mode**, retained graph | 843.7 MB | **631.9 MB** | **1.34×** |
 | 485k nodes in **file mode** (no server) | `RangeError` | **loads, 4.2 s** | — |
 | …load → interactive | 2,485 ms | **1,105 ms** | 2.2× |
 | Browser **renderer process**, 485k | 5,367 MB | **314 MB** | **17.1×** |
@@ -102,9 +104,8 @@ known and what it would take.
 | | Item | State |
 | :--- | :--- | :--- |
 | [P12.4](#p124) | Server-mode session memory has no ceiling | Unmeasured; there is no eviction anywhere |
-| [P12.5](#p125) | Index identity (P9.2), now that a 500k fixture exists | Would take the index from 58 MB to ~18 MB — the biggest remaining client win |
-| [P12.2](#p122) | File mode holds 2.1–2.5 GB of heap at 485k | The wall is gone ([P12.2](#p122) landed); the *weight* is not. A CSR edge blob beside `nodes.bin` is ~20 MB against 837 MB of JS objects, and decodes in the Worker that already exists |
-| [P12.19](#p1219) | `GET /api/projects/staleness` costs **1.6–1.9 s** of server CPU every 2 minutes with a page open | Measured, not fixed. TTL-cached, so it is a cheaper check or a longer TTL |
+| [P12.5](#p125) | Index identity (P9.2), now that a 500k fixture exists | Would take the index from 58 MB to ~18 MB — the biggest remaining **server-mode** client win. [P12.25](#p1225) measured a larger one in file mode |
+| [P12.25](#p1225) | File mode's **node objects** are 486 MB of the 592 MB it still retains at 485k | The edges half landed ([P12.25](#p1225)): 252 → 40 MB, and the split it measured is the finding — the nodes were always the larger number. Server mode answers this with `NodeStore` (485k in 58 MB) *because* detail is a fetch away; file mode has no server to fetch from |
 | [P12.23](#p1223) | Whether an unthrottled WKWebView reaches **120** fps or stops at 60 | Narrowed, not closed. At `powermode 0` the app matches Chrome frame for frame — but on a **60 Hz** external panel, which cannot tell the two apart. Needs the lid open and the window on the built-in ProMotion display |
 | [P12.23](#p1223) | The FX overlay costs ~2× more in WebKit's GPU process than in Chrome's | 37.8–38.1% of a core against 17.7–18.5%, at equal cadence. ≈2.3 ms a frame at 1400×868, only on frames [P12.21](#p1221)'s cap lets through. Would need the overlay moved onto the graph's own GPU pipeline |
 | [P11.7](#round-4--the-ingest-nobody-measured) | `build_texts` parallelism | Deferred on arithmetic — 3.3% of the command, worth ~1.7% at the limit |
@@ -2129,6 +2130,10 @@ on the way.
 
 #### Found on the way: the staleness poll costs 1.7 s of server CPU
 
+> **Closed by [P12.24](#p1224)** — one project was the whole cost, and it was
+> a gigabyte of `graph.json` parsed to answer a question that never needed it.
+> Cold poll 1.15 s → **0.019 s**.
+
 With a page open and nobody touching it, `GET /api/projects/staleness` runs
 **every two minutes** and takes **1,613 / 1,721 / 1,736 / 1,852 ms** (four
 consecutive samples, `~/.ug` with 7 projects). It is the only reason `ug serve`
@@ -2389,6 +2394,219 @@ on the built-in ProMotion panel. Nothing in this round's conclusions depends on
 it — the app already matches Chrome at 60, and if WebKit did stop at 60 on a
 120 Hz panel the cost would be a smoothness difference on a settled canvas, not
 the 3× throughput gap P12.19 appeared to show.
+
+<a id="p1224"></a>
+### ✅ P12.24 — the staleness poll read a gigabyte to answer a question about a missing repo
+
+[P12.19](#p1219) found `GET /api/projects/staleness` costing 1.6–1.9 s of
+server CPU every two minutes with a page open, and left it as "a cheaper check
+or a longer TTL". It was neither. The whole cost was **one project**.
+
+Isolated by pointing `UG_HOME` at one symlinked project at a time and timing
+`ug list` against `ug list --quick`, which skips the scan:
+
+| `ug list`, one project per run | full | `--quick` |
+| :--- | ---: | ---: |
+| **`big500k`** | **1.09 s** | 0.00 s |
+| `neo4j` (8,910 files) | 0.02 s | 0.00 s |
+| the other six | 0.00 s | 0.00 s |
+
+`~/.ug/big500k` has no `project.json`, so `meta.files` was empty and
+`project::staleness` took the pre-`files` fallback: read the whole of
+`graph.json` — **1,000 MB** — into a `String` and `serde_json`-parse it to
+derive the file list. The very next statement then checked `repo_root`, found
+`""`, and returned `repo_missing` without stat-ing a single file. A full second
+of reading a gigabyte to discard every byte of it. (`dd` over the same file is
+0.045 s page-cached, so the second is the `String` and the parse, not the I/O.)
+
+#### What landed
+
+**The guard moved above the work.** A vanished repo needs no file list — every
+count it feeds is zero — so the `repo_missing` branch now answers before the
+derivation runs, and reports `meta.files.len()`: the count `project.json`
+already holds, or 0 when there is no `project.json` to hold it.
+
+**The fallback backfills.** When a legacy project genuinely needs the
+derivation, the derived `files` / `docNodes` / `codeNodes` are written back
+into its `project.json`, so the parse costs once per project instead of once
+per poll for ever. Written directly rather than through `write_meta`, which
+stamps `updated_at` — a read must not claim the index was refreshed, because
+that is the field `ug list` sorts its rows on. A size ceiling was the other
+candidate and is worse: it would leave exactly the projects that need the
+fallback permanently unable to answer.
+
+The re-derive loop is closed on the *composition counts*, not on `files`.
+`files` carries `skip_serializing_if = "Vec::is_empty"`, so a graph with no
+file-bearing nodes would write nothing back and be re-parsed on every poll for
+ever; `docNodes`/`codeNodes` are always written, so the "already derived" test
+reads all three.
+
+#### Measured
+
+`GET /api/projects/staleness`, `~/.ug` with 8 projects, the **first** request
+of a fresh `ug serve` process — which is what every poll costs once the 60 s
+TTL has expired. Three runs each, both binaries built from the same tree
+minutes apart:
+
+| cold `/api/projects/staleness` | before | after |
+| :--- | ---: | ---: |
+| run 1 / 2 / 3 | 1.158 / 1.138 / 1.145 s | **0.0188 / 0.0189 / 0.0188 s** |
+| projects reported | 8 | 8 |
+
+**61×.** The two payloads are identical field for field except one:
+`big500k`'s `files` reads **0** rather than 8,910. That is the price of the
+change, and it is confined to a project that has no `project.json` *and* whose
+repo is gone — a bare graph directory, where no `ug list` column renders the
+count (the row reads "repo gone") and buying it cost a gigabyte per poll.
+
+#### How it is checked
+
+Both tests were run against the old ordering and both fail there, which is the
+only thing that makes them regression tests rather than tests of the fix's own
+shape:
+
+- `a_vanished_repo_never_reads_the_graph` — the `graph.json` fixture is
+  deliberately *parseable and file-bearing*, so a derivation that still ran
+  would succeed. The assertions are on what that success would have left
+  behind: a non-zero `files` count, and a backfilled `project.json`.
+- `a_legacy_meta_derives_its_file_list_once_and_records_it` — derives, asserts
+  the write-back landed with `updated_at` untouched, then overwrites
+  `graph.json` with garbage and asserts the answer has not moved.
+
+Suite **915/915**.
+
+<a id="p1225"></a>
+### ✅ P12.25 — file mode held its edges as objects, and its adjacency twice over
+
+[P12.2](#p122) closed the wall and left the weight: 2.1–2.5 GB of heap at 485k
+nodes, with a note that a CSR edge blob is "~20 MB against 837 MB of JS
+objects". The estimate was right and the framing was not, which the first
+measurement of the item settled before any of it was written.
+
+**What the 837 MB is.** Built in `node --expose-gc` from the real `graph.json`,
+parsed payload dropped, `gc()` three times — and, the trap that cost two wrong
+readings here, *after a turn boundary*, because the first `gc()` in the same
+synchronous turn still sees the parse alive:
+
+| `~/.ug/big500k`, retained after load | heap | external | total |
+| :--- | ---: | ---: | ---: |
+| `state.graph.nodes` + `state.nodeById`, no edges at all | 589.6 MB | 1.8 MB | **591.4 MB** |
+| + `state.graph.edges` and `state.adj` | 841.9 MB | 1.8 MB | **843.7 MB** |
+
+843.7 MB reproduces the 837 MB the page reported, from a script with no
+browser in it, which is what makes the split trustworthy. And the split is the
+finding: **the edges are 252 MB and the node objects are 486 MB.** The item as
+written implied the blob replaced the larger number. It replaces the smaller
+one.
+
+#### What landed
+
+`createEdgeStore` (`02-dialogs.js`) holds the edge list as `Uint32Array`
+endpoints, a `Uint16Array` relation column and a CSR incidence index
+(`off`/`inc`), replacing both structures at once:
+
+- **`state.graph.edges`** — 2,237,892 `{ source, target, rel }` objects.
+- **`state.adj`** — a `Map` of 485,175 arrays holding 4,466,538 references to
+  them. Now `null` in local mode, deliberately: `knownEdgesOf` is the only
+  reader, and a reader added later that forgets the store should throw rather
+  than quietly answer "no edges" — the distinction the whole file is built
+  around, and not one an empty `Map` can make.
+
+Endpoints are node **indices**. The ids already exist once each on the nodes;
+a second copy per endpoint is what the old `s.id` aliasing was working around.
+The index lives on the node object as `_i`, in the literal rather than assigned
+afterwards — 485k objects gaining a property later is 485k hidden-class
+transitions, and in the shape it measures as 0.2 MB, which is noise.
+
+**Nothing outside the store sees an index.** `edgesOf` builds
+`{ source, target, rel }` objects with id endpoints — the shape every caller
+already reads — per call, and they are dropped when the caller is done. The one
+caller that *compared* them, `setSoloView` deduping an edge that appears in two
+adjacency lists, compares `_i` instead of object identity. Server mode is
+untouched: it has no local edge list to column-ise, `state.edgeStore` is null
+there, and `state.adj` remains the fetched-so-far cache.
+
+`state.graph.edges` survives as a **getter** that materialises the whole list
+once and caches it. That is the one path that still needs objects — the
+renderer, when solo view is off and every link is drawn — and the renderer
+rewrites `source`/`target` into node references in place, so the next read has
+to see the same array it mutated.
+
+#### Measured
+
+| `~/.ug/big500k` (485,175 / 2,237,892) | before | after | |
+| :--- | ---: | ---: | ---: |
+| the edge structures alone | 252.3 MB | **40.3 MB** | **6.3×** |
+| retained graph, solo view **on** (the default past 200k) | 843.7 MB | **631.9 MB** | **1.34×**, −211.8 MB |
+| retained graph, solo view **off** (every link drawn) | 843.7 MB | **751.4 MB** | 1.12×, −92.3 MB |
+
+| `~/.ug/neo4j` (161,725 / 745,964) | before | after | |
+| :--- | ---: | ---: | ---: |
+| the edge structures alone | 85.7 MB | **15.4 MB** | **5.6×** |
+| retained graph | 290.3 MB | **218.2 MB** | **1.33×** |
+
+The solo-off row is the honest one to quote against a raised
+`vis.solo_threshold`: the objects come back, and what is saved is the
+adjacency `Map`. Drawing 2.2M links is already the expensive configuration.
+
+#### How it is checked
+
+A CSR build's failure mode is a *wrong graph*, not an error — an off-by-one in
+the prefix sum, a self-loop counted in one list twice, a dropped edge whose
+columns were never trimmed — so the check is equality against the shape it
+replaced, transcribed into the harness from the code it replaced.
+
+- `tests/js/edge_store.mjs` builds both shapes over 12 graphs chosen for the
+  ways a CSR build goes wrong — self-loops, only self-loops, parallel edges, an
+  undeclared endpoint, every edge dropped, a null relation, the legacy `rel`
+  spelling, a hub, and the last node holding every edge (the off-by-one `off[n]`
+  exists for) — and compares every node's adjacency edge for edge, **in order**,
+  because the solo view spends a per-seed budget on the first edges it sees.
+- The same comparison at full scale: **1,488,846** incidences on `neo4j` and
+  **4,466,538** on `big500k`, identical.
+- `vis_edge_store_test.rs` puts both in the suite; the fixture half is
+  `#[ignore]`d.
+
+And in a real browser, because a load-path change to the vis layer is not
+checked by a script that never opens the page. `ug serve --graph-mode local`
+behind a proxy that appends a driver inside the page's module:
+
+| in Chrome, file mode | `~/.ug/ug` | `~/.ug/neo4j` |
+| :--- | ---: | ---: |
+| nodes checked against a reference walk of `state.graph.edges` | 4,620 | **161,725** |
+| incidences, mismatches | 24,542, **0** | **1,488,846**, **0** |
+| degree mismatches / edge-type chip counts | 0 / match | 0 / match |
+| a click on the top hub | title correct | degree **8,680**, 8,680 related rows |
+| solo view vs what identity dedupe produced | — | **identical** |
+| console errors | none | none |
+
+Server mode was checked the same way (`?gm=server`): `state.edgeStore` null,
+`state.adj` a `Map`, edges arriving per neighbourhood with no `_i` on them.
+
+#### Two wrong readings, kept because the second nearly shipped
+
+The first said the store cost **1,546 MB** against the old shape's 843 — that
+building it *added* 660 MB. The reading was real and the conclusion was not:
+`heapUsed` was sampled in the same synchronous turn as the build, where V8
+still holds the parse. A `WeakRef` added to test the theory moved the *old*
+number by 767 MB too, which is the tell — `WeakRef` keeps its target alive for
+the rest of the turn, so the instrument was the effect.
+
+It nearly shipped as a fix. A block nulling `rawEdges` and the build scratch
+went in, with a comment reading "measured, not defensive" and quoting the
+767 MB. It changed nothing, because there was nothing to release; the numbers
+only separated when the measurement moved into a `setTimeout`. The block and
+its confident comment came back out. **A comment that states a number is a
+claim, and a wrong one is worse than no comment** — it would have survived
+every test in this file.
+
+#### Still open, and now the larger half
+
+The node objects: **486 MB of the 592 MB** that remains, 78% of what file mode
+holds. Server mode already answers this — `NodeStore` carries 485k nodes in
+58 MB with typed columns and lazy materialisation — but it can do so because
+detail is a fetch away, and file mode has no server to fetch from. Whatever the
+answer is, it is a bigger number than this item was.
 
 ### What the round taught
 
@@ -2654,6 +2872,15 @@ One row per landed item or baseline. Keep the numbers, not just the verdict.
 | 2026-09-01 | P12.2 | the same two parsers in isolation (node, 346 MB) | `JSON.parse` **573 ms** | streaming **971 ms** | 1.7× — the figure the *in-page* measurement contradicts, and the reason both are recorded |
 | 2026-09-01 | P12.2 | streaming parser vs `JSON.parse`, 11 documents × 8 chunk sizes | — | **88 parses, all deep-equal**; 7 malformed rejected | chunk size 1 puts a boundary between every pair of bytes |
 | 2026-09-01 | P12.2 | …and against the real graphs | — | **161,725 + 745,964** and **485,175 + 2,237,892** elements identical | the 485k reference had to be built in pieces — it has the same ceiling as the code under test |
+| 2026-09-06 | P12.24 | `ug list`, `big500k` alone | 1.09 s | **0.00 s** | one project was the whole scan; `--quick` control reads 0.00 both ways |
+| 2026-09-06 | P12.24 | cold `GET /api/projects/staleness`, 8 projects | 1.158 / 1.138 / 1.145 s | **0.0188 / 0.0189 / 0.0188 s** | **61×**; before/after binaries from the same tree, 3 runs each |
+| 2026-09-06 | P12.24 | …payload | 8 projects | 8 projects | identical field for field but `big500k.files` 8,910 → 0 — the price, and only for a bare graph dir whose repo is gone |
+| 2026-09-06 | P12.25 | `big500k` file mode, the edge structures | 252.3 MB | **40.3 MB** | **6.3×**; edge objects + adjacency `Map` → typed columns + CSR |
+| 2026-09-06 | P12.25 | `big500k` file mode, retained graph (solo on) | 843.7 MB | **631.9 MB** | 1.34×. Solo off, where the renderer still needs objects: 751.4 MB |
+| 2026-09-06 | P12.25 | `neo4j` file mode, retained graph | 290.3 MB | **218.2 MB** | 1.33×; edge structures 85.7 → 15.4 MB |
+| 2026-09-06 | P12.25 | …of the 591.4 MB with no edges at all | **486 MB is node objects** | unchanged | the split, which is the finding: this item was never the larger half |
+| 2026-09-06 | P12.25 | every node's adjacency vs the shape it replaces | — | **1,488,846** (`neo4j`) + **4,466,538** (`big500k`) identical | in node, and again in Chrome against a reference walk of `state.graph.edges` |
+| 2026-09-06 | — | *retracted* | "the store pins 767 MB of parsed edges" | nothing is pinned | `heapUsed` sampled in the same turn as the build; the `WeakRef` that tested it moved the control by the same 767 MB |
 
 ---
 

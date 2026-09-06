@@ -374,6 +374,60 @@ impl Staleness {
     }
 }
 
+/// Derive the indexed-file list and node composition from `graph.json`, for
+/// projects generated before `project.json` recorded them — and write the
+/// result back, so this happens at most once per project.
+///
+/// The parse is the expensive half of [`staleness`] by two orders of
+/// magnitude (a 1 GB `graph.json` is ~1 s of it), and the caller that matters
+/// is *polled*: `GET /api/projects/staleness` runs every two minutes for as
+/// long as a tab is open. A size ceiling was the other candidate and is
+/// worse — it would leave exactly the projects that need the fallback
+/// permanently unable to answer. Backfilling pays the parse once and moves
+/// them onto the stat-only path for good.
+fn derive_graph_index(
+    dir: &Path,
+    graph_path: &Path,
+    meta: &ProjectMeta,
+) -> (Vec<String>, usize, usize) {
+    let Some(graph) = std::fs::read_to_string(graph_path)
+        .ok()
+        .and_then(|c| serde_json::from_str::<ultragraph::types::GraphData>(&c).ok())
+    else {
+        return (Vec::new(), 0, 0);
+    };
+    let derived = meta.clone().with_graph_index(&graph);
+    backfill_graph_index(dir, &derived);
+    (derived.files, derived.doc_nodes, derived.code_nodes)
+}
+
+/// Write the derived index fields into an existing project.json.
+///
+/// Deliberately not [`write_meta`]: that stamps `updated_at`, and this is a
+/// cache fill on a *read* path. Claiming a project was updated because
+/// someone left a tab open would be a lie that `ug list` sorts its rows on.
+///
+/// Only fills an existing file — creating one here would invent metadata
+/// (a repo root, a version) for a directory `ug gen` never wrote, which is
+/// the one thing that distinguishes a real project from a bare graph.
+fn backfill_graph_index(dir: &Path, meta: &ProjectMeta) {
+    let path = meta_path(dir);
+    if !path.exists() {
+        return;
+    }
+    let Ok(json) = serde_json::to_string_pretty(meta) else {
+        return;
+    };
+    // Replace atomically. A poll and a `ug gen` can land together, and a
+    // half-written project.json does not read as a stale project — it reads
+    // as no project at all, because `read_meta` returns `None` on a parse
+    // error and every caller treats that as "never generated".
+    let tmp = path.with_extension("json.tmp");
+    if std::fs::write(&tmp, json).is_ok() && std::fs::rename(&tmp, &path).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+}
+
 /// Stat the tree behind `meta` and report how far its index has drifted.
 /// `None` when the project holds no `graph.json` — there is no index to
 /// compare against.
@@ -389,30 +443,18 @@ pub(crate) fn staleness(project_dir: &Path, meta: &ProjectMeta) -> Option<Stalen
             .map(|t| t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs())
     });
 
-    // Prefer the file list recorded in project.json at `ug gen` time. Falling
-    // back to reading graph.json keeps projects generated before that field
-    // existed working — at the old cost, but only for them.
-    let (files, doc_nodes, code_nodes) = if !meta.files.is_empty() {
-        (meta.files.clone(), meta.doc_nodes, meta.code_nodes)
-    } else {
-        match std::fs::read_to_string(&graph_path)
-            .ok()
-            .and_then(|c| serde_json::from_str::<ultragraph::types::GraphData>(&c).ok())
-        {
-            Some(graph) => {
-                let derived =
-                    ProjectMeta::new(&meta.name, &meta.repo_root, 0, 0).with_graph_index(&graph);
-                (derived.files, derived.doc_nodes, derived.code_nodes)
-            }
-            None => (Vec::new(), 0, 0),
-        }
-    };
-
+    // A vanished repo is settled before any file list is built. Nothing below
+    // this point is stat-ed, and the list would contribute a count and
+    // nothing else — but deriving it reads and parses the whole of
+    // graph.json, which on `~/.ug/big500k` is a full second spent on a
+    // gigabyte that the next two lines discard. That second was the entire
+    // cost of `GET /api/projects/staleness`, every two minutes, for as long
+    // as a tab stayed open.
     let repo_root = PathBuf::from(&meta.repo_root);
     if !repo_root.exists() {
         return Some(Staleness {
             built_at,
-            files: files.len(),
+            files: meta.files.len(),
             changed: 0,
             missing: 0,
             repo_missing: true,
@@ -421,6 +463,22 @@ pub(crate) fn staleness(project_dir: &Path, meta: &ProjectMeta) -> Option<Stalen
             changed_sample: Vec::new(),
         });
     }
+
+    // Prefer the file list recorded in project.json at `ug gen` time. Falling
+    // back to reading graph.json keeps projects generated before that field
+    // existed working — once each, after which the backfill has put them on
+    // the same stat-only path as everyone else.
+    //
+    // The composition counts are part of the test, not just the payload: a
+    // graph with no file-bearing nodes derives an empty list, which
+    // `skip_serializing_if` then declines to write, and reading `files` alone
+    // would send that project back through the parse on every poll forever.
+    let derived_already = !meta.files.is_empty() || meta.doc_nodes > 0 || meta.code_nodes > 0;
+    let (files, doc_nodes, code_nodes) = if derived_already {
+        (meta.files.clone(), meta.doc_nodes, meta.code_nodes)
+    } else {
+        derive_graph_index(project_dir, &graph_path, meta)
+    };
 
     let mut changed = 0usize;
     let mut missing = 0usize;
@@ -790,6 +848,32 @@ mod tests {
             .expect("set mtime");
     }
 
+    /// A one-node graph.json holding a single file-bearing symbol.
+    ///
+    /// Serialized from the real types rather than hand-written JSON, so the
+    /// fixture cannot drift from the schema the fallback parses — and it must
+    /// stay *parseable*, because the tests below distinguish "the derivation
+    /// did not run" from "the derivation ran and found nothing".
+    fn write_graph(data: &Path, file: &str) {
+        let graph = crate::types::GraphData {
+            nodes: vec![crate::types::GraphNode {
+                id: format!("{}::a", file),
+                name: "a".to_string(),
+                node_type: crate::types::GraphNodeType::Function,
+                file: Some(file.to_string()),
+                ..Default::default()
+            }],
+            edges: Vec::new(),
+            stats: None,
+            resolution: None,
+        };
+        std::fs::write(
+            data.join("graph.json"),
+            serde_json::to_string(&graph).expect("graph serializes"),
+        )
+        .expect("graph");
+    }
+
     /// The three states `ug list` and `/api/projects/staleness` report from,
     /// each of which sends the user somewhere different: edit a file and it
     /// is `changed`, delete one and it is `missing`, move the whole checkout
@@ -874,6 +958,73 @@ mod tests {
         assert!(
             summary.ends_with(&format!("+{} more", 10 - STALE_SAMPLE)),
             "{summary}"
+        );
+    }
+
+    /// A project generated before `project.json` carried a file list derives
+    /// one from graph.json — and records it, so the next poll does not parse
+    /// the graph again. `/api/projects/staleness` is polled every two
+    /// minutes; without the write-back the parse is forever, and on a 1 GB
+    /// index it is a second of server CPU each time.
+    #[test]
+    fn a_legacy_meta_derives_its_file_list_once_and_records_it() {
+        let repo = tempfile::tempdir().expect("repo");
+        let data = tempfile::tempdir().expect("data");
+        std::fs::write(repo.path().join("a.rs"), "fn a() {}").expect("a");
+
+        // A pre-`files` project.json: everything else recorded, no file list.
+        // Read back rather than reused, because `write_meta` stamps its own
+        // `updated_at` — the field the assertion below is about.
+        write_meta(
+            data.path(),
+            &ProjectMeta::new("legacy", &repo.path().to_string_lossy(), 1, 0),
+        )
+        .expect("meta");
+        let meta = read_meta(data.path()).expect("meta");
+        assert!(meta.files.is_empty(), "the shape this fallback exists for");
+
+        write_graph(data.path(), "a.rs");
+
+        let derived = staleness(data.path(), &meta).expect("has a graph");
+        assert_eq!(derived.files, 1, "derived from the graph");
+        assert_eq!(derived.code_nodes, 1);
+
+        // Recorded, and recorded *without* claiming the project was updated:
+        // `ug list` sorts on updated_at and would float this row to the top
+        // because someone left a tab open.
+        let healed = read_meta(data.path()).expect("meta still parses");
+        assert_eq!(healed.files, vec!["a.rs".to_string()]);
+        assert_eq!(healed.updated_at, meta.updated_at, "a read must not stamp");
+        assert_eq!(healed.repo_root, meta.repo_root, "the rest is preserved");
+
+        // Second call answers from project.json — proven by removing the only
+        // thing the fallback could read, without changing the answer.
+        std::fs::write(data.path().join("graph.json"), "not json at all").expect("clobber");
+        let cached = staleness(data.path(), &healed).expect("has a graph");
+        assert_eq!(cached.files, 1);
+        assert_eq!(cached.code_nodes, 1);
+    }
+
+    /// A vanished repo answers without touching graph.json. The file list is
+    /// unused on that branch — every count it feeds is zero — and deriving it
+    /// first is what made an idle poll cost a second per gigabyte of index.
+    #[test]
+    fn a_vanished_repo_never_reads_the_graph() {
+        let data = tempfile::tempdir().expect("data");
+        let meta = ProjectMeta::new("orphan", "/nonexistent/tree", 0, 0);
+        write_meta(data.path(), &meta).expect("meta");
+        // Parseable and file-bearing, so the derivation would succeed if it
+        // ran: both assertions below are things a *successful* parse would
+        // have produced, which is what makes this a regression test rather
+        // than a test that a broken graph is tolerated.
+        write_graph(data.path(), "a.rs");
+
+        let gone = staleness(data.path(), &meta).expect("has a graph");
+        assert!(gone.repo_missing);
+        assert_eq!(gone.files, 0, "the meta's own count, not the graph's");
+        assert!(
+            read_meta(data.path()).expect("meta").files.is_empty(),
+            "nothing was derived, so nothing was backfilled"
         );
     }
 

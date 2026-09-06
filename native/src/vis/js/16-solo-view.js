@@ -103,18 +103,17 @@
             }
             state.adjKeys = null;   // local mode never re-pushes the same edge
             state.adjCompleteAll = true;
-            const push = (id, e) => {
-                const list = adj.get(id);
-                if (list) list.push(e);
-                else adj.set(id, [e]);
-            };
-            state.graph.edges.forEach(e => {
-                const s = e.source.id || e.source;
-                const t = e.target.id || e.target;
-                push(s, e);
-                if (t !== s) push(t, e);
-            });
-            state.adj = adj;
+            // Local mode's adjacency *is* the edge store's CSR index, built
+            // with the columns in `transformData`. This used to be a `Map` of
+            // 485k arrays holding 4.5M references to 2.2M edge objects — 254 MB
+            // on `~/.ug/big500k`, against 40 MB for the columns (P12.25).
+            //
+            // Left null rather than empty on purpose. `knownEdgesOf` is the
+            // only reader, and a reader that is added later and forgets the
+            // store should throw here rather than quietly answer "no edges" —
+            // which is the distinction this whole file is built around, and
+            // not one an empty `Map` can make.
+            state.adj = null;
         }
 
         function edgesOf(id) {
@@ -163,6 +162,13 @@
         // are legitimately incomplete there — asking `edgesOf` would report a
         // cold miss on every one of them and re-enter the rebuild forever.
         function knownEdgesOf(id) {
+            // Local mode: built from the columns, per call. Server mode: the
+            // cache of what has been fetched so far.
+            const store = state.edgeStore;
+            if (store) {
+                const node = state.nodeById && state.nodeById.get(id);
+                return node ? store.edgesOfIndex(node._i) : EMPTY_LIST;
+            }
             return (state.adj && state.adj.get(id)) || [];
         }
 
@@ -375,8 +381,14 @@
                 // were deliberately not fetched, and demanding completeness
                 // here would report a cold miss on every one of them.
                 for (const e of knownEdgesOf(id)) {
-                    if (seen.has(e)) continue;   // every edge is in two adjacency lists
-                    seen.add(e);
+                    // Every edge is in two adjacency lists. Server mode pushes
+                    // one object into both, so identity is the key there;
+                    // local mode builds a fresh object per read, so the key is
+                    // the store's edge index. Both go in the same `Set` —
+                    // a number and an object never collide.
+                    const key = e._i === undefined ? e : e._i;
+                    if (seen.has(key)) continue;
+                    seen.add(key);
                     const s = e.source.id || e.source;
                     const t = e.target.id || e.target;
                     if (!ids.has(s) || !ids.has(t)) continue;

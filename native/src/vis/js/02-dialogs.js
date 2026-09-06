@@ -291,6 +291,18 @@
                 const angle = (i / data.nodes.length) * Math.PI * 2;
                 const radius = 100 + Math.random() * 150;
                 nodeMap.set(n.id, {
+                    // The node's position in `state.graph.nodes`, and the only
+                    // thing the edge store speaks. Same name and same meaning
+                    // as the `_i` `NodeStore` puts on a materialised node —
+                    // "where this node sits in whatever table this mode has" —
+                    // and the two never meet, because every reader of the
+                    // server-mode one checks `state.nodeStore` first.
+                    //
+                    // In the literal rather than assigned afterwards: 485k
+                    // objects that all gain a property later is 485k
+                    // hidden-class transitions, and the slot measures as
+                    // 0.2 MB when it is part of the shape.
+                    _i: i,
                     id: n.id,
                     name: n.name || n.id,
                     group: n.node_type || 'Default',
@@ -316,23 +328,18 @@
                 });
             });
 
-            // Endpoints are carried over as the *node's own* id string rather
-            // than the one JSON.parse made for this edge. graph.json spells
-            // every endpoint out in full, so a large repo arrives with a fresh
-            // string per endpoint: 1.5M of them on a 746k-edge graph, where
-            // only 162k distinct ids exist. Pointing at the node's copy leaves
-            // the duplicates collectable along with the rest of the parsed
-            // payload instead of pinning ~130 MB for the life of the tab.
-            // The lookup is the same one the old `.has()` filter did.
-            const edges = [];
-            for (const e of data.edges) {
-                const s = nodeMap.get(e.source);
-                const t = nodeMap.get(e.target);
-                if (!s || !t) continue;
-                edges.push({ source: s.id, target: t.id, rel: e.edge_type || e.rel || null });
-            }
-
-            state.graph = { nodes: Array.from(nodeMap.values()), edges };
+            const nodes = Array.from(nodeMap.values());
+            const edgeStore = createEdgeStore(data.edges, nodes, nodeMap);
+            state.edgeStore = edgeStore;
+            // `edges` is a *getter*, and deliberately so. Every reader that
+            // asks a question about one node's edges goes through `edgesOf`,
+            // which answers from the columns; the only caller that still needs
+            // the whole list as objects is the renderer, and only when solo
+            // view is off — i.e. when the user has asked for all 2.2M links to
+            // be drawn, which is already the expensive configuration. Making it
+            // a property would rebuild that list for everyone, which is exactly
+            // the 254 MB this store exists to not spend.
+            state.graph = { nodes, get edges() { return edgeStore.materializeAll(); } };
             state.stats = data.stats || null;
             // The repo-root folder node (shallowest depth) carries the
             // per-language file counts the indexer computed — the same fact
@@ -354,8 +361,8 @@
             // Null in local mode, and that is what every `if (state.nodeStore)`
             // branch keys off: the columns only exist when the server sent them.
             state.nodeStore = null;
-            state.nodeCount = state.graph.nodes.length;
-            state.edgeCount = edges.length;
+            state.nodeCount = nodes.length;
+            state.edgeCount = edgeStore.count;
             // Counted once here rather than four times over in the chips, the
             // legend, `presentNodeTypes` and `syncLegend` — server mode gets the
             // same two facts off the wire, so both modes answer from one place.
@@ -369,18 +376,179 @@
             // hubs. Both used to compute this themselves — one by scanning every
             // edge, one by ranking the whole adjacency map — for a top-5 list.
             state.degreeOf = new Map();
-            for (const e of edges) {
-                state.degreeOf.set(e.source, (state.degreeOf.get(e.source) || 0) + 1);
-                if (e.target !== e.source) {
-                    state.degreeOf.set(e.target, (state.degreeOf.get(e.target) || 0) + 1);
-                }
+            for (let i = 0; i < nodes.length; i++) {
+                const d = edgeStore.degreeAt(i);
+                if (d) state.degreeOf.set(nodes[i].id, d);
             }
+            // Tallied per relation *index* and named once at the end: the old
+            // loop did a string lookup and a property write per edge, which is
+            // 2.2M of each to produce a dozen numbers.
+            const relTally = new Uint32Array(edgeStore.relNames.length);
+            for (let k = 0; k < edgeStore.count; k++) relTally[edgeStore.relCol[k]]++;
             state.edgeTypeCounts = {};
-            for (const e of edges) {
-                const r = e.rel || 'other';
-                state.edgeTypeCounts[r] = (state.edgeTypeCounts[r] || 0) + 1;
-            }
+            edgeStore.relNames.forEach((name, ri) => {
+                if (!relTally[ri]) return;
+                const r = name || 'other';
+                state.edgeTypeCounts[r] = (state.edgeTypeCounts[r] || 0) + relTally[ri];
+            });
             state.catalogRootIds = null;   // local mode derives these from Contains
+        }
+
+        // ─── Local mode: the edge store ────────────────────
+        //
+        // What `state.graph.edges` and `state.adj` used to be, held as typed
+        // columns instead of objects.
+        //
+        // The old shape was one `{ source, target, rel }` object per edge,
+        // pushed into a `Map` of per-node arrays — every edge in two of them.
+        // On `~/.ug/big500k` (485,175 nodes / 2,237,892 edges) that is
+        // **254 MB**: 133 MB of edge objects and 121 MB of adjacency. The same
+        // two facts as columns are **40 MB** (P12.25). Both figures are the
+        // retained heap of the real graph, measured the way §10f says — built
+        // in `node --expose-gc`, parsed payload dropped, `gc()` three times.
+        //
+        // Endpoints are node **indices**, not ids. The ids already exist once
+        // each, on the nodes; a second copy per endpoint was 1.5M strings on
+        // `neo4j` and is what the old `s.id` aliasing was working around. An
+        // index is four bytes and needs no hash. Nothing outside this store
+        // sees one: `edgesOf` builds `{ source, target, rel }` objects with id
+        // endpoints, which is the shape every caller already reads.
+        //
+        // Those objects are built per call and thrown away, which is the trade
+        // that makes this work: a caller asks about one node, walks its
+        // handful of edges and drops them. The one caller that *compared* them
+        // by identity — `setSoloView`, deduping an edge that appears in two
+        // adjacency lists — compares `_i` instead.
+        function createEdgeStore(rawEdges, nodes, nodeMap) {
+            const n = nodes.length;
+            const m = rawEdges.length;
+            const srcCol = new Uint32Array(m);
+            const dstCol = new Uint32Array(m);
+            const relCol = new Uint16Array(m);
+            const relNames = [];
+            const relIdx = new Map();
+            // Degree first, so the CSR offsets can be a prefix sum rather than
+            // 485k arrays that grow.
+            const deg = new Uint32Array(n);
+            let count = 0;
+            let relOverflow = false;
+
+            for (let k = 0; k < m; k++) {
+                const e = rawEdges[k];
+                const s = nodeMap.get(e.source);
+                const t = nodeMap.get(e.target);
+                // An endpoint the graph never declared. Dropped, as it always
+                // was — the old build did the same lookup for the same reason.
+                if (!s || !t) continue;
+                const rel = e.edge_type || e.rel || null;
+                let ri = relIdx.get(rel);
+                if (ri === undefined) {
+                    // A dozen relation types is what the indexer emits; the
+                    // column is two bytes wide for a wide margin over that.
+                    // Past the margin, further names collapse onto `null`
+                    // rather than wrapping to 0 and mislabelling an edge as
+                    // some other real relation.
+                    if (relNames.length >= 65536) {
+                        if (!relOverflow) {
+                            relOverflow = true;
+                            console.warn('more than 65,536 edge relations — the rest are unlabelled');
+                        }
+                        ri = 0;
+                    } else {
+                        ri = relNames.length;
+                        relNames.push(rel);
+                        relIdx.set(rel, ri);
+                    }
+                }
+                const si = s._i;
+                const ti = t._i;
+                srcCol[count] = si;
+                dstCol[count] = ti;
+                relCol[count] = ri;
+                deg[si]++;
+                // A self-loop is one entry in one list, not two in the same
+                // one — `buildAdjacency` drew that distinction and `edgesOf`
+                // would otherwise report the edge twice.
+                if (ti !== si) deg[ti]++;
+                count++;
+            }
+
+            const off = new Uint32Array(n + 1);
+            let run = 0;
+            for (let i = 0; i < n; i++) {
+                off[i] = run;
+                run += deg[i];
+            }
+            off[n] = run;
+            // Write cursors, consumed as the incidence list fills. `deg` is
+            // done with, and `off` must survive.
+            const cur = off.slice(0, n);
+            const inc = new Uint32Array(run);
+            for (let k = 0; k < count; k++) {
+                const si = srcCol[k];
+                const ti = dstCol[k];
+                inc[cur[si]++] = k;
+                if (ti !== si) inc[cur[ti]++] = k;
+            }
+
+            // `slice`, not `subarray`: a subarray keeps the whole original
+            // buffer alive, so dropping an endpoint-less edge would free
+            // nothing. Skipped when nothing was dropped, which is the case
+            // for every graph `ug gen` writes.
+            const src = count === m ? srcCol : srcCol.slice(0, count);
+            const dst = count === m ? dstCol : dstCol.slice(0, count);
+            const rels = count === m ? relCol : relCol.slice(0, count);
+
+            function edgeAt(k) {
+                return {
+                    source: nodes[src[k]].id,
+                    target: nodes[dst[k]].id,
+                    rel: relNames[rels[k]],
+                    // The identity `setSoloView` dedupes on. Not an id pair:
+                    // two nodes can be joined by several edges, and a pair
+                    // key would draw one strand where the graph has three.
+                    _i: k,
+                };
+            }
+
+            let all = null;
+
+            return {
+                count,
+                relNames,
+                relCol: rels,
+                srcCol: src,
+                dstCol: dst,
+                degreeAt(i) {
+                    return i >= 0 && i < n ? off[i + 1] - off[i] : 0;
+                },
+                edgeAt,
+                // Every edge incident to node index `i`, as objects. The array
+                // is fresh each call; nothing here is cached, because a cache
+                // keyed by node would grow back into the Map this replaced.
+                edgesOfIndex(i) {
+                    if (!(i >= 0 && i < n)) return EMPTY_LIST;
+                    const a = off[i];
+                    const b = off[i + 1];
+                    if (a === b) return EMPTY_LIST;
+                    const out = new Array(b - a);
+                    for (let p = a; p < b; p++) out[p - a] = edgeAt(inc[p]);
+                    return out;
+                },
+                // The whole edge list, for the one path that needs it: the
+                // renderer, when solo view is off and every link is drawn.
+                // Cached, because the renderer rewrites `source`/`target` into
+                // node references in place and the next read has to see the
+                // same array it mutated — which is what `otherEnd` has always
+                // been reading around.
+                materializeAll() {
+                    if (!all) {
+                        all = new Array(count);
+                        for (let k = 0; k < count; k++) all[k] = edgeAt(k);
+                    }
+                    return all;
+                },
+            };
         }
 
         // ─── Server mode: the node index ───────────────────
@@ -879,6 +1047,10 @@
         function installNodeIndex(ix, prebuiltSlots) {
             const store = makeNodeStore(ix, prebuiltSlots);
             state.graph = { nodes: [], edges: [] };
+            // Server mode has no local edge list to column-ise; its adjacency
+            // is `state.adj`, filled a neighbourhood at a time. `edgesOf`
+            // keys off this being null, exactly as it keys off `nodeStore`.
+            state.edgeStore = null;
             state.nodeStore = store;
             state.nodeById = store;
             state.nodeCount = ix.n;

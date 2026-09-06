@@ -434,10 +434,10 @@ changelog on every bump, and keep engine calls behind the `KnowledgeStore`
 trait (`native/src/storage/store.rs`) so upgrades stay confined to
 `native/src/storage/db.rs`.
 
-## 9. Eight bugs this codebase keeps re-introducing
+## 9. Nine bugs this codebase keeps re-introducing
 
-All are invisible in review, silent at runtime, and have each already shipped
-here more than once. Check for them by reflex.
+All are invisible in review and silent at runtime, and all but the last have
+already shipped here more than once. Check for them by reflex.
 
 ### 9a. Canonicalize *both* sides of a path comparison
 
@@ -717,6 +717,45 @@ the only symptom is the fan.
   [§9f](#9f-a-buffer-that-never-leaves-the-cpu). Screenshot, act, screenshot,
   and assert both directions: that it repaints when it must, *and* that it is
   byte-stable when it must not.
+
+### 9i. Work computed above the guard that discards it
+
+**A cheap early return does not make the function cheap. Put the guard above
+the work, and check what the expensive branch's result is actually read for.**
+
+`project::staleness` derived a project's indexed-file list by reading and
+`serde_json`-parsing the whole of `graph.json`, and then — on the very next
+statement — checked whether the repo still existed and returned
+`repo_missing` without stat-ing a single file. On `~/.ug/big500k` that was
+**1,000 MB read and parsed to be thrown away**, one full second, and because
+`GET /api/projects/staleness` is *polled* every two minutes for as long as a
+tab is open, it was a second of server CPU forever. It was the entire cost of
+the endpoint ([P12.24](docs/dev/PERF-TUNING-JOURNEY.md#p1224)).
+
+Nothing about it looked wrong: both halves were correct, the fallback was
+commented and justified, the handler was already on `spawn_blocking`
+([§9b](#9b-no-unbounded-work-inside-async-fn)), and the endpoint was
+TTL-cached. The bug was only their order.
+
+What to check:
+
+- **Read the early returns first, then ask which of the work above them each
+  one uses.** Here the answer was "a `.len()`, and only when the repo is
+  gone" — a count `project.json` already carried.
+- **A fallback on a polled path must be self-limiting.** "Only the old
+  projects pay it" is true per call and false over time: a poll makes *per
+  call* the wrong unit. Either the fallback records what it derived, so it
+  runs once per project, or it does not belong on that path. Prefer recording:
+  a size ceiling leaves exactly the projects that need the fallback unable to
+  answer at all.
+- **A cache fill on a read path must not stamp mtimes.** Backfilling
+  `project.json` through `write_meta` would have set `updated_at`, and
+  `ug list` sorts on it — leaving a tab open would have re-ordered the
+  project list. Write the fields, preserve the bookkeeping.
+- **Isolate before you optimise** ([§10e](#10e-attribute-before-optimizing)).
+  Pointing `UG_HOME` at one symlinked project per run turned "the scan is slow
+  with 7 projects" into "one project is 1.09 s and the other seven are 0.00" —
+  a different bug from the one the ledger had written down.
 
 ## 10. Measuring performance without fooling yourself
 
@@ -1135,6 +1174,42 @@ Verifying the 485k parse needed `JSON.parse` as a reference, and `JSON.parse`
 could not hold the array either — so the reference was built in pieces cut at
 element boundaries. Having to do that is the clearest possible statement of
 what the ceiling actually was.
+
+### 10n. A `gc()` in the same turn as the thing you built is not a measurement
+
+The node-heap recipe in §10f — build the structure, drop the payload,
+`global.gc()` three times, read `heapUsed` — has a step that is easy to leave
+out and silently inverts the answer: **the read has to happen in a later
+turn.**
+
+What it cost. A typed-column edge store, measured against the object-and-`Map`
+shape it replaces, came out at **1,546 MB against 843** — building it *added*
+660 MB. The number was reproducible, and the story that explained it was
+plausible (V8 context-allocates a scope's variables for the closures that share
+it, so the store must be pinning the `data.edges` it was built from). A block
+nulling the parameter and the build scratch went in, with a comment reading
+"measured, not defensive" and quoting the 767 MB it was said to release.
+
+None of it was true. `global.gc()` in the same synchronous turn as the build
+does not collect what that turn is still holding — the parse was alive in both
+runs, and only the new run's numbers happened to show it. Moving the read into
+a `setTimeout(…, 50)` and collecting again separated them cleanly: 843.7 MB
+before, 631.9 MB after, nothing pinned in either.
+
+Three rules out of one mistake:
+
+- **Read the heap from a later turn.** `setTimeout(() => { gc(); gc(); gc();
+  read(); }, 50)`. In-turn readings are for peaks, never for what is retained.
+- **Test the retention hypothesis directly, and check the instrument on the
+  control.** A `WeakRef` looked like the way to ask "is this still alive?" — but
+  a `WeakRef` keeps its target alive for the rest of the turn, so it moved the
+  *before* number by the same 767 MB. That the control moved is what exposed
+  it. Run every instrument against both arms.
+- **A comment that states a number is a claim, and a wrong one outlives the
+  session that wrote it.** The nulling block passed every test in the repo,
+  because it was correct code doing nothing. It came back out only because the
+  measurement was redone. Do not write a number into a comment until the
+  measurement has survived a second method.
 
 ## 11. Record what you learn, here, without being asked
 
