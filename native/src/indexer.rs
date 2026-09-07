@@ -218,6 +218,12 @@ fn annotate_line_metrics(symbols: &mut [Symbol], content: &str, language: &str) 
 /// rest return without touching stdout, so the `\r` overwrites stay ordered
 /// without a lock.
 fn print_index_progress(done: usize, total: usize, last_pct: &AtomicUsize) {
+    // Piped output takes the "✓ done" line below and nothing else; see
+    // [`crate::progress`]. Checked before the `compare_exchange` so a
+    // non-terminal run skips the whole meter, bookkeeping included.
+    if !crate::progress::enabled() {
+        return;
+    }
     let pct = if total == 0 {
         100.0
     } else {

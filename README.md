@@ -176,10 +176,16 @@ not a keyword search mode. Three things worth knowing before relying on it:
   default local ONNX embedder fails at construction (missing model, failed
   download) and falls back cleanly. A remote `--base-url` endpoint always
   constructs, so an unreachable one fails the query outright instead.
-- **Vectors have to be in the database too.** Embedding is opt-in, so after a
-  run without `--with-embed` the semantic channel is empty for the changed nodes
-  even with a working embedder, until `ug ingest` catches up. See the next
-  section.
+- **Vectors have to be in the database too, and this is the common case.**
+  Embedding is opt-in, so after a run without `--with-embed` the semantic
+  channel is empty for the changed nodes even with a working embedder, until
+  `ug ingest` catches up. This is *not* the name-match fallback above — the
+  embedder built fine, so `search` runs its keyword and graph channels
+  normally and returns real results. `search`, `chat` and `tour` say so on
+  stderr when they open such a project, and a ranking no vector contributed
+  to is flagged in the output as well. Every hit coming back
+  `"matched_by": "keyword"` and none `"semantic"` is the same signal in the
+  JSON. See the next section.
 
 When you land on the fallback, `ug find_symbols` (exact, wildcards), `ug analyze`
 (statistics, blast radius) and `ug traverse` (edge walks) answer the same

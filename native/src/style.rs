@@ -52,6 +52,40 @@ pub mod color {
     }
 }
 
+/// Runtime gate for the live single-line progress meters.
+///
+/// Separate from [`color`] on purpose: they answer different questions.
+/// `NO_COLOR` in a terminal still wants a meter, just an uncoloured one,
+/// and a pipe that *is* reading the frames (the KB Manager's log viewer)
+/// still wants them even though it takes plain text.
+///
+/// The frames are `\r` repaints of one line. A terminal renders that as a
+/// meter; anything else accumulates ~100 copies of it — which is why the
+/// git-hook log strips `\r` after the fact and `pump_gen_output` splits on
+/// it. So the default when stdout is not a terminal is off, and the one
+/// consumer that wants the frames over a pipe opts back in with
+/// `UG_PROGRESS=1`.
+///
+/// Only the *intermediate* frames are gated. Every phase's terminating
+/// "✓ done" line is a normal `println!` and always prints, so a piped
+/// `ug gen` still reports what it did — it just does it in one line per
+/// phase instead of one per percent.
+pub mod progress {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static ENABLED: AtomicBool = AtomicBool::new(false);
+
+    /// Set the gate. Call once near the top of `main`.
+    pub fn set(on: bool) {
+        ENABLED.store(on, Ordering::Relaxed);
+    }
+
+    /// Whether a `\r` progress frame should be painted.
+    pub fn enabled() -> bool {
+        ENABLED.load(Ordering::Relaxed)
+    }
+}
+
 /// How a result renders to text. The *layout* is identical either way — only
 /// the emphasis markers differ — so CLI and MCP output can't drift apart.
 /// JSON output doesn't go through here; transports serialize the result
@@ -106,5 +140,41 @@ impl Render {
             Render::Markdown => format!("## {}", s),
             Render::Ansi => self.ansi(C_BOLD, s),
         }
+    }
+}
+
+#[cfg(test)]
+mod gate_tests {
+    /// The two gates answer different questions and must not be wired to
+    /// each other: `NO_COLOR` in a terminal still wants a meter (just an
+    /// uncoloured one), and the KB Manager's pipe wants the frames it reads
+    /// even though it takes plain text. Wiring progress to `color` would
+    /// break both.
+    #[test]
+    fn the_progress_gate_is_independent_of_the_colour_gate() {
+        super::color::set(false);
+        super::progress::set(true);
+        assert!(!super::color::enabled());
+        assert!(super::progress::enabled());
+
+        super::color::set(true);
+        super::progress::set(false);
+        assert!(super::color::enabled());
+        assert!(!super::progress::enabled());
+
+        // Both gates are process-global; leave them as `main` sets them.
+        super::color::set(true);
+        super::progress::set(false);
+    }
+
+    /// Off unless something turns it on. A library caller, a test, or any
+    /// path that never reaches `cli::run` must not repaint a meter into
+    /// whatever is collecting its stdout.
+    #[test]
+    fn progress_defaults_to_off() {
+        // Can't observe the initial value after another test has set it, so
+        // assert the contract the default encodes: setting false is honoured.
+        super::progress::set(false);
+        assert!(!super::progress::enabled());
     }
 }

@@ -1254,6 +1254,89 @@ Three rules out of one mistake:
   measurement was redone. Do not write a number into a comment until the
   measurement has survived a second method.
 
+### 10o. A budget that only stops is not a budget
+
+`search_kb`'s `max_chars` looked enforced — three loops all ended with
+`if total_chars + item_chars > opts.max_chars && !items.is_empty() { break; }`
+— and enforced nothing. Two failures hid in that one line.
+
+The `!items.is_empty()` guard admits the **first** item at any size. And an
+item is admitted whole or not at all, so once an oversized one is in, every
+later item trips the break. Both fire together on real input: a repo's own
+API reference is a single `Concept` node several times the budget, and
+`ug search "how does chat build context" --snippets` returned **one** item of
+49,427 chars against a 12,000-char budget, with the functions that answered
+the question ranked below it and discarded.
+
+The fix is `fit_to_budget` in `storage/query.rs`: clip the item's text to
+what is left instead of refusing it, and cap any single item at
+`max_chars / k` so one hit cannot take the lot. Same query now: 8 items,
+11,513 chars. Truncated text carries a marker so a clipped body is
+distinguishable from a short one.
+
+- **A cap you never apply is a stop condition wearing a cap's name.** If the
+  budget can only reject, the first item is unbounded and the rest are
+  hostage to it. Clip, then admit.
+- **Assert the invariant, not the loop.** Nothing in 916 tests noticed,
+  because the tests checked that results came back — never that
+  `sum(item_chars) <= max_chars`. A budget deserves a test that adds the
+  items up.
+- **`!x.is_empty()` in a limit check is a smell.** It is almost always there
+  to avoid returning nothing, and it almost always buys that by letting one
+  unbounded item through. Bound the item instead.
+
+### 10p. `\r` is a meter on a terminal and a hundred lines everywhere else
+
+Every progress phase in `gen`/`ingest`/`index` repainted with
+`print!("\r… {pct}%")` and no terminal check. Piped — which is how the git
+hooks, the KB Manager wizard and any agent run it — that is ~100 copies of
+one line. Two consumers had already grown workarounds for it rather than
+fixing the source: `cli/hook.rs` strips `\r` out of its log after the fact,
+and `serve/gen_jobs.rs` splits its reader on `\r`. `cli/upgrade.rs` had the
+right check locally and nobody generalised it.
+
+`ultragraph::progress` is now the single gate, set once in `cli::run` from
+`stdout().is_terminal()`, with `UG_PROGRESS=1` to opt a pipe back in — which
+the wizard's two subprocess spawns pass, because its log viewer genuinely
+reads those frames. Piped `ug gen` went from ~145 lines to 45.
+
+- **Gate it where it is written, not where it is read.** Two downstream
+  strippers is the signal that the producer is wrong. A third consumer would
+  have written a third stripper.
+- **Progress is not colour.** They were tempting to wire together and must
+  not be: `NO_COLOR` in a terminal still wants a meter, and a pipe that reads
+  the frames still wants them in plain text. Two gates.
+- **Gate the frames, never the result.** Each phase's terminating "✓ done"
+  line is ungated, so a piped run still says what it did — one line per
+  phase instead of one per percent.
+
+### 10q. The degradation you documented is not the one users hit
+
+`README.md` documents what `search` does with no embedder: warn on stderr,
+fall back to a name match. That path is real and it is not the one that
+fires. Embedding is opt-in, so the state every `ug gen` leaves behind is a
+working embedder against a store with **no vectors** — and there the dense
+channel simply returns nothing. `ug search` ran its keyword and graph
+channels, printed a green `Embedder: local ✓` banner, and returned plausible
+results. Every hit came back `matched_by: "keyword"` or `"graph"` and never
+`"semantic"`; nothing said so. Six of nine projects on the dev machine were
+in that state.
+
+`ug gen` made it worse by closing with *"Disabled until embeddings exist:
+ug search"* — so the user was told it would not work, found that it did, and
+had no reason left to doubt the output.
+
+- **Enumerate the states, not the failure you coded for.** "No embedder" and
+  "no vectors" are different, the second is the default, and only the first
+  had a warning.
+- **A capability banner is a claim about the answer.** Printing "Embedder:
+  local ✓" next to a ranking no vector contributed to is a false one.
+  `scope::announce_no_vectors` says it on stderr; the renderer notes it in
+  the output too.
+- **Check the message against the behaviour.** Three surfaces disagreed
+  about whether `search` worked. The cheapest way to find that is to run the
+  command and read what it printed, which is also the only way it was found.
+
 ## 11. Record what you learn, here, without being asked
 
 When you find something that would cost the next agent an hour — a measurement

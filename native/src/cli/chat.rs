@@ -15,7 +15,52 @@ use super::agent::{agent_repo_root, load_agent_graph};
 use super::args::{first_positional, flag_value, has_flag, multi_flag};
 use super::embed::{embedder_from_chat_args, tokio_runtime};
 use super::io::{write_file, write_or_print};
-use super::dest::single_store_spec_from_args;
+use super::dest::{single_store_spec_from_args, warn_if_no_vectors};
+
+/// Report a failed chat turn and exit.
+///
+/// The transport error on its own is a dead end: `error sending request for
+/// url (http://127.0.0.1:8000/v1/chat/completions)` tells someone whose LLM
+/// server simply isn't running neither of the two things they need — that
+/// *that* is what happened, and which knob points `ug` somewhere else. Every
+/// success path in this CLI ends by naming the next command; a failure has
+/// more reason to, not less. [`chat::ChatError::is_unreachable`] already
+/// draws the line the serve API uses for the same purpose, so the CLI reads
+/// it rather than inventing a second rule.
+fn die_chat(e: &(dyn std::error::Error + 'static), cfg: &chat::ChatConfig) -> ! {
+    eprintln!("chat failed: {}", e);
+    explain_chat_failure(e, cfg);
+    std::process::exit(1);
+}
+
+/// Print the "here is what to do about it" block, if this failure has one.
+///
+/// Only unreachable-endpoint errors get it: a refusal or a bad request from a
+/// server that *did* answer is not fixed by re-pointing `base_url`, and
+/// offering that would be worse than silence. Returns whether it printed, so
+/// the REPL can show it once per session instead of on every failed turn.
+fn explain_chat_failure(e: &(dyn std::error::Error + 'static), cfg: &chat::ChatConfig) -> bool {
+    let unreachable = e
+        .downcast_ref::<chat::ChatError>()
+        .map(|c| c.is_unreachable())
+        .unwrap_or(false);
+    if !unreachable {
+        return false;
+    }
+    eprintln!(
+        "\n  {C_YELLOW}The chat endpoint did not answer.{C_RESET}  \
+         {C_DIM}base_url={}{C_RESET}  {C_DIM}model={}{C_RESET}",
+        cfg.base_url, cfg.model
+    );
+    eprintln!("  Check the server is up, then point ug at it:");
+    eprintln!("    {C_CYAN}ug config set chat.base_url <url>{C_RESET}");
+    eprintln!("    {C_CYAN}ug config set chat.model <model>{C_RESET}");
+    eprintln!(
+        "  {C_CYAN}ug doctor{C_RESET} shows which tier each value came from. \
+         {C_DIM}Structural commands (context, find_usages, analyze) need no LLM.{C_RESET}\n"
+    );
+    true
+}
 
 pub(crate) fn chat_client_from_args(args: &[String]) -> chat::ChatClient {
     let cfg = chat_config_from_args(args);
@@ -139,6 +184,7 @@ pub(crate) fn run_chat(args: &[String]) {
     rt.block_on(async {
         let dim = embedder.config().dim as u32;
         let spec = single_store_spec_from_args(args, dim);
+        warn_if_no_vectors(&spec);
         let store = open_store(&spec)
             .await
             .unwrap_or_else(|e| {
@@ -206,10 +252,7 @@ pub(crate) fn run_chat(args: &[String]) {
                     .await
                     {
                         Ok(o) => o,
-                        Err(e) => {
-                            eprintln!("chat failed: {}", e);
-                            std::process::exit(1);
-                        }
+                        Err(e) => die_chat(e.as_ref(), chat_client.config()),
                     };
 
                     if json_output {
@@ -238,10 +281,7 @@ pub(crate) fn run_chat(args: &[String]) {
                     .await
                     {
                         Ok(o) => o,
-                        Err(e) => {
-                            eprintln!("chat failed: {}", e);
-                            std::process::exit(1);
-                        }
+                        Err(e) => die_chat(e.as_ref(), chat_client.config()),
                     };
                     if let Some(p) = output_path.as_deref() {
                         write_file(p, &outcome.answer);
@@ -511,6 +551,10 @@ async fn run_chat_repl<'a, F>(
 
     let mut history: Vec<chat::ChatMessage> = Vec::new();
     let mut show_ctx = show_context;
+    // The endpoint hint is worth saying once, not after every failed turn:
+    // a REPL against a server that is down fails on each line, and repeating
+    // a five-line block would bury the prompt.
+    let mut explained = false;
     let stdin = std::io::stdin();
     let mut handle = stdin.lock();
 
@@ -570,6 +614,9 @@ async fn run_chat_repl<'a, F>(
                 }
                 Err(e) => {
                     eprintln!("{C_YELLOW}chat error:{C_RESET} {}", e);
+                    if !explained {
+                        explained = explain_chat_failure(e.as_ref(), chat_client.config());
+                    }
                     continue;
                 }
             }
@@ -590,6 +637,9 @@ async fn run_chat_repl<'a, F>(
                 Ok(o) => o,
                 Err(e) => {
                     eprintln!("{C_YELLOW}chat error:{C_RESET} {}", e);
+                    if !explained {
+                        explained = explain_chat_failure(e.as_ref(), chat_client.config());
+                    }
                     continue;
                 }
             }

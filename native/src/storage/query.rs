@@ -582,6 +582,99 @@ impl<'a> SearchKbOptions<'a> {
     }
 }
 
+/// Smallest slice of a node's text worth returning at all. Below this a
+/// truncated entry is a name and an ellipsis — the id and location are
+/// already there, so the caller learns nothing the next item wouldn't tell
+/// them better.
+const MIN_ITEM_CHARS: usize = 240;
+
+/// Marks text the budget cut short, so a reader — human or model — can tell
+/// a clipped body from a short one and knows `get_code` has the rest.
+const TRUNCATION_MARK: &str = "\n… [truncated to fit the context budget]";
+
+/// Clip `s` to at most `max` bytes, landing on a char boundary.
+fn clip(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        return s.to_string();
+    }
+    // No room for even the marker: drop the text rather than return a string
+    // that is itself over budget.
+    if max <= TRUNCATION_MARK.len() {
+        return String::new();
+    }
+    let mut end = max - TRUNCATION_MARK.len();
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}{}", &s[..end], TRUNCATION_MARK)
+}
+
+/// The most of a `max_chars` budget any single result may take, given a
+/// target of `k` results.
+///
+/// A ceiling, not a reservation: an item under it leaves the rest for
+/// whoever follows, so a bundle of short hits still fills the budget. It
+/// exists because the alternative is one hit taking everything — which is
+/// what a repo's own README or API reference does, being a single node
+/// several times the whole budget in size. Eight ids and eight clipped
+/// bodies answer "where is this and what touches it" and one complete
+/// document does not, so the ceiling is what keeps the result plural.
+fn per_item_cap(max_chars: usize, k: usize) -> usize {
+    (max_chars / k.max(1)).max(MIN_ITEM_CHARS)
+}
+
+/// Fit one candidate into what is left of the char budget, clipping its text
+/// instead of refusing it. Returns `false` when there is no useful room left
+/// and the caller should stop.
+///
+/// The budget used to be a pure stop condition: an item was admitted whole or
+/// the loop broke. Two things followed, and both were visible from the CLI.
+/// The `!items.is_empty()` guard let the *first* item in at any size, so one
+/// oversized node — a whole-file doc Concept, say — blew straight past the
+/// cap; and having blown it, every later item tripped the break. A query that
+/// matched such a node returned exactly one result, four times over budget,
+/// with the genuinely relevant functions ranked below it and discarded. A
+/// clipped body plus the ids of what else matched is strictly more useful,
+/// and `get_code <id>` is one call away for whichever one the caller wants in
+/// full.
+///
+/// `name` counts against the budget but is never clipped — it is what the
+/// follow-up call is made with.
+fn fit_to_budget(item: &mut ContextItem, used: usize, max_chars: usize, cap: usize) -> bool {
+    let left = max_chars.saturating_sub(used);
+    // The budget itself is spent — not just this item's share. Only this
+    // ends the loop.
+    if left <= item.name.len() + MIN_ITEM_CHARS {
+        return false;
+    }
+    // This item's allowance: its share, or whatever is left if that is less.
+    let mut room = cap.min(left).saturating_sub(item.name.len());
+
+    // Description before snippet: it is the node's own summary, so it is the
+    // denser of the two and the one worth keeping when only one fits.
+    if item.description.len() > room {
+        item.description = clip(&item.description, room);
+    }
+    room -= item.description.len();
+
+    match item.snippet.take() {
+        Some(s) if room >= MIN_ITEM_CHARS => item.snippet = Some(clip(&s, room)),
+        // Dropped rather than clipped to a stub; the description survived and
+        // carries more per char than the first two lines of a body would.
+        Some(_) => item.snippet = None,
+        None => {}
+    }
+    true
+}
+
+/// Bytes `item` contributes to the budget, after [`fit_to_budget`] has had
+/// its say.
+fn item_chars(item: &ContextItem) -> usize {
+    item.snippet.as_ref().map(|s| s.len()).unwrap_or(0)
+        + item.description.len()
+        + item.name.len()
+}
+
 /// [Advanced RAG Search] Phase 4 GraphRAG: seed search -> PPR ranking ->
 /// snippet attachment -> token-budgeted assembly. Returns a JSON-friendly
 /// [`RankedContext`].
@@ -684,6 +777,7 @@ async fn search_kb_ppr(
 
     let mut items: Vec<ContextItem> = Vec::new();
     let mut total_chars: usize = 0;
+    let cap = per_item_cap(opts.max_chars, opts.k);
     let mut snippets = SnippetCache::default();
     for id in top_ids.iter() {
         let Some(n) = nodes_by_id.get(id) else {
@@ -722,13 +816,11 @@ async fn search_kb_ppr(
             snippet,
             matched_by: matched_by.to_string(),
         };
-        let item_chars = item.snippet.as_ref().map(|s| s.len()).unwrap_or(0)
-            + item.description.len()
-            + item.name.len();
-        if total_chars + item_chars > opts.max_chars && !items.is_empty() {
+        let mut item = item;
+        if !fit_to_budget(&mut item, total_chars, opts.max_chars, cap) {
             break;
         }
-        total_chars += item_chars;
+        total_chars += item_chars(&item);
         items.push(item);
         if items.len() >= opts.k {
             break;
@@ -764,6 +856,7 @@ async fn search_kb_flat(
 
     let mut items: Vec<ContextItem> = Vec::new();
     let mut total_chars: usize = 0;
+    let cap = per_item_cap(opts.max_chars, opts.k);
     let mut snippets = SnippetCache::default();
     for h in seeds.into_iter() {
         let n = h.node;
@@ -790,13 +883,11 @@ async fn search_kb_flat(
             snippet,
             matched_by: matched_by.to_string(),
         };
-        let item_chars = item.snippet.as_ref().map(|s| s.len()).unwrap_or(0)
-            + item.description.len()
-            + item.name.len();
-        if total_chars + item_chars > opts.max_chars && !items.is_empty() {
+        let mut item = item;
+        if !fit_to_budget(&mut item, total_chars, opts.max_chars, cap) {
             break;
         }
-        total_chars += item_chars;
+        total_chars += item_chars(&item);
         items.push(item);
         if items.len() >= opts.k {
             break;
@@ -869,6 +960,7 @@ async fn search_kb_mmr(
     // 5. Attach snippets and apply char budget.
     let mut items: Vec<ContextItem> = Vec::new();
     let mut total_chars: usize = 0;
+    let cap = per_item_cap(opts.max_chars, opts.k);
     let mut snippets = SnippetCache::default();
     for hit in reranked {
         let is_seed = seed_dist.contains_key(&hit.node.id);
@@ -900,13 +992,11 @@ async fn search_kb_mmr(
             matched_by: matched_by.to_string(),
         };
 
-        let item_chars = item.snippet.as_ref().map(|s| s.len()).unwrap_or(0)
-            + item.description.len()
-            + item.name.len();
-        if total_chars + item_chars > opts.max_chars && !items.is_empty() {
+        let mut item = item;
+        if !fit_to_budget(&mut item, total_chars, opts.max_chars, cap) {
             break;
         }
-        total_chars += item_chars;
+        total_chars += item_chars(&item);
         items.push(item);
         if items.len() >= opts.k {
             break;
@@ -919,4 +1009,156 @@ async fn search_kb_mmr(
         total_chars,
         seed_id,
     })
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    fn item(name: &str, description: &str, snippet: Option<&str>) -> ContextItem {
+        ContextItem {
+            id: format!("function:f.rs:{name}"),
+            name: name.to_string(),
+            node_type: "Function".to_string(),
+            file: "f.rs".to_string(),
+            start_line: 1,
+            end_line: 2,
+            description: description.to_string(),
+            distance: 0.0,
+            hop: 0,
+            snippet: snippet.map(|s| s.to_string()),
+            matched_by: "keyword".to_string(),
+        }
+    }
+
+    /// The regression this whole helper exists for. One node several times
+    /// the budget in size used to be admitted whole — the `!items.is_empty()`
+    /// guard let the first item in at any size — and then every later item
+    /// tripped the break. `ug search "how does chat build context"` returned
+    /// one 49,427-char doc against a 12,000-char budget and discarded the
+    /// functions that actually answered the question.
+    #[test]
+    fn one_huge_item_no_longer_swallows_the_whole_result() {
+        let max = 12_000;
+        let k = 8;
+        let cap = per_item_cap(max, k);
+        let mut used = 0;
+        let mut kept = 0;
+
+        // A whole-file doc node first, then seven ordinary functions.
+        let mut candidates = vec![item("API_REFERENCE", "", Some(&"x".repeat(49_427)))];
+        for i in 0..7 {
+            candidates.push(item(&format!("fn_{i}"), "does a thing", Some("fn body() {}")));
+        }
+
+        for mut c in candidates {
+            if !fit_to_budget(&mut c, used, max, cap) {
+                break;
+            }
+            assert!(
+                item_chars(&c) <= cap,
+                "{} took {} of a {} cap",
+                c.name,
+                item_chars(&c),
+                cap
+            );
+            used += item_chars(&c);
+            kept += 1;
+        }
+
+        assert_eq!(kept, 8, "every candidate should still fit");
+        assert!(used <= max, "{used} chars is over the {max} budget");
+    }
+
+    /// The budget is a cap now, not a stop condition: what lands must fit.
+    #[test]
+    fn the_budget_is_never_exceeded() {
+        let max = 1_000;
+        let cap = per_item_cap(max, 4);
+        let mut used = 0;
+        for _ in 0..20 {
+            let mut c = item("wide", &"d".repeat(5_000), Some(&"s".repeat(5_000)));
+            if !fit_to_budget(&mut c, used, max, cap) {
+                break;
+            }
+            used += item_chars(&c);
+        }
+        assert!(used <= max, "{used} > {max}");
+    }
+
+    /// Clipped text says so, so a reader can tell a cut body from a short one.
+    #[test]
+    fn clipping_is_marked_and_stays_within_size() {
+        let out = clip(&"a".repeat(5_000), 500);
+        assert!(out.ends_with(TRUNCATION_MARK), "no marker: {:?}", &out[..40]);
+        assert!(out.len() <= 500, "clip returned {} for a 500 cap", out.len());
+    }
+
+    /// Text shorter than the cap is returned untouched — no marker on
+    /// something that was never cut.
+    #[test]
+    fn short_text_is_left_alone() {
+        assert_eq!(clip("short", 500), "short");
+    }
+
+    /// Below the marker's own length there is no honest way to clip, so the
+    /// text is dropped rather than replaced by a string that is itself over
+    /// budget.
+    #[test]
+    fn a_cap_under_the_marker_drops_the_text() {
+        assert_eq!(clip(&"a".repeat(100), 5), "");
+    }
+
+    /// A multi-byte character must not be split. `clip` walks back to a char
+    /// boundary, so the result is always valid UTF-8 — which `String` would
+    /// otherwise panic on.
+    #[test]
+    fn clipping_lands_on_a_char_boundary() {
+        let s = "é".repeat(400); // 800 bytes, 2 per char
+        let out = clip(&s, 300);
+        assert!(out.len() <= 300);
+        assert!(out.ends_with(TRUNCATION_MARK));
+    }
+
+    /// The cap is a ceiling, not a reservation: short items leave the rest of
+    /// the budget for whoever follows.
+    #[test]
+    fn the_cap_is_a_ceiling_not_a_reservation() {
+        let max = 12_000;
+        let cap = per_item_cap(max, 8);
+        let mut c = item("small", "tiny doc", Some("fn f() {}"));
+        assert!(fit_to_budget(&mut c, 0, max, cap));
+        assert!(item_chars(&c) < 100, "a small item should stay small");
+        assert_eq!(c.snippet.as_deref(), Some("fn f() {}"), "untouched");
+    }
+
+    /// A spent budget stops the loop; a merely-capped item does not.
+    #[test]
+    fn only_a_spent_budget_stops_the_loop() {
+        let max = 1_000;
+        let cap = per_item_cap(max, 8);
+        let mut c = item("f", "doc", Some("body"));
+        assert!(fit_to_budget(&mut c, 0, max, cap), "room at the start");
+        assert!(!fit_to_budget(&mut c, 999, max, cap), "budget spent");
+    }
+
+    /// Description outranks snippet when only one fits: it is the node's own
+    /// summary and denser per char than the head of a body.
+    #[test]
+    fn the_description_survives_before_the_snippet() {
+        let max = 4_000;
+        let cap = per_item_cap(max, 8); // 500
+        let mut c = item("f", &"d".repeat(400), Some(&"s".repeat(4_000)));
+        assert!(fit_to_budget(&mut c, 0, max, cap));
+        assert_eq!(c.description.len(), 400, "description kept whole");
+        assert!(c.snippet.is_none(), "no room left for a useful snippet");
+    }
+
+    /// `per_item_cap` never returns something too small to hold a useful
+    /// entry, however tight the budget or however large `k`.
+    #[test]
+    fn the_cap_has_a_floor() {
+        assert_eq!(per_item_cap(100, 50), MIN_ITEM_CHARS);
+        assert_eq!(per_item_cap(12_000, 0), 12_000, "k=0 must not divide by zero");
+    }
 }

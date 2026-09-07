@@ -393,8 +393,18 @@ pub(crate) fn run_gen(args: &[String]) {
             println!(
                 "Works now: {C_BOLD}ug find_symbols{C_RESET}, {C_BOLD}ug file_outline{C_RESET}, {C_BOLD}ug traverse{C_RESET}, {C_BOLD}ug analyze{C_RESET}."
             );
+            // `search` is not disabled and saying so was the wrong warning:
+            // it runs, it returns plausible results, and the user who was
+            // told it wouldn't work discovers it does and trusts the output.
+            // What it actually loses is one of its three ranking channels,
+            // so name that instead — and keep "disabled" for chat and tours,
+            // which really do refuse to start.
             println!(
-                "Disabled until embeddings exist: {C_YELLOW}ug search{C_RESET}, chat, tours, the Indexed tab."
+                "Keyword-only until then: {C_YELLOW}ug search{C_RESET} still runs, but ranks on \
+                 keywords and graph edges alone — the semantic channel is empty."
+            );
+            println!(
+                "Disabled until embeddings exist: {C_YELLOW}ug chat{C_RESET}, tours, the Indexed tab."
             );
             println!();
             println!("{C_BOLD}Next steps:{C_RESET}");

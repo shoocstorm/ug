@@ -58,10 +58,18 @@ pub fn run() {
     // terminal. Human-facing banners keep their colour in a terminal
     // regardless.
     let raw_args: Vec<String> = env::args().collect();
+    let tty = std::io::IsTerminal::is_terminal(&std::io::stdout());
     let color_off = args::has_flag(&raw_args, "--no-color")
         || env::var_os("NO_COLOR").is_some()
-        || !std::io::IsTerminal::is_terminal(&std::io::stdout());
+        || !tty;
     ultragraph::color::set(!color_off);
+
+    // Progress meters follow the terminal, not the colour gate — see
+    // [`ultragraph::progress`]. A `\r` repaint is a meter on a terminal and
+    // ~100 duplicate lines anywhere else, so a pipe gets only each phase's
+    // final line. `UG_PROGRESS=1` opts a pipe back in: the KB Manager's
+    // wizard reads the frames to drive its live log viewer.
+    ultragraph::progress::set(tty || env::var_os("UG_PROGRESS").is_some());
 
     // Load environment defaults from `.env` (in CWD or any parent
     // directory). Real env vars still win — `dotenvy::dotenv` does not

@@ -7,6 +7,12 @@ use crate::project;
 
 use super::args::{first_positional, flag_value, has_flag, positionals};
 
+/// How many vector-less projects `ug list` names individually before it
+/// collapses them into one summary line. Two fits the case the per-project
+/// wording is written for — "this one, go fix it" — while a machine with a
+/// dozen indexed repos gets the cause once instead of twelve times.
+const VECTOR_HINT_ROWS: usize = 2;
+
 /// One project's row, with everything the scans produced.
 ///
 /// Assembled up front so the table can size its columns to the widest cell
@@ -148,17 +154,50 @@ pub(crate) fn run_list(args: &[String]) {
     // each names the command that resolves it, which a status cell has no
     // room for.
     println!();
-    for row in &rows {
-        if let Some(age) = project::pending_vectors_age(&row.dir) {
+
+    // Vectors are the exception to "one line per project". Embedding is
+    // opt-in, so not having them is the ordinary state of a fresh `ug gen`
+    // rather than a fault — and one line each across eight projects is a wall
+    // of identical yellow that teaches the reader to skip this entire block,
+    // the staleness warnings below included. Few enough to act on one at a
+    // time, name them; past that the useful fact is the shared cause.
+    let owing: Vec<(&Row, std::time::Duration)> = rows
+        .iter()
+        .filter_map(|r| project::pending_vectors_age(&r.dir).map(|age| (r, age)))
+        .collect();
+    if owing.len() > VECTOR_HINT_ROWS {
+        println!(
+            "  {C_YELLOW}·{C_RESET} {} of {} projects have no vectors — embedding is opt-in, so \
+             {C_CYAN}search{C_RESET}/{C_CYAN}chat{C_RESET} run keyword-only there.\n    \
+             {C_CYAN}ug ingest -n <name>{C_RESET} backfills one; \
+             {C_CYAN}ug gen --with-embed{C_RESET} builds them up front.",
+            owing.len(),
+            rows.len()
+        );
+    } else {
+        for (row, age) in &owing {
             println!(
-                "  {C_YELLOW}·{C_RESET} {C_CYAN}{}{C_RESET} owes vectors ({} behind) — \
-                 {C_CYAN}ug ingest -n {}{C_RESET} catches semantic search up.",
+                "  {C_YELLOW}·{C_RESET} {C_CYAN}{}{C_RESET} has no vectors ({} behind) — \
+                 {C_CYAN}search{C_RESET}/{C_CYAN}chat{C_RESET} run keyword-only until \
+                 {C_CYAN}ug ingest -n {}{C_RESET} backfills them.",
                 row.meta.name,
-                humanize(age),
+                humanize(*age),
                 row.meta.name
             );
         }
+    }
+
+    for row in &rows {
         match &row.staleness {
+            // An empty `repo_root` lands in `repo_missing` as well —
+            // `Path::new("").exists()` is false — but "no repo was ever
+            // recorded" and "the repo you recorded is gone" are different
+            // situations, and only one of them has a path to name.
+            Some(s) if s.repo_missing && row.meta.repo_root.is_empty() => println!(
+                "  {C_YELLOW}·{C_RESET} {C_CYAN}{}{C_RESET} records no repo, so it cannot refresh \
+                 itself — {C_CYAN}ug gen -i <path> -n {}{C_RESET} points it at one.",
+                row.meta.name, row.meta.name
+            ),
             Some(s) if s.repo_missing => println!(
                 "  {C_YELLOW}·{C_RESET} {C_CYAN}{}{C_RESET} indexes {}, which is gone — \
                  {C_CYAN}ug gen -i <path> -n {}{C_RESET} repoints it.",

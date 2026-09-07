@@ -165,6 +165,49 @@ pub(crate) fn announce_staleness(data_dir: &Path) {
     );
 }
 
+/// Warn that this project has no vectors, for the commands that rank with
+/// them.
+///
+/// The documented degradation — warn on stderr, fall back to a name match —
+/// fires when no *embedder* can be built. It does not cover the case that
+/// actually happens: a working embedder against a store whose vectors were
+/// never built, which is the state every `ug gen` leaves behind, because
+/// embedding is opt-in. `ug search` then runs its keyword and graph channels
+/// and returns plausible results, under a green "Embedder: local" banner,
+/// with nothing anywhere saying the semantic half contributed nothing. Every
+/// hit comes back `matched_by: "keyword"` or `"graph"` and never `"semantic"`
+/// — which is the tell, if you know to look for it.
+///
+/// So: say it. stderr and deduplicated like the rest of the banner, keyed
+/// apart from [`announce_staleness`] so a project that is both stale and
+/// vectorless reports both.
+///
+/// Only for `search`, `chat` and `tour`. The structural commands read
+/// `graph.json` and `analyze` reads the edge store; none of them touch a
+/// vector, and telling them about it would be the same noise this warning
+/// exists to make legible.
+pub(crate) fn announce_no_vectors(data_dir: &Path) {
+    if SILENT.load(Ordering::Relaxed) || std::env::var_os("UG_NO_BANNER").is_some() {
+        return;
+    }
+    if project::pending_vectors_age(data_dir).is_none() {
+        return;
+    }
+    let name = project::read_meta(data_dir)
+        .map(|m| m.name)
+        .unwrap_or_default();
+    emit(
+        format!("novec:{}", data_dir.display()),
+        format!(
+            "{C_YELLOW}⚠{C_RESET} no vectors in this project {C_DIM}·{C_RESET} the semantic \
+             channel is empty, so ranking is keyword + graph only\n  {C_DIM}Embedding is \
+             opt-in. Build them: {C_RESET}{C_CYAN}ug ingest -n {}{C_RESET}{C_DIM} (backfills) \
+             or {C_RESET}{C_CYAN}ug gen --with-embed{C_RESET}{C_DIM}.{C_RESET}",
+            name
+        ),
+    );
+}
+
 /// Which link of the resolution chain a command will follow, as a label.
 ///
 /// Mirrors [`project::resolve_active_project_name`] when `honors_active`, and

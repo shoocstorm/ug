@@ -425,6 +425,10 @@ pub(crate) async fn api_generate(
     // Quiet the ASCII-art banner `main()` prints on every invocation —
     // it would otherwise dominate the wizard's log viewer.
     cmd.env("UG_QUIET_LOGO", "1");
+    // The child's stdout is a pipe, so its progress meters are off by
+    // default. Opt back in: `pump_gen_output` splits on `\r` precisely so
+    // these frames drive the wizard's live log viewer.
+    cmd.env("UG_PROGRESS", "1");
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
     cmd.kill_on_drop(true);
@@ -579,8 +583,10 @@ pub(crate) async fn api_ingest(
         .arg("-o")
         .arg(&db_path);
     // Match the wizard: quiet the ASCII banner so the log viewer leads
-    // with the actual progress, not the banner.
+    // with the actual progress, not the banner — and keep the progress
+    // frames the log viewer renders (see the gen job above).
     cmd.env("UG_QUIET_LOGO", "1");
+    cmd.env("UG_PROGRESS", "1");
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
     cmd.kill_on_drop(true);

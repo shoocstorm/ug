@@ -137,6 +137,22 @@ pub(crate) fn single_store_spec_from_args(args: &[String], embedding_dim: u32) -
     spec
 }
 
+/// Warn the vector-ranked commands — `search`, `chat`, `tour` — when the
+/// store they resolved to has no vectors in it.
+///
+/// Separate from [`single_store_spec_from_args`] on purpose: every DB-reading
+/// command goes through that, but `analyze` and `traverse` rank with edges and
+/// would only be nagged about something that does not affect their answer.
+/// Same project-dir derivation as the staleness call above, and the same
+/// silence for a non-local `--dest`, which has no `project.json` to read.
+pub(crate) fn warn_if_no_vectors(spec: &StoreSpec) {
+    if let StoreSpec::Overgraph { path, .. } = spec {
+        if let Some(dir) = path.parent() {
+            scope::announce_no_vectors(dir);
+        }
+    }
+}
+
 /// What an ingest run actually produced.
 ///
 /// Carries the degraded case explicitly rather than folding it into

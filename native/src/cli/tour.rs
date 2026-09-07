@@ -13,7 +13,7 @@ use super::args::{first_positional, flag_value, has_flag, multi_flag};
 use super::chat::chat_client_from_args;
 use super::embed::{embedder_from_chat_args, tokio_runtime};
 use super::io::{write_file, write_or_print};
-use super::dest::{open_store_or_exit, single_store_spec_from_args};
+use super::dest::{open_store_or_exit, single_store_spec_from_args, warn_if_no_vectors};
 
 pub(crate) fn run_tour(args: &[String]) {
     if has_flag(args, "-h") || has_flag(args, "--help") {
@@ -88,6 +88,7 @@ pub(crate) fn run_tour(args: &[String]) {
     rt.block_on(async {
         let dim = embedder.config().dim as u32;
         let spec = single_store_spec_from_args(args, dim);
+        warn_if_no_vectors(&spec);
         let store = open_store_or_exit(&spec).await;
 
         let edge_types_owned: Option<Vec<String>> = if edge_types.is_empty() {
@@ -250,6 +251,14 @@ fn tour_progress_printer() -> impl FnMut(tour::TourProgress) + Send {
                 );
             }
             tour::TourProgress::Writing { chars, reasoning_chars, elapsed_ms } => {
+                // The only in-place frame here, and it fires per streamed
+                // chunk — hundreds of them for one stop. Off a terminal that
+                // is hundreds of log lines, so it is skipped there; the
+                // `Planning` line above and `Drafted` below still bracket the
+                // wait. See [`ultragraph::progress`].
+                if !ultragraph::progress::enabled() {
+                    return;
+                }
                 let secs = elapsed_ms as f64 / 1000.0;
                 // ~4 chars/token is close enough for a progress read-out.
                 let tokens = (chars + reasoning_chars) as f64 / 4.0;

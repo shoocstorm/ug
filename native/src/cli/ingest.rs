@@ -19,6 +19,20 @@ use super::io::die;
 use super::scope;
 use super::dest::{IngestOutcome, announce_destinations, store_specs_from_args};
 
+/// Paint one intermediate progress frame, if anything is watching.
+///
+/// The three long phases below (embed, write nodes, write edges) each repaint
+/// a percentage onto one line with `\r`. That is a meter on a terminal and
+/// ~100 duplicated lines through a pipe, so [`ultragraph::progress`] gates it;
+/// the phase's terminating "✓ done" `println!` is not gated and always lands.
+fn frame(line: std::fmt::Arguments<'_>) {
+    if !ultragraph::progress::enabled() {
+        return;
+    }
+    print!("{}", line);
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+}
+
 /// What an ingest run should do about vectors.
 ///
 /// The skipping half exists because loading the local embedding model costs
@@ -174,11 +188,10 @@ async fn ingest_graph_with_progress(
             }
             let processed = std::cmp::min((i + 1) * step, to_embed);
             let pct = processed as f32 / to_embed as f32 * 100.0;
-            print!(
+            frame(format_args!(
                 "\r{C_CYAN}▸{C_RESET} Embedding: {C_YELLOW}{:>6.1}%{C_RESET} ({}/{})",
                 pct, processed, to_embed
-            );
-            let _ = std::io::Write::flush(&mut std::io::stdout());
+            ));
         }
         match &embed_error {
             None => println!(
@@ -232,11 +245,10 @@ async fn ingest_graph_with_progress(
                 .map_err(|e| format!("upsert nodes: {}", e))?;
             written += batch.len();
             let pct = written as f32 / total as f32 * 100.0;
-            print!(
+            frame(format_args!(
                 "\r{C_CYAN}▸{C_RESET} Writing nodes: {C_YELLOW}{:>6.1}%{C_RESET} ({}/{})",
                 pct, written, total
-            );
-            let _ = std::io::Write::flush(&mut std::io::stdout());
+            ));
         }
         println!(
             "\r{C_CYAN}▸{C_RESET} Writing nodes: {C_GREEN}100.0% ✓ done{C_RESET} in {C_BOLD}{:?}{C_RESET} ({}/{} changed)",
@@ -292,11 +304,10 @@ async fn ingest_graph_with_progress(
             .map_err(|e| format!("upsert edges: {}", e))?;
         let written = std::cmp::min((i + 1) * write_batch, total_edges);
         let pct = written as f32 / total_edges as f32 * 100.0;
-        print!(
+        frame(format_args!(
             "\r{C_CYAN}▸{C_RESET} Writing edges: {C_YELLOW}{:>6.1}%{C_RESET} ({}/{})",
             pct, written, total_edges
-        );
-        let _ = std::io::Write::flush(&mut std::io::stdout());
+        ));
     }
     println!(
         "\r{C_CYAN}▸{C_RESET} Writing edges: {C_GREEN}100.0% ✓ done{C_RESET} in {C_BOLD}{:?}{C_RESET}",
