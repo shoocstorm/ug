@@ -708,7 +708,11 @@ function:native/src/cli/gen.rs:run_gen                                   <span c
 <span class="c-dim">$</span> curl <span class="c-flag">-s</span> <span class="c-flag">-X</span> POST localhost:8080/api/tools/find_usages  <span class="c-flag">-d</span> <span class="c-str">'{"node_id":"validate_*"}'</span>
 
 <span class="c-com"># context takes exactly one symbol — the whole neighbourhood, budgeted</span>
-<span class="c-dim">$</span> curl <span class="c-flag">-s</span> <span class="c-flag">-X</span> POST localhost:8080/api/tools/context     <span class="c-flag">-d</span> <span class="c-str">'{"nodeId":"processPayment","maxChars":6000}'</span></pre>
+<span class="c-dim">$</span> curl <span class="c-flag">-s</span> <span class="c-flag">-X</span> POST localhost:8080/api/tools/context     <span class="c-flag">-d</span> <span class="c-str">'{"nodeId":"processPayment","maxChars":6000}'</span>
+
+<span class="c-com"># any tool takes "render": "markdown" — the tool's own prose instead of the</span>
+<span class="c-com"># JSON envelope, i.e. exactly what an MCP client is handed. Comes back as {"text": …}.</span>
+<span class="c-dim">$</span> curl <span class="c-flag">-s</span> <span class="c-flag">-X</span> POST localhost:8080/api/tools/context     <span class="c-flag">-d</span> <span class="c-str">'{"nodeId":"processPayment","render":"markdown"}'</span></pre>
   </div>
 
   <h2>2.7 File Content</h2>

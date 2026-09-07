@@ -247,6 +247,25 @@ pub(crate) async fn api_tool(
         .remove("project")
         .and_then(|v| v.as_str().map(str::to_string));
 
+    // `"render": "markdown"` asks for the tool's own renderer instead of the
+    // JSON envelope — the same text `render_context` and friends hand an MCP
+    // client. The visualization's Context tab copies that, so the thing a user
+    // pastes into their agent is byte-for-byte what the agent tools emit; a
+    // second renderer in JS would be a second format to keep in step, and
+    // formats that are written twice drift.
+    let style = match params.remove("render") {
+        None => None,
+        Some(serde_json::Value::String(s)) if s.eq_ignore_ascii_case("markdown") => {
+            Some(crate::style::Render::Markdown)
+        }
+        Some(v) => {
+            return err_json(
+                StatusCode::BAD_REQUEST,
+                &format!("render takes \"markdown\"; got {v}"),
+            )
+        }
+    };
+
     let ctx = match resolve_ctx(&state.registry, project.as_deref()).await {
         Ok(c) => c,
         Err(e) if e.starts_with("unknown project") => return err_json(StatusCode::NOT_FOUND, &e),
@@ -258,6 +277,16 @@ pub(crate) async fn api_tool(
     // coercion as the MCP and chat paths, and answers from the resolved
     // project's store just like every other tool answers from its graph.
     if tool == "analyze" {
+        // `analyze` renders through its own preset machinery, not `run_tool`'s
+        // `style`, so there is nothing here to hand a `render` to. Refusing is
+        // the honest answer; silently returning JSON would look like the
+        // parameter was accepted.
+        if style.is_some() {
+            return err_json(
+                StatusCode::BAD_REQUEST,
+                "analyze has no rendered form; drop \"render\" to get its JSON",
+            );
+        }
         let mut args = serde_json::Value::Object(params);
         crate::mcp::tools::normalize_args(&tool, &mut args);
         return api_analyze(&ctx, args).await;
@@ -275,12 +304,12 @@ pub(crate) async fn api_tool(
         ultragraph::agent_tools::SourceCtx::new(&indexed, ctx.repo_root.as_path()),
         ctx.graph_path.as_path(),
         args,
-        None,
+        style,
     );
 
     match result {
         Ok(ultragraph::agent_tools::ToolOutput::Json(v)) => ok_json(v.to_string()),
-        // `run_tool` only returns Text when a render style was requested.
+        // Only reachable via `"render": "markdown"` above.
         Ok(ultragraph::agent_tools::ToolOutput::Text(t)) => {
             ok_json(serde_json::json!({ "text": t }).to_string())
         }

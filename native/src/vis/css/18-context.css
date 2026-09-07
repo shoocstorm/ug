@@ -1,0 +1,260 @@
+        /* ─── Context pack (info panel → Context tab) ────────── */
+
+        /* The controls sit above the pack, not inside it: budget and roles
+           change the *question*, and a question that scrolls away with its
+           answer is one the reader has to hunt for to revise. */
+        .ctx-controls {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding: 10px 12px;
+            background: var(--bg-surface);
+            border: 1px solid var(--border-soft);
+            border-radius: 8px;
+            margin-bottom: 10px;
+        }
+
+        .ctx-budget {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .ctx-budget-label {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text-dim);
+            flex-shrink: 0;
+        }
+
+        .ctx-budget input[type="range"] {
+            flex: 1;
+            min-width: 0;
+            accent-color: var(--accent);
+            height: 3px;
+        }
+
+        .ctx-budget-out {
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 11px;
+            color: var(--text-muted);
+            min-width: 48px;
+            text-align: right;
+            flex-shrink: 0;
+        }
+
+        .ctx-chips { flex-wrap: wrap; gap: 4px; }
+
+        .ctx-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 3px 8px;
+            font-size: 10.5px;
+            color: var(--text-dim);
+            background: transparent;
+            border: 1px solid var(--border-soft);
+            border-radius: 999px;
+            cursor: pointer;
+            transition: color 0.12s, border-color 0.12s;
+        }
+
+        .ctx-chip:hover { color: var(--text-muted); border-color: var(--border); }
+        .ctx-chip.active { color: var(--text); border-color: var(--border); }
+        /* An inactive role reads as absent, not as a role with nothing in it —
+           the dot goes grey rather than dimming the whole chip, so the role's
+           colour stays the same claim it makes on the canvas. */
+        .ctx-chip:not(.active) .chip-dot { background: var(--text-dim) !important; color: var(--text-dim) !important; }
+
+        .ctx-actions { display: flex; gap: 6px; }
+
+        .ctx-act {
+            flex: 1;
+            padding: 5px 8px;
+            font-size: 11px;
+            color: var(--text-muted);
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-soft);
+            border-radius: 6px;
+            cursor: pointer;
+            transition: color 0.12s, background 0.12s;
+        }
+
+        .ctx-act:hover { color: var(--text); background: var(--bg-hover); }
+        .ctx-act.copied { color: var(--success); border-color: var(--success); }
+        .ctx-act.off { color: var(--text-dim); opacity: 0.55; }
+
+        /* ── The budget line ── */
+
+        .ctx-status { margin-bottom: 10px; font-size: 11px; color: var(--text-muted); }
+        .ctx-status.error { color: var(--danger); }
+
+        .ctx-meter { display: flex; align-items: center; gap: 8px; }
+
+        .ctx-meter-bar {
+            flex: 1;
+            height: 3px;
+            background: var(--bg-elevated);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .ctx-meter-bar span {
+            display: block;
+            height: 100%;
+            background: var(--accent);
+            /* No transition: the bar is read, not watched, and an animated
+               width is a frame source for as long as it runs (§9h). */
+        }
+
+        .ctx-meter-bar span.over { background: var(--warning); }
+
+        .ctx-meter-txt {
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 10.5px;
+            color: var(--text-dim);
+            flex-shrink: 0;
+        }
+
+        .ctx-meter-txt.over { color: var(--warning); }
+
+        .ctx-tallies { display: flex; gap: 10px; margin-top: 5px; font-size: 10.5px; }
+        .ctx-tally { font-variant-numeric: tabular-nums; }
+
+        .ctx-dropped {
+            margin-top: 5px;
+            font-size: 10.5px;
+            color: var(--warning);
+        }
+
+        .ctx-note { margin-top: 5px; font-size: 10.5px; color: var(--text-dim); }
+
+        /* ── The pack ── */
+
+        .ctx-section { margin-bottom: 14px; }
+
+        .ctx-head {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 6px;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.09em;
+            color: var(--text-dim);
+        }
+
+        /* The rule after the label is what makes the roles read as sections
+           rather than as a run-on list — the same job the CLI's `── callers ──`
+           does in a terminal. */
+        .ctx-head::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background: var(--border-soft);
+        }
+
+        .ctx-item {
+            padding: 7px 9px;
+            margin-bottom: 5px;
+            background: var(--bg-surface);
+            border: 1px solid var(--border-soft);
+            border-left: 2px solid var(--border);
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background 0.12s, border-color 0.12s;
+        }
+
+        .ctx-item:hover { background: var(--bg-elevated); border-color: var(--border); }
+
+        /* The left edge carries the role's colour, so a scrolled pack stays
+           readable by role without re-reading a heading. Set per section so
+           the table in 00-preamble.js stays the only place the colours live —
+           these rules only say *where* the colour goes. */
+        .ctx-section[data-role="target"]     .ctx-item { border-left-color: #ff3d00; }
+        .ctx-section[data-role="caller"]     .ctx-item { border-left-color: #f97316; }
+        .ctx-section[data-role="test"]       .ctx-item { border-left-color: #fbbf24; }
+        .ctx-section[data-role="dependency"] .ctx-item { border-left-color: #38bdf8; }
+        .ctx-section[data-role="doc"]        .ctx-item { border-left-color: #a78bfa; }
+
+        .ctx-item-head {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            min-width: 0;
+        }
+
+        .ctx-item-head .name {
+            font-size: 12px;
+            color: var(--text);
+            font-weight: 500;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .ctx-loc {
+            margin-left: auto;
+            flex-shrink: 0;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 9.5px;
+            color: var(--text-dim);
+        }
+
+        .ctx-why {
+            margin-top: 3px;
+            font-size: 10.5px;
+            color: var(--text-muted);
+        }
+
+        .ctx-doc {
+            margin-top: 4px;
+            font-size: 11px;
+            line-height: 1.5;
+            color: var(--text-muted);
+        }
+
+        /* A call site is evidence, so it keeps the source's own shape: the line
+           number in a fixed gutter, the text monospaced beside it. */
+        .ctx-site {
+            display: flex;
+            gap: 8px;
+            margin-top: 3px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 10.5px;
+        }
+
+        .ctx-site-line {
+            flex-shrink: 0;
+            min-width: 34px;
+            text-align: right;
+            color: var(--text-dim);
+        }
+
+        .ctx-site code {
+            color: var(--text-muted);
+            overflow-x: auto;
+            white-space: pre;
+        }
+
+        .ctx-code {
+            margin-top: 6px;
+            padding: 7px 8px;
+            max-height: 320px;
+            overflow: auto;
+            background: var(--bg-deep);
+            border: 1px solid var(--border-soft);
+            border-radius: 5px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 10.5px;
+            line-height: 1.55;
+            color: var(--text-muted);
+            white-space: pre;
+        }
+
+        .ctx-cut {
+            margin-top: 4px;
+            font-size: 10px;
+            color: var(--warning);
+        }

@@ -9094,9 +9094,270 @@ body:has(#info.visible) #perf-hud {
 #perf-hud .ph-v.good { color: #34d399; }
 #perf-hud .ph-v.warn { color: #fbbf24; }
 #perf-hud .ph-v.bad  { color: #f87171; }
+/* ==== 18-context.css ==== */
+        /* ─── Context pack (info panel → Context tab) ────────── */
+
+        /* The controls sit above the pack, not inside it: budget and roles
+           change the *question*, and a question that scrolls away with its
+           answer is one the reader has to hunt for to revise. */
+        .ctx-controls {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding: 10px 12px;
+            background: var(--bg-surface);
+            border: 1px solid var(--border-soft);
+            border-radius: 8px;
+            margin-bottom: 10px;
+        }
+
+        .ctx-budget {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .ctx-budget-label {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text-dim);
+            flex-shrink: 0;
+        }
+
+        .ctx-budget input[type="range"] {
+            flex: 1;
+            min-width: 0;
+            accent-color: var(--accent);
+            height: 3px;
+        }
+
+        .ctx-budget-out {
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 11px;
+            color: var(--text-muted);
+            min-width: 48px;
+            text-align: right;
+            flex-shrink: 0;
+        }
+
+        .ctx-chips { flex-wrap: wrap; gap: 4px; }
+
+        .ctx-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 3px 8px;
+            font-size: 10.5px;
+            color: var(--text-dim);
+            background: transparent;
+            border: 1px solid var(--border-soft);
+            border-radius: 999px;
+            cursor: pointer;
+            transition: color 0.12s, border-color 0.12s;
+        }
+
+        .ctx-chip:hover { color: var(--text-muted); border-color: var(--border); }
+        .ctx-chip.active { color: var(--text); border-color: var(--border); }
+        /* An inactive role reads as absent, not as a role with nothing in it —
+           the dot goes grey rather than dimming the whole chip, so the role's
+           colour stays the same claim it makes on the canvas. */
+        .ctx-chip:not(.active) .chip-dot { background: var(--text-dim) !important; color: var(--text-dim) !important; }
+
+        .ctx-actions { display: flex; gap: 6px; }
+
+        .ctx-act {
+            flex: 1;
+            padding: 5px 8px;
+            font-size: 11px;
+            color: var(--text-muted);
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-soft);
+            border-radius: 6px;
+            cursor: pointer;
+            transition: color 0.12s, background 0.12s;
+        }
+
+        .ctx-act:hover { color: var(--text); background: var(--bg-hover); }
+        .ctx-act.copied { color: var(--success); border-color: var(--success); }
+        .ctx-act.off { color: var(--text-dim); opacity: 0.55; }
+
+        /* ── The budget line ── */
+
+        .ctx-status { margin-bottom: 10px; font-size: 11px; color: var(--text-muted); }
+        .ctx-status.error { color: var(--danger); }
+
+        .ctx-meter { display: flex; align-items: center; gap: 8px; }
+
+        .ctx-meter-bar {
+            flex: 1;
+            height: 3px;
+            background: var(--bg-elevated);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .ctx-meter-bar span {
+            display: block;
+            height: 100%;
+            background: var(--accent);
+            /* No transition: the bar is read, not watched, and an animated
+               width is a frame source for as long as it runs (§9h). */
+        }
+
+        .ctx-meter-bar span.over { background: var(--warning); }
+
+        .ctx-meter-txt {
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 10.5px;
+            color: var(--text-dim);
+            flex-shrink: 0;
+        }
+
+        .ctx-meter-txt.over { color: var(--warning); }
+
+        .ctx-tallies { display: flex; gap: 10px; margin-top: 5px; font-size: 10.5px; }
+        .ctx-tally { font-variant-numeric: tabular-nums; }
+
+        .ctx-dropped {
+            margin-top: 5px;
+            font-size: 10.5px;
+            color: var(--warning);
+        }
+
+        .ctx-note { margin-top: 5px; font-size: 10.5px; color: var(--text-dim); }
+
+        /* ── The pack ── */
+
+        .ctx-section { margin-bottom: 14px; }
+
+        .ctx-head {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 6px;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.09em;
+            color: var(--text-dim);
+        }
+
+        /* The rule after the label is what makes the roles read as sections
+           rather than as a run-on list — the same job the CLI's `── callers ──`
+           does in a terminal. */
+        .ctx-head::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background: var(--border-soft);
+        }
+
+        .ctx-item {
+            padding: 7px 9px;
+            margin-bottom: 5px;
+            background: var(--bg-surface);
+            border: 1px solid var(--border-soft);
+            border-left: 2px solid var(--border);
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background 0.12s, border-color 0.12s;
+        }
+
+        .ctx-item:hover { background: var(--bg-elevated); border-color: var(--border); }
+
+        /* The left edge carries the role's colour, so a scrolled pack stays
+           readable by role without re-reading a heading. Set per section so
+           the table in 00-preamble.js stays the only place the colours live —
+           these rules only say *where* the colour goes. */
+        .ctx-section[data-role="target"]     .ctx-item { border-left-color: #ff3d00; }
+        .ctx-section[data-role="caller"]     .ctx-item { border-left-color: #f97316; }
+        .ctx-section[data-role="test"]       .ctx-item { border-left-color: #fbbf24; }
+        .ctx-section[data-role="dependency"] .ctx-item { border-left-color: #38bdf8; }
+        .ctx-section[data-role="doc"]        .ctx-item { border-left-color: #a78bfa; }
+
+        .ctx-item-head {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            min-width: 0;
+        }
+
+        .ctx-item-head .name {
+            font-size: 12px;
+            color: var(--text);
+            font-weight: 500;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .ctx-loc {
+            margin-left: auto;
+            flex-shrink: 0;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 9.5px;
+            color: var(--text-dim);
+        }
+
+        .ctx-why {
+            margin-top: 3px;
+            font-size: 10.5px;
+            color: var(--text-muted);
+        }
+
+        .ctx-doc {
+            margin-top: 4px;
+            font-size: 11px;
+            line-height: 1.5;
+            color: var(--text-muted);
+        }
+
+        /* A call site is evidence, so it keeps the source's own shape: the line
+           number in a fixed gutter, the text monospaced beside it. */
+        .ctx-site {
+            display: flex;
+            gap: 8px;
+            margin-top: 3px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 10.5px;
+        }
+
+        .ctx-site-line {
+            flex-shrink: 0;
+            min-width: 34px;
+            text-align: right;
+            color: var(--text-dim);
+        }
+
+        .ctx-site code {
+            color: var(--text-muted);
+            overflow-x: auto;
+            white-space: pre;
+        }
+
+        .ctx-code {
+            margin-top: 6px;
+            padding: 7px 8px;
+            max-height: 320px;
+            overflow: auto;
+            background: var(--bg-deep);
+            border: 1px solid var(--border-soft);
+            border-radius: 5px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 10.5px;
+            line-height: 1.55;
+            color: var(--text-muted);
+            white-space: pre;
+        }
+
+        .ctx-cut {
+            margin-top: 4px;
+            font-size: 10px;
+            color: var(--warning);
+        }
     </style>
 <script>
-window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3424,"edges":9879,"files":133,"lines":78725,"ugVersion":"0.1.17","visFingerprint":"28715aae4f656e09","generatedAt":1788682010};
+window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3424,"edges":9879,"files":133,"lines":78725,"ugVersion":"0.1.18","visFingerprint":"51c534073dd7dfd1","generatedAt":1788792541};
 /* ==========================================================================
    UltraGraph — static demo shim
    ==========================================================================
@@ -11333,7 +11594,16 @@ traverse({
             walkLayout: 'flow',
             walkCascadePos: null,      // Map<id, {x,y,z}> the cascade assigned
             walkPosSaved: null,     // Map<id, {x,y,z}> pre-walk positions, put back on exit
-            walkLanes: []           // per-hop column bounds, for the on-canvas guides
+            walkLanes: [],          // per-hop column bounds, for the on-canvas guides
+            // Context pack (info panel -> Context tab). One symbol's whole
+            // neighbourhood as `ug context` assembles it: the body, who breaks,
+            // what re-verifies, what it leans on, the prose. The request is
+            // O(nodes + edges) server-side, so it is made only while the tab is
+            // actually open -- see renderContextPack in 24-context.js.
+            ctxPack: null,          // { targetId, roleById: Map<id, role> } while painted
+            ctxMaxChars: 12000,     // the tool's own default; the budget slider writes here
+            ctxRoles: new Set(),    // `include` filter; empty = every role
+            ctxPaint: true          // paint the pack on the canvas while the tab is open
         };
 
         // Canvas palette. Everything that has to sit *against* the 3D
@@ -11360,6 +11630,27 @@ traverse({
             particleOut: '#ff3d00',
             particleIn: '#67e8f9',
         };
+
+        // One colour per context role, shared by the panel's chips and the
+        // canvas paint. Same rule as CANVAS: the swatch beside a caller in the
+        // list and the dot lit on the graph are the same claim, so they read
+        // from one table and cannot drift apart.
+        //
+        // The order is CONTEXT_ROLES' order, which is a priority claim -- body,
+        // then who breaks, then what re-verifies, then what it leans on, then
+        // the prose -- and the ramp follows it: the target burns hottest and
+        // each later role cools, so the picture is readable before any label is.
+        const CTX_ROLE = {
+            target:     { color: '#ff3d00', label: 'target',     tip: 'The symbol itself, with its source.' },
+            caller:     { color: '#f97316', label: 'caller',     tip: 'Calls or imports the target -- what breaks if it changes.' },
+            test:       { color: '#fbbf24', label: 'test',       tip: 'Reaches the target within 2 hops -- what re-verifies it.' },
+            dependency: { color: '#38bdf8', label: 'dependency', tip: 'The target calls or imports this -- what it leans on.' },
+            doc:        { color: '#a78bfa', label: 'doc',        tip: 'Prose the indexer linked to this symbol.' },
+        };
+        // Rendering and budgeting order, mirroring CONTEXT_ROLES in
+        // native/src/agent_tools/context.rs. Not derived from Object.keys:
+        // the order is load-bearing and should be stated, not inherited.
+        const CTX_ROLE_ORDER = ['target', 'caller', 'test', 'dependency', 'doc'];
 
         // Canvas size, shared by the renderer backends and the resize handler.
         let width, height;
@@ -13943,6 +14234,11 @@ self.onmessage = async (ev) => {
             related: ['Related', 'Every edge touching this node in either direction — calls, '
                 + 'imports, extends, implements, references. This is the neighbourhood that '
                 + 'graph-aware search expands into when ranking results.'],
+            context: ['Context', 'What ug context hands an agent: this symbol\'s body, the '
+                + 'callers that break if it changes, the tests that re-verify it, what it leans '
+                + 'on and any linked prose — each labelled with the role that put it there, and '
+                + 'the whole thing fitted to a character budget. Related lists every edge; this '
+                + 'answers "what do I need to read before I change this?".'],
         };
 
         // Every panel section says where its data came from. The panel mixes
@@ -13992,6 +14288,14 @@ self.onmessage = async (ev) => {
                     detail: 'Every edge touching this node in either direction — calls, imports, '
                         + 'extends, implements, references. This is the neighbourhood graph-aware '
                         + 'search expands into when ranking.',
+                },
+                context: {
+                    label: 'server · POST /api/tools/context',
+                    detail: 'Assembled server-side by the same tool ug context and the context MCP '
+                        + 'tool call, over graph.json and the indexed source — no vectors involved. '
+                        + 'Unlike the other tabs this is not a view of stored fields: roles are '
+                        + 'classified and the result is fitted to a character budget, so what is '
+                        + 'here is what an agent would actually receive.',
                 },
             };
             const n = notes[view];
@@ -14615,6 +14919,7 @@ self.onmessage = async (ev) => {
             wireCatalog();
             wireNodeMenu();
             wireWalkNodes();
+            wireContextPanel();
             wireIngestButtons();
             probeCapabilities();
             startHealthPolling();
@@ -14626,6 +14931,9 @@ self.onmessage = async (ev) => {
                 document.getElementById('info').classList.remove('visible');
                 exitPathMode();
                 state.selectedNode = null;
+                // Closing the panel closes the legend for the context paint, so
+                // the paint goes with it.
+                clearContextPaint();
                 exitFocus();
                 bumpGraphStyles();
             });
@@ -19431,11 +19739,29 @@ self.onmessage = async (ev) => {
         // only affordable if "what should this node look like?" has one answer.
         // A backend decides how to *draw* that answer, never what it is.
 
+        // The context pack's role for a node, or null when no pack is painted.
+        // One guarded lookup rather than `state.ctxPack.roleById.get(...)` at
+        // each call site: the pack is null far more often than not, and every
+        // style accessor below asks the same question.
+        function ctxRoleOf(id) {
+            const p = state.ctxPack;
+            return (p && state.ctxPaint) ? (p.roleById.get(id) || null) : null;
+        }
+
         // Selected node / hovered neighbours flare to a hot saturated orange —
         // the brightest ink on the page; everything else keeps its type colour.
         function nodeColorFor(n) {
             if (state.selectedNode && n.id === state.selectedNode.id) return '#ff3d00';
             if (state.highlightNodes.has(n.id)) return '#f96716';
+            // Context pack: each member takes its role's colour, so the canvas
+            // says *why* a node is in the answer — the same claim the panel's
+            // role chips make, read from the same table (CTX_ROLE). Sits above
+            // focus (whose set is the raw 1-hop neighbourhood) and below walk
+            // and tour, which own the canvas outright while they run.
+            if (!state.walkActive && !tourState.active) {
+                const role = ctxRoleOf(n.id);
+                if (role) return CTX_ROLE[role].color;
+            }
             // Graph Walk: reached nodes take their hop's colour on a
             // hot→cool gradient; unreached nodes keep their type colour and
             // are dimmed to near-invisible by bumpGraphStyles.
@@ -19450,6 +19776,17 @@ self.onmessage = async (ev) => {
         function linkColorFor(e) {
             if (state.highlightLinks.has(e)) {
                 return state.highlightLinkDir.get(e) === 'in' ? CANVAS.linkIn : CANVAS.linkOut;
+            }
+            // Context pack: an edge with both ends in the pack is part of the
+            // answer and keeps its relationship colour; everything else recedes.
+            // Without this the pack's nodes glow inside an undimmed hairball and
+            // the shape of the neighbourhood — the thing worth looking at — is
+            // exactly as hard to read as it was before.
+            if (state.ctxPack && state.ctxPaint && !state.walkActive && !tourState.active) {
+                const sId = e.source.id || e.source;
+                const tId = e.target.id || e.target;
+                if (ctxRoleOf(sId) && ctxRoleOf(tId)) return config.getRelColor(e.rel);
+                return CANVAS.linkFar;
             }
             // Graph Walk: walked edges glow in the frontier colour, everything
             // else recedes into the background so the expanding frontier is
@@ -19594,6 +19931,14 @@ self.onmessage = async (ev) => {
                     : w === 'pending' ? 0.14
                     : 0.05;
                 return { dim: w === 'far' || w === 'pending', opacity, tier: null };
+            }
+            // Context pack: members burn, everything else recedes. Deliberately
+            // dimmer than focus mode's 0.06 — focus is a whole 1-hop
+            // neighbourhood and wants context around it, whereas the pack is a
+            // curated answer and the point is that you can count its members.
+            if (!tier && state.ctxPack && state.ctxPaint) {
+                const inPack = !!ctxRoleOf(n.id);
+                return { dim: !inPack, opacity: inPack ? 1.0 : 0.04, tier: null };
             }
             const dim = tier ? tier === 'far' : (focusOn && !state.focusSet.has(n.id));
             const opacity = tier ? TOUR_TIER_OPACITY[tier] : (dim ? 0.06 : 0.95);
@@ -25747,7 +26092,7 @@ self.onmessage = async (ev) => {
             if (d.extends) html += chipRow('extends', d.extends);
             if (d.implements) html += chipRow('implements', d.implements);
 
-            const activeTab = ['related', 'hierarchy', 'chunk'].includes(state.infoTab) ? state.infoTab : 'preview';
+            const activeTab = ['related', 'hierarchy', 'chunk', 'context'].includes(state.infoTab) ? state.infoTab : 'preview';
             const tabButton = (key, suffix = '') => {
                 const [label, tip] = TAB_DOCS[key];
                 return `<button class="info-tab${activeTab === key ? ' active' : ''}" data-view="${key}"`
@@ -25759,6 +26104,7 @@ self.onmessage = async (ev) => {
                     ${tabButton('chunk')}
                     ${tabButton('hierarchy')}
                     ${tabButton('related', related.length ? '<span class="tab-count">' + related.length + '</span>' : '')}
+                    ${tabButton('context')}
                 </div>
                 <div class="info-view${activeTab === 'preview' ? ' active' : ''}" data-view="preview">
                     ${sourceNote('preview', d)}
@@ -25817,6 +26163,10 @@ self.onmessage = async (ev) => {
                 html += `<div class="hier-empty">No edges touch this node — it is isolated in the graph.</div>`;
             }
             html += `</div>
+                <div class="info-view${activeTab === 'context' ? ' active' : ''}" data-view="context">
+                    ${sourceNote('context', d)}
+                    ${buildContextShellHtml()}
+                </div>
             </div>`;
 
             body.innerHTML = html;
@@ -25927,8 +26277,18 @@ self.onmessage = async (ev) => {
                     tab.classList.add('active');
                     body.querySelector('.info-view[data-view="' + tab.dataset.view + '"]').classList.add('active');
                     state.infoTab = tab.dataset.view;
+                    // The context pack costs a server-side pass over every node
+                    // and edge, so it is fetched when the tab is opened and not
+                    // before. Leaving the tab drops the canvas paint with it —
+                    // a highlight nobody can see the legend for is just a
+                    // recoloured graph.
+                    syncContextTab(d);
                 });
             });
+            // The tab can already be the active one when a node is selected
+            // (it persists in state.infoTab), in which case no click arrives
+            // and this is the only thing that fills it.
+            syncContextTab(d);
 
             if (d.file) {
                 jumpBtn.style.display = 'flex';
@@ -26812,6 +27172,10 @@ self.onmessage = async (ev) => {
 
         function clearSelection() {
             state.selectedNode = null;
+            // Before bumpGraphStyles, so the one restyle below puts the pack's
+            // colours back rather than leaving a lit subgraph with no selection
+            // and no panel to explain it.
+            clearContextPaint();
             exitFocus();
             bumpGraphStyles();
             document.getElementById('info').classList.remove('visible');
@@ -30311,6 +30675,7 @@ self.onmessage = async (ev) => {
             { group: 'Global', keys: '⌘K / Ctrl+K', action: 'Command palette' },
             { group: 'Global', keys: '?', action: 'Keyboard shortcuts' },
             { group: 'Global', keys: 't', action: 'Go to the guided tour' },
+            { group: 'Global', keys: 'c', action: 'Context pack for the selected node' },
             { group: 'Global', keys: 'r', action: 'Reset view' },
             { group: 'Global', keys: '[', action: 'Toggle sidebar' },
             { group: 'Global', keys: 'Backspace / Shift+Backspace', action: 'Back / forward' },
@@ -30376,6 +30741,7 @@ self.onmessage = async (ev) => {
             { name: 'Go to search', run: () => { showPanel('discover'); showSub('search'); const i = document.getElementById('search'); if (i) i.focus(); } },
             { name: 'Go to chat', run: () => { showPanel('discover'); showSub('chat'); const i = document.getElementById('chat-input'); if (i) i.focus(); } },
             { name: 'Go to insights', run: () => { showPanel('discover'); showSub('insights'); } },
+            { name: 'Context pack for the selected node', run: openContextTab },
             { name: 'Toggle solo (focus isolate)', run: toggleFocusSolo },
             { name: 'Toggle boundary box', run: () => { const b = document.getElementById('toggle-box'); if (b) b.click(); } },
             { name: 'Toggle auto-spin', run: () => { const b = document.getElementById('toggle-spin'); if (b) b.click(); } },
@@ -30594,6 +30960,14 @@ self.onmessage = async (ev) => {
                 e.preventDefault();
                 e.stopImmediatePropagation();
                 gotoTour();
+                return;
+            }
+            // No-op with nothing selected — openContextTab says so in the
+            // panel rather than swallowing the key silently.
+            if ((e.key === 'c' || e.key === 'C') && !immersive) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                openContextTab();
                 return;
             }
         }, true);
@@ -30844,6 +31218,7 @@ self.onmessage = async (ev) => {
                 <div class="nm-rows">${rows.join('')}</div>
                 <div class="nm-acts">
                     ${state.walkActive ? '' : '<button class="nm-act" data-act="details" title="Open the full node panel">Details</button>'}
+                    ${state.walkActive ? '' : '<button class="nm-act" data-act="context" title="Everything an agent needs to change this safely: callers, tests, dependencies, docs">Context</button>'}
                     <button class="nm-act" data-act="zoom" title="Fly the camera to this node">Zoom to</button>
                     <button class="nm-act" data-act="copy" title="Copy the node id — command fuel for ug get_code">Copy id</button>
                 </div>`;
@@ -30855,6 +31230,14 @@ self.onmessage = async (ev) => {
             const detailsBtn = menu.querySelector('[data-act="details"]');
             if (detailsBtn) detailsBtn.addEventListener('click', () => {
                 hideNodeMenu();
+                handleClick(null, node);
+            });
+            // Same walk guard as Details: this opens the info panel, which
+            // selects the node and tears a running walk down.
+            const ctxBtn = menu.querySelector('[data-act="context"]');
+            if (ctxBtn) ctxBtn.addEventListener('click', () => {
+                hideNodeMenu();
+                state.infoTab = 'context';
                 handleClick(null, node);
             });
             menu.querySelector('[data-act="zoom"]').addEventListener('click', () => {
@@ -31376,6 +31759,377 @@ self.onmessage = async (ev) => {
         function perfHudSync(force) {
             const want = (force === undefined) ? perfHudConfigured() : !!force;
             if (want) perfHudStart(); else perfHudStop();
+        }
+// ==== 24-context.js ====
+        // ─── Context pack (info panel → Context tab) ────────────────────────
+        //
+        // `ug context` in the browser. One symbol's whole neighbourhood in one
+        // budgeted call — its body, the callers that break if it changes, the
+        // tests that re-verify it, what it leans on, any linked prose — each
+        // item labelled with the role that put it there.
+        //
+        // The other four tabs are views of stored fields: read a row, print it.
+        // This one is an *answer*, assembled server-side by the same code the
+        // CLI and MCP run, and that difference is the whole reason it is worth
+        // a tab. Related lists every edge touching a node; this says which of
+        // them you have to read before you can safely change it.
+        //
+        // Three rules shape everything below:
+        //
+        //   1. **It is not free.** `context()` builds a map of every node and
+        //      walks every edge (agent_tools/context.rs → find_usages.rs). On
+        //      ~/.ug/big500k that is 485k nodes and 2.2M edges *per call*. So
+        //      the fetch happens when the tab is opened and at no other time —
+        //      never on selection, never on hover. §1a.
+        //   2. **The budget is the feature.** A pack that quietly dropped its
+        //      docs would be indistinguishable from a symbol with none. The
+        //      header carries `used_chars / max_chars`, and `dropped` is
+        //      rendered as "not shown: 4 dependency" exactly as the CLI does.
+        //   3. **One renderer.** Copy asks the server for the same Markdown an
+        //      MCP client gets (`"render": "markdown"` → render_context), so
+        //      what the user pastes into their agent is what the agent tools
+        //      emit. A second formatter written here would drift from it.
+
+        // The pack is a claim about one symbol; the request that produced it is
+        // keyed on everything that can change the answer. Pinned to the element
+        // it rendered into as well, because re-selecting the already-selected
+        // node rebuilds the panel and hands us a fresh, empty container while
+        // the key still matches — the trap renderPreview documents at length.
+        function contextKeyFor(node) {
+            const roles = [...state.ctxRoles].sort().join(',');
+            return `${node.id}|${state.ctxMaxChars}|${roles}`;
+        }
+
+        // The tab's shell, rendered synchronously with the rest of the panel so
+        // switching to it never shows an empty box. The pack itself lands async.
+        function buildContextShellHtml() {
+            const chips = CTX_ROLE_ORDER.map(r => {
+                const on = state.ctxRoles.size === 0 || state.ctxRoles.has(r);
+                const { color, label, tip } = CTX_ROLE[r];
+                return `<button class="ctx-chip${on ? ' active' : ''}" data-role="${r}" title="${escapeHtml(tip)}">
+                    <span class="chip-dot" style="background:${color};color:${color}"></span>
+                    <span>${escapeHtml(label)}</span>
+                </button>`;
+            }).join('');
+            return `<div class="ctx-controls">
+                    <div class="ctx-budget">
+                        <label class="ctx-budget-label has-tip" for="ctx-budget"
+                            title="The character budget the pack is fitted to — the same --max-chars ug context takes. Roles fill in priority order, so shrinking this sheds docs first, then dependencies; what did not fit is reported, never silently dropped.">Budget</label>
+                        <input type="range" id="ctx-budget" min="500" max="40000" step="500" value="${state.ctxMaxChars}">
+                        <output class="ctx-budget-out" id="ctx-budget-out">${state.ctxMaxChars.toLocaleString()}</output>
+                    </div>
+                    <div class="filter-chips ctx-chips" id="ctx-chips" title="Which roles to ask for — the tool's --include. None selected means every role.">${chips}</div>
+                    <div class="ctx-actions">
+                        <button class="ctx-act" id="ctx-paint" title="Colour this pack's members on the graph by their role, and push everything else back">Paint</button>
+                        <button class="ctx-act" id="ctx-frame" title="Fly the camera to fit the whole pack">Frame</button>
+                        <button class="ctx-act" id="ctx-copy" title="Copy the pack exactly as an agent receives it — rendered by the server, not reformatted here">Copy pack</button>
+                    </div>
+                </div>
+                <div class="ctx-status" id="ctx-status"></div>
+                <div class="ctx-body" id="ctx-body"></div>`;
+        }
+
+        // Called on every tab click and once per panel build. Fetches when the
+        // Context tab is the active one, and tears the paint down when it is not.
+        function syncContextTab(node) {
+            if (state.infoTab === 'context') { renderContextPack(node); return; }
+            // Guarded on there actually being a pack: this runs once per panel
+            // build, and handleClick already ends in a bumpGraphStyles(). An
+            // unconditional restyle here would double the cost of every node
+            // selection — a whole-graph pass, on a graph that can hold 485k
+            // nodes — to undo a paint that was not there.
+            if (!state.ctxPack) return;
+            clearContextPaint();
+            bumpGraphStyles();
+        }
+
+        // Open the tab for whatever is selected. The palette entry, the `c` key
+        // and the node menu's Context button all land here.
+        function openContextTab() {
+            const d = state.selectedNode;
+            if (!d) {
+                // Nothing selected is a real answer, not an error — say it
+                // where the user is looking rather than doing nothing.
+                const s = document.getElementById('ctx-status');
+                if (s) { s.className = 'ctx-status error'; s.textContent = 'Select a node first.'; }
+                return;
+            }
+            state.infoTab = 'context';
+            handleClick(null, d);
+        }
+
+        function clearContextPaint() {
+            state.ctxPack = null;
+        }
+
+        // ── The request ──────────────────────────────────────────────────────
+
+        async function renderContextPack(node) {
+            const body = document.getElementById('ctx-body');
+            const status = document.getElementById('ctx-status');
+            if (!body || !node) return;
+
+            const key = contextKeyFor(node);
+            if (state.ctxKey === key && state.ctxEl === body) {
+                // Same question, same box, answer still in it. Repaint anyway:
+                // leaving the tab cleared the pack, and coming back should put
+                // it on the canvas without a second full-graph scan.
+                paintContextPack();
+                return;
+            }
+            state.ctxKey = key;
+            state.ctxEl = body;
+
+            const token = (state.ctxToken = (state.ctxToken || 0) + 1);
+            status.className = 'ctx-status';
+            status.textContent = 'Assembling…';
+            body.innerHTML = '';
+            // Drop the previous pack before asking for the next one. On a large
+            // graph this call takes seconds, and leaving the old one painted
+            // would light up the *previous* node's neighbourhood beside the new
+            // node's panel — a canvas making a confident claim about the wrong
+            // symbol, which is worse than one making none.
+            if (state.ctxPack) { clearContextPaint(); bumpGraphStyles(); }
+
+            const payload = { nodeId: node.id, maxChars: state.ctxMaxChars };
+            if (state.ctxRoles.size) payload.include = [...state.ctxRoles];
+
+            let data;
+            try {
+                const res = await fetch('/api/tools/context', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                if (!res.ok) throw new Error(await readErr(res));
+                data = await res.json();
+            } catch (err) {
+                // Release the key so re-opening the tab retries rather than
+                // inheriting the failure.
+                state.ctxKey = null;
+                state.ctxEl = null;
+                if (state.ctxToken !== token) return;
+                status.className = 'ctx-status error';
+                status.textContent = `Couldn't build the context pack: ${err.message || err}`;
+                return;
+            }
+
+            // A slower answer for a node we have since moved off must not
+            // overwrite the current one.
+            if (state.ctxToken !== token) return;
+            if (!state.selectedNode || state.selectedNode.id !== node.id) return;
+
+            // The tool answers 200 with an `error` string for an unresolvable
+            // symbol — a bad reference is not a transport failure, and the
+            // message names what to do about it, so show it as written.
+            if (data.error) {
+                state.ctxKey = null;
+                state.ctxEl = null;
+                status.className = 'ctx-status error';
+                status.textContent = data.error;
+                return;
+            }
+
+            state.ctxData = data;
+            status.className = 'ctx-status';
+            status.innerHTML = contextSummaryHtml(data);
+            body.innerHTML = contextBodyHtml(data);
+            wireContextRows(body);
+            paintContextPack();
+        }
+
+        // ── Rendering ────────────────────────────────────────────────────────
+
+        // The budget line, the per-role tally, and what did not fit. This is
+        // the pack's honesty: an agent is told the same three things.
+        function contextSummaryHtml(data) {
+            const counts = new Map();
+            (data.items || []).forEach(i => counts.set(i.role, (counts.get(i.role) || 0) + 1));
+            const tally = CTX_ROLE_ORDER
+                .filter(r => r !== 'target' && counts.get(r))
+                .map(r => `<span class="ctx-tally" style="color:${CTX_ROLE[r].color}">${counts.get(r)} ${escapeHtml(CTX_ROLE[r].label)}</span>`)
+                .join('');
+            const used = data.used_chars || 0;
+            const max = data.max_chars || state.ctxMaxChars;
+            const pct = Math.max(0, Math.min(100, Math.round((used / max) * 100)));
+            // Over budget is possible by design on very tight packs — the
+            // renderer's fixed overhead is charged as an estimate. Say so
+            // rather than clamping the bar and implying it fitted.
+            const over = used > max;
+            const dropped = (data.dropped || [])
+                .map(d => `${d.count} ${escapeHtml(d.role)}`)
+                .join(', ');
+            const notes = (data.notes || []).map(n => `<div class="ctx-note">${escapeHtml(n)}</div>`).join('');
+            return `<div class="ctx-meter" title="${used.toLocaleString()} of ${max.toLocaleString()} characters, the pack's rendering overhead included. A budget, not a guarantee: a very tight pack can run a couple of hundred characters over.">
+                    <div class="ctx-meter-bar"><span style="width:${pct}%"${over ? ' class="over"' : ''}></span></div>
+                    <span class="ctx-meter-txt${over ? ' over' : ''}">${used.toLocaleString()} / ${max.toLocaleString()} chars</span>
+                </div>
+                <div class="ctx-tallies">${tally}</div>
+                ${dropped ? `<div class="ctx-dropped" title="Left out because the budget ran out or the per-role cap was hit. Raise the budget, or narrow the roles, and ask again.">not shown: ${dropped}</div>` : ''}
+                ${notes}`;
+        }
+
+        function contextBodyHtml(data) {
+            const items = data.items || [];
+            let html = '';
+            CTX_ROLE_ORDER.forEach(role => {
+                const group = items.filter(i => i.role === role);
+                if (!group.length) return;
+                const { color, label, tip } = CTX_ROLE[role];
+                const heading = role === 'target' ? 'target' : `${label}s (${group.length})`;
+                html += `<div class="ctx-section" data-role="${role}">
+                    <div class="ctx-head has-tip" title="${escapeHtml(tip)}">
+                        <span class="chip-dot" style="background:${color};color:${color}"></span>
+                        <span class="ctx-head-label">${escapeHtml(heading)}</span>
+                    </div>
+                    ${group.map(contextItemHtml).join('')}
+                </div>`;
+            });
+            return html || '<div class="hier-empty">Nothing in the pack for these roles.</div>';
+        }
+
+        function contextItemHtml(item) {
+            const loc = item.file
+                ? `${item.file}${item.start_line ? ':' + item.start_line : ''}${item.end_line && item.end_line !== item.start_line ? '-' + item.end_line : ''}`
+                : '';
+            // `why` is the specific relationship the tool recorded — "this
+            // —Calls→ target", "tested at 2 hops". It is the sentence the role
+            // chip abbreviates, so it is shown, not just tooltipped.
+            const why = item.why ? `<div class="ctx-why">${escapeHtml(item.why)}</div>` : '';
+            // Call sites are the evidence that makes a caller actionable: a
+            // name says something depends on this, a line says how.
+            const sites = (item.call_sites || []).map(cs =>
+                `<div class="ctx-site"><span class="ctx-site-line">${cs.line}</span><code>${escapeHtml(cs.text)}</code></div>`
+            ).join('');
+            const code = item.code
+                ? `<pre class="ctx-code">${escapeHtml(item.code)}</pre>` : '';
+            const cut = item.truncated_chars
+                ? `<div class="ctx-cut" title="Trimmed to fit the budget. Raise it, or open the Source tab, for the rest.">${item.truncated_chars.toLocaleString()} chars trimmed</div>` : '';
+            const doc = item.doc ? `<div class="ctx-doc">${escapeHtml(item.doc)}</div>` : '';
+            return `<div class="ctx-item" data-id="${escapeHtml(item.id)}" title="${escapeHtml(item.id)} — click to select it">
+                    <div class="ctx-item-head">
+                        ${nodeIconSvg(item.node_type)}
+                        <span class="name">${escapeHtml(truncateName(item.name))}</span>
+                        ${loc ? `<span class="ctx-loc">${escapeHtml(loc)}</span>` : ''}
+                    </div>
+                    ${why}${doc}${sites}${code}${cut}
+                </div>`;
+        }
+
+        // Every row navigates, the same way the Related list and chat citations
+        // do — handleClick to select, focusNode to move the camera.
+        function wireContextRows(scope) {
+            scope.querySelectorAll('.ctx-item').forEach(row => {
+                row.addEventListener('click', () => {
+                    const t = state.nodeById && state.nodeById.get(row.dataset.id);
+                    if (!t) return;
+                    handleClick(null, t);
+                    focusNode(t);
+                });
+            });
+        }
+
+        // ── The canvas ───────────────────────────────────────────────────────
+
+        // Publish the pack as an id→role map for the style accessors in
+        // 10-render-core.js. Built here rather than read out of `items` on
+        // every style call: nodeColorFor runs once per node per restyle, and a
+        // linear scan of the pack inside it would be O(nodes × pack).
+        function paintContextPack() {
+            const data = state.ctxData;
+            if (!data || !data.items) return;
+            const roleById = new Map();
+            if (data.target) roleById.set(data.target.id, 'target');
+            data.items.forEach(i => { if (i.id) roleById.set(i.id, i.role); });
+            state.ctxPack = { targetId: data.target ? data.target.id : null, roleById };
+            bumpGraphStyles();
+        }
+
+        function wireContextPanel() {
+            // Delegated: the panel's innards are rebuilt on every selection, so
+            // per-element listeners would have to be re-bound each time. The
+            // info body outlives them all.
+            const body = document.getElementById('info-body');
+            if (!body) return;
+
+            // Both the slider and the chips change the *question*, so both go
+            // through the same refetch. Debounced, because a slider drag fires
+            // continuously and each answer is a full graph scan.
+            const refetch = debounceTrailing(() => {
+                if (!state.selectedNode || state.infoTab !== 'context') return;
+                renderContextPack(state.selectedNode);
+            }, 260);
+
+            body.addEventListener('input', (e) => {
+                if (e.target.id !== 'ctx-budget') return;
+                state.ctxMaxChars = clampInt(e.target.value, 500, 40000, 12000);
+                const out = document.getElementById('ctx-budget-out');
+                if (out) out.textContent = state.ctxMaxChars.toLocaleString();
+                refetch();
+            });
+
+            body.addEventListener('click', (e) => {
+                const chip = e.target.closest && e.target.closest('.ctx-chip');
+                if (chip) {
+                    const role = chip.dataset.role;
+                    // The chips open as "all on" with an empty filter set, so
+                    // the first click has to mean "only this one" rather than
+                    // "everything except this one" — which is what toggling a
+                    // member of an empty set would otherwise produce.
+                    if (state.ctxRoles.size === 0) state.ctxRoles = new Set([role]);
+                    else if (state.ctxRoles.has(role)) state.ctxRoles.delete(role);
+                    else state.ctxRoles.add(role);
+                    // Back to every role, which is what an empty set means to
+                    // the tool as well.
+                    if (state.ctxRoles.size === CTX_ROLE_ORDER.length) state.ctxRoles.clear();
+                    document.querySelectorAll('.ctx-chip').forEach(c => {
+                        c.classList.toggle('active', state.ctxRoles.size === 0 || state.ctxRoles.has(c.dataset.role));
+                    });
+                    refetch();
+                    return;
+                }
+                const act = e.target.closest && e.target.closest('.ctx-act');
+                if (!act) return;
+                if (act.id === 'ctx-paint') {
+                    state.ctxPaint = !state.ctxPaint;
+                    act.classList.toggle('off', !state.ctxPaint);
+                    bumpGraphStyles();
+                } else if (act.id === 'ctx-frame') {
+                    if (state.ctxPack) frameNodeSet([...state.ctxPack.roleById.keys()]);
+                } else if (act.id === 'ctx-copy') {
+                    copyContextPack(act);
+                }
+            });
+        }
+
+        // The server renders it. `render_context` is the one formatter for this
+        // pack across the CLI, MCP and here — writing a second one in JS would
+        // give the user a lookalike of what their agent sees rather than the
+        // thing itself, and the two would drift on the first format change.
+        async function copyContextPack(btn) {
+            const node = state.selectedNode;
+            if (!node) return;
+            const label = btn.textContent;
+            btn.textContent = 'Rendering…';
+            try {
+                const payload = { nodeId: node.id, maxChars: state.ctxMaxChars, render: 'markdown' };
+                if (state.ctxRoles.size) payload.include = [...state.ctxRoles];
+                const res = await fetch('/api/tools/context', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                if (!res.ok) throw new Error(await readErr(res));
+                const data = await res.json();
+                await navigator.clipboard.writeText(data.text || '');
+                btn.classList.add('copied');
+                btn.textContent = 'Copied';
+            } catch (err) {
+                btn.textContent = 'Copy failed';
+                const s = document.getElementById('ctx-status');
+                if (s) { s.className = 'ctx-status error'; s.textContent = `Couldn't render the pack: ${err.message || err}`; }
+            }
+            setTimeout(() => { btn.classList.remove('copied'); btn.textContent = label; }, 1600);
         }
     </script>
 </body>

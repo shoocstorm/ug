@@ -9,6 +9,7 @@
             { group: 'Global', keys: '⌘K / Ctrl+K', action: 'Command palette' },
             { group: 'Global', keys: '?', action: 'Keyboard shortcuts' },
             { group: 'Global', keys: 't', action: 'Go to the guided tour' },
+            { group: 'Global', keys: 'c', action: 'Context pack for the selected node' },
             { group: 'Global', keys: 'r', action: 'Reset view' },
             { group: 'Global', keys: '[', action: 'Toggle sidebar' },
             { group: 'Global', keys: 'Backspace / Shift+Backspace', action: 'Back / forward' },
@@ -74,6 +75,7 @@
             { name: 'Go to search', run: () => { showPanel('discover'); showSub('search'); const i = document.getElementById('search'); if (i) i.focus(); } },
             { name: 'Go to chat', run: () => { showPanel('discover'); showSub('chat'); const i = document.getElementById('chat-input'); if (i) i.focus(); } },
             { name: 'Go to insights', run: () => { showPanel('discover'); showSub('insights'); } },
+            { name: 'Context pack for the selected node', run: openContextTab },
             { name: 'Toggle solo (focus isolate)', run: toggleFocusSolo },
             { name: 'Toggle boundary box', run: () => { const b = document.getElementById('toggle-box'); if (b) b.click(); } },
             { name: 'Toggle auto-spin', run: () => { const b = document.getElementById('toggle-spin'); if (b) b.click(); } },
@@ -292,6 +294,14 @@
                 e.preventDefault();
                 e.stopImmediatePropagation();
                 gotoTour();
+                return;
+            }
+            // No-op with nothing selected — openContextTab says so in the
+            // panel rather than swallowing the key silently.
+            if ((e.key === 'c' || e.key === 'C') && !immersive) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                openContextTab();
                 return;
             }
         }, true);

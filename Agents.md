@@ -1337,6 +1337,101 @@ had no reason left to doubt the output.
   about whether `search` worked. The cheapest way to find that is to run the
   command and read what it printed, which is also the only way it was found.
 
+### 10r. Booting the vis page in headless Chrome is a runaway CPU load
+
+**The page has two permanent `requestAnimationFrame` loops (§9h). Under
+software WebGL it renders every node of the graph on every one of those
+frames, forever — and a headless Chrome nobody is watching does that until it
+is killed.** This has bitten twice in two days, both times as "the check is
+still running", both times noticed by the user's fan rather than by the agent.
+
+The mechanics, so it is not re-derived:
+
+- Headless Chrome needs `--enable-unsafe-swiftshader` to get WebGL at all, and
+  swiftshader is a *CPU* rasteriser. What costs nothing on a GPU costs a core.
+- The page never idles, so Chrome never idles. It does not exit when the work
+  is done, because from its point of view there is no "done".
+- `--dump-dom --virtual-time-budget` does not save you — virtual time drains
+  one slow frame at a time and never returns once anything renders. A 120-node
+  graph hung for 7+ minutes.
+- A driver that stalls (waiting for `state.adj` on a graph that will never
+  finish laying out) leaves the browser running at full tilt with no result
+  and no error, which reads as a slow test rather than as a runaway.
+
+**The rule: do not boot the graph page to check logic that is not the graph.**
+Almost everything worth asserting in `src/vis/js/` is a pure function of
+`state` and a server response — how a pack renders, what colour an accessor
+returns, whether a filter narrows a list. Lift the function out of the part
+with a string slice and run it under `node`:
+
+```
+tests/js/context_panel.mjs      # lifts the render fns + the style accessors
+tests/js/edge_store.mjs         # the same trick for the local-mode edge store
+```
+
+Reading the function out of the real part rather than transcribing it is what
+makes this worth having: the test cannot pass against a copy that has drifted
+from what ships.
+
+**When you genuinely need the browser** — a screenshot, a pixel assertion
+(§9f), a layout question — then:
+
+- Give it a **small** graph. The cost is per node per frame, so a 4.7k-node
+  repo is already too big to drive under swiftshader.
+- Put the kill *before* the work: `( sleep 120; pkill -f "Google Chrome" ) &`
+  as its own job, so a stalled driver ends the browser instead of outliving
+  the check. Never rely on the driver's own timeout — the case you are
+  guarding against is the driver not running.
+- Drop `--enable-unsafe-swiftshader` unless you need the canvas itself. The
+  sidebar, legend and info panel all render without WebGL; only the 3D scene
+  and screenshots need it, and without it the page costs nothing.
+- Check for stragglers when you are done (`pgrep -f "Google Chrome"`), in the
+  same command that reports the result.
+
+The wider rule, which is the one that generalises: **a background process
+started for a check is not finished when the check is; it is finished when you
+have confirmed it exited.** The same applies to `ug serve` instances left
+listening on scratch ports.
+
+### 10s. `/api/tools/*` clones the whole graph on every call
+
+Measured while adding the Context tab, on `~/.ug/big500k` (485,175 nodes /
+2,237,892 edges), medians of five over loopback:
+
+| call | median |
+| :--- | ---: |
+| `POST /api/tools/context` | 1.53 s |
+| `POST /api/tools/graph_schema` | 1.63 s |
+
+`graph_schema` only tallies node and edge types. It cannot be doing 1.6 s of
+work, and that is the finding: **the latency is not the tool.** `api_tool` in
+`serve/api.rs` opens with
+
+```rust
+let snap = ctx.graph.read().expect("graph state poisoned").clone();
+```
+
+and `GraphSnapshot::parsed` is a `GraphData`, not an `Arc<GraphData>` — so
+every HTTP agent-tool call deep-copies half a million nodes and two million
+edges before doing anything. The clone is not gratuitous: `ctx_indexed_source`
+is awaited between the read and `run_tool`, and a `std::sync::RwLockReadGuard`
+cannot be held across an `await` (§9b). It was the cheap way to drop the lock.
+
+Two things to take from it:
+
+- **A tool that does nothing is the control you need.** Timing `context` alone
+  would have made a 1.5 s number look like the cost of assembling a pack, and
+  the "optimization" would have gone into the wrong file entirely. When a
+  measurement has an obvious suspect, time something on the same path that
+  cannot possibly be guilty.
+- **This is still owed.** The fix is `parsed: Arc<GraphData>`, which makes the
+  clone O(1) and needs no lock held across the await; the alternative — read
+  the source ids under one short guard, await, then re-acquire for `run_tool` —
+  keeps the type but adds a second read. Either is a change to the shared
+  dispatcher, so it wants its own diff and its own before/after. Not done here
+  because the Context tab is not what introduced it: every `/api/tools/*` call
+  has paid this since the endpoint existed.
+
 ## 11. Record what you learn, here, without being asked
 
 When you find something that would cost the next agent an hour — a measurement

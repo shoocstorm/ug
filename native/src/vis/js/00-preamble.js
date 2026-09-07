@@ -183,7 +183,16 @@
             walkLayout: 'flow',
             walkCascadePos: null,      // Map<id, {x,y,z}> the cascade assigned
             walkPosSaved: null,     // Map<id, {x,y,z}> pre-walk positions, put back on exit
-            walkLanes: []           // per-hop column bounds, for the on-canvas guides
+            walkLanes: [],          // per-hop column bounds, for the on-canvas guides
+            // Context pack (info panel -> Context tab). One symbol's whole
+            // neighbourhood as `ug context` assembles it: the body, who breaks,
+            // what re-verifies, what it leans on, the prose. The request is
+            // O(nodes + edges) server-side, so it is made only while the tab is
+            // actually open -- see renderContextPack in 24-context.js.
+            ctxPack: null,          // { targetId, roleById: Map<id, role> } while painted
+            ctxMaxChars: 12000,     // the tool's own default; the budget slider writes here
+            ctxRoles: new Set(),    // `include` filter; empty = every role
+            ctxPaint: true          // paint the pack on the canvas while the tab is open
         };
 
         // Canvas palette. Everything that has to sit *against* the 3D
@@ -210,6 +219,27 @@
             particleOut: '#ff3d00',
             particleIn: '#67e8f9',
         };
+
+        // One colour per context role, shared by the panel's chips and the
+        // canvas paint. Same rule as CANVAS: the swatch beside a caller in the
+        // list and the dot lit on the graph are the same claim, so they read
+        // from one table and cannot drift apart.
+        //
+        // The order is CONTEXT_ROLES' order, which is a priority claim -- body,
+        // then who breaks, then what re-verifies, then what it leans on, then
+        // the prose -- and the ramp follows it: the target burns hottest and
+        // each later role cools, so the picture is readable before any label is.
+        const CTX_ROLE = {
+            target:     { color: '#ff3d00', label: 'target',     tip: 'The symbol itself, with its source.' },
+            caller:     { color: '#f97316', label: 'caller',     tip: 'Calls or imports the target -- what breaks if it changes.' },
+            test:       { color: '#fbbf24', label: 'test',       tip: 'Reaches the target within 2 hops -- what re-verifies it.' },
+            dependency: { color: '#38bdf8', label: 'dependency', tip: 'The target calls or imports this -- what it leans on.' },
+            doc:        { color: '#a78bfa', label: 'doc',        tip: 'Prose the indexer linked to this symbol.' },
+        };
+        // Rendering and budgeting order, mirroring CONTEXT_ROLES in
+        // native/src/agent_tools/context.rs. Not derived from Object.keys:
+        // the order is load-bearing and should be stated, not inherited.
+        const CTX_ROLE_ORDER = ['target', 'caller', 'test', 'dependency', 'doc'];
 
         // Canvas size, shared by the renderer backends and the resize handler.
         let width, height;

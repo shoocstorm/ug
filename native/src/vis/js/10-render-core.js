@@ -10,11 +10,29 @@
         // only affordable if "what should this node look like?" has one answer.
         // A backend decides how to *draw* that answer, never what it is.
 
+        // The context pack's role for a node, or null when no pack is painted.
+        // One guarded lookup rather than `state.ctxPack.roleById.get(...)` at
+        // each call site: the pack is null far more often than not, and every
+        // style accessor below asks the same question.
+        function ctxRoleOf(id) {
+            const p = state.ctxPack;
+            return (p && state.ctxPaint) ? (p.roleById.get(id) || null) : null;
+        }
+
         // Selected node / hovered neighbours flare to a hot saturated orange —
         // the brightest ink on the page; everything else keeps its type colour.
         function nodeColorFor(n) {
             if (state.selectedNode && n.id === state.selectedNode.id) return '#ff3d00';
             if (state.highlightNodes.has(n.id)) return '#f96716';
+            // Context pack: each member takes its role's colour, so the canvas
+            // says *why* a node is in the answer — the same claim the panel's
+            // role chips make, read from the same table (CTX_ROLE). Sits above
+            // focus (whose set is the raw 1-hop neighbourhood) and below walk
+            // and tour, which own the canvas outright while they run.
+            if (!state.walkActive && !tourState.active) {
+                const role = ctxRoleOf(n.id);
+                if (role) return CTX_ROLE[role].color;
+            }
             // Graph Walk: reached nodes take their hop's colour on a
             // hot→cool gradient; unreached nodes keep their type colour and
             // are dimmed to near-invisible by bumpGraphStyles.
@@ -29,6 +47,17 @@
         function linkColorFor(e) {
             if (state.highlightLinks.has(e)) {
                 return state.highlightLinkDir.get(e) === 'in' ? CANVAS.linkIn : CANVAS.linkOut;
+            }
+            // Context pack: an edge with both ends in the pack is part of the
+            // answer and keeps its relationship colour; everything else recedes.
+            // Without this the pack's nodes glow inside an undimmed hairball and
+            // the shape of the neighbourhood — the thing worth looking at — is
+            // exactly as hard to read as it was before.
+            if (state.ctxPack && state.ctxPaint && !state.walkActive && !tourState.active) {
+                const sId = e.source.id || e.source;
+                const tId = e.target.id || e.target;
+                if (ctxRoleOf(sId) && ctxRoleOf(tId)) return config.getRelColor(e.rel);
+                return CANVAS.linkFar;
             }
             // Graph Walk: walked edges glow in the frontier colour, everything
             // else recedes into the background so the expanding frontier is
@@ -173,6 +202,14 @@
                     : w === 'pending' ? 0.14
                     : 0.05;
                 return { dim: w === 'far' || w === 'pending', opacity, tier: null };
+            }
+            // Context pack: members burn, everything else recedes. Deliberately
+            // dimmer than focus mode's 0.06 — focus is a whole 1-hop
+            // neighbourhood and wants context around it, whereas the pack is a
+            // curated answer and the point is that you can count its members.
+            if (!tier && state.ctxPack && state.ctxPaint) {
+                const inPack = !!ctxRoleOf(n.id);
+                return { dim: !inPack, opacity: inPack ? 1.0 : 0.04, tier: null };
             }
             const dim = tier ? tier === 'far' : (focusOn && !state.focusSet.has(n.id));
             const opacity = tier ? TOUR_TIER_OPACITY[tier] : (dim ? 0.06 : 0.95);

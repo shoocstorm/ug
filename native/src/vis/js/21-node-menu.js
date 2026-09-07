@@ -242,6 +242,7 @@
                 <div class="nm-rows">${rows.join('')}</div>
                 <div class="nm-acts">
                     ${state.walkActive ? '' : '<button class="nm-act" data-act="details" title="Open the full node panel">Details</button>'}
+                    ${state.walkActive ? '' : '<button class="nm-act" data-act="context" title="Everything an agent needs to change this safely: callers, tests, dependencies, docs">Context</button>'}
                     <button class="nm-act" data-act="zoom" title="Fly the camera to this node">Zoom to</button>
                     <button class="nm-act" data-act="copy" title="Copy the node id — command fuel for ug get_code">Copy id</button>
                 </div>`;
@@ -253,6 +254,14 @@
             const detailsBtn = menu.querySelector('[data-act="details"]');
             if (detailsBtn) detailsBtn.addEventListener('click', () => {
                 hideNodeMenu();
+                handleClick(null, node);
+            });
+            // Same walk guard as Details: this opens the info panel, which
+            // selects the node and tears a running walk down.
+            const ctxBtn = menu.querySelector('[data-act="context"]');
+            if (ctxBtn) ctxBtn.addEventListener('click', () => {
+                hideNodeMenu();
+                state.infoTab = 'context';
                 handleClick(null, node);
             });
             menu.querySelector('[data-act="zoom"]').addEventListener('click', () => {

@@ -428,7 +428,7 @@
             if (d.extends) html += chipRow('extends', d.extends);
             if (d.implements) html += chipRow('implements', d.implements);
 
-            const activeTab = ['related', 'hierarchy', 'chunk'].includes(state.infoTab) ? state.infoTab : 'preview';
+            const activeTab = ['related', 'hierarchy', 'chunk', 'context'].includes(state.infoTab) ? state.infoTab : 'preview';
             const tabButton = (key, suffix = '') => {
                 const [label, tip] = TAB_DOCS[key];
                 return `<button class="info-tab${activeTab === key ? ' active' : ''}" data-view="${key}"`
@@ -440,6 +440,7 @@
                     ${tabButton('chunk')}
                     ${tabButton('hierarchy')}
                     ${tabButton('related', related.length ? '<span class="tab-count">' + related.length + '</span>' : '')}
+                    ${tabButton('context')}
                 </div>
                 <div class="info-view${activeTab === 'preview' ? ' active' : ''}" data-view="preview">
                     ${sourceNote('preview', d)}
@@ -498,6 +499,10 @@
                 html += `<div class="hier-empty">No edges touch this node — it is isolated in the graph.</div>`;
             }
             html += `</div>
+                <div class="info-view${activeTab === 'context' ? ' active' : ''}" data-view="context">
+                    ${sourceNote('context', d)}
+                    ${buildContextShellHtml()}
+                </div>
             </div>`;
 
             body.innerHTML = html;
@@ -608,8 +613,18 @@
                     tab.classList.add('active');
                     body.querySelector('.info-view[data-view="' + tab.dataset.view + '"]').classList.add('active');
                     state.infoTab = tab.dataset.view;
+                    // The context pack costs a server-side pass over every node
+                    // and edge, so it is fetched when the tab is opened and not
+                    // before. Leaving the tab drops the canvas paint with it —
+                    // a highlight nobody can see the legend for is just a
+                    // recoloured graph.
+                    syncContextTab(d);
                 });
             });
+            // The tab can already be the active one when a node is selected
+            // (it persists in state.infoTab), in which case no click arrives
+            // and this is the only thing that fills it.
+            syncContextTab(d);
 
             if (d.file) {
                 jumpBtn.style.display = 'flex';
@@ -1493,6 +1508,10 @@
 
         function clearSelection() {
             state.selectedNode = null;
+            // Before bumpGraphStyles, so the one restyle below puts the pack's
+            // colours back rather than leaving a lit subgraph with no selection
+            // and no panel to explain it.
+            clearContextPaint();
             exitFocus();
             bumpGraphStyles();
             document.getElementById('info').classList.remove('visible');

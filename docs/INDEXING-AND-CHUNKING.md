@@ -546,7 +546,7 @@ node.
 
 ### 6.4 Panel vocabulary
 
-The node panel shows four data sources side by side, and the cost of confusing
+The node panel shows five data sources side by side, and the cost of confusing
 them is misreading a search result. So the naming distinguishes them, and every
 label, tab and section carries a tooltip saying where its value came from, what
 reads it, and how it relates to the other fields:
@@ -558,12 +558,29 @@ reads it, and how it relates to the other fields:
 | **Indexed** tab | vector store, via `/api/db/node` | what search **matches against** |
 | **Hierarchy** tab | `Contains` edges | containment only |
 | **Related** tab | all edges | the neighbourhood ranking expands into |
+| **Context** tab | `POST /api/tools/context` | what an **agent** would receive |
 
 `FIELD_DOCS`, `TAB_DOCS`, `EDGE_DOCS` and `STAGE_DOCS` in `visualization.html`
 hold those explanations, keyed rather than inlined so a label and its
 explanation cannot drift apart. Labels that carry one are marked with a dotted
 underline — without the cue nobody hovers, and the explanations might as well
 not exist.
+
+**Context** is the one row in that table that is not a view of stored fields.
+The other four read something back; this one is an *answer*, assembled
+server-side by the same `context` tool the CLI and MCP run — the target's body,
+the callers that break if it changes, the tests that re-verify it, its
+dependencies and any linked prose, each labelled with the role that put it
+there and the whole thing fitted to a character budget. Where **Related** lists
+every edge touching a node, **Context** says which of them you have to read
+before you can safely change it, and what did not fit is reported
+(`not shown: 4 dependency`) rather than silently dropped.
+
+Two things follow from it being a server-side answer rather than a stored view.
+It is fetched only while the tab is open — the tool builds a map of every node
+and walks every edge, which is 485k nodes and 2.2M edges on the largest test
+graph. And its members are painted on the canvas by role while the tab is open,
+which is the part no other surface for this tool can do.
 
 Two renames worth knowing if you have older screenshots: the **Preview** tab is
 now **Source**, and the **Chunk** tab is now **Indexed**. "Chunk" was a term of

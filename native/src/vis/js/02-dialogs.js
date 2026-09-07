@@ -1508,6 +1508,11 @@
             related: ['Related', 'Every edge touching this node in either direction — calls, '
                 + 'imports, extends, implements, references. This is the neighbourhood that '
                 + 'graph-aware search expands into when ranking results.'],
+            context: ['Context', 'What ug context hands an agent: this symbol\'s body, the '
+                + 'callers that break if it changes, the tests that re-verify it, what it leans '
+                + 'on and any linked prose — each labelled with the role that put it there, and '
+                + 'the whole thing fitted to a character budget. Related lists every edge; this '
+                + 'answers "what do I need to read before I change this?".'],
         };
 
         // Every panel section says where its data came from. The panel mixes
@@ -1557,6 +1562,14 @@
                     detail: 'Every edge touching this node in either direction — calls, imports, '
                         + 'extends, implements, references. This is the neighbourhood graph-aware '
                         + 'search expands into when ranking.',
+                },
+                context: {
+                    label: 'server · POST /api/tools/context',
+                    detail: 'Assembled server-side by the same tool ug context and the context MCP '
+                        + 'tool call, over graph.json and the indexed source — no vectors involved. '
+                        + 'Unlike the other tabs this is not a view of stored fields: roles are '
+                        + 'classified and the result is fitted to a character budget, so what is '
+                        + 'here is what an agent would actually receive.',
                 },
             };
             const n = notes[view];

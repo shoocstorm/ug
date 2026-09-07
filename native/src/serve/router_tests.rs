@@ -753,6 +753,163 @@ async fn analyze_route_is_dispatched_and_requires_the_db() {
     assert_eq!(status, StatusCode::NOT_FOUND, "unknown project: {body}");
 }
 
+/// `context` is the tool the visualization's Context tab runs on, and the tab
+/// reads `role`, `why`, `used_chars`, `max_chars` and `dropped` off the wire by
+/// those exact names. The Rust-side unit tests in `agent_tools::tests` cover the
+/// assembly; nothing covered the serialized envelope, so a `rename_all` or a
+/// renamed field could have blanked the panel with every Rust test green.
+#[tokio::test]
+async fn context_route_returns_a_role_labelled_pack() {
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+    let app = router_for(&tmp, "demo", &sample_graph()).await;
+
+    let (status, body) = post(
+        &app,
+        "/api/tools/context",
+        serde_json::json!({"nodeId": "function:src/a.rs:3:beta", "maxChars": 12000}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert!(v.get("error").is_none(), "unexpected error: {body}");
+    assert_eq!(v["target"]["name"], "beta");
+    // snake_case on the wire, which is what the panel's budget meter reads.
+    assert!(v["max_chars"].is_number(), "max_chars missing: {body}");
+    assert!(v["used_chars"].is_number(), "used_chars missing: {body}");
+
+    let items = v["items"].as_array().expect("items is an array");
+    // `alpha` calls `beta`, so the pack must say so — with the role that put
+    // it there and the relationship in `why`, both of which the tab renders.
+    let caller = items
+        .iter()
+        .find(|i| i["role"] == "caller")
+        .unwrap_or_else(|| panic!("no caller in the pack: {body}"));
+    assert_eq!(caller["name"], "alpha");
+    assert!(
+        !caller["why"].as_str().unwrap_or("").is_empty(),
+        "every item carries why: {body}"
+    );
+    // SymbolRef is flattened into the item, so id/file sit beside role — the
+    // tab uses `id` to select the node and to paint it on the canvas.
+    assert_eq!(caller["id"], "function:src/a.rs:1:alpha");
+    assert_eq!(caller["file"], "src/a.rs");
+}
+
+/// A budget too small to hold everything must *report* what it shed rather than
+/// return a quietly shorter pack — "not shown: N dependency" is the line the tab
+/// renders, and a pack that drops silently is indistinguishable from a symbol
+/// with no callers.
+#[tokio::test]
+async fn context_route_reports_what_the_budget_shed() {
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+
+    // `sample_graph` has one caller, which fits in any budget — a pack has to
+    // be crowded before shedding is observable at all.
+    let mut graph = sample_graph();
+    for i in 0..20 {
+        let id = format!("function:src/b.rs:{i}:caller_{i}");
+        graph.nodes.push(GraphNode {
+            id: id.clone(),
+            name: format!("caller_{i}"),
+            node_type: GraphNodeType::Function,
+            file: Some("src/b.rs".to_string()),
+            start_line: Some(1),
+            end_line: Some(4),
+            ..Default::default()
+        });
+        graph.edges.push(GraphEdge {
+            source: id.as_str().into(),
+            target: "function:src/a.rs:3:beta".into(),
+            edge_type: GraphEdgeType::Calls,
+        });
+    }
+    let app = router_for(&tmp, "demo", &graph).await;
+
+    let (status, body) = post(
+        &app,
+        "/api/tools/context",
+        serde_json::json!({"nodeId": "function:src/a.rs:3:beta", "maxChars": 500}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let dropped = v["dropped"].as_array().expect("dropped is an array");
+    assert!(!dropped.is_empty(), "a 500-char budget sheds something: {body}");
+    assert!(
+        dropped[0]["role"].is_string() && dropped[0]["count"].is_number(),
+        "dropped entries are {{role, count}}: {body}"
+    );
+}
+
+/// An unresolvable symbol is a bad *reference*, not a broken request: the tool
+/// answers 200 with an `error` naming what to do next, and the tab shows that
+/// sentence. Returning 4xx here would send the panel down its transport-failure
+/// path and lose the message.
+#[tokio::test]
+async fn context_route_reports_an_unknown_symbol_in_the_envelope() {
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+    let app = router_for(&tmp, "demo", &sample_graph()).await;
+
+    let (status, body) = post(
+        &app,
+        "/api/tools/context",
+        serde_json::json!({"nodeId": "no_such_symbol"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "a bad ref is not a bad request: {body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let err = v["error"].as_str().expect("error is a string");
+    assert!(
+        err.contains("no_such_symbol"),
+        "the message names the reference: {err}"
+    );
+    assert!(v["items"].as_array().expect("items").is_empty());
+}
+
+/// `"render": "markdown"` returns the tool's own renderer output instead of the
+/// JSON envelope. The Context tab's Copy button uses it so what a user pastes
+/// into their agent is the same text `render_context` gives an MCP client —
+/// there is exactly one formatter for this pack, and this is what keeps it that
+/// way.
+#[tokio::test]
+async fn tools_route_can_return_the_rendered_form() {
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+    let app = router_for(&tmp, "demo", &sample_graph()).await;
+
+    let (status, body) = post(
+        &app,
+        "/api/tools/context",
+        serde_json::json!({"nodeId": "function:src/a.rs:3:beta", "render": "markdown"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let text = v["text"].as_str().expect("rendered form is under `text`");
+    assert!(text.contains("beta"), "renders the target: {text}");
+    assert!(
+        text.contains("callers"),
+        "renders the role sections the CLI shows: {text}"
+    );
+    assert!(
+        v.get("items").is_none(),
+        "the rendered form replaces the envelope, it does not accompany it: {body}"
+    );
+
+    // An unknown render style is a request the server cannot honour, and
+    // silently answering with JSON would look like it had been accepted.
+    let (status, _) = post(
+        &app,
+        "/api/tools/context",
+        serde_json::json!({"nodeId": "beta", "render": "html"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
 /// `/api/browse-dir` moved onto `spawn_blocking`; it must still list only
 /// directories, hide dotfiles, and report the resolved absolute path.
 #[tokio::test]

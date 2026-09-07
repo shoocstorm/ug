@@ -512,6 +512,7 @@
             wireCatalog();
             wireNodeMenu();
             wireWalkNodes();
+            wireContextPanel();
             wireIngestButtons();
             probeCapabilities();
             startHealthPolling();
@@ -523,6 +524,9 @@
                 document.getElementById('info').classList.remove('visible');
                 exitPathMode();
                 state.selectedNode = null;
+                // Closing the panel closes the legend for the context paint, so
+                // the paint goes with it.
+                clearContextPaint();
                 exitFocus();
                 bumpGraphStyles();
             });

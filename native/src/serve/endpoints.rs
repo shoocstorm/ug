@@ -58,6 +58,7 @@ pub(crate) const API_ENDPOINTS: &[(&str, &[ApiEntry])] = &[
         "Agent tools (graph.json-backed — same names/params as the CLI and MCP)",
         &[
             ApiEntry { method: "GET", path: "/api/tools", desc: "list the agent tools and their paths (HTTP equivalent of MCP tools/list)", availability: "always", cli_equivalent: Some("ug help") },
+            ApiEntry { method: "POST", path: "/api/tools/:tool", desc: "every tool below takes an optional \"render\": \"markdown\", which returns {\"text\": …} from the tool's own renderer instead of the JSON envelope — the same prose an MCP client sees", availability: "always", cli_equivalent: None },
             ApiEntry { method: "GET", path: "/api/presets", desc: "analyze preset catalog plus the queryable property vocabulary", availability: "always", cli_equivalent: Some("ug analyze --list") },
             ApiEntry { method: "POST", path: "/api/tools/project_overview", desc: "stats, biggest files, most depended-upon symbols", availability: "always (empty if no project active)", cli_equivalent: Some("ug project_overview --json") },
             ApiEntry { method: "POST", path: "/api/tools/context", desc: "one symbol's whole neighbourhood: code, callers, tests, deps, docs — budgeted", availability: "always (empty if no project active)", cli_equivalent: Some("ug context --json") },
