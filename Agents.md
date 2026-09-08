@@ -1393,44 +1393,65 @@ started for a check is not finished when the check is; it is finished when you
 have confirmed it exited.** The same applies to `ug serve` instances left
 listening on scratch ports.
 
-### 10s. `/api/tools/*` clones the whole graph on every call
+### 10s. The snapshot cache evicted the project it had just loaded
 
-Measured while adding the Context tab, on `~/.ug/big500k` (485,175 nodes /
-2,237,892 edges), medians of five over loopback:
+Two lessons here, and the first one is a wrong answer that survived a
+plausible-looking measurement — so it is written down the way it happened
+rather than tidied into the conclusion.
+
+**The measurement.** Adding the Context tab, on `~/.ug/big500k` (485,175 nodes
+/ 2,237,892 edges), medians of five over loopback, against a server whose
+*active* project was something else and with `{"project": "big500k"}` on each
+request:
 
 | call | median |
 | :--- | ---: |
 | `POST /api/tools/context` | 1.53 s |
 | `POST /api/tools/graph_schema` | 1.63 s |
 
-`graph_schema` only tallies node and edge types. It cannot be doing 1.6 s of
-work, and that is the finding: **the latency is not the tool.** `api_tool` in
-`serve/api.rs` opens with
+**The wrong conclusion.** `graph_schema` "just tallies node and edge types", so
+it cannot be 1.6 s of real work, so the cost must be shared overhead — and
+`api_tool` opens with `ctx.graph.read()...clone()`, which looked like a deep
+copy of the graph. Written up, committed, and wrong twice over:
 
-```rust
-let snap = ctx.graph.read().expect("graph state poisoned").clone();
-```
+- `ctx.graph` is `RwLock<Arc<GraphSnapshot>>`. The `.clone()` resolves through
+  `Deref` to `Arc::clone` — a refcount bump. It *cannot* be a deep copy:
+  `GraphSnapshot` holds a `Mutex<Option<SearchMemo>>` and so has no `Clone`
+  impl at all. One `grep` for `impl Clone for GraphSnapshot` would have killed
+  the hypothesis before it reached the commit message.
+- `graph_schema` was never a control. It builds `by_id_map` over 485k nodes and
+  then does two hash lookups per edge across 2.2M of them — ~4.5M string hashes.
+  Its 0.39 s is its own work, and so is `context`'s 0.37 s.
 
-and `GraphSnapshot::parsed` is a `GraphData`, not an `Arc<GraphData>` — so
-every HTTP agent-tool call deep-copies half a million nodes and two million
-edges before doing anything. The clone is not gratuitous: `ctx_indexed_source`
-is awaited between the read and `run_tool`, and a `std::sync::RwLockReadGuard`
-cannot be held across an `await` (§9b). It was the cheap way to drop the lock.
+**The real bug**, found by changing one variable instead of reasoning about the
+code: raising `UG_SERVE_CACHE_BYTES` past the snapshot's size took the same
+call from 1.50 s *on every request* to 1.43 s once and 0.365 s thereafter. So
+nothing was being cached. `ProjectRegistry::insert_loaded` touches the LRU and
+then calls `evict_over_budget`, which protected only the **active** project —
+and a project loaded for one request via `{"project": …}` is never made active.
+Bigger than the 512 MB default on its own, it was inserted, immediately evicted
+for being over budget, and re-parsed from disk on the next request, forever.
 
-Two things to take from it:
+`evict_over_budget` now also protects the most-recently-used entry. 1.50 s →
+0.373 s steady state, matching the large-budget control exactly.
 
-- **A tool that does nothing is the control you need.** Timing `context` alone
-  would have made a 1.5 s number look like the cost of assembling a pack, and
-  the "optimization" would have gone into the wrong file entirely. When a
-  measurement has an obvious suspect, time something on the same path that
-  cannot possibly be guilty.
-- **This is still owed.** The fix is `parsed: Arc<GraphData>`, which makes the
-  clone O(1) and needs no lock held across the await; the alternative — read
-  the source ids under one short guard, await, then re-acquire for `run_tool` —
-  keeps the type but adds a second read. Either is a change to the shared
-  dispatcher, so it wants its own diff and its own before/after. Not done here
-  because the Context tab is not what introduced it: every `/api/tools/*` call
-  has paid this since the endpoint existed.
+- **"It cannot be doing that much work" is a hypothesis, not a control.** Read
+  what the function actually does before promoting it to a baseline. The real
+  control was already available and free: `/healthz` on the same server
+  answered in 0.3 ms, which proved the cost was inside `api_tool` and said
+  nothing about which part.
+- **Change one variable.** The budget was an env var. Flipping it separated
+  "the tool is slow" from "nothing is cached" in one command, with no reading
+  of code and no chance of a plausible story surviving.
+- **§9c again: one rule, two implementations, one of them knowing it.**
+  `GraphCache::evict_over_budget` in `src/mcp/mod.rs` has always documented
+  "never evicts the last entry ... making every call re-parse it". The serve
+  registry is the same cache, written separately, without that line. When you
+  find a cache, a resolver or a budget in one transport, look for its twin in
+  the other before assuming the behaviour is shared.
+- **A cache that cannot hold one entry should hold that entry anyway.**
+  Evicting it frees nothing — the loader allocates it again on the next
+  request — and costs a full re-parse each time.
 
 ## 11. Record what you learn, here, without being asked
 

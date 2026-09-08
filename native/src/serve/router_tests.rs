@@ -1095,6 +1095,91 @@ async fn cache_evicts_lru_but_never_the_active_project() {
     );
 }
 
+/// A project whose snapshot is bigger than the entire cache budget must still
+/// be cached, because the alternative is worse than using the memory: it is
+/// inserted, immediately evicted for being over budget, and re-read from disk
+/// on the very next request — for as long as anything keeps asking for it.
+///
+/// This is the shape the bug had in the field. With the 512 MB default and a
+/// 485k-node / 2.2M-edge project requested by name, every
+/// `POST /api/tools/*` carrying `{"project": …}` cost 1.50 s; 1.13 s of that
+/// was re-parsing a graph the cache had been handed moments before. The same
+/// call against a budget larger than the snapshot cost 0.365 s.
+///
+/// `cache_evicts_lru_but_never_the_active_project` did not catch it: there the
+/// oversized project *is* the active one, and the active project was already
+/// protected. The gap was the project loaded for one request without being
+/// activated — which is exactly what per-request `{"project": …}` scoping does.
+#[tokio::test]
+async fn cache_keeps_a_project_larger_than_the_whole_budget() {
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+    let graph = sample_graph();
+    let (ug_home, repo_root) = write_project(&tmp, "active", &graph);
+    std::env::set_var("UG_HOME", &ug_home);
+
+    // 1 byte: every snapshot is over budget on its own, which is the condition
+    // being tested, not an exaggeration of it — a 1 GB graph against the
+    // 512 MB default is the same relationship.
+    let registry = Arc::new(ProjectRegistry {
+        mode: ServeMode::Multi,
+        no_db: true,
+        active: RwLock::new(String::new()),
+        loaded: RwLock::new(HashMap::new()),
+        lru: RwLock::new(Vec::new()),
+        cache_budget: 1,
+    });
+
+    let build = |name: &str| {
+        let dir = ug_home.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("graph.json"), serde_json::to_string(&graph).unwrap()).unwrap();
+        (name.to_string(), dir.join("graph.json"), dir.join("ugdb"), repo_root.clone())
+    };
+    let load = |name: &str| {
+        let (n, graph_path, db_path, root) = build(name);
+        async move {
+            build_project_context(&n, graph_path, db_path, Some(root), true)
+                .await
+                .expect("context builds")
+        }
+    };
+
+    registry.insert_and_activate(load("active").await);
+    // The scoped read: loaded for this request, never made active.
+    registry.insert_loaded(load("scoped").await);
+
+    let loaded = registry.loaded.read().unwrap();
+    assert!(
+        loaded.contains_key("scoped"),
+        "a project too big for the budget must survive its own insertion — \
+         evicting it frees nothing and costs a re-parse on the next request; have: {:?}",
+        loaded.keys().collect::<Vec<_>>()
+    );
+    assert!(
+        loaded.contains_key("active"),
+        "the active project must still survive too, have: {:?}",
+        loaded.keys().collect::<Vec<_>>()
+    );
+    drop(loaded);
+
+    // And the protection is of *the newest*, not of scoped reads in general:
+    // a third project displaces the second rather than accumulating.
+    registry.insert_loaded(load("newer").await);
+    let loaded = registry.loaded.read().unwrap();
+    assert!(
+        loaded.contains_key("newer") && loaded.contains_key("active"),
+        "the newest and the active project are the two that stay, have: {:?}",
+        loaded.keys().collect::<Vec<_>>()
+    );
+    assert!(
+        !loaded.contains_key("scoped"),
+        "the previous scoped project is no longer newest and must be evicted \
+         under a budget this tight, have: {:?}",
+        loaded.keys().collect::<Vec<_>>()
+    );
+}
+
 /// POST `uri` with a JSON body, returning the status and the body as a string.
 async fn post(app: &axum::Router, uri: &str, body: serde_json::Value) -> (StatusCode, String) {
     let res = app

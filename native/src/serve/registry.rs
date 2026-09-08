@@ -259,11 +259,36 @@ impl ProjectRegistry {
 
     /// Drop least-recently-used snapshots until the cache fits its budget.
     ///
-    /// The active project is never evicted — [`active_ctx`] asserts it is
-    /// loaded, and dropping it would panic every subsequent request. Evicting
-    /// is safe for in-flight work regardless: handlers hold their own `Arc`
-    /// clone, so removing the registry's reference frees the memory only once
-    /// the last reader is done with it.
+    /// Two entries are never evicted, for the same underlying reason — a
+    /// request needs them *now*:
+    ///
+    /// - **The active project.** [`active_ctx`] asserts it is loaded, and
+    ///   dropping it would panic every subsequent request.
+    /// - **The most-recently-used project**, which is the one the caller just
+    ///   inserted: `insert_loaded` touches before it evicts, so the new entry
+    ///   is at the back of the LRU order.
+    ///
+    /// The second rule is what stops a cache from evicting what it has just
+    /// admitted. `GraphCache::evict_over_budget` in `src/mcp/mod.rs` has
+    /// stated it since it was written ("never evicts the last entry ... making
+    /// every call re-parse it") — this second copy of the same cache did not,
+    /// which is Agents.md §9c
+    /// in miniature: one rule, two implementations, and only one of them knew
+    /// it. Without it, a project whose snapshot is bigger than the whole
+    /// budget was inserted, immediately dropped for being over budget, and
+    /// re-read from disk on the *next* request — and the one after that, for
+    /// as long as anything asked for it. Measured on a 485k-node / 2.2M-edge
+    /// graph against the 512 MB default: every `POST /api/tools/*` carrying
+    /// `{"project": …}` cost 1.50 s, of which 1.13 s was re-parsing a graph
+    /// the cache had held moments earlier. Raising the budget past the
+    /// snapshot's size took the same call to 0.365 s. A cache that cannot hold
+    /// one entry should hold that entry anyway: evicting it buys no memory
+    /// back (the loader allocates it again immediately) and costs a full
+    /// re-parse per request.
+    ///
+    /// Evicting is safe for in-flight work regardless: handlers hold their own
+    /// `Arc` clone, so removing the registry's reference frees the memory only
+    /// once the last reader is done with it.
     pub(crate) fn evict_over_budget(&self) {
         // `active` before `loaded`, matching `active_ctx`'s order, so the two
         // paths can't deadlock against each other.
@@ -276,11 +301,15 @@ impl ProjectRegistry {
             return;
         }
 
+        // Captured before the loop: entries are only ever removed from in
+        // front of it, so the newest stays newest however much is dropped.
+        let newest = lru.last().cloned().unwrap_or_default();
+
         let mut idx = 0;
         while total > self.cache_budget && idx < lru.len() {
             let name = lru[idx].clone();
-            if name == active {
-                idx += 1; // never evict the active project
+            if name == active || name == newest {
+                idx += 1; // in use right now — see the note above
                 continue;
             }
             match loaded.remove(&name) {
@@ -297,6 +326,18 @@ impl ProjectRegistry {
                 }
             }
             lru.remove(idx);
+        }
+
+        // Nothing evictable is left and it still does not fit. The cache is
+        // doing its best; say so once per insert at debug level rather than
+        // pretending the budget was honoured.
+        if total > self.cache_budget {
+            tracing::debug!(
+                held_bytes = total,
+                budget_bytes = self.cache_budget,
+                "snapshot cache is over budget: the active and most-recent projects alone \
+                 exceed it. Raise UG_SERVE_CACHE_BYTES to cache more than these two."
+            );
         }
     }
 }

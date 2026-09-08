@@ -3016,6 +3016,11 @@ One row per landed item or baseline. Keep the numbers, not just the verdict.
 | 2026-09-06 | P12.26 | …mean canvas luminance / near-black pixels | 22.3 / 69.3% | **43.0 / 48.2%** | the "too dark" report: fog stuck at 0.001 because `applyDepthCues` saw an empty view |
 | 2026-09-06 | P12.26 | ablation — arrowheads alone, everything else on | 10.2 fps | **19.1 fps** | +87% from one accessor; a cone mesh per link, repositioned every frame |
 | 2026-09-06 | P12.26 | 3D cost vs element count, 4 graphs | — | **1.3–1.8 µs per draw call**, calls ≈ nodes + links ± 1% | which is why the budget counts the sum, not `max` |
+| 2026-09-07 | P12.27 | `big500k` (485k/2.2M) scoped by `{"project": …}`, `POST /api/tools/context` | 1.50 s **every call** | **0.373 s** after the first | 4.0×; the cache evicted the project it had just inserted — see Agents.md §10s |
+| 2026-09-07 | P12.27 | …the same call, `UG_SERVE_CACHE_BYTES` raised past the snapshot | 1.50 s every call | 1.43 s once, then 0.365 s | the one-variable control that located it; the fix reproduces this at the default budget |
+| 2026-09-07 | P12.27 | …`POST /api/tools/graph_schema`, active project, nothing to resolve | 0.39 s | unchanged | *not* overhead: `by_id_map` over 485k nodes + 2 lookups × 2.2M edges is its own work |
+| 2026-09-07 | — | *retracted* | "`/api/tools/*` deep-copies the graph on every call" | `Arc::clone` | `ctx.graph` is `RwLock<Arc<GraphSnapshot>>`, and `GraphSnapshot` holds a `Mutex` so it has no `Clone` impl at all |
+| 2026-09-07 | context tab | `~/.ug/ug` (4.7k nodes), `POST /api/tools/context` | — | **2.1 ms** | the budget for the vis panel's per-open cost on an ordinary repo |
 
 ---
 
