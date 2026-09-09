@@ -178,6 +178,85 @@ fn the_settings_threshold_guidance_survives_assembly() {
     }
 }
 
+/// A tab pane is hidden by `.tab-pane { display: none }`, which is one class
+/// of specificity. Any `#pane-*` rule that also sets `display` outranks it,
+/// and the pane then never hides — it sits under whichever tab you switch to,
+/// which reads as two panes rendering at once rather than as a CSS bug.
+///
+/// This shipped once: `#pane-ask { display: flex }` was written to give the
+/// column its flex layout, which `.tab-pane` already provides. Same family as
+/// the `[hidden]` trap in `docs/VISUALIZATION.md` §3.2 — a rule whose whole
+/// job is to hide something is the weakest rule in the file, so anything that
+/// touches `display` on the same element has to be scoped to the state that
+/// shows it.
+#[test]
+fn no_pane_id_rule_overrides_the_tab_switcher() {
+    for path in parts("css", "css") {
+        let body = fs::read_to_string(&path).unwrap();
+        // Comments carry example selectors; they are not rules.
+        let code = strip_css_comments(&body);
+        for (selector, block) in css_rules(&code) {
+            let sets_display = block
+                .split(';')
+                .any(|d| d.trim_start().starts_with("display") && d.contains(':'));
+            if !sets_display {
+                continue;
+            }
+            for sel in selector.split(',') {
+                let sel = sel.trim();
+                let targets_pane = sel.starts_with("#pane-") || sel.starts_with("#ask-");
+                let scoped = sel.contains(".active") || sel.contains('[');
+                assert!(
+                    !(targets_pane && !scoped),
+                    "{}: `{sel}` sets `display` on an id, which outranks \
+                     `.tab-pane {{ display: none }}` and stops the pane hiding. \
+                     Scope it to `.active`, or drop it — `.tab-pane` already \
+                     supplies the flex column.",
+                    path.display()
+                );
+            }
+        }
+    }
+}
+
+/// Blank out `/* … */` so a selector quoted in prose is not read as a rule.
+fn strip_css_comments(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    let mut rest = src;
+    while let Some(start) = rest.find("/*") {
+        out.push_str(&rest[..start]);
+        match rest[start..].find("*/") {
+            Some(end) => rest = &rest[start + end + 2..],
+            None => return out,
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// `(selector, declarations)` for each top-level rule. Nested at-rules
+/// (`@media`) keep their inner rules, which is what we want to check.
+fn css_rules(src: &str) -> Vec<(&str, &str)> {
+    let mut rules = Vec::new();
+    let mut head = 0usize;
+    let bytes = src.as_bytes();
+    for (i, b) in bytes.iter().enumerate() {
+        match b {
+            b'{' => {
+                if let Some(end) = src[i + 1..].find(['{', '}']) {
+                    if bytes[i + 1 + end] == b'}' {
+                        rules.push((src[head..i].trim(), &src[i + 1..i + 1 + end]));
+                    }
+                }
+                head = i + 1;
+            }
+            b'}' => head = i + 1,
+            _ => {}
+        }
+    }
+    rules
+}
+
 /// Every live search input must go through the shared debounce: in server
 /// mode an un-debounced keystroke is an HTTP request per character. Enter
 /// and the clear paths must not race the debounce — flush where a pick

@@ -3,19 +3,22 @@
            it never scrolls away from an answer, and everything that tunes a
            query rather than being one is folded behind the disclosure. */
 
-        #pane-ask {
-            display: flex;
-            flex-direction: column;
-            min-height: 0;
-            gap: 0;
-        }
+        /* No bare `#pane-ask` rule lives here. `.tab-pane` already gives the
+           pane its flex column, and `.tab-pane.active` is what turns it on —
+           an id selector setting `display` outranks the `.tab-pane
+           { display: none }` that hides it, so the column stayed on screen
+           underneath Browse. Style the children instead. */
 
+        /* The sidebar's content gutter is 20px (`.section-header`,
+           `.catalog-toolbar`). The pane itself stays unpadded so the sticky
+           bar's background spans the full width and content scrolling up
+           passes behind it rather than through a gap at each edge. */
         .ask-head {
             position: sticky;
             top: 0;
             z-index: 2;
             background: var(--bg-surface);
-            padding-bottom: 10px;
+            padding: 12px 20px 10px;
             border-bottom: 1px solid var(--border-soft);
         }
 
@@ -277,7 +280,11 @@
             display: flex;
             flex-direction: column;
             gap: 10px;
-            padding-top: 10px;
+            padding: 12px 20px 0;
+        }
+
+        .ask-stream:empty {
+            padding: 0;
         }
 
         .ask-block {

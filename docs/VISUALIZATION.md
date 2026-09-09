@@ -132,6 +132,15 @@ of the renderer.
 > { display: flex }` both outrank it, so hiding silently did nothing until
 > `css/16-overlay.css` added `[hidden]` rules at matching specificity. Anything
 > else hidden this way needs the same check.
+>
+> **The same trap, one level up.** A tab pane is hidden by
+> `.tab-pane { display: none }` — one class of specificity. `#pane-ask
+> { display: flex }`, written to give the Ask column a flex layout `.tab-pane`
+> already supplies, outranked it, and the column stayed on screen underneath
+> Browse. A rule whose whole job is to hide something is always the weakest
+> rule in the file, so anything that touches `display` on the same element
+> must be scoped to the state that *shows* it.
+> `no_pane_id_rule_overrides_the_tab_switcher` now fails on it.
 
 ### 3.3 Loading
 

@@ -10,7 +10,7 @@
         }
 
         .ask-onboard {
-            padding: 12px 2px 4px;
+            padding: 16px 20px 4px;
             display: flex;
             flex-direction: column;
             gap: 14px;
@@ -73,10 +73,11 @@
             display: none;
         }
 
+        /* The rule spans the panel; only its contents sit in the gutter. */
         .ask-kept {
             margin-top: 12px;
             border-top: 1px solid var(--border-soft);
-            padding-top: 8px;
+            padding: 8px 20px 0;
         }
 
         .ask-kept > summary {
