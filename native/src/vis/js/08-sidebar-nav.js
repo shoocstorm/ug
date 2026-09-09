@@ -128,7 +128,7 @@
                 document.querySelectorAll('#node-filter .filter-chip, #edge-filter .filter-chip')
                     .forEach(c => c.classList.remove('active'));
                 applyFilters();
-                refreshSuggestions(document.getElementById('search').value);
+                askPreview();
             });
         }
 
@@ -158,7 +158,7 @@
                         chip.classList.add('active');
                     }
                     applyFilters();
-                    refreshSuggestions(document.getElementById('search').value);
+                    askPreview();
                 });
                 container.appendChild(chip);
             });
@@ -184,7 +184,7 @@
                 state.boundaryFilter = !state.boundaryFilter;
                 chip.classList.toggle('active', state.boundaryFilter);
                 applyFilters();
-                refreshSuggestions(document.getElementById('search').value);
+                askPreview();
             });
             container.appendChild(chip);
         }
@@ -709,7 +709,7 @@
                         document.querySelectorAll('#node-filter .filter-chip-boundary')
                             .forEach(c => c.classList.toggle('active', state.boundaryFilter));
                         applyFilters();
-                        refreshSuggestions(document.getElementById('search').value);
+                        askPreview();
                     });
                     return;
                 }
@@ -758,7 +758,7 @@
                 chip.classList.toggle('active', state.nodeFilters.has(chip.dataset.type));
             });
             applyFilters();
-            refreshSuggestions(document.getElementById('search').value);
+            askPreview();
         }
 
         function wireLegendBulk() {
@@ -799,7 +799,7 @@
                 chip.classList.toggle('active', state.nodeFilters.has(chip.dataset.type));
             });
             applyFilters();
-            refreshSuggestions(document.getElementById('search').value);
+            askPreview();
         }
 
         // Mute legend rows whose type is currently filtered out.

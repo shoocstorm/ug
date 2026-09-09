@@ -1,0 +1,448 @@
+        /* ─── Ask column ─────────────────────────────────────
+           One bar, one stream. The bar is sticky at the top of the pane so
+           it never scrolls away from an answer, and everything that tunes a
+           query rather than being one is folded behind the disclosure. */
+
+        #pane-ask {
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            gap: 0;
+        }
+
+        .ask-head {
+            position: sticky;
+            top: 0;
+            z-index: 2;
+            background: var(--bg-surface);
+            padding-bottom: 10px;
+            border-bottom: 1px solid var(--border-soft);
+        }
+
+        /* ── The bar ── */
+
+        .ask-bar {
+            position: relative;
+            display: flex;
+            align-items: flex-start;
+            gap: 6px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 8px 8px 8px 32px;
+            transition: border-color 0.15s, box-shadow 0.15s;
+        }
+
+        .ask-bar:focus-within {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.15);
+        }
+
+        .ask-bar-icon {
+            position: absolute;
+            left: 10px;
+            top: 12px;
+            width: 14px;
+            height: 14px;
+            color: var(--text-dim);
+            pointer-events: none;
+        }
+
+        #ask-input {
+            flex: 1;
+            min-width: 0;
+            background: transparent;
+            border: none;
+            outline: none;
+            color: var(--text);
+            font-family: inherit;
+            font-size: 13px;
+            line-height: 20px;
+            resize: none;
+            overflow-y: auto;
+            max-height: 96px;
+        }
+
+        #ask-input::placeholder {
+            color: var(--text-dim);
+        }
+
+        .ask-clear,
+        .ask-run {
+            flex-shrink: 0;
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-family: inherit;
+        }
+
+        .ask-clear[hidden] {
+            display: none;
+        }
+
+        .ask-clear {
+            background: transparent;
+            color: var(--text-dim);
+        }
+
+        .ask-clear:hover {
+            background: var(--bg-hover);
+            color: var(--text);
+        }
+
+        .ask-run {
+            background: rgba(249, 115, 22, 0.12);
+            color: var(--accent);
+        }
+
+        .ask-run svg {
+            width: 14px;
+            height: 14px;
+        }
+
+        .ask-run:hover:not(:disabled) {
+            background: rgba(249, 115, 22, 0.24);
+        }
+
+        .ask-run:disabled {
+            opacity: 0.5;
+            cursor: progress;
+        }
+
+        /* ── The mode strip ──
+           Hidden until there is something to run, so the column opens as an
+           invitation rather than a control panel. */
+
+        .ask-modes {
+            display: flex;
+            gap: 4px;
+            margin-top: 8px;
+            background: var(--bg-elevated);
+            padding: 3px;
+            border-radius: 8px;
+            border: 1px solid var(--border-soft);
+        }
+
+        .ask-modes[hidden] {
+            display: none;
+        }
+
+        .ask-mode {
+            flex: 1;
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            font-size: 11px;
+            padding: 5px 6px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-family: inherit;
+            transition: background 0.15s, color 0.15s;
+        }
+
+        .ask-mode:hover:not(:disabled) {
+            color: var(--text);
+        }
+
+        .ask-mode.active {
+            background: var(--bg-hover);
+            color: var(--accent);
+        }
+
+        /* A mode the server can't serve stays visible and says why on hover —
+           the banner below repeats it, with the fix attached. */
+        .ask-mode:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        /* ── Status + disclosure strip ── */
+
+        .ask-strip {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin-top: 6px;
+            min-height: 16px;
+        }
+
+        .ask-status {
+            font-size: 10px;
+            color: var(--text-dim);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .ask-status.error {
+            color: var(--danger);
+        }
+
+        .ask-strip-actions {
+            display: flex;
+            gap: 4px;
+            flex-shrink: 0;
+        }
+
+        .ask-mini {
+            background: transparent;
+            border: none;
+            color: var(--text-dim);
+            font-size: 10px;
+            padding: 2px 4px;
+            cursor: pointer;
+            font-family: inherit;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .ask-mini:hover,
+        .ask-mini.open {
+            color: var(--accent);
+        }
+
+        /* ── Retrieval disclosure ── */
+
+        .ask-adv {
+            margin-top: 8px;
+            padding: 8px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-soft);
+            border-radius: 6px;
+        }
+
+        .ask-adv[hidden] {
+            display: none;
+        }
+
+        .ask-adv-row {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+            flex-wrap: wrap;
+            margin-bottom: 8px;
+        }
+
+        .ask-adv-fields {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .ask-adv-fields label {
+            font-size: 10px;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+
+        .ask-adv-fields input,
+        .ask-adv-fields textarea {
+            width: 100%;
+            background: var(--bg-surface);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 6px 8px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-family: inherit;
+            outline: none;
+        }
+
+        .ask-adv-fields textarea {
+            resize: vertical;
+            min-height: 40px;
+        }
+
+        .ask-adv-fields input:focus,
+        .ask-adv-fields textarea:focus {
+            border-color: var(--accent);
+        }
+
+        /* ── Capability banners ── */
+
+        .ask-caps:empty {
+            display: none;
+        }
+
+        /* ── The stream ── */
+
+        .ask-stream {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            padding-top: 10px;
+        }
+
+        .ask-block {
+            border: 1px solid var(--border-soft);
+            border-radius: 8px;
+            background: var(--bg-surface);
+            overflow: hidden;
+        }
+
+        /* The names block is rebuilt on every pause in typing, so it reads as
+           provisional until Enter freezes it. */
+        .ask-block.live {
+            border-style: dashed;
+        }
+
+        .ask-block.error {
+            border-color: var(--danger);
+        }
+
+        .ask-block-head {
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+            padding: 7px 10px;
+            background: var(--bg-elevated);
+            border-bottom: 1px solid var(--border-soft);
+            font-size: 11px;
+        }
+
+        .ask-block-mode {
+            flex-shrink: 0;
+            font-size: 9px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--accent);
+        }
+
+        .ask-block-q {
+            flex: 1;
+            min-width: 0;
+            color: var(--text);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .ask-block-meta {
+            flex-shrink: 0;
+            font-size: 10px;
+            color: var(--text-dim);
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .ask-block-body {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            padding: 8px;
+        }
+
+        .ask-wait {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px;
+            font-size: 11px;
+            color: var(--text-dim);
+        }
+
+        .ask-empty {
+            padding: 14px;
+            text-align: center;
+            color: var(--text-dim);
+            font-size: 11px;
+            line-height: 1.5;
+        }
+
+        /* ── One row, whatever retrieved it ── */
+
+        .ask-row {
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-soft);
+            border-radius: 6px;
+            padding: 7px 9px;
+            cursor: pointer;
+            font-size: 11px;
+            transition: background 0.15s, border-color 0.15s;
+        }
+
+        .ask-row:hover,
+        .ask-row.active {
+            background: var(--bg-hover);
+            border-color: var(--border);
+        }
+
+        .ask-row-head {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .ask-row-head .node-icon {
+            flex-shrink: 0;
+        }
+
+        .ask-row-name {
+            flex: 1;
+            min-width: 0;
+            color: var(--text);
+            font-family: 'JetBrains Mono', monospace;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .ask-row-meta {
+            margin-top: 4px;
+            margin-left: 20px;
+            color: var(--text-dim);
+            font-size: 10px;
+            font-family: 'JetBrains Mono', monospace;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* ── Provenance ──
+           How a row was reached, how far it was walked, how close it scored.
+           Shared by result rows and by an answer's citations, because a
+           citation is a retrieval hit that made it into the prompt. */
+
+        .ask-match {
+            flex-shrink: 0;
+            font-size: 9px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            padding: 2px 6px;
+            border-radius: 999px;
+            border: 1px solid currentColor;
+        }
+
+        .ask-match-semantic {
+            color: #60a5fa;
+        }
+
+        .ask-match-keyword {
+            color: #fbbf24;
+        }
+
+        .ask-match-graph {
+            color: #4ade80;
+        }
+
+        .ask-hop,
+        .ask-score {
+            flex-shrink: 0;
+            color: var(--text-dim);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+        }
+
+        .chat-cite .ask-match,
+        .chat-cite .ask-hop,
+        .chat-cite .ask-score {
+            margin-left: 6px;
+        }

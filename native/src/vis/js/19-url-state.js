@@ -20,7 +20,14 @@
         // Unknown keys are ignored; a key that fails to parse is dropped
         // rather than fatal.
         function readUrlState() {
-            const p = new URLSearchParams(window.location.search);
+            return readUrlStateFrom(window.location.search);
+        }
+
+        // The same decode against any query string. The trail keeps a view as
+        // exactly the params `urlStateParams` produces, so restoring one is
+        // the deep-link path rather than a second restore mechanism.
+        function readUrlStateFrom(search) {
+            const p = new URLSearchParams(search || '');
             const out = {};
             if (p.get('p')) out.p = p.get('p');
             if (p.get('n')) out.n = p.get('n');
@@ -55,8 +62,8 @@
                 p.set('focus', 'off');
             }
             const tab = state.activeTab
-                ? (state.activeTab === 'discover' && state.discoverSub
-                    ? `discover:${state.discoverSub}` : state.activeTab)
+                ? (state.activeTab === 'browse' && state.browseSub
+                    ? `browse:${state.browseSub}` : state.activeTab)
                 : '';
             if (tab) p.set('tab', tab);
             if (state.nodeFilters && state.nodeFilters.size) {
@@ -106,10 +113,10 @@
             refreshFilterChips();
             applyFilters();
             if (u.tab) setUiTab(u.tab);
-            if (u.q) {
-                const s = document.getElementById('search');
-                if (s) { s.value = u.q; refreshSuggestions(u.q); }
-            }
+            // A deep link's `q` is a name query: put it back in the Ask bar
+            // and re-run the preview, without stealing focus from the page
+            // the link just landed on.
+            if (u.q) restoreAskQuery(u.q);
             if (u.n && state.nodeById && state.nodeById.has(u.n)) {
                 const node = state.nodeById.get(u.n);
                 const prev = state.suppressHistory;
@@ -146,7 +153,7 @@
                 chip.classList.toggle('active', state.edgeFilters.has(chip.dataset.type)));
         }
 
-        // `tab` is `graph` / `catalog` / `discover` or `discover:<sub>`.
+        // `tab` is `ask` / `browse` or `browse:<sub>`.
         function setUiTab(tab) {
             if (!tab) return;
             const [panel, sub] = tab.split(':');
@@ -158,7 +165,7 @@
                     pa.classList.toggle('active', pa.dataset.tab === panel));
                 state.activeTab = panel;
             }
-            if (sub && state.showDiscoverSub) state.showDiscoverSub(sub);
+            if (sub && state.showBrowseSub) state.showBrowseSub(sub);
         }
 
         function wireUrlState() {

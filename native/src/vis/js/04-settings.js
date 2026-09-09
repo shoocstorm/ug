@@ -66,28 +66,19 @@
         }
 
         async function probeCapabilities() {
-            const chatSection = document.getElementById('section-chat');
-            const tourSection = document.getElementById('section-tour');
-            const tourDisabled = document.getElementById('section-tour-disabled');
-            const chatDisabled = document.getElementById('section-chat-disabled');
-            const chatBadgeRow = document.getElementById('chat-model-badge');
-            const chatBadgePill = document.getElementById('chat-model-pill');
             const dot = document.querySelector('.sidebar-header .brand-dot');
 
-            const showSection = (el) => el && el.classList.remove('cap-hidden');
-            const hideSection = (el) => el && el.classList.add('cap-hidden');
+            // Four banner slots, at most one of the first three shown. They
+            // sit in the Ask column under the mode strip, so the reason a
+            // mode is greyed out is next to the greyed-out mode.
+            const noEmb = document.getElementById('chat-no-embeddings-msg');
+            const noLlm = document.getElementById('chat-disabled-msg');
+            const noNarr = document.getElementById('tour-nollm-msg');
+            const semNote = document.getElementById('sem-cap-note');
+            const chatBadgeRow = document.getElementById('chat-model-badge');
+            const chatBadgePill = document.getElementById('chat-model-pill');
 
-            // The Search pane stays open — Keyword works off graph.json. Only
-            // the DB-backed Semantic/Hybrid tabs gate on search readiness:
-            // when off they're disabled with an inline note, and an active
-            // vector tab falls back to Keyword.
-            const semVectorTabs = document.querySelectorAll('.sem-mode[data-mode="semantic"], .sem-mode[data-mode="hybrid"]');
-            const semCapNote = document.getElementById('sem-cap-note');
-            const setVectorSearch = (ok, reason) => {
-                semVectorTabs.forEach(b => { b.disabled = !ok; b.title = ok ? '' : reason; });
-                if (semCapNote) { semCapNote.hidden = ok; if (!ok) semCapNote.textContent = reason; }
-                if (!ok && state.semMode && state.semMode !== 'keyword') selectSemMode('keyword');
-            };
+            const show = (el, on) => { if (el) el.hidden = !on; };
 
             try {
                 const caps = await getCapabilities();
@@ -95,7 +86,7 @@
                 state.capabilities = caps;
 
                 if (caps.search_ready) {
-                    setVectorSearch(true, '');
+                    show(semNote, false);
                     if (dot) {
                         dot.classList.remove('cap-warn', 'cap-off');
                         dot.title = `DB ready · ${caps.db_node_count ?? '?'} nodes`;
@@ -103,7 +94,11 @@
                     renderDestSelector(caps);
                 } else {
                     const reason = caps.reason || 'DB-backed search unavailable.';
-                    setVectorSearch(false, reason);
+                    if (semNote) semNote.textContent = reason;
+                    // The no-vectors banner below says the same thing with a
+                    // fix attached, so only surface this one when vectors are
+                    // present and something else is wrong.
+                    show(semNote, !!caps.db_ready && !!caps.embedder_ready);
                     if (dot) {
                         const partial = caps.db_ready && caps.embedder_ready;
                         dot.classList.toggle('cap-warn', partial);
@@ -112,102 +107,62 @@
                     }
                 }
 
-                // A tour needs retrieval (DB + embedder); LLM narration is
-                // optional — the server falls back to a ranked itinerary — so
-                // gate the launcher on search readiness, not chat.
-                if (caps.search_ready) {
-                    showSection(tourSection);
-                    hideSection(tourDisabled);
-                } else {
-                    hideSection(tourSection);
-                    showSection(tourDisabled);
-                }
-                // Tours degrade gracefully without a model; say so where the
-                // user is about to start one, not in a banner elsewhere.
-                const tourNoLlm = document.getElementById('tour-nollm-msg');
-                if (tourNoLlm) {
-                    tourNoLlm.classList.toggle('cap-hidden', !(caps.search_ready && !caps.chat_ready));
-                }
-                // ── Insights tab ──
+                // Three states, three banners:
+                //   no vectors        → Find/Answer/Tour are all out. Offer ingest.
+                //   vectors, no model → Answer is out, Tour runs unnarrated.
+                //   both              → nothing to say.
+                show(noEmb, !caps.search_ready);
+                show(noLlm, caps.search_ready && !caps.chat_ready);
+                show(noNarr, caps.search_ready && !caps.chat_ready);
+
                 // Insights presets run /api/tools/analyze, which is
-                // store-backed: the preset list itself is static, but
-                // running one needs the structural DB. The banner offers
-                // an Ingest button — `ug ingest` writes the structural
-                // nodes even on embedder failure, which is all Insights
-                // needs (vectors are Chat/Tour/Semantic only).
+                // store-backed: the preset list itself is static, but running
+                // one needs the structural DB. The banner offers an Ingest
+                // button — `ug ingest` writes the structural nodes even on
+                // embedder failure, which is all Insights needs (vectors are
+                // Find/Answer/Tour only).
                 const insNoDb = document.getElementById('ins-nodb-msg');
                 if (insNoDb) insNoDb.classList.toggle('cap-hidden', !!caps.db_ready);
 
-                markSubtabAvailability(caps);
-                // History survives page loads, and the key is per project, so
-                // it can only be read once capabilities name the project.
-                renderTourHistory();
-
-                if (caps.chat_ready) {
-                    showSection(chatSection);
-                    hideSection(chatDisabled);
-                    if (caps.chat && caps.chat.model && chatBadgeRow && chatBadgePill) {
-                        chatBadgeRow.hidden = false;
-                        chatBadgePill.hidden = false;
-                        chatBadgePill.textContent = caps.chat.model;
-                        chatBadgePill.title = `Chat model: ${caps.chat.model}\nBase URL: ${caps.chat.base_url || '?'}`;
-                    }
-                } else {
-                    hideSection(chatSection);
-                    // Two failure modes, surfaced in the disabled banner:
-                    //   • !search_ready → no vectors. Offer the Ingest button.
-                    //   •  search_ready → vectors exist, just no chat model.
-                    // Without this split, the no-vectors case showed nothing
-                    // at all and the user had no path forward from the UI.
-                    const noEmb = document.getElementById('chat-no-embeddings-msg');
-                    const noLlm = document.getElementById('chat-disabled-msg');
-                    if (caps.search_ready) {
-                        if (noEmb) noEmb.hidden = true;
-                        if (noLlm) noLlm.hidden = false;
-                        showSection(chatDisabled);
-                    } else {
-                        if (noEmb) noEmb.hidden = false;
-                        if (noLlm) noLlm.hidden = true;
-                        showSection(chatDisabled);
-                    }
+                if (caps.chat_ready && caps.chat && caps.chat.model && chatBadgeRow && chatBadgePill) {
+                    chatBadgeRow.hidden = false;
+                    chatBadgePill.hidden = false;
+                    chatBadgePill.textContent = caps.chat.model;
+                    chatBadgePill.title = `Chat model: ${caps.chat.model}\nBase URL: ${caps.chat.base_url || '?'}`;
                 }
+
+                // The trail and the tour history both survive page loads and
+                // both key on the project, so neither can be read until
+                // capabilities have named it.
+                renderTourHistory();
+                renderKept();
+                renderTrailRecents();
+                syncKeepButton();
+                // The opening block reads capabilities twice over — for the
+                // project's name and for whether its suggestions can be
+                // questions or only names.
+                renderAskOrient();
             } catch (err) {
                 state.capabilities = { db_ready: false, embedder_ready: false, search_ready: false, chat_ready: false };
-                setVectorSearch(false, 'Capabilities probe failed — server unreachable?');
-                hideSection(chatSection);
-                hideSection(tourSection);
-                showSection(tourDisabled);
+                if (semNote) semNote.textContent = 'Capabilities probe failed — server unreachable?';
+                show(semNote, true);
+                show(noEmb, false);
+                show(noLlm, false);
+                show(noNarr, false);
                 const insNoDb = document.getElementById('ins-nodb-msg');
                 if (insNoDb) insNoDb.classList.remove('cap-hidden');
-                markSubtabAvailability(state.capabilities);
                 if (dot) {
                     dot.classList.add('cap-off');
                     dot.title = 'Capabilities probe failed';
                 }
                 console.warn('capabilities probe failed:', err);
             }
-            // Capabilities can land after the renderer has already mounted, so
+            // Whatever the answer, the mode strip has to agree with it, and
+            // capabilities can land after the renderer has already mounted, so
             // the HUD is synced from both ends — whichever is last wins, and
             // both are idempotent.
+            syncAskModes();
             perfHudSync();
-        }
-
-        // Dot a Discover sub-tab whose backend isn't available. The tab stays
-        // clickable on purpose — its pane explains what's missing, which beats
-        // a mode that silently vanishes.
-        function markSubtabAvailability(caps) {
-            const set = (sub, ok) => {
-                const el = document.querySelector(`.subtab[data-sub="${sub}"]`);
-                if (!el) return;
-                el.classList.toggle('unavailable', !ok);
-                el.title = ok ? '' : 'Not available with the current server setup';
-            };
-            // Keyword search (part of the Search subtab) works off graph.json
-            // with no DB, so the subtab is never marked unavailable; the
-            // Semantic/Hybrid tabs within it carry their own disabled state.
-            set('search', true);
-            set('tour', !!(caps && caps.search_ready));
-            set('chat', !!(caps && caps.chat_ready));
         }
 
         // ─── Trigger embedding/ingestion from the UI ─────────────

@@ -355,15 +355,17 @@
             display: flex;
         }
 
-        /* Discover / Graph panes scroll their stacked sections as a whole. */
-        #pane-discover.active,
-        #pane-graph.active {
+        /* Both panes scroll their contents as a whole: the Ask column so the
+           stream runs under a sticky bar, Browse so its sub-tab strip stays
+           pinned while the sub-pane scrolls. */
+        #pane-ask.active,
+        #pane-browse.active {
             overflow-y: auto;
-            padding: 8px 0;
+            padding: 0 0 8px;
         }
 
-        /* Discover keeps its mode switcher pinned while the mode scrolls. */
-        #pane-discover.active {
-            padding-top: 0;
+        /* The Summary sub-pane still stacks collapsible sections. */
+        #pane-browse .subpane#pane-graph {
+            padding: 8px 0;
         }
 

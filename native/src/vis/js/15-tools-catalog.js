@@ -14,11 +14,10 @@
             // sort, so ranking 500k nodes to show five does not allocate an
             // array of all of them first.
             const top = topByDegree(5);
-            if (top.length < 2) {
-                box.closest('.section').style.display = 'none';
-                return;
-            }
-            box.closest('.section').style.display = '';
+            // The list lives in the Ask column's opening block now, so it
+            // hides itself rather than a section wrapper it no longer has.
+            box.hidden = top.length < 2;
+            if (box.hidden) return;
             box.innerHTML = '';
             top.forEach(n => {
                 const item = document.createElement('button');
@@ -141,15 +140,15 @@
 
         // ─── Catalog (repo TOC) ────────────────────────────
 
-        // Discover's four modes (Search / Tour / Chat / Insights). The glider
-        // is a single pill that slides to the active tab, so switching reads
-        // as one movement rather than four separate highlights.
-        function wireDiscoverSubtabs() {
-            const bar = document.getElementById('discover-subtabs');
-            const glider = document.getElementById('discover-glider');
+        // Browse's four surfaces (Catalog / Walk / Insights / Summary). The
+        // glider is a single pill that slides to the active tab, so switching
+        // reads as one movement rather than four separate highlights.
+        function wireBrowseSubtabs() {
+            const bar = document.getElementById('browse-subtabs');
+            const glider = document.getElementById('browse-glider');
             if (!bar || !glider) return;
             const tabs = [...bar.querySelectorAll('.subtab')];
-            const panes = [...document.querySelectorAll('#pane-discover .subpane')];
+            const panes = [...document.querySelectorAll('#pane-browse .subpane')];
 
             const moveGlider = () => {
                 const active = bar.querySelector('.subtab.active');
@@ -161,22 +160,27 @@
             const activate = (name) => {
                 // Leaving the Walk demo tears down its canvas state so the
                 // next pane starts from a clean graph.
-                if (state.discoverSub === 'walk' && name !== 'walk') exitWalk();
+                if (state.browseSub === 'walk' && name !== 'walk') exitWalk();
                 tabs.forEach(t => t.classList.toggle('active', t.dataset.sub === name));
                 panes.forEach(p => p.classList.toggle('active', p.dataset.sub === name));
-                state.discoverSub = name;
+                // The catalog manages its own height (sticky toolbar, scrolling
+                // tree); the other three ride the pane's scroll. See
+                // `#pane-browse.active.sub-catalog` in css/02-discover.css.
+                document.getElementById('pane-browse')
+                    .classList.toggle('sub-catalog', name === 'catalog');
+                state.browseSub = name;
                 moveGlider();
-                if (name === 'tour') renderTourHistory();
+                // Each of these renders lazily, on first reveal rather than at
+                // boot — most sessions never open three of the four.
+                if (name === 'catalog') renderCatalog();
                 if (name === 'walk') renderWalkHistory();
-                // Presets load on first reveal, not at boot — the pane is one
-                // of four and most sessions never open it.
                 if (name === 'insights') loadInsights();
                 writeUrlState();
             };
 
             tabs.forEach(t => t.addEventListener('click', () => activate(t.dataset.sub)));
-            state.discoverSub = state.discoverSub || 'search';
-            activate(state.discoverSub);
+            state.browseSub = state.browseSub || 'catalog';
+            activate(state.browseSub);
             // The bar is hidden until the Discover tab is shown, so its
             // widths only settle once it's on screen.
             window.addEventListener('resize', moveGlider);
@@ -184,11 +188,12 @@
             // resize event, so the pill would keep the width it was measured
             // at. Watch the bar itself instead of guessing when it changed.
             if (window.ResizeObserver) new ResizeObserver(moveGlider).observe(bar);
-            state.syncDiscoverGlider = moveGlider;
-            state.showDiscoverSub = activate;
+            state.syncBrowseGlider = moveGlider;
+            state.showBrowseSub = activate;
         }
 
-        // Switches between the three left-panel tabs (Catalog / Discover / Graph).
+        // Switches between the two left-panel tabs: Ask, which is where every
+        // query goes, and Browse, which is everything that inspects instead.
         function wirePanelTabs() {
             const tabs = document.querySelectorAll('.panel-tab');
             const panes = document.querySelectorAll('.tab-pane');
@@ -196,12 +201,10 @@
                 tabs.forEach(t => t.classList.toggle('active', t.dataset.tab === name));
                 panes.forEach(p => p.classList.toggle('active', p.dataset.tab === name));
                 state.activeTab = name;
-                // Catalog renders lazily — make sure it's populated when revealed.
-                if (name === 'catalog') renderCatalog();
-                // The sub-tab glider can only measure itself once visible.
-                if (name === 'discover' && state.syncDiscoverGlider) {
-                    requestAnimationFrame(state.syncDiscoverGlider);
-                    renderTourHistory();
+                if (name === 'browse') {
+                    // The sub-tab glider can only measure itself once visible.
+                    if (state.syncBrowseGlider) requestAnimationFrame(state.syncBrowseGlider);
+                    if (state.browseSub === 'catalog') renderCatalog();
                     renderWalkHistory();
                 }
                 writeUrlState();

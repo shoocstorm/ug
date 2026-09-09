@@ -286,23 +286,22 @@
         badge.addEventListener('click', () => window.open(DEMO.install, '_blank', 'noopener'));
     }
 
-    /* The three capability banners. Each one currently offers "Ingest now",
-       which is the right fix when a *local* project has no vectors and a dead
+    /* The capability banners. Each one currently offers "Ingest now", which
+       is the right fix when a *local* project has no vectors and a dead
        button here — the endpoint behind it is one of the 501s above. Replace
        the copy with the reason that actually applies, and the button with the
-       action that actually helps. */
+       action that actually helps.
+
+       The Ask bar's Names mode reads graph.json in the browser and genuinely
+       works here; Find, Answer and Tour are the three that need the store,
+       and they share one banner. */
     const BANNERS = {
-        'tour-disabled-msg': [
-            'Guided tours need a local index.',
-            'A tour is planned against the vector store ug builds on your machine, ' +
-            'then flown as a camera path across this same canvas. There is no store ' +
-            'behind a published snapshot, so the launcher stays closed here.',
-        ],
         'chat-no-embeddings-msg': [
-            'Chat needs a local index and a model.',
-            'Chat answers from embeddings ug writes next to the graph, through any ' +
-            'OpenAI-compatible endpoint you point it at — a local one is fine. ' +
-            'Neither travels with a snapshot.',
+            'Find, Answer and Tour need a local index.',
+            'All three are planned against the vector store ug builds on your ' +
+            'machine, and answers additionally need any OpenAI-compatible ' +
+            'endpoint you point ug at — a local one is fine. Neither travels ' +
+            'with a snapshot, so the bar here searches names only.',
         ],
         'ins-nodb-msg': [
             'Statistics need the indexed database.',

@@ -188,10 +188,10 @@ fn the_live_search_inputs_are_debounced() {
     for probe in [
         "function debounceTrailing",             // the shared helper
         "SEARCH_DEBOUNCE_MS",                    // one shared window
-        "refreshSuggestionsDebounced",           // sidebar search
+        "askPreviewDebounced",                   // the Ask bar's live name preview
         "refreshSeedDebounced",                  // walk seed
         "renderPaletteDebounced",                // ⌘K palette
-        "refreshSuggestionsDebounced.flush",     // Enter picks what is in the box
+        "askPreviewDebounced.flush",             // Enter picks what is in the box
         "refreshSeedDebounced.flush",            // same for the walk seed
         ".cancel()",                             // clear/Esc/reopen drop pending calls
     ] {

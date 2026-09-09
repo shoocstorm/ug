@@ -114,16 +114,15 @@
             // nothing like `showBoundary`, which is the bounding-box overlay.
             boundaryFilter: false,
             selectedNode: null,
-            suggestionIndex: -1,
-            currentSuggestions: [],
             capabilities: null,
-            semMode: 'semantic',
+            // Node ids the last Ask result set resolved to — what the
+            // "light up … in graph" button draws.
+            askMatches: [],
             // Currently selected backend for search/traverse requests.
             // Initialized from /api/capabilities; null until that probe
             // completes — fetch helpers omit `dest` in that case so the
             // server falls back to its primary.
             semDest: null,
-            semInFlight: false,
             chatInFlight: false,
             chatHistory: [],
             pathSource: null,

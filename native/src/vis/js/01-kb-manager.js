@@ -74,6 +74,9 @@
             document.getElementById('kb-open-btn').hidden = false;
             document.getElementById('brand-title').classList.add('brand-clickable');
             document.getElementById('brand-title').title = 'Browse knowledge bases';
+            document.getElementById('project-chip').hidden = false;
+            wireProjectChip();
+            renderProjectChip();
 
             // `openProject` marks the URL before reloading to switch
             // projects mid-session (see the `graphInitialized` reload
@@ -298,6 +301,9 @@
             const managerVisible = document.getElementById('kb-manager').classList.contains('visible');
             const listVisible = !document.getElementById('kb-list-view').hidden;
             if (changed && managerVisible && listVisible) showKbList(kbCapsCache);
+            // The chip carries the active project's staleness whether or not
+            // the manager is up — it is the badge you see while working.
+            if (changed) renderProjectChip();
         }
 
         function startStalenessPolling() {
@@ -384,6 +390,92 @@
         // very first pick from the initial bootstrap screen), it's safe to
         // load in place; otherwise reload the page so `initialize()` only
         // ever runs once per load — see the `graphInitialized` comment.
+        // ─── The project chip ───────────────────────────────
+        //
+        // Switching used to mean crossing the full-screen manager, which is a
+        // gate: it exists to create and delete bases, and it hides everything
+        // behind it. The chip is the switch — the same list, one click away,
+        // with the manager still one row down for the things that need it.
+
+        function renderProjectChip() {
+            const chip = document.getElementById('project-chip');
+            const name = document.getElementById('project-chip-name');
+            const stale = document.getElementById('project-chip-stale');
+            if (!chip || !isMultiMode) return;
+            const active = (kbCapsCache && kbCapsCache.active) || state.activeProject || '';
+            name.textContent = active;
+            chip.title = `Answering from "${active}" · click to switch`;
+            const p = kbCapsCache && (kbCapsCache.projects || []).find(x => x.name === active);
+            stale.hidden = !(p && p.stale);
+        }
+
+        function projectMenuOpen() {
+            const menu = document.getElementById('project-menu');
+            return menu && !menu.hidden;
+        }
+
+        function closeProjectMenu() {
+            const menu = document.getElementById('project-menu');
+            if (!menu) return;
+            menu.hidden = true;
+            document.getElementById('project-chip').setAttribute('aria-expanded', 'false');
+        }
+
+        function openProjectMenu() {
+            const menu = document.getElementById('project-menu');
+            if (!menu || !kbCapsCache) return;
+            const active = kbCapsCache.active || state.activeProject;
+            menu.innerHTML = '';
+            (kbCapsCache.projects || []).forEach(p => {
+                const row = document.createElement('button');
+                row.type = 'button';
+                row.className = 'project-row' + (p.name === active ? ' active' : '');
+                row.setAttribute('role', 'menuitem');
+                const kind = { docs: 'Docs', code: 'Code', mixed: 'Mixed' }[p.kbKind] || '';
+                const bits = [kind, p.nodes ? `${formatNumber(p.nodes)} nodes` : '',
+                    p.updatedAt ? kbRelativeTime(p.updatedAt) : ''].filter(Boolean);
+                row.innerHTML = `<span class="project-row-name"></span>`
+                    + (p.stale ? '<span class="project-row-stale">stale</span>' : '')
+                    + `<span class="project-row-meta">${escapeHtml(bits.join(' · '))}</span>`;
+                row.querySelector('.project-row-name').textContent = p.name;
+                row.title = p.repoRoot || p.name;
+                row.addEventListener('click', () => {
+                    closeProjectMenu();
+                    openProject(p.name, active);
+                });
+                menu.appendChild(row);
+            });
+            const all = document.createElement('button');
+            all.type = 'button';
+            all.className = 'project-row project-row-all';
+            all.setAttribute('role', 'menuitem');
+            all.textContent = 'All knowledge bases — create, re-index, delete…';
+            all.addEventListener('click', () => { closeProjectMenu(); reopenKbManager(); });
+            menu.appendChild(all);
+
+            menu.hidden = false;
+            document.getElementById('project-chip').setAttribute('aria-expanded', 'true');
+        }
+
+        function wireProjectChip() {
+            const chip = document.getElementById('project-chip');
+            if (!chip) return;
+            chip.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (projectMenuOpen()) closeProjectMenu(); else openProjectMenu();
+            });
+            // A menu that only closes by clicking its own trigger is a menu
+            // people leave open over the thing they wanted to look at.
+            document.addEventListener('click', (e) => {
+                if (!projectMenuOpen()) return;
+                if (e.target.closest('#project-menu') || e.target.closest('#project-chip')) return;
+                closeProjectMenu();
+            });
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape' && projectMenuOpen()) closeProjectMenu();
+            });
+        }
+
         async function openProject(name, activeName) {
             hideKbManager();
             state.activeProject = name;

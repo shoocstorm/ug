@@ -442,7 +442,7 @@ changelog on every bump, and keep engine calls behind the `KnowledgeStore`
 trait (`native/src/storage/store.rs`) so upgrades stay confined to
 `native/src/storage/db.rs`.
 
-## 9. Ten bugs this codebase keeps re-introducing
+## 9. Eleven bugs this codebase keeps re-introducing
 
 All are invisible in review and silent at runtime, and most have already
 shipped here more than once. Check for them by reflex.
@@ -799,6 +799,44 @@ path, ask **what the caller reads next**. If the answer is state the async work
 owns, assign it before the call and let the async work refine it. Grep shape:
 an assignment to a shared `state.*` inside an `async function` that a
 non-`await`ed caller depends on.
+
+### 9k. A payload that already carried the answer, thrown away at the edge
+
+`ContextItem` has carried `matched_by` (`semantic` / `keyword` / `graph`),
+`hop` and `distance` on every hybrid hit and every chat citation for as long
+as `search_kb` has existed. Three of the four places that rendered those items
+dropped all three fields on the floor:
+
+- `fetchHybrid` mapped the wire item into a hit object field by field and
+  simply did not copy `hop`.
+- The chat citation renderer printed name, type, file and line, so an answer
+  could not say *how* any of its sources had been reached.
+- The keyword suggestion list had no notion of provenance at all, which was
+  correct for it, and made the whole idea look like a hybrid-only nicety.
+
+Only the Semantic/Hybrid pane rendered `matched_by`, and that pane was three
+levels down a tab tree. So the product's best answer to "why is this result
+here" was shipped, working, and invisible.
+
+**A field-by-field mapper at the client edge is where server work goes to
+die.** It reads as defensive — take only what you use — and it silently pins
+the UI to whatever the mapper's author happened to need that day. The server
+gains a field, every renderer downstream keeps rendering last year's answer,
+and nothing fails.
+
+Two rules follow:
+
+- **When you hand-map a wire type into a view type, the diff of the two field
+  lists is a decision you are making.** Write down why each dropped field is
+  dropped, or copy it. `hop` cost one line and was worth a badge on every row.
+- **One renderer per kind of thing, not one per pane.** The reason three
+  surfaces disagreed about provenance is that there were three renderers for
+  "a node someone retrieved". There is one now (`renderHitRows` /
+  `askProvenanceHtml` in `25-ask.js`) and the citation list calls it too, so a
+  field can only be forgotten once.
+
+Grep shape: an object literal built from `it.` / `h.` / `data.` inside a
+`.map()` in the client, where the server type has more fields than the literal.
 
 ## 10. Measuring performance without fooling yourself
 

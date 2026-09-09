@@ -718,7 +718,7 @@
             if (!node || state.walkRunning) return;
             state.walkSeed = node.id;
             renderWalkSeedChip(node);
-            if (state.discoverSub === 'walk' && !state.walkActive) {
+            if (state.browseSub === 'walk' && !state.walkActive) {
                 const status = document.getElementById('walk-status');
                 if (status) { status.classList.remove('error'); status.textContent = `Seed: ${node.id}`; }
             }

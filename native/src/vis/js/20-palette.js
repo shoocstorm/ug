@@ -71,15 +71,17 @@
         // the search instead of widening it.
 
         const PALETTE_ACTIONS = [
-            { name: 'Start a guided tour', run: () => { showPanel('discover'); showSub('tour'); const i = document.getElementById('tour-input'); if (i) i.focus(); } },
-            { name: 'Go to search', run: () => { showPanel('discover'); showSub('search'); const i = document.getElementById('search'); if (i) i.focus(); } },
-            { name: 'Go to chat', run: () => { showPanel('discover'); showSub('chat'); const i = document.getElementById('chat-input'); if (i) i.focus(); } },
-            { name: 'Go to insights', run: () => { showPanel('discover'); showSub('insights'); } },
+            { name: 'Ask a question', run: () => focusAsk('') },
+            { name: 'Start a guided tour', run: () => focusAsk('', 'tour') },
+            { name: 'Go to the catalog', run: () => { showPanel('browse'); showSub('catalog'); } },
+            { name: 'Go to the graph walk', run: () => { showPanel('browse'); showSub('walk'); } },
+            { name: 'Go to insights', run: () => { showPanel('browse'); showSub('insights'); } },
+            { name: 'Go to the index summary', run: () => { showPanel('browse'); showSub('summary'); } },
             { name: 'Context pack for the selected node', run: openContextTab },
             { name: 'Toggle solo (focus isolate)', run: toggleFocusSolo },
             { name: 'Toggle boundary box', run: () => { const b = document.getElementById('toggle-box'); if (b) b.click(); } },
             { name: 'Toggle auto-spin', run: () => { const b = document.getElementById('toggle-spin'); if (b) b.click(); } },
-            { name: 'Detect cycles', run: () => { showPanel('graph'); detectAndShowCycles(); } },
+            { name: 'Detect cycles', run: () => { showPanel('browse'); showSub('summary'); detectAndShowCycles(); } },
             { name: 'Reset view', run: resetView },
             { name: 'Download graph JSON', run: downloadGraph },
             { name: 'Download index JSON', run: downloadIndex },
@@ -127,7 +129,7 @@
                     kind: 'tour',
                     label: `Replay: ${e.title || e.query}`,
                     sub: `${e.stops} stop${e.stops === 1 ? '' : 's'} · tour`,
-                    run: () => { showPanel('discover'); showSub('tour'); replayTourFromHistory(e.id); },
+                    run: () => replayTourFromHistory(e.id),
                 }));
             }
             if (!prefix || prefix === 'insight') {
@@ -138,7 +140,7 @@
                     kind: 'insight',
                     label: p.name,
                     sub: p.description || 'insight',
-                    run: () => { showPanel('discover'); showSub('insights'); choosePreset(p); },
+                    run: () => { showPanel('browse'); showSub('insights'); choosePreset(p); },
                 }));
             }
             return items;
@@ -180,6 +182,18 @@
             it.run();
         }
 
+        // The palette lists what it can resolve instantly — nodes, actions,
+        // presets, saved tours. Anything it can't (a question, a phrase) is
+        // the Ask bar's job, and this is the hand-off: the text moves to the
+        // bar and runs there rather than growing a second answer surface.
+        function askFromPalette(raw) {
+            const text = (raw || '').trim();
+            if (!text) return;
+            closePalette();
+            focusAsk(text);
+            submitAsk();
+        }
+
         function paletteMove(dir) {
             const rows = document.querySelectorAll('#palette-results .palette-item');
             if (!rows.length) return;
@@ -192,14 +206,11 @@
             if (state.showPanelTab) state.showPanelTab(name);
         }
         function showSub(name) {
-            if (state.showDiscoverSub) state.showDiscoverSub(name);
+            if (state.showBrowseSub) state.showBrowseSub(name);
         }
 
         function gotoTour() {
-            showPanel('discover');
-            showSub('tour');
-            const input = document.getElementById('tour-input');
-            if (input) input.focus();
+            focusAsk('', 'tour');
         }
 
         // ─── Shortcut sheet ─────────────────────────────────
@@ -235,6 +246,7 @@
                     const at = paletteCursor >= 0 ? paletteCursor : 0;
                     buildPaletteItems(input.value).then(items => {
                         if (items[at]) runPaletteItem(items[at]);
+                        else askFromPalette(input.value);
                     });
                 } else if (e.key === 'Escape') {
                     e.preventDefault();

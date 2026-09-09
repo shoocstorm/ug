@@ -29,42 +29,6 @@
         }
         /* Matches the Send / Search action buttons in the sibling panels,
            in the tour's own accent. */
-        .chat-controls #tour-start {
-            flex: 1;
-            gap: 6px;
-            min-width: 110px;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            padding: 6px 10px;
-            border-radius: 9px;
-            border: none;
-            background: linear-gradient(135deg, rgba(249, 115, 22, 0.34), rgba(249, 115, 22, 0.18));
-            color: #fff;
-            font-size: 12px;
-            font-weight: 700;
-            letter-spacing: 0.02em;
-            box-shadow: 0 6px 20px -8px rgba(249, 115, 22, 0.7);
-            transition: transform 0.12s, box-shadow 0.15s, opacity 0.15s;
-            cursor: pointer;
-            font-family: inherit;
-        }
-        .chat-controls #tour-start svg { width: 11px; height: 11px; }
-        .chat-controls #tour-start:hover:not(:disabled) { background: rgba(249, 115, 22, 0.2); }
-        .chat-controls #tour-start:disabled { opacity: 0.5; cursor: progress; }
-
-        .tour-examples { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-        .tour-chip {
-            font-size: 11px;
-            padding: 4px 9px;
-            border-radius: 999px;
-            cursor: pointer;
-            background: var(--bg-elevated);
-            border: 1px solid transparent;
-            color: var(--text-muted);
-            transition: background .15s, color .15s;
-        }
-        .tour-chip:hover { background: var(--bg-hover); color: var(--accent); }
         #tour-launch-status { font-size: 11px; margin-top: 8px; color: var(--text-dim, #8a7f72); }
         #tour-launch-status.error { color: #dc2626; }
 

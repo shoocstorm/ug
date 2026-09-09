@@ -1,4 +1,4 @@
-        /* ─── Discover sub-tabs (Search / Tour / Chat) ───────── */
+        /* ─── Browse sub-tabs (Catalog / Walk / Insights / Summary) ─── */
 
         .subtabs {
             position: sticky;
@@ -59,16 +59,6 @@
 
         .subtab:hover { color: var(--text); }
         .subtab.active { color: var(--accent); }
-
-        /* Capability-gated modes stay clickable — the pane explains why. */
-        .subtab.unavailable::after {
-            content: '';
-            width: 5px;
-            height: 5px;
-            border-radius: 50%;
-            background: var(--warn, #f59e0b);
-            opacity: 0.75;
-        }
 
         .subpane { display: none; }
         .subpane.active { display: block; animation: subpane-in 0.22s ease both; }
@@ -477,8 +467,19 @@
 
         .thist-clear:hover { color: #f87171; border-color: rgba(248, 113, 113, 0.4); }
 
-        /* Catalog pane keeps a sticky toolbar/footer while the tree scrolls. */
+        /* The catalog keeps a sticky toolbar and footer while the tree
+           scrolls inside it, so it manages its own height rather than
+           riding the Browse pane's scroll. `sub-catalog` is set by
+           `wireBrowseSubtabs` when this sub-pane is the active one. */
+        #pane-browse.active.sub-catalog {
+            overflow: hidden;
+        }
+
         #pane-catalog.active {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+            min-height: 0;
             overflow: hidden;
         }
 

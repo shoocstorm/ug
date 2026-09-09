@@ -1,68 +1,9 @@
-        // ─── Chat (RAG) panel ──────────────────────────────
-
-        function wireChatPanel() {
-            const input = document.getElementById('chat-input');
-            const sendBtn = document.getElementById('chat-send');
-            const resetBtn = document.getElementById('chat-reset');
-            const settings = document.getElementById('chat-settings');
-            const toggle = document.getElementById('chat-settings-toggle');
-
-            sendBtn.addEventListener('click', runChatTurn);
-            resetBtn.addEventListener('click', resetChat);
-            input.addEventListener('keydown', e => {
-                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                    e.preventDefault();
-                    runChatTurn();
-                }
-            });
-            toggle.addEventListener('click', () => {
-                const open = settings.classList.toggle('open');
-                toggle.textContent = (open ? '▾' : '▸') + ' Advanced';
-            });
-        }
-
-        function resetChat() {
-            state.chatHistory = [];
-            const list = document.getElementById('chat-messages');
-            list.innerHTML = '';
-            const status = document.getElementById('chat-status');
-            status.classList.remove('error');
-            status.textContent = '';
-        }
-
-        function appendChatMessage(role, text, opts = {}) {
-            const list = document.getElementById('chat-messages');
-            const el = document.createElement('div');
-            el.className = `chat-msg ${role}${opts.pending ? ' pending' : ''}${opts.error ? ' error' : ''}`;
-            el.textContent = text;
-            if (opts.citations && opts.citations.length) {
-                const cites = document.createElement('div');
-                cites.className = 'chat-citations';
-                opts.citations.forEach(c => {
-                    const a = document.createElement('div');
-                    a.className = 'chat-cite';
-                    const lineLabel = c.start_line
-                        ? `:${c.start_line}${c.end_line && c.end_line !== c.start_line ? '–' + c.end_line : ''}`
-                        : '';
-                    const fileLabel = c.file || '<unknown>';
-                    a.innerHTML = nodeIconSvg(c.node_type || 'Default', 'cite-icon')
-                        + escapeHtml(`[#${c.index}] ${c.name || c.id} · ${c.node_type || '?'} · ${fileLabel}${lineLabel}`);
-                    a.title = c.description ? c.description.slice(0, 200) : (c.id || c.name || '');
-                    a.addEventListener('click', () => focusCitation(c));
-                    cites.appendChild(a);
-                });
-                el.appendChild(cites);
-            }
-            if (opts.meta) {
-                const m = document.createElement('div');
-                m.className = 'chat-meta';
-                m.textContent = opts.meta;
-                el.appendChild(m);
-            }
-            list.appendChild(el);
-            list.scrollTop = list.scrollHeight;
-            return el;
-        }
+        // ─── Answer: RAG chat into an Ask block ────────────
+        //
+        // The question, the mode strip and the echo of what you asked all
+        // live in the Ask column (`js/25-ask.js`); what is left here is the
+        // turn itself — the request, the SSE reader, and the streaming
+        // bubble it fills in.
 
         // Citations, collapsed by default — they're provenance, not the
         // answer, and a dozen of them push the reply off screen.
@@ -82,7 +23,12 @@
                     ? `:${c.start_line}${c.end_line && c.end_line !== c.start_line ? '–' + c.end_line : ''}`
                     : '';
                 a.innerHTML = nodeIconSvg(c.node_type || 'Default', 'cite-icon')
-                    + escapeHtml(`[#${c.index}] ${c.name || c.id} · ${c.node_type || '?'} · ${c.file || '<unknown>'}${lineLabel}`);
+                    + escapeHtml(`[#${c.index}] ${c.name || c.id} · ${c.node_type || '?'} · ${c.file || '<unknown>'}${lineLabel}`)
+                    // A citation is a retrieval hit that made it into the
+                    // prompt, and it arrives with the same `matched_by`/`hop`
+                    // every other hit has. Saying how each source was reached
+                    // is what makes an answer checkable.
+                    + askProvenanceHtml(c);
                 a.title = c.description ? c.description.slice(0, 200) : (c.id || c.name || '');
                 a.addEventListener('click', () => focusCitation(c));
                 box.appendChild(a);
@@ -96,24 +42,16 @@
                 handleClick(null, local);
                 focusNode(local);
             } else {
-                const status = document.getElementById('chat-status');
-                status.classList.remove('error');
-                status.textContent = `Node "${c.id}" not in loaded graph.json.`;
+                setAskStatus(`"${c.id}" isn't in the loaded graph.`, true);
             }
         }
 
-        async function runChatTurn() {
-            const inputEl = document.getElementById('chat-input');
-            const sendBtn = document.getElementById('chat-send');
-            const statusEl = document.getElementById('chat-status');
-            const query = inputEl.value.trim();
-
-            statusEl.classList.remove('error');
-            if (!query) {
-                statusEl.textContent = 'Enter a question to send.';
-                return;
-            }
-            if (state.chatInFlight) return;
+        // One answer turn, rendered into the Ask block that already carries
+        // the question. `query` and `block` both come from `runAsk` — this
+        // function reads no input element and owns no echo of its own.
+        async function runChatTurn(query, block) {
+            query = (query || '').trim();
+            if (!query || state.chatInFlight) return;
 
             const k = clampInt(document.getElementById('chat-k').value, 1, 50, 8);
             const hops = clampInt(document.getElementById('chat-hops').value, 0, 4, 2);
@@ -142,16 +80,15 @@
 
             body.stream = true;
 
-            appendChatMessage('user', query);
-            inputEl.value = '';
             // The answer bubble exists from the first moment and fills in as
             // tokens arrive, with a live account of what the server is doing
             // above it — a chat that sits silent for a minute reads as broken.
-            const turn = createChatTurn();
+            const turn = createChatTurn(block.body);
+            const runBtn = document.getElementById('ask-run');
 
             state.chatInFlight = true;
-            sendBtn.disabled = true;
-            statusEl.textContent = 'Retrieving context…';
+            setAskStatus('Retrieving context…');
+            runBtn.disabled = true;
 
             const t0 = performance.now();
             let answer = '';
@@ -198,6 +135,7 @@
                     const data = await res.json();
                     answer = data.answer || '';
                     cites = data.citations || [];
+                    turn.context(cites, data.retrieval_ms);
                     turn.append(answer);
                     done = data;
                 }
@@ -206,8 +144,7 @@
                     // say what's wrong in plain words and offer the fix.
                     if (streamErrKind === 'llm_unreachable') {
                         turn.unreachable(streamErrEndpoint);
-                        statusEl.classList.add('error');
-                        statusEl.textContent = 'No answer — the model endpoint isn\'t responding.';
+                        setAskStatus('No answer — the model endpoint is not responding.', true);
                         return;
                     }
                     throw new Error(streamErr);
@@ -222,16 +159,22 @@
                 if (state.chatHistory.length > 24) {
                     state.chatHistory = state.chatHistory.slice(-24);
                 }
-                statusEl.textContent = `${cites.length} citation${cites.length === 1 ? '' : 's'} · ${totalMs} ms total`;
+                block.meta(`${cites.length} source${cites.length === 1 ? '' : 's'} · ${totalMs} ms`);
+                setAskStatus('');
+                // What an answer cited is a set worth seeing on the canvas,
+                // the same way a Find result set is.
+                setAskMatches(cites);
+                // The finished text hangs off the block so its Keep button can
+                // store the answer itself rather than the view it produced.
+                block.el._answer = { text: answer, cites };
+                recordAsk('answer', query, { answer, cites });
             } catch (err) {
                 turn.fail(err.message || err);
-                statusEl.classList.add('error');
-                statusEl.textContent = `Chat failed: ${err.message || err}`;
+                setAskStatus(`Answer failed: ${err.message || err}`, true);
                 console.error(err);
             } finally {
                 state.chatInFlight = false;
-                sendBtn.disabled = false;
-                inputEl.focus();
+                runBtn.disabled = false;
             }
         }
 
@@ -585,8 +528,12 @@
         // One streaming assistant turn: a status strip that narrates the
         // server's progress, the answer text as it arrives, and the citation
         // list once retrieval reports it.
-        function createChatTurn() {
-            const list = document.getElementById('chat-messages');
+        // `mount` is the Ask block's body — the bubble is appended there,
+        // while the scrolling that keeps the newest text in view belongs to
+        // the stream that owns every block.
+        function createChatTurn(mount) {
+            const list = mount;
+            const scroller = document.getElementById('ask-stream');
             const el = document.createElement('div');
             el.className = 'chat-msg assistant streaming';
 
@@ -603,7 +550,7 @@
 
             el.append(strip, think, bodyEl);
             list.appendChild(el);
-            list.scrollTop = list.scrollHeight;
+            scroller.scrollTop = scroller.scrollHeight;
 
             const t0 = performance.now();
             let chars = 0, reasoningChars = 0, citeCount = 0, retrievalMs = null;
@@ -616,7 +563,7 @@
                 if (tokens) bits.push(`${tokens.toLocaleString()} tokens · ${Math.round(tokens / secs)}/s`);
                 strip.querySelector('.cp-stats').textContent = bits.join('  ·  ');
             };
-            const nearBottom = () => list.scrollHeight - list.scrollTop - list.clientHeight < 60;
+            const nearBottom = () => scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 60;
 
             return {
                 phase(text) { strip.querySelector('.cp-phase').textContent = text; },
@@ -640,7 +587,7 @@
                         calls.set(t.name + '|' + t.args, row);
                         el.insertBefore(row, bodyEl);
                     }
-                    if (nearBottom()) list.scrollTop = list.scrollHeight;
+                    if (nearBottom()) scroller.scrollTop = scroller.scrollHeight;
                 },
                 reasoning(text) {
                     reasoningChars += text.length;
@@ -654,7 +601,7 @@
                     const stick = nearBottom();
                     bodyEl.textContent += text;
                     stats();
-                    if (stick) list.scrollTop = list.scrollHeight;
+                    if (stick) scroller.scrollTop = scroller.scrollHeight;
                 },
                 finish(text, cites, done, totalMs) {
                     el.classList.remove('streaming');
@@ -679,7 +626,7 @@
                         m.textContent = bits.join(' · ');
                         el.appendChild(m);
                     }
-                    list.scrollTop = list.scrollHeight;
+                    scroller.scrollTop = scroller.scrollHeight;
                 },
                 fail(msg) {
                     el.classList.remove('streaming');
@@ -709,59 +656,5 @@
                     bodyEl.appendChild(box);
                 },
             };
-        }
-
-        function renderSemanticHits(container, hits, mode) {
-            container.innerHTML = '';
-            hits.forEach(h => {
-                const card = document.createElement('div');
-                card.className = 'sem-hit';
-                const scoreText = h.score != null && Number.isFinite(h.score)
-                    ? h.score.toFixed(3)
-                    : '';
-                const lineLabel = h.start_line
-                    ? `L${h.start_line}${h.end_line && h.end_line !== h.start_line ? '–' + h.end_line : ''}`
-                    : '';
-                const meta = [h.node_type, h.file, lineLabel].filter(Boolean).join(' · ');
-                // Only the hybrid pipeline tags how each item was reached;
-                // pure-semantic hits have no `matched_by`.
-                const mech = (mode === 'hybrid' && h.matched_by) ? h.matched_by : '';
-                const mechBadge = mech
-                    ? `<span class="sem-match sem-match-${mech}" title="How this result was reached: ${mech === 'semantic' ? 'dense vector match' : mech === 'keyword' ? 'sparse/keyword match' : 'graph walk from a seed'}">${mech}</span>`
-                    : '';
-
-                card.innerHTML = `
-                    <div class="sem-hit-head">
-                        ${nodeIconSvg(h.node_type || 'Default')}
-                        <span class="name" title="${escapeHtml(h.id || h.name)}">${escapeHtml(truncateName(h.name || h.id))}</span>
-                        ${mechBadge}
-                        <span class="score">${escapeHtml(scoreText)}</span>
-                    </div>
-                    ${meta ? `<div class="sem-hit-meta" title="${escapeHtml(meta)}">${escapeHtml(meta)}</div>` : ''}
-                `;
-                card.querySelector('.sem-hit-head').addEventListener('click', (ev) => {
-                    const local = state.nodeById ? state.nodeById.get(h.id) : null;
-                    if (local) {
-                        // ⌘/Ctrl adds to the canvas instead of replacing it.
-                        if (ev.metaKey || ev.ctrlKey) state._viewMerge = true;
-                        handleClick(null, local);
-                        focusNode(local);
-                    } else {
-                        // DB has the node but graph.json doesn't — surface a small notice.
-                        const status = document.getElementById('sem-status');
-                        status.classList.remove('error');
-                        status.textContent = `Node "${h.id}" not in loaded graph.json.`;
-                    }
-                });
-                container.appendChild(card);
-            });
-
-            // Offer the whole hit set in one go: solo mode draws them fresh,
-            // normal mode dims the rest and frames them. Hits the loaded graph
-            // doesn't contain can't be drawn, so they don't count.
-            state.semMatches = hits
-                .map(h => h.id)
-                .filter(id => state.nodeById && state.nodeById.has(id));
-            syncPlotAllButton(document.getElementById('sem-plot-all'), state.semMatches);
         }
 

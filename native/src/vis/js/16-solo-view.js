@@ -677,29 +677,17 @@
             return topByDegree(n);
         }
 
-        // Put the cursor in the keyword search box. The button in the empty
-        // state is useless if it focuses something the user cannot see, and
-        // the box is four levels down: the sidebar, the Discover tab, its
-        // Search sub-tab, the Search section, then the Keyword mode. The two
-        // tab bars are opened by clicking their buttons rather than by
-        // reaching into wirePanelTabs' closures.
+        // The empty-canvas card's "search for one" action. There is one bar
+        // and one tab it lives on, so this is now a single call.
         function focusSearchInput() {
             const sidebar = document.getElementById('sidebar');
             if (sidebar) sidebar.classList.remove('collapsed');
-            const tab = document.querySelector('.panel-tab[data-tab="discover"]');
-            if (tab && !tab.classList.contains('active')) tab.click();
-            const sub = document.querySelector('.subtab[data-sub="search"]');
-            if (sub && !sub.classList.contains('active')) sub.click();
-            const section = document.getElementById('section-semantic');
-            if (section) section.classList.remove('collapsed');
-            if (state.semMode !== 'keyword') selectSemMode('keyword');
-            const input = document.getElementById('search');
-            if (input) { input.focus(); input.select(); }
+            focusAsk(null, 'names');
         }
 
-        // Shared by the two "light up … in graph" buttons (keyword + semantic).
-        // Works in both modes: solo draws the set fresh; normal mode dims the
-        // rest and frames it. Capped because thousands of lit nodes is noise.
+        // Behind every "light up … in graph" button. Works in both modes:
+        // solo draws the set fresh; normal mode dims the rest and frames it.
+        // Capped because thousands of lit nodes is noise.
         function syncPlotAllButton(btn, ids) {
             if (!btn) return;
             if (!ids.length) {

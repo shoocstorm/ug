@@ -23,8 +23,8 @@ That page is **generated**. Its source is the parts in `native/src/vis/`:
 
 ```
 index.html          the shell: <head>, markup, {{CSS}} and {{JS}} placeholders
-css/NN-name.css     17 stylesheet parts, concatenated in filename order
-js/NN-name.js       21 script parts, concatenated in filename order
+css/NN-name.css     21 stylesheet parts, concatenated in filename order
+js/NN-name.js       26 script parts, concatenated in filename order
 threejs-vis.bundle.js  the 3D renderer  (three.js + 3d-force-graph, vendored)
 cosmos-vis.bundle.js   the 2D renderer  (cosmos.gl, vendored)
 demo-shim.js        the static-hosting wrapper for the public demo
@@ -753,8 +753,92 @@ than conflict, and exiting returns the canvas to whatever was there before.
 
 ---
 
-## 8. Chrome
+## 8. The sidebar: Ask and Browse
 
+The left panel has two tabs, and the split is what the page is *for* versus
+what it lets you *poke at*.
+
+### 8.1 Ask (`25-ask.js`)
+
+**One input.** `#ask-input` is the only place a query goes. It replaced seven:
+a keyword box, a semantic box, a chat box, a tour box, the GQL box, the catalog
+filter and the palette — each with its own results list, its own empty state
+and its own idea of what Enter meant. Finding something started with choosing
+a box.
+
+**The mode is inferred, then overridable.** `classifyAsk` is pure and is the
+whole rule:
+
+| What you typed | Mode | Runs |
+|---|---|---|
+| `searchKb`, `src/vis/index.html`, `crate::a::b` — no spaces | **Names** | `searchNodes` — the loaded graph, or `/api/graph/search` |
+| `how does authentication work?` — anything with a space | **Find** | `fetchHybrid` — `/api/search/hybrid` |
+| ⌘/Ctrl+Enter, or the strip | **Answer** | `runChatTurn` — `/api/chat`, streamed |
+| the strip | **Tour** | `startTour` — `/api/tour` |
+| `#foo` · `?foo` · `>foo` | names · insights · palette actions | the prefix wins outright |
+
+A question never *defaults* to a model call: prose goes to retrieval, and
+spending tokens is always something you asked for. The strip under the bar
+shows what Enter would do and lets you override it; an edit clears the
+override, because a mode chosen for the previous wording is not a preference.
+
+Availability comes from the same `probeCapabilities` (`04-settings.js`) that
+gates everything else. Names never needs a database and is never disabled;
+Find and Tour need `search_ready`, Answer needs `chat_ready`. A mode the
+server cannot serve is greyed with the reason on hover, one banner under the
+strip repeats it with the fix attached, and `currentAskMode` falls back to
+Names rather than failing at submit time.
+
+**One stream, one row.** Each submitted query appends a block to
+`#ask-stream`; every block renders through `renderHitRows`, whatever produced
+it. Names is the one mode that answers while you type — its block is rebuilt
+on each pause, marked `live` (dashed) until Enter freezes it, so there is
+never a second results surface to reconcile. `↑`/`↓`/`Enter` walk it.
+
+The stream is capped at `ASK_MAX_BLOCKS` and old blocks are **removed**, not
+hidden — §9d is exactly this case.
+
+**Provenance is the point.** `matched_by`, `hop` and the score travel on every
+hybrid item and on every chat citation, and `askProvenanceHtml` renders them on
+result rows and citation rows alike. A citation is a retrieval hit that made it
+into the prompt, so it says how it was reached the same way. This existed
+before only on hybrid hits, inside a pane most sessions never opened.
+
+**The opening.** With an empty bar the column shows what this base is (one
+line, plus shape from `POST /api/tools/project_overview`, fetched once per
+project), four to six questions templated from real names in *this* graph
+(`hotspots`, falling back to `topByDegree` where there is no store), the
+busiest nodes, and the trail's recents. No model call on open, ever.
+
+### 8.2 Browse
+
+Catalog, Walk, Insights and Summary, on the sub-tab strip that Discover used to
+carry. Everything here inspects rather than asks. Catalog manages its own height
+(sticky toolbar, scrolling tree) via `#pane-browse.sub-catalog`; the other three
+ride the pane's scroll.
+
+### 8.3 The trail (`26-trail.js`)
+
+Per project, in `localStorage`, keyed like `tourHistoryKey` and
+`walkHistoryKey` — node ids only mean something inside one graph. Those two
+keep their own keys on purpose: they cache whole replay payloads, and sharing
+one quota would let a large saved tour evict what you kept.
+
+- **Recents** — every submitted query with its mode and outcome. Clicking one
+  puts it back in the bar and runs it; a kept answer re-reads for free.
+- **Kept** — a node (from the panel's ⌂ button), an answer (verbatim, with its
+  citations), or a whole view. A view is exactly the params `urlStateParams`
+  already produces plus the solo set the URL cannot carry, and it restores
+  through `readUrlStateFrom` — the deep-link path, not a second one.
+
+Writes shrink-then-drop on quota, and recents go before anything kept.
+
+### 8.4 The rest of the chrome
+
+- **Project chip** (`01-kb-manager.js`) — which base is answering, its
+  staleness, and a popover to switch. The full-screen manager is a *gate*: it
+  exists to create and delete, and it hides everything behind it. The chip is
+  the switch, with the manager one row down the popover.
 - **Legend** — decodes colours and doubles as a type filter, ordered by
   `NODE_TYPE_ORDER`. Counts track **what is on screen**: the reached set during a
   walk, the route during a tour, the view in solo mode. A `boundary` row counts
@@ -769,11 +853,13 @@ than conflict, and exiting returns the canvas to whatever was there before.
 - **Names** — node labels, off by default; one control in the viewbar and one on
   the walk card, both rendering from `state.showLabels`.
 - **URL state** (`19-url-state.js`) — `?p=&n=&focus=&nf=&ef=&tab=&q=&r=`, applied
-  on load, so a view is shareable and survives a reload. Node selection pushes a
-  real history entry, which makes the browser's Back button and the in-app one
-  the same button.
-- **Command palette** (`20-palette.js`) — `⌘K` dispatches to nodes, insight
-  presets, actions and recent tours; `?` opens a shortcut sheet generated from
+  on load, so a view is shareable and survives a reload. `tab` is now `ask` or
+  `browse:<sub>`. Node selection pushes a real history entry, which makes the
+  browser's Back button and the in-app one the same button.
+- **Command palette** (`20-palette.js`) — `⌘K` dispatches to nodes, actions,
+  insight presets and recent tours. Anything it cannot resolve instantly is the
+  Ask bar's job: Enter hands the text over (`askFromPalette`) rather than
+  growing a second answer surface. `?` opens a shortcut sheet generated from
   the same `KEYMAP` so the two cannot drift.
 - **Loading** — a streaming progress bar driven by `Content-Length`, an honest
   failure card with Retry and Back-to-KBs, and a "Rendering graph…" phase held
@@ -786,7 +872,7 @@ than conflict, and exiting returns the canvas to whatever was there before.
 
 ```bash
 cd native
-cargo nextest run -E 'binary(vis_assembly_test) or test(demo)'   # part order, page shape, demo staleness
+cargo nextest run -E 'test(vis_) or test(demo)'   # part order, page shape, ask dispatch, demo staleness
 cargo build --release                                             # </script> + placeholder guards
 cargo run --bin ug -- demo --page-only                            # required after any vis/ edit
 ./scripts/gen-demo.sh --preview                                   # serves docs/ug-website on :8081
@@ -829,21 +915,28 @@ reshapes what is hot).
 
 ## 10. Backlog
 
-1. **Responsive / small-screen layout** — the only `@media` queries are
-   `prefers-reduced-motion`. With a fixed `--sidebar-width` (min 300 px) plus
-   `--info-width` (min 320 px) both overlaying the canvas, 1280 px is already
-   tight and a tablet is unusable. At minimum, collapse the sidebar to an overlay
-   below ~1100 px.
-2. **Accessibility pass** — apply the KB-manager card `role`/`tabIndex`/`keydown`
-   pattern (`01-kb-manager.js`) to search results, catalog rows and insight
-   results; add focus management to the palette.
-3. **Empty / zero-result states** — copy for search, insights and catalog filters
-   that match nothing.
-4. **Light theme** — the palette is hard-committed to dark, but colours are
+1. **Accessibility pass** — apply the KB-manager card `role`/`tabIndex`/`keydown`
+   pattern (`01-kb-manager.js`) to Ask rows, catalog rows and insight results;
+   add focus management to the palette and to the project switcher popover.
+2. **Light theme** — the palette is hard-committed to dark, but colours are
    centralised in `config.colorMap` / `config.relColorMap` / `CANVAS`, so a
    CSS-variable pass is cheaper here than in most codebases.
-5. **Does 3D still earn its keep?** Every new visual feature now costs two
+3. **Does 3D still earn its keep?** Every new visual feature now costs two
    implementations. Worth revisiting once the 2D renderer has been used in anger.
+4. **Cross-project retrieval.** Deliberately *not* built. Answering one question
+   across every base means opening every store, and `~/.ug/neo4j` alone is
+   1.4 GB against a server that holds one. What "managing many bases" actually
+   needed was a switch that keeps your place (§8.4) and a per-project trail
+   (§8.3). Revisit only with a measured plan for the store cost.
+5. **The trail is per browser.** `localStorage` is the right size for it and
+   costs no backend, but it is lost on a cleared cache and invisible to the
+   CLI. A `~/.ug/<project>/trail.json` behind a small route would fix both;
+   worth doing when a second device is actually in play.
+
+Done since the last revision: responsive layout (`20-trail.css` caps both
+panels as a share of the viewport below 1100 px and again below 720 px — the
+page had no `@media` query but `prefers-reduced-motion` before that), and
+empty / zero-result copy for the Ask stream.
 
 Per AGENTS.md §3a there are no users yet — a superseded idea belongs deleted,
 not kept as an alias.

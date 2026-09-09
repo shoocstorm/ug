@@ -341,6 +341,7 @@
                 icon.title = d.group || '';
             }
             document.getElementById('info-title').textContent = truncateName(d.name);
+            syncKeepButton();
 
             // This node's neighbours, straight off the adjacency index. The
             // endpoints are resolved through nodeById rather than read off the
@@ -1522,10 +1523,11 @@
         }
 
         function resetView() {
-            document.getElementById('search').value = '';
-            document.getElementById('search-clear').classList.remove('visible');
-            document.getElementById('search-suggestions').classList.remove('visible');
+            resetAsk();
+            document.getElementById('ask-input').value = '';
+            document.getElementById('ask-clear').hidden = true;
             state.searchQuery = '';
+            syncAskModes();
             document.getElementById('info').classList.remove('visible');
             state.nodeFilters.clear();
             state.edgeFilters.clear();
