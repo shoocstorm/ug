@@ -95,9 +95,10 @@
         }
 
         // Scene backdrop: a near-black ground with soft out-of-focus washes of
-        // the two ink families (orange / steel blue). Dark makes the saturated
-        // node colours glow instead of sitting flat, and gives the dimmed
-        // rings of a tour somewhere to disappear into.
+        // teal and steel blue — the page's own backdrop in `00-base.css`,
+        // repainted here so there is no seam where the canvas starts. Cool and
+        // dark makes the saturated node inks glow instead of sitting flat, and
+        // gives the dimmed rings of a tour somewhere to disappear into.
         function backgroundTexture() {
             const c = document.createElement('canvas');
             c.width = c.height = 1024;
@@ -107,14 +108,14 @@
             const glow = (x, y, r, color) => {
                 const g = ctx.createRadialGradient(x, y, 0, x, y, r);
                 g.addColorStop(0, color);
-                g.addColorStop(1, 'rgba(13,13,16,0)');
+                g.addColorStop(1, 'rgba(10,13,17,0)');
                 ctx.fillStyle = g;
                 ctx.fillRect(0, 0, 1024, 1024);
             };
-            glow(790, 190, 620, 'rgba(233,100,28,0.16)');   // warm haze, top-right
-            glow(170, 780, 640, 'rgba(58,110,165,0.20)');   // blue haze, bottom-left
+            glow(790, 190, 620, 'rgba(45,212,191,0.16)');   // teal haze, top-right
+            glow(170, 780, 640, 'rgba(96,165,250,0.18)');   // blue haze, bottom-left
             glow(320, 150, 460, 'rgba(91,143,201,0.12)');   // pale blue, top-left
-            glow(880, 880, 520, 'rgba(194,65,12,0.12)');    // rust haze, bottom-right
+            glow(880, 880, 520, 'rgba(20,184,166,0.12)');   // deep teal, bottom-right
             glow(512, 512, 760, 'rgba(120,130,150,0.10)');  // faint lift mid-frame
             const t = new THREE.CanvasTexture(c);
             t.colorSpace = THREE.SRGBColorSpace;

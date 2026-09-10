@@ -35,7 +35,7 @@
             align-items: center;
             gap: 7px;
             padding: 7px 12px;
-            background: rgba(24, 24, 27, 0.7);
+            background: rgba(20, 26, 32, 0.7);
             border: 1px solid var(--border-soft);
             border-radius: 999px;
             color: var(--text-muted);
@@ -74,7 +74,7 @@
             align-items: center;
             justify-content: center;
             padding: 20px;
-            background: rgba(9, 9, 11, 0.72);
+            background: rgba(10, 13, 17, 0.72);
             backdrop-filter: blur(8px);
             -webkit-backdrop-filter: blur(8px);
         }
@@ -113,8 +113,8 @@
             align-items: center;
             justify-content: center;
             border-radius: 10px;
-            background: rgba(249, 115, 22, 0.12);
-            border: 1px solid rgba(249, 115, 22, 0.28);
+            background: rgba(var(--accent-rgb), 0.12);
+            border: 1px solid rgba(var(--accent-rgb), 0.28);
             color: var(--accent);
         }
 
@@ -205,8 +205,8 @@
         }
 
         .settings-precedence .prec-step.prec-here {
-            border-color: rgba(249, 115, 22, 0.45);
-            background: rgba(249, 115, 22, 0.1);
+            border-color: rgba(var(--accent-rgb), 0.45);
+            background: rgba(var(--accent-rgb), 0.1);
             color: var(--accent);
         }
 
@@ -426,7 +426,7 @@
         .settings-input-wrap input:focus,
         .settings-input-wrap select:focus {
             border-color: var(--accent);
-            box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.15);
+            box-shadow: 0 0 0 2px rgba(var(--accent-rgb), 0.15);
         }
 
         .settings-input-wrap input::placeholder {
@@ -435,7 +435,7 @@
 
         .settings-row.dirty .settings-input-wrap input,
         .settings-row.dirty .settings-input-wrap select {
-            border-color: rgba(249, 115, 22, 0.55);
+            border-color: rgba(var(--accent-rgb), 0.55);
         }
 
         .settings-clear-btn {
@@ -604,7 +604,7 @@
         .settings-btn.primary {
             background: var(--accent);
             border: none;
-            color: #1c1917;
+            color: var(--accent-ink);
         }
 
         .settings-btn.primary:hover:not(:disabled) {
@@ -615,13 +615,13 @@
            load (vis.* / graph.* rows) — accented so it reads as the
            suggested next step, quiet enough not to compete with Save. */
         .settings-btn.ghost {
-            background: rgba(249, 115, 22, 0.1);
-            border: 1px solid rgba(249, 115, 22, 0.4);
+            background: rgba(var(--accent-rgb), 0.1);
+            border: 1px solid rgba(var(--accent-rgb), 0.4);
             color: var(--accent);
         }
 
         .settings-btn.ghost:hover:not(:disabled) {
-            background: rgba(249, 115, 22, 0.18);
+            background: rgba(var(--accent-rgb), 0.18);
         }
 
         .settings-btn:disabled {
@@ -663,7 +663,7 @@
             height: 85vh;
             max-width: 1400px;
             min-width: 640px;
-            background: rgba(15, 15, 17, 0.97);
+            background: rgba(14, 18, 22, 0.97);
             border: 1px solid var(--border);
             border-radius: 14px;
             box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
@@ -818,7 +818,7 @@
 
         .catalog-search-input:focus {
             border-color: var(--accent);
-            box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.15);
+            box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.15);
         }
 
         .catalog-toolbar-actions {
@@ -880,12 +880,12 @@
         }
 
         .cat-node.match-self {
-            background: rgba(249, 115, 22, 0.1);
+            background: rgba(var(--accent-rgb), 0.1);
         }
 
         /* Persistent marker for the row whose node is currently focused. */
         .cat-node.focused {
-            background: rgba(249, 115, 22, 0.14);
+            background: rgba(var(--accent-rgb), 0.14);
             box-shadow: inset 2px 0 0 var(--accent);
         }
 
@@ -895,9 +895,9 @@
         }
 
         @keyframes cat-pulse {
-            0%   { background: rgba(249, 115, 22, 0.55); transform: translateX(2px); }
-            40%  { background: rgba(249, 115, 22, 0.28); }
-            100% { background: rgba(249, 115, 22, 0.14); transform: translateX(0); }
+            0%   { background: rgba(var(--accent-rgb), 0.55); transform: translateX(2px); }
+            40%  { background: rgba(var(--accent-rgb), 0.28); }
+            100% { background: rgba(var(--accent-rgb), 0.14); transform: translateX(0); }
         }
 
         .cat-toggle {
@@ -940,7 +940,7 @@
         }
 
         .cat-name mark {
-            background: rgba(249, 115, 22, 0.3);
+            background: rgba(var(--accent-rgb), 0.3);
             color: var(--text);
             padding: 0;
             border-radius: 2px;

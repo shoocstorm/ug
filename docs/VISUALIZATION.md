@@ -321,6 +321,27 @@ flared orange on selection keeps its silhouette:
 Grouped by family rather than one shape per type: seven silhouettes is a code to
 memorise, four is a glance.
 
+### Chrome and canvas do not share a hue
+
+The panel takes the dark half of the ug website: a blue-black ground
+(`#0a0d11` → `#1c242c`), warm off-white ink, and one teal accent. The canvas
+keeps the warm ink families above. That split is the point — chrome used to be
+orange, which is also what a File node is, so a highlight and a node argued for
+the same attention. Nothing in the panel is orange now, and nothing on the
+canvas is teal.
+
+Every chrome colour comes from the tokens in `css/00-base.css`. Washes read
+`rgba(var(--accent-rgb), α)` so a tint picks its own alpha rather than adding a
+hex that has to be kept in step, and anything *filled* with the accent takes
+`--accent-ink` for its text: the teal is bright enough that white on it cannot
+be read. Semantic colours — `--danger`, `--warning`, `--success`, and the
+context ramp's `#ff3d00` target — are not the accent and do not follow it.
+
+The page's backdrop (`#container`) and the 3D scene's backdrop texture
+(`backgroundTexture` in `11-render-three.js`, and `CANVAS.bg` / `CANVAS.fog`)
+paint the same washes on the same ground, so there is no seam where the canvas
+starts and no flash before it initialises.
+
 ---
 
 ## 5. The 2D renderer (`12-render-cosmos.js`)

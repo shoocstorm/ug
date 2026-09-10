@@ -65,7 +65,7 @@
             width: 900px;
             height: 900px;
             transform: translateX(-50%);
-            background: radial-gradient(closest-side, rgba(249, 115, 22, 0.12), transparent 70%);
+            background: radial-gradient(closest-side, rgba(var(--accent-rgb), 0.12), transparent 70%);
         }
 
         .kb-inner {
@@ -102,7 +102,7 @@
             font-weight: 700;
             letter-spacing: 1px;
             color: var(--text);
-            text-shadow: 0 0 44px rgba(249, 115, 22, 0.25);
+            text-shadow: 0 0 44px rgba(var(--accent-rgb), 0.25);
         }
 
         .kb-cursor {
@@ -584,7 +584,7 @@
         .kb-add-tile:hover {
             border-color: var(--accent);
             color: var(--accent);
-            background: rgba(249, 115, 22, 0.05);
+            background: rgba(var(--accent-rgb), 0.05);
         }
 
         .kb-add-tile svg {
@@ -632,7 +632,7 @@
             height: 44px;
             color: var(--accent);
             margin-bottom: 16px;
-            filter: drop-shadow(0 0 14px rgba(249, 115, 22, 0.4));
+            filter: drop-shadow(0 0 14px rgba(var(--accent-rgb), 0.4));
         }
 
         .kb-wizard-title {
@@ -963,7 +963,7 @@
 
         .kb-field input[type="text"]:focus {
             border-color: var(--accent);
-            box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.15);
+            box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.15);
         }
 
         .kb-checkbox {
@@ -1008,7 +1008,7 @@
             align-items: center;
             gap: 8px;
             background: var(--accent);
-            color: #04262b;
+            color: var(--accent-ink);
             border: none;
             padding: 11px 22px;
             border-radius: 8px;
@@ -1098,7 +1098,7 @@
             align-items: center;
             justify-content: center;
             padding: 20px;
-            background: rgba(9, 9, 11, 0.72);
+            background: rgba(10, 13, 17, 0.72);
             backdrop-filter: blur(8px);
             -webkit-backdrop-filter: blur(8px);
         }
@@ -1331,7 +1331,7 @@
             align-items: center;
             justify-content: center;
             padding: 20px;
-            background: rgba(9, 9, 11, 0.72);
+            background: rgba(10, 13, 17, 0.72);
             backdrop-filter: blur(8px);
             -webkit-backdrop-filter: blur(8px);
         }
@@ -1470,7 +1470,7 @@
         .kb-browse-select {
             background: var(--accent);
             border-color: transparent;
-            color: #04262b;
+            color: var(--accent-ink);
         }
 
         .kb-browse-select:hover:not(:disabled) {

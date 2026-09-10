@@ -27,7 +27,7 @@
             position: absolute;
             inset: -16px -40px -12px;
             background: radial-gradient(ellipse at 50% 45%,
-                rgba(10, 10, 13, 0.82) 0%, rgba(10, 10, 13, 0.55) 55%, rgba(10, 10, 13, 0) 78%);
+                rgba(10, 13, 17, 0.82) 0%, rgba(10, 13, 17, 0.55) 55%, rgba(10, 13, 17, 0) 78%);
             z-index: -1;
             pointer-events: none;
         }
@@ -75,8 +75,8 @@
             gap: 4px;
             padding: 3px 8px;
             border-radius: 999px;
-            background: rgba(249, 115, 22, 0.12);
-            border: 1px solid rgba(249, 115, 22, 0.25);
+            background: rgba(var(--accent-rgb), 0.12);
+            border: 1px solid rgba(var(--accent-rgb), 0.25);
             font-size: 9px;
             font-weight: 500;
             letter-spacing: 0.4px;
@@ -87,8 +87,8 @@
         }
 
         .header-badge:hover {
-            background: rgba(249, 115, 22, 0.18);
-            border-color: rgba(249, 115, 22, 0.4);
+            background: rgba(var(--accent-rgb), 0.18);
+            border-color: rgba(var(--accent-rgb), 0.4);
         }
 
         .header-badge svg {
@@ -156,7 +156,7 @@
             left: 0;
             width: var(--sidebar-width);
             height: 100vh;
-            background: rgba(15, 15, 17, 0.85);
+            background: rgba(14, 18, 22, 0.85);
             backdrop-filter: blur(24px);
             border-right: 1px solid var(--border);
             display: flex;
@@ -313,7 +313,7 @@
 
         .panel-tab.active {
             color: var(--accent);
-            background: rgba(249, 115, 22, 0.08);
+            background: rgba(var(--accent-rgb), 0.08);
             border-color: var(--accent-dim);
         }
 

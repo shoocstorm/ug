@@ -198,8 +198,10 @@
         // background lives here, so the scene's ground tone and the colours
         // that recede into it can never drift apart.
         const CANVAS = {
-            bg: '#0d0d10',
-            fog: 0x0d0d10,
+            // The ground, shared with `#container`'s backdrop in `00-base.css`
+            // so the canvas and the page it sits on are one surface.
+            bg: '#0a0d11',
+            fog: 0x0a0d11,
             label: 'rgba(214,219,230,0.92)',
             labelTour: 'rgba(253,186,116,0.98)',
             linkRecede: '#26262e',    // focus mode: outside the neighbourhood

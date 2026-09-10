@@ -4,7 +4,7 @@
             display: none;
             margin: 12px 14px 0;
             padding: 10px 12px;
-            background: rgba(249, 115, 22, 0.08);
+            background: rgba(var(--accent-rgb), 0.08);
             border: none;
             border-radius: 8px;
             font-size: 11px;
@@ -91,7 +91,7 @@
 
         .section.featured {
             border: none;
-            background: linear-gradient(180deg, rgba(249, 115, 22, 0.06) 0%, transparent 100%);
+            background: linear-gradient(180deg, rgba(var(--accent-rgb), 0.06) 0%, transparent 100%);
             position: relative;
             border-radius: 8px;
             margin: 6px;
@@ -110,7 +110,7 @@
             padding: 2px 8px;
             border-radius: 4px;
             border: none;
-            box-shadow: 0 0 12px rgba(249, 115, 22, 0.4);
+            box-shadow: 0 0 12px rgba(var(--accent-rgb), 0.4);
         }
 
         .section.featured .section-header {
@@ -161,7 +161,7 @@
             gap: 4px;
             padding: 2px 8px;
             border-radius: 999px;
-            background: rgba(249, 115, 22, 0.10);
+            background: rgba(var(--accent-rgb), 0.10);
             border: none;
             color: var(--accent);
             font-size: 10px;
@@ -195,7 +195,7 @@
 
         .chat-msg.user {
             align-self: flex-end;
-            background: rgba(249, 115, 22, 0.10);
+            background: rgba(var(--accent-rgb), 0.10);
             border: none;
             color: var(--text);
         }

@@ -235,7 +235,7 @@
             align-items: flex-start;
             justify-content: center;
             padding: 14vh 20px 20px;
-            background: rgba(9, 9, 11, 0.72);
+            background: rgba(10, 13, 17, 0.72);
             backdrop-filter: blur(8px);
             -webkit-backdrop-filter: blur(8px);
         }

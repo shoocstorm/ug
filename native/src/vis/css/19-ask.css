@@ -50,7 +50,7 @@
 
         .ask-bar:focus-within {
             border-color: var(--accent);
-            box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.15);
+            box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.15);
         }
 
         .ask-bar-icon {
@@ -111,7 +111,7 @@
         }
 
         .ask-run {
-            background: rgba(249, 115, 22, 0.12);
+            background: rgba(var(--accent-rgb), 0.12);
             color: var(--accent);
         }
 
@@ -121,7 +121,7 @@
         }
 
         .ask-run:hover:not(:disabled) {
-            background: rgba(249, 115, 22, 0.24);
+            background: rgba(var(--accent-rgb), 0.24);
         }
 
         .ask-run:disabled {

@@ -173,7 +173,7 @@
            the table in 00-preamble.js stays the only place the colours live —
            these rules only say *where* the colour goes. */
         .ctx-section[data-role="target"]     .ctx-item { border-left-color: #ff3d00; }
-        .ctx-section[data-role="caller"]     .ctx-item { border-left-color: #f97316; }
+        .ctx-section[data-role="caller"]     .ctx-item { border-left-color: var(--accent); }
         .ctx-section[data-role="test"]       .ctx-item { border-left-color: #fbbf24; }
         .ctx-section[data-role="dependency"] .ctx-item { border-left-color: #38bdf8; }
         .ctx-section[data-role="doc"]        .ctx-item { border-left-color: #a78bfa; }

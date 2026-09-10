@@ -1,15 +1,35 @@
+        /* ─── Palette ────────────────────────────────────────
+           The dark half of the ug website: a blue-black ground, warm
+           off-white ink, and one teal accent. The zinc-and-orange scheme
+           this replaces put the chrome in the same hue family as the
+           graph's own structural inks, so a highlight and a File node
+           argued for the same attention. A cool chrome around warm nodes
+           settles that — nothing on the canvas is teal, and nothing in the
+           panel is orange. */
         :root {
-            --bg-deep: #09090b;
-            --bg-surface: #18181b;
-            --bg-elevated: #27272a;
-            --bg-hover: #3f3f46;
-            --border: #3f3f46;
-            --border-soft: #2a2a2e;
-            --text: #e4e4e7;
-            --text-muted: #a1a1aa;
-            --text-dim: #71717a;
-            --accent: #f97316;
-            --accent-dim: #c2410c;
+            --bg-deep: #0a0d11;
+            --bg-surface: #0e1216;
+            --bg-elevated: #141a20;
+            --bg-hover: #1c242c;
+            --border: rgba(255, 255, 255, 0.16);
+            --border-soft: rgba(255, 255, 255, 0.09);
+            --text: #f4f1ea;
+            --text-soft: #cfc9bd;
+            --text-muted: #8e9aa6;
+            --text-dim: #6b7681;
+
+            /* One accent in five forms. `--accent-rgb` is the channel triple
+               so a wash picks its own alpha — `rgba(var(--accent-rgb), .12)`
+               — instead of a second hex that has to be kept in step. And
+               `--accent-ink` is what goes *on* a filled accent: this teal is
+               bright enough that white text on it cannot be read. */
+            --accent: #2dd4bf;
+            --accent-rgb: 45, 212, 191;
+            --accent-dim: #14b8a6;
+            --accent-soft: #5eead4;
+            --accent-pale: #99f6e4;
+            --accent-ink: #06231b;
+
             --danger: #f87171;
             --success: #4ade80;
             --warning: #fbbf24;
@@ -57,11 +77,11 @@
                before the canvas initialises and the saturated node inks read
                as luminous rather than flat. */
             background:
-                radial-gradient(ellipse 70% 55% at 78% 18%, rgba(233, 100, 28, 0.16) 0%, transparent 55%),
-                radial-gradient(ellipse 60% 50% at 15% 75%, rgba(58, 110, 165, 0.18) 0%, transparent 55%),
+                radial-gradient(ellipse 70% 55% at 78% 18%, rgba(45, 212, 191, 0.13) 0%, transparent 55%),
+                radial-gradient(ellipse 60% 50% at 15% 75%, rgba(96, 165, 250, 0.14) 0%, transparent 55%),
                 radial-gradient(ellipse 50% 40% at 30% 15%, rgba(91, 143, 201, 0.10) 0%, transparent 50%),
-                radial-gradient(ellipse 55% 45% at 88% 85%, rgba(194, 65, 12, 0.10) 0%, transparent 50%),
-                #0d0d10;
+                radial-gradient(ellipse 55% 45% at 88% 85%, rgba(20, 184, 166, 0.10) 0%, transparent 50%),
+                #0a0d11;
             background-attachment: fixed;
         }
 

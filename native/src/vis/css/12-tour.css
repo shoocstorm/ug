@@ -19,7 +19,7 @@
         .pane-blurb {
             font-size: 11.5px;
             line-height: 1.55;
-            color: var(--text-dim, #8a7f72);
+            color: var(--text-dim, #6b7681);
             margin: 0 0 10px;
         }
 
@@ -29,7 +29,7 @@
         }
         /* Matches the Send / Search action buttons in the sibling panels,
            in the tour's own accent. */
-        #tour-launch-status { font-size: 11px; margin-top: 8px; color: var(--text-dim, #8a7f72); }
+        #tour-launch-status { font-size: 11px; margin-top: 8px; color: var(--text-dim, #6b7681); }
         #tour-launch-status.error { color: #dc2626; }
 
         /* ─── Guided Tour: cinematic narration overlay ─── */
@@ -64,14 +64,14 @@
            sits over the part of it the camera just flew to. Blur keeps the
            text readable over whatever is behind. */
         .tour-card {
-            background: linear-gradient(180deg, rgba(26, 23, 21, .58), rgba(18, 16, 15, .66));
+            background: linear-gradient(180deg, rgba(20, 26, 32, .58), rgba(14, 18, 22, .66));
             backdrop-filter: blur(26px) saturate(1.25);
             -webkit-backdrop-filter: blur(26px) saturate(1.25);
-            border: 1px solid rgba(249, 115, 22, .28);
+            border: 1px solid rgba(var(--accent-rgb), .28);
             border-radius: 16px;
             box-shadow: 0 22px 60px -14px rgba(0, 0, 0, .6), 0 0 0 1px rgba(255, 255, 255, .03) inset;
             padding: 12px 18px 11px;
-            color: #f2ede6;
+            color: var(--text);
             display: flex;
             flex-direction: column;
             /* The card overlays the very nodes it's describing — cap it so a
@@ -91,19 +91,19 @@
             opacity: .45; transition: opacity .15s;
         }
         .tour-top:hover .tour-grip { opacity: .85; }
-        .tour-grip i { display: block; width: 12px; height: 1.5px; border-radius: 1px; background: #d8b48f; }
+        .tour-grip i { display: block; width: 12px; height: 1.5px; border-radius: 1px; background: var(--text-soft); }
         .tour-badge {
             font-size: 9.5px; letter-spacing: .14em; text-transform: uppercase; font-weight: 800;
-            color: #1a120b; background: linear-gradient(90deg, #fb923c, #f97316);
+            color: var(--accent-ink); background: linear-gradient(90deg, var(--accent-soft), var(--accent));
             padding: 3px 8px; border-radius: 999px; white-space: nowrap;
         }
         .tour-title-main {
-            font-size: 12.5px; font-weight: 600; color: #f7f2ea; flex: 1;
+            font-size: 12.5px; font-weight: 600; color: var(--text); flex: 1;
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
-        .tour-counter { font-size: 11px; color: #d8b48f; font-variant-numeric: tabular-nums; letter-spacing: .1em; }
+        .tour-counter { font-size: 11px; color: var(--text-soft); font-variant-numeric: tabular-nums; letter-spacing: .1em; }
         .tour-close {
-            background: none; border: none; color: #a89b8d; cursor: pointer;
+            background: none; border: none; color: var(--text-muted); cursor: pointer;
             font-size: 17px; line-height: 1; padding: 2px 5px; border-radius: 6px;
         }
         .tour-close:hover { color: #fff; background: rgba(255, 255, 255, .09); }
@@ -113,7 +113,7 @@
         .tour-icon {
             width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center;
             background: none; border: 1px solid transparent; border-radius: 8px;
-            color: #a89b8d; cursor: pointer; padding: 0;
+            color: var(--text-muted); cursor: pointer; padding: 0;
             transition: color .15s, background .15s, border-color .15s;
         }
         .tour-icon svg { width: 15px; height: 15px; }
@@ -121,29 +121,29 @@
         .tour-icon.danger:hover { color: #fca5a5; background: rgba(248, 113, 113, .12); }
         /* Toggles read as lit when engaged. */
         .tour-icon[aria-pressed="true"] {
-            color: #1a120b; background: linear-gradient(135deg, #fdba74, #f97316);
+            color: var(--accent-ink); background: linear-gradient(135deg, var(--accent-pale), var(--accent));
             border-color: transparent;
         }
-        .tour-icon[aria-pressed="true"]:hover { filter: brightness(1.08); color: #1a120b; }
+        .tour-icon[aria-pressed="true"]:hover { filter: brightness(1.08); color: var(--accent-ink); }
         /* An unlit warnings button still hints that there's something to read. */
-        .tour-icon.warn:not([aria-pressed="true"]) { color: #f5c6a0; }
+        .tour-icon.warn:not([aria-pressed="true"]) { color: var(--warning); }
         .tour-progress { display: flex; gap: 5px; margin-bottom: 10px; flex-shrink: 0; }
         .tour-seg {
             height: 3px; flex: 1; border-radius: 2px; cursor: pointer;
             background: rgba(255, 255, 255, .14); overflow: hidden; position: relative;
         }
-        .tour-seg.done { background: rgba(249, 115, 22, .6); }
-        .tour-seg.active { background: rgba(249, 115, 22, .28); }
+        .tour-seg.done { background: rgba(var(--accent-rgb), .6); }
+        .tour-seg.active { background: rgba(var(--accent-rgb), .28); }
         .tour-seg.active::after {
             content: ''; position: absolute; inset: 0 auto 0 0; width: var(--seg, 0%);
-            background: linear-gradient(90deg, #fb923c, #f97316); border-radius: 2px;
+            background: linear-gradient(90deg, var(--accent-soft), var(--accent)); border-radius: 2px;
         }
         .tour-stop-title { font-size: 16px; font-weight: 650; color: #fff; margin-bottom: 3px; line-height: 1.25; }
         .tour-stop-meta {
-            font-size: 11px; color: #cbb096; margin-bottom: 10px;
+            font-size: 11px; color: var(--text-soft); margin-bottom: 10px;
             display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
         }
-        .tour-stop-meta .type { color: #fb923c; font-weight: 600; }
+        .tour-stop-meta .type { color: var(--accent-soft); font-weight: 600; }
         .tour-stop-meta .file { font-family: ui-monospace, "SF Mono", Menlo, monospace; opacity: .85; }
         .tour-jump {
             color: #8fb8dd; cursor: pointer; text-decoration: none;
@@ -155,13 +155,13 @@
         .tour-hop {
             display: inline-flex; align-items: center; gap: 4px;
             font-size: 10px; letter-spacing: .06em; text-transform: uppercase; font-weight: 700;
-            color: #fdba74; background: rgba(249, 115, 22, .13);
-            border: 1px solid rgba(249, 115, 22, .3);
+            color: var(--accent-pale); background: rgba(var(--accent-rgb), .13);
+            border: 1px solid rgba(var(--accent-rgb), .3);
             padding: 2px 7px; border-radius: 999px;
         }
-        .tour-narration { font-size: 13.5px; line-height: 1.55; color: #e9dfd2; min-height: 2.6em; }
+        .tour-narration { font-size: 13.5px; line-height: 1.55; color: var(--text-soft); min-height: 2.6em; }
         .tour-narration .caret {
-            display: inline-block; width: 7px; color: #f97316; font-weight: 700;
+            display: inline-block; width: 7px; color: var(--accent); font-weight: 700;
             animation: tourblink 1s step-end infinite;
         }
         @keyframes tourblink { 50% { opacity: 0; } }
@@ -179,20 +179,20 @@
             width: 38px; height: 38px; border-radius: 50%; cursor: pointer; padding: 0;
             display: inline-flex; align-items: center; justify-content: center;
             background: rgba(255, 255, 255, .07); border: 1px solid rgba(255, 255, 255, .12);
-            color: #f2ede6;
+            color: var(--text);
             transition: background .15s, border-color .15s, transform .12s, box-shadow .15s, opacity .15s;
         }
         .tour-tbtn svg { width: 17px; height: 17px; }
         .tour-tbtn:hover:not(:disabled) {
-            background: rgba(255, 255, 255, .14); border-color: rgba(249, 115, 22, .5); transform: scale(1.06);
+            background: rgba(255, 255, 255, .14); border-color: rgba(var(--accent-rgb), .5); transform: scale(1.06);
         }
         .tour-tbtn:active:not(:disabled) { transform: scale(.95); }
         .tour-tbtn:disabled { opacity: .3; cursor: default; }
         /* The play button is the anchor of the whole deck. */
         .tour-tbtn.play {
-            width: 54px; height: 54px; border-color: transparent; color: #1a120b;
-            background: linear-gradient(145deg, #fdba74, #f97316);
-            box-shadow: 0 6px 20px -6px rgba(249, 115, 22, .75), 0 0 0 1px rgba(255, 255, 255, .08) inset;
+            width: 54px; height: 54px; border-color: transparent; color: var(--accent-ink);
+            background: linear-gradient(145deg, var(--accent-pale), var(--accent));
+            box-shadow: 0 6px 20px -6px rgba(var(--accent-rgb), .75), 0 0 0 1px rgba(255, 255, 255, .08) inset;
         }
         .tour-tbtn.play svg { width: 24px; height: 24px; margin-left: 1px; }
         .tour-tbtn.play:hover { filter: brightness(1.06); transform: scale(1.05); }
@@ -201,10 +201,10 @@
         .tour-tbtn.play.is-pause svg, .tour-tbtn.play.is-replay svg { margin-left: 0; }
         .tour-play-state {
             font-size: 10px; letter-spacing: .12em; text-transform: uppercase; font-weight: 700;
-            color: #7d7264; white-space: nowrap;
+            color: var(--text-dim); white-space: nowrap;
         }
         .tour-exit {
-            background: none; border: 1px solid rgba(255, 255, 255, .12); color: #a89b8d;
+            background: none; border: 1px solid rgba(255, 255, 255, .12); color: var(--text-muted);
             cursor: pointer; font-size: 11px; letter-spacing: .05em; font-weight: 600;
             height: 28px; padding: 0 11px; border-radius: 8px; transition: color .15s, border-color .15s;
         }
@@ -212,9 +212,9 @@
         /* ─── Guided Tour: live planning read-out ─── */
         .tour-plan { padding: 2px 0 4px; }
         .tplan-head { display: flex; align-items: center; gap: 9px; margin-bottom: 10px; }
-        .tplan-phase { flex: 1; font-size: 13px; font-weight: 600; color: #f2ede6; }
+        .tplan-phase { flex: 1; font-size: 13px; font-weight: 600; color: var(--text); }
         .tplan-elapsed {
-            font-size: 11px; color: #a89b8d; font-variant-numeric: tabular-nums; letter-spacing: .06em;
+            font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; letter-spacing: .06em;
         }
         /* Indeterminate sweep: the model gives no completion percentage, so
            this shows liveness rather than pretending to know how far along
@@ -225,7 +225,7 @@
         }
         .tplan-bar {
             height: 100%; width: 34%; border-radius: 2px;
-            background: linear-gradient(90deg, transparent, #fb923c, #f97316, transparent);
+            background: linear-gradient(90deg, transparent, var(--accent-soft), var(--accent), transparent);
             animation: tplan-sweep 1.5s ease-in-out infinite;
         }
         @keyframes tplan-sweep {
@@ -235,7 +235,7 @@
         .tplan-steps { display: flex; flex-direction: column; gap: 5px; }
         .tplan-step {
             display: flex; align-items: center; gap: 8px;
-            font-size: 11.5px; color: #7d7264; transition: color .2s;
+            font-size: 11.5px; color: var(--text-dim); transition: color .2s;
         }
         .tplan-step .tick {
             width: 14px; height: 14px; flex-shrink: 0; border-radius: 50%;
@@ -243,29 +243,29 @@
             display: inline-flex; align-items: center; justify-content: center;
             font-size: 9px; line-height: 1; color: transparent;
         }
-        .tplan-step.active { color: #f2ede6; }
-        .tplan-step.active .tick { border-color: #f97316; box-shadow: 0 0 0 3px rgba(249, 115, 22, .15); }
-        .tplan-step.done { color: #cbb096; }
-        .tplan-step.done .tick { border-color: rgba(249, 115, 22, .55); background: rgba(249, 115, 22, .55); color: #1a120b; }
-        .tplan-step .detail { color: #a89b8d; font-variant-numeric: tabular-nums; }
+        .tplan-step.active { color: var(--text); }
+        .tplan-step.active .tick { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .15); }
+        .tplan-step.done { color: var(--text-soft); }
+        .tplan-step.done .tick { border-color: rgba(var(--accent-rgb), .55); background: rgba(var(--accent-rgb), .55); color: var(--accent-ink); }
+        .tplan-step .detail { color: var(--text-muted); font-variant-numeric: tabular-nums; }
         .tplan-stats {
             display: flex; gap: 14px; flex-wrap: wrap; margin-top: 11px;
             padding-top: 10px; border-top: 1px solid rgba(255, 255, 255, .07);
         }
         .tplan-stat { display: flex; flex-direction: column; gap: 1px; }
         .tplan-stat .v {
-            font-size: 15px; font-weight: 650; color: #fdba74; font-variant-numeric: tabular-nums;
+            font-size: 15px; font-weight: 650; color: var(--accent-pale); font-variant-numeric: tabular-nums;
         }
         .tplan-stat .k {
-            font-size: 9px; letter-spacing: .1em; text-transform: uppercase; color: #7d7264; font-weight: 700;
+            font-size: 9px; letter-spacing: .1em; text-transform: uppercase; color: var(--text-dim); font-weight: 700;
         }
-        .tplan-hint { margin-top: 10px; font-size: 11px; line-height: 1.5; color: #7d7264; }
+        .tplan-hint { margin-top: 10px; font-size: 11px; line-height: 1.5; color: var(--text-dim); }
 
-        .tour-note { font-size: 13px; line-height: 1.55; color: #e9dfd2; }
+        .tour-note { font-size: 13px; line-height: 1.55; color: var(--text-soft); }
         .tour-note.error { color: #fca5a5; }
         .tour-spinner {
             display: inline-block; width: 13px; height: 13px; margin-right: 8px; vertical-align: -2px;
-            border: 2px solid rgba(249, 115, 22, .3); border-top-color: #f97316;
+            border: 2px solid rgba(var(--accent-rgb), .3); border-top-color: var(--accent);
             border-radius: 50%; animation: tourspin .7s linear infinite;
         }
         @keyframes tourspin { to { transform: rotate(360deg); } }
@@ -278,17 +278,17 @@
             margin: 0; padding: 9px 11px; max-height: 150px; overflow: auto;
             background: rgba(0, 0, 0, .32); border: 1px solid rgba(255, 255, 255, .07);
             border-radius: 9px; font-family: ui-monospace, "SF Mono", Menlo, monospace;
-            font-size: 11.5px; line-height: 1.5; color: #d9d2c7; white-space: pre;
+            font-size: 11.5px; line-height: 1.5; color: var(--text-soft); white-space: pre;
         }
 
         /* "Up next" teaser: keeps the walk feeling like a route. */
         .tour-next {
-            margin-top: 10px; font-size: 11px; color: #a89b8d;
+            margin-top: 10px; font-size: 11px; color: var(--text-muted);
             display: flex; align-items: center; gap: 6px;
         }
-        .tour-next .lbl { color: #7d7264; letter-spacing: .08em; text-transform: uppercase; font-size: 9.5px; font-weight: 700; }
-        .tour-next .val { color: #d8b48f; cursor: pointer; }
-        .tour-next .val:hover { color: #fdba74; text-decoration: underline; }
+        .tour-next .lbl { color: var(--text-dim); letter-spacing: .08em; text-transform: uppercase; font-size: 9.5px; font-weight: 700; }
+        .tour-next .val { color: var(--text-soft); cursor: pointer; }
+        .tour-next .val:hover { color: var(--accent-pale); text-decoration: underline; }
 
         /* `display: flex` below would otherwise beat the UA's [hidden] rule,
            leaving stale "up next" / warning rows on screen. */
@@ -296,31 +296,31 @@
         .tour-streaming[hidden] { display: none; }
         .tour-streaming {
             display: flex; align-items: center; gap: 4px; margin-top: 9px;
-            font-size: 11px; color: #cbb096;
+            font-size: 11px; color: var(--text-soft);
         }
         .tour-warnings { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; }
         .tour-warn {
-            font-size: 11px; line-height: 1.45; color: #f5c6a0;
+            font-size: 11px; line-height: 1.45; color: var(--text-soft);
             display: flex; gap: 6px; align-items: flex-start;
         }
-        .tour-warn::before { content: '!'; color: #fb923c; font-weight: 800; }
+        .tour-warn::before { content: '!'; color: var(--warning); font-weight: 800; }
 
         .tour-speed {
             background: rgba(255, 255, 255, .06); border: 1px solid rgba(255, 255, 255, .13);
-            color: #d8b48f; border-radius: 999px; height: 28px; min-width: 46px; padding: 0 11px;
+            color: var(--text-soft); border-radius: 999px; height: 28px; min-width: 46px; padding: 0 11px;
             cursor: pointer; font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums;
             transition: color .15s, border-color .15s;
         }
-        .tour-speed:hover:not(:disabled) { border-color: rgba(249, 115, 22, .45); color: #fdba74; }
+        .tour-speed:hover:not(:disabled) { border-color: rgba(var(--accent-rgb), .45); color: var(--accent-pale); }
         /* While a tour is still being planned there is nothing to drive, so
            the whole deck goes inert — only Exit stays live. */
         .tour-speed:disabled, .tour-icon:disabled { opacity: .35; cursor: default; }
-        .tour-icon:disabled:hover { background: none; color: #a89b8d; }
+        .tour-icon:disabled:hover { background: none; color: var(--text-muted); }
 
         /* ─── Guided Tour: plan JSON viewer ─── */
         #tour-json {
             position: fixed; inset: 0; z-index: 90; display: none;
-            background: rgba(10, 9, 8, .55); backdrop-filter: blur(3px);
+            background: rgba(10, 13, 17, .55); backdrop-filter: blur(3px);
             align-items: center; justify-content: center; padding: 5vh 4vw;
         }
         #tour-json.visible { display: flex; }
@@ -329,31 +329,31 @@
         body.tour-json-open #tooltip { display: none; }
         .tjson-card {
             width: min(940px, 100%); max-height: 90vh; display: flex; flex-direction: column;
-            background: linear-gradient(180deg, rgba(26, 23, 21, .98), rgba(18, 16, 15, .99));
-            border: 1px solid rgba(249, 115, 22, .3); border-radius: 16px;
-            box-shadow: 0 30px 80px -18px rgba(0, 0, 0, .75); color: #f2ede6; overflow: hidden;
+            background: linear-gradient(180deg, rgba(20, 26, 32, .98), rgba(14, 18, 22, .99));
+            border: 1px solid rgba(var(--accent-rgb), .3); border-radius: 16px;
+            box-shadow: 0 30px 80px -18px rgba(0, 0, 0, .75); color: var(--text); overflow: hidden;
         }
         .tjson-head {
             display: flex; align-items: center; gap: 10px;
             padding: 13px 16px; border-bottom: 1px solid rgba(255, 255, 255, .08);
         }
         .tjson-head .title { font-size: 13px; font-weight: 700; flex: 1; }
-        .tjson-head .sub { font-size: 11px; color: #a89b8d; font-variant-numeric: tabular-nums; }
+        .tjson-head .sub { font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
         .tjson-tabs { display: flex; gap: 5px; padding: 10px 16px 0; flex-wrap: wrap; }
         .tjson-tab {
             background: rgba(255, 255, 255, .05); border: 1px solid rgba(255, 255, 255, .1);
-            color: #cbb096; border-radius: 8px; padding: 5px 11px; cursor: pointer;
+            color: var(--text-soft); border-radius: 8px; padding: 5px 11px; cursor: pointer;
             font-size: 11px; font-weight: 600;
         }
-        .tjson-tab:hover { border-color: rgba(249, 115, 22, .4); color: #fdba74; }
-        .tjson-tab.active { background: rgba(249, 115, 22, .18); border-color: rgba(249, 115, 22, .5); color: #fdba74; }
+        .tjson-tab:hover { border-color: rgba(var(--accent-rgb), .4); color: var(--accent-pale); }
+        .tjson-tab.active { background: rgba(var(--accent-rgb), .18); border-color: rgba(var(--accent-rgb), .5); color: var(--accent-pale); }
         .tjson-body { flex: 1; overflow: auto; padding: 12px 16px 16px; }
         .tjson-body pre {
             margin: 0; font-family: ui-monospace, "SF Mono", Menlo, monospace;
-            font-size: 11.5px; line-height: 1.55; color: #d9d2c7; white-space: pre-wrap;
+            font-size: 11.5px; line-height: 1.55; color: var(--text-soft); white-space: pre-wrap;
             word-break: break-word;
         }
-        .tjson-note { font-size: 11.5px; color: #a89b8d; margin: 0 0 10px; line-height: 1.5; }
+        .tjson-note { font-size: 11.5px; color: var(--text-muted); margin: 0 0 10px; line-height: 1.5; }
         .tjson-foot {
             display: flex; align-items: center; gap: 8px;
             padding: 10px 16px; border-top: 1px solid rgba(255, 255, 255, .08);
@@ -361,11 +361,11 @@
         .tjson-foot .spacer { flex: 1; }
         .tjson-btn {
             background: rgba(255, 255, 255, .06); border: 1px solid rgba(255, 255, 255, .13);
-            color: #f2ede6; border-radius: 8px; height: 30px; padding: 0 12px; cursor: pointer;
+            color: var(--text); border-radius: 8px; height: 30px; padding: 0 12px; cursor: pointer;
             font-family: inherit; font-size: 11.5px; font-weight: 600;
             transition: background .15s, border-color .15s;
         }
-        .tjson-btn:hover { background: rgba(255, 255, 255, .12); border-color: rgba(249, 115, 22, .45); }
+        .tjson-btn:hover { background: rgba(255, 255, 255, .12); border-color: rgba(var(--accent-rgb), .45); }
 
         /* Immersive mode: the graph is the show, so the chrome steps back.
            Faded panels come back on hover, and the sidebar/details panel are
