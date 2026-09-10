@@ -199,25 +199,6 @@
             box-shadow: 0 0 12px var(--accent);
         }
 
-        .sidebar-header h2 {
-            font-size: 13px;
-            font-weight: 600;
-            letter-spacing: 0.2px;
-            color: var(--text);
-        }
-
-        /* Toggled on in multi-project mode so the brand also doubles as
-           a "back to Knowledge Base Manager" affordance, alongside the
-           explicit icon button. */
-        .brand-clickable {
-            cursor: pointer;
-            transition: color 0.15s;
-        }
-
-        .brand-clickable:hover {
-            color: var(--accent);
-        }
-
         .sidebar-header .meta {
             display: inline-flex;
             align-items: center;
@@ -307,7 +288,6 @@
             display: flex;
             gap: 4px;
             padding: 10px 14px;
-            border-bottom: 1px solid var(--border-soft);
             flex-shrink: 0;
         }
 
@@ -355,13 +335,19 @@
             display: flex;
         }
 
-        /* Both panes scroll their contents as a whole: the Ask column so the
-           stream runs under a sticky bar, Browse so its sub-tab strip stays
+        /* Browse scrolls its contents as a whole, so its sub-tab strip stays
            pinned while the sub-pane scrolls. */
-        #pane-ask.active,
         #pane-browse.active {
             overflow-y: auto;
             padding: 0 0 8px;
+        }
+
+        /* Ask does not. The bar is furniture, not content: it owns the top of
+           the column and `.ask-scroll` takes the rest (`19-ask.css`). A pane
+           that scrolls as a whole can only pin the bar with `position:
+           sticky`, and a sticky bar has results sliding underneath it. */
+        #pane-ask.active {
+            overflow: hidden;
         }
 
         /* The Summary sub-pane still stacks collapsible sections. */

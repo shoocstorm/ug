@@ -80,39 +80,6 @@
                 </div>
             </div>
 
-            <!-- What's New: Recent Enhancements -->
-            <div class="kb-whatsnew collapsed">
-                <div class="kb-whatsnew-header">
-                    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
-                    </svg>
-                    <span>What's New</span>
-                    <button class="kb-whatsnew-toggle" id="kb-whatsnew-toggle" type="button" title="Toggle"></button>
-                </div>
-                <div class="kb-whatsnew-body" id="kb-whatsnew-body">
-                    <div class="kb-whatsnew-item">
-                        <span class="kb-whatsnew-badge">Performance</span>
-                        <span class="kb-whatsnew-text">Direct <code>nodeId</code> lookups in <code>find_symbols</code> and <code>file_outline</code> — O(1) when you have the id</span>
-                    </div>
-                    <div class="kb-whatsnew-item">
-                        <span class="kb-whatsnew-badge">MCP Tools</span>
-                        <span class="kb-whatsnew-text">Enhanced AI agent tools with batch support — <code>search</code>, <code>traverse</code>, <code>find_usages</code>, <code>get_code</code></span>
-                    </div>
-                    <div class="kb-whatsnew-item">
-                        <span class="kb-whatsnew-badge">Tour</span>
-                        <span class="kb-whatsnew-text">Guided, narrated walkthroughs — ask a question, <code>ug tour</code> plans an ordered set of stops through the graph</span>
-                    </div>
-                    <div class="kb-whatsnew-item">
-                        <span class="kb-whatsnew-badge">Reliability</span>
-                        <span class="kb-whatsnew-text">Project staleness detection — automatic warnings when index falls out of sync with source</span>
-                    </div>
-                    <div class="kb-whatsnew-item">
-                        <span class="kb-whatsnew-badge">Chat</span>
-                        <span class="kb-whatsnew-text">Streaming responses with real-time progress — faster, more interactive code Q&A</span>
-                    </div>
-                </div>
-            </div>
-
             <div class="kb-body">
                 <div id="kb-loading" class="kb-state">
                     <div class="kb-scan"></div>
@@ -139,8 +106,87 @@
                             stroke-width="1.6" opacity="0.55" />
                     </svg>
                     <h2 class="kb-wizard-title">Generate a Knowledge Base</h2>
-                    <p class="kb-wizard-hint">Point at a local folder to index. This runs the same pipeline as
-                        <code>ug gen</code> and streams progress live below. Build artifacts (*.min.js, dist/, etc.) and your <code>.gitignore</code> entries are automatically ignored.</p>
+                    <p class="kb-wizard-hint">Point at a local folder — this runs the same pipeline as
+                        <code>ug gen</code>, and each stage below lights up live as it runs.</p>
+
+                    <!-- The generation pipeline. At rest it explains what will
+                         happen (and mirrors the two checkboxes: skip-db dashes
+                         the last step, with-embed adds a +vectors chip);
+                         during a run, pollGenJob paints .active/.done onto the
+                         steps as each phase line lands in the job log. -->
+                    <div class="kb-pipe-caption">What happens on generate</div>
+                    <div class="kb-pipeline" id="kb-pipeline">
+                        <div class="kb-pipe-step" data-pipe="scan" style="--i:0">
+                            <div class="kb-pipe-icon">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                                    stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
+                                    <circle cx="11.2" cy="13.4" r="2.5" />
+                                    <path d="m13.1 15.3 2.8 2.8" />
+                                </svg>
+                            </div>
+                            <div class="kb-pipe-name"><i>01</i>Scan</div>
+                            <p class="kb-pipe-desc">Walks the folder. <code>.gitignore</code> rules,
+                                <code>node_modules/</code> and build artifacts are skipped.</p>
+                            <div class="kb-pipe-foot">
+                                <span class="kb-pipe-out"><b>→</b><span>files</span></span>
+                            </div>
+                        </div>
+                        <div class="kb-pipe-link" data-after="scan" aria-hidden="true"></div>
+                        <div class="kb-pipe-step" data-pipe="extract" style="--i:1">
+                            <div class="kb-pipe-icon">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                                    stroke-linecap="round" stroke-linejoin="round">
+                                    <circle cx="12" cy="5" r="2.1" />
+                                    <circle cx="5.5" cy="18.5" r="2.1" />
+                                    <circle cx="18.5" cy="18.5" r="2.1" />
+                                    <path d="M10.9 6.9 6.6 16.6M13.1 6.9l4.3 9.7M7.6 18.5h8.8" />
+                                </svg>
+                            </div>
+                            <div class="kb-pipe-name"><i>02</i>Extract</div>
+                            <p class="kb-pipe-desc">One symbol per function, class or interface (tree-sitter);
+                                docs by heading, PDFs by page.</p>
+                            <div class="kb-pipe-foot">
+                                <span class="kb-pipe-out"><b>→</b><span>symbols</span></span>
+                            </div>
+                        </div>
+                        <div class="kb-pipe-link" data-after="extract" aria-hidden="true"></div>
+                        <div class="kb-pipe-step" data-pipe="graph" style="--i:2">
+                            <div class="kb-pipe-icon">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                                    stroke-linecap="round" stroke-linejoin="round">
+                                    <circle cx="18" cy="5" r="2.4" />
+                                    <circle cx="6" cy="12" r="2.4" />
+                                    <circle cx="18" cy="19" r="2.4" />
+                                    <path d="M8.2 10.7 15.8 6.3M8.2 13.3l7.6 4.4" />
+                                </svg>
+                            </div>
+                            <div class="kb-pipe-name"><i>03</i>Graph</div>
+                            <p class="kb-pipe-desc">Symbols become nodes; calls, imports and inheritance become
+                                edges, resolved across files.</p>
+                            <div class="kb-pipe-foot">
+                                <span class="kb-pipe-out"><b>→</b><span>nodes + edges</span></span>
+                            </div>
+                        </div>
+                        <div class="kb-pipe-link" data-after="graph" aria-hidden="true"></div>
+                        <div class="kb-pipe-step" data-pipe="ingest" style="--i:3">
+                            <div class="kb-pipe-icon">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                                    stroke-linecap="round" stroke-linejoin="round">
+                                    <ellipse cx="12" cy="5" rx="8" ry="2.7" />
+                                    <path d="M4 5v14c0 1.5 3.6 2.7 8 2.7s8-1.2 8-2.7V5" />
+                                    <path d="M4 12c0 1.5 3.6 2.7 8 2.7s8-1.2 8-2.7" />
+                                </svg>
+                            </div>
+                            <div class="kb-pipe-name"><i>04</i>Ingest</div>
+                            <p class="kb-pipe-desc">Written to the local OverGraph store — graph queries and
+                                keyword search work right away.</p>
+                            <div class="kb-pipe-foot">
+                                <span class="kb-pipe-out"><b>→</b><span class="kb-pipe-out-text">graph store</span></span>
+                                <span class="kb-pipe-extra" id="kb-pipe-embed" hidden>+ vectors</span>
+                            </div>
+                        </div>
+                    </div>
                     <form id="kb-wizard-form" class="kb-form">
                         <label class="kb-field">
                             <span>Folder path</span>
@@ -745,11 +791,15 @@
         <aside id="sidebar" class="pending">
             <div class="sidebar-header">
                 <div class="brand">
+                    <!-- Capability light: the accent when the store is ready,
+                         amber when it is half there, dim when it is not. Hover
+                         it for the reason (`probeCapabilities`). -->
                     <div class="brand-dot"></div>
-                    <h2 id="brand-title">UltraGraph</h2>
                     <!-- Which base is answering, and a one-click switch to
-                         another. The full manager (create, delete, re-index)
-                         is still one row down the popover. -->
+                         another. This is the header's identity now — the
+                         product's own name told a reader nothing they did not
+                         already know. The full manager (create, delete,
+                         re-index) is still one row down the popover. -->
                     <button class="project-chip" id="project-chip" type="button" hidden
                         aria-haspopup="true" aria-expanded="false">
                         <span class="project-chip-name" id="project-chip-name"></span>
@@ -948,61 +998,66 @@
                     <div id="tour-launch-status"></div>
                 </div>
 
-                <!-- One stream, oldest first: every query appends a block and
-                     every block renders through the same row builder, whether
-                     the rows came from a name scan, from retrieval, or from a
-                     model. -->
-                <div class="ask-stream" id="ask-stream"></div>
+                <!-- Everything below the bar scrolls; the bar itself does not.
+                     The head is a sibling of this box rather than a sticky
+                     child of one scroller, so no result can pass behind it. -->
+                <div class="ask-scroll" id="ask-scroll">
+                    <!-- The current question's block, and nothing else: a new
+                         query replaces what is here, and every block renders
+                         through the same row builder, whether the rows came from
+                         a name scan, from retrieval, or from a model. -->
+                    <div class="ask-stream" id="ask-stream"></div>
 
-                <!-- Shown while the stream is empty: what this base is, a
-                     few questions worth asking, and where you left off. -->
-                <div class="ask-onboard" id="ask-onboard">
-                    <div class="ask-orient" id="ask-orient"></div>
-                    <div class="ask-suggest" id="ask-suggest"></div>
-                    <div class="ask-recents" id="ask-recents"></div>
-                    <!-- The most connected nodes, so the first view has a
-                         place to look before the graph is understood. -->
-                    <div class="ask-onboard-head">Busiest nodes</div>
-                    <div class="start-here-list" id="start-here"></div>
-                    <div class="start-here-tools">
-                        <span class="sht-label">Try:</span>
-                        <button type="button" class="sht-btn" id="try-palette">Command palette <kbd class="btn-kbd">⌘K</kbd></button>
-                        <button type="button" class="sht-btn" id="try-shortcuts">Shortcuts <kbd class="btn-kbd">?</kbd></button>
-                        <button type="button" class="sht-btn" id="try-copy-link">Copy link</button>
-                    </div>
-                </div>
-
-                <!-- Kept: nodes, answers and whole views the reader chose to
-                     hold on to. Per project, survives a reload — see
-                     js/26-trail.js. -->
-                <details class="ask-kept" id="ask-kept" hidden>
-                    <summary>
-                        <span class="ask-kept-label">Kept</span>
-                        <span class="ask-kept-count" id="ask-kept-count"></span>
-                    </summary>
-                    <div class="ask-kept-list" id="ask-kept-list"></div>
-                    <div class="ask-kept-foot">
-                        <span class="ask-kept-hint">Click to go back to it.</span>
-                        <button class="thist-clear" id="ask-kept-clear" type="button">Clear all</button>
-                    </div>
-                </details>
-
-                <!-- Saved tours: replay or inspect without re-planning. -->
-                <div class="section" id="tour-history" hidden>
-                    <div class="section-header">
-                        <span class="label">Recent Tours</span>
-                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <polyline points="6 9 12 15 18 9" />
-                        </svg>
-                    </div>
-                    <div class="section-body">
-                        <div class="thist-list" id="tour-history-list"></div>
-                        <div class="thist-foot">
-                            <span class="thist-hint">Click a tour to replay it — no model call.</span>
-                            <button class="thist-clear" id="tour-history-clear" type="button">Clear all</button>
+                    <!-- Shown while the stream is empty: what this base is, a
+                         few questions worth asking, and where you left off. -->
+                    <div class="ask-onboard" id="ask-onboard">
+                        <div class="ask-orient" id="ask-orient"></div>
+                        <div class="ask-suggest" id="ask-suggest"></div>
+                        <div class="ask-recents" id="ask-recents"></div>
+                        <!-- The most connected nodes, so the first view has a
+                             place to look before the graph is understood. -->
+                        <div class="ask-onboard-head">Busiest nodes</div>
+                        <div class="start-here-list" id="start-here"></div>
+                        <div class="start-here-tools">
+                            <span class="sht-label">Try:</span>
+                            <button type="button" class="sht-btn" id="try-palette">Command palette <kbd class="btn-kbd">⌘K</kbd></button>
+                            <button type="button" class="sht-btn" id="try-shortcuts">Shortcuts <kbd class="btn-kbd">?</kbd></button>
+                            <button type="button" class="sht-btn" id="try-copy-link">Copy link</button>
                         </div>
                     </div>
-                </div>
+
+                    <!-- Kept: nodes, answers and whole views the reader chose to
+                         hold on to. Per project, survives a reload — see
+                         js/26-trail.js. -->
+                    <details class="ask-kept" id="ask-kept" hidden>
+                        <summary>
+                            <span class="ask-kept-label">Kept</span>
+                            <span class="ask-kept-count" id="ask-kept-count"></span>
+                        </summary>
+                        <div class="ask-kept-list" id="ask-kept-list"></div>
+                        <div class="ask-kept-foot">
+                            <span class="ask-kept-hint">Click to go back to it.</span>
+                            <button class="thist-clear" id="ask-kept-clear" type="button">Clear all</button>
+                        </div>
+                    </details>
+
+                    <!-- Saved tours: replay or inspect without re-planning. -->
+                    <div class="section" id="tour-history" hidden>
+                        <div class="section-header">
+                            <span class="label">Recent Tours</span>
+                            <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="6 9 12 15 18 9" />
+                            </svg>
+                        </div>
+                        <div class="section-body">
+                            <div class="thist-list" id="tour-history-list"></div>
+                            <div class="thist-foot">
+                                <span class="thist-hint">Click a tour to replay it — no model call.</span>
+                                <button class="thist-clear" id="tour-history-clear" type="button">Clear all</button>
+                            </div>
+                        </div>
+                    </div>
+                </div><!-- /.ask-scroll -->
 
                 </div><!-- /#pane-ask -->
 

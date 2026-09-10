@@ -1,7 +1,9 @@
         /* ─── Ask column ─────────────────────────────────────
-           One bar, one stream. The bar is sticky at the top of the pane so
-           it never scrolls away from an answer, and everything that tunes a
-           query rather than being one is folded behind the disclosure. */
+           One bar, one stream. The column is split in two: the bar is fixed
+           at the top and only `.ask-scroll` below it moves, so the bar never
+           scrolls away from an answer and no result passes behind it.
+           Everything that tunes a query rather than being one is folded
+           behind the disclosure. */
 
         /* No bare `#pane-ask` rule lives here. `.tab-pane` already gives the
            pane its flex column, and `.tab-pane.active` is what turns it on —
@@ -10,16 +12,26 @@
            underneath Browse. Style the children instead. */
 
         /* The sidebar's content gutter is 20px (`.section-header`,
-           `.catalog-toolbar`). The pane itself stays unpadded so the sticky
-           bar's background spans the full width and content scrolling up
-           passes behind it rather than through a gap at each edge. */
+           `.catalog-toolbar`), and each half of the column carries its own.
+           The pane itself stays unpadded so both span the full width and the
+           scrollbar rides the panel edge rather than a gutter inside it. */
         .ask-head {
-            position: sticky;
-            top: 0;
-            z-index: 2;
-            background: var(--bg-surface);
+            flex: 0 0 auto;
             padding: 12px 20px 10px;
-            border-bottom: 1px solid var(--border-soft);
+            /* Fixed furniture must not be able to push the stream off the
+               bottom of the column, and with Retrieval open — or a capability
+               banner showing — this is a tall box. Capping the head rather
+               than any one child keeps that true whichever part grows. */
+            max-height: 60vh;
+            overflow-y: auto;
+        }
+
+        /* The other half of the column: everything a query produces. */
+        .ask-scroll {
+            flex: 1;
+            min-height: 0;
+            overflow-y: auto;
+            padding-bottom: 8px;
         }
 
         /* ── The bar ── */
@@ -126,7 +138,7 @@
             gap: 4px;
             margin-top: 8px;
             background: var(--bg-elevated);
-            padding: 3px;
+            padding: 0px;
             border-radius: 8px;
             border: 1px solid var(--border-soft);
         }

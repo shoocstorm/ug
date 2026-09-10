@@ -180,19 +180,14 @@
                 if (kbCapsCache) showKbList(kbCapsCache);
             });
 
-            // What's New toggle
-            document.getElementById('kb-whatsnew-toggle').addEventListener('click', (e) => {
-                e.stopPropagation();
-                document.getElementById('kb-whatsnew-body').parentElement.classList.toggle('collapsed');
-            });
-            document.getElementById('kb-whatsnew-body').parentElement.addEventListener('click', (e) => {
-                if (e.target.closest('.kb-whatsnew-header') && !e.target.closest('.kb-whatsnew-toggle')) {
-                    document.getElementById('kb-whatsnew-body').parentElement.classList.toggle('collapsed');
-                }
-            });
+            // Pipeline diagram: at rest it mirrors the two checkboxes so the
+            // options explain themselves on the picture (skip-db dashes the
+            // ingest step, with-embed adds a +vectors chip).
+            document.getElementById('kb-no-ingest').addEventListener('change', refreshPipelineIdle);
+            document.getElementById('kb-with-embed').addEventListener('change', refreshPipelineIdle);
+            refreshPipelineIdle();
 
             document.getElementById('kb-open-btn').addEventListener('click', reopenKbManager);
-            document.getElementById('brand-title').addEventListener('click', reopenKbManager);
 
             document.getElementById('kb-confirm-cancel').addEventListener('click', closeDeleteConfirm);
             document.getElementById('kb-confirm-delete-btn').addEventListener('click', confirmDeleteActive);
@@ -241,7 +236,58 @@
                     document.getElementById('kb-wizard-error').textContent = err.message || String(err);
                     document.getElementById('kb-generate-btn').disabled = false;
                     document.getElementById('kb-wizard-back').disabled = false;
+                    refreshPipelineIdle();
                 }
+            });
+        }
+
+        // ── Pipeline diagram state ─────────────────────────────────────
+        //
+        // The wizard's four-step diagram doubles as the run's progress
+        // strip. The gen subprocess's phase lines (ANSI-stripped server-side,
+        // so plain text by the time they arrive) map onto stages; "▸ Indexing"
+        // covers scan+extract because the folder walk happens inside that
+        // phase, so scan shows done and extract running.
+
+        const PIPE_ORDER = ['scan', 'extract', 'graph', 'ingest'];
+        const PIPE_INGEST_RE = /^▸ (Ingesting|Building node texts|Diffing|Embedding|Writing nodes|Writing edges|Building query|Opening the store|Committing)/;
+
+        function pipeStep(id) {
+            return document.querySelector(`.kb-pipe-step[data-pipe="${id}"]`);
+        }
+
+        // Resting state, derived from the checkboxes. Called on entering the
+        // wizard, on checkbox changes, and after a failed run — a finished
+        // run navigates away, so it never needs unwinding.
+        function refreshPipelineIdle() {
+            PIPE_ORDER.forEach(id => pipeStep(id).classList.remove('active', 'done', 'skipped'));
+            document.querySelectorAll('.kb-pipe-link').forEach(l => l.classList.remove('lit'));
+            const skipDb = document.getElementById('kb-no-ingest').checked;
+            const ingest = pipeStep('ingest');
+            ingest.classList.toggle('skipped', skipDb);
+            ingest.querySelector('.kb-pipe-out-text').textContent = skipDb ? 'skipped' : 'graph store';
+            document.getElementById('kb-pipe-embed').hidden =
+                skipDb || !document.getElementById('kb-with-embed').checked;
+        }
+
+        function pipelineStageFromLog(log) {
+            let stage = 0;
+            for (const line of log) {
+                if (/^▸ Indexing /.test(line)) stage = Math.max(stage, 1);
+                else if (/^▸ Building graph/.test(line)) stage = Math.max(stage, 2);
+                else if (PIPE_INGEST_RE.test(line)) stage = Math.max(stage, 3);
+            }
+            return stage;
+        }
+
+        function paintPipeline(stage, finished) {
+            PIPE_ORDER.forEach((id, i) => {
+                const step = pipeStep(id);
+                step.classList.toggle('done', finished || i < stage);
+                step.classList.toggle('active', !finished && i === stage);
+            });
+            document.querySelectorAll('.kb-pipe-link').forEach((link, i) => {
+                link.classList.toggle('lit', finished || i < stage);
             });
         }
 
@@ -260,6 +306,7 @@
                     }
                     logEl.textContent = (job.log || []).join('\n');
                     logEl.scrollTop = logEl.scrollHeight;
+                    paintPipeline(pipelineStageFromLog(job.log || []), job.status === 'done');
                     if (job.status === 'running') {
                         statusText.textContent = 'Generating knowledge base…';
                         setTimeout(tick, 1000);
@@ -275,6 +322,7 @@
                         document.getElementById('kb-wizard-status').hidden = true;
                         document.getElementById('kb-wizard-error').hidden = false;
                         document.getElementById('kb-wizard-error').textContent = job.error || 'Generation failed.';
+                        refreshPipelineIdle();
                         reject(new Error(job.error || 'generation failed'));
                     }
                 };

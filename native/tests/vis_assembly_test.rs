@@ -219,6 +219,67 @@ fn no_pane_id_rule_overrides_the_tab_switcher() {
     }
 }
 
+/// The Ask column is two halves: a head that does not move, and everything a
+/// query produces scrolling under it. The head carries the bar, the mode strip
+/// and the capability banner that says why a mode is off, and a reader partway
+/// through an answer needs all three where they were.
+///
+/// One scrolling pane cannot do this. It can only pin the bar with `position:
+/// sticky`, which keeps the bar on screen but runs results *underneath* it,
+/// and pins nothing at all if the pane ever stops being the scroll container.
+///
+/// So two ways to lose it, both checked here: put the head inside
+/// `.ask-scroll`, or give `#pane-ask` an `overflow` that scrolls, which puts
+/// the head back inside a scroll box whatever the markup says.
+#[test]
+fn the_ask_bar_sits_outside_the_scroller() {
+    let page = assembled();
+    let head = page.find(r#"class="ask-head""#).expect("the Ask head");
+    let scroll = page.find(r#"class="ask-scroll""#).expect("the Ask scroller");
+    let stream = page.find(r#"id="ask-stream""#).expect("the Ask stream");
+
+    assert!(head < scroll, "the head must come before the scroller");
+    assert!(
+        scroll < stream,
+        "the stream must be inside `.ask-scroll`, or results scroll the whole \
+         column and take the bar with them"
+    );
+
+    // The head must be *closed* before the scroller opens, not merely written
+    // first. Every `<div` between the two, the head's own included, has to
+    // have been matched.
+    let between = &page[head..scroll];
+    let depth = between.matches("<div").count() as i32 - between.matches("</div>").count() as i32;
+    assert_eq!(
+        depth, 0,
+        "`.ask-scroll` opens inside `.ask-head` (net div depth {depth}) — it is \
+         a sibling, so the head stays put while the scroller moves"
+    );
+
+    for path in parts("css", "css") {
+        let body = fs::read_to_string(&path).unwrap();
+        let code = strip_css_comments(&body);
+        for (selector, block) in css_rules(&code) {
+            if !selector.contains("#pane-ask") {
+                continue;
+            }
+            for decl in block.split(';') {
+                let decl = decl.trim();
+                if !decl.starts_with("overflow") {
+                    continue;
+                }
+                assert!(
+                    !(decl.contains("auto") || decl.contains("scroll")),
+                    "{}: `{selector}` makes the Ask pane itself scroll (`{decl}`), \
+                     which puts the bar back inside the scroll box. `.ask-scroll` \
+                     is what scrolls.",
+                    path.display()
+                );
+            }
+        }
+    }
+}
+
 /// Blank out `/* … */` so a selector quoted in prose is not read as a rule.
 fn strip_css_comments(src: &str) -> String {
     let mut out = String::with_capacity(src.len());

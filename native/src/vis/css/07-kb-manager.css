@@ -156,145 +156,6 @@
             box-shadow: 0 0 8px var(--success);
         }
 
-        /* ─── What's New section ─── */
-
-        .kb-whatsnew {
-            max-width: 700px;
-            margin: 0 auto 32px;
-            background: var(--bg-surface);
-            border: 1px solid var(--border-soft);
-            border-radius: 12px;
-            overflow: hidden;
-            animation: kb-rise 0.35s ease-out both;
-        }
-
-        .kb-whatsnew-header {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 12px 16px;
-            border-bottom: 1px solid var(--border-soft);
-            background: rgba(255, 255, 255, 0.02);
-            cursor: pointer;
-            user-select: none;
-            transition: background 0.15s;
-        }
-
-        .kb-whatsnew-header:hover {
-            background: rgba(255, 255, 255, 0.04);
-        }
-
-        /* Collapsed by default, so the header is the panel's own bottom edge —
-           its divider would otherwise double up with the card border. */
-        .kb-whatsnew.collapsed .kb-whatsnew-header {
-            border-bottom-color: transparent;
-        }
-
-        .kb-whatsnew-header svg {
-            width: 16px;
-            height: 16px;
-            color: var(--accent);
-            flex-shrink: 0;
-        }
-
-        .kb-whatsnew-header span {
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 11px;
-            font-weight: 600;
-            letter-spacing: 0.6px;
-            text-transform: uppercase;
-            color: var(--text);
-        }
-
-        .kb-whatsnew-toggle {
-            margin-left: auto;
-            width: 20px;
-            height: 20px;
-            padding: 0;
-            border: none;
-            background: transparent;
-            color: var(--text-dim);
-            cursor: pointer;
-            border-radius: 4px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            transition: color 0.15s, background 0.15s;
-        }
-
-        .kb-whatsnew-toggle:hover {
-            color: var(--text);
-            background: rgba(255, 255, 255, 0.05);
-        }
-
-        .kb-whatsnew-toggle::before {
-            content: '▾';
-            font-size: 10px;
-            transition: transform 0.2s;
-        }
-
-        .kb-whatsnew.collapsed .kb-whatsnew-toggle::before {
-            transform: rotate(-90deg);
-        }
-
-        .kb-whatsnew-body {
-            padding: 16px;
-            transition: max-height 0.3s ease, padding 0.3s ease;
-            max-height: 600px;
-        }
-
-        .kb-whatsnew.collapsed .kb-whatsnew-body {
-            max-height: 0;
-            padding-top: 0;
-            padding-bottom: 0;
-            overflow: hidden;
-        }
-
-        .kb-whatsnew-item {
-            display: flex;
-            align-items: flex-start;
-            gap: 12px;
-            padding: 10px 0;
-            border-bottom: 1px solid var(--border-soft);
-        }
-
-        .kb-whatsnew-item:last-child {
-            border-bottom: none;
-            padding-bottom: 0;
-        }
-
-        .kb-whatsnew-item:first-child {
-            padding-top: 0;
-        }
-
-        .kb-whatsnew-badge {
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 9px;
-            font-weight: 600;
-            letter-spacing: 0.5px;
-            text-transform: uppercase;
-            padding: 3px 8px;
-            border-radius: 4px;
-            background: rgba(249, 115, 22, 0.15);
-            color: var(--accent);
-            flex-shrink: 0;
-        }
-
-        .kb-whatsnew-text {
-            font-size: 12px;
-            line-height: 1.5;
-            color: var(--text-muted);
-        }
-
-        .kb-whatsnew-text code {
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 11px;
-            padding: 2px 5px;
-            background: var(--bg-deep);
-            border-radius: 3px;
-            color: var(--text);
-        }
-
         .kb-state {
             display: flex;
             flex-direction: column;
@@ -800,9 +661,248 @@
             color: var(--accent);
         }
 
+        /* ─── Generation pipeline diagram (wizard) ─────────────
+           Two jobs, one markup: at rest it explains what `ug gen`
+           will do (and mirrors the checkboxes — skip-db dashes the
+           last step, with-embed adds a +vectors chip); during a run,
+           pollGenJob paints .active/.done as each phase line lands
+           in the job log. Like everything else on this screen the
+           resting state is fully still — the entrance stagger is
+           one-shot, and no rule here animates infinitely. */
+
+        .kb-pipe-caption {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 9.5px;
+            font-weight: 600;
+            letter-spacing: 2.2px;
+            text-transform: uppercase;
+            color: var(--text-dim);
+            margin-bottom: 12px;
+        }
+
+        .kb-pipeline {
+            width: 100%;
+            max-width: 780px;
+            display: flex;
+            align-items: stretch;
+            margin-bottom: 26px;
+        }
+
+        .kb-pipe-step {
+            --pipe-tint: var(--accent);
+            position: relative;
+            flex: 1 1 0;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+            gap: 8px;
+            padding: 15px 10px 12px;
+            background: var(--bg-surface);
+            border: 1px solid var(--border-soft);
+            border-radius: 12px;
+            animation: kb-rise 0.4s ease-out both;
+            animation-delay: calc(var(--i, 0) * 70ms);
+            transition: border-color 0.25s, box-shadow 0.25s, opacity 0.25s;
+        }
+
+        .kb-pipe-icon {
+            position: relative;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 9px;
+            background: color-mix(in srgb, var(--pipe-tint) 12%, transparent);
+            border: 1px solid color-mix(in srgb, var(--pipe-tint) 26%, transparent);
+            color: var(--pipe-tint);
+            transition: background 0.25s, border-color 0.25s, color 0.25s;
+        }
+
+        .kb-pipe-icon svg {
+            width: 16px;
+            height: 16px;
+        }
+
+        /* The ✓ badge, revealed when the step's phase completed. */
+        .kb-pipe-icon::after {
+            content: '✓';
+            position: absolute;
+            top: -5px;
+            right: -5px;
+            width: 14px;
+            height: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 9px;
+            font-weight: 700;
+            border-radius: 50%;
+            color: #06270f;
+            background: var(--success);
+            box-shadow: 0 0 8px color-mix(in srgb, var(--success) 55%, transparent);
+            opacity: 0;
+            transform: scale(0.4);
+            transition: opacity 0.2s, transform 0.2s;
+        }
+
+        .kb-pipe-step.done {
+            --pipe-tint: var(--success);
+            border-color: color-mix(in srgb, var(--success) 30%, transparent);
+        }
+
+        .kb-pipe-step.done .kb-pipe-icon::after {
+            opacity: 1;
+            transform: scale(1);
+        }
+
+        .kb-pipe-step.active {
+            border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+            box-shadow: 0 0 28px -10px var(--accent);
+        }
+
+        /* Skip-the-db checkbox: the step stays, honestly dimmed, so the
+           diagram still names what is being skipped. */
+        .kb-pipe-step.skipped {
+            border-style: dashed;
+            opacity: 0.5;
+        }
+
+        .kb-pipe-name {
+            display: flex;
+            align-items: baseline;
+            gap: 5px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.8px;
+            text-transform: uppercase;
+            color: var(--text);
+        }
+
+        .kb-pipe-name i {
+            font-style: normal;
+            font-size: 9px;
+            font-weight: 600;
+            color: var(--text-dim);
+        }
+
+        .kb-pipe-desc {
+            font-size: 10.5px;
+            line-height: 1.55;
+            color: var(--text-dim);
+            /* Grows to fill the card so the foot chips pin to the bottom
+               row-aligned across cards, whatever each description wraps
+               to — no min-height guess to drift out of date. */
+            flex: 1 1 auto;
+        }
+
+        .kb-pipe-desc code {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 9.5px;
+            padding: 0 3px;
+            background: var(--bg-deep);
+            border-radius: 3px;
+            color: var(--text-muted);
+        }
+
+        .kb-pipe-foot {
+            margin-top: auto;
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 5px;
+        }
+
+        .kb-pipe-out,
+        .kb-pipe-extra {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 9px;
+            letter-spacing: 0.3px;
+            color: var(--text-dim);
+            padding: 3px 9px;
+            border-radius: 999px;
+            border: 1px solid var(--border-soft);
+            background: var(--bg-deep);
+            white-space: nowrap;
+        }
+
+        .kb-pipe-out b {
+            font-weight: 600;
+            color: var(--pipe-tint);
+        }
+
+        .kb-pipe-extra {
+            color: var(--accent);
+            border-color: color-mix(in srgb, var(--accent) 32%, transparent);
+            background: color-mix(in srgb, var(--accent) 8%, transparent);
+        }
+
+        .kb-pipe-extra[hidden] {
+            display: none;
+        }
+
+        /* Connector: aligned with the icon row, an arrowhead at its tip.
+           Lit (success green) once the step feeding it is done. */
+        .kb-pipe-link {
+            flex: 0 0 20px;
+            align-self: flex-start;
+            margin: 90px 6px 0;
+            height: 2px;
+            position: relative;
+            background: linear-gradient(to right,
+                    var(--border) calc(100% - 6px),
+                    transparent calc(100% - 6px));
+            transition: background 0.3s;
+        }
+
+        .kb-pipe-link::before {
+            content: '';
+            position: absolute;
+            right: 0;
+            top: 50%;
+            width: 6px;
+            height: 6px;
+            border-top: 2px solid var(--border);
+            border-right: 2px solid var(--border);
+            transform: translateY(-50%) rotate(45deg);
+            transition: border-color 0.3s;
+        }
+
+        .kb-pipe-link.lit {
+            background: linear-gradient(to right,
+                    color-mix(in srgb, var(--success) 65%, transparent) calc(100% - 6px),
+                    transparent calc(100% - 6px));
+        }
+
+        .kb-pipe-link.lit::before {
+            border-color: var(--success);
+        }
+
+        @media (max-width: 680px) {
+            .kb-pipeline {
+                flex-wrap: wrap;
+                gap: 10px;
+            }
+
+            .kb-pipe-step {
+                flex: 1 1 42%;
+            }
+
+            .kb-pipe-link {
+                display: none;
+            }
+        }
+
         .kb-form {
             width: 100%;
-            max-width: 460px;
+            max-width: 560px;
             display: flex;
             flex-direction: column;
             gap: 16px;

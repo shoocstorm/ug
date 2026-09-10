@@ -143,8 +143,11 @@
                     // A dead endpoint isn't the user's mistake to decode —
                     // say what's wrong in plain words and offer the fix.
                     if (streamErrKind === 'llm_unreachable') {
+                        // `turn.unreachable` puts this in the block, with the
+                        // endpoint that did not answer. The strip only clears
+                        // the progress line it was showing.
                         turn.unreachable(streamErrEndpoint);
-                        setAskStatus('No answer — the model endpoint is not responding.', true);
+                        setAskStatus('');
                         return;
                     }
                     throw new Error(streamErr);
@@ -169,8 +172,9 @@
                 block.el._answer = { text: answer, cites };
                 recordAsk('answer', query, { answer, cites });
             } catch (err) {
+                // Same again: the failure belongs to the block that failed.
                 turn.fail(err.message || err);
-                setAskStatus(`Answer failed: ${err.message || err}`, true);
+                setAskStatus('');
                 console.error(err);
             } finally {
                 state.chatInFlight = false;

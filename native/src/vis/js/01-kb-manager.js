@@ -72,8 +72,6 @@
             kbCapsCache = caps;
             startStalenessPolling();
             document.getElementById('kb-open-btn').hidden = false;
-            document.getElementById('brand-title').classList.add('brand-clickable');
-            document.getElementById('brand-title').title = 'Browse knowledge bases';
             document.getElementById('project-chip').hidden = false;
             wireProjectChip();
             renderProjectChip();
@@ -352,6 +350,7 @@
                 document.getElementById('kb-wizard-error').textContent = err.message || String(err);
                 document.getElementById('kb-generate-btn').disabled = false;
                 document.getElementById('kb-wizard-back').disabled = false;
+                refreshPipelineIdle();
             }
         }
 
@@ -365,6 +364,7 @@
             document.getElementById('kb-wizard-error').hidden = true;
             document.getElementById('kb-generate-btn').disabled = false;
             document.getElementById('kb-wizard-back').disabled = false;
+            refreshPipelineIdle();
             setKbStatus(canGoBack ? 'Adding a new knowledge base' : 'No knowledge bases yet');
         }
 

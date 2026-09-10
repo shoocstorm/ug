@@ -1,7 +1,7 @@
-// The Ask bar's two pure halves, run under `node`.
+// The Ask bar's checkable halves, run under `node`.
 //
-// Everything the page can be asked now enters through one input, and two
-// pure functions in `src/vis/js/25-ask.js` decide what happens to it:
+// Everything the page can be asked now enters through one input, and three
+// things in `src/vis/js/25-ask.js` decide what happens to it:
 //
 //   1. `classifyAsk` turns raw text into a mode. Get it wrong and typing a
 //      symbol name spends a model call, or typing a question quietly
@@ -10,10 +10,14 @@
 //      reads. That row carries repository content — names, file paths — into
 //      `innerHTML`, and it carries the provenance that makes a result
 //      checkable rather than merely present.
+//   3. `askBlock` / `clearAskStream` decide what the column holds. Every mode
+//      writes through them, and appending instead of replacing is how the
+//      panel used to grow a block per click of the mode strip.
 //
-// Both are pure, so both are checkable here. They are read out of the real
-// part with a string slice rather than transcribed, so this cannot pass
-// against a copy that has drifted from what ships.
+// The first two are pure; the third needs only enough of a DOM to hold a few
+// nodes. All three are read out of the real part with a string slice rather
+// than transcribed, so this cannot pass against a copy that has drifted from
+// what ships.
 //
 // Booting the real page to check this instead is a runaway CPU load — see
 // Agents.md §10r.
@@ -191,6 +195,103 @@ must('a non-finite score is not printed',
 // Pure-vector rows arrive with `distance` where hybrid rows carry `score`.
 must('a distance is shown when there is no score',
     R.askProvenanceHtml({ distance: 0.25 }).includes('0.250'));
+
+// ── 3. One question, one block ───────────────────────────────────────────────
+//
+// Names, Find, Answer and Tour all write into `#ask-stream`, and they used to
+// append: walking the mode strip over a single question stacked four results
+// and the column only ever got longer. `askBlock` now retires what the last
+// question left, so the invariant worth pinning is that opening a block
+// leaves exactly one behind.
+
+const streamMod = write('stream.mjs', `
+    // A DOM small enough to hold the stream: children, class names, and a
+    // class-only querySelector, which is all these functions touch.
+    function stubNode(tag) {
+        const node = {
+            tagName: tag, className: '', textContent: '', title: '', type: '',
+            dataset: {}, children: [], _listeners: [],
+            classList: { add() {}, remove() {}, toggle() {} },
+            addEventListener(_, fn) { this._listeners.push(fn); },
+            scrollIntoView() {},
+            append(...kids) { this.children.push(...kids); },
+            appendChild(kid) { this.children.push(kid); return kid; },
+            remove() {},
+            querySelector(sel) {
+                const want = sel.slice(1);
+                for (const kid of this.children) {
+                    if (String(kid.className).split(' ').includes(want)) return kid;
+                    const deep = kid.querySelector(sel);
+                    if (deep) return deep;
+                }
+                return null;
+            },
+        };
+        Object.defineProperty(node, 'innerHTML', {
+            get() { return node._html || ''; },
+            set(v) { node._html = v; if (!v) node.children = []; },
+        });
+        return node;
+    }
+
+    const stream = stubNode('div');
+    stream.className = 'ask-stream';
+    globalThis.document = {
+        createElement: stubNode,
+        getElementById: id => (id === 'ask-stream' ? stream : null),
+    };
+
+    // The canvas half of a cleared stream. Only that it was told matters here.
+    const state = { askLive: null, askCursor: 3 };
+    let matches = null;
+    function setAskMatches(hits) { matches = hits; }
+    const askEl = id => document.getElementById(id);
+
+    ${lift(askSrc, 'askBlockHandle')}
+    ${lift(askSrc, 'askBlock')}
+    ${lift(askSrc, 'clearAskStream')}
+    export { askBlock, clearAskStream, stream, state };
+    export const seenMatches = () => matches;
+`);
+const S = await import(streamMod);
+
+console.log('keeping one question in the stream');
+S.askBlock('find', 'how does serve work');
+must('the first question opens a block', S.stream.children.length === 1);
+
+S.askBlock('answer', 'how does serve work');
+must('switching mode does not stack a second block', S.stream.children.length === 1);
+must('the block left standing is the newest',
+    S.stream.children[0].className.includes('mode-answer'));
+
+// The mode strip runs Names · Find · Answer · Tour over one question. Four
+// clicks used to mean four blocks.
+['names', 'find', 'answer', 'tour'].forEach(m => S.askBlock(m, 'one question'));
+must('walking the whole strip leaves one result', S.stream.children.length === 1);
+
+const head = S.stream.children[0].querySelector('.ask-block-head');
+must('the block says which mode produced it',
+    head.querySelector('.ask-block-mode').textContent === 'tour');
+must('the block quotes the question verbatim',
+    head.querySelector('.ask-block-q').textContent === 'one question');
+
+// A question typed into the bar is user text; it reaches the head as text and
+// must never be parsed as markup on the way.
+S.askBlock('names', '<img src=x onerror=alert(1)>');
+const q = S.stream.children[0].querySelector('.ask-block-q');
+must('a hostile question stays text', q.textContent === '<img src=x onerror=alert(1)>');
+must('a hostile question is not markup', !String(q.innerHTML).includes('<img'));
+
+// Clearing is what makes the replacement safe: the transient names block, the
+// row cursor and the set lit up on the canvas all belong to the old question.
+S.state.askLive = S.stream.children[0];
+S.state.askCursor = 2;
+S.clearAskStream();
+must('clearing empties the stream', S.stream.children.length === 0);
+must('clearing forgets the live block', S.state.askLive === null);
+must('clearing forgets the highlighted row', S.state.askCursor === -1);
+must('clearing takes the old matches off the canvas',
+    Array.isArray(S.seenMatches()) && S.seenMatches().length === 0);
 
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(failures === 0

@@ -13,16 +13,12 @@
         //   answer  `runChatTurn`  — the same retrieval, written up, cited.
         //   tour    `startTour`    — the same retrieval, flown and narrated.
         //
-        // Results from all of them land in one stream of blocks, and every
-        // block renders through `renderHitRows`, so "why is this here" is
-        // answered the same way whatever produced the row.
+        // Results from all of them land in the same one place — the block
+        // for the question being asked now — and every block renders through
+        // `renderHitRows`, so "why is this here" is answered the same way
+        // whatever produced the row.
 
         const ASK_MODES = ['names', 'find', 'answer', 'tour'];
-
-        // How many query blocks the stream keeps. Old blocks are *removed*,
-        // not hidden: a collapsed section that is still in the DOM still
-        // costs layout and paint on every reflow (AGENTS.md §9d).
-        const ASK_MAX_BLOCKS = 24;
 
         // Above this length a query with no spaces is prose someone forgot to
         // space, not an identifier.
@@ -200,6 +196,15 @@
             });
         }
 
+        // Whether a capability banner is up. An error with a home of its own
+        // — a banner here, or the failed block in the stream — must not also
+        // be written to the strip.
+        function askCapsShown() {
+            const caps = askEl('ask-caps');
+            if (!caps) return false;
+            return [...caps.querySelectorAll('.cap-banner')].some(el => !el.hidden);
+        }
+
         function setAskStatus(text, isError) {
             const el = askEl('ask-status');
             el.textContent = text || '';
@@ -238,8 +243,23 @@
                 return;
             }
 
+            // An answer in flight owns the block it is writing into. Asking
+            // again would clear that block out from under the stream, so the
+            // next question waits rather than half-replacing this one.
+            if (state.chatInFlight) {
+                setAskStatus('Still answering — wait for that to finish.', true);
+                return;
+            }
+
             const ready = askModeReady(mode);
-            if (!ready.ok) { setAskStatus(ready.why, true); return; }
+            if (!ready.ok) {
+                // The reason is already on screen, under the mode it is about:
+                // `probeCapabilities` raises a banner for every state that
+                // turns a mode off, and that one carries the fix as a button.
+                // Repeating it on the strip says the same thing twice.
+                setAskStatus(askCapsShown() ? '' : ready.why, true);
+                return;
+            }
 
             hideAskOnboard();
             switch (mode) {
@@ -253,6 +273,10 @@
                 case 'answer': return runChatTurn(query, askBlock('answer', query));
                 case 'tour': {
                     const stops = clampInt(askEl('tour-stops').value, 2, 40, 8);
+                    // A tour plays in the overlay and writes no block, so it
+                    // clears the stream itself — otherwise the last answer
+                    // sits under it looking like the tour's own result.
+                    clearAskStream();
                     setAskStatus('');
                     recordAsk('tour', query, {});
                     return startTour(query, stops);
@@ -271,6 +295,9 @@
         let askPreviewToken = 0;
 
         async function askPreview() {
+            // Typing while an answer streams must not take its block away —
+            // the preview resumes on the next keystroke after it lands.
+            if (state.chatInFlight) return;
             const { mode, query } = classifyAsk(askEl('ask-input').value);
             const effective = state.askOverride || mode;
             if (effective !== 'names' || !query) { dropAskLive(); return; }
@@ -414,6 +441,9 @@
         }
 
         function askBlock(mode, query) {
+            // One question, one block: opening a new one retires whatever the
+            // last question left behind.
+            clearAskStream();
             const stream = askEl('ask-stream');
             const el = document.createElement('div');
             el.className = `ask-block mode-${mode}`;
@@ -452,31 +482,31 @@
 
             el.append(head, body);
             stream.appendChild(el);
-            pruneAskStream();
             el.scrollIntoView({ block: 'nearest' });
             return askBlockHandle(el);
         }
 
-        // Bounded, and bounded by removal. See ASK_MAX_BLOCKS.
-        function pruneAskStream() {
-            const stream = askEl('ask-stream');
-            while (stream.children.length > ASK_MAX_BLOCKS) {
-                if (stream.firstElementChild === state.askLive) state.askLive = null;
-                stream.firstElementChild.remove();
-            }
+        // The stream holds the current question and nothing else. Each of
+        // Names, Find, Answer and Tour used to append, so walking the strip
+        // over one question left four stacked results and a column that only
+        // ever got longer. Old blocks are *removed*, not hidden: a collapsed
+        // section still in the DOM still costs layout and paint on every
+        // reflow (AGENTS.md §9d).
+        function clearAskStream() {
+            askEl('ask-stream').innerHTML = '';
+            state.askLive = null;
+            state.askCursor = -1;
+            setAskMatches([]);
         }
 
         function resetAsk() {
             state.chatHistory = [];
-            state.askLive = null;
-            state.askCursor = -1;
             // `searchQuery` is the slice of this column the URL carries; a
             // cleared stream must not leave `?q=` behind pointing at rows
             // that are gone.
             state.searchQuery = '';
-            askEl('ask-stream').innerHTML = '';
+            clearAskStream();
             setAskStatus('');
-            setAskMatches([]);
             showAskOnboard();
             writeUrlState();
         }

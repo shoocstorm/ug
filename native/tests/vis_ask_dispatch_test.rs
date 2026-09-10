@@ -1,8 +1,8 @@
-//! The Ask bar's two pure halves, run under `node`.
+//! The Ask bar's checkable halves, run under `node`.
 //!
 //! Every question the page can be asked now enters through one input, and
-//! `src/vis/js/25-ask.js` decides what happens to it. Two of its functions are
-//! pure, and both fail quietly rather than loudly:
+//! `src/vis/js/25-ask.js` decides what happens to it. Three of its parts fail
+//! quietly rather than loudly:
 //!
 //! * `classifyAsk` picks the mode from the raw text. Misclassify and typing a
 //!   symbol name spends a model call, or a plain-language question searches
@@ -11,8 +11,11 @@
 //!   puts repository content — symbol names, file paths — through `innerHTML`,
 //!   and it carries the `matched_by` / `hop` / score strip that is the whole
 //!   difference between a list of results and a checkable answer.
+//! * `askBlock` / `clearAskStream` decide what the column holds. Every mode
+//!   writes through them, and when they appended instead of replacing, a walk
+//!   along the mode strip left a block per click and a panel that only grew.
 //!
-//! `tests/js/ask_dispatch.mjs` lifts both out of the shipped part with a
+//! `tests/js/ask_dispatch.mjs` lifts all three out of the shipped part with a
 //! string slice, so this cannot pass against a copy that has drifted from
 //! what ships.
 //!
@@ -55,8 +58,8 @@ fn the_ask_bar_classifies_and_renders_as_specified() {
         text.contains("the ask bar classifies and renders as specified"),
         "the harness did not report its checks:\n{text}"
     );
-    // The two halves are independently breakable, so both have to have run —
-    // a harness that silently lifted only one would still exit 0.
+    // The halves are independently breakable, so all of them have to have run
+    // — a harness that silently lifted only one would still exit 0.
     assert!(
         text.contains("classifying a query") && text.contains("rendering a result row"),
         "both halves must be exercised:\n{text}"
@@ -72,5 +75,10 @@ fn the_ask_bar_classifies_and_renders_as_specified() {
     assert!(
         text.contains("showing how a hit was reached"),
         "the provenance checks must run:\n{text}"
+    );
+    // One question, one block. Appending is how the column grew without bound.
+    assert!(
+        text.contains("keeping one question in the stream"),
+        "the stream checks must run:\n{text}"
     );
 }

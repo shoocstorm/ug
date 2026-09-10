@@ -798,14 +798,36 @@ server cannot serve is greyed with the reason on hover, one banner under the
 strip repeats it with the fix attached, and `currentAskMode` falls back to
 Names rather than failing at submit time.
 
-**One stream, one row.** Each submitted query appends a block to
-`#ask-stream`; every block renders through `renderHitRows`, whatever produced
-it. Names is the one mode that answers while you type — its block is rebuilt
-on each pause, marked `live` (dashed) until Enter freezes it, so there is
-never a second results surface to reconcile. `↑`/`↓`/`Enter` walk it.
+**One block, one row.** Each submitted query *replaces* what is in
+`#ask-stream`, so walking Names · Find · Answer · Tour over one question shows
+four readings of it rather than four stacked results in a column that only
+grows. Every block renders through `renderHitRows`, whatever produced it.
+Names is the one mode that answers while you type — its block is rebuilt on
+each pause, marked `live` (dashed) until Enter freezes it, so there is never a
+second results surface to reconcile. `↑`/`↓`/`Enter` walk it.
 
-The stream is capped at `ASK_MAX_BLOCKS` and old blocks are **removed**, not
-hidden — §9d is exactly this case.
+The retired block is **removed**, not hidden — §9d is exactly this case. The
+one thing that is never cleared out from under itself is an answer still
+streaming: `clearAskStream` would detach the node its tokens are landing in,
+so a question asked over the top of one waits, with the reason on the status
+line, and the live preview pauses for the same reason.
+
+**Two halves, one scrollbar.** `.ask-head` — the bar, the mode strip and the
+capability banners — does not move; `.ask-scroll` under it takes the rest of
+the column and scrolls. The pane itself is `overflow: hidden`, and
+`vis_assembly_test.rs` holds both facts, because the alternative (one
+scrolling pane, `position: sticky` on the bar) pins the bar only as long as
+nothing else claims the scroll, and runs results underneath it meanwhile. The
+head is capped at `60vh` so an open Retrieval panel cannot squeeze the stream
+out of the column.
+
+**An error is said once, where it happened.** A failed answer is drawn in its
+own block by `turn.fail` / `turn.unreachable`; a mode that cannot run has a
+banner under the strip with the fix attached. Neither is repeated on the
+status line — `setAskStatus` clears instead, and `askCapsShown` is what tells
+the refusal path a banner is already up. The status line keeps what has no
+other home: progress, a click on a node that is not in the loaded graph, and
+a question asked while an answer is still streaming.
 
 **Provenance is the point.** `matched_by`, `hop` and the score travel on every
 hybrid item and on every chat citation, and `askProvenanceHtml` renders them on
