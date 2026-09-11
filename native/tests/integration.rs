@@ -98,4 +98,5 @@ mod vis_ask_dispatch_test;
 mod vis_assembly_test;
 mod vis_context_panel_test;
 mod vis_edge_store_test;
+mod vis_interaction_test;
 mod vis_json_stream_test;

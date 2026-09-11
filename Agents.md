@@ -293,7 +293,7 @@ change. Do not wait to be told, and do not file it as future work.
 | Install or upgrade steps | `index.html` `#get-started` **and** `docs/ug-website/install.sh` — they must agree |
 | Architecture or component boundaries | `architecture.html` — **both tabs**, `#tab-horizontal` and `#tab-vertical`, which draw the same pipeline at different densities |
 | A user-visible UI feature worth showing off | `index.html` `#showcase` (reuse an existing `img/UG-*.png` unless the feature is genuinely new) |
-| Anything under `native/src/vis/` (css, js, the shell, the shim) | `ug demo --page-only` — the live demo ships a *copy* of that page and keeps serving the old one until you re-publish it. `the_published_demo_page_is_not_stale` fails until you do. See 7.4 |
+| Anything under `native/src/vis/` (css, js, the shell, the shim) | `ug demo --page-only` — the live demo ships a *copy* of that page and keeps serving the old one until you re-publish it. `the_published_demo_page_is_not_stale` fails until you do. **Run it from the repo root**: it resolves its output directory relative to the working directory, so from `native/` it looks for `./ug-demo`, does not find it, and tells you to publish a demo first — which is the wrong fix. See 7.4 |
 | The indexer, or the `graph.json` shape | `./scripts/gen-demo.sh` — a full re-publish, so the demo's snapshot is one this build could actually have produced. The landing page's counts follow `demo/demo.json` on their own |
 | An endpoint the page calls **at startup**, or any fetch outside `/api/` | `native/src/vis/demo-shim.js` must answer it — on a static host there is no such route, and the demo blocks on a request nothing will serve |
 

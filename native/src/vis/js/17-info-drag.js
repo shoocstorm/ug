@@ -2,6 +2,17 @@
 
         // Info panel is docked to the right side — drag is no longer applicable.
 
+        // Escapes as *text*, not as an attribute value. Round-tripping
+        // through a text node replaces `&`, `<` and `>` and nothing else, so
+        // a quote comes back untouched — and most callers here drop the
+        // result inside a double-quoted attribute (`title="…"`,
+        // `data-id="…"`). No indexed name has carried a quote yet, which is
+        // the only reason that holds. If you ever escape something a user
+        // types rather than something the indexer extracted, this is not the
+        // function for it.
+        //
+        // Pinned by `tests/js/interaction.mjs`, which asserts the quote
+        // survives so the limit is visible rather than assumed.
         function escapeHtml(text) {
             if (text == null) return '';
             const div = document.createElement('div');

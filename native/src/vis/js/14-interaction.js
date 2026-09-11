@@ -1225,7 +1225,15 @@
             }
             // The head is "<Type>: <name>." — the rest of the first block is
             // the node's description.
-            const head = body.match(/^([^.\n]{0,80}?:\s*[^.\n]+?)\.\s*/);
+            //
+            // The name half allows dots, and the terminating dot has to be
+            // followed by a space or the end. Requiring a dot-free name cut
+            // `File: 14-interaction.js.` at the first dot, so every file node
+            // — and every dotted symbol name — showed a heading with the
+            // extension chopped off and the remainder ("js. …") leaking into
+            // the description below it. The type half stays dot-free so a
+            // "Note:" in mid-prose cannot be mistaken for the head.
+            const head = body.match(/^([^.\n]{0,80}?:\s*[^\n]+?)\.(?=\s|$)\s*/);
             if (head) {
                 out.heading = head[1].trim();
                 body = body.slice(head[0].length);
@@ -1440,7 +1448,12 @@
                 .replace(/`([^`]+)`/g, (_, c) => `<code>${c}</code>`)
                 .replace(/!\[([^\]]*)\]\([^)]*\)/g, (_, a) => `<em>${a || 'image'}</em>`)
                 .replace(/\[([^\]]+)\]\(([^)\s]+)[^)]*\)/g, (_, t, u) => {
-                    const safe = /^(https?:|\/|#|mailto:)/i.test(u) ? u : '#';
+                    // `\/(?!\/)` and not `\/`: a leading `//` is not a
+                    // site-relative path, it is a protocol-relative URL, so
+                    // `//evil.test/x` was passing a filter meant to allow
+                    // `/docs/x`. Docstrings are indexed repository content,
+                    // and this is the only thing between one and the href.
+                    const safe = /^(https?:|\/(?!\/)|#|mailto:)/i.test(u) ? u : '#';
                     return `<a href="${safe}" target="_blank" rel="noopener noreferrer">${t}</a>`;
                 })
                 .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
