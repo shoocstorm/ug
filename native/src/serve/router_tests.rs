@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use axum::body::Body;
+use serde_json::json;
 use axum::http::{Request, StatusCode};
 use tempfile::TempDir;
 use tokio::sync::Semaphore;
@@ -1583,4 +1584,125 @@ async fn search_type_filter_is_case_insensitive() {
     let u: serde_json::Value = serde_json::from_str(&upper).unwrap();
     assert_eq!(l["count"], u["count"]);
     assert!(l["count"].as_u64().unwrap() > 0, "fixture has a File node");
+}
+
+// ── /api/chat and /api/tour, end to end through the router ──────────────────
+//
+// `router_with_mode` builds state with `chat_default: None` and no embedder,
+// which is exactly the shape a `ug serve` started without `--chat-model`
+// has. That is the configuration most users hit first, so what these routes
+// do in it is the behaviour worth pinning: a clear refusal from chat, and a
+// tour that still works without a model.
+
+#[tokio::test]
+async fn chat_rejects_an_empty_query_before_anything_else() {
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+    let app = router_for(&tmp, "chat-empty", &sample_graph()).await;
+
+    // Checked ahead of store selection and config, so it stays a 400 even on
+    // a server with nothing configured — the caller's problem, named as such.
+    for body in [json!({ "query": "" }), json!({ "query": "   " })] {
+        let (status, text) = post(&app, "/api/chat", body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+        assert!(text.contains("query is required"), "{text}");
+    }
+}
+
+#[tokio::test]
+async fn chat_without_a_configured_model_is_unavailable_not_a_bad_request() {
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+    let app = router_for(&tmp, "chat-unconfigured", &sample_graph()).await;
+
+    // 503, not 400: nothing is wrong with the request. Getting this backwards
+    // tells the user to fix their question when they need to start the server
+    // with a model.
+    let (status, text) = post(&app, "/api/chat", json!({ "query": "what is this" })).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{text}");
+}
+
+#[tokio::test]
+async fn both_chat_routes_check_the_store_before_the_request_body() {
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+    let app = router_for(&tmp, "chat-order", &sample_graph()).await;
+
+    // This harness is a `--no-db` server, which is also what a user gets
+    // before their first ingest. Both routes resolve a store before they look
+    // at any endpoint override, so a body naming a hostile endpoint is
+    // refused for the boring reason and never reaches an HTTP client at all.
+    //
+    // The ordering is the point. If body handling ever moved ahead of store
+    // selection, a request could get further into the chat pipeline on a
+    // server that has nothing to retrieve from.
+    let hostile = json!({
+        "query": "q",
+        "chat_model": "some-model",
+        "chat_base_url": "http://169.254.169.254/latest/meta-data/",
+    });
+    for route in ["/api/chat", "/api/tour"] {
+        let (status, text) = post(&app, route, hostile.clone()).await;
+        assert_eq!(
+            status,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "{route} answered {status}: {text}"
+        );
+        assert!(text.contains("no-db"), "{route} should say why: {text}");
+    }
+}
+
+#[tokio::test]
+async fn a_malformed_chat_body_is_rejected_by_the_extractor() {
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+    let app = router_for(&tmp, "chat-malformed", &sample_graph()).await;
+
+    // `query` is the one required field; everything else defaults. Axum's
+    // Json extractor answers this before the handler runs, so it never
+    // reaches the store check above.
+    let (status, _) = post(&app, "/api/chat", json!({ "not_a_query": 1 })).await;
+    assert!(
+        status.is_client_error(),
+        "a body with no query must not reach the handler, got {status}"
+    );
+}
+
+#[tokio::test]
+async fn the_chat_config_route_publishes_what_a_turn_is_made_of() {
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+    let app = router_for(&tmp, "chat-config", &sample_graph()).await;
+
+    // The route exists so an answer's provenance is inspectable rather than
+    // guessed at. Its three parts are the contract: the prompt the model was
+    // given, the tools it could call, and how the context was retrieved.
+    // "Semantic search" is the usual guess for the last one and it is wrong,
+    // which is the whole reason this is published.
+    let (status, text) = get(&app, "/api/chat/config").await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+
+    assert!(
+        v["system_prompt"].as_str().is_some_and(|s| !s.is_empty()),
+        "the system prompt must be published"
+    );
+    assert!(
+        v["tools"].as_array().is_some_and(|t| !t.is_empty()),
+        "the tool list must be published"
+    );
+
+    let retrieval = &v["retrieval"];
+    assert!(
+        retrieval["strategy"] == "ppr" || retrieval["strategy"] == "mmr",
+        "retrieval names one of the two real strategies: {retrieval}"
+    );
+    // The stage list is what corrects the "it is just semantic search" guess,
+    // so an empty one defeats the route's purpose.
+    let stages = retrieval["stages"].as_array().expect("stages is a list");
+    assert!(
+        stages.iter().any(|s| s["id"] == "hybrid"),
+        "the hybrid seed stage must be named: {retrieval}"
+    );
+    assert_eq!(retrieval["defaults"]["hops"], 2);
 }

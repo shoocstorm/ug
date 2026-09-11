@@ -172,6 +172,21 @@ format), stream only the final answer, and show every call to the user as it hap
   and the `#[ignore]`-gated `neo4j_smoke.rs` / `neo4j_write_smoke.rs`. They compile
   into **one** binary via `tests/integration.rs` — a new file there needs a `mod` line in
   that harness or it is silently not built. See its module comment for why.
+- **A test that opens a real store costs ~2s, whatever it writes.** `Db::open`
+  itself is cheap (a `storage_test.rs` case runs in ~0.09s), but anything that
+  finishes a write through `ingest_graph_with_progress` pays
+  `ensure_query_indexes()`, measured at **1.98s on a store with zero nodes** —
+  it is a fixed setup cost inside OverGraph, not proportional to the data. So
+  the suite time of a store-backed test is decided by how many stores it opens,
+  not by how much it asserts. Two things follow. Group related assertions into
+  one store and one run — `cli/ingest.rs` went from nine opens to five that
+  way. Then **gate what is left behind `#[ignore]`**, as `neo4j_smoke.rs` is:
+  five store opens took the default suite from 4.5s to 15s, and a suite that
+  slow gets run less often, which costs more than the coverage buys. Run the
+  gated ones when you touch the file they cover, and before a release:
+  `cargo nextest run --lib --run-ignored all -E 'test(cli::ingest)'`.
+  (The same ~1-2s also lands on every real `ug gen` / `ug ingest` / `ug
+  update`, however little changed.)
 - **Run these tests after every code change in the native folder**
 - If adding new functionality, add corresponding test cases to the test files
 - Ensure all tests pass before completing a phase

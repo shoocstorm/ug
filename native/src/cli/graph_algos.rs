@@ -393,3 +393,206 @@ fn print_graph_cycles_help() {
     println!("  {C_CYAN}ug graph_cycles{C_RESET} --min-len 3 -f src/");
     println!("  {C_CYAN}ug graph_cycles{C_RESET} --fail-on-cycle --json   {C_YELLOW}# CI{C_RESET}");
 }
+
+#[cfg(test)]
+mod tests {
+    //! Turning what a user typed into one node, and filtering what gets
+    //! scored.
+    //!
+    //! `shortest_path`, `graph_centrality` and `graph_cycles` all need a
+    //! single unambiguous node id, so `resolve_node_ref` is what stands
+    //! between `ug shortest_path parse other` and an answer about the wrong
+    //! `parse`. Resolving to the wrong node does not fail — it reports a real
+    //! path between two real nodes, neither of which the user asked about.
+    //!
+    //! Only the success paths are reachable from a test: every failure here
+    //! ends in `std::process::exit`, including the ambiguity report.
+
+    use super::*;
+
+    fn node(id: &str, name: &str, ty: GraphNodeType, file: Option<&str>) -> GraphNode {
+        GraphNode {
+            id: id.to_string(),
+            name: name.to_string(),
+            node_type: ty,
+            file: file.map(str::to_string),
+            start_line: Some(1),
+            end_line: Some(9),
+            ..Default::default()
+        }
+    }
+
+    fn graph(nodes: Vec<GraphNode>) -> GraphData {
+        GraphData { nodes, edges: Vec::new(), stats: None, resolution: None }
+    }
+
+    fn sample() -> GraphData {
+        graph(vec![
+            node("file:src/auth/login.ts", "login.ts", GraphNodeType::File, Some("src/auth/login.ts")),
+            node("file:src/db/query.ts", "query.ts", GraphNodeType::File, Some("src/db/query.ts")),
+            node("function:src/auth/login.ts:signIn", "signIn", GraphNodeType::Function, Some("src/auth/login.ts")),
+            node("function:src/db/query.ts:signInternal", "signInternal", GraphNodeType::Function, Some("src/db/query.ts")),
+            node("class:src/db/query.ts:QueryBuilder", "QueryBuilder", GraphNodeType::Class, Some("src/db/query.ts")),
+        ])
+    }
+
+    // ── resolving a reference ───────────────────────────────────────────────
+
+    #[test]
+    fn an_exact_node_id_resolves_to_itself() {
+        let g = sample();
+        // Checked first, before any name or path matching, so an id that also
+        // happens to look like a name cannot be re-interpreted.
+        assert_eq!(
+            resolve_node_ref(&g, "function:src/auth/login.ts:signIn"),
+            "function:src/auth/login.ts:signIn"
+        );
+    }
+
+    #[test]
+    fn a_full_repo_relative_path_resolves_to_its_file_node() {
+        let g = sample();
+        assert_eq!(resolve_node_ref(&g, "src/auth/login.ts"), "file:src/auth/login.ts");
+    }
+
+    #[test]
+    fn a_path_suffix_is_enough_when_it_is_unique() {
+        let g = sample();
+        // Typing the whole repo-relative path is the thing this exists to
+        // avoid; a basename that names one file is an answer.
+        assert_eq!(resolve_node_ref(&g, "login.ts"), "file:src/auth/login.ts");
+        assert_eq!(resolve_node_ref(&g, "auth/login.ts"), "file:src/auth/login.ts");
+    }
+
+    #[test]
+    fn an_exact_name_beats_a_prefix_match() {
+        let g = sample();
+        // "signIn" is also a prefix of "signInternal". Without the ranking
+        // tiers this would be ambiguous and exit; with them the exact match
+        // is the answer and the command runs.
+        assert_eq!(
+            resolve_node_ref(&g, "signIn"),
+            "function:src/auth/login.ts:signIn"
+        );
+    }
+
+    #[test]
+    fn a_name_match_is_case_insensitive() {
+        let g = sample();
+        assert_eq!(
+            resolve_node_ref(&g, "querybuilder"),
+            "class:src/db/query.ts:QueryBuilder"
+        );
+    }
+
+    #[test]
+    fn a_unique_prefix_resolves_without_the_rest_of_the_name() {
+        let g = sample();
+        assert_eq!(
+            resolve_node_ref(&g, "signInter"),
+            "function:src/db/query.ts:signInternal"
+        );
+    }
+
+    #[test]
+    fn a_substring_resolves_when_nothing_matches_better() {
+        let g = sample();
+        // Rank 2: not exact, not a prefix. Only reached because no node
+        // scores higher, which is what keeps a substring from stealing a
+        // reference that had an exact match available.
+        assert_eq!(
+            resolve_node_ref(&g, "Builder"),
+            "class:src/db/query.ts:QueryBuilder"
+        );
+    }
+
+    #[test]
+    fn a_file_reference_is_not_answered_by_a_symbol_in_that_file() {
+        // Paths are tried before symbol names, so a path-shaped input
+        // resolves to the File node rather than to something declared in it.
+        let g = sample();
+        assert_eq!(resolve_node_ref(&g, "query.ts"), "file:src/db/query.ts");
+    }
+
+    // ── which nodes get scored ──────────────────────────────────────────────
+
+    #[test]
+    fn no_filters_pass_everything() {
+        let n = node("x", "x", GraphNodeType::Function, Some("src/a.rs"));
+        assert!(node_passes(&n, &[], None));
+    }
+
+    #[test]
+    fn the_type_filter_ignores_case() {
+        let n = node("x", "x", GraphNodeType::Function, Some("src/a.rs"));
+        // The flag is typed by hand, so "function", "Function" and "FUNCTION"
+        // all have to mean the same thing.
+        for spelling in ["function", "Function", "FUNCTION"] {
+            assert!(node_passes(&n, &[spelling.to_string()], None), "{spelling}");
+        }
+        assert!(!node_passes(&n, &["class".to_string()], None));
+    }
+
+    #[test]
+    fn several_types_are_an_or() {
+        let n = node("x", "x", GraphNodeType::Class, None);
+        let types = vec!["function".to_string(), "class".to_string()];
+        assert!(node_passes(&n, &types, None));
+    }
+
+    #[test]
+    fn the_file_filter_is_a_path_prefix() {
+        let n = node("x", "x", GraphNodeType::Function, Some("src/auth/login.ts"));
+        assert!(node_passes(&n, &[], Some("src/auth")));
+        assert!(node_passes(&n, &[], Some("src/")));
+        assert!(!node_passes(&n, &[], Some("src/db")));
+    }
+
+    #[test]
+    fn a_node_with_no_file_fails_a_file_filter_rather_than_passing_it() {
+        // Folder nodes carry no file. Letting them through a `-f src/auth`
+        // filter would put unrelated rows in a filtered report.
+        let n = node("folder:src", "src", GraphNodeType::Folder, None);
+        assert!(!node_passes(&n, &[], Some("src")));
+        assert!(node_passes(&n, &[], None), "but no filter still passes it");
+    }
+
+    #[test]
+    fn both_filters_must_pass() {
+        let n = node("x", "x", GraphNodeType::Function, Some("src/auth/login.ts"));
+        assert!(node_passes(&n, &["function".to_string()], Some("src/auth")));
+        assert!(!node_passes(&n, &["class".to_string()], Some("src/auth")));
+        assert!(!node_passes(&n, &["function".to_string()], Some("src/db")));
+    }
+
+    // ── scoring rows ────────────────────────────────────────────────────────
+
+    #[test]
+    fn a_node_the_centrality_pass_never_scored_reads_as_zero() {
+        let g = sample();
+        let empty = CentralityResult {
+            degree_centrality: Default::default(),
+            betweenness_centrality: Default::default(),
+        };
+        let rows = centrality_rows(&g, &empty, &[], None);
+
+        // Absent is zero, not skipped: an isolated node belongs in the report
+        // at the bottom, and dropping it would misstate how many were scored.
+        assert_eq!(rows.len(), g.nodes.len());
+        assert!(rows.iter().all(|(_, d, b)| *d == 0.0 && *b == 0.0));
+    }
+
+    #[test]
+    fn filters_reach_the_scored_rows() {
+        let g = sample();
+        let empty = CentralityResult {
+            degree_centrality: Default::default(),
+            betweenness_centrality: Default::default(),
+        };
+        let rows = centrality_rows(&g, &empty, &["function".to_string()], None);
+        assert_eq!(rows.len(), 2, "only the two functions are scored");
+
+        let scoped = centrality_rows(&g, &empty, &[], Some("src/db"));
+        assert_eq!(scoped.len(), 3, "the file, the function and the class under src/db");
+    }
+}

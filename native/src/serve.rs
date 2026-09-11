@@ -593,6 +593,9 @@ pub fn print_serve_help() {
 }
 
 #[cfg(test)]
+mod chat_api_tests;
+
+#[cfg(test)]
 mod router_tests;
 
 #[cfg(test)]

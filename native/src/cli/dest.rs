@@ -205,3 +205,225 @@ pub(crate) fn announce_destinations(specs: &[StoreSpec]) {
         names.join(", ")
     );
 }
+
+#[cfg(test)]
+mod tests {
+    //! Which store a command writes to or reads from, and why.
+    //!
+    //! Three inputs can name it — `-n/--name`, `--db`, and the default — and
+    //! they are tried in that order. Getting the order wrong does not fail:
+    //! the command reads or writes a real store, just not the one the user
+    //! named, and `ug gen -n other --db ./somewhere` would silently ingest
+    //! into the wrong project.
+    //!
+    //! The error paths (`--dest neo4j` with no URI, an unknown destination,
+    //! an empty `--dest`) all end in `std::process::exit`, so only the
+    //! resolutions are reachable here.
+
+    use super::*;
+    use crate::project::UG_HOME_LOCK as ENV_GUARD;
+    use tempfile::TempDir;
+
+    const DIM: u32 = 384;
+
+    fn a(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn og_path(spec: &StoreSpec) -> PathBuf {
+        match spec {
+            StoreSpec::Overgraph { path, .. } => path.clone(),
+            other => panic!("expected an overgraph spec, got {other:?}"),
+        }
+    }
+
+    /// Clear every env var these functions consult, so a developer's real
+    /// shell cannot decide the result.
+    fn clear_dest_env() {
+        for k in [
+            "UG_DEST",
+            "UG_NEO4J_URI",
+            "UG_NEO4J_USER",
+            "UG_NEO4J_PASSWORD",
+            "UG_NEO4J_DATABASE",
+        ] {
+            std::env::remove_var(k);
+        }
+    }
+
+    #[tokio::test]
+    async fn the_default_destination_is_a_local_overgraph_store() {
+        let _guard = ENV_GUARD.lock().await;
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var("UG_HOME", tmp.path());
+        clear_dest_env();
+
+        let specs = store_specs_from_args(&a(&[]), DIM);
+        assert_eq!(specs.len(), 1);
+        assert!(matches!(specs[0], StoreSpec::Overgraph { .. }));
+        match &specs[0] {
+            StoreSpec::Overgraph { embedding_dim, .. } => assert_eq!(*embedding_dim, DIM),
+            _ => unreachable!(),
+        }
+        std::env::remove_var("UG_HOME");
+    }
+
+    #[tokio::test]
+    async fn a_project_name_resolves_to_that_projects_store() {
+        let _guard = ENV_GUARD.lock().await;
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var("UG_HOME", tmp.path());
+        clear_dest_env();
+
+        let path = og_path(&store_specs_from_args(&a(&["-n", "myrepo"]), DIM)[0]);
+        assert!(
+            path.ends_with("myrepo/ugdb"),
+            "a named project points at its own store: {}",
+            path.display()
+        );
+        std::env::remove_var("UG_HOME");
+    }
+
+    #[tokio::test]
+    async fn a_project_name_outranks_an_explicit_db_path() {
+        let _guard = ENV_GUARD.lock().await;
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var("UG_HOME", tmp.path());
+        clear_dest_env();
+
+        // Documented precedence, and the one worth pinning: given both, the
+        // name wins. The opposite order would have `ug ingest -n a --db b`
+        // write project a's graph into b's store.
+        let path = og_path(&store_specs_from_args(&a(&["-n", "myrepo", "--db", "/tmp/other"]), DIM)[0]);
+        assert!(
+            path.ends_with("myrepo/ugdb"),
+            "-n must outrank --db: {}",
+            path.display()
+        );
+        std::env::remove_var("UG_HOME");
+    }
+
+    #[tokio::test]
+    async fn an_explicit_db_path_is_used_when_no_name_is_given() {
+        let _guard = ENV_GUARD.lock().await;
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var("UG_HOME", tmp.path());
+        clear_dest_env();
+
+        let path = og_path(&store_specs_from_args(&a(&["--db", "/tmp/chosen-store"]), DIM)[0]);
+        assert_eq!(path, PathBuf::from("/tmp/chosen-store"));
+        std::env::remove_var("UG_HOME");
+    }
+
+    #[tokio::test]
+    async fn a_project_name_is_sanitised_before_it_becomes_a_path() {
+        let _guard = ENV_GUARD.lock().await;
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var("UG_HOME", tmp.path());
+        clear_dest_env();
+
+        // The name reaches the filesystem, so a traversal in it must not.
+        let path = og_path(&store_specs_from_args(&a(&["-n", "../escape"]), DIM)[0]);
+        assert!(
+            path.starts_with(tmp.path()),
+            "a project name must not escape UG_HOME: {}",
+            path.display()
+        );
+        std::env::remove_var("UG_HOME");
+    }
+
+    #[tokio::test]
+    async fn the_dest_env_var_stands_in_for_the_flag() {
+        let _guard = ENV_GUARD.lock().await;
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var("UG_HOME", tmp.path());
+        clear_dest_env();
+        std::env::set_var("UG_DEST", "og");
+
+        // `og` is the short spelling, and the env var is the flagless way to
+        // set it for a whole shell session.
+        let specs = store_specs_from_args(&a(&[]), DIM);
+        assert!(matches!(specs[0], StoreSpec::Overgraph { .. }));
+
+        clear_dest_env();
+        std::env::remove_var("UG_HOME");
+    }
+
+    #[tokio::test]
+    async fn an_explicit_dest_flag_beats_the_env_var() {
+        let _guard = ENV_GUARD.lock().await;
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var("UG_HOME", tmp.path());
+        clear_dest_env();
+        std::env::set_var("UG_DEST", "neo4j");
+
+        // Without this, a `UG_DEST=neo4j` left in the environment would make
+        // a plain `--dest overgraph` run fail on missing Neo4j credentials.
+        let specs = store_specs_from_args(&a(&["--dest", "overgraph"]), DIM);
+        assert!(matches!(specs[0], StoreSpec::Overgraph { .. }));
+
+        clear_dest_env();
+        std::env::remove_var("UG_HOME");
+    }
+
+    #[tokio::test]
+    async fn a_comma_separated_dest_fans_out_to_several_stores() {
+        let _guard = ENV_GUARD.lock().await;
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var("UG_HOME", tmp.path());
+        clear_dest_env();
+
+        // Writing both at once is the point of the list form; whitespace
+        // around the entries is trimmed so a shell-quoted value still works.
+        let specs = store_specs_from_args(
+            &a(&[
+                "--dest",
+                "overgraph, neo4j",
+                "--neo4j-uri",
+                "bolt://localhost:7687",
+                "--neo4j-password",
+                "secret",
+            ]),
+            DIM,
+        );
+        assert_eq!(specs.len(), 2);
+        assert!(matches!(specs[0], StoreSpec::Overgraph { .. }));
+        match &specs[1] {
+            StoreSpec::Neo4j { uri, user, database, .. } => {
+                assert_eq!(uri, "bolt://localhost:7687");
+                assert_eq!(user, "neo4j", "the user defaults rather than being required");
+                assert_eq!(*database, None);
+            }
+            other => panic!("expected a neo4j spec, got {other:?}"),
+        }
+        std::env::remove_var("UG_HOME");
+    }
+
+    #[tokio::test]
+    async fn neo4j_credentials_fall_back_to_the_environment() {
+        let _guard = ENV_GUARD.lock().await;
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var("UG_HOME", tmp.path());
+        clear_dest_env();
+        std::env::set_var("UG_NEO4J_URI", "bolt://env-host:7687");
+        std::env::set_var("UG_NEO4J_USER", "env-user");
+        std::env::set_var("UG_NEO4J_PASSWORD", "env-secret");
+        std::env::set_var("UG_NEO4J_DATABASE", "env-db");
+
+        // Credentials in the environment rather than in shell history is the
+        // reason this fallback exists.
+        let specs = store_specs_from_args(&a(&["--dest", "neo4j"]), DIM);
+        match &specs[0] {
+            StoreSpec::Neo4j { uri, user, password, database, .. } => {
+                assert_eq!(uri, "bolt://env-host:7687");
+                assert_eq!(user, "env-user");
+                assert_eq!(password, "env-secret");
+                assert_eq!(database.as_deref(), Some("env-db"));
+            }
+            other => panic!("expected a neo4j spec, got {other:?}"),
+        }
+
+        clear_dest_env();
+        std::env::remove_var("UG_HOME");
+    }
+}

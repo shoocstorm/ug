@@ -265,7 +265,7 @@ pub(crate) struct ChatBody {
 }
 
 /// Citation list shared by the JSON and SSE chat responses.
-fn citations_json(items: &[ultragraph::storage::ContextItem]) -> Vec<serde_json::Value> {
+pub(crate) fn citations_json(items: &[ultragraph::storage::ContextItem]) -> Vec<serde_json::Value> {
     items
         .iter()
         .enumerate()
@@ -736,7 +736,7 @@ pub(crate) fn resolve_chat_endpoint(
 /// per-request overrides. Errors when neither side provides a model, or
 /// when the request's endpoint override is rejected by
 /// [`resolve_chat_endpoint`].
-fn merge_chat_cfg(
+pub(crate) fn merge_chat_cfg(
     default: &Option<ChatConfig>,
     body: &ChatBody,
 ) -> Result<ChatConfig, ChatCfgError> {
@@ -954,7 +954,7 @@ pub(crate) struct TourBody {
 /// 400. Endpoint/credential handling is [`resolve_chat_endpoint`]'s, the
 /// same as `/api/chat`: a tour body carries the identical override fields
 /// and would otherwise be the second way to walk off with the stored key.
-fn merge_tour_chat_cfg(
+pub(crate) fn merge_tour_chat_cfg(
     default: &Option<ChatConfig>,
     body: &TourBody,
 ) -> Result<ChatConfig, ChatCfgError> {
@@ -984,7 +984,7 @@ fn merge_tour_chat_cfg(
 
 /// Shape a `TourOptions` from a request body. `edge_types` is passed
 /// separately because it has to outlive the borrow.
-fn tour_opts_from_body<'a>(
+pub(crate) fn tour_opts_from_body<'a>(
     body: &'a TourBody,
     edge_types: Option<&'a [String]>,
 ) -> crate::tour::TourOptions<'a> {
@@ -1021,7 +1021,7 @@ fn tour_opts_from_body<'a>(
 }
 
 /// Attach the fields the route adds on top of a planned `Tour`.
-fn tour_response_json(
+pub(crate) fn tour_response_json(
     tour: &crate::tour::Tour,
     dest: &str,
     model: Option<&str>,

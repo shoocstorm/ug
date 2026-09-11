@@ -222,3 +222,66 @@ pub(crate) fn why_project(args: &[String], honors_active: bool) -> &'static str 
         "current directory"
     }
 }
+
+#[cfg(test)]
+mod tests {
+    //! How a command explains which project it chose.
+    //!
+    //! Every command that reads a project prints one banner saying where its
+    //! data came from and why. The "why" is the half that catches a wrong
+    //! answer: a command silently reading the previously-activated project
+    //! when the user meant the one in the current directory produces a real
+    //! result about the wrong repo, and the banner is the only thing that
+    //! says so.
+
+    use super::*;
+    use crate::project::UG_HOME_LOCK as ENV_GUARD;
+    use tempfile::TempDir;
+
+    fn a(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[tokio::test]
+    async fn an_explicit_name_is_always_the_reason() {
+        let _guard = ENV_GUARD.lock().await;
+        // Outranks an active project, so `-n` means what it says even in a
+        // shell where someone ran `ug projects use` earlier.
+        assert_eq!(why_project(&a(&["-n", "proj"]), true), "-n/--name");
+        assert_eq!(why_project(&a(&["--name", "proj"]), true), "-n/--name");
+        assert_eq!(why_project(&a(&["-n", "proj"]), false), "-n/--name");
+    }
+
+    #[tokio::test]
+    async fn without_a_name_the_reason_is_the_directory_or_the_active_project() {
+        let _guard = ENV_GUARD.lock().await;
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var("UG_HOME", tmp.path());
+
+        // No active project recorded in this UG_HOME.
+        assert_eq!(why_project(&a(&[]), true), "current directory");
+
+        // Commands that do not honour the active project say so even when one
+        // exists — `ug gen` should not quietly write to whatever was last
+        // activated.
+        assert_eq!(why_project(&a(&[]), false), "current directory");
+
+        std::env::remove_var("UG_HOME");
+    }
+
+    #[test]
+    fn a_path_under_home_is_shortened_for_the_banner() {
+        let home = dirs::home_dir().expect("a home directory");
+        let shown = tilde(&home.join(".ug").join("proj"));
+        assert!(shown.starts_with("~/"), "got {shown}");
+        assert!(shown.ends_with(".ug/proj"), "got {shown}");
+    }
+
+    #[test]
+    fn a_path_outside_home_is_printed_whole() {
+        // A tempdir or another volume has no `~` to strip, and abbreviating
+        // it to something relative would make the banner ambiguous.
+        let shown = tilde(Path::new("/opt/elsewhere/graph.json"));
+        assert_eq!(shown, "/opt/elsewhere/graph.json");
+    }
+}

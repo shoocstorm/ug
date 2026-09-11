@@ -645,3 +645,220 @@ fn print_graph_schema_help() {
     println!("{C_BOLD}Examples:{C_RESET}");
     println!("  {C_CYAN}ug graph_schema{C_RESET}");
 }
+
+#[cfg(test)]
+mod tests {
+    //! Where the agent commands look, and why.
+    //!
+    //! Every command in this file answers from a `graph.json` and reads
+    //! source relative to a repo root, and both are *resolved* rather than
+    //! given. Resolving either one wrongly is the failure mode that matters:
+    //! the command still succeeds, against the wrong project or the wrong
+    //! tree, and an agent trusts the answer for blast radius.
+    //!
+    //! The `run_*` entry points themselves call `std::process::exit` on every
+    //! error path, so they are not callable from a test in this process.
+    //! These cover the resolution the whole file sits on.
+
+    use super::*;
+    use crate::project::UG_HOME_LOCK as ENV_GUARD;
+    use crate::types::{GraphData, IndexStats};
+    use tempfile::TempDir;
+
+    fn args(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn graph_with_root(root: &str) -> GraphData {
+        GraphData {
+            nodes: Vec::new(),
+            edges: Vec::new(),
+            resolution: None,
+            stats: Some(IndexStats {
+                graph_schema_version: crate::types::GRAPH_SCHEMA_VERSION,
+                total_files: 0,
+                cached_files: 0,
+                total_symbols: 0,
+                total_folders: 0,
+                total_lines: 0,
+                indexing_time_ms: 0,
+                last_indexed_at: 0,
+                repo_root: root.to_string(),
+            }),
+        }
+    }
+
+    fn bare_graph() -> GraphData {
+        GraphData { nodes: Vec::new(), edges: Vec::new(), resolution: None, stats: None }
+    }
+
+    /// Run `f` with `UG_REPO_ROOT` set to `value` (or removed for `None`),
+    /// restoring whatever was there before. The var is process-global, so
+    /// this shares the same lock the project tests use.
+    fn with_repo_root_env<T>(value: Option<&str>, f: impl FnOnce() -> T) -> T {
+        let saved = std::env::var("UG_REPO_ROOT").ok();
+        match value {
+            Some(v) => std::env::set_var("UG_REPO_ROOT", v),
+            None => std::env::remove_var("UG_REPO_ROOT"),
+        }
+        let out = f();
+        match saved {
+            Some(v) => std::env::set_var("UG_REPO_ROOT", v),
+            None => std::env::remove_var("UG_REPO_ROOT"),
+        }
+        out
+    }
+
+    // ── repo root: four sources, in a fixed order ───────────────────────────
+
+    #[tokio::test]
+    async fn the_env_var_outranks_every_other_repo_root() {
+        let _guard = ENV_GUARD.lock().await;
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("proj");
+        std::fs::create_dir_all(&dir).unwrap();
+        let meta = crate::project::ProjectMeta::new("p", "/from/project-json", 0, 0);
+        crate::project::write_meta(&dir, &meta).unwrap();
+        let graph = graph_with_root("/from/graph-stats");
+
+        let root = with_repo_root_env(Some("/from/env"), || {
+            agent_repo_root(&graph, &dir.join("graph.json"))
+        });
+        assert_eq!(root, PathBuf::from("/from/env"));
+    }
+
+    #[tokio::test]
+    async fn a_blank_env_var_is_not_an_answer() {
+        let _guard = ENV_GUARD.lock().await;
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("proj");
+        std::fs::create_dir_all(&dir).unwrap();
+        let meta = crate::project::ProjectMeta::new("p", "/from/project-json", 0, 0);
+        crate::project::write_meta(&dir, &meta).unwrap();
+
+        // An exported-but-empty var is what a shell script that built the
+        // value and got nothing leaves behind. Treating it as a root would
+        // point every source read at the filesystem root.
+        let root = with_repo_root_env(Some("   "), || {
+            agent_repo_root(&bare_graph(), &dir.join("graph.json"))
+        });
+        assert_eq!(root, PathBuf::from("/from/project-json"));
+    }
+
+    #[tokio::test]
+    async fn project_json_outranks_the_graphs_own_stats() {
+        let _guard = ENV_GUARD.lock().await;
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("proj");
+        std::fs::create_dir_all(&dir).unwrap();
+        let meta = crate::project::ProjectMeta::new("p", "/from/project-json", 0, 0);
+        crate::project::write_meta(&dir, &meta).unwrap();
+
+        // `project.json` is rewritten whenever the project moves; the graph's
+        // stats are a record of where it was indexed. The newer fact wins.
+        let root = with_repo_root_env(None, || {
+            agent_repo_root(&graph_with_root("/from/graph-stats"), &dir.join("graph.json"))
+        });
+        assert_eq!(root, PathBuf::from("/from/project-json"));
+    }
+
+    #[tokio::test]
+    async fn the_graphs_stats_answer_when_there_is_no_project_json() {
+        let _guard = ENV_GUARD.lock().await;
+        let tmp = TempDir::new().unwrap();
+        // A graph handed over with `-i` from outside ~/.ug has no sibling
+        // project.json at all, which is the case this branch exists for.
+        let root = with_repo_root_env(None, || {
+            agent_repo_root(&graph_with_root("/from/graph-stats"), &tmp.path().join("graph.json"))
+        });
+        assert_eq!(root, PathBuf::from("/from/graph-stats"));
+    }
+
+    #[tokio::test]
+    async fn with_nothing_to_go_on_the_repo_root_is_the_working_directory() {
+        let _guard = ENV_GUARD.lock().await;
+        let tmp = TempDir::new().unwrap();
+        let root = with_repo_root_env(None, || {
+            agent_repo_root(&bare_graph(), &tmp.path().join("graph.json"))
+        });
+        assert_eq!(root, PathBuf::from("."));
+    }
+
+    #[tokio::test]
+    async fn an_empty_recorded_root_falls_through_rather_than_being_used() {
+        let _guard = ENV_GUARD.lock().await;
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("proj");
+        std::fs::create_dir_all(&dir).unwrap();
+        // A project.json written before repoRoot was recorded carries "".
+        let meta = crate::project::ProjectMeta::new("p", "", 0, 0);
+        crate::project::write_meta(&dir, &meta).unwrap();
+
+        let root = with_repo_root_env(None, || {
+            agent_repo_root(&graph_with_root("/from/graph-stats"), &dir.join("graph.json"))
+        });
+        assert_eq!(
+            root,
+            PathBuf::from("/from/graph-stats"),
+            "an empty recorded root must not shadow a real one below it"
+        );
+    }
+
+    // ── which graph.json ────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn an_explicit_input_wins_and_says_so() {
+        let _guard = ENV_GUARD.lock().await;
+        let (path, why) = agent_graph_path(&args(&["-i", "/tmp/elsewhere/graph.json"]));
+        assert_eq!(path, PathBuf::from("/tmp/elsewhere/graph.json"));
+        assert_eq!(
+            why, "-i/--input",
+            "the reason is printed, so it has to name the flag that decided"
+        );
+
+        // The long form is the same decision.
+        let (path, _) = agent_graph_path(&args(&["--input", "/tmp/other/graph.json"]));
+        assert_eq!(path, PathBuf::from("/tmp/other/graph.json"));
+    }
+
+    #[tokio::test]
+    async fn a_named_project_is_honoured_even_when_it_has_no_graph_yet() {
+        let _guard = ENV_GUARD.lock().await;
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var("UG_HOME", tmp.path());
+
+        // Naming a project that has never been generated must resolve to that
+        // project's path anyway, so the "run ug gen for this project first"
+        // error names what the user asked for rather than silently answering
+        // from some other project's graph.
+        let (path, _) = agent_graph_path(&args(&["-n", "never-generated"]));
+        assert!(
+            path.ends_with("never-generated/graph.json"),
+            "named project should win over any fallback: {}",
+            path.display()
+        );
+        std::env::remove_var("UG_HOME");
+    }
+
+    #[tokio::test]
+    async fn with_no_flags_an_existing_project_is_found() {
+        let _guard = ENV_GUARD.lock().await;
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var("UG_HOME", tmp.path());
+
+        let dir = tmp.path().join("only-project");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("graph.json"), "{}").unwrap();
+        let meta = crate::project::ProjectMeta::new("only-project", "/repo", 0, 0);
+        crate::project::write_meta(&dir, &meta).unwrap();
+
+        let (path, why) = agent_graph_path(&args(&[]));
+        assert!(
+            path.ends_with("only-project/graph.json"),
+            "the one generated project should answer: {}",
+            path.display()
+        );
+        assert!(!why.is_empty(), "the choice is always explained");
+        std::env::remove_var("UG_HOME");
+    }
+}

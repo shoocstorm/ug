@@ -842,3 +842,272 @@ fn print_ingest_help() {
     println!("            --neo4j-uri neo4j://localhost:7687 \\");
     println!("            --neo4j-user neo4j --neo4j-password $NEO4J_PASSWORD        {C_YELLOW}# fan-out{C_RESET}");
 }
+
+#[cfg(test)]
+mod tests {
+    //! What `ingest_graph_with_progress` writes, and what it refuses to claim.
+    //!
+    //! This function is the write half of both `ug ingest` and `ug gen`, and
+    //! most of its length is the five ordering rules its comments spell out.
+    //! Each of those fails silently: the content lands either way, and only
+    //! the *next* run behaves wrongly. A stamp written too early is the worst
+    //! of them, because it tells the following run there is nothing to do.
+    //!
+    //! Runs against a real store in a `TempDir`, like `storage_test.rs`, with
+    //! embedding skipped — loading a model is not something to put in the
+    //! suite, and `EmbedMode::Skip` is the ordinary path anyway.
+    //!
+    //! # Why the store-backed ones are `#[ignore]`
+    //!
+    //! Every one of them ends in the real `ensure_query_indexes()`, which is
+    //! a fixed ~2s inside OverGraph whatever the store holds (measured at
+    //! 1.98s on zero nodes). Five of those took the whole suite from 4.5s to
+    //! 15s, which is the kind of cost that gets a suite run less often — so
+    //! they are gated rather than paid on every run, the same way
+    //! `neo4j_smoke.rs` is. The two pure tests below stay in the default run.
+    //!
+    //! They are not optional coverage: they are the only thing holding the
+    //! five ordering rules. **Run them when you touch this file**, and in any
+    //! full pre-release check:
+    //!
+    //! ```text
+    //! cargo nextest run --lib --run-ignored all -E 'test(cli::ingest)'
+    //! ```
+
+    use super::*;
+    use crate::storage::db::Db;
+    use crate::types::{GraphEdge, GraphEdgeType, GraphNode, GraphNodeType};
+    use tempfile::TempDir;
+
+    fn node(id: &str, name: &str, doc: Option<&str>) -> GraphNode {
+        GraphNode {
+            id: id.to_string(),
+            name: name.to_string(),
+            node_type: GraphNodeType::Function,
+            file: Some(format!("src/{name}.rs")),
+            start_line: Some(1),
+            end_line: Some(6),
+            docstring: doc.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    fn edge(source: &str, target: &str) -> GraphEdge {
+        GraphEdge {
+            source: source.into(),
+            target: target.into(),
+            edge_type: GraphEdgeType::Calls,
+        }
+    }
+
+    fn graph(nodes: Vec<GraphNode>, edges: Vec<GraphEdge>) -> GraphData {
+        GraphData { nodes, edges, stats: None, resolution: None }
+    }
+
+    fn sample() -> GraphData {
+        graph(
+            vec![
+                node("function:src/a.rs:alpha", "alpha", Some("does alpha")),
+                node("function:src/b.rs:bravo", "bravo", Some("does bravo")),
+            ],
+            vec![edge("function:src/a.rs:alpha", "function:src/b.rs:bravo")],
+        )
+    }
+
+    /// One ingest run against `db`, embedding skipped.
+    async fn ingest(db: &Db, g: &GraphData, prune: bool) -> IngestOutcome {
+        ingest_graph_with_progress(
+            db as &dyn KnowledgeStore,
+            &EmbedMode::Skip("test-model".into()),
+            g,
+            prune,
+            &EmbedBudget::default(),
+        )
+        .await
+        .expect("ingest succeeds")
+    }
+
+    // Each store-backed test below pays ~2s for the real query-index build
+    // that `ingest_graph_with_progress` ends with, so related assertions
+    // share one store and one run rather than opening nine.
+
+    #[tokio::test]
+    #[ignore = "opens a real store: ~2s each for ensure_query_indexes. Run with --run-ignored all"]
+    async fn a_first_run_writes_everything_and_claims_no_model() {
+        let tmp = TempDir::new().unwrap();
+        let db = Db::open(tmp.path().to_str().unwrap()).await.unwrap();
+
+        let g = sample();
+        let out = ingest(&db, &g, false).await;
+
+        assert_eq!(out.nodes, 2);
+        assert_eq!(out.edges, 1);
+        assert!(out.embedding_error.is_none(), "nothing failed; embedding was declined");
+        assert_eq!(db.count_nodes().await.unwrap(), 2);
+        assert_eq!(db.count_edges().await.unwrap(), 1);
+
+        // The stamp means "every vector in this store is current for this
+        // model". Writing it over rows that have no vector at all would stop
+        // the next run from backfilling them, and semantic search would stay
+        // permanently blind to those nodes with nothing reporting a problem.
+        assert_eq!(
+            db.ingest_model(),
+            None,
+            "a run that wrote no vectors must not claim the model"
+        );
+        assert_eq!(out.vectors_skipped, 2, "both nodes are owed a vector");
+        assert!(db.edges_digest().is_some(), "a clean run stamps the edge digest");
+    }
+
+    #[tokio::test]
+    #[ignore = "opens a real store: ~2s each for ensure_query_indexes. Run with --run-ignored all"]
+    async fn an_empty_graph_writes_nothing_but_does_stamp_the_model() {
+        let tmp = TempDir::new().unwrap();
+        let db = Db::open(tmp.path().to_str().unwrap()).await.unwrap();
+
+        let out = ingest(&db, &graph(Vec::new(), Vec::new()), false).await;
+
+        assert_eq!((out.nodes, out.edges), (0, 0));
+        assert_eq!(out.vectors_skipped, 0);
+        assert_eq!(db.count_nodes().await.unwrap(), 0);
+
+        // Surprising, and pinned rather than corrected: with no nodes there
+        // is nothing owed a vector, so the "no vectors missing" condition
+        // that guards the stamp is vacuously true and the model gets
+        // recorded over an empty store.
+        //
+        // It is harmless, and knowing why saves the next reader the trace:
+        // the stamp only decides whether *stored* vectors may be carried
+        // forward, and there are none. Rows with no vector are re-embedded on
+        // their own evidence regardless of what the stamp says. The one
+        // effect is conservative — ingesting later with a different model
+        // sees a mismatch and re-embeds everything, which is correct.
+        assert_eq!(db.ingest_model().as_deref(), Some("test-model"));
+    }
+
+    #[tokio::test]
+    #[ignore = "opens a real store: ~2s each for ensure_query_indexes. Run with --run-ignored all"]
+    async fn re_ingesting_is_idempotent_and_still_reports_what_is_owed() {
+        let tmp = TempDir::new().unwrap();
+        let db = Db::open(tmp.path().to_str().unwrap()).await.unwrap();
+        let g = sample();
+        ingest(&db, &g, false).await;
+        let digest_after_first = db.edges_digest();
+
+        let again = ingest(&db, &g, false).await;
+
+        // The outcome describes the whole graph, not the delta — it is what
+        // the command prints.
+        assert_eq!((again.nodes, again.edges), (2, 1));
+        assert_eq!(db.count_nodes().await.unwrap(), 2, "no duplicate rows");
+        assert_eq!(db.count_edges().await.unwrap(), 1);
+        assert_eq!(
+            db.edges_digest(),
+            digest_after_first,
+            "an unchanged edge set keeps its digest"
+        );
+        // The second run writes nothing at all — and must still report the
+        // two nodes as awaiting vectors. Reporting "0 skipped" here would let
+        // the caller announce an index semantic search cannot use.
+        assert_eq!(
+            again.vectors_skipped, 2,
+            "an unchanged re-index still owes the vectors the first one skipped"
+        );
+
+        // And an edit does reach the store, replacing rather than appending.
+        let edited = graph(
+            vec![
+                node("function:src/a.rs:alpha", "alpha", Some("does alpha, differently")),
+                node("function:src/b.rs:bravo", "bravo", Some("does bravo")),
+            ],
+            vec![edge("function:src/a.rs:alpha", "function:src/b.rs:bravo")],
+        );
+        ingest(&db, &edited, false).await;
+        // `Db` has an inherent, synchronous `fetch_node` that shadows the
+        // trait's async one.
+        let row = db
+            .fetch_node("function:src/a.rs:alpha")
+            .unwrap()
+            .expect("the edited node is still there");
+        assert!(
+            row.node_text.contains("differently"),
+            "the changed text must reach the store: {}",
+            row.node_text
+        );
+        assert_eq!(db.count_nodes().await.unwrap(), 2, "an edit replaces, not appends");
+    }
+
+    #[tokio::test]
+    #[ignore = "opens a real store: ~2s each for ensure_query_indexes. Run with --run-ignored all"]
+    async fn pruning_removes_stale_rows_and_does_not_claim_the_edge_set() {
+        let tmp = TempDir::new().unwrap();
+        let db = Db::open(tmp.path().to_str().unwrap()).await.unwrap();
+        ingest(&db, &sample(), true).await;
+        assert_eq!(db.count_nodes().await.unwrap(), 2);
+
+        let smaller = graph(
+            vec![node("function:src/a.rs:alpha", "alpha", Some("does alpha"))],
+            Vec::new(),
+        );
+        let out = ingest(&db, &smaller, true).await;
+
+        assert_eq!(out.nodes, 1);
+        assert_eq!(
+            db.count_nodes().await.unwrap(),
+            1,
+            "the deleted symbol must not survive as a stale row"
+        );
+
+        // Removing nodes may tombstone edges along with them, so a run that
+        // deleted anything must not leave a digest claiming the stored edge
+        // set matches this graph. Not stamping costs one rewrite next run;
+        // stamping wrongly costs correctness.
+        let want = crate::storage::edges_digest(&smaller);
+        assert_ne!(
+            db.edges_digest().as_deref(),
+            Some(want.as_str()),
+            "a pruning run stamped the edge digest it had not earned"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "opens a real store: ~2s each for ensure_query_indexes. Run with --run-ignored all"]
+    async fn without_prune_a_removed_node_is_left_behind() {
+        let tmp = TempDir::new().unwrap();
+        let db = Db::open(tmp.path().to_str().unwrap()).await.unwrap();
+        ingest(&db, &sample(), false).await;
+
+        let smaller = graph(
+            vec![node("function:src/a.rs:alpha", "alpha", Some("does alpha"))],
+            Vec::new(),
+        );
+        ingest(&db, &smaller, false).await;
+
+        // The counterpart to the test above: pruning is opt-in, so a caller
+        // ingesting a partial graph does not lose the rest of the index.
+        assert_eq!(
+            db.count_nodes().await.unwrap(),
+            2,
+            "without --prune, an absent node is not a deletion"
+        );
+    }
+
+    #[test]
+    fn the_vector_plan_follows_whether_an_embedder_was_loaded() {
+        // This is what lets a re-index over an unembedded store recognise its
+        // own vector-less rows instead of rewriting every one of them.
+        assert!(matches!(
+            vector_plan(&EmbedMode::Skip("m".into())),
+            storage::VectorPlan::Skipping
+        ));
+    }
+
+    #[test]
+    fn a_skipping_mode_still_names_the_model_the_plan_is_made_against() {
+        // The planner needs it to decide whether stored vectors may carry
+        // forward, so `Skip` is not the same as "no model".
+        let mode = EmbedMode::Skip("nomic-embed-text".into());
+        assert_eq!(mode.model(), "nomic-embed-text");
+        assert!(mode.embedder().is_none());
+    }
+}
