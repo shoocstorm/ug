@@ -24,7 +24,7 @@
 //! failure mode this whole module exists to remove is the opposite one:
 //! answering "which repo symbol is this?" with a plausible guess.
 
-use crate::types::ImportInfo;
+use crate::types::{CallRef, ImportInfo};
 use std::collections::HashMap;
 
 /// Separator between a type and one of its members, in every language.
@@ -407,6 +407,42 @@ impl TypeEnv {
         self.vars.contains_key(name)
     }
 
+}
+
+/// The four lists a body walk fills in as it meets call sites.
+///
+/// One struct rather than four `&mut Vec` parameters threaded through the
+/// walk: Rust, TypeScript and Python each collect exactly these four, and
+/// each recursion had to pass all of them at every level. Their
+/// `collect_calls` carried nine arguments and a
+/// `clippy::too_many_arguments` waiver to say so.
+///
+/// Java is deliberately not a user. It collects only `calls` and `refs` —
+/// it has no constant-use or value-reference pass — and giving it two
+/// fields it never fills would claim a shape it does not have.
+#[derive(Debug, Default, Clone)]
+pub struct CallSink {
+    /// Bare callee names, de-duplicated by `push_call`.
+    pub calls: Vec<String>,
+    /// The resolvable form of each call site, with receiver and arity.
+    pub refs: Vec<CallRef>,
+    /// Module-level constants read by this body.
+    pub uses: Vec<String>,
+    /// Symbols passed *as values* rather than called (`post(api_chat)`).
+    pub value_refs: Vec<String>,
+}
+
+impl CallSink {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Unpack into the tuple the extractors return, so the sink stays an
+    /// implementation detail of the walk rather than part of the signature
+    /// every caller upstream has to learn.
+    pub fn into_parts(self) -> (Vec<String>, Vec<CallRef>, Vec<String>, Vec<String>) {
+        (self.calls, self.refs, self.uses, self.value_refs)
+    }
 }
 
 /// Strip generic arguments and reference/pointer sigils from a written type,

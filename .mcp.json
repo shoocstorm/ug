@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "ultragraph": {
+      "command": "/Users/aldrickwan/.local/share/ultragraph/.ug/ug",
+      "args": [
+        "mcp"
+      ],
+      "env": {
+        "UG_PROJECT": "ug"
+      }
+    }
+  }
+}

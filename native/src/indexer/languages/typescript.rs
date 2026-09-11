@@ -8,8 +8,8 @@ use crate::indexer::common::{
     extract_return_type, first_string_arg, get_node_text, imports_in_stable_order};
 use crate::indexer::languages::{FileContext, LanguageIndexer};
 use crate::indexer::scope::{
-    base_type_name, looks_like_constant, looks_like_type, module_path, ImportScope, TypeEnv,
-    CTOR, MEMBER_SEP,
+    base_type_name, looks_like_constant, looks_like_type, module_path, CallSink, ImportScope,
+    TypeEnv, CTOR, MEMBER_SEP,
 };
 use crate::types::{
     Annotation, CallRef, ExportInfo, ImportInfo, ImportedItem, Param, Signature, Symbol,
@@ -737,53 +737,36 @@ fn extract_calls(
         }
     }
 
-    let mut calls = Vec::new();
-    let mut refs = Vec::new();
-    let mut uses = Vec::new();
-    let mut value_refs = Vec::new();
-    collect_calls(
-        node,
-        source,
-        ctx,
-        owner,
-        &mut env,
-        &mut calls,
-        &mut refs,
-        &mut uses,
-        &mut value_refs,
-    );
-    (calls, refs, uses, value_refs)
+    let mut sink = CallSink::new();
+    collect_calls(node, source, ctx, owner, &mut env, &mut sink);
+    sink.into_parts()
 }
 
-#[allow(clippy::too_many_arguments)]
 fn collect_calls(
     node: &Node,
     source: &[u8],
     ctx: &Ctx,
     owner: Option<&OwnerCtx>,
     env: &mut TypeEnv,
-    calls: &mut Vec<String>,
-    refs: &mut Vec<CallRef>,
-    uses: &mut Vec<String>,
-    value_refs: &mut Vec<String>,
+    sink: &mut CallSink,
 ) {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        record_constant_use(&child, source, ctx, uses);
+        record_constant_use(&child, source, ctx, &mut sink.uses);
         match child.kind() {
             "variable_declarator" => record_local(&child, source, ctx, env),
             "call_expression" => {
                 if let Some(r) = call_ref_for(&child, source, ctx, owner, env) {
-                    push_call(calls, &r.name);
-                    refs.push(r);
+                    push_call(&mut sink.calls, &r.name);
+                    sink.refs.push(r);
                 }
-                record_value_refs(&child, source, ctx, env, value_refs);
+                record_value_refs(&child, source, ctx, env, &mut sink.value_refs);
             }
             "new_expression" => {
                 if let Some(ty) = get_node_text(child.child_by_field_name("constructor"), source) {
                     let bare = base_type_name(&ty);
-                    push_call(calls, bare);
-                    refs.push(CallRef {
+                    push_call(&mut sink.calls, bare);
+                    sink.refs.push(CallRef {
                         name: CTOR.to_string(),
                         owner_type: ctx.scope.lookup(bare),
                         argc: argument_count(&child),
@@ -793,11 +776,11 @@ fn collect_calls(
                         has_receiver: true,
                     });
                 }
-                record_value_refs(&child, source, ctx, env, value_refs);
+                record_value_refs(&child, source, ctx, env, &mut sink.value_refs);
             }
             _ => {}
         }
-        collect_calls(&child, source, ctx, owner, env, calls, refs, uses, value_refs);
+        collect_calls(&child, source, ctx, owner, env, sink);
     }
 }
 

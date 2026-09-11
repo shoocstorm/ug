@@ -8,18 +8,38 @@
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
     <style>
 /* ==== 00-base.css ==== */
+        /* ─── Palette ────────────────────────────────────────
+           The dark half of the ug website: a blue-black ground, warm
+           off-white ink, and one teal accent. The zinc-and-orange scheme
+           this replaces put the chrome in the same hue family as the
+           graph's own structural inks, so a highlight and a File node
+           argued for the same attention. A cool chrome around warm nodes
+           settles that — nothing on the canvas is teal, and nothing in the
+           panel is orange. */
         :root {
-            --bg-deep: #09090b;
-            --bg-surface: #18181b;
-            --bg-elevated: #27272a;
-            --bg-hover: #3f3f46;
-            --border: #3f3f46;
-            --border-soft: #2a2a2e;
-            --text: #e4e4e7;
-            --text-muted: #a1a1aa;
-            --text-dim: #71717a;
-            --accent: #f97316;
-            --accent-dim: #c2410c;
+            --bg-deep: #0a0d11;
+            --bg-surface: #0e1216;
+            --bg-elevated: #141a20;
+            --bg-hover: #1c242c;
+            --border: rgba(255, 255, 255, 0.16);
+            --border-soft: rgba(255, 255, 255, 0.09);
+            --text: #f4f1ea;
+            --text-soft: #cfc9bd;
+            --text-muted: #8e9aa6;
+            --text-dim: #6b7681;
+
+            /* One accent in five forms. `--accent-rgb` is the channel triple
+               so a wash picks its own alpha — `rgba(var(--accent-rgb), .12)`
+               — instead of a second hex that has to be kept in step. And
+               `--accent-ink` is what goes *on* a filled accent: this teal is
+               bright enough that white text on it cannot be read. */
+            --accent: #2dd4bf;
+            --accent-rgb: 45, 212, 191;
+            --accent-dim: #14b8a6;
+            --accent-soft: #5eead4;
+            --accent-pale: #99f6e4;
+            --accent-ink: #06231b;
+
             --danger: #f87171;
             --success: #4ade80;
             --warning: #fbbf24;
@@ -67,11 +87,11 @@
                before the canvas initialises and the saturated node inks read
                as luminous rather than flat. */
             background:
-                radial-gradient(ellipse 70% 55% at 78% 18%, rgba(233, 100, 28, 0.16) 0%, transparent 55%),
-                radial-gradient(ellipse 60% 50% at 15% 75%, rgba(58, 110, 165, 0.18) 0%, transparent 55%),
+                radial-gradient(ellipse 70% 55% at 78% 18%, rgba(45, 212, 191, 0.13) 0%, transparent 55%),
+                radial-gradient(ellipse 60% 50% at 15% 75%, rgba(96, 165, 250, 0.14) 0%, transparent 55%),
                 radial-gradient(ellipse 50% 40% at 30% 15%, rgba(91, 143, 201, 0.10) 0%, transparent 50%),
-                radial-gradient(ellipse 55% 45% at 88% 85%, rgba(194, 65, 12, 0.10) 0%, transparent 50%),
-                #0d0d10;
+                radial-gradient(ellipse 55% 45% at 88% 85%, rgba(20, 184, 166, 0.10) 0%, transparent 50%),
+                #0a0d11;
             background-attachment: fixed;
         }
 
@@ -224,7 +244,7 @@
             position: absolute;
             inset: -16px -40px -12px;
             background: radial-gradient(ellipse at 50% 45%,
-                rgba(10, 10, 13, 0.82) 0%, rgba(10, 10, 13, 0.55) 55%, rgba(10, 10, 13, 0) 78%);
+                rgba(10, 13, 17, 0.82) 0%, rgba(10, 13, 17, 0.55) 55%, rgba(10, 13, 17, 0) 78%);
             z-index: -1;
             pointer-events: none;
         }
@@ -272,8 +292,8 @@
             gap: 4px;
             padding: 3px 8px;
             border-radius: 999px;
-            background: rgba(249, 115, 22, 0.12);
-            border: 1px solid rgba(249, 115, 22, 0.25);
+            background: rgba(var(--accent-rgb), 0.12);
+            border: 1px solid rgba(var(--accent-rgb), 0.25);
             font-size: 9px;
             font-weight: 500;
             letter-spacing: 0.4px;
@@ -284,8 +304,8 @@
         }
 
         .header-badge:hover {
-            background: rgba(249, 115, 22, 0.18);
-            border-color: rgba(249, 115, 22, 0.4);
+            background: rgba(var(--accent-rgb), 0.18);
+            border-color: rgba(var(--accent-rgb), 0.4);
         }
 
         .header-badge svg {
@@ -353,7 +373,7 @@
             left: 0;
             width: var(--sidebar-width);
             height: 100vh;
-            background: rgba(15, 15, 17, 0.85);
+            background: rgba(14, 18, 22, 0.85);
             backdrop-filter: blur(24px);
             border-right: 1px solid var(--border);
             display: flex;
@@ -510,7 +530,7 @@
 
         .panel-tab.active {
             color: var(--accent);
-            background: rgba(249, 115, 22, 0.08);
+            background: rgba(var(--accent-rgb), 0.08);
             border-color: var(--accent-dim);
         }
 
@@ -564,7 +584,7 @@
             margin: 8px 10px 10px;
             padding: 4px;
             border-radius: 11px;
-            background: rgba(20, 19, 22, 0.92);
+            background: rgba(20, 26, 32, 0.92);
             backdrop-filter: blur(12px);
             box-shadow: 0 4px 18px -8px rgba(0, 0, 0, 0.7);
         }
@@ -577,9 +597,9 @@
             left: 4px;
             height: calc(100% - 8px);
             border-radius: 8px;
-            background: linear-gradient(135deg, rgba(249, 115, 22, 0.22), rgba(249, 115, 22, 0.1));
+            background: linear-gradient(135deg, rgba(var(--accent-rgb), 0.22), rgba(var(--accent-rgb), 0.1));
             border: none;
-            box-shadow: 0 2px 10px -3px rgba(249, 115, 22, 0.55);
+            box-shadow: 0 2px 10px -3px rgba(var(--accent-rgb), 0.55);
             transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1), width 0.28s cubic-bezier(0.16, 1, 0.3, 1);
             pointer-events: none;
         }
@@ -672,7 +692,7 @@
         .ins-cat.active {
             color: var(--accent);
             border-color: var(--accent-dim);
-            background: rgba(249, 115, 22, 0.1);
+            background: rgba(var(--accent-rgb), 0.1);
         }
 
         .ins-presets { display: flex; flex-direction: column; gap: 3px; }
@@ -690,8 +710,8 @@
             cursor: pointer;
             transition: background 0.15s, border-color 0.15s;
         }
-        .ins-preset:hover { background: rgba(249, 115, 22, 0.08); border-color: var(--accent-dim); }
-        .ins-preset.active { border-color: var(--accent); background: rgba(249, 115, 22, 0.12); }
+        .ins-preset:hover { background: rgba(var(--accent-rgb), 0.08); border-color: var(--accent-dim); }
+        .ins-preset.active { border-color: var(--accent); background: rgba(var(--accent-rgb), 0.12); }
         .ins-preset .n {
             display: block;
             font-size: 12px;
@@ -748,14 +768,14 @@
             padding: 6px 14px;
             border-radius: 8px;
             border: none;
-            background: rgba(249, 115, 22, 0.16);
+            background: rgba(var(--accent-rgb), 0.16);
             color: var(--accent);
             font-family: inherit;
             font-size: 11.5px;
             font-weight: 600;
             cursor: pointer;
         }
-        .ins-run:hover { background: rgba(249, 115, 22, 0.26); }
+        .ins-run:hover { background: rgba(var(--accent-rgb), 0.26); }
         .ins-ghost {
             padding: 6px 12px;
             border-radius: 8px;
@@ -790,7 +810,7 @@
         }
         .ins-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
         .ins-table tr.clickable { cursor: pointer; }
-        .ins-table tr.clickable:hover td { background: rgba(249, 115, 22, 0.1); }
+        .ins-table tr.clickable:hover td { background: rgba(var(--accent-rgb), 0.1); }
         .ins-table td.id {
             font-family: var(--mono, monospace);
             font-size: 10.5px;
@@ -997,7 +1017,7 @@
         }
 
         .thist-icon svg { width: 13px; height: 13px; }
-        .thist-icon:hover { color: var(--accent); background: rgba(249, 115, 22, 0.1); }
+        .thist-icon:hover { color: var(--accent); background: rgba(var(--accent-rgb), 0.1); }
         .thist-icon.danger:hover { color: #f87171; background: rgba(248, 113, 113, 0.1); }
 
         .thist-foot {
@@ -1148,7 +1168,7 @@
 
         .filter-chip.active {
             border-color: var(--accent);
-            background: rgba(249, 115, 22, 0.12);
+            background: rgba(var(--accent-rgb), 0.12);
             color: var(--text);
         }
 
@@ -1332,7 +1352,7 @@
 
         .tool-panel button.primary {
             cursor: pointer;
-            background: rgba(249, 115, 22, 0.12);
+            background: rgba(var(--accent-rgb), 0.12);
             border-color: var(--accent-dim);
             color: var(--accent);
             font-weight: 500;
@@ -1340,7 +1360,7 @@
         }
 
         .tool-panel button.primary:hover {
-            background: rgba(249, 115, 22, 0.2);
+            background: rgba(var(--accent-rgb), 0.2);
         }
 
         .centrality-list {
@@ -1446,7 +1466,7 @@
             left: 16px;
             width: 40px;
             height: 40px;
-            background: rgba(15, 15, 17, 0.92);
+            background: rgba(14, 18, 22, 0.92);
             backdrop-filter: blur(24px);
             border: 1px solid var(--border);
             border-radius: 10px;
@@ -1487,7 +1507,7 @@
             right: 0;
             width: var(--info-width, 420px);
             height: 100vh;
-            background: rgba(15, 15, 17, 0.85);
+            background: rgba(14, 18, 22, 0.85);
             backdrop-filter: blur(24px);
             border-left: 1px solid var(--border);
             box-shadow: 0 0 40px rgba(0, 0, 0, 0.4);
@@ -1886,7 +1906,7 @@
         /* Same lit-pill treatment as the Discover sub-tabs, so "selected"
            looks the same everywhere in the app. */
         #info .rel-dir.active {
-            background: rgba(249, 115, 22, 0.18);
+            background: rgba(var(--accent-rgb), 0.18);
             box-shadow: inset 0 0 0 1px var(--accent-dim);
             color: var(--accent);
         }
@@ -1990,7 +2010,7 @@
         }
 
         .hier-row.selected {
-            background: rgba(249, 115, 22, 0.12);
+            background: rgba(var(--accent-rgb), 0.12);
         }
 
         .hier-row .dot {
@@ -2232,7 +2252,7 @@
             display: none;
             margin: 12px 14px 0;
             padding: 10px 12px;
-            background: rgba(249, 115, 22, 0.08);
+            background: rgba(var(--accent-rgb), 0.08);
             border: none;
             border-radius: 8px;
             font-size: 11px;
@@ -2319,7 +2339,7 @@
 
         .section.featured {
             border: none;
-            background: linear-gradient(180deg, rgba(249, 115, 22, 0.06) 0%, transparent 100%);
+            background: linear-gradient(180deg, rgba(var(--accent-rgb), 0.06) 0%, transparent 100%);
             position: relative;
             border-radius: 8px;
             margin: 6px;
@@ -2338,7 +2358,7 @@
             padding: 2px 8px;
             border-radius: 4px;
             border: none;
-            box-shadow: 0 0 12px rgba(249, 115, 22, 0.4);
+            box-shadow: 0 0 12px rgba(var(--accent-rgb), 0.4);
         }
 
         .section.featured .section-header {
@@ -2389,7 +2409,7 @@
             gap: 4px;
             padding: 2px 8px;
             border-radius: 999px;
-            background: rgba(249, 115, 22, 0.10);
+            background: rgba(var(--accent-rgb), 0.10);
             border: none;
             color: var(--accent);
             font-size: 10px;
@@ -2423,7 +2443,7 @@
 
         .chat-msg.user {
             align-self: flex-end;
-            background: rgba(249, 115, 22, 0.10);
+            background: rgba(var(--accent-rgb), 0.10);
             border: none;
             color: var(--text);
         }
@@ -2595,7 +2615,7 @@
             width: 900px;
             height: 900px;
             transform: translateX(-50%);
-            background: radial-gradient(closest-side, rgba(249, 115, 22, 0.12), transparent 70%);
+            background: radial-gradient(closest-side, rgba(var(--accent-rgb), 0.12), transparent 70%);
         }
 
         .kb-inner {
@@ -2632,7 +2652,7 @@
             font-weight: 700;
             letter-spacing: 1px;
             color: var(--text);
-            text-shadow: 0 0 44px rgba(249, 115, 22, 0.25);
+            text-shadow: 0 0 44px rgba(var(--accent-rgb), 0.25);
         }
 
         .kb-cursor {
@@ -3114,7 +3134,7 @@
         .kb-add-tile:hover {
             border-color: var(--accent);
             color: var(--accent);
-            background: rgba(249, 115, 22, 0.05);
+            background: rgba(var(--accent-rgb), 0.05);
         }
 
         .kb-add-tile svg {
@@ -3162,7 +3182,7 @@
             height: 44px;
             color: var(--accent);
             margin-bottom: 16px;
-            filter: drop-shadow(0 0 14px rgba(249, 115, 22, 0.4));
+            filter: drop-shadow(0 0 14px rgba(var(--accent-rgb), 0.4));
         }
 
         .kb-wizard-title {
@@ -3493,7 +3513,7 @@
 
         .kb-field input[type="text"]:focus {
             border-color: var(--accent);
-            box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.15);
+            box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.15);
         }
 
         .kb-checkbox {
@@ -3538,7 +3558,7 @@
             align-items: center;
             gap: 8px;
             background: var(--accent);
-            color: #04262b;
+            color: var(--accent-ink);
             border: none;
             padding: 11px 22px;
             border-radius: 8px;
@@ -3628,7 +3648,7 @@
             align-items: center;
             justify-content: center;
             padding: 20px;
-            background: rgba(9, 9, 11, 0.72);
+            background: rgba(10, 13, 17, 0.72);
             backdrop-filter: blur(8px);
             -webkit-backdrop-filter: blur(8px);
         }
@@ -3861,7 +3881,7 @@
             align-items: center;
             justify-content: center;
             padding: 20px;
-            background: rgba(9, 9, 11, 0.72);
+            background: rgba(10, 13, 17, 0.72);
             backdrop-filter: blur(8px);
             -webkit-backdrop-filter: blur(8px);
         }
@@ -4000,7 +4020,7 @@
         .kb-browse-select {
             background: var(--accent);
             border-color: transparent;
-            color: #04262b;
+            color: var(--accent-ink);
         }
 
         .kb-browse-select:hover:not(:disabled) {
@@ -4075,7 +4095,7 @@
             align-items: center;
             gap: 7px;
             padding: 7px 12px;
-            background: rgba(24, 24, 27, 0.7);
+            background: rgba(20, 26, 32, 0.7);
             border: 1px solid var(--border-soft);
             border-radius: 999px;
             color: var(--text-muted);
@@ -4114,7 +4134,7 @@
             align-items: center;
             justify-content: center;
             padding: 20px;
-            background: rgba(9, 9, 11, 0.72);
+            background: rgba(10, 13, 17, 0.72);
             backdrop-filter: blur(8px);
             -webkit-backdrop-filter: blur(8px);
         }
@@ -4153,8 +4173,8 @@
             align-items: center;
             justify-content: center;
             border-radius: 10px;
-            background: rgba(249, 115, 22, 0.12);
-            border: 1px solid rgba(249, 115, 22, 0.28);
+            background: rgba(var(--accent-rgb), 0.12);
+            border: 1px solid rgba(var(--accent-rgb), 0.28);
             color: var(--accent);
         }
 
@@ -4245,8 +4265,8 @@
         }
 
         .settings-precedence .prec-step.prec-here {
-            border-color: rgba(249, 115, 22, 0.45);
-            background: rgba(249, 115, 22, 0.1);
+            border-color: rgba(var(--accent-rgb), 0.45);
+            background: rgba(var(--accent-rgb), 0.1);
             color: var(--accent);
         }
 
@@ -4466,7 +4486,7 @@
         .settings-input-wrap input:focus,
         .settings-input-wrap select:focus {
             border-color: var(--accent);
-            box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.15);
+            box-shadow: 0 0 0 2px rgba(var(--accent-rgb), 0.15);
         }
 
         .settings-input-wrap input::placeholder {
@@ -4475,7 +4495,7 @@
 
         .settings-row.dirty .settings-input-wrap input,
         .settings-row.dirty .settings-input-wrap select {
-            border-color: rgba(249, 115, 22, 0.55);
+            border-color: rgba(var(--accent-rgb), 0.55);
         }
 
         .settings-clear-btn {
@@ -4644,7 +4664,7 @@
         .settings-btn.primary {
             background: var(--accent);
             border: none;
-            color: #1c1917;
+            color: var(--accent-ink);
         }
 
         .settings-btn.primary:hover:not(:disabled) {
@@ -4655,13 +4675,13 @@
            load (vis.* / graph.* rows) — accented so it reads as the
            suggested next step, quiet enough not to compete with Save. */
         .settings-btn.ghost {
-            background: rgba(249, 115, 22, 0.1);
-            border: 1px solid rgba(249, 115, 22, 0.4);
+            background: rgba(var(--accent-rgb), 0.1);
+            border: 1px solid rgba(var(--accent-rgb), 0.4);
             color: var(--accent);
         }
 
         .settings-btn.ghost:hover:not(:disabled) {
-            background: rgba(249, 115, 22, 0.18);
+            background: rgba(var(--accent-rgb), 0.18);
         }
 
         .settings-btn:disabled {
@@ -4703,7 +4723,7 @@
             height: 85vh;
             max-width: 1400px;
             min-width: 640px;
-            background: rgba(15, 15, 17, 0.97);
+            background: rgba(14, 18, 22, 0.97);
             border: 1px solid var(--border);
             border-radius: 14px;
             box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
@@ -4858,7 +4878,7 @@
 
         .catalog-search-input:focus {
             border-color: var(--accent);
-            box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.15);
+            box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.15);
         }
 
         .catalog-toolbar-actions {
@@ -4920,12 +4940,12 @@
         }
 
         .cat-node.match-self {
-            background: rgba(249, 115, 22, 0.1);
+            background: rgba(var(--accent-rgb), 0.1);
         }
 
         /* Persistent marker for the row whose node is currently focused. */
         .cat-node.focused {
-            background: rgba(249, 115, 22, 0.14);
+            background: rgba(var(--accent-rgb), 0.14);
             box-shadow: inset 2px 0 0 var(--accent);
         }
 
@@ -4935,9 +4955,9 @@
         }
 
         @keyframes cat-pulse {
-            0%   { background: rgba(249, 115, 22, 0.55); transform: translateX(2px); }
-            40%  { background: rgba(249, 115, 22, 0.28); }
-            100% { background: rgba(249, 115, 22, 0.14); transform: translateX(0); }
+            0%   { background: rgba(var(--accent-rgb), 0.55); transform: translateX(2px); }
+            40%  { background: rgba(var(--accent-rgb), 0.28); }
+            100% { background: rgba(var(--accent-rgb), 0.14); transform: translateX(0); }
         }
 
         .cat-toggle {
@@ -4980,7 +5000,7 @@
         }
 
         .cat-name mark {
-            background: rgba(249, 115, 22, 0.3);
+            background: rgba(var(--accent-rgb), 0.3);
             color: var(--text);
             padding: 0;
             border-radius: 2px;
@@ -5100,7 +5120,7 @@
 
         .tooltip {
             position: absolute;
-            background: rgba(15, 15, 17, 0.95);
+            background: rgba(14, 18, 22, 0.95);
             backdrop-filter: blur(10px);
             border: 1px solid var(--border);
             border-radius: 6px;
@@ -5168,7 +5188,7 @@
             z-index: 1001;
             width: 268px;
             max-width: calc(100vw - 20px);
-            background: rgba(15, 15, 17, 0.97);
+            background: rgba(14, 18, 22, 0.97);
             backdrop-filter: blur(10px);
             border: 1px solid var(--border);
             border-radius: 8px;
@@ -5280,7 +5300,7 @@
             flex: 1 1 0;
             padding: 7px 4px;
             border: none;
-            background: rgba(15, 15, 17, 0.97);
+            background: rgba(14, 18, 22, 0.97);
             color: var(--text-muted);
             font-family: inherit;
             font-size: 10px;
@@ -5300,7 +5320,7 @@
         .canvas-overlay {
             position: absolute;
             z-index: 8;
-            background: rgba(15, 15, 17, 0.72);
+            background: rgba(14, 18, 22, 0.72);
             backdrop-filter: blur(16px);
             border: 1px solid var(--border-soft);
             border-radius: 10px;
@@ -5619,7 +5639,7 @@
             padding: 0;
             border-radius: 999px;
             border: 1px solid var(--border-soft);
-            background: rgba(249, 115, 22, 0.1);
+            background: rgba(var(--accent-rgb), 0.1);
             color: var(--accent);
             cursor: pointer;
         }
@@ -5630,7 +5650,7 @@
         }
 
         .nav-exit:hover {
-            background: rgba(249, 115, 22, 0.2);
+            background: rgba(var(--accent-rgb), 0.2);
         }
 
         /* A faint accent vignette while focus mode is active, signalling the
@@ -5641,7 +5661,7 @@
             inset: 0;
             pointer-events: none;
             z-index: 4;
-            box-shadow: inset 0 0 160px rgba(249, 115, 22, 0.07);
+            box-shadow: inset 0 0 160px rgba(var(--accent-rgb), 0.07);
         }
 
         /* ─── Bottom view bar (projection + toggles) ─────────── */
@@ -5718,8 +5738,8 @@
 
         #viewbar .vbtn.active {
             border-color: var(--accent);
-            background: rgba(249, 115, 22, 0.1);
-            box-shadow: 0 0 12px rgba(249, 115, 22, 0.25);
+            background: rgba(var(--accent-rgb), 0.1);
+            box-shadow: 0 0 12px rgba(var(--accent-rgb), 0.25);
         }
 
         #viewbar .vbtn.vbtn-3d .vn {
@@ -5796,9 +5816,9 @@
 
         #viewbar .vtoggle.active {
             border-color: var(--accent);
-            background: rgba(249, 115, 22, 0.12);
+            background: rgba(var(--accent-rgb), 0.12);
             color: var(--accent);
-            box-shadow: 0 0 12px rgba(249, 115, 22, 0.22);
+            box-shadow: 0 0 12px rgba(var(--accent-rgb), 0.22);
         }
 
         #viewbar .vtoggle.spinning .vt-ico {
@@ -5882,7 +5902,7 @@
             align-items: center;
             gap: 5px;
             margin-top: 8px;
-            background: rgba(249, 115, 22, 0.14);
+            background: rgba(var(--accent-rgb), 0.14);
             border: none;
             color: var(--accent);
             border-radius: 6px;
@@ -5894,7 +5914,7 @@
             transition: background 0.15s;
         }
 
-        .cap-cta:hover { background: rgba(249, 115, 22, 0.24); }
+        .cap-cta:hover { background: rgba(var(--accent-rgb), 0.24); }
         .cap-banner strong { display: block; margin-bottom: 3px; color: var(--text); }
 
         /* Inline progress slot for the "Ingest now" button — the spinner
@@ -6533,7 +6553,7 @@
         .pane-blurb {
             font-size: 11.5px;
             line-height: 1.55;
-            color: var(--text-dim, #8a7f72);
+            color: var(--text-dim, #6b7681);
             margin: 0 0 10px;
         }
 
@@ -6543,7 +6563,7 @@
         }
         /* Matches the Send / Search action buttons in the sibling panels,
            in the tour's own accent. */
-        #tour-launch-status { font-size: 11px; margin-top: 8px; color: var(--text-dim, #8a7f72); }
+        #tour-launch-status { font-size: 11px; margin-top: 8px; color: var(--text-dim, #6b7681); }
         #tour-launch-status.error { color: #dc2626; }
 
         /* ─── Guided Tour: cinematic narration overlay ─── */
@@ -6578,14 +6598,14 @@
            sits over the part of it the camera just flew to. Blur keeps the
            text readable over whatever is behind. */
         .tour-card {
-            background: linear-gradient(180deg, rgba(26, 23, 21, .58), rgba(18, 16, 15, .66));
+            background: linear-gradient(180deg, rgba(20, 26, 32, .58), rgba(14, 18, 22, .66));
             backdrop-filter: blur(26px) saturate(1.25);
             -webkit-backdrop-filter: blur(26px) saturate(1.25);
-            border: 1px solid rgba(249, 115, 22, .28);
+            border: 1px solid rgba(var(--accent-rgb), .28);
             border-radius: 16px;
             box-shadow: 0 22px 60px -14px rgba(0, 0, 0, .6), 0 0 0 1px rgba(255, 255, 255, .03) inset;
             padding: 12px 18px 11px;
-            color: #f2ede6;
+            color: var(--text);
             display: flex;
             flex-direction: column;
             /* The card overlays the very nodes it's describing — cap it so a
@@ -6605,19 +6625,19 @@
             opacity: .45; transition: opacity .15s;
         }
         .tour-top:hover .tour-grip { opacity: .85; }
-        .tour-grip i { display: block; width: 12px; height: 1.5px; border-radius: 1px; background: #d8b48f; }
+        .tour-grip i { display: block; width: 12px; height: 1.5px; border-radius: 1px; background: var(--text-soft); }
         .tour-badge {
             font-size: 9.5px; letter-spacing: .14em; text-transform: uppercase; font-weight: 800;
-            color: #1a120b; background: linear-gradient(90deg, #fb923c, #f97316);
+            color: var(--accent-ink); background: linear-gradient(90deg, var(--accent-soft), var(--accent));
             padding: 3px 8px; border-radius: 999px; white-space: nowrap;
         }
         .tour-title-main {
-            font-size: 12.5px; font-weight: 600; color: #f7f2ea; flex: 1;
+            font-size: 12.5px; font-weight: 600; color: var(--text); flex: 1;
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
-        .tour-counter { font-size: 11px; color: #d8b48f; font-variant-numeric: tabular-nums; letter-spacing: .1em; }
+        .tour-counter { font-size: 11px; color: var(--text-soft); font-variant-numeric: tabular-nums; letter-spacing: .1em; }
         .tour-close {
-            background: none; border: none; color: #a89b8d; cursor: pointer;
+            background: none; border: none; color: var(--text-muted); cursor: pointer;
             font-size: 17px; line-height: 1; padding: 2px 5px; border-radius: 6px;
         }
         .tour-close:hover { color: #fff; background: rgba(255, 255, 255, .09); }
@@ -6627,7 +6647,7 @@
         .tour-icon {
             width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center;
             background: none; border: 1px solid transparent; border-radius: 8px;
-            color: #a89b8d; cursor: pointer; padding: 0;
+            color: var(--text-muted); cursor: pointer; padding: 0;
             transition: color .15s, background .15s, border-color .15s;
         }
         .tour-icon svg { width: 15px; height: 15px; }
@@ -6635,29 +6655,29 @@
         .tour-icon.danger:hover { color: #fca5a5; background: rgba(248, 113, 113, .12); }
         /* Toggles read as lit when engaged. */
         .tour-icon[aria-pressed="true"] {
-            color: #1a120b; background: linear-gradient(135deg, #fdba74, #f97316);
+            color: var(--accent-ink); background: linear-gradient(135deg, var(--accent-pale), var(--accent));
             border-color: transparent;
         }
-        .tour-icon[aria-pressed="true"]:hover { filter: brightness(1.08); color: #1a120b; }
+        .tour-icon[aria-pressed="true"]:hover { filter: brightness(1.08); color: var(--accent-ink); }
         /* An unlit warnings button still hints that there's something to read. */
-        .tour-icon.warn:not([aria-pressed="true"]) { color: #f5c6a0; }
+        .tour-icon.warn:not([aria-pressed="true"]) { color: var(--warning); }
         .tour-progress { display: flex; gap: 5px; margin-bottom: 10px; flex-shrink: 0; }
         .tour-seg {
             height: 3px; flex: 1; border-radius: 2px; cursor: pointer;
             background: rgba(255, 255, 255, .14); overflow: hidden; position: relative;
         }
-        .tour-seg.done { background: rgba(249, 115, 22, .6); }
-        .tour-seg.active { background: rgba(249, 115, 22, .28); }
+        .tour-seg.done { background: rgba(var(--accent-rgb), .6); }
+        .tour-seg.active { background: rgba(var(--accent-rgb), .28); }
         .tour-seg.active::after {
             content: ''; position: absolute; inset: 0 auto 0 0; width: var(--seg, 0%);
-            background: linear-gradient(90deg, #fb923c, #f97316); border-radius: 2px;
+            background: linear-gradient(90deg, var(--accent-soft), var(--accent)); border-radius: 2px;
         }
         .tour-stop-title { font-size: 16px; font-weight: 650; color: #fff; margin-bottom: 3px; line-height: 1.25; }
         .tour-stop-meta {
-            font-size: 11px; color: #cbb096; margin-bottom: 10px;
+            font-size: 11px; color: var(--text-soft); margin-bottom: 10px;
             display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
         }
-        .tour-stop-meta .type { color: #fb923c; font-weight: 600; }
+        .tour-stop-meta .type { color: var(--accent-soft); font-weight: 600; }
         .tour-stop-meta .file { font-family: ui-monospace, "SF Mono", Menlo, monospace; opacity: .85; }
         .tour-jump {
             color: #8fb8dd; cursor: pointer; text-decoration: none;
@@ -6669,13 +6689,13 @@
         .tour-hop {
             display: inline-flex; align-items: center; gap: 4px;
             font-size: 10px; letter-spacing: .06em; text-transform: uppercase; font-weight: 700;
-            color: #fdba74; background: rgba(249, 115, 22, .13);
-            border: 1px solid rgba(249, 115, 22, .3);
+            color: var(--accent-pale); background: rgba(var(--accent-rgb), .13);
+            border: 1px solid rgba(var(--accent-rgb), .3);
             padding: 2px 7px; border-radius: 999px;
         }
-        .tour-narration { font-size: 13.5px; line-height: 1.55; color: #e9dfd2; min-height: 2.6em; }
+        .tour-narration { font-size: 13.5px; line-height: 1.55; color: var(--text-soft); min-height: 2.6em; }
         .tour-narration .caret {
-            display: inline-block; width: 7px; color: #f97316; font-weight: 700;
+            display: inline-block; width: 7px; color: var(--accent); font-weight: 700;
             animation: tourblink 1s step-end infinite;
         }
         @keyframes tourblink { 50% { opacity: 0; } }
@@ -6693,20 +6713,20 @@
             width: 38px; height: 38px; border-radius: 50%; cursor: pointer; padding: 0;
             display: inline-flex; align-items: center; justify-content: center;
             background: rgba(255, 255, 255, .07); border: 1px solid rgba(255, 255, 255, .12);
-            color: #f2ede6;
+            color: var(--text);
             transition: background .15s, border-color .15s, transform .12s, box-shadow .15s, opacity .15s;
         }
         .tour-tbtn svg { width: 17px; height: 17px; }
         .tour-tbtn:hover:not(:disabled) {
-            background: rgba(255, 255, 255, .14); border-color: rgba(249, 115, 22, .5); transform: scale(1.06);
+            background: rgba(255, 255, 255, .14); border-color: rgba(var(--accent-rgb), .5); transform: scale(1.06);
         }
         .tour-tbtn:active:not(:disabled) { transform: scale(.95); }
         .tour-tbtn:disabled { opacity: .3; cursor: default; }
         /* The play button is the anchor of the whole deck. */
         .tour-tbtn.play {
-            width: 54px; height: 54px; border-color: transparent; color: #1a120b;
-            background: linear-gradient(145deg, #fdba74, #f97316);
-            box-shadow: 0 6px 20px -6px rgba(249, 115, 22, .75), 0 0 0 1px rgba(255, 255, 255, .08) inset;
+            width: 54px; height: 54px; border-color: transparent; color: var(--accent-ink);
+            background: linear-gradient(145deg, var(--accent-pale), var(--accent));
+            box-shadow: 0 6px 20px -6px rgba(var(--accent-rgb), .75), 0 0 0 1px rgba(255, 255, 255, .08) inset;
         }
         .tour-tbtn.play svg { width: 24px; height: 24px; margin-left: 1px; }
         .tour-tbtn.play:hover { filter: brightness(1.06); transform: scale(1.05); }
@@ -6715,10 +6735,10 @@
         .tour-tbtn.play.is-pause svg, .tour-tbtn.play.is-replay svg { margin-left: 0; }
         .tour-play-state {
             font-size: 10px; letter-spacing: .12em; text-transform: uppercase; font-weight: 700;
-            color: #7d7264; white-space: nowrap;
+            color: var(--text-dim); white-space: nowrap;
         }
         .tour-exit {
-            background: none; border: 1px solid rgba(255, 255, 255, .12); color: #a89b8d;
+            background: none; border: 1px solid rgba(255, 255, 255, .12); color: var(--text-muted);
             cursor: pointer; font-size: 11px; letter-spacing: .05em; font-weight: 600;
             height: 28px; padding: 0 11px; border-radius: 8px; transition: color .15s, border-color .15s;
         }
@@ -6726,9 +6746,9 @@
         /* ─── Guided Tour: live planning read-out ─── */
         .tour-plan { padding: 2px 0 4px; }
         .tplan-head { display: flex; align-items: center; gap: 9px; margin-bottom: 10px; }
-        .tplan-phase { flex: 1; font-size: 13px; font-weight: 600; color: #f2ede6; }
+        .tplan-phase { flex: 1; font-size: 13px; font-weight: 600; color: var(--text); }
         .tplan-elapsed {
-            font-size: 11px; color: #a89b8d; font-variant-numeric: tabular-nums; letter-spacing: .06em;
+            font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; letter-spacing: .06em;
         }
         /* Indeterminate sweep: the model gives no completion percentage, so
            this shows liveness rather than pretending to know how far along
@@ -6739,7 +6759,7 @@
         }
         .tplan-bar {
             height: 100%; width: 34%; border-radius: 2px;
-            background: linear-gradient(90deg, transparent, #fb923c, #f97316, transparent);
+            background: linear-gradient(90deg, transparent, var(--accent-soft), var(--accent), transparent);
             animation: tplan-sweep 1.5s ease-in-out infinite;
         }
         @keyframes tplan-sweep {
@@ -6749,7 +6769,7 @@
         .tplan-steps { display: flex; flex-direction: column; gap: 5px; }
         .tplan-step {
             display: flex; align-items: center; gap: 8px;
-            font-size: 11.5px; color: #7d7264; transition: color .2s;
+            font-size: 11.5px; color: var(--text-dim); transition: color .2s;
         }
         .tplan-step .tick {
             width: 14px; height: 14px; flex-shrink: 0; border-radius: 50%;
@@ -6757,29 +6777,29 @@
             display: inline-flex; align-items: center; justify-content: center;
             font-size: 9px; line-height: 1; color: transparent;
         }
-        .tplan-step.active { color: #f2ede6; }
-        .tplan-step.active .tick { border-color: #f97316; box-shadow: 0 0 0 3px rgba(249, 115, 22, .15); }
-        .tplan-step.done { color: #cbb096; }
-        .tplan-step.done .tick { border-color: rgba(249, 115, 22, .55); background: rgba(249, 115, 22, .55); color: #1a120b; }
-        .tplan-step .detail { color: #a89b8d; font-variant-numeric: tabular-nums; }
+        .tplan-step.active { color: var(--text); }
+        .tplan-step.active .tick { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .15); }
+        .tplan-step.done { color: var(--text-soft); }
+        .tplan-step.done .tick { border-color: rgba(var(--accent-rgb), .55); background: rgba(var(--accent-rgb), .55); color: var(--accent-ink); }
+        .tplan-step .detail { color: var(--text-muted); font-variant-numeric: tabular-nums; }
         .tplan-stats {
             display: flex; gap: 14px; flex-wrap: wrap; margin-top: 11px;
             padding-top: 10px; border-top: 1px solid rgba(255, 255, 255, .07);
         }
         .tplan-stat { display: flex; flex-direction: column; gap: 1px; }
         .tplan-stat .v {
-            font-size: 15px; font-weight: 650; color: #fdba74; font-variant-numeric: tabular-nums;
+            font-size: 15px; font-weight: 650; color: var(--accent-pale); font-variant-numeric: tabular-nums;
         }
         .tplan-stat .k {
-            font-size: 9px; letter-spacing: .1em; text-transform: uppercase; color: #7d7264; font-weight: 700;
+            font-size: 9px; letter-spacing: .1em; text-transform: uppercase; color: var(--text-dim); font-weight: 700;
         }
-        .tplan-hint { margin-top: 10px; font-size: 11px; line-height: 1.5; color: #7d7264; }
+        .tplan-hint { margin-top: 10px; font-size: 11px; line-height: 1.5; color: var(--text-dim); }
 
-        .tour-note { font-size: 13px; line-height: 1.55; color: #e9dfd2; }
+        .tour-note { font-size: 13px; line-height: 1.55; color: var(--text-soft); }
         .tour-note.error { color: #fca5a5; }
         .tour-spinner {
             display: inline-block; width: 13px; height: 13px; margin-right: 8px; vertical-align: -2px;
-            border: 2px solid rgba(249, 115, 22, .3); border-top-color: #f97316;
+            border: 2px solid rgba(var(--accent-rgb), .3); border-top-color: var(--accent);
             border-radius: 50%; animation: tourspin .7s linear infinite;
         }
         @keyframes tourspin { to { transform: rotate(360deg); } }
@@ -6792,17 +6812,17 @@
             margin: 0; padding: 9px 11px; max-height: 150px; overflow: auto;
             background: rgba(0, 0, 0, .32); border: 1px solid rgba(255, 255, 255, .07);
             border-radius: 9px; font-family: ui-monospace, "SF Mono", Menlo, monospace;
-            font-size: 11.5px; line-height: 1.5; color: #d9d2c7; white-space: pre;
+            font-size: 11.5px; line-height: 1.5; color: var(--text-soft); white-space: pre;
         }
 
         /* "Up next" teaser: keeps the walk feeling like a route. */
         .tour-next {
-            margin-top: 10px; font-size: 11px; color: #a89b8d;
+            margin-top: 10px; font-size: 11px; color: var(--text-muted);
             display: flex; align-items: center; gap: 6px;
         }
-        .tour-next .lbl { color: #7d7264; letter-spacing: .08em; text-transform: uppercase; font-size: 9.5px; font-weight: 700; }
-        .tour-next .val { color: #d8b48f; cursor: pointer; }
-        .tour-next .val:hover { color: #fdba74; text-decoration: underline; }
+        .tour-next .lbl { color: var(--text-dim); letter-spacing: .08em; text-transform: uppercase; font-size: 9.5px; font-weight: 700; }
+        .tour-next .val { color: var(--text-soft); cursor: pointer; }
+        .tour-next .val:hover { color: var(--accent-pale); text-decoration: underline; }
 
         /* `display: flex` below would otherwise beat the UA's [hidden] rule,
            leaving stale "up next" / warning rows on screen. */
@@ -6810,31 +6830,31 @@
         .tour-streaming[hidden] { display: none; }
         .tour-streaming {
             display: flex; align-items: center; gap: 4px; margin-top: 9px;
-            font-size: 11px; color: #cbb096;
+            font-size: 11px; color: var(--text-soft);
         }
         .tour-warnings { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; }
         .tour-warn {
-            font-size: 11px; line-height: 1.45; color: #f5c6a0;
+            font-size: 11px; line-height: 1.45; color: var(--text-soft);
             display: flex; gap: 6px; align-items: flex-start;
         }
-        .tour-warn::before { content: '!'; color: #fb923c; font-weight: 800; }
+        .tour-warn::before { content: '!'; color: var(--warning); font-weight: 800; }
 
         .tour-speed {
             background: rgba(255, 255, 255, .06); border: 1px solid rgba(255, 255, 255, .13);
-            color: #d8b48f; border-radius: 999px; height: 28px; min-width: 46px; padding: 0 11px;
+            color: var(--text-soft); border-radius: 999px; height: 28px; min-width: 46px; padding: 0 11px;
             cursor: pointer; font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums;
             transition: color .15s, border-color .15s;
         }
-        .tour-speed:hover:not(:disabled) { border-color: rgba(249, 115, 22, .45); color: #fdba74; }
+        .tour-speed:hover:not(:disabled) { border-color: rgba(var(--accent-rgb), .45); color: var(--accent-pale); }
         /* While a tour is still being planned there is nothing to drive, so
            the whole deck goes inert — only Exit stays live. */
         .tour-speed:disabled, .tour-icon:disabled { opacity: .35; cursor: default; }
-        .tour-icon:disabled:hover { background: none; color: #a89b8d; }
+        .tour-icon:disabled:hover { background: none; color: var(--text-muted); }
 
         /* ─── Guided Tour: plan JSON viewer ─── */
         #tour-json {
             position: fixed; inset: 0; z-index: 90; display: none;
-            background: rgba(10, 9, 8, .55); backdrop-filter: blur(3px);
+            background: rgba(10, 13, 17, .55); backdrop-filter: blur(3px);
             align-items: center; justify-content: center; padding: 5vh 4vw;
         }
         #tour-json.visible { display: flex; }
@@ -6843,31 +6863,31 @@
         body.tour-json-open #tooltip { display: none; }
         .tjson-card {
             width: min(940px, 100%); max-height: 90vh; display: flex; flex-direction: column;
-            background: linear-gradient(180deg, rgba(26, 23, 21, .98), rgba(18, 16, 15, .99));
-            border: 1px solid rgba(249, 115, 22, .3); border-radius: 16px;
-            box-shadow: 0 30px 80px -18px rgba(0, 0, 0, .75); color: #f2ede6; overflow: hidden;
+            background: linear-gradient(180deg, rgba(20, 26, 32, .98), rgba(14, 18, 22, .99));
+            border: 1px solid rgba(var(--accent-rgb), .3); border-radius: 16px;
+            box-shadow: 0 30px 80px -18px rgba(0, 0, 0, .75); color: var(--text); overflow: hidden;
         }
         .tjson-head {
             display: flex; align-items: center; gap: 10px;
             padding: 13px 16px; border-bottom: 1px solid rgba(255, 255, 255, .08);
         }
         .tjson-head .title { font-size: 13px; font-weight: 700; flex: 1; }
-        .tjson-head .sub { font-size: 11px; color: #a89b8d; font-variant-numeric: tabular-nums; }
+        .tjson-head .sub { font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
         .tjson-tabs { display: flex; gap: 5px; padding: 10px 16px 0; flex-wrap: wrap; }
         .tjson-tab {
             background: rgba(255, 255, 255, .05); border: 1px solid rgba(255, 255, 255, .1);
-            color: #cbb096; border-radius: 8px; padding: 5px 11px; cursor: pointer;
+            color: var(--text-soft); border-radius: 8px; padding: 5px 11px; cursor: pointer;
             font-size: 11px; font-weight: 600;
         }
-        .tjson-tab:hover { border-color: rgba(249, 115, 22, .4); color: #fdba74; }
-        .tjson-tab.active { background: rgba(249, 115, 22, .18); border-color: rgba(249, 115, 22, .5); color: #fdba74; }
+        .tjson-tab:hover { border-color: rgba(var(--accent-rgb), .4); color: var(--accent-pale); }
+        .tjson-tab.active { background: rgba(var(--accent-rgb), .18); border-color: rgba(var(--accent-rgb), .5); color: var(--accent-pale); }
         .tjson-body { flex: 1; overflow: auto; padding: 12px 16px 16px; }
         .tjson-body pre {
             margin: 0; font-family: ui-monospace, "SF Mono", Menlo, monospace;
-            font-size: 11.5px; line-height: 1.55; color: #d9d2c7; white-space: pre-wrap;
+            font-size: 11.5px; line-height: 1.55; color: var(--text-soft); white-space: pre-wrap;
             word-break: break-word;
         }
-        .tjson-note { font-size: 11.5px; color: #a89b8d; margin: 0 0 10px; line-height: 1.5; }
+        .tjson-note { font-size: 11.5px; color: var(--text-muted); margin: 0 0 10px; line-height: 1.5; }
         .tjson-foot {
             display: flex; align-items: center; gap: 8px;
             padding: 10px 16px; border-top: 1px solid rgba(255, 255, 255, .08);
@@ -6875,11 +6895,11 @@
         .tjson-foot .spacer { flex: 1; }
         .tjson-btn {
             background: rgba(255, 255, 255, .06); border: 1px solid rgba(255, 255, 255, .13);
-            color: #f2ede6; border-radius: 8px; height: 30px; padding: 0 12px; cursor: pointer;
+            color: var(--text); border-radius: 8px; height: 30px; padding: 0 12px; cursor: pointer;
             font-family: inherit; font-size: 11.5px; font-weight: 600;
             transition: background .15s, border-color .15s;
         }
-        .tjson-btn:hover { background: rgba(255, 255, 255, .12); border-color: rgba(249, 115, 22, .45); }
+        .tjson-btn:hover { background: rgba(255, 255, 255, .12); border-color: rgba(var(--accent-rgb), .45); }
 
         /* Immersive mode: the graph is the show, so the chrome steps back.
            Faded panels come back on hover, and the sidebar/details panel are
@@ -6942,7 +6962,7 @@
             width: min(520px, 100%);
             padding: 28px 30px 24px;
             text-align: center;
-            background: rgba(15, 15, 17, 0.72);
+            background: rgba(14, 18, 22, 0.72);
             backdrop-filter: blur(16px);
             -webkit-backdrop-filter: blur(16px);
             border: 1px solid var(--border-soft);
@@ -6954,7 +6974,7 @@
             font-size: 26px;
             line-height: 1;
             color: var(--accent);
-            text-shadow: 0 0 18px rgba(249, 115, 22, 0.35);
+            text-shadow: 0 0 18px rgba(var(--accent-rgb), 0.35);
         }
 
         .ce-card h2 {
@@ -6992,7 +7012,7 @@
         }
 
         .ce-search-btn:hover {
-            background: #fb8c3c;
+            background: var(--accent-soft);
         }
 
         .ce-hubs-label {
@@ -7106,7 +7126,7 @@
             font-size: 11.5px;
             font-weight: 500;
             color: var(--accent);
-            background: rgba(249, 115, 22, 0.08);
+            background: rgba(var(--accent-rgb), 0.08);
             border: none;
             border-radius: 7px;
             cursor: pointer;
@@ -7115,7 +7135,7 @@
 
         .plot-all-btn:hover {
             color: var(--text);
-            background: rgba(249, 115, 22, 0.18);
+            background: rgba(var(--accent-rgb), 0.18);
         }
 
         .plot-all-btn[hidden] {
@@ -7168,7 +7188,7 @@
             margin-top: 4px;
             border-radius: 9px;
             border: 1px solid var(--border);
-            background: var(--bg-elevated, #17151a);
+            background: var(--bg-elevated, #141a20);
             box-shadow: 0 14px 40px -12px rgba(0, 0, 0, 0.8);
             max-height: 230px;
             overflow-y: auto;
@@ -7183,7 +7203,7 @@
             cursor: pointer;
             font-size: 11.5px;
         }
-        .walk-seed-sug:hover, .walk-seed-sug.active { background: rgba(249, 115, 22, 0.12); }
+        .walk-seed-sug:hover, .walk-seed-sug.active { background: rgba(var(--accent-rgb), 0.12); }
         .walk-seed-sug .nm { color: var(--text); font-weight: 600; }
         .walk-seed-sug .mt { color: var(--text-dim); font-size: 10px; margin-left: auto; }
         .walk-seed-sug svg { width: 13px; height: 13px; flex-shrink: 0; }
@@ -7195,7 +7215,7 @@
             padding: 5px 8px 5px 7px;
             border-radius: 8px;
             border: none;
-            background: rgba(249, 115, 22, 0.12);
+            background: rgba(var(--accent-rgb), 0.12);
             color: var(--text);
             font-size: 11.5px;
             font-family: var(--mono, monospace);
@@ -7265,7 +7285,7 @@
         .walk-hop-btn:hover { color: var(--text); }
         .walk-hop-btn.active {
             color: var(--accent);
-            background: rgba(249, 115, 22, 0.16);
+            background: rgba(var(--accent-rgb), 0.16);
         }
 
         .walk-dir {
@@ -7293,7 +7313,7 @@
         .walk-dir-btn:hover { color: var(--text); }
         .walk-dir-btn.active {
             color: var(--accent);
-            background: rgba(249, 115, 22, 0.16);
+            background: rgba(var(--accent-rgb), 0.16);
         }
 
         .walk-speed {
@@ -7319,7 +7339,7 @@
         .walk-speed-btn:hover { color: var(--text); }
         .walk-speed-btn.active {
             color: var(--accent);
-            background: rgba(249, 115, 22, 0.16);
+            background: rgba(var(--accent-rgb), 0.16);
         }
         .walk-arr {
             display: inline-flex;
@@ -7345,7 +7365,7 @@
         .walk-arr-btn:hover { color: var(--text); }
         .walk-arr-btn.active {
             color: var(--accent);
-            background: rgba(249, 115, 22, 0.16);
+            background: rgba(var(--accent-rgb), 0.16);
         }
 
         .walk-reveal-note {
@@ -7387,14 +7407,14 @@
         #walk-overlay.dragging .walk-card { box-shadow: 0 30px 70px -12px rgba(0, 0, 0, .7); }
 
         .walk-card {
-            background: linear-gradient(180deg, rgba(26, 23, 21, .6), rgba(18, 16, 15, .68));
+            background: linear-gradient(180deg, rgba(20, 26, 32, .6), rgba(14, 18, 22, .68));
             backdrop-filter: blur(26px) saturate(1.25);
             -webkit-backdrop-filter: blur(26px) saturate(1.25);
-            border: 1px solid rgba(249, 115, 22, .3);
+            border: 1px solid rgba(var(--accent-rgb), .3);
             border-radius: 16px;
             box-shadow: 0 22px 60px -14px rgba(0, 0, 0, .6), 0 0 0 1px rgba(255, 255, 255, .03) inset;
             padding: 12px 18px 11px;
-            color: #f2ede6;
+            color: var(--text);
             display: flex;
             flex-direction: column;
             max-height: min(46vh, 420px);
@@ -7409,29 +7429,29 @@
             opacity: .45; transition: opacity .15s;
         }
         .walk-top:hover .walk-grip { opacity: .85; }
-        .walk-grip i { display: block; width: 12px; height: 1.5px; border-radius: 1px; background: #d8b48f; }
+        .walk-grip i { display: block; width: 12px; height: 1.5px; border-radius: 1px; background: var(--text-soft); }
         .walk-badge {
             font-size: 9.5px; letter-spacing: .14em; text-transform: uppercase; font-weight: 800;
-            color: #1a120b; background: linear-gradient(90deg, #fb923c, #f97316);
+            color: var(--accent-ink); background: linear-gradient(90deg, var(--accent-soft), var(--accent));
             padding: 3px 8px; border-radius: 999px; white-space: nowrap;
         }
         .walk-o-seed {
-            font-size: 12.5px; font-weight: 600; color: #f7f2ea; flex: 1;
+            font-size: 12.5px; font-weight: 600; color: var(--text); flex: 1;
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
             font-family: var(--mono, monospace);
         }
-        .walk-counter { font-size: 11px; color: #d8b48f; font-variant-numeric: tabular-nums; letter-spacing: .1em; }
+        .walk-counter { font-size: 11px; color: var(--text-soft); font-variant-numeric: tabular-nums; letter-spacing: .1em; }
         .walk-tools { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
         .walk-icon {
             width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center;
             background: none; border: 1px solid transparent; border-radius: 8px;
-            color: #a89b8d; cursor: pointer; padding: 0;
+            color: var(--text-muted); cursor: pointer; padding: 0;
             transition: color .15s, background .15s;
         }
         .walk-icon svg { width: 15px; height: 15px; }
         .walk-icon:hover { color: #fff; background: rgba(255, 255, 255, .09); }
         .walk-icon.danger:hover { color: #fca5a5; background: rgba(248, 113, 113, .12); }
-        .walk-icon.active { color: var(--accent); background: rgba(232, 196, 140, .12); }
+        .walk-icon.active { color: var(--accent); background: rgba(var(--accent-rgb), .12); }
         .walk-icon.spinning svg { animation: walk-spin-svg 1.2s linear infinite; }
         @keyframes walk-spin-svg {
             to { transform: rotate(360deg); }
@@ -7482,14 +7502,14 @@
            permanently half-lit at the end of the run. */
         .walk-seg::after {
             content: ''; position: absolute; inset: 0 auto 0 0; width: var(--seg, 0%);
-            background: linear-gradient(90deg, #fb923c, #f97316); border-radius: 2px;
+            background: linear-gradient(90deg, var(--accent-soft), var(--accent)); border-radius: 2px;
             transition: width .25s ease;
         }
-        .walk-seg.active { background: rgba(249, 115, 22, .2); }
+        .walk-seg.active { background: rgba(var(--accent-rgb), .2); }
         /* Mid-stream: the fill sits part way along and breathes, so an
            unfinished hop cannot be mistaken for a finished one. */
         .walk-seg.streaming::after {
-            background: linear-gradient(90deg, rgba(251, 146, 60, .55), #fdba74);
+            background: linear-gradient(90deg, rgba(var(--accent-rgb), .55), var(--accent-pale));
             animation: walk-seg-stream 1.1s ease-in-out infinite;
         }
         @keyframes walk-seg-stream {
@@ -7502,25 +7522,25 @@
         .walk-o-hop { font-size: 15px; font-weight: 700; color: #fff; }
         .walk-o-phase {
             font-size: 9.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
-            color: #fdba74; background: rgba(249, 115, 22, .13);
-            border: 1px solid rgba(249, 115, 22, .3);
+            color: var(--accent-pale); background: rgba(var(--accent-rgb), .13);
+            border: 1px solid rgba(var(--accent-rgb), .3);
             padding: 2px 7px; border-radius: 999px;
         }
         .walk-o-phase[data-phase="stream"] { color: #8fb8dd; background: rgba(91, 143, 201, .14); border-color: rgba(91, 143, 201, .3); }
-        .walk-o-phase[data-phase="done"]   { color: #cbb096; background: rgba(255,255,255,.05); border-color: rgba(255,255,255,.1); }
+        .walk-o-phase[data-phase="done"]   { color: var(--text-soft); background: rgba(255,255,255,.05); border-color: rgba(255,255,255,.1); }
         .walk-o-edges { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
         .walk-o-edge {
             font-size: 9.5px; padding: 1px 6px; border-radius: 999px;
-            background: rgba(255, 255, 255, .07); color: #e9dfd2;
+            background: rgba(255, 255, 255, .07); color: var(--text-soft);
             font-family: var(--mono, monospace);
         }
-        .walk-o-empty { font-size: 11px; color: #a89b8d; font-style: italic; }
+        .walk-o-empty { font-size: 11px; color: var(--text-muted); font-style: italic; }
         .walk-o-legend { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 6px; }
-        .walk-o-leg { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; color: #cbb096; }
+        .walk-o-leg { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--text-soft); }
         .walk-o-leg .d { width: 9px; height: 9px; border-radius: 50%; box-shadow: 0 0 7px -1px currentColor; }
         .walk-o-leg .n { color: #fff; font-weight: 600; font-variant-numeric: tabular-nums; }
-        .walk-o-totals { font-size: 10.5px; color: #a89b8d; display: flex; gap: 10px; }
-        .walk-o-totals b { color: #fb923c; font-variant-numeric: tabular-nums; }
+        .walk-o-totals { font-size: 10.5px; color: var(--text-muted); display: flex; gap: 10px; }
+        .walk-o-totals b { color: var(--accent-soft); font-variant-numeric: tabular-nums; }
 
         /* Transport: speed left, prev/play/next centre, exit right. */
         .walk-controls {
@@ -7531,28 +7551,28 @@
         .walk-controls-side { display: flex; align-items: center; gap: 10px; min-width: 0; }
         .walk-controls-side.right { justify-content: flex-end; }
         .walk-speed {
-            background: none; border: 1px solid rgba(255, 255, 255, .14); color: #d8b48f;
+            background: none; border: 1px solid rgba(255, 255, 255, .14); color: var(--text-soft);
             padding: 4px 10px; border-radius: 8px; font-family: var(--mono, monospace);
             font-size: 11px; font-weight: 600; cursor: pointer;
         }
-        .walk-speed:hover { color: #fff; border-color: rgba(249, 115, 22, .5); }
+        .walk-speed:hover { color: #fff; border-color: rgba(var(--accent-rgb), .5); }
         .walk-transport { display: flex; align-items: center; gap: 4px; }
         .walk-tbtn {
             width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center;
             background: none; border: 1px solid transparent; border-radius: 9px;
-            color: #f2ede6; cursor: pointer; padding: 0;
+            color: var(--text); cursor: pointer; padding: 0;
             transition: color .15s, background .15s, border-color .15s;
         }
         .walk-tbtn:hover { background: rgba(255, 255, 255, .09); }
         .walk-tbtn:disabled { opacity: .3; cursor: default; }
         .walk-tbtn svg { width: 16px; height: 16px; }
         .walk-tbtn.play {
-            background: linear-gradient(135deg, #fdba74, #f97316); color: #1a120b;
+            background: linear-gradient(135deg, var(--accent-pale), var(--accent)); color: var(--accent-ink);
             border-color: transparent;
         }
         .walk-tbtn.play:hover { filter: brightness(1.08); }
         .walk-exit {
-            background: none; border: 1px solid rgba(255, 255, 255, .14); color: #cbb096;
+            background: none; border: 1px solid rgba(255, 255, 255, .14); color: var(--text-soft);
             padding: 6px 12px; border-radius: 8px; font-family: inherit; font-size: 11px; cursor: pointer;
         }
         .walk-exit:hover { color: #fff; border-color: rgba(248, 113, 113, .5); }
@@ -7587,7 +7607,7 @@
             transition: color .15s, background .15s;
         }
         .whist-icon svg { width: 13px; height: 13px; }
-        .whist-icon:hover { color: var(--accent); background: rgba(249, 115, 22, 0.1); }
+        .whist-icon:hover { color: var(--accent); background: rgba(var(--accent-rgb), 0.1); }
         .whist-icon.danger:hover { color: #f87171; background: rgba(248, 113, 113, 0.1); }
         .whist-foot { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
         .whist-hint { flex: 1; font-size: 10px; color: var(--text-dim); }
@@ -7679,7 +7699,7 @@
         .walk-et.active {
             color: var(--accent);
             border-color: var(--accent-dim);
-            background: rgba(249, 115, 22, 0.1);
+            background: rgba(var(--accent-rgb), 0.1);
         }
 
         .walk-actions { display: flex; gap: 7px; align-items: center; }
@@ -7692,17 +7712,17 @@
             padding: 8px 12px;
             border-radius: 9px;
             border: none;
-            background: linear-gradient(135deg, rgba(249, 115, 22, 0.34), rgba(249, 115, 22, 0.18));
+            background: linear-gradient(135deg, rgba(var(--accent-rgb), 0.34), rgba(var(--accent-rgb), 0.18));
             color: #fff;
             font-family: inherit;
             font-size: 12px;
             font-weight: 700;
             letter-spacing: 0.02em;
             cursor: pointer;
-            box-shadow: 0 6px 20px -8px rgba(249, 115, 22, 0.7);
+            box-shadow: 0 6px 20px -8px rgba(var(--accent-rgb), 0.7);
             transition: transform 0.12s, box-shadow 0.15s, opacity 0.15s;
         }
-        .walk-run:hover { transform: translateY(-1px); box-shadow: 0 10px 26px -8px rgba(249, 115, 22, 0.8); }
+        .walk-run:hover { transform: translateY(-1px); box-shadow: 0 10px 26px -8px rgba(var(--accent-rgb), 0.8); }
         .walk-run:active { transform: translateY(0); }
         .walk-run:disabled { opacity: 0.45; cursor: not-allowed; transform: none; box-shadow: none; }
         .walk-run svg { width: 14px; height: 14px; }
@@ -7734,7 +7754,7 @@
             border-radius: 11px;
             border: 1px solid var(--border-soft);
             background:
-                radial-gradient(120% 80% at 0% 0%, rgba(249, 115, 22, 0.06), transparent 60%),
+                radial-gradient(120% 80% at 0% 0%, rgba(var(--accent-rgb), 0.06), transparent 60%),
                 radial-gradient(120% 80% at 100% 100%, rgba(91, 143, 201, 0.06), transparent 60%),
                 rgba(255, 255, 255, 0.015);
         }
@@ -7782,13 +7802,13 @@
         .walk-pipe-box.seeds { border-color: rgba(91, 143, 201, 0.4); }
         .walk-pipe-box.graph {
             border-color: var(--accent);
-            background: rgba(249, 115, 22, 0.1);
+            background: rgba(var(--accent-rgb), 0.1);
         }
         .walk-pipe-box.graph .t { color: var(--accent); }
         .walk-pipe-box.agent { border-color: rgba(143, 184, 221, 0.4); }
         .walk-pipe-box.pulse {
-            box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.35), 0 0 22px -2px rgba(249, 115, 22, 0.6);
-            background: rgba(249, 115, 22, 0.18);
+            box-shadow: 0 0 0 2px rgba(var(--accent-rgb), 0.35), 0 0 22px -2px rgba(var(--accent-rgb), 0.6);
+            background: rgba(var(--accent-rgb), 0.18);
         }
         .walk-pipe-arrow {
             color: var(--text-dim);
@@ -7807,8 +7827,8 @@
             text-transform: uppercase;
         }
         .walk-pipe-tag.sem { background: rgba(91, 143, 201, 0.2); color: #8fb8dd; }
-        .walk-pipe-tag.kw { background: rgba(249, 115, 22, 0.18); color: #fb923c; }
-        .walk-pipe-tag.gph { background: rgba(249, 115, 22, 0.22); color: #fdba74; }
+        .walk-pipe-tag.kw { background: rgba(var(--accent-rgb), 0.18); color: var(--accent-soft); }
+        .walk-pipe-tag.gph { background: rgba(var(--accent-rgb), 0.22); color: var(--accent-pale); }
 
         /* MCP tool reference cards */
         .walk-mcp-list { display: flex; flex-direction: column; gap: 7px; margin-top: 12px; }
@@ -7839,7 +7859,7 @@
             text-transform: uppercase;
             padding: 1px 6px;
             border-radius: 999px;
-            background: rgba(249, 115, 22, 0.14);
+            background: rgba(var(--accent-rgb), 0.14);
             color: var(--accent);
         }
         .walk-mcp-pill.secondary { background: rgba(143, 184, 221, 0.14); color: #8fb8dd; }
@@ -7878,7 +7898,7 @@
             display: flex;
             flex-direction: column;
             z-index: 60;
-            background: rgba(16, 14, 13, 0.97);
+            background: rgba(10, 13, 17, 0.97);
             backdrop-filter: blur(12px);
             border: 1px solid rgba(255, 255, 255, 0.09);
             border-radius: 12px;
@@ -7947,7 +7967,7 @@
             transition: color .12s, border-color .12s, background .12s;
         }
         .wn-chip:hover { color: var(--text); border-color: var(--text-dim); }
-        .wn-chip.active { color: #120d08; background: var(--accent); border-color: var(--accent); font-weight: 700; }
+        .wn-chip.active { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); font-weight: 700; }
         .wn-chip .wn-count { font-variant-numeric: tabular-nums; opacity: 0.7; }
         .wn-chip .wn-dot { width: 7px; height: 7px; border-radius: 50%; }
         /* A hop the walk has planned but not yet revealed. Listing it is the
@@ -7977,7 +7997,7 @@
             align-items: center;
             gap: 7px;
             padding: 6px 13px;
-            background: rgba(16, 14, 13, 0.97);
+            background: rgba(10, 13, 17, 0.97);
             border-bottom: 1px solid var(--border-soft);
             font-size: 9.5px;
             font-weight: 700;
@@ -8001,7 +8021,7 @@
             font-family: inherit;
         }
         .wn-row:hover { background: rgba(255, 255, 255, 0.05); }
-        .wn-row.active { background: rgba(249, 115, 22, 0.13); }
+        .wn-row.active { background: rgba(var(--accent-rgb), 0.13); }
         /* A node from a hop the walk has not reached yet is on no canvas to
            fly to, so the row says what it is and stops there. */
         .wn-row.pending { cursor: default; opacity: 0.55; }
@@ -8284,7 +8304,7 @@
             align-items: flex-start;
             justify-content: center;
             padding: 14vh 20px 20px;
-            background: rgba(9, 9, 11, 0.72);
+            background: rgba(10, 13, 17, 0.72);
             backdrop-filter: blur(8px);
             -webkit-backdrop-filter: blur(8px);
         }
@@ -8821,7 +8841,7 @@ body:has(#info.visible) #perf-hud {
            the table in 00-preamble.js stays the only place the colours live —
            these rules only say *where* the colour goes. */
         .ctx-section[data-role="target"]     .ctx-item { border-left-color: #ff3d00; }
-        .ctx-section[data-role="caller"]     .ctx-item { border-left-color: #f97316; }
+        .ctx-section[data-role="caller"]     .ctx-item { border-left-color: var(--accent); }
         .ctx-section[data-role="test"]       .ctx-item { border-left-color: #fbbf24; }
         .ctx-section[data-role="dependency"] .ctx-item { border-left-color: #38bdf8; }
         .ctx-section[data-role="doc"]        .ctx-item { border-left-color: #a78bfa; }
@@ -8959,7 +8979,7 @@ body:has(#info.visible) #perf-hud {
 
         .ask-bar:focus-within {
             border-color: var(--accent);
-            box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.15);
+            box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.15);
         }
 
         .ask-bar-icon {
@@ -9020,7 +9040,7 @@ body:has(#info.visible) #perf-hud {
         }
 
         .ask-run {
-            background: rgba(249, 115, 22, 0.12);
+            background: rgba(var(--accent-rgb), 0.12);
             color: var(--accent);
         }
 
@@ -9030,7 +9050,7 @@ body:has(#info.visible) #perf-hud {
         }
 
         .ask-run:hover:not(:disabled) {
-            background: rgba(249, 115, 22, 0.24);
+            background: rgba(var(--accent-rgb), 0.24);
         }
 
         .ask-run:disabled {
@@ -9783,7 +9803,7 @@ body:has(#info.visible) #perf-hud {
         }
     </style>
 <script>
-window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3424,"edges":9879,"files":133,"lines":78725,"ugVersion":"0.1.18","visFingerprint":"6a27e50d082c8e4f","generatedAt":1789043774};
+window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3738,"edges":10801,"files":136,"lines":84798,"ugVersion":"0.1.19","visFingerprint":"f33b1dc89b962e73","generatedAt":1789046044};
 /* ==========================================================================
    UltraGraph — static demo shim
    ==========================================================================
@@ -10192,7 +10212,7 @@ window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#g
         <div class="kb-bg" aria-hidden="true">
             <div class="kb-glow"></div>
             <svg viewBox="0 0 1000 600" preserveAspectRatio="xMidYMid slice">
-                <g stroke="#f97316" stroke-width="1" opacity="0.5">
+                <g stroke="#2dd4bf" stroke-width="1" opacity="0.5">
                     <line x1="120" y1="90" x2="260" y2="180" />
                     <line x1="260" y1="180" x2="205" y2="320" />
                     <line x1="205" y1="320" x2="80" y2="410" />
@@ -12038,8 +12058,10 @@ traverse({
         // background lives here, so the scene's ground tone and the colours
         // that recede into it can never drift apart.
         const CANVAS = {
-            bg: '#0d0d10',
-            fog: 0x0d0d10,
+            // The ground, shared with `#container`'s backdrop in `00-base.css`
+            // so the canvas and the page it sits on are one surface.
+            bg: '#0a0d11',
+            fog: 0x0a0d11,
             label: 'rgba(214,219,230,0.92)',
             labelTour: 'rgba(253,186,116,0.98)',
             linkRecede: '#26262e',    // focus mode: outside the neighbourhood
@@ -20593,9 +20615,10 @@ self.onmessage = async (ev) => {
         }
 
         // Scene backdrop: a near-black ground with soft out-of-focus washes of
-        // the two ink families (orange / steel blue). Dark makes the saturated
-        // node colours glow instead of sitting flat, and gives the dimmed
-        // rings of a tour somewhere to disappear into.
+        // teal and steel blue — the page's own backdrop in `00-base.css`,
+        // repainted here so there is no seam where the canvas starts. Cool and
+        // dark makes the saturated node inks glow instead of sitting flat, and
+        // gives the dimmed rings of a tour somewhere to disappear into.
         function backgroundTexture() {
             const c = document.createElement('canvas');
             c.width = c.height = 1024;
@@ -20605,14 +20628,14 @@ self.onmessage = async (ev) => {
             const glow = (x, y, r, color) => {
                 const g = ctx.createRadialGradient(x, y, 0, x, y, r);
                 g.addColorStop(0, color);
-                g.addColorStop(1, 'rgba(13,13,16,0)');
+                g.addColorStop(1, 'rgba(10,13,17,0)');
                 ctx.fillStyle = g;
                 ctx.fillRect(0, 0, 1024, 1024);
             };
-            glow(790, 190, 620, 'rgba(233,100,28,0.16)');   // warm haze, top-right
-            glow(170, 780, 640, 'rgba(58,110,165,0.20)');   // blue haze, bottom-left
+            glow(790, 190, 620, 'rgba(45,212,191,0.16)');   // teal haze, top-right
+            glow(170, 780, 640, 'rgba(96,165,250,0.18)');   // blue haze, bottom-left
             glow(320, 150, 460, 'rgba(91,143,201,0.12)');   // pale blue, top-left
-            glow(880, 880, 520, 'rgba(194,65,12,0.12)');    // rust haze, bottom-right
+            glow(880, 880, 520, 'rgba(20,184,166,0.12)');   // deep teal, bottom-right
             glow(512, 512, 760, 'rgba(120,130,150,0.10)');  // faint lift mid-frame
             const t = new THREE.CanvasTexture(c);
             t.colorSpace = THREE.SRGBColorSpace;

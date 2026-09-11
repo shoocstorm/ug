@@ -608,31 +608,33 @@ pub fn calculate_centrality(graph: &GraphData) -> CentralityResult {
 /// inline on an async runtime thread.
 pub fn detect_cycles(graph: &GraphData) -> CycleResult {
     let (di_graph, index_map) = build_di_graph(graph);
-    let mut visited: HashMap<String, bool> = HashMap::new();
-    let mut rec_stack: HashMap<String, bool> = HashMap::new();
-    let mut cycles: Vec<Vec<String>> = vec![];
+    let mut walk = CycleWalk::default();
 
     for node in &graph.nodes {
-        if !visited.contains_key(&node.id) {
-            detect_cycles_dfs(
-                &di_graph,
-                &graph.nodes,
-                &index_map,
-                &node.id,
-                &mut visited,
-                &mut rec_stack,
-                &mut vec![],
-                &mut cycles,
-            );
+        if !walk.visited.contains_key(&node.id) {
+            // Each root starts from an empty path. The recursion pops what
+            // it pushes, so this is already empty by the time a root
+            // returns; clearing says so rather than relying on it.
+            walk.path.clear();
+            detect_cycles_dfs(&di_graph, &graph.nodes, &index_map, &node.id, &mut walk);
         }
     }
 
-    let unique_cycles: Vec<Vec<String>> = cycles
+    // Sorting each cycle is what makes two discoveries of the same loop
+    // compare equal, whichever node the walk entered it from.
+    let mut unique_cycles: Vec<Vec<String>> = walk
+        .cycles
         .into_iter()
         .map(|mut c| { c.sort(); c })
         .collect::<std::collections::HashSet<_>>()
         .into_iter()
         .collect();
+    // Draining a `HashSet` yields its own order, so the same graph reported
+    // its cycles in a different order on every run — all six permutations of
+    // three cycles, measured over 40 builds. Nothing downstream asked for
+    // insertion order, and a command whose output shuffles between
+    // identical runs cannot be diffed or baselined.
+    unique_cycles.sort();
 
     CycleResult {
         has_cycles: !unique_cycles.is_empty(),
@@ -640,45 +642,59 @@ pub fn detect_cycles(graph: &GraphData) -> CycleResult {
     }
 }
 
+/// The four books the cycle walk keeps, which every level of the recursion
+/// needs and none of them owns.
+///
+/// One struct rather than four `&mut` parameters: threading them
+/// individually put eight arguments on `detect_cycles_dfs`, of which half
+/// were bookkeeping the caller never reads.
+#[derive(Default)]
+struct CycleWalk {
+    /// Nodes the walk has entered, ever.
+    visited: HashMap<String, bool>,
+    /// Nodes on the current root-to-here path. A neighbour found `true`
+    /// here is a back edge, which is what a cycle is.
+    rec_stack: HashMap<String, bool>,
+    /// That same path in order, so a back edge can be turned into the
+    /// list of nodes it closes over.
+    path: Vec<String>,
+    /// Every cycle found so far, before de-duplication.
+    cycles: Vec<Vec<String>>,
+}
+
 fn detect_cycles_dfs(
     di_graph: &DiGraph<(), ()>,
     nodes: &[GraphNode],
     index_map: &HashMap<String, NodeIndex>,
     node_id: &str,
-    visited: &mut HashMap<String, bool>,
-    rec_stack: &mut HashMap<String, bool>,
-    path: &mut Vec<String>,
-    cycles: &mut Vec<Vec<String>>,
+    walk: &mut CycleWalk,
 ) {
-    visited.insert(node_id.to_string(), true);
-    rec_stack.insert(node_id.to_string(), true);
-    path.push(node_id.to_string());
+    walk.visited.insert(node_id.to_string(), true);
+    walk.rec_stack.insert(node_id.to_string(), true);
+    walk.path.push(node_id.to_string());
 
     if let Some(&idx) = index_map.get(node_id) {
         for neighbor_idx in di_graph.neighbors(idx) {
             let neighbor_id = nodes[neighbor_idx.index()].id.clone();
 
-            if !visited.contains_key(&neighbor_id) {
-                detect_cycles_dfs(
-                    di_graph, nodes, index_map,
-                    &neighbor_id, visited, rec_stack, path, cycles,
-                );
-            } else if rec_stack.get(&neighbor_id) == Some(&true) {
+            if !walk.visited.contains_key(&neighbor_id) {
+                detect_cycles_dfs(di_graph, nodes, index_map, &neighbor_id, walk);
+            } else if walk.rec_stack.get(&neighbor_id) == Some(&true) {
                 let mut cycle = vec![];
-                let start_pos = path.iter().position(|n| n == &neighbor_id).unwrap();
-                for (i, n) in path.iter().enumerate() {
+                let start_pos = walk.path.iter().position(|n| n == &neighbor_id).unwrap();
+                for (i, n) in walk.path.iter().enumerate() {
                     if i >= start_pos {
                         cycle.push(n.clone());
                     }
                 }
                 cycle.push(neighbor_id.clone());
-                cycles.push(cycle);
+                walk.cycles.push(cycle);
             }
         }
     }
 
-    path.pop();
-    rec_stack.insert(node_id.to_string(), false);
+    walk.path.pop();
+    walk.rec_stack.insert(node_id.to_string(), false);
 }
 // ---------------------------------------------------------------------------
 // Algorithm results

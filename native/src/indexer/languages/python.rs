@@ -5,8 +5,8 @@ use crate::indexer::common::{
     extract_return_type, first_string_arg, get_node_text, imports_in_stable_order};
 use crate::indexer::languages::{FileContext, LanguageIndexer};
 use crate::indexer::scope::{
-    base_type_name, looks_like_constant, looks_like_type, module_path, ImportScope, TypeEnv,
-    CTOR, MEMBER_SEP,
+    base_type_name, looks_like_constant, looks_like_type, module_path, CallSink, ImportScope,
+    TypeEnv, CTOR, MEMBER_SEP,
 };
 use crate::types::{
     Annotation, CallRef, ExportInfo, ImportInfo, ImportedItem, Param, Signature, Symbol,
@@ -487,55 +487,36 @@ fn extract_calls(
         }
     }
 
-    let mut calls = Vec::new();
-    let mut refs = Vec::new();
-    let mut uses = Vec::new();
-    let mut value_refs = Vec::new();
+    let mut sink = CallSink::new();
     if let Some(body) = node.child_by_field_name("body") {
-        collect_calls(
-            &body,
-            source,
-            ctx,
-            owner,
-            &mut env,
-            &mut calls,
-            &mut refs,
-            &mut uses,
-            &mut value_refs,
-        );
+        collect_calls(&body, source, ctx, owner, &mut env, &mut sink);
     }
-    (calls, refs, uses, value_refs)
+    sink.into_parts()
 }
 
-#[allow(clippy::too_many_arguments)]
 fn collect_calls(
     node: &Node,
     source: &[u8],
     ctx: &Ctx,
     owner: Option<&OwnerCtx>,
     env: &mut TypeEnv,
-    calls: &mut Vec<String>,
-    refs: &mut Vec<CallRef>,
-    uses: &mut Vec<String>,
-    value_refs: &mut Vec<String>,
+    sink: &mut CallSink,
 ) {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        record_constant_use(&child, source, ctx, uses);
+        record_constant_use(&child, source, ctx, &mut sink.uses);
         match child.kind() {
             "assignment" => record_local(&child, source, ctx, env),
             "call" => {
                 if let Some(r) = call_ref_for(&child, source, ctx, owner, env) {
-                    push_call(calls, &r.name);
-                    refs.push(r);
+                    push_call(&mut sink.calls, &r.name);
+                    sink.refs.push(r);
                 }
-                record_value_refs(&child, source, ctx, env, value_refs);
+                record_value_refs(&child, source, ctx, env, &mut sink.value_refs);
             }
             _ => {}
         }
-        collect_calls(
-            &child, source, ctx, owner, env, calls, refs, uses, value_refs,
-        );
+        collect_calls(&child, source, ctx, owner, env, sink);
     }
 }
 

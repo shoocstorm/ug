@@ -102,11 +102,6 @@ pure printer of it. `ug api` output verified byte-identical in a smoke run.)
       `ug api` command becomes a thin printer of it.
 - Verify: same as batch 1.
 
-### 8. `ug update` → `ug reindex` (user-visible; deferred)
-- [ ] NOT done this pass — needs hook.rs messages, help, api.rs table,
-      AGENTS.md, docs/API-REFERENCE.md §1.x, api-reference.html #tab-cli,
-      index.html, possibly install.sh — full §7.2 sync. Do as its own change.
-
 ## Gate — batches 1-7 (passed 2026-08-23)
 - [x] `cd native && cargo check --all-targets` — clean, no warnings
 - [x] `cd native && cargo nextest run --lib` — 607/607

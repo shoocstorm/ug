@@ -506,12 +506,29 @@ the bug looked fixed for Java repos and lived on everywhere else. When you fix
 one instance, **put the fix in the shared helper every caller already goes
 through** (`indexer::common::imports_in_stable_order`) rather than at the site.
 
+A fourth shape, found later in `detect_cycles`:
+
+```rust
+.collect::<HashSet<_>>().into_iter().collect()   // → de-duplicated, and shuffled
+```
+
+De-duplicating through a `HashSet` is the idiomatic one-liner, and it silently
+re-orders on the way out. `ug graph_cycles` returned three cycles in all six
+permutations across 40 builds of the same graph. Each *cycle* was already
+sorted — which is what made the de-duplication work at all — so the bug hid
+one level up, in the order of the list rather than the order inside its
+elements. **A `HashSet` used only to de-duplicate still needs a `sort()` after
+the `collect`**, for the same reason `HashMap::into_values` does.
+
 Rules:
 - Deriving an ordered output? Use `BTreeMap`/`BTreeSet`, or sort before emit.
 - `sort_unstable_*` + `truncate` ⇒ break ties on a stable key.
+- De-duplicating via `HashSet`? Sort what comes out of it.
 - The test is two runs compared, not one run inspected. And **two agreeing
   samples prove nothing** — the first two runs of an affected binary agreed,
   which sent an investigation down the wrong path for half an hour. Take five.
+  `cycles_test.rs::cycle_order_is_stable_across_runs` builds the same graph 21
+  times for exactly this reason.
 
 ### 9b. No unbounded work inside `async fn`
 

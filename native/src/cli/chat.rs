@@ -239,16 +239,16 @@ pub(crate) fn run_chat(args: &[String]) {
         match oneshot_query {
             Some(q) => {
                 if json_output || no_stream {
-                    let outcome = match chat::run_chat_rag(
-                        store.as_ref(),
-                        &embedder,
-                        &chat_client,
-                        repo_root.as_path(),
-                        &q,
-                        &[],
-                        opts_factory(&q),
-                        toolbox.as_ref(),
-                    )
+                    let outcome = match chat::run_chat_rag(chat::ChatRagRequest {
+                        store: store.as_ref(),
+                        embedder: &embedder,
+                        chat: &chat_client,
+                        repo_root: repo_root.as_path(),
+                        query: &q,
+                        history: &[],
+                        opts: opts_factory(&q),
+                        toolbox: toolbox.as_ref(),
+                    })
                     .await
                     {
                         Ok(o) => o,
@@ -268,14 +268,16 @@ pub(crate) fn run_chat(args: &[String]) {
                     }
                 } else {
                     let outcome = match stream_chat_turn(
-                        store.as_ref(),
-                        &embedder,
-                        &chat_client,
-                        repo_root.as_path(),
-                        &q,
-                        &[],
-                        opts_factory(&q),
-                        toolbox.as_ref(),
+                        chat::ChatRagRequest {
+                            store: store.as_ref(),
+                            embedder: &embedder,
+                            chat: &chat_client,
+                            repo_root: repo_root.as_path(),
+                            query: &q,
+                            history: &[],
+                            opts: opts_factory(&q),
+                            toolbox: toolbox.as_ref(),
+                        },
                         show_context,
                     )
                     .await
@@ -452,18 +454,12 @@ fn print_chat_outcome(query: &str, outcome: &chat::ChatRagOutcome, show_context:
 /// as they arrive. Falls back to a single chunk automatically when the
 /// provider doesn't stream (handled in `run_chat_rag_stream`).
 async fn stream_chat_turn(
-    store: &dyn KnowledgeStore,
-    embedder: &Embedder,
-    chat_client: &chat::ChatClient,
-    repo_root: &std::path::Path,
-    query: &str,
-    history: &[chat::ChatMessage],
-    opts: chat::ChatRagOptions<'_>,
-    toolbox: Option<&chat::ToolBox<'_>>,
+    req: chat::ChatRagRequest<'_>,
     show_context: bool,
 ) -> Result<chat::ChatRagOutcome, Box<dyn std::error::Error + Send + Sync>> {
     use std::io::Write;
 
+    let query = req.query;
     println!();
     println!("{C_BOLD}{C_CYAN}❯ Query:{C_RESET} {}", query);
     println!();
@@ -473,14 +469,7 @@ async fn stream_chat_turn(
     let mut in_reasoning = false;
     let mut printed_answer_header = false;
     let outcome = chat::run_chat_rag_stream(
-        store,
-        embedder,
-        chat_client,
-        repo_root,
-        query,
-        history,
-        opts,
-        toolbox,
+        req,
         |ctx| {
             // Clear the transient retrieval line before real output.
             eprint!("\r\x1b[2K");
@@ -603,9 +592,16 @@ async fn run_chat_repl<'a, F>(
 
         let opts = opts_factory(q);
         let outcome = if no_stream {
-            match chat::run_chat_rag(
-                store, embedder, chat_client, repo_root, q, &history, opts, toolbox,
-            )
+            match chat::run_chat_rag(chat::ChatRagRequest {
+                store,
+                embedder,
+                chat: chat_client,
+                repo_root,
+                query: q,
+                history: &history,
+                opts,
+                toolbox,
+            })
             .await
             {
                 Ok(o) => {
@@ -622,14 +618,16 @@ async fn run_chat_repl<'a, F>(
             }
         } else {
             match stream_chat_turn(
-                store,
-                embedder,
-                chat_client,
-                repo_root,
-                q,
-                &history,
-                opts,
-                toolbox,
+                chat::ChatRagRequest {
+                    store,
+                    embedder,
+                    chat: chat_client,
+                    repo_root,
+                    query: q,
+                    history: &history,
+                    opts,
+                    toolbox,
+                },
                 show_ctx,
             )
             .await

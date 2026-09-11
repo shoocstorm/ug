@@ -1519,23 +1519,50 @@ pub async fn retrieve_context(
     storage_search_kb(store, embedder, search_opts).await
 }
 
-/// Single-turn RAG: retrieve from `store`, then ask `chat` to answer
-/// `analyze`. `repo_root` is forwarded to the retrieval pipeline so it
-/// can resolve relative source paths when building snippets.
+/// Everything a RAG turn needs before the answer goes anywhere.
 ///
-/// `toolbox` is threaded through exactly as in [`run_chat_rag_stream`]:
-/// whether the caller wants the answer streamed is a transport choice and
-/// must not decide whether the model may consult the graph.
+/// [`run_chat_rag`] and [`run_chat_rag_stream`] take exactly this set and
+/// differ only in how the answer comes back, so it is one struct rather than
+/// eight positional arguments repeated in two signatures and at every call
+/// site. Streaming is a transport choice: a field added here reaches both
+/// paths, which is what keeps them from drifting.
+pub struct ChatRagRequest<'a> {
+    /// Where retrieval reads from.
+    pub store: &'a dyn KnowledgeStore,
+    /// Embeds the query for the dense half of the hybrid search.
+    pub embedder: &'a Embedder,
+    /// The provider that writes the answer.
+    pub chat: &'a ChatClient,
+    /// Forwarded to retrieval so it can resolve relative source paths when
+    /// building snippets.
+    pub repo_root: &'a std::path::Path,
+    /// The question being asked this turn.
+    pub query: &'a str,
+    /// Prior turns, oldest first.
+    pub history: &'a [ChatMessage],
+    /// Retrieval and prompt knobs.
+    pub opts: ChatRagOptions<'a>,
+    /// Graph tools the model may call. `None` withholds them — which is a
+    /// capability decision, never a consequence of how the caller
+    /// transports the answer.
+    pub toolbox: Option<&'a ToolBox<'a>>,
+}
+
+/// Single-turn RAG: retrieve from the store, then ask the provider to
+/// answer.
 pub async fn run_chat_rag(
-    store: &dyn KnowledgeStore,
-    embedder: &Embedder,
-    chat: &ChatClient,
-    repo_root: &std::path::Path,
-    query: &str,
-    history: &[ChatMessage],
-    opts: ChatRagOptions<'_>,
-    toolbox: Option<&ToolBox<'_>>,
+    req: ChatRagRequest<'_>,
 ) -> Result<ChatRagOutcome, Box<dyn std::error::Error + Send + Sync>> {
+    let ChatRagRequest {
+        store,
+        embedder,
+        chat,
+        repo_root,
+        query,
+        history,
+        opts,
+        toolbox,
+    } = req;
     let t_ret = std::time::Instant::now();
     let context = retrieve_context(store, embedder, repo_root, query, &opts).await?;
     let retrieval_ms = t_ret.elapsed().as_millis();
@@ -1594,14 +1621,7 @@ pub async fn run_chat_rag(
 /// callers get streaming when the provider supports it and identical
 /// behaviour when it doesn't.
 pub async fn run_chat_rag_stream<C, F, T>(
-    store: &dyn KnowledgeStore,
-    embedder: &Embedder,
-    chat: &ChatClient,
-    repo_root: &std::path::Path,
-    query: &str,
-    history: &[ChatMessage],
-    opts: ChatRagOptions<'_>,
-    toolbox: Option<&ToolBox<'_>>,
+    req: ChatRagRequest<'_>,
     mut on_context: C,
     on_tool: T,
     mut on_delta: F,
@@ -1611,6 +1631,16 @@ where
     T: FnMut(ToolEvent),
     F: FnMut(StreamDelta),
 {
+    let ChatRagRequest {
+        store,
+        embedder,
+        chat,
+        repo_root,
+        query,
+        history,
+        opts,
+        toolbox,
+    } = req;
     let t_ret = std::time::Instant::now();
     let context = retrieve_context(store, embedder, repo_root, query, &opts).await?;
     let retrieval_ms = t_ret.elapsed().as_millis();

@@ -74,6 +74,7 @@ mod bm25_test;
 mod boundary_test;
 mod centrality_test;
 mod cross_file_resolution_test;
+mod cycles_test;
 mod embed_concurrency_test;
 mod enum_names_test;
 mod facts_test;

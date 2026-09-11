@@ -395,16 +395,16 @@ pub(crate) async fn api_chat(
         max_result_chars: 6_000,
     });
 
-    let outcome = chat::run_chat_rag(
-        &*db,
-        &embedder,
-        &chat_client,
-        repo_root.as_path(),
-        &body.query,
-        &history_owned,
+    let outcome = chat::run_chat_rag(chat::ChatRagRequest {
+        store: &*db,
+        embedder: &embedder,
+        chat: &chat_client,
+        repo_root: repo_root.as_path(),
+        query: &body.query,
+        history: &history_owned,
         opts,
-        toolbox.as_ref(),
-    )
+        toolbox: toolbox.as_ref(),
+    })
     .await;
     drop(_permit);
 
@@ -537,14 +537,16 @@ pub(crate) fn api_chat_stream(
         let emit_tool = emit;
         let emit_delta = emit;
         let outcome = chat::run_chat_rag_stream(
-            &*db,
-            &embedder,
-            &chat_client,
-            repo_root.as_path(),
-            &body.query,
-            &history_owned,
-            opts,
-            toolbox.as_ref(),
+            chat::ChatRagRequest {
+                store: &*db,
+                embedder: &embedder,
+                chat: &chat_client,
+                repo_root: repo_root.as_path(),
+                query: &body.query,
+                history: &history_owned,
+                opts,
+                toolbox: toolbox.as_ref(),
+            },
             |ctx| {
                 emit_ctx(
                     "context",

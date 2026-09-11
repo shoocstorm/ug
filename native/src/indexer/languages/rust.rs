@@ -24,8 +24,8 @@ use crate::indexer::common::{
     annotation_args, calculate_nesting, extract_return_type, first_string_arg, get_node_text, imports_in_stable_order};
 use crate::indexer::languages::{FileContext, LanguageIndexer};
 use crate::indexer::scope::{
-    base_type_name, looks_like_constant, looks_like_type, module_path, ImportScope, TypeEnv,
-    CTOR, MEMBER_SEP,
+    base_type_name, looks_like_constant, looks_like_type, module_path, CallSink, ImportScope,
+    TypeEnv, CTOR, MEMBER_SEP,
 };
 use crate::types::{
     Annotation, CallRef, ExportInfo, ImportInfo, ImportedItem, Param, Signature, Symbol,
@@ -570,33 +570,24 @@ fn extract_calls(
         }
     }
 
-    let mut calls = Vec::new();
-    let mut refs = Vec::new();
-    let mut uses = Vec::new();
-    let mut value_refs = Vec::new();
+    let mut sink = CallSink::new();
     if let Some(body) = node.child_by_field_name("body") {
-        collect_calls(
-            &body, source, ctx, imp, &mut env, &mut calls, &mut refs, &mut uses, &mut value_refs,
-        );
+        collect_calls(&body, source, ctx, imp, &mut env, &mut sink);
     }
-    (calls, refs, uses, value_refs)
+    sink.into_parts()
 }
 
-#[allow(clippy::too_many_arguments)]
 fn collect_calls(
     node: &Node,
     source: &[u8],
     ctx: &Ctx,
     imp: Option<&ImplCtx>,
     env: &mut TypeEnv,
-    calls: &mut Vec<String>,
-    refs: &mut Vec<CallRef>,
-    uses: &mut Vec<String>,
-    value_refs: &mut Vec<String>,
+    sink: &mut CallSink,
 ) {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        record_constant_use(&child, source, ctx, uses);
+        record_constant_use(&child, source, ctx, &mut sink.uses);
         match child.kind() {
             // Locals are recorded as they are met, so a binding halfway down
             // a body types the calls below it. No block scoping — see
@@ -604,10 +595,10 @@ fn collect_calls(
             "let_declaration" => record_local(&child, source, ctx, env),
             "call_expression" => {
                 if let Some(r) = call_ref_for(&child, source, ctx, imp, env) {
-                    push_call(calls, &r.name);
-                    refs.push(r);
+                    push_call(&mut sink.calls, &r.name);
+                    sink.refs.push(r);
                 }
-                record_value_refs(&child, source, ctx, env, value_refs);
+                record_value_refs(&child, source, ctx, env, &mut sink.value_refs);
             }
             // `Foo { .. }` is the one construction form Rust spells
             // unambiguously. `Foo::new(..)` is a convention, not a language
@@ -616,8 +607,8 @@ fn collect_calls(
             "struct_expression" => {
                 if let Some(ty) = get_node_text(child.child_by_field_name("name"), source) {
                     let bare = base_type_name(&ty);
-                    push_call(calls, bare);
-                    refs.push(CallRef {
+                    push_call(&mut sink.calls, bare);
+                    sink.refs.push(CallRef {
                         name: CTOR.to_string(),
                         owner_type: ctx.scope.lookup(bare),
                         argc: 0,
@@ -635,8 +626,8 @@ fn collect_calls(
             "macro_invocation" => {
                 if let Some(name) = get_node_text(child.child_by_field_name("macro"), source) {
                     let bare = name.rsplit("::").next().unwrap_or(&name).to_string();
-                    push_call(calls, &bare);
-                    refs.push(CallRef {
+                    push_call(&mut sink.calls, &bare);
+                    sink.refs.push(CallRef {
                         qualified: ctx.scope.resolve_path(&name),
                         name: bare,
                         owner_type: None,
@@ -651,9 +642,7 @@ fn collect_calls(
             }
             _ => {}
         }
-        collect_calls(
-            &child, source, ctx, imp, env, calls, refs, uses, value_refs,
-        );
+        collect_calls(&child, source, ctx, imp, env, sink);
     }
 }
 
