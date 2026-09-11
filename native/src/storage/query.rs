@@ -1162,3 +1162,247 @@ mod budget_tests {
         assert_eq!(per_item_cap(12_000, 0), 12_000, "k=0 must not divide by zero");
     }
 }
+
+#[cfg(test)]
+mod rerank_tests {
+    //! MMR reranking and the line slicer both sit on the read path and both
+    //! fail quietly.
+    //!
+    //! MMR is the fallback ranking for any backend without native PageRank
+    //! (Neo4j without GDS), and `/api/chat/config` publishes which of the two
+    //! ran. Its whole job is to stop a result set being eight near-copies of
+    //! one thing: `lambda` trades relevance against diversity, and at either
+    //! extreme the behaviour has to be exactly what the name says, because a
+    //! reranker that silently ignores lambda still returns plausible results.
+
+    use super::*;
+    use crate::storage::db::NodeRow;
+
+    fn hit(id: &str, vector: Vec<f32>) -> SearchHit {
+        SearchHit {
+            node: NodeRow {
+                id: id.to_string(),
+                name: id.to_string(),
+                node_type: "Function".to_string(),
+                description: String::new(),
+                file: "src/a.rs".to_string(),
+                start_line: 1,
+                end_line: 2,
+                last_update_at: 0,
+                node_text: String::new(),
+                vector,
+                code: String::new(),
+                file_hash: String::new(),
+                facts: Default::default(),
+            },
+            distance: 0.0,
+        }
+    }
+
+    fn ids(hits: &[SearchHit]) -> Vec<&str> {
+        hits.iter().map(|h| h.node.id.as_str()).collect()
+    }
+
+    // ── the arithmetic underneath ───────────────────────────────────────────
+
+    #[test]
+    fn the_squared_norm_is_the_sum_of_squares() {
+        assert_eq!(sum_squares(&[3.0, 4.0]), 25.0);
+        assert_eq!(sum_squares(&[]), 0.0);
+    }
+
+    #[test]
+    fn identical_directions_are_perfectly_similar() {
+        let a = [1.0, 0.0];
+        let b = [5.0, 0.0];
+        let sim = cosine_pre(&a, &b, sum_squares(&a), sum_squares(&b));
+        assert!((sim - 1.0).abs() < 1e-6, "got {sim}");
+    }
+
+    #[test]
+    fn orthogonal_directions_are_not_similar_at_all() {
+        let a = [1.0, 0.0];
+        let b = [0.0, 1.0];
+        assert_eq!(cosine_pre(&a, &b, sum_squares(&a), sum_squares(&b)), 0.0);
+    }
+
+    #[test]
+    fn a_mismatched_or_empty_vector_scores_zero_rather_than_panicking() {
+        // Rows written before an embedding ran carry an empty vector, and a
+        // model swap leaves rows of the wrong width. Neither may index out of
+        // bounds on the read path.
+        assert_eq!(cosine_pre(&[1.0, 0.0], &[1.0], 1.0, 1.0), 0.0);
+        assert_eq!(cosine_pre(&[], &[1.0], 0.0, 1.0), 0.0);
+        assert_eq!(
+            cosine_pre(&[0.0, 0.0], &[1.0, 0.0], 0.0, 1.0),
+            0.0,
+            "a zero vector has no direction to compare"
+        );
+    }
+
+    // ── what the reranker picks ─────────────────────────────────────────────
+
+    #[test]
+    fn nothing_in_means_nothing_out() {
+        assert!(mmr_rerank(&[1.0, 0.0], Vec::new(), 5, 0.5).is_empty());
+        assert!(
+            mmr_rerank(&[1.0, 0.0], vec![hit("a", vec![1.0, 0.0])], 0, 0.5).is_empty(),
+            "asking for zero results returns zero"
+        );
+    }
+
+    #[test]
+    fn k_bounds_how_many_come_back() {
+        let candidates = vec![
+            hit("a", vec![1.0, 0.0]),
+            hit("b", vec![0.0, 1.0]),
+            hit("c", vec![1.0, 1.0]),
+        ];
+        assert_eq!(mmr_rerank(&[1.0, 0.0], candidates, 2, 0.5).len(), 2);
+    }
+
+    #[test]
+    fn asking_for_more_than_exists_returns_what_exists() {
+        let candidates = vec![hit("a", vec![1.0, 0.0]), hit("b", vec![0.0, 1.0])];
+        assert_eq!(mmr_rerank(&[1.0, 0.0], candidates, 99, 0.5).len(), 2);
+    }
+
+    #[test]
+    fn pure_relevance_ranks_by_similarity_to_the_query_alone() {
+        // lambda = 1: diversity is switched off entirely, so this is an
+        // ordinary similarity sort and near-duplicates are allowed to stack.
+        let query = [1.0, 0.0];
+        let candidates = vec![
+            hit("far", vec![0.0, 1.0]),
+            hit("near", vec![1.0, 0.0]),
+            hit("close", vec![0.9, 0.1]),
+        ];
+        let out = mmr_rerank(&query, candidates, 3, 1.0);
+        assert_eq!(ids(&out), vec!["near", "close", "far"]);
+    }
+
+    #[test]
+    fn diversity_breaks_up_a_cluster_of_near_duplicates() {
+        // lambda = 0: relevance is switched off, so after the first pick the
+        // reranker takes whatever is least like what it already has. The
+        // second result must not be the twin of the first.
+        let query = [1.0, 0.0];
+        let candidates = vec![
+            hit("first", vec![1.0, 0.0]),
+            hit("twin", vec![1.0, 0.0]),
+            hit("different", vec![0.0, 1.0]),
+        ];
+        let out = mmr_rerank(&query, candidates, 2, 0.0);
+        assert_eq!(
+            out[1].node.id, "different",
+            "a duplicate of the first pick is the one thing MMR exists to skip"
+        );
+    }
+
+    #[test]
+    fn at_zero_lambda_even_the_first_pick_ignores_relevance() {
+        // Worth knowing, and not what you would guess. Nothing has been
+        // picked yet, so the diversity term is zero for every candidate on
+        // the first round — and at lambda = 0 the relevance term is zeroed
+        // too, leaving every score equal. The loop keeps its first strict
+        // improvement over `f32::MIN`, so the first pick is simply the first
+        // candidate in input order, however irrelevant it is.
+        //
+        // Pure diversity therefore means "ignore the query", not "start from
+        // the best hit and then spread out". Anything wanting the latter has
+        // to pass a lambda above zero.
+        let query = [1.0, 0.0];
+        let candidates = vec![hit("far", vec![0.0, 1.0]), hit("near", vec![1.0, 0.0])];
+        assert_eq!(mmr_rerank(&query, candidates, 1, 0.0)[0].node.id, "far");
+    }
+
+    #[test]
+    fn any_lambda_above_zero_puts_the_most_relevant_hit_first() {
+        // The contrast with the case above: as soon as relevance carries any
+        // weight at all it decides the opening pick, because the diversity
+        // term is zero for everyone on the first round.
+        let query = [1.0, 0.0];
+        for lambda in [0.01, 0.5, 1.0] {
+            let candidates = vec![hit("far", vec![0.0, 1.0]), hit("near", vec![1.0, 0.0])];
+            assert_eq!(
+                mmr_rerank(&query, candidates, 1, lambda)[0].node.id,
+                "near",
+                "lambda {lambda}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_lambda_outside_its_range_is_clamped_rather_than_rejected() {
+        let query = [1.0, 0.0];
+        let cands = || {
+            vec![
+                hit("first", vec![1.0, 0.0]),
+                hit("twin", vec![1.0, 0.0]),
+                hit("different", vec![0.0, 1.0]),
+            ]
+        };
+        // Above 1 behaves as 1 (pure relevance), below 0 as 0 (pure
+        // diversity). A caller passing a percentage by mistake gets a sane
+        // ranking rather than NaN-driven ordering.
+        assert_eq!(
+            ids(&mmr_rerank(&query, cands(), 3, 100.0)),
+            ids(&mmr_rerank(&query, cands(), 3, 1.0))
+        );
+        assert_eq!(
+            ids(&mmr_rerank(&query, cands(), 3, -5.0)),
+            ids(&mmr_rerank(&query, cands(), 3, 0.0))
+        );
+    }
+
+    #[test]
+    fn candidates_with_no_vectors_are_still_returned_in_order() {
+        // An un-embedded store yields rows with empty vectors. Every
+        // similarity is then 0, so the reranker must still return k of them
+        // rather than looping or dropping them.
+        let candidates = vec![hit("a", vec![]), hit("b", vec![]), hit("c", vec![])];
+        let out = mmr_rerank(&[1.0, 0.0], candidates, 2, 0.5);
+        assert_eq!(out.len(), 2);
+    }
+
+    // ── slicing source out of a file ────────────────────────────────────────
+
+    #[test]
+    fn a_line_range_is_inclusive_at_both_ends() {
+        let src = "one\ntwo\nthree\nfour\n";
+        assert_eq!(slice_lines(src, 2, 3).as_deref(), Some("two\nthree\n"));
+        assert_eq!(slice_lines(src, 1, 1).as_deref(), Some("one\n"));
+    }
+
+    #[test]
+    fn line_numbers_are_one_based() {
+        // An off-by-one here shows the agent the line above the symbol it
+        // asked for, which reads as a correct answer to a different question.
+        let src = "first\nsecond\n";
+        assert_eq!(slice_lines(src, 1, 1).as_deref(), Some("first\n"));
+    }
+
+    #[test]
+    fn a_range_past_the_end_yields_what_exists() {
+        let src = "one\ntwo\n";
+        assert_eq!(slice_lines(src, 2, 999).as_deref(), Some("two\n"));
+    }
+
+    #[test]
+    fn a_range_entirely_past_the_end_yields_nothing() {
+        // The index can be ahead of a file that shrank, so this is a real
+        // case rather than a defensive one.
+        assert_eq!(slice_lines("one\ntwo\n", 50, 60), None);
+        assert_eq!(slice_lines("", 1, 5), None);
+    }
+
+    #[test]
+    fn an_inverted_range_yields_nothing_rather_than_the_whole_file() {
+        assert_eq!(slice_lines("one\ntwo\nthree\n", 3, 1), None);
+    }
+
+    #[test]
+    fn a_file_with_no_trailing_newline_still_slices() {
+        assert_eq!(slice_lines("one\ntwo", 2, 2).as_deref(), Some("two\n"));
+    }
+}

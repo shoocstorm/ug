@@ -230,3 +230,109 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod index_tests {
+    //! The command index, and the one thing it must not do: forget a command.
+    //!
+    //! `ug help` is how a person finds out what exists. A command that is
+    //! dispatched but unlisted is invisible, and nothing fails — so the list
+    //! is checked against the dispatcher itself rather than against a copy of
+    //! it here. Five commands are unlisted on purpose; they are named below
+    //! with their reason, so a sixth appearing is a decision someone has to
+    //! make rather than an accident.
+
+    use super::*;
+
+    /// Dispatched but deliberately absent from `ug help`, and why.
+    ///
+    /// Keep this in step with the comment in [`print_help`]. Adding a name
+    /// here is the way to say "unlisted on purpose"; the test fails until
+    /// one or the other happens.
+    const UNLISTED_ON_PURPOSE: &[(&str, &str)] = &[
+        ("index", "a stage `gen` runs; an internal seam"),
+        ("graph", "a stage `gen` runs; an internal seam"),
+        ("ingest", "a stage `gen` runs; `gen --no-ingest` covers the one reason to call it"),
+        ("demo", "publishes the website's live demo, not for end users or agents"),
+        ("semantic_search", "retired alias for `search --no-expand`, kept for old scripts"),
+    ];
+
+    fn source(rel: &str) -> String {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
+        std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
+    }
+
+    /// Every subcommand name the dispatcher answers to, read out of the real
+    /// match rather than transcribed.
+    fn dispatched() -> Vec<String> {
+        let src = source("src/cli/mod.rs");
+        let body = src
+            .split_once("fn dispatch(")
+            .map(|(_, rest)| rest)
+            .expect("dispatch fn exists — has it been renamed?");
+        let mut names: Vec<String> = Vec::new();
+        for line in body.lines() {
+            let t = line.trim();
+            let Some(rest) = t.strip_prefix('"') else { continue };
+            let Some((name, after)) = rest.split_once('"') else { continue };
+            if after.trim_start().starts_with("=>") && !names.iter().any(|n| n == name) {
+                names.push(name.to_string());
+            }
+        }
+        assert!(names.len() > 20, "parsed too few arms: {names:?}");
+        names
+    }
+
+    #[test]
+    fn every_dispatched_command_is_listed_or_deliberately_not() {
+        let help = source("src/cli/help.rs");
+        for name in dispatched() {
+            let listed = help.contains(&format!("cmd(\"{name}\""))
+                || help.contains(&format!("cmd_hi(\"{name}\""));
+            let excused = UNLISTED_ON_PURPOSE.iter().any(|(n, _)| *n == name);
+            assert!(
+                listed || excused,
+                "`ug {name}` is dispatched but absent from `ug help`. Either list it, \
+                 or add it to UNLISTED_ON_PURPOSE with the reason."
+            );
+        }
+    }
+
+    #[test]
+    fn nothing_is_excused_that_the_dispatcher_no_longer_answers() {
+        // The other direction: a command removed from the dispatcher must not
+        // leave a stale excuse behind, or the list above stops describing
+        // anything real.
+        let all = dispatched();
+        for (name, _) in UNLISTED_ON_PURPOSE {
+            assert!(
+                all.iter().any(|n| n == name),
+                "`{name}` is excused from the help index but is no longer dispatched"
+            );
+        }
+    }
+
+    #[test]
+    fn nothing_is_both_listed_and_excused() {
+        let help = source("src/cli/help.rs");
+        for (name, _) in UNLISTED_ON_PURPOSE {
+            let listed = help.contains(&format!("cmd(\"{name}\""))
+                || help.contains(&format!("cmd_hi(\"{name}\""));
+            assert!(
+                !listed,
+                "`{name}` is listed in the help and also excused from it — one of the two is stale"
+            );
+        }
+    }
+
+    #[test]
+    fn the_help_index_renders_without_panicking() {
+        // It is a long run of formatting with colour escapes woven through.
+        // Nothing here asserts wording; this is the smoke check that the
+        // whole page can be produced at all.
+        print_help();
+        print_logo();
+    }
+
+}

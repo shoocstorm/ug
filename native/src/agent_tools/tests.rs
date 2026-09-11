@@ -1439,3 +1439,1410 @@ fn renderers_never_leak_the_other_surfaces_markup() {
         );
     }
 }
+
+// ── shortest_path ───────────────────────────────────────────────────────────
+//
+// Edges are directed, and the reverse-direction retry is the part that has to
+// stay honest: an answer that walked backwards is still useful ("these two are
+// connected"), but reporting it as a forward path would tell an agent that a
+// change to the source can reach the target when the dependency runs the other
+// way. So every reversed result is flagged, and `strict` turns the retry off.
+
+#[test]
+fn a_forward_path_is_found_and_not_flagged_as_reversed() {
+    let g = fixture();
+    let r = shortest_path(
+        &g,
+        "function:src/a.rs:1:caller",
+        "function:src/a.rs:7:callee",
+        false,
+    );
+    assert!(r.found);
+    assert!(!r.reversed, "this path runs the way the edge points");
+    assert_eq!(r.length, Some(1));
+    assert_eq!(
+        r.path,
+        vec!["function:src/a.rs:1:caller", "function:src/a.rs:7:callee"]
+    );
+}
+
+#[test]
+fn a_backwards_query_is_answered_but_flagged() {
+    let g = fixture();
+    let r = shortest_path(
+        &g,
+        "function:src/a.rs:7:callee",
+        "function:src/a.rs:1:caller",
+        false,
+    );
+    assert!(r.found);
+    assert!(
+        r.reversed,
+        "the walk went against the edges and must say so"
+    );
+    // The path is reported in the direction it was actually walked.
+    assert_eq!(
+        r.path,
+        vec!["function:src/a.rs:1:caller", "function:src/a.rs:7:callee"]
+    );
+}
+
+#[test]
+fn strict_refuses_to_walk_backwards() {
+    let g = fixture();
+    let r = shortest_path(
+        &g,
+        "function:src/a.rs:7:callee",
+        "function:src/a.rs:1:caller",
+        true,
+    );
+    assert!(!r.found, "strict asks a directed question and takes no for an answer");
+    assert!(!r.reversed);
+    assert_eq!(r.length, None, "no path means no length, not zero");
+    assert!(r.path.is_empty());
+}
+
+#[test]
+fn every_node_on_the_path_is_resolved_to_a_symbol() {
+    // The ids alone are not enough for an agent to act on — it needs the
+    // name, type and location to decide what to read next.
+    let g = fixture();
+    let r = shortest_path(
+        &g,
+        "function:src/a.rs:1:caller",
+        "function:src/a.rs:7:callee",
+        false,
+    );
+    assert_eq!(r.nodes.len(), r.path.len());
+    assert_eq!(r.nodes[0].name, "caller");
+    assert_eq!(r.nodes[1].name, "callee");
+}
+
+#[test]
+fn an_unknown_endpoint_finds_nothing_rather_than_panicking() {
+    let g = fixture();
+    let r = shortest_path(&g, "function:src/a.rs:1:caller", "nope:does:not:exist", false);
+    assert!(!r.found);
+    assert!(r.nodes.is_empty());
+}
+
+#[test]
+fn a_node_to_itself_is_a_zero_hop_path() {
+    let g = fixture();
+    let id = "function:src/a.rs:1:caller";
+    let r = shortest_path(&g, id, id, false);
+    assert!(r.found);
+    assert_eq!(r.length, Some(0));
+    assert_eq!(r.path, vec![id]);
+}
+
+#[test]
+fn rendering_a_found_path_names_both_ends_and_the_hop_count() {
+    let g = fixture();
+    let r = shortest_path(
+        &g,
+        "function:src/a.rs:1:caller",
+        "function:src/a.rs:7:callee",
+        false,
+    );
+    let out = render_shortest_path(&r, Render::Markdown, false);
+    assert!(out.contains("caller"), "{out}");
+    assert!(out.contains("callee"), "{out}");
+    assert!(out.contains("1 hop(s)"), "{out}");
+    assert!(out.contains("get_code"), "the next action must be named: {out}");
+}
+
+#[test]
+fn rendering_a_reversed_path_says_it_went_backwards() {
+    // Silently rendering this like a forward path is the misreading the
+    // flag exists to prevent.
+    let g = fixture();
+    let r = shortest_path(
+        &g,
+        "function:src/a.rs:7:callee",
+        "function:src/a.rs:1:caller",
+        false,
+    );
+    let out = render_shortest_path(&r, Render::Markdown, false);
+    assert!(out.contains("reverse direction"), "{out}");
+    assert!(out.contains("no forward path existed"), "{out}");
+}
+
+#[test]
+fn rendering_a_miss_explains_which_question_was_asked() {
+    let g = fixture();
+    let miss = shortest_path(&g, "function:src/a.rs:7:callee", "function:src/a.rs:1:caller", true);
+
+    let strict_out = render_shortest_path(&miss, Render::Markdown, true);
+    assert!(
+        strict_out.contains("reverse direction not tried"),
+        "a strict miss is a narrower claim than a plain one: {strict_out}"
+    );
+
+    let loose_out = render_shortest_path(&miss, Render::Markdown, false);
+    assert!(loose_out.contains("in either direction"), "{loose_out}");
+    // The hint has to name a command that exists.
+    assert!(loose_out.contains("traverse"), "{loose_out}");
+}
+
+#[test]
+fn both_render_styles_produce_the_same_facts() {
+    let g = fixture();
+    let r = shortest_path(
+        &g,
+        "function:src/a.rs:1:caller",
+        "function:src/a.rs:7:callee",
+        false,
+    );
+    for style in [Render::Ansi, Render::Markdown] {
+        let out = render_shortest_path(&r, style, false);
+        assert!(out.contains("caller") && out.contains("callee"), "{out}");
+        assert!(out.contains("1 hop(s)"), "{out}");
+    }
+}
+
+// ── project_overview ────────────────────────────────────────────────────────
+//
+// The orientation call an agent makes first in an unfamiliar repo. Two of its
+// counts are opinionated rather than mechanical, and both would look correct
+// if they broke: `Contains` is excluded from inbound degree so a hotspot means
+// "much code depends on this" rather than "this file is big", and File and
+// Folder nodes are excluded from the per-file symbol tally so a file does not
+// count itself.
+
+/// `fixture()` plus a second file, a `References` edge into the callee from
+/// outside, and metrics on both functions — enough for every tally to have
+/// something to get wrong.
+fn overview_fixture() -> GraphData {
+    let mut g = fixture();
+    g.nodes.push(node(
+        "file:src/b.rs",
+        "b.rs",
+        GraphNodeType::File,
+        "src/b.rs",
+        None,
+    ));
+    let mut other = node(
+        "function:src/b.rs:1:other",
+        "other",
+        GraphNodeType::Function,
+        "src/b.rs",
+        Some((1, 3)),
+    );
+    other.metrics = Some(crate::types::SymbolMetrics {
+        loc: 3,
+        params: 1,
+        max_nesting: 1,
+        ..Default::default()
+    });
+    g.nodes.push(other);
+
+    if let Some(caller) = g
+        .nodes
+        .iter_mut()
+        .find(|n| n.id == "function:src/a.rs:1:caller")
+    {
+        caller.metrics = Some(crate::types::SymbolMetrics {
+            loc: 40,
+            params: 3,
+            max_nesting: 4,
+            ..Default::default()
+        });
+    }
+
+    g.edges.push(edge(
+        "function:src/b.rs:1:other",
+        "function:src/a.rs:7:callee",
+        GraphEdgeType::References,
+    ));
+    g.edges.push(edge(
+        "file:src/b.rs",
+        "function:src/b.rs:1:other",
+        GraphEdgeType::Contains,
+    ));
+    g
+}
+
+#[test]
+fn an_overview_counts_the_whole_graph() {
+    let g = overview_fixture();
+    let r = project_overview(&g, Path::new("/repo"), Path::new("/repo/graph.json"));
+    assert_eq!(r.node_count, g.nodes.len());
+    assert_eq!(r.edge_count, g.edges.len());
+    assert_eq!(r.repo_root, "/repo");
+    assert_eq!(r.graph_path, "/repo/graph.json");
+}
+
+#[test]
+fn node_and_edge_types_are_tallied_biggest_first() {
+    let g = overview_fixture();
+    let r = project_overview(&g, Path::new("/repo"), Path::new("/g.json"));
+
+    let functions = r.node_types.iter().find(|t| t.name == "Function").expect("functions");
+    assert_eq!(functions.count, 3);
+    let files = r.node_types.iter().find(|t| t.name == "File").expect("files");
+    assert_eq!(files.count, 2);
+    assert!(
+        r.node_types[0].count >= r.node_types[1].count,
+        "tallies are ordered by count"
+    );
+
+    let contains = r.edge_types.iter().find(|t| t.name == "Contains").expect("contains");
+    assert_eq!(contains.count, 2);
+}
+
+#[test]
+fn structural_containment_does_not_make_something_a_hotspot() {
+    // A file `Contains` every symbol in it, so counting those edges would
+    // rank files by size and call it dependency. The callee here is reached
+    // by a real Calls and a real References edge; the file nodes are reached
+    // only by Contains and must not appear.
+    let g = overview_fixture();
+    let r = project_overview(&g, Path::new("/repo"), Path::new("/g.json"));
+
+    let top = r.hotspots.first().expect("a hotspot");
+    assert_eq!(top.symbol.id, "function:src/a.rs:7:callee");
+    assert_eq!(top.in_degree, 2, "one Calls plus one References");
+    assert!(
+        !r.hotspots.iter().any(|h| h.symbol.id.starts_with("file:")),
+        "a file reached only by Contains is not depended upon"
+    );
+}
+
+#[test]
+fn a_file_does_not_count_itself_among_its_symbols() {
+    // File and Folder nodes carry a `file` too, so including them would add
+    // one phantom symbol to every file in the repo.
+    let g = overview_fixture();
+    let r = project_overview(&g, Path::new("/repo"), Path::new("/g.json"));
+
+    let a = r.biggest_files.iter().find(|t| t.name == "src/a.rs").expect("a.rs");
+    assert_eq!(a.count, 2, "caller and callee, not the File node as well");
+    let b = r.biggest_files.iter().find(|t| t.name == "src/b.rs").expect("b.rs");
+    assert_eq!(b.count, 1);
+}
+
+#[test]
+fn the_complexity_list_leads_with_the_longest_symbol() {
+    let g = overview_fixture();
+    let r = project_overview(&g, Path::new("/repo"), Path::new("/g.json"));
+
+    assert_eq!(r.complexity.len(), 2, "only symbols carrying metrics appear");
+    assert_eq!(r.complexity[0].symbol.name, "caller");
+    assert_eq!(r.complexity[0].loc, 40);
+    assert_eq!(r.complexity[1].symbol.name, "other");
+}
+
+#[test]
+fn an_overview_of_an_empty_graph_reports_zero_rather_than_failing() {
+    let empty = GraphData {
+        nodes: Vec::new(),
+        edges: Vec::new(),
+        stats: None,
+        resolution: None,
+    };
+    let r = project_overview(&empty, Path::new("/repo"), Path::new("/g.json"));
+    assert_eq!((r.node_count, r.edge_count), (0, 0));
+    assert!(r.hotspots.is_empty() && r.complexity.is_empty());
+    assert!(r.index.is_none(), "no stats means no index summary, not a zeroed one");
+}
+
+#[test]
+fn rendering_an_overview_names_the_repo_and_its_hotspots() {
+    let g = overview_fixture();
+    let r = project_overview(&g, Path::new("/repo"), Path::new("/g.json"));
+    for style in [Render::Ansi, Render::Markdown] {
+        let out = render_project_overview(&r, style);
+        assert!(out.contains("Project overview"), "{out}");
+        assert!(out.contains("/repo"), "{out}");
+        assert!(out.contains("callee"), "the top hotspot is the point: {out}");
+    }
+}
+
+// ── traverse: the knobs, and what happens at their edges ────────────────────
+//
+// The existing cases cover direction, edge-type filtering and pattern seeds.
+// What was left are the bounds and the degenerate inputs — the places where a
+// wrong answer is a plausible one. A hop count that silently became 5 walks a
+// far larger neighbourhood than asked for and returns a believable result; a
+// `both` direction that behaves as `outbound` simply omits every caller.
+
+/// A three-hop chain plus a branch, so hop bounds have something to bite on.
+///   root → mid → leaf
+///   root → side
+fn chain_fixture() -> GraphData {
+    let f = |id: &str, name: &str| node(id, name, GraphNodeType::Function, "src/c.rs", Some((1, 2)));
+    GraphData {
+        nodes: vec![
+            f("fn:root", "root"),
+            f("fn:mid", "mid"),
+            f("fn:leaf", "leaf"),
+            f("fn:side", "side"),
+        ],
+        edges: vec![
+            edge("fn:root", "fn:mid", GraphEdgeType::Calls),
+            edge("fn:mid", "fn:leaf", GraphEdgeType::Calls),
+            edge("fn:root", "fn:side", GraphEdgeType::Calls),
+        ],
+        stats: None,
+        resolution: None,
+    }
+}
+
+fn walked(g: &GraphData, p: TraverseParams) -> Vec<String> {
+    let mut names: Vec<String> = traverse(g, &p)
+        .nodes
+        .iter()
+        .map(|n| n.symbol.name.clone())
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn hops_bound_how_far_the_walk_reaches() {
+    let g = chain_fixture();
+    let from_root = |hops| {
+        walked(
+            &g,
+            TraverseParams {
+                node_id: vec!["fn:root".into()],
+                hops: Some(hops),
+                ..Default::default()
+            },
+        )
+    };
+    assert_eq!(from_root(1), vec!["mid", "root", "side"]);
+    assert_eq!(from_root(2), vec!["leaf", "mid", "root", "side"]);
+}
+
+#[test]
+fn a_hop_count_outside_its_range_is_clamped_not_rejected() {
+    let g = chain_fixture();
+    // Zero would otherwise return the seed alone, which reads as "nothing
+    // depends on this". The floor of 1 means the answer is always a walk.
+    let zero = walked(
+        &g,
+        TraverseParams {
+            node_id: vec!["fn:root".into()],
+            hops: Some(0),
+            ..Default::default()
+        },
+    );
+    assert!(zero.contains(&"mid".to_string()), "hops=0 is clamped up to 1: {zero:?}");
+
+    // And the ceiling holds, so a huge number cannot walk an entire repo.
+    let huge = walked(
+        &g,
+        TraverseParams {
+            node_id: vec!["fn:root".into()],
+            hops: Some(9_999),
+            ..Default::default()
+        },
+    );
+    assert_eq!(huge.len(), 4, "the whole chain, and no error: {huge:?}");
+}
+
+#[test]
+fn the_default_direction_is_outbound() {
+    let g = chain_fixture();
+    // Not `both`. Asking what a symbol depends on is the common question,
+    // and `find_usages` is the pinned-inbound tool for the other one.
+    let r = traverse(
+        &g,
+        &TraverseParams {
+            node_id: vec!["fn:mid".into()],
+            hops: Some(1),
+            ..Default::default()
+        },
+    );
+    let names: Vec<&str> = r.nodes.iter().map(|n| n.symbol.name.as_str()).collect();
+    assert!(names.contains(&"leaf"), "outbound reaches what mid calls");
+    assert!(!names.contains(&"root"), "and not what calls mid: {names:?}");
+}
+
+#[test]
+fn both_directions_reach_callers_and_callees_at_once() {
+    let g = chain_fixture();
+    let names = walked(
+        &g,
+        TraverseParams {
+            node_id: vec!["fn:mid".into()],
+            hops: Some(1),
+            direction: Some("both".into()),
+            ..Default::default()
+        },
+    );
+    assert_eq!(names, vec!["leaf", "mid", "root"]);
+}
+
+#[test]
+fn an_unrecognised_direction_falls_back_to_outbound() {
+    let g = chain_fixture();
+    let typo = walked(
+        &g,
+        TraverseParams {
+            node_id: vec!["fn:mid".into()],
+            hops: Some(1),
+            direction: Some("sideways".into()),
+            ..Default::default()
+        },
+    );
+    let default = walked(
+        &g,
+        TraverseParams {
+            node_id: vec!["fn:mid".into()],
+            hops: Some(1),
+            ..Default::default()
+        },
+    );
+    assert_eq!(typo, default);
+}
+
+#[test]
+fn several_seeds_make_one_merged_walk() {
+    // Not one walk per seed concatenated: a node reachable from two seeds
+    // appears once, at its distance from the nearest of them.
+    let g = chain_fixture();
+    let r = traverse(
+        &g,
+        &TraverseParams {
+            node_id: vec!["fn:root".into(), "fn:mid".into()],
+            hops: Some(1),
+            ..Default::default()
+        },
+    );
+    let mids: Vec<_> = r.nodes.iter().filter(|n| n.symbol.name == "mid").collect();
+    assert_eq!(mids.len(), 1, "no duplicate rows for a shared node");
+    assert_eq!(mids[0].distance, 0, "mid is a seed, so distance 0 wins");
+    let leaf = r.nodes.iter().find(|n| n.symbol.name == "leaf").expect("leaf");
+    assert_eq!(leaf.distance, 1, "one hop from the nearest seed, not two from root");
+}
+
+#[test]
+fn a_seed_that_names_nothing_is_reported_with_a_reason() {
+    let g = chain_fixture();
+    let r = traverse(
+        &g,
+        &TraverseParams {
+            node_id: vec!["fn:root".into(), "nosuchthing".into()],
+            hops: Some(1),
+            ..Default::default()
+        },
+    );
+    assert!(!r.ok(), "a partially-resolved walk is not a clean result");
+    assert_eq!(r.missing, vec!["nosuchthing"]);
+    assert_eq!(r.notes.len(), r.missing.len(), "one explanation per miss");
+    // The walk still runs for the seeds that did resolve.
+    assert!(r.nodes.iter().any(|n| n.symbol.name == "root"));
+}
+
+#[test]
+fn no_seeds_at_all_is_an_empty_walk_rather_than_the_whole_graph() {
+    let g = chain_fixture();
+    let r = traverse(&g, &TraverseParams { hops: Some(2), ..Default::default() });
+    assert!(r.nodes.is_empty(), "an unseeded walk must not fan out");
+    assert!(r.edges.is_empty());
+}
+
+#[test]
+fn a_cycle_terminates_and_reports_each_node_once() {
+    let f = |id: &str, name: &str| node(id, name, GraphNodeType::Function, "src/c.rs", Some((1, 2)));
+    let g = GraphData {
+        nodes: vec![f("fn:a", "a"), f("fn:b", "b")],
+        edges: vec![
+            edge("fn:a", "fn:b", GraphEdgeType::Calls),
+            edge("fn:b", "fn:a", GraphEdgeType::Calls),
+        ],
+        stats: None,
+        resolution: None,
+    };
+    let names = walked(
+        &g,
+        TraverseParams {
+            node_id: vec!["fn:a".into()],
+            hops: Some(5),
+            ..Default::default()
+        },
+    );
+    assert_eq!(names, vec!["a", "b"]);
+}
+
+#[test]
+fn the_edges_reported_are_those_among_the_nodes_reached() {
+    let g = chain_fixture();
+    let r = traverse(
+        &g,
+        &TraverseParams {
+            node_id: vec!["fn:root".into()],
+            hops: Some(1),
+            ..Default::default()
+        },
+    );
+    // root→mid and root→side were walked; mid→leaf was not, because leaf is
+    // outside the hop radius and an edge to a node not in the result would
+    // draw a line to nothing.
+    assert_eq!(r.edges.len(), 2, "{:?}", r.edges);
+    assert!(r.edges.iter().all(|e| e.source == "fn:root"));
+}
+
+#[test]
+fn rendering_a_walk_names_the_seed_and_what_it_reached() {
+    let g = chain_fixture();
+    let r = traverse(
+        &g,
+        &TraverseParams {
+            node_id: vec!["fn:root".into()],
+            hops: Some(2),
+            ..Default::default()
+        },
+    );
+    for style in [Render::Ansi, Render::Markdown] {
+        let out = render_traverse(&r, style);
+        assert!(out.contains("root"), "{out}");
+        assert!(out.contains("leaf"), "{out}");
+    }
+}
+
+#[test]
+fn rendering_a_walk_with_a_missing_seed_explains_the_miss() {
+    let g = chain_fixture();
+    let r = traverse(
+        &g,
+        &TraverseParams {
+            node_id: vec!["nosuchthing".into()],
+            hops: Some(1),
+            ..Default::default()
+        },
+    );
+    let out = render_traverse(&r, Render::Markdown);
+    assert!(out.contains("nosuchthing"), "the miss is named: {out}");
+}
+
+// ── the shared helpers every tool is built from ─────────────────────────────
+//
+// Small enough to look obviously right, and wrong in ways that surface as a
+// tool answering the wrong question rather than as an error: an id mistaken
+// for a name gets searched for, a `file:` prefix left on a path matches
+// nothing, and a tool missing from the discovery tables is invisible to every
+// agent that reads them.
+
+#[test]
+fn an_id_is_told_from_a_name_by_its_colons() {
+    // The CLI takes bare positionals where MCP has separate params, so this
+    // heuristic decides which lookup runs.
+    assert!(looks_like_node_id("function:src/a.rs:1:caller"));
+    assert!(looks_like_node_id("file:src/a.rs"));
+    assert!(!looks_like_node_id("caller"), "a bare name is not an id");
+    assert!(!looks_like_node_id("src/a.rs"), "nor is a path");
+}
+
+#[test]
+fn a_wildcard_is_never_an_id_even_with_colons() {
+    // `*:*:login` asks to search ids, not to look one up. Treating it as an
+    // id would look for a node literally named that and find nothing.
+    assert!(!looks_like_node_id("*:*:login"));
+    assert!(!looks_like_node_id("function:src/*.rs:handler"));
+}
+
+#[test]
+fn a_file_id_prefix_is_stripped_but_a_bare_path_is_untouched() {
+    assert_eq!(strip_file_id_prefix("file:src/a.rs"), "src/a.rs");
+    assert_eq!(strip_file_id_prefix("src/a.rs"), "src/a.rs");
+    // Only the leading occurrence, and only at the start.
+    assert_eq!(strip_file_id_prefix("src/file:weird.rs"), "src/file:weird.rs");
+}
+
+#[test]
+fn a_location_degrades_field_by_field() {
+    let with_lines = node("x", "x", GraphNodeType::Function, "src/a.rs", Some((3, 9)));
+    assert_eq!(node_loc(&with_lines), "src/a.rs:3-9");
+
+    // A File node carries no range; printing `src/a.rs:?-?` for one would be
+    // noise on every file in a result.
+    let no_lines = node("f", "a.rs", GraphNodeType::File, "src/a.rs", None);
+    assert_eq!(node_loc(&no_lines), "src/a.rs");
+
+    let mut no_file = node("x", "x", GraphNodeType::Function, "src/a.rs", Some((1, 2)));
+    no_file.file = None;
+    assert_eq!(node_loc(&no_file), "(no file)");
+}
+
+#[test]
+fn a_half_known_range_says_which_half_is_missing() {
+    let mut partial = node("x", "x", GraphNodeType::Function, "src/a.rs", Some((3, 9)));
+    partial.end_line = None;
+    assert_eq!(node_loc(&partial), "src/a.rs:3-?");
+}
+
+#[test]
+fn node_and_edge_types_render_as_their_canonical_names() {
+    // These strings are compared against user input by the CLI's `-t` filter
+    // and printed into every result, so they are a contract, not a debug
+    // format.
+    assert_eq!(node_type_str(&GraphNodeType::Function), "Function");
+    assert_eq!(node_type_str(&GraphNodeType::File), "File");
+    assert_eq!(edge_type_str(&GraphEdgeType::Calls), "Calls");
+    assert_eq!(edge_type_str(&GraphEdgeType::Contains), "Contains");
+}
+
+#[test]
+fn every_advertised_tool_carries_a_summary_and_an_example() {
+    // `ug api` and GET /api/tools publish both. A tool added to the table
+    // without either shows up in discovery as a blank row, which reads as a
+    // broken endpoint rather than a missing doc string.
+    for (name, summary) in AGENT_TOOLS.iter().chain(STORE_BACKED_AGENT_TOOLS.iter()) {
+        assert!(!summary.is_empty(), "{name} has no summary");
+        let example = tool_example(name);
+        assert!(
+            example.starts_with('{') && example.ends_with('}'),
+            "{name}'s example is not a JSON object: {example}"
+        );
+        serde_json::from_str::<serde_json::Value>(example)
+            .unwrap_or_else(|e| panic!("{name}'s example does not parse: {e}"));
+        assert_eq!(tool_summary(name), *summary, "{name} summary lookup disagrees");
+    }
+}
+
+#[test]
+fn only_graph_backed_tools_claim_run_tool_can_answer_them() {
+    // The split is the point of the two tables: `analyze` is advertised to
+    // agents but needs the store, so `run_tool` must not claim it.
+    for (name, _) in AGENT_TOOLS {
+        assert!(is_agent_tool(name), "{name} should be run_tool-dispatchable");
+    }
+    for (name, _) in STORE_BACKED_AGENT_TOOLS {
+        assert!(
+            !is_agent_tool(name),
+            "{name} needs the store, so run_tool cannot answer it"
+        );
+    }
+    assert!(!is_agent_tool("not_a_tool"));
+    assert_eq!(tool_summary("not_a_tool"), "", "an unknown tool has no summary");
+}
+
+#[test]
+fn a_batch_param_accepts_one_value_or_many() {
+    // Documented to take either, and callers use both, so the transports do
+    // not branch on the shape.
+    let one: TraverseParams =
+        serde_json::from_value(serde_json::json!({ "node_id": "fn:a" })).expect("one");
+    assert_eq!(one.node_id, vec!["fn:a"]);
+
+    let many: TraverseParams =
+        serde_json::from_value(serde_json::json!({ "node_id": ["fn:a", "fn:b"] })).expect("many");
+    assert_eq!(many.node_id, vec!["fn:a", "fn:b"]);
+
+    let absent: TraverseParams = serde_json::from_value(serde_json::json!({})).expect("absent");
+    assert!(absent.node_id.is_empty());
+}
+
+#[test]
+fn the_mcp_spelling_of_a_seed_param_still_works() {
+    // `startNodeIds` was the original MCP name and is kept as an alias;
+    // dropping it would break every agent built against the old schema.
+    for key in ["node_id", "nodeId", "nodeIds", "startNodeIds"] {
+        let p: TraverseParams =
+            serde_json::from_value(serde_json::json!({ key: "fn:a" })).unwrap_or_else(|e| panic!("{key}: {e}"));
+        assert_eq!(p.node_id, vec!["fn:a"], "{key}");
+    }
+}
+
+// ── get_code: the line window, and the answers that are not code ────────────
+//
+// The live-vs-index preference is already covered above. What was left is
+// everything around it: the `range` dialect, what a bad window does, and the
+// several ways a slice comes back as an explanation rather than source. Each
+// of those is a case where returning *something* plausible — line 1 to EOF,
+// say — would be worse than saying no.
+
+/// A repo on disk with one four-line file, and a graph naming it.
+fn disk_repo() -> (tempfile::TempDir, GraphData) {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    std::fs::write(dir.path().join("src/a.rs"), "one\ntwo\nthree\nfour\n").unwrap();
+    let g = GraphData {
+        nodes: vec![
+            node("file:src/a.rs", "a.rs", GraphNodeType::File, "src/a.rs", None),
+            node(
+                "function:src/a.rs:2:mid",
+                "mid",
+                GraphNodeType::Function,
+                "src/a.rs",
+                Some((2, 3)),
+            ),
+        ],
+        edges: vec![],
+        stats: None,
+        resolution: None,
+    };
+    (dir, g)
+}
+
+fn code_for(repo: &Path, g: &GraphData, p: GetCodeParams) -> GetCodeResult {
+    get_code(g, SourceCtx::repo_only(repo), &p)
+}
+
+#[test]
+fn a_file_and_line_range_reads_exactly_those_lines() {
+    let (dir, g) = disk_repo();
+    let r = code_for(
+        dir.path(),
+        &g,
+        GetCodeParams {
+            file: Some("src/a.rs".into()),
+            start_line: Some(2),
+            end_line: Some(3),
+            ..Default::default()
+        },
+    );
+    assert!(r.ok(), "{:?}", r.slices[0].error);
+    let code = r.slices[0].code.as_deref().unwrap();
+    assert!(code.contains("two") && code.contains("three"), "{code:?}");
+    assert!(!code.contains("one") && !code.contains("four"), "{code:?}");
+}
+
+#[test]
+fn the_range_dialect_means_the_same_as_explicit_line_numbers() {
+    let (dir, g) = disk_repo();
+    let explicit = code_for(
+        dir.path(),
+        &g,
+        GetCodeParams {
+            file: Some("src/a.rs".into()),
+            start_line: Some(2),
+            end_line: Some(3),
+            ..Default::default()
+        },
+    );
+    let via_range = code_for(
+        dir.path(),
+        &g,
+        GetCodeParams {
+            file: Some("src/a.rs".into()),
+            range: Some("2-3".into()),
+            ..Default::default()
+        },
+    );
+    assert_eq!(via_range.slices[0].code, explicit.slices[0].code);
+}
+
+#[test]
+fn a_malformed_range_is_reported_rather_than_silently_ignored() {
+    // Ignoring it would serve line 1 to EOF as though that were the request,
+    // and an agent would summarise the wrong part of the file.
+    let (dir, g) = disk_repo();
+    let r = code_for(
+        dir.path(),
+        &g,
+        GetCodeParams {
+            file: Some("src/a.rs".into()),
+            range: Some("not-a-range".into()),
+            ..Default::default()
+        },
+    );
+    assert!(!r.ok());
+    assert!(r.slices[0].error.is_some(), "{:?}", r.slices[0]);
+}
+
+#[test]
+fn asking_for_neither_a_node_nor_a_file_says_which_to_pass() {
+    let (dir, g) = disk_repo();
+    let r = code_for(dir.path(), &g, GetCodeParams::default());
+    assert!(!r.ok());
+    let err = r.slices[0].error.as_deref().unwrap();
+    assert!(err.contains("node_id") && err.contains("file"), "{err}");
+}
+
+#[test]
+fn a_file_that_is_not_there_explains_itself() {
+    let (dir, g) = disk_repo();
+    let r = code_for(
+        dir.path(),
+        &g,
+        GetCodeParams {
+            file: Some("src/missing.rs".into()),
+            ..Default::default()
+        },
+    );
+    assert!(!r.ok());
+    assert!(r.slices[0].error.is_some(), "{:?}", r.slices[0]);
+}
+
+#[test]
+fn a_file_id_is_accepted_where_a_path_is() {
+    // The other tools hand back `file:src/a.rs` ids, so get_code has to take
+    // one without the caller stripping the prefix first.
+    let (dir, g) = disk_repo();
+    let r = code_for(
+        dir.path(),
+        &g,
+        GetCodeParams {
+            file: Some("file:src/a.rs".into()),
+            ..Default::default()
+        },
+    );
+    assert!(r.ok(), "{:?}", r.slices[0].error);
+    assert!(r.slices[0].code.as_deref().unwrap().contains("one"));
+}
+
+#[test]
+fn several_ids_come_back_as_several_slices_in_order() {
+    let (dir, g) = disk_repo();
+    let r = code_for(
+        dir.path(),
+        &g,
+        GetCodeParams {
+            node_id: vec!["file:src/a.rs".into(), "function:src/a.rs:2:mid".into()],
+            ..Default::default()
+        },
+    );
+    assert_eq!(r.slices.len(), 2, "one slice per id, batched into one call");
+}
+
+#[test]
+fn a_char_budget_truncates_and_says_how_much_it_dropped() {
+    // An agent that cannot tell a truncated body from a short one will
+    // describe a function by its first line and call that the whole thing.
+    let (dir, g) = disk_repo();
+    let r = code_for(
+        dir.path(),
+        &g,
+        GetCodeParams {
+            file: Some("src/a.rs".into()),
+            max_chars: Some(5),
+            ..Default::default()
+        },
+    );
+    assert!(r.ok(), "{:?}", r.slices[0].error);
+    assert!(
+        r.slices[0].truncated_chars > 0,
+        "truncation must be reported: {:?}",
+        r.slices[0]
+    );
+}
+
+#[test]
+fn a_slice_reports_the_files_length_in_newline_separated_segments() {
+    // The total is how a caller knows whether to ask for the next window,
+    // and it counts `split('\n')` segments rather than visible lines. A file
+    // ending in a newline therefore reports one more than it looks like it
+    // has: "one\ntwo\nthree\nfour\n" is four lines and five segments.
+    //
+    // That is the implementation the slicing needs — joining all the
+    // segments reproduces the file byte for byte, where `.lines()` would
+    // silently drop the trailing newline on the way back. The cost is that
+    // the last segment is empty, so a caller paging to the reported end gets
+    // a blank final window rather than an error.
+    let (dir, g) = disk_repo();
+    let r = code_for(
+        dir.path(),
+        &g,
+        GetCodeParams {
+            file: Some("src/a.rs".into()),
+            start_line: Some(1),
+            end_line: Some(1),
+            ..Default::default()
+        },
+    );
+    assert_eq!(r.slices[0].total_lines, Some(5));
+}
+
+#[test]
+fn rendering_code_names_the_file_and_the_lines() {
+    let (dir, g) = disk_repo();
+    let r = code_for(
+        dir.path(),
+        &g,
+        GetCodeParams {
+            node_id: vec!["function:src/a.rs:2:mid".into()],
+            ..Default::default()
+        },
+    );
+    for style in [Render::Ansi, Render::Markdown] {
+        let out = render_get_code(&r, style);
+        assert!(out.contains("src/a.rs"), "{out}");
+    }
+}
+
+#[test]
+fn rendering_a_failed_slice_shows_the_reason() {
+    let (dir, g) = disk_repo();
+    let r = code_for(
+        dir.path(),
+        &g,
+        GetCodeParams {
+            file: Some("src/missing.rs".into()),
+            ..Default::default()
+        },
+    );
+    let out = render_get_code(&r, Render::Markdown);
+    assert!(out.contains("missing.rs"), "the failure names the file: {out}");
+}
+
+// ── find_usages: depth, filters, and the boundary summary ───────────────────
+//
+// The tool a caller reaches for before changing a symbol, so its bounds are
+// the ones a refactor is planned against. Under-reporting reads as "nothing
+// depends on this", which is the most expensive wrong answer in the toolbox.
+
+fn boundary(kind: &str, dir: crate::types::BoundaryDirection, detail: Option<&str>) -> crate::types::Boundary {
+    crate::types::Boundary {
+        kind: kind.into(),
+        direction: dir,
+        protocol: "http".into(),
+        detail: detail.map(str::to_string),
+        source: "test".into(),
+    }
+}
+
+/// root ← mid ← leaf, so transitive depth has something to reach.
+fn users_fixture() -> GraphData {
+    let f = |id: &str, name: &str| node(id, name, GraphNodeType::Function, "src/u.rs", Some((1, 2)));
+    GraphData {
+        nodes: vec![f("fn:root", "root"), f("fn:mid", "mid"), f("fn:leaf", "leaf")],
+        edges: vec![
+            edge("fn:mid", "fn:root", GraphEdgeType::Calls),
+            edge("fn:leaf", "fn:mid", GraphEdgeType::Calls),
+        ],
+        stats: None,
+        resolution: None,
+    }
+}
+
+fn users_of(g: &GraphData, p: FindUsagesParams) -> Vec<String> {
+    let r = find_usages(g, SourceCtx::repo_only(Path::new(NO_REPO)), &p);
+    let mut names: Vec<String> = r.nodes[0]
+        .users
+        .iter()
+        .map(|u| u.symbol.name.clone())
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn the_default_depth_is_direct_users_only() {
+    let g = users_fixture();
+    assert_eq!(
+        users_of(&g, FindUsagesParams { node_id: vec!["fn:root".into()], ..Default::default() }),
+        vec!["mid"],
+        "leaf calls mid, not root"
+    );
+}
+
+#[test]
+fn more_hops_reach_transitive_users() {
+    let g = users_fixture();
+    assert_eq!(
+        users_of(
+            &g,
+            FindUsagesParams {
+                node_id: vec!["fn:root".into()],
+                hops: Some(2),
+                ..Default::default()
+            }
+        ),
+        vec!["leaf", "mid"]
+    );
+}
+
+#[test]
+fn depth_is_recorded_per_user_so_direct_and_indirect_are_told_apart() {
+    let g = users_fixture();
+    let r = find_usages(
+        &g,
+        SourceCtx::repo_only(Path::new(NO_REPO)),
+        &FindUsagesParams {
+            node_id: vec!["fn:root".into()],
+            hops: Some(2),
+            ..Default::default()
+        },
+    );
+    let depth = |name: &str| {
+        r.nodes[0]
+            .users
+            .iter()
+            .find(|u| u.symbol.name == name)
+            .unwrap_or_else(|| panic!("{name}"))
+            .depth
+    };
+    assert_eq!(depth("mid"), 1);
+    assert_eq!(depth("leaf"), 2);
+}
+
+#[test]
+fn an_edge_type_filter_narrows_which_users_count() {
+    let g = users_fixture();
+    // Only `Contains` edges — there are none, so nothing uses root by that
+    // relationship. An empty answer here is correct, not a failure.
+    let r = find_usages(
+        &g,
+        SourceCtx::repo_only(Path::new(NO_REPO)),
+        &FindUsagesParams {
+            node_id: vec!["fn:root".into()],
+            edge_types: vec!["contains".into()],
+            ..Default::default()
+        },
+    );
+    assert!(r.nodes[0].users.is_empty());
+}
+
+#[test]
+fn a_symbol_nothing_uses_reports_no_users_rather_than_an_error() {
+    let g = users_fixture();
+    let r = find_usages(
+        &g,
+        SourceCtx::repo_only(Path::new(NO_REPO)),
+        &FindUsagesParams { node_id: vec!["fn:leaf".into()], ..Default::default() },
+    );
+    assert!(r.ok(), "resolving fine and finding nothing is a clean result");
+    assert!(r.nodes[0].users.is_empty());
+}
+
+#[test]
+fn a_boundary_user_is_summarised_by_kind() {
+    // "Who calls this" and "does changing it escape the system" are different
+    // questions, and the summary is what answers the second one without
+    // re-listing every route.
+    use crate::types::BoundaryDirection;
+    let mut g = users_fixture();
+    if let Some(mid) = g.nodes.iter_mut().find(|n| n.id == "fn:mid") {
+        mid.boundaries = vec![boundary("http.endpoint", BoundaryDirection::Inbound, Some("GET /x"))];
+    }
+    let r = find_usages(
+        &g,
+        SourceCtx::repo_only(Path::new(NO_REPO)),
+        &FindUsagesParams { node_id: vec!["fn:root".into()], ..Default::default() },
+    );
+    let out = render_find_usages(&r, Render::Markdown);
+    assert!(out.contains("system boundaries"), "{out}");
+    assert!(out.contains("http.endpoint"), "the kind is what is at stake: {out}");
+}
+
+#[test]
+fn no_boundary_users_means_no_summary_line() {
+    let g = users_fixture();
+    let r = find_usages(
+        &g,
+        SourceCtx::repo_only(Path::new(NO_REPO)),
+        &FindUsagesParams { node_id: vec!["fn:root".into()], ..Default::default() },
+    );
+    let out = render_find_usages(&r, Render::Markdown);
+    assert!(
+        !out.contains("system boundaries"),
+        "an empty breakdown must not print a header: {out}"
+    );
+}
+
+#[test]
+fn rendering_usages_names_the_subject_and_its_callers() {
+    let g = users_fixture();
+    let r = find_usages(
+        &g,
+        SourceCtx::repo_only(Path::new(NO_REPO)),
+        &FindUsagesParams { node_id: vec!["fn:root".into()], ..Default::default() },
+    );
+    for style in [Render::Ansi, Render::Markdown] {
+        let out = render_find_usages(&r, style);
+        assert!(out.contains("root") && out.contains("mid"), "{out}");
+    }
+}
+
+#[test]
+fn a_seed_that_resolves_to_nothing_is_not_a_clean_result() {
+    let g = users_fixture();
+    let r = find_usages(
+        &g,
+        SourceCtx::repo_only(Path::new(NO_REPO)),
+        &FindUsagesParams { node_id: vec!["nosuchthing".into()], ..Default::default() },
+    );
+    assert!(!r.ok());
+    let out = render_find_usages(&r, Render::Markdown);
+    assert!(out.contains("nosuchthing"), "{out}");
+}
+
+// ── project_overview: the parts that only appear on a real index ────────────
+
+#[test]
+fn an_overview_reports_the_index_summary_when_the_graph_carries_one() {
+    use crate::types::IndexStats;
+    let mut g = overview_fixture();
+    g.stats = Some(IndexStats {
+        graph_schema_version: crate::types::GRAPH_SCHEMA_VERSION,
+        total_files: 2,
+        cached_files: 1,
+        total_symbols: 3,
+        total_folders: 1,
+        total_lines: 120,
+        indexing_time_ms: 45,
+        last_indexed_at: 1_700_000_000,
+        repo_root: "/repo".into(),
+    });
+    let r = project_overview(&g, Path::new("/repo"), Path::new("/g.json"));
+
+    let idx = r.index.expect("the summary follows the stats");
+    assert_eq!((idx.files, idx.cached_files, idx.symbols), (2, 1, 3));
+    assert_eq!(idx.lines, 120);
+}
+
+#[test]
+fn the_language_breakdown_comes_from_the_shallowest_folder() {
+    // The repo-root folder node is the one the indexer put the whole-repo
+    // breakdown on. Reading a deeper folder's would describe a subdirectory
+    // and call it the project.
+    use crate::types::{FolderClassification, GraphNodeFolderMeta};
+    use std::collections::BTreeMap;
+
+    let folder = |id: &str, depth: u32, langs: &[(&str, u32)]| {
+        let mut n = node(id, id, GraphNodeType::Folder, "src", None);
+        n.folder = Some(GraphNodeFolderMeta {
+            depth,
+            parent: None,
+            classification: Some(FolderClassification::Source),
+            readme: None,
+            total_files: 2,
+            language_breakdown: langs
+                .iter()
+                .map(|(k, v)| (k.to_string(), *v))
+                .collect::<BTreeMap<_, _>>(),
+            summary: None,
+        });
+        n
+    };
+
+    let mut g = overview_fixture();
+    g.nodes.push(folder("folder:src/deep", 3, &[("python", 99)]));
+    g.nodes.push(folder("folder:.", 0, &[("rust", 10), ("typescript", 4)]));
+
+    let r = project_overview(&g, Path::new("/repo"), Path::new("/g.json"));
+    let names: Vec<&str> = r.languages.iter().map(|l| l.name.as_str()).collect();
+    assert_eq!(names, vec!["rust", "typescript"], "biggest first, from depth 0");
+    assert!(
+        !names.contains(&"python"),
+        "a deep folder's breakdown is not the project's: {names:?}"
+    );
+    assert_eq!(r.kb_type.as_deref(), Some("source"));
+}
+
+// ── file_outline ────────────────────────────────────────────────────────────
+
+#[test]
+fn an_outline_lists_a_files_symbols_in_line_order() {
+    let g = fixture();
+    let r = file_outline(&g, &FileOutlineParams { file: vec!["src/a.rs".into()], ..Default::default() });
+    assert!(r.ok(), "{:?}", r.files[0].error);
+    let names: Vec<&str> = r.files[0].symbols.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, vec!["caller", "callee"], "line order, not id order");
+}
+
+#[test]
+fn an_outline_accepts_a_bare_basename() {
+    // Typing the repo-relative path is what the suffix match exists to avoid.
+    let g = fixture();
+    let r = file_outline(&g, &FileOutlineParams { file: vec!["a.rs".into()], ..Default::default() });
+    assert!(r.ok(), "{:?}", r.files[0].error);
+    assert_eq!(r.files[0].symbols.len(), 2);
+}
+
+#[test]
+fn an_outline_accepts_a_file_node_id() {
+    let g = fixture();
+    let r = file_outline(
+        &g,
+        &FileOutlineParams { file: vec!["file:src/a.rs".into()], ..Default::default() },
+    );
+    assert!(r.ok(), "{:?}", r.files[0].error);
+}
+
+#[test]
+fn an_outline_of_an_unknown_file_explains_itself() {
+    let g = fixture();
+    let r = file_outline(
+        &g,
+        &FileOutlineParams { file: vec!["src/nothing.rs".into()], ..Default::default() },
+    );
+    assert!(!r.ok());
+    assert!(r.files[0].error.is_some(), "{:?}", r.files[0]);
+}
+
+#[test]
+fn several_files_are_outlined_in_one_call() {
+    let g = overview_fixture();
+    let r = file_outline(
+        &g,
+        &FileOutlineParams {
+            file: vec!["src/a.rs".into(), "src/b.rs".into()],
+            ..Default::default()
+        },
+    );
+    assert_eq!(r.files.len(), 2, "batched rather than one call per file");
+}
+
+#[test]
+fn rendering_an_outline_names_the_file_and_its_symbols() {
+    let g = fixture();
+    let r = file_outline(&g, &FileOutlineParams { file: vec!["src/a.rs".into()], ..Default::default() });
+    for style in [Render::Ansi, Render::Markdown] {
+        let out = render_file_outline(&r, style);
+        assert!(out.contains("src/a.rs"), "{out}");
+        assert!(out.contains("caller") && out.contains("callee"), "{out}");
+    }
+}
+
+#[test]
+fn rendering_an_outline_miss_shows_the_reason() {
+    let g = fixture();
+    let r = file_outline(
+        &g,
+        &FileOutlineParams { file: vec!["src/nothing.rs".into()], ..Default::default() },
+    );
+    let out = render_file_outline(&r, Render::Markdown);
+    assert!(out.contains("nothing.rs"), "{out}");
+}
+
+// ── find_symbols: the boundary filter ───────────────────────────────────────
+
+#[test]
+fn the_boundary_filter_keeps_only_the_systems_edges() {
+    // "What does this service expose and consume" is the fastest way to
+    // orient in an unfamiliar repo, and it is this filter plus `name: "*"`.
+    // Without the filter the same query returns every symbol there is.
+    use crate::types::BoundaryDirection;
+    let mut g = users_fixture();
+    if let Some(mid) = g.nodes.iter_mut().find(|n| n.id == "fn:mid") {
+        mid.boundaries = vec![boundary("http.endpoint", BoundaryDirection::Inbound, Some("GET /x"))];
+    }
+
+    let all = find_symbols(
+        &g,
+        &FindSymbolsParams { name: vec!["*".into()], ..Default::default() },
+    );
+    assert!(all.queries[0].items.len() > 1, "the unfiltered query sees everything");
+
+    let edges = find_symbols(
+        &g,
+        &FindSymbolsParams {
+            name: vec!["*".into()],
+            boundary: true,
+            ..Default::default()
+        },
+    );
+    let names: Vec<&str> = edges.queries[0].items.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, vec!["mid"], "only the symbol carrying a boundary");
+}
+
+#[test]
+fn a_boundary_hit_says_which_surface_it_is() {
+    // The kind and the route are the answer; a bare list of names would not
+    // tell a reader what the service actually exposes.
+    use crate::types::BoundaryDirection;
+    let mut g = users_fixture();
+    if let Some(mid) = g.nodes.iter_mut().find(|n| n.id == "fn:mid") {
+        mid.boundaries = vec![boundary("http.endpoint", BoundaryDirection::Inbound, Some("GET /orders"))];
+    }
+    let r = find_symbols(
+        &g,
+        &FindSymbolsParams { name: vec!["mid".into()], ..Default::default() },
+    );
+    let label = r.queries[0].items[0].boundary.as_deref().expect("a boundary label");
+    assert!(label.contains("in:"), "direction is part of the label: {label}");
+    assert!(label.contains("http.endpoint"), "{label}");
+    assert!(label.contains("GET /orders"), "{label}");
+}
+
+#[test]
+fn a_repo_with_no_boundaries_returns_nothing_rather_than_everything() {
+    // The failure that would look like success: a filter that silently
+    // stopped applying turns "show me the service surface" into "show me the
+    // whole repo".
+    let g = users_fixture();
+    let r = find_symbols(
+        &g,
+        &FindSymbolsParams {
+            name: vec!["*".into()],
+            boundary: true,
+            ..Default::default()
+        },
+    );
+    assert!(r.queries[0].items.is_empty());
+}
+
+#[test]
+fn rendering_a_full_overview_shows_every_section_it_has_data_for() {
+    // The render drops a section rather than printing an empty one, so the
+    // sections only appear on a graph carrying stats and a root folder — the
+    // shape a real `ug gen` produces, and the one the terse fixtures above
+    // never reach.
+    use crate::types::{FolderClassification, GraphNodeFolderMeta, IndexStats};
+    use std::collections::BTreeMap;
+
+    let mut g = overview_fixture();
+    g.stats = Some(IndexStats {
+        graph_schema_version: crate::types::GRAPH_SCHEMA_VERSION,
+        total_files: 2,
+        cached_files: 1,
+        total_symbols: 3,
+        total_folders: 1,
+        total_lines: 120,
+        indexing_time_ms: 45,
+        last_indexed_at: 1_700_000_000,
+        repo_root: "/repo".into(),
+    });
+    let mut root = node("folder:.", ".", GraphNodeType::Folder, "", None);
+    root.folder = Some(GraphNodeFolderMeta {
+        depth: 0,
+        parent: None,
+        classification: Some(FolderClassification::Source),
+        readme: None,
+        total_files: 2,
+        language_breakdown: BTreeMap::from([("rust".to_string(), 10u32)]),
+        summary: None,
+    });
+    g.nodes.push(root);
+
+    let r = project_overview(&g, Path::new("/repo"), Path::new("/g.json"));
+    for style in [Render::Ansi, Render::Markdown] {
+        let out = render_project_overview(&r, style);
+        assert!(out.contains("rust"), "the language breakdown: {out}");
+        assert!(out.contains("caller"), "the complexity list: {out}");
+        assert!(out.contains("callee"), "the hotspots: {out}");
+        assert!(out.contains("src/a.rs"), "the biggest files: {out}");
+    }
+}
+
+#[test]
+fn the_graph_schema_reports_the_types_actually_present() {
+    // The call an agent makes before any filtered query, because filtering on
+    // a type the graph does not contain returns a confident zero rather than
+    // an error.
+    let g = overview_fixture();
+    let r = graph_schema(&g, Path::new("/g.json"));
+    let names: Vec<&str> = r.node_types.iter().map(|t| t.name.as_str()).collect();
+    assert!(names.contains(&"Function"), "{names:?}");
+    assert!(names.contains(&"File"), "{names:?}");
+
+    let edges: Vec<&str> = r.edge_types.iter().map(|t| t.name.as_str()).collect();
+    assert!(edges.contains(&"Calls"), "{edges:?}");
+    assert!(edges.contains(&"Contains"), "{edges:?}");
+
+    for style in [Render::Ansi, Render::Markdown] {
+        let out = render_graph_schema(&r, style);
+        assert!(out.contains("Function"), "{out}");
+    }
+}
+
+#[test]
+fn an_empty_graphs_schema_is_empty_rather_than_a_default_list() {
+    // Reporting the vocabulary a graph *could* hold, on a graph that holds
+    // nothing, is how a filter comes back with a confident zero.
+    let empty = GraphData {
+        nodes: Vec::new(),
+        edges: Vec::new(),
+        stats: None,
+        resolution: None,
+    };
+    let r = graph_schema(&empty, Path::new("/g.json"));
+    assert!(r.node_types.is_empty());
+    assert!(r.edge_types.is_empty());
+}
