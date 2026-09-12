@@ -241,23 +241,18 @@
                 ${doc}
                 <div class="nm-rows">${rows.join('')}</div>
                 <div class="nm-acts">
-                    ${state.walkActive ? '' : '<button class="nm-act" data-act="details" title="Open the full node panel">Details</button>'}
+                    <button class="nm-act" data-act="walk" title="Start a graph walk from this node">Walk</button>
                     ${state.walkActive ? '' : '<button class="nm-act" data-act="context" title="Everything an agent needs to change this safely: callers, tests, dependencies, docs">Context</button>'}
                     <button class="nm-act" data-act="zoom" title="Fly the camera to this node">Zoom to</button>
                     <button class="nm-act" data-act="copy" title="Copy the node id — command fuel for ug get_code">Copy id</button>
                 </div>`;
 
-            // No Details during a walk. Opening the panel selects the node,
-            // which rebuilds the solo view and tears the walk down — the very
-            // thing the click guard exists to prevent, so offering it as a
-            // button would just be the same bug behind one more press.
-            const detailsBtn = menu.querySelector('[data-act="details"]');
-            if (detailsBtn) detailsBtn.addEventListener('click', () => {
+            const walkBtn = menu.querySelector('[data-act="walk"]');
+            if (walkBtn) walkBtn.addEventListener('click', async () => {
                 hideNodeMenu();
-                handleClick(null, node);
+                state.walkSeed = node.id;
+                await runWalk();
             });
-            // Same walk guard as Details: this opens the info panel, which
-            // selects the node and tears a running walk down.
             const ctxBtn = menu.querySelector('[data-act="context"]');
             if (ctxBtn) ctxBtn.addEventListener('click', () => {
                 hideNodeMenu();

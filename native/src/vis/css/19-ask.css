@@ -379,7 +379,6 @@
 
         .ask-row {
             background: var(--bg-elevated);
-            border: 1px solid var(--border-soft);
             border-radius: 6px;
             padding: 7px 9px;
             cursor: pointer;

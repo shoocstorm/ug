@@ -608,7 +608,6 @@
             margin-top: 14px;
             padding: 12px;
             border-radius: 11px;
-            border: 1px solid var(--border-soft);
             background:
                 radial-gradient(120% 80% at 0% 0%, rgba(var(--accent-rgb), 0.06), transparent 60%),
                 radial-gradient(120% 80% at 100% 100%, rgba(91, 143, 201, 0.06), transparent 60%),

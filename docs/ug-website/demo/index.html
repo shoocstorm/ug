@@ -7752,7 +7752,6 @@
             margin-top: 14px;
             padding: 12px;
             border-radius: 11px;
-            border: 1px solid var(--border-soft);
             background:
                 radial-gradient(120% 80% at 0% 0%, rgba(var(--accent-rgb), 0.06), transparent 60%),
                 radial-gradient(120% 80% at 100% 100%, rgba(91, 143, 201, 0.06), transparent 60%),
@@ -9308,7 +9307,6 @@ body:has(#info.visible) #perf-hud {
 
         .ask-row {
             background: var(--bg-elevated);
-            border: 1px solid var(--border-soft);
             border-radius: 6px;
             padding: 7px 9px;
             cursor: pointer;
@@ -9803,7 +9801,7 @@ body:has(#info.visible) #perf-hud {
         }
     </style>
 <script>
-window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3738,"edges":10801,"files":136,"lines":84798,"ugVersion":"0.1.19","visFingerprint":"c2113968e105706e","generatedAt":1789136702};
+window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3738,"edges":10801,"files":136,"lines":84798,"ugVersion":"0.1.19","visFingerprint":"0d40d3352bf93121","generatedAt":1789220013};
 /* ==========================================================================
    UltraGraph — static demo shim
    ==========================================================================
@@ -31395,23 +31393,18 @@ self.onmessage = async (ev) => {
                 ${doc}
                 <div class="nm-rows">${rows.join('')}</div>
                 <div class="nm-acts">
-                    ${state.walkActive ? '' : '<button class="nm-act" data-act="details" title="Open the full node panel">Details</button>'}
+                    <button class="nm-act" data-act="walk" title="Start a graph walk from this node">Walk</button>
                     ${state.walkActive ? '' : '<button class="nm-act" data-act="context" title="Everything an agent needs to change this safely: callers, tests, dependencies, docs">Context</button>'}
                     <button class="nm-act" data-act="zoom" title="Fly the camera to this node">Zoom to</button>
                     <button class="nm-act" data-act="copy" title="Copy the node id — command fuel for ug get_code">Copy id</button>
                 </div>`;
 
-            // No Details during a walk. Opening the panel selects the node,
-            // which rebuilds the solo view and tears the walk down — the very
-            // thing the click guard exists to prevent, so offering it as a
-            // button would just be the same bug behind one more press.
-            const detailsBtn = menu.querySelector('[data-act="details"]');
-            if (detailsBtn) detailsBtn.addEventListener('click', () => {
+            const walkBtn = menu.querySelector('[data-act="walk"]');
+            if (walkBtn) walkBtn.addEventListener('click', async () => {
                 hideNodeMenu();
-                handleClick(null, node);
+                state.walkSeed = node.id;
+                await runWalk();
             });
-            // Same walk guard as Details: this opens the info panel, which
-            // selects the node and tears a running walk down.
             const ctxBtn = menu.querySelector('[data-act="context"]');
             if (ctxBtn) ctxBtn.addEventListener('click', () => {
                 hideNodeMenu();
