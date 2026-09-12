@@ -252,6 +252,71 @@ impl ProjectMeta {
 #[cfg(test)]
 pub(crate) static UG_HOME_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+/// Holds [`UG_HOME_LOCK`] *and* puts back every environment variable it was
+/// asked to change.
+///
+/// Taking the lock is only half the job. Under `cargo test` every test in a
+/// crate shares one process — `cargo llvm-cov` drives it that way, even
+/// though `cargo nextest` gives each test its own — so a variable left set
+/// when a test returns is still set for whichever test runs next, and that
+/// one may not take the lock at all. That is how a `UG_HOME` pointing at a
+/// deleted temp dir reached `project::tests` and failed it.
+///
+/// Use `set`/`remove` through the guard rather than `std::env` directly, and
+/// the restore happens on drop however the test exits, panic included.
+#[cfg(test)]
+pub(crate) struct EnvGuard {
+    _lock: tokio::sync::MutexGuard<'static, ()>,
+    saved: Vec<(String, Option<std::ffi::OsString>)>,
+}
+
+#[cfg(test)]
+impl EnvGuard {
+    /// For `#[test]` bodies, which run outside any runtime.
+    pub(crate) fn new() -> Self {
+        EnvGuard {
+            _lock: UG_HOME_LOCK.blocking_lock(),
+            saved: Vec::new(),
+        }
+    }
+
+    /// For `#[tokio::test]` bodies, which cannot block on the mutex.
+    pub(crate) async fn new_async() -> Self {
+        EnvGuard {
+            _lock: UG_HOME_LOCK.lock().await,
+            saved: Vec::new(),
+        }
+    }
+
+    fn remember(&mut self, key: &str) {
+        if !self.saved.iter().any(|(k, _)| k == key) {
+            self.saved.push((key.to_string(), std::env::var_os(key)));
+        }
+    }
+
+    pub(crate) fn set(&mut self, key: &str, value: impl AsRef<std::ffi::OsStr>) {
+        self.remember(key);
+        std::env::set_var(key, value);
+    }
+
+    pub(crate) fn remove(&mut self, key: &str) {
+        self.remember(key);
+        std::env::remove_var(key);
+    }
+}
+
+#[cfg(test)]
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        for (key, prior) in self.saved.drain(..) {
+            match prior {
+                Some(v) => std::env::set_var(&key, v),
+                None => std::env::remove_var(&key),
+            }
+        }
+    }
+}
+
 pub(crate) fn meta_path(dir: &Path) -> PathBuf {
     dir.join("project.json")
 }

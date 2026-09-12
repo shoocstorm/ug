@@ -1556,9 +1556,10 @@ mod config_tests {
 
     #[test]
     fn a_json_install_adds_the_entry_and_an_uninstall_takes_only_that_back() {
+        let mut env = crate::project::EnvGuard::new();
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("mcp.json");
-        std::env::set_var("UG_TEST_CFG_JSON", &path);
+        env.set("UG_TEST_CFG_JSON", &path);
         std::fs::write(&path, r#"{"mcpServers":{"other":{"command":"keep-me"}}}"#).unwrap();
 
         let t = target(Format::JsonMcpServers, json_target_path);
@@ -1581,8 +1582,9 @@ mod config_tests {
 
     #[test]
     fn uninstalling_from_a_file_that_does_not_exist_is_a_no_op() {
+        let mut env = crate::project::EnvGuard::new();
         let tmp = tempfile::tempdir().unwrap();
-        std::env::set_var("UG_TEST_CFG_JSON", tmp.path().join("absent.json"));
+        env.set("UG_TEST_CFG_JSON", tmp.path().join("absent.json"));
         let t = target(Format::JsonMcpServers, json_target_path);
 
         let (_, removed) = uninstall_config(&t, Scope::Project).expect("no error");
@@ -1591,9 +1593,10 @@ mod config_tests {
 
     #[test]
     fn a_toml_install_preserves_unrelated_tables() {
+        let mut env = crate::project::EnvGuard::new();
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("config.toml");
-        std::env::set_var("UG_TEST_CFG_TOML", &path);
+        env.set("UG_TEST_CFG_TOML", &path);
         std::fs::write(&path, "[profile]\nmodel = \"gpt\"\n\n[mcp_servers.other]\ncommand = \"x\"\n").unwrap();
 
         let t = target(Format::Toml, toml_target_path);
@@ -1613,9 +1616,10 @@ mod config_tests {
 
     #[test]
     fn a_yaml_install_round_trips_through_the_document() {
+        let mut env = crate::project::EnvGuard::new();
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("config.yaml");
-        std::env::set_var("UG_TEST_CFG_YAML", &path);
+        env.set("UG_TEST_CFG_YAML", &path);
         std::fs::write(&path, "model: local\nmcp_servers:\n  other:\n    command: x\n").unwrap();
 
         let t = target(Format::Yaml, yaml_target_path);
@@ -1634,6 +1638,7 @@ mod config_tests {
 
     #[test]
     fn a_scope_the_target_does_not_support_is_refused_with_what_it_does() {
+        let _env = crate::project::EnvGuard::new();
         // `claude-desk` has no project config, and the error is the only
         // place the user learns which scopes exist.
         let t = target(Format::JsonMcpServers, json_target_path);
@@ -1697,11 +1702,11 @@ mod skill_file_tests {
 
     use super::*;
 
-    /// Point `$HOME` at a fresh directory for this test's process.
-    fn home_in(tmp: &tempfile::TempDir) -> PathBuf {
+    /// Point `$HOME` at a fresh directory, restoring it when `env` drops.
+    fn home_in(env: &mut crate::project::EnvGuard, tmp: &tempfile::TempDir) -> PathBuf {
         let h = tmp.path().join("home");
         std::fs::create_dir_all(&h).expect("home");
-        std::env::set_var("HOME", &h);
+        env.set("HOME", &h);
         // Deliberately NOT canonicalized: `dirs::home_dir()` hands back `$HOME`
         // verbatim, and on macOS a temp dir's `/var/...` canonicalizes to
         // `/private/var/...`, so a canonicalized copy would never prefix-match
@@ -1713,6 +1718,7 @@ mod skill_file_tests {
 
     #[test]
     fn every_supported_agent_has_a_skill_location() {
+        let _env = crate::project::EnvGuard::new();
         for target in ["claude", "cursor", "windsurf", "opencode"] {
             assert!(
                 skill_target(target, Scope::Project).is_some(),
@@ -1726,8 +1732,9 @@ mod skill_file_tests {
 
     #[test]
     fn a_global_install_writes_under_home_and_a_project_install_does_not() {
+        let mut env = crate::project::EnvGuard::new();
         let tmp = tempfile::tempdir().unwrap();
-        let home = home_in(&tmp);
+        let home = home_in(&mut env, &tmp);
 
         let (global, _) = skill_target("claude", Scope::Global).expect("global");
         assert!(
@@ -1746,10 +1753,11 @@ mod skill_file_tests {
 
     #[test]
     fn windsurf_rules_are_project_scoped_even_when_asked_for_globally() {
+        let mut env = crate::project::EnvGuard::new();
         // Windsurf has no global rules directory, so a `--global` install has
         // to land in the project or it lands nowhere the editor reads.
         let tmp = tempfile::tempdir().unwrap();
-        let home = home_in(&tmp);
+        let home = home_in(&mut env, &tmp);
         let (path, _) = skill_target("windsurf", Scope::Global).expect("windsurf");
         assert!(
             !path.starts_with(&home),
@@ -1761,6 +1769,7 @@ mod skill_file_tests {
 
     #[test]
     fn each_agent_gets_the_file_format_it_actually_reads() {
+        let _env = crate::project::EnvGuard::new();
         // Claude and opencode discover *skills*, which keep their own
         // frontmatter; Cursor and Windsurf read *rules*, which need one
         // written for them. Handing either the other's shape is invisible.
@@ -1782,6 +1791,7 @@ mod skill_file_tests {
 
     #[test]
     fn the_old_guide_name_is_listed_for_removal_beside_the_new_one() {
+        let _env = crate::project::EnvGuard::new();
         // `ug-mcp` is the pre-rename name. Both spellings have to be swept,
         // or the old one keeps loading next to the new.
         for target in ["claude", "cursor", "windsurf", "opencode"] {
@@ -1851,8 +1861,9 @@ mod skill_file_tests {
 
     #[test]
     fn a_global_skill_install_writes_the_guide_and_sweeps_the_old_name() {
+        let mut env = crate::project::EnvGuard::new();
         let tmp = tempfile::tempdir().unwrap();
-        let home = home_in(&tmp);
+        let home = home_in(&mut env, &tmp);
 
         // A pre-rename install to clean up.
         let legacy = home.join(".claude/skills/ug-mcp/SKILL.md");
@@ -1879,8 +1890,9 @@ mod skill_file_tests {
 
     #[test]
     fn a_rule_install_wraps_the_body_in_frontmatter_the_editor_reads() {
+        let mut env = crate::project::EnvGuard::new();
         let tmp = tempfile::tempdir().unwrap();
-        let home = home_in(&tmp);
+        let home = home_in(&mut env, &tmp);
 
         let written = install_skill_file("cursor", Scope::Global).expect("installs");
         let body = std::fs::read_to_string(&written).unwrap();
@@ -1899,8 +1911,9 @@ mod skill_file_tests {
 
     #[test]
     fn an_uninstall_removes_both_the_current_and_the_legacy_guide() {
+        let mut env = crate::project::EnvGuard::new();
         let tmp = tempfile::tempdir().unwrap();
-        let home = home_in(&tmp);
+        let home = home_in(&mut env, &tmp);
 
         let current = install_skill_file("claude", Scope::Global).expect("installs");
         let legacy = home.join(".claude/skills/ug-mcp/SKILL.md");
@@ -1914,8 +1927,9 @@ mod skill_file_tests {
 
     #[test]
     fn an_install_over_an_existing_guide_replaces_it_rather_than_appending() {
+        let mut env = crate::project::EnvGuard::new();
         let tmp = tempfile::tempdir().unwrap();
-        let _home = home_in(&tmp);
+        let _home = home_in(&mut env, &tmp);
 
         let first = install_skill_file("claude", Scope::Global).expect("first");
         std::fs::write(&first, "stale contents").unwrap();
@@ -1929,8 +1943,9 @@ mod skill_file_tests {
 
     #[test]
     fn an_unsupported_target_installs_no_guide_and_reports_so() {
+        let mut env = crate::project::EnvGuard::new();
         let tmp = tempfile::tempdir().unwrap();
-        let _home = home_in(&tmp);
+        let _home = home_in(&mut env, &tmp);
         assert!(install_skill_file("claude-desk", Scope::Global).is_none());
     }
 }

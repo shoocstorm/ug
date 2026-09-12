@@ -1902,19 +1902,19 @@ mod protocol_tests {
 
     #[test]
     fn the_cache_budget_defaults_when_unset_or_unusable() {
-        std::env::remove_var("UG_MCP_CACHE_BYTES");
+        let mut env = crate::project::EnvGuard::new();
+        env.remove("UG_MCP_CACHE_BYTES");
         let default = graph_cache_budget();
         assert!(default > 0);
 
         // Zero would evict on every insert and re-parse graph.json on every
         // call, which is slow rather than broken — so it falls back instead.
         for bad in ["0", "lots", "-5", ""] {
-            std::env::set_var("UG_MCP_CACHE_BYTES", bad);
+            env.set("UG_MCP_CACHE_BYTES", bad);
             assert_eq!(graph_cache_budget(), default, "{bad:?} must fall back");
         }
-        std::env::set_var("UG_MCP_CACHE_BYTES", "1048576");
+        env.set("UG_MCP_CACHE_BYTES", "1048576");
         assert_eq!(graph_cache_budget(), 1_048_576);
-        std::env::remove_var("UG_MCP_CACHE_BYTES");
     }
 
     #[test]
@@ -1984,7 +1984,7 @@ mod tool_dispatch_tests {
 
     /// A `~/.ug` with one indexed project in it, and a repo on disk to match.
     /// Returns the guard so the directory outlives the test.
-    fn project(name: &str) -> tempfile::TempDir {
+    fn project(env: &mut crate::project::EnvGuard, name: &str) -> tempfile::TempDir {
         let tmp = tempfile::tempdir().expect("tmp");
         let ug_home = tmp.path().join("ug_home");
         let repo = tmp.path().join("repo");
@@ -2001,7 +2001,7 @@ mod tool_dispatch_tests {
         let meta = crate::project::ProjectMeta::new(name, repo.to_str().unwrap(), 3, 2);
         crate::project::write_meta(&dir, &meta).expect("meta");
 
-        std::env::set_var("UG_HOME", &ug_home);
+        env.set("UG_HOME", &ug_home);
         tmp
     }
 
@@ -2013,7 +2013,8 @@ mod tool_dispatch_tests {
 
     #[tokio::test]
     async fn a_named_project_that_does_not_exist_says_how_to_find_one() {
-        let _guard = project("real");
+        let mut env = crate::project::EnvGuard::new_async().await;
+        let _guard = project(&mut env, "real");
         let err = call("find_symbols", json!({ "project": "ghost", "name": "caller" }))
             .await
             .unwrap_err();
@@ -2026,7 +2027,8 @@ mod tool_dispatch_tests {
 
     #[tokio::test]
     async fn an_unknown_tool_is_refused_by_name() {
-        let _guard = project("p");
+        let mut env = crate::project::EnvGuard::new_async().await;
+        let _guard = project(&mut env, "p");
         let err = call("teleport", json!({ "project": "p" })).await.unwrap_err();
         assert!(err.contains("teleport"), "{err}");
     }
@@ -2037,7 +2039,8 @@ mod tool_dispatch_tests {
     async fn find_symbols_answers_from_graph_json_alone() {
         // No `ugdb` was ever written here. That the structural tools still
         // work is the reason they are split from the store-backed ones.
-        let _guard = project("p");
+        let mut env = crate::project::EnvGuard::new_async().await;
+        let _guard = project(&mut env, "p");
         let out = call("find_symbols", json!({ "project": "p", "name": "caller" }))
             .await
             .expect("find_symbols");
@@ -2047,7 +2050,8 @@ mod tool_dispatch_tests {
 
     #[tokio::test]
     async fn file_outline_lists_a_files_symbols() {
-        let _guard = project("p");
+        let mut env = crate::project::EnvGuard::new_async().await;
+        let _guard = project(&mut env, "p");
         let out = call("file_outline", json!({ "project": "p", "file": "src/a.rs" }))
             .await
             .expect("file_outline");
@@ -2056,7 +2060,8 @@ mod tool_dispatch_tests {
 
     #[tokio::test]
     async fn find_usages_reports_the_caller() {
-        let _guard = project("p");
+        let mut env = crate::project::EnvGuard::new_async().await;
+        let _guard = project(&mut env, "p");
         let out = call(
             "find_usages",
             json!({ "project": "p", "nodeId": "function:src/a.rs:6:callee" }),
@@ -2068,7 +2073,8 @@ mod tool_dispatch_tests {
 
     #[tokio::test]
     async fn traverse_walks_from_a_seed() {
-        let _guard = project("p");
+        let mut env = crate::project::EnvGuard::new_async().await;
+        let _guard = project(&mut env, "p");
         let out = call(
             "traverse",
             json!({ "project": "p", "nodeId": "function:src/a.rs:1:caller", "hops": 1 }),
@@ -2080,7 +2086,8 @@ mod tool_dispatch_tests {
 
     #[tokio::test]
     async fn shortest_path_connects_two_symbols() {
-        let _guard = project("p");
+        let mut env = crate::project::EnvGuard::new_async().await;
+        let _guard = project(&mut env, "p");
         let out = call(
             "shortest_path",
             json!({
@@ -2096,7 +2103,8 @@ mod tool_dispatch_tests {
 
     #[tokio::test]
     async fn project_overview_orients_in_the_repo() {
-        let _guard = project("p");
+        let mut env = crate::project::EnvGuard::new_async().await;
+        let _guard = project(&mut env, "p");
         let out = call("project_overview", json!({ "project": "p" }))
             .await
             .expect("project_overview");
@@ -2107,7 +2115,8 @@ mod tool_dispatch_tests {
     async fn get_code_reads_the_working_tree_when_nothing_was_captured() {
         // No store, so there is no indexed capture — the tool falls through
         // to the repo root recorded in project.json.
-        let _guard = project("p");
+        let mut env = crate::project::EnvGuard::new_async().await;
+        let _guard = project(&mut env, "p");
         let out = call(
             "get_code",
             json!({ "project": "p", "nodeId": "function:src/a.rs:1:caller" }),
@@ -2119,7 +2128,8 @@ mod tool_dispatch_tests {
 
     #[tokio::test]
     async fn context_bundles_one_symbols_neighbourhood() {
-        let _guard = project("p");
+        let mut env = crate::project::EnvGuard::new_async().await;
+        let _guard = project(&mut env, "p");
         let out = call(
             "context",
             json!({ "project": "p", "nodeId": "function:src/a.rs:6:callee" }),
@@ -2132,7 +2142,8 @@ mod tool_dispatch_tests {
 
     #[tokio::test]
     async fn graph_schema_reports_the_types_present() {
-        let _guard = project("p");
+        let mut env = crate::project::EnvGuard::new_async().await;
+        let _guard = project(&mut env, "p");
         let out = call("graph_schema", json!({ "project": "p" }))
             .await
             .expect("graph_schema");
@@ -2147,7 +2158,8 @@ mod tool_dispatch_tests {
         // MCP clients stringify array arguments as readily as chat models do,
         // which is what `normalize_args` exists for. Without it this reads as
         // one symbol literally named `["a","b"]`.
-        let _guard = project("p");
+        let mut env = crate::project::EnvGuard::new_async().await;
+        let _guard = project(&mut env, "p");
         let out = call(
             "find_symbols",
             json!({ "project": "p", "name": "[\"caller\",\"callee\"]" }),
@@ -2162,7 +2174,8 @@ mod tool_dispatch_tests {
     async fn the_project_parameter_is_not_passed_on_to_the_tool() {
         // It selects the project; leaving it in the args would reach the
         // tool's own deserializer as an unknown field.
-        let _guard = project("p");
+        let mut env = crate::project::EnvGuard::new_async().await;
+        let _guard = project(&mut env, "p");
         let out = call("find_symbols", json!({ "project": "p", "name": "caller" }))
             .await
             .expect("the project key is stripped before the tool sees it");
@@ -2173,7 +2186,8 @@ mod tool_dispatch_tests {
     async fn list_projects_warns_that_it_ignores_a_project_argument() {
         // It lists every project by definition, so a `project` argument was a
         // misunderstanding worth naming rather than silently dropping.
-        let _guard = project("p");
+        let mut env = crate::project::EnvGuard::new_async().await;
+        let _guard = project(&mut env, "p");
         let out = call("list_projects", json!({ "project": "p" }))
             .await
             .expect("list_projects");
@@ -2191,7 +2205,8 @@ mod tool_dispatch_tests {
         // The note is the whole reason an agent can trust a blast radius: a
         // structural tool answers from the index, so a file edited since the
         // last `gen` makes that answer describe code that no longer exists.
-        let guard = project("p");
+        let mut env = crate::project::EnvGuard::new_async().await;
+        let guard = project(&mut env, "p");
         let repo = guard.path().join("repo");
         std::fs::write(repo.join("src/a.rs"), "fn caller() { changed(); }\n").expect("edit");
         // Age `graph.json` rather than sleeping for the filesystem's mtime
@@ -2216,7 +2231,8 @@ mod tool_dispatch_tests {
     async fn an_unedited_project_carries_no_staleness_warning() {
         // The counterpart: a note on every answer is noise, and noise gets
         // ignored — including the time it is telling the truth.
-        let _guard = project("p");
+        let mut env = crate::project::EnvGuard::new_async().await;
+        let _guard = project(&mut env, "p");
         let out = call("find_symbols", json!({ "project": "p", "name": "caller" }))
             .await
             .expect("find_symbols");

@@ -196,6 +196,18 @@ format), stream only the final answer, and show every call to the user as it hap
   let cargo regenerate it — `rm -rf native/target/debug/build`, and
   `native/target/llvm-cov-target/debug/build` separately, since coverage uses
   its own target dir. Nothing under `src/` needs changing.
+- **`cargo nextest` hides env-var races that `cargo test` exposes — and
+  `cargo llvm-cov` uses `cargo test`.** nextest runs one process per test, so
+  a test that sets `UG_HOME`, `HOME` or `UG_DEST` looks correct under it and
+  fails the moment the suite shares a process. Coverage runs are where this
+  surfaces, as a handful of unrelated tests failing together, including tests
+  you did not touch. Any test that mutates a process-global variable must go
+  through `project::EnvGuard`, which holds the one shared lock *and* restores
+  what it changed on drop — taking the lock alone is not enough, because a
+  variable left set leaks into the next test, which may not take the lock at
+  all. **Before landing test changes that touch the environment, run
+  `cargo test --lib` as well as nextest**; it is the cheap way to see what
+  coverage will see.
 - **Run these tests after every code change in the native folder**
 - If adding new functionality, add corresponding test cases to the test files
 - Ensure all tests pass before completing a phase

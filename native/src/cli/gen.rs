@@ -881,7 +881,12 @@ mod arg_tests {
     }
 
     /// A `~/.ug` containing one project whose recorded root is `repo_root`.
-    fn project_with_root(name: &str, repo_root: &str, ug_version: Option<&str>) -> tempfile::TempDir {
+    fn project_with_root(
+        env: &mut crate::project::EnvGuard,
+        name: &str,
+        repo_root: &str,
+        ug_version: Option<&str>,
+    ) -> tempfile::TempDir {
         let tmp = tempfile::tempdir().expect("tmp");
         let ug_home = tmp.path().join("ug_home");
         let dir = ug_home.join(name);
@@ -891,7 +896,7 @@ mod arg_tests {
             meta.ug_version = v.to_string();
         }
         project::write_meta(&dir, &meta).expect("meta");
-        std::env::set_var("UG_HOME", &ug_home);
+        env.set("UG_HOME", &ug_home);
         tmp
     }
 
@@ -921,11 +926,12 @@ mod arg_tests {
 
     #[test]
     fn an_index_from_another_ug_version_is_re_parsed_from_scratch() {
+        let mut env = crate::project::EnvGuard::new();
         // The parse cache is keyed on this build's extractors. Reusing one
         // written by a different version silently keeps whatever that version
         // got wrong, which is invisible until someone asks a structural
         // question and gets last release's answer.
-        let tmp = project_with_root("p", "/repo", Some("0.0.1-ancient"));
+        let tmp = project_with_root(&mut env, "p", "/repo", Some("0.0.1-ancient"));
         let dir = tmp.path().join("ug_home/p");
         assert!(
             resolve_gen_cache(&args(&[]), dir.to_str().unwrap()).is_none(),
@@ -935,7 +941,8 @@ mod arg_tests {
 
     #[test]
     fn an_index_from_this_version_keeps_its_cache() {
-        let tmp = project_with_root("p", "/repo", Some(env!("CARGO_PKG_VERSION")));
+        let mut env = crate::project::EnvGuard::new();
+        let tmp = project_with_root(&mut env, "p", "/repo", Some(env!("CARGO_PKG_VERSION")));
         let dir = tmp.path().join("ug_home/p");
         assert_eq!(
             resolve_gen_cache(&args(&[]), dir.to_str().unwrap()).as_deref(),
@@ -945,9 +952,10 @@ mod arg_tests {
 
     #[test]
     fn a_project_with_no_recorded_version_keeps_its_cache() {
+        let mut env = crate::project::EnvGuard::new();
         // Written before the field existed. Discarding the cache would be a
         // full re-parse on every upgrade path that predates the stamp.
-        let tmp = project_with_root("p", "/repo", None);
+        let tmp = project_with_root(&mut env, "p", "/repo", None);
         let dir = tmp.path().join("ug_home/p");
         assert!(resolve_gen_cache(&args(&[]), dir.to_str().unwrap()).is_some());
     }
@@ -956,8 +964,9 @@ mod arg_tests {
 
     #[test]
     fn with_no_project_on_disk_gen_indexes_the_working_directory() {
+        let mut env = crate::project::EnvGuard::new();
         let tmp = tempfile::tempdir().unwrap();
-        std::env::set_var("UG_HOME", tmp.path().join("empty"));
+        env.set("UG_HOME", tmp.path().join("empty"));
         let (root, name) = resolve_gen_input(&args(&[]));
         assert_eq!(root, ".");
         assert!(name.is_none(), "nothing to carry forward");
@@ -965,13 +974,14 @@ mod arg_tests {
 
     #[test]
     fn an_existing_project_is_re_indexed_from_its_recorded_root() {
+        let mut env = crate::project::EnvGuard::new();
         // Re-running and running the first time are the same command, so a
         // bare `ug gen` from anywhere must refresh the tree the project
         // already describes rather than the directory you happen to be in.
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path().join("repo");
         std::fs::create_dir_all(&repo).unwrap();
-        let _guard = project_with_root("mine", repo.to_str().unwrap(), None);
+        let _guard = project_with_root(&mut env, "mine", repo.to_str().unwrap(), None);
 
         let (root, name) = resolve_gen_input(&args(&["-n", "mine"]));
         assert_eq!(root, repo.to_str().unwrap());
@@ -985,10 +995,11 @@ mod arg_tests {
 
     #[test]
     fn a_project_name_that_differs_from_its_directory_is_carried_not_derived() {
+        let mut env = crate::project::EnvGuard::new();
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path().join("some-checkout");
         std::fs::create_dir_all(&repo).unwrap();
-        let _guard = project_with_root("custom", repo.to_str().unwrap(), None);
+        let _guard = project_with_root(&mut env, "custom", repo.to_str().unwrap(), None);
 
         let (_, name) = resolve_gen_input(&args(&["-n", "custom"]));
         assert_eq!(name.as_deref(), Some("custom"), "not \"some-checkout\"");
@@ -998,11 +1009,12 @@ mod arg_tests {
 
     #[test]
     fn the_resolved_db_path_overrides_whatever_the_caller_wrote() {
+        let mut env = crate::project::EnvGuard::new();
         // `gen` has already resolved the project directory by this point, so
         // a `-d`/`-o` on the command line must not reach the spec builder and
         // send the write somewhere else.
         let tmp = tempfile::tempdir().unwrap();
-        std::env::set_var("UG_HOME", tmp.path());
+        env.set("UG_HOME", tmp.path());
         let specs = gen_specs(&args(&["-d", "/tmp/ignored", "-n", "mine"]), "/resolved/ugdb", 384);
         assert_eq!(specs.len(), 1);
         match &specs[0] {
@@ -1016,10 +1028,11 @@ mod arg_tests {
 
     #[test]
     fn flags_that_are_not_path_flags_still_reach_the_spec_builder() {
+        let mut env = crate::project::EnvGuard::new();
         // `--dest` decides which backends are written at all, so dropping it
         // while filtering out the path flags would silently halve a fan-out.
         let tmp = tempfile::tempdir().unwrap();
-        std::env::set_var("UG_HOME", tmp.path());
+        env.set("UG_HOME", tmp.path());
         let specs = gen_specs(
             &args(&[
                 "--dest", "overgraph,neo4j",

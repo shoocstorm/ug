@@ -630,7 +630,7 @@ mod spec_tests {
 
     use super::*;
 
-    fn clear_env() {
+    fn clear_env(env: &mut crate::project::EnvGuard) {
         for k in [
             "UG_DEST",
             "UG_SERVE_CACHE_BYTES",
@@ -639,13 +639,14 @@ mod spec_tests {
             "UG_NEO4J_PASSWORD",
             "UG_NEO4J_DATABASE",
         ] {
-            std::env::remove_var(k);
+            env.remove(k);
         }
     }
 
     #[test]
     fn the_default_backend_is_the_local_store_at_the_given_path() {
-        clear_env();
+        let mut env = crate::project::EnvGuard::new();
+        clear_env(&mut env);
         let path = PathBuf::from("/home/u/.ug/p/ugdb");
         let specs = build_serve_store_specs(&path);
         assert_eq!(specs.len(), 1);
@@ -660,30 +661,32 @@ mod spec_tests {
 
     #[test]
     fn the_short_backend_spelling_is_accepted() {
-        clear_env();
-        std::env::set_var("UG_DEST", "og");
+        let mut env = crate::project::EnvGuard::new();
+        clear_env(&mut env);
+        env.set("UG_DEST", "og");
         let specs = build_serve_store_specs(&PathBuf::from("/x/ugdb"));
         assert!(matches!(specs[0], StoreSpec::Overgraph { .. }));
-        clear_env();
+        clear_env(&mut env);
     }
 
     #[test]
     fn a_blank_dest_falls_back_to_the_default_rather_than_opening_nothing() {
+        let mut env = crate::project::EnvGuard::new();
         // An exported-but-empty variable is what a shell script that built
         // the value and got nothing leaves behind. A server with no store
         // answers 503 to everything.
-        clear_env();
-        std::env::set_var("UG_DEST", "");
+        clear_env(&mut env);
+        env.set("UG_DEST", "");
         assert_eq!(build_serve_store_specs(&PathBuf::from("/x/ugdb")).len(), 1);
-        clear_env();
     }
 
     #[test]
     fn a_comma_separated_dest_opens_both_backends() {
-        clear_env();
-        std::env::set_var("UG_DEST", "overgraph, neo4j");
-        std::env::set_var("UG_NEO4J_URI", "bolt://localhost:7687");
-        std::env::set_var("UG_NEO4J_PASSWORD", "secret");
+        let mut env = crate::project::EnvGuard::new();
+        clear_env(&mut env);
+        env.set("UG_DEST", "overgraph, neo4j");
+        env.set("UG_NEO4J_URI", "bolt://localhost:7687");
+        env.set("UG_NEO4J_PASSWORD", "secret");
 
         let specs = build_serve_store_specs(&PathBuf::from("/x/ugdb"));
         assert_eq!(specs.len(), 2, "whitespace around an entry is trimmed");
@@ -696,31 +699,33 @@ mod spec_tests {
             }
             other => panic!("expected a neo4j spec, got {other:?}"),
         }
-        clear_env();
+        clear_env(&mut env);
     }
 
     #[test]
     fn the_cache_budget_defaults_when_unset_or_unusable() {
-        clear_env();
+        let mut env = crate::project::EnvGuard::new();
+        clear_env(&mut env);
         let default = snapshot_cache_budget();
         assert!(default > 0);
 
         for bad in ["0", "not-a-number", "-5", ""] {
-            std::env::set_var("UG_SERVE_CACHE_BYTES", bad);
+            env.set("UG_SERVE_CACHE_BYTES", bad);
             assert_eq!(
                 snapshot_cache_budget(),
                 default,
                 "{bad:?} must fall back, not disable the cache"
             );
         }
-        clear_env();
+        clear_env(&mut env);
     }
 
     #[test]
     fn an_explicit_cache_budget_is_honoured() {
-        clear_env();
-        std::env::set_var("UG_SERVE_CACHE_BYTES", "1048576");
+        let mut env = crate::project::EnvGuard::new();
+        clear_env(&mut env);
+        env.set("UG_SERVE_CACHE_BYTES", "1048576");
         assert_eq!(snapshot_cache_budget(), 1_048_576);
-        clear_env();
+        clear_env(&mut env);
     }
 }
