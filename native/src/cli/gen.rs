@@ -860,3 +860,237 @@ mod tests {
         std::env::remove_var("UG_HOME");
     }
 }
+
+#[cfg(test)]
+mod arg_tests {
+    //! What `ug gen` decides before it does any work.
+    //!
+    //! All of these read flags and the project on disk, and every one of them
+    //! decides something expensive or destructive: whether to re-parse the
+    //! whole repo, which tree to index, which store to write, and whether to
+    //! spend the minutes an embedding pass costs. Each fails by doing the
+    //! wrong thing successfully, so they are pinned here rather than left to
+    //! the end-to-end run.
+    //!
+    //! `UG_HOME` is process-global and nextest runs one process per test.
+
+    use super::*;
+
+    fn args(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// A `~/.ug` containing one project whose recorded root is `repo_root`.
+    fn project_with_root(name: &str, repo_root: &str, ug_version: Option<&str>) -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let ug_home = tmp.path().join("ug_home");
+        let dir = ug_home.join(name);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let mut meta = project::ProjectMeta::new(name, repo_root, 0, 0);
+        if let Some(v) = ug_version {
+            meta.ug_version = v.to_string();
+        }
+        project::write_meta(&dir, &meta).expect("meta");
+        std::env::set_var("UG_HOME", &ug_home);
+        tmp
+    }
+
+    // ── the parse cache ─────────────────────────────────────────────────────
+
+    #[test]
+    fn the_cache_defaults_to_the_projects_own_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_str().unwrap();
+        assert_eq!(resolve_gen_cache(&args(&[]), dir).as_deref(), Some(dir));
+    }
+
+    #[test]
+    fn no_cache_means_no_cache() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(resolve_gen_cache(&args(&["--no-cache"]), tmp.path().to_str().unwrap()).is_none());
+    }
+
+    #[test]
+    fn an_explicit_cache_wins_over_the_project_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out = resolve_gen_cache(&args(&["--cache", "/tmp/elsewhere"]), tmp.path().to_str().unwrap());
+        assert_eq!(out.as_deref(), Some("/tmp/elsewhere"));
+        let short = resolve_gen_cache(&args(&["-c", "/tmp/elsewhere"]), tmp.path().to_str().unwrap());
+        assert_eq!(short.as_deref(), Some("/tmp/elsewhere"));
+    }
+
+    #[test]
+    fn an_index_from_another_ug_version_is_re_parsed_from_scratch() {
+        // The parse cache is keyed on this build's extractors. Reusing one
+        // written by a different version silently keeps whatever that version
+        // got wrong, which is invisible until someone asks a structural
+        // question and gets last release's answer.
+        let tmp = project_with_root("p", "/repo", Some("0.0.1-ancient"));
+        let dir = tmp.path().join("ug_home/p");
+        assert!(
+            resolve_gen_cache(&args(&[]), dir.to_str().unwrap()).is_none(),
+            "a version mismatch must drop the cache"
+        );
+    }
+
+    #[test]
+    fn an_index_from_this_version_keeps_its_cache() {
+        let tmp = project_with_root("p", "/repo", Some(env!("CARGO_PKG_VERSION")));
+        let dir = tmp.path().join("ug_home/p");
+        assert_eq!(
+            resolve_gen_cache(&args(&[]), dir.to_str().unwrap()).as_deref(),
+            Some(dir.to_str().unwrap())
+        );
+    }
+
+    #[test]
+    fn a_project_with_no_recorded_version_keeps_its_cache() {
+        // Written before the field existed. Discarding the cache would be a
+        // full re-parse on every upgrade path that predates the stamp.
+        let tmp = project_with_root("p", "/repo", None);
+        let dir = tmp.path().join("ug_home/p");
+        assert!(resolve_gen_cache(&args(&[]), dir.to_str().unwrap()).is_some());
+    }
+
+    // ── which tree gets indexed ─────────────────────────────────────────────
+
+    #[test]
+    fn with_no_project_on_disk_gen_indexes_the_working_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("UG_HOME", tmp.path().join("empty"));
+        let (root, name) = resolve_gen_input(&args(&[]));
+        assert_eq!(root, ".");
+        assert!(name.is_none(), "nothing to carry forward");
+    }
+
+    #[test]
+    fn an_existing_project_is_re_indexed_from_its_recorded_root() {
+        // Re-running and running the first time are the same command, so a
+        // bare `ug gen` from anywhere must refresh the tree the project
+        // already describes rather than the directory you happen to be in.
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let _guard = project_with_root("mine", repo.to_str().unwrap(), None);
+
+        let (root, name) = resolve_gen_input(&args(&["-n", "mine"]));
+        assert_eq!(root, repo.to_str().unwrap());
+        assert_eq!(
+            name.as_deref(),
+            Some("mine"),
+            "the resolved name rides along — deriving it from the root's \
+             basename would write into the wrong project directory"
+        );
+    }
+
+    #[test]
+    fn a_project_name_that_differs_from_its_directory_is_carried_not_derived() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("some-checkout");
+        std::fs::create_dir_all(&repo).unwrap();
+        let _guard = project_with_root("custom", repo.to_str().unwrap(), None);
+
+        let (_, name) = resolve_gen_input(&args(&["-n", "custom"]));
+        assert_eq!(name.as_deref(), Some("custom"), "not \"some-checkout\"");
+    }
+
+    // ── which store gets written ────────────────────────────────────────────
+
+    #[test]
+    fn the_resolved_db_path_overrides_whatever_the_caller_wrote() {
+        // `gen` has already resolved the project directory by this point, so
+        // a `-d`/`-o` on the command line must not reach the spec builder and
+        // send the write somewhere else.
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("UG_HOME", tmp.path());
+        let specs = gen_specs(&args(&["-d", "/tmp/ignored", "-n", "mine"]), "/resolved/ugdb", 384);
+        assert_eq!(specs.len(), 1);
+        match &specs[0] {
+            ultragraph::storage::StoreSpec::Overgraph { path, embedding_dim } => {
+                assert_eq!(path.to_str().unwrap(), "/resolved/ugdb");
+                assert_eq!(*embedding_dim, 384);
+            }
+            other => panic!("expected an overgraph spec, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn flags_that_are_not_path_flags_still_reach_the_spec_builder() {
+        // `--dest` decides which backends are written at all, so dropping it
+        // while filtering out the path flags would silently halve a fan-out.
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("UG_HOME", tmp.path());
+        let specs = gen_specs(
+            &args(&[
+                "--dest", "overgraph,neo4j",
+                "--neo4j-uri", "bolt://localhost:7687",
+                "--neo4j-password", "secret",
+            ]),
+            "/resolved/ugdb",
+            384,
+        );
+        assert_eq!(specs.len(), 2, "both destinations survive the filter");
+    }
+
+    // ── whether vectors get built ───────────────────────────────────────────
+
+    #[test]
+    fn embedding_is_opt_in() {
+        // It costs most of the wall clock of a run, and nothing structural
+        // needs it.
+        assert!(!wants_embeddings(&args(&[])));
+        assert!(wants_embeddings(&args(&["--with-embed"])));
+    }
+
+    #[test]
+    fn the_retired_opt_out_still_means_what_it_meant() {
+        // `--no-embed` was the old opt-out and is now the default. Installed
+        // git hooks still pass it, and when both are given the flag naming a
+        // *skip* wins — the conservative reading.
+        assert!(!wants_embeddings(&args(&["--no-embed"])));
+        assert!(
+            !wants_embeddings(&args(&["--with-embed", "--no-embed"])),
+            "the skip flag wins over the ask"
+        );
+    }
+
+    // ── the model a vector-less run plans against ───────────────────────────
+
+    #[test]
+    fn an_explicit_model_flag_is_what_the_run_plans_against() {
+        assert_eq!(configured_model(&args(&["--model", "my-embedder"])), "my-embedder");
+    }
+
+    #[test]
+    fn with_no_store_and_no_flags_the_defaults_apply() {
+        let tmp = tempfile::tempdir().unwrap();
+        let empty = tmp.path().join("no-store");
+        let (dim, model) = store_dim_and_model(empty.to_str().unwrap(), &args(&[]));
+        assert_eq!(dim, ultragraph::storage::DEFAULT_EMBEDDING_DIM as u32);
+        assert!(!model.is_empty());
+    }
+
+    #[test]
+    fn an_explicit_dimension_applies_only_when_there_is_no_store_to_read() {
+        // Opening an existing store with any other dim is a hard error, so
+        // the flag is a first-ingest convenience, never an override.
+        let tmp = tempfile::tempdir().unwrap();
+        let empty = tmp.path().join("no-store");
+        let (dim, _) = store_dim_and_model(empty.to_str().unwrap(), &args(&["--embedding-dim", "512"]));
+        assert_eq!(dim, 512);
+    }
+
+    #[test]
+    fn a_section_cap_is_read_as_a_number_or_ignored() {
+        assert_eq!(section_cap_override(&args(&["--section-cap", "4000"])), Some(4000));
+        assert_eq!(section_cap_override(&args(&["--section-cap", "lots"])), None);
+    }
+
+    #[test]
+    fn the_skip_flags_help_names_every_stage_that_can_be_skipped() {
+        // It is the only place a user learns these exist.
+        let help = skip_flags_help();
+        assert!(help.contains("--no-ingest"), "{help}");
+        assert!(!help.trim().is_empty());
+    }
+}

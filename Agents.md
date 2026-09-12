@@ -187,6 +187,15 @@ format), stream only the final answer, and show every call to the user as it hap
   `cargo nextest run --lib --run-ignored all -E 'test(cli::ingest)'`.
   (The same ~1-2s also lands on every real `ug gen` / `ug ingest` / `ug
   update`, however little changed.)
+- **`failed to link or copy ... build-script-build` (os error 1) is a stale
+  target dir, not your change.** It appears for every build script at once,
+  including crates you never touched, and both `cargo check` and
+  `cargo llvm-cov` hit it independently. Hard-linking those files is what
+  fails; a plain `cp` of the same file still works, and the sources carry a
+  `com.apple.provenance` xattr. The fix is to drop the build-script cache and
+  let cargo regenerate it — `rm -rf native/target/debug/build`, and
+  `native/target/llvm-cov-target/debug/build` separately, since coverage uses
+  its own target dir. Nothing under `src/` needs changing.
 - **Run these tests after every code change in the native folder**
 - If adding new functionality, add corresponding test cases to the test files
 - Ensure all tests pass before completing a phase

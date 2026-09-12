@@ -475,6 +475,8 @@ fn print_tour_help() {
     println!("  {C_CYAN}--hops{C_RESET} <n>            Graph expansion hops (default: 2)");
     println!("  {C_CYAN}--max-stops{C_RESET} <n>       Max stops on the tour (default: {}, max {})", tour::DEFAULT_MAX_STOPS, tour::MAX_STOPS_LIMIT);
     println!("  {C_CYAN}--max-per-file{C_RESET} <n>    Candidates kept per file, 0 = no cap (default: 2)");
+    println!("  {C_CYAN}--max-chars{C_RESET} <n>       Char budget for the retrieved context pack");
+    println!("  {C_CYAN}--repo-root{C_RESET} <dir>     Tree to read snippets from (default: the project's recorded root)");
     println!("  {C_YELLOW}--no-llm{C_RESET}             Skip the guide; emit a ranked itinerary from retrieval only");
     println!("  {C_CYAN}--no-snippets{C_RESET}         Omit code snippets from stops");
     println!("  {C_CYAN}--think{C_RESET}               Let a reasoning model deliberate (slower, rarely better)");

@@ -1025,3 +1025,205 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod splice_tests {
+    //! Editing a file git already owns.
+    //!
+    //! A hook file may be one the user wrote, one another tool installed, or
+    //! one of ours. Install has to add our block without disturbing the rest,
+    //! and uninstall has to take back exactly what install added — including
+    //! the blank line it inserted, or a repo that installs and uninstalls
+    //! repeatedly grows a blank line each round.
+    //!
+    //! The existing tests above cover the round trip through the filesystem.
+    //! These pin the text surgery itself, which is where the round trip's
+    //! byte-identity actually comes from.
+
+    use super::*;
+
+    fn block() -> String {
+        hook_block(Hook::PostCommit, "/usr/local/bin/ug", "myrepo")
+    }
+
+    #[test]
+    fn an_empty_file_gets_a_shebang_and_our_block() {
+        let (out, placement) = splice("", &block());
+        assert_eq!(placement, Placement::Created);
+        assert!(out.starts_with("#!/bin/sh\n"), "a hook git will execute: {out:.40}");
+        assert!(out.contains(BEGIN) && out.contains(END));
+
+        // Whitespace-only counts as empty; a file of blank lines is not a
+        // hook worth merging into.
+        let (_, placement) = splice("   \n\n", &block());
+        assert_eq!(placement, Placement::Created);
+    }
+
+    #[test]
+    fn an_existing_hook_is_kept_and_ours_is_appended() {
+        let theirs = "#!/bin/sh\necho existing\n";
+        let (out, placement) = splice(theirs, &block());
+        assert_eq!(placement, Placement::Merged);
+        assert!(out.starts_with(theirs), "their hook runs first, unchanged: {out:.60}");
+        assert!(out.contains(BEGIN));
+    }
+
+    #[test]
+    fn a_hook_without_a_trailing_newline_is_not_run_into_our_block() {
+        // Otherwise their last line and our BEGIN marker end up on one line
+        // and neither is valid shell.
+        let (out, _) = splice("#!/bin/sh\necho existing", &block());
+        assert!(
+            out.contains("echo existing\n"),
+            "a newline is added before our block: {out:?}"
+        );
+    }
+
+    #[test]
+    fn reinstalling_replaces_our_block_rather_than_adding_a_second() {
+        let once = splice("#!/bin/sh\necho existing\n", &block()).0;
+        let (twice, placement) = splice(&once, &block());
+        assert_eq!(placement, Placement::Updated);
+        assert_eq!(twice.matches(BEGIN).count(), 1, "one block, not two:\n{twice}");
+        assert!(twice.contains("echo existing"), "their hook still survives");
+    }
+
+    #[test]
+    fn an_upgrade_rewrites_the_block_in_place() {
+        // The stub bakes in the binary path, so an upgrade that moved `ug`
+        // has to replace the old block where it stands rather than append.
+        let old = splice("", &hook_block(Hook::PostCommit, "/old/ug", "myrepo")).0;
+        let (new, _) = splice(&old, &hook_block(Hook::PostCommit, "/new/ug", "myrepo"));
+        assert!(new.contains("/new/ug"), "{new}");
+        assert!(!new.contains("/old/ug"), "{new}");
+    }
+
+    #[test]
+    fn an_install_and_uninstall_round_trips_a_foreign_hook_byte_for_byte() {
+        // The blank-line detail: `splice` inserts one to separate the two,
+        // and `unsplice` has to take it back or the file grows every cycle.
+        let theirs = "#!/bin/sh\necho existing\n";
+        let mut current = theirs.to_string();
+        for round in 0..3 {
+            current = splice(&current, &block()).0;
+            current = unsplice(&current)
+                .expect("our block is there")
+                .expect("their hook is worth keeping");
+            assert_eq!(current, theirs, "drifted on round {round}");
+        }
+    }
+
+    #[test]
+    fn uninstalling_a_hook_that_was_only_ours_leaves_nothing_worth_keeping() {
+        // `Some(None)` means "delete the file": a lone shebang and comments
+        // is not a hook, and leaving one behind makes `git` run an empty
+        // script on every commit.
+        let ours = splice("", &block()).0;
+        let left = unsplice(&ours).expect("our block is there");
+        assert!(left.is_none(), "nothing meaningful remains: {left:?}");
+    }
+
+    #[test]
+    fn uninstalling_finds_nothing_in_a_file_that_was_never_ours() {
+        assert!(unsplice("#!/bin/sh\necho existing\n").is_none());
+        assert!(unsplice("").is_none());
+    }
+
+    #[test]
+    fn a_comment_only_remainder_is_not_treated_as_a_hook() {
+        let theirs = "#!/bin/sh\n# just a note\n";
+        let spliced = splice(theirs, &block()).0;
+        let left = unsplice(&spliced).expect("ours is there");
+        assert!(left.is_none(), "comments alone are not a hook: {left:?}");
+    }
+
+    // ── quoting what goes into the script ───────────────────────────────────
+
+    #[test]
+    fn a_path_with_a_space_is_quoted_so_the_stub_still_runs() {
+        assert_eq!(sh_quote("/Applications/My Tools/ug"), "'/Applications/My Tools/ug'");
+    }
+
+    #[test]
+    fn a_single_quote_in_a_path_is_escaped_rather_than_closing_the_string() {
+        // `'` ends the quoted string in sh, so a naive quote turns the rest
+        // of the path into shell words — the classic injection through a
+        // filename the user chose.
+        assert_eq!(sh_quote("/Users/o'brien/ug"), r#"'/Users/o'\''brien/ug'"#);
+    }
+
+    #[test]
+    fn the_installed_stub_quotes_both_values_it_bakes_in() {
+        let b = hook_block(Hook::PostCommit, "/Users/o'brien/ug", "my repo");
+        assert!(b.contains(r#"'/Users/o'\''brien/ug'"#), "{b}");
+        assert!(b.contains("'my repo'"), "{b}");
+    }
+
+    #[test]
+    fn the_stub_can_never_fail_a_git_operation() {
+        // A broken index must not block a commit, and a moved binary must
+        // not either.
+        let b = block();
+        assert!(b.contains("|| true"), "a failing refresh is swallowed: {b}");
+        assert!(b.contains("UG_HOOK_DISABLE"), "one-command escape hatch: {b}");
+        assert!(b.contains("-x"), "skips when the binary is gone: {b}");
+    }
+
+    // ── which two commits each hook compares ────────────────────────────────
+
+    #[test]
+    fn a_file_checkout_is_declined_rather_than_guessed_at() {
+        // Flag 0 is a file checkout: both heads are the same commit, so the
+        // changed paths are not derivable. Re-indexing on a guess is worse
+        // than not re-indexing.
+        let same = vec!["abc".into(), "abc".into(), "1".into()];
+        assert!(diff_args(Hook::PostCheckout, &same, "").is_none());
+
+        let file_checkout = vec!["abc".into(), "def".into(), "0".into()];
+        assert!(diff_args(Hook::PostCheckout, &file_checkout, "").is_none());
+    }
+
+    #[test]
+    fn a_fresh_clone_has_no_previous_head_to_diff_against() {
+        let clone = vec!["0".repeat(40), "def".into(), "1".into()];
+        assert!(
+            diff_args(Hook::PostCheckout, &clone, "").is_none(),
+            "an all-zero previous head means there is no graph to keep fresh yet"
+        );
+    }
+
+    #[test]
+    fn a_branch_checkout_diffs_the_two_heads() {
+        let switch = vec!["abc".into(), "def".into(), "1".into()];
+        let args = diff_args(Hook::PostCheckout, &switch, "").expect("derivable");
+        assert_eq!(args, vec!["diff", "--name-only", "abc", "def"]);
+    }
+
+    #[test]
+    fn a_rewrite_diffs_from_the_oldest_thing_that_moved() {
+        // stdin carries one `<old> <new>` pair per rewritten commit; the
+        // first old sha is the oldest, and HEAD is where the rewrite landed.
+        let stdin = "aaa111 bbb222\nccc333 ddd444\n";
+        let args = diff_args(Hook::PostRewrite, &[], stdin).expect("derivable");
+        assert_eq!(args, vec!["diff", "--name-only", "aaa111", "HEAD"]);
+    }
+
+    #[test]
+    fn a_rewrite_with_nothing_on_stdin_is_declined() {
+        assert!(diff_args(Hook::PostRewrite, &[], "").is_none());
+        assert!(diff_args(Hook::PostRewrite, &[], "\n\n").is_none());
+    }
+
+    #[test]
+    fn a_merge_compares_the_pre_merge_tip_with_where_it_landed() {
+        let args = diff_args(Hook::PostMerge, &[], "").expect("derivable");
+        assert_eq!(args, vec!["diff", "--name-only", "ORIG_HEAD", "HEAD"]);
+    }
+
+    #[test]
+    fn a_commit_diffs_itself_against_its_parent() {
+        let args = diff_args(Hook::PostCommit, &[], "").expect("derivable");
+        assert!(args.contains(&"diff-tree".to_string()), "{args:?}");
+        assert!(args.contains(&"HEAD".to_string()), "{args:?}");
+    }
+}

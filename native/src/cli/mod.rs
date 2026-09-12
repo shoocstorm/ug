@@ -178,3 +178,153 @@ fn dispatch(cmd: &str, cmd_args: &[String]) {
         }
     }
 }
+
+#[cfg(test)]
+mod help_drift_tests {
+    //! Every flag a command reads is a flag its own `-h` has to name.
+    //!
+    //! Per-command help lives beside the command it documents, which is the
+    //! right place for it and also the reason it drifts: adding a flag is one
+    //! edit and documenting it is another, and nothing fails when only the
+    //! first happens. The flag then works and is undiscoverable, which is
+    //! indistinguishable from it not existing.
+    //!
+    //! This reads the flags straight out of each command's own `has_flag` /
+    //! `flag_value` calls, so it cannot go stale the way a transcribed list
+    //! would.
+
+    use std::collections::BTreeSet;
+
+    fn source(rel: &str) -> String {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/cli").join(rel);
+        std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
+    }
+
+    /// Every `-x` / `--long` this file passes to `has_flag` or `flag_value`.
+    fn flags_read(src: &str) -> BTreeSet<String> {
+        let mut out = BTreeSet::new();
+        // Both helpers take flag names as string literals, so the literals
+        // inside a `has_flag(` / `flag_value(` call are the flag vocabulary.
+        for (open, close) in [("has_flag(", ')'), ("flag_value(", ')')] {
+            let mut rest = src;
+            while let Some(i) = rest.find(open) {
+                rest = &rest[i + open.len()..];
+                let Some(end) = rest.find(close) else { break };
+                let call = &rest[..end];
+                let mut chars = call.char_indices();
+                while let Some((qi, c)) = chars.next() {
+                    if c != '"' {
+                        continue;
+                    }
+                    let after = &call[qi + 1..];
+                    let Some(qe) = after.find('"') else { break };
+                    let lit = &after[..qe];
+                    if lit.starts_with('-') && lit.len() > 1 {
+                        out.insert(lit.to_string());
+                    }
+                    // Skip past the closing quote.
+                    for (ni, _) in chars.by_ref() {
+                        if ni > qi + qe {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Flags that are real but deliberately undocumented, with the reason.
+    /// Adding a name here is how you say "not worth a help line"; the test
+    /// fails until either that or a help line happens.
+    fn excused(flag: &str) -> bool {
+        matches!(
+            flag,
+            // Universally accepted, documented once in `ug help` rather than
+            // repeated under every command.
+            "-h" | "--help" | "--no-logo"
+                // Legacy spellings kept working for installed hooks and old
+                // scripts; documenting them would advertise them.
+                | "--no-embed" | "--no-expand" | "-o" | "--output"
+        )
+    }
+
+    #[track_caller]
+    fn assert_documented(file: &str, help_marker: &str) {
+        let src = source(file);
+        let help_start = src
+            .find(help_marker)
+            .unwrap_or_else(|| panic!("{file}: no `{help_marker}` — has it been renamed?"));
+        let help = &src[help_start..];
+
+        let missing: Vec<String> = flags_read(&src)
+            .into_iter()
+            .filter(|f| !excused(f))
+            .filter(|f| !help.contains(f.as_str()))
+            .collect();
+
+        assert!(
+            missing.is_empty(),
+            "{file} reads {missing:?} but its help never mentions them — \
+             document them, or excuse them in `excused()` with a reason"
+        );
+    }
+
+    #[test]
+    fn the_tour_command_documents_the_flags_it_reads() {
+        assert_documented("tour.rs", "fn print_tour_help");
+    }
+
+    #[test]
+    fn the_ingest_command_documents_the_flags_it_reads() {
+        assert_documented("ingest.rs", "fn print_ingest_help");
+    }
+
+    #[test]
+    fn the_update_command_documents_the_flags_it_reads() {
+        assert_documented("update.rs", "fn print_update_help");
+    }
+
+    #[test]
+    fn the_hook_command_documents_the_flags_it_reads() {
+        assert_documented("hook.rs", "fn hook_help_text");
+    }
+
+    #[test]
+    fn a_flag_that_is_read_but_undocumented_is_actually_caught() {
+        // The guard above only means something if it can fail. This is the
+        // shape it is looking for: a flag in the code, absent from the help.
+        let src = r#"
+            fn run(args: &[String]) {
+                if has_flag(args, "--secret-mode") { return; }
+            }
+            fn print_x_help() {
+                println!("  --documented   does a thing");
+            }
+        "#;
+        let flags = flags_read(src);
+        assert!(flags.contains("--secret-mode"), "{flags:?}");
+        let help = &src[src.find("fn print_x_help").unwrap()..];
+        assert!(!help.contains("--secret-mode"), "the drift this test detects");
+    }
+
+    #[test]
+    fn the_extractor_finds_both_call_shapes() {
+        let src = r#"
+            has_flag(args, "--alpha");
+            flag_value(args, &["-b", "--bravo"]);
+        "#;
+        let flags = flags_read(src);
+        assert!(flags.contains("--alpha"), "{flags:?}");
+        assert!(flags.contains("-b") && flags.contains("--bravo"), "{flags:?}");
+    }
+
+    #[test]
+    fn the_extractor_ignores_strings_that_are_not_flags() {
+        // A project name or a path in the same call is not a flag.
+        let flags = flags_read(r#"flag_value(args, &["-n", "--name"]); foo("myrepo");"#);
+        assert!(!flags.contains("myrepo"), "{flags:?}");
+        assert_eq!(flags.len(), 2, "{flags:?}");
+    }
+}

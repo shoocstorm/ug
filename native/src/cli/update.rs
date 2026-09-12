@@ -386,3 +386,136 @@ fn print_update_help() {
     println!();
     print!("{}", super::gen::skip_flags_help());
 }
+
+#[cfg(test)]
+mod target_tests {
+    //! Turning what the caller typed into a repo-relative path.
+    //!
+    //! `ug update` is called by hand, by an agent, and by the git hooks with
+    //! whatever spelling `git diff --name-only` produced — so the same file
+    //! arrives as an absolute path, a cwd-relative one, and a repo-relative
+    //! one, and all three have to land on the same answer.
+    //!
+    //! Two refusals are load-bearing. A path outside the repo is rejected
+    //! rather than indexed, and a path that never existed stays an error
+    //! rather than being read as a deletion: `ug update src/tpyo.rs`
+    //! reporting success is how an agent concludes its edit was indexed when
+    //! nothing was.
+
+    use super::*;
+
+    /// A repo with one file in it. Returns the guard and the canonical root,
+    /// since macOS resolves a temp dir's `/var` to `/private/var`.
+    fn repo() -> (tempfile::TempDir, std::path::PathBuf) {
+        let tmp = tempfile::tempdir().expect("tmp");
+        std::fs::create_dir_all(tmp.path().join("src")).expect("src");
+        std::fs::write(tmp.path().join("src/a.rs"), "fn a() {}").expect("a.rs");
+        let root = std::fs::canonicalize(tmp.path()).expect("canonical");
+        (tmp, root)
+    }
+
+    #[test]
+    fn an_absolute_path_inside_the_repo_becomes_repo_relative() {
+        let (_g, root) = repo();
+        let abs = root.join("src/a.rs");
+        let out = resolve_target(abs.to_str().unwrap(), &root, &[]).expect("resolves");
+        assert_eq!(out, "src/a.rs");
+    }
+
+    #[test]
+    fn a_repo_root_relative_path_resolves_even_from_another_directory() {
+        // The hooks run with the repo root as cwd, but an agent may not.
+        // Falling back to repo-root-relative is what makes both work.
+        let (_g, root) = repo();
+        let out = resolve_target("src/a.rs", &root, &[]).expect("resolves");
+        assert_eq!(out, "src/a.rs");
+    }
+
+    #[test]
+    fn every_spelling_of_one_file_lands_on_the_same_answer() {
+        let (_g, root) = repo();
+        let abs = root.join("src/a.rs");
+        let spellings = [
+            abs.to_str().unwrap().to_string(),
+            "src/a.rs".to_string(),
+            "./src/a.rs".to_string(),
+        ];
+        for s in spellings {
+            assert_eq!(
+                resolve_target(&s, &root, &[]).expect(&s),
+                "src/a.rs",
+                "spelling {s} disagreed"
+            );
+        }
+    }
+
+    #[test]
+    fn a_path_outside_the_repo_is_refused_and_says_which_root_it_checked() {
+        let (_g, root) = repo();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("elsewhere.rs"), "x").unwrap();
+        let path = outside.path().join("elsewhere.rs");
+
+        let err = resolve_target(path.to_str().unwrap(), &root, &[]).unwrap_err();
+        assert!(err.contains("outside"), "{err}");
+        assert!(
+            err.contains(root.to_str().unwrap()),
+            "the error names the root it enforced: {err}"
+        );
+    }
+
+    #[test]
+    fn a_path_that_never_existed_stays_an_error() {
+        // Not a deletion: the index never held it, so this is a typo, and
+        // reporting success would tell an agent its edit was indexed.
+        let (_g, root) = repo();
+        let err = resolve_target("src/tpyo.rs", &root, &[]).unwrap_err();
+        assert!(err.contains("does not exist"), "{err}");
+        assert!(err.contains("src/tpyo.rs"), "{err}");
+        assert!(
+            err.contains("nothing to update"),
+            "the message has to say no work was done: {err}"
+        );
+    }
+
+    // ── deletions ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn a_file_the_index_holds_but_disk_does_not_is_a_deletion_to_re_index() {
+        // This is how a removal reaches the graph: the path is gone, so it
+        // cannot be canonicalised, and the index is the only evidence it was
+        // ever there.
+        let (_g, root) = repo();
+        let indexed = vec!["src/gone.rs".to_string()];
+        let out = resolve_target("src/gone.rs", &root, &indexed).expect("a known deletion");
+        assert_eq!(out, "src/gone.rs");
+    }
+
+    #[test]
+    fn a_deleted_file_named_absolutely_is_still_recognised() {
+        let (_g, root) = repo();
+        let abs = root.join("src/gone.rs");
+        let indexed = vec!["src/gone.rs".to_string()];
+        let out = resolve_target(abs.to_str().unwrap(), &root, &indexed).expect("a known deletion");
+        assert_eq!(out, "src/gone.rs");
+    }
+
+    #[test]
+    fn a_missing_file_the_index_never_held_is_not_treated_as_a_deletion() {
+        let (_g, root) = repo();
+        let indexed = vec!["src/other.rs".to_string()];
+        assert!(resolve_target("src/gone.rs", &root, &indexed).is_err());
+    }
+
+    #[test]
+    fn the_deletion_check_is_a_whole_path_match_not_a_suffix() {
+        // `a.rs` must not be answered by an indexed `src/a.rs`, or a typo
+        // one directory up silently re-indexes the wrong file.
+        let (_g, root) = repo();
+        let indexed = vec!["src/gone.rs".to_string()];
+        assert!(
+            resolve_target("gone.rs", &root, &indexed).is_err(),
+            "a bare basename is not the indexed path"
+        );
+    }
+}

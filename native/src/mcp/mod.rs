@@ -1567,3 +1567,662 @@ mod tests {
         assert!(cache.get(Path::new("/a/graph.json")).is_none());
     }
 }
+
+#[cfg(test)]
+mod protocol_tests {
+    //! The JSON-RPC envelope, and how tool arguments reach `analyze`.
+    //!
+    //! An MCP client reads the wire, not the code. A response missing its
+    //! `jsonrpc` field, an error where a result belongs, or a reply sent to a
+    //! notification are all silent on this side and fatal on the other — the
+    //! client either drops the message or desynchronises its id table.
+    //!
+    //! `handle_message` is only reachable for the three methods that need no
+    //! open project; `tools/call` needs a built `Mcp`, so its result shaping
+    //! is checked through [`tool_call_result`] instead.
+
+    use super::*;
+
+    fn req(method: &str, id: Value, params: Value) -> Value {
+        json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params })
+    }
+
+    async fn reply(msg: &Value) -> Option<Value> {
+        // The three methods below never touch the project context, so a
+        // default `Mcp` is enough to drive them.
+        handle_message(&Mcp::new(), msg).await
+    }
+
+    // ── the envelope ────────────────────────────────────────────────────────
+
+    #[test]
+    fn a_result_carries_the_protocol_version_and_the_callers_id() {
+        let out = rpc_result(json!(7), json!({ "ok": true }));
+        assert_eq!(out["jsonrpc"], "2.0");
+        assert_eq!(out["id"], 7);
+        assert_eq!(out["result"]["ok"], true);
+        assert!(out.get("error").is_none(), "a result never also carries an error");
+    }
+
+    #[test]
+    fn an_error_carries_a_code_and_never_a_result() {
+        let out = rpc_error(json!("abc"), -32601, "Method not found: x");
+        assert_eq!(out["jsonrpc"], "2.0");
+        assert_eq!(out["id"], "abc");
+        assert_eq!(out["error"]["code"], -32601);
+        assert!(out["error"]["message"].as_str().unwrap().contains("x"));
+        assert!(out.get("result").is_none());
+    }
+
+    #[test]
+    fn a_string_id_survives_as_a_string() {
+        // Ids are opaque: echoing a string id back as a number would break
+        // the client's correlation table.
+        assert_eq!(rpc_result(json!("req-1"), json!({}))["id"], "req-1");
+        assert_eq!(rpc_error(json!(null), -1, "x")["id"], Value::Null);
+    }
+
+    // ── dispatch ────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn a_notification_gets_no_reply_at_all() {
+        // A message with no id is a notification. Answering one puts an
+        // unexpected frame on the wire, which a strict client treats as a
+        // protocol error.
+        let note = json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
+        assert!(reply(&note).await.is_none());
+
+        // Even for a method that would otherwise answer.
+        let ping = json!({ "jsonrpc": "2.0", "method": "ping" });
+        assert!(reply(&ping).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn initialize_answers_with_the_servers_identity_and_capabilities() {
+        let out = reply(&req("initialize", json!(1), json!({})))
+            .await
+            .expect("initialize is answered");
+        assert_eq!(out["id"], 1);
+        assert_eq!(out["result"]["serverInfo"]["name"], SERVER_NAME);
+        assert_eq!(out["result"]["serverInfo"]["version"], SERVER_VERSION);
+        assert!(
+            out["result"]["capabilities"]["tools"].is_object(),
+            "a server that does not declare tools is never asked for them"
+        );
+        assert!(
+            !out["result"]["instructions"].as_str().unwrap_or("").is_empty(),
+            "the instructions are how an agent learns when to reach for these tools"
+        );
+    }
+
+    #[tokio::test]
+    async fn initialize_echoes_the_clients_protocol_version() {
+        // Version negotiation: agreeing to what the client asked for is what
+        // keeps an older client working.
+        let out = reply(&req(
+            "initialize",
+            json!(1),
+            json!({ "protocolVersion": "2024-11-05" }),
+        ))
+        .await
+        .expect("answered");
+        assert_eq!(out["result"]["protocolVersion"], "2024-11-05");
+    }
+
+    #[tokio::test]
+    async fn initialize_without_a_version_falls_back_to_the_servers_own() {
+        let out = reply(&req("initialize", json!(1), json!({})))
+            .await
+            .expect("answered");
+        assert_eq!(out["result"]["protocolVersion"], PROTOCOL_VERSION);
+    }
+
+    #[tokio::test]
+    async fn ping_is_answered_with_an_empty_result_not_an_error() {
+        let out = reply(&req("ping", json!(2), json!({}))).await.expect("answered");
+        assert_eq!(out["result"], json!({}));
+        assert!(out.get("error").is_none());
+    }
+
+    #[tokio::test]
+    async fn tools_list_advertises_every_tool_with_a_schema() {
+        let out = reply(&req("tools/list", json!(3), json!({})))
+            .await
+            .expect("answered");
+        let tools = out["result"]["tools"].as_array().expect("a tool list");
+        assert!(!tools.is_empty());
+        for t in tools {
+            let name = t["name"].as_str().unwrap_or_default();
+            assert!(!name.is_empty(), "a tool with no name cannot be called: {t}");
+            assert!(
+                !t["description"].as_str().unwrap_or_default().is_empty(),
+                "{name} has no description, so a model never learns when to use it"
+            );
+            assert!(
+                t["inputSchema"]["type"] == "object",
+                "{name}'s inputSchema must be an object schema"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unknown_method_is_a_method_not_found_error() {
+        // -32601 is the JSON-RPC code clients special-case; a generic failure
+        // here reads as a server fault rather than an unsupported call.
+        let out = reply(&req("tools/explode", json!(4), json!({})))
+            .await
+            .expect("answered");
+        assert_eq!(out["error"]["code"], -32601);
+        assert!(out["error"]["message"].as_str().unwrap().contains("tools/explode"));
+    }
+
+    #[tokio::test]
+    async fn a_message_with_no_method_is_answered_rather_than_dropped() {
+        // It still has an id, so the client is waiting for something.
+        let out = reply(&json!({ "jsonrpc": "2.0", "id": 5 }))
+            .await
+            .expect("a message with an id is always answered");
+        assert_eq!(out["error"]["code"], -32601);
+    }
+
+    // ── what a tool call looks like coming back ─────────────────────────────
+
+    #[test]
+    fn a_successful_call_comes_back_as_text_content() {
+        let out = tool_call_result(Ok("some markdown".into()));
+        assert_eq!(out["content"][0]["type"], "text");
+        assert_eq!(out["content"][0]["text"], "some markdown");
+        assert!(
+            out.get("isError").is_none(),
+            "success must not carry the error flag at all"
+        );
+    }
+
+    #[test]
+    fn a_failed_call_is_flagged_and_still_readable() {
+        // MCP reports tool failure inside a *successful* RPC result, flagged
+        // with isError — not as an RPC error. Getting that backwards makes
+        // the client treat a bad argument as a dead server.
+        let out = tool_call_result(Err("no such node".into()));
+        assert_eq!(out["isError"], true);
+        let text = out["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("no such node"), "{text}");
+        assert!(text.starts_with("Error:"), "the model reads this: {text}");
+    }
+
+    // ── analyze arguments, as a model actually sends them ───────────────────
+
+    #[test]
+    fn analyze_takes_its_preset_and_paging_from_the_top_level() {
+        let p = parse_analyze_args(&json!({
+            "preset": "long_functions",
+            "limit": 30,
+            "range": "11-35",
+        }));
+        assert_eq!(p.preset.as_deref(), Some("long_functions"));
+        assert_eq!(p.limit, Some(30));
+        assert_eq!(p.range.as_deref(), Some("11-35"));
+        assert!(p.gql.is_none());
+    }
+
+    #[test]
+    fn a_blank_string_is_treated_as_absent() {
+        // Models send "" for a field they decided not to use. Passing that
+        // through as a preset name looks up a preset called "".
+        let p = parse_analyze_args(&json!({ "preset": "  ", "gql": "" }));
+        assert!(p.preset.is_none());
+        assert!(p.gql.is_none());
+    }
+
+    #[test]
+    fn a_list_argument_sent_as_an_array_is_joined_not_stringified() {
+        // `analyze` binds list params from a comma-separated string. Calling
+        // `.to_string()` on the array would keep the brackets and quotes, and
+        // the split downstream would produce `["a.ts` as a filename.
+        let p = parse_analyze_args(&json!({
+            "preset": "diff_impact",
+            "args": { "files": ["a.ts", "b.rs"] },
+        }));
+        assert_eq!(p.args.get("files").map(String::as_str), Some("a.ts,b.rs"));
+    }
+
+    #[test]
+    fn scalar_arguments_keep_their_written_form() {
+        let p = parse_analyze_args(&json!({
+            "preset": "long_functions",
+            "args": { "min_loc": 100, "strict": true, "target": "src/a.rs" },
+        }));
+        assert_eq!(p.args.get("min_loc").map(String::as_str), Some("100"));
+        assert_eq!(p.args.get("strict").map(String::as_str), Some("true"));
+        assert_eq!(p.args.get("target").map(String::as_str), Some("src/a.rs"));
+    }
+
+    #[test]
+    fn a_null_argument_is_dropped_rather_than_bound_as_the_text_null() {
+        // Otherwise a preset sees the four characters "null" as its value.
+        let p = parse_analyze_args(&json!({ "args": { "target": null } }));
+        assert!(p.args.get("target").is_none());
+    }
+
+    #[test]
+    fn no_arguments_at_all_parses_to_an_empty_request() {
+        let p = parse_analyze_args(&json!({}));
+        assert!(p.preset.is_none() && p.gql.is_none() && p.args.is_empty());
+    }
+
+    // ── where a project's graph lives ───────────────────────────────────────
+
+    #[test]
+    fn the_graph_sits_beside_the_store_it_was_ingested_into() {
+        let p = graph_path_for(Path::new("/home/u/.ug/myrepo/ugdb"));
+        assert!(
+            p.ends_with("myrepo/graph.json"),
+            "the graph is the store's sibling: {}",
+            p.display()
+        );
+    }
+    // ── the notes appended to a tool's answer ───────────────────────────────
+
+    #[test]
+    fn a_per_file_report_distinguishes_indexed_deleted_and_ignored() {
+        // `gen` reports what each named file contributed. The three outcomes
+        // look identical from the outside — the command succeeded either way
+        // — so the count is the only place an agent learns its edit landed.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/a.rs"), "fn a() {}").unwrap();
+        std::fs::write(root.join("notes.txt"), "prose").unwrap();
+
+        let mut graph = GraphData {
+            nodes: Vec::new(),
+            edges: Vec::new(),
+            stats: None,
+            resolution: None,
+        };
+        graph.nodes.push(crate::types::GraphNode {
+            id: "function:src/a.rs:a".into(),
+            name: "a".into(),
+            node_type: crate::types::GraphNodeType::Function,
+            file: Some("src/a.rs".into()),
+            ..Default::default()
+        });
+
+        let report = per_file_report(
+            &graph,
+            &[
+                "src/a.rs".to_string(),
+                "notes.txt".to_string(),
+                "src/gone.rs".to_string(),
+            ],
+            root,
+        );
+
+        assert!(report.contains("src/a.rs: 1 symbol(s)"), "{report}");
+        assert!(
+            report.contains("notes.txt: 0 symbols"),
+            "a file on disk that contributed nothing is not a deletion: {report}"
+        );
+        assert!(
+            report.contains("extension not indexed"),
+            "and the reason has to be named, or it reads as a failure: {report}"
+        );
+        assert!(
+            report.contains("src/gone.rs: deleted"),
+            "a path that is gone from disk is a deletion: {report}"
+        );
+    }
+
+    #[test]
+    fn a_whole_repo_gen_reports_no_per_file_lines() {
+        let tmp = tempfile::tempdir().unwrap();
+        let graph = GraphData {
+            nodes: Vec::new(),
+            edges: Vec::new(),
+            stats: None,
+            resolution: None,
+        };
+        assert!(per_file_report(&graph, &[], tmp.path()).is_empty());
+    }
+
+    #[test]
+    fn a_project_with_no_vectors_owing_gets_no_warning() {
+        // The note is appended to every vector-backed answer, so printing it
+        // when nothing is owed trains the reader to skip it.
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = ProjectCtx {
+            db_path: tmp.path().join("p/ugdb"),
+            repo_root: tmp.path().to_path_buf(),
+            graph_path: tmp.path().join("p/graph.json"),
+        };
+        assert!(vectors_note(&ctx).is_empty());
+    }
+
+    // ── the graph cache ceiling ─────────────────────────────────────────────
+
+    #[test]
+    fn the_cache_budget_defaults_when_unset_or_unusable() {
+        std::env::remove_var("UG_MCP_CACHE_BYTES");
+        let default = graph_cache_budget();
+        assert!(default > 0);
+
+        // Zero would evict on every insert and re-parse graph.json on every
+        // call, which is slow rather than broken — so it falls back instead.
+        for bad in ["0", "lots", "-5", ""] {
+            std::env::set_var("UG_MCP_CACHE_BYTES", bad);
+            assert_eq!(graph_cache_budget(), default, "{bad:?} must fall back");
+        }
+        std::env::set_var("UG_MCP_CACHE_BYTES", "1048576");
+        assert_eq!(graph_cache_budget(), 1_048_576);
+        std::env::remove_var("UG_MCP_CACHE_BYTES");
+    }
+
+    #[test]
+    fn an_absent_file_has_no_modification_time() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(mtime_of(&tmp.path().join("nope")).is_none());
+
+        let present = tmp.path().join("here");
+        std::fs::write(&present, "x").unwrap();
+        assert!(mtime_of(&present).is_some());
+    }
+}
+
+#[cfg(test)]
+mod tool_dispatch_tests {
+    //! Calling the graph-backed tools the way an MCP client does.
+    //!
+    //! The eight structural tools need only a `graph.json`, which is the
+    //! whole point of that split: they keep answering on a project that was
+    //! never ingested, and on a machine with no embedding backend. These
+    //! drive them through `call_tool` — the same entry point the JSON-RPC
+    //! loop and `ug mcp call` both use — so argument normalisation, project
+    //! resolution and the staleness note are covered along the way rather
+    //! than assumed.
+    //!
+    //! `UG_HOME` is process-global; nextest runs one process per test, so
+    //! each test below owns its own.
+
+    use super::*;
+    use crate::types::{GraphEdge, GraphEdgeType, GraphNode, GraphNodeType};
+
+    fn node(id: &str, name: &str, t: GraphNodeType, file: &str, lines: Option<(u32, u32)>) -> GraphNode {
+        GraphNode {
+            id: id.into(),
+            name: name.into(),
+            node_type: t,
+            file: Some(file.into()),
+            start_line: lines.map(|(s, _)| s),
+            end_line: lines.map(|(_, e)| e),
+            ..Default::default()
+        }
+    }
+
+    fn sample_graph() -> GraphData {
+        GraphData {
+            nodes: vec![
+                node("file:src/a.rs", "a.rs", GraphNodeType::File, "src/a.rs", None),
+                node("function:src/a.rs:1:caller", "caller", GraphNodeType::Function, "src/a.rs", Some((1, 4))),
+                node("function:src/a.rs:6:callee", "callee", GraphNodeType::Function, "src/a.rs", Some((6, 9))),
+            ],
+            edges: vec![
+                GraphEdge {
+                    source: "function:src/a.rs:1:caller".into(),
+                    target: "function:src/a.rs:6:callee".into(),
+                    edge_type: GraphEdgeType::Calls,
+                },
+                GraphEdge {
+                    source: "file:src/a.rs".into(),
+                    target: "function:src/a.rs:1:caller".into(),
+                    edge_type: GraphEdgeType::Contains,
+                },
+            ],
+            stats: None,
+            resolution: None,
+        }
+    }
+
+    /// A `~/.ug` with one indexed project in it, and a repo on disk to match.
+    /// Returns the guard so the directory outlives the test.
+    fn project(name: &str) -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let ug_home = tmp.path().join("ug_home");
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(repo.join("src")).expect("repo");
+        std::fs::write(repo.join("src/a.rs"), "fn caller() {\n  callee();\n}\n\n\nfn callee() {\n  1\n}\n").expect("src");
+
+        let dir = ug_home.join(name);
+        std::fs::create_dir_all(&dir).expect("project dir");
+        std::fs::write(
+            dir.join("graph.json"),
+            serde_json::to_string(&sample_graph()).expect("graph"),
+        )
+        .expect("write graph");
+        let meta = crate::project::ProjectMeta::new(name, repo.to_str().unwrap(), 3, 2);
+        crate::project::write_meta(&dir, &meta).expect("meta");
+
+        std::env::set_var("UG_HOME", &ug_home);
+        tmp
+    }
+
+    async fn call(tool: &str, args: Value) -> Result<String, String> {
+        Mcp::new().call_tool(tool, &args).await
+    }
+
+    // ── project resolution ──────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn a_named_project_that_does_not_exist_says_how_to_find_one() {
+        let _guard = project("real");
+        let err = call("find_symbols", json!({ "project": "ghost", "name": "caller" }))
+            .await
+            .unwrap_err();
+        assert!(err.contains("ghost"), "{err}");
+        assert!(
+            err.contains("list_projects"),
+            "the error has to name the way out: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unknown_tool_is_refused_by_name() {
+        let _guard = project("p");
+        let err = call("teleport", json!({ "project": "p" })).await.unwrap_err();
+        assert!(err.contains("teleport"), "{err}");
+    }
+
+    // ── the eight structural tools, on a project with no store at all ───────
+
+    #[tokio::test]
+    async fn find_symbols_answers_from_graph_json_alone() {
+        // No `ugdb` was ever written here. That the structural tools still
+        // work is the reason they are split from the store-backed ones.
+        let _guard = project("p");
+        let out = call("find_symbols", json!({ "project": "p", "name": "caller" }))
+            .await
+            .expect("find_symbols");
+        assert!(out.contains("caller"), "{out}");
+        assert!(out.contains("function:src/a.rs:1:caller"), "the id is the point: {out}");
+    }
+
+    #[tokio::test]
+    async fn file_outline_lists_a_files_symbols() {
+        let _guard = project("p");
+        let out = call("file_outline", json!({ "project": "p", "file": "src/a.rs" }))
+            .await
+            .expect("file_outline");
+        assert!(out.contains("caller") && out.contains("callee"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn find_usages_reports_the_caller() {
+        let _guard = project("p");
+        let out = call(
+            "find_usages",
+            json!({ "project": "p", "nodeId": "function:src/a.rs:6:callee" }),
+        )
+        .await
+        .expect("find_usages");
+        assert!(out.contains("caller"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn traverse_walks_from_a_seed() {
+        let _guard = project("p");
+        let out = call(
+            "traverse",
+            json!({ "project": "p", "nodeId": "function:src/a.rs:1:caller", "hops": 1 }),
+        )
+        .await
+        .expect("traverse");
+        assert!(out.contains("callee"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn shortest_path_connects_two_symbols() {
+        let _guard = project("p");
+        let out = call(
+            "shortest_path",
+            json!({
+                "project": "p",
+                "source": "function:src/a.rs:1:caller",
+                "target": "function:src/a.rs:6:callee",
+            }),
+        )
+        .await
+        .expect("shortest_path");
+        assert!(out.contains("hop"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn project_overview_orients_in_the_repo() {
+        let _guard = project("p");
+        let out = call("project_overview", json!({ "project": "p" }))
+            .await
+            .expect("project_overview");
+        assert!(out.contains("Project overview"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn get_code_reads_the_working_tree_when_nothing_was_captured() {
+        // No store, so there is no indexed capture — the tool falls through
+        // to the repo root recorded in project.json.
+        let _guard = project("p");
+        let out = call(
+            "get_code",
+            json!({ "project": "p", "nodeId": "function:src/a.rs:1:caller" }),
+        )
+        .await
+        .expect("get_code");
+        assert!(out.contains("callee()"), "the live source: {out}");
+    }
+
+    #[tokio::test]
+    async fn context_bundles_one_symbols_neighbourhood() {
+        let _guard = project("p");
+        let out = call(
+            "context",
+            json!({ "project": "p", "nodeId": "function:src/a.rs:6:callee" }),
+        )
+        .await
+        .expect("context");
+        assert!(out.contains("callee"), "{out}");
+        assert!(out.contains("caller"), "the caller is half the pack: {out}");
+    }
+
+    #[tokio::test]
+    async fn graph_schema_reports_the_types_present() {
+        let _guard = project("p");
+        let out = call("graph_schema", json!({ "project": "p" }))
+            .await
+            .expect("graph_schema");
+        assert!(out.contains("Function"), "{out}");
+        assert!(out.contains("Calls"), "{out}");
+    }
+
+    // ── argument shapes a client actually sends ─────────────────────────────
+
+    #[tokio::test]
+    async fn a_stringified_array_argument_is_still_understood() {
+        // MCP clients stringify array arguments as readily as chat models do,
+        // which is what `normalize_args` exists for. Without it this reads as
+        // one symbol literally named `["a","b"]`.
+        let _guard = project("p");
+        let out = call(
+            "find_symbols",
+            json!({ "project": "p", "name": "[\"caller\",\"callee\"]" }),
+        )
+        .await
+        .expect("find_symbols");
+        assert!(out.contains("caller"), "{out}");
+        assert!(out.contains("callee"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn the_project_parameter_is_not_passed_on_to_the_tool() {
+        // It selects the project; leaving it in the args would reach the
+        // tool's own deserializer as an unknown field.
+        let _guard = project("p");
+        let out = call("find_symbols", json!({ "project": "p", "name": "caller" }))
+            .await
+            .expect("the project key is stripped before the tool sees it");
+        assert!(out.contains("caller"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn list_projects_warns_that_it_ignores_a_project_argument() {
+        // It lists every project by definition, so a `project` argument was a
+        // misunderstanding worth naming rather than silently dropping.
+        let _guard = project("p");
+        let out = call("list_projects", json!({ "project": "p" }))
+            .await
+            .expect("list_projects");
+        assert!(out.contains("ignores the project parameter"), "{out}");
+
+        let plain = call("list_projects", json!({})).await.expect("list_projects");
+        assert!(!plain.contains("ignores the project parameter"), "{plain}");
+        assert!(plain.contains('p'), "the project is listed: {plain}");
+    }
+
+    // ── the staleness note ──────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn an_edit_after_indexing_is_reported_on_a_structural_answer() {
+        // The note is the whole reason an agent can trust a blast radius: a
+        // structural tool answers from the index, so a file edited since the
+        // last `gen` makes that answer describe code that no longer exists.
+        let guard = project("p");
+        let repo = guard.path().join("repo");
+        std::fs::write(repo.join("src/a.rs"), "fn caller() { changed(); }\n").expect("edit");
+        // Age `graph.json` rather than sleeping for the filesystem's mtime
+        // granularity: the note compares the two timestamps, and a second of
+        // real time in the suite buys nothing a backdated stamp does not.
+        let graph = guard.path().join("ug_home/p/graph.json");
+        let f = std::fs::File::options().write(true).open(&graph).expect("open graph");
+        f.set_modified(SystemTime::now() - std::time::Duration::from_secs(60))
+            .expect("backdate graph.json");
+        drop(f);
+
+        let out = call("find_symbols", json!({ "project": "p", "name": "caller" }))
+            .await
+            .expect("find_symbols");
+        assert!(
+            out.contains("index") || out.contains("stale") || out.contains("behind"),
+            "an edited file must be reported: {out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unedited_project_carries_no_staleness_warning() {
+        // The counterpart: a note on every answer is noise, and noise gets
+        // ignored — including the time it is telling the truth.
+        let _guard = project("p");
+        let out = call("find_symbols", json!({ "project": "p", "name": "caller" }))
+            .await
+            .expect("find_symbols");
+        assert!(
+            !out.contains("behind the tree"),
+            "a current index must not warn: {out}"
+        );
+    }
+}

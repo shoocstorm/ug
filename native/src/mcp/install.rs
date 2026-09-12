@@ -1357,3 +1357,580 @@ mod tests {
         assert!(find_target("nope").is_err());
     }
 }
+
+#[cfg(test)]
+mod config_tests {
+    //! Writing the `ultragraph` entry into someone else's config file.
+    //!
+    //! Every target here is a file the user owns and edits themselves, often
+    //! with several other servers in it. The failure that matters is not a
+    //! crash — it is a successful write that took something else out with it.
+    //! So each format is checked twice: that the entry lands, and that an
+    //! unrelated neighbour survives both the install and the uninstall.
+    //!
+    //! The `Target` paths are `fn()` pointers, so the fixtures below read a
+    //! per-test env var rather than capturing a directory. Each test uses its
+    //! own variable name, so they cannot collide even outside nextest's
+    //! process-per-test isolation.
+
+    use super::*;
+
+    fn entry() -> Value {
+        json!({
+            "command": "/usr/local/bin/ug",
+            "args": ["mcp"],
+            "env": { "UG_PROJECT": "myrepo" },
+        })
+    }
+
+    // ── JSON: three shapes, one entry name ──────────────────────────────────
+
+    #[test]
+    fn the_claude_shape_nests_the_server_under_mcp_servers() {
+        let mut cfg = json!({ "mcpServers": { "other": { "command": "x" } } });
+        apply_json(&mut cfg, Format::JsonMcpServers, &entry());
+
+        assert_eq!(cfg["mcpServers"]["ultragraph"]["command"], "/usr/local/bin/ug");
+        assert_eq!(
+            cfg["mcpServers"]["other"]["command"], "x",
+            "another server in the same file must survive"
+        );
+    }
+
+    #[test]
+    fn the_vscode_shape_uses_servers_and_declares_a_transport() {
+        // VS Code keys off `type`, so an entry without it is ignored — and
+        // ignored silently, which reads as "the install did not work".
+        let mut cfg = json!({});
+        apply_json(&mut cfg, Format::JsonVscode, &entry());
+
+        assert_eq!(cfg["servers"]["ultragraph"]["type"], "stdio");
+        assert_eq!(cfg["servers"]["ultragraph"]["command"], "/usr/local/bin/ug");
+        assert!(cfg.get("mcpServers").is_none(), "the other shape is not written too");
+    }
+
+    #[test]
+    fn the_opencode_shape_folds_the_args_into_the_command() {
+        // opencode takes one argv array rather than command + args, and names
+        // the env block `environment`. Getting either wrong produces a config
+        // it accepts and never runs.
+        let mut cfg = json!({});
+        apply_json(&mut cfg, Format::JsonOpencode, &entry());
+
+        let e = &cfg["mcp"]["ultragraph"];
+        assert_eq!(e["type"], "local");
+        assert_eq!(e["command"], json!(["/usr/local/bin/ug", "mcp"]));
+        assert_eq!(e["environment"]["UG_PROJECT"], "myrepo");
+        assert_eq!(e["enabled"], true);
+        assert_eq!(cfg["$schema"], "https://opencode.ai/config.json");
+    }
+
+    #[test]
+    fn an_existing_opencode_schema_is_left_as_the_user_wrote_it() {
+        let mut cfg = json!({ "$schema": "https://example.test/custom.json" });
+        apply_json(&mut cfg, Format::JsonOpencode, &entry());
+        assert_eq!(cfg["$schema"], "https://example.test/custom.json");
+    }
+
+    #[test]
+    fn a_non_object_config_is_replaced_rather_than_indexed_into() {
+        // A file holding `[]` or `null` would otherwise panic on the index.
+        for junk in [json!([]), json!(null), json!("a string")] {
+            let mut cfg = junk;
+            apply_json(&mut cfg, Format::JsonMcpServers, &entry());
+            assert!(cfg["mcpServers"]["ultragraph"].is_object());
+        }
+    }
+
+    #[test]
+    fn a_container_of_the_wrong_type_is_replaced() {
+        // `"mcpServers": []` is a plausible hand-edit. Inserting into it
+        // requires replacing it, not merging.
+        let mut cfg = json!({ "mcpServers": [] });
+        apply_json(&mut cfg, Format::JsonMcpServers, &entry());
+        assert!(cfg["mcpServers"]["ultragraph"].is_object());
+    }
+
+    #[test]
+    fn installing_twice_leaves_one_entry_not_two() {
+        let mut cfg = json!({});
+        apply_json(&mut cfg, Format::JsonMcpServers, &entry());
+        apply_json(&mut cfg, Format::JsonMcpServers, &entry());
+        assert_eq!(cfg["mcpServers"].as_object().unwrap().len(), 1);
+    }
+
+    // ── JSON: removal reports whether it did anything ───────────────────────
+
+    #[test]
+    fn removing_reports_whether_there_was_anything_to_remove() {
+        let mut cfg = json!({ "mcpServers": { "ultragraph": {}, "other": {} } });
+        assert!(remove_json(&mut cfg, Format::JsonMcpServers));
+        assert!(cfg["mcpServers"]["other"].is_object(), "the neighbour survives");
+        assert!(cfg["mcpServers"].get("ultragraph").is_none());
+
+        // The distinction is what lets the command say "removed" rather than
+        // "already gone", so a second pass must report false.
+        assert!(!remove_json(&mut cfg, Format::JsonMcpServers));
+    }
+
+    #[test]
+    fn removal_looks_in_the_container_its_format_uses() {
+        // Removing from the wrong container would report success and leave
+        // the entry in place.
+        let mut cfg = json!({ "servers": { "ultragraph": {} } });
+        assert!(!remove_json(&mut cfg, Format::JsonMcpServers));
+        assert!(remove_json(&mut cfg, Format::JsonVscode));
+    }
+
+    #[test]
+    fn removing_from_a_config_that_never_had_one_is_not_an_error() {
+        let mut cfg = json!({});
+        assert!(!remove_json(&mut cfg, Format::JsonMcpServers));
+        assert!(!remove_json(&mut cfg, Format::JsonVscode));
+        assert!(!remove_json(&mut cfg, Format::JsonOpencode));
+    }
+
+    // ── reading a file the user may have broken ─────────────────────────────
+
+    #[test]
+    fn a_missing_or_empty_config_reads_as_an_empty_object() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("nope.json");
+        assert_eq!(read_json(&missing).unwrap(), json!({}));
+
+        let empty = tmp.path().join("empty.json");
+        std::fs::write(&empty, "   \n").unwrap();
+        assert_eq!(read_json(&empty).unwrap(), json!({}));
+    }
+
+    #[test]
+    fn a_broken_config_is_refused_by_name_rather_than_overwritten() {
+        // Silently replacing a file the user hand-edited would destroy every
+        // other server in it, so this has to fail loudly and say where.
+        let tmp = tempfile::tempdir().unwrap();
+        let bad = tmp.path().join("broken.json");
+        std::fs::write(&bad, "{ not json").unwrap();
+
+        let err = read_json(&bad).unwrap_err();
+        assert!(err.contains("broken.json"), "{err}");
+        assert!(err.contains("isn't valid JSON"), "{err}");
+    }
+
+    #[test]
+    fn writing_creates_the_directory_and_round_trips() {
+        let tmp = tempfile::tempdir().unwrap();
+        // A first install often targets a directory that does not exist yet
+        // (`~/.cursor/mcp.json` on a fresh machine).
+        let path = tmp.path().join("deep/nested/mcp.json");
+        let cfg = json!({ "mcpServers": { "ultragraph": { "command": "ug" } } });
+
+        write_json(&path, &cfg).expect("writes");
+        assert_eq!(read_json(&path).unwrap(), cfg);
+
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.ends_with('\n'), "a config file ends in a newline");
+        assert!(raw.contains("\n  "), "written indented for a human to edit");
+    }
+
+    // ── install / uninstall against a real file ─────────────────────────────
+
+    fn json_target_path() -> PathBuf {
+        PathBuf::from(std::env::var("UG_TEST_CFG_JSON").expect("UG_TEST_CFG_JSON"))
+    }
+    fn toml_target_path() -> PathBuf {
+        PathBuf::from(std::env::var("UG_TEST_CFG_TOML").expect("UG_TEST_CFG_TOML"))
+    }
+    fn yaml_target_path() -> PathBuf {
+        PathBuf::from(std::env::var("UG_TEST_CFG_YAML").expect("UG_TEST_CFG_YAML"))
+    }
+
+    fn target(format: Format, path: fn() -> PathBuf) -> Target {
+        Target {
+            key: "test",
+            label: "Test",
+            format,
+            project_path: Some(path),
+            global_path: None,
+        }
+    }
+
+    #[test]
+    fn a_json_install_adds_the_entry_and_an_uninstall_takes_only_that_back() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("mcp.json");
+        std::env::set_var("UG_TEST_CFG_JSON", &path);
+        std::fs::write(&path, r#"{"mcpServers":{"other":{"command":"keep-me"}}}"#).unwrap();
+
+        let t = target(Format::JsonMcpServers, json_target_path);
+        let written = install_config(&t, Scope::Project).expect("installs");
+        assert_eq!(written, path);
+
+        let after = read_json(&path).unwrap();
+        assert!(after["mcpServers"]["ultragraph"].is_object());
+        assert_eq!(after["mcpServers"]["other"]["command"], "keep-me");
+
+        let (_, removed) = uninstall_config(&t, Scope::Project).expect("uninstalls");
+        assert!(removed);
+        let after = read_json(&path).unwrap();
+        assert!(after["mcpServers"].get("ultragraph").is_none());
+        assert_eq!(
+            after["mcpServers"]["other"]["command"], "keep-me",
+            "uninstall must not take the user's other servers with it"
+        );
+    }
+
+    #[test]
+    fn uninstalling_from_a_file_that_does_not_exist_is_a_no_op() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("UG_TEST_CFG_JSON", tmp.path().join("absent.json"));
+        let t = target(Format::JsonMcpServers, json_target_path);
+
+        let (_, removed) = uninstall_config(&t, Scope::Project).expect("no error");
+        assert!(!removed, "nothing there is not a failure");
+    }
+
+    #[test]
+    fn a_toml_install_preserves_unrelated_tables() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+        std::env::set_var("UG_TEST_CFG_TOML", &path);
+        std::fs::write(&path, "[profile]\nmodel = \"gpt\"\n\n[mcp_servers.other]\ncommand = \"x\"\n").unwrap();
+
+        let t = target(Format::Toml, toml_target_path);
+        install_config(&t, Scope::Project).expect("installs");
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert!(after.contains("[mcp_servers.ultragraph]"), "{after}");
+        assert!(after.contains("[profile]"), "an unrelated table survives: {after}");
+        assert!(after.contains("[mcp_servers.other]"), "{after}");
+
+        let (_, removed) = uninstall_config(&t, Scope::Project).expect("uninstalls");
+        assert!(removed);
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert!(!after.contains("[mcp_servers.ultragraph]"), "{after}");
+        assert!(after.contains("[profile]"), "{after}");
+        assert!(after.contains("[mcp_servers.other]"), "{after}");
+    }
+
+    #[test]
+    fn a_yaml_install_round_trips_through_the_document() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.yaml");
+        std::env::set_var("UG_TEST_CFG_YAML", &path);
+        std::fs::write(&path, "model: local\nmcp_servers:\n  other:\n    command: x\n").unwrap();
+
+        let t = target(Format::Yaml, yaml_target_path);
+        install_config(&t, Scope::Project).expect("installs");
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert!(after.contains("ultragraph"), "{after}");
+        assert!(after.contains("model: local"), "unrelated keys survive: {after}");
+        assert!(after.contains("other"), "{after}");
+
+        let (_, removed) = uninstall_config(&t, Scope::Project).expect("uninstalls");
+        assert!(removed);
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert!(!after.contains("ultragraph"), "{after}");
+        assert!(after.contains("other"), "{after}");
+    }
+
+    #[test]
+    fn a_scope_the_target_does_not_support_is_refused_with_what_it_does() {
+        // `claude-desk` has no project config, and the error is the only
+        // place the user learns which scopes exist.
+        let t = target(Format::JsonMcpServers, json_target_path);
+        let err = install_config(&t, Scope::Global).unwrap_err();
+        assert!(err.contains("global"), "{err}");
+        assert!(err.contains("project"), "the error names what is supported: {err}");
+    }
+
+    // ── picking a target by name ────────────────────────────────────────────
+
+    #[test]
+    fn a_known_target_resolves_and_an_unknown_one_lists_the_options() {
+        match find_target("claude") {
+            Ok(t) => assert_eq!(t.key, "claude"),
+            Err(e) => panic!("claude should resolve: {e}"),
+        }
+        // `Target` is not `Debug`, so the error side is matched rather than
+        // unwrapped.
+        match find_target("nonesuch") {
+            Ok(t) => panic!("'nonesuch' resolved to {}", t.key),
+            Err(e) => assert!(e.contains("claude"), "the error lists real targets: {e}"),
+        }
+    }
+
+    #[test]
+    fn every_target_supports_at_least_one_scope() {
+        // A target with neither path can be selected and then never installed.
+        for t in targets() {
+            assert!(
+                !t.scopes().is_empty(),
+                "{} has no project or global config path",
+                t.key
+            );
+        }
+    }
+
+    #[test]
+    fn target_keys_are_unique() {
+        let mut keys: Vec<&str> = targets().iter().map(|t| t.key).collect();
+        let before = keys.len();
+        keys.sort_unstable();
+        keys.dedup();
+        assert_eq!(keys.len(), before, "two targets share a key; find_target would shadow one");
+    }
+}
+
+#[cfg(test)]
+mod skill_file_tests {
+    //! Writing and removing the agent skill file.
+    //!
+    //! The skill is how an agent learns these tools exist at all, so the
+    //! failure that matters is a *stale* copy rather than a missing one: the
+    //! guide was called `ug-mcp` while it documented the MCP tools and is now
+    //! `ug`, and if the old name survives an upgrade both load and the agent
+    //! reads contradictory instructions.
+    //!
+    //! `skill_target` resolves against `$HOME` and the working directory,
+    //! both process-global. nextest runs one process per test, so each test
+    //! below sets its own and the working directory is only changed by the
+    //! two that must.
+
+    use super::*;
+
+    /// Point `$HOME` at a fresh directory for this test's process.
+    fn home_in(tmp: &tempfile::TempDir) -> PathBuf {
+        let h = tmp.path().join("home");
+        std::fs::create_dir_all(&h).expect("home");
+        std::env::set_var("HOME", &h);
+        // Deliberately NOT canonicalized: `dirs::home_dir()` hands back `$HOME`
+        // verbatim, and on macOS a temp dir's `/var/...` canonicalizes to
+        // `/private/var/...`, so a canonicalized copy would never prefix-match
+        // the paths under test.
+        h
+    }
+
+    // ── where each agent's guide goes ───────────────────────────────────────
+
+    #[test]
+    fn every_supported_agent_has_a_skill_location() {
+        for target in ["claude", "cursor", "windsurf", "opencode"] {
+            assert!(
+                skill_target(target, Scope::Project).is_some(),
+                "{target} has no project skill path"
+            );
+        }
+        // A target with no guide is not an error — it just gets the server
+        // entry and nothing else.
+        assert!(skill_target("claude-desk", Scope::Project).is_none());
+    }
+
+    #[test]
+    fn a_global_install_writes_under_home_and_a_project_install_does_not() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = home_in(&tmp);
+
+        let (global, _) = skill_target("claude", Scope::Global).expect("global");
+        assert!(
+            global.starts_with(&home),
+            "a global skill belongs under $HOME: {}",
+            global.display()
+        );
+
+        let (project, _) = skill_target("claude", Scope::Project).expect("project");
+        assert!(
+            !project.starts_with(&home),
+            "a project skill belongs beside the repo: {}",
+            project.display()
+        );
+    }
+
+    #[test]
+    fn windsurf_rules_are_project_scoped_even_when_asked_for_globally() {
+        // Windsurf has no global rules directory, so a `--global` install has
+        // to land in the project or it lands nowhere the editor reads.
+        let tmp = tempfile::tempdir().unwrap();
+        let home = home_in(&tmp);
+        let (path, _) = skill_target("windsurf", Scope::Global).expect("windsurf");
+        assert!(
+            !path.starts_with(&home),
+            "windsurf rules are never global: {}",
+            path.display()
+        );
+        assert!(path.ends_with(".windsurf/rules/ug.md"));
+    }
+
+    #[test]
+    fn each_agent_gets_the_file_format_it_actually_reads() {
+        // Claude and opencode discover *skills*, which keep their own
+        // frontmatter; Cursor and Windsurf read *rules*, which need one
+        // written for them. Handing either the other's shape is invisible.
+        for (target, ends_with) in [
+            ("claude", ".claude/skills/ug/SKILL.md"),
+            ("opencode", ".agents/skills/ug/SKILL.md"),
+        ] {
+            let (path, kind) = skill_target(target, Scope::Project).expect(target);
+            assert!(path.ends_with(ends_with), "{}", path.display());
+            assert!(matches!(kind, SkillKind::Skill), "{target}");
+        }
+        for target in ["cursor", "windsurf"] {
+            let (_, kind) = skill_target(target, Scope::Project).expect(target);
+            assert!(matches!(kind, SkillKind::Rule(_)), "{target}");
+        }
+    }
+
+    // ── the stale-copy cleanup ──────────────────────────────────────────────
+
+    #[test]
+    fn the_old_guide_name_is_listed_for_removal_beside_the_new_one() {
+        // `ug-mcp` is the pre-rename name. Both spellings have to be swept,
+        // or the old one keeps loading next to the new.
+        for target in ["claude", "cursor", "windsurf", "opencode"] {
+            let legacy = legacy_skill_paths(target, Scope::Project);
+            assert!(!legacy.is_empty(), "{target} has no legacy paths to clean");
+            assert!(
+                legacy.iter().all(|p| p.to_string_lossy().contains("ug-mcp")),
+                "{target}: legacy paths must name the old guide: {legacy:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn removing_a_guide_takes_its_skill_directory_with_it() {
+        // A bare `ug/` directory left behind still looks like an installed
+        // skill to anyone reading the tree.
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join(".claude/skills/ug");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("SKILL.md");
+        std::fs::write(&file, "x").unwrap();
+
+        remove_guide_file(&file);
+        assert!(!file.exists());
+        assert!(!dir.exists(), "the empty skill directory goes too");
+    }
+
+    #[test]
+    fn a_skill_directory_with_other_files_in_it_is_left_alone() {
+        // Removing a directory the user put something else in would be a
+        // deletion they never asked for.
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join(".claude/skills/ug");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("SKILL.md");
+        std::fs::write(&file, "x").unwrap();
+        std::fs::write(dir.join("notes.md"), "mine").unwrap();
+
+        remove_guide_file(&file);
+        assert!(!file.exists(), "the guide still goes");
+        assert!(dir.exists(), "but not the directory around it");
+        assert!(dir.join("notes.md").exists());
+    }
+
+    #[test]
+    fn a_rules_file_removal_does_not_touch_the_rules_directory() {
+        // `.cursor/rules/` holds the user's other rules; only a directory
+        // named for the skill itself is swept.
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join(".cursor/rules");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("ug.mdc");
+        std::fs::write(&file, "x").unwrap();
+
+        remove_guide_file(&file);
+        assert!(!file.exists());
+        assert!(dir.exists(), "a shared rules directory is never removed");
+    }
+
+    #[test]
+    fn removing_a_guide_that_is_not_there_is_a_no_op() {
+        let tmp = tempfile::tempdir().unwrap();
+        remove_guide_file(&tmp.path().join("nothing/here.md"));
+    }
+
+    // ── writing the file, in a directory of this test's own ─────────────────
+
+    #[test]
+    fn a_global_skill_install_writes_the_guide_and_sweeps_the_old_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = home_in(&tmp);
+
+        // A pre-rename install to clean up.
+        let legacy = home.join(".claude/skills/ug-mcp/SKILL.md");
+        std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        std::fs::write(&legacy, "old guide").unwrap();
+
+        let written = install_skill_file("claude", Scope::Global).expect("installs");
+        assert!(written.ends_with(".claude/skills/ug/SKILL.md"), "{}", written.display());
+
+        let body = std::fs::read_to_string(&written).unwrap();
+        assert!(
+            body.starts_with("---\nname: ug\n"),
+            "the frontmatter is what makes the skill discoverable: {}",
+            &body[..body.len().min(40)]
+        );
+        assert!(body.ends_with('\n'));
+
+        assert!(!legacy.exists(), "the pre-rename guide must not survive an install");
+        assert!(
+            !legacy.parent().unwrap().exists(),
+            "nor the directory that held it"
+        );
+    }
+
+    #[test]
+    fn a_rule_install_wraps_the_body_in_frontmatter_the_editor_reads() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = home_in(&tmp);
+
+        let written = install_skill_file("cursor", Scope::Global).expect("installs");
+        let body = std::fs::read_to_string(&written).unwrap();
+        assert!(body.starts_with("---\n"), "{body:.60}");
+        assert!(body.contains("alwaysApply: false"), "{body:.200}");
+        // The rule body is the skill with its own frontmatter stripped —
+        // two frontmatter blocks in one file is not a document either
+        // editor parses.
+        assert_eq!(
+            body.matches("\n---\n").count(),
+            1,
+            "exactly one frontmatter block: {body:.200}"
+        );
+        assert!(written.starts_with(&home));
+    }
+
+    #[test]
+    fn an_uninstall_removes_both_the_current_and_the_legacy_guide() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = home_in(&tmp);
+
+        let current = install_skill_file("claude", Scope::Global).expect("installs");
+        let legacy = home.join(".claude/skills/ug-mcp/SKILL.md");
+        std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        std::fs::write(&legacy, "old").unwrap();
+
+        uninstall_skill_file("claude", Scope::Global);
+        assert!(!current.exists(), "the installed guide goes");
+        assert!(!legacy.exists(), "and so does the stale one");
+    }
+
+    #[test]
+    fn an_install_over_an_existing_guide_replaces_it_rather_than_appending() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = home_in(&tmp);
+
+        let first = install_skill_file("claude", Scope::Global).expect("first");
+        std::fs::write(&first, "stale contents").unwrap();
+        let second = install_skill_file("claude", Scope::Global).expect("second");
+
+        assert_eq!(first, second);
+        let body = std::fs::read_to_string(&second).unwrap();
+        assert!(!body.contains("stale contents"), "an upgrade overwrites");
+        assert!(body.starts_with("---\nname: ug\n"));
+    }
+
+    #[test]
+    fn an_unsupported_target_installs_no_guide_and_reports_so() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = home_in(&tmp);
+        assert!(install_skill_file("claude-desk", Scope::Global).is_none());
+    }
+}

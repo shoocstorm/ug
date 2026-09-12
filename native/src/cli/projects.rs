@@ -775,3 +775,92 @@ mod tests {
         assert_eq!(format_bytes(5 * 1024 * 1024 * 1024 * 1024), "5.0 TB");
     }
 }
+
+#[cfg(test)]
+mod format_tests {
+    //! The columns `ug projects` prints.
+    //!
+    //! A project list is read at a glance and compared down the column, so
+    //! what matters is that the numbers stay comparable: the same unit
+    //! reached at the same threshold, and a missing value that reads as
+    //! missing rather than as zero.
+
+    use super::*;
+
+    #[test]
+    fn thousands_separators_land_every_three_digits() {
+        assert_eq!(commas(0), "0");
+        assert_eq!(commas(999), "999");
+        assert_eq!(commas(1_000), "1,000");
+        assert_eq!(commas(12_345), "12,345");
+        assert_eq!(commas(1_234_567), "1,234,567");
+    }
+
+    #[test]
+    fn bytes_below_a_kilobyte_are_printed_whole() {
+        assert_eq!(format_bytes(0), "0 B");
+        assert_eq!(format_bytes(999), "999 B");
+        assert_eq!(format_bytes(1023), "1023 B");
+    }
+
+    #[test]
+    fn the_unit_changes_at_the_boundary_not_near_it() {
+        assert_eq!(format_bytes(1024), "1.0 KB");
+        assert_eq!(format_bytes(1024 * 1024), "1.0 MB");
+        assert_eq!(format_bytes(1024 * 1024 * 1024), "1.0 GB");
+    }
+
+    #[test]
+    fn small_values_keep_a_decimal_and_large_ones_drop_it() {
+        // Three significant figures below ten units, so a column of sizes
+        // stays comparable rather than collapsing to "1 MB, 9 MB, 40 MB".
+        assert_eq!(format_bytes(1024 * 5 + 512), "5.5 KB");
+        assert_eq!(format_bytes(1024 * 40), "40 KB");
+        assert!(format_bytes(1024 * 9).contains('.'), "under ten keeps the decimal");
+        assert!(!format_bytes(1024 * 10).contains('.'), "ten and over does not");
+    }
+
+    #[test]
+    fn the_largest_unit_is_not_exceeded() {
+        // Past terabytes the loop stops rather than indexing off the end.
+        let huge = format_bytes(u64::MAX);
+        assert!(huge.ends_with(" TB"), "{huge}");
+    }
+
+    #[test]
+    fn an_unknown_size_reads_as_unknown_not_as_zero() {
+        // A project whose store has not been written yet has no size. "0 B"
+        // would read as an empty index.
+        assert_eq!(size_cell(None), "-");
+        assert_eq!(size_cell(Some(0)), "0 B");
+        assert_eq!(size_cell(Some(1024)), "1.0 KB");
+    }
+
+    // ── how long ago ────────────────────────────────────────────────────────
+
+    fn ago(secs: u64) -> String {
+        humanize(std::time::Duration::from_secs(secs))
+    }
+
+    #[test]
+    fn a_recent_moment_is_not_reported_in_seconds() {
+        // The useful distinction is minutes versus days; "43s ago" invites
+        // precision the number does not have.
+        assert_eq!(ago(0), "under a minute");
+        assert_eq!(ago(90), "under a minute");
+    }
+
+    #[test]
+    fn each_scale_takes_over_where_the_last_stops_reading_well() {
+        assert_eq!(ago(91), "1m");
+        assert_eq!(ago(5400), "90m");
+        assert_eq!(ago(5401), "1h");
+        assert_eq!(ago(172_800), "48h");
+        assert_eq!(ago(172_801), "2d");
+    }
+
+    #[test]
+    fn a_long_gap_is_reported_in_days() {
+        assert_eq!(ago(86_400 * 30), "30d");
+    }
+}

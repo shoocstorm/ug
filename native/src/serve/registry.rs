@@ -617,3 +617,110 @@ pub(crate) async fn resolve_ctx(
     registry.insert_loaded(ctx.clone());
     Ok(ctx)
 }
+
+#[cfg(test)]
+mod spec_tests {
+    //! What `ug serve` opens, and how much it is allowed to cache.
+    //!
+    //! Both read the environment, which is how a deployment configures the
+    //! server without flags. The failure to catch is a value that parses to
+    //! something harmless-looking: a cache budget of zero would evict on
+    //! every insert and turn every project switch into a full reload, and it
+    //! would never report an error.
+
+    use super::*;
+
+    fn clear_env() {
+        for k in [
+            "UG_DEST",
+            "UG_SERVE_CACHE_BYTES",
+            "UG_NEO4J_URI",
+            "UG_NEO4J_USER",
+            "UG_NEO4J_PASSWORD",
+            "UG_NEO4J_DATABASE",
+        ] {
+            std::env::remove_var(k);
+        }
+    }
+
+    #[test]
+    fn the_default_backend_is_the_local_store_at_the_given_path() {
+        clear_env();
+        let path = PathBuf::from("/home/u/.ug/p/ugdb");
+        let specs = build_serve_store_specs(&path);
+        assert_eq!(specs.len(), 1);
+        match &specs[0] {
+            StoreSpec::Overgraph { path: p, embedding_dim } => {
+                assert_eq!(p, &path);
+                assert_eq!(*embedding_dim, DEFAULT_EMBEDDING_DIM as u32);
+            }
+            other => panic!("expected an overgraph spec, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_short_backend_spelling_is_accepted() {
+        clear_env();
+        std::env::set_var("UG_DEST", "og");
+        let specs = build_serve_store_specs(&PathBuf::from("/x/ugdb"));
+        assert!(matches!(specs[0], StoreSpec::Overgraph { .. }));
+        clear_env();
+    }
+
+    #[test]
+    fn a_blank_dest_falls_back_to_the_default_rather_than_opening_nothing() {
+        // An exported-but-empty variable is what a shell script that built
+        // the value and got nothing leaves behind. A server with no store
+        // answers 503 to everything.
+        clear_env();
+        std::env::set_var("UG_DEST", "");
+        assert_eq!(build_serve_store_specs(&PathBuf::from("/x/ugdb")).len(), 1);
+        clear_env();
+    }
+
+    #[test]
+    fn a_comma_separated_dest_opens_both_backends() {
+        clear_env();
+        std::env::set_var("UG_DEST", "overgraph, neo4j");
+        std::env::set_var("UG_NEO4J_URI", "bolt://localhost:7687");
+        std::env::set_var("UG_NEO4J_PASSWORD", "secret");
+
+        let specs = build_serve_store_specs(&PathBuf::from("/x/ugdb"));
+        assert_eq!(specs.len(), 2, "whitespace around an entry is trimmed");
+        assert!(matches!(specs[0], StoreSpec::Overgraph { .. }));
+        match &specs[1] {
+            StoreSpec::Neo4j { uri, user, database, .. } => {
+                assert_eq!(uri, "bolt://localhost:7687");
+                assert_eq!(user, "neo4j", "the user defaults rather than being required");
+                assert_eq!(*database, None);
+            }
+            other => panic!("expected a neo4j spec, got {other:?}"),
+        }
+        clear_env();
+    }
+
+    #[test]
+    fn the_cache_budget_defaults_when_unset_or_unusable() {
+        clear_env();
+        let default = snapshot_cache_budget();
+        assert!(default > 0);
+
+        for bad in ["0", "not-a-number", "-5", ""] {
+            std::env::set_var("UG_SERVE_CACHE_BYTES", bad);
+            assert_eq!(
+                snapshot_cache_budget(),
+                default,
+                "{bad:?} must fall back, not disable the cache"
+            );
+        }
+        clear_env();
+    }
+
+    #[test]
+    fn an_explicit_cache_budget_is_honoured() {
+        clear_env();
+        std::env::set_var("UG_SERVE_CACHE_BYTES", "1048576");
+        assert_eq!(snapshot_cache_budget(), 1_048_576);
+        clear_env();
+    }
+}
