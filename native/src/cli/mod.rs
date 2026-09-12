@@ -42,6 +42,8 @@ use ultragraph::{C_BOLD, C_CYAN, C_RESET};
 
 use crate::{mcp, serve};
 
+use io::{exit_with, CliError, CliResult};
+
 /// Parse the process arguments and run the requested command.
 ///
 /// Everything that has to happen before any subcommand sees an argument —
@@ -115,21 +117,31 @@ pub fn run() {
     dispatch(&argv[1], &argv[2..]);
 }
 
-/// Map a subcommand name to its entry point.
+/// Map a subcommand name to its entry point, then end the process on failure.
+///
+/// This is the only place a handled CLI failure exits. Commands return
+/// [`CliResult`] instead of calling `die` themselves, which is what makes
+/// them callable from a test — a command that exits on its bad-input path
+/// takes the test runner down with it, so those paths could never be
+/// exercised.
+///
+/// Arms still written `{ f(args); Ok(()) }` have not been converted yet.
+/// Converting one is a local change to that command; this table does not
+/// move again.
 fn dispatch(cmd: &str, cmd_args: &[String]) {
-    match cmd {
+    let result: CliResult = match cmd {
         // Primary entry points.
-        "gen" => gen::run_gen(cmd_args),
-        "update" => update::run_update(cmd_args),
-        "hook" => hook::run_hook(cmd_args),
-        "serve" => serve::run_serve(cmd_args),
-        "app" => app::run_app(cmd_args),
-        "api" => api::run_api(cmd_args),
-        "demo" => demo::run_demo(cmd_args),
+        "gen" => { gen::run_gen(cmd_args); Ok(()) },
+        "update" => { update::run_update(cmd_args); Ok(()) },
+        "hook" => { hook::run_hook(cmd_args); Ok(()) },
+        "serve" => { serve::run_serve(cmd_args); Ok(()) },
+        "app" => { app::run_app(cmd_args); Ok(()) },
+        "api" => { api::run_api(cmd_args); Ok(()) },
+        "demo" => { demo::run_demo(cmd_args); Ok(()) },
         // Pipeline steps `gen` runs for you.
-        "index" => index::run_index(cmd_args),
-        "graph" => index::run_graph(cmd_args),
-        "ingest" => ingest::run_ingest(cmd_args),
+        "index" => { index::run_index(cmd_args); Ok(()) },
+        "graph" => { index::run_graph(cmd_args); Ok(()) },
+        "ingest" => { ingest::run_ingest(cmd_args); Ok(()) },
         // Structural analysis. What is left here is what nothing else
         // can do: betweenness centrality needs all-pairs shortest paths,
         // and cycle detection needs an unbounded DFS — neither is
@@ -146,37 +158,38 @@ fn dispatch(cmd: &str, cmd_args: &[String]) {
         "project_overview" => agent::run_project_overview(cmd_args),
         "shortest_path" => graph_algos::run_graph_path(cmd_args),
         "graph_schema" => agent::run_graph_schema(cmd_args),
-        "analyze" => analyze::run_analyze(cmd_args),
+        "analyze" => { analyze::run_analyze(cmd_args); Ok(()) },
         // Retrieval (OverGraph-backed).
-        "semantic_search" => search::run_semantic_search(cmd_args),
-        "search" => search::run_hybrid_search(cmd_args),
-        "traverse" => search::run_traverse(cmd_args),
-        "chat" => chat::run_chat(cmd_args),
-        "tour" => tour::run_tour(cmd_args),
+        "semantic_search" => { search::run_semantic_search(cmd_args); Ok(()) },
+        "search" => { search::run_hybrid_search(cmd_args); Ok(()) },
+        "traverse" => { search::run_traverse(cmd_args); Ok(()) },
+        "chat" => { chat::run_chat(cmd_args); Ok(()) },
+        "tour" => { tour::run_tour(cmd_args); Ok(()) },
         // Project management.
         // `list` is the command; `list_projects` stays because it is the MCP
         // tool's name, and the agent-tool commands are documented as taking
         // the same names as the tools.
-        "list" | "ls" | "list_projects" => projects::run_list(cmd_args),
-        "active" => projects::run_active(cmd_args),
-        "rename" | "rn" | "mv" => projects::run_rename(cmd_args),
-        "remove" => projects::run_remove(cmd_args),
-        "uninstall" => projects::run_uninstall(cmd_args),
-        "upgrade" => upgrade::run_upgrade(cmd_args),
-        "config" => config::run_config(cmd_args),
-        "doctor" => doctor::run_doctor(cmd_args),
-        "connect" => connect::run_connect(cmd_args),
-        "disconnect" => connect::run_disconnect(cmd_args),
+        "list" | "ls" | "list_projects" => { projects::run_list(cmd_args); Ok(()) },
+        "active" => { projects::run_active(cmd_args); Ok(()) },
+        "rename" | "rn" | "mv" => { projects::run_rename(cmd_args); Ok(()) },
+        "remove" => { projects::run_remove(cmd_args); Ok(()) },
+        "uninstall" => { projects::run_uninstall(cmd_args); Ok(()) },
+        "upgrade" => { upgrade::run_upgrade(cmd_args); Ok(()) },
+        "config" => { config::run_config(cmd_args); Ok(()) },
+        "doctor" => { doctor::run_doctor(cmd_args); Ok(()) },
+        "connect" => { connect::run_connect(cmd_args); Ok(()) },
+        "disconnect" => { connect::run_disconnect(cmd_args); Ok(()) },
         // The MCP server itself: a primary entry point, dispatched straight
         // to the module rather than forwarded through `connect`.
-        "mcp" => mcp::run(cmd_args),
-        "help" | "-h" | "--help" => help::print_help(),
+        "mcp" => { mcp::run(cmd_args); Ok(()) },
+        "help" | "-h" | "--help" => { help::print_help(); Ok(()) },
         _ => {
             eprintln!("Unknown command: {}", cmd);
             help::print_help();
-            std::process::exit(1);
+            Err(CliError::new(format!("unknown command: {}", cmd)))
         }
-    }
+    };
+    exit_with(result);
 }
 
 #[cfg(test)]

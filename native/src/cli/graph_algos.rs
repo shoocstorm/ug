@@ -26,27 +26,23 @@ use ultragraph::{
 };
 
 use super::agent::{emit_agent_result, load_agent_graph, print_wildcard_help};
+use super::io::{CliError, CliResult};
 use super::args::{analysis_input, emit_raw, flag_value, has_flag, limit_or, type_filter};
 
 /// Resolve a user-supplied node reference to a node id. Accepts an exact
 /// nodeId, a repo-relative (or suffix-unique) file path, a wildcard pattern,
 /// or a symbol name ranked exact > prefix > substring. Ambiguity and misses
 /// print candidates and exit — every downstream algorithm needs one id.
-pub(crate) fn resolve_node_ref(graph: &GraphData, input: &str) -> String {
+pub(crate) fn resolve_node_ref(graph: &GraphData, input: &str) -> Result<String, CliError> {
     if let Some(n) = graph.nodes.iter().find(|n| n.id == input) {
-        return n.id.clone();
+        return Ok(n.id.clone());
     }
 
     // A pattern has no ranking tiers to fall back through: it either picks
     // out one node or the user has to say which one they meant.
     if ultragraph::pattern::is_pattern(input) {
-        match agent_tools::resolve_single_ref(graph, input) {
-            Ok(id) => return id,
-            Err(e) => {
-                eprintln!("✗ {}", e);
-                std::process::exit(1);
-            }
-        }
+        return agent_tools::resolve_single_ref(graph, input)
+            .map_err(|e| CliError::new(format!("✗ {}", e)));
     }
 
     // File path: exact repo-relative match, else unique path suffix.
@@ -64,10 +60,10 @@ pub(crate) fn resolve_node_ref(graph: &GraphData, input: &str) -> String {
     file_hits.sort_by(|a, b| a.id.cmp(&b.id));
     file_hits.dedup_by(|a, b| a.id == b.id);
     if file_hits.len() == 1 {
-        return file_hits[0].id.clone();
+        return Ok(file_hits[0].id.clone());
     }
     if file_hits.len() > 1 {
-        exit_ambiguous(input, &file_hits);
+        return Err(ambiguous(input, &file_hits));
     }
 
     // Symbol name.
@@ -89,11 +85,10 @@ pub(crate) fn resolve_node_ref(graph: &GraphData, input: &str) -> String {
         }
     }
     if hits.is_empty() {
-        eprintln!(
+        return Err(CliError::new(format!(
             "✗ Nothing in the graph matches '{}' — look it up with {C_CYAN}ug find_symbols{C_RESET}, or pass a node id directly.",
             input
-        );
-        std::process::exit(1);
+        )));
     }
     let best = hits.iter().map(|(r, _)| *r).min().unwrap_or(0);
     let best_hits: Vec<&GraphNode> = hits
@@ -102,32 +97,35 @@ pub(crate) fn resolve_node_ref(graph: &GraphData, input: &str) -> String {
         .map(|(_, n)| *n)
         .collect();
     if best_hits.len() > 1 {
-        exit_ambiguous(input, &best_hits);
+        return Err(ambiguous(input, &best_hits));
     }
-    best_hits[0].id.clone()
+    Ok(best_hits[0].id.clone())
 }
 
-/// Print the candidates behind an ambiguous reference and exit — the
-/// user picks one id and re-runs.
-fn exit_ambiguous(input: &str, candidates: &[&GraphNode]) -> ! {
-    eprintln!(
+/// The candidates behind an ambiguous reference, as an error the user can
+/// act on: they pick one id and re-run.
+///
+/// Built as a message rather than printed and exited, so the caller decides
+/// what happens next — and so the list itself is checkable.
+fn ambiguous(input: &str, candidates: &[&GraphNode]) -> CliError {
+    let mut msg = format!(
         "'{}' matches {} nodes — re-run with one of these ids:",
         input,
         candidates.len()
     );
     for n in candidates.iter().take(15) {
-        eprintln!(
-            "  {} {}  {}  id: {}",
+        msg.push_str(&format!(
+            "\n  {} {}  {}  id: {}",
             node_type_str(&n.node_type),
             n.name,
             node_loc(n),
             n.id
-        );
+        ));
     }
     if candidates.len() > 15 {
-        eprintln!("  … and {} more", candidates.len() - 15);
+        msg.push_str(&format!("\n  … and {} more", candidates.len() - 15));
     }
-    std::process::exit(1);
+    CliError::new(msg)
 }
 
 /// One-line description of a node, used across the analysis reports.
@@ -157,21 +155,22 @@ fn node_passes(n: &GraphNode, types: &[String], file_prefix: Option<&str>) -> bo
     true
 }
 
-pub(crate) fn run_graph_path(args: &[String]) {
+pub(crate) fn run_graph_path(args: &[String]) -> CliResult {
     if has_flag(args, "-h") || has_flag(args, "--help") {
         print_graph_path_help();
-        return;
+        return Ok(());
     }
     let (load_args, pos) = analysis_input(args);
     if pos.len() < 2 {
-        eprintln!("Usage: ug shortest_path <source> <target> [--strict] [-n|--name <project>]");
-        std::process::exit(1);
+        return Err(CliError::usage(
+            "Usage: ug shortest_path <source> <target> [--strict] [-n|--name <project>]",
+        ));
     }
-    let (graph, _raw, _path) = load_agent_graph(&load_args);
+    let (graph, _raw, _path) = load_agent_graph(&load_args)?;
     // The CLI resolves names/paths to ids before handing off; MCP and HTTP
     // pass ids directly.
-    let source = resolve_node_ref(&graph, &pos[0]);
-    let target = resolve_node_ref(&graph, &pos[1]);
+    let source = resolve_node_ref(&graph, &pos[0])?;
+    let target = resolve_node_ref(&graph, &pos[1])?;
     let strict = has_flag(args, "--strict");
 
     let result = agent_tools::shortest_path(&graph, &source, &target, strict);
@@ -181,7 +180,7 @@ pub(crate) fn run_graph_path(args: &[String]) {
         || agent_tools::render_shortest_path(&result, Render::Ansi, strict),
         "path result",
         true,
-    );
+    )
 }
 
 /// Rows behind the centrality report: one per node, both scores joined.
@@ -205,23 +204,23 @@ fn centrality_rows<'a>(
         .collect()
 }
 
-pub(crate) fn run_graph_centrality(args: &[String]) {
+pub(crate) fn run_graph_centrality(args: &[String]) -> CliResult {
     if has_flag(args, "-h") || has_flag(args, "--help") {
         print_graph_centrality_help();
-        return;
+        return Ok(());
     }
     let (load_args, _pos) = analysis_input(args);
     let types = type_filter(args, &["-t", "--type"]);
     let file_prefix = flag_value(args, &["-f", "--file"]);
     let top = limit_or(args, &["--top", "-l", "--limit"], 20);
 
-    let (graph, _raw, _path) = load_agent_graph(&load_args);
+    let (graph, _raw, _path) = load_agent_graph(&load_args)?;
     let centrality = calculate_centrality(&graph);
 
     // Raw output keeps the lib's shape so existing consumers of
     // analysis.json keep working.
     if emit_raw(args, &serde_json::to_string(&centrality).unwrap_or_default(), "centrality") {
-        return;
+        return Ok(());
     }
 
     let mut rows = centrality_rows(&graph, &centrality, &types, file_prefix.as_deref());
@@ -244,12 +243,13 @@ pub(crate) fn run_graph_centrality(args: &[String]) {
     }
     println!();
     println!("{C_DIM}Next:{C_RESET} {C_CYAN}ug find_usages <id>{C_RESET} to see who depends on a hotspot.");
+    Ok(())
 }
 
-pub(crate) fn run_graph_cycles(args: &[String]) {
+pub(crate) fn run_graph_cycles(args: &[String]) -> CliResult {
     if has_flag(args, "-h") || has_flag(args, "--help") {
         print_graph_cycles_help();
-        return;
+        return Ok(());
     }
     let (load_args, _pos) = analysis_input(args);
     let limit = limit_or(args, &["-l", "--limit"], 20);
@@ -257,7 +257,7 @@ pub(crate) fn run_graph_cycles(args: &[String]) {
     let max_len = limit_or(args, &["--max-len"], usize::MAX);
     let file_prefix = flag_value(args, &["-f", "--file"]);
 
-    let (graph, _raw, _path) = load_agent_graph(&load_args);
+    let (graph, _raw, _path) = load_agent_graph(&load_args)?;
     let by_id = by_id_map(&graph);
     let all = detect_cycles(&graph).cycles;
 
@@ -313,10 +313,12 @@ pub(crate) fn run_graph_cycles(args: &[String]) {
         }
     }
 
-    // CI use: non-zero exit when the graph has cycles.
+    // CI use: non-zero exit when the graph has cycles. The report above has
+    // already listed them, so the error carries no message of its own.
     if has_flag(args, "--fail-on-cycle") && !cycles.is_empty() {
-        std::process::exit(1);
+        return Err(CliError { code: 1, message: String::new() });
     }
+    Ok(())
 }
 
 /// Options every graph-analysis command shares.
@@ -410,7 +412,7 @@ mod tests {
 
     use super::*;
 
-    fn node(id: &str, name: &str, ty: GraphNodeType, file: Option<&str>) -> GraphNode {
+    pub(super) fn node(id: &str, name: &str, ty: GraphNodeType, file: Option<&str>) -> GraphNode {
         GraphNode {
             id: id.to_string(),
             name: name.to_string(),
@@ -422,11 +424,16 @@ mod tests {
         }
     }
 
-    fn graph(nodes: Vec<GraphNode>) -> GraphData {
+    pub(super) fn graph(nodes: Vec<GraphNode>) -> GraphData {
         GraphData { nodes, edges: Vec::new(), stats: None, resolution: None }
     }
 
-    fn sample() -> GraphData {
+    /// `resolve_node_ref` for a reference expected to resolve.
+    fn resolved(g: &GraphData, input: &str) -> String {
+        resolve_node_ref(g, input).unwrap_or_else(|e| panic!("{input} should resolve: {e}"))
+    }
+
+    pub(super) fn sample() -> GraphData {
         graph(vec![
             node("file:src/auth/login.ts", "login.ts", GraphNodeType::File, Some("src/auth/login.ts")),
             node("file:src/db/query.ts", "query.ts", GraphNodeType::File, Some("src/db/query.ts")),
@@ -444,7 +451,7 @@ mod tests {
         // Checked first, before any name or path matching, so an id that also
         // happens to look like a name cannot be re-interpreted.
         assert_eq!(
-            resolve_node_ref(&g, "function:src/auth/login.ts:signIn"),
+            resolved(&g, "function:src/auth/login.ts:signIn"),
             "function:src/auth/login.ts:signIn"
         );
     }
@@ -452,7 +459,7 @@ mod tests {
     #[test]
     fn a_full_repo_relative_path_resolves_to_its_file_node() {
         let g = sample();
-        assert_eq!(resolve_node_ref(&g, "src/auth/login.ts"), "file:src/auth/login.ts");
+        assert_eq!(resolved(&g, "src/auth/login.ts"), "file:src/auth/login.ts");
     }
 
     #[test]
@@ -460,8 +467,8 @@ mod tests {
         let g = sample();
         // Typing the whole repo-relative path is the thing this exists to
         // avoid; a basename that names one file is an answer.
-        assert_eq!(resolve_node_ref(&g, "login.ts"), "file:src/auth/login.ts");
-        assert_eq!(resolve_node_ref(&g, "auth/login.ts"), "file:src/auth/login.ts");
+        assert_eq!(resolved(&g, "login.ts"), "file:src/auth/login.ts");
+        assert_eq!(resolved(&g, "auth/login.ts"), "file:src/auth/login.ts");
     }
 
     #[test]
@@ -471,7 +478,7 @@ mod tests {
         // tiers this would be ambiguous and exit; with them the exact match
         // is the answer and the command runs.
         assert_eq!(
-            resolve_node_ref(&g, "signIn"),
+            resolved(&g, "signIn"),
             "function:src/auth/login.ts:signIn"
         );
     }
@@ -480,7 +487,7 @@ mod tests {
     fn a_name_match_is_case_insensitive() {
         let g = sample();
         assert_eq!(
-            resolve_node_ref(&g, "querybuilder"),
+            resolved(&g, "querybuilder"),
             "class:src/db/query.ts:QueryBuilder"
         );
     }
@@ -489,7 +496,7 @@ mod tests {
     fn a_unique_prefix_resolves_without_the_rest_of_the_name() {
         let g = sample();
         assert_eq!(
-            resolve_node_ref(&g, "signInter"),
+            resolved(&g, "signInter"),
             "function:src/db/query.ts:signInternal"
         );
     }
@@ -501,7 +508,7 @@ mod tests {
         // scores higher, which is what keeps a substring from stealing a
         // reference that had an exact match available.
         assert_eq!(
-            resolve_node_ref(&g, "Builder"),
+            resolved(&g, "Builder"),
             "class:src/db/query.ts:QueryBuilder"
         );
     }
@@ -511,7 +518,7 @@ mod tests {
         // Paths are tried before symbol names, so a path-shaped input
         // resolves to the File node rather than to something declared in it.
         let g = sample();
-        assert_eq!(resolve_node_ref(&g, "query.ts"), "file:src/db/query.ts");
+        assert_eq!(resolved(&g, "query.ts"), "file:src/db/query.ts");
     }
 
     // ── which nodes get scored ──────────────────────────────────────────────
@@ -594,5 +601,273 @@ mod tests {
 
         let scoped = centrality_rows(&g, &empty, &[], Some("src/db"));
         assert_eq!(scoped.len(), 3, "the file, the function and the class under src/db");
+    }
+}
+
+#[cfg(test)]
+mod resolution_error_tests {
+    //! The refusals, which used to be unreachable.
+    //!
+    //! Until `resolve_node_ref` returned a `Result`, every one of these ended
+    //! in `std::process::exit` — so a test that exercised one took the test
+    //! runner down with it, and none of them was ever checked. They are the
+    //! paths a user actually meets: a typo, and a name that means two things.
+    //!
+    //! The ambiguity list is the part worth pinning. It is not a diagnostic,
+    //! it is the answer: the user reads it, picks one id, and re-runs.
+
+    use super::tests::{graph, node, sample};
+    use super::*;
+
+    fn err(g: &GraphData, input: &str) -> CliError {
+        match resolve_node_ref(g, input) {
+            Ok(id) => panic!("{input} unexpectedly resolved to {id}"),
+            Err(e) => e,
+        }
+    }
+
+    #[test]
+    fn a_name_that_matches_nothing_says_where_to_look_it_up() {
+        let g = sample();
+        let e = err(&g, "nosuchsymbol");
+        assert!(e.message.contains("nosuchsymbol"), "{e}");
+        assert!(
+            e.message.contains("find_symbols"),
+            "the error has to name the way out: {e}"
+        );
+        assert_eq!(e.code, 1);
+    }
+
+    #[test]
+    fn an_ambiguous_name_lists_the_ids_to_choose_between() {
+        // Two functions named `handler` in different files. Picking one would
+        // answer a question about the wrong symbol and look correct doing it.
+        let g = graph(vec![
+            node("function:src/a.rs:handler", "handler", GraphNodeType::Function, Some("src/a.rs")),
+            node("function:src/b.rs:handler", "handler", GraphNodeType::Function, Some("src/b.rs")),
+        ]);
+        let e = err(&g, "handler");
+
+        assert!(e.message.contains("matches 2 nodes"), "{e}");
+        assert!(e.message.contains("function:src/a.rs:handler"), "{e}");
+        assert!(e.message.contains("function:src/b.rs:handler"), "{e}");
+        assert!(
+            e.message.contains("re-run with one of these ids"),
+            "the list is an instruction, not a diagnostic: {e}"
+        );
+    }
+
+    #[test]
+    fn an_ambiguous_file_path_lists_the_files_it_could_mean() {
+        let g = graph(vec![
+            node("file:src/a/config.ts", "config.ts", GraphNodeType::File, Some("src/a/config.ts")),
+            node("file:src/b/config.ts", "config.ts", GraphNodeType::File, Some("src/b/config.ts")),
+        ]);
+        let e = err(&g, "config.ts");
+        assert!(e.message.contains("matches 2 nodes"), "{e}");
+        assert!(e.message.contains("src/a/config.ts"), "{e}");
+        assert!(e.message.contains("src/b/config.ts"), "{e}");
+    }
+
+    #[test]
+    fn a_long_candidate_list_is_truncated_with_a_count_of_the_rest() {
+        // Twenty identically-named symbols is a wall of text, and the point
+        // of the list is that the user can read it.
+        let nodes: Vec<GraphNode> = (0..20)
+            .map(|i| {
+                node(
+                    &format!("function:src/f{i}.rs:dup"),
+                    "dup",
+                    GraphNodeType::Function,
+                    Some(&format!("src/f{i}.rs")),
+                )
+            })
+            .collect();
+        let e = err(&graph(nodes), "dup");
+
+        assert!(e.message.contains("matches 20 nodes"), "{e}");
+        assert_eq!(
+            e.message.matches("  id: ").count(),
+            15,
+            "at most fifteen are listed: {e}"
+        );
+        assert!(e.message.contains("… and 5 more"), "{e}");
+    }
+
+    #[test]
+    fn a_pattern_that_matches_several_is_refused_rather_than_narrowed() {
+        // A wildcard has no ranking tiers to fall through — it either picks
+        // out one node or the user has to say which they meant.
+        let g = graph(vec![
+            node("function:src/a.rs:handleGet", "handleGet", GraphNodeType::Function, Some("src/a.rs")),
+            node("function:src/a.rs:handlePut", "handlePut", GraphNodeType::Function, Some("src/a.rs")),
+        ]);
+        let e = err(&g, "handle*");
+        assert!(!e.message.is_empty(), "a refusal has to say something");
+    }
+
+    #[test]
+    fn a_pattern_that_matches_nothing_is_refused() {
+        let g = sample();
+        assert!(!err(&g, "nosuch*").message.is_empty());
+    }
+
+    #[test]
+    fn a_pattern_matching_exactly_one_symbol_still_resolves() {
+        // The refusals above must not make the useful case an error too.
+        // `signIn*` would match `signInternal` as well, so the pattern has to
+        // be one that genuinely names a single symbol.
+        let g = sample();
+        assert_eq!(
+            resolve_node_ref(&g, "QueryB*").expect("one match resolves"),
+            "class:src/db/query.ts:QueryBuilder"
+        );
+    }
+}
+
+#[cfg(test)]
+mod command_tests {
+    //! The three commands, driven end to end.
+    //!
+    //! Reachable at all only because they return `CliResult` now. What they
+    //! print is checked by the renderer tests; what matters here is that a
+    //! bad invocation comes back as a failure with the right exit code
+    //! instead of ending the process.
+
+    use super::tests::node;
+    use super::*;
+    use crate::project::EnvGuard;
+
+    /// A `~/.ug` holding one project whose graph has a two-symbol call edge.
+    fn project(env: &mut EnvGuard) -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let ug_home = tmp.path().join("ug_home");
+        let dir = ug_home.join("p");
+        std::fs::create_dir_all(&dir).expect("dir");
+
+        let g = GraphData {
+            nodes: vec![
+                node("function:src/a.rs:caller", "caller", GraphNodeType::Function, Some("src/a.rs")),
+                node("function:src/a.rs:callee", "callee", GraphNodeType::Function, Some("src/a.rs")),
+            ],
+            edges: vec![crate::types::GraphEdge {
+                source: "function:src/a.rs:caller".into(),
+                target: "function:src/a.rs:callee".into(),
+                edge_type: crate::types::GraphEdgeType::Calls,
+            }],
+            stats: None,
+            resolution: None,
+        };
+        std::fs::write(dir.join("graph.json"), serde_json::to_string(&g).unwrap()).expect("graph");
+        let meta = crate::project::ProjectMeta::new("p", tmp.path().to_str().unwrap(), 2, 1);
+        crate::project::write_meta(&dir, &meta).expect("meta");
+        env.set("UG_HOME", &ug_home);
+        tmp
+    }
+
+    fn args(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn shortest_path_needs_two_endpoints_and_says_so() {
+        let mut env = EnvGuard::new();
+        let _g = project(&mut env);
+        let e = run_graph_path(&args(&["--json", "onlyone"])).expect_err("usage error");
+        assert_eq!(e.code, 2, "a usage error is exit 2, not 1");
+        assert!(e.message.contains("Usage: ug shortest_path"), "{e}");
+    }
+
+    #[test]
+    fn shortest_path_reports_an_unresolvable_endpoint() {
+        let mut env = EnvGuard::new();
+        let _g = project(&mut env);
+        let e = run_graph_path(&args(&["--json", "caller", "nosuchthing"]))
+            .expect_err("the target does not resolve");
+        assert!(e.message.contains("nosuchthing"), "{e}");
+    }
+
+    #[test]
+    fn shortest_path_between_two_real_symbols_succeeds() {
+        let mut env = EnvGuard::new();
+        let _g = project(&mut env);
+        run_graph_path(&args(&["--json", "caller", "callee"])).expect("a real path");
+    }
+
+    #[test]
+    fn every_command_prints_its_help_without_touching_a_project() {
+        // `-h` is answered before any project resolution, so it works in a
+        // directory with no index at all — which is where someone reaching
+        // for it usually is.
+        let mut env = EnvGuard::new();
+        let tmp = tempfile::tempdir().unwrap();
+        env.set("UG_HOME", tmp.path().join("empty"));
+
+        run_graph_path(&args(&["-h"])).expect("path help");
+        run_graph_centrality(&args(&["--help"])).expect("centrality help");
+        run_graph_cycles(&args(&["-h"])).expect("cycles help");
+    }
+
+    #[test]
+    fn a_missing_graph_is_reported_rather_than_ending_the_process() {
+        // The whole point of the conversion: this used to call exit(1), so
+        // no test could reach it.
+        let mut env = EnvGuard::new();
+        let tmp = tempfile::tempdir().unwrap();
+        env.set("UG_HOME", tmp.path().join("empty"));
+
+        let e = run_graph_centrality(&args(&["--json", "-n", "nothing-here"]))
+            .expect_err("no graph to read");
+        assert!(e.message.contains("graph.json"), "{e}");
+        assert!(e.message.contains("ug gen"), "the error says how to fix it: {e}");
+    }
+
+    #[test]
+    fn fail_on_cycle_is_quiet_when_the_graph_is_acyclic() {
+        // The fixture's one edge makes no cycle, so the CI flag must not
+        // fail a clean graph.
+        let mut env = EnvGuard::new();
+        let _g = project(&mut env);
+        run_graph_cycles(&args(&["-n", "p", "--fail-on-cycle"])).expect("no cycles");
+    }
+
+    #[test]
+    fn fail_on_cycle_fails_when_there_is_one() {
+        // A non-zero exit is the entire feature, and the message is empty
+        // because the report above it already listed the cycles.
+        let mut env = EnvGuard::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let ug_home = tmp.path().join("ug_home");
+        let dir = ug_home.join("cyc");
+        std::fs::create_dir_all(&dir).unwrap();
+        let edge = |s: &str, t: &str| crate::types::GraphEdge {
+            source: s.into(),
+            target: t.into(),
+            edge_type: crate::types::GraphEdgeType::Calls,
+        };
+        let g = GraphData {
+            nodes: vec![
+                node("function:src/a.rs:a", "a", GraphNodeType::Function, Some("src/a.rs")),
+                node("function:src/b.rs:b", "b", GraphNodeType::Function, Some("src/b.rs")),
+            ],
+            edges: vec![
+                edge("function:src/a.rs:a", "function:src/b.rs:b"),
+                edge("function:src/b.rs:b", "function:src/a.rs:a"),
+            ],
+            stats: None,
+            resolution: None,
+        };
+        std::fs::write(dir.join("graph.json"), serde_json::to_string(&g).unwrap()).unwrap();
+        let meta = crate::project::ProjectMeta::new("cyc", tmp.path().to_str().unwrap(), 2, 2);
+        crate::project::write_meta(&dir, &meta).unwrap();
+        env.set("UG_HOME", &ug_home);
+
+        let e = run_graph_cycles(&args(&["-n", "cyc", "--fail-on-cycle"]))
+            .expect_err("the graph has a cycle");
+        assert_eq!(e.code, 1);
+        assert!(
+            e.message.is_empty(),
+            "the printed report is the message; repeating it would double it"
+        );
     }
 }

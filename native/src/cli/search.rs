@@ -15,7 +15,7 @@ use super::agent::{emit_agent_result, load_agent_graph, print_node_ref_help, pri
 use super::graph_algos::resolve_node_ref;
 use super::args::{first_positional, flag_value, has_flag, multi_flag, positionals};
 use super::embed::{tokio_runtime, try_embedder_from_args};
-use super::io::{die, write_or_print};
+use super::io::{die, exit_with, write_or_print};
 use super::dest::{open_store_or_exit, single_store_spec_from_args, warn_if_no_vectors};
 
 /// Retired subcommand, kept as an alias so muscle memory and existing
@@ -174,13 +174,13 @@ pub(crate) fn run_hybrid_search(args: &[String]) {
             .unwrap_or_else(|e| die(1, format!("hybrid search failed: {e}")))
     });
 
-    emit_agent_result(
+    exit_with(emit_agent_result(
         args,
         &result,
         || render_search(&result, max_chars, include_snippets, Render::Ansi),
         "hybrid search result",
         true,
-    );
+    ));
 }
 
 /// Render a ranked search result for a terminal.
@@ -348,7 +348,10 @@ pub(crate) fn run_traverse(args: &[String]) {
     // still routes to the store, which is how you verify what actually
     // landed in a destination (see docs/MULTI-STORAGE-DEST.md).
     if flag_value(args, &["--dest"]).is_none() {
-        let (graph, _raw, _path) = load_agent_graph(args);
+        // `run_traverse` is not converted to `CliResult` yet, so a failed
+        // graph load and an ambiguous reference still end the process here.
+        let (graph, _raw, _path) =
+            load_agent_graph(args).unwrap_or_else(|e| die(e.code, e.message));
         // Accept a bare name or file path, not just an exact node id.
         // Typing `ug traverse run_serve` is what people try first, and being told
         // "no node with id 'run_serve'" when the symbol plainly exists is
@@ -363,7 +366,7 @@ pub(crate) fn run_traverse(args: &[String]) {
                 if ultragraph::pattern::is_pattern(s) {
                     s.clone()
                 } else {
-                    resolve_node_ref(&graph, s)
+                    resolve_node_ref(&graph, s).unwrap_or_else(|e| die(e.code, e.message))
                 }
             })
             .collect();
@@ -375,13 +378,13 @@ pub(crate) fn run_traverse(args: &[String]) {
         };
         let result = agent_tools::traverse(&graph, &params);
         let ok = result.ok();
-        emit_agent_result(
+        exit_with(emit_agent_result(
             args,
             &result,
             || agent_tools::render_traverse(&result, Render::Ansi),
             "traverse result",
             ok,
-        );
+        ));
         return;
     }
 

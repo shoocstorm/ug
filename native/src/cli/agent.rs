@@ -23,6 +23,7 @@ use super::args::{
     split_ids_and_names,
 };
 use super::embed::tokio_runtime;
+use super::io::{CliError, CliResult};
 use super::scope;
 
 /// graph.json for the agent-tool commands: `-i/--input` wins, else the
@@ -50,7 +51,7 @@ fn agent_graph_path(args: &[String]) -> (PathBuf, &'static str) {
     (p, scope::why_project(args, true))
 }
 
-pub(crate) fn load_agent_graph(args: &[String]) -> (GraphData, String, PathBuf) {
+pub(crate) fn load_agent_graph(args: &[String]) -> Result<(GraphData, String, PathBuf), CliError> {
     let (path, why) = agent_graph_path(args);
     // Before the read, so a "graph.json not found" failure below still says
     // which project it was looking for and why it looked there.
@@ -63,23 +64,15 @@ pub(crate) fn load_agent_graph(args: &[String]) -> (GraphData, String, PathBuf) 
     if let Some(dir) = path.parent() {
         scope::announce_staleness(dir);
     }
-    let raw = match fs::read_to_string(&path) {
-        Ok(r) => r,
-        Err(_) => {
-            eprintln!(
-                "graph.json not found at {} — run {C_CYAN}ug gen{C_RESET} for this project first.",
-                path.display()
-            );
-            std::process::exit(1);
-        }
-    };
-    match serde_json::from_str::<GraphData>(&raw) {
-        Ok(graph) => (graph, raw, path),
-        Err(e) => {
-            eprintln!("Failed to parse {}: {}", path.display(), e);
-            std::process::exit(1);
-        }
-    }
+    let raw = fs::read_to_string(&path).map_err(|_| {
+        CliError::new(format!(
+            "graph.json not found at {} — run {C_CYAN}ug gen{C_RESET} for this project first.",
+            path.display()
+        ))
+    })?;
+    let graph = serde_json::from_str::<GraphData>(&raw)
+        .map_err(|e| CliError::new(format!("failed to parse {}: {}", path.display(), e)))?;
+    Ok((graph, raw, path))
 }
 
 /// Repo root for reading source files: $UG_REPO_ROOT > project.json's
@@ -340,37 +333,44 @@ fn print_project_overview_help() {
 /// Emit an agent-tool result: raw JSON when `--json`/`-o` was given,
 /// otherwise the ANSI rendering. Exits non-zero when any item in the batch
 /// failed, so a bad id in a script is still detectable.
+/// Print a tool's result, then report whether the tool itself succeeded.
+///
+/// The output goes out either way — a partially-resolved answer is still
+/// worth reading, and the renderer explains what went wrong — so the failure
+/// is carried back as the exit code rather than as a missing result. The
+/// message is empty because the rendered output above it already said it.
 pub(crate) fn emit_agent_result<T: serde::Serialize>(
     args: &[String],
     result: &T,
     render: impl FnOnce() -> String,
     label: &str,
     ok: bool,
-) {
+) -> CliResult {
     let json = serde_json::to_string_pretty(result).unwrap_or_default();
     if !emit_raw(args, &json, label) {
         print!("{}", render());
     }
-    if !ok {
-        std::process::exit(1);
+    if ok {
+        Ok(())
+    } else {
+        Err(CliError { code: 1, message: String::new() })
     }
 }
 
-pub(crate) fn run_find_symbols(args: &[String]) {
+pub(crate) fn run_find_symbols(args: &[String]) -> CliResult {
     run_find_symbols_with(args, false)
 }
 
-fn run_find_symbols_with(args: &[String], include_docs: bool) {
+fn run_find_symbols_with(args: &[String], include_docs: bool) -> CliResult {
     if has_flag(args, "-h") || has_flag(args, "--help") {
         print_find_symbols_help();
-        return;
+        return Ok(());
     }
     // A leading `<graph-file>.json` positional is read as `-i`, not as a name.
     let (load_args, queries) = analysis_input(args);
     let boundary = has_flag(args, "--boundary");
     if queries.is_empty() && !boundary {
-        eprintln!("Usage: ug find_symbols <name>... [--node-type <type>]... [--file-prefix <prefix>] [--boundary] [-k <n>] [--include-docs] [-n <project>]");
-        std::process::exit(1);
+        return Err(CliError::usage("Usage: ug find_symbols <name>... [--node-type <type>]... [--file-prefix <prefix>] [--boundary] [-k <n>] [--include-docs] [-n <project>]"));
     }
     let (node_id, mut name) = split_ids_and_names(&queries);
     // `--boundary` on its own is a listing, not a search: "show me this
@@ -389,7 +389,7 @@ fn run_find_symbols_with(args: &[String], include_docs: bool) {
         include_docs: include_docs || has_flag(args, "--include-docs"),
         boundary,
     };
-    let (graph, _raw, _path) = load_agent_graph(&load_args);
+    let (graph, _raw, _path) = load_agent_graph(&load_args)?;
 
     let result = agent_tools::find_symbols(&graph, &params);
     let ok = result.ok();
@@ -399,20 +399,19 @@ fn run_find_symbols_with(args: &[String], include_docs: bool) {
         || agent_tools::render_find_symbols(&result, Render::Ansi),
         "find_symbols result",
         ok,
-    );
+    )
 }
 
-pub(crate) fn run_file_outline(args: &[String]) {
+pub(crate) fn run_file_outline(args: &[String]) -> CliResult {
     if has_flag(args, "-h") || has_flag(args, "--help") {
         print_file_outline_help();
-        return;
+        return Ok(());
     }
     let files = positionals(args, AGENT_VALUE_FLAGS);
     if files.is_empty() {
-        eprintln!("Usage: ug file_outline <file>... [-n|--name <project>]");
-        std::process::exit(1);
+        return Err(CliError::usage("Usage: ug file_outline <file>... [-n|--name <project>]"));
     }
-    let (graph, _raw, _path) = load_agent_graph(args);
+    let (graph, _raw, _path) = load_agent_graph(args)?;
 
     // A `file:`-prefixed id is a File node id *and* a path — `file_outline`
     // resolves either, so both buckets end up in the same place.
@@ -438,21 +437,20 @@ pub(crate) fn run_file_outline(args: &[String]) {
         || agent_tools::render_file_outline(&result, Render::Ansi),
         "file_outline result",
         ok,
-    );
+    )
 }
 
-pub(crate) fn run_get_code(args: &[String]) {
+pub(crate) fn run_get_code(args: &[String]) -> CliResult {
     if has_flag(args, "-h") || has_flag(args, "--help") {
         print_get_code_help();
-        return;
+        return Ok(());
     }
     let node_ids = positionals(args, AGENT_VALUE_FLAGS);
     let file_flag = flag_value(args, &["-f", "--file"]);
     if node_ids.is_empty() && file_flag.is_none() {
-        eprintln!("Usage: ug get_code <node-id>... | -f|--file <file> [-s|--start <line>] [-e|--end <line>] [--range <window>] [--max-chars <n>] [-n|--name <project>]");
-        std::process::exit(1);
+        return Err(CliError::usage("Usage: ug get_code <node-id>... | -f|--file <file> [-s|--start <line>] [-e|--end <line>] [--range <window>] [--max-chars <n>] [-n|--name <project>]"));
     }
-    let (graph, _raw, graph_path) = load_agent_graph(args);
+    let (graph, _raw, graph_path) = load_agent_graph(args)?;
     let repo_root = agent_repo_root(&graph, &graph_path);
 
     // `--range 11-35` is one flag for what `-s 11 -e 35` says in two. Both
@@ -482,15 +480,15 @@ pub(crate) fn run_get_code(args: &[String]) {
         || agent_tools::render_get_code(&result, Render::Ansi),
         "get_code result",
         ok,
-    );
+    )
 }
 
-pub(crate) fn run_project_overview(args: &[String]) {
+pub(crate) fn run_project_overview(args: &[String]) -> CliResult {
     if has_flag(args, "-h") || has_flag(args, "--help") {
         print_project_overview_help();
-        return;
+        return Ok(());
     }
-    let (graph, _raw, graph_path) = load_agent_graph(args);
+    let (graph, _raw, graph_path) = load_agent_graph(args)?;
     let repo_root = agent_repo_root(&graph, &graph_path);
 
     let result = agent_tools::project_overview(&graph, &repo_root, &graph_path);
@@ -500,20 +498,19 @@ pub(crate) fn run_project_overview(args: &[String]) {
         || agent_tools::render_project_overview(&result, Render::Ansi),
         "project_overview result",
         true,
-    );
+    )
 }
 
-pub(crate) fn run_find_usages(args: &[String]) {
+pub(crate) fn run_find_usages(args: &[String]) -> CliResult {
     if has_flag(args, "-h") || has_flag(args, "--help") {
         print_find_usages_help();
-        return;
+        return Ok(());
     }
     let node_ids = positionals(args, AGENT_VALUE_FLAGS);
     if node_ids.is_empty() {
-        eprintln!("Usage: ug find_usages <node-id>... [-k|--hops <n>] [-t|--edge-type <type>]... [-n|--name <project>]");
-        std::process::exit(1);
+        return Err(CliError::usage("Usage: ug find_usages <node-id>... [-k|--hops <n>] [-t|--edge-type <type>]... [-n|--name <project>]"));
     }
-    let (graph, _raw, graph_path) = load_agent_graph(args);
+    let (graph, _raw, graph_path) = load_agent_graph(args)?;
     let repo_root = agent_repo_root(&graph, &graph_path);
 
     let params = agent_tools::FindUsagesParams {
@@ -537,24 +534,23 @@ pub(crate) fn run_find_usages(args: &[String]) {
         || agent_tools::render_find_usages(&result, Render::Ansi),
         "find_usages result",
         ok,
-    );
+    )
 }
 
 /// `ug context <symbol>` — the whole neighbourhood of one symbol, budgeted.
-pub(crate) fn run_context(args: &[String]) {
+pub(crate) fn run_context(args: &[String]) -> CliResult {
     if has_flag(args, "-h") || has_flag(args, "--help") {
         print_context_help();
-        return;
+        return Ok(());
     }
     let refs = positionals(args, AGENT_VALUE_FLAGS);
     if refs.is_empty() {
-        eprintln!(
-            "Usage: ug context <symbol> [--max-chars <n>] [--include <role>]... [-n|--name <project>]"
-        );
-        eprintln!("   Run {C_CYAN}ug context -h{C_RESET} for details.");
-        std::process::exit(1);
+        return Err(CliError::usage(format!(
+            "Usage: ug context <symbol> [--max-chars <n>] [--include <role>]... [-n|--name <project>]\n\
+             \x20  Run {C_CYAN}ug context -h{C_RESET} for details."
+        )));
     }
-    let (graph, _raw, graph_path) = load_agent_graph(args);
+    let (graph, _raw, graph_path) = load_agent_graph(args)?;
     let repo_root = agent_repo_root(&graph, &graph_path);
 
     let params = agent_tools::ContextParams {
@@ -575,15 +571,15 @@ pub(crate) fn run_context(args: &[String]) {
         || agent_tools::render_context(&result, Render::Ansi),
         "context result",
         ok,
-    );
+    )
 }
 
-pub(crate) fn run_graph_schema(args: &[String]) {
+pub(crate) fn run_graph_schema(args: &[String]) -> CliResult {
     if has_flag(args, "-h") || has_flag(args, "--help") {
         print_graph_schema_help();
-        return;
+        return Ok(());
     }
-    let (graph, _raw, graph_path) = load_agent_graph(args);
+    let (graph, _raw, graph_path) = load_agent_graph(args)?;
 
     let result = agent_tools::graph_schema(&graph, &graph_path);
     emit_agent_result(
@@ -592,7 +588,7 @@ pub(crate) fn run_graph_schema(args: &[String]) {
         || agent_tools::render_graph_schema(&result, Render::Ansi),
         "graph_schema result",
         true,
-    );
+    )
 }
 
 fn print_find_usages_help() {
@@ -656,9 +652,8 @@ mod tests {
     //! the command still succeeds, against the wrong project or the wrong
     //! tree, and an agent trusts the answer for blast radius.
     //!
-    //! The `run_*` entry points themselves call `std::process::exit` on every
-    //! error path, so they are not callable from a test in this process.
-    //! These cover the resolution the whole file sits on.
+    //! These cover the resolution the whole file sits on. The `run_*` entry
+    //! points that use it are driven in `command_tests` below.
 
     use super::*;
     use crate::project::UG_HOME_LOCK as ENV_GUARD;
@@ -860,5 +855,210 @@ mod tests {
         );
         assert!(!why.is_empty(), "the choice is always explained");
         std::env::remove_var("UG_HOME");
+    }
+}
+
+#[cfg(test)]
+mod command_tests {
+    //! The seven agent commands, driven end to end.
+    //!
+    //! Reachable only since they returned `CliResult`: every one of these
+    //! paths used to end in `std::process::exit`, so the usage errors, the
+    //! missing-graph error and the not-found exit code were all unreachable
+    //! from a test. They are also the paths a user meets most, because they
+    //! are what a mistyped command does.
+    //!
+    //! These commands read `graph.json` and nothing else — no store, no
+    //! embedder — which is what makes the whole set testable from a temp
+    //! directory.
+
+    use super::*;
+    use crate::project::EnvGuard;
+    use crate::types::{GraphEdge, GraphEdgeType, GraphNode, GraphNodeType};
+
+    fn node(id: &str, name: &str, t: GraphNodeType, file: &str, lines: Option<(u32, u32)>) -> GraphNode {
+        GraphNode {
+            id: id.into(),
+            name: name.into(),
+            node_type: t,
+            file: Some(file.into()),
+            start_line: lines.map(|(s, _)| s),
+            end_line: lines.map(|(_, e)| e),
+            ..Default::default()
+        }
+    }
+
+    /// A `~/.ug` with one project, and a repo on disk whose source matches it.
+    fn project(env: &mut EnvGuard) -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let ug_home = tmp.path().join("ug_home");
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(repo.join("src")).expect("repo");
+        std::fs::write(
+            repo.join("src/a.rs"),
+            "fn caller() {\n  callee();\n}\n\n\nfn callee() {\n  1\n}\n",
+        )
+        .expect("src");
+
+        let g = GraphData {
+            nodes: vec![
+                node("file:src/a.rs", "a.rs", GraphNodeType::File, "src/a.rs", None),
+                node("function:src/a.rs:1:caller", "caller", GraphNodeType::Function, "src/a.rs", Some((1, 3))),
+                node("function:src/a.rs:6:callee", "callee", GraphNodeType::Function, "src/a.rs", Some((6, 8))),
+            ],
+            edges: vec![GraphEdge {
+                source: "function:src/a.rs:1:caller".into(),
+                target: "function:src/a.rs:6:callee".into(),
+                edge_type: GraphEdgeType::Calls,
+            }],
+            stats: None,
+            resolution: None,
+        };
+        let dir = ug_home.join("p");
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(dir.join("graph.json"), serde_json::to_string(&g).unwrap()).expect("graph");
+        let meta = crate::project::ProjectMeta::new("p", repo.to_str().unwrap(), 3, 1);
+        crate::project::write_meta(&dir, &meta).expect("meta");
+        env.set("UG_HOME", &ug_home);
+        tmp
+    }
+
+    fn args(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    // ── the happy paths ─────────────────────────────────────────────────────
+
+    #[test]
+    fn every_command_answers_from_graph_json_alone() {
+        // No store was ever written for this project. That these keep working
+        // without one is the reason they are split from the db-backed tools.
+        let mut env = EnvGuard::new();
+        let _g = project(&mut env);
+
+        run_find_symbols(&args(&["--json", "-n", "p", "caller"])).expect("find_symbols");
+        run_file_outline(&args(&["--json", "-n", "p", "src/a.rs"])).expect("file_outline");
+        run_get_code(&args(&["--json", "-n", "p", "function:src/a.rs:1:caller"])).expect("get_code");
+        run_find_usages(&args(&["--json", "-n", "p", "function:src/a.rs:6:callee"]))
+            .expect("find_usages");
+        run_context(&args(&["--json", "-n", "p", "callee"])).expect("context");
+        run_project_overview(&args(&["--json", "-n", "p"])).expect("project_overview");
+        run_graph_schema(&args(&["--json", "-n", "p"])).expect("graph_schema");
+    }
+
+    #[test]
+    fn a_bare_name_resolves_where_an_id_is_expected() {
+        let mut env = EnvGuard::new();
+        let _g = project(&mut env);
+        run_find_usages(&args(&["--json", "-n", "p", "callee"])).expect("a name resolves like an id");
+    }
+
+    // ── usage errors, which used to end the process ─────────────────────────
+
+    #[test]
+    fn each_command_that_needs_an_argument_says_so_with_exit_two() {
+        let mut env = EnvGuard::new();
+        let _g = project(&mut env);
+
+        for (label, result) in [
+            ("find_symbols", run_find_symbols(&args(&["-n", "p"]))),
+            ("file_outline", run_file_outline(&args(&["-n", "p"]))),
+            ("get_code", run_get_code(&args(&["-n", "p"]))),
+            ("find_usages", run_find_usages(&args(&["-n", "p"]))),
+            ("context", run_context(&args(&["-n", "p"]))),
+        ] {
+            let e = result.expect_err(label);
+            assert_eq!(e.code, 2, "{label}: a usage error is exit 2");
+            assert!(
+                e.message.contains(&format!("ug {label}")),
+                "{label}: the message must show the command's own usage: {e}"
+            );
+        }
+    }
+
+    #[test]
+    fn find_symbols_with_no_name_but_a_boundary_filter_is_a_listing_not_an_error() {
+        // "Show me this service's surface" is asked precisely because the
+        // caller does not yet know what any of it is called.
+        let mut env = EnvGuard::new();
+        let _g = project(&mut env);
+        run_find_symbols(&args(&["--json", "-n", "p", "--boundary"])).expect("a bare listing");
+    }
+
+    // ── a tool that resolved nothing ────────────────────────────────────────
+
+    #[test]
+    fn a_symbol_that_does_not_exist_fails_with_exit_one_and_no_extra_message() {
+        // The rendered output already explained it; a second message would
+        // print the same thing twice.
+        let mut env = EnvGuard::new();
+        let _g = project(&mut env);
+
+        let e = run_find_usages(&args(&["--json", "-n", "p", "nosuchsymbol"]))
+            .expect_err("nothing resolves");
+        assert_eq!(e.code, 1);
+        assert!(e.message.is_empty(), "the report is the message: {e}");
+    }
+
+    #[test]
+    fn a_search_that_matches_nothing_is_still_a_success() {
+        // Finding nothing is an answer. Only a *failed* lookup is an error,
+        // which is the distinction `ok()` draws.
+        let mut env = EnvGuard::new();
+        let _g = project(&mut env);
+        run_find_symbols(&args(&["--json", "-n", "p", "nosuchsymbol"]))
+            .expect("an empty result is not a failure");
+    }
+
+    // ── the project the command reads ───────────────────────────────────────
+
+    #[test]
+    fn a_project_with_no_graph_is_reported_rather_than_ending_the_process() {
+        let mut env = EnvGuard::new();
+        let tmp = tempfile::tempdir().unwrap();
+        env.set("UG_HOME", tmp.path().join("empty"));
+
+        let e = run_project_overview(&args(&["--json", "-n", "never-generated"]))
+            .expect_err("no graph to read");
+        assert_eq!(e.code, 1);
+        assert!(e.message.contains("graph.json"), "{e}");
+        assert!(e.message.contains("ug gen"), "the error says how to fix it: {e}");
+    }
+
+    #[test]
+    fn a_corrupt_graph_names_the_file_it_could_not_parse() {
+        let mut env = EnvGuard::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let ug_home = tmp.path().join("ug_home");
+        let dir = ug_home.join("broken");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("graph.json"), "{ not json").unwrap();
+        env.set("UG_HOME", &ug_home);
+
+        let e = run_project_overview(&args(&["--json", "-n", "broken"]))
+            .expect_err("unparseable graph");
+        assert!(e.message.contains("graph.json"), "{e}");
+        assert!(e.message.contains("parse"), "{e}");
+    }
+
+    #[test]
+    fn help_is_answered_before_any_project_is_resolved() {
+        // Someone reaching for `-h` is usually in a directory with no index,
+        // which is exactly when it has to work.
+        let mut env = EnvGuard::new();
+        let tmp = tempfile::tempdir().unwrap();
+        env.set("UG_HOME", tmp.path().join("empty"));
+
+        for result in [
+            run_find_symbols(&args(&["-h"])),
+            run_file_outline(&args(&["-h"])),
+            run_get_code(&args(&["-h"])),
+            run_find_usages(&args(&["--help"])),
+            run_context(&args(&["-h"])),
+            run_project_overview(&args(&["-h"])),
+            run_graph_schema(&args(&["-h"])),
+        ] {
+            result.expect("help needs no project");
+        }
     }
 }

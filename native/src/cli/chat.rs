@@ -14,7 +14,7 @@ use crate::{chat, config};
 use super::agent::{agent_repo_root, load_agent_graph};
 use super::args::{first_positional, flag_value, has_flag, multi_flag};
 use super::embed::{embedder_from_chat_args, tokio_runtime};
-use super::io::{write_file, write_or_print};
+use super::io::{die, write_file, write_or_print};
 use super::dest::{single_store_spec_from_args, warn_if_no_vectors};
 
 /// Report a failed chat turn and exit.
@@ -324,7 +324,10 @@ fn cli_tool_runner(
     embedder: std::sync::Arc<Embedder>,
 ) -> impl Fn(&str, serde_json::Value) -> futures::future::BoxFuture<'static, Result<String, String>>
 {
-    let (graph, _raw, graph_path) = load_agent_graph(args);
+    // `run_chat` has not been converted to `CliResult` yet, so the graph
+    // load still ends the process here rather than reporting upward.
+    let (graph, _raw, graph_path) =
+        load_agent_graph(args).unwrap_or_else(|e| die(e.code, e.message));
     let repo_root = agent_repo_root(&graph, &graph_path);
     let graph = std::sync::Arc::new(graph);
     // The graph.json text is dropped here rather than held for the closure:
