@@ -1207,6 +1207,17 @@
                 // does not get to keep it, or every walk would leave the graph
                 // rearranged behind it.
                 restoreWalkPositions();
+                // And hand the *lighting* back. Opening a node's details
+                // mid-walk anchors focus on it (handleClick → enterFocus), but
+                // focus dimming is inert while `walkActive` — the walk owns the
+                // three-state seed/reached/far shading. So the dimming is
+                // invisible right up until the walk ends, and then the graph
+                // comes back dimmed around whichever node was last selected,
+                // with nothing on screen to say why. Dropping the anchor here
+                // is what makes exiting a walk return the whole graph. The
+                // selection itself is kept (see above); this is the same
+                // "focus off, selection on" state the Exit button leaves.
+                if (state.focusNode) exitFocus();
                 bumpGraphStyles();
             } else {
                 state.walkPosSaved = null;

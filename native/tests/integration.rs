@@ -101,3 +101,4 @@ mod vis_context_panel_test;
 mod vis_edge_store_test;
 mod vis_interaction_test;
 mod vis_json_stream_test;
+mod vis_walk_exit_test;

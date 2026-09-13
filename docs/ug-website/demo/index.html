@@ -10159,7 +10159,7 @@ body:has(#info.visible) #perf-hud {
         }
     </style>
 <script>
-window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3738,"edges":10801,"files":136,"lines":84798,"ugVersion":"0.1.19","visFingerprint":"d9e5c6126b989605","generatedAt":1789277470};
+window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3738,"edges":10801,"files":136,"lines":84798,"ugVersion":"0.1.19","visFingerprint":"5959b670ef18b79b","generatedAt":1789280619};
 /* ==========================================================================
    UltraGraph — static demo shim
    ==========================================================================
@@ -30605,6 +30605,17 @@ self.onmessage = async (ev) => {
                 // does not get to keep it, or every walk would leave the graph
                 // rearranged behind it.
                 restoreWalkPositions();
+                // And hand the *lighting* back. Opening a node's details
+                // mid-walk anchors focus on it (handleClick → enterFocus), but
+                // focus dimming is inert while `walkActive` — the walk owns the
+                // three-state seed/reached/far shading. So the dimming is
+                // invisible right up until the walk ends, and then the graph
+                // comes back dimmed around whichever node was last selected,
+                // with nothing on screen to say why. Dropping the anchor here
+                // is what makes exiting a walk return the whole graph. The
+                // selection itself is kept (see above); this is the same
+                // "focus off, selection on" state the Exit button leaves.
+                if (state.focusNode) exitFocus();
                 bumpGraphStyles();
             } else {
                 state.walkPosSaved = null;

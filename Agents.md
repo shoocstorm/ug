@@ -478,7 +478,7 @@ changelog on every bump, and keep engine calls behind the `KnowledgeStore`
 trait (`native/src/storage/store.rs`) so upgrades stay confined to
 `native/src/storage/db.rs`.
 
-## 9. Sixteen bugs this codebase keeps re-introducing
+## 9. Seventeen bugs this codebase keeps re-introducing
 
 All are invisible in review and silent at runtime, and most have already
 shipped here more than once. Check for them by reflex.
@@ -1051,6 +1051,41 @@ either rebuild release (`cargo build --release`) or commit with
 is pinned to whenever that artefact was last built, and the staleness is
 invisible at the call site. `ug hook status` reports how far behind the index
 is, not which binary wrote it.
+
+### 9q. State set while a mode suppresses it, revealed when the mode ends
+
+The vis page has several modes that take over the canvas: a tour, a Graph
+Walk, the context pack. Each one answers *first* in the render accessors, so
+whatever the ordinary UI would have painted is inert for as long as the mode
+runs — `nodeLightingFor` reads `state.walkActive` before it looks at
+`state.focusNode`, and shades every node by its hop instead.
+
+Inert is not the same as *not set*. The ordinary UI keeps running underneath:
+opening a node's details from the walk's node list goes through `handleClick`,
+which anchors focus on that node. Nothing looks wrong, because nothing the
+anchor does is visible. Then the walk exits, the suppression lifts, and the
+graph comes back dimmed around a node the reader never chose to dim — with
+solo armed, with most of the graph simply gone. The bug is reported as "the
+walk broke my view", and there is nothing in the walk's own code to find.
+
+The general shape: **whatever a mode suppresses, it owns on exit.** A mode that
+overrides paint has to hand the canvas back in a state the user can explain,
+which means clearing what accumulated behind it — not just its own state.
+`exitWalk` drops the focus anchor for exactly this reason (the selection is
+kept: that is what the reader keeps exploring from).
+
+Where it hides:
+- Anything set by a handler that still runs during the mode. Suppression flags
+  like `suppressFocusReanchor` cover the mode's *own* calls into that handler,
+  never the user's.
+- Isolation flags especially (`focusIsolate`, `tourState.isolate`): a stale one
+  does not dim, it *hides*, and the canvas comes back nearly empty.
+- Check the exit path, not the entry path. Entry is where the suppression is
+  written and where attention goes.
+
+Testable without a browser: lift the exit function and the render accessor into
+`node` and assert on the state the exit leaves (`tests/js/walk_exit.mjs`) —
+booting the real page is the CPU runaway in §10r.
 
 ## 10. Measuring performance without fooling yourself
 
