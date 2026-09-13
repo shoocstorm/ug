@@ -9812,6 +9812,24 @@ body:has(#info.visible) #perf-hud {
            history — there is no arrangement of that which reads well in a
            strip, and a picker that wraps is worse than one that stacks. */
 
+        /* The launcher button. `.ask-mini` was text-only until this one — an
+           inline SVG carrying only a `viewBox` has no intrinsic size, so it
+           lays out at the browser's 300×150 default and swamps a 10px label.
+           Scoped to this button rather than `.ask-mini`, which two other
+           buttons share and neither needs re-laying-out. */
+        #changes-toggle {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            vertical-align: middle;
+        }
+
+        #changes-toggle svg {
+            width: 11px;
+            height: 11px;
+            flex: none;
+        }
+
         .changes-panel {
             margin-top: 8px;
             padding: 10px;
@@ -10141,7 +10159,7 @@ body:has(#info.visible) #perf-hud {
         }
     </style>
 <script>
-window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3738,"edges":10801,"files":136,"lines":84798,"ugVersion":"0.1.19","visFingerprint":"5e2f2775238d6b04","generatedAt":1789276803};
+window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3738,"edges":10801,"files":136,"lines":84798,"ugVersion":"0.1.19","visFingerprint":"d9e5c6126b989605","generatedAt":1789277470};
 /* ==========================================================================
    UltraGraph — static demo shim
    ==========================================================================

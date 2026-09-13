@@ -453,7 +453,17 @@ pub struct Dependency {
 ///   correctly declines whenever the callee's name is not unique — so on a
 ///   version-4 graph these calls are *absent*, and the functions they reach
 ///   read as dead code. Same reader advice as version 3.
-pub const GRAPH_SCHEMA_VERSION: u32 = 5;
+/// - **6**: `is_test` recognises the annotation spellings it previously
+///   missed — `#[tokio::test]` and every other `x::test`, the JUnit 5
+///   family, `@BeforeEach` on a `FooTestBase`, anything under `pytest.` —
+///   and the `*_tests.rs` / `*_specs.*` filename forms. Before this, a
+///   `#[tokio::test]` function outside a `#[cfg(test)] mod` read as
+///   production code: on this repository that was 80 of 1735 test nodes.
+///   A reader seeing version < 6 must treat every test count as a **lower
+///   bound** — and, worse, `untested_symbols` on such a graph lists test
+///   functions as untested production code. Re-run `ug gen` to fix it;
+///   `graph_schema` reports it as `stale_test_flags`.
+pub const GRAPH_SCHEMA_VERSION: u32 = 6;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexStats {

@@ -478,7 +478,7 @@ changelog on every bump, and keep engine calls behind the `KnowledgeStore`
 trait (`native/src/storage/store.rs`) so upgrades stay confined to
 `native/src/storage/db.rs`.
 
-## 9. Fourteen bugs this codebase keeps re-introducing
+## 9. Fifteen bugs this codebase keeps re-introducing
 
 All are invisible in review and silent at runtime, and most have already
 shipped here more than once. Check for them by reflex.
@@ -984,6 +984,47 @@ Two things came out of it:
 
 Grep shape: any verification step whose parser, mode or entry point was chosen
 for convenience rather than copied from how the thing actually runs.
+
+### 9o. Comparing a name against the wrong spelling of itself
+
+Two instances, one afternoon, same file.
+
+**In the code.** `facts::is_test_node` decided "is this a test" partly from
+annotations, with `a.name == "test" || a.name == "cfg(test)"`. Exact match.
+So `#[tokio::test]` — the standard Rust async test attribute, 174 of them in
+this repository — was not a test. Only the ones that also happened to sit
+inside a `#[cfg(test)] mod` were rescued, which is why it went unnoticed:
+the common case worked. `untested_symbols` listed real tests as untested
+production code, `test_ratio` understated, and every answer looked plausible.
+The fix is to compare the annotation's **last `::`/`.`-delimited segment**,
+case-insensitively — which incidentally makes Java's `@Test`, the JUnit 5
+family and `pytest.*` work for free.
+
+**In the measurement of it.** Sizing the fix meant replaying both heuristics
+over the indexed graphs in a script. That script compared
+`classification == "Test"` — the Rust variant's spelling. `FileClassification`
+is `#[serde(rename_all = "lowercase")]`, so `graph.json` says `"test"`. Every
+already-correct node read as unclassified, the path fallback ran that should
+not have, and the script reported `is_test` going from 1498 to 19813 on the
+neo4j graph: a 13× bug that did not exist. The real number was +2.
+
+The rule both want:
+
+**When you compare a name, enumerate its spellings first.** A name that
+crosses a boundary — an attribute macro, a serde rename, a wire format, a
+case convention — has more than one, and `==` against your favourite is a
+filter that silently drops the rest. Ask: qualified or bare? What case? What
+does the *serialiser* write, not the type?
+
+And the corollary, because the second one is the expensive kind: **a script
+that replays production logic is production logic, and drifts from it.**
+Before trusting a number it produced, check it against a case you already
+know the answer to. One `assert` that neo4j's `@Test` methods are already
+classified would have killed the phantom 13× in a second, instead of after a
+full analysis built on it.
+
+Grep shape: `== "somename"` or a `matches!` on a string, where the value comes
+from an indexer, a deserialiser, or another language's syntax.
 
 ## 10. Measuring performance without fooling yourself
 

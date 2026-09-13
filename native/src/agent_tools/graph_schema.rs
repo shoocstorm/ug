@@ -42,6 +42,13 @@ pub struct GraphSchemaResult {
     /// (`GRAPH_SCHEMA_VERSION` 4), i.e. an empty `boundary_kinds` means "not
     /// measured" rather than "none".
     pub stale_boundaries: bool,
+    /// Whether this graph predates the widened test detection
+    /// (`GRAPH_SCHEMA_VERSION` 6). On such a graph `is_test` missed
+    /// `#[tokio::test]` and the `*_tests.rs` filename form, so every test
+    /// statistic is a lower bound and `untested_symbols` lists real tests
+    /// as untested production code — a wrong answer wearing the shape of a
+    /// right one, which is exactly what this manifest exists to flag.
+    pub stale_test_flags: bool,
 }
 
 pub fn graph_schema(graph: &GraphData, graph_path: &Path) -> GraphSchemaResult {
@@ -120,6 +127,12 @@ pub fn graph_schema(graph: &GraphData, graph_path: &Path) -> GraphSchemaResult {
         stale_call_graph: schema.map(|v| v < 5).unwrap_or(true),
         boundary_kinds,
         stale_boundaries: schema.map(|v| v < 4).unwrap_or(true),
+        // A version-5 graph's `is_test` missed `#[tokio::test]` and the
+        // `*_tests.rs` filename form, so every test statistic taken from it
+        // is a lower bound — and `untested_symbols` lists real tests as
+        // untested production code, which is a wrong answer that looks
+        // exactly like a right one.
+        stale_test_flags: schema.map(|v| v < 6).unwrap_or(true),
     }
 }
 
@@ -166,6 +179,26 @@ pub fn render_graph_schema(r: &GraphSchemaResult, style: Render) -> String {
         }
     }
     out.push('\n');
+
+    if r.stale_test_flags {
+        line(
+            &mut out,
+            &format!(
+                "{} {} {}",
+                style.bold("Test detection"),
+                // No backticks: this string goes to the ANSI surface too,
+                // and `style.id` is how a name is marked up per surface.
+                style.dim(
+                    "STALE — this graph predates detection of qualified test attributes \
+                     (tokio::test and friends) and the *_tests.* filename form, so every \
+                     test count is a lower bound and untested_symbols lists real tests as \
+                     untested. Run"
+                ),
+                style.id("ug gen")
+            ),
+        );
+        out.push('\n');
+    }
 
     line(
         &mut out,

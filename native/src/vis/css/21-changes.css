@@ -10,6 +10,24 @@
            history — there is no arrangement of that which reads well in a
            strip, and a picker that wraps is worse than one that stacks. */
 
+        /* The launcher button. `.ask-mini` was text-only until this one — an
+           inline SVG carrying only a `viewBox` has no intrinsic size, so it
+           lays out at the browser's 300×150 default and swamps a 10px label.
+           Scoped to this button rather than `.ask-mini`, which two other
+           buttons share and neither needs re-laying-out. */
+        #changes-toggle {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            vertical-align: middle;
+        }
+
+        #changes-toggle svg {
+            width: 11px;
+            height: 11px;
+            flex: none;
+        }
+
         .changes-panel {
             margin-top: 8px;
             padding: 10px;

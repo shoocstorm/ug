@@ -133,10 +133,69 @@ const TEST_PATH_MARKERS: &[&str] = &[
     "/spec/",
     "/test_",
     "_test.",
+    "_tests.",
     ".test.",
+    ".tests.",
     ".spec.",
     "_spec.",
+    "_specs.",
 ];
+
+/// Annotation names that mark a symbol as test code.
+///
+/// Matched against the annotation's **last segment**, case-insensitively:
+/// `#[tokio::test]`, `#[async_std::test]` and Java's `@Test` all reduce to
+/// `test`. Matching the whole name is what missed them — `is_test_node`
+/// compared `name == "test"` exactly, so of the 174 `tokio::test` functions
+/// in this repository, only those that also sat inside a `#[cfg(test)] mod`
+/// were recognised. The rest read as production code, which is what
+/// `untested_symbols` then reported them as.
+///
+/// The JUnit lifecycle names earn their place separately: `@BeforeEach` on a
+/// `FooTestBase` class is the only marker such a file carries, since it is
+/// neither in a `/test/` path nor annotated `@Test`.
+///
+/// Deliberately absent: JUnit 4's bare `@Before` / `@After`. They are common
+/// in older Java, but "test" is not in the name and nothing in the indexed
+/// corpora needed them — an ambiguous marker added on a guess is how
+/// `latest_version.rs` once read as test code.
+const TEST_ANNOTATIONS: &[&str] = &[
+    // Rust `#[test]` / `#[tokio::test]`; Java + TestNG `@Test`.
+    "test",
+    // JUnit 5.
+    "parameterizedtest",
+    "repeatedtest",
+    "testfactory",
+    "testtemplate",
+    // JUnit lifecycle — only ever on a test class.
+    "beforeeach",
+    "aftereach",
+    "beforeall",
+    "afterall",
+    "beforeclass",
+    "afterclass",
+];
+
+/// Does this annotation mark test code?
+///
+/// Three shapes, because three ecosystems spell it differently:
+///
+/// 1. `cfg(test)` — Rust, exact. Everything inside a `#[cfg(test)] mod` is
+///    test code even when the file around it is not.
+/// 2. Anything under `pytest.` — `pytest.fixture`, `pytest.mark.asyncio`.
+///    The prefix is unambiguous, and the *last* segment is not: matching on
+///    `asyncio` would be wrong and matching on `mark` meaningless.
+/// 3. The last `::`- or `.`-delimited segment, against [`TEST_ANNOTATIONS`].
+fn annotation_marks_test(name: &str) -> bool {
+    if name == "cfg(test)" {
+        return true;
+    }
+    if name.len() > 7 && name[..7].eq_ignore_ascii_case("pytest.") {
+        return true;
+    }
+    let last = name.rsplit(['.', ':']).next().unwrap_or(name);
+    TEST_ANNOTATIONS.iter().any(|m| last.eq_ignore_ascii_case(m))
+}
 
 fn looks_like_test(file: &str) -> bool {
     // Leading separator so a top-level `tests/` directory matches the same
@@ -158,9 +217,11 @@ fn looks_like_test(file: &str) -> bool {
 ///
 /// Three signals, most specific first:
 ///
-/// 1. A per-symbol `test` / `cfg(test)` annotation (the Rust indexer's
-///    `test_annotation`). A helper inside `#[cfg(test)] mod tests` in an
-///    otherwise production file is test code, and only the marker knows that.
+/// 1. A per-symbol test annotation — see [`annotation_marks_test`], which
+///    covers `#[test]`, `#[tokio::test]`, `#[cfg(test)]`, `@Test`, the
+///    JUnit 5 family and anything under `pytest.`. A helper inside a
+///    `#[cfg(test)] mod tests` in an otherwise production file is test code,
+///    and only the marker knows that.
 /// 2. The indexer's `FileClassification`, which saw the file's contents
 ///    rather than just its name. It has no "unknown" variant — every variant
 ///    is a decision — so `Some(c)` means the classifier had an opinion, and
@@ -181,7 +242,7 @@ pub fn is_test_node(n: &GraphNode) -> bool {
     };
     if n.annotations
         .iter()
-        .any(|a| a.name == "test" || a.name == "cfg(test)")
+        .any(|a| annotation_marks_test(&a.name))
     {
         return true;
     }
@@ -840,6 +901,103 @@ mod tests {
             args: None,
         });
         assert_eq!(compute(&n, &ctx_of(vec![]))["is_test"], FactValue::Int(0));
+    }
+
+    /// The bug: `is_test_node` compared the annotation name *exactly* against
+    /// `"test"`, so `#[tokio::test]` — the standard Rust async test attribute,
+    /// 174 of them in this repository — read as production code unless the
+    /// function also sat inside a `#[cfg(test)] mod`. `untested_symbols` then
+    /// reported real tests as untested.
+    #[test]
+    fn a_qualified_test_attribute_is_still_a_test() {
+        for name in [
+            "tokio::test",
+            "async_std::test",
+            "actix_web::test",
+            // Java and TestNG spell it with a capital.
+            "Test",
+            "ParameterizedTest",
+            "RepeatedTest",
+            // Only marker a `FooTestBase` class carries.
+            "BeforeEach",
+            "AfterAll",
+            // Anything pytest touches is test code; the *last* segment here
+            // is `asyncio`, which is why the prefix rule exists.
+            "pytest.mark.asyncio",
+            "pytest.fixture",
+        ] {
+            let mut n = node("f", Some("src/server.rs"));
+            n.classification = Some(FileClassification::Service);
+            n.annotations.push(Annotation {
+                name: name.into(),
+                args: None,
+            });
+            assert_eq!(
+                compute(&n, &ctx_of(vec![]))["is_test"],
+                FactValue::Int(1),
+                "#[{name}] marks test code"
+            );
+        }
+    }
+
+    /// The matching is on the last segment, so it must not sweep in an
+    /// annotation that merely *contains* one of the markers.
+    #[test]
+    fn an_annotation_that_is_not_a_test_marker_stays_production() {
+        for name in [
+            "derive",
+            "serde",
+            "napi",
+            "Override",
+            "Inject",
+            // `latest` ends in "test" — the same mid-word trap the path
+            // markers already guard against, one layer up.
+            "latest",
+            "contest",
+            "protest",
+            // A source annotation that only ever accompanies a real marker
+            // must not count on its own — it appears on helper methods too.
+            "MethodSource",
+            "ValueSource",
+        ] {
+            let mut n = node("f", Some("src/server.rs"));
+            n.classification = Some(FileClassification::Service);
+            n.annotations.push(Annotation {
+                name: name.into(),
+                args: None,
+            });
+            assert_eq!(
+                compute(&n, &ctx_of(vec![]))["is_test"],
+                FactValue::Int(0),
+                "#[{name}] is not a test marker"
+            );
+        }
+    }
+
+    /// `router_tests.rs` and `chat_api_tests.rs` are this repository's own
+    /// spelling, and the singular `_test.` marker missed every one of them.
+    #[test]
+    fn the_plural_filename_forms_read_as_tests() {
+        for path in [
+            "src/serve/router_tests.rs",
+            "src/serve/chat_api_tests.rs",
+            "lib/foo.tests.ts",
+            "lib/bar_specs.rb",
+        ] {
+            let f = compute(&node("f", Some(path)), &ctx_of(vec![]));
+            assert_eq!(f["is_test"], FactValue::Int(1), "{path} should read as test");
+        }
+
+        // And the plural marker must stay anchored on its underscore, the
+        // same way the singular one is.
+        for path in ["src/my_latests.rs", "src/protests.py", "src/contests.go"] {
+            let f = compute(&node("f", Some(path)), &ctx_of(vec![]));
+            assert_eq!(
+                f["is_test"],
+                FactValue::Int(0),
+                "{path} is production code, not a test"
+            );
+        }
     }
 
     /// `test_` was matched anywhere in the path, so ordinary words ending in
