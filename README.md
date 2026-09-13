@@ -1,4 +1,4 @@
-# UltraGraph: High-Performance Knowledge Graph & RAG Engine
+# UltraGraph
 
 A local-first engine that turns codebases and documents into an interactive,
 queryable **Semantic Knowledge Graph**. Built with Rust and Node.js for speed.
@@ -14,431 +14,129 @@ queryable **Semantic Knowledge Graph**. Built with Rust and Node.js for speed.
 curl -fsSL https://ultra-graph.web.app/install.sh | sh
 ```
 
-Installs the `ug` binary (and the `ug-app` desktop shell) to
-`~/.local/share/ultragraph/.ug/` and symlinks `ug` onto `~/.local/bin`.
 Windows: download `ultragraph-windows-x64.zip` from
-[Releases](https://github.com/shoocstorm/ug/releases/latest). Build from source
-with **Rust** (latest stable): `cd native && cargo build --release --features app`
-(drop `--features app` to build just the `ug` CLI, without the desktop shell).
+[Releases](https://github.com/shoocstorm/ug/releases/latest).
 
-`ug upgrade` self-updates (`--check` reports whether a release is available).
+From source (Rust required): `cd native && cargo build --release`
 
 ## Quick Start
 
 ```bash
-ug gen        # index → graph → ingest this repo (→ ~/.ug/<name>/)
-ug            # bare `ug` == `ug serve`: visualization + REST API at :8080
+ug gen        # index this repo → ~/.ug/<name>/
+ug            # open the web UI at :8080
 ```
 
-- **`ug gen`** runs the full pipeline on the current directory. Output goes to
-  `~/.ug/<project-name>/` (name = directory basename; override with `-n/--name`).
-  **Embedding is opt-in**: by default the run writes the graph and the database
-  without vectors — no embedding model is loaded, which is most of the wall
-  clock — so everything structural is live immediately and only `search`/`chat`
-  lag. Add `--with-embed` to build vectors in the same run, or `--no-ingest` to
-  skip the database entirely (`ug analyze` statistics and blast radius lag too).
-  See [Embedding is opt-in](#embedding-is-opt-in).
-- **`ug serve`** (or bare `ug`) without `-i` runs in **multi-project mode**:
-  discovers every project under `~/.ug` and adds a UI project switcher. With zero
-  projects it shows the KB Manager wizard instead of erroring — so `ug` alone is
-  always safe to run first.
+`ug gen` runs the full pipeline on the current directory — index, graph,
+and database. Output goes to `~/.ug/<project-name>/`.
+
+`ug` (or `ug serve`) starts a web UI with visualization, search, and a REST
+API. With zero projects it shows a setup wizard.
 
 ```bash
-ug gen -i ~/code/other-repo -n other              # index another repo (no vectors)
-ug gen --with-embed                               # …and build the vectors too
+ug gen -i ~/code/other-repo -n other    # index another repo
+ug gen --with-embed                     # include vector embeddings
+ug -h                                   # all commands
 ```
 
-`ug -h` lists every command; `ug <command> -h` prints its full flags. From a
-source build, the binary is `native/target/release/ug`.
-
-No external embedding service is required: UltraGraph ships an in-process
-**ONNX embedder** ([`fastembed-rs`](https://github.com/Anush008/fastembed-rs)).
-Weights download once on first use (~22–130 MB) and cache locally. Pass
-`--base-url` for a remote OpenAI-compatible endpoint instead — see
-[Embeddings](#embeddings).
+Embeddings are **opt-in**: by default `ug gen` skips the embedding model
+(most of the wall clock), so everything structural works immediately.
+Only `search`, `chat`, and tours need vectors. Use `--with-embed` to build
+them in the same run.
 
 ## Architecture
 
 [![UltraGraph Architecture](docs/UG-Architecture.png)](https://ultra-graph.web.app/architecture.html)
 
-A four-phase pipeline (click the diagram for an
-[interactive view](https://ultra-graph.web.app/architecture.html)):
+A four-phase pipeline ([interactive view](https://ultra-graph.web.app/architecture.html)):
 
-1. **Turbo Indexing** — native multi-threaded `tree-sitter` indexer, incremental via `blake3` hashing.
-2. **Graph Synthesis** — symbol graph with structural analysis (centrality, cycles, shortest paths).
-3. **OverGraph Storage** — persistent vector + FTS store with in-process ONNX embedding.
-4. **GraphRAG Search** — Personalized PageRank (PPR) fusing semantic relevance with structural importance.
+1. **Indexing** — parallel `tree-sitter` indexer, incremental via `blake3`
+2. **Graph** — symbol graph with structural analysis (centrality, cycles, shortest paths)
+3. **Storage** — OverGraph vector + full-text store with local ONNX embedding
+4. **Search** — GraphRAG: Personalized PageRank fusing semantic + structural relevance
 
 ## Features
 
-| Category | Feature |
+| Area | What |
 | :--- | :--- |
-| **Indexing** | Parallel `.gitignore`-aware crawling; incremental `blake3` hashing |
-| | Languages: **TypeScript, JavaScript, Python, Java, Rust, Markdown, PDF** |
-| **Graph** | Folder hierarchy + symbol extraction (Functions, Classes, Interfaces, Imports, Calls) |
-| | **Cross-file call resolution** for Rust, TypeScript, Python and Java — module paths and receiver types, not name matching. Ambiguous call sites are dropped rather than guessed at ([how](docs/INDEXING-AND-CHUNKING.md#31a-cross-file-call-resolution)) |
-| | K-hop BFS, Shortest Path, Centrality, Cycle Detection |
-| **Storage** | **OverGraph**: hybrid Vector + FTS store; local ONNX or remote OpenAI-compatible embedding |
-| **Retrieval** | **GraphRAG**: PPR ranking over the edge graph; RRF hybrid fusion |
-| **Chat** | `ug chat` + `POST /api/chat`: RAG-grounded chat against any OpenAI-compatible LLM, with citations |
-| **Changes** | `ug walk` + `POST /api/walk`: a narrated walkthrough of a **git diff** — the symbols a change touched, in call-graph order, plus the callers and tests it reaches |
-| **Interface** | Web UI (D3.js viz + chat panel), `ug app` desktop shell (Tauri), MCP server, CLI |
+| **Languages** | TypeScript, JavaScript, Python, Java, Rust, Markdown, PDF |
+| **Graph** | Functions, Classes, Interfaces, Imports, Calls — with cross-file call resolution |
+| **Search** | Semantic + keyword + graph expansion (GraphRAG) |
+| **Chat** | RAG-grounded chat against any OpenAI-compatible LLM |
+| **Changes** | `ug walk` — narrated walkthrough of a git diff in call-graph order |
+| **Interfaces** | Web UI, desktop app (Tauri), MCP server, CLI |
 
-## Data layout
+## Key Commands
 
-All generated data lives in one folder per project under `~/.ug` (override the
-root with `UG_HOME`):
-
-```
-~/.ug/<project-name>/
-├── graph.json          # the knowledge graph
-├── indexed-tree.json   # raw symbol tree
-├── ugdb/               # OverGraph vector + edge store
-├── project.json        # name, repoRoot, node/edge counts, timestamps
-└── README.md
-```
-
-`ug list` shows every project with counts and last-generated times; `ug rename
-<new-name>` renames one (the active project by default — the graph and db move
-with it); `ug remove <project>` deletes one (prompts unless `-f/--force`/`-y/--yes`).
-The repo-local `.ug/` folder only holds the `ug` binary, not data.
-
-## Command Line Interface
-
-The native `ug` binary is the primary CLI. `ug -h` lists every command;
-`ug <command> -h` prints that command's full flags and examples.
-
-| Command | Description |
+| Command | What it does |
 | :--- | :--- |
-| `ug gen` | Full pipeline: index → graph → visualization → OverGraph ingest. With no path named, re-runs an already-generated project from its recorded repo root — incremental. |
-| `ug update <file>...` | Refresh the graph for just the files you changed — the focused counterpart to `gen`, built for a live editing session |
-| `ug hook install` | Hang that refresh off git: hooks on commit, merge, checkout and rebase re-index the paths each event touched, so blast-radius answers never lag the working tree. Hook runs never pass `--with-embed` — no embedding model is loaded, which is most of the run time — so vectors alone lag; `ug hook status` says how far and `ug ingest -n <project>` backfills them. `ug hook uninstall`; `UG_HOOK_DISABLE=1` skips one command. |
-| `ug serve` / `ug app` | Serve the viz + REST API (multi-project); `app` wraps it in a native Tauri window |
-| `ug index` / `graph` / `ingest` | The individual pipeline stages `gen` runs for you. Unlisted in `ug -h` — `gen --no-ingest` covers the usual reason to want one. |
-| `ug search "<query>"` | GraphRAG: semantic search → graph expansion → ranked context. `--no-expand` returns just what matched, no graph walk (this replaced the separate `ug semantic_search`, which still works as an alias) |
-| `ug traverse <node-id>` | K-hop BFS over the stored OverGraph edges |
-| `ug chat "<question>"` | RAG-grounded chat against an LLM — see [docs/CHAT.md](docs/CHAT.md) |
-| `ug walk [<rev>]` | **Walk a change.** Maps a git diff onto the graph and narrates the symbols it actually touched — innermost enclosing function per hunk, not just the file list — ordered so callers come before the code they call, then the unchanged callers and tests the change reaches. `ug walk` for uncommitted work (untracked files included), `ug walk <hash>`, `ug walk main...HEAD`. `--commits` lists recent commits to pick from. Reads `graph.json` only: no database, no embedder, and the model is optional (without one you get the ranked itinerary). The one command that needs git — see [Changes](#changes-ug-walk) |
-| `ug context <symbol>` | **Everything about one symbol in one budgeted call** — its doc + source, its callers with call sites, the tests that reach it, its dependencies and any linked prose, each labelled with the role that put it there. Replaces the `get_code` + `find_usages` + `traverse` + `analyze test_for` sequence. `--max-chars` sets the budget; `--include <role>` narrows it. Also a tab in the web UI's node panel, which paints the pack's members on the graph by role. |
-| `ug project_overview` / `find_symbols` / `file_outline` / `get_code` / `find_usages` / `shortest_path` / `graph_schema` | Agent tools — same names, params and output as the MCP tools and `POST /api/tools/<name>`. Add `--json` for the machine-readable envelope. |
-| `ug find_symbols 'handle_*'` · `ug file_outline 'src/**/*.ts'` · `ug find_usages 'validate_*'` | Wildcards (`*` `?` `[abc]` `{a,b}`) work anywhere a symbol or file is named — one call instead of a loop. Those commands also take a plain symbol name, not just a node id. See [docs/API-REFERENCE.md](docs/API-REFERENCE.md#wildcards). |
-| `ug analyze <preset>` | Whole-repo statistics: "how many functions over 50 lines", "what breaks if I change this file", "which endpoints a change is visible through", "which folders are worst documented". `ug analyze --list` shows every preset; `--gql` runs a raw query. |
-| `ug list` / `ug rename <new>` / `ug remove <project>` | List projects under `~/.ug`, rename one (the active one by default), or delete one |
-| `ug doctor` | Print resolved project/db/embedder/chat config and where each value came from |
-| `ug connect [agent]` | Connect an AI agent — CLI skill, MCP server, or both. See [Connecting an AI agent](#connecting-an-ai-agent) |
-| `ug config ...` | Persist defaults — see [Configuration](#configuration) |
-| `ug upgrade` / `ug uninstall` | Self-update from GitHub, or remove all projects + the install (prebuilt only) |
+| `ug gen` | Full pipeline: index → graph → database |
+| `ug update <file>...` | Refresh graph for changed files only |
+| `ug hook install` | Auto-refresh graph on git commits |
+| `ug serve` / `ug app` | Web UI + REST API (desktop shell with `app`) |
+| `ug search "<query>"` | GraphRAG search |
+| `ug chat "<question>"` | RAG-grounded chat |
+| `ug walk [<rev>]` | Narrated walkthrough of a git diff |
+| `ug context <symbol>` | Everything about one symbol in one call |
+| `ug analyze <preset>` | Whole-repo statistics and blast radius |
+| `ug list` / `ug remove` | Manage projects under `~/.ug` |
 
-Every command that selects a project takes `-n/--name <project>` (default: cwd
-basename, else the most recently generated project under `~/.ug`). Destructive
-commands (`rm`, `uninstall`) prompt unless `-f/--force`/`-y/--yes` is given.
-
-### Which storage backs what
-
-Two stores exist per project under `~/.ug/<name>/`: **`graph.json`** (structural,
-written by `ug graph`) and **`ugdb/`** (the OverGraph vector+edge store, written
-by `ug ingest`). Which one a command reads tells you what still works after
-`ug gen --no-ingest`, or when no embedding backend is reachable.
-
-| Reads | Works |
-| :--- | :--- |
-| **`graph.json`** — no DB or embedder needed | `find_symbols`, `file_outline`, `get_code`, `find_usages`, `context`, `traverse`, `shortest_path`, `project_overview`, `graph_schema`, all `graph_*` tools; `GET /api/graph/*`, `/api/file`, `/graph.json` |
-| **`ugdb/`** — needs the ingest step, but **no embedder** | `analyze` (statistics); `traverse --dest <name>`; `GET /api/db/node/:id`, `/api/db/traverse/:id`, `POST /api/tools/analyze` |
-| **`ugdb/` + an embedder** — needs ingest *and* a reachable backend | `search`, `chat`, `tour`; `POST /api/search/hybrid`, `/api/search/semantic`, `/api/chat` |
-
-The practical consequence: **only `search`, `chat` and `tour`
-need an embedder — but `ug analyze` still needs the database.** If your embedding
-endpoint is down, symbol lookup, outlines, source reads, usage analysis, traversal,
-pathfinding *and* whole-repo statistics all still work. `--dest <name>` (or
-`/api/db/traverse`) runs `traverse` against a destination store, to verify what
-landed in OverGraph or Neo4j — see
-[docs/MULTI-STORAGE-DEST.md](docs/MULTI-STORAGE-DEST.md).
-
-#### What `search` does when there is no embedder
-
-The last row is not uniform: `search` **degrades rather than fails**, but only
-from the CLI, and only so far.
-
-| Surface | Behaviour without an embedder |
-| :--- | :--- |
-| `ug search` (CLI) | Warn on stderr, then return a **name-substring match** over indexed symbols, tagged `"matched_by": "name"` |
-| MCP `search` tool | Error — no fallback |
-| `POST /api/search/hybrid`, `/api/search/semantic`, `/api/chat` | `503` |
-| `ug chat`, `ug tour` | Exit — they need an embedder *and* a chat model |
-
-The CLI fallback is a genuine name match — `name CONTAINS <query>` — and nothing
-more: no vector or full-text ranking, no graph expansion, no PPR, no snippets. It
-keeps `ug search foo` answering when the embedding backend is unconfigured; it is
-not a keyword search mode. Three things worth knowing before relying on it:
-
-- **The full-text half of hybrid search is not the fallback.** FTS is a channel
-  *inside* the RRF fusion that seeds PPR, and that path embeds the query first.
-  Lose the embedder and you lose the keyword channel with it.
-- **It triggers on a backend that cannot be built, not one that is down.** The
-  default local ONNX embedder fails at construction (missing model, failed
-  download) and falls back cleanly. A remote `--base-url` endpoint always
-  constructs, so an unreachable one fails the query outright instead.
-- **Vectors have to be in the database too, and this is the common case.**
-  Embedding is opt-in, so after a run without `--with-embed` the semantic
-  channel is empty for the changed nodes even with a working embedder, until
-  `ug ingest` catches up. This is *not* the name-match fallback above — the
-  embedder built fine, so `search` runs its keyword and graph channels
-  normally and returns real results. `search`, `chat` and `tour` say so on
-  stderr when they open such a project, and a ranking no vector contributed
-  to is flagged in the output as well. Every hit coming back
-  `"matched_by": "keyword"` and none `"semantic"` is the same signal in the
-  JSON. See the next section.
-
-When you land on the fallback, `ug find_symbols` (exact, wildcards), `ug analyze`
-(statistics, blast radius) and `ug traverse` (edge walks) answer the same
-questions without embeddings at all.
-
-### Embedding is opt-in
-
-A knowledge graph is structure, and none of the structural tools read a vector:
-`find_symbols`, `find_usages`, `traverse`, `ug analyze` — statistics,
-`diff_impact`, blast radius — all need `ugdb/`, but not an embedder. So `ug gen`
-and `ug update` build **no vectors unless you ask**, which is what makes them
-fast. Vectors buy `search`, `chat` and tours; `--with-embed` builds them in the
-same run.
-
-Do not confuse "no vectors" with "no database" — the row above tells you why the
-difference matters:
-
-| `ug gen` / `ug update` | Written to `ugdb/` | Current after the run | Answering from the *previous* ingest |
-| :--- | :--- | :--- | :--- |
-| *(default)* | nodes, edges, facts, keyword statistics — **everything but the vectors**. No embedding model is loaded, which is most of a small run's wall clock. | the `graph.json` tools **and `ug analyze`** | `search`, `chat` |
-| `--with-embed` | all of the above **plus the vectors**. Loads the embedding model. | everything | — |
-| `--no-ingest` | **nothing** — the database is never opened; only `graph.json` is rebuilt. | the `graph.json` tools only | **everything `ugdb/` backs**, including `ug analyze` |
-
-`ug ingest -n <project>` catches the database up whenever you like — it embeds
-only the nodes still owed a vector. This is why the git hooks never pass
-`--with-embed`: blast radius stays exact while the vectors arrive on your
-schedule.
-
-*(`--no-embed`, the old opt-out, is still accepted — it is the default now.)*
+Run `ug -h` for the full list, or `ug <command> -h` for flags.
 
 ## Configuration
-
-Persist defaults once instead of repeating flags on every invocation:
 
 ```bash
 ug config set chat.model gpt-4o-mini
 ug config set chat.base_url https://api.openai.com/v1
-ug config set embed.model text-embedding-3-small
-ug config list          # every key, its value, and what can override it
+ug config list
 ```
 
-Values land in `$UG_HOME/config.json`. Precedence is always **CLI flag > env
-var > `ug config` > built-in default**; a `.env` file in the cwd supplies
-per-repo env-var defaults. Run `ug doctor` to see which tier won for each
-setting. Full key list, the env-var table, and `.env` details are in
-[docs/CONFIGURATION.md](docs/CONFIGURATION.md).
+Precedence: **CLI flag > env var > `ug config` > default**.
+Run `ug doctor` to see resolved values. See [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
 ## Embeddings
 
-Pick a backend with a single flag on `ingest`/`gen`/`search`:
-**omit `--base-url` for the local in-process ONNX embedder (default), or pass
-`--base-url` for a remote OpenAI-compatible endpoint.**
+```bash
+ug ingest                                  # local ONNX (default, no config needed)
+ug ingest --base-url https://api.openai.com/v1 --api-key $KEY \
+          --model text-embedding-3-small   # remote
+```
+
+No external service required — ships with a local ONNX embedder. Weights
+download once on first use (~22–130 MB). See [docs/EMBEDDING-BACKENDS.md](docs/EMBEDDING-BACKENDS.md).
+
+## AI Agent Integration
+
+Connect an AI agent to UltraGraph:
 
 ```bash
-ug ingest                                   # local default: bge-small-en-v1.5, 384-dim
-ug ingest --model mxbai-embed-large-v1      # a different local alias (1024-dim)
-ug ingest --base-url https://api.openai.com/v1 --api-key $OPENAI_API_KEY \
-          --model text-embedding-3-small    # remote
+ug connect [agent]     # interactive picker (claude, cursor, windsurf, etc.)
 ```
 
-You don't need to know your model's dim — it's probed on first ingest and
-persisted to `<db>/ug-meta.json`. The full model-alias catalog, cache locations,
-and backend architecture are in
-[docs/EMBEDDING-BACKENDS.md](docs/EMBEDDING-BACKENDS.md).
+This sets up either a **CLI skill** (recommended) or an **MCP server**.
+Add `--hooks` to install git hooks that auto-refresh the graph on commits.
+See [docs/MCP-SERVE.md](docs/MCP-SERVE.md).
 
-## RAG Chat (`ug chat`)
+## Data Layout
 
-`ug chat` retrieves graph-aware context via the same GraphRAG pipeline `search`
-uses, then sends it to an OpenAI-compatible chat model and prints the answer
-(one-shot, or a REPL if you omit the prompt). `ug serve` exposes the same
-pipeline at `POST /api/chat`, which powers the web UI's Chat panel.
-
-```bash
-ug chat "how does graph ingest work?" \
-  --base-url http://127.0.0.1:8000/v1 --api-key 12345 \
-  --chat-model Qwen3.6-35B-A3B-MLX-8bit --show-context
 ```
-
-Flags, the REPL commands, `--json` output, and the HTTP API are documented in
-[docs/CHAT.md](docs/CHAT.md).
-
-## Changes (`ug walk`)
-
-A tour answers a *question*. A walk answers a *change*.
-
-`ug walk` reads a git diff, maps each hunk onto the **innermost symbol that
-contains it**, and orders the result by the call graph — so consecutive stops
-are actually connected and the narration can say "…which calls…" and be
-telling the truth. A patch is ordered by filename; this is ordered by what
-calls what.
-
-```bash
-ug walk                       # what you are in the middle of changing
-ug walk HEAD                  # review the last commit
-ug walk main...HEAD           # the whole branch, as a reviewer would read it
-ug walk --commits             # list recent commits to pick from
+~/.ug/<project>/
+├── graph.json          # knowledge graph
+├── ugdb/               # vector + edge store
+└── project.json        # metadata
 ```
-
-Every stop is labelled with **why it is there**:
-
-| Role | Meaning |
-| :--- | :--- |
-| `changed` | The diff edited these exact lines. `+n/-n` counts the lines inside *this symbol*, not its file. |
-| `caller` | **Unchanged** code that calls or references something that changed. |
-| `test` | **Unchanged** test that reaches something that changed. |
-
-That distinction is the point. A list that mixes edited code with the code
-around it is a list you cannot act on.
-
-It reads `graph.json` and nothing else — no vector store, no embedder — so it
-works on any generated project, including one that was never ingested. The
-language model is optional in exactly the way `ug tour`'s is: without one you
-get the ordered itinerary, without narration.
-
-**On all four surfaces:** `ug walk` (CLI) · `POST /api/walk` (JSON or SSE,
-with `GET /api/git/status`, `/api/git/commits` and `/api/git/diff` behind it)
-· the **Changes** panel in the web UI, which lists this repository's own
-commits to pick from and previews the diff before spending a model on it ·
-and the `walk` MCP tool, which returns the itinerary without narration for an
-agent to read.
-
-### git is a soft dependency
-
-`ug walk` is the only command that shells out to git. Without git — or outside
-a working tree, or in a repository with no commits — it says which of those is
-the case and what would fix it, and **every other `ug` command is
-unaffected**. The web UI probes `GET /api/git/status` before offering the
-panel, so the Changes button explains itself rather than failing when pressed.
-
-### One caveat, reported rather than hidden
-
-A diff's line numbers describe the tree at its *new* side; the graph describes
-the tree on disk. For uncommitted work and the most recent commit those are
-the same and the mapping is exact. Walk an older revision and a hunk can land
-inside whatever occupies those lines today — so the walk checks (one
-`git diff --name-only` against the range's tip) and warns, naming the files
-whose stops may be approximate.
-
-## Connecting an AI agent
-
-An agent can reach UltraGraph two ways, and they are alternatives:
-
-- **The `ug` CLI (recommended)** — install the agent skill and the agent runs
-  `ug` itself. `ug --help` and `ug analyze --list` teach it the rest, so its
-  knowledge stays current with the binary and costs no idle context.
-- **The MCP server** — the agent calls tools over the protocol.
-
-`ug connect [agent]` sets up either (or both) — an interactive picker when
-no target, else one of: `claude`, `claude-desk`, `cursor`, `windsurf`, `vscode`,
-`gemini`, `codex`, `hermes`, `opencode`. It asks which way you want, or take
-`--cli` / `--mcp` / `--both`; `--project`/`--global` picks the scope.
-
-Installing both leaves the agent to choose, and it tends to reach for the
-connected tools — so if you want the CLI path, `--cli` is the way to get it.
-Whichever you pick, the other is removed.
-
-Add `--hooks` (or run `ug hook install` any time) to install the git hooks that
-re-index after every commit, merge, checkout and rebase. An agent that edits
-will not think to refresh the graph, and a stale graph is worst exactly where it
-matters most — the blast-radius answer it asked for *because* it just edited.
-Letting git trigger the refresh removes that from anyone's memory.
-
-### For the agent, this is an edit-safety net — not just a search tool
-
-Search is the part that is easy to describe and the least differentiated: an
-agent already has grep, and most platforms ship their own embeddings. What no
-amount of grepping reproduces is the graph answering the two questions that
-decide whether a change is safe:
-
-```bash
-ug context <symbol>                                 # before: the whole picture in one call
-ug find_usages <symbol>                             # before: who is downstream of this?
-ug analyze boundary_impact --arg target=path/to/f.rs  # before: does the change escape the system?
-ug analyze diff_impact --arg files=a.ts,b.rs          # after: what did my edit reach?
-ug analyze diff_retest_scope --arg files=a.ts,b.rs    # after: which tests must I re-run?
-```
-
-The installed skill now teaches that workflow explicitly, and the hooks are what
-make it trustworthy: those answers describe the code the agent *just wrote*, not
-the code as it was at the last manual index. Between commits the agent can also
-refresh on demand — `ug update <file>...` for the files it touched (a fraction of
-a second), `ug gen` after a large or messy change — and `ug hook status` says
-whether the hooks are installed and whether any vectors are owed.
-
-**Tools exposed:** `search`, `traverse`, `find_usages`,
-`find_symbols`, `file_outline`, `get_code`, `project_overview`, `context`,
-`shortest_path`, `analyze`, `graph_schema`, `list_projects`, `gen`.
-
-`analyze` is the one to know about if you have not seen it: it answers
-counting, distribution and blast-radius questions over the whole repo in one
-call — the questions an agent would otherwise answer by grepping every file
-and reading the results, at roughly a thousandth of the tokens.
-
-The easiest way to wire this up is `ug connect --mcp` (interactive picker,
-or name a client: `claude`, `claude-desk`, `cursor`, `windsurf`, `vscode`,
-`gemini`, `codex`, `hermes`, `opencode`). It writes the config below into the
-client's config file. Without `--mcp` it first asks whether you want the MCP
-server, the CLI skill, or both.
-
-Point the server at a project with `UG_PROJECT` (a name under `~/.ug`); with no
-env set it falls back to `~/.ug/<cwd-basename>/ugdb` if it exists. Set
-`UG_EMBED_BASE_URL` to opt into the remote embedder. Run `ug doctor` to preview
-what resolves. Full tool reference, client setup, and troubleshooting:
-[docs/MCP-SERVE.md](docs/MCP-SERVE.md).
-
-```json
-{
-  "mcpServers": {
-    "ultragraph": {
-      "command": "ug",
-      "args": ["mcp"],
-      "env": { "UG_PROJECT": "ug" }
-    }
-  }
-}
-```
-
-## Other integration modes
-
-The standalone binary is the default path, but the same core is reachable other ways:
-
-- **Spawn the `ug` binary** (`child_process`) and parse its JSON output — every
-  agent tool has a matching CLI subcommand (`ug search`, `ug find_symbols`, …).
-- **HTTP** — run `ug serve` and call its REST API (`/api/tools/:name`,
-  `/api/search/*`) from any language.
-
-## Testing
-
-```bash
-cargo install cargo-nextest --locked   # one time
-cd native && cargo nextest run         # native Rust tests
-```
-
-Parallelism is set in `native/.config/nextest.toml` and scales to your
-machine, so no `-j` flag is needed. Plain `cargo test` still works if you
-would rather not install nextest.
 
 ## Further Reading
 
 | Doc | Covers |
 | :--- | :--- |
-| [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) | Config keys, env vars, `.env`, precedence, `ug doctor` |
-| [`docs/CHAT.md`](docs/CHAT.md) | `ug chat` flags, REPL, `--json`, `POST /api/chat` |
-| [`docs/EMBEDDING-BACKENDS.md`](docs/EMBEDDING-BACKENDS.md) | Local ONNX vs. remote embedder, model aliases, failure modes |
-| [`docs/GRAPH-STORAGE.md`](docs/GRAPH-STORAGE.md) | OverGraph data model, query functions, node/edge mapping |
-| [`docs/WEB-SERVE.md`](docs/WEB-SERVE.md) | `ug serve`'s REST API, routes, logging, asset resolution |
-| [`docs/MCP-SERVE.md`](docs/MCP-SERVE.md) | Full MCP tool reference, client setup, troubleshooting |
-| [`docs/MULTI-STORAGE-DEST.md`](docs/MULTI-STORAGE-DEST.md) | Neo4j backend: CLI flags, capability matrix, schema |
-| [`docs/ANALYZE.md`](docs/ANALYZE.md) | `analyze` / `ug analyze`: whole-repo statistics, impact analysis, the fact layer |
-| [`docs/API-REFERENCE.md`](docs/API-REFERENCE.md) | Complete CLI, HTTP API, MCP tools, storage backends, pipeline & schemas |
-| [`native/README.md`](native/README.md) | Rust crate internals: CLI commands, project structure, extensibility |
+| [`docs/API-REFERENCE.md`](docs/API-REFERENCE.md) | Complete CLI, HTTP API, MCP tools |
+| [`docs/CHAT.md`](docs/CHAT.md) | `ug chat` flags, REPL, HTTP API |
+| [`docs/EMBEDDING-BACKENDS.md`](docs/EMBEDDING-BACKENDS.md) | Local vs remote embedder |
+| [`docs/MCP-SERVE.md`](docs/MCP-SERVE.md) | MCP tools, client setup |
+| [`docs/ANALYZE.md`](docs/ANALYZE.md) | Whole-repo statistics |
+| [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) | Config keys, env vars |
+| [`docs/WEB-SERVE.md`](docs/WEB-SERVE.md) | REST API routes |
 
 ## License
+
 MIT
