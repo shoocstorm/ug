@@ -59,6 +59,7 @@ fn assemble_visualization() {
     // `<script type="module">` inside a string literal.
     reject_closing_tag(&css, "</style>", "css");
     reject_closing_tag(&js, "</script>", "js");
+    reject_duplicate_declarations(&js);
 
     for token in ["{{CSS}}", "{{JS}}"] {
         assert!(
@@ -109,6 +110,63 @@ fn concat_parts(dir: &Path, ext: &str) -> String {
         chunks.push(format!("{banner}\n{}", body.strip_suffix('\n').unwrap_or(&body)));
     }
     chunks.join("\n")
+}
+
+/// Refuse two parts that declare the same name at the shared scope.
+///
+/// The parts are concatenated into a single `<script type="module">`, which
+/// is strict mode — so a name declared twice is not a shadowed function, it
+/// is a `SyntaxError` that stops the *entire page* from running. Nothing else
+/// catches it: each part parses on its own, and `node --check` defaults to
+/// sloppy CommonJS where duplicate `function` declarations are legal.
+///
+/// This shipped once: `27-changes.js` added `runWalk`, which `18-walk.js`
+/// already had, and the app died at load with one line in the console.
+///
+/// Deliberately conservative — it matches only declarations at the parts'
+/// own indentation (8 spaces), which is the shared scope. Anything nested
+/// is indented further and is somebody else's scope.
+fn reject_duplicate_declarations(js: &str) {
+    use std::collections::HashMap;
+
+    let mut seen: HashMap<&str, usize> = HashMap::new();
+    let mut part = String::new();
+    let mut dupes: Vec<String> = Vec::new();
+
+    for (i, line) in js.lines().enumerate() {
+        if let Some(name) = line.strip_prefix("// ==== ") {
+            part = name.trim_end_matches(" ====").to_string();
+            continue;
+        }
+        let Some(rest) = line.strip_prefix("        ") else {
+            continue;
+        };
+        // Only the forms the parts actually use at this depth.
+        let rest = rest.strip_prefix("async ").unwrap_or(rest);
+        let name = ["function ", "const ", "let ", "class "]
+            .iter()
+            .find_map(|kw| rest.strip_prefix(kw))
+            .map(|tail| {
+                tail.trim_start()
+                    .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$'))
+                    .next()
+                    .unwrap_or("")
+            })
+            .filter(|n| !n.is_empty());
+        let Some(name) = name else { continue };
+        if seen.insert(name, i).is_some() {
+            dupes.push(format!("`{name}` (again in {part})"));
+        }
+    }
+
+    assert!(
+        dupes.is_empty(),
+        "src/vis/js parts declare the same name twice at the shared scope: {}.\n\
+         Every part is concatenated into one `<script type=\"module\">`, and a module is \
+         strict mode — so this is a SyntaxError that stops the whole page from loading, not \
+         a shadowed function. Rename one of them.",
+        dupes.join(", ")
+    );
 }
 
 fn reject_closing_tag(body: &str, tag: &str, ext: &str) {

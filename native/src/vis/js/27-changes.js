@@ -81,7 +81,7 @@
                 if (v) selectSpec(v, { run: true });
             });
 
-            chgEl('chg-run').addEventListener('click', () => runWalk());
+            chgEl('chg-run').addEventListener('click', () => runDiffWalk());
         }
 
         /// Probe the repository and fill the picker.
@@ -250,7 +250,7 @@
             if (!diff.files.length) {
                 setChangesStatus('Nothing changed here — pick another change.');
             } else if (thenRun) {
-                runWalk();
+                runDiffWalk();
             }
         }
 
@@ -317,7 +317,11 @@
         // alongside it and a `change` on each stop. Two cinematic overlays
         // would be two sets of playback bugs.
 
-        async function runWalk() {
+        // `runDiffWalk`, not `runWalk`: `18-walk.js` owns that name for the
+        // client-side BFS reveal, and every part is concatenated into one
+        // module scope — where a duplicate declaration is a SyntaxError that
+        // takes the whole page down, not a shadowed function.
+        async function runDiffWalk() {
             if (changesState.running) return;
             const spec = changesState.spec;
             const diff = changesState.diff;

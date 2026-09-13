@@ -478,7 +478,7 @@ changelog on every bump, and keep engine calls behind the `KnowledgeStore`
 trait (`native/src/storage/store.rs`) so upgrades stay confined to
 `native/src/storage/db.rs`.
 
-## 9. Thirteen bugs this codebase keeps re-introducing
+## 9. Fourteen bugs this codebase keeps re-introducing
 
 All are invisible in review and silent at runtime, and most have already
 shipped here more than once. Check for them by reflex.
@@ -949,6 +949,41 @@ sentence to trust.
 name the revision each side came from and check they are the same.** If they
 can differ, the answer is a warning, not silence — an approximate answer that
 does not say so is indistinguishable from an exact one.
+
+### 9n. Checking the code in a different mode than it runs in
+
+`27-changes.js` declared `runWalk`. So did `18-walk.js`, for the unrelated
+client-side BFS reveal. The parts are concatenated into one
+`<script type="module">` — and a module is **strict mode**, where a name
+declared twice is a `SyntaxError`. Not a shadowed function: the entire page
+fails to load, every feature at once, with one line in the console.
+
+It passed every check it was given:
+
+- Each part parses on its own. The collision only exists after assembly.
+- `cargo build` succeeded; nothing in the build knew the two names met.
+- The assembled page was extracted and run through `node --check`, **which
+  reported it clean** — because `node --check` on a file with no extension
+  defaults to sloppy CommonJS, where two `function` declarations are legal
+  and the second simply wins.
+
+That last one is the trap worth naming. The verification ran, printed OK, and
+was answering a different question than the browser asks. A check that does
+not use the same mode, parser or entry point as production is not weaker
+evidence than no check — it is worse, because it stops you looking.
+
+Two things came out of it:
+
+- **`build.rs` now refuses two parts that declare the same name at the shared
+  scope** (`reject_duplicate_declarations`), beside the `</script>` check that
+  exists for the same reason: both are silent at build time and fatal at load.
+  Prefer this over a test — the build is what creates the shared scope.
+- **To check the assembled page under `node`, write it to a `.mjs` file** (or
+  pass `--input-type=module`). Anything else parses it as a script and will
+  cheerfully accept code the browser rejects.
+
+Grep shape: any verification step whose parser, mode or entry point was chosen
+for convenience rather than copied from how the thing actually runs.
 
 ## 10. Measuring performance without fooling yourself
 
