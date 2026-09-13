@@ -203,6 +203,33 @@ pub struct TourStop {
     /// exists — lets the UI narrate the transition honestly.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub edge_from_prev: Option<StopLink>,
+    /// Why this stop is on a *diff*-seeded walk, and what happened to it.
+    /// `None` on a question-seeded tour, where there is no change to
+    /// describe. Filled in after assembly by [`crate::walk`], because the
+    /// guide chooses the route and only then is it known which stops the
+    /// change actually reached.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub change: Option<StopChange>,
+}
+
+/// What a diff did to a stop, and why the stop is on the walk at all.
+///
+/// `role` is the honest answer to "why am I looking at this": `changed`
+/// means the diff touched these very lines, while `caller` and `test` mean
+/// the code is unchanged and is here because it *reaches* something that
+/// changed. Conflating the two is what turns a blast-radius walk into a
+/// list of files that look edited but are not.
+#[derive(Clone, Debug, Serialize)]
+pub struct StopChange {
+    /// `changed`, `caller` or `test`.
+    pub role: String,
+    /// The file's diff status (`added`/`modified`/`deleted`/`renamed`);
+    /// absent for stops the diff did not touch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    /// Lines added/removed *within this symbol*, not within its file.
+    pub added: u32,
+    pub removed: u32,
 }
 
 /// A candidate the retrieval pass surfaced, whether or not the guide used
@@ -632,6 +659,7 @@ fn stop_from_item(
         narration: narration.trim().to_string(),
         snippet: item.snippet.clone(),
         edge_from_prev: None,
+        change: None,
     }
 }
 
@@ -745,10 +773,23 @@ fn fallback_tour(query: &str, items: &[ContextItem], max_stops: usize) -> Tour {
 }
 
 fn empty_tour(query: &str, retrieval_ms: u128) -> Tour {
-    let mut tour = Tour::skeleton(query);
-    tour.intro =
+    empty_tour_with(
+        query,
+        retrieval_ms,
         "No matching nodes were found in this project's knowledge graph for that question."
-            .to_string();
+            .to_string(),
+    )
+}
+
+/// A tour with no stops, and the reason there are none.
+///
+/// The reason is a parameter because the causes are not interchangeable: a
+/// question that retrieved nothing and a diff whose files were never
+/// indexed need different fixes, and one generic sentence sends half the
+/// callers to the wrong one.
+pub(crate) fn empty_tour_with(query: &str, retrieval_ms: u128, reason: String) -> Tour {
+    let mut tour = Tour::skeleton(query);
+    tour.intro = reason;
     tour.fallback = true;
     tour.retrieval_ms = retrieval_ms;
     tour
@@ -850,7 +891,7 @@ fn attach_snippets(tour: &mut Tour, repo_root: &std::path::Path) {
 /// Give the *planner* a taste of each candidate's real code. Without this
 /// the guide narrates from descriptions alone, which is where invented
 /// details creep in.
-fn attach_prompt_snippets(items: &mut [ContextItem], repo_root: &std::path::Path, cap: usize) {
+pub(crate) fn attach_prompt_snippets(items: &mut [ContextItem], repo_root: &std::path::Path, cap: usize) {
     for item in items.iter_mut().take(cap.min(PROMPT_SNIPPET_ITEMS)) {
         if item.snippet.is_some() {
             continue;
@@ -1019,6 +1060,7 @@ fn build_plan_messages(
     edges: &[TourEdge],
     ctx_max_chars: usize,
     max_stops: usize,
+    brief: Option<&str>,
 ) -> (Vec<ChatMessage>, usize) {
     let (rendered, shown) = render_numbered_items(items, ctx_max_chars, prompt_item_cap(max_stops));
     let links = render_links(items, edges, shown);
@@ -1032,8 +1074,16 @@ fn build_plan_messages(
         user.push_str(&links);
     }
     user.push_str("\nDesign the guided tour as JSON now.");
+    // The brief extends the *system* prompt rather than the user turn: it
+    // describes what kind of tour this is, which is the guide's standing
+    // instruction, not part of the question being asked.
+    let mut system = tour_system_prompt(max_stops);
+    if let Some(b) = brief.map(str::trim).filter(|b| !b.is_empty()) {
+        system.push_str("\n\n");
+        system.push_str(b);
+    }
     let messages = vec![
-        ChatMessage::new("system", tour_system_prompt(max_stops)),
+        ChatMessage::new("system", system),
         ChatMessage::new("user", user),
     ];
     (messages, shown)
@@ -1508,20 +1558,101 @@ pub async fn plan_tour_with_progress(
         return Ok(empty_tour(query, retrieval_ms));
     }
 
+    let cap = prompt_item_cap(opts.max_stops);
+    let edges = candidate_edges(store, &items, opts.edge_types, cap).await;
+    on_progress(TourProgress::Linking { edges: edges.len() });
+
+    plan_from_candidates(
+        Some(chat),
+        repo_root,
+        query,
+        Candidates {
+            items,
+            edges,
+            seed_id,
+            retrieval_ms,
+            brief: None,
+        },
+        &opts,
+        toolbox,
+        on_progress,
+    )
+    .await
+}
+
+/// Everything the planner needs that does *not* come from its options: the
+/// candidate pack, the edges between those candidates, and where the walk
+/// starts.
+///
+/// This is the seam between "how were these nodes chosen" and "how are they
+/// turned into a narrated route". A question-seeded tour fills it from
+/// GraphRAG retrieval ([`plan_tour_with_progress`]); a diff-seeded walk
+/// fills it from a git diff ([`crate::walk`]). Neither planner knows which
+/// it is looking at, so both get the same repair round-trip, the same
+/// streaming drafts and the same ranked fallback.
+pub(crate) struct Candidates<'a> {
+    pub items: Vec<ContextItem>,
+    pub edges: Vec<TourEdge>,
+    /// Where the camera should open, before the first stop.
+    pub seed_id: Option<String>,
+    /// How long choosing the candidates took, for the report line.
+    pub retrieval_ms: u128,
+    /// Extra standing instructions for the guide, appended to the system
+    /// prompt. `None` for a plain tour.
+    pub brief: Option<&'a str>,
+}
+
+/// Order and narrate a prepared candidate pack.
+///
+/// `chat` is `None` when no model is configured (or the caller asked for
+/// none): the result is then the ranked itinerary, which is a real answer
+/// rather than a degraded one — the stops are chosen and linked either way,
+/// only the ordering and the prose come from the guide.
+pub(crate) async fn plan_from_candidates(
+    chat: Option<&ChatClient>,
+    repo_root: &std::path::Path,
+    query: &str,
+    cand: Candidates<'_>,
+    opts: &TourOptions<'_>,
+    toolbox: Option<&crate::chat::ToolBox<'_>>,
+    on_progress: ProgressFn<'_>,
+) -> Result<Tour, Box<dyn std::error::Error + Send + Sync>> {
+    let Candidates {
+        items,
+        edges,
+        seed_id,
+        retrieval_ms,
+        brief,
+    } = cand;
+
+    if items.is_empty() {
+        return Ok(empty_tour(query, retrieval_ms));
+    }
+
+    let Some(chat) = chat else {
+        let mut tour = fallback_tour(query, &items, opts.max_stops);
+        tour.seed_id = seed_id;
+        tour.retrieval_ms = retrieval_ms;
+        bind_route(&mut tour, &edges);
+        // No guide ran, so nothing was "shown to" one.
+        bind_candidates(&mut tour, &items, 0);
+        if opts.include_snippets {
+            attach_snippets(&mut tour, repo_root);
+        }
+        return Ok(tour);
+    };
+
     // A long itinerary needs a long menu — and enough prompt budget to show
     // it. Both scale with the stop count, but only when the caller left them
     // at their defaults.
-    let cap = prompt_item_cap(opts.max_stops);
     let ctx_chars = if opts.max_context_chars <= DEFAULT_CONTEXT_CHARS {
         plan_context_chars(opts.max_stops)
     } else {
         opts.max_context_chars
     };
 
-    let edges = candidate_edges(store, &items, opts.edge_types, cap).await;
-    on_progress(TourProgress::Linking { edges: edges.len() });
-
-    let (messages, shown) = build_plan_messages(query, &items, &edges, ctx_chars, opts.max_stops);
+    let (messages, shown) =
+        build_plan_messages(query, &items, &edges, ctx_chars, opts.max_stops, brief);
 
     // Plan with a completion budget big enough to hold the whole object.
     let raised = planning_client(chat, opts.fast);
@@ -1629,23 +1760,28 @@ pub async fn plan_tour_no_llm(
     let (items, seed_id, retrieval_ms) =
         gather_candidates(store, embedder, repo_root, query, &opts, false, &mut quiet).await?;
 
-    let mut tour = if items.is_empty() {
-        empty_tour(query, retrieval_ms)
+    let edges = if items.is_empty() {
+        Vec::new()
     } else {
-        fallback_tour(query, &items, opts.max_stops)
+        candidate_edges(store, &items, opts.edge_types, prompt_item_cap(opts.max_stops)).await
     };
-    tour.seed_id = seed_id;
-    tour.retrieval_ms = retrieval_ms;
-    if !items.is_empty() {
-        let edges = candidate_edges(store, &items, opts.edge_types, prompt_item_cap(opts.max_stops)).await;
-        bind_route(&mut tour, &edges);
-        // No guide ran, so nothing was "shown to" one.
-        bind_candidates(&mut tour, &items, 0);
-    }
-    if opts.include_snippets {
-        attach_snippets(&mut tour, repo_root);
-    }
-    Ok(tour)
+
+    plan_from_candidates(
+        None,
+        repo_root,
+        query,
+        Candidates {
+            items,
+            edges,
+            seed_id,
+            retrieval_ms,
+            brief: None,
+        },
+        &opts,
+        None,
+        &mut quiet,
+    )
+    .await
 }
 
 #[cfg(test)]

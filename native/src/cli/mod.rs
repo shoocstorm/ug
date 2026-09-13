@@ -34,6 +34,7 @@ pub(crate) mod search;
 pub(crate) mod dest;
 pub(crate) mod tour;
 pub(crate) mod update;
+pub(crate) mod walk;
 pub(crate) mod upgrade;
 
 use std::env;
@@ -165,6 +166,7 @@ fn dispatch(cmd: &str, cmd_args: &[String]) {
         "traverse" => { search::run_traverse(cmd_args); Ok(()) },
         "chat" => { chat::run_chat(cmd_args); Ok(()) },
         "tour" => { tour::run_tour(cmd_args); Ok(()) },
+        "walk" => walk::run_walk(cmd_args),
         // Project management.
         // `list` is the command; `list_projects` stays because it is the MCP
         // tool's name, and the agent-tool commands are documented as taking
@@ -287,6 +289,11 @@ mod help_drift_tests {
     #[test]
     fn the_tour_command_documents_the_flags_it_reads() {
         assert_documented("tour.rs", "fn print_tour_help");
+    }
+
+    #[test]
+    fn the_walk_command_documents_the_flags_it_reads() {
+        assert_documented("walk.rs", "fn print_walk_help");
     }
 
     #[test]

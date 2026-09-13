@@ -546,6 +546,54 @@ fn parse_analyze_args(args: &Value) -> ultragraph::analyze::AnalyzeParams {
 /// hand the model the same MCP schemas, so all three have to answer every tool
 /// those schemas advertise — and unlike [`Mcp::tool_analyze`], the chat
 /// paths already hold a store and must not open a second one.
+/// Answer a `walk` tool call for any dispatcher that has a graph and a
+/// repo root.
+///
+/// Shared for the reason [`run_analyze_json`] is: the MCP server, the chat
+/// toolbox and the tour's research pass are handed the same schemas, so all
+/// three have to answer every tool those schemas advertise — and a tool two
+/// dispatchers answer *differently* is one whose behaviour depends on which
+/// door you came in through, with nothing to tell you which one you got.
+///
+/// No chat client is built even when one is configured. The caller asked
+/// for the structure of a change; a model writing prose about it is latency
+/// they did not ask for and cannot skip. The narrated form is `ug walk` and
+/// the web UI.
+pub(crate) async fn run_walk_tool(
+    args: &Value,
+    graph: &GraphData,
+    repo_root: &Path,
+) -> Result<String, String> {
+    let spec = ultragraph::git::RevSpec::parse(
+        args.get("spec").and_then(Value::as_str).unwrap_or_default(),
+    );
+    let mut opts = ultragraph::walk::WalkOptions::new();
+    if let Some(n) = args.get("max_stops").and_then(Value::as_u64) {
+        opts.max_stops = (n as usize).clamp(1, ultragraph::tour::MAX_STOPS_LIMIT);
+    }
+    opts.expand = args.get("expand").and_then(Value::as_bool).unwrap_or(true);
+    // Snippets are what `get_code` is for. Including them here would double
+    // the size of every walk to show the caller code it can already fetch
+    // precisely, by the ids this output already names.
+    opts.include_snippets = false;
+    opts.include_debug = false;
+
+    let diff = ultragraph::walk::resolve_diff(repo_root, &spec).map_err(|e| {
+        format!(
+            "{}\n{}\n(walk is the one tool that needs git; every other tool is unaffected.)",
+            e,
+            e.hint()
+        )
+    })?;
+    let drifted = ultragraph::walk::drifted_files(repo_root, &spec, &diff);
+    let mut quiet = |_| {};
+    let walked =
+        ultragraph::walk::plan_walk(graph, repo_root, diff, &drifted, None, &opts, &mut quiet)
+            .await
+            .map_err(|e| format!("walk failed: {}", e))?;
+    Ok(format::format_walk(&walked))
+}
+
 pub(crate) async fn run_analyze_json(
     store: &dyn KnowledgeStore,
     args: &Value,
@@ -818,6 +866,11 @@ impl Mcp {
             // the store's indexed properties. It still needs no embedder,
             // so it stays available when `search` is not.
             "analyze" => Ok(with_staleness(self.tool_analyze(&ctx, args).await?)),
+            // A walk reads graph.json and git, and nothing else — no store,
+            // no embedder — so it stays available on a project that was
+            // never ingested, which is also the project most likely to be
+            // mid-change.
+            "walk" => Ok(with_staleness(self.tool_walk(&ctx, &args).await?)),
             "graph_schema" => {
                 let mut text = self.tool_graph(name, &ctx, args).await?;
                 text.push_str(&self.query_capabilities(&ctx).await);
@@ -868,6 +921,17 @@ impl Mcp {
                 e
             )
         })
+    }
+
+    /// `walk` — the diff-seeded walkthrough, without narration.
+    ///
+    /// No chat client is built even when one is configured: an agent asked
+    /// for the structure of a change, and a model writing prose about it is
+    /// latency the caller did not ask for and cannot skip. The narrated form
+    /// is `ug walk` and the web UI.
+    async fn tool_walk(&self, ctx: &ProjectCtx, args: &Value) -> Result<String, String> {
+        let graph = self.load_graph(&ctx.graph_path)?;
+        run_walk_tool(args, graph.as_ref(), &ctx.repo_root).await
     }
 
     async fn tool_analyze(&self, ctx: &ProjectCtx, args: Value) -> Result<String, String> {
@@ -2031,6 +2095,71 @@ mod tool_dispatch_tests {
         let _guard = project(&mut env, "p");
         let err = call("teleport", json!({ "project": "p" })).await.unwrap_err();
         assert!(err.contains("teleport"), "{err}");
+    }
+
+    // ── walk (graph.json + git, no store) ───────────────────────────────────
+
+    #[tokio::test]
+    async fn walk_outside_a_working_tree_names_git_and_absolves_the_rest() {
+        let mut env = crate::project::EnvGuard::new_async().await;
+        let _guard = project(&mut env, "p");
+        // The fixture repo is a plain directory, never `git init`-ed.
+        let err = call("walk", json!({ "project": "p" })).await.unwrap_err();
+        assert!(err.contains("not inside a git repository"), "{err}");
+        assert!(
+            err.contains("every other tool is unaffected"),
+            "an agent must not conclude the whole server is broken: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn walk_reports_the_changed_symbol_and_its_caller() {
+        if !crate::git::available() {
+            eprintln!("skipping: no git on PATH");
+            return;
+        }
+        let mut env = crate::project::EnvGuard::new_async().await;
+        let guard = project(&mut env, "p");
+        let repo = guard.path().join("repo");
+        for args in [
+            vec!["init", "-q", "-b", "main"],
+            vec!["add", "-A"],
+            vec!["-c", "user.name=t", "-c", "user.email=t@e.invalid", "commit", "-q", "-m", "init"],
+        ] {
+            let out = std::process::Command::new("git")
+                .current_dir(&repo)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@e.invalid")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@e.invalid")
+                .args(&args)
+                .output()
+                .expect("git");
+            if !out.status.success() {
+                eprintln!("skipping: git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+                return;
+            }
+        }
+        // `callee` is at lines 6-9; touch line 7 and nothing else.
+        std::fs::write(
+            repo.join("src/a.rs"),
+            "fn caller() {\n  callee();\n}\n\n\nfn callee() {\n  2\n}\n",
+        )
+        .expect("edit");
+
+        let out = call("walk", json!({ "project": "p" })).await.expect("walk");
+        assert!(out.contains("callee"), "{out}");
+        assert!(out.contains("[changed"), "the role label is the point: {out}");
+        // `caller` calls `callee`, so the ring reaches it — and must be
+        // labelled as unchanged, not as part of the diff.
+        assert!(out.contains("caller"), "{out}");
+        assert!(out.contains("[caller]"), "{out}");
+        assert!(
+            out.contains("diff_impact"),
+            "the output should point at the tool for the full reachable set: {out}"
+        );
     }
 
     // ── the eight structural tools, on a project with no store at all ───────

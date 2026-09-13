@@ -958,19 +958,45 @@ pub(crate) fn merge_tour_chat_cfg(
     default: &Option<ChatConfig>,
     body: &TourBody,
 ) -> Result<ChatConfig, ChatCfgError> {
+    merge_chat_overrides(
+        default,
+        &ChatOverrides {
+            model: body.chat_model.as_deref(),
+            base_url: body.chat_base_url.as_deref(),
+            api_key: body.chat_api_key.as_deref(),
+            temperature: body.temperature,
+            max_tokens: body.max_tokens,
+        },
+    )
+}
+
+/// The per-request model overrides a narrated route accepts.
+///
+/// Named separately from any one body so `/api/tour` and `/api/walk`
+/// cannot drift into accepting different overrides — or, worse, into
+/// validating the endpoint override differently, which is the field that
+/// decides whether the stored API key leaves the machine.
+pub(crate) struct ChatOverrides<'a> {
+    pub(crate) model: Option<&'a str>,
+    pub(crate) base_url: Option<&'a str>,
+    pub(crate) api_key: Option<&'a str>,
+    pub(crate) temperature: Option<f32>,
+    pub(crate) max_tokens: Option<u32>,
+}
+
+pub(crate) fn merge_chat_overrides(
+    default: &Option<ChatConfig>,
+    ov: &ChatOverrides<'_>,
+) -> Result<ChatConfig, ChatCfgError> {
     let base_default = default.clone().unwrap_or_default();
-    let model = body
-        .chat_model
-        .clone()
+    let model = ov
+        .model
+        .map(str::to_string)
         .or_else(|| default.as_ref().map(|c| c.model.clone()))
         .ok_or(ChatCfgError::NotConfigured)?;
-    let (base_url, api_key) = resolve_chat_endpoint(
-        &base_default,
-        body.chat_base_url.as_deref(),
-        body.chat_api_key.as_deref(),
-    )?;
-    let temperature = body.temperature.unwrap_or(base_default.temperature);
-    let max_tokens = body.max_tokens.unwrap_or(base_default.max_tokens);
+    let (base_url, api_key) = resolve_chat_endpoint(&base_default, ov.base_url, ov.api_key)?;
+    let temperature = ov.temperature.unwrap_or(base_default.temperature);
+    let max_tokens = ov.max_tokens.unwrap_or(base_default.max_tokens);
     Ok(ChatConfig {
         extra_body: None,
         base_url,

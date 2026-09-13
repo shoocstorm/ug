@@ -478,7 +478,7 @@ changelog on every bump, and keep engine calls behind the `KnowledgeStore`
 trait (`native/src/storage/store.rs`) so upgrades stay confined to
 `native/src/storage/db.rs`.
 
-## 9. Eleven bugs this codebase keeps re-introducing
+## 9. Thirteen bugs this codebase keeps re-introducing
 
 All are invisible in review and silent at runtime, and most have already
 shipped here more than once. Check for them by reflex.
@@ -890,6 +890,65 @@ Two rules follow:
 
 Grep shape: an object literal built from `it.` / `h.` / `data.` inside a
 `.map()` in the client, where the server type has more fields than the literal.
+
+### 9l. Attributing a whole range to the smallest thing that overlaps it
+
+`ug walk` maps each `@@` hunk onto the innermost graph node containing it, so
+a one-line edit inside a method stops at the method rather than at the
+400-line class around it. The first version picked *one* node per hunk — the
+smallest overlapping one — and credited it the hunk's entire line count.
+
+Then it walked a real commit and reported this:
+
+```
+Stop 1/8 · args (Function) [changed +268/-0]
+   native/src/cli/graph_algos.rs:768-770
+```
+
+`args` is three lines long. The hunk was `@@ -598,0 +606,268 @@` — a whole
+test module added at once — and it merely *passed through* those three lines
+on its way down the file. Everything about the output looked right: a real
+symbol, a real file, a real range, a plausible number. Nothing failed.
+
+Two separate errors, and the second is the one that generalises:
+
+1. A hunk larger than a symbol must credit that symbol only the lines they
+   share. The fix is per-line: sort candidates innermost-first, let each claim
+   the lines of the hunk nothing smaller has claimed, and let the File node —
+   last, because it spans everything — pick up what no symbol covers. That is
+   also what makes an import change map to the file instead of to nothing.
+2. The "innermost" tie-break has to say what happens when spans are *equal*.
+   A file holding one symbol gives both the same extent, and the File node
+   won on id order — so a single-function file reported "the file changed"
+   instead of naming the function. Rank key: `(span, is_file, id)`.
+
+**Whenever you fold a range onto a set of overlapping ranges, ask what the
+answer is when one contains the others, and when two are the same size.**
+"Pick the smallest" answers neither. The arithmetic is in `walk::claim` and
+is tested directly, because an off-by-one there changes only a number nobody
+can check by eye.
+
+### 9m. Line numbers from one revision, read against another
+
+The same feature, the same day. A diff's line numbers describe the tree on its
+*new* side. The graph describes the tree **on disk**. For uncommitted work and
+for the most recent commit those are the same tree; for anything older they
+are not, and a hunk at line 606 lands inside whatever occupies line 606 today.
+
+The result is a walk that is confidently, silently wrong in the exact shape
+this codebase refuses to ship: real symbols, real files, real line ranges, and
+no relationship to what the commit actually changed.
+
+It is also cheap to detect — one `git diff --name-only <tip>` names every file
+that has moved since — so `ug walk` checks and warns, listing the files whose
+stops are approximate. It does not refuse: a walk of an old branch is still
+the right *neighbourhood*, and the user needs to know which half of that
+sentence to trust.
+
+**Any time you join data from a revision against data from the working tree,
+name the revision each side came from and check they are the same.** If they
+can differ, the answer is a warning, not silence — an approximate answer that
+does not say so is indistinguishable from an exact one.
 
 ## 10. Measuring performance without fooling yourself
 

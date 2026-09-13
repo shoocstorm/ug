@@ -376,13 +376,45 @@ which case the page uses its built-ins:
 | POST | `/api/search/semantic` | Pure vector search — `{ "query", "k", "whereClause" }` | ugdb or Neo4j + embedder | DB or embedder unavailable |
 | POST | `/api/search/hybrid` | GraphRAG search — `{ "query", "k", "hops", "edgeTypes", "direction", "maxChars", "mmrLambda", "whereClause", "includeSnippets", "strategy", ... }` | ugdb or Neo4j + embedder | DB or embedder unavailable |
 
-### 2.9 Chat & Tour API
+### 2.9 Chat, Tour & Walk API
 
 | Method | Path | What it does | Data source | Returns 503 when |
 |--------|------|-------------|--------------|------------------|
 | POST | `/api/chat` | RAG chat. Body: `{ "message", "history", "k", "direction", "edgeTypes", "repoRoot", "model", "baseUrl", "apiKey", "temperature", "maxTokens", "system", "tools", "stream", ... }` — non-streaming by default; `"stream": true` switches to an SSE response (`event: context` / `delta` / `done` / terminal `error`) | DB + embedder + chat LLM | Chat endpoint not configured |
 | GET | `/api/chat/config` | Get the server's default chat configuration | Config |
 | POST | `/api/tour` | Guided tour. Body: `{ "topic", "projectName", "maxStops", "model", "stream", ... }` → plan → candidates → narration + links — non-streaming by default; `"stream": true` narrates itself over SSE (`event: progress` per phase, then `tour`, or terminal `error`) | DB + embedder + chat LLM | See tour opts |
+| GET | `/api/git/status` | Can this project be walked? `{ "available", "repo": { "root", "branch", "head", "head_subject", "dirty", "staged", "default_branch" } }`, or `{ "available": false, "code", "error", "hint" }` | git | **Never** — always 200; see below |
+| GET | `/api/git/commits` | Recent commits for a picker: `?limit=30&rev=<ref>` → `{ "commits": [{ "sha", "short", "subject", "author", "relative", "date", "files", "insertions", "deletions" }] }` | git | git unavailable, or no commits |
+| GET | `/api/git/diff` | What a spec touches, without walking it: `?spec=HEAD` → `{ "diff": { "spec", "label", "files": [{ "path", "old_path", "status", "added", "removed", "hunks", "binary" }], "insertions", "deletions", "commits", "truncated" }, "drifted": [path] }` | git | git unavailable (400 on an unknown revision) |
+| POST | `/api/walk` | Walk a change. Body: `{ "spec", "max_stops", "expand", "include_snippets", "include_debug", "stream", "think", "no_llm", "chat_model", "chat_base_url", "chat_api_key", "temperature", "max_tokens" }` → a `Tour` plus `diff`, `unmapped` and `drifted`; each stop carries `change: { role, status, added, removed }`. `"stream": true` switches to SSE (`event: progress` per phase, then **`walk`**, or terminal `error`) | graph.json + git; **no DB, no embedder**; LLM optional | git unavailable |
+
+#### Walking a change
+
+`spec` takes any of: omitted or `"working"` (uncommitted, untracked files
+included), `"staged"`, a commit-ish (`"HEAD"`, `"HEAD~2"`, a sha — walked
+against its parent), or a range (`"main..HEAD"`, `"main...HEAD"`).
+
+Each stop's `change.role` is `changed` (the diff edited these lines),
+`caller` or `test` (**unchanged** code that reaches something that did).
+`added`/`removed` count lines inside *that symbol*, not its file.
+
+Three things this API does deliberately:
+
+- **`/api/git/status` never returns an error status.** "git is not installed"
+  and "this is not a working tree" are facts about the machine that a client
+  has to render, not failed requests — a 503 would be indistinguishable from a
+  server that is down. Every negative answer carries a stable `code`
+  (`not_installed`, `not_a_repo`, `no_commits`, `bad_rev`, `failed`) to switch
+  on and a `hint` to display. The other three routes *do* use status codes:
+  400 for a revision the caller invented, 503 for git being unusable.
+- **`drifted` names files whose line numbers no longer match the tree.** A
+  diff's lines describe its new side; the graph describes the working tree.
+  Walking an older revision maps one onto the other, so the affected stops are
+  approximate and the response says which. Empty for uncommitted and staged
+  work, where the two are the same tree.
+- **The event is `walk`, not `tour`.** The payload carries `diff` and a
+  per-stop `change`; a client that saw `tour` would be entitled to assume
+  neither is there.
 
 ---
 
@@ -390,7 +422,7 @@ which case the page uses its built-ins:
 
 ### 3.1 Advertised MCP Tools (`tools/list`)
 
-These 13 tools are advertised over MCP `tools/list` and also available via the CLI and HTTP `/api/tools/:tool`. Each tool accepts an optional `project` parameter (except `list_projects`).
+These 14 tools are advertised over MCP `tools/list` and also available via the CLI and HTTP `/api/tools/:tool`. Each tool accepts an optional `project` parameter (except `list_projects`).
 
 | Tool | What it does | Data source | When it errors |
 |------|-------------|-------------|----------------|
@@ -403,6 +435,7 @@ These 13 tools are advertised over MCP `tools/list` and also available via the C
 | `project_overview` | Orient in the codebase: repo root, node/edge counts, biggest files, most depended-upon symbols. | graph.json | graph.json missing/invalid |
 | `context` | **Curated bundle for one symbol**: source + callers (with call sites) + tests + dependencies + linked docs, each item labelled by role, filled in priority order under one `maxChars` budget. Assembly over the existing tools, not new analysis — so it needs no embedder and no db beyond the stored source `get_code` and `find_usages` already use. Takes exactly one symbol; an ambiguous name is an error listing the candidates. | graph.json (+ ugdb for source & call sites) | graph.json missing/invalid, or the symbol resolves to zero/several nodes |
 | `shortest_path` | Find shortest directed edge path between two symbols. Each endpoint (id, name or wildcard) must resolve to exactly one node. | graph.json | graph.json missing/invalid |
+| `walk` | **What did this change touch?** Maps a git diff onto the graph — the innermost enclosing symbol per hunk, not just the file list — ordered by the call graph so callers come before the code they call, then the unchanged callers and tests they reach. Every stop is labelled `changed` / `caller` / `test`; the last two are code the diff did **not** edit. Takes `spec` (omitted = uncommitted, or `staged`, a commit-ish, or a range), `max_stops`, `expand`. One hop out by design — `analyze diff_impact` is the full reachable set. | graph.json + **git** (no db, no embedder) | git missing, not a working tree, or an unknown revision |
 | `analyze` | **Whole-repo statistics**: counts, groups, distributions, blast radius. Takes a named `preset` or raw GQL. Read-only — mutations are rejected before write staging. Every answer reports property coverage, because aggregating over an unstored property returns `0` rather than an error. | ugdb (**no embedder**) | db missing or written by an older ug |
 | `graph_schema` | **Capability manifest**: node & edge types with counts and connection shapes (from graph.json), plus queryable properties with live coverage and the `analyze` preset list (from the db). | graph.json + ugdb | graph.json missing/invalid (the db half degrades to a note) |
 | `list_projects` | List every indexed project on this machine (name, repo path, graph size). | `~/.ug/` directory scan | — |

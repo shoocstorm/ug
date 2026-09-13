@@ -911,6 +911,18 @@
                     <div class="ask-strip">
                         <span class="ask-status" id="ask-status"></span>
                         <span class="ask-strip-actions">
+                            <!-- A walk is seeded by a change, not by a question,
+                                 so it cannot live in the bar above: there is
+                                 nothing to type. It gets its own always-visible
+                                 launcher instead of hiding behind a prefix. -->
+                            <button class="ask-mini" id="changes-toggle" type="button" aria-expanded="false"
+                                title="Walk a change: what a commit or your uncommitted work touched (needs git)">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                                    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                    <circle cx="6" cy="6" r="2.5" /><circle cx="6" cy="18" r="2.5" />
+                                    <circle cx="18" cy="12" r="2.5" /><path d="M6 8.5v7M8.5 6h4a3 3 0 0 1 3 3v1" />
+                                </svg>
+                                Changes</button>
                             <button class="ask-mini" id="ask-adv-toggle" type="button" aria-expanded="false"
                                 title="Retrieval breadth and model overrides">Retrieval</button>
                             <button class="ask-mini" id="ask-reset" type="button"
@@ -961,6 +973,63 @@
                             <summary>How this answers · retrieval, prompt, tools</summary>
                             <div class="chat-setup-body" id="chat-setup-body">Loading…</div>
                         </details>
+                    </div>
+
+                    <!-- Walk a change. Hidden until asked for; `js/27-changes.js`
+                         fills the picker from /api/git/commits on first open, so
+                         the list is this repository's actual history rather than
+                         something the user has to remember the hash of. -->
+                    <div class="changes-panel" id="changes-panel" hidden>
+                        <div class="chg-head">
+                            <span class="chg-title">Walk a change</span>
+                            <span class="chg-branch" id="chg-branch"></span>
+                        </div>
+
+                        <!-- git missing, not a repo, or no commits yet. One
+                             banner, filled from the error's own hint. -->
+                        <div class="cap-banner warn" id="chg-unavailable" hidden></div>
+
+                        <div class="chg-body" id="chg-body">
+                            <!-- The four changes anyone actually walks, as one
+                                 click each. The dropdown below is for the fifth. -->
+                            <div class="chg-quick" id="chg-quick" role="group" aria-label="What to walk">
+                                <button class="chg-chip" type="button" data-spec="working">Uncommitted</button>
+                                <button class="chg-chip" type="button" data-spec="staged">Staged</button>
+                                <button class="chg-chip" type="button" data-spec="HEAD">Last commit</button>
+                                <button class="chg-chip" type="button" id="chg-vs-default" hidden></button>
+                            </div>
+
+                            <div class="chg-row">
+                                <label class="chg-label" for="chg-commit">Or a commit</label>
+                                <select id="chg-commit">
+                                    <option value="">Loading recent commits…</option>
+                                </select>
+                            </div>
+
+                            <div class="chg-row">
+                                <label class="chg-label" for="chg-ref">Or a range</label>
+                                <input id="chg-ref" type="text" autocomplete="off" spellcheck="false"
+                                    placeholder="main...HEAD, v1.2..v1.3, a1b2c3d">
+                            </div>
+
+                            <!-- What the selected spec actually touches, fetched
+                                 before anything is walked: nobody should spend a
+                                 model to find out the diff was empty. -->
+                            <div class="chg-preview" id="chg-preview" hidden>
+                                <div class="chg-stat" id="chg-stat"></div>
+                                <div class="chg-files" id="chg-files"></div>
+                            </div>
+
+                            <div class="chg-actions">
+                                <label class="chg-opt" title="Also visit the unchanged callers and tests the change reaches">
+                                    <input type="checkbox" id="chg-expand" checked>
+                                    <span>Include what it affects</span>
+                                </label>
+                                <span class="chg-spacer"></span>
+                                <button class="chg-run" id="chg-run" type="button" disabled>Walk this change</button>
+                            </div>
+                            <div class="chg-status" id="chg-status"></div>
+                        </div>
                     </div>
 
                     <!-- Why a mode is unavailable, said where the mode is.

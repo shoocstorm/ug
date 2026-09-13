@@ -16,6 +16,7 @@ use super::api::*;
 use super::chat_api::*;
 use super::db_api::*;
 use super::encoding::asset_response;
+use super::git_api::*;
 use super::host_guard::guard_host;
 use super::projects_api::*;
 use super::*;
@@ -81,6 +82,12 @@ pub(crate) fn build_router(state: ServeState) -> Router {
         .route("/api/search/hybrid", post(api_search_hybrid))
         .route("/api/chat", post(api_chat))
         .route("/api/tour", post(api_tour))
+        // Change-shaped routes: what this repo has changed, and the walk
+        // through it. Needs neither the store nor an embedder.
+        .route("/api/git/status", get(api_git_status))
+        .route("/api/git/commits", get(api_git_commits))
+        .route("/api/git/diff", get(api_git_diff))
+        .route("/api/walk", post(api_walk))
         .route("/api/chat/config", get(api_chat_config))
         // CompressionLayer skips responses that already have Content-Encoding,
         // so it only kicks in for the dynamic /api/* JSON.

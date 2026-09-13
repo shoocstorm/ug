@@ -35,10 +35,12 @@ mod assets;
 mod chat;
 pub mod cli;
 mod config;
+pub mod git;
 mod mcp;
 mod project;
 mod serve;
-mod tour;
+pub mod tour;
+pub mod walk;
 
 pub use graph::{
     build_graph, build_graph_from_index, calculate_centrality, detect_cycles,

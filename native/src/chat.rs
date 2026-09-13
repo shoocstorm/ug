@@ -791,8 +791,12 @@ pub async fn run_chat_tool(
         // Statistics come from the store's indexed properties, not the graph —
         // the one thing `agent_tools::run_tool` cannot answer.
         "analyze" => crate::mcp::run_analyze_json(store, &args).await,
+        // Reads graph.json and git; needs neither the store nor the
+        // embedder, so it answers "what did I just change" even on a
+        // project that was never ingested.
+        "walk" => crate::mcp::run_walk_tool(&args, graph, repo_root).await,
         _ => {
-            crate::mcp::tools::reject_if_store_backed(name)?;
+            crate::mcp::tools::reject_if_not_graph_backed(name)?;
             // Chat already holds this project's store open, so the source
             // pre-fetch is one lookup rather than another open.
             let indexed = agent_tools::IndexedSource::load(

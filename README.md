@@ -81,6 +81,7 @@ A four-phase pipeline (click the diagram for an
 | **Storage** | **OverGraph**: hybrid Vector + FTS store; local ONNX or remote OpenAI-compatible embedding |
 | **Retrieval** | **GraphRAG**: PPR ranking over the edge graph; RRF hybrid fusion |
 | **Chat** | `ug chat` + `POST /api/chat`: RAG-grounded chat against any OpenAI-compatible LLM, with citations |
+| **Changes** | `ug walk` + `POST /api/walk`: a narrated walkthrough of a **git diff** — the symbols a change touched, in call-graph order, plus the callers and tests it reaches |
 | **Interface** | Web UI (D3.js viz + chat panel), `ug app` desktop shell (Tauri), MCP server, CLI |
 
 ## Data layout
@@ -117,6 +118,7 @@ The native `ug` binary is the primary CLI. `ug -h` lists every command;
 | `ug search "<query>"` | GraphRAG: semantic search → graph expansion → ranked context. `--no-expand` returns just what matched, no graph walk (this replaced the separate `ug semantic_search`, which still works as an alias) |
 | `ug traverse <node-id>` | K-hop BFS over the stored OverGraph edges |
 | `ug chat "<question>"` | RAG-grounded chat against an LLM — see [docs/CHAT.md](docs/CHAT.md) |
+| `ug walk [<rev>]` | **Walk a change.** Maps a git diff onto the graph and narrates the symbols it actually touched — innermost enclosing function per hunk, not just the file list — ordered so callers come before the code they call, then the unchanged callers and tests the change reaches. `ug walk` for uncommitted work (untracked files included), `ug walk <hash>`, `ug walk main...HEAD`. `--commits` lists recent commits to pick from. Reads `graph.json` only: no database, no embedder, and the model is optional (without one you get the ranked itinerary). The one command that needs git — see [Changes](#changes-ug-walk) |
 | `ug context <symbol>` | **Everything about one symbol in one budgeted call** — its doc + source, its callers with call sites, the tests that reach it, its dependencies and any linked prose, each labelled with the role that put it there. Replaces the `get_code` + `find_usages` + `traverse` + `analyze test_for` sequence. `--max-chars` sets the budget; `--include <role>` narrows it. Also a tab in the web UI's node panel, which paints the pack's members on the graph by role. |
 | `ug project_overview` / `find_symbols` / `file_outline` / `get_code` / `find_usages` / `shortest_path` / `graph_schema` | Agent tools — same names, params and output as the MCP tools and `POST /api/tools/<name>`. Add `--json` for the machine-readable envelope. |
 | `ug find_symbols 'handle_*'` · `ug file_outline 'src/**/*.ts'` · `ug find_usages 'validate_*'` | Wildcards (`*` `?` `[abc]` `{a,b}`) work anywhere a symbol or file is named — one call instead of a loop. Those commands also take a plain symbol name, not just a node id. See [docs/API-REFERENCE.md](docs/API-REFERENCE.md#wildcards). |
@@ -266,6 +268,63 @@ ug chat "how does graph ingest work?" \
 
 Flags, the REPL commands, `--json` output, and the HTTP API are documented in
 [docs/CHAT.md](docs/CHAT.md).
+
+## Changes (`ug walk`)
+
+A tour answers a *question*. A walk answers a *change*.
+
+`ug walk` reads a git diff, maps each hunk onto the **innermost symbol that
+contains it**, and orders the result by the call graph — so consecutive stops
+are actually connected and the narration can say "…which calls…" and be
+telling the truth. A patch is ordered by filename; this is ordered by what
+calls what.
+
+```bash
+ug walk                       # what you are in the middle of changing
+ug walk HEAD                  # review the last commit
+ug walk main...HEAD           # the whole branch, as a reviewer would read it
+ug walk --commits             # list recent commits to pick from
+```
+
+Every stop is labelled with **why it is there**:
+
+| Role | Meaning |
+| :--- | :--- |
+| `changed` | The diff edited these exact lines. `+n/-n` counts the lines inside *this symbol*, not its file. |
+| `caller` | **Unchanged** code that calls or references something that changed. |
+| `test` | **Unchanged** test that reaches something that changed. |
+
+That distinction is the point. A list that mixes edited code with the code
+around it is a list you cannot act on.
+
+It reads `graph.json` and nothing else — no vector store, no embedder — so it
+works on any generated project, including one that was never ingested. The
+language model is optional in exactly the way `ug tour`'s is: without one you
+get the ordered itinerary, without narration.
+
+**On all four surfaces:** `ug walk` (CLI) · `POST /api/walk` (JSON or SSE,
+with `GET /api/git/status`, `/api/git/commits` and `/api/git/diff` behind it)
+· the **Changes** panel in the web UI, which lists this repository's own
+commits to pick from and previews the diff before spending a model on it ·
+and the `walk` MCP tool, which returns the itinerary without narration for an
+agent to read.
+
+### git is a soft dependency
+
+`ug walk` is the only command that shells out to git. Without git — or outside
+a working tree, or in a repository with no commits — it says which of those is
+the case and what would fix it, and **every other `ug` command is
+unaffected**. The web UI probes `GET /api/git/status` before offering the
+panel, so the Changes button explains itself rather than failing when pressed.
+
+### One caveat, reported rather than hidden
+
+A diff's line numbers describe the tree at its *new* side; the graph describes
+the tree on disk. For uncommitted work and the most recent commit those are
+the same and the mapping is exact. Walk an older revision and a hunk can land
+inside whatever occupies those lines today — so the walk checks (one
+`git diff --name-only` against the range's tip) and warns, naming the files
+whose stops may be approximate.
 
 ## Connecting an AI agent
 

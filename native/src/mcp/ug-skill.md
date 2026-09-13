@@ -33,7 +33,9 @@ description: >-
   this expose", "is this a breaking change", "what did my change break",
   "what should I re-test", "is it safe to change this", "did I miss a caller",
   "give me context on", "everything about this function", "walk me through this
-  symbol", "what do I need to know before changing X".
+  symbol", "what do I need to know before changing X", "what changed", "what
+  did this commit do", "review this branch", "walk me through this diff",
+  "summarise my changes", "what am I in the middle of".
 ---
 
 # ug — codebase knowledge graph from the CLI
@@ -59,6 +61,11 @@ ug analyze boundary_impact --arg target=<file> # visible outside the system?
 # AFTER an edit burst — blast radius + tests to re-run
 ug analyze diff_impact --arg files=$(git diff --name-only | paste -sd, -)
 ug analyze diff_retest_scope --arg files=a.ts,b.rs
+
+# ORIENT in a change — yours, or someone else's
+ug walk                                        # what is uncommitted right now
+ug walk HEAD                                   # review the last commit
+ug walk main...HEAD                            # everything this branch changed
 ```
 
 Git hooks re-index only at commit boundaries, so across an edit burst the graph
@@ -114,6 +121,38 @@ Two rules turn a loop into one call:
 > "Who calls any of the validators?" is `ug find_usages 'validate_*'` — one
 > call, not one per validator.
 
+## `ug walk` — read a change, not a patch
+
+`git diff` orders by filename and stops at the file. `ug walk` maps each hunk
+onto the **innermost symbol that contains it** and orders the stops by the
+call graph, so callers come before the code they call — then follows the edges
+out to the unchanged callers and tests the change reaches.
+
+```bash
+ug walk                  # uncommitted, untracked files included
+ug walk staged
+ug walk HEAD             # one commit, against its parent
+ug walk main...HEAD      # this branch, against where it forked
+ug walk --commits        # list recent commits to pick from
+```
+
+**Read the role on every stop.** It is the difference between code you changed
+and code that merely touches it:
+
+| Role | Means |
+|---|---|
+| `changed` | The diff edited these exact lines. `+n/-n` is inside *this symbol*, not its file. |
+| `caller` | **Unchanged.** It calls or references something that changed. |
+| `test` | **Unchanged.** A test that reaches something that changed. |
+
+Never edit a `caller` or `test` believing the diff touched it.
+
+One hop out by design — for the full reachable set use `ug analyze diff_impact`
+and `ug analyze diff_retest_scope`. Line numbers are exact for uncommitted work
+and the most recent commit; walking an older revision maps that diff's lines
+onto today's code and prints a warning naming the files where that is
+approximate.
+
 ## Routing — which command do I run?
 
 | Question | Command |
@@ -121,6 +160,7 @@ Two rules turn a loop into one call:
 | Counts / fractions / rankings / what breaks? | `ug analyze <preset>` — catalog below |
 | **Everything about one symbol at once** | **`ug context <symbol>`** — code + callers + tests + deps + docs |
 | Safe to change this symbol? | `ug context <symbol>` (or just `ug find_usages <symbol>`) before you edit |
+| **What did this change actually touch?** | **`ug walk`** (uncommitted) · `ug walk HEAD` · `ug walk main...HEAD` — the symbols a diff edited, in call-graph order |
 | What did my edited files break? | `ug analyze diff_impact --arg files=...` (feed it `git diff --name-only`) |
 | Which tests should I re-run? | `ug analyze diff_retest_scope --arg files=...` |
 | Graph match my edits? | `ug update <file>...` — do this before asking structurally |
@@ -163,7 +203,8 @@ you actually asked:
 ## What needs an embedder — and what happens without one
 
 `analyze`/`traverse` need the db but **no** embedder; everything else reads
-`graph.json` and needs neither. Only `search` is embedding-backed, and it behaves
+`graph.json` and needs neither. `walk` is the one command that also needs
+**git** — outside a working tree it says so, and nothing else is affected. Only `search` is embedding-backed, and it behaves
 differently depending on how you call it:
 
 | Surface | No embedder |

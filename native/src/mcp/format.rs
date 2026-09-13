@@ -8,7 +8,9 @@
 //! not by output format.
 //!
 //! The graph-backed tools don't need anything here — they render themselves
-//! inside [`crate::agent_tools`] via `Render::Markdown`.
+//! inside [`crate::agent_tools`] via `Render::Markdown`. [`format_walk`] is
+//! the exception that is neither: a walk is planned in [`crate::walk`],
+//! which has no opinion about presentation, and rendered per surface.
 
 use ultragraph::storage::query::RankedContext;
 
@@ -439,4 +441,105 @@ mod tests {
         let out = format_project_list(&projects, "/elsewhere", "/home/u/.ug");
         assert!(out.contains("(? nodes, ? edges)"), "{out}");
     }
+}
+
+// ── walk ───────────────────────────────────────────────────────────────────
+
+/// Render a planned walk for an agent.
+///
+/// Deliberately not the CLI's itinerary: that one is paced for reading, with
+/// wrapped narration and snippets. An agent wants the *table* — what changed,
+/// where, and why each line is in the list — and every character of prose it
+/// does not read is prompt budget spent for nothing.
+///
+/// The role column is the part that matters. Without it a caller and a
+/// changed symbol look identical, and an agent that assumes the whole list
+/// was edited will go and "fix" code the diff never touched.
+pub(crate) fn format_walk(w: &crate::walk::Walk) -> String {
+    let d = &w.diff;
+    let mut out = String::new();
+    out.push_str(&format!(
+        "# Walk: {}\n\n{} file(s) changed, +{}/-{}",
+        d.label,
+        d.files.len(),
+        d.insertions,
+        d.deletions
+    ));
+    if !d.commits.is_empty() {
+        out.push_str(&format!(" across {} commit(s)", d.commits.len()));
+    }
+    out.push_str("\n\n");
+
+    if w.tour.stops.is_empty() {
+        out.push_str(&w.tour.intro);
+        out.push('\n');
+        return out;
+    }
+
+    out.push_str(
+        "Stops in call-graph order — callers before the code they call.\n\
+         `changed` = the diff edited these lines; `caller`/`test` = unchanged code that reaches \
+         something that did.\n\n",
+    );
+
+    for (i, s) in w.tour.stops.iter().enumerate() {
+        let role = s
+            .change
+            .as_ref()
+            .map(|c| c.role.as_str())
+            .unwrap_or("context");
+        let delta = match s.change.as_ref() {
+            Some(c) if c.added > 0 || c.removed > 0 => format!(" +{}/-{}", c.added, c.removed),
+            _ => String::new(),
+        };
+        let lines = if s.end_line > s.start_line {
+            format!(":{}-{}", s.start_line, s.end_line)
+        } else if s.start_line > 0 {
+            format!(":{}", s.start_line)
+        } else {
+            String::new()
+        };
+        out.push_str(&format!(
+            "{}. **{}** ({}) — `{}`  \n   {}{}  ·  [{}{}]\n",
+            i + 1,
+            s.name,
+            s.node_type,
+            s.node_id,
+            s.file,
+            lines,
+            role,
+            delta
+        ));
+        // The edge we followed to get here, when the graph has one: it is
+        // what makes the order a walk rather than a list, and it is the
+        // fact an agent would otherwise have to call traverse to learn.
+        if let Some(link) = s.edge_from_prev.as_ref() {
+            out.push_str(&format!(
+                "   {} {} from the previous stop\n",
+                if link.reverse { "←" } else { "→" },
+                link.edge_type
+            ));
+        }
+        if !s.narration.trim().is_empty() && !s.narration.contains("part of the neighbourhood") {
+            out.push_str(&format!("   {}\n", s.narration.trim()));
+        }
+    }
+
+    if !w.unmapped.is_empty() {
+        out.push_str(&format!(
+            "\n**Not walked** ({} file(s) with no indexed symbol — deleted, binary, or not yet \
+             indexed): {}\n",
+            w.unmapped.len(),
+            w.unmapped.join(", ")
+        ));
+    }
+    for warn in &w.tour.warnings {
+        out.push_str(&format!("\n⚠ {}\n", warn));
+    }
+    out.push_str(
+        "\nThis is one hop out. For the full reachable set, call analyze with preset \
+         `diff_impact` (blast radius) or `diff_retest_scope` (tests to re-run), passing these \
+         changed paths.\n",
+    );
+    out
 }

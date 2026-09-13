@@ -81,6 +81,10 @@ pub(crate) const API_ENDPOINTS: &[(&str, &[ApiEntry])] = &[
             ApiEntry { method: "POST", path: "/api/chat", desc: "GraphRAG-grounded chat completion (\"stream\": true in the body switches to SSE)", availability: "503 if no DB + embedder + chat model configured", cli_equivalent: Some("ug chat") },
             ApiEntry { method: "GET", path: "/api/chat/config", desc: "the server's default chat configuration", availability: "always", cli_equivalent: Some("ug config list (similar info)") },
             ApiEntry { method: "POST", path: "/api/tour", desc: "Guided, narrated walkthrough — ordered stops bound to node ids (\"stream\": true switches to SSE)", availability: "503 if no DB + embedder; LLM narration optional (ranked fallback)", cli_equivalent: Some("ug tour") },
+            ApiEntry { method: "GET", path: "/api/git/status", desc: "Can this project be walked? Repo root, branch, HEAD, dirty/staged, default branch", availability: "always 200 — reports available:false with a code and a hint when git is missing or this is not a working tree", cli_equivalent: None },
+            ApiEntry { method: "GET", path: "/api/git/commits", desc: "Recent commits with per-commit file and line counts — what the UI's picker lists", availability: "503 if git is unavailable or the repo has no commits", cli_equivalent: Some("ug walk --commits") },
+            ApiEntry { method: "GET", path: "/api/git/diff", desc: "What a revision spec touches, without walking it: files, statuses, line counts", availability: "400 on an unknown revision; 503 if git is unavailable", cli_equivalent: None },
+            ApiEntry { method: "POST", path: "/api/walk", desc: "Walk a change — the stops a git diff touched, in call-graph order (\"stream\": true switches to SSE)", availability: "needs graph.json and git; no DB or embedder; LLM narration optional (ranked fallback)", cli_equivalent: Some("ug walk") },
         ],
     ),
     (

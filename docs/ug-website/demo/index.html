@@ -9799,9 +9799,349 @@ body:has(#info.visible) #perf-hud {
                 flex: 1 1 40%;
             }
         }
+/* ==== 21-changes.css ==== */
+        /* ─── Changes: walk a diff ───────────────────────────
+           The launcher for a walk, folded into the Ask column's head next
+           to the Retrieval disclosure. Same box treatment as `.ask-adv`
+           deliberately: both are "things that set up a run" rather than a
+           run, and giving the second one its own visual language would
+           imply it belongs to a different surface.
+
+           Everything here is one column of labelled rows. A walk has four
+           inputs and one of them is a dropdown of this repository's own
+           history — there is no arrangement of that which reads well in a
+           strip, and a picker that wraps is worse than one that stacks. */
+
+        .changes-panel {
+            margin-top: 8px;
+            padding: 10px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-soft);
+            border-radius: 6px;
+        }
+
+        .changes-panel[hidden] {
+            display: none;
+        }
+
+        .chg-head {
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+
+        .chg-title {
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            color: var(--text-soft);
+        }
+
+        /* Which branch this is, so a walk is never planned against a
+           checkout the user forgot they were on. */
+        .chg-branch {
+            font-size: 10px;
+            color: var(--text-dim);
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .chg-branch.dirty::after {
+            content: " ●";
+            color: var(--warning);
+        }
+
+        .chg-body[hidden] {
+            display: none;
+        }
+
+        /* ── The four one-click specs ── */
+
+        .chg-quick {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 5px;
+            margin-bottom: 8px;
+        }
+
+        .chg-chip {
+            background: transparent;
+            border: 1px solid var(--border-soft);
+            border-radius: 999px;
+            color: var(--text-muted);
+            font-family: inherit;
+            font-size: 11px;
+            padding: 3px 10px;
+            cursor: pointer;
+            transition: color 0.12s, border-color 0.12s, background 0.12s;
+        }
+
+        .chg-chip:hover:not(:disabled) {
+            color: var(--text);
+            border-color: var(--border);
+        }
+
+        .chg-chip.active {
+            color: var(--accent);
+            border-color: var(--accent);
+            background: rgba(var(--accent-rgb), 0.1);
+        }
+
+        .chg-chip:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        .chg-chip[hidden] {
+            display: none;
+        }
+
+        /* ── Labelled rows ── */
+
+        .chg-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 6px;
+        }
+
+        .chg-label {
+            flex: 0 0 64px;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-dim);
+        }
+
+        .chg-row select,
+        .chg-row input {
+            flex: 1;
+            min-width: 0;
+            background: var(--bg-surface);
+            border: 1px solid var(--border-soft);
+            border-radius: 5px;
+            color: var(--text-soft);
+            font-family: inherit;
+            font-size: 11px;
+            padding: 4px 6px;
+        }
+
+        /* The commit list is monospace so the hashes line up and the
+           subjects start at the same column — the only thing that makes a
+           thirty-row dropdown scannable. */
+        .chg-row select {
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        }
+
+        .chg-row select:focus,
+        .chg-row input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        /* ── Preview ── */
+
+        .chg-preview {
+            margin: 8px 0;
+            padding: 7px 8px;
+            background: var(--bg-surface);
+            border: 1px solid var(--border-soft);
+            border-radius: 5px;
+        }
+
+        .chg-preview[hidden] {
+            display: none;
+        }
+
+        .chg-stat {
+            font-size: 11px;
+            color: var(--text-soft);
+            margin-bottom: 4px;
+        }
+
+        .chg-stat .add {
+            color: var(--success);
+        }
+
+        .chg-stat .del {
+            color: var(--danger);
+        }
+
+        .chg-stat .empty {
+            color: var(--text-dim);
+        }
+
+        /* Capped rather than scrolled past: the file list is orientation,
+           and the itinerary below is the real summary. Six rows is enough
+           to recognise a change without turning the launcher into a diff
+           viewer. */
+        .chg-files {
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
+            max-height: 108px;
+            overflow-y: auto;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 10px;
+            color: var(--text-dim);
+        }
+
+        .chg-file {
+            display: flex;
+            gap: 6px;
+            align-items: baseline;
+        }
+
+        .chg-file .mark {
+            flex: 0 0 10px;
+            text-align: center;
+            font-weight: 600;
+        }
+
+        .chg-file .mark.added {
+            color: var(--success);
+        }
+
+        .chg-file .mark.deleted {
+            color: var(--danger);
+        }
+
+        .chg-file .mark.renamed {
+            color: var(--accent-soft);
+        }
+
+        .chg-file .path {
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            /* A path is identified by its tail, so the ellipsis has to eat
+               the front of it. */
+            direction: rtl;
+            text-align: left;
+        }
+
+        .chg-file .path > span {
+            direction: ltr;
+            unicode-bidi: bidi-override;
+        }
+
+        .chg-file.drift .path {
+            color: var(--warning);
+        }
+
+        /* ── Actions ── */
+
+        .chg-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 8px;
+        }
+
+        .chg-spacer {
+            flex: 1;
+        }
+
+        .chg-opt {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 10px;
+            color: var(--text-dim);
+            cursor: pointer;
+        }
+
+        .chg-opt input {
+            accent-color: var(--accent);
+            cursor: pointer;
+        }
+
+        .chg-run {
+            background: var(--accent);
+            border: none;
+            border-radius: 5px;
+            color: var(--accent-ink);
+            font-family: inherit;
+            font-size: 11px;
+            font-weight: 600;
+            padding: 5px 12px;
+            cursor: pointer;
+            transition: opacity 0.12s;
+        }
+
+        .chg-run:hover:not(:disabled) {
+            opacity: 0.88;
+        }
+
+        .chg-run:disabled {
+            opacity: 0.35;
+            cursor: not-allowed;
+        }
+
+        .chg-status {
+            margin-top: 6px;
+            font-size: 10px;
+            color: var(--text-dim);
+            min-height: 12px;
+        }
+
+        .chg-status.error {
+            color: var(--danger);
+        }
+
+        /* ── The badge a walk puts on a tour stop ──
+           Three roles, three readings: a changed stop is the point of the
+           walk, a caller is context, a test is reassurance. Colouring them
+           the same would undo the one distinction the walk exists to
+           make. */
+
+        .tour-change {
+            display: inline-flex;
+            align-items: baseline;
+            gap: 4px;
+            padding: 1px 6px;
+            border-radius: 999px;
+            font-size: 9px;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            border: 1px solid transparent;
+        }
+
+        .tour-change.changed {
+            color: var(--success);
+            border-color: rgba(74, 222, 128, 0.35);
+            background: rgba(74, 222, 128, 0.1);
+        }
+
+        .tour-change.caller {
+            color: var(--warning);
+            border-color: rgba(251, 191, 36, 0.3);
+            background: rgba(251, 191, 36, 0.08);
+        }
+
+        .tour-change.test {
+            color: var(--accent-soft);
+            border-color: rgba(var(--accent-rgb), 0.35);
+            background: rgba(var(--accent-rgb), 0.1);
+        }
+
+        .tour-change .delta {
+            font-weight: 500;
+            letter-spacing: 0;
+            text-transform: none;
+            opacity: 0.85;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        }
     </style>
 <script>
-window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3738,"edges":10801,"files":136,"lines":84798,"ugVersion":"0.1.19","visFingerprint":"0d40d3352bf93121","generatedAt":1789220013};
+window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3738,"edges":10801,"files":136,"lines":84798,"ugVersion":"0.1.19","visFingerprint":"bdb655a9ff196460","generatedAt":1789271314};
 /* ==========================================================================
    UltraGraph — static demo shim
    ==========================================================================
@@ -11098,6 +11438,18 @@ window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#g
                     <div class="ask-strip">
                         <span class="ask-status" id="ask-status"></span>
                         <span class="ask-strip-actions">
+                            <!-- A walk is seeded by a change, not by a question,
+                                 so it cannot live in the bar above: there is
+                                 nothing to type. It gets its own always-visible
+                                 launcher instead of hiding behind a prefix. -->
+                            <button class="ask-mini" id="changes-toggle" type="button" aria-expanded="false"
+                                title="Walk a change: what a commit or your uncommitted work touched (needs git)">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                                    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                    <circle cx="6" cy="6" r="2.5" /><circle cx="6" cy="18" r="2.5" />
+                                    <circle cx="18" cy="12" r="2.5" /><path d="M6 8.5v7M8.5 6h4a3 3 0 0 1 3 3v1" />
+                                </svg>
+                                Changes</button>
                             <button class="ask-mini" id="ask-adv-toggle" type="button" aria-expanded="false"
                                 title="Retrieval breadth and model overrides">Retrieval</button>
                             <button class="ask-mini" id="ask-reset" type="button"
@@ -11148,6 +11500,63 @@ window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#g
                             <summary>How this answers · retrieval, prompt, tools</summary>
                             <div class="chat-setup-body" id="chat-setup-body">Loading…</div>
                         </details>
+                    </div>
+
+                    <!-- Walk a change. Hidden until asked for; `js/27-changes.js`
+                         fills the picker from /api/git/commits on first open, so
+                         the list is this repository's actual history rather than
+                         something the user has to remember the hash of. -->
+                    <div class="changes-panel" id="changes-panel" hidden>
+                        <div class="chg-head">
+                            <span class="chg-title">Walk a change</span>
+                            <span class="chg-branch" id="chg-branch"></span>
+                        </div>
+
+                        <!-- git missing, not a repo, or no commits yet. One
+                             banner, filled from the error's own hint. -->
+                        <div class="cap-banner warn" id="chg-unavailable" hidden></div>
+
+                        <div class="chg-body" id="chg-body">
+                            <!-- The four changes anyone actually walks, as one
+                                 click each. The dropdown below is for the fifth. -->
+                            <div class="chg-quick" id="chg-quick" role="group" aria-label="What to walk">
+                                <button class="chg-chip" type="button" data-spec="working">Uncommitted</button>
+                                <button class="chg-chip" type="button" data-spec="staged">Staged</button>
+                                <button class="chg-chip" type="button" data-spec="HEAD">Last commit</button>
+                                <button class="chg-chip" type="button" id="chg-vs-default" hidden></button>
+                            </div>
+
+                            <div class="chg-row">
+                                <label class="chg-label" for="chg-commit">Or a commit</label>
+                                <select id="chg-commit">
+                                    <option value="">Loading recent commits…</option>
+                                </select>
+                            </div>
+
+                            <div class="chg-row">
+                                <label class="chg-label" for="chg-ref">Or a range</label>
+                                <input id="chg-ref" type="text" autocomplete="off" spellcheck="false"
+                                    placeholder="main...HEAD, v1.2..v1.3, a1b2c3d">
+                            </div>
+
+                            <!-- What the selected spec actually touches, fetched
+                                 before anything is walked: nobody should spend a
+                                 model to find out the diff was empty. -->
+                            <div class="chg-preview" id="chg-preview" hidden>
+                                <div class="chg-stat" id="chg-stat"></div>
+                                <div class="chg-files" id="chg-files"></div>
+                            </div>
+
+                            <div class="chg-actions">
+                                <label class="chg-opt" title="Also visit the unchanged callers and tests the change reaches">
+                                    <input type="checkbox" id="chg-expand" checked>
+                                    <span>Include what it affects</span>
+                                </label>
+                                <span class="chg-spacer"></span>
+                                <button class="chg-run" id="chg-run" type="button" disabled>Walk this change</button>
+                            </div>
+                            <div class="chg-status" id="chg-status"></div>
+                        </div>
                     </div>
 
                     <!-- Why a mode is unavailable, said where the mode is.
@@ -15497,6 +15906,7 @@ self.onmessage = async (ev) => {
             wireToolTabs();
             wireFilterActions();
             wireTourPanel();
+            wireChanges();
             wireFindPathBtn();
             wireInsights();
             wireWalk();
@@ -18328,6 +18738,12 @@ self.onmessage = async (ev) => {
                     : `→ ${stop.edge_from_prev.edge_type}`;
                 meta.appendChild(hop);
             }
+            // On a walk, why this stop is here at all — and how much of it
+            // moved. First in the line because it is the thing the reader
+            // needs before the type or the path: a caller shown without it
+            // reads as code the diff edited.
+            const badge = changeBadge(stop.change);
+            if (badge) meta.appendChild(badge);
             if (stop.node_type) {
                 const t = document.createElement('span');
                 t.className = 'type';
@@ -33379,6 +33795,428 @@ self.onmessage = async (ev) => {
                 renderKept();
                 syncKeepButton();
             });
+        }
+// ==== 27-changes.js ====
+        // ─── Changes: walk a diff ───────────────────────────
+        //
+        // A tour is seeded by a question you type. A walk is seeded by a
+        // *change*, which you cannot type — so this is a picker, not a bar.
+        //
+        // The whole panel is built around one rule: never make the user
+        // guess, and never let them find out the answer by pressing the
+        // expensive button.
+        //
+        //   /api/git/status   is git usable here, on what branch, is it dirty
+        //   /api/git/commits  the dropdown's contents — this repo's own log
+        //   /api/git/diff     what the selected spec touches, before walking it
+        //   /api/walk         the walk, streamed into the tour overlay
+        //
+        // The first three are cheap and run on open / on change. The fourth
+        // is the one that costs a model, and by the time it is enabled the
+        // user has already seen the file list it will walk.
+        //
+        // git is a soft dependency end to end: `status` answers 200 with
+        // `available: false` plus a code and a hint, and that hint is what
+        // the banner says. A machine with no git loses this panel and
+        // nothing else on the page.
+
+        const changesState = {
+            wired: false,
+            loaded: false,       // commits fetched at least once
+            repo: null,          // RepoStatus from /api/git/status
+            spec: 'working',     // what would be walked right now
+            previewToken: 0,     // drops responses for a spec the user left
+            diff: null,          // the last preview, for the run button
+            running: false,
+        };
+
+        /// Files listed in the preview before it turns into a wall.
+        const CHG_PREVIEW_FILES = 40;
+
+        function chgEl(id) { return document.getElementById(id); }
+
+        function wireChanges() {
+            if (changesState.wired) return;
+            changesState.wired = true;
+
+            const toggle = chgEl('changes-toggle');
+            const panel = chgEl('changes-panel');
+            if (!toggle || !panel) return;
+
+            toggle.addEventListener('click', () => {
+                const open = panel.hidden;
+                panel.hidden = !open;
+                toggle.setAttribute('aria-expanded', String(open));
+                toggle.classList.toggle('open', open);
+                // Probed on first open rather than at load: a page that
+                // never opens this panel should not shell out to git.
+                if (open && !changesState.loaded) loadChanges();
+            });
+
+            chgEl('chg-quick').addEventListener('click', (e) => {
+                const btn = e.target.closest('.chg-chip');
+                if (!btn || btn.disabled) return;
+                selectSpec(btn.dataset.spec);
+            });
+
+            chgEl('chg-commit').addEventListener('change', (e) => {
+                if (e.target.value) selectSpec(e.target.value);
+            });
+
+            // A typed ref is a deliberate override, so it wins over the
+            // dropdown — but only once the user stops typing, or every
+            // keystroke of `main...HEAD` is a git call.
+            const ref = chgEl('chg-ref');
+            const debounced = debounceTrailing(() => {
+                const v = ref.value.trim();
+                if (v) selectSpec(v);
+            }, 400);
+            ref.addEventListener('input', debounced);
+            ref.addEventListener('keydown', (e) => {
+                if (e.key !== 'Enter') return;
+                e.preventDefault();
+                debounced.cancel();
+                const v = ref.value.trim();
+                if (v) selectSpec(v, { run: true });
+            });
+
+            chgEl('chg-run').addEventListener('click', () => runWalk());
+        }
+
+        /// Probe the repository and fill the picker.
+        async function loadChanges() {
+            changesState.loaded = true;
+            try {
+                const res = await fetch('/api/git/status');
+                const info = await res.json();
+                if (!info.available) return showChangesUnavailable(info);
+                changesState.repo = info.repo || {};
+                applyRepoStatus(changesState.repo);
+            } catch (err) {
+                return showChangesUnavailable({
+                    error: err.message || String(err),
+                    hint: 'The server may have stopped — reload the page.',
+                });
+            }
+            await loadCommits();
+            // Open on the change the user is most likely to want: what they
+            // have not committed, or the last commit when the tree is clean.
+            selectSpec(changesState.repo.dirty ? 'working' : 'HEAD');
+        }
+
+        /// git is unusable here. Say why, and say what would fix it.
+        function showChangesUnavailable(info) {
+            const banner = chgEl('chg-unavailable');
+            const body = chgEl('chg-body');
+            if (!banner || !body) return;
+            body.hidden = true;
+            banner.hidden = false;
+            const headline = {
+                not_installed: 'Walking a change needs git.',
+                not_a_repo: 'This project is not a git working tree.',
+                no_commits: 'This repository has no commits yet.',
+            }[info.code] || 'Changes are unavailable.';
+            banner.innerHTML =
+                `<strong>${escapeHtml(headline)}</strong> ` +
+                escapeHtml(info.hint || info.error || '') +
+                ' Everything else on this page is unaffected.';
+        }
+
+        function applyRepoStatus(repo) {
+            const branch = chgEl('chg-branch');
+            if (branch) {
+                branch.textContent = repo.branch || '';
+                branch.classList.toggle('dirty', !!repo.dirty);
+                branch.title = repo.dirty
+                    ? 'This working tree has uncommitted changes'
+                    : 'This working tree is clean';
+            }
+            // "Uncommitted" and "Staged" are offered only when there is
+            // something there: a chip that runs and reports nothing is a
+            // dead end the panel already knew about.
+            const quick = chgEl('chg-quick');
+            const working = quick.querySelector('[data-spec="working"]');
+            const staged = quick.querySelector('[data-spec="staged"]');
+            if (working) {
+                working.disabled = !repo.dirty;
+                working.title = repo.dirty ? '' : 'Nothing uncommitted right now';
+            }
+            if (staged) {
+                staged.disabled = !repo.staged;
+                staged.title = repo.staged ? '' : 'Nothing staged right now';
+            }
+            // "vs main" — the question a reviewer actually asks. Only shown
+            // when there is a default branch and we are not standing on it.
+            const vs = chgEl('chg-vs-default');
+            const def = repo.default_branch;
+            if (vs && def && def !== repo.branch) {
+                vs.hidden = false;
+                vs.textContent = `vs ${def}`;
+                vs.dataset.spec = `${def}...HEAD`;
+                vs.title = `Everything this branch changed since it forked from ${def}`;
+            } else if (vs) {
+                vs.hidden = true;
+            }
+        }
+
+        async function loadCommits() {
+            const sel = chgEl('chg-commit');
+            if (!sel) return;
+            try {
+                const res = await fetch('/api/git/commits?limit=30');
+                if (!res.ok) throw new Error(await readErr(res));
+                const { commits } = await res.json();
+                sel.innerHTML = '';
+                const blank = document.createElement('option');
+                blank.value = '';
+                blank.textContent = commits.length
+                    ? `${commits.length} recent commits…`
+                    : 'No commits';
+                sel.appendChild(blank);
+                (commits || []).forEach(c => {
+                    const o = document.createElement('option');
+                    o.value = c.sha;
+                    o.textContent = commitLabel(c);
+                    o.title = `${c.subject}\n${c.author} · ${c.date}`;
+                    sel.appendChild(o);
+                });
+            } catch (err) {
+                sel.innerHTML = '';
+                const o = document.createElement('option');
+                o.value = '';
+                o.textContent = `Could not list commits: ${err.message || err}`;
+                sel.appendChild(o);
+            }
+        }
+
+        /// One dropdown row: hash, subject, age, size. Enough to recognise a
+        /// commit without opening it — which is the whole job of a picker.
+        function commitLabel(c) {
+            const size = c.files
+                ? `${c.files}f +${c.insertions}/-${c.deletions}`
+                : '';
+            const subject = c.subject.length > 46
+                ? c.subject.slice(0, 45) + '…'
+                : c.subject;
+            return `${c.short}  ${subject}  · ${c.relative}${size ? ' · ' + size : ''}`;
+        }
+
+        /// Point the panel at `spec` and fetch what it touches.
+        function selectSpec(spec, opts) {
+            opts = opts || {};
+            changesState.spec = spec;
+            chgEl('chg-quick').querySelectorAll('.chg-chip').forEach(b => {
+                b.classList.toggle('active', b.dataset.spec === spec);
+            });
+            // A chip and the dropdown are two views of the same choice; only
+            // one can be showing a selection.
+            const sel = chgEl('chg-commit');
+            if (sel && sel.value !== spec) sel.value = [...sel.options].some(o => o.value === spec) ? spec : '';
+            previewSpec(spec, opts.run);
+        }
+
+        async function previewSpec(spec, thenRun) {
+            const token = ++changesState.previewToken;
+            const preview = chgEl('chg-preview');
+            const stat = chgEl('chg-stat');
+            const run = chgEl('chg-run');
+            changesState.diff = null;
+            run.disabled = true;
+            setChangesStatus('');
+            preview.hidden = false;
+            stat.textContent = 'Reading the diff…';
+            chgEl('chg-files').innerHTML = '';
+
+            let payload;
+            try {
+                const res = await fetch(`/api/git/diff?spec=${encodeURIComponent(spec)}`);
+                payload = await res.json();
+                if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
+            } catch (err) {
+                if (token !== changesState.previewToken) return;
+                preview.hidden = true;
+                setChangesStatus(err.message || String(err), true);
+                return;
+            }
+            // The user moved on while this was in flight.
+            if (token !== changesState.previewToken) return;
+
+            const diff = payload.diff;
+            changesState.diff = diff;
+            renderDiffPreview(diff, payload.drifted || []);
+            // An empty diff is not an error, but there is nothing to walk.
+            run.disabled = !diff.files.length;
+            if (!diff.files.length) {
+                setChangesStatus('Nothing changed here — pick another change.');
+            } else if (thenRun) {
+                runWalk();
+            }
+        }
+
+        function renderDiffPreview(diff, drifted) {
+            const stat = chgEl('chg-stat');
+            const files = chgEl('chg-files');
+            if (!diff.files.length) {
+                stat.innerHTML = `<span class="empty">${escapeHtml(diff.label)} — no changes</span>`;
+                files.innerHTML = '';
+                return;
+            }
+            const commits = diff.commits && diff.commits.length > 1
+                ? ` · ${diff.commits.length} commits`
+                : '';
+            stat.innerHTML =
+                `${escapeHtml(diff.label)} — ${diff.files.length} file${diff.files.length === 1 ? '' : 's'} ` +
+                `<span class="add">+${diff.insertions}</span>/<span class="del">-${diff.deletions}</span>` +
+                escapeHtml(commits);
+
+            const drift = new Set(drifted);
+            files.innerHTML = '';
+            diff.files.slice(0, CHG_PREVIEW_FILES).forEach(f => {
+                const row = document.createElement('div');
+                row.className = 'chg-file' + (drift.has(f.path) ? ' drift' : '');
+                const mark = document.createElement('span');
+                mark.className = `mark ${f.status}`;
+                mark.textContent = f.status.charAt(0).toUpperCase();
+                mark.title = f.status;
+                const path = document.createElement('span');
+                path.className = 'path';
+                // The inner span restores LTR inside the RTL ellipsis trick,
+                // so a path is truncated at the front and still reads
+                // forwards.
+                const inner = document.createElement('span');
+                inner.textContent = f.path;
+                path.appendChild(inner);
+                path.title = drift.has(f.path)
+                    ? `${f.path} — changed again since this diff, so its stops may be approximate`
+                    : f.path;
+                const delta = document.createElement('span');
+                delta.textContent = `+${f.added}/-${f.removed}`;
+                row.append(mark, path, delta);
+                files.appendChild(row);
+            });
+            if (diff.files.length > CHG_PREVIEW_FILES) {
+                const more = document.createElement('div');
+                more.className = 'chg-file';
+                more.textContent = `… and ${diff.files.length - CHG_PREVIEW_FILES} more`;
+                files.appendChild(more);
+            }
+        }
+
+        function setChangesStatus(text, isError) {
+            const el = chgEl('chg-status');
+            if (!el) return;
+            el.textContent = text || '';
+            el.classList.toggle('error', !!isError);
+        }
+
+        // ── Running it ──────────────────────────────────────
+        //
+        // Shares the tour overlay wholesale: a walk *is* a tour whose stops
+        // came from a diff, and the response is a tour object with `diff`
+        // alongside it and a `change` on each stop. Two cinematic overlays
+        // would be two sets of playback bugs.
+
+        async function runWalk() {
+            if (changesState.running) return;
+            const spec = changesState.spec;
+            const diff = changesState.diff;
+            if (!diff || !diff.files.length) return;
+
+            changesState.running = true;
+            const run = chgEl('chg-run');
+            run.disabled = true;
+            setChangesStatus('Planning your walk…');
+
+            beginTourSession();
+            tourEl('tour-o-title').textContent = diff.label;
+            const note = tourEl('tour-o-note');
+            note.hidden = true;
+            note.classList.remove('error');
+            resetPlanProgress(diff.label);
+
+            const body = {
+                spec,
+                stream: true,
+                expand: chgEl('chg-expand').checked,
+                max_stops: clampInt(askEl('tour-stops').value, 2, 40, 8),
+            };
+
+            const fail = (msg) => {
+                stopPlanProgress();
+                note.hidden = false;
+                note.classList.add('error');
+                note.textContent = `Walk failed: ${msg}`;
+                setChangesStatus(`Walk failed: ${msg}`, true);
+            };
+
+            try {
+                const res = await fetch('/api/walk', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                if (!res.ok) throw new Error(await readErr(res));
+
+                let walk = null, streamErr = null;
+                if (res.body && (res.headers.get('content-type') || '').includes('event-stream')) {
+                    await readSseStream(res, (name, payload) => {
+                        if (!tourState.active) return;      // user bailed
+                        if (name === 'progress') applyTourProgress(payload);
+                        else if (name === 'walk') walk = payload;
+                        else if (name === 'error') streamErr = payload.error || 'stream error';
+                    });
+                } else {
+                    walk = await res.json();
+                }
+                if (!tourState.active) return;
+                if (streamErr) throw new Error(streamErr);
+                if (!walk) throw new Error('the server closed the stream without a walk');
+
+                stopPlanProgress();
+                if (!walk.stops || !walk.stops.length) {
+                    note.hidden = false;
+                    note.innerHTML = escapeHtml(walk.intro || 'Nothing in this change could be mapped onto the graph.');
+                    setChangesStatus('');
+                    return;
+                }
+                recordTourInHistory(walk, `⎇ ${diff.label}`, body.max_stops);
+                setChangesStatus(
+                    `${walk.fallback ? 'ranked itinerary' : 'guided walk'} ready · ` +
+                    `${walk.stops.length} stop${walk.stops.length === 1 ? '' : 's'}`
+                );
+                if (tourState.streaming) upgradeToFinalTour(walk);
+                else enterTourMode(walk);
+            } catch (err) {
+                fail(err.message || err);
+                console.error(err);
+            } finally {
+                changesState.running = false;
+                run.disabled = false;
+            }
+        }
+
+        /// The `[changed +12/-3]` badge on a stop, or nothing on a tour.
+        ///
+        /// Exported as its own function because `renderStopMeta` is shared:
+        /// a question-seeded tour has no `change` on any stop and must not
+        /// grow an empty pill.
+        function changeBadge(change) {
+            if (!change) return null;
+            const el = document.createElement('span');
+            el.className = `tour-change ${change.role}`;
+            el.textContent = change.role;
+            el.title = {
+                changed: 'The diff edited these lines',
+                caller: 'Unchanged — it calls or references something that changed',
+                test: 'Unchanged — a test that reaches something that changed',
+            }[change.role] || '';
+            if (change.added || change.removed) {
+                const d = document.createElement('span');
+                d.className = 'delta';
+                d.textContent = `+${change.added}/-${change.removed}`;
+                el.appendChild(d);
+            }
+            return el;
         }
     </script>
 </body>

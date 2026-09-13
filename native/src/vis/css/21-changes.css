@@ -1,0 +1,339 @@
+        /* ─── Changes: walk a diff ───────────────────────────
+           The launcher for a walk, folded into the Ask column's head next
+           to the Retrieval disclosure. Same box treatment as `.ask-adv`
+           deliberately: both are "things that set up a run" rather than a
+           run, and giving the second one its own visual language would
+           imply it belongs to a different surface.
+
+           Everything here is one column of labelled rows. A walk has four
+           inputs and one of them is a dropdown of this repository's own
+           history — there is no arrangement of that which reads well in a
+           strip, and a picker that wraps is worse than one that stacks. */
+
+        .changes-panel {
+            margin-top: 8px;
+            padding: 10px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-soft);
+            border-radius: 6px;
+        }
+
+        .changes-panel[hidden] {
+            display: none;
+        }
+
+        .chg-head {
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+
+        .chg-title {
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            color: var(--text-soft);
+        }
+
+        /* Which branch this is, so a walk is never planned against a
+           checkout the user forgot they were on. */
+        .chg-branch {
+            font-size: 10px;
+            color: var(--text-dim);
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .chg-branch.dirty::after {
+            content: " ●";
+            color: var(--warning);
+        }
+
+        .chg-body[hidden] {
+            display: none;
+        }
+
+        /* ── The four one-click specs ── */
+
+        .chg-quick {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 5px;
+            margin-bottom: 8px;
+        }
+
+        .chg-chip {
+            background: transparent;
+            border: 1px solid var(--border-soft);
+            border-radius: 999px;
+            color: var(--text-muted);
+            font-family: inherit;
+            font-size: 11px;
+            padding: 3px 10px;
+            cursor: pointer;
+            transition: color 0.12s, border-color 0.12s, background 0.12s;
+        }
+
+        .chg-chip:hover:not(:disabled) {
+            color: var(--text);
+            border-color: var(--border);
+        }
+
+        .chg-chip.active {
+            color: var(--accent);
+            border-color: var(--accent);
+            background: rgba(var(--accent-rgb), 0.1);
+        }
+
+        .chg-chip:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        .chg-chip[hidden] {
+            display: none;
+        }
+
+        /* ── Labelled rows ── */
+
+        .chg-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 6px;
+        }
+
+        .chg-label {
+            flex: 0 0 64px;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-dim);
+        }
+
+        .chg-row select,
+        .chg-row input {
+            flex: 1;
+            min-width: 0;
+            background: var(--bg-surface);
+            border: 1px solid var(--border-soft);
+            border-radius: 5px;
+            color: var(--text-soft);
+            font-family: inherit;
+            font-size: 11px;
+            padding: 4px 6px;
+        }
+
+        /* The commit list is monospace so the hashes line up and the
+           subjects start at the same column — the only thing that makes a
+           thirty-row dropdown scannable. */
+        .chg-row select {
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        }
+
+        .chg-row select:focus,
+        .chg-row input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        /* ── Preview ── */
+
+        .chg-preview {
+            margin: 8px 0;
+            padding: 7px 8px;
+            background: var(--bg-surface);
+            border: 1px solid var(--border-soft);
+            border-radius: 5px;
+        }
+
+        .chg-preview[hidden] {
+            display: none;
+        }
+
+        .chg-stat {
+            font-size: 11px;
+            color: var(--text-soft);
+            margin-bottom: 4px;
+        }
+
+        .chg-stat .add {
+            color: var(--success);
+        }
+
+        .chg-stat .del {
+            color: var(--danger);
+        }
+
+        .chg-stat .empty {
+            color: var(--text-dim);
+        }
+
+        /* Capped rather than scrolled past: the file list is orientation,
+           and the itinerary below is the real summary. Six rows is enough
+           to recognise a change without turning the launcher into a diff
+           viewer. */
+        .chg-files {
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
+            max-height: 108px;
+            overflow-y: auto;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 10px;
+            color: var(--text-dim);
+        }
+
+        .chg-file {
+            display: flex;
+            gap: 6px;
+            align-items: baseline;
+        }
+
+        .chg-file .mark {
+            flex: 0 0 10px;
+            text-align: center;
+            font-weight: 600;
+        }
+
+        .chg-file .mark.added {
+            color: var(--success);
+        }
+
+        .chg-file .mark.deleted {
+            color: var(--danger);
+        }
+
+        .chg-file .mark.renamed {
+            color: var(--accent-soft);
+        }
+
+        .chg-file .path {
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            /* A path is identified by its tail, so the ellipsis has to eat
+               the front of it. */
+            direction: rtl;
+            text-align: left;
+        }
+
+        .chg-file .path > span {
+            direction: ltr;
+            unicode-bidi: bidi-override;
+        }
+
+        .chg-file.drift .path {
+            color: var(--warning);
+        }
+
+        /* ── Actions ── */
+
+        .chg-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 8px;
+        }
+
+        .chg-spacer {
+            flex: 1;
+        }
+
+        .chg-opt {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 10px;
+            color: var(--text-dim);
+            cursor: pointer;
+        }
+
+        .chg-opt input {
+            accent-color: var(--accent);
+            cursor: pointer;
+        }
+
+        .chg-run {
+            background: var(--accent);
+            border: none;
+            border-radius: 5px;
+            color: var(--accent-ink);
+            font-family: inherit;
+            font-size: 11px;
+            font-weight: 600;
+            padding: 5px 12px;
+            cursor: pointer;
+            transition: opacity 0.12s;
+        }
+
+        .chg-run:hover:not(:disabled) {
+            opacity: 0.88;
+        }
+
+        .chg-run:disabled {
+            opacity: 0.35;
+            cursor: not-allowed;
+        }
+
+        .chg-status {
+            margin-top: 6px;
+            font-size: 10px;
+            color: var(--text-dim);
+            min-height: 12px;
+        }
+
+        .chg-status.error {
+            color: var(--danger);
+        }
+
+        /* ── The badge a walk puts on a tour stop ──
+           Three roles, three readings: a changed stop is the point of the
+           walk, a caller is context, a test is reassurance. Colouring them
+           the same would undo the one distinction the walk exists to
+           make. */
+
+        .tour-change {
+            display: inline-flex;
+            align-items: baseline;
+            gap: 4px;
+            padding: 1px 6px;
+            border-radius: 999px;
+            font-size: 9px;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            border: 1px solid transparent;
+        }
+
+        .tour-change.changed {
+            color: var(--success);
+            border-color: rgba(74, 222, 128, 0.35);
+            background: rgba(74, 222, 128, 0.1);
+        }
+
+        .tour-change.caller {
+            color: var(--warning);
+            border-color: rgba(251, 191, 36, 0.3);
+            background: rgba(251, 191, 36, 0.08);
+        }
+
+        .tour-change.test {
+            color: var(--accent-soft);
+            border-color: rgba(var(--accent-rgb), 0.35);
+            background: rgba(var(--accent-rgb), 0.1);
+        }
+
+        .tour-change .delta {
+            font-weight: 500;
+            letter-spacing: 0;
+            text-transform: none;
+            opacity: 0.85;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        }

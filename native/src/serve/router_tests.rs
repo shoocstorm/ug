@@ -1706,3 +1706,168 @@ async fn the_chat_config_route_publishes_what_a_turn_is_made_of() {
     );
     assert_eq!(retrieval["defaults"]["hops"], 2);
 }
+
+// ── the change routes (/api/git/*, /api/walk) ──────────────────────────────
+//
+// The fixture repo is a bare temp directory, not a working tree, which is
+// exactly the interesting case: it is what a user gets when they index a
+// folder that git has never seen, and the whole point of the soft
+// dependency is that this degrades legibly rather than failing.
+
+/// The same three nodes as [`sample_graph`], but with the line ranges an
+/// indexer would actually emit: `alpha` on lines 1-2, `beta` on 3-4, inside
+/// a file spanning 1-4 — so an edit to line 3 has exactly one right answer.
+fn line_ranged_graph() -> GraphData {
+    let mut g = sample_graph();
+    for n in &mut g.nodes {
+        let (s, e) = match n.id.as_str() {
+            "function:src/a.rs:1:alpha" => (1, 2),
+            "function:src/a.rs:3:beta" => (3, 4),
+            _ => (1, 4),
+        };
+        n.start_line = Some(s);
+        n.end_line = Some(e);
+    }
+    g
+}
+
+/// Run `git` in `dir`, or report why the caller should skip.
+fn git_in(dir: &std::path::Path, args: &[&str]) -> Result<(), String> {
+    let out = std::process::Command::new("git")
+        .current_dir(dir)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_AUTHOR_NAME", "ug test")
+        .env("GIT_AUTHOR_EMAIL", "ug@example.invalid")
+        .env("GIT_COMMITTER_NAME", "ug test")
+        .env("GIT_COMMITTER_EMAIL", "ug@example.invalid")
+        .args(args)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).to_string())
+    }
+}
+
+#[tokio::test]
+async fn git_status_reports_a_non_repo_as_unavailable_with_a_fix() {
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+    let app = router_for(&tmp, "demo", &sample_graph()).await;
+
+    // 200, not 503: "this folder is not a working tree" is a fact about the
+    // machine that the UI has to render, not a failed request.
+    let (status, body) = get(&app, "/api/git/status").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["available"], json!(false), "{body}");
+    assert_eq!(v["code"], json!("not_a_repo"), "{body}");
+    assert!(
+        v["hint"].as_str().is_some_and(|h| !h.is_empty()),
+        "the banner needs something to say: {body}"
+    );
+}
+
+#[tokio::test]
+async fn walking_outside_a_repo_says_so_rather_than_erroring_opaquely() {
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+    let app = router_for(&tmp, "demo", &sample_graph()).await;
+
+    let (status, body) = post(&app, "/api/walk", json!({ "no_llm": true })).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["code"], json!("not_a_repo"), "{body}");
+}
+
+#[tokio::test]
+async fn commits_outside_a_repo_are_unavailable_not_empty() {
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+    let app = router_for(&tmp, "demo", &sample_graph()).await;
+
+    // An empty list would read as "this repo has no commits", which is a
+    // different thing and sends the user looking in the wrong place.
+    let (status, body) = get(&app, "/api/git/commits?limit=5").await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["code"], json!("not_a_repo"), "{body}");
+}
+
+/// The end-to-end shape, against a real repository: commit a file, edit one
+/// of its functions, and check the walk stops at that function.
+///
+/// This is the only test that exercises `git diff` parsing against git
+/// itself. Everything below it — hunk ranges, path handling, the
+/// hunk→symbol join — is covered by fixtures, and fixtures cannot catch
+/// the day git changes its output.
+#[tokio::test]
+async fn a_real_repo_walks_the_function_that_changed() {
+    let _guard = ENV_GUARD.lock().await;
+    if !crate::git::available() {
+        eprintln!("skipping: no git on PATH");
+        return;
+    }
+    let tmp = TempDir::new().unwrap();
+    // Not `sample_graph`: that fixture gives every node the same 1-4 extent,
+    // which cannot distinguish "the innermost symbol" from "whichever node
+    // sorted first". A walk is exactly the thing that has to tell them
+    // apart, so it gets a graph with real line ranges.
+    let app = router_for(&tmp, "demo", &line_ranged_graph()).await;
+    // `router_for` wrote the repo fixture; turn it into a working tree.
+    let repo = tmp.path().join("repo");
+    for args in [
+        vec!["init", "-q", "-b", "main"],
+        vec!["add", "-A"],
+        vec!["commit", "-q", "-m", "initial"],
+    ] {
+        if let Err(e) = git_in(&repo, &args) {
+            eprintln!("skipping: git {args:?} failed: {e}");
+            return;
+        }
+    }
+
+    // `sample_graph` puts `beta` at lines 3-4 of src/a.rs; edit line 3 and
+    // nothing else, so only `beta` can legitimately be a stop.
+    std::fs::write(repo.join("src/a.rs"), "one\ntwo\nBETA-CHANGED\nfour\n").unwrap();
+
+    let (status, body) = get(&app, "/api/git/status").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["available"], json!(true), "{body}");
+    assert_eq!(v["repo"]["dirty"], json!(true), "{body}");
+    assert_eq!(v["repo"]["branch"], json!("main"), "{body}");
+
+    let (status, body) = get(&app, "/api/git/diff?spec=working").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["diff"]["files"][0]["path"], json!("src/a.rs"), "{body}");
+    assert_eq!(v["diff"]["files"][0]["status"], json!("modified"), "{body}");
+
+    let (status, body) = post(&app, "/api/walk", json!({ "no_llm": true })).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let stops = v["stops"].as_array().expect("stops");
+    assert!(!stops.is_empty(), "a one-line edit must produce a stop: {body}");
+    assert_eq!(
+        stops[0]["node_id"],
+        json!("function:src/a.rs:3:beta"),
+        "the innermost symbol containing line 3, not the file: {body}"
+    );
+    assert_eq!(stops[0]["change"]["role"], json!("changed"), "{body}");
+    assert_eq!(stops[0]["change"]["added"], json!(1), "{body}");
+    // `alpha` calls `beta`, so the impact ring should reach it.
+    let roles: Vec<&str> = stops
+        .iter()
+        .filter_map(|s| s["change"]["role"].as_str())
+        .collect();
+    assert!(roles.contains(&"caller"), "the caller ring is missing: {roles:?}");
+
+    // A revision nobody has heard of is the caller's mistake, not a 500.
+    let (status, body) = get(&app, "/api/git/diff?spec=no-such-ref-xyz").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["code"], json!("bad_rev"), "{body}");
+}

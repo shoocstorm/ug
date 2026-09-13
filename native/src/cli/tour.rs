@@ -177,7 +177,7 @@ pub(crate) fn run_tour(args: &[String]) {
 }
 
 /// Word-wrap `text` to `width` columns, prefixing every line with `indent`.
-fn wrap_indent(text: &str, width: usize, indent: &str) -> String {
+pub(crate) fn wrap_indent(text: &str, width: usize, indent: &str) -> String {
     let mut out = String::new();
     for (pi, para) in text.split('\n').enumerate() {
         if pi > 0 {
@@ -209,7 +209,7 @@ fn wrap_indent(text: &str, width: usize, indent: &str) -> String {
 /// A progress sink that keeps the terminal alive during a long plan.
 /// Phase changes print a line; token counts rewrite one status line in
 /// place (`\r`) so a five-minute completion doesn't scroll the screen.
-fn tour_progress_printer() -> impl FnMut(tour::TourProgress) + Send {
+pub(crate) fn tour_progress_printer() -> impl FnMut(tour::TourProgress) + Send {
     use std::io::Write;
     let mut writing = false;
     move |p| {
@@ -301,7 +301,7 @@ fn tour_progress_printer() -> impl FnMut(tour::TourProgress) + Send {
 
 /// Render a `Tour` as a terminal itinerary. `color` toggles ANSI so the
 /// same routine produces a clean plain-text file with `-o`.
-fn render_tour(t: &tour::Tour, color: bool) -> String {
+pub(crate) fn render_tour(t: &tour::Tour, color: bool) -> String {
     let c = |code: &'static str| if color { code } else { "" };
     let bold = c(C_BOLD);
     let reset = c(C_RESET);
@@ -356,11 +356,12 @@ fn render_tour(t: &tour::Tour, color: bool) -> String {
             ));
         }
         out.push_str(&format!(
-            "{green}  ●{reset} {dim}Stop {}/{}{reset} · {bold}{}{reset} {dim}({}){reset}\n",
+            "{green}  ●{reset} {dim}Stop {}/{}{reset} · {bold}{}{reset} {dim}({}){reset}{}\n",
             i + 1,
             total,
             s.title,
-            s.node_type
+            s.node_type,
+            change_badge(s.change.as_ref(), color)
         ));
         if !loc.is_empty() {
             out.push_str(&format!("{dim}     {}{reset}\n", loc));
@@ -416,9 +417,34 @@ fn render_tour(t: &tour::Tour, color: bool) -> String {
     out
 }
 
+/// The `+n/-n changed` (or `caller` / `test`) marker a diff walk puts on a
+/// stop. Empty on a question-seeded tour, where nothing changed to report.
+///
+/// The role is spelled out rather than implied by the counts: a caller
+/// with `+0/-0` and a changed symbol whose edit was pure deletion both
+/// show no additions, and only the word tells them apart.
+fn change_badge(change: Option<&tour::StopChange>, color: bool) -> String {
+    let Some(c) = change else { return String::new() };
+    let c_of = |code: &'static str| if color { code } else { "" };
+    let dim = c_of(C_DIM);
+    let reset = c_of(C_RESET);
+    let tint = c_of(match c.role.as_str() {
+        "changed" => C_GREEN,
+        "test" => C_MAGENTA,
+        _ => C_YELLOW,
+    });
+    if c.added == 0 && c.removed == 0 {
+        return format!(" {tint}[{}]{reset}", c.role);
+    }
+    format!(
+        " {tint}[{}{reset}{dim} +{}/-{}{reset}{tint}]{reset}",
+        c.role, c.added, c.removed
+    )
+}
+
 /// Pretty-print the guide's raw plan (`--show-plan`): the JSON object the
 /// model produced, plus any refs we couldn't bind to a node.
-fn render_tour_plan(t: &tour::Tour, color: bool) -> String {
+pub(crate) fn render_tour_plan(t: &tour::Tour, color: bool) -> String {
     let c = |code: &'static str| if color { code } else { "" };
     let bold = c(C_BOLD);
     let reset = c(C_RESET);

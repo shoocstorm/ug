@@ -23,6 +23,7 @@ pub const TOOL_NAMES: &[&str] = &[
     "project_overview",
     "context",
     "shortest_path",
+    "walk",
     "analyze",
     "graph_schema",
     "list_projects",
@@ -59,16 +60,34 @@ pub const CHAT_TOOL_DENYLIST: &[&str] = &["gen", "list_projects"];
 /// neither place is one the model can call and nothing can run.
 pub const STORE_BACKED_CHAT_TOOLS: &[&str] = &["search", "semantic_search", "analyze"];
 
+/// Tools the chat dispatchers answer from `graph.json` **plus git**, in
+/// their own match arm.
+///
+/// A third category, because `walk` is neither of the other two: it is not
+/// store-backed (so it is not the store's category) and it is
+/// not an `agent_tools` tool (so the graph.json fall-through cannot run
+/// it). Naming the category is what keeps
+/// `every_tool_offered_to_chat_can_be_dispatched` a real guard rather than
+/// a list somebody widened until it passed.
+pub const GIT_BACKED_CHAT_TOOLS: &[&str] = &["walk"];
+
 /// Guard for the chat dispatchers' graph.json fall-through.
 ///
-/// Reaching `agent_tools::run_tool` with a store-backed name means the tool is
-/// advertised but has no arm to run it. Saying so beats that function's
-/// "Unknown agent tool", which sends the reader looking for a missing *graph*
-/// tool — the wrong hunt, and how `analyze` stayed broken in chat.
-pub fn reject_if_store_backed(name: &str) -> Result<(), String> {
+/// Reaching `agent_tools::run_tool` with a name that needs its own arm means
+/// the tool is advertised but nothing runs it. Saying which arm is missing
+/// beats that function's "Unknown agent tool", which sends the reader looking
+/// for a missing *graph* tool — the wrong hunt, and how `analyze` stayed
+/// broken in chat.
+pub fn reject_if_not_graph_backed(name: &str) -> Result<(), String> {
     if STORE_BACKED_CHAT_TOOLS.contains(&name) {
         return Err(format!(
             "{} needs the indexed store, but this dispatcher has no arm for it.",
+            name
+        ));
+    }
+    if GIT_BACKED_CHAT_TOOLS.contains(&name) {
+        return Err(format!(
+            "{} needs git as well as the graph, but this dispatcher has no arm for it.",
             name
         ));
     }
@@ -406,6 +425,29 @@ fn raw_tools() -> Value {
             }
         },
         {
+            "name": "walk",
+            "description": "WHAT DID THIS CHANGE TOUCH? Maps a git diff onto the graph and returns the symbols it actually edited — innermost enclosing function or class per hunk, not just the file list — ordered by the call graph so callers come before the code they call, followed by the unchanged callers and tests that reach them. Use it to review a branch or a commit, to orient before continuing someone else's work, or to answer 'what did I just change and what does it affect' without reading the patch. This is what a diff cannot tell you: `git diff` orders by filename and stops at the file, while this names the symbols and follows the edges out of them. Every stop is labelled with its role — `changed` means the diff edited those lines, `caller`/`test` mean the code is UNCHANGED and is listed only because it reaches something that changed; never edit a caller believing the diff touched it. Needs git and graph.json; no database and no embedder. One hop out by design: for the full reachable set use analyze with `diff_impact` or `diff_retest_scope`.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "spec": {
+                        "type": "string",
+                        "description": "What to walk. Omit (or \"working\") for uncommitted changes including untracked files — the default, and what you want after editing. \"staged\" for the index alone. A commit-ish (\"HEAD\", \"HEAD~2\", a sha) walks that commit against its parent. A range walks several: \"main..HEAD\" is every commit on this branch, \"main...HEAD\" is this branch against where it forked. Line numbers are exact for uncommitted work and for the most recent commit; walking an older revision maps its lines onto today's code and says so in a warning."
+                    },
+                    "max_stops": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 40,
+                        "description": "Upper bound on stops (default 10). A large diff is summarised to the most-changed symbols rather than truncated arbitrarily."
+                    },
+                    "expand": {
+                        "type": "boolean",
+                        "description": "Include the unchanged callers and tests the change reaches (default true). Set false for only what the diff edited."
+                    }
+                }
+            }
+        },
+        {
             "name": "analyze",
             "description": format!(
                 "WHOLE-REPO STATISTICS over the indexed graph — counts, groups, distributions and blast radius. Use this for ANY question of the form 'how many', 'which are the biggest / longest / most depended-upon', 'what fraction', 'where is the worst X', 'what breaks if I change Y'. NEVER grep for a count and NEVER loop a per-file tool to build one: this answers in one call and ~100 tokens what reading the repo costs hundreds of thousands. Two ways to call it. (1) `preset` — a named question, the cheap path, e.g. {{\"preset\": \"long_functions\"}} or {{\"preset\": \"impact\", \"args\": {{\"target\": \"src/auth.ts\"}}}}. Available: {presets}. (2) `gql` — a raw OverGraph GQL (Cypher-shaped) query when no preset fits, e.g. \"MATCH (n:Function) WHERE n.loc > 50 AND n.is_test = 0 RETURN n.folder AS folder, count(*) AS c ORDER BY c DESC\". Queryable properties: node_type, name, file, folder, loc, params, max_nesting, has_doc, is_test, in_degree, out_degree, qualified_name, route, annotations, start_line, end_line, boundary, boundary_in, boundary_out, boundary_kinds, boundary_protocols, boundary_detail — call graph_schema for their live population counts before relying on one. A *boundary* is where the system meets the outside world (a REST handler, a queue listener, a CLI command, an outbound HTTP or DB client); `boundary_impact` is the blast-radius question that matters before a change, because it reports which externally-visible contracts a change reaches rather than merely how many symbols move. Booleans are stored as 0/1 so they can be summed: documented fraction is sum(n.has_doc)/count(*). Read-only; it cannot modify the index. Every answer states its coverage denominators — treat a 'NOT INDEXED' warning as meaning the number is about nothing.",
@@ -464,9 +506,11 @@ mod tests {
             }
             assert!(
                 STORE_BACKED_CHAT_TOOLS.contains(name)
+                    || GIT_BACKED_CHAT_TOOLS.contains(name)
                     || ultragraph::agent_tools::is_agent_tool(name),
                 "'{}' is advertised to the chat model but no dispatcher answers it: \
                  add it to a store-backed match arm (and to STORE_BACKED_CHAT_TOOLS), \
+                 to a git-backed arm (and to GIT_BACKED_CHAT_TOOLS), \
                  to agent_tools::run_tool, or to CHAT_TOOL_DENYLIST",
                 name
             );

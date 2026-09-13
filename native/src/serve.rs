@@ -24,6 +24,7 @@ pub(crate) mod db_api;
 pub(crate) mod encoding;
 pub(crate) mod endpoints;
 pub(crate) mod gen_jobs;
+pub(crate) mod git_api;
 pub(crate) mod host_guard;
 pub(crate) mod nidx;
 pub(crate) mod projects_api;

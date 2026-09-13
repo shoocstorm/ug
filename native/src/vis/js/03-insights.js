@@ -502,6 +502,7 @@
             wireToolTabs();
             wireFilterActions();
             wireTourPanel();
+            wireChanges();
             wireFindPathBtn();
             wireInsights();
             wireWalk();
