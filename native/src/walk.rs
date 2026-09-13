@@ -44,7 +44,8 @@ use crate::git::{self, ChangeStatus, DiffSummary, GitError, RevSpec};
 use crate::tour::{
     self, Candidates, StopChange, Tour, TourEdge, TourOptions, TourProgress, ProgressFn,
 };
-use crate::types::{FileClassification, GraphData, GraphEdgeType, GraphNodeType};
+use crate::types::{GraphData, GraphEdgeType, GraphNodeType};
+use ultragraph::storage::facts::is_test_node;
 use ultragraph::storage::ContextItem;
 
 /// Edge types that mean "this code depends on that code". `Contains` is
@@ -103,6 +104,16 @@ pub struct WalkNode {
     pub status: Option<ChangeStatus>,
     pub added: u32,
     pub removed: u32,
+    /// Is this test code? Decides ranking for a changed symbol and the
+    /// role for an unchanged one.
+    ///
+    /// From [`is_test_node`], never from `classification` directly: that
+    /// misses a `#[cfg(test)] mod tests` inside a production file, which in
+    /// this repository is where most tests live. It is also the single
+    /// definition `analyze`'s test presets and `ug context` already use, and
+    /// a second one here would mean a walk and `analyze test_for` disagreeing
+    /// about what a test is, on the same repo, in the same session.
+    pub is_test: bool,
 }
 
 impl WalkNode {
@@ -329,18 +340,28 @@ pub fn changed_symbols(graph: &GraphData, diff: &DiffSummary) -> (Vec<WalkNode>,
                 status: status_of.get(file.as_str()).map(|f| f.status),
                 added,
                 removed,
+                is_test: is_test_node(n),
                 file,
             }
         })
         .collect();
 
-    // Most-changed first. The tie-break on id is not cosmetic: `HashMap`
-    // iteration order is arbitrary, and without it the same diff produces
-    // a different itinerary on every run (Agents.md §11 — `ug gen` had
-    // exactly this bug).
+    // Production code first, then most-changed within each half.
+    //
+    // A walk is read the way a review is: what the change *does*, then
+    // whether it is covered. Ranking on line count alone inverts that on
+    // exactly the commits where it matters — a feature that adds 400 lines
+    // of tests alongside 200 of implementation opens on its own test
+    // module, which is the least informative thing in the diff.
+    //
+    // The tie-break on id is not cosmetic: `HashMap` iteration order is
+    // arbitrary, and without it the same diff produces a different
+    // itinerary on every run (Agents.md §9 — `ug gen` had exactly this
+    // bug).
     nodes.sort_by(|a, b| {
-        (b.added + b.removed)
-            .cmp(&(a.added + a.removed))
+        a.is_test
+            .cmp(&b.is_test)
+            .then_with(|| (b.added + b.removed).cmp(&(a.added + a.removed)))
             .then_with(|| a.file.cmp(&b.file))
             .then_with(|| a.start_line.cmp(&b.start_line))
             .then_with(|| a.id.cmp(&b.id))
@@ -496,7 +517,7 @@ pub fn impact_ring(graph: &GraphData, seeds: &[WalkNode]) -> Vec<WalkNode> {
             if n.node_type == GraphNodeType::Folder || n.node_type == GraphNodeType::File {
                 continue;
             }
-            let is_test = n.classification == Some(FileClassification::Test);
+            let is_test = is_test_node(n);
             out.push(WalkNode {
                 id: n.id.clone(),
                 name: n.name.clone(),
@@ -509,6 +530,7 @@ pub fn impact_ring(graph: &GraphData, seeds: &[WalkNode]) -> Vec<WalkNode> {
                 status: None,
                 added: 0,
                 removed: 0,
+                is_test,
             });
             taken += 1;
         }
@@ -888,6 +910,7 @@ fn unmapped_warning(unmapped: &[String]) -> String {
 mod tests {
     use super::*;
     use crate::git::{FileChange, Hunk, LineRange};
+    use crate::types::FileClassification;
     use crate::types::{GraphEdge, GraphNode};
 
     fn node(id: &str, name: &str, ty: GraphNodeType, file: &str, s: u32, e: u32) -> GraphNode {
@@ -1077,6 +1100,34 @@ mod tests {
         assert_eq!((seeds[0].added, seeds[0].removed), (4, 4));
     }
 
+    /// A feature commit usually adds more test lines than implementation
+    /// lines. Ranking on line count alone opens the walk on the test module,
+    /// which is the least informative thing in the diff.
+    #[test]
+    fn production_code_is_ranked_ahead_of_bigger_test_changes() {
+        let mut test_fn = node("fn:t", "t", GraphNodeType::Function, "tests/a.rs", 1, 400);
+        test_fn.classification = Some(FileClassification::Test);
+        let graph = GraphData {
+            nodes: vec![
+                node("fn:impl", "impl_", GraphNodeType::Function, "src/a.rs", 1, 100),
+                test_fn,
+            ],
+            edges: vec![],
+            stats: None,
+            resolution: None,
+        };
+        let diff = summary(vec![
+            changed("src/a.rs", &[(1, 20, 20, 0)]),
+            // Four times the size, and still second.
+            changed("tests/a.rs", &[(1, 80, 80, 0)]),
+        ]);
+        let (seeds, _) = changed_symbols(&graph, &diff);
+        let ids: Vec<&str> = seeds.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(ids, vec!["fn:impl", "fn:t"]);
+        // Demoted, never dropped — a changed test is still part of the change.
+        assert!(seeds[1].is_test);
+    }
+
     #[test]
     fn files_the_index_has_never_seen_are_reported_not_dropped() {
         let graph = GraphData {
@@ -1118,17 +1169,17 @@ mod tests {
             WalkNode {
                 id: "fn:c".into(), name: "c".into(), node_type: "Function".into(),
                 file: "a.rs".into(), start_line: 1, end_line: 10, description: String::new(),
-                role: Role::Changed, status: None, added: 9, removed: 0,
+                role: Role::Changed, status: None, added: 9, removed: 0, is_test: false,
             },
             WalkNode {
                 id: "fn:b".into(), name: "b".into(), node_type: "Function".into(),
                 file: "m.rs".into(), start_line: 1, end_line: 10, description: String::new(),
-                role: Role::Changed, status: None, added: 5, removed: 0,
+                role: Role::Changed, status: None, added: 5, removed: 0, is_test: false,
             },
             WalkNode {
                 id: "fn:a".into(), name: "a".into(), node_type: "Function".into(),
                 file: "z.rs".into(), start_line: 1, end_line: 10, description: String::new(),
-                role: Role::Changed, status: None, added: 1, removed: 0,
+                role: Role::Changed, status: None, added: 1, removed: 0, is_test: false,
             },
         ];
         let ordered = order_by_flow(nodes, &graph);
@@ -1151,7 +1202,7 @@ mod tests {
         let mk = |id: &str, added: u32| WalkNode {
             id: id.into(), name: id.into(), node_type: "Function".into(),
             file: "a.rs".into(), start_line: 1, end_line: 2, description: String::new(),
-            role: Role::Changed, status: None, added, removed: 0,
+            role: Role::Changed, status: None, added, removed: 0, is_test: false,
         };
         let ordered = order_by_flow(vec![mk("fn:a", 5), mk("fn:b", 9)], &graph);
         assert_eq!(ordered.len(), 2, "no stop is lost to a cycle");
@@ -1183,7 +1234,7 @@ mod tests {
         let seeds = vec![WalkNode {
             id: "fn:seed".into(), name: "seed".into(), node_type: "Function".into(),
             file: "a.rs".into(), start_line: 1, end_line: 9, description: String::new(),
-            role: Role::Changed, status: None, added: 3, removed: 0,
+            role: Role::Changed, status: None, added: 3, removed: 0, is_test: false,
         }];
         let ring = impact_ring(&graph, &seeds);
         let roles: HashMap<&str, Role> =
@@ -1209,7 +1260,7 @@ mod tests {
         let mk = |id: &str| WalkNode {
             id: id.into(), name: id.into(), node_type: "Function".into(),
             file: "x.rs".into(), start_line: 1, end_line: 9, description: String::new(),
-            role: Role::Changed, status: None, added: 1, removed: 0,
+            role: Role::Changed, status: None, added: 1, removed: 0, is_test: false,
         };
         assert!(impact_ring(&graph, &[mk("fn:a"), mk("fn:b")]).is_empty());
     }
