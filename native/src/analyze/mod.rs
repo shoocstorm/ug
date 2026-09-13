@@ -524,22 +524,62 @@ pub async fn coverage_for(
 /// A deliberately shallow scan: it wants the names to *probe*, and a name
 /// that turns out not to be a stored property simply reports as absent,
 /// which is the same thing the caller needed to know anyway.
+///
+/// Shallow, but not blind to strings. A dot inside a quoted literal is
+/// data, and the data this tool is pointed at is mostly *paths* — so
+/// `WHERE n.file ENDS WITH "router_tests.rs"` used to probe a property
+/// named `rs`, find nothing carrying it, and warn "NOT INDEXED: rs — this
+/// answer is not about what you asked" over an answer that was entirely
+/// correct. A false alarm on this particular warning is expensive: it is
+/// the one that tells a caller to distrust a number, so crying wolf
+/// teaches them to ignore the real thing.
 fn referenced_properties(gql: &str) -> Vec<String> {
     let bytes = gql.as_bytes();
     let mut found: Vec<String> = Vec::new();
+    // Which quote we are inside, if any. Backticks count: Cypher quotes
+    // odd identifiers with them, and a dot in there is part of the name,
+    // not an access.
+    let mut quote: Option<u8> = None;
+    let mut i = 0usize;
 
-    for (i, _) in gql.match_indices('.') {
-        // A dot inside `*1..3`, a decimal literal, or a quoted path is not
-        // a property access. Requiring an identifier character on the left
-        // and an alphabetic one on the right rules all three out.
+    while i < bytes.len() {
+        let b = bytes[i];
+        if let Some(q) = quote {
+            // A backslash escapes the next byte, including the closing
+            // quote — `'` inside a single-quoted literal does not end it.
+            if b == b'\\' {
+                i += 2;
+                continue;
+            }
+            if b == q {
+                quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        if matches!(b, b'\'' | b'"' | b'`') {
+            quote = Some(b);
+            i += 1;
+            continue;
+        }
+        if b != b'.' {
+            i += 1;
+            continue;
+        }
+
+        // A dot inside `*1..3` or a decimal literal is not a property
+        // access either. Requiring an identifier character on the left and
+        // an alphabetic one on the right rules both out.
         let left_ok = i > 0 && (bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_');
         if !left_ok {
+            i += 1;
             continue;
         }
         let name: String = gql[i + 1..]
             .chars()
             .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
             .collect();
+        i += 1;
         if name.is_empty() || !name.starts_with(|c: char| c.is_ascii_alphabetic()) {
             continue;
         }
@@ -747,6 +787,59 @@ mod tests {
             .iter()
             .any(|p| p.starts_with(|c: char| c.is_numeric())));
         assert_eq!(props.len(), 3, "{props:?}");
+    }
+
+    /// The bug: the scan walked every `.` in the raw query, so a *path* in
+    /// a string literal read as a property access. `n.file = "router_tests.rs"`
+    /// probed a property called `rs`, found nothing carrying it, and warned
+    /// "NOT INDEXED: rs — this answer is not about what you asked" over an
+    /// answer that was exactly what was asked.
+    #[test]
+    fn a_path_inside_a_string_literal_is_not_a_property() {
+        let props = referenced_properties(
+            r#"MATCH (n) WHERE n.file ENDS WITH "router_tests.rs" RETURN sum(n.is_test) AS t"#,
+        );
+        assert_eq!(props, vec!["file".to_string(), "is_test".to_string()], "{props:?}");
+
+        // Single quotes are the same literal, and the presets use them.
+        let props = referenced_properties(
+            "MATCH (n) WHERE n.file IN ['src/a.ts', 'src/b.rs'] RETURN n.folder AS f",
+        );
+        assert_eq!(props, vec!["file".to_string(), "folder".to_string()], "{props:?}");
+    }
+
+    #[test]
+    fn a_quote_escaped_inside_a_literal_does_not_end_it() {
+        // If the `\'` were read as the closing quote, `don` would leave the
+        // string and `t.rs` would register as a property named `rs`.
+        let props = referenced_properties(
+            r"MATCH (n) WHERE n.name = 'don\'t.rs' RETURN count(*) AS c",
+        );
+        assert_eq!(props, vec!["name".to_string()], "{props:?}");
+    }
+
+    #[test]
+    fn a_backticked_identifier_hides_its_dots_too() {
+        let props = referenced_properties(
+            "MATCH (n) WHERE n.`odd.name` = 1 RETURN n.loc AS loc",
+        );
+        // `odd.name` contributes nothing; only the real accesses do.
+        assert_eq!(props, vec!["loc".to_string()], "{props:?}");
+    }
+
+    /// The scan must still find everything it did before — skipping strings
+    /// is a narrowing, and a narrowing that goes too far silently drops the
+    /// coverage caveat this whole module exists to print.
+    #[test]
+    fn skipping_strings_does_not_lose_real_accesses() {
+        let props = referenced_properties(
+            r#"MATCH (dep)-[:Calls*1..3]->(t) WHERE t.file IN ["a.rs"] AND dep.is_test = 1
+               RETURN dep.folder AS f, count(*) AS c"#,
+        );
+        assert!(props.contains(&"folder".to_string()), "{props:?}");
+        assert!(props.contains(&"file".to_string()), "{props:?}");
+        assert!(props.contains(&"is_test".to_string()), "{props:?}");
+        assert!(!props.contains(&"rs".to_string()), "{props:?}");
     }
 
     #[test]

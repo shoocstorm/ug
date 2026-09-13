@@ -478,7 +478,7 @@ changelog on every bump, and keep engine calls behind the `KnowledgeStore`
 trait (`native/src/storage/store.rs`) so upgrades stay confined to
 `native/src/storage/db.rs`.
 
-## 9. Fifteen bugs this codebase keeps re-introducing
+## 9. Sixteen bugs this codebase keeps re-introducing
 
 All are invisible in review and silent at runtime, and most have already
 shipped here more than once. Check for them by reflex.
@@ -1025,6 +1025,32 @@ full analysis built on it.
 
 Grep shape: `== "somename"` or a `matches!` on a string, where the value comes
 from an indexer, a deserialiser, or another language's syntax.
+
+### 9p. The installed git hook re-indexes with a *different build* of ug
+
+Working on the indexer, the extractors or `storage::facts` in this repo has a
+trap nothing warns you about: `ug hook install` writes a `post-commit` that
+runs **`native/target/release/ug`**, whatever that binary happens to be. It is
+not your `cargo build` output and it is not on your mind.
+
+So the loop is:
+
+1. Change how a fact is derived; `cargo build` (debug).
+2. `ug gen` with the debug binary — the graph is correct, schema version 6.
+3. Commit. The hook fires, re-indexes with the *stale release* binary, and
+   rewrites `graph.json` back to the old logic and schema version 5.
+4. Query it. The numbers are the old ones, and nothing anywhere says why.
+
+This cost a real debugging detour: a verified fix "regressed" between two
+commands with no edit in between, because the commit in the middle reverted
+the index.
+
+**When you change anything that lands in `graph.json` or the stored facts,
+either rebuild release (`cargo build --release`) or commit with
+`UG_HOOK_DISABLE=1`.** The general form: a hook that runs a *built artefact*
+is pinned to whenever that artefact was last built, and the staleness is
+invisible at the call site. `ug hook status` reports how far behind the index
+is, not which binary wrote it.
 
 ## 10. Measuring performance without fooling yourself
 
