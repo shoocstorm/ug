@@ -438,8 +438,20 @@ fn add_file_and_symbol_nodes(index_result: &crate::types::IndexResult, acc: &mut
             name: normalized_file_path.clone(),
             node_type: file_node_type,
             file: Some(normalized_file_path.clone()),
-            start_line: None,
-            end_line: None,
+            // A file spans its own lines, so it carries a span like any
+            // other node and `facts::span_loc` turns that into the `loc`
+            // fact — which is how `file_context` can say how big a file is
+            // without reading it. The indexer has counted these lines since
+            // the beginning; until now they were dropped on the floor here.
+            //
+            // Deliberately a span rather than `metrics`: a `SymbolMetrics`
+            // would also write `params`, `code_lines` and `comment_lines` as
+            // `0` for every file in the repo, which is precisely the
+            // confident-zero-that-reads-as-a-measurement failure
+            // `storage::facts` exists to prevent. An empty file keeps
+            // `end_line: None` so its `loc` is absent, not zero.
+            start_line: (file.lines > 0).then_some(1),
+            end_line: (file.lines > 0).then_some(file.lines),
             metrics: None,
             signature: None,
             docstring: None,

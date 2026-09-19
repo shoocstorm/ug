@@ -699,3 +699,61 @@ fn a_rust_route_handler_passed_as_a_value_gets_a_references_edge() {
         "api_chat passed as a value should get a References edge"
     );
 }
+
+/// A File node carries its own line span, so `facts::span_loc` can answer
+/// "how big is this file" without anyone summing the symbols inside it.
+///
+/// The span is the whole point: before it existed the indexer counted a
+/// file's lines and dropped them before writing the graph, and the only
+/// available answer was a sum of symbol `code_lines` that silently omits
+/// every line outside a symbol — here, the two blank lines and the comment.
+#[test]
+fn a_file_node_spans_its_own_lines() {
+    let dir = TempDir::new().unwrap();
+    let dir_path = dir.path().to_string_lossy().to_string();
+    // 6 lines, only two of which are inside a symbol.
+    fs::write(
+        dir.path().join("test.ts"),
+        "// a comment\n\nfunction test(): void { }\n\nconst x = 1;\n",
+    )
+    .unwrap();
+
+    let index_result = index(dir_path);
+    let graph_json = build_graph(index_result);
+    let graph: GraphData = serde_json::from_str(&graph_json).unwrap();
+
+    let file = graph
+        .nodes
+        .iter()
+        .find(|n| n.node_type == GraphNodeType::File)
+        .expect("a File node");
+
+    assert_eq!(file.start_line, Some(1), "a file starts at line 1");
+    assert_eq!(file.end_line, Some(5), "and ends at its last line");
+    // Not fabricated metrics: a File node must not claim 0 params or 0 code
+    // lines, which is the confident zero `storage::facts` exists to prevent.
+    assert!(file.metrics.is_none(), "a File node carries no symbol metrics");
+}
+
+/// An empty file reports no span at all rather than a zero-length one — the
+/// `loc` fact is then absent, which reads as "not measured" instead of as a
+/// measurement of nothing.
+#[test]
+fn an_empty_file_has_no_span_rather_than_a_zero_one() {
+    let dir = TempDir::new().unwrap();
+    let dir_path = dir.path().to_string_lossy().to_string();
+    fs::write(dir.path().join("empty.ts"), "").unwrap();
+
+    let index_result = index(dir_path);
+    let graph_json = build_graph(index_result);
+    let graph: GraphData = serde_json::from_str(&graph_json).unwrap();
+
+    if let Some(file) = graph
+        .nodes
+        .iter()
+        .find(|n| n.node_type == GraphNodeType::File && n.name.ends_with("empty.ts"))
+    {
+        assert_eq!(file.start_line, None);
+        assert_eq!(file.end_line, None);
+    }
+}

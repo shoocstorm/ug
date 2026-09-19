@@ -494,7 +494,16 @@ pub struct Dependency {
 ///   bound** — and, worse, `untested_symbols` on such a graph lists test
 ///   functions as untested production code. Re-run `ug gen` to fix it;
 ///   `graph_schema` reports it as `stale_test_flags`.
-pub const GRAPH_SCHEMA_VERSION: u32 = 6;
+/// - **7**: `File` nodes carry their own line span, so every file has a
+///   `loc` fact. Before this the indexer counted a file's lines and dropped
+///   them before the graph was written, so "how big is this file" had to be
+///   answered by summing the `code_lines` of the symbols inside it — which
+///   silently omits every line that sits outside a symbol span (imports,
+///   module docs, `use` blocks) and undercounts by a wide margin on some
+///   files and not at all on others. A reader seeing version < 7 must treat
+///   a file's `loc` as **absent**, not zero, and say so rather than
+///   reporting a sum it cannot justify.
+pub const GRAPH_SCHEMA_VERSION: u32 = 7;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexStats {

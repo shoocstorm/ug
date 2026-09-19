@@ -100,7 +100,7 @@ it by hand.
 
 | Property | Notes |
 | --- | --- |
-| `loc` | Code span, **inclusive** at both ends. Falls back to `end_line - start_line + 1` when `metrics` is absent, which is what gives Class/Interface nodes a size. |
+| `loc` | Code span, **inclusive** at both ends. Falls back to `end_line - start_line + 1` when `metrics` is absent, which is what gives Class/Interface nodes a size — and, from schema version 7, gives a `File` node the length of the whole file. Before 7 a file had no `loc` at all, and the only answer to "how big is this file" was a sum of its symbols' `code_lines`, which omits every line outside a symbol span. |
 | `code_lines` / `comment_lines` / `doc_lines` | Computed per file in `indexer/line_metrics.rs`, once, rather than in the five language extractors — so all languages gain them at once and "a comment" cannot mean different things per language. |
 | `has_doc` / `has_comments` | Two separate booleans, deliberately. On this repo 329 functions carry prose but no doc comment; collapsing those into one "documented" figure hides exactly that finding. |
 | `params` / `max_nesting` / `members` | `members` is only populated for languages whose class body encloses its members (Java, Python, TypeScript). A Rust struct's methods live in a separate `impl` block, so Rust types carry no `members` — the coverage line says so rather than ranking them all as memberless. |
