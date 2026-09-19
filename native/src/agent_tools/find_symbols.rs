@@ -377,14 +377,27 @@ pub fn render_find_symbols(r: &FindSymbolsResult, style: Render) -> String {
             item.render_bullet(&mut out, style);
         }
     }
-    next_actions(
-        &mut out,
-        style,
-        &[
-            ("get_code <id>", "for source"),
-            ("find_usages <id>", "for callers"),
-            ("traverse <id>", "for dependencies"),
-        ],
-    );
+    // A boundary hit opens two questions the generic three do not answer:
+    // "which of these are the same kind" and "what reaches this surface".
+    // Neither is guessable — one needs `CONTAINS` against a comma-joined
+    // property, the other a preset whose name says nothing about boundaries
+    // — so the hint carries the whole command rather than naming a tool.
+    let saw_boundary = r
+        .queries
+        .iter()
+        .any(|q| q.items.iter().any(|i| i.boundary.is_some()));
+    let mut hints: Vec<(&str, &str)> = vec![
+        ("get_code <id>", "for source"),
+        ("find_usages <id>", "for callers"),
+        ("traverse <id>", "for dependencies"),
+    ];
+    if saw_boundary {
+        hints.push((
+            "analyze --gql \"MATCH (n) WHERE n.boundary_kinds CONTAINS 'http.client' RETURN elementKey(n), n.boundary_detail\"",
+            "for every symbol of one kind (CONTAINS, not =: a symbol can carry two)",
+        ));
+        hints.push(("analyze boundary_impact --arg target=<id>", "for what reaches a surface"));
+    }
+    next_actions(&mut out, style, &hints);
     out
 }

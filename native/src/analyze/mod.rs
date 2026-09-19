@@ -134,6 +134,12 @@ pub struct QueryAnswer {
     /// Whether to render the "by file" concentration summary. Copied from
     /// [`AnalyzeParams::by_folder`] so the renderer needs no extra arg.
     pub by_folder: bool,
+    /// What to run next, from the preset that produced this answer.
+    ///
+    /// An answer is rarely the end of the question, and the useful follow-up
+    /// is often one nobody would guess — see [`presets::Preset::next`]. Empty
+    /// for raw GQL, which has no preset to ask.
+    pub next: &'static [(&'static str, &'static str)],
 }
 
 const DEFAULT_LIMIT: usize = 20;
@@ -252,6 +258,14 @@ pub async fn run(
     };
 
     Ok(QueryAnswer {
+        // Looked up again rather than threaded through `resolve`, whose
+        // four-tuple is already at the limit of what reads clearly.
+        next: params
+            .preset
+            .as_deref()
+            .and_then(presets::find)
+            .map(|p| p.next)
+            .unwrap_or(&[]),
         title,
         description,
         page,

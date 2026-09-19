@@ -93,6 +93,15 @@ pub struct Preset {
     /// headline and for the viz layer's preset cards. `None` when the
     /// answer is inherently a table.
     pub headline: Option<&'static str>,
+    /// What to run after this answer, as `(command, why)` pairs.
+    ///
+    /// A preset answers one question and immediately raises the next one,
+    /// and the follow-up is often a query nobody would guess: listing one
+    /// boundary kind needs `CONTAINS` against a comma-joined property,
+    /// because `=` silently drops every symbol that carries two. Naming the
+    /// command here puts it in the output an agent is already reading,
+    /// rather than in documentation it is not.
+    pub next: &'static [(&'static str, &'static str)],
 }
 
 pub fn find(name: &str) -> Option<&'static Preset> {
@@ -104,6 +113,9 @@ pub fn all() -> &'static [Preset] {
 }
 
 const NO_PARAMS: &[PresetParam] = &[];
+
+/// No follow-up worth naming: the answer is the end of the question.
+const NO_NEXT: &[(&str, &str)] = &[];
 
 const MIN_LOC: &[PresetParam] = &[PresetParam {
     name: "min_loc",
@@ -152,6 +164,7 @@ pub static BUILTIN: &[Preset] = &[
               RETURN n.node_type AS kind, count(*) AS symbols \
               ORDER BY symbols DESC",
         headline: None,
+        next: NO_NEXT,
     },
     Preset {
         name: "biggest_files",
@@ -164,6 +177,7 @@ pub static BUILTIN: &[Preset] = &[
               ORDER BY symbols DESC \
               LIMIT 200",
         headline: None,
+        next: NO_NEXT,
     },
     Preset {
         name: "language_breakdown",
@@ -176,6 +190,7 @@ pub static BUILTIN: &[Preset] = &[
                      sum(n.code_lines) AS code_lines \
               ORDER BY symbols DESC",
         headline: None,
+        next: NO_NEXT,
     },
     Preset {
         name: "file_kinds",
@@ -187,6 +202,7 @@ pub static BUILTIN: &[Preset] = &[
               RETURN n.classification AS kind, count(*) AS symbols \
               ORDER BY symbols DESC",
         headline: None,
+        next: NO_NEXT,
     },
     Preset {
         name: "where_to_start",
@@ -199,6 +215,7 @@ pub static BUILTIN: &[Preset] = &[
               ORDER BY depended_on_by DESC \
               LIMIT 200",
         headline: None,
+        next: NO_NEXT,
     },
     // ── size and shape ────────────────────────────────────────────────
     Preset {
@@ -212,6 +229,7 @@ pub static BUILTIN: &[Preset] = &[
               ORDER BY loc DESC \
               LIMIT 200",
         headline: None,
+        next: NO_NEXT,
     },
     Preset {
         name: "long_functions_by_folder",
@@ -226,6 +244,7 @@ pub static BUILTIN: &[Preset] = &[
               ORDER BY functions DESC \
               LIMIT 200",
         headline: None,
+        next: NO_NEXT,
     },
     Preset {
         name: "size_histogram",
@@ -243,6 +262,7 @@ pub static BUILTIN: &[Preset] = &[
                      count(*) AS functions \
               ORDER BY bucket ASC",
         headline: None,
+        next: NO_NEXT,
     },
     Preset {
         name: "god_classes",
@@ -255,6 +275,7 @@ pub static BUILTIN: &[Preset] = &[
               ORDER BY loc DESC \
               LIMIT 200",
         headline: None,
+        next: NO_NEXT,
     },
     Preset {
         name: "long_functions_by_code",
@@ -268,6 +289,7 @@ pub static BUILTIN: &[Preset] = &[
               ORDER BY code_lines DESC \
               LIMIT 200",
         headline: None,
+        next: NO_NEXT,
     },
     Preset {
         name: "classes_by_members",
@@ -284,6 +306,7 @@ pub static BUILTIN: &[Preset] = &[
               ORDER BY members DESC \
               LIMIT 200",
         headline: None,
+        next: NO_NEXT,
     },
     Preset {
         name: "param_bloat",
@@ -301,6 +324,7 @@ pub static BUILTIN: &[Preset] = &[
               ORDER BY params DESC \
               LIMIT 200",
         headline: None,
+        next: NO_NEXT,
     },
     Preset {
         name: "deep_nesting",
@@ -318,6 +342,7 @@ pub static BUILTIN: &[Preset] = &[
               ORDER BY nesting DESC \
               LIMIT 200",
         headline: None,
+        next: NO_NEXT,
     },
     // ── documentation ─────────────────────────────────────────────────
     //
@@ -341,6 +366,7 @@ pub static BUILTIN: &[Preset] = &[
                      sum(n.has_doc) AS with_doc_comment \
               ORDER BY total DESC",
         headline: None,
+        next: NO_NEXT,
     },
     Preset {
         name: "comment_density",
@@ -358,6 +384,7 @@ pub static BUILTIN: &[Preset] = &[
               ORDER BY code_lines DESC \
               LIMIT 200",
         headline: None,
+        next: NO_NEXT,
     },
     Preset {
         name: "token_docs",
@@ -372,6 +399,7 @@ pub static BUILTIN: &[Preset] = &[
               ORDER BY code_lines DESC \
               LIMIT 200",
         headline: None,
+        next: NO_NEXT,
     },
     Preset {
         name: "undercommented_complexity",
@@ -386,6 +414,7 @@ pub static BUILTIN: &[Preset] = &[
               ORDER BY code_lines DESC \
               LIMIT 200",
         headline: None,
+        next: NO_NEXT,
     },
     Preset {
         name: "doc_coverage",
@@ -397,6 +426,7 @@ pub static BUILTIN: &[Preset] = &[
               RETURN n.node_type AS kind, count(*) AS total, sum(n.has_doc) AS documented \
               ORDER BY total DESC",
         headline: None,
+        next: NO_NEXT,
     },
     Preset {
         name: "doc_coverage_by_folder",
@@ -411,6 +441,7 @@ pub static BUILTIN: &[Preset] = &[
               ORDER BY documented ASC, total DESC \
               LIMIT 200",
         headline: None,
+        next: NO_NEXT,
     },
     Preset {
         name: "undocumented_hotspots",
@@ -424,6 +455,7 @@ pub static BUILTIN: &[Preset] = &[
               ORDER BY depended_on_by DESC \
               LIMIT 200",
         headline: None,
+        next: NO_NEXT,
     },
     // ── dead code ─────────────────────────────────────────────────────
     //
@@ -442,6 +474,7 @@ pub static BUILTIN: &[Preset] = &[
               ORDER BY loc DESC \
               LIMIT 200",
         headline: None,
+        next: NO_NEXT,
     },
     Preset {
         name: "orphan_files",
@@ -453,6 +486,7 @@ pub static BUILTIN: &[Preset] = &[
               RETURN elementKey(n) AS id \
               LIMIT 200",
         headline: None,
+        next: NO_NEXT,
     },
     Preset {
         name: "duplicate_names",
@@ -466,6 +500,7 @@ pub static BUILTIN: &[Preset] = &[
               ORDER BY definitions DESC \
               LIMIT 200",
         headline: None,
+        next: NO_NEXT,
     },
     // ── architecture ──────────────────────────────────────────────────
     Preset {
@@ -479,6 +514,7 @@ pub static BUILTIN: &[Preset] = &[
               ORDER BY depended_on_by DESC \
               LIMIT 200",
         headline: None,
+        next: NO_NEXT,
     },
     Preset {
         name: "fanout_offenders",
@@ -496,6 +532,7 @@ pub static BUILTIN: &[Preset] = &[
               ORDER BY depends_on DESC \
               LIMIT 200",
         headline: None,
+        next: NO_NEXT,
     },
     Preset {
         name: "coupling_matrix",
@@ -508,6 +545,7 @@ pub static BUILTIN: &[Preset] = &[
               ORDER BY edges DESC \
               LIMIT 200",
         headline: None,
+        next: NO_NEXT,
     },
     Preset {
         name: "layering_violations",
@@ -533,6 +571,7 @@ pub static BUILTIN: &[Preset] = &[
               ORDER BY edges DESC \
               LIMIT 200",
         headline: None,
+        next: NO_NEXT,
     },
     // ── boundaries ────────────────────────────────────────────────────
     Preset {
@@ -554,6 +593,10 @@ pub static BUILTIN: &[Preset] = &[
               ORDER BY symbols DESC \
               LIMIT 200",
         headline: None,
+        next: &[
+            ("analyze --gql \"MATCH (n) WHERE n.boundary_kinds CONTAINS 'http.client' RETURN elementKey(n) AS symbol, n.boundary_detail AS surface\"", "every symbol of one kind — CONTAINS, not =, or a symbol carrying two kinds is dropped"),
+            ("analyze boundaries", "the same surfaces listed one per row, with their ids"),
+        ],
     },
     Preset {
         name: "boundaries",
@@ -569,6 +612,10 @@ pub static BUILTIN: &[Preset] = &[
               ORDER BY kinds, file \
               LIMIT 200",
         headline: None,
+        next: &[
+            ("analyze --gql \"MATCH (n) WHERE n.boundary_kinds CONTAINS 'http.client' RETURN elementKey(n) AS symbol, n.boundary_detail AS surface\"", "every symbol of one kind — CONTAINS, not =, or a symbol carrying two kinds is dropped"),
+            ("analyze boundary_impact --arg target=<file-or-symbol>", "what a change reaches through these"),
+        ],
     },
     // ── tests ─────────────────────────────────────────────────────────
     Preset {
@@ -583,6 +630,7 @@ pub static BUILTIN: &[Preset] = &[
               ORDER BY functions DESC \
               LIMIT 200",
         headline: None,
+        next: NO_NEXT,
     },
     Preset {
         name: "untested_symbols",
@@ -609,6 +657,7 @@ pub static BUILTIN: &[Preset] = &[
               ORDER BY depended_on_by DESC \
               LIMIT 200",
         headline: None,
+        next: NO_NEXT,
     },
     Preset {
         name: "retest_scope",
@@ -621,6 +670,7 @@ pub static BUILTIN: &[Preset] = &[
               ORDER BY test_symbols DESC \
               LIMIT 200",
         headline: None,
+        next: NO_NEXT,
     },
     Preset {
         name: "test_for",
@@ -637,6 +687,7 @@ pub static BUILTIN: &[Preset] = &[
               ORDER BY paths DESC \
               LIMIT 200",
         headline: None,
+        next: NO_NEXT,
     },
     Preset {
         name: "diff_retest_scope",
@@ -653,6 +704,7 @@ pub static BUILTIN: &[Preset] = &[
               ORDER BY test_symbols DESC \
               LIMIT 200",
         headline: None,
+        next: NO_NEXT,
     },
     // ── risk ──────────────────────────────────────────────────────────
     Preset {
@@ -673,6 +725,7 @@ pub static BUILTIN: &[Preset] = &[
               ORDER BY dependents DESC \
               LIMIT 200",
         headline: None,
+        next: NO_NEXT,
     },
     Preset {
         name: "diff_impact",
@@ -691,6 +744,7 @@ pub static BUILTIN: &[Preset] = &[
               ORDER BY dependents DESC \
               LIMIT 200",
         headline: None,
+        next: NO_NEXT,
     },
     Preset {
         name: "impact_summary",
@@ -702,6 +756,7 @@ pub static BUILTIN: &[Preset] = &[
               RETURN count(DISTINCT elementKey(dep)) AS dependents, \
                      count(DISTINCT dep.file) AS files_affected",
         headline: Some("dependents"),
+        next: NO_NEXT,
     },
     Preset {
         name: "boundary_impact",
@@ -737,6 +792,10 @@ pub static BUILTIN: &[Preset] = &[
               ORDER BY paths DESC \
               LIMIT 200",
         headline: None,
+        next: &[
+            ("find_usages <symbol>", "the symbol-level callers, where this answer is file-level"),
+            ("get_code <id>", "the source of a surface listed above"),
+        ],
     },
     Preset {
         name: "risky_symbols",
@@ -750,6 +809,7 @@ pub static BUILTIN: &[Preset] = &[
               ORDER BY depended_on_by DESC \
               LIMIT 200",
         headline: None,
+        next: NO_NEXT,
     },
 ];
 

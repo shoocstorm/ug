@@ -340,6 +340,17 @@ fn push_caveats(out: &mut String, answer: &QueryAnswer, style: Render) {
         }
     }
 
+    // Before coverage, not after: coverage is the caveat that closes an
+    // answer, and a follow-up buried under it reads as part of the warning.
+    if !answer.next.is_empty() {
+        let rendered: Vec<String> = answer
+            .next
+            .iter()
+            .map(|(cmd, why)| format!("{} {}", style.id(cmd), why))
+            .collect();
+        out.push_str(&format!("\n{} {}\n", style.dim("Next:"), rendered.join(" · ")));
+    }
+
     let populated: Vec<&Coverage> = answer.coverage.iter().filter(|c| !c.is_absent()).collect();
     if !populated.is_empty() {
         // Percentages only: the raw `present/total` counts are scale, which
@@ -477,6 +488,7 @@ mod tests {
             .collect();
         let empty_index = !coverage.is_empty() && coverage.iter().all(|c| c.index_is_empty());
         QueryAnswer {
+            next: &[],
             target_resolved_from: None,
             title: "test".into(),
             description: None,
@@ -551,6 +563,33 @@ mod tests {
         a.from_preset = true;
         let out = render(&a, Render::Markdown);
         assert!(!out.contains("coverage, not absence"), "{out}");
+    }
+
+    /// The follow-up an agent cannot guess: listing one boundary kind needs
+    /// `CONTAINS` against a comma-joined property, because `=` silently
+    /// drops every symbol carrying two kinds. Naming it in the output beats
+    /// naming it in documentation nobody is reading at that moment.
+    #[test]
+    fn a_preset_names_what_to_run_next() {
+        let mut a = answer(
+            page(&["c"], vec![vec![QueryValue::Int(3)]]),
+            vec![Coverage { property: "boundary_kinds".into(), present: 142, total: 4096 }],
+        );
+        a.next = &[("analyze boundaries", "one row per surface")];
+        let out = render(&a, Render::Markdown);
+        assert!(out.contains("Next:"), "{out}");
+        assert!(out.contains("analyze boundaries"), "{out}");
+        assert!(out.contains("one row per surface"), "{out}");
+        // Above the coverage caveat: a follow-up under it reads as a warning.
+        assert!(out.find("Next:") < out.find("coverage:"), "{out}");
+    }
+
+    /// Raw GQL has no preset to ask, and inventing a follow-up for it would
+    /// be guessing at a question the caller already wrote themselves.
+    #[test]
+    fn a_raw_query_gets_no_next_line() {
+        let a = answer(page(&["c"], vec![vec![QueryValue::Int(3)]]), vec![]);
+        assert!(!render(&a, Render::Markdown).contains("Next:"));
     }
 
     #[test]

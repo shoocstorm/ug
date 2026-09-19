@@ -2775,6 +2775,40 @@ fn a_genuinely_absent_name_still_suggests_widening() {
     assert!(out.contains("shorter fragment"), "{out}");
 }
 
+/// A boundary hit raises two questions the generic footer does not answer,
+/// and both need a command nobody would guess — `CONTAINS` against a
+/// comma-joined property, and a preset whose name says nothing about
+/// boundaries.
+#[test]
+fn a_boundary_hit_chains_to_the_boundary_specific_commands() {
+    use crate::types::BoundaryDirection;
+    let mut g = users_fixture();
+    if let Some(mid) = g.nodes.iter_mut().find(|n| n.id == "fn:mid") {
+        mid.boundaries = vec![boundary("http.client", BoundaryDirection::Outbound, None)];
+    }
+    let r = find_symbols(
+        &g,
+        &FindSymbolsParams { name: vec!["mid".into()], ..Default::default() },
+    );
+    let out = render_find_symbols(&r, Render::Markdown);
+    assert!(out.contains("boundary_kinds CONTAINS"), "{out}");
+    assert!(out.contains("boundary_impact"), "{out}");
+}
+
+/// The same footer must not follow an ordinary lookup: a hint that fires on
+/// every result is one an agent learns to skip.
+#[test]
+fn an_ordinary_hit_keeps_the_plain_footer() {
+    let g = users_fixture();
+    let r = find_symbols(
+        &g,
+        &FindSymbolsParams { name: vec!["mid".into()], ..Default::default() },
+    );
+    let out = render_find_symbols(&r, Render::Markdown);
+    assert!(out.contains("get_code <id>"), "{out}");
+    assert!(!out.contains("boundary_kinds CONTAINS"), "{out}");
+}
+
 #[test]
 fn a_boundary_hit_says_which_surface_it_is() {
     // The kind and the route are the answer; a bare list of names would not
