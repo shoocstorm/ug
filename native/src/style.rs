@@ -141,6 +141,25 @@ impl Render {
             Render::Ansi => self.ansi(C_BOLD, s),
         }
     }
+
+    /// A suggested follow-up call, spelled the way *this* surface takes it.
+    ///
+    /// The same suggestion is a shell command in a terminal and a tool name
+    /// in an MCP client, and neither audience can use the other's spelling:
+    /// `ug find_usages x` is not a tool an MCP client can call, and a bare
+    /// `find_usages x` is not a command a terminal will run. A suggestion is
+    /// only worth printing if it can be acted on without translation.
+    pub(crate) fn cmd(self, tool: &str, args: &str) -> String {
+        let call = if args.is_empty() {
+            tool.to_string()
+        } else {
+            format!("{} {}", tool, args)
+        };
+        match self {
+            Render::Markdown => format!("`{}`", call),
+            Render::Ansi => self.ansi(C_CYAN, &format!("ug {}", call)),
+        }
+    }
 }
 
 #[cfg(test)]

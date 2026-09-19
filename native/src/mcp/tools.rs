@@ -309,7 +309,7 @@ fn raw_tools() -> Value {
         {
             "name": "traverse",
             "description": format!(
-                "Walk the graph N hops from given seed symbols. The natural follow-up to search: take a node id you got back, expand outward to see what it imports, calls, contains, or extends. {refs} Several seeds make ONE merged walk, so a pattern like 'handle_*' traces everything reachable from a whole family in a single call. Filters by edge type and direction: 'outbound' is what the seed depends on, 'inbound' is who depends on the seed. Output is grouped by hop, with an edge-type tally, so the structure is easy to scan. Reads the structural graph directly — no database or embedding backend needed, so it keeps working when search does not.",
+                "Walk the graph N hops from given seed symbols. The natural follow-up to search: take a node id you got back, expand outward to see what it imports, calls, contains, or extends. {refs} Several seeds make ONE merged walk, so a pattern like 'handle_*' traces everything reachable from a whole family in a single call. Filters by edge type and direction: 'outbound' is what the seed depends on, 'inbound' is who depends on the seed. PREFER find_usages for the inbound direction specifically — it is this same walk with call-site lines as evidence and a default edge set wide enough that constants and types are not invisible; prefer context when you want one symbol's code, callers, tests and deps before editing it. Output is grouped by hop, with an edge-type tally, and states what the edge-type and direction filters hid, so a narrowed walk cannot be mistaken for a complete one. Reads the structural graph directly — no database or embedding backend needed, so it keeps working when search does not.",
                 refs = NODE_REF_FORMS
             ),
             "inputSchema": {
@@ -317,7 +317,7 @@ fn raw_tools() -> Value {
                 "properties": {
                     "nodeId": { "oneOf": [ { "type": "string" }, { "type": "array", "items": { "type": "string" }, "minItems": 1, "maxItems": 10 } ], "description": format!("Seed(s) — one value or an array of up to 10. {refs} Ids typically come from a prior search / find_symbols result. (`startNodeIds` is the deprecated legacy name for the same parameter.)", refs = NODE_REF_FORMS) },
                     "hops": { "type": "integer", "minimum": 1, "maximum": 5, "description": "Hop radius (default 2). Use 1 for direct neighbors only." },
-                    "edgeTypes": { "type": "array", "items": { "type": "string" }, "description": "Restrict to these edge types (case-insensitive). Common: imports, calls, extends, implements, contains, references, instantiates, uses, overrides. See graph_schema for what this graph has." },
+                    "edgeTypes": { "type": "array", "items": { "type": "string" }, "description": "Restrict to these edge types (case-insensitive; a comma-separated string is accepted too). Common: imports, calls, extends, implements, contains, references, instantiates, uses, overrides. See graph_schema for what this graph has. OMITTING THIS IS USUALLY RIGHT: a filter narrows the walk silently and the result still looks complete. ['calls'] alone misses a function passed as a value rather than called — languages record that as 'references' — so prefer ['calls','references'] when you mean \"what does this use\". The result reports how many edges the filter hid, and of which types." },
                     "direction": { "type": "string", "enum": ["outbound", "inbound", "both"], "description": "Edge direction (default 'outbound'). 'inbound' = who depends on me; 'outbound' = what I depend on; 'both' = either." }
                 },
                 "required": ["nodeId"]
@@ -334,7 +334,7 @@ fn raw_tools() -> Value {
                 "properties": {
                     "nodeId": { "oneOf": [ { "type": "string" }, { "type": "array", "items": { "type": "string" }, "minItems": 1, "maxItems": 10 } ], "description": format!("What to look up usages for — one value or an array of up to 10 (batch related lookups into ONE call instead of several). {refs}", refs = NODE_REF_FORMS) },
                     "hops": { "type": "integer", "minimum": 1, "maximum": 3, "description": "How many hops out to walk (default 1 = direct callers only). Bump to 2 to catch transitive usages." },
-                    "edgeTypes": { "type": "array", "items": { "type": "string" }, "description": "Override the default ['calls', 'references', 'imports', 'extends', 'implements'] set if you only care about a subset (e.g. ['calls'])." }
+                    "edgeTypes": { "type": "array", "items": { "type": "string" }, "description": "Override the default ['calls', 'references', 'imports', 'extends', 'implements', 'overrides', 'instantiates', 'uses'] set if you only care about a subset (e.g. ['calls']). Narrowing it hides users rather than reporting none: drop 'instantiates'/'uses' and every constructed type and every read constant answers \"nobody uses this\". The full default is the safe answer for \"what breaks if I change X\". A comma-separated string is accepted too." }
                 },
                 "required": ["nodeId"]
             }

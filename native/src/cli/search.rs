@@ -535,7 +535,7 @@ fn print_hybrid_search_help() {
 }
 
 fn print_traverse_help() {
-    println!("  {C_CYAN}ug traverse{C_RESET}  {C_YELLOW}— K-hop BFS using the OverGraph edges table{C_RESET}");
+    println!("  {C_CYAN}ug traverse{C_RESET}  {C_YELLOW}— what does this symbol reach, and what reaches it{C_RESET}");
     println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
     println!();
     println!("{C_BOLD}Usage:{C_RESET}  ug traverse <symbol>... [options]");
@@ -549,7 +549,10 @@ fn print_traverse_help() {
     println!("  {C_CYAN}-k, --hops{C_RESET} <n>          Max hops 1-5 (default: 2)");
     println!("  {C_CYAN}-d, --direction{C_RESET} <dir>   {C_CYAN}outbound{C_RESET} what I depend on (default) · {C_CYAN}inbound{C_RESET} who depends");
     println!("                          on me · {C_CYAN}both{C_RESET}");
-    println!("  {C_CYAN}-t, --edge-type{C_RESET} <type>  Restrict to edge type (repeatable; see {C_CYAN}ug graph_schema{C_RESET})");
+    println!("  {C_CYAN}-t, --edge-type{C_RESET} <type>  Restrict to edge type (repeatable or comma-separated; see");
+    println!("                          {C_CYAN}ug graph_schema{C_RESET}). Omitting it is usually right — a filter can");
+    println!("                          hide a real dependency and the walk still looks whole.");
+    println!("                          Whatever it hides is counted under the result.");
     println!("  {C_CYAN}-o, --output{C_RESET} <file>     Write the result JSON to a file (omit for stdout)");
     println!();
     print_wildcard_help();
@@ -560,6 +563,10 @@ fn print_traverse_help() {
     println!("  {C_CYAN}ug traverse{C_RESET} <id1> <id2>                 {C_YELLOW}# one merged walk from several seeds{C_RESET}");
     println!("  {C_CYAN}ug traverse{C_RESET} {C_BOLD}'handle_*'{C_RESET} -d inbound       {C_YELLOW}# what reaches any handler{C_RESET}");
     println!("  {C_CYAN}ug traverse{C_RESET} {C_BOLD}'src/auth/*.ts'{C_RESET} -t imports   {C_YELLOW}# the import graph of one directory{C_RESET}");
+    println!();
+    println!("{C_BOLD}See also:{C_RESET}");
+    println!("  {C_CYAN}ug find_usages{C_RESET}  who calls or imports this — the inbound walk, plus call-site lines");
+    println!("  {C_CYAN}ug context{C_RESET}      one symbol's code, callers, tests and deps in a single call");
 }
 
 #[cfg(test)]

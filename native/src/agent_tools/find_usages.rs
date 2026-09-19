@@ -217,7 +217,7 @@ fn walk_usages(graph: &GraphData, p: &FindUsagesParams) -> FindUsagesResult {
     let edge_types: Vec<String> = if p.edge_types.is_empty() {
         USAGE_EDGE_TYPES.iter().map(|s| s.to_string()).collect()
     } else {
-        p.edge_types.iter().map(|t| t.to_lowercase()).collect()
+        normalize_edge_filter(&p.edge_types)
     };
 
     let by_id = by_id_map(graph);

@@ -46,7 +46,7 @@ pub(crate) const API_ENDPOINTS: &[(&str, &[ApiEntry])] = &[
             ApiEntry { method: "POST", path: "/api/graph/nodes/hydrate", desc: "batch node detail: the docstring/signature/metrics/calls fields the slim index omits", availability: "always (empty if no project active)", cli_equivalent: None },
             ApiEntry { method: "GET", path: "/api/graph/node/:id", desc: "fetch one node by id", availability: "always (empty if no project active)", cli_equivalent: None },
             ApiEntry { method: "GET", path: "/api/graph/search", desc: "keyword search over graph nodes", availability: "always (empty if no project active)", cli_equivalent: Some("ug find_symbols") },
-            ApiEntry { method: "GET", path: "/api/graph/traverse/:id", desc: "k-hop BFS traversal from a node", availability: "always (empty if no project active)", cli_equivalent: Some("ug traverse") },
+            ApiEntry { method: "GET", path: "/api/graph/traverse/:id", desc: "k-hop BFS for the viewport — outbound only, every edge type, exact id, induced edges. NOT the traverse tool: no edge-type filter, no direction, no name/pattern seeds, and an unknown id is an empty 200. Use POST /api/tools/traverse for the agent-facing walk", availability: "always (empty if no project active)", cli_equivalent: None },
             ApiEntry { method: "GET", path: "/api/graph/path", desc: "shortest path between two nodes", availability: "always (empty if no project active)", cli_equivalent: Some("ug shortest_path") },
             ApiEntry { method: "GET", path: "/api/graph/filter", desc: "filter edges by type", availability: "always (empty if no project active)", cli_equivalent: None },
             ApiEntry { method: "GET", path: "/api/graph/centrality", desc: "degree/betweenness centrality", availability: "always (empty if no project active)", cli_equivalent: Some("ug graph_centrality") },
@@ -66,6 +66,7 @@ pub(crate) const API_ENDPOINTS: &[(&str, &[ApiEntry])] = &[
             ApiEntry { method: "POST", path: "/api/tools/file_outline", desc: "every indexed symbol in a file, in line order; takes a path glob", availability: "always (empty if no project active)", cli_equivalent: Some("ug file_outline --json") },
             ApiEntry { method: "POST", path: "/api/tools/get_code", desc: "source for a symbol (id, name or wildcard), or a file/line range", availability: "always (empty if no project active)", cli_equivalent: Some("ug get_code --json") },
             ApiEntry { method: "POST", path: "/api/tools/find_usages", desc: "inbound callers/importers, with call sites", availability: "always (empty if no project active)", cli_equivalent: Some("ug find_usages --json") },
+            ApiEntry { method: "POST", path: "/api/tools/traverse", desc: "N-hop walk from seed symbols, filtered by edge type and direction", availability: "always (empty if no project active)", cli_equivalent: Some("ug traverse --json") },
             ApiEntry { method: "POST", path: "/api/tools/shortest_path", desc: "shortest directed edge path between two symbols", availability: "always (empty if no project active)", cli_equivalent: Some("ug shortest_path --json") },
             ApiEntry { method: "POST", path: "/api/tools/graph_schema", desc: "node & edge types present, with counts", availability: "always (empty if no project active)", cli_equivalent: Some("ug graph_schema --json") },
             ApiEntry { method: "POST", path: "/api/tools/analyze", desc: "run a GQL (Cypher-like) query or built-in preset against the OverGraph store", availability: "503 if no DB backend configured", cli_equivalent: Some("ug analyze") },
@@ -101,3 +102,58 @@ pub(crate) const API_ENDPOINTS: &[(&str, &[ApiEntry])] = &[
         ],
     )    
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent_tools::{AGENT_TOOLS, STORE_BACKED_AGENT_TOOLS};
+
+    /// Every dispatchable agent tool must appear in the catalogue.
+    ///
+    /// `traverse` was dispatchable at `POST /api/tools/traverse` for as long
+    /// as the endpoint existed and was listed nowhere, so `ug api` showed
+    /// eight of the nine tools and the ninth was reachable only by guessing.
+    /// `AGENT_TOOLS` already carries a comment about two lists drifting
+    /// apart; this is the third list, and the one nothing was checking.
+    #[test]
+    fn every_agent_tool_is_listed_as_an_endpoint() {
+        let listed: Vec<&str> = API_ENDPOINTS
+            .iter()
+            .flat_map(|(_, entries)| entries.iter())
+            .filter_map(|e| e.path.strip_prefix("/api/tools/"))
+            .collect();
+        for (tool, _) in AGENT_TOOLS.iter().chain(STORE_BACKED_AGENT_TOOLS) {
+            assert!(
+                listed.contains(tool),
+                "agent tool `{tool}` is dispatchable at POST /api/tools/{tool} \
+                 but missing from API_ENDPOINTS — add an ApiEntry for it"
+            );
+        }
+    }
+
+    /// The reverse: a `/api/tools/` path naming no tool is a 404 the
+    /// catalogue promises will work.
+    #[test]
+    fn every_listed_tool_endpoint_names_a_real_tool() {
+        let known: Vec<&str> = AGENT_TOOLS
+            .iter()
+            .chain(STORE_BACKED_AGENT_TOOLS)
+            .map(|(t, _)| *t)
+            .collect();
+        for path in API_ENDPOINTS
+            .iter()
+            .flat_map(|(_, entries)| entries.iter())
+            .filter_map(|e| e.path.strip_prefix("/api/tools/"))
+        {
+            // The dispatcher's own `:tool` placeholder heads the listing; it
+            // is not itself a tool.
+            if path == ":tool" {
+                continue;
+            }
+            assert!(
+                known.contains(&path),
+                "API_ENDPOINTS lists POST /api/tools/{path}, which is not an agent tool"
+            );
+        }
+    }
+}

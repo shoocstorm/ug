@@ -64,6 +64,24 @@ pub struct TraverseResult {
     pub edge_types: Vec<String>,
     pub nodes: Vec<TraversedNode>,
     pub edges: Vec<TraversedEdge>,
+    /// Edges the caller's `edge_types` filter removed, that the walk would
+    /// otherwise have followed, tallied by type.
+    ///
+    /// A filter narrows silently: the edges it drops never reach the result,
+    /// so a filtered walk and a complete one are indistinguishable in the
+    /// output. That is how `edge_types: ["calls"]` reports a function as
+    /// having no dependency on one it passes as a value — Rust records that
+    /// as `references`, and the answer still looks whole. Counting what was
+    /// hidden is the only way a caller can tell the difference.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub hidden_by_edge_type: BTreeMap<String, usize>,
+    /// Edges pointing the other way from an expanded node, tallied by type.
+    /// Empty when `direction` is `Both`, since then nothing is hidden.
+    ///
+    /// The same blind spot as above, one axis over: `outbound` answers "what
+    /// does this reach" and says nothing about what reaches it.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub hidden_by_direction: BTreeMap<String, usize>,
     /// Seeds that named no node, as the caller wrote them.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub missing: Vec<String>,
@@ -93,7 +111,7 @@ pub fn traverse(graph: &GraphData, p: &TraverseParams) -> TraverseResult {
         .as_deref()
         .map(Dir::from_str_lossy)
         .unwrap_or(Dir::Outbound);
-    let edge_filter: Vec<String> = p.edge_types.iter().map(|t| t.to_lowercase()).collect();
+    let edge_filter: Vec<String> = normalize_edge_filter(&p.edge_types);
 
     let by_id = by_id_map(graph);
 
@@ -181,6 +199,54 @@ pub fn traverse(graph: &GraphData, p: &TraverseParams) -> TraverseResult {
         }
     }
 
+    // What the knobs hid.
+    //
+    // A second pass over the edge list, rather than a parallel "suppressed"
+    // adjacency built alongside the real one: the walk has to finish before
+    // anything can be said about which dropped edges were even relevant, and
+    // holding every dropped edge until then is what would cost memory — on a
+    // large repo `edge_types: ["calls"]` drops most of three quarters of a
+    // million edges. This pass allocates nothing per edge and runs only when
+    // a knob was actually set, so an unfiltered `both` walk pays for none of
+    // it.
+    let mut hidden_by_edge_type: BTreeMap<String, usize> = BTreeMap::new();
+    let mut hidden_by_direction: BTreeMap<String, usize> = BTreeMap::new();
+    let filtering = !edge_filter.is_empty();
+    let directional = direction != Dir::Both;
+    if filtering || directional {
+        // A node at the hop limit is never expanded, so edges leaving it were
+        // not hidden by a knob — the walk had already stopped. Counting them
+        // would report the hop bound as if it were a filter.
+        let expanded = |id: &str| distances.get(id).is_some_and(|d| *d < hops);
+        for e in &graph.edges {
+            let et = edge_type_str(&e.edge_type);
+            let passes = !filtering || edge_filter.iter().any(|t| t.eq_ignore_ascii_case(et));
+            let out_reach = matches!(direction, Dir::Outbound | Dir::Both) && expanded(&e.source);
+            let in_reach = matches!(direction, Dir::Inbound | Dir::Both) && expanded(&e.target);
+
+            if !passes {
+                if out_reach || in_reach {
+                    *hidden_by_edge_type.entry(et.to_string()).or_insert(0) += 1;
+                }
+                // Already accounted for; counting it under direction too
+                // would report one edge as two separate omissions.
+                continue;
+            }
+            // Passed the filter and still absent: the walk only looks one
+            // way, and this edge points the other.
+            if directional && !out_reach && !in_reach {
+                let other_way = match direction {
+                    Dir::Outbound => expanded(&e.target),
+                    Dir::Inbound => expanded(&e.source),
+                    Dir::Both => false,
+                };
+                if other_way {
+                    *hidden_by_direction.entry(et.to_string()).or_insert(0) += 1;
+                }
+            }
+        }
+    }
+
     let mut nodes: Vec<TraversedNode> = distances
         .iter()
         .filter_map(|(id, d)| {
@@ -209,6 +275,8 @@ pub fn traverse(graph: &GraphData, p: &TraverseParams) -> TraverseResult {
         edge_types: edge_filter,
         nodes,
         edges,
+        hidden_by_edge_type,
+        hidden_by_direction,
         missing,
         notes,
     }
@@ -297,13 +365,108 @@ pub fn render_traverse(r: &TraverseResult, style: Render) -> String {
         );
     }
 
-    next_actions(
-        &mut out,
-        style,
-        &[
-            ("get_code <id>", "to read any node above"),
-            ("find_usages <id>", "for the inbound direction"),
-        ],
-    );
+    // What the knobs hid, said out loud. An edge-type filter that quietly
+    // drops a real dependency is worse than no filter at all, because the
+    // result still looks complete — see `TraverseResult::hidden_by_edge_type`.
+    if !r.hidden_by_edge_type.is_empty() {
+        line(
+            &mut out,
+            &style.dim(&format!(
+                "{} hidden by edge-type filter: {}  ·  drop it to see all",
+                edge_count(&r.hidden_by_edge_type),
+                tally_str(&r.hidden_by_edge_type)
+            )),
+        );
+    }
+    if !r.hidden_by_direction.is_empty() {
+        line(
+            &mut out,
+            &style.dim(&format!(
+                "{} hidden by dir={:?}: {}  ·  --direction both to see both ways",
+                edge_count(&r.hidden_by_direction),
+                r.direction,
+                tally_str(&r.hidden_by_direction)
+            )),
+        );
+    }
+
+    next_actions_styled(&mut out, style, &traverse_next_actions(r, style));
     out
+}
+
+fn edge_count(tally: &BTreeMap<String, usize>) -> String {
+    let n: usize = tally.values().sum();
+    format!("{} edge{}", n, if n == 1 { "" } else { "s" })
+}
+
+fn tally_str(tally: &BTreeMap<String, usize>) -> String {
+    tally
+        .iter()
+        .map(|(t, c)| format!("{}×{}", t, c))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// What to suggest *next*, given what this walk actually did.
+///
+/// A tool description is read once, cold, before the agent has a task in
+/// hand; the previous result is the last thing it saw. So the reliable place
+/// to say "another tool answers this better" is here, in the output, with the
+/// arguments already filled in — a command that can be run beats the name of
+/// one that would have to be assembled.
+fn traverse_next_actions(r: &TraverseResult, style: Render) -> Vec<(String, &'static str)> {
+    let seed = r.seeds.first().map(String::as_str).unwrap_or("<id>");
+    let quoted = format!("'{}'", seed);
+    let mut hints: Vec<(String, &'static str)> = Vec::new();
+
+    // An empty walk is empty for every possible reason at once, and the
+    // caller cannot tell which from the result. The knobs are the likeliest.
+    if r.nodes.len() <= r.seeds.len() {
+        if !r.hidden_by_edge_type.is_empty() {
+            hints.push((
+                style.cmd("traverse", &quoted),
+                "— nothing matched the edge-type filter; this is the same walk unfiltered",
+            ));
+        } else if !r.seeds.is_empty() {
+            hints.push((
+                style.cmd("find_symbols", &format!("'{}*'", seed)),
+                "— the seed resolved but has no edges; check the name is the one you meant",
+            ));
+        }
+        return hints;
+    }
+
+    // `find_usages` is this walk pinned inbound, plus call-site lines and a
+    // default edge set wide enough that constants and types aren't silent.
+    if r.direction == Dir::Inbound {
+        hints.push((
+            style.cmd("find_usages", &quoted),
+            "— the same inbound walk, with call-site lines as evidence",
+        ));
+    }
+
+    // One seed, one hop, outbound: `context` answers the question this was
+    // probably standing in for, in one call.
+    if r.hops == 1 && r.seeds.len() == 1 && r.direction == Dir::Outbound {
+        hints.push((
+            style.cmd("context", &quoted),
+            "— code, callers, tests and deps for this symbol in one budgeted call",
+        ));
+    }
+
+    if r.nodes.len() > 200 {
+        hints.push((
+            style.cmd("traverse", &format!("{} -k 1", quoted)),
+            "— this neighbourhood is large; narrow it, or rank it with graph_centrality",
+        ));
+    }
+
+    hints.push((style.cmd("get_code", "<id>"), "to read any node above"));
+    if r.direction != Dir::Inbound {
+        hints.push((
+            style.cmd("find_usages", "<id>"),
+            "for the inbound direction",
+        ));
+    }
+    hints
 }

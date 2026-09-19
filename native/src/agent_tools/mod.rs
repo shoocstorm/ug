@@ -11,7 +11,7 @@
 //! kebab flags, HTTP snake_case query/body).
 
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use crate::pattern::{self, Mode, Pattern};
@@ -225,6 +225,23 @@ fn type_allowed(matchers: &[Matcher], n: &GraphNode) -> bool {
 // ---------------------------------------------------------------------------
 // Node references
 // ---------------------------------------------------------------------------
+
+/// Lowercase an edge-type filter, splitting on commas.
+///
+/// `-t calls,references` arrives as the single token `"calls,references"`,
+/// which matches no edge type at all — and an edge-type filter that matches
+/// nothing returns an *empty walk*, not an error, so the mistake reads as
+/// "this symbol has no dependencies". Every surface can produce the comma
+/// form (a CLI flag, a one-element MCP array, an HTTP `types=` query), so it
+/// is normalised here rather than in any one of them.
+pub fn normalize_edge_filter(types: &[String]) -> Vec<String> {
+    types
+        .iter()
+        .flat_map(|t| t.split(','))
+        .map(|t| t.trim().to_lowercase())
+        .filter(|t| !t.is_empty())
+        .collect()
+}
 
 /// How many nodes one name or pattern may expand to in an id-taking tool.
 ///
@@ -556,6 +573,18 @@ impl SymbolRef {
 /// in a terminal, backticks in Markdown — so neither leaks the other's
 /// markup.
 fn next_actions(out: &mut String, style: Render, hints: &[(&str, &str)]) {
+    let styled: Vec<(String, &str)> = hints
+        .iter()
+        .map(|(cmd, why)| (style.id(cmd), *why))
+        .collect();
+    next_actions_styled(out, style, &styled);
+}
+
+/// [`next_actions`] for hints whose command was built with [`Render::cmd`] —
+/// a tool name plus arguments, rather than a bare id. Takes them already
+/// styled because only the caller knows where the tool name ends and the
+/// arguments begin.
+fn next_actions_styled(out: &mut String, style: Render, hints: &[(String, &str)]) {
     if hints.is_empty() {
         return;
     }
@@ -563,9 +592,9 @@ fn next_actions(out: &mut String, style: Render, hints: &[(&str, &str)]) {
         .iter()
         .map(|(cmd, why)| {
             if why.is_empty() {
-                style.id(cmd)
+                cmd.clone()
             } else {
-                format!("{} {}", style.id(cmd), why)
+                format!("{} {}", cmd, why)
             }
         })
         .collect();

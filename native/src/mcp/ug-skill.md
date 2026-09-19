@@ -179,6 +179,23 @@ approximate.
 | Every endpoint / listener / CLI command | `ug find_symbols --boundary` |
 | Central symbols · dependency cycles | `ug graph_centrality` · `ug graph_cycles` |
 
+**`context` vs `find_usages` vs `traverse`** — three tools walk the same
+edges, and picking the widest one wastes a call while picking the narrowest
+one gives an answer that looks complete and isn't:
+
+| You want | Use | Why not the others |
+|---|---|---|
+| Everything about one symbol before editing it | `ug context <sym>` | `traverse` gives you ids without code, tests or docs |
+| Who calls / imports / would break | `ug find_usages <sym>` | `traverse -d inbound` is the same walk minus the call-site evidence, and its default edge set is narrower |
+| What this reaches, N hops out, one edge kind | `ug traverse <sym>` | the only one of the three that walks outbound past one hop |
+
+**`-t/--edge-type` narrows silently.** An edge-type filter that matches
+nothing returns an *empty walk*, not an error — which reads as "this symbol
+has no dependencies". `-t calls` alone misses a function passed as a value
+(recorded as `references`), so prefer `-t calls,references` or no filter at
+all. Both `traverse` and `find_usages` report what their filters hid, under
+the result: trust that line over the tally above it.
+
 Node ids are `kind:file:name` — **no line number**, e.g.
 `function:path/to/file.rs:symbol_name`. Anywhere an id is expected you may
 instead pass a **bare symbol name** or **wildcard**, so a `find_symbols` round

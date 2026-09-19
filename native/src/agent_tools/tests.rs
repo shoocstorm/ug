@@ -2846,3 +2846,248 @@ fn an_empty_graphs_schema_is_empty_rather_than_a_default_list() {
     assert!(r.node_types.is_empty());
     assert!(r.edge_types.is_empty());
 }
+
+// ── traverse: what the knobs hide ───────────────────────────────────────────
+//
+// A filtered walk and a complete one used to be indistinguishable in the
+// output, which is how `-t calls` reported a function as having no dependency
+// on one it passes as a value: Rust records that as `references`, the edge was
+// dropped while adjacency was built, and the result still read as whole.
+
+/// `user` calls `called` and references `referenced` — the exact shape that
+/// `edge_types: ["calls"]` answers incompletely.
+fn mixed_edge_fixture() -> GraphData {
+    let f =
+        |id: &str, name: &str| node(id, name, GraphNodeType::Function, "src/m.rs", Some((1, 2)));
+    GraphData {
+        nodes: vec![
+            f("fn:user", "user"),
+            f("fn:called", "called"),
+            f("fn:referenced", "referenced"),
+            f("fn:caller_of_user", "caller_of_user"),
+        ],
+        edges: vec![
+            edge("fn:user", "fn:called", GraphEdgeType::Calls),
+            edge("fn:user", "fn:referenced", GraphEdgeType::References),
+            edge("fn:caller_of_user", "fn:user", GraphEdgeType::Calls),
+        ],
+        stats: None,
+        resolution: None,
+    }
+}
+
+#[test]
+fn an_edge_type_filter_reports_what_it_hid() {
+    let g = mixed_edge_fixture();
+    let r = traverse(
+        &g,
+        &TraverseParams {
+            node_id: vec!["fn:user".into()],
+            hops: Some(1),
+            edge_types: vec!["calls".into()],
+            ..Default::default()
+        },
+    );
+    let names: Vec<&str> = r.nodes.iter().map(|n| n.symbol.name.as_str()).collect();
+    assert!(names.contains(&"called"));
+    assert!(!names.contains(&"referenced"), "filtered out, as asked");
+    assert_eq!(
+        r.hidden_by_edge_type.get("References"),
+        Some(&1),
+        "the dropped edge must be counted, or the walk reads as complete: {:?}",
+        r.hidden_by_edge_type
+    );
+    let out = render_traverse(&r, Render::Ansi);
+    assert!(out.contains("hidden by edge-type filter"), "{out}");
+    assert!(out.contains("References×1"), "{out}");
+}
+
+#[test]
+fn an_unfiltered_walk_hides_nothing_by_edge_type() {
+    let g = mixed_edge_fixture();
+    let r = traverse(
+        &g,
+        &TraverseParams {
+            node_id: vec!["fn:user".into()],
+            hops: Some(1),
+            direction: Some("both".into()),
+            ..Default::default()
+        },
+    );
+    assert!(r.hidden_by_edge_type.is_empty());
+    assert!(
+        r.hidden_by_direction.is_empty(),
+        "direction=both hides nothing: {:?}",
+        r.hidden_by_direction
+    );
+    let out = render_traverse(&r, Render::Ansi);
+    assert!(!out.contains("hidden by"), "{out}");
+}
+
+#[test]
+fn a_one_way_walk_counts_the_edges_pointing_the_other_way() {
+    let g = mixed_edge_fixture();
+    let r = traverse(
+        &g,
+        &TraverseParams {
+            node_id: vec!["fn:user".into()],
+            hops: Some(1),
+            ..Default::default()
+        },
+    );
+    // `caller_of_user → user` was never going to be walked outbound; say so.
+    assert_eq!(
+        r.hidden_by_direction.get("Calls"),
+        Some(&1),
+        "{:?}",
+        r.hidden_by_direction
+    );
+}
+
+/// A node at the hop limit is never expanded, so edges leaving it were not
+/// hidden by a knob — the walk had already stopped. Counting them would
+/// report the hop bound as if it were a filter.
+#[test]
+fn edges_beyond_the_hop_limit_are_not_reported_as_hidden() {
+    let g = chain_fixture();
+    let r = traverse(
+        &g,
+        &TraverseParams {
+            node_id: vec!["fn:root".into()],
+            hops: Some(1),
+            edge_types: vec!["calls".into()],
+            ..Default::default()
+        },
+    );
+    // mid is at the limit; mid→leaf passes the filter anyway, but nothing
+    // about it was suppressed.
+    assert!(
+        r.hidden_by_edge_type.is_empty(),
+        "{:?}",
+        r.hidden_by_edge_type
+    );
+}
+
+#[test]
+fn a_comma_separated_edge_type_filter_is_split_rather_than_matching_nothing() {
+    let g = mixed_edge_fixture();
+    let r = traverse(
+        &g,
+        &TraverseParams {
+            node_id: vec!["fn:user".into()],
+            hops: Some(1),
+            // The shape `-t calls,references` produces. Before this was
+            // split, it matched no edge type and returned an empty walk —
+            // which reads as "no dependencies", not as a bad argument.
+            edge_types: vec!["calls,references".into()],
+            ..Default::default()
+        },
+    );
+    let mut names: Vec<&str> = r.nodes.iter().map(|n| n.symbol.name.as_str()).collect();
+    names.sort();
+    assert_eq!(names, vec!["called", "referenced", "user"]);
+    assert_eq!(r.edge_types, vec!["calls", "references"]);
+}
+
+#[test]
+fn find_usages_also_splits_a_comma_separated_edge_type_filter() {
+    let g = mixed_edge_fixture();
+    let r = find_usages(
+        &g,
+        SourceCtx::repo_only(Path::new("/nonexistent")),
+        &FindUsagesParams {
+            node_id: vec!["fn:called".into()],
+            edge_types: vec!["calls,references".into()],
+            ..Default::default()
+        },
+    );
+    let found: usize = r.nodes.iter().map(|e| e.users.len()).sum();
+    assert_eq!(found, 1, "caller must survive the split filter: {r:?}");
+}
+
+// ── traverse: steering the caller to the better tool ────────────────────────
+//
+// A tool description is read once, cold, before there is a task in hand; the
+// previous result is the last thing the caller saw. So the place to say
+// "another tool answers this better" is the output, with the arguments
+// already filled in.
+
+#[test]
+fn an_inbound_walk_points_at_find_usages_with_the_seed_filled_in() {
+    let g = mixed_edge_fixture();
+    let r = traverse(
+        &g,
+        &TraverseParams {
+            node_id: vec!["fn:user".into()],
+            hops: Some(1),
+            direction: Some("inbound".into()),
+            ..Default::default()
+        },
+    );
+    let out = render_traverse(&r, Render::Ansi);
+    assert!(out.contains("find_usages 'fn:user'"), "{out}");
+    assert!(
+        !out.contains("find_usages <id>"),
+        "the generic inbound hint is noise on a walk that is already inbound: {out}"
+    );
+}
+
+#[test]
+fn a_single_hop_outbound_walk_points_at_context() {
+    let g = mixed_edge_fixture();
+    let r = traverse(
+        &g,
+        &TraverseParams {
+            node_id: vec!["fn:user".into()],
+            hops: Some(1),
+            ..Default::default()
+        },
+    );
+    let out = render_traverse(&r, Render::Ansi);
+    assert!(out.contains("context 'fn:user'"), "{out}");
+}
+
+#[test]
+fn an_empty_filtered_walk_suggests_dropping_the_filter() {
+    let g = mixed_edge_fixture();
+    let r = traverse(
+        &g,
+        &TraverseParams {
+            node_id: vec!["fn:user".into()],
+            hops: Some(1),
+            edge_types: vec!["implements".into()],
+            ..Default::default()
+        },
+    );
+    assert_eq!(r.nodes.len(), 1, "the seed alone");
+    let out = render_traverse(&r, Render::Ansi);
+    assert!(
+        out.contains("nothing matched the edge-type filter"),
+        "an empty walk must not read as \"no dependencies\": {out}"
+    );
+}
+
+/// The two surfaces spell a follow-up differently and neither can use the
+/// other's: `ug find_usages x` is not an MCP tool, and a bare `find_usages x`
+/// is not a shell command.
+#[test]
+fn suggested_follow_ups_are_spelled_for_the_surface_they_are_printed_on() {
+    let g = mixed_edge_fixture();
+    let r = traverse(
+        &g,
+        &TraverseParams {
+            node_id: vec!["fn:user".into()],
+            hops: Some(1),
+            direction: Some("inbound".into()),
+            ..Default::default()
+        },
+    );
+    let ansi = render_traverse(&r, Render::Ansi);
+    assert!(ansi.contains("ug find_usages 'fn:user'"), "{ansi}");
+    let md = render_traverse(&r, Render::Markdown);
+    assert!(md.contains("`find_usages 'fn:user'`"), "{md}");
+    assert!(
+        !md.contains("ug find_usages"),
+        "no shell prefix in MCP output: {md}"
+    );
+}

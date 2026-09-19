@@ -1740,6 +1740,37 @@ for being over budget, and re-parsed from disk on the next request, forever.
   Evicting it frees nothing — the loader allocates it again on the next
   request — and costs a full re-parse each time.
 
+### 9r. A filter that narrows a result without saying so
+
+`ug traverse <fn> --edge-type calls` answered "which functions does this
+call?" with eleven of the twelve. The twelfth was passed as a function
+pointer — `ext.as_deref().is_some_and(document::is_supported_ext)` — which the
+graph records as `References`, not `Calls`, so the filter dropped it while
+adjacency was being built. Nothing downstream knew an edge had been removed.
+The output ended `edges: Calls×11`, which is a complete-looking answer to a
+question that had been silently narrowed, and it was believed.
+
+An omission is invisible by construction: the caller cannot see what is not
+there, and a filtered result and an unfiltered one are the same shape. Worse,
+an edge-type filter that matches *nothing* returns an empty walk rather than
+an error — so `-t calls,references` (one token, matching no type) read as
+"this symbol has no dependencies".
+
+**A knob that removes data must report what it removed.** Not "a filter was
+applied" — the caller knows that, they passed it — but *how much and of what
+kind*, so the gap has a size. `traverse` now counts edges dropped by the
+edge-type filter and by the direction, and prints both under the tally;
+`normalize_edge_filter` splits the comma form for every surface at once
+(§9c: it went in the shared helper, not in the CLI, because MCP and HTTP can
+produce the same token).
+
+The rule generalises past this function: **whenever a parameter can shrink a
+result, the result carries the count of what it shrank away.** Applies to
+`--edge-type`, `--direction`, node-type filters, `limit`, and any budget that
+truncates.
+
+---
+
 ## 11. Record what you learn, here, without being asked
 
 When you find something that would cost the next agent an hour — a measurement
