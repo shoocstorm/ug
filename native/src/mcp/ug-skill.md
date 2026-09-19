@@ -250,7 +250,21 @@ for `find_symbols` (exact, wildcards), `analyze` (statistics, blast radius) or
 ## Wildcards — one call instead of a loop
 
 `* ? [abc] [a-z] [!ab] {a,b}` work wherever a symbol or file is named. **Quote
-them** — the shell expands `*` otherwise. A pattern matches the **whole** name
+them, always** — and do not conclude from one working command that you can
+skip it, because an unquoted pattern fails three different ways depending on
+your shell and your cwd:
+
+| | unquoted `ug find_usages index_with_*` |
+|---|---|
+| bash, nothing on disk matches | **works** — the shell passes the pattern through |
+| zsh, nothing matches | `zsh: no matches found` — `ug` never runs |
+| either shell, files *do* match | **silently wrong** — `ug` receives `indexer indexer.rs` and answers about those |
+
+The third is the one that costs you: it returns a confident, complete-looking
+answer about whatever the filenames happened to resolve to. `ug` warns when
+every argument names a file that exists, but the quotes are the actual fix.
+
+A pattern matches the **whole** name
 (`*auth*` finds `reauth`, `auth` doesn't); in paths `*` stops at `/`, `**/`
 crosses directories. Id-taking commands cap a pattern at 25 symbols and say so
 when they hit it — narrow, don't trust a capped answer.
@@ -419,7 +433,9 @@ process and answers the same tools over HTTP (`POST /api/tools/<name>`) — the
 - Trusting `ug search` ranking without checking `matched_by` — `"name"` means the
   embedder was unavailable and you got a substring match, not GraphRAG.
 - Looping over a family of symbols or files → one wildcard call.
-- An unquoted `'*'` — the shell expands it before `ug` sees it.
+- An unquoted `'*'` — the shell expands it before `ug` sees it. It may *look*
+  fine (bash passes an unmatched pattern through); when real files match you
+  get a confident answer about the wrong nodes. Quote every pattern.
 - A wildcard that matches nothing is usually anchoring: patterns cover the whole
   name (`*auth*`, not `auth`), and `*` doesn't cross `/` in a path.
 - Judging code from a snippet → `get_code` for the whole symbol.

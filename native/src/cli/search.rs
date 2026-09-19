@@ -338,6 +338,7 @@ pub(crate) fn run_traverse(args: &[String]) {
         eprintln!("missing start node id");
         std::process::exit(1);
     }
+    super::agent::warn_if_shell_expanded(&starts);
     let hops: u32 = flag_value(args, &["-k", "--hops"])
         .and_then(|s| s.parse().ok())
         .unwrap_or(2);

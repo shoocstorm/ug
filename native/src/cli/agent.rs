@@ -152,6 +152,53 @@ pub(crate) fn print_wildcard_help() {
     println!("  In paths, {C_CYAN}*{C_RESET} stops at {C_CYAN}/{C_RESET} and {C_CYAN}**/{C_RESET} crosses directories: {C_CYAN}src/**/*.ts{C_RESET}.");
 }
 
+/// Warn when the positional arguments look like a wildcard the shell already
+/// expanded.
+///
+/// Quoting a pattern is documented in three places, and none of them can
+/// help here, because the failure is silent and shell-dependent. In `bash`,
+/// `ug find_usages index_with_*` with nothing matching on disk is *correct*:
+/// the shell passes the unmatched pattern through and `ug` expands it itself,
+/// so an agent that tries it once concludes the quotes are optional. `zsh`
+/// aborts with "no matches found" before `ug` runs at all. And when files do
+/// happen to match, either shell hands `ug` the filenames instead — observed:
+/// `ug find_usages index*` became `find_usages indexer indexer.rs`, resolved
+/// `indexer` to a Folder node, and answered "Nothing points at this node",
+/// which reads as a fact about the code rather than about the quoting.
+///
+/// Only the third case is worth detecting and it is the only one that lies.
+/// The signature is that *every* argument names something that exists on
+/// disk, which is what glob expansion produces and what a list of symbol
+/// names is not. Warn rather than refuse: passing real paths is legitimate,
+/// and a note on stderr costs nothing when it is wrong.
+fn looks_shell_expanded(refs: &[String]) -> bool {
+    // One argument that happens to be a real path is an ordinary file
+    // reference; two or more is the shape a glob leaves behind.
+    if refs.len() < 2 {
+        return false;
+    }
+    // A surviving metacharacter means the shell left the pattern alone.
+    if refs.iter().any(|r| ultragraph::pattern::is_pattern(r)) {
+        return false;
+    }
+    refs.iter().all(|r| Path::new(r).exists())
+}
+
+pub(crate) fn warn_if_shell_expanded(refs: &[String]) {
+    if !looks_shell_expanded(refs) {
+        return;
+    }
+    eprintln!(
+        "{C_YELLOW}⚠{C_RESET} every argument names a file that exists here, which is what your \
+         shell leaves behind after expanding a wildcard:"
+    );
+    eprintln!("  {C_DIM}{}{C_RESET}", refs.join(" "));
+    eprintln!(
+        "  If you meant a pattern, {C_BOLD}quote it{C_RESET} — {C_CYAN}ug find_usages \
+         'index_with_*'{C_RESET}, not {C_CYAN}ug find_usages index_with_*{C_RESET}."
+    );
+}
+
 /// The three shapes every id-taking command accepts, printed where they
 /// apply. Agents were sending an id-only lookup, failing, and round-tripping
 /// through `find_symbols`; humans just knew the function's name.
@@ -446,6 +493,7 @@ pub(crate) fn run_get_code(args: &[String]) -> CliResult {
         return Ok(());
     }
     let node_ids = positionals(args, AGENT_VALUE_FLAGS);
+    warn_if_shell_expanded(&node_ids);
     let file_flag = flag_value(args, &["-f", "--file"]);
     if node_ids.is_empty() && file_flag.is_none() {
         return Err(CliError::usage("Usage: ug get_code <node-id>... | -f|--file <file> [-s|--start <line>] [-e|--end <line>] [--range <window>] [--max-chars <n>] [-n|--name <project>]"));
@@ -507,6 +555,7 @@ pub(crate) fn run_find_usages(args: &[String]) -> CliResult {
         return Ok(());
     }
     let node_ids = positionals(args, AGENT_VALUE_FLAGS);
+    warn_if_shell_expanded(&node_ids);
     if node_ids.is_empty() {
         return Err(CliError::usage("Usage: ug find_usages <node-id>... [-k|--hops <n>] [-t|--edge-type <type>]... [-n|--name <project>]"));
     }
@@ -544,6 +593,7 @@ pub(crate) fn run_context(args: &[String]) -> CliResult {
         return Ok(());
     }
     let refs = positionals(args, AGENT_VALUE_FLAGS);
+    warn_if_shell_expanded(&refs);
     if refs.is_empty() {
         return Err(CliError::usage(format!(
             "Usage: ug context <symbol> [--max-chars <n>] [--include <role>]... [-n|--name <project>]\n\
@@ -1060,5 +1110,61 @@ mod command_tests {
         ] {
             result.expect("help needs no project");
         }
+    }
+}
+
+#[cfg(test)]
+mod shell_expansion_tests {
+    //! The guard's job is to fire on glob leftovers and stay quiet on every
+    //! legitimate argument list. It cannot see the original command line —
+    //! by the time `ug` runs, the shell has already rewritten it — so the
+    //! only evidence available is the shape of what arrived.
+    use super::*;
+
+    /// The guard's own predicate, not a copy of it — a test that reimplements
+    /// the condition it is checking passes when the real one is deleted.
+    fn would_warn(refs: &[&str]) -> bool {
+        let owned: Vec<String> = refs.iter().map(|s| s.to_string()).collect();
+        looks_shell_expanded(&owned)
+    }
+
+    #[test]
+    fn symbol_names_never_trip_the_guard() {
+        // The overwhelmingly common case: names that exist in the graph and
+        // not on disk.
+        assert!(!would_warn(&["index_with_cache", "index_with_cache_typed"]));
+    }
+
+    #[test]
+    fn a_surviving_metacharacter_means_the_shell_left_it_alone() {
+        // zsh with `nullglob`/`nomatch` off, or a quoted pattern: `ug` got
+        // what the caller typed, so there is nothing to warn about.
+        assert!(!would_warn(&["index_with_*", "Cargo.toml"]));
+    }
+
+    #[test]
+    fn one_real_path_is_an_ordinary_file_reference() {
+        // `ug find_usages Cargo.toml` is a legitimate single file ref, and a
+        // glob that matched exactly one file is indistinguishable from it.
+        // Warning on every single-path call would be noise, so the guard
+        // gives that case up deliberately.
+        assert!(!would_warn(&["Cargo.toml"]));
+    }
+
+    #[test]
+    fn several_arguments_that_all_exist_on_disk_look_like_glob_output() {
+        // The observed failure: `ug find_usages index*` in native/src became
+        // `find_usages indexer indexer.rs`. Both exist; neither is a pattern.
+        // Unit tests run with the crate root as cwd, so these two are here.
+        assert!(Path::new("Cargo.toml").is_file(), "cwd is the crate root");
+        assert!(Path::new("src").is_dir(), "cwd is the crate root");
+        assert!(would_warn(&["Cargo.toml", "src"]));
+    }
+
+    #[test]
+    fn a_name_that_does_not_exist_on_disk_clears_the_whole_list() {
+        // One symbol name among the arguments is enough to say this was not
+        // glob output — the shell would have expanded or rejected all of it.
+        assert!(!would_warn(&["Cargo.toml", "no_such_symbol_anywhere"]));
     }
 }

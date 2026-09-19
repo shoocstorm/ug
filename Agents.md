@@ -1781,6 +1781,42 @@ truncates.
 
 ---
 
+### 9s. A shell that rewrites the command before ug sees it
+
+`ug find_usages index_with_*` — unquoted — behaves three different ways, and
+only one of them is an error:
+
+| | result |
+|---|---|
+| bash, nothing on disk matches | **works.** The shell passes the unmatched pattern through and `ug` expands it itself |
+| zsh, nothing matches | `zsh: no matches found` — `ug` never runs |
+| either shell, files *do* match | **silently wrong.** `ug` receives the filenames |
+
+The third is the one that costs you. In `native/src`, `ug find_usages index*`
+became `ug find_usages indexer indexer.rs`, resolved `indexer` to a **Folder**
+node, and answered "Nothing points at this node" — which reads as a fact about
+the code, not about the quoting.
+
+Quoting was already documented in three places (`print_wildcard_help`, the
+skill body, the skill's mistakes list) and documentation could not have
+prevented this: the first case *teaches the wrong lesson*. An agent that tries
+it once in bash, sees it work, and generalises is behaving reasonably.
+
+`warn_if_shell_expanded` (`cli/agent.rs`) now fires when every positional
+names a file that exists on disk — the shape glob expansion leaves behind and
+a list of symbol names is not. It warns rather than refuses, because passing
+real paths is legitimate, and it gives up the single-argument case on purpose:
+`ug find_usages Cargo.toml` and a glob that matched exactly one file are
+indistinguishable.
+
+**The rule: when an outside layer can rewrite your input before you see it,
+validate the *shape* of what arrived.** You cannot see the original, and the
+caller cannot see the substitution — so only the receiver is in a position to
+notice, and only if it looks. Same family as §9r: the failure is silent, and
+the output is confident.
+
+---
+
 ## 11. Record what you learn, here, without being asked
 
 When you find something that would cost the next agent an hour — a measurement
